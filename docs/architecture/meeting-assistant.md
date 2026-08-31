@@ -99,7 +99,8 @@ with retained text, so the relay needs no second channel. A turn still
 waiting on the pause tick takes the new label; notes ALREADY composed keep
 the label they were composed with — those words are in the doc and the
 revision has nowhere to land — but a person RENAMING a voice does reach
-them, retroactively; see "A rename reaches backwards" below. The revision
+them, retroactively, through both the tag rewrite and the text sweep; see
+"A rename reaches backwards" below. The revision
 can also take a label away (a
 placeholder is "no speaker"), which the record writes as an explicit
 `speaker: null` relabel line — an absent field would read as "says nothing
@@ -245,15 +246,52 @@ Renaming an already-given name works the same way, because the rewrite reads
 the OLD DISPLAY NAME (what the composer actually wrote), not the raw label —
 "Devi" → "Devi Raman" replaces "Devi".
 
-**Two voices with the same name refuse the rewrite.** Display text is the
-only handle the notes give — composed prose carries no per-mention
-attribution — so if both A and B are called "Alex", "Alex" in the notes does
-not say which, and correcting A to "Sam" would silently reattribute B's
-words. The session detects that (across every label SEEN, not just the named
-ones — an unnamed B still reads as "Speaker B") and skips the retroactive
-part, reporting it through `onError`. The forward mapping still holds: that
-voice's later turns compose under the new name. Raised by review before
-merge, not in the field.
+**Two voices with the same name narrow the rewrite, they no longer refuse
+it.** Display text used to be the only handle the notes gave, so if both A
+and B were called "Alex", "Alex" in the notes did not say which and
+correcting A to "Sam" would have silently reattributed B's words; the session
+detected that and skipped the retroactive part entirely. Tagged mentions have
+their own handle — the label in the href — so the tag rewrite runs
+unconditionally and only the UNTAGGED text sweep is skipped when the display
+name is ambiguous (`rewriteUntagged: false` on the relabel). The session
+still reports through `onError`, now saying the rename reached only tagged
+mentions. The forward mapping always held: that voice's later turns compose
+under the new name.
+
+### Speaker tags: attribution the notes can carry
+
+A tag is a markdown link whose href names the voice —
+`[@Devi](speaker:B)` — so the visible half is the name and the durable half
+is the LABEL (`packages/core/src/speaker-tags.ts`). The shape was chosen
+because a meeting doc is a live Yjs doc that flushes to a `.md` on disk: a
+link is ordinary markdown and an ordinary Yjs `link` mark, so attribution
+survives the round trip and rides through an edit the way bold does. A mark
+invented for this would have been lost on the first flush.
+
+- **The composer proposes, the server disposes.** Tags come back from an LLM,
+  so every composed section passes `normalizeSpeakerTags` before it reaches a
+  doc: a tag naming a label the meeting never carried is unwrapped to plain
+  words (and reported), and a tag naming a real one is re-rendered from the
+  name map rather than trusted to spell it. Same law the task capture's
+  `requester` is held to — a model-claimed attribution must name something
+  the tick's own transcript contained. Lines a PERSON wrote are passed
+  through byte for byte, because the merge recognises them by exact text.
+- **A rename is keyed on the label, never the spelling.**
+  `retagSpeakerInNotes` walks the notes section's `Y.XmlText` nodes and
+  rewrites the text of every run whose link href is `speaker:<label>`,
+  in place, marks preserved — which is what makes two voices called Alex
+  separable where the display-text sweep could not tell them apart. It runs
+  BEFORE the untagged sweep, so an already-retagged mention has nothing left
+  for the sweep to match.
+- **A suggestion may not re-attribute a person's note.** `canSuggestOn`
+  refuses a rewrite that introduces a speaker label the target did not
+  already carry, so the composer cannot attach a line someone typed to a
+  voice in the room.
+- **The editor renders a tag as a quiet chip, not a link.** Tiptap blanks an
+  href whose scheme is not in `protocols`, so the Link extension is
+  configured with `speaker`; `safeLinkHref` then refuses the scheme, so
+  clicking a tag navigates nowhere. Reassigning a tag inline is designed but
+  NOT built — the mock is the current artefact for it.
 
 ## Task capture ("file a ticket for that")
 
