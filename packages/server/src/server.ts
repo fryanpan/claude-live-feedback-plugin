@@ -5916,7 +5916,9 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
                   hint: `The workspace notes home is ${notes.repoRoot} branch "${notes.branch}", but ${
                     placed.reason === 'repo-missing'
                       ? 'that path is not a git checkout any more'
-                      : 'no worktree has that branch checked out right now'
+                      : placed.reason === 'path-escapes-checkout'
+                        ? 'the notes dir passes through a symlink that leaves the checkout'
+                        : 'no worktree has that branch checked out right now'
                   }. Check the branch out (git worktree add <path> "${notes.branch}") and retry, or pass an explicit sourceUrl.`,
                 });
               }

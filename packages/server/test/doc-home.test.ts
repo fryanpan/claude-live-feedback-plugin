@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
 import { execFileSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
@@ -79,6 +79,27 @@ describe('doc-home git plumbing readers', () => {
     expect(canonicalRepoRoot(main)).toBe(main);
     expect(canonicalRepoRoot(wt)).toBe(main);
     expect(canonicalRepoRoot(tmp)).toBeNull();
+  });
+
+  it('a relPath through a symlinked parent that leaves the checkout is refused, not written', () => {
+    // `docs` inside the worktree is a symlink to a directory OUTSIDE the
+    // repo: the lexical spelling looks contained, the bytes would not be.
+    const outside = join(tmp, 'outside-the-repo');
+    mkdirSync(outside);
+    symlinkSync(outside, join(wt, 'docs'));
+    const home = { repoRoot: main, branch: 'feature', relPath: 'docs/plans/triage.md' };
+    expect(resolveHomeCheckout(home)).toEqual({
+      placed: false,
+      reason: 'path-escapes-checkout',
+    });
+    expect(verifyPathInHome(join(wt, 'docs/plans/triage.md'), home)).toBe('outside-repo');
+    // A symlink that stays INSIDE the checkout is a normal repo layout.
+    mkdirSync(join(wt, 'real-docs'));
+    symlinkSync(join(wt, 'real-docs'), join(wt, 'docs-in'));
+    expect(
+      resolveHomeCheckout({ repoRoot: main, branch: 'feature', relPath: 'docs-in/triage.md' })
+        .placed,
+    ).toBe(true);
   });
 
   it('findWorktreeRoot walks up from a (possibly missing) file path', () => {

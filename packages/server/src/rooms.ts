@@ -4115,10 +4115,14 @@ export class Rooms {
         ? `doc home is unreachable: ${home.repoRoot} is not (or no longer) a git checkout. ` +
           'Writes are parked; the live doc stays the source of truth and its content is durable ' +
           'in the workspace. Re-pin the home at a valid checkout to resume.'
-        : `doc home is unplaced: no checkout of the repo has branch "${home.branch}" checked out. ` +
-          'Writes are parked; the live doc stays the source of truth and its content is durable ' +
-          'in the workspace. Check the branch out in some worktree (git worktree add <path> ' +
-          `"${home.branch}") and the next edit or reparse resumes syncing there.`;
+        : placement.reason === 'path-escapes-checkout'
+          ? `doc home is unsafe: ${home.relPath} passes through a symlink that leaves the ` +
+            'checkout, so writing it would land outside the repo. Writes are parked; the live ' +
+            'doc stays the source of truth. Re-pin the home at a path contained in the checkout.'
+          : `doc home is unplaced: no checkout of the repo has branch "${home.branch}" checked out. ` +
+            'Writes are parked; the live doc stays the source of truth and its content is durable ' +
+            'in the workspace. Check the branch out in some worktree (git worktree add <path> ' +
+            `"${home.branch}") and the next edit or reparse resumes syncing there.`;
     if (binding.lastSyncError?.message !== message) {
       this.recordSyncError(room, binding, message);
     }

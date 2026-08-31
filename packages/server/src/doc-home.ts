@@ -118,7 +118,38 @@ export function findWorktreeRoot(absPath: string): string | null {
 
 export type HomePlacement =
   | { placed: true; worktreeRoot: string; absPath: string }
-  | { placed: false; reason: 'repo-missing' | 'no-checkout-on-branch' };
+  | { placed: false; reason: 'repo-missing' | 'no-checkout-on-branch' | 'path-escapes-checkout' };
+
+/**
+ * Does `root`/`relPath` stay inside `root` once symlinks are resolved? The
+ * lexical checks in normalizeDocHome catch `..` spellings, but a SYMLINKED
+ * parent directory inside the checkout can point anywhere — the joined path
+ * looks contained while the bytes land outside the repo. Resolve the nearest
+ * EXISTING ancestor (the file itself may not exist yet) and compare real
+ * prefixes. Unreadable resolves count as escapes: a placement we cannot
+ * prove contained is not a placement.
+ */
+export function placementEscapesRoot(root: string, relPath: string): boolean {
+  let realRoot: string;
+  try {
+    realRoot = realpathSync(root);
+  } catch {
+    return true;
+  }
+  const segments = relPath.split('/');
+  for (let keep = segments.length; keep >= 0; keep--) {
+    const candidate = join(root, ...segments.slice(0, keep));
+    let real: string;
+    try {
+      real = realpathSync(candidate);
+    } catch {
+      continue; // not created yet — try the parent
+    }
+    const full = join(real, ...segments.slice(keep));
+    return full !== realRoot && !full.startsWith(realRoot + sep);
+  }
+  return true;
+}
 
 /**
  * Every worktree of the repo whose common dir this is, with the branch each
@@ -168,6 +199,9 @@ export function resolveHomeCheckout(home: DocHome): HomePlacement {
   if (!common) return { placed: false, reason: 'repo-missing' };
   for (const wt of listWorktrees(common)) {
     if (wt.branch === home.branch) {
+      if (placementEscapesRoot(wt.root, home.relPath)) {
+        return { placed: false, reason: 'path-escapes-checkout' };
+      }
       return { placed: true, worktreeRoot: wt.root, absPath: join(wt.root, home.relPath) };
     }
   }
@@ -193,6 +227,10 @@ export function verifyPathInHome(absFilePath: string, home: DocHome): HomeVerdic
   if (checkoutBranch(wtRoot) !== home.branch) return 'wrong-branch';
   const rel = relative(wtRoot, resolvePath(absFilePath)).split(sep).join('/');
   if (rel !== home.relPath) return 'wrong-path';
+  // The lexical spelling is the home's; make sure the BYTES stay in the
+  // checkout too — a symlinked parent directory would pass every check
+  // above while the write lands outside the repo.
+  if (placementEscapesRoot(wtRoot, rel)) return 'outside-repo';
   return 'ok';
 }
 
