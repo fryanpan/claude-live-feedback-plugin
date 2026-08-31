@@ -745,9 +745,22 @@ export function mountMarkupMargin(opts: MarkupMarginOpts): MarkupMarginHandle {
     // deletion/highlight, only the card slides down. max() is monotonic, so
     // the anchor-sorted stacking order is preserved.
     const minY = toggleClearanceY(editorRect);
+    // Fit-to-fold: a balloon anchored low in the visible viewport lifts so
+    // its footer (the composer and its Answer button) stays reachable without
+    // scrolling the document — the CSS height clamp bounds the card, this
+    // bounds its position. clientHeight of 0 means no real layout (tests,
+    // hidden pane): skip the bound rather than fit to a degenerate viewport.
+    const viewport =
+      editorEl.clientHeight > 0
+        ? {
+            top: Math.max(editorEl.scrollTop, minY),
+            bottom: editorEl.scrollTop + editorEl.clientHeight - GAP,
+          }
+        : undefined;
     const ys = layoutBalloons(
       items.map((it) => ({ anchorY: Math.max(minY, it.anchorY), height: it.height })),
       GAP,
+      viewport,
     );
 
     // Size the overlay to the scrolled content so lines aren't clipped.
@@ -936,6 +949,23 @@ export function mountMarkupMargin(opts: MarkupMarginOpts): MarkupMarginHandle {
   });
 
   scope.listen(window, 'resize', scheduleRelayout);
+
+  // The fit-to-fold bound moves with the scroll position, and nothing else
+  // re-runs on scroll — restack (positions only, no rebuild, so drafts and
+  // focus are untouched) once scrolling settles, or a balloon whose anchor
+  // sits low in the NEW viewport is right back under the fold.
+  let scrollTimer: ReturnType<typeof setTimeout> | null = null;
+  scope.listen(editorEl, 'scroll', () => {
+    if (scrollTimer != null) clearTimeout(scrollTimer);
+    scrollTimer = setTimeout(() => {
+      scrollTimer = null;
+      if (!scope.disposed) positionBalloons();
+    }, RELAYOUT_DEBOUNCE_MS);
+  });
+  scope.onCleanup(() => {
+    if (scrollTimer != null) clearTimeout(scrollTimer);
+    scrollTimer = null;
+  });
 
   // Mermaid renders complete asynchronously with no event; the injected SVG
   // resizes the prose element, which this observer sees (and it doubles as
