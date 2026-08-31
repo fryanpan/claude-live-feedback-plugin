@@ -156,6 +156,43 @@ describe('mockup durability', () => {
       expect(await after.text()).toContain('Good body');
     });
 
+    it('re-binding to an empty file drops the old capture instead of keeping it', async () => {
+      // The serve-time refusal above protects a capture from ITS OWN source
+      // being caught mid-write. A rebind names a different file, so the same
+      // refusal would leave the link resolving to a mockup nobody pointed it
+      // at — the silent-wrong-content failure, arrived at from the other side.
+      const first = join(scratch, 'rebind-empty-first.html');
+      const second = join(scratch, 'rebind-empty-second.html');
+      writeFileSync(first, '<!doctype html><html><body><h1>Superseded body</h1></body></html>');
+      writeFileSync(second, '');
+      await bindOk({ docId: 'mock-rebind-empty', type: 'mockup', sourceUrl: first });
+      await bindOk({ docId: 'mock-rebind-empty', type: 'mockup', sourceUrl: second });
+
+      rmSync(first);
+      rmSync(second);
+      const after = await fetch(`${base}/mockup/mock-rebind-empty`);
+      expect(after.headers.get('x-mockup-source')).toBe('captured');
+      expect(await after.text()).not.toContain('Superseded body');
+    });
+
+    it('the etag describes the page sent, not the file read', async () => {
+      // Two docs, one source file. The widget embed carries the doc id, so
+      // the bytes the browser holds differ even though the file does not — a
+      // source-derived tag would let one page revalidate as the other.
+      const shared = join(scratch, 'shared-source.html');
+      writeFileSync(shared, '<!doctype html><html><body><h1>Shared body</h1></body></html>');
+      await bindOk({ docId: 'mock-etag-a', type: 'mockup', sourceUrl: shared });
+      await bindOk({ docId: 'mock-etag-b', type: 'mockup', sourceUrl: shared });
+      const a = await fetch(`${base}/mockup/mock-etag-a`);
+      const b = await fetch(`${base}/mockup/mock-etag-b`);
+      expect(a.headers.get('etag')).toBeTruthy();
+      expect(a.headers.get('etag')).not.toBe(b.headers.get('etag'));
+      // …and it is still stable for the same page, which is the half that
+      // makes it worth sending at all.
+      const again = await fetch(`${base}/mockup/mock-etag-a`);
+      expect(again.headers.get('etag')).toBe(a.headers.get('etag'));
+    });
+
     it('an unbound docId is still a 404 — the fallback invents nothing', async () => {
       const res = await fetch(`${base}/mockup/mock-never-bound`);
       expect(res.status).toBe(404);
