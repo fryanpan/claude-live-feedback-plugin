@@ -60,7 +60,12 @@ import {
   type NotesUpdate,
   extendsWord,
 } from './meeting-notes.ts';
-import { type TaskCaptureBoard, runTaskCapture } from './meeting-task-capture.ts';
+import {
+  type RunTaskCaptureDeps,
+  type TaskCaptureBoard,
+  type TaskCaptureLookup,
+  runTaskCapture,
+} from './meeting-task-capture.ts';
 
 /** The section the notes agent owns, verbatim — finding it again is the
  *  replace contract, so this string changing would orphan every live doc's
@@ -528,9 +533,16 @@ export function withServerNotesSinks(
     /** The store the capture pipeline writes through. A thunk like `tasks`,
      *  and only read when `taskExtractor` is present. */
     captureBoard?: () => TaskCaptureBoard;
+    /** Where a "pull that in" ask looks: the board's docs and their past
+     *  meetings. Absent, lookups resolve to nothing and the notes are as
+     *  they were. */
+    lookup?: TaskCaptureLookup;
     /** The lead wake for a captured task judged clear enough to start —
      *  wired to the ready-nudge channel by the server. */
     onTaskReady?: (wake: { workspaceId: string; taskId: string; title: string }) => void;
+    /** The projection + announce a filed research confirmation owes; only
+     *  `createServer` can reach either. See `RunTaskCaptureDeps`. */
+    onReviewFiled?: RunTaskCaptureDeps['onReviewFiled'];
     /** Tests: an ownership ledger they can seed or read back. */
     ledger?: NotesLedger;
   },
@@ -540,20 +552,22 @@ export function withServerNotesSinks(
   // One ledger per wiring, i.e. per server: it is keyed by doc and meeting,
   // and a meeting is the life of one notes section.
   const ledger = deps.ledger ?? createNotesLedger();
-  const captureTasks: MeetingNotesDeps['captureTasks'] =
-    options.captureTasks ??
+  const captureIntents: MeetingNotesDeps['captureIntents'] =
+    options.captureIntents ??
     (extractor && captureBoard
       ? async ({ docId, turns, priorTurns }) => {
           // The doc's board is the capture's scope: a meeting on a doc no
           // workspace owns has no board to find or create on.
           const room = deps.rooms().get(docId);
           const workspaceId = room?.meta.setId;
-          if (!workspaceId) return [];
+          if (!workspaceId) return { tasks: [], docs: [] };
           return runTaskCapture(
             {
               board: captureBoard(),
               extractor,
+              ...(deps.lookup ? { lookup: deps.lookup } : {}),
               ...(deps.onTaskReady ? { onTaskReady: deps.onTaskReady } : {}),
+              ...(deps.onReviewFiled ? { onReviewFiled: deps.onReviewFiled } : {}),
               onError: (message) => console.error(`[meeting-tasks] ${message}`),
             },
             {
@@ -568,7 +582,7 @@ export function withServerNotesSinks(
       : undefined);
   return {
     ...options,
-    ...(captureTasks ? { captureTasks } : {}),
+    ...(captureIntents ? { captureIntents } : {}),
     resolveContext: (docId: string): NotesProjectContext | undefined => {
       const gathered: NotesProjectContext = {};
       try {

@@ -24,14 +24,47 @@
  * through the ready-nudge channel — this module never claims `in-progress`
  * itself. The chip in the notes shows live status, so it flips only when the
  * lead's dispatch actually happens, and it stays honest if that never does.
+ *
+ * THE FILE IS NAMED FOR ITS FIRST TWO INTENTS AND NOW CARRIES FOUR. Requests
+ * and references were the whole of it; research and lookup asks arrived in
+ * the same reply rather than in calls of their own, because a tick's prompt
+ * is ~95% shared context and what scales with intents is how many times that
+ * context is re-sent (decisions.md, 2026-08-30: "One call per tick carries
+ * every intent"). An intent added here costs ~58 input tokens; the same
+ * intent as its own always-on pass costs seven to twenty-seven times that.
+ * So: one call, one items array, a `kind` per intent, and rows that parse
+ * independently so one malformed intent never costs the others.
+ *
+ * THE TWO NEW INTENTS ARE NOT SYMMETRICAL, AND THE ASYMMETRY IS THE POINT.
+ * A LOOKUP only reads — a wrong one is a link nobody wanted, dropped by the
+ * same guards the reference path uses. A RESEARCH ask SPENDS: an agent goes
+ * away and burns tokens on a report. So a research ask never acts on speech
+ * alone. It files a row into triage carrying a decision review item, and an
+ * open review item already holds a row off dispatch (`ready-gate.ts`,
+ * `awaiting-answer`) — the confirmation is enforced by the board rather than
+ * promised by a prompt.
  */
 
+import type { TaskReviewItem } from '@feedback/core';
 import { readRenamedEnv } from '@feedback/core/env-names';
-import type { NoteTaskLink, NotesTurn } from './meeting-notes.ts';
+import {
+  type LookupDoc,
+  docLookupUrl,
+  lookupWhen,
+  parseRecency,
+  resolveLookup,
+} from './meeting-lookup.ts';
+import type { NoteDocLink, NoteTaskLink, NotesTurn } from './meeting-notes.ts';
 import { readKeychainPassword } from './share/keychain.ts';
 import { resolveKeyFrom } from './summarize.ts';
 import { clipToWordBoundary } from './task-title.ts';
-import { CHORES_GOAL_ID, type CreateTaskOpts, type TaskStatus } from './tasks.ts';
+import {
+  type AddReviewItemResult,
+  CHORES_GOAL_ID,
+  type CreateTaskOpts,
+  type Task,
+  type TaskStatus,
+} from './tasks.ts';
 
 /** One open (or recently closed) board row, as the extractor may see it. */
 export interface TaskCaptureCandidate {
@@ -61,7 +94,38 @@ export interface CapturedReference {
   taskId: string;
 }
 
-export type CapturedItem = CapturedRequest | CapturedReference;
+/**
+ * Speech that asked for something to be FOUND OUT rather than built — "go
+ * look into that", "dig into why it does that", "find out what it would take".
+ *
+ * Never acted on as heard. It becomes a row plus a decision item asking
+ * whether to spend the pass, because the failure modes are not the same size:
+ * a wrong task is a row to delete, a wrong research spawn is tokens spent on
+ * a report nobody wanted.
+ */
+export interface CapturedResearch {
+  kind: 'research';
+  /** What to look into, in the words spoken. */
+  topic: string;
+  /** What the research should answer, when the speech said. */
+  question?: string;
+  /** The voice that asked — same law as {@link CapturedRequest.requester}. */
+  requester?: string;
+}
+
+/**
+ * Speech that asked for existing material to be brought in — "pull up last
+ * week's notes", "link the design doc for that". What it points at is
+ * resolved in `meeting-lookup.ts`; all this carries is what was asked for.
+ */
+export interface CapturedLookup {
+  kind: 'lookup';
+  /** What was asked for, in the words spoken, INCLUDING any "when" — the
+   *  time phrase is often the only part that identifies a past meeting. */
+  query: string;
+}
+
+export type CapturedItem = CapturedRequest | CapturedReference | CapturedResearch | CapturedLookup;
 
 export interface TaskCaptureInput {
   turns: readonly NotesTurn[];
@@ -95,6 +159,11 @@ export const MEETING_CAPTURE_ACTOR = {
 
 /** Longest title a captured request may carry — the board's own title cap. */
 const TITLE_MAX = 80;
+
+/** Longest lookup query the resolver is asked to work with. Not a title —
+ *  it is a spoken phrase, and past the first few words it stops narrowing
+ *  and starts adding words the fuzzy matcher has to discount. */
+const QUERY_MAX = 120;
 
 /** How many board rows the extractor prompt may carry, mirroring the notes
  *  context cap: enough to match against, few enough that a thousand-row
@@ -317,6 +386,26 @@ export function requestMatchesCandidate(title: string, candidateTitle: string): 
 }
 
 /**
+ * Was this phrase actually SPOKEN? The guard the two reading intents stand
+ * on: a research topic and a lookup query are both supposed to be "in the
+ * words spoken", so a model that answers with words the window never carried
+ * has invented the ask, and an invented ask is dropped.
+ *
+ * Two significant words where the phrase has two — the
+ * {@link requestMatchesCandidate} threshold, and for its reason: one word in
+ * common is a coincidence between any two sentences about the same project.
+ * A phrase with only one significant word to give must give it; one with
+ * none at all ("pull that up", every word a stopword) can be vouched for by
+ * nothing and is dropped rather than let through on an empty match.
+ */
+export function phraseSpokenOnTick(turns: readonly NotesTurn[], phrase: string): boolean {
+  const want = significantWords(phrase);
+  if (want.size === 0) return false;
+  const spoken = significantWords(turns.map((t) => t.text).join(' '));
+  return sharedWordCount(spoken, want) >= Math.min(2, want.size);
+}
+
+/**
  * The transcript must vouch for a requester the same way it vouches for a
  * reference: the model may only name a voice the window actually carried —
  * this tick's speech or the marked overlap, since a request that begins
@@ -347,6 +436,39 @@ export function taskCaptureUrl(workspaceId: string, taskId: string): string {
  * on every tick, overlap or not, which is why it is this short and why
  * `scripts/capture-overlap-cost.ts` measures it separately.
  */
+/**
+ * What research sounds like, and what separates it from the request intent
+ * sitting beside it in the same reply. Exported, like the overlap rule, so
+ * `scripts/intent-prompt-cost.ts` can price this intent by removing exactly
+ * the text it added — an intent's cost is a measurement here, not an
+ * estimate.
+ *
+ * "They will rarely say the word research" is the load-bearing line: the ask
+ * this exists to catch is "go look into that", and a prompt that leaned on
+ * the word would catch only the asks that needed no help.
+ */
+export const RESEARCH_PROMPT_RULE = [
+  'A RESEARCH ask when a speaker wants something FOUND OUT before it can be',
+  'decided or built — "go look into that", "dig into why it does that",',
+  '"find out what it would take". They will rarely say the word "research".',
+  'Wondering aloud is not an ask; somebody has to want it done. "topic":',
+  'what to look into, in the words spoken; "question": what it should',
+  'answer, omitted if unsaid. Prefer "request" when they asked for the WORK',
+  'rather than for findings.',
+] as const;
+
+/**
+ * What a lookup sounds like. The "keep any when" clause earns its tokens:
+ * an earlier meeting has no title of its own, so the time phrase is often
+ * the only part of the ask that identifies anything (`meeting-lookup.ts`).
+ */
+export const LOOKUP_PROMPT_RULE = [
+  'A LOOKUP when a speaker asks for material that ALREADY EXISTS to be',
+  'brought in — "pull up last week\'s notes", "link the design doc for',
+  'that", "what did we decide on Tuesday". "query": what they asked for in',
+  'their own words, KEEPING any "when" they said ("last week", "Tuesday").',
+] as const;
+
 export const OVERLAP_PROMPT_RULE = [
   '"Earlier speech" was read last pass: use it to resolve what a new line',
   'points at, or to finish a request it began. Every item must draw part of',
@@ -360,11 +482,15 @@ export const OVERLAP_PROMPT_RULE = [
  */
 export function buildTaskCapturePrompt(input: TaskCaptureInput): { system: string; user: string } {
   const system = [
-    'You listen to a live working meeting and extract exactly two things:',
-    'task REQUESTS and task REFERENCES. Answer with JSON only, this shape:',
+    'You listen to a live working meeting and extract four things: task',
+    'REQUESTS, task REFERENCES, RESEARCH asks and LOOKUP asks. Answer with',
+    'JSON only, this shape:',
     '{"items":[{"kind":"request","title":"...","actionable":true|false,',
     '           "requester":"who asked, omitted if unclear"}',
-    '         |{"kind":"reference","match":<candidate number>}]}',
+    '         |{"kind":"reference","match":<candidate number>}',
+    '         |{"kind":"research","topic":"...","question":"...",',
+    '           "requester":"who asked, omitted if unclear"}',
+    '         |{"kind":"lookup","query":"..."}]}',
     '',
     'A REQUEST only when a speaker explicitly asks for work to be tracked or',
     'filed — "file a ticket", "let\'s track that", "add it to the board",',
@@ -384,6 +510,10 @@ export function buildTaskCapturePrompt(input: TaskCaptureInput): { system: strin
     'A REFERENCE only when the speech clearly refers to work in the numbered',
     'candidate list; "match" is that number. Never guess: no confident match',
     'means no item.',
+    '',
+    ...RESEARCH_PROMPT_RULE,
+    '',
+    ...LOOKUP_PROMPT_RULE,
     '',
     ...OVERLAP_PROMPT_RULE,
     '',
@@ -462,6 +592,39 @@ export function parseTaskCaptureReply(
         actionable: row.actionable === true,
         ...(requester !== undefined ? { requester } : {}),
       });
+    } else if (row.kind === 'research') {
+      if (typeof row.topic !== 'string') continue;
+      const topic = clipToWordBoundary(row.topic.trim(), TITLE_MAX);
+      if (topic.length === 0) continue;
+      // The words have to have been said — see phraseSpokenOnTick. This is
+      // the guard that stands between a mishearing and a research pass.
+      if (!phraseSpokenOnTick(window, topic)) continue;
+      const key = `research:${topic.toLowerCase()}`;
+      if (seenTitles.has(key)) continue;
+      seenTitles.add(key);
+      const question =
+        typeof row.question === 'string' && row.question.trim().length > 0
+          ? row.question.trim()
+          : undefined;
+      const requester =
+        typeof row.requester === 'string' ? speakerOnTick(window, row.requester) : undefined;
+      out.push({
+        kind: 'research',
+        topic,
+        ...(question !== undefined ? { question } : {}),
+        ...(requester !== undefined ? { requester } : {}),
+      });
+    } else if (row.kind === 'lookup') {
+      if (typeof row.query !== 'string') continue;
+      const query = row.query.trim().slice(0, QUERY_MAX);
+      if (query.length === 0) continue;
+      // Same vouching as research: a query nobody spoke points at nothing
+      // anyone asked for, whatever it happens to match on the board.
+      if (!phraseSpokenOnTick(window, query)) continue;
+      const key = `lookup:${query.toLowerCase()}`;
+      if (seenTitles.has(key)) continue;
+      seenTitles.add(key);
+      out.push({ kind: 'lookup', query });
     }
   }
   return out;
@@ -485,14 +648,57 @@ export interface TaskCaptureBoard {
     to: TaskStatus,
     opts: { actor: { id: string; name: string; kind?: string }; note?: string },
   ): { ok: boolean };
+  /**
+   * Required, not optional, and that is deliberate: a board that could not
+   * file the confirmation would file research rows with nothing gating
+   * them. There is no wiring in which the ask is skipped.
+   */
+  addReviewItem(
+    taskId: string,
+    review: unknown,
+    opts: { actor: { id: string; name: string; kind?: string } },
+  ): AddReviewItemResult;
+}
+
+/**
+ * Where a lookup ask looks, beyond the board rows this pass has already
+ * read. Docs and their past meetings live behind `rooms` and the meeting
+ * store, which this module has no business knowing about.
+ */
+export interface TaskCaptureLookup {
+  /**
+   * The board's docs and when each last carried a meeting. The meeting's own
+   * doc is excluded by the implementation — "pull up the last meeting" means
+   * the one before this one, and the notes being written are already here.
+   */
+  docs(workspaceId: string, exceptDocId: string): LookupDoc[];
+}
+
+/** What one tick's pass hands the composer: rows it touched, and material it
+ *  was asked to bring in. Both empty is the ordinary answer. */
+export interface CaptureLinks {
+  tasks: NoteTaskLink[];
+  docs: NoteDocLink[];
 }
 
 export interface RunTaskCaptureDeps {
   board: TaskCaptureBoard;
   extractor: TaskCaptureExtractor;
+  /** Where a lookup ask resolves. Absent, lookups are extracted and dropped
+   *  — the same shape as capture being off: a missed convenience. */
+  lookup?: TaskCaptureLookup;
   /** The lead wake — the ready-nudge channel. Fired only for a request the
    *  extractor judged actionable, after its row is `todo`. */
   onTaskReady?: (wake: { workspaceId: string; taskId: string; title: string }) => void;
+  /**
+   * A filed confirmation. `addReviewItem` emits no store event (by design),
+   * so the caller owes the item two things this module cannot reach: a
+   * re-projection of the board room, and the announce that puts it on the
+   * reader's queue. Same contract `proposeAllowRule` honours in server.ts.
+   */
+  onReviewFiled?: (filed: { task: Task; item: TaskReviewItem }) => void;
+  /** Tests: the clock a recency phrase is read against. */
+  now?: () => number;
   onError?: (message: string) => void;
 }
 
@@ -513,7 +719,8 @@ export interface RunTaskCaptureInput {
 export async function runTaskCapture(
   deps: RunTaskCaptureDeps,
   input: RunTaskCaptureInput,
-): Promise<NoteTaskLink[]> {
+): Promise<CaptureLinks> {
+  const none: CaptureLinks = { tasks: [], docs: [] };
   let candidates: TaskCaptureCandidate[];
   try {
     // Done rows stay in: "the tunnel fix from last week is done" is a
@@ -525,7 +732,7 @@ export async function runTaskCapture(
       .map((t) => ({ id: t.id, title: t.title, status: t.status }));
   } catch (err) {
     deps.onError?.(err instanceof Error ? err.message : 'task capture: board read failed');
-    return [];
+    return none;
   }
 
   let items: CapturedItem[];
@@ -538,22 +745,50 @@ export async function runTaskCapture(
     });
   } catch (err) {
     deps.onError?.(err instanceof Error ? err.message : 'task capture failed');
-    return [];
+    return none;
   }
 
   const byId = new Map(candidates.map((c) => [c.id, c]));
   const links: NoteTaskLink[] = [];
+  const docLinks: NoteDocLink[] = [];
   const linked = new Set<string>();
+  const linkedDocs = new Set<string>();
   const pushCandidate = (c: TaskCaptureCandidate): void => {
     if (linked.has(c.id)) return;
     linked.add(c.id);
     links.push({ title: c.title, url: taskCaptureUrl(input.workspaceId, c.id), status: c.status });
+  };
+  /** A row this pass just made, which the candidate list predates. */
+  const pushMade = (id: string, title: string, status: TaskStatus): void => {
+    if (linked.has(id)) return;
+    linked.add(id);
+    links.push({ title, url: taskCaptureUrl(input.workspaceId, id), status });
+    candidates.push({ id, title, status });
   };
 
   for (const item of items) {
     if (item.kind === 'reference') {
       const candidate = byId.get(item.taskId);
       if (candidate) pushCandidate(candidate);
+      continue;
+    }
+    if (item.kind === 'lookup') {
+      handleLookup(deps, input, item, candidates, pushCandidate, docLinks, linkedDocs);
+      continue;
+    }
+    if (item.kind === 'research') {
+      // Asked for twice, or already tracked: link the row rather than file a
+      // second confirmation of the same pass. Same threshold and the same
+      // reasoning as a duplicated request.
+      const tracked = candidates.find(
+        (c) => c.status !== 'done' && requestMatchesCandidate(item.topic, c.title),
+      );
+      if (tracked) {
+        pushCandidate(tracked);
+        continue;
+      }
+      const filed = fileResearchAsk(deps, input, item);
+      if (filed) pushMade(filed.taskId, filed.title, 'triage');
       continue;
     }
     // Find before create: a request that names tracked OPEN work links the
@@ -606,13 +841,135 @@ export async function runTaskCapture(
         });
       }
     }
-    links.push({
-      title: item.title,
-      url: taskCaptureUrl(input.workspaceId, created.task.id),
-      status,
-    });
+    pushMade(created.task.id, item.title, status);
   }
-  return links;
+  return { tasks: links, docs: docLinks };
+}
+
+/**
+ * A research ask becomes a row in TRIAGE plus a decision item asking whether
+ * to spend the pass. Two things gate it, and neither is a promise:
+ *
+ * - **Triage is not a band.** Dispatch runs goal bands in priority order and
+ *   never reaches triage, so the row cannot be picked up even before anybody
+ *   answers.
+ * - **An open review item holds the row.** `ready-gate.ts` reports
+ *   `awaiting-answer` for a row with an unanswered item, so the row stays
+ *   held after triage too, until it is answered.
+ *
+ * The item filing can fail — a board that refuses the payload, a store
+ * error. That costs the row its card, not its safety: the row is still in
+ * triage with no band, which is where an unconfirmed research ask belongs.
+ * The failure is reported, never swallowed.
+ */
+function fileResearchAsk(
+  deps: RunTaskCaptureDeps,
+  input: RunTaskCaptureInput,
+  item: CapturedResearch,
+): { taskId: string; title: string } | null {
+  const title = clipToWordBoundary(`Research: ${item.topic}`, TITLE_MAX);
+  const created = deps.board.createTask(input.workspaceId, {
+    title,
+    body: [
+      `Heard live in the meeting${input.docTitle ? ` "${input.docTitle}"` : ''} by the meeting`,
+      "assistant — the doc's transcript is the source record.",
+      ...(item.question ? [`The question asked: ${item.question}`] : []),
+      ...(item.requester ? [`Asked for by ${item.requester}.`] : []),
+      "Nobody called this research out loud; it is the assistant's reading of the ask,",
+      'so it waits on the review item below before anything is spent on it.',
+    ].join(' '),
+    assignee: MEETING_CAPTURE_ACTOR.name,
+    assigneeKind: 'agent',
+    // No goal, so the row lands in triage: a band would make it dispatchable
+    // the moment the item is answered EITHER way.
+    origin: { kind: 'doc', docId: input.docId },
+    actor: MEETING_CAPTURE_ACTOR,
+  });
+  if (!created.ok) {
+    deps.onError?.(`research capture: create refused (${created.error})`);
+    return null;
+  }
+  const taskId = created.task.id;
+  const url = taskCaptureUrl(input.workspaceId, taskId);
+  const filed = deps.board.addReviewItem(
+    taskId,
+    {
+      review_type: 'decision',
+      headline: `Look into ${clipToWordBoundary(item.topic, 52)}?`,
+      detail: [
+        `Heard in the meeting${input.docTitle ? ` "${input.docTitle}"` : ''}:`,
+        item.question ? `${item.question}` : `somebody wanted ${item.topic} looked into`,
+        item.requester ? `(${item.requester} asked).` : '.',
+        'Nobody said the word "research" — this is the meeting assistant reading an ask',
+        'out of the conversation, which is exactly the kind of reading worth a glance',
+        'before an agent spends a pass on it.',
+        `The row is [${title}](${url}), parked in triage until you answer.`,
+      ].join(' '),
+      options: [
+        {
+          id: 'go-ahead',
+          label: 'Go ahead',
+          detail:
+            'Releases the row so it can be banded and dispatched; an agent does the reading and reports back on the ticket.',
+        },
+        {
+          id: 'not-now',
+          label: 'Not now',
+          detail:
+            'Nothing is spent. The row stays in triage, where you can archive it if the assistant misheard.',
+        },
+      ],
+    },
+    { actor: MEETING_CAPTURE_ACTOR },
+  );
+  if (!filed.ok) {
+    deps.onError?.(`research capture: confirmation refused (${filed.error})`);
+    return { taskId, title };
+  }
+  deps.onReviewFiled?.({ task: filed.task, item: filed.item });
+  return { taskId, title };
+}
+
+/**
+ * A lookup ask becomes a link, or nothing. The resolution is
+ * `meeting-lookup.ts`'s; what happens here is only the routing: a doc
+ * becomes a doc link the composer may cite, and a board row goes down the
+ * path board rows already take, so a lookup and a reference to the same row
+ * cannot produce two links to it.
+ */
+function handleLookup(
+  deps: RunTaskCaptureDeps,
+  input: RunTaskCaptureInput,
+  item: CapturedLookup,
+  candidates: readonly TaskCaptureCandidate[],
+  pushCandidate: (c: TaskCaptureCandidate) => void,
+  docLinks: NoteDocLink[],
+  linkedDocs: Set<string>,
+): void {
+  if (!deps.lookup) return;
+  const now = deps.now?.() ?? Date.now();
+  let docs: LookupDoc[];
+  try {
+    docs = deps.lookup.docs(input.workspaceId, input.docId);
+  } catch (err) {
+    deps.onError?.(err instanceof Error ? err.message : 'lookup: doc read failed');
+    return;
+  }
+  const hit = resolveLookup(item.query, { docs, tasks: candidates }, now);
+  if (!hit) return;
+  if (hit.kind === 'task') {
+    const candidate = candidates.find((c) => c.id === hit.taskId);
+    if (candidate) pushCandidate(candidate);
+    return;
+  }
+  if (linkedDocs.has(hit.docId)) return;
+  linkedDocs.add(hit.docId);
+  const when = lookupWhen(hit, parseRecency(item.query, now));
+  docLinks.push({
+    title: hit.title,
+    url: docLookupUrl(input.workspaceId, hit.docId),
+    ...(when !== undefined ? { when } : {}),
+  });
 }
 
 const API_URL = 'https://api.anthropic.com/v1/messages';

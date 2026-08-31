@@ -129,9 +129,11 @@ import {
   buildLandingModel,
 } from './landing.ts';
 import { linkTitlesFor } from './link-titles.ts';
+import type { LookupDoc } from './meeting-lookup.ts';
 import { withServerNotesSinks } from './meeting-notes-doc.ts';
 import type { MeetingNotesOptions } from './meeting-notes.ts';
 import { MeetingRelay } from './meeting-protocol.ts';
+import { MEETING_CAPTURE_ACTOR } from './meeting-task-capture.ts';
 import { MeetingStore } from './meetings.ts';
 import {
   LOOPBACK_HOSTS,
@@ -1343,12 +1345,28 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           // gets. Both close over consts declared below; a meeting can only
           // start long after createServer has returned.
           captureBoard: () => taskStore,
+          // Where "pull up last week's notes" looks. Board docs and when
+          // each last carried a meeting; the meeting's own doc is dropped
+          // by the caller, since "the last meeting" means the one before.
+          lookup: { docs: (workspaceId, exceptDocId) => lookupDocs(workspaceId, exceptDocId) },
           onTaskReady: (wake) =>
             readyNudger.taskReady({
               workspaceId: wake.workspaceId,
               taskId: wake.taskId,
               taskTitle: wake.title,
             }),
+          // The two steps `addReviewItem` cannot take for itself, exactly as
+          // `proposeAllowRule` takes them: re-project so the board room
+          // carries the item, and announce so it reaches the reader's queue.
+          onReviewFiled: ({ task, item }) => {
+            taskProjection.ensureWorkspace(task.workspaceId);
+            announceTaskReview(task, item, {
+              id: MEETING_CAPTURE_ACTOR.id,
+              name: MEETING_CAPTURE_ACTOR.name,
+              kind: 'known',
+              color: ANONYMOUS_ACTOR.color,
+            });
+          },
         })
       : null,
     // Lifecycle only. The words never touch this hub — see meeting-protocol.
@@ -1438,6 +1456,41 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
   // reads the task notes the routes below append and writes nothing but its
   // own sidecar — never a settings file.
   const allowRules = new AllowRuleProposals(dataDir);
+  /**
+   * The board's docs as a lookup ask sees them: a title to match on, and
+   * when each last carried a meeting — which is what makes "last week's
+   * notes" resolvable at all, since a meeting record has times and no
+   * subject of its own.
+   *
+   * Runs only when a tick actually carried a lookup ask, and reads a small
+   * index file per doc, so the cap is generous rather than tuned; it exists
+   * so a board that has accumulated hundreds of docs cannot turn one spoken
+   * sentence into hundreds of stats.
+   */
+  function lookupDocs(workspaceId: string, exceptDocId: string): LookupDoc[] {
+    const workspace = taskStore.getWorkspace(workspaceId);
+    if (!workspace) return [];
+    const out: LookupDoc[] = [];
+    for (const docId of workspace.docIds) {
+      if (out.length >= 200) break;
+      if (docId === exceptDocId) continue;
+      // A doc with no title has nothing to match on and nothing to show in a
+      // link, so it is not material anybody can ask for by name.
+      const title = rooms.peekMeta(docId)?.title;
+      if (!title) continue;
+      let last: number | undefined;
+      try {
+        // Oldest first, so the newest meeting is the tail.
+        last = meetingStore.list(docId).at(-1)?.startedAt;
+      } catch {
+        // An unreadable meeting index costs this doc its "when", not the
+        // whole lookup: it stays matchable by title.
+      }
+      out.push({ docId, title, ...(last !== undefined ? { meetingAt: last } : {}) });
+    }
+    return out;
+  }
+
   /** A denial's own agent, as the author of the item it triggered — so the
    *  card says who was blocked, the way a comment-borne ask names its poster. */
   function proposeAllowRule(

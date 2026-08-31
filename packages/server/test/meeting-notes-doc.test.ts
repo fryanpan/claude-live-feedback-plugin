@@ -606,6 +606,7 @@ describe('withServerNotesSinks task capture', () => {
         return { ok: false as const, error: 'workspace-retired' };
       },
       transition: () => ({ ok: false as const }),
+      addReviewItem: () => ({ ok: false, error: 'not-found' }) as never,
     };
     const extractor = {
       name: 'stub',
@@ -625,13 +626,13 @@ describe('withServerNotesSinks task capture', () => {
         onTaskReady: (wake) => w.wakes.push(wake),
       },
     );
-    const links = await wired.captureTasks?.({
+    const links = await wired.captureIntents?.({
       docId: 'doc-a',
       meetingId: 'm-1',
       turns: [{ turn: 1, text: 'The navbar strip task again.' }],
       priorTurns: [],
     });
-    expect(links).toEqual([
+    expect(links?.tasks).toEqual([
       { title: 'Live navbar strip task', url: '/workspaces/w-1?task=t-live', status: 'todo' },
     ]);
     expect(w.created).toHaveLength(0);
@@ -647,13 +648,13 @@ describe('withServerNotesSinks task capture', () => {
         captureBoard: () => w.board,
       },
     );
-    const links = await wired.captureTasks?.({
+    const links = await wired.captureIntents?.({
       docId: 'doc-unknown',
       meetingId: 'm-1',
       turns: [{ turn: 1, text: 'Anything.' }],
       priorTurns: [],
     });
-    expect(links).toEqual([]);
+    expect(links).toEqual({ tasks: [], docs: [] });
   });
 
   it('no extractor means no capture hook at all', () => {
@@ -662,7 +663,7 @@ describe('withServerNotesSinks task capture', () => {
       { composer: { name: 's', compose: async () => 'n' } },
       { rooms: () => w.rooms, tasks: () => ({ listTasks: () => [] }), captureBoard: () => w.board },
     );
-    expect(wired.captureTasks).toBeUndefined();
+    expect(wired.captureIntents).toBeUndefined();
   });
 });
 

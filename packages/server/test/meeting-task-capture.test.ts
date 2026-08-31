@@ -21,12 +21,14 @@ import {
   createHaikuTaskCaptureExtractor,
   overlapWindow,
   parseTaskCaptureReply,
+  phraseSpokenOnTick,
   requestMatchesCandidate,
   runTaskCapture,
   speakerOnTick,
   taskCaptureUrl,
   tickMentionsCandidate,
 } from '../src/meeting-task-capture.ts';
+import type { AddReviewItemResult } from '../src/tasks.ts';
 
 const candidates: TaskCaptureCandidate[] = [
   { id: 't-pop', title: 'Popover loses anchor while scrolling', status: 'in-progress' },
@@ -166,30 +168,56 @@ describe('taskCaptureUrl', () => {
 });
 
 /** A board stub that records every write. */
-function boardStub(over: { failCreate?: boolean } = {}) {
+function boardStub(over: { failCreate?: boolean; failReview?: boolean } = {}) {
   const created: Array<import('../src/tasks.ts').CreateTaskOpts> = [];
   const transitions: Array<{ taskId: string; to: string; actor: unknown }> = [];
+  const reviews: Array<{ taskId: string; review: ReviewRecord; actor: unknown }> = [];
+  // Rows this stub has filed. A real board remembers them, and the pass that
+  // runs a tick later has to see them or it would twin what it just created.
+  const filedRows: TaskCaptureCandidate[] = [];
   let nextId = 0;
   return {
     created,
     transitions,
+    reviews,
     board: {
-      listTasks: () => candidates.map((c) => ({ ...c })),
+      listTasks: () => [...candidates, ...filedRows].map((c) => ({ ...c })),
       createTask: (_ws: string, opts: import('../src/tasks.ts').CreateTaskOpts) => {
         if (over.failCreate) return { ok: false as const, error: 'workspace-retired' };
         created.push(opts);
         nextId++;
+        const id = `t-new${nextId}`;
+        filedRows.push({ id, title: opts.title, status: 'triage' });
         return {
           ok: true as const,
-          task: { id: `t-new${nextId}`, title: opts.title, status: 'triage' },
+          task: { id, title: opts.title, status: 'triage' },
         };
       },
       transition: (taskId: string, to: string, opts: { actor: unknown }) => {
         transitions.push({ taskId, to, actor: opts.actor });
         return { ok: true as const };
       },
+      addReviewItem: (taskId: string, review: unknown, opts: { actor: unknown }) => {
+        if (over.failReview) {
+          return { ok: false, error: 'bad-review' } as unknown as AddReviewItemResult;
+        }
+        reviews.push({ taskId, review: review as ReviewRecord, actor: opts.actor });
+        return {
+          ok: true,
+          task: { id: taskId, workspaceId: 'w-board', title: 'filed row' },
+          item: { id: `r-${reviews.length}`, review },
+        } as unknown as AddReviewItemResult;
+      },
     },
   };
+}
+
+/** The decision payload the research path files, as the stub records it. */
+interface ReviewRecord {
+  review_type?: string;
+  headline?: string;
+  detail?: string;
+  options?: Array<{ id: string; label: string; detail?: string }>;
 }
 
 function extractorOf(items: unknown) {
@@ -209,7 +237,7 @@ describe('runTaskCapture', () => {
       tickInput,
     );
     expect(created).toHaveLength(0);
-    expect(links).toEqual([
+    expect(links.tasks).toEqual([
       {
         title: 'Popover loses anchor while scrolling',
         url: '/workspaces/w-board?task=t-pop',
@@ -245,7 +273,7 @@ describe('runTaskCapture', () => {
     expect(opts.goal).toBeUndefined();
     expect(transitions).toHaveLength(0);
     expect(wakes).toHaveLength(0);
-    expect(links).toEqual([
+    expect(links.tasks).toEqual([
       {
         title: 'Strip overlaps navbar on short screens',
         url: '/workspaces/w-board?task=t-new1',
@@ -276,7 +304,7 @@ describe('runTaskCapture', () => {
         title: 'Strip overlaps navbar on short screens',
       },
     ]);
-    expect(links[0]?.status).toBe('todo');
+    expect(links.tasks[0]?.status).toBe('todo');
   });
 
   it('files a request that duplicates a tracked task as a reference instead', async () => {
@@ -291,7 +319,7 @@ describe('runTaskCapture', () => {
       tickInput,
     );
     expect(created).toHaveLength(0);
-    expect(links[0]?.url).toBe('/workspaces/w-board?task=t-pop');
+    expect(links.tasks[0]?.url).toBe('/workspaces/w-board?task=t-pop');
   });
 
   it('a failed extract is silence, never a write', async () => {
@@ -303,7 +331,7 @@ describe('runTaskCapture', () => {
       },
       tickInput,
     );
-    expect(links).toEqual([]);
+    expect(links.tasks).toEqual([]);
     expect(created).toHaveLength(0);
     expect(transitions).toHaveLength(0);
   });
@@ -319,7 +347,7 @@ describe('runTaskCapture', () => {
       },
       tickInput,
     );
-    expect(links).toEqual([]);
+    expect(links.tasks).toEqual([]);
   });
 });
 
@@ -562,7 +590,7 @@ describe('an ask that spans two ticks', () => {
       'Export dialog forgets the chosen range',
     ]);
     expect(created[0]?.body).toContain('Asked for by Priya.');
-    expect(links).toHaveLength(2);
+    expect(links.tasks).toHaveLength(2);
   });
 
   it('case 3 — the overlap is marked, and last pass’s row is linked, not twinned', async () => {
@@ -592,6 +620,7 @@ describe('an ask that spans two ticks', () => {
         return { ok: true as const, task: { id: 't-twin' } };
       },
       transition: () => ({ ok: true as const }),
+      addReviewItem: () => ({ ok: false, error: 'not-found' }) as never,
     };
     const links = await runTaskCapture(
       {
@@ -603,7 +632,7 @@ describe('an ask that spans two ticks', () => {
       { workspaceId: 'w-board', docId: 'doc-m', turns: deicticTick, priorTurns: priorTick },
     );
     expect(created).toHaveLength(0);
-    expect(links).toEqual([
+    expect(links.tasks).toEqual([
       { title: filed.title, url: '/workspaces/w-board?task=t-lan', status: 'todo' },
     ]);
   });
@@ -680,5 +709,400 @@ describe('the overlap window', () => {
     // asks the token counter rather than dividing characters by four; this
     // bound is the character ceiling that number was taken at.
     expect(delta).toBeLessThanOrEqual(400);
+  });
+});
+
+/**
+ * The two intents that arrived after requests and references — asking for
+ * something to be looked into, and asking for something to be pulled in.
+ *
+ * They ride the same reply, so most of what is asserted here is that they
+ * ride it WITHOUT costing the other two: a malformed research row leaves the
+ * request beside it alone, and a lookup nobody can resolve is silence.
+ */
+
+/** Speech that asks for research without ever using the word. */
+const researchTurns: NotesTurn[] = [
+  { turn: 7, speaker: 'Priya', text: 'The offline queue keeps replaying the same batch.' },
+  { turn: 8, speaker: 'Priya', text: 'Can somebody go look into the offline queue replay?' },
+];
+
+describe('phraseSpokenOnTick', () => {
+  it('vouches for a phrase the speech carried', () => {
+    expect(phraseSpokenOnTick(researchTurns, 'offline queue replay')).toBe(true);
+  });
+
+  it('drops a phrase the speech never carried', () => {
+    expect(phraseSpokenOnTick(researchTurns, 'billing webhook signatures')).toBe(false);
+  });
+
+  it('needs two significant words when the phrase has two', () => {
+    // "queue" alone was said; "throughput" never was — one hit of two.
+    expect(phraseSpokenOnTick(researchTurns, 'queue throughput')).toBe(false);
+  });
+
+  it('accepts a one-word phrase on its one word', () => {
+    expect(phraseSpokenOnTick(researchTurns, 'replay')).toBe(true);
+  });
+
+  it('drops a phrase with no significant words to vouch for at all', () => {
+    // Every word a stopword: nothing could ever vouch for it, so an empty
+    // match must not read as a pass.
+    expect(phraseSpokenOnTick(researchTurns, 'that thing')).toBe(false);
+  });
+});
+
+describe('the research and lookup prompt', () => {
+  it('names both intents in the shape and tells the model not to wait for the word', () => {
+    const { system } = buildTaskCapturePrompt({ turns: researchTurns, candidates });
+    expect(system).toContain('"kind":"research"');
+    expect(system).toContain('"kind":"lookup"');
+    expect(system).toContain('rarely say the word "research"');
+    // The "when" clause is what makes a past meeting reachable at all.
+    expect(system).toContain('KEEPING any "when"');
+  });
+});
+
+describe('parsing the reading intents', () => {
+  const parse = (items: unknown) =>
+    parseTaskCaptureReply(JSON.stringify({ items }), candidates, researchTurns);
+
+  it('keeps a research ask whose topic was spoken', () => {
+    expect(
+      parse([{ kind: 'research', topic: 'offline queue replay', question: 'why does it repeat?' }]),
+    ).toEqual([
+      { kind: 'research', topic: 'offline queue replay', question: 'why does it repeat?' },
+    ]);
+  });
+
+  it('drops a research ask whose topic nobody said', () => {
+    expect(parse([{ kind: 'research', topic: 'Postgres connection pooling' }])).toEqual([]);
+  });
+
+  it('attributes a research ask only to a voice the tick carried', () => {
+    expect(
+      parse([{ kind: 'research', topic: 'offline queue replay', requester: 'priya' }]),
+    ).toEqual([{ kind: 'research', topic: 'offline queue replay', requester: 'Priya' }]);
+    expect(
+      parse([{ kind: 'research', topic: 'offline queue replay', requester: 'Marcus' }]),
+    ).toEqual([{ kind: 'research', topic: 'offline queue replay' }]);
+  });
+
+  it('keeps a lookup whose query was spoken and drops one that was not', () => {
+    expect(parse([{ kind: 'lookup', query: 'the offline queue notes' }])).toEqual([
+      { kind: 'lookup', query: 'the offline queue notes' },
+    ]);
+    expect(parse([{ kind: 'lookup', query: 'the hiring plan' }])).toEqual([]);
+  });
+
+  it('drops the same ask twice', () => {
+    expect(
+      parse([
+        { kind: 'research', topic: 'offline queue replay' },
+        { kind: 'research', topic: 'Offline Queue Replay' },
+      ]),
+    ).toHaveLength(1);
+  });
+
+  it('lets one malformed intent cost only itself', () => {
+    const out = parse([
+      { kind: 'research', topic: 42 },
+      { kind: 'lookup' },
+      { kind: 'research', topic: 'offline queue replay' },
+    ]);
+    expect(out).toEqual([{ kind: 'research', topic: 'offline queue replay' }]);
+  });
+});
+
+const researchInput = {
+  workspaceId: 'w-board',
+  docId: 'doc-m',
+  docTitle: 'Demo prep',
+  turns: researchTurns,
+};
+
+describe('runTaskCapture — a research ask confirms before it spends', () => {
+  it('files a triage row and a decision item, and sets nothing moving', async () => {
+    const { board, created, transitions, reviews } = boardStub();
+    const wakes: unknown[] = [];
+    const filed: Array<{ taskId: string }> = [];
+    const links = await runTaskCapture(
+      {
+        board,
+        extractor: extractorOf([
+          { kind: 'research', topic: 'offline queue replay', question: 'why does it repeat?' },
+        ]),
+        onTaskReady: (w) => wakes.push(w),
+        onReviewFiled: ({ task }) => filed.push({ taskId: task.id }),
+      },
+      researchInput,
+    );
+
+    // The row exists, in triage, banded nowhere — so dispatch cannot reach
+    // it even before anybody answers.
+    expect(created).toHaveLength(1);
+    expect(created[0]?.title).toBe('Research: offline queue replay');
+    expect(created[0]?.goal).toBeUndefined();
+    expect(created[0]?.actor).toEqual(MEETING_CAPTURE_ACTOR);
+    expect(created[0]?.origin).toEqual({ kind: 'doc', docId: 'doc-m' });
+    // Nothing is spent: no transition out of triage, no lead wake.
+    expect(transitions).toHaveLength(0);
+    expect(wakes).toHaveLength(0);
+
+    // And the ask itself: a decision with two options, on that row.
+    expect(reviews).toHaveLength(1);
+    expect(reviews[0]?.taskId).toBe('t-new1');
+    expect(reviews[0]?.review.review_type).toBe('decision');
+    expect(reviews[0]?.review.headline).toContain('offline queue replay');
+    expect(reviews[0]?.review.options?.map((o) => o.id)).toEqual(['go-ahead', 'not-now']);
+    // The card has to say where to look — an inline link to the row.
+    expect(reviews[0]?.review.detail).toContain('/workspaces/w-board?task=t-new1');
+    expect(reviews[0]?.review.detail).toContain('why does it repeat?');
+    // The caller owes the item its projection and announce.
+    expect(filed).toEqual([{ taskId: 't-new1' }]);
+
+    expect(links.tasks).toEqual([
+      {
+        title: 'Research: offline queue replay',
+        url: '/workspaces/w-board?task=t-new1',
+        status: 'triage',
+      },
+    ]);
+  });
+
+  it('records who asked, when the tick carried them', async () => {
+    const { board, created } = boardStub();
+    await runTaskCapture(
+      {
+        board,
+        extractor: extractorOf([
+          { kind: 'research', topic: 'offline queue replay', requester: 'Priya' },
+        ]),
+      },
+      researchInput,
+    );
+    expect(created[0]?.body).toContain('Priya');
+  });
+
+  it('links the row it already filed rather than asking a second time', async () => {
+    // The same ask twice: once in this tick's reply, and once a whole tick
+    // later, when the row from the first pass is a candidate the board
+    // returns. Neither may produce a second confirmation to answer.
+    const { board, created, reviews } = boardStub();
+    const first = await runTaskCapture(
+      {
+        board,
+        extractor: extractorOf([
+          { kind: 'research', topic: 'offline queue replay' },
+          { kind: 'research', topic: 'offline queue replay problem' },
+        ]),
+      },
+      researchInput,
+    );
+    expect(first.tasks).toHaveLength(1);
+
+    const later = await runTaskCapture(
+      { board, extractor: extractorOf([{ kind: 'research', topic: 'offline queue replay' }]) },
+      researchInput,
+    );
+    expect(created).toHaveLength(1);
+    expect(reviews).toHaveLength(1);
+    expect(later.tasks).toEqual([
+      {
+        title: 'Research: offline queue replay',
+        url: '/workspaces/w-board?task=t-new1',
+        status: 'triage',
+      },
+    ]);
+  });
+
+  it('a refused confirmation leaves the row in triage and says so', async () => {
+    const { board, created, transitions } = boardStub({ failReview: true });
+    const errors: string[] = [];
+    const links = await runTaskCapture(
+      {
+        board,
+        extractor: extractorOf([{ kind: 'research', topic: 'offline queue replay' }]),
+        onError: (m) => errors.push(m),
+      },
+      researchInput,
+    );
+    expect(created).toHaveLength(1);
+    // Triage and unbanded is where an unconfirmed ask belongs; the missing
+    // card costs it its visibility, never its safety.
+    expect(transitions).toHaveLength(0);
+    expect(links.tasks[0]?.status).toBe('triage');
+    expect(errors[0]).toContain('confirmation refused');
+  });
+});
+
+describe('runTaskCapture — a lookup reaches docs and past meetings', () => {
+  const lookupTurns: NotesTurn[] = [
+    { turn: 3, speaker: 'Marcus', text: 'Can you pull in the offline queue notes from last week?' },
+  ];
+  const lookupInput = {
+    workspaceId: 'w-board',
+    docId: 'doc-m',
+    docTitle: 'Demo prep',
+    turns: lookupTurns,
+  };
+  const NOW = new Date(2026, 7, 26, 15, 0, 0).getTime();
+  const lastWeek = new Date(2026, 7, 19, 10, 0, 0).getTime();
+  const lookup = {
+    docs: () => [
+      { docId: 'd-queue', title: 'Offline queue notes', meetingAt: lastWeek },
+      { docId: 'd-charter', title: 'Team charter' },
+    ],
+  };
+
+  it('links a past meeting found by name, dated rather than paraphrased', async () => {
+    const { board } = boardStub();
+    const links = await runTaskCapture(
+      {
+        board,
+        extractor: extractorOf([
+          { kind: 'lookup', query: 'the offline queue notes from last week' },
+        ]),
+        lookup,
+        now: () => NOW,
+      },
+      lookupInput,
+    );
+    // The TITLE is what matched, so the date is the only thing that can be
+    // said honestly: a doc found by name may not have been last week's.
+    expect(links.docs).toEqual([
+      {
+        title: 'Offline queue notes',
+        url: '/workspaces/w-board/docs/d-queue',
+        when: '2026-08-19',
+      },
+    ]);
+    expect(links.tasks).toEqual([]);
+  });
+
+  it('reaches a past meeting by when alone, in the speaker’s own frame', async () => {
+    // "last week's notes" names no title — every doc is "notes" and "week"
+    // is a stopword. The window is the only thing that resolves it, so the
+    // window's own words are what the link may be labelled with.
+    const { board } = boardStub();
+    const links = await runTaskCapture(
+      {
+        board,
+        extractor: extractorOf([{ kind: 'lookup', query: "last week's notes" }]),
+        lookup,
+        now: () => NOW,
+      },
+      {
+        ...lookupInput,
+        turns: [{ turn: 3, speaker: 'Marcus', text: "Pull in last week's notes for me." }],
+      },
+    );
+    expect(links.docs).toEqual([
+      {
+        title: 'Offline queue notes',
+        url: '/workspaces/w-board/docs/d-queue',
+        when: 'last week',
+      },
+    ]);
+  });
+
+  it('never asks for the meeting doc it is already in', async () => {
+    const { board } = boardStub();
+    const asked: Array<[string, string]> = [];
+    await runTaskCapture(
+      {
+        board,
+        extractor: extractorOf([{ kind: 'lookup', query: 'the offline queue notes' }]),
+        lookup: {
+          docs: (ws, except) => {
+            asked.push([ws, except]);
+            return lookup.docs();
+          },
+        },
+        now: () => NOW,
+      },
+      lookupInput,
+    );
+    expect(asked).toEqual([['w-board', 'doc-m']]);
+  });
+
+  it('sends a lookup that lands on a board row down the task path', async () => {
+    const { board } = boardStub();
+    const links = await runTaskCapture(
+      {
+        board,
+        extractor: extractorOf([{ kind: 'lookup', query: 'the popover anchor scrolling ticket' }]),
+        lookup,
+        now: () => NOW,
+      },
+      {
+        ...lookupInput,
+        turns: [
+          { turn: 3, text: 'Bring up the popover anchor scrolling ticket while we are here.' },
+        ],
+      },
+    );
+    expect(links.docs).toEqual([]);
+    expect(links.tasks[0]?.url).toBe('/workspaces/w-board?task=t-pop');
+  });
+
+  it('links one doc once, however many ways it was asked for', async () => {
+    const { board } = boardStub();
+    const links = await runTaskCapture(
+      {
+        board,
+        extractor: extractorOf([
+          { kind: 'lookup', query: 'the offline queue notes' },
+          { kind: 'lookup', query: 'the offline queue notes from last week' },
+        ]),
+        lookup,
+        now: () => NOW,
+      },
+      lookupInput,
+    );
+    expect(links.docs).toHaveLength(1);
+  });
+
+  it('resolves nothing with no lookup source wired, and does not throw', async () => {
+    const { board } = boardStub();
+    const links = await runTaskCapture(
+      { board, extractor: extractorOf([{ kind: 'lookup', query: 'the offline queue notes' }]) },
+      lookupInput,
+    );
+    expect(links).toEqual({ tasks: [], docs: [] });
+  });
+
+  it('a lookup source that throws costs the link, not the pass', async () => {
+    const { board } = boardStub();
+    const errors: string[] = [];
+    const links = await runTaskCapture(
+      {
+        board,
+        extractor: extractorOf([
+          { kind: 'lookup', query: 'the offline queue notes' },
+          { kind: 'reference', taskId: 't-pop' },
+        ]),
+        lookup: {
+          docs: () => {
+            throw new Error('doc index unreadable');
+          },
+        },
+        onError: (m) => errors.push(m),
+        now: () => NOW,
+      },
+      {
+        ...lookupInput,
+        turns: [
+          {
+            turn: 3,
+            text: 'Pull in the offline queue notes; the popover anchor scrolling one too.',
+          },
+        ],
+      },
+    );
+    expect(links.docs).toEqual([]);
+    // The reference beside it still landed.
+    expect(links.tasks[0]?.url).toBe('/workspaces/w-board?task=t-pop');
+    expect(errors).toEqual(['doc index unreadable']);
   });
 });
