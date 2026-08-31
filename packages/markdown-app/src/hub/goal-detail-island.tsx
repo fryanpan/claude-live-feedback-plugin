@@ -267,6 +267,16 @@ function GoalDetailPanel(props: {
   // screen the panel covers the board, so the board must stop reserving room
   // for it. Same two classes the task panel writes, because it is the same
   // overlay geometry — a second set would need a second copy of the CSS.
+  //
+  // Deliberately WITHOUT an unmount cleanup, which reads like a leak and is
+  // not one (raised in review, measured before answering). The board rule is
+  // `body.hub-detail-open.hub-detail-full`, and `hub-detail-open` comes off
+  // when the last panel closes — so the class left behind matches nothing: a
+  // board measured after closing a full-screen panel is 1472px wide, exactly
+  // the width of one that has never been full screen. What the class DOES do
+  // is carry the reader's choice to the next row they open — `full` is seeded
+  // from it above — and reopening restores the wide panel (1905px against
+  // 1100px) because it survived. A cleanup here would delete that.
   useLayoutEffect(() => {
     host.classList.toggle('hub-detail--full', full);
     document.body.classList.toggle('hub-detail-full', full);
