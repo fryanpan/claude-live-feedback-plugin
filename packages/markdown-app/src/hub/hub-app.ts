@@ -8,13 +8,21 @@
  * mutation goes through the REST gate — never by writing into the maps,
  * which the server would revert.
  */
-import { type ReviewPayload, type Thread, type User, connect, escapeHtml } from '@feedback/core';
+import {
+  type CaptureMode,
+  type ReviewPayload,
+  type Thread,
+  type User,
+  connect,
+  escapeHtml,
+} from '@feedback/core';
 import {
   renderConnectionBanner,
   renderLiveStaleNotice,
   watchConnection,
   watchLiveSync,
 } from '../connection-state.ts';
+import { HUDDLE_MODE_PARAM } from '../huddle-entry.ts';
 import { MIC_ICON, SVG, SVG_ENDS } from '../icons.ts';
 import { ensureUserIdentity } from '../identity-prompt.ts';
 import { wireKeyboardInset } from '../keyboard-inset.ts';
@@ -1939,7 +1947,8 @@ async function main(): Promise<void> {
     // call, so a board repaint cannot rebuild a button mid-request.
     renderQuickActions(el('hub-quick'), {
       onNewTask: () => newTask(),
-      onStartHuddle: () => startHuddle(),
+      onStartHuddle: () => startHuddle('solo'),
+      onStartConversation: () => startHuddle('conversation'),
     });
     renderLead();
     renderMe();
@@ -2456,12 +2465,16 @@ async function main(): Promise<void> {
   }
 
   /**
-   * The Board's "Start a planning huddle": ONE call makes the huddle doc on
-   * this board, and the page leaves for it at once with the flag the editor
-   * reads to start the meeting assistant without a press. The click here is
-   * the person's gesture; `huddle-entry.ts` is the other half.
+   * The Board's two mic buttons: ONE call makes the huddle doc on this
+   * board, and the page leaves for it at once with the flag the editor reads
+   * to start the meeting assistant without a press. The click here is the
+   * person's gesture; `huddle-entry.ts` is the other half.
+   *
+   * `mode` is the only difference between "Start a planning huddle" and
+   * "Record a conversation" — the doc, the route and the file are the same.
+   * Solo asks for no speaker labels and pays for none.
    */
-  async function startHuddle(): Promise<boolean> {
+  async function startHuddle(mode: CaptureMode): Promise<boolean> {
     const res = await send(
       `/api/workspaces/${encodeURIComponent(workspaceId)}/huddles`,
       'POST',
@@ -2474,7 +2487,10 @@ async function main(): Promise<void> {
       showToast(why);
       return false;
     }
-    location.assign(`${url}?huddle=1`);
+    // The mode rides the address beside the start flag: this press is the
+    // only thing that knows whether anyone else is in the room, and the
+    // editor that opens the mic is a different page.
+    location.assign(`${url}?huddle=1&${HUDDLE_MODE_PARAM}=${mode}`);
     return true;
   }
 

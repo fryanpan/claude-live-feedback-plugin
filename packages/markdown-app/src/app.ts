@@ -1,4 +1,11 @@
-import { type User, connect, escapeHtml, readDocMeta, suggestOps } from '@feedback/core';
+import {
+  DEFAULT_CAPTURE_MODE,
+  type User,
+  connect,
+  escapeHtml,
+  readDocMeta,
+  suggestOps,
+} from '@feedback/core';
 import { mountCode } from './code/code-app.ts';
 import { saveStateView, settlePending, watchConnection } from './connection-state.ts';
 import { renderDiffNav, setActiveFile } from './diff-nav.ts';
@@ -7,7 +14,7 @@ import { docHref, workspaceIdFromPath } from './doc-path.ts';
 import { wireEditViewport } from './edit-viewport.ts';
 import { type EditorHandle, createEditor } from './editor.ts';
 import { trackGesture } from './gesture.ts';
-import { wantsHuddleStart, withoutHuddleStart } from './huddle-entry.ts';
+import { huddleCaptureMode, wantsHuddleStart, withoutHuddleStart } from './huddle-entry.ts';
 import { ensureUserIdentity } from './identity-prompt.ts';
 import { wireKeyboardInset } from './keyboard-inset.ts';
 import { mountMeetingStrip } from './meeting-strip.ts';
@@ -279,6 +286,11 @@ async function mountMarkdown(ctx: MountContext): Promise<void> {
   const meetingStripEl = document.getElementById('meeting-strip');
   if (meetingStripEl && ctx.docType === 'markdown' && ctx.navDocId === undefined) {
     const huddleStart = wantsHuddleStart(location.search);
+    // "Record a conversation" is the only thing that says someone else is in
+    // the room, and it is a press on the Board — a page that is gone by the
+    // time this mounts. It rides in on the address with the start flag and
+    // leaves with it.
+    const huddleMode = huddleStart ? huddleCaptureMode(location.search) : DEFAULT_CAPTURE_MODE;
     if (huddleStart) {
       history.replaceState(
         history.state,
@@ -286,7 +298,15 @@ async function mountMarkdown(ctx: MountContext): Promise<void> {
         withoutHuddleStart(location.pathname + location.search + location.hash),
       );
     }
-    const strip = mountMeetingStrip({ docId, root: meetingStripEl, autoStart: huddleStart });
+    const strip = mountMeetingStrip({
+      docId,
+      root: meetingStripEl,
+      autoStart: huddleStart,
+      // Read BEFORE the flag is stripped from the address above… it is, in
+      // fact, read from `location.search` there too, so both come off the
+      // same address; see `huddleCaptureMode`.
+      mode: huddleMode,
+    });
     scope.onCleanup(() => strip.destroy());
   }
 

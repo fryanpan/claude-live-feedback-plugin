@@ -24,5 +24,12 @@ export const SVG_ENDS = 'stroke-linecap="round" stroke-linejoin="round" aria-hid
  */
 export const MIC_ICON = `<svg ${SVG} ${SVG_ENDS}><rect x="9" y="2.5" width="6" height="11" rx="3"/><path d="M5.5 11.5a6.5 6.5 0 0 0 13 0"/><path d="M12 18v3.2"/><path d="M8.6 21.2h6.8"/></svg>`;
 
+/**
+ * Two people — the Board's "Record a conversation". The mic beside it starts
+ * a huddle for one voice; this one says there is somebody else in the room,
+ * which is the whole difference between the two buttons.
+ */
+export const PEOPLE_ICON = `<svg ${SVG} ${SVG_ENDS}><circle cx="9" cy="8" r="3.2"/><path d="M3.2 20a5.8 5.8 0 0 1 11.6 0"/><path d="M16.2 5.2a3.2 3.2 0 0 1 0 6.2"/><path d="M17.4 14.6A5.8 5.8 0 0 1 20.8 20"/></svg>`;
+
 /** New task — the Board's primary action, drawn in the same vocabulary. */
 export const PLUS_ICON = `<svg ${SVG} ${SVG_ENDS}><path d="M12 5v14"/><path d="M5 12h14"/></svg>`;

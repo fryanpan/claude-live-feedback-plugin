@@ -12,12 +12,26 @@
  * applies it beside the back arrow, as shell chrome that outlives each mount.
  */
 
+import { type CaptureMode, parseCaptureMode } from '@feedback/core';
+
 /** `?huddle=1` — set by the Board, consumed by the markdown mount. */
 export const HUDDLE_START_PARAM = 'huddle';
+
+/**
+ * `?mode=conversation` — the Board's "Record a conversation" button. The
+ * choice is made on the Board because that press is the only thing that says
+ * anyone else is in the room: nothing announces an in-person conversation.
+ */
+export const HUDDLE_MODE_PARAM = 'mode';
 
 /** Whether this address asks the editor to start the meeting on load. */
 export function wantsHuddleStart(search: string): boolean {
   return new URLSearchParams(search).get(HUDDLE_START_PARAM) === '1';
+}
+
+/** What the huddle on this address listens for. Solo unless it says so. */
+export function huddleCaptureMode(search: string): CaptureMode {
+  return parseCaptureMode(new URLSearchParams(search).get(HUDDLE_MODE_PARAM));
 }
 
 /** The same address with the flag taken out; everything else stays. */
@@ -30,6 +44,9 @@ export function withoutHuddleStart(href: string): string {
   const hash = hashAt < 0 ? '' : href.slice(hashAt);
   const params = new URLSearchParams(search);
   params.delete(HUDDLE_START_PARAM);
+  // Both halves of the same one-shot gesture: leaving the mode behind would
+  // make a reload of this address a conversation nobody asked for.
+  params.delete(HUDDLE_MODE_PARAM);
   const rest = params.toString();
   return `${path}${rest ? `?${rest}` : ''}${hash}`;
 }

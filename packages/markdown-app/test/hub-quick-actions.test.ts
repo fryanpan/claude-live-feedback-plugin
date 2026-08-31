@@ -6,15 +6,18 @@ import { type DetailHandlers, renderQuickActions } from '../src/hub/hub-render.t
 import { disposeTaskDetail, renderTaskDetail } from './support/task-detail.ts';
 
 /**
- * The Board's quick-add text box is gone; in its slot are the two ways work
+ * The Board's quick-add text box is gone; in its slot are the three ways work
  * starts (Bryan, 2026-08-29: *"From board, have a quick flow to create a new
  * task (replace current text box) that creates an empty item in the usual
  * task detail view. And have another button to start a planning huddle."*).
  *
  * "New task" files an EMPTY row and opens the real panel with the title in
  * edit mode, so the first thing typed is the title. "Start a planning huddle"
- * creates the huddle doc and leaves for the editor with the mic flag. Neither
- * asks anything first. All fixtures synthetic.
+ * creates the huddle doc and leaves for the editor with the mic flag. "Record
+ * a conversation" is the same huddle for a room: it is a second BUTTON
+ * because nothing announces an in-person conversation, so the press has to
+ * be the announcement. None of them asks anything first. All fixtures
+ * synthetic.
  */
 
 const NOW = 1_700_000_000_000;
@@ -65,22 +68,26 @@ const pending = () => {
   return { promise, release: (ok: boolean) => release(ok) };
 };
 
-describe('renderQuickActions — the two buttons in the quick-add slot', () => {
-  it('mounts New task (primary) and Start a planning huddle, and no text box', () => {
+describe('renderQuickActions — the buttons in the quick-add slot', () => {
+  it('mounts New task (primary), the huddle and the conversation, and no text box', () => {
     renderQuickActions(root, {
       onNewTask: () => Promise.resolve(true),
       onStartHuddle: () => Promise.resolve(true),
+      onStartConversation: () => Promise.resolve(true),
     });
     const wrap = root.querySelector('.hub-quick-actions');
     expect(wrap).not.toBeNull();
     const buttons = Array.from(root.querySelectorAll('button'));
-    expect(buttons).toHaveLength(2);
+    expect(buttons).toHaveLength(3);
     const newTask = root.querySelector('.hub-quick-new') as HTMLButtonElement;
     const huddle = root.querySelector('.hub-huddle-start') as HTMLButtonElement;
     expect(newTask.textContent).toContain('New task');
     expect(newTask.classList.contains('hub-btn-primary')).toBe(true);
     expect(huddle.textContent).toContain('Start a planning huddle');
     expect(huddle.classList.contains('hub-btn')).toBe(true);
+    const conversation = root.querySelector('.hub-conversation-start') as HTMLButtonElement;
+    expect(conversation.textContent).toContain('Record a conversation');
+    expect(conversation.type).toBe('button');
     // Not a submit: there is no form here to submit, and a stray Enter must
     // not file anything.
     expect(newTask.type).toBe('button');
@@ -95,7 +102,8 @@ describe('renderQuickActions — the two buttons in the quick-add slot', () => {
     const newTask = pending();
     const onNewTask = vi.fn(() => newTask.promise);
     const onStartHuddle = vi.fn(() => Promise.resolve(true));
-    renderQuickActions(root, { onNewTask, onStartHuddle });
+    const onStartConversation = vi.fn(() => Promise.resolve(true));
+    renderQuickActions(root, { onNewTask, onStartHuddle, onStartConversation });
     const btn = root.querySelector('.hub-quick-new') as HTMLButtonElement;
     btn.click();
     expect(onNewTask).toHaveBeenCalledTimes(1);
@@ -113,11 +121,14 @@ describe('renderQuickActions — the two buttons in the quick-add slot', () => {
     const huddle = pending();
     const onNewTask = vi.fn(() => Promise.resolve(true));
     const onStartHuddle = vi.fn(() => huddle.promise);
-    renderQuickActions(root, { onNewTask, onStartHuddle });
+    const onStartConversation = vi.fn(() => Promise.resolve(true));
+    renderQuickActions(root, { onNewTask, onStartHuddle, onStartConversation });
     const btn = root.querySelector('.hub-huddle-start') as HTMLButtonElement;
     btn.click();
     expect(onStartHuddle).toHaveBeenCalledTimes(1);
     expect(onNewTask).not.toHaveBeenCalled();
+    // The two mic buttons are two routes, not one with a modifier.
+    expect(onStartConversation).not.toHaveBeenCalled();
     expect(btn.disabled).toBe(true);
     huddle.release(false);
     await Promise.resolve();
@@ -126,14 +137,31 @@ describe('renderQuickActions — the two buttons in the quick-add slot', () => {
     expect(btn.disabled).toBe(false);
   });
 
-  it('mounts once — a board repaint does not stack a second pair', () => {
+  it('the conversation press is its own route, held while the call is out', async () => {
+    const conversation = pending();
+    const onNewTask = vi.fn(() => Promise.resolve(true));
+    const onStartHuddle = vi.fn(() => Promise.resolve(true));
+    const onStartConversation = vi.fn(() => conversation.promise);
+    renderQuickActions(root, { onNewTask, onStartHuddle, onStartConversation });
+    const btn = root.querySelector('.hub-conversation-start') as HTMLButtonElement;
+    btn.click();
+    expect(onStartConversation).toHaveBeenCalledTimes(1);
+    expect(onStartHuddle).not.toHaveBeenCalled();
+    expect(btn.disabled).toBe(true);
+    conversation.release(false);
+    await Promise.resolve();
+    expect(btn.disabled).toBe(false);
+  });
+
+  it('mounts once — a board repaint does not stack a second set', () => {
     const h = {
       onNewTask: () => Promise.resolve(true),
       onStartHuddle: () => Promise.resolve(true),
+      onStartConversation: () => Promise.resolve(true),
     };
     renderQuickActions(root, h);
     renderQuickActions(root, h);
-    expect(root.querySelectorAll('button')).toHaveLength(2);
+    expect(root.querySelectorAll('button')).toHaveLength(3);
   });
 });
 
@@ -207,7 +235,7 @@ describe('hub-app wires the two buttons to the two routes', () => {
     'utf8',
   );
   const fn = (name: string): string => {
-    const m = HUB_APP.match(new RegExp(`async function ${name}\\(\\)[\\s\\S]*?\\n {2}\\}\\n`));
+    const m = HUB_APP.match(new RegExp(`async function ${name}\\([^)]*\\)[\\s\\S]*?\\n {2}\\}\\n`));
     return m?.[0] ?? '';
   };
 
@@ -241,6 +269,15 @@ describe('hub-app wires the two buttons to the two routes', () => {
     expect(body).toMatch(/\/huddles`/);
     expect(body).toContain('location.assign(');
     expect(body).toMatch(/huddle=1/);
+    // The mode goes on the address too: the press on THIS page is the only
+    // thing that knows whether anyone else is in the room, and the editor
+    // that opens the mic is a different page.
+    expect(body).toContain('HUDDLE_MODE_PARAM');
+  });
+
+  it('the two mic buttons are the same route with different modes', () => {
+    expect(HUB_APP).toContain("onStartHuddle: () => startHuddle('solo')");
+    expect(HUB_APP).toContain("onStartConversation: () => startHuddle('conversation')");
   });
 
   it('the c shortcut presses New task now that there is no box to focus', () => {

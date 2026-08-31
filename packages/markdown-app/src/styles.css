@@ -1314,7 +1314,8 @@ body.hub-body {
 /* The same stroked glyphs the rail wears, sized as boxes — decoration, not a
    target (see `.voice-mic svg`). */
 .hub-quick-new svg,
-.hub-huddle-start svg {
+.hub-huddle-start svg,
+.hub-conversation-start svg {
   display: block;
   width: 15px;
   height: 15px;
@@ -6430,6 +6431,37 @@ body.is-reading-width #editor > .ProseMirror {
   color: var(--fg-muted);
   cursor: default;
 }
+/* "Detect multiple speakers" — a switch, not a second Start. Unpressed it is
+   the quiet default (one voice, no diarization bill); pressed it fills, the
+   way the strip's own live state does. The label never changes with the
+   state: `aria-pressed` carries that, and a button whose words flip between
+   the state and the action reads as neither.
+
+   Same 36px floor as the toggle beside it (design-mobile.md) and nothing
+   inside it clips — the tag's lesson higher up this section. */
+.meeting-mode {
+  flex: none;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  padding: 4px 11px;
+  min-height: 36px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--fg-muted);
+  border-radius: var(--radius-pill);
+  cursor: pointer;
+  white-space: nowrap;
+}
+.meeting-mode[aria-pressed="true"] {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 12%, var(--bg));
+  color: var(--accent);
+}
+.meeting-mode:disabled {
+  cursor: default;
+  opacity: 0.65;
+}
 @media (min-width: 721px) {
   /* The strip is one row here, so the micro-row stops being a box and its
      children join the strip's own flex line. That flattens them in SOURCE
@@ -6444,8 +6476,11 @@ body.is-reading-width #editor > .ProseMirror {
   .meeting-caption {
     order: 2;
   }
-  .meeting-toggle {
+  .meeting-mode {
     order: 3;
+  }
+  .meeting-toggle {
+    order: 4;
   }
 }
 @media (max-width: 720px) {
@@ -6474,8 +6509,18 @@ body.is-reading-width #editor > .ProseMirror {
   .meeting-caption {
     height: 2.9em;
   }
-  .meeting-toggle {
+  /* The stacked micro-row: the mode sits with the clock and Start is pushed
+     to the far edge. Below 380px the words and both controls no longer fit on
+     one line, so the row wraps rather than squeezing the tap targets. */
+  .meeting-mode {
     margin-left: auto;
+  }
+  .meeting-toggle {
+    margin-left: 8px;
+  }
+  .meeting-strip-row {
+    flex-wrap: wrap;
+    row-gap: 6px;
   }
   /* ---- The strip yields while an editor has focus ----
      Bryan, from his phone after tapping a table cell: "the keyboard and voice
@@ -6502,6 +6547,12 @@ body.is-reading-width #editor > .ProseMirror {
     padding-bottom: calc(4px + var(--safe-bottom) + var(--kb-bottom, 0px));
   }
   body[data-edit-viewport="compact"] .meeting-caption {
+    display: none;
+  }
+  /* A live strip keeps the dot, the clock and Stop. The mode switch is
+     disabled for the length of a meeting anyway, and this row has no room to
+     spare while a keyboard is up. */
+  body[data-edit-viewport="compact"] .meeting-mode {
     display: none;
   }
 }
