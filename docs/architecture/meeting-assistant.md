@@ -93,6 +93,21 @@ parameter, assemblyai.com/pricing for both figures, re-checked 2026-08-30).
 default that Bryan is alone"*): the parameter is absent — not `false` — on a
 solo session, because an unpriced session is one that never asked.
 
+**And capped.** `max_speakers` (1–10) rides beside it as a hard cap on how
+many labels the session may ever hand out; past it, extra speakers merge into
+the closest existing label (same doc page, read 2026-08-30). Absent, the count
+is UNBOUNDED, and an unbounded diarizer in a room where two people share one
+far-field microphone is free to answer a change of posture with a new letter.
+The room's size is the browser's to know — nothing on the server can hear the
+room — so it rides the `start` frame as `speakers`, clamped rather than
+refused (an out-of-range value makes the engine refuse the whole session,
+which reads as "transcription is broken"), and defaults to **2**. The docs
+suggest a little headroom above the expected count; we do not take it,
+because the failures are not symmetrical: a third voice merged into the
+closest label costs one misattributed turn, an invented Speaker C costs the
+reader their belief in the labels. `?speakers=3` on the doc address is how a
+room that really holds three says so. A solo capture sends neither parameter.
+
 **A meeting is a CHAIN of sessions, because a session ends at three hours.**
 AssemblyAI closes one with code 3008 ("Session Expired: Maximum session
 duration exceeded") and bills the full three hours
@@ -146,6 +161,40 @@ can also take a label away (a
 placeholder is "no speaker"), which the record writes as an explicit
 `speaker: null` relabel line — an absent field would read as "says nothing
 about the speaker" and leave an attribution the strip had already dropped.
+
+**What the room's microphone does to all this.** Echo cancellation, noise
+suppression and automatic gain control are tuned for one near-field talker:
+AGC renormalises level continuously and noise suppression gates the quieter
+part of the spectrum, so both act on exactly the cues — relative loudness,
+timbre, near talker against far — a diarizer uses to tell two voices apart.
+They are now one config, `ROOM_AUDIO_DEFAULT` in `meeting-audio.ts`, applied
+only to a `conversation` (solo capture is untouched) and overridable from the
+address: `?mic=ec1-ns0-agc0`, alongside `?speakers=N`. Both are facts about
+the ROOM rather than one-shot gestures, so unlike `huddle=1` and `mode=` they
+survive the reload.
+
+**The default is deliberately unchanged** — the same three answers solo has
+always sent. The argument above says the processors are suspect in a room; it
+does not say which way, and moving a default on an argument rather than a
+number is how a subsystem acquires settings nobody can explain. What moves it
+is `scripts/room-labels-check.ts`, which scores a run against the script that
+was actually read and prints its scoring settings beside every figure (a
+diarization accuracy number moves by tens of points on those settings alone,
+so one without them is not a number). Three ways in: `--doc <docId>` scores a
+meeting already in the append-only record — no key, no cost, and no audio
+needed, **which is the only way to compare microphone settings**, because the
+browser applies them before the audio exists and this server keeps no audio to
+re-process; `--audio` sends a file through the real engine; `--synthetic`
+builds a two-voice fixture with `say` and ffmpeg — two distances, a shared
+reverb tail, overlapping turns — and runs it. `--mock` runs the whole path
+with no key and no bill, and measures nothing.
+
+So the room procedure is: record the same short script several times with
+`?mic=` set differently, then score each meeting with its `--setting` named.
+As of 2026-08-30 the fixture builds (22.5s, the far talker 6 dB down) and the
+scorer is checked against known answers in both directions, but no live run
+has happened: no key was reachable, and no real two-person recording exists
+yet.
 
 **What diarization is actually proven by.** Every automated test drives the
 MOCK engine, which returns labels a fixture chose. That covers the plumbing
@@ -392,4 +441,6 @@ stored content.
 `packages/server/src/meeting-notes.ts` + `meeting-notes-doc.ts` (composer +
 doc sink; the two clocks live in `createPauseTicker`) · `packages/server/src/meeting-notes-merge.ts` (the merge that
 keeps a person's writing) · `packages/markdown-app/src/meeting-strip.ts`
-(UI).
+(UI) · `packages/markdown-app/src/meeting-audio.ts` (capture + the room's
+microphone config) · `scripts/room-labels-check.ts` + `room-labels-score.ts`
+(the room measurement and its arithmetic).
