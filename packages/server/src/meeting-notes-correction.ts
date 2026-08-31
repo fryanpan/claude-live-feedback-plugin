@@ -70,7 +70,7 @@ import {
   findNotesSection,
   itemsInSection,
 } from './meeting-notes-merge.ts';
-import { type SpokenCorrection, extendsWord } from './meeting-notes.ts';
+import type { SpokenCorrection } from './meeting-notes.ts';
 
 /**
  * The shortest a mistaken phrase may be and still identify a note. A
@@ -104,9 +104,26 @@ export function correctionPhraseUsable(phrase: string): boolean {
  * it — "thursday" and "Thursday" are the same correction, and refusing the
  * pair would drop the ordinary case.
  *
- * WHOLE TOKEN, on the same `extendsWord` boundary the rename uses: without
- * it, correcting "ten" would reach inside "attention".
+ * WHOLE TOKEN, or correcting "ten" would reach inside "attention".
+ *
+ * The boundary is UNICODE-AWARE, and deliberately not the rename's
+ * `extendsWord`. That one asks `[A-Za-z0-9]`, which is right where it lives:
+ * an engine label is a single ASCII letter, so "Speaker A" only ever needs to
+ * be told apart from "Speaker AB". A correction is arbitrary words somebody
+ * SPOKE, in whatever language the room speaks, and an ASCII rule reads every
+ * accented letter as a word boundary — correcting "ana" would rewrite the
+ * tail of "mañana", because the "ñ" before it does not look like a letter.
+ * Combining marks count too, so a decomposed "ñ" (n + U+0303) is not a
+ * boundary either. Found by `codex review`.
  */
+const WORD_CHAR = /[\p{L}\p{N}\p{M}]/u;
+
+/** True when `ch` would make text adjacent to a match part of a longer word,
+ *  in any script. */
+function extendsWordUnicode(ch: string | undefined): boolean {
+  return ch !== undefined && WORD_CHAR.test(ch);
+}
+
 export function phraseSites(text: string, phrase: string): number[] {
   if (phrase.length === 0) return [];
   const haystack = text.toLowerCase();
@@ -116,7 +133,9 @@ export function phraseSites(text: string, phrase: string): number[] {
   while (true) {
     const at = haystack.indexOf(needle, i);
     if (at < 0) break;
-    if (!extendsWord(text[at - 1]) && !extendsWord(text[at + phrase.length])) out.push(at);
+    if (!extendsWordUnicode(text[at - 1]) && !extendsWordUnicode(text[at + phrase.length])) {
+      out.push(at);
+    }
     i = at + 1;
   }
   return out;
