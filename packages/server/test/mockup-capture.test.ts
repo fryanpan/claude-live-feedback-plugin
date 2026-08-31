@@ -268,6 +268,35 @@ describe('mockup durability', () => {
       expect(await still.text()).toContain('Good mock body');
     });
 
+    it('fails the bind when the capture itself cannot be written', async () => {
+      // Durability is part of what bind_mock now promises, so a bind that
+      // cannot store the copy must say so. A 200 here would hand back a link
+      // that reads as durable and is not — the shape of the incident, rebuilt
+      // out of a full or unwritable data dir instead of a deleted scratch dir.
+      const src = join(scratch, 'capture-blocked.html');
+      writeFileSync(src, '<!doctype html><html><body><h1>Blocked body</h1></body></html>');
+      const created = await bindOk({
+        docId: 'mock-capture-blocked',
+        type: 'mockup',
+        sourceUrl: src,
+      });
+      const capture = mockupCapturePath(dataDir, created.meta.docId);
+
+      // Something the write cannot land on. The bound path is still perfectly
+      // readable — this is the data dir refusing, not the caller.
+      rmSync(capture, { force: true });
+      mkdirSync(capture, { recursive: true });
+      try {
+        const res = await bind({ docId: 'mock-capture-blocked', type: 'mockup', sourceUrl: src });
+        expect(res.status).toBe(500);
+        const body = (await res.json()) as { error: string; hint?: string };
+        expect(body.error).toBe('mockup_capture_failed');
+        expect(body.hint).toContain(src);
+      } finally {
+        rmSync(capture, { recursive: true, force: true });
+      }
+    });
+
     it('POSITIVE CONTROL: a readable path still binds and still serves', async () => {
       // Without this, every assertion above passes on a route that refuses
       // everything.
