@@ -129,7 +129,7 @@ import {
   buildLandingModel,
 } from './landing.ts';
 import { linkTitlesFor } from './link-titles.ts';
-import type { LookupDoc } from './meeting-lookup.ts';
+import { type LookupDoc, boardLookupDocs } from './meeting-lookup.ts';
 import { withServerNotesSinks } from './meeting-notes-doc.ts';
 import type { MeetingNotesOptions } from './meeting-notes.ts';
 import { MeetingRelay } from './meeting-protocol.ts';
@@ -1457,38 +1457,21 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
   // own sidecar — never a settings file.
   const allowRules = new AllowRuleProposals(dataDir);
   /**
-   * The board's docs as a lookup ask sees them: a title to match on, and
-   * when each last carried a meeting — which is what makes "last week's
-   * notes" resolvable at all, since a meeting record has times and no
-   * subject of its own.
-   *
-   * Runs only when a tick actually carried a lookup ask, and reads a small
-   * index file per doc, so the cap is generous rather than tuned; it exists
-   * so a board that has accumulated hundreds of docs cannot turn one spoken
-   * sentence into hundreds of stats.
+   * The board's docs as a lookup ask sees them — the three narrow questions
+   * `boardLookupDocs` asks, answered from this server's own stores. The
+   * rules about what qualifies live there, where they are tested.
    */
   function lookupDocs(workspaceId: string, exceptDocId: string): LookupDoc[] {
-    const workspace = taskStore.getWorkspace(workspaceId);
-    if (!workspace) return [];
-    const out: LookupDoc[] = [];
-    for (const docId of workspace.docIds) {
-      if (out.length >= 200) break;
-      if (docId === exceptDocId) continue;
-      // A doc with no title has nothing to match on and nothing to show in a
-      // link, so it is not material anybody can ask for by name.
-      const title = rooms.peekMeta(docId)?.title;
-      if (!title) continue;
-      let last: number | undefined;
-      try {
+    return boardLookupDocs(
+      {
+        docIds: (id) => taskStore.getWorkspace(id)?.docIds,
+        docTitle: (docId) => rooms.peekMeta(docId)?.title,
         // Oldest first, so the newest meeting is the tail.
-        last = meetingStore.list(docId).at(-1)?.startedAt;
-      } catch {
-        // An unreadable meeting index costs this doc its "when", not the
-        // whole lookup: it stays matchable by title.
-      }
-      out.push({ docId, title, ...(last !== undefined ? { meetingAt: last } : {}) });
-    }
-    return out;
+        lastMeetingAt: (docId) => meetingStore.list(docId).at(-1)?.startedAt,
+      },
+      workspaceId,
+      exceptDocId,
+    );
   }
 
   /** A denial's own agent, as the author of the item it triggered — so the

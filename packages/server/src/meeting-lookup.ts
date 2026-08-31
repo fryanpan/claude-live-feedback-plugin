@@ -213,6 +213,58 @@ export function docLookupUrl(workspaceId: string, docId: string): string {
 }
 
 /**
+ * Everything the board can offer a lookup, assembled from the three narrow
+ * questions the server can answer: which docs a board holds, what each is
+ * called, and when each last carried a meeting.
+ *
+ * A function rather than four lines inside `createServer` because every rule
+ * in it is a judgement worth a test — the doc the meeting is IN is not
+ * material anybody can ask to have pulled in, a doc with no title has
+ * nothing to match on and nothing to show in a link, and an unreadable
+ * meeting index costs that doc its "when" rather than costing the whole
+ * lookup its answer.
+ */
+export interface BoardLookupSources {
+  /** The docs filed on this board, or undefined when there is no such board. */
+  docIds(workspaceId: string): readonly string[] | undefined;
+  docTitle(docId: string): string | undefined;
+  /** When this doc last carried a meeting. May throw; a throw is tolerated. */
+  lastMeetingAt(docId: string): number | undefined;
+}
+
+/**
+ * The cap. A lookup ask is rare — it runs only on a tick that carried one —
+ * and each doc costs a small index read, so this is generous rather than
+ * tuned: it exists so a board that has accumulated hundreds of docs cannot
+ * turn one spoken sentence into hundreds of stats.
+ */
+export const MAX_LOOKUP_DOCS = 200;
+
+export function boardLookupDocs(
+  sources: BoardLookupSources,
+  workspaceId: string,
+  exceptDocId: string,
+): LookupDoc[] {
+  const docIds = sources.docIds(workspaceId);
+  if (!docIds) return [];
+  const out: LookupDoc[] = [];
+  for (const docId of docIds) {
+    if (out.length >= MAX_LOOKUP_DOCS) break;
+    if (docId === exceptDocId) continue;
+    const title = sources.docTitle(docId);
+    if (!title) continue;
+    let meetingAt: number | undefined;
+    try {
+      meetingAt = sources.lastMeetingAt(docId);
+    } catch {
+      // Matchable by title still; just not by when.
+    }
+    out.push({ docId, title, ...(meetingAt !== undefined ? { meetingAt } : {}) });
+  }
+  return out;
+}
+
+/**
  * How the notes may say WHEN a linked meeting was — the speaker's own frame
  * when they gave one ("last week"), and a plain date when the doc was found
  * by name instead. A doc that never carried a meeting says nothing: it is a

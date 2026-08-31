@@ -657,6 +657,60 @@ describe('withServerNotesSinks task capture', () => {
     expect(links).toEqual({ tasks: [], docs: [] });
   });
 
+  it('threads the lookup source and the review-filed callback through', async () => {
+    // The wiring, not the pipeline: the pass has no way to reach the board's
+    // docs or to announce a filed confirmation except through these two, and
+    // `createServer` is the only place either can be built.
+    const w = captureWorld();
+    const asked: Array<[string, string]> = [];
+    const filed: string[] = [];
+    const wired = withServerNotesSinks(
+      {
+        composer: { name: 's', compose: async () => 'n' },
+        taskExtractor: {
+          name: 'stub',
+          extract: () =>
+            Promise.resolve([
+              { kind: 'lookup' as const, query: 'the retention sweep design' },
+              { kind: 'research' as const, topic: 'retention sweep' },
+            ]),
+        },
+      },
+      {
+        rooms: () => w.rooms,
+        tasks: () => ({ listTasks: () => [] }),
+        captureBoard: () => ({
+          ...w.board,
+          createTask: () => ({ ok: true as const, task: { id: 't-r1' } }),
+          addReviewItem: () => ({ ok: true, task: { id: 't-r1' }, item: { id: 'r-1' } }) as never,
+        }),
+        lookup: {
+          docs: (ws, except) => {
+            asked.push([ws, except]);
+            return [{ docId: 'd-des', title: 'Retention sweep design' }];
+          },
+        },
+        onReviewFiled: ({ item }) => filed.push(item.id),
+      },
+    );
+    const links = await wired.captureIntents?.({
+      docId: 'doc-a',
+      meetingId: 'm-1',
+      turns: [
+        { turn: 1, text: 'Pull up the retention sweep design, and go look into it properly.' },
+      ],
+      priorTurns: [],
+    });
+    // The lookup was asked of the doc's own board, excluding the meeting doc.
+    expect(asked).toEqual([['w-1', 'doc-a']]);
+    expect(links?.docs).toEqual([
+      { title: 'Retention sweep design', url: '/workspaces/w-1/docs/d-des' },
+    ]);
+    // And the filed confirmation reached the callback that owes it its
+    // projection and its announce.
+    expect(filed).toEqual(['r-1']);
+  });
+
   it('no extractor means no capture hook at all', () => {
     const w = captureWorld();
     const wired = withServerNotesSinks(

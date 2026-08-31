@@ -13,6 +13,8 @@
 import { describe, expect, it } from 'bun:test';
 import {
   type LookupDoc,
+  MAX_LOOKUP_DOCS,
+  boardLookupDocs,
   docLookupUrl,
   lookupWhen,
   parseRecency,
@@ -212,5 +214,63 @@ describe('link shape', () => {
   it('dates no board row', () => {
     const hit = resolveLookup('the export dialog range ticket', pool, NOW);
     expect(hit && lookupWhen(hit, null)).toBeUndefined();
+  });
+});
+
+describe('boardLookupDocs', () => {
+  const sources = {
+    docIds: (ws: string) =>
+      ws === 'w-1' ? ['d-self', 'd-untitled', 'd-charter', 'd-broken', 'd-huddle'] : undefined,
+    docTitle: (id: string) =>
+      ({
+        'd-self': 'The meeting in progress',
+        'd-charter': 'Team charter',
+        'd-broken': 'Doc with an unreadable index',
+        'd-huddle': 'Huddle 2026-08-24 14:05',
+      })[id],
+    lastMeetingAt: (id: string) => {
+      if (id === 'd-broken') throw new Error('meeting index unreadable');
+      return id === 'd-huddle' ? at(2026, 8, 24, 14) : undefined;
+    },
+  };
+
+  it('offers the board its docs, with when each last carried a meeting', () => {
+    expect(boardLookupDocs(sources, 'w-1', 'd-self')).toEqual([
+      { docId: 'd-charter', title: 'Team charter' },
+      { docId: 'd-broken', title: 'Doc with an unreadable index' },
+      { docId: 'd-huddle', title: 'Huddle 2026-08-24 14:05', meetingAt: at(2026, 8, 24, 14) },
+    ]);
+  });
+
+  it('never offers the doc the meeting is in', () => {
+    // "Pull up the last meeting" means the one before this one, and the notes
+    // being written are already here.
+    const ids = boardLookupDocs(sources, 'w-1', 'd-self').map((d) => d.docId);
+    expect(ids).not.toContain('d-self');
+  });
+
+  it('skips a doc with no title — nothing to match on, nothing to show', () => {
+    expect(boardLookupDocs(sources, 'w-1', 'd-self').map((d) => d.docId)).not.toContain(
+      'd-untitled',
+    );
+  });
+
+  it('an unreadable meeting index costs that doc its when, not the lookup', () => {
+    const broken = boardLookupDocs(sources, 'w-1', 'd-self').find((d) => d.docId === 'd-broken');
+    expect(broken).toEqual({ docId: 'd-broken', title: 'Doc with an unreadable index' });
+  });
+
+  it('offers nothing for a board that does not exist', () => {
+    expect(boardLookupDocs(sources, 'w-gone', 'd-self')).toEqual([]);
+  });
+
+  it('caps how many docs one spoken sentence can stat', () => {
+    const many = Array.from({ length: MAX_LOOKUP_DOCS + 25 }, (_, i) => `d-${i}`);
+    const wide = {
+      docIds: () => many,
+      docTitle: (id: string) => `Doc ${id}`,
+      lastMeetingAt: () => undefined,
+    };
+    expect(boardLookupDocs(wide, 'w-1', 'none')).toHaveLength(MAX_LOOKUP_DOCS);
   });
 });
