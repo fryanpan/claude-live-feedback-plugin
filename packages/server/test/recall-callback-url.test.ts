@@ -19,6 +19,7 @@ import {
   normalizeRecallCallbackHost,
   recallConfigFromEnv,
   recallStatusWebhookUrl,
+  unreachableCallbackReason,
   wsBaseForRecall,
 } from '../src/recall.ts';
 
@@ -162,5 +163,74 @@ describe('recallConfigFromEnv reads the callback host itself', () => {
 
   it('leaves bots disabled when neither is set', () => {
     expect(recallConfigFromEnv({}, undefined).publicWsBase).toBeNull();
+  });
+});
+
+describe('unreachableCallbackReason', () => {
+  const OPS_HOST = 'ops.example.com';
+
+  it('refuses the fallback when it would dial an Access-gated hostname', () => {
+    // The regression the dedicated hostname created. Removing the callback
+    // exemptions is right; it also means a deployment still deriving its
+    // callback URL from CW_PUBLIC_BASE_URL looks configured and is not — the
+    // bot joins, bills per meeting-hour, and every callback is 401'd before
+    // any route runs. A boot warning does not stop money being spent, so this
+    // is what disarms the invite.
+    const reason = unreachableCallbackReason({
+      wsBase: `wss://${OPS_HOST}`,
+      callbackHost: null,
+      accessGatedHosts: [OPS_HOST],
+    });
+    expect(reason).toContain(OPS_HOST);
+    expect(reason).toContain('CW_RECALL_CALLBACK_HOST');
+  });
+
+  it('matches the gated host by name, port and case ignored', () => {
+    expect(
+      unreachableCallbackReason({
+        wsBase: `wss://${OPS_HOST}:8787`,
+        callbackHost: null,
+        accessGatedHosts: ['OPS.Example.com'],
+      }),
+    ).not.toBeNull();
+  });
+
+  it('is null once a dedicated callback host is configured', () => {
+    // Even if that host somehow appears on the gated list: the callback host
+    // is defined as the one with no Access application in front of it, and
+    // the host guard serves it from a class that runs no verifier at all.
+    expect(
+      unreachableCallbackReason({
+        wsBase: `wss://${HOST}`,
+        callbackHost: HOST,
+        accessGatedHosts: [HOST, OPS_HOST],
+      }),
+    ).toBeNull();
+  });
+
+  it('is null for a public hostname this server does not gate', () => {
+    // POSITIVE CONTROL for the whole predicate: a deployment whose public
+    // base URL is not Access-fronted keeps working exactly as before, which
+    // is the fallback the change is required to preserve.
+    expect(
+      unreachableCallbackReason({
+        wsBase: 'wss://open.example.com',
+        callbackHost: null,
+        accessGatedHosts: [OPS_HOST],
+      }),
+    ).toBeNull();
+    expect(
+      unreachableCallbackReason({
+        wsBase: `wss://${OPS_HOST}`,
+        callbackHost: null,
+        accessGatedHosts: [],
+      }),
+    ).toBeNull();
+  });
+
+  it("is null when there is nothing to dial — that is another check's answer", () => {
+    expect(
+      unreachableCallbackReason({ wsBase: null, callbackHost: null, accessGatedHosts: [OPS_HOST] }),
+    ).toBeNull();
   });
 });

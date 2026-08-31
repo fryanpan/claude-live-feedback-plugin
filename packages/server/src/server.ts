@@ -188,7 +188,7 @@ import {
 import { RecallMeetingRelay } from './recall-meeting.ts';
 import { parseBotStatusWebhook } from './recall-status.ts';
 import { svixHeadersFrom, verifySvixSignature } from './recall-webhook-auth.ts';
-import type { RecallClient } from './recall.ts';
+import { type RecallClient, unreachableCallbackReason } from './recall.ts';
 import { listArchivedDocs, listArchivedReviews, readDocArchiveManifest } from './review-archive.ts';
 import { backfillReviewFiling } from './review-backfill.ts';
 import { type ReviewJudge, type ReviewJudgeVerdict } from './review-judge.ts';
@@ -1422,10 +1422,25 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
    * two ownership ledgers over one doc's notes section, and the ledger is
    * what stops a tick from eating what a person typed.
    */
+  /**
+   * Is the address we would hand Recall one this server itself refuses?
+   *
+   * Computed here rather than in bin.ts because the effective host lists are
+   * here — `proxiedTrustedHosts` above is already the post-verifier one — and
+   * because a server spun up any other way (staging, a test) deserves the
+   * same answer. Null means nothing known says the callbacks are unreachable.
+   */
+  const recallUnreachable = unreachableCallbackReason({
+    wsBase: opts.meetingBot?.config.publicWsBase ?? null,
+    callbackHost: recallCallbackHost,
+    accessGatedHosts: [...proxiedTrustedHosts, ...(opts.accessTunnelHosts ?? [])],
+  });
+  if (recallUnreachable) console.error(`[meetings] bots are OFF: ${recallUnreachable}`);
   const recallRelay = new RecallMeetingRelay({
     store: meetingStore,
     notes: meetingRelay.notesDeps,
     client: opts.meetingBot ?? null,
+    unreachable: recallUnreachable,
     broadcast: (docId, payload) => sse.broadcast(docId, payload),
   });
   // Late-bound because Rooms is constructed before the task store and the

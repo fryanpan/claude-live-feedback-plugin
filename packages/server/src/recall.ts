@@ -40,6 +40,7 @@
  * this mapping must not reach the vendor, and this one spends money per bot.
  */
 
+import { normalizeHost } from './middleware/host-guard.ts';
 import { RECALL_STATUS_PATH } from './middleware/recall-callback-gate.ts';
 import { readKeychainPassword } from './share/keychain.ts';
 
@@ -301,6 +302,64 @@ export function recallStatusWebhookUrl(opts: {
   // Built from the SAME derivation the websocket uses (https for wss), so the
   // two can never name different hosts or different path prefixes.
   return `${wsBase.replace(/^wss:/, 'https:')}${RECALL_STATUS_PATH}`;
+}
+
+/**
+ * Why the address this server would hand Recall CANNOT be dialled, or null.
+ *
+ * The hole this closes is the one the dedicated hostname opened. Removing the
+ * bot callbacks' Cloudflare Access exemptions is right, and it silently
+ * invalidated the fallback: a deployment with a Recall key and a
+ * `CW_PUBLIC_BASE_URL` that names its Access-gated operator hostname still
+ * looks fully configured — the invite button renders, a bot is created, it
+ * joins the call and bills per meeting-hour — and then every callback it
+ * makes is answered 401 before any route runs. Transcript: none. That is the
+ * exact failure this file's comments keep citing, arrived at from the other
+ * direction, and a boot warning does not stop money being spent.
+ *
+ * So it is checked where it can refuse rather than only where it can complain.
+ * A reason string here disarms `configured()`, which is what makes the doc
+ * say "meeting bots are not set up on this server" instead of offering a
+ * button that always fails.
+ *
+ * Null in every other case, deliberately including the ones this cannot see:
+ * an Access application configured outside these lists, a WAF rule, a tunnel
+ * that never routes the hostname. This refuses what it can PROVE unreachable
+ * from configuration this process holds; it is not a reachability test.
+ */
+export function unreachableCallbackReason(args: {
+  /** The derived `wss://` origin — `RecallConfig.publicWsBase`. */
+  wsBase: string | null;
+  /** `CW_RECALL_CALLBACK_HOST`, already normalized, or null. */
+  callbackHost: string | null;
+  /**
+   * Hostnames this server puts a Cloudflare Access challenge in front of and
+   * exempts nothing on: the operator's own (`proxiedTrustedHosts`) and the
+   * collaboration hosts (`accessTunnelHosts`, where `/recall/*` is out of
+   * share scope anyway). Pass the EFFECTIVE lists — the ones the host guard
+   * will actually honour — not what the operator typed.
+   */
+  accessGatedHosts: string[];
+}): string | null {
+  // Nothing to dial, or already disabled: the caller's other checks own this.
+  if (!args.wsBase) return null;
+  // A dedicated callback host has no Access application in front of it by
+  // construction. That is what it is for.
+  if (args.callbackHost) return null;
+  let host: string;
+  try {
+    host = normalizeHost(new URL(args.wsBase).host);
+  } catch {
+    return null;
+  }
+  const gated = args.accessGatedHosts.map((h) => normalizeHost(h)).filter((h) => h !== '');
+  if (!gated.includes(host)) return null;
+  return (
+    `Recall would dial ${host}, which this server puts behind Cloudflare Access with no ` +
+    'exemptions — a bot would join, bill, and deliver nothing. Set CW_RECALL_CALLBACK_HOST ' +
+    'to a dedicated callback hostname (no Access application in front of it) pointed at ' +
+    'this server.'
+  );
 }
 
 /** What `createBot` needs that is not config. */
