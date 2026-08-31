@@ -29,6 +29,7 @@ import { mountMeetingStrip } from './meeting-strip.ts';
 import { wantsLatencyTiming } from './meeting-timing-client.ts';
 import type { MountContext } from './mount-context.ts';
 import type { MountScope } from './mount-scope.ts';
+import { mountPlanTasks } from './plan-tasks.ts';
 import { startReadingTracker } from './reading-tracker.ts';
 import { mountMarkupMargin } from './redline/markup-margin.ts';
 import { mountRedline } from './redline/redline-app.ts';
@@ -377,6 +378,15 @@ async function mountMarkdown(ctx: MountContext): Promise<void> {
     // has no Recall key, so this costs one GET on a doc that cannot use it.
     const botRow = mountMeetingBotRow({ docId, root: meetingStripEl });
     scope.onCleanup(() => botRow.destroy());
+  }
+
+  // Work derived from THIS doc, as live chips above the prose — and the
+  // Approve control when the doc is a plan whose drafts are held. Ordinary
+  // markdown docs only, same rule (and reason) as the meeting strip.
+  const planTasksEl = document.getElementById('plan-tasks');
+  if (planTasksEl && ctx.docType === 'markdown' && ctx.navDocId === undefined) {
+    const planTasks = mountPlanTasks({ docId, root: planTasksEl, user, canWrite });
+    scope.onCleanup(() => planTasks.destroy());
   }
 
   // Tapping a speaker tag in the notes offers the voices this doc's meetings

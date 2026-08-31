@@ -21,6 +21,7 @@ import {
 import {} from '@feedback/core/goal-summary';
 import { renderCommentMarkdown } from '../comment-markdown.ts';
 import { MIC_ICON, PEOPLE_ICON, PLUS_ICON } from '../icons.ts';
+import { cachedLinkTitle, fetchLinkInfos } from '../link-titles.ts';
 import {
   type ComposerSelection,
   composerSelection,
@@ -950,6 +951,10 @@ export interface DetailHandlers {
    * every record names the answerer, which is true, just less familiar.
    */
   selfName?: string;
+  /** The board's own workspace id, so the Source-doc field can link the
+   *  origin doc at its canonical workspace address. Without it the field
+   *  still renders, linking the legacy `/review/` shape instead. */
+  workspaceId?: string;
   onAssign: (task: HubTask, assignee: string) => void;
   /** The agents currently attached to this workspace — see `BoardHandlers`. */
   knownAgentIds?: string[];
@@ -1520,6 +1525,69 @@ export const BODY_LIVE_CLASS = 'hub-detail-body-live';
  * were pills, so the state you were IN read as a stray label rather than as
  * the selected one.
  */
+/** The doc this task was derived from, when its origin ref names one. A
+ *  thread origin counts — the thread lives on a doc, and that doc is where
+ *  the reader should land. Anything else (a task origin, a malformed ref,
+ *  a newer kind) is null rather than guessed at. */
+export function sourceDocOf(task: HubTask): string | null {
+  const o = task.origin;
+  if (typeof o !== 'object' || o === null) return null;
+  const ref = o as Record<string, unknown>;
+  if (ref.kind !== 'doc' && ref.kind !== 'thread') return null;
+  return typeof ref.docId === 'string' && ref.docId !== '' ? ref.docId : null;
+}
+
+/**
+ * The Source-doc field's value: a link to the origin doc, plus the plan-gate
+ * and staleness marks when the row carries them.
+ *
+ * The visible text starts as the doc id and swaps to the doc's title when
+ * the shared link-title cache answers — the same display-only hydration
+ * every pasted workspace link gets, so a rename never strands a stale label
+ * in a stored task.
+ */
+function sourceDocCell(task: HubTask, docId: string, workspaceId?: string): HTMLElement {
+  const wrap = document.createElement('span');
+  wrap.className = 'hub-detail-sourcedoc';
+  const a = document.createElement('a');
+  a.className = 'hub-sourcedoc-link';
+  a.href =
+    workspaceId !== undefined
+      ? `/workspaces/${encodeURIComponent(workspaceId)}/docs/${encodeURIComponent(docId)}`
+      : `/review/${encodeURIComponent(docId)}`;
+  a.textContent = docId;
+  a.addEventListener('click', (ev) => ev.stopPropagation());
+  const hydrate = (): void => {
+    const title = cachedLinkTitle(a.getAttribute('href') ?? '');
+    if (typeof title === 'string' && title !== '') a.textContent = title;
+  };
+  hydrate();
+  if (a.textContent === docId) {
+    void fetchLinkInfos([a.getAttribute('href') ?? ''])
+      .then(() => {
+        if (a.isConnected) hydrate();
+      })
+      .catch(() => {
+        // The id stays — true, just less familiar.
+      });
+  }
+  wrap.append(a);
+  if (task.planHold !== undefined) {
+    const held = document.createElement('span');
+    held.className = 'hub-sourcedoc-held';
+    held.textContent = 'Draft — held until the plan is approved';
+    wrap.append(held);
+  }
+  if (task.possiblyStale !== undefined) {
+    const stale = document.createElement('span');
+    stale.className = 'hub-sourcedoc-stale';
+    stale.textContent = 'plan edited since filed';
+    stale.title = 'The source doc changed after this task was filed — the body may be out of date.';
+    wrap.append(stale);
+  }
+  return wrap;
+}
+
 export function detailFields(
   task: HubTask,
   handlers: DetailHandlers,
@@ -1587,6 +1655,17 @@ export function detailFields(
   });
   statusCtl.append(mark, status);
   cell('Status', statusCtl);
+
+  // Where this row CAME FROM, when it was filed out of a doc — the origin
+  // ref, drawn as a link near the top rather than left as a stored fact no
+  // surface shows (the `links` chips' own origin story). The plan-gate and
+  // staleness marks ride on the same cell: they are facts about this row's
+  // relationship to that doc, and a reader deciding what to do with the row
+  // needs all three in one glance.
+  const originDoc = sourceDocOf(task);
+  if (originDoc !== null) {
+    cell('Source doc', sourceDocCell(task, originDoc, handlers.workspaceId));
+  }
 
   cell(
     'Assignee',

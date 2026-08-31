@@ -679,14 +679,102 @@ body.has-set .doc-switcher-caret {
 #editor-pane {
   position: relative; /* anchors the floating diff/file view toggle */
   display: grid;
-  /* format bar, document, transcript strip. The third track is what makes the
-     strip RESERVE its height instead of covering the prose: the editor keeps
-     the 1fr and shrinks by exactly the strip's height. It costs nothing when
-     no meeting surface is mounted — a hidden strip is a zero-height track. */
-  grid-template-rows: auto 1fr auto;
+  /* format bar, derived-work strip, document, transcript strip. The auto
+     tracks are what make each strip RESERVE its height instead of covering
+     the prose: the editor keeps the 1fr and shrinks by exactly their height.
+     They cost nothing unmounted — a hidden strip is a zero-height track. */
+  grid-template-rows: auto auto 1fr auto;
   overflow: hidden;
   background: var(--bg);
   border-right: 1px solid var(--border);
+}
+
+/* Work derived from this doc (src/plan-tasks.ts): a slim row of task chips
+   between the format bar and the prose, plus the plan gate's Approve button.
+   One line that wraps; chips stay tappable at 430px (≥36px targets via
+   padding) and the row spends height, not width, on iPad landscape. */
+.plan-tasks {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
+  padding: 6px 12px;
+  border-bottom: 1px solid var(--border);
+  font-size: 13px;
+  background: var(--bg);
+}
+
+.plan-tasks[hidden] {
+  display: none;
+}
+
+.plan-tasks-label {
+  color: var(--text-secondary, #666);
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.plan-tasks-list {
+  display: contents;
+}
+
+.plan-task-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: inherit;
+  text-decoration: none;
+  max-width: 100%;
+}
+
+a.plan-task-chip:hover {
+  background: var(--bg-hover, rgba(0, 0, 0, 0.04));
+}
+
+.plan-task-chip .plan-task-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 32ch;
+}
+
+/* A held draft reads muted: filed, visible, deliberately not queued. */
+.plan-task-chip.is-draft {
+  border-style: dashed;
+  color: var(--text-secondary, #666);
+}
+
+/* Possibly stale = quiet yellow, the shared "look again" vocabulary. */
+.plan-task-chip.is-stale {
+  border-color: var(--yellow, #b58900);
+}
+
+.plan-task-stale {
+  color: var(--yellow, #b58900);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.plan-tasks-approve {
+  padding: 4px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg);
+  cursor: pointer;
+  font: inherit;
+  font-weight: 600;
+}
+
+.plan-tasks-approve:hover:not(:disabled) {
+  background: var(--bg-hover, rgba(0, 0, 0, 0.04));
+}
+
+.plan-tasks-error {
+  color: var(--red, #dc322f);
+  font-size: 12px;
 }
 
 /* ================= WORKSPACE HUB =================
@@ -4065,6 +4153,33 @@ body.hub-body {
 }
 .hub-assignee-btn:hover {
   border-color: var(--border-strong);
+}
+/* The Source-doc field: where a doc-derived row came from, plus the plan
+   gate's marks. The link wraps like any field value; the marks are quiet —
+   a held draft is deliberate, and "plan edited" is a look-again yellow, not
+   an alarm. */
+.hub-detail-sourcedoc {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 10px;
+  min-width: 0;
+}
+.hub-sourcedoc-link {
+  color: var(--accent);
+  text-decoration: none;
+  overflow-wrap: anywhere;
+}
+.hub-sourcedoc-link:hover {
+  text-decoration: underline;
+}
+.hub-sourcedoc-held {
+  color: var(--fg-muted);
+  font-size: 12px;
+}
+.hub-sourcedoc-stale {
+  color: var(--yellow, #b58900);
+  font-size: 12px;
 }
 /* Link chips: what a `url` ref is FOR. Wraps rather than scrolls — the
    detail panel has vertical room and a hidden link is the bug this

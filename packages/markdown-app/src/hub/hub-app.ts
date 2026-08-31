@@ -1571,6 +1571,9 @@ async function main(): Promise<void> {
         ...(task ? { focusTitle: focusTitleTaskId === task.id } : {}),
         onAssign: (t, assignee) => void assignTask(t, assignee),
         knownAgentIds: knownAgentIds(),
+        // So the Source-doc field links the origin doc at its canonical
+        // workspace address rather than the legacy /review/ one.
+        workspaceId,
         goalLabel: (id) => goalLabel(state.info?.goals ?? [], id),
         goals: state.info?.goals ?? [],
         onGoalSet: (t, goalId) => void setTaskGoal(t, goalId),
