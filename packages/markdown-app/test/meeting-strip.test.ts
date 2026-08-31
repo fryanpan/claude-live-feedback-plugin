@@ -1532,6 +1532,58 @@ describe('the device speaking is not cancelled out of its own recording', () => 
     expect(mics[1]?.aec).toEqual([false]);
   });
 
+  it('restores echo cancellation to what the ROOM asked for, not to on', async () => {
+    // `?mic=ec0-…` turns echo cancellation off for a room, and the
+    // announcement is made on exactly the mode that knob applies to. Restoring
+    // a hardcoded `true` afterwards would switch it back on mid-meeting, for
+    // the rest of the meeting, with nothing saying so — and the knob is what
+    // the microphone measurement varies.
+    const announcer = new FakeAnnouncer();
+    const mic = pumpCapture();
+    const h = mount(mic.start, {
+      mode: 'conversation',
+      announcer,
+      room: { echoCancellation: false, noiseSuppression: true, autoGainControl: false },
+    });
+    h.toggle().click();
+    await settle();
+    h.sockets[0]?.onopen?.();
+    h.sockets[0]?.serve({
+      type: 'ready',
+      meetingId: 'm1',
+      startedAt: 1_000,
+      engine: 'test',
+      mode: 'conversation',
+    });
+    await settle();
+    announcer.settleOldest(true);
+    await settle();
+    // Down for the sentence, and back to OFF — where the room put it.
+    expect(mic.aec).toEqual([false, false]);
+  });
+
+  it('restores it to ON for a room that never asked for anything else', async () => {
+    // The positive control: the fix must not simply stop restoring. The
+    // default room wants cancellation, and gets it back.
+    const announcer = new FakeAnnouncer();
+    const mic = pumpCapture();
+    const h = mount(mic.start, { mode: 'conversation', announcer });
+    h.toggle().click();
+    await settle();
+    h.sockets[0]?.onopen?.();
+    h.sockets[0]?.serve({
+      type: 'ready',
+      meetingId: 'm1',
+      startedAt: 1_000,
+      engine: 'test',
+      mode: 'conversation',
+    });
+    await settle();
+    announcer.settleOldest(true);
+    await settle();
+    expect(mic.aec).toEqual([false, true]);
+  });
+
   it('a meeting that ends while the constraint is in flight is never announced', async () => {
     // `cancel()` reaches an utterance that has started. It cannot reach one
     // that has not — and suspending the canceller is a promise, so there is a

@@ -316,7 +316,13 @@ export async function fetchAmiExcerpt(
   if (existsSync(cached)) return new Uint8Array(readFileSync(cached));
   const url = amiAudioUrl(meeting);
   const head = await fetch(url, { headers: { Range: 'bytes=0-199' } });
-  if (!head.ok) throw new Error(`AMI audio ${head.status} for ${meeting}`);
+  // 206 or nothing. A plain 200 means the server ignored the range and is
+  // sending all 40 MB, which `arrayBuffer()` would dutifully wait for on a
+  // link measured in tens of KB/s — a header read that quietly becomes a
+  // whole-file download.
+  if (head.status !== 206) {
+    throw new Error(`AMI audio did not honour a range request: ${head.status} for ${meeting}`);
+  }
   const header = new Uint8Array(await head.arrayBuffer());
   const view = new DataView(header.buffer);
   const tag = (at: number) => String.fromCharCode(...header.subarray(at, at + 4));
@@ -334,11 +340,24 @@ export async function fetchAmiExcerpt(
   if (tag(at) !== 'data') throw new Error('no data chunk in the first 200 bytes');
   const dataAt = at + 8;
   const bytesPerSecond = MEETING_SAMPLE_RATE * 2;
-  const start = dataAt + Math.round(fromSeconds * bytesPerSecond);
-  const end = start + Math.round(seconds * bytesPerSecond) - 1;
-  const res = await fetch(url, { headers: { Range: `bytes=${start}-${end}` } });
+  // Rounded to a whole SAMPLE, not a whole byte: a 16-bit sample is two
+  // bytes, and an odd offset splits one, so every sample after it is
+  // assembled from the wrong halves and the excerpt decodes as noise.
+  const offset = 2 * Math.round((fromSeconds * bytesPerSecond) / 2);
+  const length = 2 * Math.round((seconds * bytesPerSecond) / 2);
+  const start = dataAt + offset;
+  const res = await fetch(url, { headers: { Range: `bytes=${start}-${start + length - 1}` } });
   if (res.status !== 206) throw new Error(`AMI audio did not honour the range: ${res.status}`);
   const pcm = new Uint8Array(await res.arrayBuffer());
+  // A short body is a shorter excerpt than the truth window was cut from, so
+  // the reference would carry words that are not in the audio and the run
+  // would score as mishearing rather than as a truncated download.
+  if (pcm.length < length) {
+    throw new Error(
+      `AMI audio returned ${pcm.length} bytes of the ${length} asked for — ` +
+        'the excerpt would be shorter than the reference cut to match it.',
+    );
+  }
   writeFileSync(cached, pcm);
   return pcm;
 }
@@ -571,12 +590,15 @@ async function main(argv: readonly string[]): Promise<number> {
     const record = known.find((m) => m.meetingId === meetingId);
     const turns = readTranscript(dataDir, docId, meetingId);
     const score = scoreDiarization(turns, parseTruth(readFileSync(truthFile, 'utf8')));
+    // The same verdict the audio path gives: inventing a speaker and never
+    // finding one are both failures, and one instrument should not answer the
+    // same question two ways depending on how the audio reached it.
     console.log(`\nRecorded meeting ${meetingId}`);
     console.log(`  data dir: ${dataDir}`);
     console.log(`  capture mode: ${record?.mode ?? 'unknown'}`);
     console.log(`  microphone settings: ${setting}\n`);
     console.log(formatScore(docId, score));
-    return score.speakersInvented > 0 ? 1 : 0;
+    return score.speakersInvented > 0 || score.speakersPredicted < score.speakersTruth ? 1 : 0;
   }
 
   const dir = mkdtempSync(join(tmpdir(), 'room-labels-'));
@@ -597,6 +619,10 @@ async function main(argv: readonly string[]): Promise<number> {
       const fromArg = args.get('ami-from')?.[0];
       const from =
         fromArg !== undefined ? Number(fromArg) : busiestWindow(reference.utterances, seconds);
+      if (from === undefined) {
+        console.error(`No ${seconds}s window fits inside ${meeting}. Try a shorter --ami-seconds.`);
+        return 1;
+      }
       const window = amiWindow(reference.utterances, from, seconds);
       if (window.length === 0) {
         console.error(`Nothing said in ${meeting} between ${from}s and ${from + seconds}s.`);

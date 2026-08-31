@@ -85,6 +85,12 @@ export interface DiarizationScore {
   speakersInvented: number;
   /** How many people the labels never distinguished — the opposite failure. */
   speakersMissed: number;
+  /** Reference lines in the script, and how many any turn actually covered. */
+  linesTotal: number;
+  linesCovered: number;
+  /** The same in words — the denominator every percentage here is a part of. */
+  refWordsTotal: number;
+  refWordsCovered: number;
   turnsTotal: number;
   turnsAligned: number;
   turnsUnlabelled: number;
@@ -245,15 +251,28 @@ export function scoreDiarization(
     /** The one person this turn is all of, or null when it covers several. */
     person: string | null;
     words: number;
+    /** Which turn this was, and which reference lines it covered. Both are
+     *  needed to know whether two pairs were ACTUALLY next to each other:
+     *  being adjacent in this array only means nothing scoreable sat between
+     *  them, which is exactly what a gap looks like. */
+    turnIndex: number;
+    firstLine: number;
+    lastLine: number;
   }> = [];
+  const covered = new Set<number>();
   turns.forEach((turn, i) => {
-    const lines = (aligned[i] ?? []).map((at) => truth[at]).filter((l): l is TruthUtterance => !!l);
+    const at = aligned[i] ?? [];
+    const lines = at.map((k) => truth[k]).filter((l): l is TruthUtterance => !!l);
     if (lines.length === 0) return;
+    for (const k of at) covered.add(k);
     const people = new Set(lines.map((l) => l.speaker));
     pairs.push({
       label: turn.speaker,
       person: people.size === 1 ? (lines[0]?.speaker ?? null) : null,
       words: words(turn.text).length,
+      turnIndex: i,
+      firstLine: at[0] ?? -1,
+      lastLine: at[at.length - 1] ?? -1,
     });
   });
 
@@ -286,11 +305,16 @@ export function scoreDiarization(
   for (let i = 1; i < pairs.length; i++) {
     const prev = pairs[i - 1];
     const cur = pairs[i];
-    // ADJACENT turns only, both labelled, and neither of them mixed. Dropping
-    // the others and walking the remainder would make the turns either side
-    // of a gap look consecutive and score a boundary the engine never
-    // expressed; a mixed turn has no single person to compare against at all.
+    // ADJACENT turns only, both labelled, and neither of them mixed. This
+    // array holds only turns that aligned, so being neighbours IN IT means
+    // only that nothing scoreable sat between them — which is what a gap
+    // looks like. Adjacency is therefore checked on both sides: consecutive
+    // turn numbers AND consecutive reference lines. Without that, a run whose
+    // middle turn was unalignable garbage scores the boundary either side of
+    // it as an agreement the engine never expressed.
     if (!prev || !cur) continue;
+    if (cur.turnIndex !== prev.turnIndex + 1) continue;
+    if (cur.firstLine !== prev.lastLine + 1) continue;
     if (prev.label === undefined || cur.label === undefined) continue;
     if (prev.person === null || cur.person === null) continue;
     boundaryPairs++;
@@ -305,6 +329,10 @@ export function scoreDiarization(
     speakersPredicted: predicted.size,
     speakersInvented: Math.max(0, predicted.size - truthSpeakers.size),
     speakersMissed: Math.max(0, truthSpeakers.size - predicted.size),
+    linesTotal: truth.length,
+    linesCovered: covered.size,
+    refWordsTotal: truth.reduce((n, t) => n + words(t.text).length, 0),
+    refWordsCovered: [...covered].reduce((n, k) => n + words(truth[k]?.text ?? '').length, 0),
     turnsTotal: turns.length,
     turnsAligned: pairs.length,
     turnsUnlabelled: turns.filter((t) => t.speaker === undefined).length,
@@ -318,6 +346,28 @@ export function scoreDiarization(
     labelMap: assignment.map,
   };
 }
+
+/**
+ * How much of what was said the run even attempted, 0-1.
+ *
+ * Every percentage on the scorecard is computed over the COVERED part of the
+ * script, so this is the number that says how much they are a percentage of.
+ * A run that transcribed a third of the meeting perfectly scores 100% on all
+ * of them; without this line that is indistinguishable from a run that got
+ * everything right. It also decides whether two runs can be compared at all:
+ * different microphone settings produce different transcripts and therefore
+ * different denominators.
+ */
+export function coverage(score: DiarizationScore): number {
+  return score.refWordsTotal === 0 ? 0 : score.refWordsCovered / score.refWordsTotal;
+}
+
+/**
+ * Two runs are comparable when they were scored over near enough the same
+ * script. Five points of reference coverage is the line: below that, the
+ * cheaper number may simply be the one that attempted more.
+ */
+export const COMPARABLE_COVERAGE_DELTA = 0.05;
 
 /** A percentage, or "n/a" when nothing was measured — never a silent zero. */
 export function pct(part: number, whole: number): string {
@@ -344,8 +394,11 @@ export function formatScore(title: string, score: DiarizationScore): string {
   return [
     `  ${title}`,
     `    speakers: ${score.speakersPredicted} labelled vs ${score.speakersTruth} in the room${counted}`,
+    `    script covered: ${pct(score.refWordsCovered, score.refWordsTotal)} of the words ` +
+      `(${score.linesCovered}/${score.linesTotal} lines) — EVERY FIGURE BELOW IS OVER THAT PART`,
     `    turns: ${score.turnsAligned}/${score.turnsTotal} aligned to the script, ` +
-      `${score.turnsUnlabelled} unattributed, ${score.turnsMixed} covering more than one person`,
+      `${score.turnsAlignedUnlabelled} of those unattributed, ` +
+      `${score.turnsMixed} covering more than one person`,
     `    boundary agreement: ${pct(score.boundaryAgreements, score.boundaryPairs)} ` +
       `(${score.boundaryAgreements}/${score.boundaryPairs} consecutive pairs)`,
     `    turn attribution: ${pct(score.turnsCorrect, scoredTurns)} ` +
@@ -396,26 +449,41 @@ export function median(values: readonly number[]): number {
  */
 export function summarizeRuns(scores: readonly DiarizationScore[]): string {
   if (scores.length === 0) return '  no runs';
+  // NaN, not 0, when nothing was measured: a run that aligned nothing scored
+  // no percentage at all, and folding it in as 0% would drag a median toward
+  // a number no run produced. `median` of a list holding NaN is NaN, which
+  // prints as "n/a" — the same answer `pct` gives.
+  const ratio = (part: number, whole: number) => (whole === 0 ? Number.NaN : (100 * part) / whole);
   const turnPct = scores.map((s) => {
     const base =
       s.settings.unlabelled === 'excluded'
         ? s.turnsAligned - s.turnsAlignedUnlabelled
         : s.turnsAligned;
-    return base === 0 ? 0 : (100 * s.turnsCorrect) / base;
+    return ratio(s.turnsCorrect, base);
   });
-  const wordPct = scores.map((s) =>
-    s.wordsScored === 0 ? 0 : (100 * s.wordsCorrect) / s.wordsScored,
-  );
+  const wordPct = scores.map((s) => ratio(s.wordsCorrect, s.wordsScored));
+  const covered = scores.map((s) => 100 * coverage(s));
   const labelled = scores.map((s) => s.speakersPredicted);
+  const one = (v: number) => (Number.isNaN(v) ? 'n/a' : `${v.toFixed(1)}%`);
   const show = (values: readonly number[]) =>
-    `${values.map((v) => `${v.toFixed(1)}%`).join(' / ')}  (median ${median(values).toFixed(1)}%)`;
-  const spread = Math.max(...wordPct) - Math.min(...wordPct);
+    `${values.map(one).join(' / ')}  (median ${one(median(values))})`;
+  const real = wordPct.filter((v) => !Number.isNaN(v));
+  const spread = real.length > 1 ? Math.max(...real) - Math.min(...real) : 0;
+  const coverSpread = Math.max(...covered) - Math.min(...covered);
   const lines = [
     `  ACROSS ${scores.length} RUN${scores.length === 1 ? '' : 'S'} of the same audio:`,
     `    speakers labelled: ${Math.min(...labelled)}–${Math.max(...labelled)} of ${scores[0]?.speakersTruth ?? 0}`,
+    `    script covered: ${show(covered)}`,
     `    turn attribution: ${show(turnPct)}`,
     `    word attribution: ${show(wordPct)}`,
   ];
+  if (scores.length > 1 && coverSpread > 100 * COMPARABLE_COVERAGE_DELTA) {
+    lines.push(
+      `    COVERAGE DIFFERS BY ${coverSpread.toFixed(1)} POINTS — these runs were scored`,
+      '    over different amounts of the script, so their percentages are not',
+      '    comparable. The cheaper-looking one may simply have attempted more.',
+    );
+  }
   if (scores.length > 1 && spread >= 10) {
     lines.push(
       `    SPREAD ${spread.toFixed(1)} POINTS WITHIN ONE SETTING — the engine is not`,

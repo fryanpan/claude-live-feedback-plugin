@@ -91,12 +91,39 @@ describe('busiestWindow', () => {
     // The opening minutes of a meeting are one person explaining the
     // recording equipment: plenty of words, nothing to tell apart.
     const said = [
-      { speaker: 'A', start: 0, end: 7, text: 'one voice reading the instructions at some length' },
+      // STRICTLY WORDIER than the two-speaker window that follows, so the
+      // speaker term is the only thing that can pick the later one. With the
+      // words alone deciding, this window wins — which is what an earlier
+      // version of this fixture failed to check.
+      {
+        speaker: 'A',
+        start: 0,
+        end: 7,
+        text: 'one voice reading out the recording instructions at considerable and unhurried length',
+      },
       { speaker: 'A', start: 20, end: 24, text: 'so that is the plan' },
       { speaker: 'B', start: 25, end: 28, text: 'sounds right to me' },
     ];
-    // Both candidate windows hold the same number of words; only one holds a
-    // conversation.
     expect(busiestWindow(said, 8, 10)).toBe(20);
+  });
+
+  it('says nothing when no whole window fits inside the recording', () => {
+    // Zero would be a real answer to a different question: a caller that got
+    // it would measure the opening seconds believing they had been chosen.
+    expect(busiestWindow([{ speaker: 'A', start: 0, end: 4, text: 'hello there' }], 120)).toBe(
+      undefined,
+    );
+  });
+});
+
+describe('parseAmiWords on the shapes the corpus actually contains', () => {
+  it('does not let a self-closing <w/> swallow the next word', () => {
+    // Matched loosely, `<w …/>` runs on to the NEXT `</w>` and steals its
+    // text — so a real word arrives attributed to an empty element.
+    const xml = `<nite:root>
+<w nite:id="x.0" starttime="1.0" endtime="1.2"/>
+<w nite:id="x.1" starttime="2.0" endtime="2.4">hello</w>
+</nite:root>`;
+    expect(parseAmiWords(xml, 'A').map((w) => w.text)).toEqual(['hello']);
   });
 });

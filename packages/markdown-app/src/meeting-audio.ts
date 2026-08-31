@@ -366,7 +366,7 @@ export interface MeetingCapture {
   /**
    * Turn echo cancellation off for a moment, and back on.
    *
-   * WHY THIS EXISTS. `MEETING_CONSTRAINTS` asks for echo cancellation because
+   * WHY THIS EXISTS. `SOLO_AUDIO_PROCESSING` and `ROOM_AUDIO_DEFAULT` both ask for echo cancellation because
    * a meeting on a laptop speaker otherwise transcribes its own output. But
    * echo cancellation exists precisely to remove what the DEVICE is playing
    * from what the microphone hears — and the recording announcement is the

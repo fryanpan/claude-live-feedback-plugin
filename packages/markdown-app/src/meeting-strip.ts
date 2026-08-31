@@ -55,6 +55,7 @@ import { type Announcer, createAnnouncer } from './meeting-announce.ts';
 import {
   type MeetingCapture,
   type MeetingCaptureStart,
+  ROOM_AUDIO_DEFAULT,
   type RoomAudioProcessing,
   startMeetingCapture,
 } from './meeting-audio.ts';
@@ -805,11 +806,20 @@ export function mountMeetingStrip(opts: MeetingStripOpts): MeetingStripHandle {
     suspended: boolean,
   ): Promise<void> {
     try {
-      await mic?.setEchoCancellation(!suspended);
+      // Restored to what the ROOM asked for, not to `true`. Echo cancellation
+      // is a knob (`?mic=ec0-…`) and the announcement is made on exactly the
+      // mode that knob applies to, so restoring a constant would turn every
+      // `ec0` room back on mid-meeting — silently, and for good.
+      await mic?.setEchoCancellation(suspended ? false : wantsEchoCancellation());
     } catch {
       // Then the capture keeps the cancellation it has, and the sentence is
       // spoken into it anyway.
     }
+  }
+
+  /** What this room asked for, with the same default the capture used. */
+  function wantsEchoCancellation(): boolean {
+    return (opts.room ?? ROOM_AUDIO_DEFAULT).echoCancellation;
   }
 
   function endAnnouncement(): void {

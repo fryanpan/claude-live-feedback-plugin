@@ -62,7 +62,10 @@ function decodeEntities(text: string): string {
 
 export function parseAmiWords(xml: string, speaker: string): AmiWord[] {
   const out: AmiWord[] = [];
-  const element = /<w\b([^>]*)>([\s\S]*?)<\/w>/g;
+  // The `[^/>]` before the close refuses a SELF-CLOSING `<w …/>`: matched
+  // loosely, it would swallow everything up to the NEXT `</w>` and attribute
+  // that word's text to the empty element.
+  const element = /<w\b((?:[^>]*[^/>])?)>([\s\S]*?)<\/w>/g;
   let match: RegExpExecArray | null = element.exec(xml);
   while (match) {
     const attrs = match[1] ?? '';
@@ -150,12 +153,15 @@ export function busiestWindow(
   utterances: readonly AmiUtterance[],
   seconds: number,
   stepSeconds = 15,
-): number {
+): number | undefined {
   // Only windows that fit entirely inside the recording are candidates: a
   // window running off the end would be judged on a few seconds of audio and
   // could win on two speakers in two words.
-  const last = utterances[utterances.length - 1]?.end ?? 0;
-  let bestAt = 0;
+  // The LAST moment anybody stopped talking, not the last utterance's end:
+  // the stream is ordered by when speech started, so an utterance that began
+  // earlier can finish later.
+  const last = utterances.reduce((n, u) => Math.max(n, u.end), 0);
+  let bestAt: number | undefined;
   let bestScore = -1;
   for (let at = 0; at + seconds <= last; at += stepSeconds) {
     const window = amiWindow(utterances, at, seconds);
@@ -167,5 +173,8 @@ export function busiestWindow(
       bestAt = at;
     }
   }
+  // Undefined, not 0, when the recording is shorter than the window: `0` is a
+  // real answer to a different question, and a caller that got it would
+  // measure the first seconds of a meeting believing they had been chosen.
   return bestAt;
 }

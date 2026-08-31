@@ -121,6 +121,11 @@ describe('room speaker cap', () => {
 
   it('says nothing for a room size nobody gave, so the default lives in one place', () => {
     expect(parseRoomSpeakers(undefined)).toBeUndefined();
+    // `?speakers=` with the value deleted. `Number('')` is 0, which would
+    // clamp to ONE label and merge the room into a single voice — the
+    // opposite of the cap's purpose, from a parameter that said nothing.
+    expect(parseRoomSpeakers('')).toBeUndefined();
+    expect(parseRoomSpeakers('   ')).toBeUndefined();
     expect(parseRoomSpeakers('two')).toBeUndefined();
     expect(parseRoomSpeakers(null)).toBeUndefined();
   });

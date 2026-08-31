@@ -97,6 +97,12 @@ export const MAX_ROOM_SPEAKERS = 10;
  * two" and apply the default in ONE place.
  */
 export function parseRoomSpeakers(raw: unknown): number | undefined {
+  // An empty or blank string is NOT a room of zero people. `?speakers=` with
+  // nothing after it is what an address bar produces when the value is
+  // deleted, and `Number('')` is 0, which clamps to one label — every voice
+  // merged into one, the exact opposite of what the cap is for, from a
+  // parameter that said nothing.
+  if (typeof raw === 'string' && raw.trim() === '') return undefined;
   const n = typeof raw === 'number' ? raw : typeof raw === 'string' ? Number(raw) : Number.NaN;
   if (!Number.isFinite(n)) return undefined;
   const rounded = Math.round(n);

@@ -1,10 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import { SYNTHETIC_SCRIPT, parseArgs, parseTruth } from './room-labels-check.ts';
 import {
+  COMPARABLE_COVERAGE_DELTA,
   DEFAULT_SCORING,
   type ScoredTurn,
   type TruthUtterance,
   alignMonotonic,
+  coverage,
   formatScore,
   median,
   optimalAssignment,
@@ -319,5 +321,113 @@ describe('summarizeRuns', () => {
 
   it('does not divide by a zero when there were no runs', () => {
     expect(summarizeRuns([])).toBe('  no runs');
+  });
+});
+
+/* ===== What the run did NOT reach ===== */
+
+/**
+ * Both of these are the same failure the branch already fixed once, wearing a
+ * different hat: the engine half of the ledger was reported and the reference
+ * half was not, so a run that reached a third of the meeting could print a
+ * perfect scorecard. An independent review found them; the fixtures below are
+ * that review's own reproductions.
+ */
+describe('coverage of the script', () => {
+  const script: TruthUtterance[] = [
+    { speaker: 'Rowan', text: 'the kettle is on the left of the sink' },
+    { speaker: 'Devi', text: 'and the mugs are in the cupboard above' },
+    { speaker: 'Rowan', text: 'I will put the tray down by the door' },
+    { speaker: 'Devi', text: 'that works for the morning as well' },
+    { speaker: 'Rowan', text: 'we should label the shelf for the visitors' },
+    { speaker: 'Devi', text: 'I will bring the labels tomorrow afternoon' },
+  ];
+
+  it('reports how little of the script a run reached, however right that part was', () => {
+    // Two lines of six, both perfect. Every attribution figure says 100%,
+    // because they are percentages OF THE COVERED PART — so the covered part
+    // has to be on the card, or the card is a lie by omission.
+    const turns: ScoredTurn[] = [
+      { turn: 1, text: script[0]?.text ?? '', speaker: 'A' },
+      { turn: 2, text: script[1]?.text ?? '', speaker: 'B' },
+    ];
+    const score = scoreDiarization(turns, script, DEFAULT_SCORING);
+    expect(score.turnsCorrect).toBe(2);
+    expect(score.linesCovered).toBe(2);
+    expect(score.linesTotal).toBe(6);
+    expect(coverage(score)).toBeLessThan(0.4);
+    expect(formatScore('x', score)).toContain('2/6 lines');
+  });
+
+  it('is 1 when the run reached all of it, so the number means something', () => {
+    // The positive control: a metric that only ever reports a shortfall is
+    // indistinguishable from one that is broken.
+    const turns: ScoredTurn[] = script.map((l, i) => ({
+      turn: i + 1,
+      text: l.text,
+      speaker: i % 2 === 0 ? 'A' : 'B',
+    }));
+    expect(coverage(scoreDiarization(turns, script, DEFAULT_SCORING))).toBe(1);
+  });
+
+  it('warns that runs covering different amounts of the script cannot be ranked', () => {
+    // This is what the microphone matrix does for a living: four settings,
+    // four different transcripts, four different denominators.
+    const all: ScoredTurn[] = script.map((l, i) => ({
+      turn: i + 1,
+      text: l.text,
+      speaker: i % 2 === 0 ? 'A' : 'B',
+    }));
+    const half = all.slice(0, 2);
+    const text = summarizeRuns([
+      scoreDiarization(all, script, DEFAULT_SCORING),
+      scoreDiarization(half, script, DEFAULT_SCORING),
+    ]);
+    expect(text).toContain('COVERAGE DIFFERS');
+    expect(text).toContain('not');
+    // And stays quiet when they covered the same ground, or it says nothing.
+    expect(
+      summarizeRuns([
+        scoreDiarization(all, script, DEFAULT_SCORING),
+        scoreDiarization(all, script, DEFAULT_SCORING),
+      ]),
+    ).not.toContain('COVERAGE DIFFERS');
+    expect(COMPARABLE_COVERAGE_DELTA).toBeGreaterThan(0);
+  });
+
+  it('scores no boundary across a turn that aligned to nothing', () => {
+    // The reproduction: turn 2 is garbage the alignment drops, so turns 1 and
+    // 3 become neighbours in the scored list without ever having been
+    // adjacent. Counting that pair reads a speaker change the engine never
+    // expressed — and it read as 100% agreement.
+    const turns: ScoredTurn[] = [
+      { turn: 1, text: script[0]?.text ?? '', speaker: 'A' },
+      { turn: 2, text: 'zzz qqq xxx nothing like the script at all', speaker: 'A' },
+      { turn: 3, text: script[3]?.text ?? '', speaker: 'B' },
+    ];
+    const score = scoreDiarization(turns, script, DEFAULT_SCORING);
+    expect(score.boundaryPairs).toBe(0);
+  });
+
+  it('scores no boundary across reference lines nobody transcribed', () => {
+    // The other half: consecutive TURNS, but they landed either side of two
+    // lines nothing covered. Adjacency has to hold on both sides.
+    const turns: ScoredTurn[] = [
+      { turn: 1, text: script[0]?.text ?? '', speaker: 'A' },
+      { turn: 2, text: script[3]?.text ?? '', speaker: 'B' },
+    ];
+    expect(scoreDiarization(turns, script, DEFAULT_SCORING).boundaryPairs).toBe(0);
+  });
+
+  it('still scores the boundary between two turns that really were adjacent', () => {
+    // The positive control for both guards: they must not simply zero the
+    // metric. Consecutive turns, consecutive lines, one real speaker change.
+    const turns: ScoredTurn[] = [
+      { turn: 1, text: script[0]?.text ?? '', speaker: 'A' },
+      { turn: 2, text: script[1]?.text ?? '', speaker: 'B' },
+    ];
+    const score = scoreDiarization(turns, script, DEFAULT_SCORING);
+    expect(score.boundaryPairs).toBe(1);
+    expect(score.boundaryAgreements).toBe(1);
   });
 });
