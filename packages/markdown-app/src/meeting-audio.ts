@@ -28,11 +28,16 @@ import {
 } from './voice-capture.ts';
 
 /**
- * Samples per outgoing frame — 100 ms at `MEETING_SAMPLE_RATE`. Small enough
- * that a partial phrase reaches the engine while it is still being said, large
- * enough that a meeting is not tens of thousands of socket writes an hour.
+ * Samples per outgoing frame — 50 ms at `MEETING_SAMPLE_RATE`, the engine's
+ * own floor (chunks may be 50–1000ms) and its recommendation for
+ * latency-sensitive callers. A word cannot leave the device until its frame
+ * closes, so the frame size is a direct, deterministic term in word-to-paint
+ * latency: half a frame on average, a whole frame at the tail. Halving the
+ * frame from 100ms buys that wait down by ~25ms at the median and ~45ms at
+ * the tail — arithmetic; a `?timing=1` session is what confirms it on the
+ * live pipeline — for the price of 20 socket writes a second instead of 10.
  */
-export const MEETING_FRAME_SAMPLES = MEETING_SAMPLE_RATE / 10;
+export const MEETING_FRAME_SAMPLES = MEETING_SAMPLE_RATE / 20;
 
 /**
  * The browser's three microphone processors, as one config.
