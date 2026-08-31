@@ -105,6 +105,37 @@ export interface TrustedHostOpts {
    * (security review 2026-08-05). Failure mode is refusal, never exposure.
    */
   accessFronted?: boolean;
+  /**
+   * The ONE hostname Recall.ai's backend dials this deployment on — a
+   * dedicated first-level name pointed at the same tunnel, e.g.
+   * `recall.<domain>` (`CW_RECALL_CALLBACK_HOST`).
+   *
+   * The FOURTH list, and by far the narrowest grant: not the product, not the
+   * share surface, not the app shell — two routes, each of which carries its
+   * own credential (a 128-bit per-bot token in the path; a Svix signature
+   * over the webhook body). Everything else on it is 404. See
+   * middleware/recall-callback-gate.ts for the allowlist and why each route
+   * is armed only while its credential is configured.
+   *
+   * A SINGLE hostname rather than a list, deliberately: it is derived into
+   * the callback URL handed to the vendor, and a list would have no answer to
+   * "which one did we tell Recall to dial".
+   *
+   * Two conditions the other proxied lists impose are deliberately ABSENT
+   * here, and both absences are reasoned rather than overlooked:
+   *
+   * - **No `accessFronted`.** Cloudflare Access is a browser flow. Recall's
+   *   backend has no browser and no way to acquire a token, so an Access
+   *   application in front of this hostname would refuse every real caller —
+   *   which is the whole reason the exemptions this replaces existed. The
+   *   credentials the two routes carry are what authenticates them.
+   * - **No `viaProxy` requirement.** That veto exists so a tunnel visitor
+   *   cannot claim `Host: localhost` and be served the product; there is no
+   *   product here to serve. Requiring it would also break any deployment
+   *   fronted by something that is not Cloudflare (no `cf-ray`), turning a
+   *   working bot into one that joins, records, bills and delivers nothing.
+   */
+  recallCallbackHost?: string | null;
 }
 
 const LOOPBACK = new Set(['localhost', '127.0.0.1', '::1', '0.0.0.0']);
@@ -236,6 +267,34 @@ export function isProxiedTrustedHost(
 }
 
 /**
+ * Is this Host the dedicated hostname Recall.ai dials back on?
+ *
+ * Exact match against the single configured name, same rule as every other
+ * list here: no suffix matching, so `recall.example.com.attacker.com` is not
+ * it. Unconfigured (the ordinary state — no meeting bots, or bots reached
+ * some other way) answers false for every Host, which leaves the hostname
+ * unknown and therefore denied.
+ *
+ * Deliberately NOT a widening of any existing list. `extraHosts` classifies
+ * `local` — the whole product, no token; `proxiedAccessHosts` classifies
+ * `collab`; `proxiedTrustedHosts` classifies `proxied-local`. All three are
+ * grants to PEOPLE, gated by something a person can present. This one is a
+ * grant to a VENDOR'S BACKEND, gated by credentials only that backend holds,
+ * and it reaches two routes. Keeping it a fourth door is what stops the
+ * unauthenticated one from ever being the door people use.
+ */
+export function isRecallCallbackHost(
+  host: string | null | undefined,
+  opts: TrustedHostOpts,
+): boolean {
+  const configured = normalizeHost(opts.recallCallbackHost ?? '');
+  if (configured === '') return false;
+  const h = normalizeHost(host);
+  if (h === '') return false;
+  return h === configured;
+}
+
+/**
  * What a share hostname grants access to.
  *
  * One field, and that is the whole point. A target used to carry a `docId`
@@ -264,14 +323,16 @@ export type HostDecision =
   | { kind: 'link' } // public link host: authorize from the session cookie
   | { kind: 'collab' } // Access-fronted collaboration host: JWT + collabScope
   | { kind: 'proxied-local' } // Access-fronted operator host: JWT, then local
+  | { kind: 'recall-callback' } // the bot callback host: two routes, nothing else
   | { kind: 'deny'; reason: 'unknown_host' }; // anything else: refuse
 
 /**
  * Classify a request's Host.
  *
- * Order matters: our own names win, then a per-share Access hostname, then
- * the single public hostname that link shares live on, then the operator's
- * opt-in collaboration hosts, then the operator's own proxied address.
+ * Order matters: our own names win, then the bot callback hostname, then a
+ * per-share Access hostname, then the single public hostname that link shares
+ * live on, then the operator's opt-in collaboration hosts, then the
+ * operator's own proxied address.
  * Anything else is refused — the tunnel forwards every hostname under its
  * ingress here, so "unrecognised" must mean refuse, never "skip the gate".
  *
@@ -291,6 +352,10 @@ export function classifyHost(
   },
 ): HostDecision {
   if (isTrustedLocalHost(host, opts)) return { kind: 'local' };
+  // The narrowest external kind, so it is checked FIRST among them: a name
+  // configured as the bot callback host can only ever lose surface by being
+  // matched here, never gain any.
+  if (isRecallCallbackHost(host, opts)) return { kind: 'recall-callback' };
   const h = normalizeHost(host);
   const target = opts.lookupShare(h);
   if (target) return { kind: 'share', target };

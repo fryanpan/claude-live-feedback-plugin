@@ -5,6 +5,7 @@ import {
   collabScope,
   isAccessTunnelHost,
   isProxiedTrustedHost,
+  isRecallCallbackHost,
   isTrustedLocalHost,
   normalizeHost,
   shareScopeAllows,
@@ -91,6 +92,68 @@ describe('isTrustedLocalHost', () => {
   });
 });
 
+describe('isRecallCallbackHost', () => {
+  const RECALL = { recallCallbackHost: 'recall.example.com' };
+
+  it('matches the one configured name, port and case ignored', () => {
+    expect(isRecallCallbackHost('recall.example.com', RECALL)).toBe(true);
+    expect(isRecallCallbackHost('RECALL.Example.COM:8787', RECALL)).toBe(true);
+  });
+
+  it('matches EXACTLY — no suffix, no prefix', () => {
+    // The rule every list in this file shares, and the one that would turn
+    // this hostname into "anything the attacker can name".
+    expect(isRecallCallbackHost('recall.example.com.attacker.com', RECALL)).toBe(false);
+    expect(isRecallCallbackHost('evil-recall.example.com', RECALL)).toBe(false);
+    expect(isRecallCallbackHost('sub.recall.example.com', RECALL)).toBe(false);
+  });
+
+  it('is false for every host when unconfigured', () => {
+    // The ordinary state. An empty setting must not match an empty Host, or
+    // an HTTP/1.0 request with no Host header would land in this class.
+    for (const opts of [{}, { recallCallbackHost: '' }, { recallCallbackHost: null }]) {
+      expect(isRecallCallbackHost('recall.example.com', opts)).toBe(false);
+      expect(isRecallCallbackHost('', opts)).toBe(false);
+      expect(isRecallCallbackHost(null, opts)).toBe(false);
+    }
+  });
+
+  it('does NOT require the request to have come through the proxy', () => {
+    // The opposite of `isAccessTunnelHost` and `isProxiedTrustedHost`, on
+    // purpose: those grant a surface to PEOPLE and lean on an Access token
+    // that only exists at the edge. This grants two credential-carrying
+    // routes to a vendor's backend, and requiring `cf-ray` would break any
+    // deployment fronted by something that is not Cloudflare.
+    expect(isRecallCallbackHost('recall.example.com', { ...RECALL, viaProxy: true })).toBe(true);
+    expect(isRecallCallbackHost('recall.example.com', { ...RECALL, viaProxy: false })).toBe(true);
+  });
+
+  it('does NOT require Cloudflare Access to be configured', () => {
+    // Access is a browser flow; Recall's backend has no browser. Gating this
+    // host on `accessFronted` would refuse every real caller — which is the
+    // failure the dedicated hostname exists to remove.
+    expect(isRecallCallbackHost('recall.example.com', { ...RECALL, accessFronted: false })).toBe(
+      true,
+    );
+  });
+
+  it('the lists cannot leak into each other', () => {
+    // A name on the recall list is not a local name, not a collab name and
+    // not the operator's. Each door keeps its own key.
+    const only = { ...LOCAL, ...RECALL, viaProxy: true, accessFronted: true };
+    expect(isTrustedLocalHost('recall.example.com', only)).toBe(false);
+    expect(isAccessTunnelHost('recall.example.com', only)).toBe(false);
+    expect(isProxiedTrustedHost('recall.example.com', only)).toBe(false);
+    // …and conversely, the operator's own hostname is not the recall host.
+    expect(
+      isRecallCallbackHost('ops.example.com', {
+        ...only,
+        proxiedTrustedHosts: ['ops.example.com'],
+      }),
+    ).toBe(false);
+  });
+});
+
 describe('classifyHost', () => {
   const lookupShare = (h: string) =>
     h === 'share-abc.tunnel.example.com' ? { workspaceId: 'ws-shared' } : null;
@@ -130,6 +193,46 @@ describe('classifyHost', () => {
       reason: 'unknown_host',
     });
     expect(classifyHost(null, { ...LOCAL, lookupShare })).toEqual({
+      kind: 'deny',
+      reason: 'unknown_host',
+    });
+  });
+
+  it('the recall callback host is its own kind, proxied or not', () => {
+    const opts = { ...LOCAL, lookupShare, recallCallbackHost: 'recall.example.com' };
+    expect(classifyHost('recall.example.com', opts)).toEqual({ kind: 'recall-callback' });
+    expect(classifyHost('recall.example.com', { ...opts, viaProxy: true })).toEqual({
+      kind: 'recall-callback',
+    });
+  });
+
+  it('unconfigured, that same hostname is denied like any other', () => {
+    expect(classifyHost('recall.example.com', { ...LOCAL, lookupShare })).toEqual({
+      kind: 'deny',
+      reason: 'unknown_host',
+    });
+  });
+
+  it('the recall host never widens into another kind, and never narrows one', () => {
+    // Checked FIRST among the external kinds because it is the narrowest, so
+    // a collision can only ever LOSE surface. Proven both ways: a name that
+    // is on the recall list AND the operator list classifies recall (the
+    // narrow one wins), and adding a recall host leaves every other
+    // hostname's classification exactly where it was.
+    const both = {
+      ...LOCAL,
+      lookupShare,
+      viaProxy: true,
+      accessFronted: true,
+      recallCallbackHost: 'ops.example.com',
+      proxiedTrustedHosts: ['ops.example.com'],
+    };
+    expect(classifyHost('ops.example.com', both)).toEqual({ kind: 'recall-callback' });
+    expect(classifyHost('share-abc.tunnel.example.com', both)).toEqual({
+      kind: 'share',
+      target: { workspaceId: 'ws-shared' },
+    });
+    expect(classifyHost('anything.tunnel.example.com', both)).toEqual({
       kind: 'deny',
       reason: 'unknown_host',
     });
