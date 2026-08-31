@@ -140,6 +140,21 @@ export type WsCtx = {
    * writable. Absent for a socket opened over the tailnet.
    */
   shareId?: string;
+  /**
+   * This socket may READ the doc and may not change it.
+   *
+   * Set at the upgrade when `CW_REQUIRE_SIGNIN_TO_WRITE` is on and the
+   * browser opening it has proven nobody (server.ts). Absent — the case for
+   * every socket that predates the flag, and every socket while it is off —
+   * means fully writable, so nothing had to be touched to keep meaning what
+   * it meant.
+   *
+   * Enforced in `yjs-protocol.ts`: sync step 1 is answered (that is the
+   * read), and a sync step 2 or update frame is dropped. Awareness still
+   * flows both ways — presence is not content, and a reader who cannot be
+   * seen in the room is a worse review surface, not a safer one.
+   */
+  readOnly?: boolean;
 };
 
 export type FeedbackWs = ServerWebSocket<WsCtx>;

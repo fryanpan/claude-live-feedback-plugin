@@ -4,6 +4,8 @@ import { afterEach, describe, expect, it } from 'vitest';
 import {
   HUDDLE_START_PARAM,
   applyHuddleCrumb,
+  applyReadingCrumb,
+  resetReadingCrumbForTest,
   wantsHuddleStart,
   withoutHuddleStart,
 } from '../src/huddle-entry.ts';
@@ -48,6 +50,7 @@ describe('withoutHuddleStart', () => {
 describe('applyHuddleCrumb', () => {
   afterEach(() => {
     document.body.innerHTML = '';
+    resetReadingCrumbForTest();
   });
   const crumb = () => {
     document.body.innerHTML =
@@ -69,6 +72,36 @@ describe('applyHuddleCrumb', () => {
   it('does nothing on a shell with no crumb', () => {
     document.body.innerHTML = '';
     expect(() => applyHuddleCrumb(document, true)).not.toThrow();
+  });
+
+  it('says Reading to a browser that may not write, and KEEPS saying it', () => {
+    // The bug this is for: the crumb is rewritten unconditionally on every
+    // in-place navigation, so setting the word once was undone by the next
+    // one and the surface went back to announcing "Editing:" to somebody who
+    // could not edit.
+    const label = crumb();
+    applyReadingCrumb(document);
+    expect(label.textContent).toBe('Reading:');
+    applyHuddleCrumb(document, false);
+    expect(label.textContent).toBe('Reading:');
+  });
+
+  it('still names a huddle a huddle — that word is about the doc', () => {
+    const label = crumb();
+    applyReadingCrumb(document);
+    applyHuddleCrumb(document, true);
+    expect(label.textContent).toBe('Huddle');
+    // And back to Reading, not to Editing, on the next ordinary doc.
+    applyHuddleCrumb(document, false);
+    expect(label.textContent).toBe('Reading:');
+  });
+
+  it('says Editing to everyone else', () => {
+    // The control: without this, "Reading:" would also be what a signed-in
+    // editor sees, which is the same bug pointing the other way.
+    const label = crumb();
+    applyHuddleCrumb(document, false);
+    expect(label.textContent).toBe('Editing:');
   });
 });
 

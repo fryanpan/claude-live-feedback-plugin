@@ -47,6 +47,15 @@ export interface CreateLiveRedlineEditorOpts {
   debounceMs?: number;
   /** In-app navigation for relative sibling links (see CreateEditorOpts). */
   docLink?: { workspaceId: string; relPath: string; navigate: (url: string) => void };
+  /**
+   * Whether this surface takes typing. Defaults to `true` — it is the
+   * editable redline. A browser the server refuses writes from still gets it
+   * (the markup, the balloons, and the companion doc's comment threads are
+   * the same ones everyone else is reading), built read-only rather than
+   * swapped for the derived fallback, because losing the surface would lose
+   * the threads with it.
+   */
+  editable?: boolean;
 }
 
 export function createLiveRedlineEditor(opts: CreateLiveRedlineEditorOpts): LiveRedlineSurface {
@@ -57,6 +66,7 @@ export function createLiveRedlineEditor(opts: CreateLiveRedlineEditorOpts): Live
     onSelectionChange: opts.onSelectionChange,
     user: opts.user,
     docLink: opts.docLink,
+    editable: opts.editable ?? true,
     extraExtensions: [
       LiveMarkup.configure({
         baseText: opts.baseText,

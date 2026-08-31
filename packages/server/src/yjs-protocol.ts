@@ -125,7 +125,29 @@ export function onMessage(room: DocRoom, ws: FeedbackWs, data: Uint8Array): void
     switch (kind) {
       case MSG_SYNC: {
         encoding.writeVarUint(enc, MSG_SYNC);
-        syncProtocol.readSyncMessage(dec, enc, room.ydoc, ws);
+        if (ws.data.readOnly) {
+          // A socket that may read and may not write (`WsCtx.readOnly`).
+          //
+          // Step 1 is the READ — the client asking what it is missing, which
+          // we answer with step 2 and the whole doc. Step 2 and update are
+          // the client TELLING US something, and those are dropped: they are
+          // the only two frames `readSyncMessage` would have applied to the
+          // ydoc, so decoding the sub-kind here and answering only step 1 is
+          // exactly "reading unchanged, writing refused" with nothing else
+          // altered.
+          //
+          // Dropped in silence on the wire, and loudly in the UI: the client
+          // has already asked `/api/auth/session` whether it may write and
+          // has stayed in view mode with a sign-in bar if not, so nothing
+          // legitimate reaches this branch. What does reach it is a client
+          // that ignored the answer, and it gets what it should — no write.
+          const step = decoding.readVarUint(dec);
+          if (step === syncProtocol.messageYjsSyncStep1) {
+            syncProtocol.readSyncStep1(dec, enc, room.ydoc);
+          }
+        } else {
+          syncProtocol.readSyncMessage(dec, enc, room.ydoc, ws);
+        }
         if (encoding.length(enc) > 1) {
           ws.sendBinary(encoding.toUint8Array(enc), true);
         }
