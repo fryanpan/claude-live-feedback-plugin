@@ -25,6 +25,7 @@ import {
   formatGoalEffortSeconds,
   goalPaceWindowDays,
   isCurrentGenerationEstimate,
+  isObservedClose,
   neutralCalibration,
   neutralRatioSet,
   ratioForGoal,
@@ -767,6 +768,98 @@ describe("summarizeGoalEffort — pace over the goal's active window", () => {
     if (s.kind !== 'ready') throw new Error('expected ready');
     expect(s.paceWindowDays).toBeCloseTo(3, 6);
     expect(s.closesInWindow).toBe(2);
+  });
+});
+
+describe('summarizeGoalEffort — a close with no work behind it', () => {
+  // The ticket this covers: "projected finish ignores tickets that went
+  // straight to done". A row swept out of the backlog was already refused by
+  // the calibrator, which needs an actual; pace and the projection floor
+  // took it, so bulk-closing stale rows faked a speed-up.
+  const born = NOW - 10 * DAY;
+
+  /** Closed without ever entering `in-progress` — a bulk sweep. */
+  const swept = (agoMs: number): EffortTaskInput =>
+    task({
+      status: 'done',
+      createdAt: born,
+      transitions: [{ ts: NOW - agoMs, to: 'done' }],
+    });
+
+  const worked = (agoMs: number): EffortTaskInput => closed(agoMs, HOUR, { createdAt: born });
+
+  it('keeps a swept row out of the pace', () => {
+    const s = summarizeGoalEffort([swept(HOUR), swept(2 * HOUR), task()], 'g1', identity(), NOW);
+    if (s.kind !== 'ready') throw new Error('expected ready');
+    expect(s.closesInWindow).toBe(0);
+    expect(s.paceSecondsPerDay).toBe(0);
+    // Positive control on the fixture: those rows ARE closed, so a zero pace
+    // is the exclusion firing and not two tickets that never closed.
+    expect(s.percentComplete).toBe(67);
+  });
+
+  it('still counts a swept row as done everywhere it is a plain fact', () => {
+    // The bar, the remainder and `complete` are statements about what is
+    // finished, not about how fast the goal moves. Withholding those would
+    // be a different and worse bug.
+    const s = summarizeGoalEffort([swept(HOUR), swept(2 * HOUR)], 'g1', identity(), NOW);
+    if (s.kind !== 'ready') throw new Error('expected ready');
+    expect(s.complete).toBe(true);
+    expect(s.percentComplete).toBe(100);
+    expect(s.wallClockRemainingSeconds).toBe(0);
+  });
+
+  it('does not move the projected date when three stale rows close in one minute', () => {
+    const base = [worked(DAY), worked(2 * DAY), worked(3 * DAY), task({ createdAt: born })];
+    const before = summarizeGoalEffort(base, 'g1', identity(), NOW);
+    if (before.kind !== 'ready') throw new Error('expected ready');
+    // Positive control: there IS a date to move, so "unmoved" is a
+    // comparison of two projections rather than two absences.
+    expect(before.projectedFinishAt).toBeDefined();
+
+    const bulk = [...base, swept(20_000), swept(40_000), swept(60_000)];
+    const after = summarizeGoalEffort(bulk, 'g1', identity(), NOW);
+    if (after.kind !== 'ready') throw new Error('expected ready');
+    expect(after.closesInWindow).toBe(before.closesInWindow);
+    expect(after.paceSecondsPerDay).toBe(before.paceSecondsPerDay);
+    expect(after.projectedFinishAt).toBe(before.projectedFinishAt);
+
+    // And the control in the other direction: the same three rows, this time
+    // actually worked, DO pull the date in. Without this the assertion above
+    // would also pass on a projection that never responds to anything.
+    const real = summarizeGoalEffort(
+      [...base, worked(20_000), worked(40_000), worked(60_000)],
+      'g1',
+      identity(),
+      NOW,
+    );
+    if (real.kind !== 'ready') throw new Error('expected ready');
+    expect(real.paceSecondsPerDay).toBeGreaterThan(before.paceSecondsPerDay);
+    expect(real.projectedFinishAt ?? 0).toBeLessThan(before.projectedFinishAt ?? 0);
+  });
+
+  it('will not unlock a date on swept rows alone', () => {
+    // Three closes in the window and still no projection, because none of
+    // them was worked. The floor counts observed closes.
+    const s = summarizeGoalEffort(
+      [swept(HOUR), swept(2 * HOUR), swept(3 * HOUR), task({ createdAt: born })],
+      'g1',
+      identity(),
+      NOW,
+    );
+    if (s.kind !== 'ready') throw new Error('expected ready');
+    expect(s.closesInWindow).toBe(0);
+    expect(s.projectedFinishAt).toBeUndefined();
+    expect(s.projectionOverHorizonDays).toBeUndefined();
+  });
+
+  it('reports a swept close as unobserved and a worked one as observed', () => {
+    expect(isObservedClose(swept(HOUR))).toBe(false);
+    expect(isObservedClose(worked(HOUR))).toBe(true);
+    // An open ticket is not a close at all, however much of a trail it has.
+    expect(isObservedClose(task({ transitions: [{ ts: NOW - HOUR, to: 'in-progress' }] }))).toBe(
+      false,
+    );
   });
 });
 

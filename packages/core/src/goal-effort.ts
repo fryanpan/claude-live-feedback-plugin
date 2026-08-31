@@ -141,9 +141,10 @@ export const EFFORT_PACE_WINDOW_DAYS = 14;
  */
 export const EFFORT_MIN_PACE_WINDOW_DAYS = 1;
 
-/** Below this many closes inside the pace window there is no projection —
- *  a date drawn from one or two closes is a number pretending to be a
- *  forecast. */
+/** Below this many OBSERVED closes inside the pace window there is no
+ *  projection — a date drawn from one or two closes is a number pretending
+ *  to be a forecast, and a date drawn from three rows somebody swept out of
+ *  the backlog is not even that (see `isObservedClose`). */
 export const EFFORT_MIN_CLOSES_FOR_PROJECTION = 3;
 
 /** Below this many samples there is no spread, so no "likely by" date: a
@@ -404,6 +405,32 @@ export function effortActualWallClockSeconds(task: EffortTaskInput): number | nu
 export function effortActualHandsOnSeconds(task: EffortTaskInput): number | null {
   const total = task.readingTime?.totalSeconds;
   return isPositiveFinite(total) ? Math.round(total) : null;
+}
+
+/**
+ * Did anybody watch this ticket being worked?
+ *
+ * A close with a measured wall-clock actual behind it — which is to say a
+ * ticket that entered `in-progress` and later closed. A row moved STRAIGHT
+ * to `done` fails it, and that is the whole point: nobody observed the work,
+ * so the close is bookkeeping rather than throughput.
+ *
+ * Calibration already refused those rows, because `actual / estimate` needs
+ * an actual. Pace and the projection floor did not, and that was the bug:
+ * sweeping five stale rows in one afternoon added five closes and their
+ * whole estimate to the numerator of a rate that is supposed to describe how
+ * fast the goal moves, and the projected finish jumped forward on an
+ * afternoon of tidying. One rule now covers all three — an unobserved close
+ * teaches nothing.
+ *
+ * What it does NOT touch is the arithmetic where a close is a plain fact
+ * rather than evidence: the percentage bar still moves, the remainder still
+ * drops, and a goal all of whose rows were bulk-closed still reads
+ * `complete`. Those say the ticket is finished, which it is. Only the claims
+ * about SPEED are withheld.
+ */
+export function isObservedClose(task: EffortTaskInput): boolean {
+  return isEffortDone(task) && effortActualWallClockSeconds(task) !== null;
 }
 
 /** Clamp a correction factor into the trusted band. */
@@ -680,6 +707,10 @@ export interface GoalEffortReady {
    *  each surface, because the sentence a header prints ("on the last N
    *  days' pace") has to name the same N the arithmetic used. */
   paceWindowDays: number;
+  /** OBSERVED closes inside that window — tickets that entered
+   *  `in-progress` and later closed. A row swept straight to done is not
+   *  counted here, so a bulk close cannot unlock a date it did not earn;
+   *  `EFFORT_MIN_CLOSES_FOR_PROJECTION` is checked against this number. */
   closesInWindow: number;
   /** How many of the goal's live tickets carry a usable estimate, and how
    *  many do not. The bar covers only the first group and a reader is
@@ -760,12 +791,17 @@ export function summarizeGoalEffort(
     const wall = applyEffortRatio(est.wallClockSeconds, wallClockRatio.ratio);
     totalWallClock += wall;
     if (isEffortDone(task)) {
+      // The bar counts every close, observed or not: the ticket is finished,
+      // and how it got there is not a fact about how much of the goal is
+      // left.
       doneWallClock += wall;
-      // Pace is measured in ESTIMATE-seconds closed per day, not in actual
-      // seconds. That keeps it in the same currency as the remainder it is
-      // divided into — dividing a remaining estimate by a rate of actuals
-      // would apply the correction twice, once in each operand.
-      const closedAt = effortClosedAt(task);
+      // The PACE counts only closes somebody watched happen — see
+      // `isObservedClose`. Pace is measured in ESTIMATE-seconds closed per
+      // day, not in actual seconds. That keeps it in the same currency as
+      // the remainder it is divided into — dividing a remaining estimate by
+      // a rate of actuals would apply the correction twice, once in each
+      // operand.
+      const closedAt = isObservedClose(task) ? effortClosedAt(task) : null;
       if (closedAt !== null && closedAt >= windowStart && closedAt <= now) {
         closesInWindow++;
         closedSecondsInWindow += wall;

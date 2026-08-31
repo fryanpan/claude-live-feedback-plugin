@@ -57,6 +57,34 @@ The header sentence names the window it actually used — "on the last 3 days'
 pace" — so the number on screen and the number in the arithmetic are the
 same one.
 
+## A close with no work behind it is not throughput
+
+A ticket that went **straight to done** — closed without ever entering
+`in-progress` — is excluded from **calibration, pace and the projection
+floor** alike.
+
+Nobody watched it being worked, so there is no wall-clock actual to learn a
+correction from; that half was always excluded. The other two halves were
+not, and that was the bug: closing five stale rows in one afternoon added
+five closes and their whole estimate to the numerator of a rate that is
+supposed to describe throughput, and the goal's projected finish jumped
+forward on an afternoon of bookkeeping. Sweeping a backlog is not a
+speed-up.
+
+So the rule is one rule, in one direction: **an unobserved close teaches
+nothing.** It still counts everywhere it is a plain fact rather than
+evidence — the percentage bar moves, the remainder drops, `complete` can
+become true. What it does not do is set a rate or unlock a date.
+
+`EFFORT_MIN_CLOSES_FOR_PROJECTION` therefore counts **observed** closes: a
+goal whose only three closes skipped `in-progress` gets no date, and the
+header says so.
+
+The one thing this does **not** narrow is hands-on calibration. Attention is
+measured directly, off the reading time folded onto the row, and needs no
+`in-progress` transition to be real: somebody read the ticket or they did
+not. Only the wall-clock trail depends on the transition that a sweep skips.
+
 ## What a reader is owed
 
 Every absence is a different sentence, and none of them is a zero.

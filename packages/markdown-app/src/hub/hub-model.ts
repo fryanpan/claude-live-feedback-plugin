@@ -855,7 +855,11 @@ export function goalEffortLabel(
     );
   } else {
     titleParts.push(
-      `No finish date yet — that needs ${EFFORT_MIN_CLOSES_FOR_PROJECTION} tickets closed in the last ${paceDays}, and ${summary.closesInWindow} ${summary.closesInWindow === 1 ? 'has' : 'have'} closed.`,
+      // "worked on and closed", not "closed": a row swept straight to done
+      // no longer counts toward the floor, so a reader looking at four
+      // closed tickets and a sentence asking for three would otherwise think
+      // the board could not count.
+      `No finish date yet — that needs ${EFFORT_MIN_CLOSES_FOR_PROJECTION} tickets worked on and closed in the last ${paceDays}, and ${summary.closesInWindow} ${summary.closesInWindow === 1 ? 'has' : 'have'}.`,
     );
   }
   if (summary.wallClockRatio.samples > 0) {
