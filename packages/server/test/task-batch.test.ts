@@ -400,7 +400,7 @@ describe('POST /api/workspaces/<id>/tasks/batch', () => {
     const { wsId } = await seedWorkspace();
     expect((await post(`/api/workspaces/${wsId}/tasks/batch`, { tasks: [] })).status).toBe(400);
     expect((await post(`/api/workspaces/${wsId}/tasks/batch`, { tasks: 'nope' })).status).toBe(400);
-    const missing = await post('/api/workspaces/w-does-not-exist/tasks/batch', {
+    const missing = await post('/api/workspaces/w-nope/tasks/batch', {
       author: AGENT,
       tasks: [{ title: 'Orphan' }],
     });

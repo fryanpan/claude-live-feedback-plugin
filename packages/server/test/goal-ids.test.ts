@@ -326,7 +326,7 @@ describe('a board that already holds slug ids keeps working', () => {
     return out;
   };
 
-  const wsId = 'w-legacyboard1';
+  const wsId = 'w-legacy1';
 
   beforeEach(() => {
     dataDir = mkdtempSync(join(tmpdir(), 'goal-legacy-'));
@@ -491,7 +491,7 @@ describe('the goal route refuses a caller-chosen id and names the way out', () =
 describe('a board written before subgoals were removed loads flat', () => {
   let dataDir: string;
   let store: TaskStore;
-  const wsId = 'w-nestedboard1';
+  const wsId = 'w-nested1';
 
   const nested = () => ({
     workspace: {
@@ -515,7 +515,7 @@ describe('a board written before subgoals were removed loads flat', () => {
     },
     tasks: [
       {
-        id: 't-nested-1',
+        id: 't-nest1',
         workspaceId: wsId,
         title: 'proof the headline',
         status: 'todo',
@@ -593,7 +593,7 @@ describe('a board written before subgoals were removed loads flat', () => {
       'g-launch-copy',
     ]);
     // And the task did not move with the band's position.
-    expect(store.getTask('t-nested-1')?.goal).toBe('g-launch-qa');
+    expect(store.getTask('t-nest1')?.goal).toBe('g-launch-qa');
   });
 });
 
@@ -614,7 +614,7 @@ describe('a board written before subgoals were removed loads flat', () => {
 describe('a board whose archive cascaded into a subgoal loads coherently', () => {
   let dataDir: string;
   let store: TaskStore;
-  const wsId = 'w-cascadeboard1';
+  const wsId = 'w-casc1';
   const AT = 1_700_000_500_000;
 
   const goalRow = (id: string, title: string, over: Record<string, unknown> = {}) => ({
@@ -653,7 +653,7 @@ describe('a board whose archive cascaded into a subgoal loads coherently', () =>
     ],
     tasks: [
       {
-        id: 't-under-parent',
+        id: 't-par1',
         workspaceId: wsId,
         title: 'book the slot',
         status: 'todo',
@@ -667,7 +667,7 @@ describe('a board whose archive cascaded into a subgoal loads coherently', () =>
         transitions: [],
       },
       {
-        id: 't-under-sub',
+        id: 't-sub1',
         workspaceId: wsId,
         title: 'proof the headline',
         status: 'todo',
@@ -700,10 +700,10 @@ describe('a board whose archive cascaded into a subgoal loads coherently', () =>
     // Premise, asserted rather than assumed: both rows really are archived.
     expect(store.getGoalRow('g-launch')?.archivedAt).toBe(AT);
     expect(store.getGoalRow('g-launch-qa')?.archivedAt).toBe(AT);
-    expect(store.getTask('t-under-sub')?.archivedWithGoal).toBe('g-launch-qa');
+    expect(store.getTask('t-sub1')?.archivedWithGoal).toBe('g-launch-qa');
     // The parent's own task is untouched — the re-point is scoped to the
     // band that moved, not applied to every marker on the board.
-    expect(store.getTask('t-under-parent')?.archivedWithGoal).toBe('g-launch');
+    expect(store.getTask('t-par1')?.archivedWithGoal).toBe('g-launch');
   });
 
   it('restores each band with its own work, and leaves the other alone', () => {
@@ -711,22 +711,22 @@ describe('a board whose archive cascaded into a subgoal loads coherently', () =>
     if (!sub.ok) throw new Error('unarchiveGoal refused');
     // The failure this guards: an empty band back on the board under a
     // control that had just promised to bring its tasks.
-    expect(sub.taskIds).toEqual(['t-under-sub']);
-    expect(store.getTask('t-under-sub')?.archivedAt).toBeUndefined();
+    expect(sub.taskIds).toEqual(['t-sub1']);
+    expect(store.getTask('t-sub1')?.archivedAt).toBeUndefined();
     // The other direction, in the same read: the parent is still archived,
     // with its own task still off the board.
     expect(store.getGoalRow('g-launch')?.archivedAt).toBe(AT);
-    expect(store.getTask('t-under-parent')?.archivedAt).toBe(AT);
+    expect(store.getTask('t-par1')?.archivedAt).toBe(AT);
 
     const parent = store.unarchiveGoal('g-launch', { actor: PERSON });
     if (!parent.ok) throw new Error('unarchiveGoal refused');
-    expect(parent.taskIds).toEqual(['t-under-parent']);
+    expect(parent.taskIds).toEqual(['t-par1']);
     expect(
       store
         .listTasks(wsId)
         .map((t) => t.id)
         .sort(),
-    ).toEqual(['t-under-parent', 't-under-sub'].sort());
+    ).toEqual(['t-par1', 't-sub1'].sort());
   });
 
   it('stops writing the marker back, so the shape does not outlive the migration', () => {
