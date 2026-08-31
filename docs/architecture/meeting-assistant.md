@@ -243,10 +243,19 @@ the notes session correctly REFUSES to rewrite a name that means two voices.
 `turn_order`; Recall's does not. `recall-turns.ts` allocates them: a partial
 opens a participant's turn, a final settles it, and a final on an
 already-settled turn opens a NEW one **unless its words normalise to the same
-string** — which is the `format_turns` double-final arriving as two
-indistinguishable events. The clause is narrow on purpose: merging two
-different sentences would lose one, which is worse than a duplicated
-punctuation pass.
+string AND it arrives within two seconds** — which is the `format_turns`
+double-final arriving as two indistinguishable events. Both halves of that
+clause are load-bearing. Without the same-words half, the punctuated pass
+becomes a duplicate turn. Without the two-second window, "Yes." said twice in
+one conversation becomes one turn and the second answer is deleted outright.
+Merging two different sentences would lose one, which is worse than a
+duplicated punctuation pass; deleting a repeated one is the same loss wearing
+a different hat.
+
+The record takes the SECOND of a folded pair: a later transcript line with
+words for a turn already written revises it in place (see Persistence), so
+the durable transcript reads the punctuated way rather than keeping the rough
+first draft forever.
 
 **The first word starts the meeting; a terminal state ends it.** Not the
 `bot.in_call_recording` webhook. The status channel and the word channel are
@@ -311,7 +320,10 @@ and a `calendar.sync_events` webhook consumer before any bot is scheduled.
 Append-only under `<dataDir>/meetings/<safeDocId>/`: one
 `<meetingId>.jsonl` of settled turns (`{turn, text, ts, speaker?}`; a later
 `{turn, speaker, ts}` line with no text relabels a turn already written, and
-`speaker: null` there un-labels it),
+`speaker: null` there un-labels it; a later line WITH text revises the words
+and REPLACES the turn on read, keeping the position it first settled in —
+that is how the bot path's double final, rough then punctuated, lands as one
+turn reading the punctuated way),
 plus a `meetings.jsonl` index whose start/stop lines fold into one record
 per meeting — and whose `{meetingId, speakers: {A: "Jordan"}}` lines fold
 into the record's name map, last word wins. Nothing deletes; ids sanitized
