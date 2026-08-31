@@ -1114,6 +1114,13 @@ export interface GoalRow {
   /** Absent means nobody owns it — a vacancy, not a person. */
   assignee?: string;
   dueAt?: number;
+  /**
+   * Cross-references, mirroring `Task.links` — in practice the docs this
+   * goal came out of or is discussed in, written by the ref backfill and the
+   * settle-time doc scan (a doc whose prose links this goal). Row-owned, so
+   * `syncGoalRows` never touches it and it survives every goal-list edit.
+   */
+  links?: Ref[];
   /** Fractional sort key among the board's goal rows: priority order. */
   order: number;
   status: TaskStatus;
@@ -6668,6 +6675,30 @@ export class TaskStore {
     task.updatedAt = Date.now();
     this.scheduleSave(task.workspaceId);
     return { ok: true, task, changed: true };
+  }
+
+  /**
+   * The goal half of `linkRef`: add a cross-reference to a goal row's
+   * `links`. Same idempotency contract; a goal cannot self-ref (its own id
+   * is a task-kind ref, refused for symmetry with `linkRef`).
+   */
+  linkGoalRef(
+    goalId: string,
+    ref: Ref,
+  ):
+    | { ok: true; goal: GoalRow; changed: boolean }
+    | { ok: false; error: 'not-found' | 'bad-ref' | 'self-ref' } {
+    const goal = this.getGoalRow(goalId);
+    if (!goal) return { ok: false, error: 'not-found' };
+    if (!isValidRef(ref)) return { ok: false, error: 'bad-ref' };
+    if (ref.kind === 'task' && ref.taskId === goalId) return { ok: false, error: 'self-ref' };
+    const key = refKey(ref);
+    if ((goal.links ?? []).some((r) => refKey(r) === key))
+      return { ok: true, goal, changed: false };
+    goal.links = [...(goal.links ?? []), ref];
+    goal.updatedAt = Date.now();
+    this.scheduleSave(goal.workspaceId);
+    return { ok: true, goal, changed: true };
   }
 
   /** Remove a cross-reference. Removing one that isn't there is a no-op

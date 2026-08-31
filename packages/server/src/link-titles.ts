@@ -25,16 +25,28 @@ export interface LinkTitleSources {
   docInWorkspace(docId: string, workspaceId: string): boolean;
   /** A task's — or a GOAL's, they share the id namespace and the status
    *  machine — title, home board, and status. The board check needs the
-   *  workspaceId; the status becomes the chip. */
-  task(taskId: string): { title: string; workspaceId: string; status: TaskStatus } | undefined;
+   *  workspaceId; the status becomes the chip. `planHeld` marks a draft row
+   *  held behind an unapproved plan (goals never carry it), so the chip can
+   *  say what the row IS rather than "triage". */
+  task(
+    taskId: string,
+  ): { title: string; workspaceId: string; status: TaskStatus; planHeld?: boolean } | undefined;
   workspaceName(workspaceId: string): string | undefined;
 }
 
 /** What one URL resolves to. `status` only ever appears on task/goal-backed
- *  addresses — its absence is what tells the client "no chip here". */
+ *  addresses — its absence is what tells the client "no chip here".
+ *  `planHeld` only ever appears as `true`, and only beside a status. */
 export interface ResolvedLink {
   title: string | null;
   status?: TaskStatus;
+  planHeld?: boolean;
+}
+
+/** The task-source answer folded into a ResolvedLink — one spot so the three
+ *  task-backed URL shapes cannot disagree on how `planHeld` rides along. */
+function taskLink(t: { title: string; status: TaskStatus; planHeld?: boolean }): ResolvedLink {
+  return { title: t.title, status: t.status, ...(t.planHeld === true ? { planHeld: true } : {}) };
 }
 
 export function linkInfoFor(url: string, sources: LinkTitleSources): ResolvedLink {
@@ -46,7 +58,7 @@ export function linkInfoFor(url: string, sources: LinkTitleSources): ResolvedLin
     case 'task': {
       const task = sources.task(link.taskId);
       if (!task || task.workspaceId !== link.workspaceId) return { title: null };
-      return { title: task.title, status: task.status };
+      return taskLink(task);
     }
     // The goal panel's own address shape. Same lookup as a task on purpose:
     // goals and tasks share the id namespace and the status machine, and the
@@ -54,7 +66,7 @@ export function linkInfoFor(url: string, sources: LinkTitleSources): ResolvedLin
     case 'goal': {
       const goal = sources.task(link.goalId);
       if (!goal || goal.workspaceId !== link.workspaceId) return { title: null };
-      return { title: goal.title, status: goal.status };
+      return taskLink(goal);
     }
     case 'doc':
     case 'mockup': {
@@ -66,7 +78,7 @@ export function linkInfoFor(url: string, sources: LinkTitleSources): ResolvedLin
         if (!task) return { title: null };
         if (link.workspaceId !== null && task.workspaceId !== link.workspaceId)
           return { title: null };
-        return { title: task.title, status: task.status };
+        return taskLink(task);
       }
       const meta = sources.docMeta(link.docId);
       if (!meta) return { title: null };
@@ -93,19 +105,27 @@ export const LINK_TITLE_BATCH_LIMIT = 100;
 /**
  * Resolve a batch, capped at the batch limit. `titles` keeps its original
  * shape (`url → title|null`) so a client on an older bundle keeps working;
- * `statuses` holds an entry ONLY for task/goal-backed URLs.
+ * `statuses` holds an entry ONLY for task/goal-backed URLs, and `planHeld`
+ * only for the subset of those that are drafts held behind an unapproved
+ * plan (so the chip reads "Draft" rather than the hold's technical status).
  */
 export function linkTitlesFor(
   urls: string[],
   sources: LinkTitleSources,
-): { titles: Record<string, string | null>; statuses: Record<string, TaskStatus> } {
+): {
+  titles: Record<string, string | null>;
+  statuses: Record<string, TaskStatus>;
+  planHeld: Record<string, boolean>;
+} {
   const titles: Record<string, string | null> = {};
   const statuses: Record<string, TaskStatus> = {};
+  const planHeld: Record<string, boolean> = {};
   for (const url of urls.slice(0, LINK_TITLE_BATCH_LIMIT)) {
     if (typeof url !== 'string') continue;
     const info = linkInfoFor(url, sources);
     titles[url] = info.title;
     if (info.status !== undefined) statuses[url] = info.status;
+    if (info.planHeld === true) planHeld[url] = true;
   }
-  return { titles, statuses };
+  return { titles, statuses, planHeld };
 }
