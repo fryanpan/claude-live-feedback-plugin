@@ -24,38 +24,74 @@ flowchart LR
 Estimates are on both sides of every fraction. A measured number is never
 multiplied — a correction scales the forecast and nothing else.
 
-## Pace is measured over the goal's own active window
+## Pace is measured over the span the goal actually moved in
 
-The denominator is **the goal's age**, clamped to
-`[EFFORT_MIN_PACE_WINDOW_DAYS, EFFORT_PACE_WINDOW_DAYS]` — one day to
-fourteen. It used to be a flat fourteen days for every goal, which made the
-divisor a fact about the calendar rather than about the goal: a goal three
-days old with two closes was reported at `2/14` per day and looked becalmed,
-while a goal running since spring read fast because only its last fortnight
-counted. Same numerator, and the goal that had earned it in three days got
-the smaller rate.
+The denominator is **the stretch the goal's counted closes happened in** —
+the earliest one to now — clamped to `[EFFORT_MIN_PACE_WINDOW_DAYS,
+EFFORT_PACE_WINDOW_DAYS]`: one hour to fourteen days.
 
-- **The goal's age is its oldest live ticket's `createdAt`.** The goal record
-  itself never reaches the module — `summarizeGoalEffort` takes a list of
-  tickets so the board can recompute client-side — and the oldest ticket
-  filed under a band is the closest honest proxy. It errs the safe way: a
-  goal cannot have been running before anything was filed under it, so the
-  window can only come out too short, never too long.
+It was a flat fourteen days for every goal, which made the divisor a fact
+about the calendar rather than about the goal. Replacing that with the goal's
+**age** fixed half of it and left the half that prompted the ticket. Measured
+on the live board: a goal three and a half days old closed most of itself in
+one four-hour run, and dividing that run by the goal's age still read as a
+trickle — it moved the finish from a week out to a day and a half out, when
+the goal was running at hours.
+
+Age is how long a goal has **existed**. A pace is a fact about the stretch in
+which it **moved**. A goal that sat for three days and then ran for four
+hours has a four-hour window; the three quiet days are not evidence about its
+rate.
+
+- **Counted closes site the window**, using the same predicate the numerator
+  uses: an observed close (see the next section) carrying an estimate, inside
+  the fourteen-day ceiling. So the window is exactly the span of the closes
+  it will be divided into, and no counted close can fall outside a window
+  derived from it. A swept close or an unscored one sites nothing — neither
+  reaches the numerator, and widening the window to reach one would divide
+  the real closes by a span none of them spent.
+- **Closes are summed, never serialized.** Two tickets worked in parallel and
+  closed in the same hour are two closes in that hour, not one after the
+  other. Throughput is what the goal got through, not what one worker could
+  have done end to end.
 - **The ceiling is fourteen days** because a rate learned from what a goal
   was doing two months ago is history, not a rate.
-- **The floor is one day** because a goal whose first ticket was filed an
-  hour ago would otherwise divide by 1/24 of a day and claim a pace
-  twenty-four times anything it has demonstrated.
-- **One window, both halves.** The same span decides which closes count and
-  what the total is divided by. Deriving them separately is how a rate ends
-  up measured over one period and divided by another.
-- A band with **no timestamp anywhere** gets the full fourteen days, not the
-  floor: nothing is known about its age, and one day is a claim about a young
-  goal rather than a neutral answer.
+- **The floor is one hour**, and this is what bounds a very young window.
+  Three tickets closed within a minute of each other span almost no time at
+  all; dividing their estimates by that span claims a rate no work produced,
+  and a goal with an afternoon of work left would project *done in ten
+  minutes*. Below an hour a goal is reported at the pace it managed in an
+  hour — the most a burst of evidence can honestly say — so the soonest
+  finish any goal can be given is an hour out. An hour rather than a day
+  because a day is not a floor here but a different answer: rounding that
+  four-hour afternoon up to a day puts the finish back out past tomorrow,
+  which is the reading this window exists to stop.
+- **The window ends at now, not at the last close**, so it decays on its own.
+  An afternoon's burst is a four-hour window that afternoon and a
+  twenty-eight-hour window a day later. No goal keeps claiming a sprint's
+  rate for having sprinted once.
+- **Nothing closed yet** → the fallback is the goal's age, taken from the
+  oldest live ticket's `createdAt` (or that ticket's earliest transition).
+  Nothing is projected from it — a date needs
+  `EFFORT_MIN_CLOSES_FOR_PROJECTION` closes — so it only answers "how long
+  has this been going". A band with **no timestamp anywhere** gets the full
+  fourteen days, not the floor: nothing is known about its age, and an hour
+  is a claim about a young goal rather than a neutral answer.
 
-The header sentence names the window it actually used — "on the last 3 days'
-pace" — so the number on screen and the number in the arithmetic are the
-same one.
+The guards above the window are unchanged: a projection still needs three
+observed closes, and one still stops being a date past
+`EFFORT_MAX_PROJECTION_DAYS` (a year), where the readout says how far out it
+is instead of naming a day.
+
+The header sentence names the window it actually used — "on the last 4 hours'
+pace", "on the last 3 days' pace" — so the number on screen and the number in
+the arithmetic are the same one. **It counts hours below two days.** Rounding
+to whole days misstates the denominator by `0.5 / n`: a third of it at a day
+and a half, a fifth at two and a half, and shrinking from there. Naming a
+four-hour window "1 day" is not a rounding error in that sentence but a
+different claim about how the date was made, and a 35-hour window called "1
+day" is the same defect one unit up — so the hour wording reaches past the
+first day, and days take over where the error is under a quarter and falling.
 
 ## A close with no work behind it is not throughput
 

@@ -70,14 +70,12 @@ function identity(): EffortCalibration {
 /**
  * A ticket on a goal that has been running a while.
  *
- * `createdAt` is part of the default because the PACE WINDOW is now the
- * goal's own age (`goalPaceWindowDays`), and a fixture with no timestamps
- * would silently date every goal from its first close — making the
- * denominator an accident of when the closes were placed rather than
- * something each test states. Dating the fixture a full window back keeps
- * the denominator at `EFFORT_PACE_WINDOW_DAYS`, which is what the arithmetic
- * in the projection tests is written against; a test about a YOUNG goal
- * overrides it and says so.
+ * `createdAt` is part of the default so that a fixture always has an age,
+ * which is what `goalPaceWindowDays` falls back to while nothing has closed.
+ * It is NOT what sets the pace window once closes exist — that is the span
+ * the closes themselves happened in — so the arithmetic in the projection
+ * tests below is written against where each `closed()` was placed, and a
+ * test about a goal's age overrides this and says so.
  */
 function task(over: Partial<EffortTaskInput> = {}): EffortTaskInput {
   return {
@@ -654,8 +652,28 @@ describe('summarizeGoalEffort — the fraction', () => {
   });
 });
 
-describe("goalPaceWindowDays — the goal's own age, not the calendar's", () => {
-  it('dates a band from its oldest live ticket', () => {
+describe('goalPaceWindowDays — the span the closes happened in', () => {
+  it('measures from the earliest counted close', () => {
+    expect(goalPaceWindowDays([closed(2 * DAY), closed(DAY), task()], NOW)).toBeCloseTo(2, 6);
+  });
+
+  it('does not site the window on a close nobody watched', () => {
+    // A swept row teaches nothing about a rate, so it cannot be what a rate
+    // is measured from either — the window uses the same predicate the
+    // numerator does.
+    const swept = task({ status: 'done', transitions: [{ ts: NOW - 9 * DAY, to: 'done' }] });
+    expect(goalPaceWindowDays([swept, closed(DAY), task()], NOW)).toBeCloseTo(1, 6);
+  });
+
+  it('does not site the window on a close with no estimate', () => {
+    // An unscored close never reaches the numerator, so widening the window
+    // to reach it would divide the scored closes by a span none of them
+    // spent. This is the live shape: a goal's oldest closes predate scoring.
+    const unscored = closed(9 * DAY, HOUR, { effortEstimate: undefined });
+    expect(goalPaceWindowDays([unscored, closed(DAY), task()], NOW)).toBeCloseTo(1, 6);
+  });
+
+  it('dates a band with no closes from its oldest live ticket', () => {
     const days = goalPaceWindowDays(
       [task({ createdAt: NOW - 3 * DAY }), task({ createdAt: NOW - 2 * DAY })],
       NOW,
@@ -664,16 +682,18 @@ describe("goalPaceWindowDays — the goal's own age, not the calendar's", () => 
   });
 
   it('falls back to the first transition when a row carries no createdAt', () => {
-    const { createdAt: _dropped, ...noCreated } = closed(2 * DAY, HOUR);
-    // The close is 2 days old and ran for an hour, so the trail starts at
-    // 2d 1h — which is what dates the goal once `createdAt` is gone.
-    expect(goalPaceWindowDays([noCreated], NOW)).toBeCloseTo(2 + 1 / 24, 4);
+    // Still the age path — nothing has closed — and with no `createdAt` the
+    // age is the earliest timestamp on the trail.
+    const { createdAt: _dropped, ...noCreated } = task({
+      status: 'in-progress',
+      transitions: [{ ts: NOW - 2 * DAY, to: 'in-progress' }],
+    });
+    expect(goalPaceWindowDays([noCreated], NOW)).toBeCloseTo(2, 6);
   });
 
   it('gives a band with no timestamps the full window rather than the floor', () => {
-    // Nothing is known about this band's age. One day is a claim about a
-    // YOUNG goal; the full window is the old behaviour, which is the honest
-    // answer when there is no evidence either way.
+    // Nothing is known about this band. An hour is a claim about a YOUNG
+    // goal; the full window is the honest answer with no evidence either way.
     expect(goalPaceWindowDays([{ status: 'todo' }], NOW)).toBe(EFFORT_PACE_WINDOW_DAYS);
     expect(goalPaceWindowDays([], NOW)).toBe(EFFORT_PACE_WINDOW_DAYS);
   });
@@ -682,9 +702,19 @@ describe("goalPaceWindowDays — the goal's own age, not the calendar's", () => 
     expect(goalPaceWindowDays([task({ createdAt: NOW - 400 * DAY })], NOW)).toBe(
       EFFORT_PACE_WINDOW_DAYS,
     );
-    expect(goalPaceWindowDays([task({ createdAt: NOW - HOUR })], NOW)).toBe(
+    // Ten minutes old with nothing closed: an hour is the shortest span this
+    // board is willing to call a rate.
+    expect(goalPaceWindowDays([task({ createdAt: NOW - 10 * 60 * 1000 })], NOW)).toBe(
       EFFORT_MIN_PACE_WINDOW_DAYS,
     );
+  });
+
+  it('floors a burst of closes at one hour', () => {
+    // Three rows closed inside ten minutes span almost no time at all. The
+    // floor is what stops that span becoming a rate.
+    expect(
+      goalPaceWindowDays([closed(10 * 60 * 1000), closed(5 * 60 * 1000), closed(60 * 1000)], NOW),
+    ).toBe(EFFORT_MIN_PACE_WINDOW_DAYS);
   });
 
   it('ignores a zero timestamp rather than dating the goal from the epoch', () => {
@@ -699,72 +729,127 @@ describe("goalPaceWindowDays — the goal's own age, not the calendar's", () => 
 
 describe("summarizeGoalEffort — pace over the goal's active window", () => {
   // The ticket this covers: "goal pace reflects how long the goal has
-  // actually run". Both goals below close the same two tickets; the only
-  // difference is how long the goal has existed.
+  // actually run". Both goals below close the same two tickets at the same
+  // two moments; the only difference is how long the goal has existed.
   const twoCloses = (createdAt: number): EffortTaskInput[] => [
     closed(0.5 * DAY, HOUR, { createdAt }),
     closed(DAY, HOUR, { createdAt }),
     task({ createdAt }),
   ];
 
-  it('divides a three-day-old goal by three days, not by fourteen', () => {
+  it('divides a goal by the span its closes happened in, not by fourteen', () => {
     const s = summarizeGoalEffort(twoCloses(NOW - 3 * DAY), 'g1', identity(), NOW);
     if (s.kind !== 'ready') throw new Error('expected ready');
-    expect(s.paceWindowDays).toBeCloseTo(3, 6);
+    // The closes are 12 and 24 hours old, so the span is a day — not the
+    // fortnight, and not the three days the goal has existed.
+    expect(s.paceWindowDays).toBeCloseTo(1, 6);
     expect(s.closesInWindow).toBe(2);
-    // 7,200 estimate-seconds closed over three days.
-    expect(s.paceSecondsPerDay).toBeCloseTo(7200 / 3, 6);
+    expect(s.paceSecondsPerDay).toBeCloseTo(7200 / 1, 6);
   });
 
-  it('divides an old goal with the same closes by the full window', () => {
-    const s = summarizeGoalEffort(twoCloses(NOW - 90 * DAY), 'g1', identity(), NOW);
-    if (s.kind !== 'ready') throw new Error('expected ready');
-    expect(s.paceWindowDays).toBe(EFFORT_PACE_WINDOW_DAYS);
-    expect(s.closesInWindow).toBe(2);
-    expect(s.paceSecondsPerDay).toBeCloseTo(7200 / EFFORT_PACE_WINDOW_DAYS, 6);
-  });
-
-  it('reads the young goal as faster than the old one on identical closes', () => {
-    // The whole point, stated as the comparison the ticket makes: same
-    // numerator, and the goal that earned it in three days is not reported
-    // at the rate of one that took three months.
+  it('measures the closes, not how long the goal has existed', () => {
     const young = summarizeGoalEffort(twoCloses(NOW - 3 * DAY), 'g1', identity(), NOW);
     const old = summarizeGoalEffort(twoCloses(NOW - 90 * DAY), 'g1', identity(), NOW);
     if (young.kind !== 'ready' || old.kind !== 'ready') throw new Error('expected ready');
-    expect(young.paceSecondsPerDay).toBeGreaterThan(old.paceSecondsPerDay);
-    expect(young.paceSecondsPerDay / old.paceSecondsPerDay).toBeCloseTo(
-      EFFORT_PACE_WINDOW_DAYS / 3,
-      6,
-    );
+    // Age used to change this number. It no longer does, and that is the
+    // fix: a pace is a fact about the stretch a goal MOVED in, not about
+    // when somebody filed its first ticket. A three-month-old goal that
+    // closed two tickets yesterday closed two tickets yesterday.
+    expect(young.paceWindowDays).toBeCloseTo(1, 6);
+    expect(old.paceWindowDays).toBeCloseTo(1, 6);
+    expect(young.paceSecondsPerDay).toBeCloseTo(old.paceSecondsPerDay, 6);
   });
 
-  it('projects a young goal sooner than an old one, on the same evidence', () => {
-    const rows = (createdAt: number): EffortTaskInput[] => [
-      closed(0.25 * DAY, HOUR, { createdAt }),
-      closed(0.5 * DAY, HOUR, { createdAt }),
-      closed(DAY, HOUR, { createdAt }),
-      task({ createdAt }),
+  it('reads a burst as faster than the same work spread over a fortnight', () => {
+    const born = NOW - 30 * DAY;
+    const burst = [
+      closed(3 * HOUR, HOUR, { createdAt: born }),
+      closed(2 * HOUR, HOUR, { createdAt: born }),
+      closed(HOUR, HOUR, { createdAt: born }),
+      task({ createdAt: born }),
     ];
-    const young = summarizeGoalEffort(rows(NOW - 3 * DAY), 'g1', identity(), NOW);
-    const old = summarizeGoalEffort(rows(NOW - 90 * DAY), 'g1', identity(), NOW);
-    if (young.kind !== 'ready' || old.kind !== 'ready') throw new Error('expected ready');
-    // Positive control: both DO get a date, so "sooner" is a comparison of
-    // two projections rather than one projection and one absence.
-    expect(young.projectedFinishAt).toBeDefined();
-    expect(old.projectedFinishAt).toBeDefined();
-    expect(young.projectedFinishAt ?? 0).toBeLessThan(old.projectedFinishAt ?? 0);
+    const spread = [
+      closed(12 * DAY, HOUR, { createdAt: born }),
+      closed(6 * DAY, HOUR, { createdAt: born }),
+      closed(HOUR, HOUR, { createdAt: born }),
+      task({ createdAt: born }),
+    ];
+    const b = summarizeGoalEffort(burst, 'g1', identity(), NOW);
+    const sp = summarizeGoalEffort(spread, 'g1', identity(), NOW);
+    if (b.kind !== 'ready' || sp.kind !== 'ready') throw new Error('expected ready');
+    // Same three closes, same estimates, same goal age, same remainder.
+    // Only the span they happened in differs, and that is the rate.
+    expect(b.closesInWindow).toBe(3);
+    expect(sp.closesInWindow).toBe(3);
+    expect(b.paceSecondsPerDay).toBeGreaterThan(sp.paceSecondsPerDay);
+    // Positive control: both DO get a date, so "sooner" compares two
+    // projections rather than a projection and an absence.
+    expect(b.projectedFinishAt).toBeDefined();
+    expect(sp.projectedFinishAt).toBeDefined();
+    expect(b.projectedFinishAt ?? 0).toBeLessThan(sp.projectedFinishAt ?? 0);
+  });
+
+  it('projects a finish in hours when a goal closes most of itself in an afternoon', () => {
+    // The live shape this rule was written for, and the one the age-based
+    // window still got wrong: a goal filed days ago that closed most of
+    // itself in one four-hour run, with about as much still open as it just
+    // finished. Dividing that run by the goal's AGE put the finish a day and
+    // a half out. Dividing it by the run projects the afternoon the goal is
+    // actually running at.
+    const born = NOW - 3 * DAY;
+    const rows = [
+      closed(4 * HOUR, HOUR, { createdAt: born }),
+      closed(3 * HOUR, HOUR, { createdAt: born }),
+      closed(2 * HOUR, HOUR, { createdAt: born }),
+      closed(HOUR, HOUR, { createdAt: born }),
+      task({ createdAt: born }),
+      task({ createdAt: born }),
+      task({ createdAt: born }),
+    ];
+    const s = summarizeGoalEffort(rows, 'g1', identity(), NOW);
+    if (s.kind !== 'ready') throw new Error('expected ready');
+    expect(s.closesInWindow).toBe(4);
+    // Four hours of closes, not three days of existing.
+    expect(s.paceWindowDays).toBeCloseTo(4 / 24, 6);
+    // 14,400 estimate-seconds closed in four hours; 10,800 left. The
+    // remainder is comparable to what just closed, so the finish is about as
+    // far out as the run was long: three hours, not fifty-four.
+    const hoursOut = ((s.projectedFinishAt ?? 0) - NOW) / HOUR;
+    expect(hoursOut).toBeCloseTo(3, 6);
+    expect(hoursOut).toBeLessThan(24);
+    // The number the age-based window produced on this same shape, spelled
+    // out so the regression is legible: 14,400 over three days is 4,800 a
+    // day, and 10,800 at that rate is two and a quarter DAYS.
+    expect(10_800 / (14_400 / 3)).toBeCloseTo(2.25, 6);
+  });
+
+  it('lets a burst decay as the window grows past it', () => {
+    const born = NOW - 30 * DAY;
+    const rows = (endedAgo: number): EffortTaskInput[] => [
+      closed(endedAgo + 2 * HOUR, HOUR, { createdAt: born }),
+      closed(endedAgo + HOUR, HOUR, { createdAt: born }),
+      closed(endedAgo, HOUR, { createdAt: born }),
+      task({ createdAt: born }),
+    ];
+    const fresh = summarizeGoalEffort(rows(HOUR), 'g1', identity(), NOW);
+    const yesterday = summarizeGoalEffort(rows(DAY), 'g1', identity(), NOW);
+    if (fresh.kind !== 'ready' || yesterday.kind !== 'ready') throw new Error('expected ready');
+    // The same burst, a day later. The window ends at NOW rather than at the
+    // last close, so no goal keeps claiming a sprint's rate for having
+    // sprinted once.
+    expect(fresh.paceSecondsPerDay).toBeGreaterThan(yesterday.paceSecondsPerDay);
   });
 
   it('will not read a rate off a goal hours old', () => {
-    // Three closes inside two hours on a goal filed this morning. Without
-    // the floor the denominator is 1/12 of a day and the pace is twelve
-    // times anything the goal has shown.
+    // Three closes inside a quarter of an hour. Without the floor the
+    // denominator is a fraction of an hour and the goal projects "done in
+    // ten minutes" on an afternoon of remaining work.
     const born = NOW - 2 * HOUR;
     const s = summarizeGoalEffort(
       [
-        closed(5 * 60 * 1000, 60 * 1000, { createdAt: born }),
-        closed(10 * 60 * 1000, 60 * 1000, { createdAt: born }),
         closed(15 * 60 * 1000, 60 * 1000, { createdAt: born }),
+        closed(10 * 60 * 1000, 60 * 1000, { createdAt: born }),
+        closed(5 * 60 * 1000, 60 * 1000, { createdAt: born }),
         task({ createdAt: born }),
       ],
       'g1',
@@ -774,19 +859,20 @@ describe("summarizeGoalEffort — pace over the goal's active window", () => {
     if (s.kind !== 'ready') throw new Error('expected ready');
     expect(s.paceWindowDays).toBe(EFFORT_MIN_PACE_WINDOW_DAYS);
     expect(s.paceSecondsPerDay).toBeCloseTo(10_800 / EFFORT_MIN_PACE_WINDOW_DAYS, 6);
+    // The floor's whole job, stated as the reader sees it: one open ticket
+    // the same size as the three that just closed is an HOUR out, not the
+    // three minutes the raw span would have claimed.
+    expect(((s.projectedFinishAt ?? 0) - NOW) / HOUR).toBeCloseTo(1 / 3, 6);
   });
 
-  it('counts a close only inside the window it divides by', () => {
-    // The two halves of the pace share one window. A close five days back on
-    // a three-day-old goal cannot happen in real data, but a divisor and a
-    // filter derived separately would let one in and rate it against the
-    // other's span.
+  it('covers every close it counts, and still stops at the ceiling', () => {
     const born = NOW - 3 * DAY;
     const s = summarizeGoalEffort(
       [
         closed(DAY, HOUR, { createdAt: born }),
         closed(2 * DAY, HOUR, { createdAt: born }),
         closed(5 * DAY, HOUR, { createdAt: born }),
+        closed((EFFORT_PACE_WINDOW_DAYS + 6) * DAY, HOUR, { createdAt: born }),
         task({ createdAt: born }),
       ],
       'g1',
@@ -794,8 +880,14 @@ describe("summarizeGoalEffort — pace over the goal's active window", () => {
       NOW,
     );
     if (s.kind !== 'ready') throw new Error('expected ready');
-    expect(s.paceWindowDays).toBeCloseTo(3, 6);
-    expect(s.closesInWindow).toBe(2);
+    // One window, both halves — and it is derived FROM the closes, so a
+    // five-day-old close on a three-day-old goal widens the window rather
+    // than being clipped by an age it never had.
+    expect(s.paceWindowDays).toBeCloseTo(5, 6);
+    expect(s.closesInWindow).toBe(3);
+    // The ceiling still holds: the close past fourteen days neither counts
+    // nor stretches the window out to reach it.
+    expect(s.paceWindowDays).toBeLessThan(EFFORT_PACE_WINDOW_DAYS);
   });
 });
 
@@ -1035,10 +1127,11 @@ describe('summarizeGoalEffort — projection', () => {
   });
 
   it('projects a finish date from pace, and the arithmetic is checkable by hand', () => {
-    // Three closes at a 3600s estimate each inside a 14-day window:
-    //   pace = 10,800 / 14 = 771.4286 estimate-seconds per calendar day.
+    // Three closes at a 3600s estimate each, the oldest three days back, so
+    // the window is the three days they span:
+    //   pace = 10,800 / 3 = 3,600 estimate-seconds per calendar day.
     // Two open tickets at 3600s each = 7,200s of wall-clock remaining.
-    //   days = 7,200 / 771.4286 = 9.3333…
+    //   days = 7,200 / 3,600 = 2.
     const s = summarizeGoalEffort(
       [closed(DAY), closed(2 * DAY), closed(3 * DAY), task(), task()],
       'g1',
@@ -1047,11 +1140,12 @@ describe('summarizeGoalEffort — projection', () => {
     );
     if (s.kind !== 'ready') throw new Error('expected ready');
     expect(s.closesInWindow).toBe(EFFORT_MIN_CLOSES_FOR_PROJECTION);
-    expect(s.paceSecondsPerDay).toBeCloseTo(10_800 / 14, 6);
+    expect(s.paceWindowDays).toBeCloseTo(3, 6);
+    expect(s.paceSecondsPerDay).toBeCloseTo(10_800 / 3, 6);
     expect(s.wallClockRemainingSeconds).toBe(7200);
     expect(s.percentComplete).toBe(60); // 3 of 5 equal tickets
-    const days = 7200 / (10_800 / 14);
-    expect(days).toBeCloseTo(9.3333, 4);
+    const days = 7200 / (10_800 / 3);
+    expect(days).toBeCloseTo(2, 6);
     expect(s.projectedFinishAt).toBeCloseTo(NOW + days * DAY, 0);
   });
 

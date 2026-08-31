@@ -751,6 +751,37 @@ export interface GoalEffortLabel {
   showBar: boolean;
 }
 
+/** Below this the window is named in hours. Two days, not one: rounding to
+ *  whole days misstates the denominator by `0.5 / n`, which is a third of it
+ *  at 1.5 days and a fifth at 2.5 — so the hour wording has to reach past the
+ *  first day to keep the error bounded where days are still few. Above this
+ *  the error is under a quarter and shrinking, and "days" is how a reader
+ *  says a span that long. */
+const PACE_WINDOW_HOURS_BELOW_DAYS = 2;
+
+/**
+ * The pace window as a reader says it: "4 hours", "36 hours", "3 days".
+ *
+ * Two units, because the window spans two orders of magnitude — it floors at
+ * one hour and caps at fourteen days — and this sentence is the reader's only
+ * check that the date came from the stretch they think it did. Naming a
+ * four-hour window "1 day" is not a rounding error there, it is a different
+ * claim about how the number was made, and the same is true of a 35-hour one.
+ *
+ * Never below one of whatever unit it lands in: the window itself is clamped
+ * to at least an hour, so "0 hours" would describe a span the arithmetic
+ * cannot produce.
+ */
+function formatPaceWindow(days: number): string {
+  if (!Number.isFinite(days) || days <= 0) return '1 hour';
+  if (days < PACE_WINDOW_HOURS_BELOW_DAYS) {
+    const hours = Math.max(1, Math.round(days * 24));
+    return `${hours} hour${hours === 1 ? '' : 's'}`;
+  }
+  const whole = Math.max(1, Math.round(days));
+  return `${whole} day${whole === 1 ? '' : 's'}`;
+}
+
 /**
  * Turn one goal's rollup into the words the header prints.
  *
@@ -807,12 +838,15 @@ export function goalEffortLabel(
   const date = (at: number): string => formatEffortDate(at, now, locale);
   // The pace window is the GOAL's, not a constant, so the sentence has to
   // read it off the summary: a three-day-old goal saying "the last 14 days'
-  // pace" would be quoting a denominator its own arithmetic never used. It
-  // is rounded to whole days for the reader and never below one, matching
-  // the floor the rate itself is clamped to.
-  const paceWindowDays = Math.max(1, Math.round(summary.paceWindowDays));
-  const paceDays = `${paceWindowDays} day${paceWindowDays === 1 ? '' : 's'}`;
-  const paceWindow = `${paceDays}${paceWindowDays === 1 ? "'s" : "'"}`;
+  // pace" would be quoting a denominator its own arithmetic never used.
+  //
+  // And it has to be able to say HOURS. The window floors at one hour, not
+  // one day, so a goal that closed most of itself in an afternoon carries a
+  // window of 0.4 days — which the old whole-day rounding printed as "the
+  // last 1 day's pace", quoting a denominator two and a half times the one
+  // the date came from. Under a day the sentence counts hours.
+  const paceDays = formatPaceWindow(summary.paceWindowDays);
+  const paceWindow = `${paceDays}${paceDays.endsWith('s') ? "'" : "'s"}`;
   // The two visible numbers are in different currencies: the bar is CALENDAR
   // time and the figure beside it is Bryan's own attention. Read together
   // unlabelled they invite one reading — "67% done, 40 minutes to go" — and
@@ -824,12 +858,22 @@ export function goalEffortLabel(
   const leftTextShort = summary.complete ? 'done' : left;
   // Why there is no date is as much of an answer as a date, and it was also
   // hover-only. Three different absences, three different sentences.
+  // A range whose two ends land on the same day is not a range. Short
+  // projections made that the common case rather than a curiosity — a goal
+  // finishing this afternoon has its central date and its late end inside
+  // one day — and "~Aug 31–Aug 31" spends the narrow tier's scarcest
+  // resource saying a single day twice.
+  const finishDay =
+    summary.projectedFinishAt !== undefined ? date(summary.projectedFinishAt) : undefined;
+  const latestDay =
+    summary.projectedLatestAt !== undefined ? date(summary.projectedLatestAt) : undefined;
+  const spansTwoDays = latestDay !== undefined && latestDay !== finishDay;
   const finishText = summary.complete
     ? ''
-    : summary.projectedFinishAt !== undefined
-      ? summary.projectedLatestAt !== undefined
-        ? `~${date(summary.projectedFinishAt)}\u2013${date(summary.projectedLatestAt)}`
-        : `~${date(summary.projectedFinishAt)}`
+    : finishDay !== undefined
+      ? spansTwoDays
+        ? `~${finishDay}\u2013${latestDay}`
+        : `~${finishDay}`
       : summary.projectionOverHorizonDays !== undefined
         ? 'over a year out'
         : `date after ${EFFORT_MIN_CLOSES_FOR_PROJECTION} closes`;
@@ -849,12 +893,11 @@ export function goalEffortLabel(
   if (summary.complete) {
     // No pace sentence on a finished goal: there is nothing left for a pace
     // to be applied to.
-  } else if (summary.projectedFinishAt !== undefined) {
-    const latest = summary.projectedLatestAt;
+  } else if (finishDay !== undefined) {
     titleParts.push(
-      latest !== undefined
-        ? `On the last ${paceWindow} pace, finishing around ${date(summary.projectedFinishAt)}, likely by ${date(latest)}.`
-        : `On the last ${paceWindow} pace, finishing around ${date(summary.projectedFinishAt)}.`,
+      spansTwoDays
+        ? `On the last ${paceWindow} pace, finishing around ${finishDay}, likely by ${latestDay}.`
+        : `On the last ${paceWindow} pace, finishing around ${finishDay}.`,
     );
   } else if (summary.projectionOverHorizonDays !== undefined) {
     titleParts.push(
