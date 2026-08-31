@@ -1665,6 +1665,87 @@ describe('renderTaskDetail — discussion', () => {
   });
 
   /**
+   * The keyboard send. Every other fast path in the panel works from the
+   * keyboard (Enter saves a title, hold-Space for voice); the composer was the
+   * one gap — Cmd+Enter did nothing and posting meant reaching for the mouse.
+   */
+  it('Cmd+Enter posts the comment', () => {
+    const onComment = vi.fn();
+    renderTaskDetail(root, task(), detailHandlers({ onComment }), { loading: false, threads: [] });
+    const ta = root.querySelector('.hub-comment-form textarea') as HTMLTextAreaElement;
+    ta.value = 'Shipped from the keyboard.';
+    ta.dispatchEvent(
+      new KeyboardEvent('keydown', { key: 'Enter', metaKey: true, cancelable: true }),
+    );
+    expect(onComment).toHaveBeenLastCalledWith(
+      expect.anything(),
+      'Shipped from the keyboard.',
+      undefined,
+    );
+  });
+
+  it('Ctrl+Enter posts too, for a keyboard without a Cmd', () => {
+    const onComment = vi.fn();
+    renderTaskDetail(root, task(), detailHandlers({ onComment }), { loading: false, threads: [] });
+    const ta = root.querySelector('.hub-comment-form textarea') as HTMLTextAreaElement;
+    ta.value = 'Same send, other modifier.';
+    ta.dispatchEvent(
+      new KeyboardEvent('keydown', { key: 'Enter', ctrlKey: true, cancelable: true }),
+    );
+    expect(onComment).toHaveBeenLastCalledWith(
+      expect.anything(),
+      'Same send, other modifier.',
+      undefined,
+    );
+  });
+
+  it('Enter alone stays a newline, not a send', () => {
+    const onComment = vi.fn();
+    renderTaskDetail(root, task(), detailHandlers({ onComment }), { loading: false, threads: [] });
+    const ta = root.querySelector('.hub-comment-form textarea') as HTMLTextAreaElement;
+    ta.value = 'Still mid-sentence';
+    ta.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', cancelable: true }));
+    expect(onComment).not.toHaveBeenCalled();
+  });
+
+  /**
+   * The same keystroke typed in the MOUNTED editor. The editor's surface
+   * re-dispatches Enter keydowns onto the textarea (md-composer.ts) and
+   * cancels the real event when the proxy was consumed — which is what keeps
+   * the editor from also inserting a paragraph under the send.
+   */
+  it('Cmd+Enter typed in the editor posts, and the editor never sees the key', () => {
+    const onComment = vi.fn();
+    renderTaskDetail(root, task(), detailHandlers({ onComment }), { loading: false, threads: [] });
+    const ta = root.querySelector('.hub-comment-form textarea') as HTMLTextAreaElement;
+    const surface = surfaceOf(ta) as HTMLElement;
+    expect(surface).not.toBeNull(); // control: the editor really mounted
+    ta.value = 'From inside the editor.';
+    const consumed = !surface.dispatchEvent(
+      new KeyboardEvent('keydown', { key: 'Enter', metaKey: true, cancelable: true }),
+    );
+    expect(onComment).toHaveBeenLastCalledWith(
+      expect.anything(),
+      'From inside the editor.',
+      undefined,
+    );
+    expect(consumed).toBe(true);
+  });
+
+  it('Cmd+Enter on an empty box refuses with the note, same as the button', () => {
+    const onComment = vi.fn();
+    renderTaskDetail(root, task(), detailHandlers({ onComment }), { loading: false, threads: [] });
+    const ta = root.querySelector('.hub-comment-form textarea') as HTMLTextAreaElement;
+    ta.dispatchEvent(
+      new KeyboardEvent('keydown', { key: 'Enter', metaKey: true, cancelable: true }),
+    );
+    expect(onComment).not.toHaveBeenCalled();
+    expect(root.querySelector('.hub-comment-form .hub-form-error')?.textContent).toBe(
+      'Write something first',
+    );
+  });
+
+  /**
    * Nothing an agent posts may stop arriving. An agent's comment lands as a
    * thread on `task:<id>` — anchored or not, open or resolved — and every one
    * of them has to appear in the one stream, in time order, with no per-thread
