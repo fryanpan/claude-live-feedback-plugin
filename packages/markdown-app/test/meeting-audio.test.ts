@@ -100,9 +100,12 @@ const SECURE = {
 };
 const INSECURE = { ...SECURE, isSecureContext: false, protocol: 'http:', port: '8787' };
 
-function fakeStream(): MediaStream {
-  const track = { stop: vi.fn() };
-  return { getTracks: () => [track] } as unknown as MediaStream;
+function fakeStream(applyConstraints = vi.fn(() => Promise.resolve())): MediaStream {
+  const track = { stop: vi.fn(), applyConstraints };
+  return {
+    getTracks: () => [track],
+    getAudioTracks: () => [track],
+  } as unknown as MediaStream;
 }
 
 describe('startMeetingCapture', () => {
@@ -178,5 +181,41 @@ describe('startMeetingCapture', () => {
     // A wedged-open mic is the failure mode: the graph closing is not enough,
     // the track itself keeps the recording indicator lit.
     expect(stream.getTracks()[0]?.stop).toHaveBeenCalled();
+  });
+});
+
+describe('suspending echo cancellation for the announcement', () => {
+  const liveCapture = async (stream: MediaStream) => {
+    const started = await startMeetingCapture({
+      onFrame: () => {},
+      deps: {
+        readOrigin: () => SECURE,
+        getMedia: () => Promise.resolve(stream),
+        createPump: () =>
+          Promise.resolve({ sampleRate: 48_000, onBlock: null, stop: vi.fn() } as AudioPump),
+      },
+    });
+    if (!started.ok) throw new Error('capture did not start');
+    return started.capture;
+  };
+
+  it('re-applies the constraint on the live track, both ways', async () => {
+    // The announcement is the device playing something the microphone has to
+    // hear, which is exactly what echo cancellation exists to remove.
+    const applyConstraints = vi.fn(() => Promise.resolve());
+    const stream = fakeStream(applyConstraints);
+    const capture = await liveCapture(stream);
+    await capture.setEchoCancellation(false);
+    expect(applyConstraints).toHaveBeenCalledWith({ echoCancellation: false });
+    await capture.setEchoCancellation(true);
+    expect(applyConstraints).toHaveBeenLastCalledWith({ echoCancellation: true });
+  });
+
+  it('NEVER rejects, whatever the browser thinks of the constraint', async () => {
+    // Safari has refused `echoCancellation` on a live track. This is a hedge;
+    // a hedge that throws would take the announcement down with it.
+    const stream = fakeStream(vi.fn(() => Promise.reject(new Error('OverconstrainedError'))));
+    const capture = await liveCapture(stream);
+    await expect(capture.setEchoCancellation(false)).resolves.toBeUndefined();
   });
 });

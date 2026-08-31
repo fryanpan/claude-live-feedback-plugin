@@ -6719,10 +6719,27 @@ body.is-reading-width #editor > .ProseMirror {
     transform: scale(0.8);
   }
 }
-/* The word ("REC" / "Paused") is the phone's; the bar has the clock, and a
-   pulsing red dot beside a running clock already says recording. */
+/* "Paused" is the phone's — the bar has the clock and no room for a word that
+   says nothing is happening. "REC" is every width's. The pulsing dot beside a
+   running clock did read as recording to whoever built the bar, but this strip
+   now announces itself to a ROOM, and the person who was told they are being
+   recorded has to be able to look over and see that they still are. A dot is
+   the weakest form that claim can take. */
 .meeting-status {
   display: none;
+}
+.meeting-strip.is-live .meeting-status {
+  display: inline;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  /* --red-strong, not --red, and measured rather than picked: this is 11px
+     text, so the 4.5:1 floor applies rather than the 3:1 a graphical object
+     gets. On --bg-panel, --red is 4.26:1 (base) and fails; --red-strong is
+     5.0:1 base and 5.1:1 through the Open Props layer. The dot keeps --red —
+     it is a shape, and 3:1 is its bar. */
+  color: var(--red-strong);
 }
 .meeting-elapsed {
   font-weight: 600;
@@ -6874,6 +6891,23 @@ body.is-reading-width #editor > .ProseMirror {
 .meeting-note {
   color: var(--fg-muted);
 }
+/* The announcement a person is meant to READ. It holds the caption line until
+   a settled turn arrives or it is tapped away, so it is a button — a
+   dismissible thing has to be reachable by more than a pointer. Stripped back
+   to look exactly like the note it replaces: the affordance is the whole line,
+   not a control someone has to find. The 36px floor does not apply, because
+   the caption already carries its own hit area (see the tag's lesson above)
+   and this button fills it. */
+.meeting-note-dismiss {
+  font: inherit;
+  color: inherit;
+  background: none;
+  border: 0;
+  padding: 0;
+  margin: 0;
+  text-align: left;
+  cursor: pointer;
+}
 .meeting-toggle {
   flex: none;
   font: inherit;
@@ -6995,6 +7029,29 @@ body.is-reading-width #editor > .ProseMirror {
   cursor: default;
   opacity: 0.65;
 }
+/* "I'll say it" — the hybrid's other Start, and it reads as the quieter of the
+   two: no fill, muted text, the same pill. It is an alternative to a default
+   that is already correct, not a thing anyone has to notice, so it must never
+   compete with Start for the eye. Same 36px floor as its two neighbours
+   (design-mobile.md) and `white-space: nowrap` for the same reason the mode
+   switch has it — the apostrophe and the two short words must not stack. */
+.meeting-announce {
+  flex: none;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  padding: 4px 11px;
+  min-height: 36px;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--fg-muted);
+  border-radius: var(--radius-pill);
+  cursor: pointer;
+  white-space: nowrap;
+}
+.meeting-announce[hidden] {
+  display: none;
+}
 @media (min-width: 721px) {
   /* The strip is one row here, so the micro-row stops being a box and its
      children join the strip's own flex line. That flattens them in SOURCE
@@ -7012,8 +7069,14 @@ body.is-reading-width #editor > .ProseMirror {
   .meeting-mode {
     order: 3;
   }
-  .meeting-toggle {
+  /* Between the mode switch and Start: it is a start button, so it belongs to
+     the controls at the end of the line, and it is the secondary one, so it
+     sits before the primary rather than past it. */
+  .meeting-announce {
     order: 4;
+  }
+  .meeting-toggle {
+    order: 5;
   }
   /* The strip runs as a ROW here, so wrapping puts the readout on the next
      LINE and the bar's fixed 40px has to give. Both of these are scoped to
@@ -7064,6 +7127,11 @@ body.is-reading-width #editor > .ProseMirror {
   .meeting-mode {
     margin-left: auto;
   }
+  /* No margin of its own: `.meeting-strip-row` already carries an 8px gap
+     here, and the one on Start beside it predates that gap and doubles it.
+     Adding a third margin is what tips this row into a wrap at 430px, which
+     costs the phone 42px of its bottom edge for a state nobody is looking
+     at (idle, before Start). */
   .meeting-toggle {
     margin-left: 8px;
   }
@@ -7099,10 +7167,11 @@ body.is-reading-width #editor > .ProseMirror {
     display: none;
   }
   /* A live strip keeps the dot, the clock and Stop. The mode switch is
-     disabled for the length of a meeting anyway, and neither it nor the
-     readout has room to spare while a keyboard is up — the caption's rule,
-     applied to everything that is not the recording state. */
+     disabled for the length of a meeting anyway, and neither it, the second
+     Start, nor the readout has room to spare while a keyboard is up — the
+     caption's rule, applied to everything that is not the recording state. */
   body[data-edit-viewport="compact"] .meeting-mode,
+  body[data-edit-viewport="compact"] .meeting-announce,
   body[data-edit-viewport="compact"] .meeting-timing-row {
     display: none;
   }
