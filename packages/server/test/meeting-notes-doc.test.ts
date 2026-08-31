@@ -545,6 +545,33 @@ describe('withServerNotesSinks', () => {
     expect(context?.taskTitles).toEqual(['Live task']);
   });
 
+  it('the assembled sink carries a correction into the doc and answers what it did', () => {
+    // The wiring seam: the session calls `onCorrection` and the server-side
+    // deps have to turn that into an edit on the right doc, with the same
+    // ledger the notes writes use — otherwise the correction would read every
+    // note as somebody else's and only ever propose.
+    const { ydoc, deps } = serverDeps();
+    const ledger = createNotesLedger();
+    const wired = withServerNotesSinks(
+      { composer: { name: 's', compose: async () => 'n' } },
+      { ...deps, ledger },
+    );
+    wired.onNotes({
+      docId: 'doc-a',
+      meetingId: 'm-1',
+      tick: { tick: 1, reason: 'pause', turns: [] },
+      notes: `## ${MEETING_NOTES_HEADING}\n\n- Ship the gate on Tuesday.\n`,
+    });
+    const result = wired.onCorrection?.({
+      docId: 'doc-a',
+      meetingId: 'm-1',
+      wrong: 'Tuesday',
+      right: 'Thursday',
+    });
+    expect(result).toBe('revised');
+    expect(markdownOf(ydoc)).toContain('- Ship the gate on Thursday.');
+  });
+
   it('caller-supplied context fields ride along with the gathered ones', () => {
     const { deps } = serverDeps();
     const wired = withServerNotesSinks(

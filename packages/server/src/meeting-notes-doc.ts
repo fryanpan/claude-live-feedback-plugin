@@ -40,10 +40,22 @@
  * hands it `reclaimAfterInPlaceEdit` — the ledger has to learn the new
  * wording of its own lines, or the rename would hand every line it touched
  * to the person and the notes would freeze there.
+ *
+ * A SPOKEN CORRECTION IS THE SAME SHAPE AND A DIFFERENT SUBJECT. "No, I said
+ * Thursday" fixes the WORDS of a note rather than the name of a voice, and it
+ * arrives from the capture pass rather than from a gesture — but it is the
+ * same two-phrase, in-place, ledger-reclaiming edit, so it runs the same way
+ * (`applyNotesCorrection`). What it adds is the question a rename never has
+ * to ask: whose note is this? A rename can safely sweep everybody's text
+ * because it is fixing a name the agent itself wrote; a correction is
+ * changing what a note SAYS, so it may rewrite only the agent's own and must
+ * propose on anybody else's. That resolution lives in
+ * `meeting-notes-correction.ts`.
  */
 
 import { type DocType, contentKind, prose, speakerTagHref, speakerTagText } from '@feedback/core';
 import * as Y from 'yjs';
+import { correctNotesSection } from './meeting-notes-correction.ts';
 import {
   type NotesOwnership,
   createNotesOwnership,
@@ -54,6 +66,8 @@ import {
 import {
   type MeetingNotesDeps,
   type MeetingNotesOptions,
+  type NotesCorrection,
+  type NotesCorrectionResult,
   type NotesProjectContext,
   type NotesRelabel,
   type NotesSectionState,
@@ -517,6 +531,39 @@ export function applyNotesRelabel(
 }
 
 /**
+ * Carry a spoken correction into the note it fixes.
+ *
+ * Same tolerances as `applyNotesUpdate` and `applyNotesRelabel`: a doc that
+ * has gone away or was never prose is not an error, it is a meeting whose
+ * notes are somewhere this cannot reach. `'none'` covers all of those and the
+ * ordinary case besides — a correction whose words are in no note.
+ *
+ * THROUGH THE RECLAIM WRAPPER, for the reason the rename is: the revision
+ * edits the agent's own bullet IN PLACE, so the ledger's record of that
+ * bullet's wording goes stale the moment it lands. Without the wrapper the
+ * correction would hand every note it fixed to the person — the next tick
+ * could only propose on it — and the notes would freeze at the correction.
+ * The wrapper re-records only lines the ledger ALREADY claimed, so a note the
+ * person had made theirs stays theirs.
+ */
+export function applyNotesCorrection(
+  rooms: NotesDocRooms,
+  correction: NotesCorrection,
+  ledger: NotesLedger,
+): NotesCorrectionResult {
+  const room = rooms.get(correction.docId);
+  if (!room) return 'none';
+  if (contentKind(room.meta.type) !== 'prose') return 'none';
+  const ownership = ledger.forDoc(correction.docId);
+  const outcome = reclaimAfterInPlaceEdit(room.ydoc, MEETING_NOTES_HEADING, ownership, () =>
+    correctNotesSection(room.ydoc, MEETING_NOTES_HEADING, ownership, correction),
+  );
+  if (outcome.applied === 'revised') return 'revised';
+  if (outcome.applied === 'suggested') return 'suggested';
+  return 'none';
+}
+
+/**
  * Wire caller options into the deps a meeting session runs on: the doc write
  * becomes the sink (a caller `onNotes` observes after it), and the context
  * resolver reads the doc's title and its board's open task titles at meeting
@@ -642,6 +689,20 @@ export function withServerNotesSinks(
         console.error('[meeting-notes] relabel failed:', err);
       }
       options.onRelabel?.(relabel);
+    },
+    onCorrection: (correction: NotesCorrection): NotesCorrectionResult => {
+      try {
+        const result = applyNotesCorrection(deps.rooms(), correction, ledger);
+        options.onCorrection?.(correction);
+        return result;
+      } catch (err) {
+        // A correction that cannot reach the doc leaves a note reading the
+        // way the room already said it does not; letting the throw reach the
+        // compose chain would cost the meeting its next notes, which is
+        // worse. Same containment as the relabel above.
+        console.error('[meeting-notes] correction failed:', err);
+        return 'none';
+      }
     },
   };
 }
