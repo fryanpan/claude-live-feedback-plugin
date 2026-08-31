@@ -7650,6 +7650,19 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           // dead end: off the reader's queue, complained about at five
           // minutes, and with no verb its filer can call.
           if (reviewItemId === LEGACY_REVIEW_ITEM_ID) {
+            // Refused, never dropped. The ticket's own decision has no item
+            // thread of its own to answer on, and forwarding a `reply` this
+            // branch does not act on would answer 200 while discarding the
+            // one sentence the caller wrote for a person to read — the
+            // accepted-and-discarded shape this file refuses everywhere else
+            // (codex review).
+            if (reply !== undefined) {
+              return j(400, {
+                error: 'no-thread',
+                message:
+                  "a ticket's own decision has no item thread to reply on — revise it without `reply`, and point at what changed with post_reply on the task",
+              });
+            }
             const wasHeldDecision = taskStore
               .listReviewItems(taskId)
               .some((r) => r.id === LEGACY_REVIEW_ITEM_ID && isReviewItemHeld(r));

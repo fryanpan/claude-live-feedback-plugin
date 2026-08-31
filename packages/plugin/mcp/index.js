@@ -17124,6 +17124,9 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
         if (taskId === undefined) {
           return err("which item? taskId (+ reviewItemId for one of the items filed on the ticket), or docId + threadId + commentId for one raised on a doc thread");
         }
+        if (reviewItemId === undefined && reply !== undefined) {
+          return err("`reply` needs an item thread to land on, and a ticket's own decision has none — revise without `reply`, then point at the change with post_reply on the task");
+        }
         const targetItemId = reviewItemId ?? "r-legacy";
         const res = await http("POST", `/api/tasks/${encodeURIComponent(taskId)}/review-items/${encodeURIComponent(targetItemId)}/revise`, { ...patch, ...reply !== undefined ? { reply } : {} });
         return ok({

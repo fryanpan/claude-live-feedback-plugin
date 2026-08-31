@@ -130,6 +130,9 @@ interface QueueRow {
   reviewItemId?: string;
   /** Comment-borne rows are addressed by their thread, not by an item id. */
   threadId?: string;
+  /** The row's ticket title — which, for a ticket's own decision, IS the
+   *  words the gate judged. */
+  title?: string;
   askedAt?: number;
   since?: number;
 }
@@ -1417,6 +1420,36 @@ describe('the review-item quality gate', () => {
       expect(released.released).toBe(true);
       expect(calls).toHaveLength(1);
       expect((await decisionQueue(workspaceId)).map((r) => r.taskId)).toEqual([taskId]);
+    });
+
+    it('refuses a `reply` on a decision rather than dropping it', async () => {
+      const { workspaceId } = await board();
+      verdict = { ok: true, reason: 'Complete.' };
+      const filed = await createTasks(workspaceId, {
+        title: 'Which cache size should the nightly rebuild use?',
+        body: DECISION_BODY,
+        needs: 'decision',
+        assignee: PERSON.name,
+        options: [{ label: 'Keep it' }, { label: 'Halve it' }],
+      });
+      const taskId = filed.tasks[0]?.id ?? '';
+      // The ticket's own decision has no item thread to answer on. Forwarding
+      // the reply would answer 200 and discard the one sentence written for a
+      // person to read.
+      const res = await post(`/api/tasks/${taskId}/review-items/r-legacy/revise`, {
+        author: FILER,
+        headline: 'Which cache size should the nightly rebuild use, exactly?',
+        reply: 'Rewrote the question so it names the stakes.',
+      });
+      expect(res.status).toBe(400);
+      expect(((await res.json()) as { error: string }).error).toBe('no-thread');
+      // And the words did NOT move — the refusal happens before any write.
+      const { items } = await jj<{ items: QueueRow[] }>(
+        await get(`/api/workspaces/${workspaceId}/review-items`),
+      );
+      expect(items.find((i) => i.reviewItemId === 'r-legacy')?.title).toBe(
+        'Which cache size should the nightly rebuild use?',
+      );
     });
 
     it('CONTROL — the ticket form behaves exactly as it did', async () => {

@@ -3732,6 +3732,11 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
         // taken for the same row, and the address a hold on it hands back.
         // `reply` is refused there for the doc form's reason inverted: the
         // ticket's decision has no item thread of its own to answer on.
+        if (reviewItemId === undefined && reply !== undefined) {
+          return err(
+            "`reply` needs an item thread to land on, and a ticket's own decision has none — revise without `reply`, then point at the change with post_reply on the task",
+          );
+        }
         const targetItemId = reviewItemId ?? 'r-legacy';
         const res = (await http(
           'POST',
