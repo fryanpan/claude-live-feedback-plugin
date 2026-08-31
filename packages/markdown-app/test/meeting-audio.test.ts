@@ -79,8 +79,8 @@ describe('chunkPcm16', () => {
     expect(Array.from(step.rest)).toEqual([1]);
   });
 
-  it('ships 100ms of 16kHz audio per frame', () => {
-    expect(MEETING_FRAME_SAMPLES).toBe(1600);
+  it('ships 50ms of 16kHz audio per frame', () => {
+    expect(MEETING_FRAME_SAMPLES).toBe(800);
   });
 });
 

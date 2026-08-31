@@ -31,6 +31,7 @@ import {
   type LatencySummary,
   type MeetingTimingMark,
   type PendingSample,
+  TIMING_CHUNK_HISTORY,
   bestOffset,
   buildSample,
   offsetFromPong,
@@ -47,11 +48,12 @@ export function wantsLatencyTiming(search: string): boolean {
 }
 
 /**
- * How many audio frames' emit times are kept. Deliberately the same window
- * the server's ledger keeps, so the two sides forget a chunk together rather
- * than one of them holding half a sample.
+ * How many audio frames' emit times are kept. The server's own constant
+ * rather than a copy of its value, so the two sides forget a chunk together
+ * rather than one of them holding half a sample — a copy drifted the first
+ * time the frame size changed.
  */
-const FRAME_HISTORY = 1200;
+const FRAME_HISTORY = TIMING_CHUNK_HISTORY;
 
 /** Clock exchanges at the start of a meeting, and how far apart. */
 const PING_BURST = 5;

@@ -43,8 +43,8 @@
 /** Bytes per sample of `pcm_s16le`, mono. */
 const BYTES_PER_SAMPLE = 2;
 
-/** How many audio chunks the server remembers. ~2 minutes at 100ms framing. */
-export const TIMING_CHUNK_HISTORY = 1200;
+/** How many audio chunks the server remembers. ~2 minutes at 50ms framing. */
+export const TIMING_CHUNK_HISTORY = 2400;
 
 /**
  * What the server knows about one audio chunk, in the server's own clock.
@@ -167,7 +167,8 @@ export class AudioChunkLedger {
    * in-memory one the test suite drives does exactly that — and a turn
    * arriving then would look up an audio offset the ledger had not accounted
    * for yet, quietly resolving to the PREVIOUS chunk and pricing the leg
-   * against a frame sent 100ms too early. Recording first costs nothing and
+   * against a frame sent a whole frame too early. Recording first costs
+   * nothing and
    * removes the ordering question entirely.
    */
   record(byteLength: number, recvMs: number, fwdMs: number): AudioChunkMark {
@@ -195,9 +196,10 @@ export class AudioChunkLedger {
    * newest — which is every partial, the population we most want.
    *
    * The upper edge belongs to the chunk BELOW it. A word ending at exactly
-   * 100ms was carried to its last sample by the frame spanning 0–100, not by
-   * the one that starts there — and frames here are 100ms by construction, so
-   * a word ending on a boundary is an ordinary event, not a curiosity.
+   * 50ms was carried to its last sample by the frame spanning 0–50, not by
+   * the one that starts there — and frames here are a fixed size by
+   * construction, so a word ending on a boundary is an ordinary event, not a
+   * curiosity.
    * Reading it the other way moves a whole frame out of the vendor's leg and
    * into capture.
    */
@@ -238,7 +240,8 @@ export interface LatencySample {
   audioEndMs: number;
   /** Client clock, reconstructed: when that word was actually spoken. */
   spokenMs: number;
-  /** Waiting for the 100ms frame carrying the word to close. */
+  /** Waiting for the frame carrying the word to close (half a frame, on
+   *  average — the leg the frame size buys down directly). */
   capture: number;
   /** Browser → server, using the clock offset. */
   uplink: number;
