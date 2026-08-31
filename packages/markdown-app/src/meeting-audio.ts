@@ -55,19 +55,47 @@ export interface RoomAudioProcessing {
 }
 
 /**
- * What a room capture asks for until the measurement says otherwise.
+ * What a solo capture asks for: the three answers this subsystem has always
+ * given, kept as their own constant so that moving the ROOM default below
+ * cannot reach a case it was never measured on. One person holding a device
+ * is not a room, and nothing here has measured it.
+ */
+const SOLO_AUDIO_PROCESSING: RoomAudioProcessing = {
+  echoCancellation: true,
+  noiseSuppression: true,
+  autoGainControl: true,
+};
+
+/**
+ * What a room capture asks for, now that the measurement has spoken.
  *
- * Deliberately the SAME three answers a solo capture has always given. The
- * argument above says the processors are suspect in a room; it does not say
- * which way, and changing a default on an argument rather than on a number is
- * how a subsystem acquires settings nobody can explain. Move this when
- * `room-labels-check.ts` has run against a real two-person recording — the
- * whole point of naming it here is that moving it is one line.
+ * Gain control is OFF. Measured through the real engine on one far-field
+ * element of the AMI array — one microphone on a table with people around
+ * it — it was the worst of the four settings in both windows scored, and the
+ * only one that lost against leaving everything alone:
+ *
+ *     two people, 120s      raw 24.0%   ns 40.2%   agc 19.7%   ns+agc 24.1%
+ *     four people, 120s     raw 35.1%   ns 39.3%   agc 31.2%   ns+agc 50.2%
+ *
+ * (word attribution; `docs/architecture/meeting-assistant.md` prints the
+ * scoring settings and the caveats.) There is a mechanism behind the number,
+ * which is why it is trusted at this size: telling people apart on ONE
+ * microphone leans on how loud each of them is, and gain control exists to
+ * remove exactly that difference. Noise suppression stays on — it helped in
+ * both windows.
+ *
+ * Echo cancellation stays on and UNMEASURED: it cancels what the device's own
+ * speaker is playing, and an AMI recording has no far-end signal to cancel,
+ * so no run here says anything about it either way.
+ *
+ * These were ffmpeg approximations of a browser's processors, on two windows
+ * of one meeting. Bryan's own recording is what confirms them; moving this
+ * line back is as cheap as moving it was.
  */
 export const ROOM_AUDIO_DEFAULT: RoomAudioProcessing = {
   echoCancellation: true,
   noiseSuppression: true,
-  autoGainControl: true,
+  autoGainControl: false,
 };
 
 /** The short spelling the address knob and the measurement report share. */
@@ -98,7 +126,7 @@ export function parseRoomAudio(raw: string | null | undefined): RoomAudioProcess
 
 /** What the browser is asked for: one channel of cleaned-up speech. */
 export const MEETING_CONSTRAINTS: MediaStreamConstraints = {
-  audio: { channelCount: 1, ...ROOM_AUDIO_DEFAULT },
+  audio: { channelCount: 1, ...SOLO_AUDIO_PROCESSING },
 };
 
 /**

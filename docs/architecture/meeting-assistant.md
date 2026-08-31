@@ -173,28 +173,94 @@ address: `?mic=ec1-ns0-agc0`, alongside `?speakers=N`. Both are facts about
 the ROOM rather than one-shot gestures, so unlike `huddle=1` and `mode=` they
 survive the reload.
 
-**The default is deliberately unchanged** — the same three answers solo has
-always sent. The argument above says the processors are suspect in a room; it
-does not say which way, and moving a default on an argument rather than a
-number is how a subsystem acquires settings nobody can explain. What moves it
-is `scripts/room-labels-check.ts`, which scores a run against the script that
-was actually read and prints its scoring settings beside every figure (a
+**The default turns gain control off, and the number is why.** Scoring is
+`scripts/room-labels-check.ts`, which scores a run against the script that was
+actually read and prints its scoring settings beside every figure — a
 diarization accuracy number moves by tens of points on those settings alone,
-so one without them is not a number). Three ways in: `--doc <docId>` scores a
-meeting already in the append-only record — no key, no cost, and no audio
-needed, **which is the only way to compare microphone settings**, because the
-browser applies them before the audio exists and this server keeps no audio to
-re-process; `--audio` sends a file through the real engine; `--synthetic`
-builds a two-voice fixture with `say` and ffmpeg — two distances, a shared
-reverb tail, overlapping turns — and runs it. `--mock` runs the whole path
-with no key and no bill, and measures nothing.
+so one without them is not a number. Four ways in: `--doc <docId>` scores a
+meeting already in the append-only record (no key, no cost, no audio needed);
+`--audio` sends a file through the real engine; `--synthetic` builds a
+two-voice fixture with `say` and ffmpeg — two distances, a shared reverb tail,
+overlapping turns; and `--ami` scores an excerpt of a real meeting. `--mock`
+runs the whole path with no key and no bill, and measures nothing.
 
-So the room procedure is: record the same short script several times with
-`?mic=` set differently, then score each meeting with its `--setting` named.
-As of 2026-08-30 the fixture builds (22.5s, the far talker 6 dB down) and the
-scorer is checked against known answers in both directions, but no live run
-has happened: no key was reachable, and no real two-person recording exists
-yet.
+`--ami` is what made the microphone matrix possible at all. The browser
+applies these processors BEFORE the audio exists and this server keeps no
+audio, so no recording of ours can be re-scored under other settings — the
+matrix would have cost one recording per combination from a person. The AMI
+Meeting Corpus (CC BY 4.0) publishes unprocessed far-field audio, and its
+`Array1-01` channel is a SINGLE element of the array on the table: one
+microphone, people around it, which is this subsystem's case. So the
+processors can be approximated on top of it offline and the same seconds
+scored under each. The excerpt is range-fetched into a cache outside the repo
+— the channel is already 16 kHz mono PCM16, the meeting wire's own format, so
+a byte offset is a time offset and 4.8 MB arrives instead of 40 MB.
+
+Measured 2026-08-31, ES2002a, 120-second windows, through the real engine with
+`max_speakers` set to the number of people in the window. Word attribution,
+scored `similarity=jaccard-words threshold=0.5 alignment=monotonic-dp-span
+mapping=optimal-assignment unlabelled=excluded mixed=counted-wrong`:
+
+| window | ec1-ns0-agc0 | ec1-ns1-agc0 | ec1-ns0-agc1 | ec1-ns1-agc1 |
+|---|---|---|---|---|
+| two people (590s–710s) | 24.0% | **40.2%** | 19.7% | 24.1% |
+| four people (900s–1020s) | 35.1% | 39.3% | 31.2% | **50.2%** |
+| speakers labelled, two-person window | 2 of 2 | 2 of 2 | 2 of 2 | 2 of 2 |
+| speakers labelled, four-person window | 3 of 4 | 2 of 4 | 2 of 4 | 3 of 4 |
+
+Noise suppression helped in both windows; gain control alone was the worst
+column in both, and the only setting that lost against changing nothing. There
+is a mechanism behind that, which is why it is trusted at this size: telling
+people apart on ONE microphone leans on how loud each of them is, and gain
+control exists to remove exactly that difference. So `ROOM_AUDIO_DEFAULT` is
+`ec1-ns1-agc0`. Solo keeps all three — it was measured by nothing here, and
+the two defaults are now separate constants so that moving one cannot move the
+other.
+
+**Echo cancellation is untested and stays on.** It cancels what the device's
+own speaker is playing, and an AMI recording has no far-end signal to cancel;
+no run here says anything about it either way. The honest reading of the table
+is four rows about two processors.
+
+**What the AMI numbers are and are not.** They are the real engine on real
+far-field audio with human reference annotations. They are NOT the browser:
+`afftdn` and `dynaudnorm` are ffmpeg approximations of WebRTC's processors,
+doing the same job by a different algorithm, and the report labels every such
+run `EMULATED`. Two windows of one meeting is a small sample, and the
+four-person case is harder than the product's. Bryan's own two-minute
+recording is what confirms the direction on the case we actually ship; moving
+the default back is one line.
+
+Repeats matter more than they look. `--repeat n` runs the same audio n times,
+prints every run and their median, and warns when the spread WITHIN one
+setting is wide enough to swallow the gaps BETWEEN settings. Across the 20
+runs above, each setting's own runs agreed to within 0.1 points — the engine
+is near-deterministic on identical bytes — and the one disagreement was a
+single transcribed word. That was worth establishing: the first pass at this
+matrix printed identical scores for two settings and read them as run-to-run
+noise. They were identical because the emulation had silently not applied
+(zsh does not word-split an unquoted parameter, so `ns agc` arrived as one
+unknown key, and the script dropped it while still printing `EMULATED`).
+`emulate` now refuses a key it cannot apply.
+
+**What the synthetic fixture showed.** `--synthetic` builds 22.5 seconds of
+two macOS voices at two distances with a shared reverb tail and 150 ms of
+overlap. Through the real engine with `max_speakers=2` it came back as three
+run-on turns, all labelled A: **one voice where there were two.** That is a
+result about the fixture as much as the engine — two TTS voices over a
+synthetic tail are not a room — and it is the run that exposed a scorer bug
+worth naming, because the harness scored that failure as "turn attribution
+100.0%". One-line-per-turn alignment had matched each turn to its best single
+line and dropped the rest. Alignment is now many-to-one, a turn spanning two
+people is MIXED and never correct, and a person who never gets a label is
+reported as NEVER DISTINGUISHED.
+
+**That two real voices separate is now shown.** On the two-person AMI window,
+every setting produced exactly 2 labels for 2 people, each mapping to a
+different person, with nothing invented — on one far-field microphone. What
+the attribution percentages say is where the remaining error is: 6 of 10
+aligned turns ran across both speakers. The engine finds the people; it merges
+across the change.
 
 **What diarization is actually proven by.** Every automated test drives the
 MOCK engine, which returns labels a fixture chose. That covers the plumbing
@@ -207,8 +273,10 @@ than proving the fixture has a `speaker` field. Run
 `bun run scripts/diarize-check.ts` for the part no fixture can do: it speaks a two-voice script
 through the real engine with two macOS `say` voices and prints the labels.
 It needs a key, opens a metered session (~$0.001), and is deliberately not
-part of any suite. As of 2026-08-30 the live half has NOT been run — no key
-was reachable from the session that wrote it.
+part of any suite. The live half HAS now been run (2026-08-31), by
+`room-labels-check.ts` rather than by this script: see the AMI table above —
+two real voices on one far-field microphone came back as two labels for two
+people.
 
 **Key wiring:** `ASSEMBLYAI_API_KEY` env, then Keychain
 (`transcribe-assemblyai.ts` names the service). No key → the socket answers
@@ -443,4 +511,5 @@ doc sink; the two clocks live in `createPauseTicker`) · `packages/server/src/me
 keeps a person's writing) · `packages/markdown-app/src/meeting-strip.ts`
 (UI) · `packages/markdown-app/src/meeting-audio.ts` (capture + the room's
 microphone config) · `scripts/room-labels-check.ts` + `room-labels-score.ts`
-(the room measurement and its arithmetic).
++ `ami-truth.ts` (the room measurement, its arithmetic, and the AMI corpus
+reference it scores against).

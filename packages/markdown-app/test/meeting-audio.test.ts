@@ -200,6 +200,21 @@ describe('room audio processing', () => {
     ).toEqual(MEETING_CONSTRAINTS);
   });
 
+  it('turns gain control off for a room and leaves it on for solo', () => {
+    // The measured result, pinned as a value rather than left to a comment.
+    // Gain control equalises how loud each person is, which is the cue a
+    // single far-field microphone has for telling them apart: it was the
+    // worst of the four settings in both AMI windows scored (19.7% and 31.2%
+    // word attribution, against 24.0% and 35.1% for changing nothing).
+    expect(ROOM_AUDIO_DEFAULT.autoGainControl).toBe(false);
+    expect(ROOM_AUDIO_DEFAULT.noiseSuppression).toBe(true);
+    // And solo, which no run here measured, keeps what it always had. The two
+    // used to be one constant, so moving the room's default would have
+    // silently moved a case the measurement never looked at.
+    const solo = captureConstraints('solo').audio as MediaTrackConstraints;
+    expect(solo.autoGainControl).toBe(true);
+  });
+
   it('gives a conversation the room config, still on one channel', () => {
     const room = { echoCancellation: true, noiseSuppression: false, autoGainControl: false };
     expect(captureConstraints('conversation', room)).toEqual({

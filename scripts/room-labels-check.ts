@@ -648,10 +648,10 @@ async function main(argv: readonly string[]): Promise<number> {
     );
     const mocked = args.has('mock') ? truth : undefined;
     // Repeats are how the report distinguishes a real difference from a draw.
-    // Measured here: the engine IS deterministic on identical bytes — three
-    // runs of one AMI excerpt agreed to the word — which is worth being able
-    // to demonstrate, because the first reading of this matrix explained a
-    // between-settings difference away as run-to-run noise.
+    // Measured here: the engine is near-deterministic on identical bytes —
+    // 20 runs, every setting's own runs within 0.1 points — which is worth
+    // being able to demonstrate, because the first reading of this matrix
+    // explained a between-settings difference away as run-to-run noise.
     const repeats = Math.max(1, Number(args.get('repeat')?.[0] ?? '1'));
     const scores: DiarizationScore[] = [];
     for (let run = 1; run <= repeats; run++) {

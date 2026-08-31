@@ -380,10 +380,12 @@ export function median(values: readonly number[]): number {
 /**
  * Several runs of ONE recording, reported as a spread rather than a number.
  *
- * Measured on this engine, the same bytes give the same answer: three runs of
- * one AMI excerpt agreed to the word. That is worth being able to show rather
- * than assume, because the first reading of the microphone matrix explained a
- * real between-settings difference away as run-to-run noise, and only repeats
+ * Measured on this engine, the same bytes give very nearly the same answer:
+ * across 20 runs of two AMI excerpts under four settings, every setting's
+ * runs agreed to within 0.1 points, and the single disagreement was one
+ * transcribed word. That is worth being able to show rather than assume,
+ * because the first reading of the microphone matrix explained a real
+ * between-settings difference away as run-to-run noise, and only repeats
  * could tell those two stories apart.
  *
  * So the summary prints every run rather than a single number, and says out
