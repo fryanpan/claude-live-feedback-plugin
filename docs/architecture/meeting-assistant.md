@@ -142,6 +142,55 @@ follows the same no-default seam as the engine: nothing that merely spins a
 server up can reach an LLM. Partials count as speech in progress and defer
 the pause tick.
 
+**The write is a MERGE, and a person can type in the section while it runs**
+(owner, 2026-08-30: *"destroyed my notes"*). The old write deleted the whole
+section and re-inserted the composed string, so every tick ate what he had
+typed since the last one. Now (`meeting-notes-merge.ts`):
+
+- The unit is an **item** — a top-level block, or one item of a list, because
+  a bullet list is a single block and block granularity would hand the
+  agent's whole list to the person who fixed one bullet.
+- Ownership is a **ledger keyed by the Yjs element**, holding the markdown
+  the agent left in it, held per doc in memory. An item is the agent's only
+  if the agent wrote that element AND it still reads exactly as the agent
+  left it. Both halves matter: text alone hands a person's element to the
+  agent the moment they type a line matching one of its own, and element
+  alone keeps calling a line the agent's after they rewrote it. Only agent
+  items are ever deleted, and a person's item is never re-created — the same
+  element stays in place, so its marks and anchors survive.
+- **`previous` is the live section**, not the composer's own last reply, so
+  the composer sees what the person wrote. The first tick of a session still
+  composes from scratch — otherwise every meeting would continue the last
+  one's notes. Human items are listed in the prompt as theirs to reproduce
+  verbatim, and are gated on the same first-tick condition: on tick one they
+  are the LAST meeting's lines, and "reproduce verbatim" would copy them in.
+- **A changed version of a person's line becomes a suggestion**, not a
+  rewrite: the redline marks in `suggest-ops.ts`, authored as "Meeting
+  Assistant". The accepted state — what serializes to disk — stays his words
+  until he accepts. One pending proposal per item; the marks are the
+  registry, so the doc is where the duplicate check asks.
+- **The stale-compose race** is caught with `basedOn`, the item list the
+  compose read. An item missing from it arrived DURING the compose, so a
+  collision with it is dropped rather than proposed; an item in it that has
+  since left the doc is one he edited mid-compose, so anything the compose
+  says that reads like it is dropped rather than inserted. `basedOn` holds
+  KEYS — kind plus text — so turning a paragraph into a bullet without
+  retyping it still counts as the edit it is. Nothing is lost — the composer
+  returns the whole notes every tick.
+- **A line the composer moved is not a new line.** Before an unmatched
+  incoming entry is inserted, it is matched against the person's items that
+  the diff did not line up with; an exact hit is the composer re-emitting
+  their note somewhere else, and inserting it would leave two of it.
+- **A ledger that claims nothing means "everything here is somebody
+  else's"**, so a restarted server adds and stops replacing rather than
+  claiming prose it has never seen.
+- **An in-place agent edit has to tell the ledger.** The speaker rename below
+  rewrites characters inside the agent's own lines rather than replacing
+  them, so the ledger would stop recognising them and hand each one to the
+  person. `reclaimAfterInPlaceEdit` snapshots what the ledger claimed before
+  the edit and re-records exactly those elements after it — never a line the
+  person had already made theirs.
+
 ### A rename reaches backwards (owner's call, 2026-08-29: "rewrite them")
 
 Naming a voice mid-meeting fixes the notes ALREADY in the doc, not just the
@@ -161,9 +210,9 @@ the rename and by name below it was the thing to avoid. Three moving parts:
 
 **Why not `replaceNotesSection`.** It replaces the whole section from a
 string the server composed, which would discard whatever the person had typed
-inside the section since the last tick. The section is agent-owned and each
-tick does rewrite it — but a rename is not a tick, and must not become a
-second way for the note-taker to overwrite someone's writing. Everything
+inside the section since the last tick. Since the merge above, no tick
+rewrites the section wholesale either — a rename must not become the one
+remaining way for the note-taker to overwrite someone's writing. Everything
 OUTSIDE the section is unreachable from this path however it is worded: the
 tests fix a doc whose body says "Speaker B" three times and assert all three
 survive.
@@ -213,6 +262,13 @@ stored content.
   reads as settled — a silent failure.
 - **AssemblyAI auth is the bare key as the whole `Authorization` header** —
   no `Bearer` prefix.
+- **A detached Yjs type reads as empty, and its children cannot be
+  re-parented.** `parseMarkdownBlocks` hands back elements that belong to no
+  document: serializing one returns nothing ("Invalid access: Add Yjs type to
+  a document before reading data"), and moving a parsed `listItem` into a
+  live list silently inserts nothing while every call reports success. Parse
+  into a scratch `Y.Doc` to READ markdown, and build a `listItem` by hand
+  (`listItem > paragraph > XmlText` + `insertTextWithMarks`) to WRITE one.
 - **A speaker name is applied when a tick COMPOSES, not when it arrives** —
   the compose runs on the session's promise chain, so a name given right
   after the quiet timer fires still reaches that tick. Carried (failed)
@@ -265,4 +321,6 @@ stored content.
 `packages/server/src/transcribe-assemblyai.ts` (engine) ·
 `packages/server/src/meetings.ts` (store) ·
 `packages/server/src/meeting-notes.ts` + `meeting-notes-doc.ts` (composer +
-doc sink) · `packages/markdown-app/src/meeting-strip.ts` (UI).
+doc sink) · `packages/server/src/meeting-notes-merge.ts` (the merge that
+keeps a person's writing) · `packages/markdown-app/src/meeting-strip.ts`
+(UI).

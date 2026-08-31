@@ -158,3 +158,22 @@ describe('captured task links in the prompt', () => {
     expect(user.toLowerCase()).not.toContain('markdown link');
   });
 });
+
+describe('the person’s own lines in the prompt', () => {
+  it('names them, and says reproduce them verbatim or propose a change', () => {
+    const { system, user } = buildNotesPrompt({
+      ...input,
+      humanNotes: ['my own bullet, my own words'],
+    });
+    expect(user).toContain('Written by a person — reproduce verbatim:');
+    expect(user).toContain('- my own bullet, my own words');
+    expect(system).toContain('reproduce each one character for character');
+    expect(system).toContain('suggestion');
+    expect(system).toContain('Never delete one');
+  });
+
+  it('says nothing about them when the person has written nothing', () => {
+    const { user } = buildNotesPrompt(input);
+    expect(user).not.toContain('Written by a person');
+  });
+});

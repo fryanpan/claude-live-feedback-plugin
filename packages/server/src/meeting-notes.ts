@@ -197,8 +197,19 @@ export interface NotesComposeInput {
   docId: string;
   meetingId: string;
   tick: NotesTick;
-  /** The notes as previously composed; null on a meeting's first tick. */
+  /**
+   * The notes as they CURRENTLY READ — the live section including anything a
+   * person typed into it, not merely what this composer last returned. A
+   * composer that saw only its own output would keep re-proposing the words
+   * a person has already fixed. Null on a meeting's first tick.
+   */
   previous: string | null;
+  /**
+   * The lines of `previous` a PERSON wrote. They are theirs: reproduce them
+   * verbatim. Returning a changed version of one is read as a proposal and
+   * lands as a suggestion on their line, never as a rewrite of it.
+   */
+  humanNotes?: readonly string[];
   context?: NotesProjectContext;
   /** Tasks captured from THIS tick's speech. Absent when capture is off,
    *  found nothing, or failed — the notes compose either way. */
@@ -237,6 +248,24 @@ export interface NotesUpdate {
   /** The tick as composed — includes any words carried from a failed tick. */
   tick: NotesTick;
   notes: string;
+  /**
+   * The notes section's items as the compose READ them. Anything in the doc
+   * that is not in this list arrived while the compose was in flight, so
+   * these notes were written without knowing about it — the sink withholds
+   * changes to those rather than landing older words on a newer edit.
+   * Absent when the sink was composed without a doc to read.
+   */
+  basedOn?: readonly string[];
+}
+
+/** The notes section as it currently stands, read fresh for each compose. */
+export interface NotesSectionState {
+  /** Heading plus body, the accepted state. */
+  markdown: string;
+  /** Every item, in reading order. */
+  items: readonly string[];
+  /** The subset the agent did not write. */
+  human: readonly string[];
 }
 
 /**
@@ -281,6 +310,13 @@ export interface MeetingNotesDeps {
     meetingId: string;
     turns: readonly NotesTurn[];
   }) => Promise<NoteTaskLink[]>;
+  /**
+   * Read the doc's notes section at the START of each compose, so the
+   * composer sees what the person has written rather than only what it last
+   * returned. Absent in tests that wire no doc; then the composer's own last
+   * output is `previous`, as it always was.
+   */
+  readSection?: (input: { docId: string; meetingId: string }) => NotesSectionState | null;
   /** Where composed notes go. The doc-writing stage plugs in here. */
   onNotes: (update: NotesUpdate) => void;
   /**
@@ -417,18 +453,45 @@ export function beginNotesSession(
           deps.onError?.(err instanceof Error ? err.message : 'task capture failed');
         }
       }
+      // Read INSIDE the chain, immediately before composing: the compose is
+      // the thing that must not be written from stale text, and the chain is
+      // what serializes it against the previous tick's write.
+      let live: NotesSectionState | null = null;
+      try {
+        live = deps.readSection?.({ docId: ids.docId, meetingId: ids.meetingId }) ?? null;
+      } catch (err) {
+        // The section is an input to a better compose, never a dependency of
+        // one — same rule as context and capture.
+        deps.onError?.(err instanceof Error ? err.message : 'notes section read failed');
+      }
       const input: NotesComposeInput = {
         docId: ids.docId,
         meetingId: ids.meetingId,
         tick: { ...tick, turns },
-        previous,
+        // The FIRST tick of a session composes from scratch, even on a doc
+        // whose notes section still holds the last meeting's — handing that
+        // in would make every meeting a continuation of the one before it.
+        // From the second tick on, `previous` is what the doc actually says,
+        // which is how a person's edits reach the composer at all.
+        previous: previous === null ? null : (live?.markdown ?? previous),
+        // Gated with `previous` for the same reason: on tick one the human
+        // lines in the section are the LAST meeting's, or an agenda written
+        // before this one, and telling a from-scratch compose to reproduce
+        // them verbatim would copy them into these notes.
+        ...(previous !== null && live && live.human.length > 0 ? { humanNotes: live.human } : {}),
         ...(context ? { context } : {}),
         ...(taskLinks.length > 0 ? { taskLinks } : {}),
       };
       try {
         const notes = await deps.composer.compose(input);
         previous = notes;
-        deps.onNotes({ docId: ids.docId, meetingId: ids.meetingId, tick: input.tick, notes });
+        deps.onNotes({
+          docId: ids.docId,
+          meetingId: ids.meetingId,
+          tick: input.tick,
+          notes,
+          ...(live ? { basedOn: live.items } : {}),
+        });
       } catch (err) {
         carry = [...raw, ...carry];
         deps.onError?.(err instanceof Error ? err.message : 'notes composer failed');
