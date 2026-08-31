@@ -256,6 +256,7 @@ import {
   retiredRefusal,
   reviewItemVersion,
   taskChip,
+  wordsRevisionOf,
 } from './tasks.ts';
 import { ThreadRequestDedup } from './thread-request-dedup.ts';
 import type { TranscriptionEngine } from './transcribe.ts';
@@ -1743,11 +1744,15 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
    * estimator wired at all" (no key, or `CW_EFFORT_ESTIMATE=0`) leaves the
    * row untouched, the "gate off" contract `judgeReviewItem` also uses.
    *
-   * Reads `titleWrittenAt`/`bodyWrittenAt` BEFORE the await, not after —
-   * they are the words this run is ABOUT, and `recordEffortEstimate`
-   * refuses the write if the ticket has moved on by the time the call
-   * returns, so a slow answer to old words can never overwrite a newer
-   * run's answer.
+   * Reads the row's provenance BEFORE the await, not after — it describes
+   * the words this run is ABOUT, and `recordEffortEstimate` refuses the
+   * write if the ticket has moved on by the time the call returns, so a
+   * slow answer to old words can never overwrite a newer run's answer.
+   *
+   * `wordsRevision` is the token that decision is made on; the three
+   * timestamps ride along as the human-readable half. Every mutator bumps
+   * the counter before emitting the event that lands here, so this read
+   * sees the post-edit value and the run it overtook holds a smaller one.
    */
   function scoreEffortEstimate(task: Task): void {
     const estimator = opts.effortEstimator;
@@ -1757,6 +1762,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
     const forTitleWrittenAt = task.titleWrittenAt ?? task.createdAt;
     const forBodyWrittenAt = task.bodyWrittenAt;
     const forGoal = task.goal;
+    const forWordsRevision = wordsRevisionOf(task);
     void (async () => {
       let verdict: EffortEstimateVerdict | null = null;
       try {
@@ -1785,6 +1791,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
         forTitleWrittenAt,
         ...(forBodyWrittenAt !== undefined ? { forBodyWrittenAt } : {}),
         forGoal,
+        forWordsRevision,
       };
       const record: TaskEffortEstimate =
         verdict === null

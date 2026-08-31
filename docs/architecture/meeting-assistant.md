@@ -45,8 +45,10 @@ flowchart LR
   `"B"`) travels as `speaker` on each transcript frame; the strip shows it as
   a muted tag at the head of the turn ("Speaker A"), and a tap on the tag
   names that voice for the meeting — every turn with the label updates, the
-  strip sends `name_speaker` up the audio socket, and the record and the
-  notes composer read the name from then on. Labels are per SESSION: the
+  strip sends `name_speaker` up the audio socket, the record keeps the name,
+  and the notes composer reads it from then on AND the notes already written
+  are rewritten to match ("A rename reaches backwards", below). Labels are
+  per SESSION: the
   same letter is a different person next meeting, so the name map lives on
   the meeting's index line, never on the doc.
 
@@ -70,7 +72,24 @@ not a rework.
 
 **Speaker labels** (added 2026-08-29): `speaker_labels=true` on the same
 streaming URL — supported on every streaming model, **+$0.12/hr** on top of
-the $0.15 base (docs: streaming/label-speakers-and-separate-channels). Each
+the $0.15 base (docs: streaming/label-speakers-and-separate-channels for the
+parameter, assemblyai.com/pricing for both figures, re-checked 2026-08-30).
+
+**What a meeting costs.** Streaming is billed on the seconds the SOCKET IS
+OPEN, not on the audio sent — silence in the room costs the same as speech,
+and the meeting's length is the bill.
+
+| | per hour | **per meeting-minute** |
+|---|---|---|
+| Universal-Streaming English | $0.15 | $0.0025 |
+| + speaker labels | $0.27 | **$0.0045** |
+
+So labels add **$0.002 per meeting-minute** — $0.12 on a one-hour meeting,
+against $0.15 the meeting already cost. Roughly a 1.8x transcription bill for
+knowing who spoke. The notes composer and task capture are separate Haiku
+calls and are not in these numbers.
+
+Each
 `Turn` carries `speaker_label`; turns under ~1s of audio carry a placeholder
 (`PENDING`/`UNKNOWN`) the engine adapter maps to "no speaker". A
 `SpeakerRevision` arrives before `Termination` naming turns the whole-session
@@ -78,10 +97,23 @@ pass relabelled; the adapter re-emits those through `onTurn` as settled turns
 with retained text, so the relay needs no second channel. A turn still
 waiting on the pause tick takes the new label; notes ALREADY composed keep
 the label they were composed with — those words are in the doc and the
-revision has nowhere to land. The revision can also take a label away (a
+revision has nowhere to land — but a person RENAMING a voice does reach
+them, retroactively; see "A rename reaches backwards" below. The revision
+can also take a label away (a
 placeholder is "no speaker"), which the record writes as an explicit
 `speaker: null` relabel line — an absent field would read as "says nothing
 about the speaker" and leave an attribution the strip had already dropped.
+
+**What diarization is actually proven by.** Every automated test drives the
+MOCK engine, which returns labels a fixture chose. That covers the plumbing
+end to end — label on the wire, in the record, in the composed notes, and the
+rename that rewrites them (`meeting-e2e.test.ts`) — and it cannot show that
+AssemblyAI separates two real voices, because no fixture can. Run
+`bun run scripts/diarize-check.ts` for that: it speaks a two-voice script
+through the real engine with two macOS `say` voices and prints the labels.
+It needs a key, opens a metered session (~$0.001), and is deliberately not
+part of any suite. As of 2026-08-30 the live half has NOT been run — no key
+was reachable from the session that wrote it.
 
 **Key wiring:** `ASSEMBLYAI_API_KEY` env, then Keychain
 (`transcribe-assemblyai.ts` names the service). No key → the socket answers
@@ -109,6 +141,46 @@ section via the Yjs fragment. The composer is an LLM call (Haiku) and
 follows the same no-default seam as the engine: nothing that merely spins a
 server up can reach an LLM. Partials count as speech in progress and defer
 the pause tick.
+
+### A rename reaches backwards (owner's call, 2026-08-29: "rewrite them")
+
+Naming a voice mid-meeting fixes the notes ALREADY in the doc, not just the
+ones still to come — a transcript where the same person is "Speaker B" above
+the rename and by name below it was the thing to avoid. Three moving parts:
+
+- `nameSpeaker` rewrites the session's `previous` — the composer's memory of
+  what it wrote — so no later tick reintroduces the placeholder.
+- A `NotesRelabel` goes to the sink, which calls `relabelNotesSection` on the
+  doc. That is a **targeted in-place replacement**, not a section rewrite: it
+  changes the exact token ("Speaker B") on word boundaries, only inside the
+  notes section, carrying each site's marks. A rename is a two-word
+  correction and costs two words.
+- Both are queued on the **compose chain**, behind anything in flight. A
+  compose that started before the rename read `previous` the old way and will
+  return notes written the old way; the rewrite has to land after it.
+
+**Why not `replaceNotesSection`.** It replaces the whole section from a
+string the server composed, which would discard whatever the person had typed
+inside the section since the last tick. The section is agent-owned and each
+tick does rewrite it — but a rename is not a tick, and must not become a
+second way for the note-taker to overwrite someone's writing. Everything
+OUTSIDE the section is unreachable from this path however it is worded: the
+tests fix a doc whose body says "Speaker B" three times and assert all three
+survive.
+
+Renaming an already-given name works the same way, because the rewrite reads
+the OLD DISPLAY NAME (what the composer actually wrote), not the raw label —
+"Devi" → "Devi Raman" replaces "Devi".
+
+**Two voices with the same name refuse the rewrite.** Display text is the
+only handle the notes give — composed prose carries no per-mention
+attribution — so if both A and B are called "Alex", "Alex" in the notes does
+not say which, and correcting A to "Sam" would silently reattribute B's
+words. The session detects that (across every label SEEN, not just the named
+ones — an unnamed B still reads as "Speaker B") and skips the retroactive
+part, reporting it through `onError`. The forward mapping still holds: that
+voice's later turns compose under the new name. Raised by review before
+merge, not in the field.
 
 ## Task capture ("file a ticket for that")
 
