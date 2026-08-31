@@ -812,15 +812,29 @@ class FeedbackWidgetEl extends HTMLElement {
     const ta = composer.querySelector('textarea') as HTMLTextAreaElement;
     ta.focus();
     composer.querySelector('.cancel')?.addEventListener('click', () => composer.remove());
-    composer.querySelector('.submit')?.addEventListener('click', async () => {
+    const submit = composer.querySelector('.submit') as HTMLButtonElement;
+    submit.addEventListener('click', async () => {
       const text = ta.value.trim();
       if (!text || !this.user) return;
+      // A silent await reads as a dead button — say the click landed.
+      submit.disabled = true;
+      submit.textContent = 'Posting…';
       const posted = replyTo
         ? await this.postReply(replyTo, text)
         : await this.postNewThread(anchor, text);
-      // Kept on failure, with the text still in it. `showSignInRequired` has
-      // already put the way forward in the panel.
-      if (!posted) return;
+      if (!posted) {
+        // Kept on failure, with the text still in it. `showSignInRequired`
+        // has already put the way forward in the panel when that's the cause.
+        submit.disabled = false;
+        submit.textContent = 'Post';
+        if (!composer.querySelector('.composer-err')) {
+          const err = document.createElement('div');
+          err.className = 'composer-err';
+          err.textContent = 'Couldn’t post — try again.';
+          composer.appendChild(err);
+        }
+        return;
+      }
       composer.remove();
     });
   }

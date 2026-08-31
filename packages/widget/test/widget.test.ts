@@ -124,6 +124,28 @@ describe('widget', () => {
     expect(document.body.classList.contains('cfw-feedback-mode')).toBe(false);
   });
 
+  it('a refused post keeps the composer, the text, and says what happened', async () => {
+    const mod = await importWidget();
+    (globalThis as unknown as { fetch: unknown }).fetch = async () =>
+      new Response('{}', { status: 500 });
+    const el = mod.FeedbackWidget.init({ docId: 'w-test-fail', user: 'bryan' });
+    const root = el.shadowRoot!;
+    document.elementFromPoint = () => document.getElementById('hello') as HTMLElement;
+    (root.querySelector('.fab') as HTMLButtonElement).click();
+    window.dispatchEvent(new PointerEvent('pointerup', { clientX: 10, clientY: 10 }));
+    const composer = root.querySelector('.composer') as HTMLElement;
+    (composer.querySelector('textarea') as HTMLTextAreaElement).value = 'needs work';
+    (composer.querySelector('.submit') as HTMLButtonElement).click();
+    await new Promise((r) => setTimeout(r, 20));
+    // The typed comment is not the failure's to discard.
+    expect(root.querySelector('.composer')).toBeTruthy();
+    expect((root.querySelector('.composer textarea') as HTMLTextAreaElement).value).toBe(
+      'needs work',
+    );
+    expect(root.querySelector('.composer-err')?.textContent).toContain('try again');
+    expect((root.querySelector('.composer .submit') as HTMLButtonElement).disabled).toBe(false);
+  });
+
   it('a click on the widget host in feedback mode is left alone', async () => {
     const mod = await importWidget();
     const el = mod.FeedbackWidget.init({ docId: 'w-test-chrome', user: 'bryan' });

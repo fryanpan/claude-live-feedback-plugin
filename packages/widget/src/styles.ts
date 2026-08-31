@@ -91,7 +91,7 @@ export const widgetStyles = `
 .panel {
   position: fixed;
   right: max(16px, env(safe-area-inset-right));
-  bottom: calc(var(--lf-vv-bottom) + max(82px, calc(env(safe-area-inset-bottom) + 82px)));
+  bottom: calc(var(--lf-vv-bottom) + max(128px, calc(env(safe-area-inset-bottom) + 128px)));
   width: 340px;
   max-height: 70vh;
   background: #fff;
@@ -308,6 +308,7 @@ export const widgetStyles = `
   gap: 6px;
   margin-top: 6px;
 }
+.composer-err { color: #a40e26; font-size: 11px; margin-top: 6px; }
 
 .thread-popover {
   position: fixed;
