@@ -211,8 +211,14 @@ describe('computeEffortRatios', () => {
       { goal: 'g1', estimateSeconds: 100, actualSeconds: 200 },
       { goal: 'g1', estimateSeconds: 100, actualSeconds: 1000 },
     ]);
-    // A mean would be dragged to ~4.7x; the median holds at 2x.
-    expect(set.board.ratio).toBe(2);
+    // A mean would be dragged to ~4.7x; the median holds at 2x — and then
+    // the board is shrunk toward its prior (1 here, the default), three
+    // samples carrying 3/8 of the answer: 1 + (2 - 1) * 3/8.
+    expect(set.board.ratio).toBe(1.375);
+    // The property this test is for, stated as a comparison rather than a
+    // constant: the same three closes read as a MEAN would land higher, and
+    // the outlier is what puts it there.
+    expect(shrinkEffortRatio((2 + 2 + 10) / 3, 1, 3)).toBeCloseTo(2.375);
   });
 
   it('pulls a two-sample goal most of the way back to the board', () => {
@@ -240,6 +246,9 @@ describe('computeEffortRatios', () => {
       })),
     );
     expect(set.byGoal.g1?.ratio).toBe(2);
+    // The board is clamped too, on the far side of its own shrinkage: a
+    // thousand-fold miss shrunk toward a prior of 1 is still 900x.
+    expect(set.board.ratio).toBe(2);
   });
 
   it('claims no spread below three samples', () => {
@@ -292,12 +301,20 @@ describe('the priors: what a board forecasts with before it has closed anything'
       ...closed(2 * DAY, HOUR, { readingTime: { totalSeconds: 600 } }),
     }));
     const c = computeEffortCalibration(closes);
-    expect(ratioForGoal(c.wallClock, 'g1').ratio).toBeCloseTo(1, 2);
-    expect(ratioForGoal(c.handsOn, 'g1').ratio).toBeCloseTo(1, 2);
+    // Not 1.0: ten closes is real evidence and not yet overwhelming
+    // evidence, so the answer sits between the prior and the measurement —
+    // nearer the measurement on the goal that owns the samples, because g1
+    // is shrunk toward the board a second time from its own median of 1.
+    const g1 = ratioForGoal(c.wallClock, 'g1').ratio;
+    const g2 = ratioForGoal(c.wallClock, 'g2').ratio;
+    expect(g1).toBeGreaterThan(c.wallClock.board.ratio);
+    expect(g1).toBeLessThan(1);
+    expect(c.wallClock.board.ratio).toBeGreaterThan(EFFORT_PRIOR_WALL_CLOCK_RATIO);
     // g2 has no bucket, so it falls back to the BOARD — which g1's closes
     // have now moved off the prior. That is correct and worth stating: a
     // prior is what a BOARD starts at, and a board with evidence has left it.
-    expect(ratioForGoal(c.wallClock, 'g2').ratio).toBeCloseTo(1, 2);
+    expect(g2).toBe(c.wallClock.board.ratio);
+    expect(g2).toBeGreaterThan(EFFORT_PRIOR_WALL_CLOCK_RATIO);
   });
 
   it('lets a measured 0.1 through, where the old floor reported it as 0.5', () => {
@@ -312,11 +329,23 @@ describe('the priors: what a board forecasts with before it has closed anything'
       })),
       EFFORT_PRIOR_WALL_CLOCK_RATIO,
     );
-    expect(set.board.ratio).toBeCloseTo(0.1);
+    // 0.1 measured, shrunk toward the 1/7 prior on nine samples — so the
+    // answer is 0.115 rather than 0.099, and nowhere near the 0.5 the old
+    // floor reported. The prior is CLOSE to the measurement here, which is
+    // what a well-chosen prior looks like: it barely moves the answer.
+    expect(set.board.ratio).toBeCloseTo(
+      EFFORT_PRIOR_WALL_CLOCK_RATIO + (0.1 - EFFORT_PRIOR_WALL_CLOCK_RATIO) * (9 / 14),
+    );
     expect(set.board.ratio).toBeGreaterThan(EFFORT_RATIO_MIN);
-    // The floor still refuses a correction two more orders of magnitude out.
+    expect(set.board.ratio).toBeLessThan(0.5);
+    // The floor still refuses a correction orders of magnitude out, once
+    // enough samples have pulled it clear of the prior.
     const wild = computeEffortRatios(
-      Array.from({ length: 9 }, () => ({ goal: 'g1', estimateSeconds: 10_000, actualSeconds: 1 })),
+      Array.from({ length: 200 }, () => ({
+        goal: 'g1',
+        estimateSeconds: 10_000,
+        actualSeconds: 1,
+      })),
       EFFORT_PRIOR_WALL_CLOCK_RATIO,
     );
     expect(wild.board.ratio).toBe(EFFORT_RATIO_MIN);
@@ -371,7 +400,10 @@ describe('a stale-generation estimate teaches nothing', () => {
       })),
     );
     expect(fresh.wallClock.board.samples).toBe(10);
-    expect(fresh.wallClock.board.ratio).toBe(2);
+    expect(fresh.wallClock.board.ratio).toBeCloseTo(
+      EFFORT_PRIOR_WALL_CLOCK_RATIO + (2 - EFFORT_PRIOR_WALL_CLOCK_RATIO) * (10 / 15),
+    );
+    expect(fresh.wallClock.board.ratio).toBeGreaterThan(1);
   });
 
   it('still FORECASTS from an old-generation estimate — it is the best number the row has', () => {
@@ -395,9 +427,18 @@ describe('computeEffortCalibration — the two quantities stay apart', () => {
       ...closed(2 * DAY, 2 * HOUR, { readingTime: { totalSeconds: 300 } }),
     }));
     const c = cal(tasks);
-    expect(c.wallClock.board.ratio).toBe(2);
-    // Estimated 600s hands-on, measured 300 → 0.5.
-    expect(c.handsOn.board.ratio).toBe(0.5);
+    // 2.0 measured, shrunk toward the wall-clock prior on 20 samples:
+    // 1/7 + (2 - 1/7) * 20/25.
+    expect(c.wallClock.board.ratio).toBeCloseTo(
+      EFFORT_PRIOR_WALL_CLOCK_RATIO + (2 - EFFORT_PRIOR_WALL_CLOCK_RATIO) * (20 / 25),
+    );
+    // Estimated 600s hands-on, measured 300 → 0.5, shrunk toward the
+    // hands-on prior. The point of the test is that the two quantities land
+    // on DIFFERENT numbers from different evidence, and they still do.
+    expect(c.handsOn.board.ratio).toBeCloseTo(
+      EFFORT_PRIOR_HANDS_ON_RATIO + (0.5 - EFFORT_PRIOR_HANDS_ON_RATIO) * (20 / 25),
+    );
+    expect(c.handsOn.board.ratio).toBeLessThan(c.wallClock.board.ratio);
   });
 
   it('a closed ticket nobody read calibrates wall-clock and stays OUT of hands-on', () => {
@@ -539,10 +580,16 @@ describe('summarizeGoalEffort — the fraction', () => {
       ...closed(2 * DAY, HOUR, { readingTime: { totalSeconds: 900 } }),
     }));
     const c = computeEffortCalibration(calTasks);
-    // 900 measured against a 600 estimate → 1.5.
-    expect(c.handsOn.board.ratio).toBeCloseTo(1.5, 5);
-    // Wall-clock was estimated at 3600 and measured at 3600 → 1.0.
-    expect(c.wallClock.board.ratio).toBeCloseTo(1, 5);
+    // 900 measured against a 600 estimate → 1.5 measured, then shrunk toward
+    // the hands-on prior and toward the board in turn. Fifty samples is
+    // enough to be most of the way there without being all of it.
+    const hands = ratioForGoal(c.handsOn, 'g1').ratio;
+    const wall = ratioForGoal(c.wallClock, 'g1').ratio;
+    expect(hands).toBeGreaterThan(1.4);
+    expect(hands).toBeLessThan(1.5);
+    // Wall-clock was estimated at 3600 and measured at 3600 → 1.0 measured.
+    expect(wall).toBeGreaterThan(0.99);
+    expect(wall).toBeLessThan(1);
     const s = summarizeGoalEffort(
       [closed(DAY), task(), task({ status: 'in-progress' })],
       'g1',
@@ -550,10 +597,12 @@ describe('summarizeGoalEffort — the fraction', () => {
       NOW,
     );
     if (s.kind !== 'ready') throw new Error('expected ready');
-    // Two open tickets at 600s hands-on each, corrected by 1.5.
-    expect(s.handsOnRemainingSeconds).toBe(1800);
-    // …and the wall-clock remainder is untouched by the hands-on ratio.
-    expect(s.wallClockRemainingSeconds).toBe(7200);
+    // Two open tickets at 600s hands-on each, at the hands-on factor — and
+    // the point of the test is the SEPARATION: the hands-on remainder moves
+    // with the hands-on ratio and the calendar remainder does not.
+    expect(s.handsOnRemainingSeconds).toBe(Math.round(600 * hands) * 2);
+    expect(s.handsOnRemainingSeconds).not.toBe(Math.round(600 * wall) * 2);
+    expect(s.wallClockRemainingSeconds).toBe(Math.round(3600 * wall) * 2);
   });
 });
 

@@ -1990,6 +1990,14 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
       // best — `recordEffortEstimate` would refuse it as stale anyway.
       const current = taskStore.getTask(task.id);
       if (!current || current.status === 'done' || current.archivedAt !== undefined) continue;
+      // And re-ask the question this loop exists to answer. A row queued
+      // behind a hundred others can be edited while it waits, and an edit
+      // triggers its own scoring — so by the time the loop reaches it the row
+      // may already carry a current-generation estimate. Without this check
+      // the pass spends a second call and can land its answer on top of the
+      // newer one, which `recordEffortEstimate`'s guard does not catch
+      // because no words changed between the two reads.
+      if (current.effortEstimate?.promptVersion === EFFORT_ESTIMATE_PROMPT_VERSION) continue;
       await runEffortEstimate(current);
       if (effortRescoreStopped) return;
       await new Promise((r) => setTimeout(r, EFFORT_RESCORE_GAP_MS));

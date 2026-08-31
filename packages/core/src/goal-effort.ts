@@ -96,10 +96,13 @@ export const EFFORT_RATIO_MAX = 2.0;
  * none of that waiting gets faster. Hands-on has no such floor: the work an
  * agent does alone leaves the owner's column entirely.
  *
- * A prior is a STARTING POINT, not a setting. The moment a goal closes
- * tickets scored under the current prompt, `computeEffortRatios` learns from
- * those and the prior is gone — see `shrinkEffortRatio`, which is what makes
- * the handover gradual rather than a step.
+ * A prior is a STARTING POINT, not a setting, and the handover is gradual
+ * rather than a step: `computeEffortRatios` shrinks the board's measured
+ * median TOWARD the prior on `EFFORT_SHRINK_K`, so the first close carries a
+ * sixth of the answer and the prior is most of what is left. Without that
+ * shrinkage a prior would not be a prior at all — the first ticket to close
+ * would delete it, and one outlying close would move every forecast on the
+ * board.
  */
 export const EFFORT_PRIOR_WALL_CLOCK_RATIO = 1 / 7;
 export const EFFORT_PRIOR_HANDS_ON_RATIO = 1 / 15;
@@ -459,16 +462,25 @@ export function computeEffortRatios(samples: EffortSample[], prior = 1): EffortR
   const usable = samples.filter(
     (s) => isPositiveFinite(s.estimateSeconds) && isPositiveFinite(s.actualSeconds),
   );
-  // The prior is the board's answer only while there is no measurement to
-  // replace it. One usable sample is enough to take over, because a goal's
-  // own ratio is shrunk toward whatever this returns — so a board with one
-  // close does not swing to that close, it moves a seventh of the way.
   if (usable.length === 0) return neutralRatioSet(prior);
   const allRatios = usable.map((s) => s.actualSeconds / s.estimateSeconds);
   const boardMedian = median(allRatios);
+  // The BOARD is shrunk toward the prior, on the same weight a goal is
+  // shrunk toward the board. Without this the prior is not a prior at all —
+  // it is a placeholder that the first close deletes: `boardMedian` would
+  // replace it outright, every goal with no samples inherits the board, and
+  // every goal WITH samples is shrunk toward it, so one outlying close moves
+  // every forecast on the board from ×0.07 to anywhere inside the clamp.
+  // Shrinkage is what makes the handover gradual, which is the only thing
+  // that makes a prior worth having.
+  const boardRatio = clampEffortRatio(shrinkEffortRatio(boardMedian, prior, usable.length));
   const board: EffortRatio = {
-    ratio: clampEffortRatio(boardMedian),
+    ratio: boardRatio,
     samples: usable.length,
+    // Spread is measured against the board's OWN median, not the shrunk
+    // ratio: it answers "how scattered were these closes", which is a fact
+    // about the samples and has nothing to do with how much of the prior is
+    // still in the answer.
     spread: spreadOf(allRatios, boardMedian),
   };
   const grouped = new Map<string, number[]>();
@@ -484,8 +496,13 @@ export function computeEffortRatios(samples: EffortSample[], prior = 1): EffortR
     // Shrink toward the board BEFORE clamping. Clamping a wild sample first
     // and then pulling it toward the board would launder an outlier into a
     // number that looks like evidence.
+    //
+    // Toward `boardRatio` — the board as everything else on this board sees
+    // it — not toward the raw median. A goal with no samples inherits
+    // `board.ratio`, so shrinking a one-sample goal toward a different number
+    // would have two goals disagreeing about what the board's answer is.
     byGoal[goal] = {
-      ratio: clampEffortRatio(shrinkEffortRatio(own, boardMedian, ratios.length)),
+      ratio: clampEffortRatio(shrinkEffortRatio(own, boardRatio, ratios.length)),
       samples: ratios.length,
       spread: spreadOf(ratios, own),
     };

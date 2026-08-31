@@ -22,6 +22,8 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { EFFORT_ESTIMATE_PROMPT_VERSION } from '@feedback/core/effort-estimate-prompt';
 import {
+  type EffortCalibration,
+  type EffortRatio,
   computeEffortCalibration,
   neutralCalibration,
   ratioForGoal,
@@ -573,6 +575,28 @@ describe('the ticket panel shows two estimates and hides the arithmetic', () => 
   };
   const text = (el: HTMLElement): string => el.textContent ?? '';
 
+  /**
+   * A calibration built by hand, so the PANEL's wording can be asserted
+   * against a factor chosen for readability.
+   *
+   * These tests are about what the drawer SAYS. Deriving their factor from
+   * `computeEffortCalibration` coupled four assertions about sentences to
+   * the calibrator's internals, and a change there — shrinking the board
+   * median toward the board's prior — rewrote all four without a word of the
+   * panel changing. The calibrator's arithmetic has its own tests in core;
+   * `looks the correction up by BAND` below still runs the real one, because
+   * WHICH bucket the panel reads is the thing that test is about.
+   */
+  const factor = (ratio: number, samples: number, spread = 1): EffortRatio => ({
+    ratio,
+    samples,
+    spread,
+  });
+  const shipCal = (wall: EffortRatio, hands: EffortRatio = wall): EffortCalibration => ({
+    wallClock: { board: wall, byGoal: { 'g-ship': wall } },
+    handsOn: { board: hands, byGoal: { 'g-ship': hands } },
+  });
+
   it('draws no estimate fields at all for a ticket nobody scored', () => {
     // Absent is not zero: an unscored ticket gets no fields rather than
     // fields reading "0m". Positive control below, on a scored row.
@@ -581,7 +605,7 @@ describe('the ticket panel shows two estimates and hides the arithmetic', () => 
   });
 
   it('puts the two numbers in two ordinary fields, not one sentence', () => {
-    const f = effortFields(task(), computeEffortCalibration(closedSet()));
+    const f = effortFields(task(), shipCal(factor(2, 6)));
     if (!f) throw new Error('expected fields');
     // 600s x 2.00 = 20m of attention; 3600s x 2.00 = 2h of calendar.
     expect(text(f.handsOn)).toBe('20m');
@@ -593,7 +617,7 @@ describe('the ticket panel shows two estimates and hides the arithmetic', () => 
   });
 
   it('keeps the arithmetic behind a tap, and opens it on either field', () => {
-    const f = effortFields(task(), computeEffortCalibration(closedSet()));
+    const f = effortFields(task(), shipCal(factor(2, 6)));
     if (!f) throw new Error('expected fields');
     expect(f.detail.hidden).toBe(true);
     expect(text(f.detail)).toContain('×2.00');
@@ -635,7 +659,7 @@ describe('the ticket panel shows two estimates and hides the arithmetic', () => 
     // A reopened ticket keeps the `done` transition from its first life, so
     // the measurement helpers keep answering — and the drawer would report
     // how long it took as a finished fact about work that is running again.
-    const cal = computeEffortCalibration(closedSet());
+    const cal = shipCal(factor(2, 6));
     const wall = ratioForGoal(cal.wallClock, 'g-ship');
     const hands = ratioForGoal(cal.handsOn, 'g-ship');
     const wasClosed = closedSet()[0] as HubTask;
@@ -674,12 +698,7 @@ describe('the ticket panel shows two estimates and hides the arithmetic', () => 
     // trail and no reading time teaches the calendar and nothing about your
     // attention. One line printed over two DIFFERENT factors would be a claim
     // about a number that was never scaled that way.
-    const rows = closedSet().map((t, i) =>
-      i === 0
-        ? { ...t, readingTime: { totalSeconds: 300, sessionCount: 1, lastSessionAt: NOW } }
-        : { ...t, readingTime: undefined },
-    ) as HubTask[];
-    const differ = effortFields(task(), computeEffortCalibration(rows));
+    const differ = effortFields(task(), shipCal(factor(2, 6), factor(0.5, 1)));
     if (!differ) throw new Error('expected fields');
     expect(differ.detail.textContent).toContain('Hands-on scaled');
     expect(differ.detail.textContent).toContain('Calendar time scaled');
@@ -687,16 +706,13 @@ describe('the ticket panel shows two estimates and hides the arithmetic', () => 
     // When the FACTOR agrees, it is one correction to a reader and is said
     // once — even where the two axes learned it from different numbers of
     // closes. Keying that on the counts too printed the same number twice.
-    const uneven = closedSet().map((t, i) =>
-      i < 2 ? t : ({ ...t, readingTime: undefined } as HubTask),
-    );
-    const once = effortFields(task(), computeEffortCalibration(uneven));
+    const once = effortFields(task(), shipCal(factor(2, 6), factor(2, 2)));
     if (!once) throw new Error('expected fields');
     expect(once.detail.textContent).toContain('Scaled ×2.00 from 2–6 closed tickets');
     expect(once.detail.textContent).not.toContain('Calendar time scaled');
 
     // Positive control: agreeing on both still reads as one plain count.
-    const agreed = effortFields(task(), computeEffortCalibration(closedSet()));
+    const agreed = effortFields(task(), shipCal(factor(2, 6)));
     if (!agreed) throw new Error('expected fields');
     expect(agreed.detail.textContent).toContain('Scaled ×2.00 from 6 closed tickets');
   });
