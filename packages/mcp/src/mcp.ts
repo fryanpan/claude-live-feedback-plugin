@@ -108,7 +108,7 @@ function suggestionAuthor(): { id: string; name: string; color: string } {
  * bundle than the deploy source would install. A second literal would be a
  * fourth version site, and this file's history is that version sites drift.
  */
-const PLUGIN_VERSION = '0.1.134';
+const PLUGIN_VERSION = '0.1.135';
 
 /**
  * One nonce per PROCESS, minted at module load and sent on every attach.
@@ -1430,6 +1430,16 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
               required: ['title'],
             },
             maxItems: 100,
+          },
+          sourceDoc: {
+            type: 'object',
+            description:
+              "The doc these rows were derived from — set it whenever you are filing tasks out of a doc, and every row gets a structured origin ref back to it (no separate link call). `mode` says what kind of doc: 'plan' (the default for a non-huddle doc) files the rows as DRAFTS — visible on the board, in no dispatch read, held in triage until a person approves the plan on the doc page, which releases them; 'discussion' (the default for a huddle/meeting doc) files them live immediately. A later edit to the doc flags still-open derived rows as possibly stale.",
+            properties: {
+              docId: { type: 'string' },
+              mode: { type: 'string', enum: ['plan', 'discussion'] },
+            },
+            required: ['docId'],
           },
         },
         required: ['workspaceId', 'tasks'],
@@ -3123,11 +3133,15 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
         return ok({ ok: true, workspaceId, docIds: res.workspace?.docIds ?? [] });
       }
       case 'create_tasks': {
-        const { workspaceId, tasks } = a as { workspaceId: string; tasks: unknown[] };
+        const { workspaceId, tasks, sourceDoc } = a as {
+          workspaceId: string;
+          tasks: unknown[];
+          sourceDoc?: { docId: string; mode?: 'plan' | 'discussion' };
+        };
         const res = (await http(
           'POST',
           `/api/workspaces/${encodeURIComponent(workspaceId)}/tasks/batch`,
-          { tasks, author: AUTHOR },
+          { tasks, author: AUTHOR, ...(sourceDoc !== undefined ? { sourceDoc } : {}) },
         )) as {
           tasks: TaskPayload[];
           failures: Array<{ index: number; title?: string; error: string; message?: string }>;
@@ -3142,6 +3156,7 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
           }>;
           visibility?: Array<{ taskId: string; note: string }>;
           placement?: { unplaced: string[]; goals: unknown[] };
+          sourceDoc?: { docId: string; mode: string; held: boolean };
         };
         const gapsFor = (taskId: string) =>
           res.shapeGaps?.find((g) => g.taskId === taskId)?.gaps ?? undefined;
@@ -3190,6 +3205,9 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
           // call — the same answer repeated per row in a hundred-row burst
           // is noise, and the rows that need naming are the unplaced ones.
           ...(res.placement !== undefined ? { placement: res.placement } : {}),
+          // What the doc gate did with this batch: held:true means every row
+          // is a triage draft until the plan doc is approved on its page.
+          ...(res.sourceDoc !== undefined ? { sourceDoc: res.sourceDoc } : {}),
         });
       }
       case 'promote_to_task': {
