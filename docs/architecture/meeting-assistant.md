@@ -1200,6 +1200,39 @@ its gesture on one silent utterance, which unlocks the queue, and the real
 sentence rides that unlock later. Same trick an `AudioContext` needs, same
 reason.
 
+**And the Board's button cannot prime, which is a bug we shipped.** Reported
+from a real iPad, 2026-08-30: "Record a conversation" produced no spoken
+announcement at all. The press is on the BOARD, and it leaves by
+`location.assign` — a full navigation, which carries no gesture into the page
+that mounts the strip. So the auto-started meeting hands its sentence to a
+queue nothing has unlocked, and iOS does not refuse it: it accepts the
+utterance and never begins it. The old code then waited out the whole 12s end
+timeout before putting the fallback line on a strip nobody was looking at.
+
+Nothing on the board side can fix that — a navigation is precisely the thing
+that spends a gesture. So the strip ASKS for the one tap it needs, on the doc,
+where the announcement is owed:
+
+- `speak()` tells "never began" apart from every other failure. `onstart`
+  within `SPEECH_START_TIMEOUT_MS` (2.5s) or the outcome is `mute` rather than
+  `failed` — the room finds out in seconds instead of twelve, and `mute` is
+  the only failure a tap can still turn into speech.
+- On `mute`, and only where `announcer.primed()` is false, the caption line
+  becomes *Tap to announce it out loud: "…"*. The tap primes and speaks into
+  the microphone that is already open, so the announcement still lands in the
+  recording. A queue that WAS primed and stayed silent is a dead end, and gets
+  the ordinary read-it-yourself line instead — a button that cannot work is
+  worse than the line it replaces.
+- The record claims `spoken` while the offer stands (the sentence is on
+  screen, which is all `spoken` ever claimed) and upgrades to `device` if the
+  tap gets speech.
+
+**The queue is not cleared on the way in.** `cancel()` immediately before
+`speak()` is a known way to lose an utterance on WebKit, and on the auto-start
+path there was nothing queued for it to clear. It now runs only when an
+earlier announcement is still in progress, which is the case it was written
+for.
+
 **The sentence is a constant and is not localized.** `RECORDING_ANNOUNCEMENT`
 in `packages/core/src/meeting.ts`. Fixed because it is the thing anyone would
 later be asked to show, and deliberately passive about who is recording — the
@@ -1235,9 +1268,10 @@ consent record out of a typo.
 **A device that cannot speak falls back and CORRECTS the record.** No synthesis
 engine, a refused gesture, and an utterance that is accepted and then never
 fires `end` or `error` (a real browser bug, hence the 12s timeout in
-`meeting-announce.ts`) are indistinguishable from the strip and all end the
-same way: the sentence goes on screen for a person, and the `announced` frame
-that goes up says `spoken` instead. A record claiming the device announced it
+`meeting-announce.ts`) all end the same way: the sentence goes on screen for a
+person, and the `announced` frame that goes up says `spoken` instead. Only one
+of them is told apart — an utterance that never BEGINS, which is offered the
+tap above — and it makes the same `spoken` claim while the offer stands. A record claiming the device announced it
 when the device said nothing is worse than one that claims less. The index
 folds `announced` last-word-wins, the same rule the speaker names fold under,
 so a `device` that is later corrected to `spoken` reads as `spoken`.
