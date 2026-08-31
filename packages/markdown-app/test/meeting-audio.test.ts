@@ -1,11 +1,16 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
   type AudioPump,
+  MEETING_CONSTRAINTS,
   MEETING_FRAME_SAMPLES,
   RESAMPLE_START,
+  ROOM_AUDIO_DEFAULT,
+  captureConstraints,
   chunkPcm16,
   floatToPcm16,
+  formatRoomAudio,
   mediaErrorCode,
+  parseRoomAudio,
   resampleLinear,
   startMeetingCapture,
 } from '../src/meeting-audio.ts';
@@ -181,6 +186,87 @@ describe('startMeetingCapture', () => {
     // A wedged-open mic is the failure mode: the graph closing is not enough,
     // the track itself keeps the recording indicator lit.
     expect(stream.getTracks()[0]?.stop).toHaveBeenCalled();
+  });
+});
+
+describe('room audio processing', () => {
+  it('leaves a solo capture exactly as it was, whatever the room config says', () => {
+    // The processors are tuned for one near-field talker, which is precisely
+    // what a solo capture IS. Nothing about the room measurement may move it.
+    expect(captureConstraints('solo')).toEqual(MEETING_CONSTRAINTS);
+    expect(
+      captureConstraints('solo', {
+        echoCancellation: false,
+        noiseSuppression: false,
+        autoGainControl: false,
+      }),
+    ).toEqual(MEETING_CONSTRAINTS);
+  });
+
+  it('turns gain control off for a room and leaves it on for solo', () => {
+    // The measured result, pinned as a value rather than left to a comment.
+    // Noise suppression on beat noise suppression off in all four AMI
+    // pairings. Gain control is the split one — it cost on two voices (13.4%
+    // of everything said, against 16.4% for changing nothing) and helped on
+    // four — and this default is chosen for the two-person room the product
+    // is for, not by a majority of the eight numbers.
+    expect(ROOM_AUDIO_DEFAULT.autoGainControl).toBe(false);
+    expect(ROOM_AUDIO_DEFAULT.noiseSuppression).toBe(true);
+    // And solo, which no run here measured, keeps what it always had. The two
+    // used to be one constant, so moving the room's default would have
+    // silently moved a case the measurement never looked at.
+    const solo = captureConstraints('solo').audio as MediaTrackConstraints;
+    expect(solo.autoGainControl).toBe(true);
+  });
+
+  it('gives a conversation the room config, still on one channel', () => {
+    const room = { echoCancellation: true, noiseSuppression: false, autoGainControl: false };
+    expect(captureConstraints('conversation', room)).toEqual({
+      audio: { channelCount: 1, ...room },
+    });
+  });
+
+  it('falls back to the one default a conversation gets when nobody chose', () => {
+    expect(captureConstraints('conversation')).toEqual({
+      audio: { channelCount: 1, ...ROOM_AUDIO_DEFAULT },
+    });
+  });
+
+  it('reads the knob the measurement writes, in both directions', () => {
+    const off = { echoCancellation: false, noiseSuppression: false, autoGainControl: false };
+    expect(parseRoomAudio('ec0-ns0-agc0')).toEqual(off);
+    expect(formatRoomAudio(off)).toBe('ec0-ns0-agc0');
+    expect(parseRoomAudio(formatRoomAudio(ROOM_AUDIO_DEFAULT))).toEqual(ROOM_AUDIO_DEFAULT);
+    // A flag left out keeps its default, so one run can vary one processor.
+    expect(parseRoomAudio('ns0')).toEqual({ ...ROOM_AUDIO_DEFAULT, noiseSuppression: false });
+  });
+
+  it('says nothing for a knob it cannot read, rather than half a setting', () => {
+    for (const bad of ['', null, undefined, 'ec2', 'nope', 'ec1 ns1']) {
+      expect(parseRoomAudio(bad)).toBeUndefined();
+    }
+  });
+
+  it('asks the browser for the constraints the mode and the room chose', async () => {
+    const asked: MediaStreamConstraints[] = [];
+    const room = { echoCancellation: false, noiseSuppression: false, autoGainControl: true };
+    const started = await startMeetingCapture({
+      onFrame: () => {},
+      mode: 'conversation',
+      room,
+      deps: {
+        readOrigin: () => SECURE,
+        getMedia: (c) => {
+          asked.push(c);
+          return Promise.resolve(fakeStream());
+        },
+        createPump: () => Promise.resolve({ sampleRate: 48_000, onBlock: null, stop: vi.fn() }),
+      },
+    });
+    expect(started.ok).toBe(true);
+    // The config is worth nothing if it stops at the edge of this module: the
+    // assertion is on what getUserMedia was HANDED.
+    expect(asked).toEqual([{ audio: { channelCount: 1, ...room } }]);
   });
 });
 

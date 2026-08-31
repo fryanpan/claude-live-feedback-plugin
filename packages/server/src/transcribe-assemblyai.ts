@@ -31,6 +31,9 @@
  * and the streaming API reference, read 2026-08-29): `speaker_labels=true`
  * on the same URL, supported on every streaming model, +$0.12/hr on top of
  * the session rate — SENT ONLY WHEN THE CAPTURE SAID IT WAS A CONVERSATION,
+ * with `max_speakers` (1–10) beside it as a HARD CAP on how many labels the
+ * session may ever hand out — absent, the count is unbounded and a room on
+ * one microphone gets a new letter for a change of posture.
  * because a session's config is its URL and cannot be changed once open. Each `Turn` then carries `speaker_label` — `"A"`, `"B"`,
  * or a placeholder (`"PENDING"` / `"UNKNOWN"`) for a turn under about a
  * second of audio — and a `SpeakerRevision` arrives before `Termination`
@@ -42,6 +45,7 @@
  * The socket is injected because a test of this mapping must not open one.
  */
 
+import { MAX_ROOM_SPEAKERS, MIN_ROOM_SPEAKERS } from '@feedback/core';
 import { readKeychainPassword } from './share/keychain.ts';
 import type {
   TranscriptionEngine,
@@ -207,7 +211,11 @@ export function resolveAssemblyAiKey(
  * There is no way to add it to a session already open — the URL IS the
  * configuration — which is why the mode is chosen before the mic starts.
  */
-export function streamingUrl(sampleRate: number, detectSpeakers: boolean): string {
+export function streamingUrl(
+  sampleRate: number,
+  detectSpeakers: boolean,
+  maxSpeakers?: number,
+): string {
   const params = new URLSearchParams({
     sample_rate: String(sampleRate),
     encoding: ENCODING,
@@ -219,7 +227,22 @@ export function streamingUrl(sampleRate: number, detectSpeakers: boolean): strin
   // Who said it. Priced per session hour on top of the base rate (see the
   // header); without it every turn reads as one voice, which is the right
   // answer when there IS one voice.
-  if (detectSpeakers) params.set('speaker_labels', 'true');
+  if (detectSpeakers) {
+    params.set('speaker_labels', 'true');
+    // The cap only means anything beside the labels, so it is set inside this
+    // branch: `max_speakers` on a session with no diarization is a parameter
+    // the engine has nothing to apply and a reader has to work out is inert.
+    // Clamped rather than trusted — the number reaches here from an address
+    // bar, and the engine rejects the session outright for a value outside
+    // 1-10, which would read as "transcription is broken".
+    if (maxSpeakers !== undefined && Number.isFinite(maxSpeakers)) {
+      const capped = Math.min(
+        MAX_ROOM_SPEAKERS,
+        Math.max(MIN_ROOM_SPEAKERS, Math.round(maxSpeakers)),
+      );
+      params.set('max_speakers', String(capped));
+    }
+  }
   return `${STREAM_URL}?${params.toString()}`;
 }
 
@@ -391,7 +414,11 @@ export function createAssemblyAiEngine(opts: AssemblyAiOptions = {}): Transcript
               sessionOpts.onTurn({ turn: idFor(leg, order), text, final: true, ...speaker });
             };
             leg.socket = makeSocket({
-              url: streamingUrl(sessionOpts.sampleRate, sessionOpts.detectSpeakers),
+              url: streamingUrl(
+                sessionOpts.sampleRate,
+                sessionOpts.detectSpeakers,
+                sessionOpts.maxSpeakers,
+              ),
               // No `Bearer` prefix — the key is the whole header value.
               headers: { Authorization: key },
               onOpen: () => {},
