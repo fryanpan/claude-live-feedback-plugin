@@ -378,6 +378,16 @@ describe('goalEffortLabel keeps three states apart', () => {
     expect(l.title).toContain("the last 3 days' pace");
   });
 
+  it('counts hours through the second day, where whole days still mislead', () => {
+    // Rounding to whole days misstates the denominator by 0.5/n. At a
+    // day and a half that is a third of it — a window of 36 hours announced
+    // as "the last 1 day's pace", which is the same defect as calling four
+    // hours a day, one unit up.
+    const l = labelFor([closed(36 * HOUR), closed(30 * HOUR), closed(2 * HOUR), task()]);
+    expect(l.title).toContain("the last 36 hours' pace");
+    expect(l.title).not.toContain("day's pace");
+  });
+
   it('prints one date when the range lands inside a single day', () => {
     // Short projections made a same-day range the common case rather than a
     // curiosity: a goal finishing this afternoon has its central date and

@@ -751,14 +751,22 @@ export interface GoalEffortLabel {
   showBar: boolean;
 }
 
+/** Below this the window is named in hours. Two days, not one: rounding to
+ *  whole days misstates the denominator by `0.5 / n`, which is a third of it
+ *  at 1.5 days and a fifth at 2.5 — so the hour wording has to reach past the
+ *  first day to keep the error bounded where days are still few. Above this
+ *  the error is under a quarter and shrinking, and "days" is how a reader
+ *  says a span that long. */
+const PACE_WINDOW_HOURS_BELOW_DAYS = 2;
+
 /**
- * The pace window as a reader says it: "4 hours", "3 days".
+ * The pace window as a reader says it: "4 hours", "36 hours", "3 days".
  *
  * Two units, because the window spans two orders of magnitude — it floors at
- * one hour and caps at fourteen days — and the sentence that names it is the
- * reader's only check that the date came from the stretch they think it did.
- * Rounding a four-hour window up to "1 day" is not a rounding error in that
- * sentence, it is a different claim about how the number was made.
+ * one hour and caps at fourteen days — and this sentence is the reader's only
+ * check that the date came from the stretch they think it did. Naming a
+ * four-hour window "1 day" is not a rounding error there, it is a different
+ * claim about how the number was made, and the same is true of a 35-hour one.
  *
  * Never below one of whatever unit it lands in: the window itself is clamped
  * to at least an hour, so "0 hours" would describe a span the arithmetic
@@ -766,7 +774,7 @@ export interface GoalEffortLabel {
  */
 function formatPaceWindow(days: number): string {
   if (!Number.isFinite(days) || days <= 0) return '1 hour';
-  if (days < 1) {
+  if (days < PACE_WINDOW_HOURS_BELOW_DAYS) {
     const hours = Math.max(1, Math.round(days * 24));
     return `${hours} hour${hours === 1 ? '' : 's'}`;
   }

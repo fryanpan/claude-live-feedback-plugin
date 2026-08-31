@@ -85,9 +85,13 @@ is instead of naming a day.
 
 The header sentence names the window it actually used — "on the last 4 hours'
 pace", "on the last 3 days' pace" — so the number on screen and the number in
-the arithmetic are the same one. **It counts hours under a day.** Rounding a
-four-hour window up to "1 day" there is not a rounding error, it is a
-different claim about how the date was made.
+the arithmetic are the same one. **It counts hours below two days.** Rounding
+to whole days misstates the denominator by `0.5 / n`: a third of it at a day
+and a half, a fifth at two and a half, and shrinking from there. Naming a
+four-hour window "1 day" is not a rounding error in that sentence but a
+different claim about how the date was made, and a 35-hour window called "1
+day" is the same defect one unit up — so the hour wording reaches past the
+first day, and days take over where the error is under a quarter and falling.
 
 ## A close with no work behind it is not throughput
 
