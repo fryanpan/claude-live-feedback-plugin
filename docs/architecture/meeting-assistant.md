@@ -178,6 +178,16 @@ per meeting — and whose `{meetingId, speakers: {A: "Jordan"}}` lines fold
 into the record's name map, last word wins. Nothing deletes; ids sanitized
 `[^A-Za-z0-9._-] → _`.
 
+**What the vendor keeps: nothing.** Streaming is zero-data-retention for
+audio and transcripts while the account is opted out of model training (it
+is) — only logging/billing metadata survives, and ZDR is an ACCOUNT setting,
+not a session parameter, so no code here can assert it. The 30-day retention
+that applies to AssemblyAI's ASYNC transcripts never engages: this repo makes
+no `POST /v2/transcript` call, and on 2026-08-31 the account listed zero
+stored transcripts. `bun run scripts/assemblyai-retention-sweep.ts` re-checks
+that and deletes anything found (`--delete`); the mechanics it has to get
+right are in `packages/server/src/assemblyai-retention.ts`.
+
 ## Notes composition
 
 A tick triggers the composer, which sees the transcript so far plus doc title
