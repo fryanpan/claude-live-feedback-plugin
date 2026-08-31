@@ -4060,7 +4060,7 @@ export class TaskStore {
     taskId: string,
     input: { kind: TaskNote['kind']; text: string; agent: string; ts: number; sessionId?: string },
   ): { ok: true; task: Task; note: TaskNote } | { ok: false; error: 'not-found' } {
-    // Tasks only: `resolveCurrentTask` never hands this a goal row, and a
+    // Tasks only: `resolveNoteTarget` never hands this a goal row, and a
     // goal's trail is its children's, not a session's one-liners.
     const task = this.getTask(taskId);
     if (!task) return { ok: false, error: 'not-found' };
