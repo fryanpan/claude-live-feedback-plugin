@@ -146,6 +146,26 @@ describe('widget', () => {
     expect((root.querySelector('.composer .submit') as HTMLButtonElement).disabled).toBe(false);
   });
 
+  it('an unreachable server does not strand the button at Posting…', async () => {
+    const mod = await importWidget();
+    (globalThis as unknown as { fetch: unknown }).fetch = async () => {
+      throw new Error('net down');
+    };
+    const el = mod.FeedbackWidget.init({ docId: 'w-test-net', user: 'bryan' });
+    const root = el.shadowRoot!;
+    document.elementFromPoint = () => document.getElementById('hello') as HTMLElement;
+    (root.querySelector('.fab') as HTMLButtonElement).click();
+    window.dispatchEvent(new PointerEvent('pointerup', { clientX: 10, clientY: 10 }));
+    const composer = root.querySelector('.composer') as HTMLElement;
+    (composer.querySelector('textarea') as HTMLTextAreaElement).value = 'hello?';
+    (composer.querySelector('.submit') as HTMLButtonElement).click();
+    await new Promise((r) => setTimeout(r, 20));
+    const submit = root.querySelector('.composer .submit') as HTMLButtonElement;
+    expect(submit.disabled).toBe(false);
+    expect(submit.textContent).toBe('Post');
+    expect(root.querySelector('.composer-err')).toBeTruthy();
+  });
+
   it('a click on the widget host in feedback mode is left alone', async () => {
     const mod = await importWidget();
     const el = mod.FeedbackWidget.init({ docId: 't-chrome', user: 'bryan' });

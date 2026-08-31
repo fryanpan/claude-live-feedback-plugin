@@ -819,9 +819,14 @@ class FeedbackWidgetEl extends HTMLElement {
       // A silent await reads as a dead button — say the click landed.
       submit.disabled = true;
       submit.textContent = 'Posting…';
-      const posted = replyTo
-        ? await this.postReply(replyTo, text)
-        : await this.postNewThread(anchor, text);
+      // A rejected fetch (server unreachable) is a failed post like any
+      // other — without the catch it would strand the button at "Posting…".
+      let posted = false;
+      try {
+        posted = replyTo
+          ? await this.postReply(replyTo, text)
+          : await this.postNewThread(anchor, text);
+      } catch {}
       if (!posted) {
         // Kept on failure, with the text still in it. `showSignInRequired`
         // has already put the way forward in the panel when that's the cause.
