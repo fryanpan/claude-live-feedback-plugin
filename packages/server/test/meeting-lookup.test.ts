@@ -29,8 +29,8 @@ const at = (y: number, m: number, d: number, h = 10): number =>
 
 const docs: LookupDoc[] = [
   { docId: 'd-rollout', title: 'Rollout plan for the offline queue', meetingAt: at(2026, 8, 19) },
-  { docId: 'd-huddle-tue', title: 'Huddle 2026-08-25 09:30', meetingAt: at(2026, 8, 25, 9) },
-  { docId: 'd-huddle-mon', title: 'Huddle 2026-08-24 14:05', meetingAt: at(2026, 8, 24, 14) },
+  { docId: 'd-hud-tue', title: 'Huddle 2026-08-25 09:30', meetingAt: at(2026, 8, 25, 9) },
+  { docId: 'd-hud-mon', title: 'Huddle 2026-08-24 14:05', meetingAt: at(2026, 8, 24, 14) },
   { docId: 'd-charter', title: 'Team charter' },
 ];
 const tasks = [
@@ -137,12 +137,12 @@ describe('resolveLookup', () => {
 
   it('takes the newest meeting inside the window', () => {
     const hit = resolveLookup('what did we decide this week', pool, NOW);
-    expect(hit?.kind === 'doc' && hit.docId).toBe('d-huddle-tue');
+    expect(hit?.kind === 'doc' && hit.docId).toBe('d-hud-tue');
   });
 
   it('reaches huddles, which are docs like any other', () => {
     const hit = resolveLookup('the huddle from Monday', pool, NOW);
-    expect(hit?.kind === 'doc' && hit.docId).toBe('d-huddle-mon');
+    expect(hit?.kind === 'doc' && hit.docId).toBe('d-hud-mon');
   });
 
   it('resolves nothing when the window holds no meeting', () => {
