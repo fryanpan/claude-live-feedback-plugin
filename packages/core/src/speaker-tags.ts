@@ -112,6 +112,19 @@ export interface SpeakerTagRef {
   /** Turn ids this mention could have been composed from, ascending. Empty
    *  when nothing stamped one, which is a mention no revision can place. */
   turns: readonly number[];
+  /**
+   * The href carried a `t` parameter at all — true even when it was
+   * unreadable and `turns` came back empty.
+   *
+   * The two empties are not the same thing and only this tells them apart.
+   * A tag with NO parameter is one the composer has just written, and this
+   * tick's turns are the truthful thing to stamp on it. A tag whose
+   * parameter would not parse is an OLD mention whose handle was corrupted;
+   * stamping it with turns from a tick it has nothing to do with would hand
+   * a later revision the wrong mention to move. It keeps its empty list and
+   * stays out of every correction.
+   */
+  claimsTurns: boolean;
   /** A revision moved some of `turns` and not others, so which voice this
    *  mention belongs to is no longer known. */
   unsure: boolean;
@@ -154,6 +167,17 @@ export const SPEAKER_TAG_SIGIL = '@';
 export interface SpeakerTagRefInit {
   turns?: readonly number[];
   unsure?: boolean;
+  /**
+   * Write the handle as EMPTY rather than absent: `speaker:B?t=`.
+   *
+   * The one state the two spellings have to keep apart. A tag with no `t`
+   * at all is one the composer has just written, and the next tick stamps
+   * it. A tag whose `t` says nothing is one whose provenance was lost — and
+   * it has to keep saying so, or the next tick stamps IT too, with turns it
+   * was never composed from. Set when re-rendering a tag that claimed
+   * provenance and had none readable; nothing else needs it.
+   */
+  claimsTurns?: boolean;
 }
 
 /** `"B"` → `"speaker:B"`, and `"B"` plus turns → `"speaker:B?t=10,12"`. */
@@ -161,6 +185,7 @@ export function speakerTagHref(label: string, ref?: SpeakerTagRefInit): string {
   const turns = normalizeTurns(ref?.turns);
   const params: string[] = [];
   if (turns.length > 0) params.push(`${SPEAKER_TAG_TURNS_PARAM}=${turns.join(',')}`);
+  else if (ref?.claimsTurns === true) params.push(`${SPEAKER_TAG_TURNS_PARAM}=`);
   // Only meaningful beside a turn list — it says those turns disagree — so a
   // flag with nothing to be unsure ABOUT is dropped rather than written.
   if (ref?.unsure === true && turns.length > 0) params.push(`${SPEAKER_TAG_UNSURE_PARAM}=1`);
@@ -184,17 +209,20 @@ export function parseSpeakerTagHref(href: string): SpeakerTagRef | null {
   const label = (q < 0 ? rest : rest.slice(0, q)).trim();
   if (label.length === 0) return null;
   let turns: readonly number[] = [];
+  let claimsTurns = false;
   let unsure = false;
   if (q >= 0) {
     for (const part of rest.slice(q + 1).split('&')) {
       const eq = part.indexOf('=');
       const key = eq < 0 ? part : part.slice(0, eq);
       const value = eq < 0 ? '' : part.slice(eq + 1);
-      if (key === SPEAKER_TAG_TURNS_PARAM) turns = parseTurnList(value);
-      else if (key === SPEAKER_TAG_UNSURE_PARAM) unsure = value === '1';
+      if (key === SPEAKER_TAG_TURNS_PARAM) {
+        claimsTurns = true;
+        turns = parseTurnList(value);
+      } else if (key === SPEAKER_TAG_UNSURE_PARAM) unsure = value === '1';
     }
   }
-  return { label, turns, unsure: unsure && turns.length > 0 };
+  return { label, turns, claimsTurns, unsure: unsure && turns.length > 0 };
 }
 
 /**
@@ -251,6 +279,24 @@ function unescapeTagText(text: string): string {
   return text.replace(/\\(.)/g, '$1');
 }
 
+/**
+ * The inverse: visible text made safe to sit inside a link's brackets.
+ *
+ * For callers holding text they did not compose — the document rewriter
+ * rebuilds a one-tag markdown string out of what is actually in the doc,
+ * and a person can type a bracket into a chip's words. Unescaped, that text
+ * closes the link early, {@link findSpeakerTags} sees no tag at all, and the
+ * mention silently sits out the correction. Escaped, it round-trips: the
+ * finder unescapes it back on the way out.
+ *
+ * Not what {@link speakerTagText} does to a NAME — a name is stripped,
+ * because names travel through the document serializer, which escapes
+ * nothing. This is for text going straight into the finder and back.
+ */
+export function escapeTagText(text: string): string {
+  return text.replace(/[[\]\\]/g, '\\$&');
+}
+
 /** One tag found in a markdown string. */
 export interface SpeakerTagMatch {
   /** Index of the opening `[`. */
@@ -262,6 +308,9 @@ export interface SpeakerTagMatch {
   /** The turns this mention was composed from, or empty when the href
    *  stamped none. See {@link SPEAKER_TAG_TURNS_PARAM}. */
   turns: readonly number[];
+  /** The href claimed provenance, readable or not. See
+   *  {@link SpeakerTagRef.claimsTurns} for why the distinction matters. */
+  claimsTurns: boolean;
   /** A revision moved some of `turns` and not others. */
   unsure: boolean;
   /** The tag's visible text, sigil included and UNESCAPED — what a reader
@@ -294,6 +343,7 @@ export function findSpeakerTags(markdown: string): SpeakerTagMatch[] {
       end: start + m[0].length,
       label: ref.label,
       turns: ref.turns,
+      claimsTurns: ref.claimsTurns,
       unsure: ref.unsure,
       text: unescapeTagText(m[1] ?? ''),
       raw: m[0],
@@ -398,12 +448,26 @@ export function normalizeSpeakerTags(
         return unwrappedText(tag);
       }
       // Provenance the tag already carries is its own and is kept; a tag the
-      // composer has just written carries none, and gets this tick's.
-      const turns = tag.turns.length > 0 ? tag.turns : (opts.turnsByLabel?.[tag.label] ?? []);
-      const want = renderSpeakerTag(tag.label, opts.names, { turns, unsure: tag.unsure });
+      // composer has just written carries none, and gets this tick's. Asked
+      // of `claimsTurns` and not of the list, so a mention whose parameter
+      // was corrupted keeps its empty handle instead of being handed one
+      // from a tick it never came from.
+      const turns = tag.claimsTurns ? tag.turns : (opts.turnsByLabel?.[tag.label] ?? []);
+      const want = renderSpeakerTag(tag.label, opts.names, {
+        turns,
+        // Canonicalizing a corrupted handle drops the unreadable value, so
+        // the empty claim is written back explicitly — otherwise this pass
+        // turns the mention into a bare tag and the NEXT one stamps it.
+        claimsTurns: tag.claimsTurns,
+        unsure: tag.unsure,
+      });
       if (want === tag.raw) return null;
-      if (speakerTagText(tag.label, opts.names) === tag.text) stamped++;
-      else renamed++;
+      // Three reasons a tag gets rewritten, and only two of them are worth
+      // a number. The third is canonicalizing a handle that would not parse
+      // into the empty one — nothing was renamed and no provenance was
+      // gained, so counting it as either would overstate what happened.
+      if (speakerTagText(tag.label, opts.names) !== tag.text) renamed++;
+      else if (!tag.claimsTurns && turns.length > 0) stamped++;
       return want;
     }).markdown;
   });

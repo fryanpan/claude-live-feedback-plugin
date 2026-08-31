@@ -15,6 +15,7 @@ import {
   applyNotesRelabel,
   applyNotesUpdate,
   createNotesLedger,
+  reattributeNotesSection,
   relabelNotesSection,
   replaceNotesSection,
   retagSpeakerInNotes,
@@ -806,6 +807,46 @@ describe('applyNotesReattribution — the engine changes its mind after the word
     throw new Error(`no text node containing ${contains}`);
   }
 
+  /** A person typing INTO a chip's words — inside the link run, so the mark
+   *  carries over exactly as it does in the editor. */
+  function typeInside(ydoc: Y.Doc, contains: string, offset: number, extra: string): void {
+    const texts: Y.XmlText[] = [];
+    const walk = (el: Y.XmlElement | Y.XmlFragment): void => {
+      for (const child of el.toArray()) {
+        if (child instanceof Y.XmlText) texts.push(child);
+        else if (child instanceof Y.XmlElement) walk(child);
+      }
+    };
+    walk(prose.getProseFragment(ydoc));
+    for (const node of texts) {
+      const plain = (node.toDelta() as Array<{ insert: unknown }>)
+        .map((op) => (typeof op.insert === 'string' ? op.insert : ''))
+        .join('');
+      const at = plain.indexOf(contains);
+      if (at >= 0) {
+        node.insert(at + offset, extra);
+        return;
+      }
+    }
+    throw new Error(`no text node containing ${contains}`);
+  }
+
+  /** Every element in the doc, for asserting the rewrite itself rather than
+   *  the ledger scope that normally narrows it. */
+  function everyElementIn(ydoc: Y.Doc): Set<Y.XmlElement> {
+    const out = new Set<Y.XmlElement>();
+    const walk = (el: Y.XmlElement | Y.XmlFragment): void => {
+      for (const child of el.toArray()) {
+        if (child instanceof Y.XmlElement) {
+          out.add(child);
+          walk(child);
+        }
+      }
+    };
+    walk(prose.getProseFragment(ydoc));
+    return out;
+  }
+
   it('moves a mention whose every turn moved the same way', () => {
     const { ydoc, ledger, rooms } = composed('- [@Speaker B](speaker:B?t=10,12) wants the gate.\n');
     expect(
@@ -830,6 +871,28 @@ describe('applyNotesReattribution — the engine changes its mind after the word
     const md = markdownOf(ydoc);
     expect(md).toContain('- Speaker B wants the gate.');
     expect(md).not.toContain('speaker:');
+  });
+
+  it('moves a mention whose visible text carries a bracket', () => {
+    // Every writer of chip text strips brackets today, so the pipeline does
+    // not produce this — which is exactly why the unit is asserted here and
+    // not through applyNotesReattribution: the rewrite rebuilds a one-tag
+    // markdown string out of the text it finds in the DOC, and text it did
+    // not compose must not be able to close the link early and make the
+    // mention invisible to the correction.
+    const { ydoc } = composed('- [@Sam](speaker:B?t=10) wants the gate.\n');
+    typeInside(ydoc, '@Sam', 3, ']');
+    expect(plainTextOf(ydoc)).toContain('@Sa]m');
+    expect(
+      reattributeNotesSection(
+        ydoc,
+        { revisions: new Map([[10, 'C']]), names: { C: 'Rowan' } },
+        everyElementIn(ydoc),
+      ).replaced,
+    ).toBe(1);
+    // A move re-renders the tag from the new voice's name, as it does for
+    // any other mention — the bracket's only job here was to be findable.
+    expect(markdownOf(ydoc)).toContain('[@Rowan](speaker:C?t=10)');
   });
 
   it('leaves the tag a tag, so a later rename still finds it', () => {

@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   MAX_SPEAKER_TAG_TURNS,
   type SpeakerRevisions,
+  escapeTagText,
   findSpeakerTags,
   normalizeSpeakerTags,
   parseSpeakerTagHref,
@@ -42,6 +43,7 @@ describe('findSpeakerTags', () => {
         end: 20,
         label: 'B',
         turns: [],
+        claimsTurns: false,
         unsure: false,
         text: '@Devi',
         raw: '[@Devi](speaker:B)',
@@ -102,6 +104,27 @@ describe('a name with markdown in it', () => {
     const out = normalizeSpeakerTags(md, { names: {}, known: new Set(['B']) });
     expect(out.markdown).toBe('Sam PM');
     expect(out.unknown).toEqual(['C']);
+  });
+});
+
+describe('escapeTagText', () => {
+  it('lets text a person typed survive a rebuild of the tag around it', () => {
+    // The document rewriter holds visible text it did not compose. Raw, a
+    // bracket closes the link early and the finder sees no tag at all.
+    const text = '@Sam [PM]';
+    expect(findSpeakerTags(`[${text}](speaker:B?t=10)`)).toHaveLength(0);
+    const tags = findSpeakerTags(`[${escapeTagText(text)}](speaker:B?t=10)`);
+    expect(tags).toHaveLength(1);
+    // ...and the finder hands the text back exactly as the reader sees it.
+    expect(tags[0]?.text).toBe(text);
+    expect(tags[0]?.turns).toEqual([10]);
+  });
+
+  it('escapes a backslash too, so it cannot eat the bracket after it', () => {
+    const text = '@Sam \\';
+    const tags = findSpeakerTags(`[${escapeTagText(text)}](speaker:B)`);
+    expect(tags).toHaveLength(1);
+    expect(tags[0]?.text).toBe(text);
   });
 });
 
@@ -200,11 +223,13 @@ describe('provenance in the href', () => {
     expect(parseSpeakerTagHref('speaker:B?t=10,12')).toEqual({
       label: 'B',
       turns: [10, 12],
+      claimsTurns: true,
       unsure: false,
     });
     expect(parseSpeakerTagHref('speaker:B?t=10,12&unsure=1')).toEqual({
       label: 'B',
       turns: [10, 12],
+      claimsTurns: true,
       unsure: true,
     });
   });
@@ -223,6 +248,10 @@ describe('provenance in the href', () => {
     const ref = parseSpeakerTagHref('speaker:B?t=10,oops');
     expect(ref?.label).toBe('B');
     expect(ref?.turns).toEqual([]);
+    // ...and it still says it CLAIMED provenance, which is what keeps the
+    // next tick from filling the hole with turns of its own.
+    expect(ref?.claimsTurns).toBe(true);
+    expect(parseSpeakerTagHref('speaker:B')?.claimsTurns).toBe(false);
   });
 
   it('refuses to be unsure about nothing', () => {
@@ -283,6 +312,56 @@ describe('normalizeSpeakerTags — stamping this tick', () => {
     });
     expect(out.markdown).toBe('- Priya volunteered.');
     expect(out.unknown).toEqual(['C']);
+  });
+
+  it('does not fill a corrupted handle with turns from this tick', () => {
+    // `t=3,oops` parses to no turns, the same empty list a bare tag has —
+    // but it is an OLD mention whose handle broke, not a new one. Stamping
+    // it here would hand the next revision a mention composed from words it
+    // never saw, and move the wrong sentence.
+    const md = '- [@Devi](speaker:B?t=3,oops) wants the gate moved.';
+    const out = normalizeSpeakerTags(md, {
+      names: { B: 'Devi' },
+      known,
+      turnsByLabel: { B: [10, 12] },
+    });
+    // The unreadable value goes, but the CLAIM stays, written as an empty
+    // handle: this mention has no provenance and is never to be given any.
+    expect(out.markdown).toBe('- [@Devi](speaker:B?t=) wants the gate moved.');
+    // Reported as neither a stamp nor a rename — it is a cleanup.
+    expect(out.stamped).toBe(0);
+    expect(out.renamed).toBe(0);
+  });
+
+  it('keeps the empty handle empty on every tick after that', () => {
+    // The composer returns the whole notes each tick, so the canonical form
+    // has to survive its own second pass — otherwise the mention is bare by
+    // one tick and stamped by the next.
+    const md = '- [@Devi](speaker:B?t=) wants the gate moved.';
+    const out = normalizeSpeakerTags(md, {
+      names: { B: 'Devi' },
+      known,
+      turnsByLabel: { B: [10, 12] },
+    });
+    expect(out.markdown).toBe(md);
+    expect(out.stamped).toBe(0);
+  });
+
+  it('leaves that mention out of the correction that follows', () => {
+    // The consequence of the rule above, end to end: turn 10 moves B to C,
+    // and the mention whose provenance was unreadable stays with B because
+    // it never got 10 stamped on it.
+    const normalized = normalizeSpeakerTags('- [@Devi](speaker:B?t=3,oops) wants the gate moved.', {
+      names: { B: 'Devi' },
+      known,
+      turnsByLabel: { B: [10] },
+    }).markdown;
+    const out = reattributeSpeakerTags(normalized, {
+      revisions: revisions({ 10: 'C' }),
+      names: { B: 'Devi', C: 'Rowan' },
+    });
+    expect(out.markdown).toBe(normalized);
+    expect(out.moved).toBe(0);
   });
 });
 

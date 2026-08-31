@@ -55,6 +55,7 @@ import {
   type DocType,
   type SpeakerTagRef,
   contentKind,
+  escapeTagText,
   findSpeakerTags,
   parseSpeakerTagHref,
   prose,
@@ -429,7 +430,11 @@ export function reattributeNotesSection(
       // Run through core on a one-tag markdown string, so the doc and the
       // session's `previous` are decided by the same code rather than by two
       // implementations of the same rule.
-      const before = `[${tag.text}](${tag.href})`;
+      // Escaped, because this text came out of the DOCUMENT rather than out
+      // of a composer: a person can type a bracket into a chip's words, and
+      // raw it would close the link early and make the mention invisible to
+      // the finder — the correction would skip it in silence.
+      const before = `[${escapeTagText(tag.text)}](${tag.href})`;
       const after = reattributeSpeakerTags(before, reattribution).markdown;
       if (after === before) return null;
       const rewritten = findSpeakerTags(after)[0];
