@@ -139,6 +139,34 @@ export interface DocMeta {
    */
   producedBy?: { agentId?: string; sessionId?: string };
   /**
+   * The doc's PLAN gate, when it has one. `'pending'` means tasks derived
+   * from this doc are drafts: they exist and are visible, but the transition
+   * gate refuses to move them out of triage until somebody approves the plan
+   * (`POST /api/docs/:id/plan`). `'approved'` releases them and lets later
+   * derived tasks skip the hold. Absent means the doc is not a gated plan at
+   * all — a discussion, a huddle, an ordinary review doc — and derived tasks
+   * move like any other row. Set by the first create-from-doc call that
+   * declares plan mode, in the CRDT meta (it describes the document, and a
+   * share visitor rendering the doc may see it).
+   */
+  planState?: 'pending' | 'approved';
+  /** Display name of whoever approved the plan, and when. Only ever written
+   *  beside `planState: 'approved'`. */
+  planApprovedBy?: string;
+  planApprovedAt?: number;
+  /**
+   * How many settled AUTHORING edit bursts this doc's content has seen — a
+   * monotonic counter, deliberately not a timestamp (see `wordsRevision` on
+   * tasks: a millisecond is coarser than the events it must separate, and a
+   * counter that only goes up cannot tie). Tasks derived from the doc stamp
+   * the value they were derived at; a later bump is what flags them
+   * "possibly stale". In the CRDT meta so it survives restarts — the
+   * in-memory `lastContentChangeAt` is deliberately not durable, and a
+   * restart must not silently un-stale every derived task. Absent reads
+   * as 0 (a doc nobody has edited since the field existed).
+   */
+  contentRevision?: number;
+  /**
    * Git diff review fields — present only on `type: 'diff'` docs (one doc per
    * changed file, grouped under `workspaceId` = the review id, with
    * `workspaceRoot` = the repo path and `relPath` = the file's path at target).

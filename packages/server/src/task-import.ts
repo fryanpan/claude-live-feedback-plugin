@@ -20,6 +20,7 @@
 import { resolveAssignee } from './task-owner.ts';
 import {
   CHORES_GOAL_ID,
+  type Ref,
   type Task,
   type TaskStatus,
   type TaskStore,
@@ -377,7 +378,16 @@ export function applyImport(
   store: TaskStore,
   workspaceId: string,
   mapping: ImportMapping,
-  opts: { actor: { id: string; name: string; kind?: string } },
+  opts: {
+    actor: { id: string; name: string; kind?: string };
+    /** The bound doc the tracker file belongs to, when there is one — every
+     *  imported row cites it as a structured origin ref, so the doc→task tie
+     *  survives outside the file's banner. */
+    origin?: Ref;
+    /** The bound doc's plan gate is pending: rows import as drafts, held in
+     *  triage until the plan is approved (see `Task.planHold`). */
+    planHold?: { docId: string };
+  },
 ): ApplyImportResult | { ok: false; error: 'workspace-not-found' | 'goal-list-rejected' } {
   const workspace = store.getWorkspace(workspaceId);
   if (!workspace) return { ok: false, error: 'workspace-not-found' };
@@ -417,6 +427,8 @@ export function applyImport(
       // tracker's owner column is often blank, and "agent" is not an owner.
       assignee: resolveAssignee(row.assignee, opts.actor) ?? opts.actor.name,
       ...(row.notes !== undefined ? { body: row.notes } : {}),
+      ...(opts.origin !== undefined ? { origin: opts.origin } : {}),
+      ...(opts.planHold !== undefined ? { planHold: opts.planHold } : {}),
       actor: opts.actor,
     });
     if (!created.ok) {

@@ -14446,7 +14446,7 @@ var STATUS_TEXT_MAX = 4000;
 function suggestionAuthor() {
   return { id: AUTHOR.id, name: AUTHOR.name, color: AUTHOR.color };
 }
-var PLUGIN_VERSION = "0.1.134";
+var PLUGIN_VERSION = "0.1.135";
 var PROCESS_ID = randomUUID();
 var server = new Server({
   name: "claude-workspaces",
@@ -15583,6 +15583,15 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
               required: ["title"]
             },
             maxItems: 100
+          },
+          sourceDoc: {
+            type: "object",
+            description: "The doc these rows were derived from — set it whenever you are filing tasks out of a doc, and every row gets a structured origin ref back to it (no separate link call). `mode` says what kind of doc: 'plan' (the default for a non-huddle doc) files the rows as DRAFTS — visible on the board, in no dispatch read, held in triage until a person approves the plan on the doc page, which releases them; 'discussion' (the default for a huddle/meeting doc) files them live immediately. A later edit to the doc flags still-open derived rows as possibly stale.",
+            properties: {
+              docId: { type: "string" },
+              mode: { type: "string", enum: ["plan", "discussion"] }
+            },
+            required: ["docId"]
           }
         },
         required: ["workspaceId", "tasks"]
@@ -16796,8 +16805,8 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
         return ok({ ok: true, workspaceId, docIds: res.workspace?.docIds ?? [] });
       }
       case "create_tasks": {
-        const { workspaceId, tasks } = a;
-        const res = await http("POST", `/api/workspaces/${encodeURIComponent(workspaceId)}/tasks/batch`, { tasks, author: AUTHOR });
+        const { workspaceId, tasks, sourceDoc } = a;
+        const res = await http("POST", `/api/workspaces/${encodeURIComponent(workspaceId)}/tasks/batch`, { tasks, author: AUTHOR, ...sourceDoc !== undefined ? { sourceDoc } : {} });
         const gapsFor = (taskId) => res.shapeGaps?.find((g) => g.taskId === taskId)?.gaps ?? undefined;
         const adviceFor = (taskId) => res.reviewAdvice?.find((r) => r.taskId === taskId)?.advice ?? undefined;
         const visibilityFor = (taskId) => res.visibility?.find((v) => v.taskId === taskId)?.note ?? undefined;
@@ -16816,7 +16825,8 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
             ...visibilityFor(t.id) !== undefined ? { visibility: visibilityFor(t.id) } : {}
           })),
           failures: res.failures,
-          ...res.placement !== undefined ? { placement: res.placement } : {}
+          ...res.placement !== undefined ? { placement: res.placement } : {},
+          ...res.sourceDoc !== undefined ? { sourceDoc: res.sourceDoc } : {}
         });
       }
       case "promote_to_task": {

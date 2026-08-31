@@ -117,6 +117,13 @@ export interface HubTask {
   archiveReason?: string;
   links: unknown[];
   origin?: unknown;
+  /** A plan-doc draft: filed from a plan nobody has approved yet, so the row
+   *  is visible here and in no dispatch read, and transitions refuse until
+   *  the plan is approved on its doc page (which clears this). */
+  planHold?: { docId: string };
+  /** The source doc changed after this row was filed — the body may be out
+   *  of date. Cleared by the next body rewrite. */
+  possiblyStale?: { docRevision: number; ts: number };
   quote?: string;
   /** Candidate answers the asker already had in mind. A shortcut, never a
    *  closed set — Bryan can always write his own answer instead. */

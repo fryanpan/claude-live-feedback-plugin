@@ -250,6 +250,10 @@
               aria-pressed="false"
             >↔</button>
           </div>
+          <!-- Work derived from this doc: live task chips + the plan gate's
+               Approve control. Empty and hidden until a markdown doc mounts
+               it (src/plan-tasks.ts); a hidden strip is a zero-height row. -->
+          <div id="plan-tasks"></div>
           <div id="editor" class="prose"></div>
           <!-- Live-meeting transcript strip. Empty and hidden until a markdown
                doc mounts it (src/meeting-strip.ts); it is #editor-pane's third
