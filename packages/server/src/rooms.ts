@@ -440,6 +440,23 @@ const CONTENT_REVISION_ORIGIN = 'content-revision';
  *  is a person or agent mid-thought, not N revisions. */
 const REVISION_SETTLE_MS = 1000;
 
+/**
+ * Meta keys ONLY the server may write, though they live in the synced CRDT
+ * map (they must: planState is what the doc page renders, and contentRevision
+ * has to survive a restart). The map is writable by any connected editor —
+ * share visitors included — so without a guard a peer could set
+ * `planState: 'approved'` and file rows past the hold, or move
+ * `contentRevision` and suppress or fabricate stale flags. `guardServerMeta`
+ * reverts any write to these keys whose transaction origin is not the
+ * server's own.
+ */
+const SERVER_META_KEYS = [
+  'planState',
+  'planApprovedBy',
+  'planApprovedAt',
+  'contentRevision',
+] as const;
+
 function isAuthoringOrigin(room: DocRoom, origin: unknown): boolean {
   if (typeof origin === 'string') return origin.startsWith('agent') && origin !== REANCHOR_ORIGIN;
   if (typeof origin !== 'object' || origin === null) return false;
@@ -5530,6 +5547,35 @@ export class Rooms {
     });
   }
 
+  /**
+   * Revert any write to a SERVER_META_KEY that did not come from the server.
+   *
+   * Different repair from `guardPrivateMeta`, because the server DOES write
+   * these keys into the CRDT: a bare delete would erase legitimate state, so
+   * the guard restores each touched key from the in-memory mirror — which is
+   * authoritative here by construction: it is populated from the loaded doc
+   * before this observer attaches (`wireEvents` runs after `loadFromDisk`),
+   * and every server write to these keys updates it in the same call.
+   */
+  private guardServerMeta(room: DocRoom): void {
+    const meta = room.ydoc.getMap('meta');
+    meta.observe((event, tr) => {
+      if (tr.origin === CONTENT_REVISION_ORIGIN || tr.origin === PRIVATE_META_GUARD_ORIGIN) return;
+      const touched = SERVER_META_KEYS.filter((key) => event.keysChanged.has(key));
+      if (touched.length === 0) return;
+      room.ydoc.transact(() => {
+        for (const key of touched) {
+          const want = room.meta[key];
+          if (want === undefined) meta.delete(key);
+          else meta.set(key, want);
+        }
+      }, PRIVATE_META_GUARD_ORIGIN);
+      console.error(
+        `[rooms] ${room.docId}: reverted peer write to server meta key(s): ${touched.join(', ')}`,
+      );
+    });
+  }
+
   private wireEvents(room: DocRoom): void {
     room.ydoc.on('update', (_update: Uint8Array, origin: unknown) => {
       // One hook, every writer. See `DocRoom.lastContentChangeAt` for why the
@@ -5542,6 +5588,7 @@ export class Rooms {
       this.saveToDisk(room);
     });
     this.guardPrivateMeta(room);
+    this.guardServerMeta(room);
     // Code and diff docs have no prose fragment — the prose-fragment
     // auto-reanchor sweep below would find nothing and orphan every thread.
     // Run the flat-text twin instead: observe the raw `content` Y.Text and

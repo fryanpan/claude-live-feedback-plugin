@@ -380,6 +380,36 @@ describe('plan-doc linkage (routes)', () => {
     });
   });
 
+  describe('the plan gate is server-authoritative', () => {
+    it("a peer's CRDT write to planState or contentRevision is reverted on the spot", () => {
+      handle.rooms.getOrCreate('guarded-plan', { type: 'markdown' });
+      const room = handle.rooms.get('guarded-plan');
+      if (!room) throw new Error('room gone');
+      const meta = room.ydoc.getMap('meta');
+      // A peer write arrives under the connection object's origin — any
+      // non-server origin takes this path.
+      const peer = { fake: 'conn' };
+      room.ydoc.transact(() => {
+        meta.set('planState', 'approved');
+        meta.set('planApprovedBy', 'Mallory');
+        meta.set('contentRevision', 999);
+      }, peer);
+      // Observers run at transaction end, so the revert has already landed.
+      expect(meta.get('planState')).toBeUndefined();
+      expect(meta.get('planApprovedBy')).toBeUndefined();
+      expect(meta.get('contentRevision')).toBeUndefined();
+      expect(room.meta.planState).toBeUndefined();
+      // Positive control: the server's own write takes, through the same map.
+      const set = handle.rooms.setPlanState('guarded-plan', 'pending');
+      expect(set.ok).toBe(true);
+      expect(meta.get('planState')).toBe('pending');
+      // And a peer cannot flip it back off pending either.
+      room.ydoc.transact(() => meta.set('planState', 'approved'), peer);
+      expect(meta.get('planState')).toBe('pending');
+      expect(room.meta.planState).toBe('pending');
+    });
+  });
+
   describe('doc payload surfacing', () => {
     it('a member sees derived rows with workspaceId + plan marks; the chip base shape is intact', async () => {
       const body = (await (await local('/api/docs/sprint-plan')).json()) as {
