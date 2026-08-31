@@ -6235,10 +6235,145 @@ body.is-reading-width #editor > .ProseMirror {
   border-radius: 999px;
   background: var(--chip-bg, rgba(127, 127, 127, 0.12));
   white-space: nowrap;
-  cursor: default;
+  /* A pointer, because the tag IS the control: tapping it opens the menu
+     that corrects the attribution. It went nowhere before that gesture
+     existed, and said so with a default cursor. */
+  cursor: pointer;
 }
 #editor > .ProseMirror a[href^="speaker:"]:hover {
   text-decoration: none;
+  background: var(--chip-bg-hover, rgba(127, 127, 127, 0.2));
+  color: var(--fg, #111827);
+}
+#editor > .ProseMirror a[href^="speaker:"][aria-expanded="true"] {
+  background: var(--accent-soft, rgba(46, 125, 215, 0.14));
+  color: var(--accent, #2e7dd7);
+}
+/* An inline chip is only as tall as the text around it — around 23px, which
+   is under a fingertip. On a touch pointer the hit box grows past the ink
+   without moving a character of layout; on a mouse the same overlay would
+   reach into the lines above and below and steal their tags' clicks. */
+@media (pointer: coarse) {
+  #editor > .ProseMirror a[href^="speaker:"] {
+    position: relative;
+  }
+  #editor > .ProseMirror a[href^="speaker:"]::after {
+    content: "";
+    position: absolute;
+    /* Measured at 430px: 18.4px of ink, 38px of hit box with this rule —
+       clear of the 36px design-mobile asks for, and well inside the ~50px
+       between prose lines, so no tag reaches into its neighbour's row.
+       Horizontal stays small: neighbouring WORDS sit closer than
+       neighbouring lines do. */
+    inset: -10px -3px;
+  }
+}
+
+/* ===== The reassign menu =====
+   Raised by tapping a tag, and the answer to "who said this?" is always one
+   of a short known list, so it is a menu rather than a field. Each row
+   carries the last thing that voice said, because "Speaker A" identifies
+   nobody and "Move the gate." identifies the person you remember.
+
+   Attached to the BODY, not the editor: an ancestor with `overflow: hidden`
+   would otherwise clip the menu of a tag near the edge of the prose. */
+.speaker-menu {
+  position: absolute;
+  z-index: 960;
+  min-width: 15rem;
+  max-width: min(22rem, calc(100vw - 1rem));
+  background: var(--surface, #fff);
+  border: 1px solid var(--border, rgba(127, 127, 127, 0.25));
+  border-radius: 12px;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.18);
+  overflow: hidden;
+}
+/* Transparent on a pointer: it exists to catch the click that dismisses the
+   menu, not to dim anything. The sheet below gives it a colour. */
+.speaker-menu-scrim {
+  position: fixed;
+  inset: 0;
+  z-index: 955;
+}
+.speaker-menu-head {
+  padding: 0.5rem 0.75rem 0.35rem;
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--fg-muted, #6b7280);
+}
+.speaker-menu-voice,
+.speaker-menu-nobody {
+  display: block;
+  width: 100%;
+  text-align: left;
+  background: none;
+  border: 0;
+  font: inherit;
+  color: var(--fg, #111827);
+  padding: 0.5rem 0.75rem;
+  cursor: pointer;
+}
+.speaker-menu-voice:hover,
+.speaker-menu-nobody:hover,
+.speaker-menu-voice:focus-visible,
+.speaker-menu-nobody:focus-visible {
+  background: var(--chip-bg, rgba(127, 127, 127, 0.12));
+}
+.speaker-menu-who {
+  display: block;
+  font-weight: 600;
+}
+/* One line, clipped. The words are here to tell two voices apart at a
+   glance; a row that grows to three lines turns a menu into a transcript. */
+.speaker-menu-said {
+  display: block;
+  font-size: 0.85em;
+  color: var(--fg-muted, #6b7280);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.speaker-menu-voice[aria-checked="true"] .speaker-menu-who::after {
+  content: " ✓";
+  color: var(--accent, #2e7dd7);
+}
+.speaker-menu-empty {
+  padding: 0.35rem 0.75rem 0.5rem;
+  font-size: 0.85em;
+  color: var(--fg-muted, #6b7280);
+}
+/* Its own thing, not another voice: it removes a claim rather than moving
+   one, so it sits below a rule instead of at the end of the list. */
+.speaker-menu-nobody {
+  border-top: 1px solid var(--border, rgba(127, 127, 127, 0.25));
+  color: var(--fg-muted, #6b7280);
+}
+/* A menu anchored to a word works next to a cursor. Under a thumb it lands
+   half off-screen, on top of the sentence being read — so at phone width it
+   becomes a sheet at the bottom of the screen, where the thumb already is,
+   riding above the keyboard by the same --kb-bottom the threads pane uses. */
+@media (max-width: 560px) {
+  .speaker-menu {
+    position: fixed;
+    top: auto !important;
+    left: 0 !important;
+    right: 0;
+    bottom: var(--kb-bottom, 0px);
+    max-width: 100%;
+    border-radius: 16px 16px 0 0;
+    max-height: 70vh;
+    overflow-y: auto;
+    padding-bottom: env(safe-area-inset-bottom, 0px);
+  }
+  .speaker-menu-scrim {
+    background: rgba(0, 0, 0, 0.35);
+  }
+  .speaker-menu-voice,
+  .speaker-menu-nobody {
+    padding: 0.75rem;
+  }
 }
 /* Mobile prose tuning. Trim horizontal padding (40px → 16px) so a
    ~390px viewport doesn't have content squeezed into the middle 300px,
