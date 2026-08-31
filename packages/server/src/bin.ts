@@ -494,6 +494,24 @@ if (meetingBot?.config.publicWsBase && !meetingBotWebhookSecret) {
       'accepted unsigned. Set it to the signing secret from the Recall dashboard.',
   );
 }
+// Recall dials in on the OPERATOR's public hostname, which the host guard
+// classifies `proxied-local` — Access token required before any route runs.
+// Two callbacks are exempted there, each only while the credential it carries
+// is configured (middleware/recall-callback-gate.ts). Printed whenever that
+// hostname is actually live, because "did the exemption take effect?" is
+// otherwise only answerable by making a bot join a real call.
+if (proxiedTrustedHosts.length && proxiedTrustedReady) {
+  console.log(
+    '[meetings] bot callbacks on the operator hostname: websocket ' +
+      (meetingBot?.config.publicWsBase
+        ? 'exempt from Access (relay configured)'
+        : 'still gated (no Recall key or no CW_PUBLIC_BASE_URL)') +
+      '; status webhook ' +
+      (meetingBotWebhookSecret
+        ? 'exempt from Access (Svix signature is the credential)'
+        : 'gated until RECALL_WEBHOOK_SECRET is set'),
+  );
+}
 
 const notesComposer = createHaikuNotesComposer();
 if (transcription && !notesComposer) {
