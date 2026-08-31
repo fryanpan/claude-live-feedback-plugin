@@ -34,16 +34,19 @@ import { type ServerHandle, createServer } from '../src/server.ts';
 import { createMockTranscriptionEngine } from '../src/transcribe.ts';
 
 /**
- * A scheduler the test advances by hand. `fire()` runs whatever is armed —
- * the ticker keeps at most one timer, and re-arming replaces it.
+ * A scheduler the test advances by hand. `fire()` runs whatever is armed;
+ * `fireAt(ms)` runs only the timer set for that delay, which is how a test
+ * says "the speaker never went quiet" while still letting the cadence clock
+ * run out. The ticker keeps at most one timer per delay, and re-arming one
+ * replaces it.
  */
 class ManualScheduler implements TickScheduler {
-  private fns = new Map<number, () => void>();
+  private fns = new Map<number, { fn: () => void; ms: number }>();
   private n = 0;
   cleared = 0;
-  set(fn: () => void, _ms: number): unknown {
+  set(fn: () => void, ms: number): unknown {
     this.n++;
-    this.fns.set(this.n, fn);
+    this.fns.set(this.n, { fn, ms });
     return this.n;
   }
   clear(handle: unknown): void {
@@ -52,18 +55,46 @@ class ManualScheduler implements TickScheduler {
   get armed(): number {
     return this.fns.size;
   }
+  /** The live handles for a given delay — identity, so a test can tell a
+   *  timer left running from one that was cleared and re-armed. */
+  handlesAt(ms: number): number[] {
+    return [...this.fns].filter(([, t]) => t.ms === ms).map(([handle]) => handle);
+  }
+  armedAt(ms: number): number {
+    return this.handlesAt(ms).length;
+  }
+  /**
+   * Runs everything armed, SHORTEST DELAY FIRST — a real clock reaches the
+   * quiet threshold before the cadence ceiling, and firing in the order the
+   * timers happened to be set would let the ceiling win a race it never wins
+   * in a meeting.
+   */
   fire(): void {
-    const pending = [...this.fns.values()];
+    const pending = [...this.fns.values()].sort((a, b) => a.ms - b.ms);
     this.fns.clear();
-    for (const fn of pending) fn();
+    for (const t of pending) t.fn();
+  }
+  /** Runs only the timers armed for `ms`. Returns how many ran. */
+  fireAt(ms: number): number {
+    const due = [...this.fns].filter(([, t]) => t.ms === ms);
+    for (const [handle] of due) this.fns.delete(handle);
+    for (const [, t] of due) t.fn();
+    return due.length;
   }
 }
 
 describe('pause ticker', () => {
-  const setup = (quietMs = 1000) => {
+  const QUIET_MS = 1000;
+  const CADENCE_MS = 5000;
+  const setup = (quietMs = QUIET_MS, cadenceMs = CADENCE_MS) => {
     const schedule = new ManualScheduler();
     const ticks: NotesTick[] = [];
-    const ticker = createPauseTicker({ quietMs, schedule, onTick: (t) => ticks.push(t) });
+    const ticker = createPauseTicker({
+      quietMs,
+      cadenceMs,
+      schedule,
+      onTick: (t) => ticks.push(t),
+    });
     return { schedule, ticks, ticker };
   };
 
@@ -91,9 +122,9 @@ describe('pause ticker', () => {
     ticker.onTurn({ turn: 0, text: 'Done.', final: true });
     const clearedBefore = schedule.cleared;
     ticker.onTurn({ turn: 1, text: 'but', final: false });
-    // The armed timer was replaced, not left running from the final.
+    // The armed quiet timer was replaced, not left running from the final.
     expect(schedule.cleared).toBe(clearedBefore + 1);
-    expect(schedule.armed).toBe(1);
+    expect(schedule.armedAt(QUIET_MS)).toBe(1);
     expect(ticks).toEqual([]);
     schedule.fire();
     expect(ticks.length).toBe(1);
@@ -178,6 +209,104 @@ describe('pause ticker', () => {
     const { ticks, ticker } = setup();
     ticker.end();
     expect(ticks).toEqual([]);
+  });
+
+  it('nobody pauses: the cadence fires while the quiet countdown is still being pushed back', () => {
+    const { schedule, ticks, ticker } = setup();
+    // A continuous stretch of speech: every settled sentence is followed by
+    // the next one's partial, so the quiet countdown is replaced before it
+    // can ever elapse. This is the meeting that produced nothing until it
+    // ended.
+    ticker.onTurn({ turn: 0, text: 'we should measure', final: false });
+    ticker.onTurn({ turn: 0, text: 'We should measure first.', final: true });
+    ticker.onTurn({ turn: 1, text: 'and then decide', final: false });
+    ticker.onTurn({ turn: 1, text: 'And then decide.', final: true });
+    ticker.onTurn({ turn: 2, text: 'the numbers say', final: false });
+    expect(ticks).toEqual([]);
+    // The quiet timer is still armed and is deliberately never fired here.
+    expect(schedule.armedAt(QUIET_MS)).toBe(1);
+    expect(schedule.fireAt(CADENCE_MS)).toBe(1);
+    expect(ticks).toEqual([
+      {
+        tick: 1,
+        reason: 'cadence',
+        turns: [
+          { turn: 0, text: 'We should measure first.' },
+          { turn: 1, text: 'And then decide.' },
+        ],
+      },
+    ]);
+  });
+
+  it('a cadence tick carries finished sentences only — the turn still being spoken waits', () => {
+    const { schedule, ticks, ticker } = setup();
+    ticker.onTurn({ turn: 0, text: 'Ship the fix.', final: true });
+    ticker.onTurn({ turn: 1, text: 'but only once we have', final: false });
+    schedule.fireAt(CADENCE_MS);
+    // Turn 1 is mid-clause and unpunctuated; it is not a sentence yet.
+    expect(ticks[0]?.turns).toEqual([{ turn: 0, text: 'Ship the fix.' }]);
+    // It lands whole in the next tick, once the engine settles it.
+    ticker.onTurn({ turn: 1, text: 'But only once we have the numbers.', final: true });
+    schedule.fireAt(CADENCE_MS);
+    expect(ticks[1]?.turns).toEqual([{ turn: 1, text: 'But only once we have the numbers.' }]);
+  });
+
+  it('the cadence clock runs from the first unwritten sentence and speech does not reset it', () => {
+    const { schedule, ticks, ticker } = setup();
+    ticker.onTurn({ turn: 0, text: 'One.', final: true });
+    const [armed] = schedule.handlesAt(CADENCE_MS);
+    expect(armed).toBeDefined();
+    // Frames keep arriving. If any of them re-armed the cadence, the handle
+    // would change and the oldest sentence's wait would restart — which is
+    // the pause timer's bug, not a fix for it.
+    ticker.onTurn({ turn: 1, text: 'two', final: false });
+    ticker.onTurn({ turn: 1, text: 'Two.', final: true });
+    ticker.onTurn({ turn: 2, text: 'three', final: false });
+    expect(schedule.handlesAt(CADENCE_MS)).toEqual([armed]);
+    expect(ticks).toEqual([]);
+  });
+
+  it('a pause tick disarms the cadence, and new words arm a fresh one', () => {
+    const { schedule, ticks, ticker } = setup();
+    ticker.onTurn({ turn: 0, text: 'Quiet after this.', final: true });
+    const [first] = schedule.handlesAt(CADENCE_MS);
+    schedule.fireAt(QUIET_MS);
+    expect(ticks.map((t) => t.reason)).toEqual(['pause']);
+    // Nothing unwritten is waiting, so no cadence tick is owed.
+    expect(schedule.armedAt(CADENCE_MS)).toBe(0);
+    expect(schedule.fireAt(CADENCE_MS)).toBe(0);
+    expect(ticks.length).toBe(1);
+    ticker.onTurn({ turn: 1, text: 'More.', final: true });
+    expect(schedule.armedAt(CADENCE_MS)).toBe(1);
+    expect(schedule.handlesAt(CADENCE_MS)).not.toEqual([first]);
+  });
+
+  it('a partial alone never owes a cadence tick', () => {
+    const { schedule, ticker } = setup();
+    ticker.onTurn({ turn: 0, text: 'still talking', final: false });
+    // Nothing has settled, so there is no finished sentence to write and no
+    // clock counting down towards an empty tick.
+    expect(schedule.armedAt(CADENCE_MS)).toBe(0);
+  });
+
+  it('end() leaves no cadence timer armed', () => {
+    const { schedule, ticker } = setup();
+    ticker.onTurn({ turn: 0, text: 'Last words.', final: true });
+    expect(schedule.armedAt(CADENCE_MS)).toBe(1);
+    ticker.end();
+    expect(schedule.armed).toBe(0);
+  });
+
+  it('cadence ticks and pause ticks share one numbering', () => {
+    const { schedule, ticks, ticker } = setup();
+    ticker.onTurn({ turn: 0, text: 'One.', final: true });
+    schedule.fireAt(CADENCE_MS);
+    ticker.onTurn({ turn: 1, text: 'Two.', final: true });
+    schedule.fireAt(QUIET_MS);
+    expect(ticks.map((t) => [t.tick, t.reason])).toEqual([
+      [1, 'cadence'],
+      [2, 'pause'],
+    ]);
   });
 });
 
