@@ -31,48 +31,73 @@ import {
 /** macOS hands `port: 0` a number from here up; a virtual port never can. */
 const EPHEMERAL_FLOOR = 49152;
 
+/**
+ * The escape hatch is a PROCESS-wide env var, so a run started with
+ * `CW_DEDICATED_TEST_LISTENERS=1` — which is how you reproduce the old
+ * transport to compare against — would otherwise turn the assertions below
+ * into assertions about the hatch. Each predicate case therefore states the
+ * env it is about rather than inheriting the ambient one.
+ */
+function withHatch<T>(value: string | undefined, body: () => T): T {
+  const before = process.env.CW_DEDICATED_TEST_LISTENERS;
+  if (value === undefined) Reflect.deleteProperty(process.env, 'CW_DEDICATED_TEST_LISTENERS');
+  else process.env.CW_DEDICATED_TEST_LISTENERS = value;
+  try {
+    return body();
+  } finally {
+    if (before === undefined) Reflect.deleteProperty(process.env, 'CW_DEDICATED_TEST_LISTENERS');
+    else process.env.CW_DEDICATED_TEST_LISTENERS = before;
+  }
+}
+
+/** True unless this run deliberately reproduced the pre-change transport. */
+const sharingLive = process.env.CW_DEDICATED_TEST_LISTENERS !== '1';
+
 describe('shouldShareListener', () => {
   it('shares only an ephemeral request, under a test runner', () => {
-    expect(shouldShareListener(0, undefined)).toBe(true);
-    expect(shouldShareListener(0, false)).toBe(true);
+    withHatch(undefined, () => {
+      expect(shouldShareListener(0, undefined)).toBe(true);
+      expect(shouldShareListener(0, false)).toBe(true);
+    });
   });
 
   it('refuses the ports prod and staging name', () => {
     // The real guard against this ever engaging outside a test: prod is 8787
     // and staging is 8788, so neither can reach the shared branch even if
     // NODE_ENV were somehow 'test'.
-    expect(shouldShareListener(8787, undefined)).toBe(false);
-    expect(shouldShareListener(8788, undefined)).toBe(false);
-    expect(shouldShareListener(undefined, undefined)).toBe(false);
+    withHatch(undefined, () => {
+      expect(shouldShareListener(8787, undefined)).toBe(false);
+      expect(shouldShareListener(8788, undefined)).toBe(false);
+      expect(shouldShareListener(undefined, undefined)).toBe(false);
+    });
   });
 
   it('honours a caller that asked for its own listener', () => {
-    expect(shouldShareListener(0, true)).toBe(false);
+    withHatch(undefined, () => {
+      expect(shouldShareListener(0, true)).toBe(false);
+    });
   });
 
   it('honours the process-wide escape hatch', () => {
-    const before = process.env.CW_DEDICATED_TEST_LISTENERS;
-    process.env.CW_DEDICATED_TEST_LISTENERS = '1';
-    try {
+    withHatch('1', () => {
       expect(shouldShareListener(0, undefined)).toBe(false);
-    } finally {
-      if (before === undefined) Reflect.deleteProperty(process.env, 'CW_DEDICATED_TEST_LISTENERS');
-      else process.env.CW_DEDICATED_TEST_LISTENERS = before;
-    }
+    });
   });
 
   it('only engages under a test runner', () => {
     const before = process.env.NODE_ENV;
     process.env.NODE_ENV = 'production';
     try {
-      expect(shouldShareListener(0, undefined)).toBe(false);
+      withHatch(undefined, () => {
+        expect(shouldShareListener(0, undefined)).toBe(false);
+      });
     } finally {
       process.env.NODE_ENV = before;
     }
   });
 });
 
-describe('two servers behind one real socket', () => {
+describe.skipIf(!sharingLive)('two servers behind one real socket', () => {
   let dirA: string;
   let dirB: string;
   let dirOwn: string;

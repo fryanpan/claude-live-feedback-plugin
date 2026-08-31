@@ -116,7 +116,13 @@ function ensureShared(): Bun.Server<CoreTaggedData> {
   if (shared) return shared;
   shared = Bun.serve<CoreTaggedData>({
     port: 0,
-    hostname: '127.0.0.1',
+    // No `hostname`. A dedicated listener does not name one either, and the
+    // shim rewrites only the PORT — so a request keeps whatever host the test
+    // wrote, usually `localhost`. Pinning the front door to 127.0.0.1 while
+    // the client still asks for `localhost` costs a refused connection to ::1
+    // before every successful one on macOS, which is churn in exactly the
+    // currency this file exists to save.
+    hostname: undefined,
     // The same number the real listener uses. `sse-keepalive.test.ts` asserts
     // the relationship between this and the SSE keepalive, and a front door
     // with its own idle timeout would quietly change what that test measures.
