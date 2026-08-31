@@ -15,6 +15,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { DispatchRegistry, type WatchFactory } from '../src/dispatch-registry.ts';
+import { fdContentionError, otherTestRunnerCount } from './fd-contention.ts';
 
 const tempDir = () => mkdtempSync(join(tmpdir(), 'dispatch-registry-'));
 
@@ -244,7 +245,19 @@ describe('dispatch registry', () => {
       mkdirSync(join(worktree, 'src'));
       const reg = new DispatchRegistry({ dataDir });
       try {
-        reg.register('t-alpha', worktree);
+        const res = reg.register('t-alpha', worktree);
+        expect(res.ok).toBe(true);
+        if (res.ok && !res.dispatch.watching) {
+          // The factory could not even arm. Out of descriptors is suite
+          // contention; anything else is a genuinely broken factory.
+          const fdErr = fdContentionError();
+          throw new Error(
+            fdErr
+              ? `real fs.watch factory failed to arm — ${fdErr.message}`
+              : 'real fs.watch factory failed to arm on a fresh worktree with fd headroom to ' +
+                  'spare — the watcher is broken; this is not suite contention',
+          );
+        }
         writeFileSync(join(worktree, 'src', 'index.ts'), 'export {};\n');
         // FSEvents is a shared system service with no latency guarantee, and
         // its delivery degrades with the number of live watchers and the
@@ -262,10 +275,34 @@ describe('dispatch registry', () => {
         while (reg.activityFor('t-alpha') === undefined && Date.now() < deadline) {
           await new Promise((r) => setTimeout(r, 25));
         }
-        expect(
-          reg.activityFor('t-alpha'),
-          `no watch event after ${Date.now() - startedAt}ms`,
-        ).toBeGreaterThan(0);
+        const activity = reg.activityFor('t-alpha');
+        if (activity === undefined) {
+          // Still red on every branch — the factory delivered nothing, and
+          // that must never pass. What differs is the diagnosis: parallel
+          // worktrees run this suite concurrently by design, and both fd
+          // exhaustion and FSEvents starvation from a rival run land here
+          // looking exactly like a broken watcher (reproduced 2026-08-31:
+          // three concurrent runs, one hit this timeout with zero events).
+          const waited = Date.now() - startedAt;
+          const fdErr = fdContentionError();
+          if (fdErr) throw new Error(`no watch event after ${waited}ms — ${fdErr.message}`);
+          const rivals = otherTestRunnerCount();
+          if (rivals > 0) {
+            throw new Error(
+              'SUITE CONTENTION, most likely not your diff: no FSEvents delivery after ' +
+                `${waited}ms while ${rivals} other test-runner process(es) share this ` +
+                'machine, and FSEvents starves under concurrent suite churn. Re-run ' +
+                '`bun test packages/server/test` alone; only a failure in a solo run ' +
+                'indicts the watcher.',
+            );
+          }
+          throw new Error(
+            `no watch event after ${waited}ms with no rival test runs and fd headroom to ` +
+              'spare — the real factory has stopped seeing files; investigate the watcher, ' +
+              'not the machine',
+          );
+        }
+        expect(activity).toBeGreaterThan(0);
       } finally {
         reg.stop();
         rmSync(dataDir, { recursive: true, force: true });
