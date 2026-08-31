@@ -22,6 +22,7 @@ import {
 import {
   type NotesComposeInput,
   type NotesComposer,
+  type NotesRelabel,
   type NotesTick,
   type NotesUpdate,
   type TickScheduler,
@@ -33,16 +34,19 @@ import { type ServerHandle, createServer } from '../src/server.ts';
 import { createMockTranscriptionEngine } from '../src/transcribe.ts';
 
 /**
- * A scheduler the test advances by hand. `fire()` runs whatever is armed —
- * the ticker keeps at most one timer, and re-arming replaces it.
+ * A scheduler the test advances by hand. `fire()` runs whatever is armed;
+ * `fireAt(ms)` runs only the timer set for that delay, which is how a test
+ * says "the speaker never went quiet" while still letting the cadence clock
+ * run out. The ticker keeps at most one timer per delay, and re-arming one
+ * replaces it.
  */
 class ManualScheduler implements TickScheduler {
-  private fns = new Map<number, () => void>();
+  private fns = new Map<number, { fn: () => void; ms: number }>();
   private n = 0;
   cleared = 0;
-  set(fn: () => void, _ms: number): unknown {
+  set(fn: () => void, ms: number): unknown {
     this.n++;
-    this.fns.set(this.n, fn);
+    this.fns.set(this.n, { fn, ms });
     return this.n;
   }
   clear(handle: unknown): void {
@@ -51,18 +55,46 @@ class ManualScheduler implements TickScheduler {
   get armed(): number {
     return this.fns.size;
   }
+  /** The live handles for a given delay — identity, so a test can tell a
+   *  timer left running from one that was cleared and re-armed. */
+  handlesAt(ms: number): number[] {
+    return [...this.fns].filter(([, t]) => t.ms === ms).map(([handle]) => handle);
+  }
+  armedAt(ms: number): number {
+    return this.handlesAt(ms).length;
+  }
+  /**
+   * Runs everything armed, SHORTEST DELAY FIRST — a real clock reaches the
+   * quiet threshold before the cadence ceiling, and firing in the order the
+   * timers happened to be set would let the ceiling win a race it never wins
+   * in a meeting.
+   */
   fire(): void {
-    const pending = [...this.fns.values()];
+    const pending = [...this.fns.values()].sort((a, b) => a.ms - b.ms);
     this.fns.clear();
-    for (const fn of pending) fn();
+    for (const t of pending) t.fn();
+  }
+  /** Runs only the timers armed for `ms`. Returns how many ran. */
+  fireAt(ms: number): number {
+    const due = [...this.fns].filter(([, t]) => t.ms === ms);
+    for (const [handle] of due) this.fns.delete(handle);
+    for (const [, t] of due) t.fn();
+    return due.length;
   }
 }
 
 describe('pause ticker', () => {
-  const setup = (quietMs = 1000) => {
+  const QUIET_MS = 1000;
+  const CADENCE_MS = 5000;
+  const setup = (quietMs = QUIET_MS, cadenceMs = CADENCE_MS) => {
     const schedule = new ManualScheduler();
     const ticks: NotesTick[] = [];
-    const ticker = createPauseTicker({ quietMs, schedule, onTick: (t) => ticks.push(t) });
+    const ticker = createPauseTicker({
+      quietMs,
+      cadenceMs,
+      schedule,
+      onTick: (t) => ticks.push(t),
+    });
     return { schedule, ticks, ticker };
   };
 
@@ -90,9 +122,9 @@ describe('pause ticker', () => {
     ticker.onTurn({ turn: 0, text: 'Done.', final: true });
     const clearedBefore = schedule.cleared;
     ticker.onTurn({ turn: 1, text: 'but', final: false });
-    // The armed timer was replaced, not left running from the final.
+    // The armed quiet timer was replaced, not left running from the final.
     expect(schedule.cleared).toBe(clearedBefore + 1);
-    expect(schedule.armed).toBe(1);
+    expect(schedule.armedAt(QUIET_MS)).toBe(1);
     expect(ticks).toEqual([]);
     schedule.fire();
     expect(ticks.length).toBe(1);
@@ -177,6 +209,104 @@ describe('pause ticker', () => {
     const { ticks, ticker } = setup();
     ticker.end();
     expect(ticks).toEqual([]);
+  });
+
+  it('nobody pauses: the cadence fires while the quiet countdown is still being pushed back', () => {
+    const { schedule, ticks, ticker } = setup();
+    // A continuous stretch of speech: every settled sentence is followed by
+    // the next one's partial, so the quiet countdown is replaced before it
+    // can ever elapse. This is the meeting that produced nothing until it
+    // ended.
+    ticker.onTurn({ turn: 0, text: 'we should measure', final: false });
+    ticker.onTurn({ turn: 0, text: 'We should measure first.', final: true });
+    ticker.onTurn({ turn: 1, text: 'and then decide', final: false });
+    ticker.onTurn({ turn: 1, text: 'And then decide.', final: true });
+    ticker.onTurn({ turn: 2, text: 'the numbers say', final: false });
+    expect(ticks).toEqual([]);
+    // The quiet timer is still armed and is deliberately never fired here.
+    expect(schedule.armedAt(QUIET_MS)).toBe(1);
+    expect(schedule.fireAt(CADENCE_MS)).toBe(1);
+    expect(ticks).toEqual([
+      {
+        tick: 1,
+        reason: 'cadence',
+        turns: [
+          { turn: 0, text: 'We should measure first.' },
+          { turn: 1, text: 'And then decide.' },
+        ],
+      },
+    ]);
+  });
+
+  it('a cadence tick carries finished sentences only — the turn still being spoken waits', () => {
+    const { schedule, ticks, ticker } = setup();
+    ticker.onTurn({ turn: 0, text: 'Ship the fix.', final: true });
+    ticker.onTurn({ turn: 1, text: 'but only once we have', final: false });
+    schedule.fireAt(CADENCE_MS);
+    // Turn 1 is mid-clause and unpunctuated; it is not a sentence yet.
+    expect(ticks[0]?.turns).toEqual([{ turn: 0, text: 'Ship the fix.' }]);
+    // It lands whole in the next tick, once the engine settles it.
+    ticker.onTurn({ turn: 1, text: 'But only once we have the numbers.', final: true });
+    schedule.fireAt(CADENCE_MS);
+    expect(ticks[1]?.turns).toEqual([{ turn: 1, text: 'But only once we have the numbers.' }]);
+  });
+
+  it('the cadence clock runs from the first unwritten sentence and speech does not reset it', () => {
+    const { schedule, ticks, ticker } = setup();
+    ticker.onTurn({ turn: 0, text: 'One.', final: true });
+    const [armed] = schedule.handlesAt(CADENCE_MS);
+    expect(armed).toBeDefined();
+    // Frames keep arriving. If any of them re-armed the cadence, the handle
+    // would change and the oldest sentence's wait would restart — which is
+    // the pause timer's bug, not a fix for it.
+    ticker.onTurn({ turn: 1, text: 'two', final: false });
+    ticker.onTurn({ turn: 1, text: 'Two.', final: true });
+    ticker.onTurn({ turn: 2, text: 'three', final: false });
+    expect(schedule.handlesAt(CADENCE_MS)).toEqual([armed]);
+    expect(ticks).toEqual([]);
+  });
+
+  it('a pause tick disarms the cadence, and new words arm a fresh one', () => {
+    const { schedule, ticks, ticker } = setup();
+    ticker.onTurn({ turn: 0, text: 'Quiet after this.', final: true });
+    const [first] = schedule.handlesAt(CADENCE_MS);
+    schedule.fireAt(QUIET_MS);
+    expect(ticks.map((t) => t.reason)).toEqual(['pause']);
+    // Nothing unwritten is waiting, so no cadence tick is owed.
+    expect(schedule.armedAt(CADENCE_MS)).toBe(0);
+    expect(schedule.fireAt(CADENCE_MS)).toBe(0);
+    expect(ticks.length).toBe(1);
+    ticker.onTurn({ turn: 1, text: 'More.', final: true });
+    expect(schedule.armedAt(CADENCE_MS)).toBe(1);
+    expect(schedule.handlesAt(CADENCE_MS)).not.toEqual([first]);
+  });
+
+  it('a partial alone never owes a cadence tick', () => {
+    const { schedule, ticker } = setup();
+    ticker.onTurn({ turn: 0, text: 'still talking', final: false });
+    // Nothing has settled, so there is no finished sentence to write and no
+    // clock counting down towards an empty tick.
+    expect(schedule.armedAt(CADENCE_MS)).toBe(0);
+  });
+
+  it('end() leaves no cadence timer armed', () => {
+    const { schedule, ticker } = setup();
+    ticker.onTurn({ turn: 0, text: 'Last words.', final: true });
+    expect(schedule.armedAt(CADENCE_MS)).toBe(1);
+    ticker.end();
+    expect(schedule.armed).toBe(0);
+  });
+
+  it('cadence ticks and pause ticks share one numbering', () => {
+    const { schedule, ticks, ticker } = setup();
+    ticker.onTurn({ turn: 0, text: 'One.', final: true });
+    schedule.fireAt(CADENCE_MS);
+    ticker.onTurn({ turn: 1, text: 'Two.', final: true });
+    schedule.fireAt(QUIET_MS);
+    expect(ticks.map((t) => [t.tick, t.reason])).toEqual([
+      [1, 'cadence'],
+      [2, 'pause'],
+    ]);
   });
 });
 
@@ -276,6 +406,229 @@ describe('notes session', () => {
       ['Jordan', 'Speaker B'],
       ['Sam'],
     ]);
+  });
+
+  it('naming a voice rewrites the notes already composed, and what the composer remembers', async () => {
+    const schedule = new ManualScheduler();
+    const inputs: NotesComposeInput[] = [];
+    const relabels: NotesRelabel[] = [];
+    const composer: NotesComposer = {
+      name: 'capture',
+      compose(input) {
+        inputs.push(input);
+        // A composer that appends, so tick 2's notes carry tick 1's text —
+        // the shape that makes a stale label visible.
+        const line = input.tick.turns.map((t) => `- ${t.speaker}: ${t.text}`).join('\n');
+        return Promise.resolve([input.previous, line].filter(Boolean).join('\n'));
+      },
+    };
+    const session = beginNotesSession(
+      {
+        composer,
+        quietMs: 1000,
+        schedule,
+        onNotes: () => {},
+        onRelabel: (r) => relabels.push(r),
+      },
+      ids,
+    );
+    session.onTurn({ turn: 0, text: 'Take it?', final: true, speaker: 'B' });
+    schedule.fire();
+    await new Promise((r) => setTimeout(r, 0));
+    // The notes now say "Speaker B" and the doc has them.
+    expect(inputs[0]?.tick.turns[0]?.speaker).toBe('Speaker B');
+
+    session.nameSpeaker('B', 'Marisol');
+    session.onTurn({ turn: 1, text: 'By Thursday.', final: true, speaker: 'B' });
+    schedule.fire();
+    await session.end();
+
+    // The sink was told exactly what to change, in the words the composer
+    // had written — not the raw engine label.
+    expect(relabels).toEqual([
+      { docId: ids.docId, meetingId: ids.meetingId, from: 'Speaker B', to: 'Marisol' },
+    ]);
+    // And the session's memory of what it wrote was rewritten too, so the
+    // next compose never sees the placeholder come back.
+    expect(inputs[1]?.previous).toBe('- Marisol: Take it?');
+    expect(inputs[1]?.previous).not.toContain('Speaker B');
+  });
+
+  it('a rename during a compose lands after it, not under it', async () => {
+    // The compose in flight read `previous` before the rename and will
+    // return notes written the old way. The rewrite has to be queued behind
+    // it — ahead of it, the compose would put the placeholder straight back.
+    const schedule = new ManualScheduler();
+    const inputs: NotesComposeInput[] = [];
+    const relabels: NotesRelabel[] = [];
+    const order: string[] = [];
+    const composer: NotesComposer = {
+      name: 'slow',
+      async compose(input) {
+        inputs.push(input);
+        await new Promise((r) => setTimeout(r, 10));
+        order.push('composed');
+        return `${input.previous ? `${input.previous}\n` : ''}- ${input.tick.turns[0]?.speaker}: said it`;
+      },
+    };
+    const session = beginNotesSession(
+      {
+        composer,
+        quietMs: 1000,
+        schedule,
+        onNotes: () => {},
+        onRelabel: (r) => {
+          order.push('relabelled');
+          relabels.push(r);
+        },
+      },
+      ids,
+    );
+    session.onTurn({ turn: 0, text: 'One.', final: true, speaker: 'A' });
+    schedule.fire();
+    // Let the chained compose actually START — a rename before that point is
+    // the documented case where the name reaches the tick itself, which is a
+    // different behaviour and would not test the queue at all.
+    await new Promise((r) => setTimeout(r, 0));
+    // Renamed while the 10ms compose is still running.
+    session.nameSpeaker('A', 'Devi');
+    await session.end();
+
+    expect(order).toEqual(['composed', 'relabelled']);
+    expect(relabels).toEqual([
+      { docId: ids.docId, meetingId: ids.meetingId, from: 'Speaker A', to: 'Devi' },
+    ]);
+    // The compose that was in flight wrote "Speaker A"; the rewrite behind
+    // it corrected the memory, so a later tick starts from the name.
+    expect(inputs[0]?.tick.turns[0]?.speaker).toBe('Speaker A');
+    session.onTurn({ turn: 1, text: 'Two.', final: true, speaker: 'A' });
+  });
+
+  it('correcting a name already given rewrites from that name, not from the label', async () => {
+    const schedule = new ManualScheduler();
+    const relabels: NotesRelabel[] = [];
+    const composer: NotesComposer = {
+      name: 'capture',
+      compose: (input) =>
+        Promise.resolve(`- ${input.tick.turns[0]?.speaker}: ${input.tick.turns[0]?.text}`),
+    };
+    const session = beginNotesSession(
+      { composer, quietMs: 1000, schedule, onNotes: () => {}, onRelabel: (r) => relabels.push(r) },
+      ids,
+    );
+    session.onTurn({ turn: 0, text: 'Hello.', final: true, speaker: 'A' });
+    session.nameSpeaker('A', 'Devi');
+    schedule.fire();
+    await new Promise((r) => setTimeout(r, 0));
+    session.nameSpeaker('A', 'Devi Raman');
+    await session.end();
+    expect(relabels.map((r) => `${r.from}->${r.to}`)).toEqual([
+      'Speaker A->Devi',
+      'Devi->Devi Raman',
+    ]);
+  });
+
+  it('refuses to rewrite when two voices share the name, rather than reattributing one', async () => {
+    // Two people called Alex. "Alex" in the notes already written does not
+    // say WHICH of them, so correcting one must not move the other's words.
+    const schedule = new ManualScheduler();
+    const relabels: NotesRelabel[] = [];
+    const errors: string[] = [];
+    const session = beginNotesSession(
+      {
+        composer: { name: 'x', compose: () => Promise.resolve('- Alex: both of them') },
+        quietMs: 1000,
+        schedule,
+        onNotes: () => {},
+        onRelabel: (r) => relabels.push(r),
+        onError: (m) => errors.push(m),
+      },
+      ids,
+    );
+    session.onTurn({ turn: 0, text: 'One.', final: true, speaker: 'A' });
+    session.onTurn({ turn: 1, text: 'Two.', final: true, speaker: 'B' });
+    session.nameSpeaker('A', 'Alex');
+    session.nameSpeaker('B', 'Alex');
+    // Correcting one of the two Alexes.
+    session.nameSpeaker('A', 'Sam');
+    await session.end();
+    // The two naming steps went through — each was unambiguous when made.
+    // The correction did not: nothing after "Speaker B -> Alex" is emitted.
+    expect(relabels.map((r) => `${r.from}->${r.to}`)).toEqual([
+      'Speaker A->Alex',
+      'Speaker B->Alex',
+    ]);
+    expect(errors.join(' ')).toContain('more than one voice');
+  });
+
+  it('an unnamed voice counts as a voice when deciding the name is ambiguous', async () => {
+    // B is unnamed, so it reads as "Speaker B". Someone types "Speaker B" as
+    // A's name, then corrects it: the notes' "Speaker B" is now two voices,
+    // and the `names` map alone would not have noticed.
+    const schedule = new ManualScheduler();
+    const relabels: NotesRelabel[] = [];
+    const errors: string[] = [];
+    const session = beginNotesSession(
+      {
+        composer: { name: 'x', compose: () => Promise.resolve('notes') },
+        quietMs: 1000,
+        schedule,
+        onNotes: () => {},
+        onRelabel: (r) => relabels.push(r),
+        onError: (m) => errors.push(m),
+      },
+      ids,
+    );
+    session.onTurn({ turn: 0, text: 'One.', final: true, speaker: 'A' });
+    session.onTurn({ turn: 1, text: 'Two.', final: true, speaker: 'B' });
+    session.nameSpeaker('A', 'Speaker B');
+    session.nameSpeaker('A', 'Sam');
+    await session.end();
+    expect(relabels.map((r) => `${r.from}->${r.to}`)).toEqual(['Speaker A->Speaker B']);
+    expect(errors.join(' ')).toContain('more than one voice');
+  });
+
+  it('an unrelated named voice does not make a rename ambiguous', async () => {
+    // The positive control for the two tests above: without it, a guard that
+    // refused every rename would pass both of them.
+    const schedule = new ManualScheduler();
+    const relabels: NotesRelabel[] = [];
+    const errors: string[] = [];
+    const session = beginNotesSession(
+      {
+        composer: { name: 'x', compose: () => Promise.resolve('notes') },
+        quietMs: 1000,
+        schedule,
+        onNotes: () => {},
+        onRelabel: (r) => relabels.push(r),
+        onError: (m) => errors.push(m),
+      },
+      ids,
+    );
+    session.onTurn({ turn: 0, text: 'One.', final: true, speaker: 'A' });
+    session.onTurn({ turn: 1, text: 'Two.', final: true, speaker: 'B' });
+    session.nameSpeaker('B', 'Rin');
+    session.nameSpeaker('A', 'Sam');
+    await session.end();
+    expect(relabels.map((r) => `${r.from}->${r.to}`)).toEqual(['Speaker B->Rin', 'Speaker A->Sam']);
+    expect(errors).toEqual([]);
+  });
+
+  it('renaming a voice to what it is already called changes nothing', async () => {
+    const relabels: NotesRelabel[] = [];
+    const session = beginNotesSession(
+      {
+        composer: { name: 'x', compose: () => Promise.resolve('notes') },
+        quietMs: 1000,
+        schedule: new ManualScheduler(),
+        onNotes: () => {},
+        onRelabel: (r) => relabels.push(r),
+      },
+      ids,
+    );
+    session.nameSpeaker('A', 'Speaker A');
+    await session.end();
+    expect(relabels).toEqual([]);
   });
 
   it('the stub composer writes the speaker before the words', async () => {
@@ -458,7 +811,11 @@ describe('notes through the audio socket', () => {
     await waitFor(() => frames.some((f) => f.type === 'stopped'), 'stopped');
     await waitFor(() => updates.length === 2, 'the end tick');
     expect(updates[1]?.tick.reason).toBe('end');
-    expect(updates[1]?.notes).toContain(updates[0]?.notes ?? '@@');
+    // The second tick builds on the first. It is asserted through the WORDS
+    // rather than through tick 1's exact string: `previous` is now the live
+    // section as the doc renders it (heading and all), not the composer's
+    // own last reply, so that the person's writing is in front of it.
+    expect(updates[1]?.notes).toContain('So the sync is the bottleneck.');
     ws.close();
   });
 
@@ -551,5 +908,101 @@ describe('task capture riding the notes session', () => {
     expect(inputs[1]?.taskLinks).toBeUndefined();
     expect(updates.map((u) => u.notes)).toEqual(['notes 1', 'notes 2']);
     expect(errors).toEqual(['capture refused']);
+  });
+});
+
+describe('the composer reads the LIVE section, not only its own last answer', () => {
+  const ids = { docId: 'doc-live', meetingId: 'm-live' };
+
+  it('previous is what the doc now says, and the person’s lines are named', async () => {
+    const schedule = new ManualScheduler();
+    const inputs: NotesComposeInput[] = [];
+    const composer: NotesComposer = {
+      name: 'capture',
+      compose(input) {
+        inputs.push(input);
+        return Promise.resolve('## Meeting notes\n\n- composed');
+      },
+    };
+    const session = beginNotesSession(
+      {
+        composer,
+        quietMs: 1000,
+        schedule,
+        readSection: () => ({
+          markdown: '## Meeting notes\n\n- composed\n- typed by hand',
+          items: ['composed', 'typed by hand'],
+          human: ['typed by hand'],
+        }),
+        onNotes: () => {},
+      },
+      ids,
+    );
+    session.onTurn({ turn: 0, text: 'First.', final: true });
+    schedule.fire();
+    session.onTurn({ turn: 1, text: 'Second.', final: true });
+    await session.end();
+    // Tick one starts clean — a doc's section may still hold the LAST
+    // meeting's notes, and no meeting is a continuation of that one.
+    expect(inputs[0]?.previous).toBeNull();
+    // Tick two reads the doc: not "## Meeting notes\n\n- composed", the
+    // composer's own last answer, but the section as it now stands, with the
+    // person's line in it and named as theirs.
+    expect(inputs[1]?.previous).toBe('## Meeting notes\n\n- composed\n- typed by hand');
+    // Human lines are gated with `previous`: on tick one the ones in the
+    // section are the last meeting's, and telling a from-scratch compose to
+    // reproduce them verbatim would copy them into these notes.
+    expect(inputs[0]?.humanNotes).toBeUndefined();
+    expect(inputs[1]?.humanNotes).toEqual(['typed by hand']);
+  });
+
+  it('the update carries the items the compose READ, for the sink’s race check', async () => {
+    const schedule = new ManualScheduler();
+    const updates: NotesUpdate[] = [];
+    // Reads change between ticks, the way a doc being typed into does.
+    const reads = [
+      { markdown: 'a', items: ['a'], human: [] as string[] },
+      { markdown: 'b', items: ['a', 'b'], human: ['b'] },
+    ];
+    let call = 0;
+    const session = beginNotesSession(
+      {
+        composer: { name: 's', compose: async () => '## Meeting notes\n\n- n' },
+        quietMs: 1000,
+        schedule,
+        readSection: () => reads[Math.min(call++, reads.length - 1)]!,
+        onNotes: (u) => updates.push(u),
+      },
+      ids,
+    );
+    session.onTurn({ turn: 0, text: 'First.', final: true });
+    schedule.fire();
+    session.onTurn({ turn: 1, text: 'Second.', final: true });
+    await session.end();
+    expect(updates.map((u) => u.basedOn)).toEqual([['a'], ['a', 'b']]);
+  });
+
+  it('a section that cannot be read costs the tick its awareness, never its notes', async () => {
+    const schedule = new ManualScheduler();
+    const updates: NotesUpdate[] = [];
+    const errors: string[] = [];
+    const session = beginNotesSession(
+      {
+        composer: { name: 's', compose: async () => 'notes' },
+        quietMs: 1000,
+        schedule,
+        readSection: () => {
+          throw new Error('doc gone');
+        },
+        onNotes: (u) => updates.push(u),
+        onError: (m) => errors.push(m),
+      },
+      ids,
+    );
+    session.onTurn({ turn: 0, text: 'First.', final: true });
+    await session.end();
+    expect(updates.length).toBe(1);
+    expect(updates[0]?.basedOn).toBeUndefined();
+    expect(errors).toEqual(['doc gone']);
   });
 });

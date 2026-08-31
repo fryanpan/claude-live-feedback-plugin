@@ -10,21 +10,55 @@
  * write-back observer flushes it to disk like any other.
  *
  * THE SECTION IS FOUND BY ITS HEADING, EVERY TIME. The composer returns the
- * whole notes, so each update must REPLACE the previous section rather than
+ * whole notes, so each update must revise the previous section rather than
  * grow the doc — and an anchor or offset would rot the moment a human edits
  * around it. The heading is re-located per write, so the section survives
- * being moved, and a human's edits INSIDE it last until the next tick
- * rewrites the section (the transcript file is the durable record; the
- * notes are a live view).
+ * being moved.
+ *
+ * WHAT REACHES THE DOC IS A MERGE, NOT A REPLACE. `replaceNotesSection`
+ * below deletes the section and re-inserts the composed string; run every
+ * pause tick, that is the note-taker destroying what the person typed while
+ * it was composing, which is exactly what the owner reported. The live sink
+ * goes through `mergeNotesSection` instead: it changes only the items the
+ * agent itself last wrote, and where the composer wants different words in a
+ * person's line it proposes them as a suggestion. `replaceNotesSection` is
+ * kept for the first write of a section and for callers that own the whole
+ * span; see `meeting-notes-merge.ts` for the invariant and its reasoning.
+ *
+ * A RENAME REWRITES THE NOTES ALREADY WRITTEN, and does it as a TARGETED
+ * replacement rather than a section rewrite (owner, 2026-08-29: "rewrite
+ * them" — he does not want the same person reading as "Speaker B" above a
+ * rename and by name below it). `relabelNotesSection` replaces only the
+ * exact token the composer put there ("Speaker B"), only inside the notes
+ * section, and touches nothing else in the doc.
+ *
+ * It deliberately does NOT go through `replaceNotesSection`, for the same
+ * reason the notes sink no longer does: that path replaces the whole section
+ * with a string this module composed, discarding whatever the human had
+ * typed into it. A rename is a two-word correction and must cost no more
+ * than two words. It edits IN PLACE, under the agent's hand, so the sink
+ * hands it `reclaimAfterInPlaceEdit` — the ledger has to learn the new
+ * wording of its own lines, or the rename would hand every line it touched
+ * to the person and the notes would freeze there.
  */
 
 import { type DocType, contentKind, prose } from '@feedback/core';
 import type * as Y from 'yjs';
-import type {
-  MeetingNotesDeps,
-  MeetingNotesOptions,
-  NotesProjectContext,
-  NotesUpdate,
+import {
+  type NotesOwnership,
+  createNotesOwnership,
+  mergeNotesSection,
+  readNotesSection,
+  reclaimAfterInPlaceEdit,
+} from './meeting-notes-merge.ts';
+import {
+  type MeetingNotesDeps,
+  type MeetingNotesOptions,
+  type NotesProjectContext,
+  type NotesRelabel,
+  type NotesSectionState,
+  type NotesUpdate,
+  extendsWord,
 } from './meeting-notes.ts';
 import { type TaskCaptureBoard, runTaskCapture } from './meeting-task-capture.ts';
 
@@ -78,6 +112,30 @@ export function replaceNotesSection(
   if (blocks.length === 0) return { ok: false, error: 'empty' };
 
   const fragment = prose.getProseFragment(ydoc);
+  const span = findNotesSectionSpan(fragment, heading);
+
+  if (!span) {
+    ydoc.transact(() => {
+      fragment.insert(fragment.length, blocks);
+    }, 'agent');
+    return { ok: true, mode: 'appended' };
+  }
+
+  ydoc.transact(() => {
+    fragment.delete(span.start, span.endExclusive - span.start);
+    fragment.insert(span.start, blocks);
+  }, 'agent');
+  return { ok: true, mode: 'replaced' };
+}
+
+/** Where the notes section sits in the top-level fragment: the heading's own
+ *  index, and the first index past its body (the next heading at the same or
+ *  a higher level, or the end of the doc). Null when the heading is absent —
+ *  which is the "never written yet" state, not a failure. */
+function findNotesSectionSpan(
+  fragment: Y.XmlFragment,
+  heading: string,
+): { start: number; endExclusive: number } | null {
   const top = fragment.toArray() as Y.XmlElement[];
   let start = -1;
   let level = 0;
@@ -89,13 +147,7 @@ export function replaceNotesSection(
     level = prose.headingLevelOf(el);
     break;
   }
-
-  if (start < 0) {
-    ydoc.transact(() => {
-      fragment.insert(fragment.length, blocks);
-    }, 'agent');
-    return { ok: true, mode: 'appended' };
-  }
+  if (start < 0) return null;
 
   let endExclusive = top.length;
   for (let i = start + 1; i < top.length; i++) {
@@ -106,11 +158,76 @@ export function replaceNotesSection(
       break;
     }
   }
+  return { start, endExclusive };
+}
+
+export interface RelabelNotesResult {
+  /** How many occurrences were rewritten. Zero is an ordinary answer: the
+   *  notes may not mention that voice, or may not exist yet. */
+  replaced: number;
+  /** Matches that straddled two Y.XmlText nodes and were left alone. A
+   *  count the caller cannot see is a stale label nobody knows about. */
+  skippedCrossNode?: number;
+}
+
+/**
+ * Rewrite `from` to `to` inside the notes section only — the rename made
+ * retroactive across notes already composed.
+ *
+ * SCOPED THREE WAYS, because this runs on a doc a human is writing in:
+ *  1. Only inside the notes section, and never its heading. Prose the human
+ *     wrote elsewhere in the doc cannot be reached from here, whatever it
+ *     says.
+ *  2. Only the exact token, on word boundaries — the string this module's
+ *     own composer put there ("Speaker B"), not a substring of one.
+ *  3. In place, character-for-character, carrying each site's marks. The
+ *     surrounding sentence is not re-composed, re-parsed, or replaced, so a
+ *     sentence the human edited into the section keeps every other word.
+ */
+export function relabelNotesSection(
+  ydoc: Y.Doc,
+  from: string,
+  to: string,
+  heading: string = MEETING_NOTES_HEADING,
+): RelabelNotesResult {
+  if (!from || !to || from === to) return { replaced: 0 };
+  const fragment = prose.getProseFragment(ydoc);
+  const span = findNotesSectionSpan(fragment, heading);
+  if (!span) return { replaced: 0 };
+
+  const top = fragment.toArray() as Y.XmlElement[];
+  // From start + 1: the heading is the replace contract's own anchor and
+  // holds no speaker, so it is never eligible.
+  const inSection = new Set<unknown>(top.slice(span.start + 1, span.endExclusive));
+  if (inSection.size === 0) return { replaced: 0 };
+
+  const { matches, crossNode, plainText } = prose.locateMatches(fragment, { find: from });
+  const kept = matches.filter((m) => {
+    if (!inSection.has(m.segment.topBlock)) return false;
+    if (extendsWord(plainText[m.docOffset - 1])) return false;
+    if (extendsWord(plainText[m.docOffset + m.length])) return false;
+    return true;
+  });
+  if (kept.length === 0) {
+    return { replaced: 0, ...(crossNode > 0 ? { skippedCrossNode: crossNode } : {}) };
+  }
+
   ydoc.transact(() => {
-    fragment.delete(start, endExclusive - start);
-    fragment.insert(start, blocks);
+    // Descending, for the reason findAndReplace's sweep is: every offset not
+    // yet used stays valid because edits only land at or above the next site.
+    for (let i = kept.length - 1; i >= 0; i--) {
+      const m = kept[i]!;
+      const siteMarks = prose.coveringInlineMarks([
+        { node: m.segment.node, offset: m.offsetInNode, length: m.length },
+      ]);
+      m.segment.node.delete(m.offsetInNode, m.length);
+      prose.insertTextWithMarks(m.segment.node, m.offsetInNode, to, {
+        attributes: siteMarks.attributes,
+      });
+    }
   }, 'agent');
-  return { ok: true, mode: 'replaced' };
+
+  return { replaced: kept.length, ...(crossNode > 0 ? { skippedCrossNode: crossNode } : {}) };
 }
 
 /**
@@ -168,15 +285,93 @@ export interface NotesContextTasks {
 }
 
 /**
- * Write one composed update into its meeting doc. False — never a throw —
- * when the doc is gone or is not prose: a meeting on a vanished doc still
- * has its transcript file, and a flat doc is not a notepad.
+ * One ownership record per meeting doc — what the agent wrote into that
+ * doc's notes section, and the ONLY thing separating the agent's own bullets
+ * from a person's writing.
+ *
+ * Per DOC, not per meeting, and it outlives a meeting deliberately: a second
+ * meeting on the same doc still recognises the first one's notes as its own
+ * and revises them, the way it always has. Nothing a person touched is in
+ * there, so the longer life costs them nothing.
+ *
+ * In memory only, so a restarted server claims nothing — which the merge
+ * reads as "everything in this section is somebody else's". That is the safe
+ * direction: after a restart the note-taker adds and stops replacing, rather
+ * than guessing that prose it has never seen is its own.
  */
-export function applyNotesUpdate(rooms: NotesDocRooms, update: NotesUpdate): boolean {
+export interface NotesLedger {
+  forDoc(docId: string): NotesOwnership;
+}
+
+export function createNotesLedger(): NotesLedger {
+  const byDoc = new Map<string, NotesOwnership>();
+  return {
+    forDoc(docId) {
+      const existing = byDoc.get(docId);
+      if (existing) return existing;
+      const created = createNotesOwnership();
+      byDoc.set(docId, created);
+      return created;
+    },
+  };
+}
+
+/**
+ * Write one composed update into its meeting doc, keeping every item the
+ * agent did not write. False — never a throw — when the doc is gone or is
+ * not prose: a meeting on a vanished doc still has its transcript file, and
+ * a flat doc is not a notepad.
+ */
+export function applyNotesUpdate(
+  rooms: NotesDocRooms,
+  update: NotesUpdate,
+  ledger: NotesLedger,
+): boolean {
   const room = rooms.get(update.docId);
   if (!room) return false;
   if (contentKind(room.meta.type) !== 'prose') return false;
-  return replaceNotesSection(room.ydoc, update.notes).ok;
+  return mergeNotesSection(room.ydoc, update.notes, MEETING_NOTES_HEADING, {
+    ownership: ledger.forDoc(update.docId),
+    ...(update.basedOn ? { basedOn: update.basedOn } : {}),
+  }).ok;
+}
+
+/** The notes section as it currently reads, for the composer's `previous`. */
+export function readNotesState(
+  rooms: NotesDocRooms,
+  ids: { docId: string; meetingId: string },
+  ledger: NotesLedger,
+): NotesSectionState | null {
+  const room = rooms.get(ids.docId);
+  if (!room) return null;
+  if (contentKind(room.meta.type) !== 'prose') return null;
+  return readNotesSection(room.ydoc, MEETING_NOTES_HEADING, ledger.forDoc(ids.docId));
+}
+
+/**
+ * Carry a rename into the notes already written in the meeting's doc.
+ * Same tolerances as `applyNotesUpdate`: a doc that has gone away or was
+ * never prose is not an error, it is a meeting whose notes are elsewhere.
+ * Returns how many mentions moved — zero when the voice was never written
+ * about, which is ordinary.
+ */
+export function applyNotesRelabel(
+  rooms: NotesDocRooms,
+  relabel: NotesRelabel,
+  ledger: NotesLedger,
+): number {
+  const room = rooms.get(relabel.docId);
+  if (!room) return 0;
+  if (contentKind(room.meta.type) !== 'prose') return 0;
+  // Through the reclaim wrapper, not straight at the doc: the rename edits
+  // the agent's own lines in place, and the ledger has to come out the other
+  // side still recognising them. See `reclaimAfterInPlaceEdit`.
+  return reclaimAfterInPlaceEdit(
+    room.ydoc,
+    MEETING_NOTES_HEADING,
+    ledger.forDoc(relabel.docId),
+    () => relabelNotesSection(room.ydoc, relabel.from, relabel.to).replaced,
+  );
 }
 
 /**
@@ -199,10 +394,15 @@ export function withServerNotesSinks(
     /** The lead wake for a captured task judged clear enough to start —
      *  wired to the ready-nudge channel by the server. */
     onTaskReady?: (wake: { workspaceId: string; taskId: string; title: string }) => void;
+    /** Tests: an ownership ledger they can seed or read back. */
+    ledger?: NotesLedger;
   },
 ): MeetingNotesDeps {
   const extractor = options.taskExtractor;
   const captureBoard = deps.captureBoard;
+  // One ledger per wiring, i.e. per server: it is keyed by doc and meeting,
+  // and a meeting is the life of one notes section.
+  const ledger = deps.ledger ?? createNotesLedger();
   const captureTasks: MeetingNotesDeps['captureTasks'] =
     options.captureTasks ??
     (extractor && captureBoard
@@ -258,9 +458,19 @@ export function withServerNotesSinks(
       const merged = { ...gathered, ...supplied };
       return Object.keys(merged).length > 0 ? merged : undefined;
     },
+    readSection: (ids: { docId: string; meetingId: string }): NotesSectionState | null => {
+      try {
+        return readNotesState(deps.rooms(), ids, ledger);
+      } catch (err) {
+        // A section we cannot read costs the compose its awareness of the
+        // person's writing, never its notes.
+        console.error('[meeting-notes] section read failed:', err);
+        return null;
+      }
+    },
     onNotes: (update: NotesUpdate): void => {
       try {
-        if (!applyNotesUpdate(deps.rooms(), update)) {
+        if (!applyNotesUpdate(deps.rooms(), update, ledger)) {
           console.error(`[meeting-notes] doc write skipped for ${update.docId}`);
         }
       } catch (err) {
@@ -269,6 +479,17 @@ export function withServerNotesSinks(
         console.error('[meeting-notes] doc write failed:', err);
       }
       options.onNotes?.(update);
+    },
+    onRelabel: (relabel: NotesRelabel): void => {
+      try {
+        applyNotesRelabel(deps.rooms(), relabel, ledger);
+      } catch (err) {
+        // A rename that cannot reach the doc leaves a stale label, which is
+        // a blemish; letting it reach the compose chain as a rejection would
+        // cost the meeting its next notes, which is not.
+        console.error('[meeting-notes] relabel failed:', err);
+      }
+      options.onRelabel?.(relabel);
     },
   };
 }

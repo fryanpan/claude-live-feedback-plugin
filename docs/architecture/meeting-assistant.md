@@ -2,7 +2,8 @@
 
 **Goal:** a person opens a doc, presses one button, and talks. Words appear
 live in a compact strip while they speak; meeting notes compose themselves
-into the doc at the natural pauses in the conversation. The transcript is
+into the doc at the natural pauses in the conversation — and, when there are
+none, at least every fifteen seconds. The transcript is
 durable; the doc body stays the person's own writing plus the notes section.
 
 Shipped 2026-08-28 (capture PR #408, notes PR #410). This doc is the summary
@@ -19,7 +20,7 @@ flowchart LR
   Engine -->|turns| Relay
   Relay -->|transcript frames| WS
   Relay -->|settled turns| Store[MeetingStore<br/>append-only JSONL]
-  Relay -->|every turn| Notes[MeetingNotesSession<br/>pause-driven composer]
+  Relay -->|every turn| Notes[MeetingNotesSession<br/>pause + cadence composer]
   Notes -->|Yjs write| Doc[Doc "Meeting notes" section]
   Relay -.->|started/stopped only| SSE[Doc SSE channel]
 ```
@@ -45,8 +46,10 @@ flowchart LR
   `"B"`) travels as `speaker` on each transcript frame; the strip shows it as
   a muted tag at the head of the turn ("Speaker A"), and a tap on the tag
   names that voice for the meeting — every turn with the label updates, the
-  strip sends `name_speaker` up the audio socket, and the record and the
-  notes composer read the name from then on. Labels are per SESSION: the
+  strip sends `name_speaker` up the audio socket, the record keeps the name,
+  and the notes composer reads it from then on AND the notes already written
+  are rewritten to match ("A rename reaches backwards", below). Labels are
+  per SESSION: the
   same letter is a different person next meeting, so the name map lives on
   the meeting's index line, never on the doc.
 
@@ -70,7 +73,24 @@ not a rework.
 
 **Speaker labels** (added 2026-08-29): `speaker_labels=true` on the same
 streaming URL — supported on every streaming model, **+$0.12/hr** on top of
-the $0.15 base (docs: streaming/label-speakers-and-separate-channels). Each
+the $0.15 base (docs: streaming/label-speakers-and-separate-channels for the
+parameter, assemblyai.com/pricing for both figures, re-checked 2026-08-30).
+
+**What a meeting costs.** Streaming is billed on the seconds the SOCKET IS
+OPEN, not on the audio sent — silence in the room costs the same as speech,
+and the meeting's length is the bill.
+
+| | per hour | **per meeting-minute** |
+|---|---|---|
+| Universal-Streaming English | $0.15 | $0.0025 |
+| + speaker labels | $0.27 | **$0.0045** |
+
+So labels add **$0.002 per meeting-minute** — $0.12 on a one-hour meeting,
+against $0.15 the meeting already cost. Roughly a 1.8x transcription bill for
+knowing who spoke. The notes composer and task capture are separate Haiku
+calls and are not in these numbers.
+
+Each
 `Turn` carries `speaker_label`; turns under ~1s of audio carry a placeholder
 (`PENDING`/`UNKNOWN`) the engine adapter maps to "no speaker". A
 `SpeakerRevision` arrives before `Termination` naming turns the whole-session
@@ -78,10 +98,23 @@ pass relabelled; the adapter re-emits those through `onTurn` as settled turns
 with retained text, so the relay needs no second channel. A turn still
 waiting on the pause tick takes the new label; notes ALREADY composed keep
 the label they were composed with — those words are in the doc and the
-revision has nowhere to land. The revision can also take a label away (a
+revision has nowhere to land — but a person RENAMING a voice does reach
+them, retroactively; see "A rename reaches backwards" below. The revision
+can also take a label away (a
 placeholder is "no speaker"), which the record writes as an explicit
 `speaker: null` relabel line — an absent field would read as "says nothing
 about the speaker" and leave an attribution the strip had already dropped.
+
+**What diarization is actually proven by.** Every automated test drives the
+MOCK engine, which returns labels a fixture chose. That covers the plumbing
+end to end — label on the wire, in the record, in the composed notes, and the
+rename that rewrites them (`meeting-e2e.test.ts`) — and it cannot show that
+AssemblyAI separates two real voices, because no fixture can. Run
+`bun run scripts/diarize-check.ts` for that: it speaks a two-voice script
+through the real engine with two macOS `say` voices and prints the labels.
+It needs a key, opens a metered session (~$0.001), and is deliberately not
+part of any suite. As of 2026-08-30 the live half has NOT been run — no key
+was reachable from the session that wrote it.
 
 **Key wiring:** `ASSEMBLYAI_API_KEY` env, then Keychain
 (`transcribe-assemblyai.ts` names the service). No key → the socket answers
@@ -102,13 +135,125 @@ into the record's name map, last word wins. Nothing deletes; ids sanitized
 
 ## Notes composition
 
-A pause in the conversation — no new turn activity past the quiet threshold
-— triggers the composer, which sees the transcript so far plus doc title and
-board task titles for context, and writes into the doc's "Meeting notes"
+A tick triggers the composer, which sees the transcript so far plus doc title
+and board task titles for context, and writes into the doc's "Meeting notes"
 section via the Yjs fragment. The composer is an LLM call (Haiku) and
 follows the same no-default seam as the engine: nothing that merely spins a
-server up can reach an LLM. Partials count as speech in progress and defer
-the pause tick.
+server up can reach an LLM.
+
+**Two clocks fire a tick, and whichever comes first wins.**
+
+- **A pause** — no new turn activity for `DEFAULT_NOTES_QUIET_MS` (4s).
+  Partials count as speech in progress and defer it: every frame replaces the
+  countdown.
+- **The cadence ceiling** — `DEFAULT_NOTES_CADENCE_MS` (15s), started when the
+  first unwritten sentence settles and **not** reset by speech. Added
+  2026-08-30 (owner: *"waits too long to update notes"*), because the pause
+  clock alone means a conversation where nobody stops for four seconds
+  produces nothing until it ends. Measured on a scripted three-minute meeting
+  (`scripts/notes-latency-check.ts`), sentence-settled to note-written went
+  from a 43.0s median / 92.2s worst case to 8.7s / 15.0s, and the same script
+  wrote 10 notes instead of 2.
+
+**A tick is two Haiku calls** (compose + task capture), so the ceiling raises
+the per-meeting LLM cost roughly in proportion to the extra ticks — five times
+as many on the script above. Transcription is billed on socket-seconds and is
+unchanged.
+
+**A cadence tick carries settled turns only.** This engine's partials are
+unformatted — punctuation and sentence casing arrive with `format_turns` when
+the turn settles — so there is no finished sentence inside a partial to cut
+at. A settled turn IS the unit of finished speech; the turn being spoken waits
+for the next tick rather than being written mid-clause.
+
+**The write is a MERGE, and a person can type in the section while it runs**
+(owner, 2026-08-30: *"destroyed my notes"*). The old write deleted the whole
+section and re-inserted the composed string, so every tick ate what he had
+typed since the last one. Now (`meeting-notes-merge.ts`):
+
+- The unit is an **item** — a top-level block, or one item of a list, because
+  a bullet list is a single block and block granularity would hand the
+  agent's whole list to the person who fixed one bullet.
+- Ownership is a **ledger keyed by the Yjs element**, holding the markdown
+  the agent left in it, held per doc in memory. An item is the agent's only
+  if the agent wrote that element AND it still reads exactly as the agent
+  left it. Both halves matter: text alone hands a person's element to the
+  agent the moment they type a line matching one of its own, and element
+  alone keeps calling a line the agent's after they rewrote it. Only agent
+  items are ever deleted, and a person's item is never re-created — the same
+  element stays in place, so its marks and anchors survive.
+- **`previous` is the live section**, not the composer's own last reply, so
+  the composer sees what the person wrote. The first tick of a session still
+  composes from scratch — otherwise every meeting would continue the last
+  one's notes. Human items are listed in the prompt as theirs to reproduce
+  verbatim, and are gated on the same first-tick condition: on tick one they
+  are the LAST meeting's lines, and "reproduce verbatim" would copy them in.
+- **A changed version of a person's line becomes a suggestion**, not a
+  rewrite: the redline marks in `suggest-ops.ts`, authored as "Meeting
+  Assistant". The accepted state — what serializes to disk — stays his words
+  until he accepts. One pending proposal per item; the marks are the
+  registry, so the doc is where the duplicate check asks.
+- **The stale-compose race** is caught with `basedOn`, the item list the
+  compose read. An item missing from it arrived DURING the compose, so a
+  collision with it is dropped rather than proposed; an item in it that has
+  since left the doc is one he edited mid-compose, so anything the compose
+  says that reads like it is dropped rather than inserted. `basedOn` holds
+  KEYS — kind plus text — so turning a paragraph into a bullet without
+  retyping it still counts as the edit it is. Nothing is lost — the composer
+  returns the whole notes every tick.
+- **A line the composer moved is not a new line.** Before an unmatched
+  incoming entry is inserted, it is matched against the person's items that
+  the diff did not line up with; an exact hit is the composer re-emitting
+  their note somewhere else, and inserting it would leave two of it.
+- **A ledger that claims nothing means "everything here is somebody
+  else's"**, so a restarted server adds and stops replacing rather than
+  claiming prose it has never seen.
+- **An in-place agent edit has to tell the ledger.** The speaker rename below
+  rewrites characters inside the agent's own lines rather than replacing
+  them, so the ledger would stop recognising them and hand each one to the
+  person. `reclaimAfterInPlaceEdit` snapshots what the ledger claimed before
+  the edit and re-records exactly those elements after it — never a line the
+  person had already made theirs.
+
+### A rename reaches backwards (owner's call, 2026-08-29: "rewrite them")
+
+Naming a voice mid-meeting fixes the notes ALREADY in the doc, not just the
+ones still to come — a transcript where the same person is "Speaker B" above
+the rename and by name below it was the thing to avoid. Three moving parts:
+
+- `nameSpeaker` rewrites the session's `previous` — the composer's memory of
+  what it wrote — so no later tick reintroduces the placeholder.
+- A `NotesRelabel` goes to the sink, which calls `relabelNotesSection` on the
+  doc. That is a **targeted in-place replacement**, not a section rewrite: it
+  changes the exact token ("Speaker B") on word boundaries, only inside the
+  notes section, carrying each site's marks. A rename is a two-word
+  correction and costs two words.
+- Both are queued on the **compose chain**, behind anything in flight. A
+  compose that started before the rename read `previous` the old way and will
+  return notes written the old way; the rewrite has to land after it.
+
+**Why not `replaceNotesSection`.** It replaces the whole section from a
+string the server composed, which would discard whatever the person had typed
+inside the section since the last tick. Since the merge above, no tick
+rewrites the section wholesale either — a rename must not become the one
+remaining way for the note-taker to overwrite someone's writing. Everything
+OUTSIDE the section is unreachable from this path however it is worded: the
+tests fix a doc whose body says "Speaker B" three times and assert all three
+survive.
+
+Renaming an already-given name works the same way, because the rewrite reads
+the OLD DISPLAY NAME (what the composer actually wrote), not the raw label —
+"Devi" → "Devi Raman" replaces "Devi".
+
+**Two voices with the same name refuse the rewrite.** Display text is the
+only handle the notes give — composed prose carries no per-mention
+attribution — so if both A and B are called "Alex", "Alex" in the notes does
+not say which, and correcting A to "Sam" would silently reattribute B's
+words. The session detects that (across every label SEEN, not just the named
+ones — an unnamed B still reads as "Speaker B") and skips the retroactive
+part, reporting it through `onError`. The forward mapping still holds: that
+voice's later turns compose under the new name. Raised by review before
+merge, not in the field.
 
 ## Task capture ("file a ticket for that")
 
@@ -141,6 +286,13 @@ stored content.
   reads as settled — a silent failure.
 - **AssemblyAI auth is the bare key as the whole `Authorization` header** —
   no `Bearer` prefix.
+- **A detached Yjs type reads as empty, and its children cannot be
+  re-parented.** `parseMarkdownBlocks` hands back elements that belong to no
+  document: serializing one returns nothing ("Invalid access: Add Yjs type to
+  a document before reading data"), and moving a parsed `listItem` into a
+  live list silently inserts nothing while every call reports success. Parse
+  into a scratch `Y.Doc` to READ markdown, and build a `listItem` by hand
+  (`listItem > paragraph > XmlText` + `insertTextWithMarks`) to WRITE one.
 - **A speaker name is applied when a tick COMPOSES, not when it arrives** —
   the compose runs on the session's promise chain, so a name given right
   after the quiet timer fires still reaches that tick. Carried (failed)
@@ -193,4 +345,6 @@ stored content.
 `packages/server/src/transcribe-assemblyai.ts` (engine) ·
 `packages/server/src/meetings.ts` (store) ·
 `packages/server/src/meeting-notes.ts` + `meeting-notes-doc.ts` (composer +
-doc sink) · `packages/markdown-app/src/meeting-strip.ts` (UI).
+doc sink; the two clocks live in `createPauseTicker`) · `packages/server/src/meeting-notes-merge.ts` (the merge that
+keeps a person's writing) · `packages/markdown-app/src/meeting-strip.ts`
+(UI).
