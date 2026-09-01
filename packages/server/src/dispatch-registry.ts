@@ -39,6 +39,19 @@
  *   (the stall pass, the REST list) are exactly the moments staleness would
  *   mislead. Dispatch records are coordination state, not user content, so
  *   hard-deleting a closed one is not a soft-delete concern.
+ * - **A task the board is done with closes its dispatch the same way.** The
+ *   registry does not know what a task is; the server hands it `isTaskOver`
+ *   (done or archived) and every read — `list`, `activityFor`, and the
+ *   boot-time `prune` — treats such a task exactly like a vanished
+ *   worktree. Closed IN THE REGISTRY and persisted, never filtered by a
+ *   caller: the cap view, the dispatch refusal, the stall gate's watching
+ *   set and `/api/dispatches` all read this one set, and a filter in one of
+ *   them would let the others keep counting a slot nobody holds. Measured
+ *   2026-08-31 right after a deploy: the hub read `inUse 12 / free 0`, every
+ *   holder a task already `done` whose builder finished on a bundle that
+ *   never sent `close_dispatch` — and the first real spawn would have been
+ *   refused. Leaving the worktree directory behind (a done builder's checkout
+ *   often lingers on disk) is exactly why the path check alone was not enough.
  * - **A corrupt file is renamed aside, never overwritten** — losing the set
  *   is recoverable (the lead re-registers on its next dispatch); destroying
  *   the evidence of what went wrong is not.
@@ -114,20 +127,32 @@ export interface DispatchRegistryOptions {
   dataDir: string;
   now?: () => number;
   watchFactory?: WatchFactory;
+  /**
+   * Does the board consider this task's work over — `done`, or archived?
+   * A dispatch on such a task is closed on read exactly as one whose
+   * worktree vanished. Absent (unit tests, a registry with no board), no
+   * task is ever over and only the path check applies.
+   */
+  isTaskOver?: (taskId: string) => boolean;
 }
 
 export class DispatchRegistry {
   private readonly path: string;
   private readonly now: () => number;
   private readonly watchFactory: WatchFactory;
+  private readonly isTaskOver: (taskId: string) => boolean;
   private readonly entries = new Map<string, Entry>();
   /** Set when the file on disk was unreadable and moved aside. */
   readonly loadError: string | null = null;
+  /** Task ids whose persisted dispatch was already stale at boot — a finished
+   *  task or a vanished worktree — and was closed before anything read it. */
+  readonly prunedAtBoot: readonly string[] = [];
 
   constructor(opts: DispatchRegistryOptions) {
     this.path = join(opts.dataDir, FILENAME);
     this.now = opts.now ?? Date.now;
     this.watchFactory = opts.watchFactory ?? fsWatchFactory;
+    this.isTaskOver = opts.isTaskOver ?? (() => false);
     if (!existsSync(this.path)) return;
     try {
       const parsed = JSON.parse(readFileSync(this.path, 'utf8')) as Partial<FileShape>;
@@ -146,10 +171,14 @@ export class DispatchRegistry {
             : {}),
         };
         this.entries.set(taskId, entry);
-        // A path already gone stays until a read prunes it; arming would
-        // throw ENOENT into the degraded branch for nothing.
-        if (existsSync(rec.worktreePath)) this.arm(entry);
+        // A stale record is pruned below before anything reads it; arming
+        // would throw ENOENT into the degraded branch for nothing.
+        if (!this.stale(taskId, entry)) this.arm(entry);
       }
+      // Boot is a read like any other: a record that was stale when the
+      // server went down (or became stale while it was down — a task closed
+      // by the board on a restart's other side) must not hold a slot.
+      this.prunedAtBoot = this.prune();
     } catch (err) {
       const aside = `${this.path}.corrupt-${this.now()}`;
       try {
@@ -196,7 +225,7 @@ export class DispatchRegistry {
   activityFor(taskId: string): number | undefined {
     const entry = this.entries.get(taskId);
     if (!entry) return undefined;
-    if (!existsSync(entry.worktreePath)) {
+    if (this.stale(taskId, entry)) {
       this.closeEntry(taskId);
       this.save();
       return undefined;
@@ -204,15 +233,10 @@ export class DispatchRegistry {
     return entry.lastActivityAt;
   }
 
-  /** Every open dispatch, dead-worktree ones pruned by the read. */
+  /** Every open dispatch, stale ones (dead worktree, task done or archived) pruned
+   *  by the read. */
   list(): DispatchRecord[] {
-    let pruned = false;
-    for (const [taskId, entry] of this.entries) {
-      if (existsSync(entry.worktreePath)) continue;
-      this.closeEntry(taskId);
-      pruned = true;
-    }
-    if (pruned) this.save();
+    this.prune();
     return [...this.entries.entries()]
       .map(([taskId, entry]) => this.record(taskId, entry))
       .sort((a, b) => a.registeredAt - b.registeredAt || a.taskId.localeCompare(b.taskId));
@@ -226,6 +250,28 @@ export class DispatchRegistry {
       } catch {}
       entry.watcher = null;
     }
+  }
+
+  /**
+   * Close every stale dispatch and persist if any went. Returns the task
+   * ids closed. Every reader runs this first, so no caller ever sees — or
+   * counts — a slot the board has already released.
+   */
+  prune(): string[] {
+    const closed: string[] = [];
+    for (const [taskId, entry] of this.entries) {
+      if (!this.stale(taskId, entry)) continue;
+      this.closeEntry(taskId);
+      closed.push(taskId);
+    }
+    if (closed.length > 0) this.save();
+    return closed;
+  }
+
+  /** The one definition of "this dispatch is over": the worktree is gone,
+   *  or the board is done with the task. */
+  private stale(taskId: string, entry: Entry): boolean {
+    return !existsSync(entry.worktreePath) || this.isTaskOver(taskId);
   }
 
   private arm(entry: Entry): void {
