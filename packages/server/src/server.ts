@@ -1,5 +1,5 @@
 import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { dirname, extname, join, resolve } from 'node:path';
+import { basename, dirname, extname, join, resolve } from 'node:path';
 import {
   type Anchor,
   type DocMeta,
@@ -41,6 +41,13 @@ import {
   suggestOps,
   summaryHash,
 } from '@feedback/core';
+import {
+  ASSET_MANIFEST_FILE,
+  type AssetManifest,
+  assetHref,
+  isContentHashedAsset,
+  parseAssetManifest,
+} from '@feedback/core/asset-manifest';
 import {
   DEFAULT_EFFORT_ESTIMATE_PROMPT,
   EFFORT_ESTIMATE_PROMPT_VERSION,
@@ -4417,31 +4424,33 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
     // The doc editor's shell is a BUILT file, identical on every box, so the
     // Sentry tags cannot be templated into it at build time — they are box
     // config. Rewritten here on the way out instead, the same way a mockup's
-    // own HTML gets the widget. Unconfigured, `injectSentryHead` returns the
-    // bytes untouched and this is `serveStatic` with its own etag.
+    // own HTML gets the widget. Unconfigured, `injectSentryHead` is skipped
+    // and the built bytes go out as they are. The bundle URLs inside are
+    // already content-addressed — the BUILD wrote them that way.
     return serveShellHtml(join(markdownAppDist, 'index.html'), 'doc');
   };
 
   /**
    * A built HTML shell, with the browser Sentry tags added for `pageType`.
    *
-   * Reads and re-hashes rather than delegating to `serveStatic`, because the
-   * etag has to describe the bytes actually SENT: serving the file's own hash
-   * beside a rewritten body would hand a browser a 304 for a document it
-   * never received. Falls straight through to `serveStatic` when Sentry is
-   * unconfigured, so the common path is byte-identical to what it was.
+   * Read rather than delegated to `serveStatic` because the body can be
+   * rewritten on the way out and the response has to describe what was
+   * actually SENT. That used to mean re-hashing for an etag; it now means
+   * `no-store` and no etag at all, which is the same principle taken one step
+   * further — see `HTML_SHELL_HEADERS`.
    */
   const serveShellHtml = (path: string, pageType: PageType): Response | null => {
-    if (!browserSentry) return serveStatic(path);
     if (!existsSync(path)) return null;
-    const html = injectSentryHead(readFileSync(path, 'utf8'), browserSentry, pageType);
-    return new Response(html, {
-      headers: {
-        'content-type': 'text/html; charset=utf-8',
-        'cache-control': 'no-cache',
-        etag: `"${Bun.hash(html).toString(16)}"`,
-      },
-    });
+    // `no-store`, and no etag to go with it. This shell names the bundle URLs
+    // the page will load; a browser holding an old copy of it loads the
+    // bundles IT names, and there is no later request in which to notice.
+    // Since those URLs are content-addressed, the shell is the only thing
+    // that has to stay fresh — and it is about a kilobyte gzipped.
+    const raw = readFileSync(path, 'utf8');
+    const html = browserSentry
+      ? injectSentryHead(raw, browserSentry, pageType, readAppAssetManifest(markdownAppDist))
+      : raw;
+    return new Response(html, { headers: HTML_SHELL_HEADERS });
   };
 
   /**
@@ -4496,7 +4505,12 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
     // the same route: a mockup is somebody's own file, and neither the review
     // scaffolding nor the box's monitoring config belongs in it on disk.
     const withWidget = injectWidget(html, room.meta.docId);
-    const body = injectSentryHead(withWidget, browserSentry, 'mockup');
+    const body = injectSentryHead(
+      withWidget,
+      browserSentry,
+      'mockup',
+      readAppAssetManifest(markdownAppDist),
+    );
     return new Response(body, {
       headers: {
         'content-type': 'text/html; charset=utf-8',
@@ -4507,8 +4521,8 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
         // BODY WE SEND rather than the file we read — the widget embed and
         // the Sentry head are part of what the browser is holding, so a
         // source-derived tag would revalidate a page whose injected half had
-        // changed underneath it. `serveShellHtml` hashes its injected HTML
-        // for the same reason.
+        // changed underneath it. (`serveShellHtml` no longer carries a tag at
+        // all — it is `no-store`, so there is nothing stored to validate.)
         etag: `"${Bun.hash(body).toString(16)}"`,
         // Which copy answered. A page served from the capture is still the
         // page — but "the source file is gone" is a fact somebody may want to
@@ -12057,8 +12071,9 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
             renderHubShell(workspace.id, workspace.name, {
               feedback: !visitor,
               sentry: browserSentry,
+              assets: readAppAssetManifest(markdownAppDist),
             }),
-            { headers: { 'content-type': 'text/html; charset=utf-8' } },
+            { headers: HTML_SHELL_HEADERS },
           );
         }
 
@@ -12160,8 +12175,9 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           if (served) return served;
         }
         if (markdownAppDist && pathname.startsWith('/app/')) {
-          const p = join(markdownAppDist, pathname.slice('/app/'.length));
-          const resp = serveStaticUnder(markdownAppDist, p);
+          const rel = pathname.slice('/app/'.length);
+          const p = join(markdownAppDist, rel);
+          const resp = serveStaticUnder(markdownAppDist, p, appCacheControl(basename(rel)));
           if (resp) return resp;
         }
 
@@ -12210,9 +12226,10 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
         // the tailnet reaches everything signed out; this page only lets a
         // person claim who they are (`/api/auth/*` above).
         if (pathname === '/signin' && req.method === 'GET') {
-          return new Response(renderSigninShell(browserSentry), {
-            headers: { 'content-type': 'text/html; charset=utf-8' },
-          });
+          return new Response(
+            renderSigninShell(browserSentry, readAppAssetManifest(markdownAppDist)),
+            { headers: HTML_SHELL_HEADERS },
+          );
         }
 
         // --- Landing ---
@@ -12227,9 +12244,20 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           // The landing banner's join files its doc under the default board
           // (the join POST carries no workspaceId from `/`), so the offer
           // names that destination on its face.
-          return new Response(renderLanding(model, browserSentry, DEFAULT_HUB_WORKSPACE_NAME), {
-            headers: { 'content-type': 'text/html; charset=utf-8' },
-          });
+          // `no-store` like every other shell, and this one has a second
+          // reason of its own: the page IS the model — workspace rows,
+          // waiting counts, "active in the last N days". Served with no cache
+          // directives at all, as it was, a browser picks its own freshness
+          // lifetime and can show a queue that has since been worked.
+          return new Response(
+            renderLanding(
+              model,
+              browserSentry,
+              DEFAULT_HUB_WORKSPACE_NAME,
+              readAppAssetManifest(markdownAppDist),
+            ),
+            { headers: HTML_SHELL_HEADERS },
+          );
         }
 
         // --- One project's artifacts, on demand ---
@@ -12245,10 +12273,15 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           }
           if (owner === '') return new Response('not found', { status: 404 });
           const artifacts = buildProjectArtifacts(rooms, withReviewUrl, owner);
-          return new Response(renderProjectPage(owner, artifacts, browserSentry), {
-            status: artifacts.length === 0 ? 404 : 200,
-            headers: { 'content-type': 'text/html; charset=utf-8' },
-          });
+          return new Response(
+            renderProjectPage(
+              owner,
+              artifacts,
+              browserSentry,
+              readAppAssetManifest(markdownAppDist),
+            ),
+            { status: artifacts.length === 0 ? 404 : 200, headers: HTML_SHELL_HEADERS },
+          );
         }
 
         return new Response('not found', { status: 404 });
@@ -12724,17 +12757,81 @@ async function safeJson(req: Request): Promise<Record<string, unknown> | null> {
  * a static route into an arbitrary-file read on a host that is now publicly
  * reachable. Assert the containment where the read happens.
  */
-export function serveStaticUnder(root: string, p: string): Response | null {
+/**
+ * What an HTML shell must be sent with.
+ *
+ * `no-store`, not `no-cache`. Every shell here names the asset URLs the page
+ * will load, so it is the one document whose staleness cannot be recovered
+ * from: a browser holding a shell from two deploys ago loads the bundles that
+ * shell names and there is no later request in which to notice. `no-cache`
+ * asks a browser to revalidate; `no-store` tells it there is nothing to
+ * revalidate. The bug this replaced was a shell served with no cache
+ * directives AT ALL, which makes it heuristically cacheable — the browser
+ * picks its own lifetime.
+ *
+ * The cost is the shell itself on every navigation: about 1 KB gzipped, and
+ * the assets it names still cache forever because they are content-addressed.
+ */
+export const HTML_SHELL_HEADERS: Record<string, string> = {
+  'content-type': 'text/html; charset=utf-8',
+  'cache-control': 'no-store',
+};
+
+/**
+ * The caching policy for one file under `/app/`.
+ *
+ * Three answers, and the middle one is the fix:
+ *
+ *   • `BUILD_INFO.txt` — `no-store`. The whole stale check reads this to learn
+ *     the truth; a cached copy of it is the check lying to itself.
+ *   • a content-addressed name — a year, `immutable`. Safe by construction:
+ *     the name is a hash of the bytes, so these bytes at this URL can never
+ *     become something else. This is what lets the shell stop depending on a
+ *     browser's willingness to revalidate.
+ *   • everything else — `no-cache`, as before. That is the plain-named copies
+ *     kept for shells cached before the hashing landed, and it is exactly the
+ *     policy whose weakness this change routes around rather than trusts.
+ */
+export function appCacheControl(fileName: string): string {
+  if (fileName === 'BUILD_INFO.txt') return 'no-store';
+  if (isContentHashedAsset(fileName)) return 'public, max-age=31536000, immutable';
+  return 'no-cache';
+}
+
+/**
+ * The built asset manifest, read fresh on every shell render.
+ *
+ * Deliberately NOT cached, and not read once at startup. `bun run dev`
+ * rebuilds the client under a running server, and a deploy republishes the
+ * release directory beneath it — a remembered manifest would name hashes that
+ * no longer exist, which is a 404 on the bundle rather than merely a stale
+ * one. Caching it on mtime is the obvious repair and the wrong one: two
+ * rebuilds inside a millisecond report the same mtime. This is a few hundred
+ * bytes read on page NAVIGATIONS only, never on an asset request.
+ *
+ * Absent or unreadable answers `{}`, and every caller then falls back to the
+ * permanent names, which the build still emits.
+ */
+export function readAppAssetManifest(dist: string | null): AssetManifest {
+  if (!dist) return {};
+  try {
+    return parseAssetManifest(readFileSync(join(dist, ASSET_MANIFEST_FILE), 'utf8'));
+  } catch {
+    return {};
+  }
+}
+
+export function serveStaticUnder(root: string, p: string, cacheControl?: string): Response | null {
   // isWithinRoot realpaths both sides: `path.resolve` is purely LEXICAL, so a
   // symlink inside the root pointing anywhere on disk sails straight through a
   // string-prefix check. `demos/` in particular is a directory of Bryan's own
   // files, where a convenience symlink is entirely plausible. It answers
   // closed for a missing file or a dangling link — nothing to serve either way.
   if (!isWithinRoot(root, p)) return null;
-  return serveStatic(p);
+  return serveStatic(p, cacheControl);
 }
 
-function serveStatic(p: string): Response | null {
+function serveStatic(p: string, cacheControl?: string): Response | null {
   if (!existsSync(p)) return null;
   const buf = readFileSync(p);
   const ct = CT[extname(p).toLowerCase()] ?? 'application/octet-stream';
@@ -12748,7 +12845,11 @@ function serveStatic(p: string): Response | null {
       // could give was the whole file again. Every board load re-sent every
       // byte of its CSS, its app bundle and the widget. The etag below is what
       // turns that into a 304.
-      'cache-control': 'no-cache',
+      //
+      // A caller may override it — `/app/` does, because a content-addressed
+      // name earns a year and `BUILD_INFO.txt` earns none. `no-cache` stays
+      // the default for every root that is NOT content-addressed.
+      'cache-control': cacheControl ?? 'no-cache',
       // Hashed from the CONTENT rather than from mtime+size. A redeploy writes
       // these files fresh, so mtime moves on every deploy whether or not the
       // bytes did — which would throw away the cache precisely when nothing
@@ -12818,14 +12919,23 @@ h1{font-size:1.25rem;margin:0 0 .5rem}p{color:#555;margin:0}
  * `init` would run before the module that defines it. The element upgrades on
  * parse and reads its own attributes.
  */
-function renderHubShell(
+export function renderHubShell(
   workspaceId: string,
   name: string,
-  opts: { feedback: boolean; sentry?: BrowserSentryConfig | null } = { feedback: false },
+  opts: { feedback: boolean; sentry?: BrowserSentryConfig | null; assets?: AssetManifest } = {
+    feedback: false,
+  },
 ): string {
+  // Content-addressed URLs for the three files this shell names. Without a
+  // manifest (an unbuilt dist, or one from before hashing landed) these fall
+  // back to the plain names, which is exactly what the shell said before.
+  const assets = opts.assets ?? {};
+  const hubJs = assetHref(assets, 'hub.js');
+  const stylesCss = assetHref(assets, 'styles.css');
+  const tokensCss = assetHref(assets, 'tokens.css');
   const safeName = escape(name);
   const safeId = escape(workspaceId);
-  const sentryTags = sentryHeadTags(opts.sentry ?? null, 'board');
+  const sentryTags = sentryHeadTags(opts.sentry ?? null, 'board', assets);
   const sentryMeta = sentryTags ? `\n    ${sentryTags}` : '';
   // Deliberately NOT rendered for a share visitor. Every peer on a Yjs doc
   // syncs the whole doc, so one shared feedback doc would hand every hub
@@ -12851,14 +12961,14 @@ function renderHubShell(
     <link rel="manifest" href="/manifest.webmanifest" />
     <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
     <meta name="theme-color" content="#2e7dd7" />${sentryMeta}
-    <link rel="stylesheet" href="/app/styles.css" />
+    <link rel="stylesheet" href="${stylesCss}" />
     <!-- Open Props trial layer — after styles.css on purpose; see
          packages/markdown-app/index.html. -->
-    <link rel="stylesheet" href="/app/tokens.css" />
+    <link rel="stylesheet" href="${tokensCss}" />
   </head>
   <body class="hub-body">
     <div id="hub-root" data-workspace-id="${safeId}"></div>
-    <script type="module" src="/app/hub.js"></script>${widget}
+    <script type="module" src="${hubJs}"></script>${widget}
   </body>
 </html>`;
 }
@@ -12869,9 +12979,15 @@ function renderHubShell(
  * the bundle (`/app/signin.js`), the app's own stylesheet so the page looks
  * like the product it signs you into.
  */
-function renderSigninShell(sentry: BrowserSentryConfig | null): string {
-  const sentryTags = sentryHeadTags(sentry, 'signin');
+export function renderSigninShell(
+  sentry: BrowserSentryConfig | null,
+  assets: AssetManifest = {},
+): string {
+  const sentryTags = sentryHeadTags(sentry, 'signin', assets);
   const sentryMeta = sentryTags ? `\n    ${sentryTags}` : '';
+  const signinJs = assetHref(assets, 'signin.js');
+  const stylesCss = assetHref(assets, 'styles.css');
+  const tokensCss = assetHref(assets, 'tokens.css');
   return `<!doctype html>
 <html lang="en">
   <head>
@@ -12880,12 +12996,12 @@ function renderSigninShell(sentry: BrowserSentryConfig | null): string {
     <title>Sign in · Fryanpan Workspaces</title>
     <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
     <meta name="theme-color" content="#2e7dd7" />${sentryMeta}
-    <link rel="stylesheet" href="/app/styles.css" />
-    <link rel="stylesheet" href="/app/tokens.css" />
+    <link rel="stylesheet" href="${stylesCss}" />
+    <link rel="stylesheet" href="${tokensCss}" />
   </head>
   <body class="signin-body">
     <div id="signin-root"></div>
-    <script type="module" src="/app/signin.js"></script>
+    <script type="module" src="${signinJs}"></script>
   </body>
 </html>`;
 }
@@ -13270,8 +13386,13 @@ details[open] > summary::before{content:'\\25BE'}
 footer{margin-top:28px;color:#8b95a1;font-size:11px}
 `;
 
-function landingShell(title: string, body: string, sentry: BrowserSentryConfig | null): string {
-  const sentryTags = sentryHeadTags(sentry, 'landing');
+function landingShell(
+  title: string,
+  body: string,
+  sentry: BrowserSentryConfig | null,
+  assets: AssetManifest = {},
+): string {
+  const sentryTags = sentryHeadTags(sentry, 'landing', assets);
   const sentryMeta = sentryTags ? `\n${sentryTags}` : '';
   // The manifest belongs here most of all: `/` is the manifest's own
   // `start_url`, so this is the page a Home Screen install lands on and the
@@ -13317,6 +13438,7 @@ function renderLanding(
   model: LandingModel,
   sentry: BrowserSentryConfig | null,
   notesWorkspaceName: string,
+  assets: AssetManifest = {},
 ): string {
   const days = Math.round(model.windowMs / 86_400_000);
   // Retired boards are NOT in this denominator. "Nothing active, 3 inactive
@@ -13385,13 +13507,14 @@ function renderLanding(
     `<h1>Workspaces</h1>
 <div class="summary">Active in the last ${days} days, most recent first</div>
 <meeting-banner workspace-name="${escape(notesWorkspaceName)}"></meeting-banner>
-<script type="module" src="/app/landing.js"></script>
+<script type="module" src="${assetHref(assets, 'landing.js')}"></script>
 ${allbar}
 ${active}
 ${inactive}
 ${retired}
 ${projects}`,
     sentry,
+    assets,
   );
 }
 
@@ -13403,6 +13526,7 @@ function renderProjectPage(
   owner: string,
   artifacts: LandingArtifact[],
   sentry: BrowserSentryConfig | null,
+  assets: AssetManifest = {},
 ): string {
   const body =
     artifacts.length === 0
@@ -13417,6 +13541,7 @@ function renderProjectPage(
 <div class="summary">${artifacts.length} artifact${artifacts.length === 1 ? '' : 's'} · ${open} open thread${open === 1 ? '' : 's'}</div>
 ${body}`,
     sentry,
+    assets,
   );
 }
 
