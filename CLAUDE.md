@@ -115,27 +115,49 @@ cat ~/Library/Application\ Support/claude-workspaces/client/current/release.json
 
 ### Where prod lives — all of it on the boot disk (2026-09-01)
 
-macOS blocks a **launchd-started** process from reading `/Volumes/Data`, so
-every path the service needs sits under
+Everything the service needs sits under
 `~/Library/Application Support/claude-workspaces/`: `repo/` (prod's own
 checkout, tracking `origin/main`), `data/` (the `.ydoc` corpus — set by
 `CW_DATA_DIR`), `client/` (releases — set by `CW_CLIENT_ROOT`), and
-`bin/bun`. A process started from a TERMINAL is unaffected, which is why
-dev checkouts and worktrees stay on `/Volumes/Data`.
+`bin/bun`. Dev checkouts and worktrees stay on `/Volumes/Data`.
+
+**TCC attaches per BINARY, not per volume.** The rule is that the executable
+must live on the boot disk and hold Full Disk Access; what it reads afterwards
+follows that grant. A launchd job whose bun is `bin/bun` reads `/Volumes/Data`
+fine — verified by booting a full launchd server with `WorkingDirectory` on
+Data, which built and served normally. Do not write, or repeat, "launchd
+cannot read /Volumes/Data": that claim came from probing with `/bin/cat`,
+which holds no grant, and it is how this section read on the day it was
+written.
 
 - **Prod's deploy source is whatever checkout the plist's `WorkingDirectory`
   names** — nothing else defines it, because `bin.ts` derives `repoRoot` from
   its own file location. Moving prod means editing that key.
 - The primary checkout is no longer prod's deploy source, so a mid-edit or
-  unpulled working tree can no longer ship the wrong client.
-- `~/.local`, `~/.claude` and `~/.bun` are **symlinks onto `/Volumes/Data`**,
-  so a launchd process cannot read them. Anything prod needs from `$HOME`
-  must resolve to real `~/Library` storage — the discovery file
-  (`~/.claude/claude-workspaces/`) is a symlink to boot-disk storage for
-  exactly this reason. Audit every new `homedir()` path against this.
-- Diagnosing it: `launchctl submit` a `/bin/cat` of a file under the path in
-  question. `Operation not permitted` is the block; run the same probe on a
-  `~/Library` file as the positive control, or a broken job looks identical.
+  unpulled working tree can no longer ship the wrong client. **This, not TCC,
+  is the durable reason the move was worth doing.**
+- **The move reduced the grant dependency; it did not remove it.** Without the
+  grant prod still boots and serves the board — repo, corpus, releases, logs,
+  bun and `~/.ssh` are all boot disk. Three things would still break:
+  the **discovery file** (`~/.local`, `~/.claude` and `~/.bun` are symlinks
+  onto `/Volumes/Data`, so `~/.claude/claude-workspaces/server.json` is a Data
+  path and every MCP client resolves prod through it), **bound docs and
+  folders rooted in Data repos**, and the plugin-cache refresh. Symlinking
+  `~/.claude/claude-workspaces` to boot-disk storage would remove the first —
+  it works under launchd, but it is NOT currently installed. Audit every new
+  `homedir()` path against this.
+- **Whether the grant survives a reboot is OPEN.** Nothing observed on
+  2026-09-01 spanned one (`kern.boottime` was Aug 31 23:20 throughout). A
+  `/bin/cat` probe that *hung* in the morning returned a clean `Operation not
+  permitted` that afternoon — two failure modes on one binary in a single boot
+  session, still **unexplained**. Leading hypothesis, unconfirmed: a TCC write
+  made when the plist change was approved. Do not let this get retold as
+  settled.
+- Diagnosing it: `launchctl submit` a probe **using the same binary the
+  service runs**, and pair it with a positive control on a path you expect to
+  work. A system binary like `/bin/cat` is not a proxy for bun — it will
+  report a block the service does not have, which is exactly the false
+  negative that sent this migration after the wrong bug.
 
 Done when `release.json`'s `sourceRef` matches the commit you shipped AND the
 deploy's `verification` reads `healthy` — a healthy restart over an unpulled
