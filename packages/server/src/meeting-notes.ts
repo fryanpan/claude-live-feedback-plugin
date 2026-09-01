@@ -498,6 +498,21 @@ export interface NotesReattribution {
   names: Readonly<Record<string, string>>;
 }
 
+/**
+ * Where a tick is in its life, for the surface showing provisional text: the
+ * words split off to compose, they landed in the doc, or the compose failed
+ * and they are carried into the next tick. `turns` are engine turn ids — the
+ * identity the strip already tracks — so a client can move exactly those
+ * turns from its provisional block into "being written" and out again.
+ */
+export interface NotesTickLifecycle {
+  docId: string;
+  meetingId: string;
+  tick: number;
+  phase: 'composing' | 'written' | 'failed';
+  turns: readonly number[];
+}
+
 export interface MeetingNotesDeps {
   composer: NotesComposer;
   /** Quiet threshold; defaults to {@link DEFAULT_NOTES_QUIET_MS}. */
@@ -578,6 +593,19 @@ export interface MeetingNotesDeps {
    */
   onReattribute?: (reattribution: NotesReattribution) => void;
   onError?: (message: string) => void;
+  /**
+   * A new session is beginning on this doc — called synchronously from
+   * `beginNotesSession`, before any tick can fire. The server sink releases
+   * the ownership ledger's claims here, so a stop-and-restart can never
+   * replace the notes the previous recording wrote.
+   */
+  onSessionStart?: (ids: { docId: string; meetingId: string }) => void;
+  /**
+   * Tick progress for the surface showing provisional text. Per SESSION, not
+   * per server: the relay spreads the shared deps and adds this per socket,
+   * so the frames reach the one client whose meeting it is.
+   */
+  onTickLifecycle?: (event: NotesTickLifecycle) => void;
 }
 
 /**
@@ -679,6 +707,9 @@ export function beginNotesSession(
   deps: MeetingNotesDeps,
   ids: { docId: string; meetingId: string },
 ): MeetingNotesSession {
+  // Before anything else: whatever a previous recording wrote on this doc is
+  // finished writing, and this session must never replace it.
+  deps.onSessionStart?.(ids);
   const context = deps.resolveContext?.(ids.docId) ?? deps.context;
   let previous: string | null = null;
   /** Raw engine labels, never display names — a carried turn is re-mapped
@@ -713,18 +744,42 @@ export function beginNotesSession(
           speakerLabel: turn.speaker,
         };
 
+  const lifecycle = (phase: 'composing' | 'written' | 'failed', tick: number, turns: number[]) =>
+    deps.onTickLifecycle?.({ docId: ids.docId, meetingId: ids.meetingId, tick, phase, turns });
+
   const composeTick = (tick: NotesTick): void => {
     lastTickNo = Math.max(lastTickNo, tick.tick);
+    // Announced when the tick FIRES, not when the chain gets to it: this is
+    // the moment the settled words split off from the provisional stream,
+    // which is what the surface showing them wants to draw.
+    if (tick.turns.length > 0) {
+      lifecycle(
+        'composing',
+        tick.tick,
+        tick.turns.map((t) => t.turn),
+      );
+    }
     chain = chain.then(async () => {
       const raw = [...carry, ...tick.turns];
       carry = [];
       if (raw.length === 0) return;
-      const turns = raw.map(withNames);
+      // Speaker tags belong to multi-speaker sessions only (owner's call,
+      // 2026-08-31: a solo huddle stamped with the speaker's own name on
+      // every note is pure noise — and a `conversation` capture with one
+      // person in the room is still solo). Until a second voice has been
+      // heard, the composer never learns who spoke, so it has nothing to tag.
+      const multi = seen.size >= 2;
+      const turns = multi
+        ? raw.map(withNames)
+        : raw.map((t): NotesTurn => ({ turn: t.turn, text: t.text }));
       let taskLinks: readonly NoteTaskLink[] = [];
       let docLinks: readonly NoteDocLink[] = [];
       // Read before the pass, written after it: this tick's words are the
-      // NEXT tick's overlap, never their own.
-      const priorTurns = priorRaw.map(withNames);
+      // NEXT tick's overlap, never their own. Same multi gate as `turns`:
+      // the capture pass must see exactly the window its guards see.
+      const priorTurns = multi
+        ? priorRaw.map(withNames)
+        : priorRaw.map((t): NotesTurn => ({ turn: t.turn, text: t.text }));
       priorRaw = raw;
       if (deps.captureIntents) {
         try {
@@ -803,7 +858,10 @@ export function beginNotesSession(
         // to — an attribution must name something the transcript contained.
         const checked = normalizeSpeakerTags(composed, {
           names,
-          known: seen,
+          // While the session is effectively solo the composer was shown no
+          // voices at all, so ANY tag it writes is invented — an empty known
+          // set unwraps them all.
+          known: multi ? seen : new Set<string>(),
           ...(input.humanNotes ? { protect: input.humanNotes } : {}),
           // What this tick actually carried, per voice. A mention the
           // composer has just written is stamped with it, so a later
@@ -827,8 +885,18 @@ export function beginNotesSession(
           notes,
           ...(live ? { basedOn: live.items } : {}),
         });
+        lifecycle(
+          'written',
+          tick.tick,
+          raw.map((t) => t.turn),
+        );
       } catch (err) {
         carry = [...raw, ...carry];
+        lifecycle(
+          'failed',
+          tick.tick,
+          raw.map((t) => t.turn),
+        );
         deps.onError?.(err instanceof Error ? err.message : 'notes composer failed');
       }
     });

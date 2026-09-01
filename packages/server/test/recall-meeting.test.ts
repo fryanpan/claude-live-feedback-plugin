@@ -334,19 +334,27 @@ describe('the bot meeting', () => {
 
   it('gives the notes composer the names, never the labels', async () => {
     // A note that said "Speaker p7 raised the sync cost" is the bug this
-    // whole label-then-immediately-name design exists to avoid.
+    // whole label-then-immediately-name design exists to avoid. Two voices,
+    // because speakers only reach the composer at all once a second voice
+    // has been heard (the multi-speaker tag gate) — a solo bot call takes
+    // no attribution, same as a solo microphone capture.
     const relay = relayWith(new FakeRecall(config()));
     await relay.invite({ docId: 'doc-1', meetingUrl: ZOOM_URL });
     relay.onSocketText(
       TOKEN,
       transcriptFrame({ final: true, id: 7, name: 'Rowan Pike', text: 'So the sync.' }),
     );
+    relay.onSocketText(
+      TOKEN,
+      transcriptFrame({ final: true, id: 8, name: 'Devi Sen', text: 'Measure it first.' }),
+    );
     schedule.fire();
     await new Promise((r) => setTimeout(r, 10));
     expect(notesSeen).not.toHaveLength(0);
     const speakers = notesSeen.flatMap((i) => i.tick.turns.map((t) => t.speaker));
     expect(speakers).toContain('Rowan Pike');
-    expect(speakers.some((s) => s?.includes('p7'))).toBe(false);
+    expect(speakers).toContain('Devi Sen');
+    expect(speakers.some((s) => s?.includes('p7') || s?.includes('p8'))).toBe(false);
   });
 
   it('starts the meeting on the first WORD, not on the status report', async () => {

@@ -230,6 +230,26 @@ describe('a meeting end to end: pauses become notes, stop/start stays consistent
     expect(v2.split('## Meeting notes').length).toBe(2);
     expect(v2.split('So the sync is the bottleneck.').length).toBe(2);
 
+    // The socket heard about both ticks as they happened — composing when
+    // the pause fired, written when the note landed — carrying the same turn
+    // ids as the transcript frames, so a provisional surface can move
+    // exactly those lines into "being written" and out again.
+    await waitFor(
+      () => client.frames.filter((f) => f.type === 'notes_progress').length >= 4,
+      'the notes_progress frames',
+    );
+    expect(
+      client.frames
+        .filter((f) => f.type === 'notes_progress')
+        .slice(0, 4)
+        .map((f) => ({ phase: f.phase, tick: f.tick, turns: f.turns })),
+    ).toEqual([
+      { phase: 'composing', tick: 1, turns: [0] },
+      { phase: 'written', tick: 1, turns: [0] },
+      { phase: 'composing', tick: 2, turns: [1] },
+      { phase: 'written', tick: 2, turns: [1] },
+    ]);
+
     // Stop mid-sentence on turn three: only two of its words were spoken, so
     // the close flushes exactly the words actually said, and the end tick
     // folds them into the notes without waiting for a pause that never comes.
@@ -278,16 +298,26 @@ describe('a meeting end to end: pauses become notes, stop/start stays consistent
     expect(during.meetings.find((m) => m.meetingId === secondMeetingId)?.endedAt).toBeNull();
 
     // The fresh engine session replays the script from its first turn; the
-    // fresh notes session starts from nothing. The first pause REPLACES the
-    // old meeting's section — this meeting's notes, not an accretion of both.
+    // fresh notes session starts from nothing — and the first meeting's notes
+    // are FINISHED writing. Its session-start released the ledger's claims,
+    // so the first pause APPENDS after them rather than replacing them: a
+    // stop-and-restart never costs the doc the notes already written (the
+    // owner's reported data loss, 2026-08-31).
     client.speak(7);
     await waitFor(() => client.finals().length === 1, 'the second meeting settled turn');
     schedule.fire();
     await waitFor(() => updates.length === 4, 'the second meeting notes');
     const md = docMarkdown();
+    // One section still — the old one ended the doc, so this meeting joins
+    // its end instead of opening a second heading mid-air.
     expect(md.split('## Meeting notes').length).toBe(2);
+    // Every note the FIRST meeting wrote is still there, after stop/restart.
     expect(md).toContain('So the sync is the bottleneck.');
-    expect(md).not.toContain('then we');
+    expect(md).toContain("Let's measure it first.");
+    expect(md).toContain('then we');
+    // The second meeting re-spoke the first sentence; the merge recognises
+    // the line already in the doc rather than writing it twice.
+    expect(md.split('So the sync is the bottleneck.').length).toBe(2);
 
     client.stop();
     await waitFor(() => client.frames.some((f) => f.type === 'stopped'), 'second stopped');
@@ -350,7 +380,26 @@ describe('a meeting end to end: pauses become notes, stop/start stays consistent
     // none of them. `MockScriptTurn.speaker` exists precisely so the mock can
     // diarize, and this script did not set it — so the one test that walks
     // socket -> store -> notes -> doc walked it unlabelled.
-    const client = await AudioClient.open(wsBase, docId);
+    //
+    // Its OWN doc, not the shared one: the meetings above already wrote these
+    // exact sentences there, and a restart never replaces prior-meeting notes
+    // — the tagged rewrites would arrive as suggestions instead of the text
+    // changes every assertion below reads.
+    const path = join(dataDir, 'speaker-carry.md');
+    writeFileSync(path, '# Speaker carry\n\nAgenda.\n');
+    const created = await fetch(`${base}/api/docs`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ docId: 'speaker-carry', sourceUrl: path, title: 'Speaker carry' }),
+    });
+    expect(created.status, await created.clone().text()).toBe(200);
+    const carryDocId = ((await created.json()) as { docId: string }).docId;
+    const carryMarkdown = (): string => {
+      const room = handle.rooms.get(carryDocId);
+      if (!room) throw new Error(`no room for ${carryDocId}`);
+      return prose.serializeFragmentToMarkdown(prose.getProseFragment(room.ydoc));
+    };
+    const client = await AudioClient.open(wsBase, carryDocId);
     // A conversation: the mode is what buys the labels every assertion below
     // is about.
     client.start('conversation');
@@ -369,7 +418,10 @@ describe('a meeting end to end: pauses become notes, stop/start stays consistent
     expect(client.finals().map((f) => f.speaker)).toEqual(['A', 'B']);
 
     // 2. The durable record keeps the label with the turn.
-    expect(readTranscript(dataDir, docId, meetingId).map((t) => t.speaker)).toEqual(['A', 'B']);
+    expect(readTranscript(dataDir, carryDocId, meetingId).map((t) => t.speaker)).toEqual([
+      'A',
+      'B',
+    ]);
 
     // 3. The notes name them. The composer stub renders `speaker: text`, and
     //    the speaker it renders has been through `speakerDisplayName` — so
@@ -378,7 +430,7 @@ describe('a meeting end to end: pauses become notes, stop/start stays consistent
     const before = updates.length;
     schedule.fire();
     await waitFor(() => updates.length > before, 'the notes update for this meeting');
-    const named = docMarkdown();
+    const named = carryMarkdown();
     expect(named).toContain('Speaker A: So the sync is the bottleneck.');
     expect(named).toContain("Speaker B: Let's measure it first.");
 
@@ -387,10 +439,13 @@ describe('a meeting end to end: pauses become notes, stop/start stays consistent
     //    and every later render of that label resolves to the name.
     client.ws.send(JSON.stringify({ type: 'name_speaker', speaker: 'A', name: 'Dana' }));
     await waitFor(
-      () => listMeetings(dataDir, docId).some((m) => m.meetingId === meetingId && m.speakers?.A),
+      () =>
+        listMeetings(dataDir, carryDocId).some((m) => m.meetingId === meetingId && m.speakers?.A),
       'the name to reach the meeting record',
     );
-    expect(listMeetings(dataDir, docId).find((m) => m.meetingId === meetingId)?.speakers).toEqual({
+    expect(
+      listMeetings(dataDir, carryDocId).find((m) => m.meetingId === meetingId)?.speakers,
+    ).toEqual({
       A: 'Dana',
     });
 
@@ -400,10 +455,10 @@ describe('a meeting end to end: pauses become notes, stop/start stays consistent
     //    replaces the whole section and would make this pass for the wrong
     //    reason.
     await waitFor(
-      () => docMarkdown().includes('Dana: So the sync is the bottleneck.'),
+      () => carryMarkdown().includes('Dana: So the sync is the bottleneck.'),
       'the rename to rewrite the note already written',
     );
-    const rewritten = docMarkdown();
+    const rewritten = carryMarkdown();
     expect(rewritten).not.toContain('Speaker A');
     // Only that voice moved. B was not named and still reads as a label.
     expect(rewritten).toContain("Speaker B: Let's measure it first.");
@@ -415,9 +470,9 @@ describe('a meeting end to end: pauses become notes, stop/start stays consistent
     const beforeRenamed = updates.length;
     schedule.fire();
     await waitFor(() => updates.length > beforeRenamed, 'the notes update after the rename');
-    expect(docMarkdown()).toContain('Dana: Then we decide.');
+    expect(carryMarkdown()).toContain('Dana: Then we decide.');
     // The record is unchanged by the naming — raw labels, all three turns.
-    expect(readTranscript(dataDir, docId, meetingId).map((t) => t.speaker)).toEqual([
+    expect(readTranscript(dataDir, carryDocId, meetingId).map((t) => t.speaker)).toEqual([
       'A',
       'B',
       'A',
