@@ -64,6 +64,29 @@ describe('the mode a doc may MOUNT in', () => {
     expect(initialEditMode(true)).toBe('view');
   });
 
+  // A huddle the person started seconds ago mounted read-only under a
+  // placeholder reading "Type or say…" — an invitation the page refused.
+  it('opens a just-started huddle ready to write, whatever the preference', () => {
+    writeEditModePref('view');
+    expect(initialEditMode(true, { justStarted: true })).toBe('edit');
+  });
+
+  it('is this mount only — it stores nothing and the next visit reads normally', () => {
+    writeEditModePref('view');
+    expect(initialEditMode(true, { justStarted: true })).toBe('edit');
+    // The preference is untouched, so an ordinary later arrival still reads.
+    expect(readEditModePref()).toBe('view');
+    expect(initialEditMode(true)).toBe('view');
+  });
+
+  it('never overrides a server that said this browser may not write', () => {
+    // `justStarted` is about intent; `canWrite` is about permission, and
+    // permission wins. A read-only visitor following a share link carries no
+    // start flag, but nothing may make this the exception that grants one.
+    writeEditModePref('edit');
+    expect(initialEditMode(false, { justStarted: true })).toBe('view');
+  });
+
   // A refusal is a lock, not a reset. This browser may be signed in again in
   // a minute, and the preference is still what this person likes — clearing
   // it would silently change their setting on the way past.

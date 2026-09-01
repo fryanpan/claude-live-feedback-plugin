@@ -335,9 +335,13 @@ async function mountMarkdown(ctx: MountContext): Promise<void> {
   // flag, and the strip asks for the mic at once instead of waiting for a
   // press. Read once and taken back out of the address, so a reload or a
   // later Back into this entry does not open a mic nobody pressed for.
+  // Read ONCE, here, because the strip block below takes the flag back out of
+  // the address — and the edit-mode decision that also needs it runs much
+  // later, by which time `location.search` no longer says anything.
+  const startedHuddleHere = wantsHuddleStart(location.search);
   const meetingStripEl = document.getElementById('meeting-strip');
   if (meetingStripEl && ctx.docType === 'markdown' && ctx.navDocId === undefined) {
-    const huddleStart = wantsHuddleStart(location.search);
+    const huddleStart = startedHuddleHere;
     // "Record a conversation" is the only thing that says someone else is in
     // the room, and it is a press on the Board — a page that is gone by the
     // time this mounts. It rides in on the address with the start flag and
