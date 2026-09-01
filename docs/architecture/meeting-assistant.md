@@ -29,11 +29,15 @@ flowchart LR
   end — clean stop, tab close, network drop — ends the meeting exactly once.
   `opening`/`ending` are real states because both ends of a meeting are round
   trips.
-- **Nothing word-rate rides SSE.** Transcript frames return on the audio
-  socket; only `meeting.started`/`meeting.stopped` broadcast to the doc
-  channel. The SSE hub keeps 200 events for reconnect replay and a
-  conversation emits that many words in about a minute — broadcasting
-  partials would evict every real doc event.
+- **Nothing word-rate enters the SSE replay buffer.** Microphone transcript
+  frames return on the audio socket; only `meeting.started`/`meeting.stopped`
+  broadcast to the doc channel. The SSE hub keeps 200 events for reconnect
+  replay and a conversation emits that many words in about a minute —
+  broadcasting partials would evict every real doc event. The bot path (below)
+  has no socket to a browser, so its words DO ride the doc channel — as
+  `meeting.transcript` frames through `SseHub.broadcastTransient`, which fans
+  out live, buffers nothing and stamps no id, so the replay window and every
+  reconnect cursor are untouched.
 - **The strip, not the doc.** Desktop: a bar along the bottom of the editor
   pane, reserved as a grid track so it can never cover prose. Mobile
   (≤720px): a stacked panel at the true bottom edge. The transcript never
@@ -337,7 +341,8 @@ flowchart LR
   Hook --> API
   API -->|EngineTurn| Notes[MeetingNotesSession]
   API -->|settled turns| Store[MeetingStore]
-  API -.->|meeting.bot| SSE[Doc SSE channel]
+  API -.->|meeting.bot, buffered| SSE[Doc SSE channel]
+  API -.->|meeting.transcript, transient| SSE
 ```
 
 **Both callbacks come in on a hostname of their own** (2026-08-31).
@@ -475,14 +480,34 @@ not in this repo and not in the create-bot body. The Keychain key still serves
 the browser-microphone path. Two places hold an AssemblyAI credential and they
 are for two different paths.
 
-**What is NOT here, deliberately.** No live word ticker for a bot meeting: a
-bot's words have no socket back to the browser (the strip's words come down the
-socket that sent the audio), and pushing them over the doc's SSE channel would
-evict every real doc event from its 200-event replay buffer within a minute.
-What a viewer sees is the bot's state and the notes composing themselves.
-Calendar auto-join is also not here, and it is not a single config call: it
-needs a Google/Outlook OAuth app, per-user OAuth consent, `POST /calendars`,
-and a `calendar.sync_events` webhook consumer before any bot is scheduled.
+**The live ticker rides the doc's own stream, transiently** (2026-08-31,
+after the owner's first real bot call: names and notes worked, but nothing
+showed the bot was hearing anything until notes appeared). A bot's words have
+no socket back to any browser — the microphone strip's words come down the
+socket that sent the audio — and the one channel every viewer of a doc already
+holds is `/events/<docId>`. Buffered, its words would evict every real doc
+event from the 200-event replay window within a minute; so the relay sends
+each vendor frame, partials included, as a `meeting.transcript` event through
+`SseHub.broadcastTransient`: fanned out to open streams, never appended to the
+buffer, and carrying **no `id:` line** — per the SSE spec a frame without one
+leaves the client's `lastEventId` alone, so a reconnect can never present a
+word's id and be told it is a gap. Words missed during a blip are gone, exactly
+as they are on the microphone socket; the durable transcript is the record.
+`meeting-bot-client.ts` listens for both events on its one EventSource, and the
+strip folds bot turns through the same `rollTranscript` window the socket
+frames use, with the platform's display name (`speakerName`) filling the tag
+a person would otherwise tap to fill. The tag is a fixed label on a bot turn
+rather than the rename button: the platform named the voice, and the rename
+route refuses a meeting still recording. The contract is
+`MEETING_TRANSCRIPT_EVENT` / `MeetingTranscriptEvent` in `@feedback/core`;
+`recall-transcript-stream.test.ts` drives it through the real server. It adds
+no vendor or LLM spend: the frames already existed for the notes composer, and
+this only forwards them.
+
+**What is NOT here, deliberately.** Calendar auto-join, and it is not a single
+config call: it needs a Google/Outlook OAuth app, per-user OAuth consent,
+`POST /calendars`, and a `calendar.sync_events` webhook consumer before any
+bot is scheduled.
 
 **Load-bearing gotchas on this path**
 

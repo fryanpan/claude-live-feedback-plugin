@@ -1460,6 +1460,10 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
     client: opts.meetingBot ?? null,
     unreachable: recallUnreachable,
     broadcast: (docId, payload) => sse.broadcast(docId, payload),
+    // The bot's words DO touch this hub — unlike the microphone's — because a
+    // bot has no socket to any browser. Transient: live fan-out, no buffer,
+    // no id, so the replay window stays the doc's (see SseHub).
+    broadcastTransient: (docId, payload) => sse.broadcastTransient(docId, payload),
   });
   // Late-bound because Rooms is constructed before the task store and the
   // projection it needs. Nothing can fire through it until a room exists,

@@ -211,6 +211,43 @@ export class SseHub {
     }
   }
 
+  /**
+   * Fan a frame out to every open stream on a channel and FORGET it.
+   *
+   * The counterpart to `broadcast` for word-rate traffic — a bot meeting's
+   * live transcript, which says two hundred words in about a minute. Through
+   * `broadcast` that would evict every real doc event from the replay buffer
+   * within a minute of the bot joining, which is why the microphone path
+   * returns its words on the audio socket and this path never had a ticker
+   * at all. So a transient frame skips the buffer entirely: not appended,
+   * not pruned, not counted against `REPLAY_MAX_EVENTS`.
+   *
+   * And it carries NO `id:` line — per the SSE spec a frame without one
+   * leaves the client's `lastEventId` untouched. That is load-bearing, not
+   * an omission: an id that was never buffered would, presented back on
+   * reconnect, read as a gap and trigger a refetch that finds nothing — the
+   * vacuous-gap wave `lastEver` exists to end. Words missed during a blip
+   * are gone, exactly as they are on the microphone socket; the durable
+   * transcript is the record either way.
+   *
+   * Returns how many sinks it reached. Zero is a real answer (nobody has the
+   * doc open) and costs nothing — there is no buffer to park it in.
+   */
+  broadcastTransient(docId: string, payload: SsePayload): number {
+    const set = this.byDoc.get(docId);
+    if (!set) return 0;
+    let sent = 0;
+    for (const sink of set.keys()) {
+      try {
+        sink.write(payload.event, payload);
+        sent += 1;
+      } catch (err) {
+        console.error('[sse] transient write failed:', err);
+      }
+    }
+    return sent;
+  }
+
   private buffer(docId: string, id: string, payload: SsePayload, toAgent?: string): void {
     let buf = this.replay.get(docId);
     if (!buf) {

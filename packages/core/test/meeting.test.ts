@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { parseMeetingTranscriptEvent } from '../src/meeting-bot.ts';
 import {
   DEFAULT_ROOM_SPEAKERS,
   MAX_ROOM_SPEAKERS,
@@ -259,5 +260,49 @@ describe('the announcement on the wire', () => {
     expect(
       parseMeetingClientMessage(JSON.stringify({ type: 'announced', by: 'shouted' })),
     ).toBeNull();
+  });
+});
+
+describe('parseMeetingTranscriptEvent — the bot path’s live turn on the doc stream', () => {
+  it('reads the SSE data line into the shared transcript shape, name and all', () => {
+    const raw = JSON.stringify({
+      event: 'meeting.transcript',
+      docId: 'doc-1',
+      meetingId: 'm-1',
+      turn: 3,
+      text: 'So the sync.',
+      final: true,
+      speaker: 'p7',
+      speakerName: 'Rowan Pike',
+    });
+    expect(parseMeetingTranscriptEvent(raw)).toEqual({
+      event: 'meeting.transcript',
+      docId: 'doc-1',
+      meetingId: 'm-1',
+      turn: 3,
+      text: 'So the sync.',
+      final: true,
+      speaker: 'p7',
+      speakerName: 'Rowan Pike',
+    });
+  });
+
+  it('tolerates what the socket frame tolerates: no speaker, no name, a missing final', () => {
+    expect(parseMeetingTranscriptEvent({ turn: 0, text: 'hi' })).toEqual({
+      event: 'meeting.transcript',
+      docId: '',
+      meetingId: '',
+      turn: 0,
+      text: 'hi',
+      final: false,
+    });
+  });
+
+  it('refuses a frame without a turn number or text — the two facts a fold needs', () => {
+    expect(parseMeetingTranscriptEvent({ text: 'hi' })).toBeNull();
+    expect(parseMeetingTranscriptEvent({ turn: 1 })).toBeNull();
+    expect(parseMeetingTranscriptEvent({ turn: Number.NaN, text: 'x' })).toBeNull();
+    expect(parseMeetingTranscriptEvent('not json')).toBeNull();
+    expect(parseMeetingTranscriptEvent(null)).toBeNull();
   });
 });

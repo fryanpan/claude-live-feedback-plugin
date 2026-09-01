@@ -7136,6 +7136,23 @@ body.is-reading-width #editor > .ProseMirror {
 .meeting-speaker-pill::before {
   content: "✎ ";
 }
+/* A bot turn's tag is the same pill with nothing to tap: the platform named
+   the voice, and a live bot meeting is not renamed from the strip. So no
+   pencil, no dotted underline, no hover — the two signals that promise an
+   edit — on the span the strip renders instead of the button. */
+.meeting-speaker.is-fixed {
+  cursor: default;
+}
+.meeting-speaker.is-fixed .meeting-speaker-pill {
+  text-decoration: none;
+}
+.meeting-speaker.is-fixed .meeting-speaker-pill::before {
+  content: none;
+}
+.meeting-speaker.is-fixed:hover .meeting-speaker-pill {
+  color: var(--fg-muted);
+  border-color: var(--border);
+}
 /* Why no words are coming — an unconfigured server, a refused mic, an origin
    the browser gives no mic on, a bot's state. It occupies the feed because it
    is the answer to the same question. */
