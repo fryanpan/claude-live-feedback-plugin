@@ -300,9 +300,109 @@ describe('mountPlanGate', () => {
     expect(JSON.parse(String(post?.init?.body))).toEqual({ author: JORDAN });
     expect(label()).toBe('Plan requested');
     expect(sub()).toBe('Waiting for Workspaces');
-    // Still pressable: an agent that missed the first comment gets another.
-    expect(approveBtn()?.disabled).toBe(false);
+    // A receipt, not a control. It stayed pressable so a missed comment could
+    // be re-sent, and every press filed another identical thread.
+    expect(approveBtn()?.disabled).toBe(true);
     gate.destroy();
+  });
+
+  it('names who asked, so the press has a receipt and not just a label', async () => {
+    const gate = mountPlanGate({
+      docId: 'd-receipt',
+      root,
+      user: JORDAN,
+      canWrite: true,
+      fetchJson: stubFetch([
+        {
+          meta: { huddleKind: 'plan', planRequestedAt: 1e12, planRequestedBy: 'Jordan' },
+          tasks: [],
+          leadAgentId: 'Workspaces',
+        },
+      ]).fetchJson,
+    });
+    await gate.ready;
+    expect(gate.face()).toBe('requested');
+    expect(sub()).toBe('Asked by Jordan — waiting for Workspaces');
+    gate.destroy();
+  });
+
+  it('files ONE request however many times the float is pressed', async () => {
+    // Three presses gave three identical threads, with nothing on screen
+    // saying the first had been heard.
+    const stub = stubFetch([
+      { meta: { huddleKind: 'plan' }, tasks: [], leadAgentId: 'Workspaces' },
+      {
+        meta: { huddleKind: 'plan', planRequestedAt: 1e12, planRequestedBy: 'Jordan' },
+        tasks: [],
+        leadAgentId: 'Workspaces',
+      },
+    ]);
+    const gate = mountPlanGate({
+      docId: 'd-once',
+      root,
+      user: JORDAN,
+      canWrite: true,
+      fetchJson: stub.fetchJson,
+    });
+    await gate.ready;
+    expect(gate.face()).toBe('make');
+    for (let i = 0; i < 3; i++) {
+      approveBtn()?.click();
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+    }
+    const requests = stub.calls.filter((c) => c.url.endsWith('/plan-request'));
+    expect(requests).toHaveLength(1);
+    expect(gate.face()).toBe('requested');
+    gate.destroy();
+  });
+
+  it('flips from requested to Approve when the plan lands, with no reload', async () => {
+    // The measured bug: the float sat on "Plan requested" for 12s after the
+    // agent had already set the plan pending, because the only subscription
+    // it ever opened was gated on state==='pending' — which it could not yet
+    // know — and nothing else re-read. It took a reload to advance.
+    //
+    // The doc's own meta map is what carries the arrival, so the watcher is
+    // driven here the way Yjs drives it: fire, and the gate re-reads.
+    let fire: (() => void) | undefined;
+    let stopped = false;
+    const stub = stubFetch([
+      {
+        meta: { huddleKind: 'plan', planRequestedAt: 1e12, planRequestedBy: 'Jordan' },
+        tasks: [],
+        leadAgentId: 'Workspaces',
+      },
+      { meta: { huddleKind: 'plan', planState: 'pending' }, tasks: [] },
+    ]);
+    const gate = mountPlanGate({
+      docId: 'd-live',
+      root,
+      user: JORDAN,
+      canWrite: true,
+      fetchJson: stub.fetchJson,
+      watchDocMeta: (onChange) => {
+        fire = onChange;
+        return () => {
+          stopped = true;
+        };
+      },
+    });
+    await gate.ready;
+    expect(gate.face()).toBe('requested');
+    // The watch is armed from mount, not from a state the client can't reach.
+    expect(fire).toBeTypeOf('function');
+
+    fire?.();
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(gate.face()).toBe('approve');
+    expect(label()).toBe('Approve Plan');
+    gate.destroy();
+    expect(stopped).toBe(true);
   });
 
   it('a reader sees no Make Plan either', async () => {

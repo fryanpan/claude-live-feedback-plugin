@@ -54,6 +54,22 @@ export interface PlanGateOpts {
   /** Injected so a test drives this without a server or an EventSource. */
   fetchJson?: (url: string, init?: RequestInit) => Promise<unknown>;
   subscribe?: (workspaceId: string, onTaskEvent: () => void) => () => void;
+  /**
+   * Watch the doc's own metadata for a change, and re-read when one lands.
+   *
+   * This is how the float learns the plan ARRIVED. The board streams below
+   * carry `task.transitioned` and `task.created` and nothing else, and
+   * `POST /plan {state:'pending'}` fires neither — only the `approved` branch
+   * touches the task projection. So a doc sitting on `Plan requested` had no
+   * event that could reach it and stayed on that label until a reload, which
+   * is exactly what the UX review measured.
+   *
+   * The signal it needs is already there: `setPlanState` writes `planState`
+   * into the room's Yjs `meta` map, and this client is connected to that doc.
+   * Observing the map turns the arrival into a live flip with no new server
+   * surface. Injected rather than reached for so a test drives it without Yjs.
+   */
+  watchDocMeta?: (onChange: () => void) => () => void;
   /** Injected so a test can retire the approved notice without waiting on a
    *  real clock. Defaults to the real timers. */
   setTimer?: (fn: () => void, ms: number) => number;
@@ -78,6 +94,7 @@ interface DocAnswer {
     huddleKind?: string;
     planRequestedAt?: number;
     planRequestedBy?: string;
+    planApprovedBy?: string;
   };
   tasks?: Array<{ planHeld?: boolean; workspaceId?: string }>;
   leadAgentId?: string;
@@ -151,6 +168,7 @@ export function mountPlanGate(opts: PlanGateOpts): PlanGateHandle {
   let state: string | undefined;
   let kind: string | undefined;
   let requestedAt: number | undefined;
+  let requestedBy: string | undefined;
   let lead: string | undefined;
   let loaded = false;
   let busy = false;
@@ -175,7 +193,13 @@ export function mountPlanGate(opts: PlanGateOpts): PlanGateHandle {
   function render(): void {
     const face = faceFor();
     float.hidden = face === 'none';
-    float.disabled = busy || face === 'approved';
+    // `requested` is a RECEIPT, not a control. It used to stay pressable so
+    // an agent that missed the first comment could be asked again, but every
+    // press filed another identical thread — three presses, three threads,
+    // with nothing on screen saying the first had been heard. The ask is a
+    // comment and the doc has a comment box; a second identical thread is not
+    // the recovery path it looked like.
+    float.disabled = busy || face === 'approved' || face === 'requested';
     float.dataset.face = face;
     // One class per face so the stylesheet can colour them apart; the base
     // class carries the shape and the `[hidden]` guard.
@@ -189,7 +213,13 @@ export function mountPlanGate(opts: PlanGateOpts): PlanGateHandle {
       subEl.textContent = `Ask ${named} to create a plan`;
     } else if (face === 'requested') {
       labelEl.textContent = 'Plan requested';
-      subEl.textContent = `Waiting for ${named}`;
+      // Name who asked, so the press has a receipt and not just a label that
+      // could equally mean "nothing happened". No clock: "asked by" is the
+      // fact a second presser needs, and a relative time would go stale in
+      // place with nothing to re-render it.
+      subEl.textContent = requestedBy
+        ? `Asked by ${requestedBy} — waiting for ${named}`
+        : `Waiting for ${named}`;
     } else if (face === 'approve') {
       labelEl.textContent = 'Approve Plan';
       subEl.textContent = 'Creates the goal and tickets, starts work';
@@ -232,6 +262,7 @@ export function mountPlanGate(opts: PlanGateOpts): PlanGateHandle {
       state = body.meta?.planState;
       kind = body.meta?.huddleKind;
       requestedAt = body.meta?.planRequestedAt;
+      requestedBy = body.meta?.planRequestedBy;
       lead = body.leadAgentId;
       loaded = true;
       const tasks = body.tasks ?? [];
@@ -267,9 +298,8 @@ export function mountPlanGate(opts: PlanGateOpts): PlanGateHandle {
 
   float.addEventListener('click', () => {
     const face = faceFor();
-    if (face === 'make' || face === 'requested') {
-      // Asking again is allowed and is the point of leaving the button live:
-      // an agent that missed the first comment gets a second one.
+    // `requested` is disabled above and files nothing — one ask, one thread.
+    if (face === 'make') {
       press(() =>
         fetchJson(`${docUrl}/plan-request`, {
           method: 'POST',
@@ -301,9 +331,17 @@ export function mountPlanGate(opts: PlanGateOpts): PlanGateHandle {
 
   const ready = load();
 
+  // The doc's own metadata, watched from mount — this is what carries the
+  // plan's ARRIVAL (see `watchDocMeta`). Unconditional rather than gated on a
+  // face: the gate that used to decide when to listen is the bug.
+  const stopMetaWatch = opts.watchDocMeta?.(() => {
+    if (!disposed) void load();
+  });
+
   return {
     destroy(): void {
       disposed = true;
+      stopMetaWatch?.();
       if (noticeTimer !== undefined) clearTimer(noticeTimer);
       for (const stop of streams.values()) stop();
       streams.clear();
