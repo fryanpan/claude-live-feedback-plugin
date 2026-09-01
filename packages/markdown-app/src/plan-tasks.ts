@@ -11,9 +11,17 @@
  *
  * A sibling of the editor, not a plugin inside it (the task-link-chips
  * extension decorates links WRITTEN in the prose; this strip draws rows that
- * may appear nowhere in the text). Same shape as meeting-bot-row: one
- * endpoint, one event stream per board, injectable for tests, hides itself
- * when there is nothing to show.
+ * may appear nowhere in the text). One endpoint, one event stream per board,
+ * injectable for tests, hides itself when there is nothing to show.
+ *
+ * THE APPROVE BUTTON FLOATS. On a pending plan the one decision the doc is
+ * waiting for is approval, and it used to be a small control inside this
+ * strip — findable only by someone who already knew where to look. It is now
+ * a floating button pinned to the bottom of the editor pane, always visible
+ * however far the plan has been scrolled, unmistakably the primary action
+ * (Bryan, on the mock). The strip keeps the status line and the task chips;
+ * the verb it fires is unchanged — POST /api/docs/:id/plan, the approval
+ * release shipped with the plan-gate.
  */
 
 import type { User } from '@feedback/core';
@@ -92,8 +100,10 @@ export function mountPlanTasks(opts: PlanTasksOpts): PlanTasksHandle {
 
   const approve = document.createElement('button');
   approve.type = 'button';
-  approve.className = 'plan-tasks-approve';
-  approve.textContent = 'Approve plan';
+  approve.className = 'plan-approve-float';
+  // Just the label (Bryan, on the mock): no checkmark, no released-tasks
+  // subtext — the button is loud enough by being the only floating thing.
+  approve.textContent = 'Approve Plan';
   approve.hidden = true;
 
   const error = document.createElement('span');
@@ -101,8 +111,12 @@ export function mountPlanTasks(opts: PlanTasksOpts): PlanTasksHandle {
   // Assertive: only ever appears in answer to a press.
   error.setAttribute('aria-live', 'assertive');
 
-  row.append(label, list, approve, error);
+  row.append(label, list, error);
   root.append(row);
+  // The float anchors to the editor pane (`position: relative`), so it pins
+  // to the bottom of the visible pane whatever the scroll position. A bare
+  // root (a test, a stripped embed) anchors it to the root instead.
+  (root.closest('#editor-pane') ?? root).append(approve);
 
   let current: PlanTaskEntry[] = [];
   let state: string | undefined;
@@ -219,6 +233,7 @@ export function mountPlanTasks(opts: PlanTasksOpts): PlanTasksHandle {
       for (const stop of streams.values()) stop();
       streams.clear();
       row.remove();
+      approve.remove();
     },
     entries: () => current,
     planState: () => state,

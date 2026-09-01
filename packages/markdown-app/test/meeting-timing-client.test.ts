@@ -254,10 +254,15 @@ async function mountStrip(timing: boolean): Promise<{ root: HTMLElement; socket:
         ok: true,
         capture: { stop: vi.fn(), setEchoCancellation: () => Promise.resolve() },
       }),
+    // Solo, so the start frame's shape is the minimal one this file pins and
+    // no announcement machinery wakes up.
+    mode: DEFAULT_CAPTURE_MODE,
     timing,
   });
   cleanups.push(() => strip.destroy());
-  (root.querySelector('.meeting-toggle') as HTMLButtonElement).click();
+  // Start rides the chooser now: the Record button opens it, the CTA starts.
+  (root.querySelector('.meeting-record') as HTMLButtonElement).click();
+  (root.querySelector('.meeting-start-cta') as HTMLButtonElement).click();
   await settle();
   const sock = socket as FakeSocket | null;
   if (!sock) throw new Error('the strip opened no socket');
@@ -286,8 +291,11 @@ describe('the strip only measures when it is asked — and the control that prov
     expect(root.classList.contains('has-timing')).toBe(true);
     const start = JSON.parse(socket.sent[0] as string) as Record<string, unknown>;
     expect(start.timing).toBe(true);
-    // The readout is a row of its own, after the caption — never a fourth
-    // item competing with the transcript for the bar's one line.
-    expect(root.lastElementChild?.className).toBe('meeting-timing-row');
+    // The readout is a row of its own, after the feed — never a fourth item
+    // competing with the transcript for the bar's one line. (The popover
+    // shells sit after it in the DOM; they are position: fixed.)
+    expect(root.querySelector('.meeting-feed')?.nextElementSibling?.className).toBe(
+      'meeting-timing-row',
+    );
   });
 });

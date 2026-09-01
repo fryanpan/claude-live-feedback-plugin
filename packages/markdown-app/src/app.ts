@@ -24,7 +24,7 @@ import {
 } from './huddle-entry.ts';
 import { ensureUserIdentity } from './identity-prompt.ts';
 import { wireKeyboardInset } from './keyboard-inset.ts';
-import { mountMeetingBotRow } from './meeting-bot-row.ts';
+import { createMeetingBotClient } from './meeting-bot-client.ts';
 import { mountMeetingStrip } from './meeting-strip.ts';
 import { wantsLatencyTiming } from './meeting-timing-client.ts';
 import type { MountContext } from './mount-context.ts';
@@ -64,7 +64,6 @@ import { readSuggestModePref, setSuggesting, writeSuggestModePref } from './sugg
 import { registerMarkdownMount } from './surface-registry.ts';
 import { type TableMenuItem, tableMenuItems } from './table-menu.ts';
 import { watchTaskLinkStatuses } from './task-link-chips.ts';
-import { mountDocVoice } from './voice-dock.ts';
 import { renderWorkspaceTree } from './workspace-tree.ts';
 
 const DEFAULT_WS_PATH = (docId: string, type: string) =>
@@ -149,10 +148,6 @@ async function main(): Promise<void> {
     },
     writeAccess.canWrite ? {} : { suppressNamePrompt: true },
   );
-  // Voice on the doc surface (§3.8): one dock for the whole session; each
-  // utterance reads the CURRENT doc + topmost heading at release time, so
-  // the anchor follows navigation without remounting.
-  mountDocVoice(user);
   registerMarkdownMount(mountMarkdown);
   startRouter({
     user,
@@ -358,9 +353,23 @@ async function mountMarkdown(ctx: MountContext): Promise<void> {
     // running numbers. Left in the address on purpose, unlike the huddle
     // flag: a reload should keep measuring, and it opens no mic by itself —
     // which is also why it is read after the huddle flag has been stripped.
+    // The bot's lifecycle is its own client — one endpoint, one SSE event —
+    // and the strip's chrome renders it: the invite lives in the start
+    // chooser, the state in the strip and menu. It hides itself when the
+    // server has no Recall key, so this costs one GET on a doc that cannot
+    // use it.
+    const botClient = createMeetingBotClient({ docId });
+    scope.onCleanup(() => botClient.destroy());
     const strip = mountMeetingStrip({
       docId,
       root: meetingStripEl,
+      // The Record Audio button docks at the end of the top bar's toolbar;
+      // the strip fuses to it from the row below.
+      toolbar: document.querySelector<HTMLElement>('#topbar .toolbar'),
+      bot: botClient,
+      // "<name>'s Claude Code Agent" — the bot walks into the call wearing
+      // the name of the person who sent it, editable in the chooser.
+      botNamePrefill: user.name ? `${user.name}'s Claude Code Agent` : 'Claude Code Agent',
       autoStart: huddleStart,
       // Read BEFORE the flag is stripped from the address above… it is, in
       // fact, read from `location.search` there too, so both come off the
@@ -378,11 +387,6 @@ async function mountMarkdown(ctx: MountContext): Promise<void> {
       postName: (meetingId, speaker, name) => postSpeakerName({ docId, meetingId, speaker, name }),
     });
     scope.onCleanup(() => strip.destroy());
-    // A sibling of the strip, not part of it: a bot has its own lifecycle and
-    // shares none of the microphone's state. It hides itself when the server
-    // has no Recall key, so this costs one GET on a doc that cannot use it.
-    const botRow = mountMeetingBotRow({ docId, root: meetingStripEl });
-    scope.onCleanup(() => botRow.destroy());
   }
 
   // Work derived from THIS doc, as live chips above the prose — and the

@@ -130,17 +130,24 @@ describe('mountPlanTasks', () => {
       subscribe: () => () => {},
     });
     await strip.ready;
-    const approve = root.querySelector<HTMLButtonElement>('.plan-tasks-approve');
+    const approve = root.querySelector<HTMLButtonElement>('.plan-approve-float');
     expect(approve?.hidden).toBe(false);
+    // The one decision the doc is waiting for is a floating button with just
+    // the label (Bryan, on the mock) — outside the chip row, so it pins to
+    // the pane rather than scrolling away with the strip.
+    expect(approve?.textContent).toBe('Approve Plan');
+    expect(approve?.closest('.plan-tasks')).toBeNull();
     approve?.click();
     await vi.waitFor(() => expect(strip.planState()).toBe('approved'));
     const post = stub.calls.find((c) => c.init?.method === 'POST');
     expect(post?.url).toBe('/api/docs/d-gate/plan');
     expect(JSON.parse(String(post?.init?.body))).toEqual({ state: 'approved', author: JORDAN });
     // Approved: the button is gone and the chip moved with the reload.
-    expect(root.querySelector<HTMLButtonElement>('.plan-tasks-approve')?.hidden).toBe(true);
+    expect(root.querySelector<HTMLButtonElement>('.plan-approve-float')?.hidden).toBe(true);
     expect(root.querySelector('.ws-status-chip')?.textContent).toBe('To do');
     strip.destroy();
+    // The float is appended beside the row, so destroy must remove it too.
+    expect(root.querySelector('.plan-approve-float')).toBeNull();
   });
 
   it('a reader without write access sees the drafts but no Approve', async () => {
@@ -157,7 +164,7 @@ describe('mountPlanTasks', () => {
     });
     await strip.ready;
     expect(root.querySelector<HTMLElement>('.plan-tasks')?.hidden).toBe(false); // control
-    expect(root.querySelector<HTMLButtonElement>('.plan-tasks-approve')?.hidden).toBe(true);
+    expect(root.querySelector<HTMLButtonElement>('.plan-approve-float')?.hidden).toBe(true);
     strip.destroy();
   });
 

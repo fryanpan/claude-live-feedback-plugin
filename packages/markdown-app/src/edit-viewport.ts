@@ -7,11 +7,11 @@
  * editing and the screen should also scroll up to show the point being
  * edited"*.
  *
- * 1. THE MEETING STRIP YIELDS. It is `#editor-pane`'s third grid row, so on a
- *    phone — where it is a stacked panel, not a 40px bar — it costs the prose
- *    ~70px on top of whatever the keyboard already takes. It is also the one
- *    thing on that screen with nothing to say while somebody types. So while
- *    an editor holds focus at phone width the strip gives its row back.
+ * 1. THE MEETING STRIP YIELDS. It is `#shell`'s second grid row, fused under
+ *    the topbar, so at phone width it costs the prose 36px on top of whatever
+ *    the keyboard already takes — and it is the one thing on that screen with
+ *    nothing to say while somebody types. So while an editor holds focus at
+ *    phone width the strip gives its row back.
  *
  *    It yields in CSS, never by unmounting: `stripYield` publishes a mode on
  *    `<body>` and the stylesheet reads it. The strip's state machine, its
@@ -23,8 +23,8 @@
  *    strip's own availability logic free to un-yield it at any moment.
  *
  *    A RECORDING strip never disappears — a live mic with no indicator is not
- *    a thing to ship. It collapses instead, to the meta row that carries the
- *    pulsing dot, the clock and Stop; only the transcript caption goes.
+ *    a thing to ship. `stripYield` publishes `compact` for it, and no rule
+ *    consumes that mode: the whole 36px line stays, clear of the keyboard.
  *
  * 2. THE CARET STAYS ABOVE THE KEYBOARD. Nothing scrolled to follow it. iOS
  *    does not shrink the LAYOUT viewport for the keyboard, so `#editor` still
@@ -44,11 +44,9 @@
 
 import { IOS_ACCESSORY, keyboardInset } from './keyboard-inset.ts';
 
-/** Width at which the strip becomes a stacked panel rather than a bar — the
- *  canonical phone breakpoint (docs/product/design-mobile.md). Above it the
- *  strip is 40px in a row, which is what the iPad reads, and it does not
- *  yield: the complaint is a phone complaint and the iPad's scarce axis is
- *  paid for by a bar that small only once. */
+/** The canonical phone breakpoint (docs/product/design-mobile.md). Above it
+ *  the strip does not yield: the complaint is a phone complaint and the
+ *  iPad's scarce axis is paid for by a 36px bar only once. */
 export const STRIP_YIELD_QUERY = '(max-width: 720px)';
 
 /** How much clear space to keep between the caret and either edge of the

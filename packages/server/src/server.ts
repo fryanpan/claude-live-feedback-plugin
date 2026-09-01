@@ -9874,10 +9874,22 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
             // A bot costs money the moment it is created, so unlike the
             // read above this one insists the doc actually exists.
             if (!rooms.get(docId)) return j(404, { error: 'doc not found' });
-            const body = (await req.json().catch(() => null)) as { meetingUrl?: unknown } | null;
+            const body = (await req.json().catch(() => null)) as {
+              meetingUrl?: unknown;
+              botName?: unknown;
+            } | null;
             const meetingUrl = typeof body?.meetingUrl === 'string' ? body.meetingUrl : '';
             if (!meetingUrl) return j(400, { error: 'meetingUrl required' });
-            const result = await recallRelay.invite({ docId, meetingUrl });
+            // Optional — the old payload stays accepted. Clipped rather than
+            // refused: a long name is a preference, not an error, and the
+            // vendor truncates what its UI cannot show anyway.
+            const rawBotName = typeof body?.botName === 'string' ? body.botName.trim() : '';
+            const botName = rawBotName ? rawBotName.slice(0, 100) : undefined;
+            const result = await recallRelay.invite({
+              docId,
+              meetingUrl,
+              ...(botName !== undefined ? { botName } : {}),
+            });
             if (result.ok) return j(200, { bot: result.status });
             const status =
               result.reason === 'not_configured'
