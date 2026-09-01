@@ -1146,6 +1146,43 @@ kernel-wide socket CREATION failing, and its cause is still unknown.**
   Fix: System Settings → Privacy & Security → Full Disk Access → add the
   binary (e.g. `~/.bun/bin/bun`). Shell-spawned processes inherit
   Terminal's TCC scope and don't hit this — only launchd does.
+- **The grant attaches per BINARY, not per volume — corrected 2026-09-01
+  after the wrong reading cost most of a day.** A launchd-started process
+  whose executable is on the boot disk AND holds Full Disk Access reads and
+  writes `/Volumes/Data` perfectly well; one whose executable *lives on* Data
+  cannot even exec, and dies before any of its code runs. Measured under
+  `launchctl submit`, with a positive control so the probe could speak:
+  `/bin/cat /etc/hosts` → 426 bytes; `/bin/cat` on a Data file →
+  `Operation not permitted`; the boot-disk `bun` on that same Data file →
+  read it fine. A full launchd job with `WorkingDirectory` on Data booted,
+  built both bundles and served.
+- **So "move the interpreter to the boot disk" is not insufficient — it is
+  the whole rule**, provided that interpreter holds FDA. The opposite claim
+  ("the program AND everything it reads at runtime must be off the volume")
+  was asserted here and in the fleet ops doc for several hours and is FALSE.
+  It came from a probe whose own `bun` was on Data (`~/.bun` is a symlink
+  into `/Volumes/Data`), so the failure was at exec and got attributed to the
+  read. **A binary on the blocked volume and a binary reading the blocked
+  volume fail at different moments; a probe that cannot tell them apart will
+  blame the wrong one.**
+- **Two different failure modes were observed on the same binary in the same
+  boot session, and this is still unexplained.** Morning: `/bin/cat` on a Data
+  file *hung* (100% in `dyld4::...open()`). Afternoon: the same call returned
+  a clean `Operation not permitted`. `uptime` / `kern.boottime` /
+  `last reboot` confirm no restart in between — a peer's "16:43 reboot" was
+  another session's own respawn, read as machine state. Leading hypothesis,
+  unconfirmed: a TCC database write (the user granting FDA to one binary) can
+  change behaviour for others in the same session. **Do not let this get
+  retold as settled.**
+- **Whether the grant survives a reboot is OPEN.** Nothing measured so far
+  spans one, so no claim either way is supported. A hang and an `EPERM` are
+  different enough that the pre-reboot state may not be reproducible from
+  today's evidence at all.
+- **A service can be alive, healthy and simply not bootstrapped.** The
+  2026-09-01 outage was diagnosed as a TCC failure and was in fact a
+  `bootout` that nobody re-bootstrapped. Check `launchctl list` for the label
+  before theorising about permissions — the absent-job case and the
+  blocked-job case both present as "the port is dead".
 - **`launchctl bootstrap gui/$(id -u)` is the modern entry point.**
   `launchctl load/unload` is deprecated on macOS 11+; `kickstart -k` is
   the modern way to force-restart a supervised service.
@@ -3478,3 +3515,28 @@ write-once in practice, and the repair verb for a moved file cannot repair it.
   kern.maxfilesperproc — under a 64 soft limit). Lower the HARD limit
   (`ulimit -n 64`) when building an exhaustion control, and assert the
   exhaustion actually happened, or the control passes vacuously.
+
+## `rsync -a` preserves a symlink's absolute target, so a copied release root can silently resolve back onto the volume you were escaping
+
+- **The trap.** Migrating prod's client releases to the boot disk, `rsync -a`
+  faithfully copied `current` — an absolute symlink into
+  `~/.local/state/claude-workspaces/...`, itself a symlink onto
+  `/Volumes/Data`. The copy looked complete, the server started, the board
+  served. It was serving from the **old volume**, which is precisely what the
+  migration existed to stop. Caught by `realpath`, not by any status check.
+- **Nothing downstream can notice.** A release root that resolves onto the
+  wrong disk is byte-identical in behaviour until that disk becomes
+  unreadable — at which point it fails as an outage rather than as a
+  migration bug, weeks later, with no obvious link back.
+- **After any copy that includes symlinks, `realpath` the entry points and
+  assert the volume**, e.g. `df` or `stat -f %Sd` on the resolved path. The
+  check is one line and it is the only thing that distinguishes a real
+  migration from a decorated one.
+- **Same family, same day:** `bootout` is asynchronous, so the old pid can
+  still be listed when the next step starts. Verify the corpus *after* the
+  copy rather than trusting elapsed time. Two files diverged
+  (`sse-replay-marks.json`, `ready-nudge-stamps.json`, both transient); zero
+  `.ydoc` differed, 6638 each side. `--delete` on the final mirror was
+  deliberate: without it, docs archived since the bulk copy keep their stale
+  top-level `.ydoc` and **resurrect unarchived** — a soft-delete violation
+  arriving by way of a backup flag.
