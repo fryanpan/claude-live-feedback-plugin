@@ -15,6 +15,8 @@ Goals describe **real-world outcomes** and say what is in scope. Ambitious, spec
 
 **Ask the primary user questions until the goal is falsifiable.** A goal you wrote alone, that nobody can tell you has been met, will quietly rank everything below it wrong for a week. That is a review item, not a chat message.
 
+**A goal starts in triage, and stays there until somebody agrees to it.** A band in `triage` is not ready to work on: nothing under it reaches `next_tasks` or the ready nudge, and the stall check does not judge its rows. `task_transition(goalId, "todo")` releases the band; `task_transition(goalId, "triage")` holds it again when a goal turns out not to be agreed. The board's goal panel offers the same states.
+
 ## 2. Make every task clear, and ranked
 
 Every task you create — and every task you *see* — is yours to check against the standard in the general skill. Where the standard is not met, rewrite it with `rewrite_task`, or add a review item asking the primary user what they meant. Nothing asks you to do this row by row: the `task.created` events you already receive are the trigger, and `attach_agent` hands you the rows still waiting for a goal.

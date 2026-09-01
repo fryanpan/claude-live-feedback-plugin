@@ -14496,7 +14496,7 @@ var STATUS_TEXT_MAX = 4000;
 function suggestionAuthor() {
   return { id: AUTHOR.id, name: AUTHOR.name, color: AUTHOR.color };
 }
-var PLUGIN_VERSION = "0.1.136";
+var PLUGIN_VERSION = "0.1.138";
 var PROCESS_ID = randomUUID();
 var server = new Server({
   name: "claude-workspaces",
@@ -15757,7 +15757,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     },
     {
       name: "task_transition",
-      description: "The single gate for status changes (triage | todo | in-progress | done), attributed to you on the task's trail. It is also the only way to clear a triage row. Say what you did in `note` — the commit, the PR, what you verified — because the note is the whole of what the trail keeps. Re-sending the same status refuses; there is nothing to change.",
+      description: "The single gate for status changes (triage | todo | in-progress | done), attributed to you on the task's trail. It is also the only way to clear a triage row. Takes a GOAL id too: a goal in triage is a band nobody has agreed to — every row under it is held out of next_tasks and the ready nudge, and the stall check does not judge them — so moving a goal to `todo` releases its band and moving it to `triage` holds it again. Say what you did in `note` — the commit, the PR, what you verified — because the note is the whole of what the trail keeps. Re-sending the same status refuses; there is nothing to change.",
       inputSchema: {
         type: "object",
         properties: {
@@ -15880,7 +15880,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     },
     {
       name: "set_goal_list",
-      description: "Add or remove a goal by submitting the board's whole ordered list. Send an entry with no id to add a band (the server mints it); send an existing id exactly as get_workspace reports it to keep one. Use rename_goal to retitle and reorder_goals to re-prioritise — both are safer, because this is a full replace and any id you leave out is removed. Removing a band that still holds tasks is refused until you name it in drop.",
+      description: "Add or remove a goal by submitting the board's whole ordered list. Send an entry with no id to add a band (the server mints it); send an existing id exactly as get_workspace reports it to keep one. A band you add starts in `triage` — not ready to work on: nothing under it is dispatched until somebody moves the goal to `todo` with task_transition(goalId). Use rename_goal to retitle and reorder_goals to re-prioritise — both are safer, because this is a full replace and any id you leave out is removed. Removing a band that still holds tasks is refused until you name it in drop.",
       inputSchema: {
         type: "object",
         properties: {
