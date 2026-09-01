@@ -2821,11 +2821,13 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
     const ownerBand = new Set(
       goals.filter((g) => /decision/i.test(`${g.id} ${g.title}`)).map((g) => g.id),
     );
-    // A band nobody has agreed to yet dispatches nothing under it, so a row
-    // sitting there is idle BY RULE and must not read as stalled — the same
-    // verdict `backlog` carries, and the same one the ready gate reads as
-    // `goal-triage`. The status lives on the goal ROWS; the ordered goal list
-    // does not carry one.
+    // A band nobody has agreed to yet dispatches nothing under it — the
+    // verdict the ready gate reads as `goal-triage` — so a row sitting there
+    // is not judged by this loop at all: it is handed to the classifier as its
+    // own set (`bands.triage`) and skipped before any bucket, and it is also
+    // kept out of `dispatchable` below so a caller that never learned the
+    // set still reads the row as backlog rather than as ready. The status
+    // lives on the goal ROWS; the ordered goal list does not carry one.
     const triageGoals = new Set(
       taskStore
         .listGoalRows(workspace.id)
@@ -2916,7 +2918,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
       tasks: rows,
       events,
       reviewItems,
-      bands: { dispatchable, ownerBand },
+      bands: { dispatchable, ownerBand, triage: triageGoals },
       unreadableReviewTaskIds,
       now,
       parallelismCap,

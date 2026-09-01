@@ -75,8 +75,16 @@ async function main(): Promise<void> {
   const wsRes = await fetch(`${base}/api/workspaces/${ws}`);
   const wsBody = (await wsRes.json()) as {
     workspace?: { goals?: Array<{ id: string; name?: string; title?: string }> };
+    goalSummary?: Array<{ id: string; status?: string }>;
   };
   const goals = wsBody.workspace?.goals ?? [];
+  // A band still in triage is a goal nobody has agreed to: the server's stall
+  // loop hands the classifier these as their own set and never judges a row
+  // under one. Same set here, so the report and the wake cannot disagree.
+  // Status lives on the goal ROWS (`goalSummary`), not on the ordered list.
+  const triage = new Set(
+    (wsBody.goalSummary ?? []).filter((g) => g.status === 'triage').map((g) => g.id),
+  );
   // The decisions band is Bryan's queue by its own description — sitting
   // there is waiting on the owner, not on an agent.
   // Matching on "Bryan" is wrong — his name appears in ordinary goal titles
@@ -84,11 +92,13 @@ async function main(): Promise<void> {
   const ownerBand = new Set(
     goals.filter((g) => /decision/i.test(`${g.id} ${g.name ?? g.title ?? ''}`)).map((g) => g.id),
   );
-  const dispatchable = new Set(goals.map((g) => g.id).filter((id) => !ownerBand.has(id)));
+  const dispatchable = new Set(
+    goals.map((g) => g.id).filter((id) => !ownerBand.has(id) && !triage.has(id)),
+  );
   const events = ((await eventsRes.json()) as { events: EventRow[] }).events ?? [];
   const items = ((await itemsRes.json()) as { items: ReviewItemRow[] }).items ?? [];
 
-  const bands = { dispatchable, ownerBand };
+  const bands = { dispatchable, ownerBand, triage };
   let rows = classifyOpenTasks(tasks, events, items, now, stallMs, bands);
   // Second pass for rows the first pass called stalled: their task:<id>
   // discussion threads may hold the activity the board events missed (the

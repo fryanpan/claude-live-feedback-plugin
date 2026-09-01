@@ -111,7 +111,15 @@ export function classifyOpenTasks(
   reviewItems: ReviewItemRow[],
   now: number,
   stallMs: number,
-  bands: { dispatchable: Set<string>; ownerBand: Set<string> },
+  bands: {
+    dispatchable: Set<string>;
+    ownerBand: Set<string>;
+    /** Goals nobody has agreed to yet. A row under one is not judged at all
+     *  — see the skip in the loop below. Optional because the report's older
+     *  callers never learned goal status; absent reads as "no band in
+     *  triage", the same as before. */
+    triage?: ReadonlySet<string>;
+  },
   /**
    * The row's newest movement that the board's own timestamps cannot see, per
    * taskId — this classifier's ONE seam for such evidence, kept single on
@@ -162,6 +170,17 @@ export function classifyOpenTasks(
   const out: Classified[] = [];
   for (const t of tasks) {
     if (t.status !== 'todo' && t.status !== 'in-progress') continue;
+    // A row under a band in TRIAGE is not judged at all — not bucketed, not
+    // counted. The band's status is already the verdict: `goal-triage` holds
+    // every row under it out of every dispatch read (ready-gate.ts), so
+    // nobody was supposed to be moving it, and a clock over it would only
+    // measure how long the goal has gone unagreed. Every bucket below is a
+    // claim about work somebody could act on; here the only thing to act on
+    // is the goal, and a wake over its rows would ask the lead to drive work
+    // the board itself says is not ready. Skipped one line after the status
+    // filter because it is the same kind of exclusion: a row deferred by its
+    // own status and a row deferred by its band's are both deliberate.
+    if (bands.triage?.has(t.goal ?? '')) continue;
     const unmet = (t.after ?? []).filter((dep) => {
       const d = byId.get(dep);
       return d !== undefined && d.status !== 'done';

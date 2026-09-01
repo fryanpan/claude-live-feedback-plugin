@@ -2199,18 +2199,19 @@ export function walkNextUrl(chain: string[]): string | null {
 export const TASK_STATUS_ORDER: readonly TaskStatus[] = ['triage', 'todo', 'in-progress', 'done'];
 
 /**
- * The statuses a GOAL may be declared to hold — the same list minus `triage`.
+ * The statuses a GOAL may be declared to hold — every one a task may.
  *
- * A goal is created by a person, from the goal list, and there is no path that
- * files one unvetted; the store never mints a goal row in triage. Offering it
- * in the goal's own picker would therefore be a control whose only reachable
- * use is putting a band into a state nothing else in the product produces.
+ * This list used to leave `triage` out, on the reasoning that the store never
+ * minted a goal row there. It does now: a goal somebody adds is a proposal and
+ * starts in triage (Bryan, 2026-08-25), and a band in triage is "not ready to
+ * work on" — nothing under it reaches a dispatch read, and the stall loop
+ * does not judge its rows. The picker offers the state both ways, so a goal
+ * that turns out not to be agreed can be put back as well as released.
  *
- * A goal's TASKS can of course be in triage, and the goal detail's task counts
- * still say so — that read is over `TASK_STATUS_ORDER`, which is the right
- * list for it.
+ * Kept as its own export rather than aliased, because the two pickers are
+ * still two decisions and the test pins that they currently agree.
  */
-export const GOAL_STATUS_ORDER: readonly TaskStatus[] = ['todo', 'in-progress', 'done'];
+export const GOAL_STATUS_ORDER: readonly TaskStatus[] = ['triage', 'todo', 'in-progress', 'done'];
 
 const STATUS_LABEL: Record<TaskStatus, string> = {
   triage: 'Triage',

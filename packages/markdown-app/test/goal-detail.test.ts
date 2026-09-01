@@ -140,6 +140,29 @@ describe('renderGoalDetail', () => {
     expect(h.onStatusSet).toHaveBeenCalledWith('g-pr', 'done');
   });
 
+  // Triage is a state a goal holds — a band nobody has agreed to, whose rows
+  // no dispatch read returns — so the picker offers it both ways: out of it
+  // when the goal is agreed, and back into it when it turns out not to be.
+  // The panel says what the state means, because the word alone does not.
+  it('offers Triage in the picker and says what it holds back', () => {
+    const h = handlers();
+    renderGoalDetail(root, sectionWith({ status: 'todo' }), h);
+    const select = root.querySelector('.hub-goal-detail-status') as HTMLSelectElement;
+    expect([...select.options].map((o) => o.value)).toContain('triage');
+    expect(root.querySelector('.hub-goal-triage-note')).toBeNull();
+    select.value = 'triage';
+    select.dispatchEvent(new Event('change', { bubbles: true }));
+    expect(h.onStatusSet).toHaveBeenCalledWith('g-pr', 'triage');
+
+    renderGoalDetail(root, sectionWith({ status: 'triage' }), h);
+    expect((root.querySelector('.hub-goal-detail-status') as HTMLSelectElement).value).toBe(
+      'triage',
+    );
+    const note = root.querySelector('.hub-goal-triage-note') as HTMLElement;
+    expect(note).not.toBeNull();
+    expect(note.textContent).toContain('not ready');
+  });
+
   // Attribution stays: a done goal is somebody's claim and the claim names
   // its author. The per-status breakdown does NOT — *"how many tasks are in
   // triage/todo/in-progress/done is just not useful information"* (Bryan,

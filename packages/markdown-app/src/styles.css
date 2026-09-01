@@ -2899,11 +2899,13 @@ body.hub-body {
 }
 /* Due date as plain muted text right of the title — deliberately NOT a
    `.hub-badge` chip (struck in review). Red only on an OPEN band past it.
-   `.hub-done-note` is the word a done band spends that same slot on, and it
-   shares this rule outright so the two can never drift into different
-   treatments — no chip may grow on either. */
+   `.hub-done-note` is the word a done band spends that same slot on, and
+   `.hub-triage-note` the word an unagreed band spends it on; both share this
+   rule outright so the three can never drift into different treatments — no
+   chip may grow on any of them. */
 .hub-due,
-.hub-done-note {
+.hub-done-note,
+.hub-triage-note {
   font-size: 12px;
   color: var(--fg-muted);
   white-space: nowrap;
@@ -3111,8 +3113,11 @@ body.hub-body {
   display: none;
 }
 /* A done band: muted title, and that is all — the mock draws no further
-   chrome for a done goal; status and history live in the detail panel. */
-.hub-band-done .hub-goal-title-text {
+   chrome for a done goal; status and history live in the detail panel. A
+   band in triage is muted the same way: not yet work, so it reads as not
+   yet the board's — the word in the meta slot says which of the two it is. */
+.hub-band-done .hub-goal-title-text,
+.hub-band-triage .hub-goal-title-text {
   color: var(--fg-muted);
 }
 /* Backlog: reserved, and drawn as NOT a goal — neutral accent, page
@@ -3190,7 +3195,8 @@ body.hub-body {
   font-size: 11px;
   color: var(--fg-muted);
 }
-.hub-goal-done-note {
+.hub-goal-done-note,
+.hub-goal-triage-note {
   margin: 14px 0 0;
   font-size: 13px;
   color: var(--fg-muted);

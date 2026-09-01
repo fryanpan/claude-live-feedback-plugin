@@ -976,6 +976,41 @@ describe('the goal band row', () => {
     expect(goalRow().querySelector('.hub-done-note')).toBeNull();
   });
 
+  // A band in triage is a goal nobody has agreed to — nothing under it is
+  // dispatched, and the stall loop does not judge its rows. That has to READ
+  // on the board, so the word takes the due date's slot exactly as "done"
+  // does, in the same plain treatment: no chip, no badge, no status circle.
+  it('says “triage” in plain text where an unagreed goal’s due date would go', () => {
+    renderBoard(
+      root,
+      boardSections(goalsWith({ status: 'triage', dueAt: Date.now() + DAY }), [], filters),
+      handlers(),
+    );
+    const meta = goalRow().querySelector('.hub-goal-meta') as HTMLElement;
+    const note = meta.querySelector('.hub-triage-note') as HTMLElement;
+    expect(note).not.toBeNull();
+    expect(note.textContent).toBe('triage');
+    expect(note.className).not.toContain('hub-badge');
+    expect(meta.querySelector('.hub-due')).toBeNull();
+    expect(goalRow().querySelector('.hub-badge')).toBeNull();
+    const band = root.querySelector('.hub-section[data-goal-id="g-pr"] .hub-band') as HTMLElement;
+    expect(band.className).toContain('hub-band-triage');
+    expect(goalRow().title).toContain('not ready');
+    // Positive control: an agreed band with the same due date draws the date
+    // and claims nothing about triage.
+    root.replaceChildren();
+    renderBoard(
+      root,
+      boardSections(goalsWith({ status: 'todo', dueAt: Date.now() + DAY }), [], filters),
+      handlers(),
+    );
+    expect(goalRow().querySelector('.hub-due')?.textContent).toContain('due');
+    expect(goalRow().querySelector('.hub-triage-note')).toBeNull();
+    expect(
+      (root.querySelector('.hub-section[data-goal-id="g-pr"] .hub-band') as HTMLElement).className,
+    ).not.toContain('hub-band-triage');
+  });
+
   // The avatar draws from the projected owner the way a task row's does —
   // same class family, same initials scheme — so the two columns read as one.
   it('draws a projected owner as the same initials avatar a task row gets', () => {
