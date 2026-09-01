@@ -342,24 +342,74 @@ function assigneePicker(
   return sel;
 }
 
+/** The shared class every title-hydrated doc anchor carries — the Activity
+ *  tab's doc-kind chips and the Related Links section both hydrate through
+ *  the one re-query in `hydrateDocTitles`, so either can kick off the fetch
+ *  and both catch the answer regardless of which is mounted when it lands. */
+const DOC_TITLE_LINK_CLASS = 'hub-doc-title-link';
+
+/** The canonical href for a doc: workspace-scoped when a workspaceId is
+ *  known (what every fresh link should be), the legacy `/review/<id>` shape
+ *  otherwise — the same fallback the old Source-doc field used. */
+function docLinkHref(docId: string, workspaceId?: string): string {
+  return workspaceId !== undefined
+    ? `/workspaces/${encodeURIComponent(workspaceId)}/docs/${encodeURIComponent(docId)}`
+    : `/review/${encodeURIComponent(docId)}`;
+}
+
+/** Applies the shared link-title cache to one title-hydrated anchor.
+ *  `null` (not `undefined`) means the server WAS asked and came back with
+ *  nothing — a genuinely untitled doc, not a lookup still in flight — so it
+ *  renders "Untitled doc". `undefined` (not yet asked) leaves the "Loading…"
+ *  placeholder alone so a later hydration pass can still land. The raw doc
+ *  id is never a value this settles on: the AC is title-only links, a
+ *  reviewer should never see one in this slot. */
+function applyDocTitle(a: HTMLAnchorElement): void {
+  const title = cachedLinkTitle(a.getAttribute('href') ?? '');
+  if (typeof title === 'string' && title !== '') a.textContent = title;
+  else if (title === null) a.textContent = 'Untitled doc';
+}
+
+/** Kicks off one title fetch for whichever `DOC_TITLE_LINK_CLASS` anchors
+ *  are still on the "Loading…" placeholder, and reapplies titles to
+ *  whatever is CURRENTLY mounted when it resolves. Never gated on any one
+ *  render's own DOM surviving: `useFill`'s no-deps effect can rebuild
+ *  either section on every parent re-render, tearing down the anchor that
+ *  issued the fetch well before it settles — re-querying the live document
+ *  is what closes that race. */
+function hydrateDocTitles(anchors: readonly HTMLAnchorElement[]): void {
+  const unresolved = anchors.filter((a) => a.textContent === 'Loading…');
+  if (unresolved.length === 0) return;
+  void fetchLinkInfos(unresolved.map((a) => a.getAttribute('href') ?? ''))
+    .then(() => {
+      for (const a of document.querySelectorAll<HTMLAnchorElement>(`.${DOC_TITLE_LINK_CLASS}`))
+        applyDocTitle(a);
+    })
+    .catch(() => {
+      // The ids stay — true, just less familiar.
+    });
+}
+
 /**
  * The task's `links`, as chips. Until this existed, a ref was stored, keyed
  * and backlinked and then never drawn — the store had it and no surface
  * could show it, which is the failure mode this codebase has already been
  * bitten by once with resolved threads.
  *
- * Only `url` refs become anchors. The internal kinds (doc / thread / task /
- * diff) are ids, and inventing hrefs for them here would be guessing at
- * route shapes that live on the server; they render as labelled chips so
- * their presence is at least visible. A ref of an unknown kind is skipped
+ * `url` refs become external anchors, and `doc` refs become title-hydrated
+ * internal anchors — the same title-only treatment Related Links gets, so a
+ * reviewer never sees a raw doc id here either. The remaining internal kinds
+ * (thread / task / diff) are ids with no titled destination this panel can
+ * resolve, so they stay labelled chips; a ref of an unknown kind is skipped
  * rather than thrown on — an older client must survive a newer server
  * adding a kind, and a task that fails to open is worse than a missing chip.
  */
-export function renderTaskLinks(task: HubTask): HTMLElement | null {
+export function renderTaskLinks(task: HubTask, workspaceId?: string): HTMLElement | null {
   const refs = Array.isArray(task.links) ? task.links : [];
   if (refs.length === 0) return null;
   const wrap = document.createElement('div');
   wrap.className = 'hub-detail-links';
+  const docAnchors: HTMLAnchorElement[] = [];
   for (const raw of refs) {
     if (typeof raw !== 'object' || raw === null) continue;
     const ref = raw as Record<string, unknown>;
@@ -391,12 +441,24 @@ export function renderTaskLinks(task: HubTask): HTMLElement | null {
     }
     const kind = typeof ref.kind === 'string' ? ref.kind : null;
     if (kind === null) continue;
+    if (kind === 'doc' && typeof ref.docId === 'string' && ref.docId !== '') {
+      const a = document.createElement('a');
+      a.className = `hub-link-chip ${DOC_TITLE_LINK_CLASS}`;
+      a.href = docLinkHref(ref.docId, workspaceId);
+      a.textContent = 'Loading…';
+      a.addEventListener('click', (ev) => ev.stopPropagation());
+      applyDocTitle(a);
+      wrap.append(a);
+      docAnchors.push(a);
+      continue;
+    }
     const id = ref.docId ?? ref.taskId ?? ref.workspaceId;
     const chip = document.createElement('span');
     chip.className = 'hub-link-chip hub-link-internal';
     chip.textContent = typeof id === 'string' ? `${kind}: ${id}` : kind;
     wrap.append(chip);
   }
+  hydrateDocTitles(docAnchors);
   return wrap.childElementCount > 0 ? wrap : null;
 }
 
@@ -411,6 +473,11 @@ export interface GoalDetailHandlers {
    *  (the server's transition route accepts a goal row's id), which is how
    *  "somebody declares the goal done" happens from the board. */
   onStatusSet: (goalId: string, to: TaskStatus) => void;
+  /** Set the due date, or clear it with `null` — the same field the task
+   *  panel carries, and the same "all fields must be human editable" rule
+   *  (Bryan, 2026-08-18). Absent means the app has not wired one, and the
+   *  field renders read-only text rather than a control nothing answers. */
+  onDueSet?: (goalId: string, dueAt: number | null) => void;
   /**
    * Post to the goal's discussion. Resolves to whether it LANDED — the
    * composer keeps the text until it hears yes, so a failed post is
@@ -464,6 +531,11 @@ export interface GoalDetailHandlers {
   /** Put an archived band back, with the rows its archive took — the panel's
    *  other face, drawn in place of Archive when the open band is archived. */
   onRestore?: (section: BoardSection) => void;
+  /** The board's own workspace id, so the Related Links section can link
+   *  each doc at its canonical workspace address — same field, same reason,
+   *  as the task panel's. Without it the section still renders, linking the
+   *  legacy `/review/` shape instead. */
+  workspaceId?: string;
   /** Clock seam, so "3 hours ago" is assertable. */
   now?: number;
 }
@@ -1525,61 +1597,100 @@ export const BODY_LIVE_CLASS = 'hub-detail-body-live';
  * were pills, so the state you were IN read as a stray label rather than as
  * the selected one.
  */
-/** The doc this task was derived from, when its origin ref names one. A
- *  thread origin counts — the thread lives on a doc, and that doc is where
- *  the reader should land. Anything else (a task origin, a malformed ref,
- *  a newer kind) is null rather than guessed at. */
-export function sourceDocOf(task: HubTask): string | null {
-  const o = task.origin;
-  if (typeof o !== 'object' || o === null) return null;
-  const ref = o as Record<string, unknown>;
-  if (ref.kind !== 'doc' && ref.kind !== 'thread') return null;
-  return typeof ref.docId === 'string' && ref.docId !== '' ? ref.docId : null;
+/** One doc a row's Related Links section names. `held` marks the ORIGIN doc
+ *  of a plan-held draft — the one row this note can ever attach to. */
+export interface RelatedDocLink {
+  docId: string;
+  held?: boolean;
 }
 
 /**
- * The Source-doc field's value: a link to the origin doc, plus the plan-hold
- * mark while the row is a held draft. No staleness mark: a "plan edited since
- * filed" flag gives the reader nothing to act on (Bryan, 2026-08-31) — the
- * lead updates the tickets when the plan changes.
+ * Every doc a task or goal ties to, in Related-Links order: the origin doc
+ * first (a thread origin counts — the thread lives on a doc, and that doc is
+ * where the reader should land), then every doc-kind ref in `links`. Deduped
+ * by doc id — the backfill already avoids double-tying the same doc via
+ * origin AND links, but an older row or a hand-written link can still repeat
+ * one, and this is the one place that reads both arrays at once.
  *
- * The visible text starts as the doc id and swaps to the doc's title when
- * the shared link-title cache answers — the same display-only hydration
- * every pasted workspace link gets, so a rename never strands a stale label
- * in a stored task.
+ * Only doc-kind refs: after the 2026-08-31 linkage rework `links` holds
+ * doc ties exclusively (`refs-backfill.ts`), and a `url`/`diff` ref is
+ * rendered elsewhere as a chip rather than here as a title.
  */
-function sourceDocCell(task: HubTask, docId: string, workspaceId?: string): HTMLElement {
-  const wrap = document.createElement('span');
-  wrap.className = 'hub-detail-sourcedoc';
-  const a = document.createElement('a');
-  a.className = 'hub-sourcedoc-link';
-  a.href =
-    workspaceId !== undefined
-      ? `/workspaces/${encodeURIComponent(workspaceId)}/docs/${encodeURIComponent(docId)}`
-      : `/review/${encodeURIComponent(docId)}`;
-  a.textContent = docId;
-  a.addEventListener('click', (ev) => ev.stopPropagation());
-  const hydrate = (): void => {
-    const title = cachedLinkTitle(a.getAttribute('href') ?? '');
-    if (typeof title === 'string' && title !== '') a.textContent = title;
-  };
-  hydrate();
-  if (a.textContent === docId) {
-    void fetchLinkInfos([a.getAttribute('href') ?? ''])
-      .then(() => {
-        if (a.isConnected) hydrate();
-      })
-      .catch(() => {
-        // The id stays — true, just less familiar.
-      });
+export function relatedDocLinks(row: {
+  links?: unknown[];
+  origin?: unknown;
+  planHold?: { docId: string };
+}): RelatedDocLink[] {
+  const out: RelatedDocLink[] = [];
+  const seen = new Set<string>();
+  const origin = row.origin;
+  if (typeof origin === 'object' && origin !== null) {
+    const ref = origin as Record<string, unknown>;
+    if (
+      (ref.kind === 'doc' || ref.kind === 'thread') &&
+      typeof ref.docId === 'string' &&
+      ref.docId !== ''
+    ) {
+      seen.add(ref.docId);
+      out.push({ docId: ref.docId, held: row.planHold?.docId === ref.docId });
+    }
   }
-  wrap.append(a);
-  if (task.planHold !== undefined) {
-    const held = document.createElement('span');
-    held.className = 'hub-sourcedoc-held';
-    held.textContent = 'Draft — held until the plan is approved';
-    wrap.append(held);
+  for (const raw of row.links ?? []) {
+    if (typeof raw !== 'object' || raw === null) continue;
+    const ref = raw as Record<string, unknown>;
+    if (ref.kind !== 'doc') continue;
+    if (typeof ref.docId !== 'string' || ref.docId === '' || seen.has(ref.docId)) continue;
+    seen.add(ref.docId);
+    out.push({ docId: ref.docId });
   }
+  return out;
+}
+
+/**
+ * The "Related Links" section: title-only links to every doc a row ties to,
+ * below the fields row on both the task and the goal panel. No source chips,
+ * no staleness mark — Bryan rejected both on the revised mock ("omit
+ * needless details"). `null` when the row names no doc, so the section is
+ * absent entirely rather than an empty heading.
+ *
+ * Each link's visible text starts as the doc id and swaps to its title when
+ * the shared link-title cache answers — the same display-only hydration
+ * every pasted workspace link gets, batched into one lookup rather than one
+ * per link.
+ */
+export function renderRelatedLinks(
+  links: readonly RelatedDocLink[],
+  workspaceId?: string,
+): HTMLElement | null {
+  if (links.length === 0) return null;
+  const wrap = document.createElement('div');
+  wrap.className = 'hub-related-links';
+  const heading = document.createElement('p');
+  heading.className = 'hub-related-links-k';
+  heading.textContent = 'Related Links';
+  const list = document.createElement('ul');
+  list.className = 'hub-related-links-list';
+  const anchors: HTMLAnchorElement[] = [];
+  for (const link of links) {
+    const li = document.createElement('li');
+    const a = document.createElement('a');
+    a.className = `hub-related-link ${DOC_TITLE_LINK_CLASS}`;
+    a.href = docLinkHref(link.docId, workspaceId);
+    a.textContent = 'Loading…';
+    a.addEventListener('click', (ev) => ev.stopPropagation());
+    applyDocTitle(a);
+    li.append(a);
+    if (link.held) {
+      const held = document.createElement('span');
+      held.className = 'hub-related-link-held';
+      held.textContent = 'Draft — held until the plan is approved';
+      li.append(held);
+    }
+    list.append(li);
+    anchors.push(a);
+  }
+  wrap.append(heading, list);
+  hydrateDocTitles(anchors);
   return wrap;
 }
 
@@ -1603,9 +1714,9 @@ export function detailFields(
   // wrapper existed — "STATUS" sat in column one with the chips in column two
   // and "ASSIGNEE" in column three, which is exactly the jumble this row is
   // meant to end.
-  const cell = (key: string, value: Node | string): void => {
+  const cell = (key: string, value: Node | string, opts?: { full?: boolean }): void => {
     const wrap = document.createElement('div');
-    wrap.className = 'hub-detail-field';
+    wrap.className = opts?.full ? 'hub-detail-field hub-detail-field--full' : 'hub-detail-field';
     const dt = document.createElement('dt');
     dt.className = 'hub-detail-field-k';
     dt.textContent = key;
@@ -1650,15 +1761,6 @@ export function detailFields(
   });
   statusCtl.append(mark, status);
   cell('Status', statusCtl);
-
-  // Where this row CAME FROM, when it was filed out of a doc — the origin
-  // ref, drawn as a link near the top rather than left as a stored fact no
-  // surface shows (the `links` chips' own origin story). The plan-hold mark
-  // rides on the same cell while the row is a held draft.
-  const originDoc = sourceDocOf(task);
-  if (originDoc !== null) {
-    cell('Source doc', sourceDocCell(task, originDoc, handlers.workspaceId));
-  }
 
   cell(
     'Assignee',
@@ -1712,7 +1814,12 @@ export function detailFields(
   goal.addEventListener('change', () => {
     if (goal.value && goal.value !== task.goal) handlers.onGoalSet?.(task, goal.value);
   });
-  cell('Goal', goal);
+  // Explicitly full-width, not "whichever field lands last": when effort
+  // fields are scored, the hidden effort-detail drawer is what's actually
+  // appended last, and DOM order is never a fact this panel wants to depend
+  // on for a completely different reason (the goal panel's own last field,
+  // Due, must never inherit this by coincidence of position).
+  cell('Goal', goal, { full: true });
 
   // Effort, last, and only when there is something to say.
   //

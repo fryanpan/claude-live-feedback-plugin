@@ -20,7 +20,6 @@ import { disposeGoalDetail, renderGoalDetail } from './support/goal-detail.ts';
  */
 
 const NOW = 1_700_000_000_000;
-const DAY = 86_400_000;
 
 let seq = 0;
 function task(overrides: Partial<HubTask> = {}): HubTask {
@@ -184,13 +183,59 @@ describe('renderGoalDetail', () => {
   });
 
   it('draws the owner as a vacancy until the projection says otherwise, and the due date', () => {
-    renderGoalDetail(root, sectionWith({ dueAt: NOW + DAY }), handlers());
+    // Noon local, built the way the reader's own calendar would — the same
+    // round-trip the task panel's Due control uses, so the date shown here
+    // does not depend on the test runner's timezone.
+    const due = new Date(2026, 7, 20, 12).getTime();
+    renderGoalDetail(root, sectionWith({ dueAt: due }), handlers());
     let text = (root.querySelector('.hub-detail-panel') as HTMLElement).textContent ?? '';
     expect(text).toContain('Nobody yet');
-    expect(text).toContain('due');
+    expect(root.querySelector<HTMLInputElement>('.hub-detail-due')?.value).toBe('2026-08-20');
     renderGoalDetail(root, sectionWith({ assignee: 'search-revamp' }), handlers());
     text = (root.querySelector('.hub-detail-panel') as HTMLElement).textContent ?? '';
     expect(text).toContain('search-revamp');
+  });
+
+  // The Due field is a control on both panels now, not text on one and a
+  // control on the other (approved mock: "the GOAL panel mirrors the task
+  // panel's fields including an editable Due date"). Always present, set or
+  // not — an empty input IS the way to set one, and a cleared input reports
+  // `null` the same way the task panel's does.
+  it('the Due field is human-editable, the same as the task panel’s', () => {
+    const onDueSet = vi.fn();
+    renderGoalDetail(root, sectionWith(), handlers({ onDueSet }));
+    const due = root.querySelector<HTMLInputElement>('.hub-detail-due');
+    expect(due).not.toBeNull();
+    expect(due?.value).toBe('');
+
+    if (due) due.value = '2026-09-02';
+    due?.dispatchEvent(new Event('change'));
+    const [goalId, ts] = onDueSet.mock.calls[0] ?? [];
+    expect(goalId).toBe('g-pr');
+    const back = new Date(ts as number);
+    expect([back.getFullYear(), back.getMonth(), back.getDate()]).toEqual([2026, 8, 2]);
+
+    // Clearing it is expressible, and is not the same as sending a bad date.
+    if (due) due.value = '';
+    due?.dispatchEvent(new Event('change'));
+    expect(onDueSet).toHaveBeenLastCalledWith('g-pr', null);
+  });
+
+  // Related Links: title-only links to the docs this goal ties to, the same
+  // section and function the task panel draws (approved mock). Absent when
+  // the goal names none.
+  it('shows Related Links for the docs the goal ties to, and not at all with none', () => {
+    renderGoalDetail(
+      root,
+      sectionWith({ links: [{ kind: 'doc', docId: 'd-plan' }] }),
+      handlers({ workspaceId: 'w-test' }),
+    );
+    expect(root.querySelector('.hub-related-links-k')?.textContent).toBe('Related Links');
+    const link = root.querySelector<HTMLAnchorElement>('.hub-related-link');
+    expect(link?.getAttribute('href')).toBe('/workspaces/w-test/docs/d-plan');
+
+    renderGoalDetail(root, sectionWith(), handlers({ workspaceId: 'w-test' }));
+    expect(root.querySelector('.hub-related-links-k')).toBeNull();
   });
 
   // The live board repaints the panel on every projection change, and a
