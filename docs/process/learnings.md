@@ -3488,6 +3488,12 @@ write-once in practice, and the repair verb for a moved file cannot repair it.
   inside it splits the string into fragments that match nothing. The
   assertions keep running, keep passing, and no longer look at the rule they
   name.
+- **Why it passes instead of throwing: the lookup returned an empty list, and
+  the assertions read empty as "no such rule" rather than "the parser broke".**
+  Both produce the same value and only one is a reason to be quiet — the same
+  trap as *"Empty output is not a 'no'"*. A helper that derives structure
+  should distinguish *found nothing* from *could not look*; a caller that
+  cannot tell them apart will take the reassuring reading every time.
 - **Nothing fails when it breaks.** No test goes red, no build warns, and the
   diff that disarms it edits a COMMENT — the least-reviewed line in any patch.
   It was caught in #557 only because its author added a comment above the very
