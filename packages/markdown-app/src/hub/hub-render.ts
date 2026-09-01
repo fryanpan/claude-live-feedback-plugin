@@ -20,7 +20,7 @@ import {
 } from '@feedback/core/goal-effort';
 import {} from '@feedback/core/goal-summary';
 import { renderCommentMarkdown } from '../comment-markdown.ts';
-import { MIC_ICON, PEOPLE_ICON, PLUS_ICON } from '../icons.ts';
+import { PENCIL_ICON, PLUS_ICON, SPEECH_ICON } from '../icons.ts';
 import { cachedLinkTitle, fetchLinkInfos } from '../link-titles.ts';
 import {
   type ComposerSelection,
@@ -652,8 +652,8 @@ export function renderArchivedList(
 // ── Quick actions: the two ways work starts ───────────────────────────────
 
 /**
- * "New task", "Start a planning huddle" and "Record a conversation", in the
- * slot the quick-add box had.
+ * "New task", "Make a plan" and "Have a discussion", in the slot the
+ * quick-add box had.
  *
  * Bryan, 2026-08-29: *"From board, have a quick flow to create a new task
  * (replace current text box) that creates an empty item in the usual task
@@ -661,6 +661,12 @@ export function renderArchivedList(
  * asks anything first: the task is an empty row the panel opens on with the
  * title ready to type, and the huddle is a doc the editor opens with the mic
  * already asked for.
+ *
+ * Renamed from "Start a planning huddle" / "Record a conversation" with the
+ * round-4 entry mock (Bryan, 2026-09-01): the old labels named the mechanism;
+ * these name what you leave with — a plan doc, or discussion notes. The
+ * rename touches these buttons only; routes, params, classes and doc titles
+ * keep the huddle name.
  *
  * The third is the same huddle for a room rather than for one person, and it
  * is what an in-person conversation has instead of a platform to join: the
@@ -718,12 +724,12 @@ export function renderQuickActions(container: HTMLElement, handlers: QuickAction
   const huddle = document.createElement('button');
   huddle.type = 'button';
   huddle.className = 'hub-btn hub-huddle-start';
-  huddle.innerHTML = `${MIC_ICON}<span>Start a planning huddle</span>`;
+  huddle.innerHTML = `${PENCIL_ICON}<span>Make a plan</span>`;
   hold(huddle, handlers.onStartHuddle);
   const conversation = document.createElement('button');
   conversation.type = 'button';
   conversation.className = 'hub-btn hub-conversation-start';
-  conversation.innerHTML = `${PEOPLE_ICON}<span>Record a conversation</span>`;
+  conversation.innerHTML = `${SPEECH_ICON}<span>Have a discussion</span>`;
   hold(conversation, handlers.onStartConversation);
   row.append(newTask, huddle, conversation);
   // Error prevention rather than error recovery, matching the doc surface's

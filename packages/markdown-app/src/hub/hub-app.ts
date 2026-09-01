@@ -10,6 +10,7 @@
  */
 import {
   type CaptureMode,
+  type HuddleKind,
   type ReviewPayload,
   type Thread,
   type User,
@@ -2083,8 +2084,8 @@ async function main(): Promise<void> {
     // call, so a board repaint cannot rebuild a button mid-request.
     renderQuickActions(el('hub-quick'), {
       onNewTask: () => newTask(),
-      onStartHuddle: () => startHuddle('solo'),
-      onStartConversation: () => startHuddle('conversation'),
+      onStartHuddle: () => startHuddle('plan', 'solo'),
+      onStartConversation: () => startHuddle('discussion', 'conversation'),
       // The board's create buttons are the doc surface's edit toggle: a
       // control that cannot work should say so before it is pressed, not
       // after. The rest of the board's writes still fail loudly through
@@ -2820,21 +2821,20 @@ async function main(): Promise<void> {
   }
 
   /**
-   * The Board's two mic buttons: ONE call makes the huddle doc on this
+   * The Board's two huddle buttons: ONE call makes the huddle doc on this
    * board, and the page leaves for it at once with the flag the editor reads
    * to start the meeting assistant without a press. The click here is the
    * person's gesture; `huddle-entry.ts` is the other half.
    *
-   * `mode` is the only difference between "Start a planning huddle" and
-   * "Record a conversation" — the doc, the route and the file are the same.
-   * Solo asks for no speaker labels and pays for none.
+   * "Make a plan" and "Have a discussion" are the same route and the same
+   * file; `kind` tells the server which doc to seed (a plan opens under a
+   * `# Goal` heading) and `mode` rides the address for the mic. Solo asks
+   * for no speaker labels and pays for none.
    */
-  async function startHuddle(mode: CaptureMode): Promise<boolean> {
-    const res = await send(
-      `/api/workspaces/${encodeURIComponent(workspaceId)}/huddles`,
-      'POST',
-      {},
-    );
+  async function startHuddle(kind: HuddleKind, mode: CaptureMode): Promise<boolean> {
+    const res = await send(`/api/workspaces/${encodeURIComponent(workspaceId)}/huddles`, 'POST', {
+      kind,
+    });
     const url = typeof res.data?.url === 'string' ? res.data.url : null;
     if (!res.ok || !url) {
       const why =

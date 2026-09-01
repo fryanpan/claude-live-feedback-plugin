@@ -3481,6 +3481,35 @@ export function answeredByLine(by: string | undefined, selfName: string | undefi
 }
 
 /**
+ * "Decided by you 2 hours ago" — the provenance UNDER a settled item, once
+ * the outcome has a labelled strip of its own and no longer needs a sentence
+ * wrapped around it (the approved mock's decided block).
+ *
+ * The verb follows the item's shape, the way the card's own kind chip does:
+ * a decision is decided, a question is answered. Saying "Decided" over "Both,
+ * Zoom first" would promise a ruling the item never asked for.
+ *
+ * The clock is RELATIVE, matching `askedMetaLine` directly above it on the
+ * same card — the mock draws an absolute date, but two clocks on one card is
+ * how "Asked 3 hours ago / Decided Aug 28, 2:14 PM" stops being subtractable
+ * at a glance. `at` is absent on records written before `answeredAt` existed;
+ * those keep the line and lose only the time.
+ */
+export function decidedMetaLine(
+  by: string | undefined,
+  selfName: string | undefined,
+  at: number | undefined,
+  now: number,
+  decision: boolean,
+): string {
+  const verb = decision ? 'Decided' : 'Answered';
+  const who = by?.trim() ?? '';
+  const name = selfName !== undefined && who === selfName ? 'you' : who;
+  const head = name === '' ? verb : `${verb} by ${name}`;
+  return at === undefined ? head : `${head} ${waitShort(at, now)} ago`;
+}
+
+/**
  * The meta for a queue item. For a DECLARED item "Asked by" is always true —
  * a declaration IS an ask, in so many words, whatever the `direct` heuristic
  * measured. The inferred band keeps its measured Posted/Asked honesty, since

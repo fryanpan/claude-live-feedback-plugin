@@ -78,11 +78,18 @@ export function statusChipLabel(status: string): string {
 
 /** The chip element, shared by DOM hydration and the editor decoration. A
  *  held draft's chip says what the row IS — "Draft" — not the technical
- *  status the hold happens to park it in. */
+ *  status the hold happens to park it in.
+ *
+ *  The chip is a bare word next to a link — "To do" — and a screen reader
+ *  reaching it after the link text gets that word with nothing to attach it
+ *  to. Sighted readers get the relationship from the pill's shape and the gap;
+ *  the label is how that reaches everyone else. */
 export function statusChipEl(status: string, held = false): HTMLSpanElement {
   const chip = document.createElement('span');
   chip.className = held ? 'ws-status-chip ws-chip-draft' : `ws-status-chip ws-chip-${status}`;
-  chip.textContent = held ? 'Draft' : statusChipLabel(status);
+  const words = held ? 'Draft' : statusChipLabel(status);
+  chip.textContent = words;
+  chip.setAttribute('aria-label', `Task: ${words}`);
   return chip;
 }
 
