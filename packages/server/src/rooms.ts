@@ -9,9 +9,10 @@ import {
   statSync,
   writeFileSync,
 } from 'node:fs';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import {
   type Anchor,
+  type DocHome,
   type DocMeta,
   type DocType,
   type ReviewAnswerUndone,
@@ -72,6 +73,12 @@ import {
   refreshWorkspace as refreshWorkspaceImpl,
   setWorkspaceGroups as setWorkspaceGroupsImpl,
 } from './binds.ts';
+import {
+  canonicalRepoRoot,
+  normalizeDocHome,
+  resolveHomeCheckout,
+  verifyPathInHome,
+} from './doc-home.ts';
 import {
   type DocIdAuthority,
   HUB_ROOM_PREFIXES,
@@ -611,6 +618,9 @@ export function maintainAwareness(aw: awarenessProtocol.Awareness, now = Date.no
 export class Rooms {
   private rooms = new Map<string, DocRoom>();
   private fileBindings = new Map<string, FileBinding>();
+  /** Last attempt to re-resolve an UNBOUND home-pinned doc on an edit
+   *  (`maybeRebindHome`) — the probe is cheap, but not per-keystroke. */
+  private homeRebindAttemptAt = new Map<string, number>();
   /**
    * docId → reader key → last time that reader fetched the doc's content
    * (GET /api/docs/:id/content?reader=…). Pairs with `lastHumanEditAt` in
@@ -1493,6 +1503,22 @@ export class Rooms {
     if (src && isHubOwnedRoom(docId)) {
       console.error(`[rooms] ${docId}: ignoring a sourceUrl on a server-owned hub room`);
       return false;
+    }
+    // A home-pinned doc re-resolves its home rather than trusting the path
+    // it was bound to when the server went down — worktrees move between
+    // restarts. Unplaced parks exactly like a live park: content is in the
+    // .ydoc, no binding, the pin persists for the next resolve.
+    const home = room.meta.docHome;
+    if (home && !isHubOwnedRoom(docId) && contentKind(room.meta.type) === 'prose') {
+      const placement = resolveHomeCheckout(home);
+      if (!placement.placed) {
+        console.warn(
+          `[rooms] ${docId}: doc home unplaced at hydrate (${placement.reason}); writes parked`,
+        );
+        return false;
+      }
+      this.retargetHomeBinding(room, placement.absPath);
+      return this.fileBindings.has(docId);
     }
     if (!src || !existsSync(src)) return false;
     if (contentKind(room.meta.type) === 'prose') {
@@ -3910,6 +3936,229 @@ export class Rooms {
   }
 
   /**
+   * Pin a doc to its repo home: repo + branch + relPath (see `DocHome` in
+   * core). From here on, the file the doc syncs with is "the declared
+   * relPath in whichever worktree has the declared branch checked out" —
+   * resolved at pin, at hydrate, and re-verified by `homeGuard` before every
+   * flush and every disk→doc apply. A checkout that switches branches under
+   * the binding is never written again; the binding follows the branch or
+   * parks.
+   *
+   * Prose docs only: a home is for durable planning/discussion notes. Diff,
+   * code and mockup docs follow their surface (the diff's repo, the running
+   * server) and pinning them would fight those flows.
+   */
+  setDocHome(
+    docId: string,
+    input: unknown,
+  ):
+    | {
+        ok: true;
+        home: DocHome;
+        placement: { placed: true; path: string } | { placed: false; reason: string };
+      }
+    | { ok: false; error: 'not-found' | 'invalid-home' | 'not-markdown'; detail?: string } {
+    const room = this.resolveRoom(docId);
+    if (!room) return { ok: false, error: 'not-found' };
+    if (isHubOwnedRoom(room.docId) || contentKind(room.meta.type) !== 'prose') {
+      return {
+        ok: false,
+        error: 'not-markdown',
+        detail: 'a repo home is for markdown docs; code/diff/mockup docs follow their surface',
+      };
+    }
+    const norm = normalizeDocHome(input);
+    if (!norm.ok) return { ok: false, error: 'invalid-home', detail: norm.error };
+    // The repo must at least exist as a repo — a typo'd repoRoot pinned
+    // as-is would park the doc forever with a message blaming the branch.
+    // Store the MAIN checkout's root, not the caller's spelling: a home
+    // declared from a linked worktree must survive that worktree's removal.
+    const canonRoot = canonicalRepoRoot(norm.home.repoRoot);
+    if (canonRoot === null) {
+      return {
+        ok: false,
+        error: 'invalid-home',
+        detail: `${norm.home.repoRoot} is not a git checkout`,
+      };
+    }
+    const home: DocHome = { ...norm.home, repoRoot: canonRoot };
+    room.meta.docHome = home;
+    const placement = resolveHomeCheckout(home);
+    if (placement.placed) {
+      const binding = this.fileBindings.get(room.docId);
+      // Already bound to an EXISTING copy of the home: nothing to move. A
+      // missing file still retargets — the retarget is what exports it.
+      if (binding?.path === placement.absPath && existsSync(placement.absPath)) {
+        this.saveToDisk(room);
+      } else {
+        this.retargetHomeBinding(room, placement.absPath);
+      }
+      return { ok: true, home, placement: { placed: true, path: placement.absPath } };
+    }
+    // Unplaced is a legal pin: the doc stays durable in the .ydoc and the
+    // guard parks every write until a checkout on the branch appears. An
+    // existing binding to some other path is deliberately left in the map —
+    // homeGuard is what stops it writing, and keeping it is what lets the
+    // next flush attempt re-resolve and recover.
+    this.saveToDisk(room);
+    return { ok: true, home, placement: { placed: false, reason: placement.reason } };
+  }
+
+  /** Unpin: the doc keeps whatever binding it has and goes back to being an
+   *  ordinary explicit-path doc. */
+  clearDocHome(docId: string): { ok: boolean } {
+    const room = this.resolveRoom(docId);
+    if (!room || !room.meta.docHome) return { ok: false };
+    room.meta.docHome = undefined;
+    this.saveToDisk(room);
+    return { ok: true };
+  }
+
+  /** The pin plus where it resolves RIGHT NOW — for doc status surfaces. */
+  docHomeStatus(docId: string):
+    | {
+        home: DocHome;
+        placement: { placed: true; path: string } | { placed: false; reason: string };
+        boundPath?: string;
+      }
+    | undefined {
+    const room = this.resolveRoom(docId);
+    const home = room?.meta.docHome;
+    if (!room || !home) return undefined;
+    const placement = resolveHomeCheckout(home);
+    const boundPath = this.fileBindings.get(room.docId)?.path;
+    return {
+      home,
+      placement: placement.placed
+        ? { placed: true, path: placement.absPath }
+        : { placed: false, reason: placement.reason },
+      ...(boundPath ? { boundPath } : {}),
+    };
+  }
+
+  /**
+   * Point a home-pinned doc's binding at `absPath` (the freshly-resolved
+   * home) with a CLEAN attach. The old binding's bookkeeping is about the
+   * old file — letting `attachFile` read its `lastWritten` as `prior` would
+   * arbitrate the new checkout's file against another file's history — so it
+   * is dropped whole and the attach runs the same mtime arbitration a
+   * restart does (losing side backed up, never silently discarded).
+   */
+  private retargetHomeBinding(room: DocRoom, absPath: string): void {
+    const docId = room.docId;
+    const old = this.fileBindings.get(docId);
+    if (old) {
+      if (old.writeTimer) clearTimeout(old.writeTimer);
+      if (old.readTimer) clearTimeout(old.readTimer);
+      old.pollArmed = false;
+      if (old.observer) prose.getProseFragment(room.ydoc).unobserveDeep(old.observer);
+      this.fileBindings.delete(docId);
+    }
+    // A branch whose checkout holds no copy yet: the pin (or retarget) IS
+    // the export. Write the doc's content first, atomically, so the attach
+    // below finds an in-sync file instead of never creating one (attachFile
+    // arms nothing for a missing path).
+    if (!existsSync(absPath)) {
+      const md = prose.serializeFragmentToMarkdown(prose.getProseFragment(room.ydoc));
+      try {
+        mkdirSync(dirname(absPath), { recursive: true });
+        const tmp = `${absPath}.lf-write~`;
+        writeFileSync(tmp, md);
+        renameSync(tmp, absPath);
+      } catch (err) {
+        console.error(`[rooms] ${docId}: could not export doc to its home ${absPath}:`, err);
+      }
+    }
+    // attachFile only records sourceUrl when absent; a retarget must repoint.
+    room.meta.sourceUrl = absPath;
+    this.attachFile(docId, absPath);
+    this.saveToDisk(room);
+    console.log(`[rooms] ${docId}: home binding now at ${absPath}`);
+  }
+
+  /**
+   * A home-pinned doc with NO binding tries to re-place its home. The state
+   * exists when hydration found no checkout on the home branch: parking
+   * there leaves nothing in `fileBindings`, and every recovery path below
+   * this one — homeGuard, the poll sweep — hangs off a binding. Without this
+   * hook the park message's promise ("check the branch out and the next
+   * edit or reparse resumes syncing") held only for docs parked while LIVE;
+   * a doc parked at hydrate stayed parked until a re-pin or restart. Called
+   * from the room's update hook (throttled) and from reparseFromDisk
+   * (forced). Bound docs return immediately — homeGuard owns them.
+   */
+  private maybeRebindHome(room: DocRoom, opts?: { force?: boolean }): void {
+    const home = room.meta.docHome;
+    if (!home || this.fileBindings.has(room.docId)) return;
+    if (isHubOwnedRoom(room.docId) || contentKind(room.meta.type) !== 'prose') return;
+    const now = Date.now();
+    if (!opts?.force && now - (this.homeRebindAttemptAt.get(room.docId) ?? 0) < 1000) return;
+    this.homeRebindAttemptAt.set(room.docId, now);
+    const placement = resolveHomeCheckout(home);
+    if (!placement.placed) return;
+    // Persist BEFORE attaching: the attach's at-rest arbitration compares
+    // the home's file against the persisted .ydoc (diskNewerThanState), and
+    // when the trigger is the edit itself the .ydoc still holds the
+    // pre-edit state — a freshly checked-out copy would win and revert the
+    // very edit that resumed syncing.
+    this.persistRoomNow(room);
+    this.retargetHomeBinding(room, placement.absPath);
+  }
+
+  /**
+   * The per-sync-direction gate for home-pinned docs, run before a flush
+   * writes AND before a disk change is applied. Cheap (a handful of stat +
+   * plumbing-file reads, no subprocess), because it has to run every time:
+   * verifying only occasionally is how a triage doc once landed on another
+   * session's feature branch — the checkout under the path had switched and
+   * both directions kept treating its file as the doc's.
+   *
+   * 'ok'         the bound path is still the home; proceed.
+   * 'retargeted' the home resolves elsewhere now; the binding was moved
+   *              there (exporting the file if the new checkout has none)
+   *              and a flush was re-armed. The caller must NOT touch the
+   *              old binding it was handed.
+   * 'parked'     the home resolves nowhere; nothing was read or written,
+   *              and a syncError names why and how to resume.
+   */
+  private homeGuard(room: DocRoom, binding: FileBinding): 'ok' | 'retargeted' | 'parked' {
+    const home = room.meta.docHome;
+    if (!home) return 'ok';
+    if (verifyPathInHome(binding.path, home) === 'ok') return 'ok';
+    const placement = resolveHomeCheckout(home);
+    if (placement.placed) {
+      // Resolution landing on the very path the verify refused (a nested
+      // repo under relPath can split the two): writing there is what the
+      // home declares, so treat it as placed rather than retarget-looping.
+      if (placement.absPath === binding.path) return 'ok';
+      this.retargetHomeBinding(room, placement.absPath);
+      const next = this.fileBindings.get(room.docId);
+      // Re-arm a flush on the NEW binding: its no-op pass is what clears the
+      // pending-write bookkeeping the flush this guard interrupted was
+      // carrying.
+      if (next) this.scheduleFileWrite(room, next);
+      return 'retargeted';
+    }
+    const message =
+      placement.reason === 'repo-missing'
+        ? `doc home is unreachable: ${home.repoRoot} is not (or no longer) a git checkout. ` +
+          'Writes are parked; the live doc stays the source of truth and its content is durable ' +
+          'in the workspace. Re-pin the home at a valid checkout to resume.'
+        : placement.reason === 'path-escapes-checkout'
+          ? `doc home is unsafe: ${home.relPath} passes through a symlink that leaves the ` +
+            'checkout, so writing it would land outside the repo. Writes are parked; the live ' +
+            'doc stays the source of truth. Re-pin the home at a path contained in the checkout.'
+          : `doc home is unplaced: no checkout of the repo has branch "${home.branch}" checked out. ` +
+            'Writes are parked; the live doc stays the source of truth and its content is durable ' +
+            'in the workspace. Check the branch out in some worktree (git worktree add <path> ' +
+            `"${home.branch}") and the next edit or reparse resumes syncing there.`;
+    if (binding.lastSyncError?.message !== message) {
+      this.recordSyncError(room, binding, message);
+    }
+    return 'parked';
+  }
+
+  /**
    * Watch the bound file for external edits via an mtime poll.
    *
    * We deliberately do NOT use fs.watch. A file-level fs.watch is bound to
@@ -4135,6 +4384,21 @@ export class Rooms {
       }, 'file-watch');
       return { ok: true };
     }
+    // A pinned doc re-resolves its home before the reparse reads anything.
+    // The old path's checkout may have switched branches since the binding
+    // was made — an unguarded read here would pull that branch's copy
+    // straight into the live doc, the exact incident homeGuard closes on
+    // the poll path — and a doc parked at hydrate has no binding at all,
+    // with reparse documented as one of its two recovery verbs.
+    if (
+      room.meta.docHome &&
+      !isHubOwnedRoom(room.docId) &&
+      contentKind(room.meta.type) === 'prose'
+    ) {
+      const bound = this.fileBindings.get(docId);
+      if (!bound) this.maybeRebindHome(room, { force: true });
+      else if (this.homeGuard(room, bound) === 'parked') return { ok: false, error: 'missing' };
+    }
     const binding = this.fileBindings.get(docId);
     if (!binding) return { ok: false, error: 'no-binding' };
     if (!existsSync(binding.path)) return { ok: false, error: 'missing' };
@@ -4192,6 +4456,11 @@ export class Rooms {
     room: DocRoom,
     binding: FileBinding,
   ): 'in-sync' | 'catch-up' | 'apply' | 'conflict' | 'missing' {
+    // The disk→doc side of the home gate. Without it, `git checkout` under a
+    // pinned doc's old path rewrites the file, the poll sees an mtime change,
+    // and the OTHER branch's copy gets applied into the live doc — the read
+    // half of the same incident the write half guards against.
+    if (this.homeGuard(room, binding) !== 'ok') return 'missing';
     if (!existsSync(binding.path)) return 'missing';
     let md: string;
     try {
@@ -4367,6 +4636,12 @@ export class Rooms {
    *  what `flush()` runs synchronously on graceful shutdown. */
   private writeBoundFileNow(room: DocRoom, binding: FileBinding): void {
     try {
+      // Home-pinned docs re-verify the destination before every write —
+      // "persistence never writes to whatever checkout happens to be
+      // current". A retarget already carried this flush's content out (the
+      // export) or re-armed one on the new binding; parked means the bytes
+      // stay in the live doc.
+      if (this.homeGuard(room, binding) !== 'ok') return;
       // Guard (RC2): if disk moved since we last read or wrote it, we'd be
       // overwriting bytes we have never seen — the poll just hasn't caught
       // up yet. Reconcile first; apply/conflict decides, and the conflict
@@ -5613,6 +5888,10 @@ export class Rooms {
       if (isAuthoringOrigin(room, origin)) {
         room.lastContentChangeAt = Date.now();
         this.scheduleRevisionBump(room);
+        // "The next edit resumes syncing" — see maybeRebindHome. No-op for
+        // every doc that has a binding (or no pin), which is all of them
+        // outside the hydration-parked state.
+        this.maybeRebindHome(room);
       }
       this.saveToDisk(room);
     });

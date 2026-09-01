@@ -370,7 +370,27 @@ export interface HubWorkspace {
    * reader, so the default lives in exactly one place.
    */
   effortEstimatePrompt?: string;
+  /**
+   * Where this board's planning/discussion notes get checked in: a repo +
+   * branch + directory, from which `POST /api/docs` derives a file (and a
+   * pinned doc home) for a markdown doc created without an explicit path.
+   * Absent means docs must name their own file — the fleet's
+   * `<repo>/.claude/reviews/` scratch convention is untouched either way.
+   * Host paths: served on the owner settings route only, never projected
+   * into the `ws:` room a share visitor can sync (the settings route is not
+   * on the visitor allowlist).
+   */
+  notesHome?: WorkspaceNotesHome;
   createdAt: number;
+}
+
+/** A workspace's default location for planning notes — see
+ *  `HubWorkspace.notesHome`. `dir` is relative to the repo root, same
+ *  traversal rules as a doc home's relPath. */
+export interface WorkspaceNotesHome {
+  repoRoot: string;
+  branch: string;
+  dir: string;
 }
 
 /**
@@ -4823,6 +4843,33 @@ export class TaskStore {
       workspace: state.workspace,
       criteria: read ?? { value: DEFAULT_REVIEW_ITEM_CRITERIA, isDefault: true },
     };
+  }
+
+  /** This board's notes home, or undefined (board missing, or none set —
+   *  there is deliberately no default: checking notes into a repo is an
+   *  opt-in). */
+  notesHome(workspaceId: string): WorkspaceNotesHome | undefined {
+    return this.workspaces.get(workspaceId)?.workspace.notesHome;
+  }
+
+  /**
+   * Set — or, with `undefined`, clear — where this board's planning notes
+   * get checked in. A settings write, not a board event, the same contract
+   * as `setReviewItemCriteria`: the next doc creation reads it. The caller
+   * (the settings route) validates the shape; this stores it.
+   */
+  setNotesHome(
+    workspaceId: string,
+    home: WorkspaceNotesHome | undefined,
+    _opts: { actor: { id: string; name: string; kind?: string } },
+  ):
+    | { ok: true; workspace: HubWorkspace; notesHome?: WorkspaceNotesHome }
+    | { ok: false; error: 'workspace-not-found' } {
+    const state = this.workspaces.get(workspaceId);
+    if (!state) return { ok: false, error: 'workspace-not-found' };
+    state.workspace.notesHome = home;
+    this.scheduleSave(workspaceId);
+    return { ok: true, workspace: state.workspace, ...(home ? { notesHome: home } : {}) };
   }
 
   /**
