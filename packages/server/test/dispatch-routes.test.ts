@@ -323,48 +323,66 @@ describe('builder dispatches through the server', () => {
   });
 
   it('refuses a dispatch past the workspace parallelism cap, naming who holds the slots', async () => {
-    const wtA = mkdtempSync(join(tmpdir(), 'wt-'));
-    const wtB = mkdtempSync(join(tmpdir(), 'wt-'));
-    const wtC = mkdtempSync(join(tmpdir(), 'wt-'));
+    // Default cap is 4 (Bryan, 2026-08-31): four dispatches fill it, the fifth
+    // is turned away naming all four holders.
+    const worktrees = Array.from({ length: 5 }, () => mkdtempSync(join(tmpdir(), 'wt-')));
     try {
       const ctx = await boardWithLead();
-      const taskA = await inProgressRow(ctx.workspaceId, 'Rank results by recency');
-      const taskB = await inProgressRow(ctx.workspaceId, 'Dedupe near-identical rows');
-      const taskC = await inProgressRow(ctx.workspaceId, 'Cache the second-page query');
-      await jj(
-        await post('/api/dispatches', { taskId: taskA, worktreePath: wtA, agentName: 'Builder A' }),
-      );
-      await jj(
-        await post('/api/dispatches', { taskId: taskB, worktreePath: wtB, agentName: 'Builder B' }),
-      );
-
-      // Default cap is 2, and both slots are now spent.
+      const titles = [
+        'Rank results by recency',
+        'Dedupe near-identical rows',
+        'Cache the second-page query',
+        'Trim the index rebuild',
+      ];
+      const holders: string[] = [];
+      for (const [i, title] of titles.entries()) {
+        const taskId = await inProgressRow(ctx.workspaceId, title);
+        holders.push(taskId);
+        await jj(
+          await post('/api/dispatches', {
+            taskId,
+            worktreePath: worktrees[i],
+            agentName: `Builder ${i + 1}`,
+          }),
+        );
+      }
+      const taskE = await inProgressRow(ctx.workspaceId, 'Backfill the missing thumbnails');
       const refused = await post('/api/dispatches', {
-        taskId: taskC,
-        worktreePath: wtC,
-        agentName: 'Builder C',
+        taskId: taskE,
+        worktreePath: worktrees[4],
+        agentName: 'Builder 5',
       });
       expect(refused.status).toBe(409);
       const body = (await refused.json()) as {
         error: string;
+        message: string;
         cap: number;
-        holders: Array<{ taskId: string; agentName?: string }>;
+        holders: Array<{ taskId: string; title?: string; agentName?: string }>;
       };
       expect(body.error).toBe('parallelism-cap-reached');
-      expect(body.cap).toBe(2);
-      expect(body.holders.map((h) => h.agentName).sort()).toEqual(['Builder A', 'Builder B']);
-      expect(body.holders.map((h) => h.taskId).sort()).toEqual([taskA, taskB].sort());
+      expect(body.cap).toBe(4);
+      expect(body.holders.map((h) => h.agentName).sort()).toEqual([
+        'Builder 1',
+        'Builder 2',
+        'Builder 3',
+        'Builder 4',
+      ]);
+      expect(body.holders.map((h) => h.taskId).sort()).toEqual([...holders].sort());
+      // Who holds each slot and on what, in words: the lead reads the message,
+      // not the array.
+      expect(body.message).toContain('Builder 1 on "Rank results by recency"');
+      expect(body.holders.find((h) => h.agentName === 'Builder 4')?.title).toBe(
+        'Trim the index rebuild',
+      );
 
       const listed = await jj<{ dispatches: DispatchRecord[] }>(
         await fetch(`${base}/api/dispatches`),
       );
-      // The refusal never registered — only the two originals are open.
-      expect(listed.dispatches.map((d) => d.taskId).sort()).toEqual([taskA, taskB].sort());
+      // The refusal never registered — only the four originals are open.
+      expect(listed.dispatches.map((d) => d.taskId).sort()).toEqual([...holders].sort());
       await ctx.lead.stop();
     } finally {
-      rmSync(wtA, { recursive: true, force: true });
-      rmSync(wtB, { recursive: true, force: true });
-      rmSync(wtC, { recursive: true, force: true });
+      for (const wt of worktrees) rmSync(wt, { recursive: true, force: true });
     }
   });
 
@@ -374,6 +392,13 @@ describe('builder dispatches through the server', () => {
     const wtB = mkdtempSync(join(tmpdir(), 'wt-'));
     try {
       const ctx = await boardWithLead();
+      await jj(
+        await fetch(`${base}/api/workspaces/${ctx.workspaceId}/parallelism-cap`, {
+          method: 'PUT',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ cap: 2, author: LEAD }),
+        }),
+      );
       const taskA = await inProgressRow(ctx.workspaceId, 'Rank results by recency');
       const taskB = await inProgressRow(ctx.workspaceId, 'Dedupe near-identical rows');
       await jj(await post('/api/dispatches', { taskId: taskA, worktreePath: wtA }));
@@ -438,7 +463,7 @@ describe('builder dispatches through the server', () => {
         parallelismCap: { value: number; isDefault: boolean; default: number };
         dispatchesInUse: number;
       }>(await get(`/api/workspaces/${ctx.workspaceId}/settings`));
-      expect(before.parallelismCap).toEqual({ value: 2, isDefault: true, default: 2 });
+      expect(before.parallelismCap).toEqual({ value: 4, isDefault: true, default: 4 });
       expect(before.dispatchesInUse).toBe(0);
 
       const taskA = await inProgressRow(ctx.workspaceId, 'Rank results by recency');

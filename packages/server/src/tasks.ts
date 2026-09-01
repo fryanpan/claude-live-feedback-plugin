@@ -259,12 +259,14 @@ export function refKey(ref: Ref): string {
   }
 }
 
-/** No board asked for a number, so how many builders it may run at once —
- *  the same "keep the board moving without starving higher-priority work"
- *  tension every lead already reads about in `workspace-board.md`'s
- *  "Respect capacity" bullet, made a number an owner can change instead of a
- *  judgment call every lead makes alone. */
-export const DEFAULT_PARALLELISM_CAP = 2;
+/** How many builders a board may run at once when nobody has set a number
+ *  for it — four (Bryan, 2026-08-31: *"Let's make it default 4, but Team
+ *  Lead can adjust down (and so can Bryan)"*). The same "keep the board
+ *  moving without starving higher-priority work" tension every lead already
+ *  reads about in `workspace-board.md`'s "Respect capacity" bullet, made a
+ *  number an owner can change instead of a judgment call every lead makes
+ *  alone. */
+export const DEFAULT_PARALLELISM_CAP = 4;
 /** Below one, "limiting parallelism" has stopped meaning anything — a cap of
  *  zero would refuse every dispatch forever with no way back short of a
  *  second write, which is a worse failure than the validation that prevents

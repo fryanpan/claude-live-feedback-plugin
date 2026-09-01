@@ -95,6 +95,9 @@ export interface StallPayload {
   undetermined?: { count?: number; reasons?: string[] };
   /** `heldItems`, not `held` — ready_idle spends that name on its counts. */
   heldItems?: HeldRowPayload[];
+  /** Runnable rows past the board's parallelism cap, which the pass did not
+   *  judge — idle by rule, not healthy. Absent when none. */
+  beyondCapacity?: number;
   /** The lead this wake was addressed to, when it could not be reached and
    *  came here instead. Absent on the ordinary wake — its presence is the
    *  whole signal, and without it the reader has no way to tell why it was
@@ -305,8 +308,16 @@ export function stalledLine(p: StallPayload): string {
   const parts: string[] = [];
   const rows = p.rows ?? [];
   const count = p.stalledCount ?? rows.length;
+  // The cap's unjudged rows ride inside the denominator clause, so "of 9
+  // open rows checked" cannot read as nine judged when five were.
+  const beyond =
+    p.beyondCapacity !== undefined && p.beyondCapacity > 0
+      ? `; ${p.beyondCapacity} beyond the parallelism cap and not judged`
+      : '';
   const denominator =
-    p.consideredCount === undefined ? '' : ` (of ${p.consideredCount} open row(s) checked)`;
+    p.consideredCount === undefined
+      ? ''
+      : ` (of ${p.consideredCount} open row(s) checked${beyond})`;
   if (count > 0) {
     const subject = count === 1 ? '1 task has' : `${count} tasks have`;
     const list = rows.length > 0 ? ` — ${stalledRowsClause(rows)}` : '';
