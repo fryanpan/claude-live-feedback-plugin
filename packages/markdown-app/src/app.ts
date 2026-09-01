@@ -29,7 +29,9 @@ import { mountMarkupMargin } from './redline/markup-margin.ts';
 import { mountRedline } from './redline/redline-app.ts';
 import { mountSuggestionsSummary } from './redline/suggestions-summary.ts';
 import {
+  type ChromeSelection,
   type ReviewChrome,
+  anchorBody,
   el,
   mountReviewChrome,
   showToast,
@@ -53,6 +55,7 @@ import {
 } from './signin/write-gate.ts';
 import { mountSpeakerReassign } from './speaker-reassign-menu.ts';
 import { loadDocSpeakers, loadDocVoices, postSpeakerName } from './speaker-voices.ts';
+import { type SpinoffId, clipTitle, mountSpinoffMenu, runSpinoff } from './spinoff-menu.ts';
 import { installStaleClientNotice } from './stale-client.ts';
 import { readSuggestModePref, setSuggesting, writeSuggestModePref } from './suggest-input.ts';
 import { registerMarkdownMount } from './surface-registry.ts';
@@ -647,11 +650,109 @@ async function mountMarkdown(ctx: MountContext): Promise<void> {
       // setTextSelection is synchronous; read the rel positions now.
       const sel = editor.getSelectionRel();
       if (sel) selection = sel;
-      reviewChrome.openComposer();
-    } else {
-      reviewChrome.openComposer();
     }
+    // On a HUDDLE doc the pill opens the five ways a line can leave the doc
+    // as work; everywhere else it is the comment affordance it has always
+    // been, and opens the composer directly.
+    if (ctx.huddle === true) {
+      openSpinoffMenu();
+      return;
+    }
+    reviewChrome.openComposer();
   });
+
+  /**
+   * The spin-off menu over the current selection.
+   *
+   * The PM range is captured HERE rather than read again when a row is
+   * tapped: opening the menu moves focus into it, and on iOS the tap that
+   * opened the pill has already blurred the editor. Without a captured range
+   * there is nothing left to write the task's link beside.
+   */
+  let spinoff: { destroy(): void } | null = null;
+  function openSpinoffMenu(): void {
+    const sel = editor.getSelectionRel() ?? selection;
+    if (!sel) {
+      showToast('Select a line first.');
+      return;
+    }
+    const { from, to } = editor.editor.state.selection;
+    const range = from < to ? { from, to } : caretParaRange;
+    spinoff?.destroy();
+    spinoff = mountSpinoffMenu({
+      anchorEl: commentPill,
+      onDismiss: () => hidePill(),
+      onPick: (action) => {
+        spinoff = null;
+        hidePill();
+        if (action === 'comment') {
+          reviewChrome.openComposer();
+          return;
+        }
+        void takeSpinoff(action, sel, range);
+      },
+    });
+  }
+
+  async function takeSpinoff(
+    action: SpinoffId,
+    sel: ChromeSelection,
+    range: { from: number; to: number } | null,
+  ): Promise<void> {
+    // The board this doc is filed on. `ctx` has it on a doc opened through a
+    // workspace URL; the CRDT is the fallback for one opened directly.
+    const workspaceId = ctx.workspaceId ?? readDocMeta(ydoc).workspaceId;
+    if (workspaceId === undefined) {
+      showToast('This doc is not on a board yet.');
+      return;
+    }
+    try {
+      const made = await runSpinoff(action, {
+        docId,
+        workspaceId,
+        user,
+        quote: sel.snippet,
+        anchor: anchorBody(sel),
+        docTitle: readDocMeta(ydoc).title,
+        fetchJson: async (url, init) => {
+          const res = await fetch(url, init);
+          const body = await res.json().catch(() => ({}));
+          if (!res.ok) throw new Error(String((body as { error?: string }).error ?? res.status));
+          return body;
+        },
+      });
+      if (!made) {
+        showToast("That didn't go through — try again.");
+        return;
+      }
+      if (made.action === 'question') {
+        showToast('Asked — the agent watching this doc will answer here.');
+        return;
+      }
+      // The task's link goes in AFTER the line, not over it: the words stay
+      // the words somebody said, and `task-link-chips.ts` decorates the link
+      // with the row's live status the moment it lands.
+      if (made.href !== undefined && range) {
+        insertTaskLink(range.to, clipTitle(sel.snippet), made.href);
+      }
+      showToast(made.action === 'start' ? 'Task created — top of the queue.' : 'Task created.');
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : "That didn't go through.");
+    }
+  }
+
+  /** ` <title>` carrying a link mark, dropped just past the selection. */
+  function insertTaskLink(at: number, title: string, href: string): void {
+    editor.editor
+      .chain()
+      .focus()
+      .insertContentAt(at, [
+        { type: 'text', text: ' ' },
+        { type: 'text', text: title, marks: [{ type: 'link', attrs: { href } }] },
+      ])
+      .run();
+  }
+  scope.onCleanup(() => spinoff?.destroy());
 
   // This lives on the editor's own DOM, which is removed by editor.destroy()
   // on teardown, so its listener dies with it — no scope binding needed.
