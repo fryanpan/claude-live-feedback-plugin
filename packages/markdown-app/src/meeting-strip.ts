@@ -65,6 +65,7 @@ import {
   parseCaptureMode,
   speakerDisplayName,
 } from '@feedback/core';
+import type { MeetingTranscriptEvent } from '@feedback/core';
 import { type Announcer, createAnnouncer } from './meeting-announce.ts';
 import {
   type MeetingCapture,
@@ -656,7 +657,7 @@ export function mountMeetingStrip(opts: MeetingStripOpts): MeetingStripHandle {
    *  already on screen instead of redrawing the line under the reader. */
   const rendered = new Map<
     number,
-    { span: HTMLElement; tag: HTMLButtonElement | null; words: HTMLElement[]; text: string }
+    { span: HTMLElement; tag: HTMLElement | null; words: HTMLElement[]; text: string }
   >();
   /**
    * Engine label → what the person calls that voice. Belongs to ONE meeting:
@@ -682,6 +683,9 @@ export function mountMeetingStrip(opts: MeetingStripOpts): MeetingStripHandle {
   /** Whether this mount has seen the bot alive — a terminal state found
    *  already-terminal at load is history, not news, and is not shown. */
   let sawLiveBot = false;
+  /** Whether the bot was live at the LAST change — the edge a new bot
+   *  meeting is detected on, so its turns start from a clean window. */
+  let botWasLive = false;
   /** A terminal bot state the person tapped away. */
   let botNoteDismissed = false;
 
@@ -761,17 +765,34 @@ export function mountMeetingStrip(opts: MeetingStripOpts): MeetingStripHandle {
     return tag;
   }
 
+  /**
+   * The same tag with no tap in it — a bot turn's. The platform already
+   * named the voice, and a live bot meeting cannot be renamed from here
+   * anyway (the rename route refuses a recording meeting; the socket a
+   * live rename rides is the microphone's). Same pill, same place on the
+   * line, so a bot meeting reads exactly like a microphone one; the
+   * pencil and the dotted underline are the stylesheet's to withhold.
+   */
+  function speakerLabel(): HTMLElement {
+    const tag = document.createElement('span');
+    tag.className = 'meeting-speaker is-fixed';
+    const pill = document.createElement('span');
+    pill.className = 'meeting-speaker-pill';
+    tag.append(pill);
+    return tag;
+  }
+
   /** The tag every turn with this label wears, as it should read now. The
    *  name goes on the PILL, never on the button: the button is the tap
    *  target and holds nothing but padding (see the stylesheet). */
-  function renderTag(entry: { tag: HTMLButtonElement | null }, label: string): void {
+  function renderTag(entry: { tag: HTMLElement | null }, label: string): void {
     const tag = entry.tag;
     if (!tag) return;
     const shown = speakerDisplayName(label, names);
     tag.dataset.speaker = label;
     const pill = tag.querySelector('.meeting-speaker-pill');
     if (pill) pill.textContent = shown;
-    tag.setAttribute('aria-label', `Name ${shown}`);
+    if (tag instanceof HTMLButtonElement) tag.setAttribute('aria-label', `Name ${shown}`);
   }
 
   function nameSpeaker(label: string): void {
@@ -822,9 +843,14 @@ export function mountMeetingStrip(opts: MeetingStripOpts): MeetingStripHandle {
     // gave has to go when words start arriving.
     line.querySelector('.meeting-note')?.remove();
     if (state.kind === 'idle') {
-      // An idle strip with a live bot narrates the bot; with a farewell, the
+      // An idle strip with a live bot shows the bot's words once there are
+      // any, and narrates its state until then; with a farewell, the
       // farewell; otherwise the strip is hidden and the line stays empty.
       const live = liveBot();
+      if (live && turns.length > 0) {
+        renderTurns(false);
+        return;
+      }
       if (live) {
         clearTurnSpans();
         const who = live.speakers.length ? ` · ${live.speakers.join(', ')}` : '';
@@ -852,6 +878,15 @@ export function mountMeetingStrip(opts: MeetingStripOpts): MeetingStripHandle {
       clearTurnSpans();
       return;
     }
+    renderTurns(true);
+  }
+
+  /**
+   * The rolling window onto the line, one span per turn and one per word.
+   * `tappable` is whether a speaker tag is the rename button (a microphone
+   * meeting) or the fixed label a bot meeting's turns wear.
+   */
+  function renderTurns(tappable: boolean): void {
     for (const [turn, entry] of rendered) {
       if (!turns.some((t) => t.turn === turn)) {
         entry.span.remove();
@@ -875,7 +910,7 @@ export function mountMeetingStrip(opts: MeetingStripOpts): MeetingStripHandle {
         entry.tag = null;
       } else {
         if (!entry.tag) {
-          const tag = speakerButton();
+          const tag = tappable ? speakerButton() : speakerLabel();
           entry.span.prepend(tag);
           entry.tag = tag;
         }
@@ -1842,11 +1877,53 @@ export function mountMeetingStrip(opts: MeetingStripOpts): MeetingStripHandle {
 
   const offBot = bot?.onChange(() => {
     if (disposed) return;
-    if (bot.live()) {
+    const live = bot.live() !== null;
+    if (live) {
       sawLiveBot = true;
       botNoteDismissed = false;
     }
+    if (live !== botWasLive) {
+      botWasLive = live;
+      // A bot meeting starting or ending is a meeting boundary, the same one
+      // `start` draws for the microphone: the window empties so the next
+      // meeting's turn 0 is not "older than the newest" and dropped, and a
+      // new bot's cast is a new cast. The names stay when the bot LEAVES —
+      // they are the record's, and the post-meeting rename (over HTTP, to
+      // `lastMeetingId`) is addressed to exactly that meeting.
+      turns = [];
+      if (live) {
+        names = {};
+        seen = new Set();
+        lastMeetingId = null;
+      }
+    }
     render();
+  });
+  /**
+   * The bot's words, through the SAME fold as the microphone's frames.
+   * Rendered only while the strip's own capture is idle and a bot is live —
+   * the server refuses a second capture on a doc, so anything else is a
+   * frame for a meeting this strip is not showing.
+   */
+  const offBotWords = bot?.onTranscript((frame: MeetingTranscriptEvent) => {
+    if (disposed || state.kind !== 'idle' || !liveBot()) return;
+    if (frame.meetingId) lastMeetingId = frame.meetingId;
+    if (frame.speaker !== undefined) {
+      const grew = !seen.has(frame.speaker);
+      seen.add(frame.speaker);
+      // The platform's name for the voice fills the map a person fills by
+      // tapping on the microphone path; a later frame naming it differently
+      // (a disambiguated duplicate) wins, as a later tap would.
+      if (frame.speakerName) names[frame.speaker] = frame.speakerName;
+      if (grew && view === 'menu') renderPop();
+    }
+    turns = rollTranscript(turns, {
+      turn: frame.turn,
+      text: frame.text,
+      final: frame.final,
+      ...(frame.speaker !== undefined ? { speaker: frame.speaker } : {}),
+    });
+    renderFeed();
   });
   // The bot feature answers whether it exists a beat after mount; a chooser
   // opened in that beat should grow the bot source when the answer lands.
@@ -1890,6 +1967,7 @@ export function mountMeetingStrip(opts: MeetingStripOpts): MeetingStripHandle {
       scrim.removeEventListener('click', onScrim);
       document.removeEventListener('keydown', onKeydown);
       offBot?.();
+      offBotWords?.();
       timing?.destroy();
       releaseAudio();
       closeSocket();

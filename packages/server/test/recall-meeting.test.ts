@@ -13,6 +13,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import type { MeetingTranscriptEvent } from '@feedback/core';
 import type { NotesComposeInput, NotesComposer, TickScheduler } from '../src/meeting-notes.ts';
 import { MeetingStore, readTranscript } from '../src/meetings.ts';
 import { BOT_ENGINE_NAME, RecallMeetingRelay } from '../src/recall-meeting.ts';
@@ -102,6 +103,9 @@ describe('the bot meeting', () => {
   let dataDir: string;
   let store: MeetingStore;
   let events: Array<{ docId: string; payload: Record<string, unknown> }>;
+  /** What went out unbuffered — the live ticker — kept apart from `events`
+   *  so a test can prove a frame landed on one and not the other. */
+  let transient: Array<{ docId: string; payload: MeetingTranscriptEvent }>;
   let notesSeen: NotesComposeInput[];
   let schedule: ManualScheduler;
 
@@ -119,6 +123,7 @@ describe('the bot meeting', () => {
       notes: withNotes ? { composer, quietMs: 1000, schedule, onNotes: () => {} } : null,
       client,
       broadcast: (docId, payload) => events.push({ docId, payload }),
+      broadcastTransient: (docId, payload) => transient.push({ docId, payload }),
       mintToken: () => TOKEN,
     });
   }
@@ -127,6 +132,7 @@ describe('the bot meeting', () => {
     dataDir = mkdtempSync(join(tmpdir(), 'cw-recall-'));
     store = new MeetingStore(dataDir);
     events = [];
+    transient = [];
     notesSeen = [];
     schedule = new ManualScheduler();
   });
@@ -259,6 +265,71 @@ describe('the bot meeting', () => {
       ['p7', 'So the sync.'],
       ['p8', "Let's measure it."],
     ]);
+  });
+
+  it('publishes every frame — partials included — to the doc as a live turn, named', async () => {
+    // The word ticker: what a viewer's strip folds. Same turn number, twice,
+    // is the partial replacing itself in place; `speaker` stays the label
+    // the record uses and `speakerName` carries the platform's own name.
+    const relay = relayWith(new FakeRecall(config()));
+    await relay.invite({ docId: 'doc-1', meetingUrl: ZOOM_URL });
+    relay.onSocketText(
+      TOKEN,
+      transcriptFrame({ final: false, id: 7, name: 'Rowan Pike', text: 'so the' }),
+    );
+    relay.onSocketText(
+      TOKEN,
+      transcriptFrame({ final: true, id: 7, name: 'Rowan Pike', text: 'So the sync.' }),
+    );
+    const meetingId = store.active('doc-1')?.meetingId ?? '';
+    expect(meetingId).not.toBe('');
+    expect(transient.map((e) => e.docId)).toEqual(['doc-1', 'doc-1']);
+    expect(transient.map((e) => e.payload)).toEqual([
+      {
+        event: 'meeting.transcript',
+        docId: 'doc-1',
+        meetingId,
+        turn: 0,
+        text: 'so the',
+        final: false,
+        speaker: 'p7',
+        speakerName: 'Rowan Pike',
+      },
+      {
+        event: 'meeting.transcript',
+        docId: 'doc-1',
+        meetingId,
+        turn: 0,
+        text: 'So the sync.',
+        final: true,
+        speaker: 'p7',
+        speakerName: 'Rowan Pike',
+      },
+    ]);
+    // Never on the buffered channel: the words would evict the doc's events.
+    expect(events.some((e) => e.payload.event === 'meeting.transcript')).toBe(false);
+    // POSITIVE CONTROL: the buffered channel still carries the bot's status,
+    // unchanged in shape — the first word named a speaker, and that fact,
+    // unlike the words, is one a reconnecting tab must be able to replay.
+    const statuses = events.filter((e) => e.payload.event === 'meeting.bot');
+    expect(statuses.length).toBeGreaterThan(0);
+    expect(statuses[statuses.length - 1]?.payload).toMatchObject({
+      event: 'meeting.bot',
+      botId: 'bot_1',
+      docId: 'doc-1',
+      speakers: ['Rowan Pike'],
+    });
+    expect(events.some((e) => e.payload.event === 'meeting.started')).toBe(true);
+  });
+
+  it('a frame for a token the meeting does not accept publishes nothing', async () => {
+    const relay = relayWith(new FakeRecall(config()));
+    await relay.invite({ docId: 'doc-1', meetingUrl: ZOOM_URL });
+    relay.onSocketText(
+      'ffffffffffffffffffffffffffffffff',
+      transcriptFrame({ final: true, id: 7, name: 'Rowan Pike', text: 'Nobody hears this.' }),
+    );
+    expect(transient).toHaveLength(0);
   });
 
   it('gives the notes composer the names, never the labels', async () => {

@@ -11,6 +11,7 @@ import {
   meetingSocketPath,
   parseMeetingClientMessage,
 } from '@feedback/core';
+import type { MeetingTranscriptEvent } from '@feedback/core';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { Announcer, SpeechOutcome } from '../src/meeting-announce.ts';
 import type { RoomAudioProcessing } from '../src/meeting-audio.ts';
@@ -226,9 +227,24 @@ class FakeBot implements MeetingBotClient {
   /** When set, the next invite rejects with this message. */
   refuse: string | null = null;
   private listeners = new Set<() => void>();
+  private wordListeners = new Set<(frame: MeetingTranscriptEvent) => void>();
   destroy(): void {}
   configured(): boolean {
     return this.isConfigured;
+  }
+  onTranscript(cb: (frame: MeetingTranscriptEvent) => void): () => void {
+    this.wordListeners.add(cb);
+    return () => this.wordListeners.delete(cb);
+  }
+  /** One live turn arriving on the doc's stream, as the server sends it. */
+  speak(frame: Omit<MeetingTranscriptEvent, 'event' | 'docId' | 'meetingId'>): void {
+    const full: MeetingTranscriptEvent = {
+      event: 'meeting.transcript',
+      docId: 'doc-1',
+      meetingId: 'bot-meeting-1',
+      ...frame,
+    };
+    for (const cb of [...this.wordListeners]) cb(full);
   }
   status(): MeetingBotStatus | null {
     return this.current;
@@ -1507,6 +1523,99 @@ describe('the meeting bot in the chrome', () => {
     // Dismissible: the farewell is a line, not a permanent fixture.
     (h2.root.querySelector('.meeting-note-dismiss') as HTMLButtonElement).click();
     expect(h2.root.hidden).toBe(true);
+  });
+
+  it("a live bot's words roll on the line as the microphone's do, under the platform's names", () => {
+    const bot = new FakeBot();
+    const h = mount(undefined, { bot });
+    bot.set('recording', ['Rowan Pike']);
+    // Until the first word the line narrates the bot's state…
+    expect(h.note()).toBe('Recording · Rowan Pike');
+    // …and the first partial replaces that narration with the words.
+    bot.speak({ turn: 0, text: 'so the', final: false, speaker: 'p7', speakerName: 'Rowan Pike' });
+    expect(h.note()).toBe('');
+    expect(h.caption()).toContain('so the');
+    expect(h.tags()).toEqual(['Rowan Pike']);
+    // A later partial for the SAME turn replaces it in place — the whole
+    // correction mechanism, and the thing the microphone strip does.
+    bot.speak({
+      turn: 0,
+      text: 'So the sync is the bottleneck.',
+      final: true,
+      speaker: 'p7',
+      speakerName: 'Rowan Pike',
+    });
+    expect(h.root.querySelectorAll('.meeting-turn')).toHaveLength(1);
+    expect(h.caption()).toContain('So the sync is the bottleneck.');
+    expect(h.caption()).not.toContain('so the sync is');
+    bot.speak({ turn: 1, text: 'Measure it.', final: true, speaker: 'p8', speakerName: 'Devi' });
+    expect(h.tags()).toEqual(['Rowan Pike', 'Devi']);
+    expect(h.root.querySelectorAll('.meeting-turn')).toHaveLength(2);
+    // The recording face, same as the microphone's.
+    expect(h.root.classList.contains('is-live')).toBe(true);
+    // The tag is the same pill but not a rename button: a live bot meeting
+    // cannot be renamed from the strip, and a tap that could only fail is
+    // not offered.
+    expect(h.root.querySelectorAll('button.meeting-speaker')).toHaveLength(0);
+    expect(h.root.querySelectorAll('.meeting-speaker.is-fixed')).toHaveLength(2);
+  });
+
+  it('POSITIVE CONTROL: a microphone frame still renders through the same fold', async () => {
+    // Same harness, same accessors — proves `caption()`/`tags()` see a turn
+    // the socket path draws, so the bot assertions above are not vacuous.
+    const h = mount(undefined, { bot: new FakeBot() });
+    h.pressStart();
+    await settle();
+    h.sockets[0]?.onopen?.();
+    h.sockets[0]?.serve({
+      type: 'ready',
+      meetingId: 'm1',
+      startedAt: 1_000,
+      engine: 'test',
+      mode: 'conversation',
+    });
+    h.sockets[0]?.serve({ type: 'transcript', turn: 0, text: 'Hi.', final: true, speaker: 'A' });
+    expect(h.caption()).toContain('Hi.');
+    expect(h.tags()).toEqual(['Speaker A']);
+    // And the microphone's tag IS the rename button.
+    expect(h.root.querySelectorAll('button.meeting-speaker')).toHaveLength(1);
+  });
+
+  it("a bot's words are dropped while this strip's own microphone is the capture", async () => {
+    const bot = new FakeBot();
+    const h = mount(undefined, { bot });
+    h.pressStart();
+    await settle();
+    h.sockets[0]?.onopen?.();
+    h.sockets[0]?.serve({
+      type: 'ready',
+      meetingId: 'm1',
+      startedAt: 1_000,
+      engine: 'test',
+      mode: 'solo',
+    });
+    h.sockets[0]?.serve({ type: 'transcript', turn: 0, text: 'Mine.', final: true });
+    bot.speak({ turn: 0, text: 'Not mine.', final: true, speaker: 'p7', speakerName: 'Rowan' });
+    expect(h.caption()).toContain('Mine.');
+    expect(h.caption()).not.toContain('Not mine.');
+  });
+
+  it('a bot leaving clears the window, and the next bot meeting starts from turn 0', () => {
+    const bot = new FakeBot();
+    const h = mount(undefined, { bot });
+    bot.set('recording', ['Rowan Pike']);
+    bot.speak({ turn: 0, text: 'First.', final: true, speaker: 'p7', speakerName: 'Rowan Pike' });
+    bot.speak({ turn: 1, text: 'Second.', final: true, speaker: 'p7', speakerName: 'Rowan Pike' });
+    bot.set('left');
+    expect(h.note()).toBe('The bot has left');
+    expect(h.root.querySelectorAll('.meeting-turn')).toHaveLength(0);
+    // A new bot, a new meeting: its turn 0 must not read as "older than the
+    // newest" and be dropped by the rolling window.
+    bot.set('recording', ['Devi']);
+    bot.speak({ turn: 0, text: 'Again.', final: true, speaker: 'p9', speakerName: 'Devi' });
+    expect(h.caption()).toContain('Again.');
+    expect(h.caption()).not.toContain('Second.');
+    expect(h.tags()).toEqual(['Devi']);
   });
 });
 

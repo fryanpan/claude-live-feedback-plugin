@@ -12,6 +12,7 @@ import { parseThreadReviewItemId } from '../../core/src/review-item-id.ts';
 import { type BacklogCommentRow, deliverAttachBacklog } from './attach-backlog.ts';
 import { createAttachmentKeepalive } from './attachment-keepalive.ts';
 import { resolveAgentAuthor } from './author.ts';
+import { isChannelEvent } from './channel-gate.ts';
 import { type PresenceRow, claimWarning } from './claim-warning.ts';
 import { decisionAnsweredLine } from './decision-line.ts';
 import { declareWorkspaceLead } from './declare-lead.ts';
@@ -109,7 +110,7 @@ function suggestionAuthor(): { id: string; name: string; color: string } {
  * bundle than the deploy source would install. A second literal would be a
  * fourth version site, and this file's history is that version sites drift.
  */
-const PLUGIN_VERSION = '0.1.139';
+const PLUGIN_VERSION = '0.1.140';
 
 /**
  * One nonce per PROCESS, minted at module load and sent on every attach.
@@ -4930,7 +4931,9 @@ async function handleFrame(raw: string): Promise<void> {
     });
     return;
   }
-  if (shouldForwardFrame.shouldForward(ev, payload)) {
+  // The kind gate FIRST, then the dedup: a word-rate frame must never reach
+  // the dedup's window, let alone the channel (channel-gate.ts).
+  if (isChannelEvent(ev) && shouldForwardFrame.shouldForward(ev, payload)) {
     await emitChannelMessage(ev, payload);
   }
   // The receipt for a durable comment row, AFTER the forward attempt (same

@@ -27,9 +27,11 @@
 
 import {
   MEETING_BOT_EVENT,
+  MEETING_TRANSCRIPT_EVENT,
   type MeetingBotState,
   type MeetingBotStatus,
   type MeetingPlatform,
+  type MeetingTranscriptEvent,
   isTerminalBotState,
   meetingPlatformOf,
 } from '@feedback/core';
@@ -66,8 +68,18 @@ export interface RecallMeetingDeps {
   notes: MeetingNotesDeps | null;
   /** Null is the configured-off state — no key, or no public URL to dial. */
   client: RecallClient | null;
-  /** Lifecycle facts only. Never a transcript frame; see meeting-bot.ts. */
+  /** Lifecycle facts only — buffered for reconnect replay. Never a
+   *  transcript frame: that is `broadcastTransient`'s job, see meeting-bot.ts. */
   broadcast: (docId: string, payload: { event: string } & Record<string, unknown>) => void;
+  /**
+   * The live word ticker: one `meeting.transcript` per frame the vendor
+   * sends, partials included, on the doc's own SSE channel — fanned out to
+   * whoever has the doc open and never buffered (`SseHub.broadcastTransient`).
+   * The microphone path returns its words on the audio socket; a bot has no
+   * socket to a browser, and this is the one channel every viewer already
+   * holds.
+   */
+  broadcastTransient: (docId: string, payload: MeetingTranscriptEvent) => void;
   now?: () => number;
   /** Injected so a test can assert the URL Recall is actually handed. */
   mintToken?: () => string;
@@ -325,6 +337,22 @@ export class RecallMeetingRelay {
     // Every frame, partial included: a partial is speech in progress, which
     // is exactly the evidence that defers the notes composer's pause tick.
     rec.notes?.onTurn(turn);
+    // And every frame to the doc's viewers, partial included, for the same
+    // reason the microphone strip gets them: a partial replacing itself in
+    // place by turn number IS the live ticker. The speaker rides as the
+    // label the record and the notes use, plus the platform's name for it,
+    // so the strip fills its name map without anyone tapping a tag.
+    this.deps.broadcastTransient(rec.docId, {
+      event: MEETING_TRANSCRIPT_EVENT,
+      docId: rec.docId,
+      meetingId: meeting.meetingId,
+      turn: turn.turn,
+      text: turn.text,
+      final: turn.final,
+      speaker: turn.speaker,
+      // Already allocated above (`isNew` → `nameFor`), so this is a lookup.
+      speakerName: rec.namer.nameFor(frame.participant),
+    });
   }
 
   /**
