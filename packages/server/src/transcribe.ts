@@ -91,10 +91,11 @@ export interface TranscriptionEngine {
  * decided. A `start` naming no engine opens the first configured engine, and
  * `/api/meeting-engines` reports it as the default the chooser preselects.
  *
- * Soniox leads (Bryan, 2026-09-01); on a box without the Soniox key the
- * default falls back to AssemblyAI, which is what every server ran before
- * the choice existed. A function rather than an array literal in `bin.ts`
- * so the ordering is a fact a test can hold still.
+ * Soniox leads — Bryan chose it after a live side-by-side of the engines
+ * (2026-09-01). On a box without the Soniox key the default falls back to
+ * AssemblyAI, which is what every server ran before the choice existed.
+ * A function rather than an array literal in `bin.ts` so the ordering is
+ * a fact a test can hold still.
  */
 export function orderedEngines(available: {
   soniox: TranscriptionEngine | null;
