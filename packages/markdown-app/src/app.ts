@@ -29,7 +29,9 @@ import { mountMarkupMargin } from './redline/markup-margin.ts';
 import { mountRedline } from './redline/redline-app.ts';
 import { mountSuggestionsSummary } from './redline/suggestions-summary.ts';
 import {
+  type ChromeSelection,
   type ReviewChrome,
+  anchorBody,
   el,
   mountReviewChrome,
   showToast,
@@ -53,6 +55,14 @@ import {
 } from './signin/write-gate.ts';
 import { mountSpeakerReassign } from './speaker-reassign-menu.ts';
 import { loadDocSpeakers, loadDocVoices, postSpeakerName } from './speaker-voices.ts';
+import { linkSpinoffRange, unlinkSpinoffHref } from './spinoff-link.ts';
+import {
+  SPINOFF_QUESTION_PREFILL,
+  type SpinoffTaskId,
+  boardIdFor,
+  mountSpinoffMenu,
+  runSpinoff,
+} from './spinoff-menu.ts';
 import { installStaleClientNotice } from './stale-client.ts';
 import { readSuggestModePref, setSuggesting, writeSuggestModePref } from './suggest-input.ts';
 import { registerMarkdownMount } from './surface-registry.ts';
@@ -183,6 +193,14 @@ async function mountMarkdown(ctx: MountContext): Promise<void> {
   const editorMount = el<HTMLElement>('editor');
   const composer = el<HTMLElement>('composer');
   const commentPill = el<HTMLButtonElement>('comment-pill');
+  // The pill's markup says "Add comment" because that is all it ever did. On
+  // a huddle doc it now opens four actions, only one of which is a comment,
+  // so the label would send a screen-reader user somewhere the menu doesn't
+  // go. Named for what it opens, not for the row it used to be.
+  if (ctx.huddle === true) {
+    commentPill.setAttribute('aria-label', 'Turn this line into work');
+    commentPill.title = 'Turn this line into work';
+  }
   const formatBar = el<HTMLElement>('format-bar');
   const toggleFormat = el<HTMLButtonElement>('toggle-format');
   const toggleEditMode = el<HTMLButtonElement>('toggle-edit-mode');
@@ -326,9 +344,13 @@ async function mountMarkdown(ctx: MountContext): Promise<void> {
   // flag, and the strip asks for the mic at once instead of waiting for a
   // press. Read once and taken back out of the address, so a reload or a
   // later Back into this entry does not open a mic nobody pressed for.
+  // Read ONCE, here, because the strip block below takes the flag back out of
+  // the address — and the edit-mode decision that also needs it runs much
+  // later, by which time `location.search` no longer says anything.
+  const startedHuddleHere = wantsHuddleStart(location.search);
   const meetingStripEl = document.getElementById('meeting-strip');
   if (meetingStripEl && ctx.docType === 'markdown' && ctx.navDocId === undefined) {
-    const huddleStart = wantsHuddleStart(location.search);
+    const huddleStart = startedHuddleHere;
     // "Record a conversation" is the only thing that says someone else is in
     // the room, and it is a press on the Board — a page that is gone by the
     // time this mounts. It rides in on the address with the start flag and
@@ -372,7 +394,14 @@ async function mountMarkdown(ctx: MountContext): Promise<void> {
       // "<name>'s Claude Code Agent" — the bot walks into the call wearing
       // the name of the person who sent it, editable in the chooser.
       botNamePrefill: user.name ? `${user.name}'s Claude Code Agent` : 'Claude Code Agent',
-      autoStart: huddleStart,
+      // Which of the two entries this press was, read off the mode it
+      // carries: a solo huddle ("Make a plan") opens the microphone, and a
+      // conversation ("Have a discussion") opens the chooser instead,
+      // because a room cannot be recorded until somebody presses the button
+      // that tells it so. Nothing new on the address — the mode the Board
+      // already sends is the whole difference between the two buttons.
+      autoStart: huddleStart && huddleMode !== 'conversation',
+      autoChoose: huddleStart && huddleMode === 'conversation',
       // Read BEFORE the flag is stripped from the address above… it is, in
       // fact, read from `location.search` there too, so both come off the
       // same address; see `huddleCaptureMode`.
@@ -398,7 +427,21 @@ async function mountMarkdown(ctx: MountContext): Promise<void> {
   // branch, or a companion doc under `navDocId`, is not a plan a person
   // approves.
   if (ctx.docType === 'markdown' && ctx.navDocId === undefined) {
-    const planGate = mountPlanGate({ docId, root: editorMount, user, canWrite });
+    const planGate = mountPlanGate({
+      docId,
+      root: editorMount,
+      user,
+      canWrite,
+      // `setPlanState` writes planState into this same map on the server, so
+      // observing it is how the float hears that the plan landed — no event
+      // stream carries that transition. Any meta change re-reads; the read is
+      // one small GET and the map changes rarely.
+      watchDocMeta: (onChange) => {
+        const meta = ydoc.getMap('meta');
+        meta.observe(onChange);
+        return () => meta.unobserve(onChange);
+      },
+    });
     scope.onCleanup(() => planGate.destroy());
   }
 
@@ -647,11 +690,146 @@ async function mountMarkdown(ctx: MountContext): Promise<void> {
       // setTextSelection is synchronous; read the rel positions now.
       const sel = editor.getSelectionRel();
       if (sel) selection = sel;
-      reviewChrome.openComposer();
-    } else {
-      reviewChrome.openComposer();
     }
+    // On a HUDDLE doc the pill opens the four ways a line can leave the doc
+    // as work; everywhere else it is the comment affordance it has always
+    // been, and opens the composer directly.
+    if (ctx.huddle === true) {
+      openSpinoffMenu();
+      return;
+    }
+    reviewChrome.openComposer();
   });
+
+  /**
+   * The spin-off menu over the current selection.
+   *
+   * The PM range is captured HERE rather than read again when a row is
+   * tapped: opening the menu moves focus into it, and on iOS the tap that
+   * opened the pill has already blurred the editor. Without a captured range
+   * there is nothing left to write the task's link beside.
+   */
+  let spinoff: { destroy(): void } | null = null;
+  function openSpinoffMenu(): void {
+    const sel = editor.getSelectionRel() ?? selection;
+    if (!sel) {
+      showToast('Select a line first.');
+      return;
+    }
+    const { from, to } = editor.editor.state.selection;
+    const range = from < to ? { from, to } : caretParaRange;
+    spinoff?.destroy();
+    spinoff = mountSpinoffMenu({
+      anchorEl: commentPill,
+      onDismiss: () => hidePill(),
+      onPick: (action) => {
+        spinoff = null;
+        hidePill();
+        // Both of these are the person's own words, so both open the
+        // composer and post nothing until they send it.
+        if (action === 'comment') {
+          reviewChrome.openComposer();
+          return;
+        }
+        if (action === 'question') {
+          reviewChrome.openComposer(SPINOFF_QUESTION_PREFILL);
+          return;
+        }
+        void takeSpinoff(action, sel, range);
+      },
+    });
+  }
+
+  async function takeSpinoff(
+    action: SpinoffTaskId,
+    sel: ChromeSelection,
+    range: { from: number; to: number } | null,
+  ): Promise<void> {
+    // The BOARD this doc is filed on, which is `backTo` — not `workspaceId`.
+    //
+    // Those are two different ids and the difference is the whole bug this
+    // comment exists for: `meta.workspaceId` is the GROUPING id of a diff
+    // review or a folder browse, and a huddle doc has none at all. Reading it
+    // gave the empty string, which is not `undefined`, so the guard below
+    // passed and the create went to `/api/workspaces//tasks` — a 404 the
+    // person saw as a toast reading "404".
+    //
+    // `backTo` is what the server answers when it can name the board a doc
+    // was reached from, which for a huddle is the board that started it.
+    const workspaceId = boardIdFor(ctx);
+    // Empty, not undefined, is how "no board" actually arrives — `DocMeta`
+    // defaults both ids to `''`.
+    if (!workspaceId) {
+      showToast('This doc is not on a board yet.');
+      return;
+    }
+    try {
+      const made = await runSpinoff(action, {
+        docId,
+        workspaceId,
+        user,
+        quote: sel.snippet,
+        anchor: anchorBody(sel),
+        docTitle: readDocMeta(ydoc).title,
+        fetchJson: async (url, init) => {
+          const res = await fetch(url, init);
+          const body = await res.json().catch(() => ({}));
+          if (!res.ok) throw new Error(String((body as { error?: string }).error ?? res.status));
+          return body;
+        },
+      });
+      if (!made) {
+        showToast("That didn't go through — try again.");
+        return;
+      }
+      // The selected words BECOME the task's link — nothing is written into
+      // the doc. `task-link-chips.ts` hangs the row's live status beside
+      // them, so the line reads as itself with a status on the end.
+      if (made.href !== undefined && range) {
+        linkSpinoffRange(editor.editor, range, made.href);
+      }
+      const named = made.title ? `“${made.title}”` : 'Task';
+      const { taskId, href } = made;
+      // Name the column. The row's placement is now decided from what the
+      // row says rather than from which button was pressed, so "added to the
+      // board" would leave the person to go and find out which half of that
+      // decision they got.
+      const landed = made.status === 'triage' ? 'sent to Triage' : 'added to To do';
+      showToast(
+        `${named} — ${landed}.`,
+        taskId !== undefined
+          ? { label: 'Undo', onAction: () => void undoSpinoff(taskId, href) }
+          : undefined,
+      );
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : "That didn't go through.");
+    }
+  }
+
+  /**
+   * Take a spin-off back: archive the row, and un-link the words.
+   *
+   * Archive rather than delete — a spun-off row may already have been read,
+   * ranked or replied to in the seconds the toast was up, and this project
+   * does not destroy content to undo a tap. The board stops showing it, and
+   * it is still there to restore.
+   */
+  async function undoSpinoff(taskId: string, href: string | undefined): Promise<void> {
+    try {
+      const res = await fetch(`/api/tasks/${encodeURIComponent(taskId)}/archive`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ author: user, reason: 'Undone from the doc it was spun off from' }),
+      });
+      if (!res.ok) throw new Error(String(res.status));
+    } catch {
+      showToast("Couldn't undo that — the task is still on the board.");
+      return;
+    }
+    if (href !== undefined) unlinkSpinoffHref(editor.editor, href);
+    showToast('Undone.');
+  }
+  scope.onCleanup(() => spinoff?.destroy());
 
   // This lives on the editor's own DOM, which is removed by editor.destroy()
   // on teardown, so its listener dies with it — no scope binding needed.
@@ -1087,7 +1265,7 @@ async function mountMarkdown(ctx: MountContext): Promise<void> {
   // main() already awaited, so the first `setEditable` of this mount is
   // already the right one. There is no window in which the document is live
   // and the answer is outstanding — the mount had the answer before it ran.
-  let editMode: EditMode = initialEditMode(canWrite);
+  let editMode: EditMode = initialEditMode(canWrite, { justStarted: startedHuddleHere });
   applyEditMode(editMode);
   scope.listen(toggleEditMode, 'click', () => {
     // A disabled button fires no click. Kept anyway: `lockDocToReading` is
