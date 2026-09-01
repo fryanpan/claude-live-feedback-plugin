@@ -126,6 +126,9 @@ import {
   huddleFilePath,
   huddleSeedMarkdown,
   huddleTitle,
+  meetingDocAlias,
+  meetingDocFilePath,
+  meetingDocTitle,
   parseHuddleTopic,
 } from './huddle.ts';
 import { Identities, type IdentityRecord, userForIdentity } from './identities.ts';
@@ -191,10 +194,11 @@ import {
   isBoardActivity,
 } from './ready-nudge.ts';
 import {
-  CalendarAutoScheduler,
   CalendarConnectionStore,
+  CalendarSyncConsumer,
   type GoogleOauthApp,
   type RecallCalendarClient,
+  type RecallCalendarEvent,
   type RefreshTokenVault,
   eligibleForBot,
   parseCalendarSyncWebhook,
@@ -940,18 +944,19 @@ export interface ServerOptions {
   /**
    * Calendar meeting-join: Recall.ai Calendar V2 plus the Google OAuth app
    * the connect flow speaks for. No bot joins anything by default — the
-   * connection tracks upcoming meetings and only an explicit per-event join
-   * schedules one. **No default**, the same seam rule as
-   * `meetingBot` directly above and with the same bill attached — a scheduled
-   * bot joins a real call and spends. Omitting it makes every
-   * `/api/calendar/*` route answer `not_configured` and the status webhook
-   * ignore `calendar.sync_events`. Only `bin.ts` constructs real ones
-   * (`createRecallCalendarClient`, `createGoogleOauthApp`,
-   * `createKeychainRefreshTokenVault`).
+   * connection tracks upcoming meetings, and taking a per-event join sends
+   * the bot in through `meetingBot`'s invite path (so joins also need THAT
+   * configured) and opens the discussion doc the transcript lands in.
+   * **No default**, the same seam rule as `meetingBot` directly above and
+   * with the same bill attached — an invited bot joins a real call and
+   * spends. Omitting it makes every `/api/calendar/*` route answer
+   * `not_configured` and the status webhook ignore `calendar.sync_events`.
+   * Only `bin.ts` constructs real ones (`createRecallCalendarClient`,
+   * `createGoogleOauthApp`, `createKeychainRefreshTokenVault`).
    */
   calendarBot?: {
     client: RecallCalendarClient;
-    /** Null when the Google OAuth app is not configured: sync + opt-out still
+    /** Null when the Google OAuth app is not configured: sync + join still
      *  work for a calendar connected earlier, but connect answers 503. */
     google: GoogleOauthApp | null;
     /** Where the refresh token rests so disconnect can revoke it at Google. */
@@ -1496,19 +1501,22 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
     broadcastTransient: (docId, payload) => sse.broadcastTransient(docId, payload),
   });
   /**
-   * Calendar auto-join, beside the relay it schedules bots for. The store
-   * survives restarts because the webhook consumer must recognise the
-   * connected calendar after one, and an opt-out that lasted only until the
-   * next deploy would re-invite the bot to the exact meeting somebody
-   * removed it from.
+   * Calendar meeting-join, beside the relay whose invite path a join click
+   * takes. The store survives restarts because the webhook consumer must
+   * recognise the connected calendar after one, and a join that lasted only
+   * until the next deploy would orphan the doc it opened.
    */
   const calendarStore = opts.calendarBot ? new CalendarConnectionStore(dataDir) : null;
-  const calendarScheduler =
+  const calendarSync =
     opts.calendarBot && calendarStore
-      ? new CalendarAutoScheduler({
+      ? new CalendarSyncConsumer({
           client: opts.calendarBot.client,
           store: calendarStore,
-          ...(opts.meetingBot ? { botName: opts.meetingBot.config.botName } : {}),
+          // A cancelled meeting somebody joined: the bot goes home through
+          // the same leave the doc's own button uses.
+          onCancelledJoin: async (_eventId, docId) => {
+            await recallRelay.leave(docId);
+          },
         })
       : null;
   /**
@@ -6020,10 +6028,10 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           // not a bot status may be a `calendar.sync_events`. Consumed after
           // the 200 is decided: the vendor's contract is "you got it", and a
           // list-and-reconcile that takes seconds must not make it retry.
-          if (!event && calendarScheduler) {
+          if (!event && calendarSync) {
             const sync = parseCalendarSyncWebhook(parsed);
             if (sync) {
-              calendarScheduler.onSync(sync).catch((err: unknown) => {
+              calendarSync.onSync(sync).catch((err: unknown) => {
                 console.error('[calendar] sync_events consume failed:', err);
               });
             }
@@ -10519,7 +10527,19 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
         //
         // No bot joins anything by default — the connection tracks upcoming
         // meetings so an explicit per-event join is one click instead of a
-        // pasted URL.
+        // pasted URL. Taking the join does three things at once: hands back
+        // the meeting URL to open, sends the bot into the call, and opens a
+        // discussion doc the transcript lands in.
+        //
+        // Where a calendar meeting's doc opens: the board it was filed on
+        // when the join minted it, or the bare review route for one that
+        // somehow is not filed. Board-relative like the huddle route's URL.
+        const docUrlFor = (docId: string): string => {
+          const ws = taskStore.workspaceOfDoc(docId);
+          return ws
+            ? `/workspaces/${encodeURIComponent(ws)}/docs/${encodeURIComponent(docId)}`
+            : `/review/${encodeURIComponent(docId)}`;
+        };
         //
         // All on the operator's surface — these are a PERSON's verbs, so they
         // go through the same host/Access gating as every other /api route.
@@ -10529,7 +10549,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           const google = opts.calendarBot?.google ?? null;
           const connection = calendarStore?.connection() ?? null;
           return j(200, {
-            configured: calendarScheduler !== null,
+            configured: calendarSync !== null,
             googleConfigured: google !== null,
             connection: connection
               ? { email: connection.email, connectedAt: connection.connectedAt }
@@ -10631,7 +10651,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           return j(200, { ok: true, revoked });
         }
         if (pathname === '/api/calendar/events' && req.method === 'GET') {
-          if (!calendarScheduler || !calendarStore || !opts.calendarBot) {
+          if (!calendarSync || !calendarStore || !opts.calendarBot) {
             return j(503, { error: 'not_configured' });
           }
           const connection = calendarStore.connection();
@@ -10642,20 +10662,26 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
               new Date().toISOString(),
             );
             // The shape a join surface (the coming workspace banner) needs:
-            // which meeting, when, whether a bot COULD join it, and whether
-            // one WILL. The URL itself stays server-side — presence is what
-            // the click needs, and this list renders places a meeting link
-            // does not belong.
+            // which meeting, when it starts AND when it ends (the offer
+            // lives from 15 minutes before start until the end), whether a
+            // bot COULD join it, whether one was asked to, and — for a taken
+            // join — where its discussion doc is. The meeting URL itself
+            // stays server-side: presence is what the offer needs, and the
+            // join RESPONSE hands the URL to the click that earned it.
             return j(200, {
-              events: events.map((event) => ({
-                id: event.id,
-                title: event.title,
-                startTime: event.startTime,
-                hasMeetingLink: event.meetingUrl !== null,
-                joinable: eligibleForBot(event),
-                joined: calendarStore.isOptedIn(event.id),
-                botScheduled: event.botsScheduled > 0,
-              })),
+              events: events.map((event) => {
+                const joinRec = calendarStore.joinRecord(event.id);
+                return {
+                  id: event.id,
+                  title: event.title,
+                  startTime: event.startTime,
+                  endTime: event.endTime,
+                  hasMeetingLink: event.meetingUrl !== null,
+                  joinable: eligibleForBot(event),
+                  joined: joinRec !== null,
+                  ...(joinRec ? { docId: joinRec.docId, docUrl: docUrlFor(joinRec.docId) } : {}),
+                };
+              }),
             });
           } catch (err) {
             return j(502, { error: err instanceof Error ? err.message : 'list_failed' });
@@ -10664,20 +10690,119 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
         const calendarJoin = pathname.match(/^\/api\/calendar\/events\/([^/]+)\/join$/);
         if (calendarJoin) {
           if (req.method !== 'POST') return j(405, { error: 'method not allowed' });
-          if (!calendarScheduler) return j(503, { error: 'not_configured' });
+          if (!calendarSync || !calendarStore || !opts.calendarBot) {
+            return j(503, { error: 'not_configured' });
+          }
+          if (!calendarStore.connection()) return j(404, { error: 'not_connected' });
           const eventId = decodeURIComponent(calendarJoin[1] ?? '');
-          const body = (await req.json().catch(() => null)) as { join?: unknown } | null;
+          const body = (await req.json().catch(() => null)) as {
+            join?: unknown;
+            workspaceId?: unknown;
+          } | null;
           // Absent means "join" — the button this backs is the explicit
           // opt-IN (bots join nothing by default), and withdrawing it is the
           // explicit `join: false`.
           const join = body?.join !== false;
+
+          if (!join) {
+            const joinRec = calendarStore.joinRecord(eventId);
+            if (!joinRec) return j(200, { join, action: 'skipped', reason: 'not_joined' });
+            // The bot goes home; the doc and whatever it heard stay.
+            await recallRelay.leave(joinRec.docId);
+            calendarStore.setJoinRecord(eventId, null);
+            return j(200, { join, action: 'left', eventId, docId: joinRec.docId });
+          }
+
+          // The join does three things at once: answers the meeting URL so
+          // the client can open it, sends the bot into the call, and opens a
+          // discussion doc with the transcript pipeline already listening —
+          // the invite below is the SAME path a pasted URL takes, realtime
+          // socket and notes included.
+          let event: RecallCalendarEvent | null;
           try {
-            const outcome = await calendarScheduler.setJoin(eventId, join);
-            if (!outcome) return j(404, { error: 'not_connected' });
-            return j(200, { join, ...outcome });
+            event = await opts.calendarBot.client.getEvent(eventId);
           } catch (err) {
             return j(502, { error: err instanceof Error ? err.message : 'join_failed' });
           }
+          if (!event) return j(404, { error: 'unknown_event' });
+          if (!eligibleForBot(event) || !event.meetingUrl) {
+            return j(400, {
+              error: 'no_supported_link',
+              message: 'That event has no Zoom, Google Meet or Teams link to join.',
+            });
+          }
+
+          // A repeat join answers the SAME doc — the click is idempotent,
+          // not a doc factory. The doc is only minted on the first take.
+          const existing = calendarStore.joinRecord(eventId);
+          let docId: string;
+          if (existing) {
+            docId = existing.docId;
+          } else {
+            const now = Date.now();
+            const title = meetingDocTitle(event.title, now);
+            let created = rooms.createForCaller(meetingDocAlias(now), {
+              type: 'markdown',
+              title,
+            });
+            if (created.ok && !created.minted) {
+              created = rooms.createForCaller(meetingDocAlias(now), {
+                type: 'markdown',
+                title,
+              });
+            }
+            if (!created.ok || !created.minted) return j(500, { error: 'doc-not-minted' });
+            docId = created.room.docId;
+            // The file first, then the bind — same order and reason as the
+            // huddle route: the doc is a record on disk before the first word.
+            const file = meetingDocFilePath(dataDir, docId);
+            try {
+              mkdirSync(dirname(file), { recursive: true });
+              if (!existsSync(file)) writeFileSync(file, `# ${title}\n`);
+            } catch (err) {
+              console.error(`[calendar] could not write ${file}:`, err);
+              return j(500, { error: 'doc-file-failed' });
+            }
+            const attached = rooms.attachFile(docId, file);
+            if (!attached.ok) return j(409, { error: 'attach_failed', attached });
+            const requestedWs =
+              typeof body?.workspaceId === 'string' ? body.workspaceId : undefined;
+            fileUnderHubWorkspace(docId, requestedWs);
+          }
+
+          const invited = await recallRelay.invite({
+            docId,
+            meetingUrl: event.meetingUrl,
+            ...(event.title ? { botName: `Meeting Assistant (${event.title.slice(0, 60)})` } : {}),
+          });
+          if (!invited.ok && invited.reason !== 'already_recording') {
+            // The join is only a join once the bot is actually going: no
+            // record is written on a refusal, so the offer stays takeable.
+            // A doc minted just above stays — it is empty, harmless, and
+            // deleting user-visible content on an error path is how records
+            // get eaten.
+            const status =
+              invited.reason === 'not_configured'
+                ? 503
+                : invited.reason === 'vendor_error'
+                  ? 502
+                  : 400;
+            return j(status, { error: invited.reason, message: invited.message });
+          }
+          // `already_recording` on the SAME doc is a repeat click while the
+          // bot is live — the state the click wanted.
+          calendarStore.setJoinRecord(eventId, { docId, joinedAt: Date.now() });
+          return j(200, {
+            join,
+            action: 'joined',
+            eventId,
+            // What the client opens for the person...
+            meetingUrl: event.meetingUrl,
+            // ...and where the meeting's words are landing.
+            docId,
+            docUrl: docUrlFor(docId),
+            ...(invited.ok ? { bot: invited.status } : {}),
+          });
         }
 
         // --- A doc's meeting bot: invite one, read its state, send it home ---

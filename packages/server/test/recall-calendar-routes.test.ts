@@ -2,12 +2,14 @@
  * The calendar connect / disconnect / join routes and the sync-webhook
  * consumer, over a real server. The route layer is the part nothing
  * type-checks — a predicate wired into the wrong branch is invisible to every
- * unit test. The load-bearing claim throughout: NO event gets a bot from a
- * sync alone; only an explicit join schedules one.
+ * unit test. The load-bearing claims throughout: NO event gets a bot from a
+ * sync alone, and a taken join does three things at once — answers the
+ * meeting URL, sends the bot in through the relay's invite path, and opens a
+ * discussion doc wired for the transcript.
  *
- * Every credential is a literal this suite invents; the Google flow and the
- * Recall client are fakes, because the real ones spend money. Fixture names
- * and hosts are fictional.
+ * Every credential is a literal this suite invents; the Google flow, the
+ * Recall calendar client and the bot relay's client are fakes, because the
+ * real ones spend money. Fixture names and hosts are fictional.
  */
 import { afterAll, beforeAll, describe, expect, it } from 'bun:test';
 import { mkdtempSync, rmSync } from 'node:fs';
@@ -19,6 +21,7 @@ import type {
   RecallCalendarEvent,
   RefreshTokenVault,
 } from '../src/recall-calendar.ts';
+import type { CreateBotArgs, RecallClient } from '../src/recall.ts';
 import { type ServerHandle, createServer } from '../src/server.ts';
 
 const REDIRECT = 'https://ops.example.com/api/calendar/google/callback';
@@ -26,14 +29,16 @@ const REDIRECT = 'https://ops.example.com/api/calendar/google/callback';
 interface Fakes {
   google: GoogleOauthApp;
   client: RecallCalendarClient;
+  relayClient: RecallClient;
   vault: RefreshTokenVault & { value: string | null };
   calls: {
     exchanged: string[];
     revoked: string[];
     calendarsCreated: number;
     calendarsDeleted: string[];
-    scheduled: { eventId: string; deduplicationKey: string }[];
     unscheduled: string[];
+    botsCreated: CreateBotArgs[];
+    botsLeft: string[];
   };
   events: RecallCalendarEvent[];
 }
@@ -44,8 +49,9 @@ const makeFakes = (): Fakes => {
     revoked: [],
     calendarsCreated: 0,
     calendarsDeleted: [],
-    scheduled: [],
     unscheduled: [],
+    botsCreated: [],
+    botsLeft: [],
   };
   const events: RecallCalendarEvent[] = [];
   return {
@@ -75,14 +81,33 @@ const makeFakes = (): Fakes => {
       },
       getEvent: async (id) => events.find((e) => e.id === id) ?? null,
       listEventsUpdatedSince: async () => events,
-      listUpcoming: async () => events,
-      scheduleBot: async (eventId, args) => {
-        calls.scheduled.push({ eventId, deduplicationKey: args.deduplicationKey });
-      },
+      listUpcoming: async () => events.filter((e) => !e.isDeleted),
       unscheduleBot: async (eventId) => {
         calls.unscheduled.push(eventId);
       },
     },
+    // The bot relay's v1 client — the join goes through the SAME invite path
+    // a pasted URL takes, so a configured relay is part of this suite's rig.
+    relayClient: {
+      config: {
+        region: 'us-east-1',
+        publicWsBase: 'wss://recall.example.com',
+        retentionHours: 24,
+        separateStreams: true,
+        botName: 'Meeting Assistant',
+      },
+      createBot: async (args: CreateBotArgs) => {
+        calls.botsCreated.push(args);
+        return { id: `bot-${calls.botsCreated.length}` };
+      },
+      getBot: async () => {
+        throw new Error('not asked in this suite');
+      },
+      leaveCall: async (botId: string) => {
+        calls.botsLeft.push(botId);
+      },
+      requestRecordingPermission: async () => false,
+    } as RecallClient,
     vault: {
       value: null,
       save(token) {
@@ -107,6 +132,16 @@ const eventually = async (check: () => boolean, ms = 2_000): Promise<void> => {
   expect(check()).toBe(true);
 };
 
+const syncWebhook = (base: string): Promise<Response> =>
+  fetch(`${base}/recall/status`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      event: 'calendar.sync_events',
+      data: { calendar_id: 'cal-1', last_updated_ts: '2026-09-01T00:00:00Z' },
+    }),
+  });
+
 describe('calendar routes', () => {
   let dataDir: string;
   let handle: ServerHandle;
@@ -119,6 +154,7 @@ describe('calendar routes', () => {
     handle = createServer({
       port: 0,
       dataDir,
+      meetingBot: fakes.relayClient,
       calendarBot: { client: fakes.client, google: fakes.google, vault: fakes.vault },
     });
     base = `http://localhost:${handle.port}`;
@@ -142,6 +178,7 @@ describe('calendar routes', () => {
     const events = await fetch(`${base}/api/calendar/events`);
     expect(events.status).toBe(404);
     const joinRes = await fetch(`${base}/api/calendar/events/evt-1/join`, { method: 'POST' });
+    expect(joinRes.status).toBe(404);
     expect((await joinRes.json()).error).toBe('not_connected');
   });
 
@@ -179,46 +216,51 @@ describe('calendar routes', () => {
     expect(status.connection?.email).toBe('casey@example.com');
   });
 
-  it('THE DEFAULT: a sync schedules NO bot for a linked event nobody joined', async () => {
+  it('THE DEFAULT: a sync sends NO bot anywhere, and removes a stray scheduled one', async () => {
     fakes.events.length = 0;
     fakes.events.push(
       {
         id: 'evt-meet',
         title: 'Design sync',
         startTime: '2026-09-02T15:00:00Z',
+        endTime: '2026-09-02T15:30:00Z',
         meetingUrl: 'https://meet.google.com/abc-defg-hij',
         isDeleted: false,
         botsScheduled: 0,
       },
-      // A bot already on an un-joined event (a leftover) is actively removed.
+      // A vendor-side scheduled bot nothing creates on purpose any more.
       {
-        id: 'evt-leftover',
+        id: 'evt-stray',
         title: 'Vendor call',
         startTime: '2026-09-02T12:00:00Z',
+        endTime: '2026-09-02T13:00:00Z',
         meetingUrl: 'https://zoom.us/j/1234567890',
         isDeleted: false,
         botsScheduled: 1,
       },
+      // A meeting with no link at all — listed, but not joinable.
+      {
+        id: 'evt-lunch',
+        title: 'Team lunch',
+        startTime: '2026-09-02T18:00:00Z',
+        endTime: null,
+        meetingUrl: null,
+        isDeleted: false,
+        botsScheduled: 0,
+      },
     );
     // No webhook secret is configured on this handle, so the route accepts
     // the body unsigned — the same mode the bot status tests rely on.
-    const res = await fetch(`${base}/recall/status`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({
-        event: 'calendar.sync_events',
-        data: { calendar_id: 'cal-1', last_updated_ts: '2026-09-01T00:00:00Z' },
-      }),
-    });
+    const res = await syncWebhook(base);
     expect(res.status).toBe(200);
-    // The unschedule of the leftover proves the consumer RAN; only then is
-    // the empty scheduled list a real negative and not a consumer that never
-    // fired (a zero needs its positive control).
-    await eventually(() => fakes.calls.unscheduled.includes('evt-leftover'));
-    expect(fakes.calls.scheduled).toEqual([]);
+    // The stray's removal proves the consumer RAN; only then is the absence
+    // of created bots a real negative and not a consumer that never fired
+    // (a zero needs its positive control).
+    await eventually(() => fakes.calls.unscheduled.includes('evt-stray'));
+    expect(fakes.calls.botsCreated).toEqual([]);
   });
 
-  it('lists upcoming events with what a join surface needs', async () => {
+  it('lists upcoming events with what the join offer needs — start AND end, no URL', async () => {
     const res = await fetch(`${base}/api/calendar/events`);
     expect(res.status).toBe(200);
     const body = (await res.json()) as { events: Record<string, unknown>[] };
@@ -227,59 +269,128 @@ describe('calendar routes', () => {
         id: 'evt-meet',
         title: 'Design sync',
         startTime: '2026-09-02T15:00:00Z',
+        endTime: '2026-09-02T15:30:00Z',
         hasMeetingLink: true,
         joinable: true,
         joined: false,
-        botScheduled: false,
       },
       {
-        id: 'evt-leftover',
+        id: 'evt-stray',
         title: 'Vendor call',
         startTime: '2026-09-02T12:00:00Z',
+        endTime: '2026-09-02T13:00:00Z',
         hasMeetingLink: true,
         joinable: true,
         joined: false,
-        botScheduled: true,
+      },
+      {
+        id: 'evt-lunch',
+        title: 'Team lunch',
+        startTime: '2026-09-02T18:00:00Z',
+        endTime: null,
+        hasMeetingLink: false,
+        joinable: false,
+        joined: false,
       },
     ]);
   });
 
-  it('an explicit join schedules the bot with the dedup key, and un-join withdraws it', async () => {
+  it('a taken join answers the meeting URL, sends the bot in, and opens a live doc', async () => {
     const joinRes = await fetch(`${base}/api/calendar/events/evt-meet/join`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ join: true }),
     });
     expect(joinRes.status).toBe(200);
-    expect(((await joinRes.json()) as { action: string }).action).toBe('scheduled');
-    expect(fakes.calls.scheduled).toEqual([
-      {
-        eventId: 'evt-meet',
-        deduplicationKey: '2026-09-02T15:00:00Z-https://meet.google.com/abc-defg-hij',
-      },
-    ]);
-    const listed = (await (await fetch(`${base}/api/calendar/events`)).json()) as {
-      events: { id: string; joined: boolean }[];
+    const joined = (await joinRes.json()) as {
+      action: string;
+      meetingUrl: string;
+      docId: string;
+      docUrl: string;
     };
-    expect(listed.events.find((e) => e.id === 'evt-meet')?.joined).toBe(true);
+    expect(joined.action).toBe('joined');
+    // The three things at once: the URL for the person...
+    expect(joined.meetingUrl).toBe('https://meet.google.com/abc-defg-hij');
+    // ...the bot into the call, through the same invite path a pasted URL
+    // takes — realtime endpoint wired, so the transcript pipeline is live...
+    expect(fakes.calls.botsCreated).toHaveLength(1);
+    expect(fakes.calls.botsCreated[0]?.meetingUrl).toBe('https://meet.google.com/abc-defg-hij');
+    expect(fakes.calls.botsCreated[0]?.realtimeUrl).toMatch(
+      /^wss:\/\/recall\.example\.com\/recall\/[0-9a-f]{32}$/,
+    );
+    // ...and a discussion doc, real enough to fetch, titled by the event.
+    expect(joined.docId).toBeTruthy();
+    expect(joined.docUrl).toContain(encodeURIComponent(joined.docId));
+    const doc = (await (await fetch(`${base}/api/docs/${joined.docId}`)).json()) as {
+      meta: { title?: string };
+    };
+    expect(doc.meta.title).toBe('Design sync');
+    // The doc's bot row shows the invite this join made.
+    const bot = (await (await fetch(`${base}/api/docs/${joined.docId}/meeting-bot`)).json()) as {
+      bot: { state: string } | null;
+    };
+    expect(bot.bot).not.toBeNull();
 
-    // The vendor would now report the bot; the fake follows suit so the
-    // un-join has something real to remove.
-    const meetEvent = fakes.events.find((e) => e.id === 'evt-meet');
-    if (meetEvent) meetEvent.botsScheduled = 1;
-    fakes.calls.unscheduled.length = 0;
+    const listed = (await (await fetch(`${base}/api/calendar/events`)).json()) as {
+      events: { id: string; joined: boolean; docId?: string }[];
+    };
+    const row = listed.events.find((e) => e.id === 'evt-meet');
+    expect(row?.joined).toBe(true);
+    expect(row?.docId).toBe(joined.docId);
+
+    // A repeat take is idempotent: the SAME doc answers, no second doc.
+    const again = (await (
+      await fetch(`${base}/api/calendar/events/evt-meet/join`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ join: true }),
+      })
+    ).json()) as { docId: string };
+    expect(again.docId).toBe(joined.docId);
+    expect(fakes.calls.botsCreated).toHaveLength(1);
+
+    // Un-join sends the bot home and clears the join; the doc stays.
     const leave = await fetch(`${base}/api/calendar/events/evt-meet/join`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ join: false }),
     });
     expect(leave.status).toBe(200);
-    expect(((await leave.json()) as { action: string }).action).toBe('unscheduled');
-    expect(fakes.calls.unscheduled).toEqual(['evt-meet']);
+    expect(((await leave.json()) as { action: string }).action).toBe('left');
+    expect(fakes.calls.botsLeft).toEqual(['bot-1']);
     const after = (await (await fetch(`${base}/api/calendar/events`)).json()) as {
       events: { id: string; joined: boolean }[];
     };
     expect(after.events.find((e) => e.id === 'evt-meet')?.joined).toBe(false);
+    expect((await fetch(`${base}/api/docs/${joined.docId}`)).status).toBe(200);
+  });
+
+  it("a joined meeting's cancellation sends the bot home through the sync", async () => {
+    const rejoin = (await (
+      await fetch(`${base}/api/calendar/events/evt-meet/join`, { method: 'POST' })
+    ).json()) as { docId: string };
+    expect(fakes.calls.botsCreated).toHaveLength(2);
+    const meetEvent = fakes.events.find((e) => e.id === 'evt-meet');
+    if (meetEvent) meetEvent.isDeleted = true;
+    fakes.calls.botsLeft.length = 0;
+    expect((await syncWebhook(base)).status).toBe(200);
+    await eventually(() => fakes.calls.botsLeft.includes('bot-2'));
+    const listed = (await (await fetch(`${base}/api/calendar/events`)).json()) as {
+      events: { id: string }[];
+    };
+    expect(listed.events.some((e) => e.id === 'evt-meet')).toBe(false);
+    // The doc outlives the meeting that cancelled — it is user content.
+    expect((await fetch(`${base}/api/docs/${rejoin.docId}`)).status).toBe(200);
+  });
+
+  it('a join on an unknown or linkless event grants nothing', async () => {
+    const ghost = await fetch(`${base}/api/calendar/events/evt-ghost/join`, { method: 'POST' });
+    expect(ghost.status).toBe(404);
+    expect((await ghost.json()).error).toBe('unknown_event');
+    const lunch = await fetch(`${base}/api/calendar/events/evt-lunch/join`, { method: 'POST' });
+    expect(lunch.status).toBe(400);
+    expect((await lunch.json()).error).toBe('no_supported_link');
+    expect(fakes.calls.botsCreated).toHaveLength(2);
   });
 
   it('disconnect deletes the Recall calendar, revokes at Google, clears the vault', async () => {

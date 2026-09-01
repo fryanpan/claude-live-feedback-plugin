@@ -2,9 +2,20 @@
  * Calendar meeting-join — Recall.ai Calendar V2 over a Google Calendar.
  *
  * THE DEFAULT IS NO BOT. The calendar connection tracks upcoming meetings so
- * joining one is a single click instead of a pasted URL; only an event the
- * person explicitly opted IN is ever scheduled a bot (owner's call,
- * 2026-09-01, inverting the original auto-join draft of this module).
+ * joining one is a single click instead of a pasted URL; a bot only ever
+ * enters a meeting the person explicitly joined (owner's call, 2026-09-01,
+ * inverting the original auto-join draft of this module).
+ *
+ * THE JOIN IS AN INVITE, NOT A VENDOR-SIDE SCHEDULE. The offer exists from
+ * 15 minutes before a meeting until it ends, so a taken offer means "the bot
+ * goes in NOW": the join route creates the discussion doc and sends the bot
+ * through `RecallMeetingRelay.invite` — the same v1 path a pasted URL takes,
+ * which is what wires the realtime transcript, the notes, and the meeting
+ * record to the doc. Recall's v2 scheduled-bot machinery (dedup keys, minimal
+ * `bot_config`, no transcript) is deliberately NOT used to create bots any
+ * more; the sync consumer below only keeps the tracked events fresh, ends a
+ * joined meeting's bot when the event is cancelled, and clears out any
+ * vendor-side scheduled bot it finds (none are created on purpose).
  *
  * PROTOCOL, CONFIRMED FROM THE DOCS rather than remembered (read 2026-08-31):
  *
@@ -23,22 +34,12 @@
  *    lists what changed via
  *    `GET /api/v2/calendar-events/?calendar_id=…&updated_at__gte=<ts>`.
  *    (docs.recall.ai/docs/scheduling-guide)
- *  - Recall does NOT reschedule bots itself. An event moving means we
- *    re-`POST /api/v2/calendar-events/{id}/bot/` with the new timing; only a
- *    CANCELLED event whose bot has not joined yet is unscheduled by Recall
- *    on its own (`is_deleted: true`), and a deleted event is one its docs
- *    say a bot will not join. So the reconcile below is idempotent: schedule
- *    what should record, unschedule what should not, every sync.
- *  - `deduplication_key` is what folds duplicate invites to one call into
- *    ONE bot. The docs' "deduplicate all" strategy is
- *    `{start_time}-{meeting_url}`, and the key logic must stay consistent
- *    for the life of the calendar. (docs.recall.ai/docs/scheduling-guide)
  *  - Recall tracks events 1 day back / 28 days forward; nothing outside that
  *    window lists.
  *
  * `fetch` is injected everywhere for the same reason `recall.ts` injects it:
- * a test of this mapping must not reach the vendor or Google, and a scheduled
- * bot spends money when it joins.
+ * a test of this mapping must not reach the vendor or Google, and a bot
+ * spends money when it joins.
  */
 
 import { spawnSync } from 'node:child_process';
@@ -46,7 +47,6 @@ import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSy
 import { dirname, join } from 'node:path';
 import { meetingPlatformOf } from '@feedback/core';
 import {
-  DEFAULT_BOT_NAME,
   type FetchLike,
   type RecallRegion,
   isRecallRegion,
@@ -272,8 +272,14 @@ export interface RecallCalendarEvent {
    * not something anybody can opt into responsibly.
    */
   title: string | null;
-  /** ISO datetime from the vendor, used verbatim in the dedup key. */
+  /** ISO datetime from the vendor. */
   startTime: string;
+  /**
+   * ISO end, or null when the vendor record has none. The join offer lives
+   * until the meeting ENDS, so a surface rendering the offer needs this, not
+   * just the start.
+   */
+  endTime: string | null;
   meetingUrl: string | null;
   isDeleted: boolean;
   /** How many bots Recall currently has scheduled against this event. */
@@ -293,8 +299,12 @@ export interface RecallCalendarClient {
   listEventsUpdatedSince(calendarId: string, sinceIso: string): Promise<RecallCalendarEvent[]>;
   /** Events that have not started yet, soonest first, deleted ones excluded. */
   listUpcoming(calendarId: string, nowIso: string): Promise<RecallCalendarEvent[]>;
-  scheduleBot(eventId: string, args: { deduplicationKey: string; botName: string }): Promise<void>;
-  /** Remove the scheduled bot. An event with none is already the goal state. */
+  /**
+   * Remove a VENDOR-SIDE scheduled bot. This integration no longer creates
+   * them (joins go through the v1 invite path), so anything this finds is a
+   * stray — a leftover from the retired auto-join draft, or something another
+   * tool scheduled. An event with none is already the goal state.
+   */
   unscheduleBot(eventId: string): Promise<void>;
 }
 
@@ -424,21 +434,6 @@ export function createRecallCalendarClient(
       url.searchParams.set('is_deleted', 'false');
       return listAll(url.toString());
     },
-    async scheduleBot(eventId, args): Promise<void> {
-      await send(`${base}/v2/calendar-events/${encodeURIComponent(eventId)}/bot/`, {
-        method: 'POST',
-        body: JSON.stringify({
-          deduplication_key: args.deduplicationKey,
-          // A COMPLETE config every time — the endpoint replaces rather than
-          // merges (docs: "partial updates aren't supported"). Deliberately
-          // minimal in this phase: no realtime endpoint and no transcript
-          // provider, because a stream needs a doc to land in and which doc a
-          // calendar meeting belongs to is the phase-2 design question. The
-          // vendor's own retention applies to what the bot records meanwhile.
-          bot_config: { bot_name: args.botName },
-        }),
-      });
-    },
     async unscheduleBot(eventId): Promise<void> {
       try {
         await send(`${base}/v2/calendar-events/${encodeURIComponent(eventId)}/bot/`, {
@@ -469,6 +464,7 @@ export function parseCalendarEvent(raw: unknown): RecallCalendarEvent | null {
     id: rec.id,
     title,
     startTime: typeof rec.start_time === 'string' ? rec.start_time : '',
+    endTime: typeof rec.end_time === 'string' && rec.end_time ? rec.end_time : null,
     meetingUrl: typeof rec.meeting_url === 'string' && rec.meeting_url ? rec.meeting_url : null,
     isDeleted: rec.is_deleted === true,
     botsScheduled: Array.isArray(rec.bots) ? rec.bots.length : 0,
@@ -509,16 +505,24 @@ export interface CalendarConnection {
   connectedAt: number;
 }
 
+/** What a taken join offer left behind: the discussion doc the bot reports to. */
+export interface CalendarJoinRecord {
+  docId: string;
+  joinedAt: number;
+}
+
 interface CalendarStateFile {
   connection: CalendarConnection | null;
   /**
-   * Vendor event ids the person explicitly asked a bot to join. THE LIST IS
-   * THE PERMISSION: nothing outside it is ever scheduled (owner's call,
+   * Vendor event id → the join somebody explicitly took. THE MAP IS THE
+   * PERMISSION: no event outside it ever gets a bot (owner's call,
    * 2026-09-01, flipping the original auto-join default — a bot appearing in
    * a meeting nobody asked it into is the failure this field exists to make
-   * impossible, and it fails toward absent).
+   * impossible, and it fails toward absent). The doc id rides along so a
+   * repeat join answers the SAME doc, the events list can link to it, and a
+   * cancellation knows which doc's bot to send home.
    */
-  optIns: string[];
+  joins: Record<string, CalendarJoinRecord>;
 }
 
 /**
@@ -534,10 +538,21 @@ export class CalendarConnectionStore {
 
   constructor(dataDir: string) {
     this.path = join(dataDir, 'calendar', 'google.json');
-    this.state = { connection: null, optIns: [] };
+    this.state = { connection: null, joins: {} };
     if (existsSync(this.path)) {
       try {
         const raw = JSON.parse(readFileSync(this.path, 'utf8')) as Partial<CalendarStateFile>;
+        const joins: Record<string, CalendarJoinRecord> = {};
+        if (raw.joins && typeof raw.joins === 'object') {
+          for (const [eventId, rec] of Object.entries(raw.joins)) {
+            if (rec && typeof rec.docId === 'string' && rec.docId) {
+              joins[eventId] = {
+                docId: rec.docId,
+                joinedAt: typeof rec.joinedAt === 'number' ? rec.joinedAt : 0,
+              };
+            }
+          }
+        }
         this.state = {
           connection:
             raw.connection && typeof raw.connection.calendarId === 'string'
@@ -548,13 +563,12 @@ export class CalendarConnectionStore {
                     typeof raw.connection.connectedAt === 'number' ? raw.connection.connectedAt : 0,
                 }
               : null,
-          optIns: Array.isArray(raw.optIns)
-            ? raw.optIns.filter((v): v is string => typeof v === 'string')
-            : [],
+          joins,
         };
       } catch {
-        // An unreadable state file means "not connected" and "nothing opted
-        // in" — both fail toward no bot being scheduled, the cheap direction.
+        // An unreadable state file means "not connected" and "nothing
+        // joined" — both fail toward no bot going anywhere, the cheap
+        // direction.
       }
     }
   }
@@ -565,21 +579,21 @@ export class CalendarConnectionStore {
 
   setConnection(connection: CalendarConnection | null): void {
     this.state.connection = connection;
-    // Opt-ins are per-calendar facts: event ids from the old connection can
+    // Joins are per-calendar facts: event ids from the old connection can
     // never match the new calendar's, and a stale one carried over would be
-    // a standing permission nobody remembers granting.
-    if (connection === null) this.state.optIns = [];
+    // a standing permission nobody remembers granting. The docs the joins
+    // opened are user content and are untouched.
+    if (connection === null) this.state.joins = {};
     this.flush();
   }
 
-  isOptedIn(eventId: string): boolean {
-    return this.state.optIns.includes(eventId);
+  joinRecord(eventId: string): CalendarJoinRecord | null {
+    return this.state.joins[eventId] ?? null;
   }
 
-  setOptIn(eventId: string, optedIn: boolean): void {
-    const has = this.state.optIns.includes(eventId);
-    if (optedIn && !has) this.state.optIns.push(eventId);
-    if (!optedIn && has) this.state.optIns = this.state.optIns.filter((id) => id !== eventId);
+  setJoinRecord(eventId: string, record: CalendarJoinRecord | null): void {
+    if (record) this.state.joins[eventId] = record;
+    else delete this.state.joins[eventId];
     this.flush();
   }
 
@@ -595,25 +609,14 @@ export class CalendarConnectionStore {
 }
 
 // ---------------------------------------------------------------------------
-// The auto-scheduler
+// The sync consumer
 // ---------------------------------------------------------------------------
-
-/**
- * The docs' "deduplicate all" strategy: duplicate invites to the same call —
- * two invites in one inbox, or (later) two connected calendars — share a
- * start time and a meeting URL, so they share a key and Recall deploys ONE
- * bot. Must stay consistent for the life of the calendar; changing the
- * strategy means disconnecting and reconnecting.
- */
-export function deduplicationKeyFor(event: RecallCalendarEvent): string {
-  return `${event.startTime}-${event.meetingUrl ?? ''}`;
-}
 
 /**
  * COULD this event carry a bot — not whether it should. The same platform
  * test the invite route runs (`meetingPlatformOf`): a link the relay could
  * not join by hand is not one to join from a calendar either. Whether a bot
- * actually joins is the person's explicit opt-in, checked by the scheduler;
+ * actually joins is the person's explicit join click, handled by the route;
  * this predicate is what the events list exposes as `joinable`.
  */
 export function eligibleForBot(event: RecallCalendarEvent): boolean {
@@ -622,42 +625,43 @@ export function eligibleForBot(event: RecallCalendarEvent): boolean {
   return meetingPlatformOf(event.meetingUrl) !== null;
 }
 
-export interface CalendarAutoSchedulerDeps {
+export interface CalendarSyncConsumerDeps {
   client: RecallCalendarClient;
   store: CalendarConnectionStore;
-  /** Participant-list name for scheduled bots; the invite-time default. */
-  botName?: string;
+  /**
+   * A joined meeting was cancelled — send its doc's bot home. Wired to
+   * `RecallMeetingRelay.leave` by the server; the seam exists so this module
+   * never imports the relay and a test can assert the call without one.
+   */
+  onCancelledJoin?: (eventId: string, docId: string) => Promise<void>;
   log?: (line: string) => void;
 }
 
 export interface ReconcileOutcome {
   eventId: string;
-  action: 'scheduled' | 'unscheduled' | 'skipped';
+  action: 'left' | 'unscheduled' | 'skipped';
   reason?: string;
 }
 
 /**
- * Turns a `calendar.sync_events` webhook into schedule / unschedule calls.
+ * Consumes `calendar.sync_events` webhooks. THE DEFAULT IS NO BOT (owner's
+ * call, 2026-09-01), and joins do not go through the vendor's scheduler at
+ * all (see the file header), so a sync never CREATES anything. What it does:
  *
- * THE DEFAULT IS NO BOT (owner's call, 2026-09-01). A sync tracks what
- * changed, but only an event the person explicitly joined is ever POSTed a
- * bot; everything else is left alone — or actively unscheduled, so a
- * withdrawn join (or a bot from before this default flipped) cannot linger.
+ *  - a cancelled event somebody had joined sends that doc's bot home and
+ *    retires the join — the permission dies with the meeting it named;
+ *  - a vendor-side scheduled bot, which nothing creates on purpose any more,
+ *    is removed wherever it turns up (a leftover from the retired auto-join
+ *    draft, or another tool's doing);
+ *  - a moved event needs nothing: the join offer surfaces the CURRENT vendor
+ *    timing, and a bot already in a call does not care what the calendar
+ *    says. Everything else is tracking data the events list reads live.
  *
- * Idempotent by design: every changed event is reconciled to what it SHOULD
- * be, not diffed against what we remember doing — the vendor's dedup key
- * absorbs a re-POST, and re-DELETE of nothing is a no-op. That is what makes
- * a moved joined event work (re-POST carries the new timing), a cancelled one
- * safe (Recall unschedules an unjoined bot itself; `is_deleted` events are
- * skipped, not DELETEd, because the vendor refuses writes on them), and a
- * replayed webhook harmless.
+ * Idempotent: re-leaving a left bot and re-DELETEing nothing are both no-ops,
+ * so a replayed webhook is harmless.
  */
-export class CalendarAutoScheduler {
-  constructor(private readonly deps: CalendarAutoSchedulerDeps) {}
-
-  private get botName(): string {
-    return this.deps.botName ?? DEFAULT_BOT_NAME;
-  }
+export class CalendarSyncConsumer {
+  constructor(private readonly deps: CalendarSyncConsumerDeps) {}
 
   private log(line: string): void {
     (this.deps.log ?? console.log)(line);
@@ -680,66 +684,31 @@ export class CalendarAutoScheduler {
 
   /** One event, driven to the state it should be in. */
   async reconcile(event: RecallCalendarEvent): Promise<ReconcileOutcome> {
-    const joined = this.deps.store.isOptedIn(event.id);
+    const join = this.deps.store.joinRecord(event.id);
     if (event.isDeleted) {
-      // Recall unschedules an unjoined bot on cancellation itself, and
-      // refuses writes on a deleted event. The join permission dies with the
-      // meeting it named — kept, it would be a standing grant on an id the
-      // list can never surface again.
-      if (joined) this.deps.store.setOptIn(event.id, false);
+      if (join) {
+        try {
+          await this.deps.onCancelledJoin?.(event.id, join.docId);
+        } catch (err) {
+          // The join still retires below: the meeting is gone either way,
+          // and a leave that failed here can be repeated by hand from the
+          // doc, whose bot row is still showing.
+          this.log(`[calendar] leave on cancelled event ${event.id} failed: ${message(err)}`);
+        }
+        this.deps.store.setJoinRecord(event.id, null);
+        return { eventId: event.id, action: 'left', reason: 'cancelled' };
+      }
       return { eventId: event.id, action: 'skipped', reason: 'deleted' };
     }
-    if (joined && eligibleForBot(event)) {
-      try {
-        await this.deps.client.scheduleBot(event.id, {
-          deduplicationKey: deduplicationKeyFor(event),
-          botName: this.botName,
-        });
-        return { eventId: event.id, action: 'scheduled' };
-      } catch (err) {
-        // An event that ended (or started) between the webhook and this call
-        // is a scheduling refusal, not a failure of the sync — log and move
-        // on so one stale event cannot stop the rest of the batch.
-        this.log(`[calendar] schedule refused for event ${event.id}: ${message(err)}`);
-        return { eventId: event.id, action: 'skipped', reason: 'vendor_refused' };
-      }
-    }
     if (event.botsScheduled > 0) {
-      // A bot on an event nobody (any longer) joined — a withdrawn join, a
-      // link that changed to an unsupported one, or a leftover from before
-      // no-bot became the default. Whatever put it there, the reconcile
-      // takes it off.
       await this.deps.client.unscheduleBot(event.id);
-      return {
-        eventId: event.id,
-        action: 'unscheduled',
-        reason: joined ? 'no_supported_link' : 'not_joined',
-      };
+      return { eventId: event.id, action: 'unscheduled', reason: 'stray_vendor_bot' };
     }
     return {
       eventId: event.id,
       action: 'skipped',
-      reason: joined ? 'no_supported_link' : 'not_joined',
+      reason: join ? 'joined' : 'not_joined',
     };
-  }
-
-  /**
-   * The explicit join / un-join, applied immediately rather than at the next
-   * sync: a person pressing "join this meeting" expects the bot scheduled
-   * when the button answers, and an un-join expects it gone the same way.
-   */
-  async setJoin(eventId: string, join: boolean): Promise<ReconcileOutcome | null> {
-    const connection = this.deps.store.connection();
-    if (!connection) return null;
-    this.deps.store.setOptIn(eventId, join);
-    const event = await this.deps.client.getEvent(eventId);
-    if (!event) {
-      // A join on an id the vendor does not know grants nothing — take the
-      // flag back off rather than leave a permission floating.
-      if (join) this.deps.store.setOptIn(eventId, false);
-      return { eventId, action: 'skipped', reason: 'unknown_event' };
-    }
-    return this.reconcile(event);
   }
 }
 
