@@ -3856,9 +3856,14 @@ body.hub-body {
    drops to a single column on a narrow phone, where `span 2` would create an
    implicit second column and overflow the panel, while `1 / -1` just means
    "full width" at every count.
+   An explicit modifier, not `:last-child` (what this was): position is an
+   accident, not an intent — the goal PANEL's own last field is Due, a date
+   input that must stay one column wide, and the task panel's own last field
+   is sometimes a hidden effort-detail drawer rather than Goal at all. Only
+   the cell that IS the free-text field gets this class.
    Status is NO LONGER the full-width one — it stopped being three chips and
    became a single value with a dropdown, which fits a column. */
-.hub-detail-field:last-child {
+.hub-detail-field--full {
   grid-column: 1 / -1;
 }
 /* --- the blocked note: a blocker is task state, and this is its one surface
@@ -4066,26 +4071,39 @@ body.hub-body {
 .hub-assignee-btn:hover {
   border-color: var(--border-strong);
 }
-/* The Source-doc field: where a doc-derived row came from, plus the plan
-   gate's marks. The link wraps like any field value; the marks are quiet —
-   a held draft is deliberate, and "plan edited" is a look-again yellow, not
-   an alarm. */
-.hub-detail-sourcedoc {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 4px 10px;
-  min-width: 0;
+/* Related Links: title-only links to the docs a task or goal ties to, below
+   the fields row on both panels (replaces the old Source-doc field). One
+   heading, a plain list — no chips, no staleness mark (Bryan, 2026-08-31:
+   "omit needless details"). The held note is quiet, same treatment the old
+   Source-doc field gave it: a held draft is deliberate, not an alarm. */
+.hub-related-links {
+  margin: 0 0 12px;
 }
-.hub-sourcedoc-link {
+.hub-related-links-k {
+  margin: 0 0 4px;
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--fg-muted);
+}
+.hub-related-links-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.hub-related-link {
   color: var(--accent);
   text-decoration: none;
   overflow-wrap: anywhere;
 }
-.hub-sourcedoc-link:hover {
+.hub-related-link:hover {
   text-decoration: underline;
 }
-.hub-sourcedoc-held {
+.hub-related-link-held {
+  margin-left: 8px;
   color: var(--fg-muted);
   font-size: 12px;
 }

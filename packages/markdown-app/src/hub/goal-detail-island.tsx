@@ -75,6 +75,9 @@ import {
   type GoalDetailHandlers,
   type TaskDiscussion,
   bodySlot,
+  localDateInputValue,
+  relatedDocLinks,
+  renderRelatedLinks,
   wireInPlaceTitle,
 } from './hub-render.ts';
 
@@ -127,8 +130,10 @@ export function archiveConfirmLine(title: string, cascade: GoalCascade | null): 
 }
 
 /** One `<dt>/<dd>` pair. Built here rather than as JSX so the fields row can go
- *  through `useFill` — it holds no state, so it is cheapest rebuilt. */
-function fieldCell(key: string, value: string): HTMLElement {
+ *  through `useFill` — it holds no state, so it is cheapest rebuilt. A Node
+ *  value is a control (the Due date input mirrors the task panel's); a
+ *  string is read-only text. */
+function fieldCell(key: string, value: Node | string): HTMLElement {
   const wrap = document.createElement('div');
   wrap.className = 'hub-detail-field';
   const dt = document.createElement('dt');
@@ -136,7 +141,8 @@ function fieldCell(key: string, value: string): HTMLElement {
   dt.textContent = key;
   const dd = document.createElement('dd');
   dd.className = 'hub-detail-field-v';
-  dd.textContent = value;
+  if (typeof value === 'string') dd.textContent = value;
+  else dd.append(value);
   wrap.append(dt, dd);
   return wrap;
 }
@@ -167,6 +173,7 @@ function GoalDetailPanel(props: {
   const panelRef = useRef<HTMLDivElement | null>(null);
   const titleRef = useRef<HTMLHeadingElement | null>(null);
   const fieldsRef = useRef<HTMLDListElement | null>(null);
+  const relatedLinksRef = useRef<HTMLDivElement | null>(null);
   const slotRef = useRef<HTMLDivElement | null>(null);
 
   // What the title needs at the moment it FIRES, rather than at the moment it
@@ -234,19 +241,41 @@ function GoalDetailPanel(props: {
     // The vacancy is stated rather than hidden — an unowned goal is a fact a
     // reader acts on. No picker yet: no verb sets a goal's owner.
     cells.push(fieldCell('Owner', section.assignee ?? 'Nobody yet'));
-    if (section.dueAt !== undefined) {
-      cells.push(
-        fieldCell(
-          'Due',
-          `due ${new Date(section.dueAt).toLocaleDateString(undefined, {
-            month: 'short',
-            day: 'numeric',
-          })}`,
-        ),
-      );
-    }
+
+    // The same native date input the task panel's Due field is — same
+    // local-day conversions, same cleared-input-means-`null` contract — so a
+    // goal's due date is as human-editable as a task's (approved mock: "the
+    // GOAL panel mirrors the task panel's fields including an editable Due
+    // date"). Always shown, not only when a date is already set: the empty
+    // input IS the way to set one.
+    const due = document.createElement('input');
+    due.type = 'date';
+    due.className = 'hub-detail-input hub-detail-due';
+    due.value = section.dueAt === undefined ? '' : localDateInputValue(section.dueAt);
+    due.setAttribute('aria-label', 'Due date');
+    due.addEventListener('change', () => {
+      const v = due.value;
+      if (!v) {
+        handlers.onDueSet?.(section.id, null);
+        return;
+      }
+      const [y, m, d] = v.split('-').map(Number);
+      if (!y || !m || !d) return;
+      handlers.onDueSet?.(section.id, new Date(y, m - 1, d, 12, 0, 0, 0).getTime());
+    });
+    cells.push(fieldCell('Due', due));
     return cells;
   });
+
+  // The Related Links section: title-only links to every doc this goal ties
+  // to, directly below the fields row — same section, same function, as the
+  // task panel's. Computed once as a pure list for the emptiness check
+  // below; `renderRelatedLinks` (which does the hydration fetch) runs only
+  // inside the fill.
+  const relatedLinks = relatedDocLinks(section);
+  useFill(relatedLinksRef as RefObject<HTMLElement>, () => [
+    ...(renderRelatedLinks(relatedLinks, handlers.workspaceId)?.childNodes ?? []),
+  ]);
 
   // The description slot is the one node a repaint must never rebuild. Preact
   // owns the element and none of its children, and the fallback below only runs
@@ -488,15 +517,22 @@ function GoalDetailPanel(props: {
         </div>
       )}
 
-      <div class="hub-detail-body">
-        <dl ref={fieldsRef} class="hub-detail-fields" />
-        {/* The attribution the row can only whisper (its tooltip), said plainly
-            where there is room: a done goal is somebody's claim, and the claim
-            names its author. No open-children advisory beside it — the server
-            has always accepted a done declaration over open children, so it
-            spent two lines restating a rule nothing enforced. */}
-        {doneNote !== null && <p class="hub-goal-done-note">{doneNote}</p>}
-      </div>
+      {/* Siblings, not wrapped — the task panel's own fields/related-links/
+          notes sit flat too. `.hub-detail-body` is the DESCRIPTION prose's
+          class elsewhere in this file (serif font, indented lists); reusing
+          it here as a bare layout wrapper had these three inheriting both
+          by accident. */}
+      <dl ref={fieldsRef} class="hub-detail-fields" />
+      {/* Title-only links to the docs this goal ties to — the approved
+          mock's Related Links section, right below the fields row. Absent
+          entirely when the goal names no doc. */}
+      {relatedLinks.length > 0 && <div ref={relatedLinksRef} class="hub-related-links-slot" />}
+      {/* The attribution the row can only whisper (its tooltip), said plainly
+          where there is room: a done goal is somebody's claim, and the claim
+          names its author. No open-children advisory beside it — the server
+          has always accepted a done declaration over open children, so it
+          spent two lines restating a rule nothing enforced. */}
+      {doneNote !== null && <p class="hub-goal-done-note">{doneNote}</p>}
 
       {/* The prose the whole ticket is about: *"the most important object on
           the board is the only one you cannot explain"*. Drawn unconditionally,

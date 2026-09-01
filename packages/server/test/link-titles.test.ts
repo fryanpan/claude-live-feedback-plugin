@@ -100,6 +100,28 @@ describe('POST /api/links/titles', () => {
     expect(titles[legacy]).toBe('Redline Design');
   });
 
+  it('falls back to the file basename for a doc with no title — never the raw doc id', async () => {
+    // A doc bound by an absolute sourceUrl outside any notes home (no
+    // `relPath`, no `title`) is exactly the shape a Related Links entry
+    // hits when a doc was never given a title — the AC there is
+    // title-only, so this is the one thing standing between the reader
+    // and a raw id like "d-xyz123".
+    const untitledPath = join(dataDir, 'untitled-notes.md');
+    writeFileSync(untitledPath, '# Untitled\n\nNo title was ever set on this one.\n');
+    const created = await post('/api/docs', {
+      docId: 'lt-untitled',
+      type: 'markdown',
+      sourceUrl: untitledPath,
+    });
+    const untitledId = ((await created.json()) as { docId: string }).docId;
+    const attach = await post(`/api/workspaces/${wsId}/docs`, { docId: untitledId });
+    expect(attach.status).toBe(200);
+
+    const url = `${base}/workspaces/${wsId}/docs/${encodeURIComponent(untitledId)}`;
+    const titles = await titlesFor([url]);
+    expect(titles[url]).toBe('untitled-notes.md');
+  });
+
   it('resolves a workspace URL to the workspace name', async () => {
     const url = `${base}/workspaces/${wsId}`;
     const titles = await titlesFor([url]);
