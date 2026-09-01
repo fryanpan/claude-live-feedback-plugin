@@ -4,6 +4,14 @@ export default defineConfig({
   // Preact JSX for .tsx files (mirrors jsx/jsxImportSource in tsconfig.base.json).
   esbuild: { jsx: 'automatic', jsxImportSource: 'preact' },
   test: {
+    // One uncapped `vitest run` forks a worker per core (~10-19 processes);
+    // two builders' gate runs on a 16GB box already hosting a dozen Claude
+    // sessions froze the machine on 2026-08-31 (load 97, swap exhausted).
+    // Four forks keeps a full run under a minute while leaving the box alive
+    // no matter how many runs overlap.
+    pool: 'forks',
+    poolOptions: { forks: { maxForks: 4, minForks: 1 } },
+    maxWorkers: 4,
     environment: 'happy-dom',
     setupFiles: ['./vitest.setup.ts'],
     include: [
