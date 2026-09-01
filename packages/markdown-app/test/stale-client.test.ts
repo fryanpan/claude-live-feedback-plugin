@@ -120,6 +120,50 @@ describe('watchForStaleClient', () => {
     expect(fetchBuildInfo).toHaveBeenCalledTimes(3);
   });
 
+  it('is silent after the reload that actually picked up the new bundle', async () => {
+    // Bryan's report: the banner came back after every reload. A reload is a
+    // fresh page, so it is a FRESH watcher — module state does not survive
+    // one. Which build the new watcher is running is decided entirely by
+    // which bytes the reload fetched, so this test is the two outcomes of
+    // that fetch, side by side.
+    const served = 'built NEW\n';
+
+    // The reload got the new bundle: the tab and the server agree, and it
+    // says nothing however many times it reconnects afterwards.
+    const fresh = fakeStatus();
+    const onFreshStale = vi.fn();
+    watchForStaleClient({
+      buildId: 'NEW',
+      onStatus: fresh.onStatus,
+      fetchBuildInfo: async () => served,
+      onStale: onFreshStale,
+    });
+    for (let i = 0; i < 3; i++) {
+      fresh.set('closed');
+      fresh.set('open');
+      await flush();
+    }
+    expect(onFreshStale).not.toHaveBeenCalled();
+
+    // Positive control on the same served answer: a reload that came back on
+    // the OLD bundle is still flagged, so the silence above is agreement and
+    // not a watcher that has stopped working. This is the case the caching
+    // fix exists to make impossible — the banner was RIGHT, the reload was
+    // what failed.
+    const stuck = fakeStatus();
+    const onStuckStale = vi.fn();
+    watchForStaleClient({
+      buildId: 'OLD',
+      onStatus: stuck.onStatus,
+      fetchBuildInfo: async () => served,
+      onStale: onStuckStale,
+    });
+    stuck.set('closed');
+    stuck.set('open');
+    await flush();
+    expect(onStuckStale).toHaveBeenCalledTimes(1);
+  });
+
   it('never probes from a bundle with no baked id, so `bun dev` is not a nag', async () => {
     const status = fakeStatus();
     const fetchBuildInfo = vi.fn(async () => 'built NEW\n');

@@ -169,17 +169,34 @@ describe('the served shells carry the Sentry DSN and page type only when configu
     }
   });
 
-  it('the doc shell is served with an etag describing the bytes actually sent', async () => {
-    // The shell is a built file rewritten on the way out. Serving the FILE's
-    // hash beside a rewritten body would hand a browser a 304 for a document
-    // it never received — so the two servers' etags for the same index.html
-    // must differ, and each must match a re-fetch of its own.
+  it('never lets a cache hand one box the doc shell belonging to the other', async () => {
+    // Two boxes serve the same built index.html and rewrite it differently on
+    // the way out — one adds a DSN, one adds nothing. Handing a browser the
+    // FILE's hash beside a rewritten body would let a cache satisfy a request
+    // for one document with the other.
+    //
+    // This used to be guarded by an etag over the SENT bytes, and it was
+    // asserted as "the two etags differ". The shell is now `no-store`, so
+    // there is nothing stored for an etag to validate and it carries none —
+    // see HTML_SHELL_HEADERS for why the shell in particular must not be
+    // stored at all. That is a strictly stronger answer to the same hazard,
+    // and this asserts BOTH halves of it rather than the proxy it replaced:
+    // nothing is cacheable, and the rewrite that made the bytes differ is
+    // provably still happening.
     const a = await fetch(`${baseA}/workspaces/${wsA}/docs/a-doc`);
     const b = await fetch(`${baseB}/workspaces/${wsB}/docs/a-doc`);
-    expect(a.headers.get('etag')).toBeTruthy();
-    expect(b.headers.get('etag')).toBeTruthy();
-    expect(a.headers.get('etag')).not.toBe(b.headers.get('etag'));
-    const again = await fetch(`${baseA}/workspaces/${wsA}/docs/a-doc`);
-    expect(again.headers.get('etag')).toBe(a.headers.get('etag'));
+    expect(a.headers.get('cache-control')).toBe('no-store');
+    expect(b.headers.get('cache-control')).toBe('no-store');
+    expect(a.headers.get('etag')).toBeNull();
+    expect(b.headers.get('etag')).toBeNull();
+
+    // The bytes themselves, which is what the etag was standing in for. If
+    // the injection ever stopped happening these would be equal, and the old
+    // etag assertion would have caught that — so it is asserted directly.
+    const bodyA = await a.text();
+    const bodyB = await b.text();
+    expect(bodyA).not.toBe(bodyB);
+    expect(bodyA).toContain(FAKE_DSN);
+    expect(bodyB).not.toContain('sentry-dsn');
   });
 });

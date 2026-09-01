@@ -9,6 +9,7 @@
   "exports": {
     ".": "./src/index.ts",
     "./anchor": "./src/anchor/index.ts",
+    "./asset-manifest": "./src/asset-manifest.ts",
     "./env-names": "./src/env-names.ts",
     "./machine-paths": "./src/machine-paths.ts",
     "./trace-privacy": "./src/trace-privacy.ts",
