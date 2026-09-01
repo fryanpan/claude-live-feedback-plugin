@@ -648,14 +648,15 @@ describe('meeting engine choice', () => {
   beforeAll(async () => {
     dataDir = mkdtempSync(join(tmpdir(), 'cw-meeting-engines-'));
     // Three engines under the CLIENT-nameable names, all mocks: the choice is
-    // the thing under test, and nothing here may open a billed session.
+    // the thing under test, and nothing here may open a billed session. The
+    // order mirrors production's (`orderedEngines`): Soniox is the default.
     handle = createServer({
       port: 0,
       dataDir,
       transcription: [
+        { ...createMockTranscriptionEngine(), name: 'soniox' },
         { ...createMockTranscriptionEngine(), name: 'assemblyai' },
         { ...createMockTranscriptionEngine(), name: 'assemblyai-pro' },
-        { ...createMockTranscriptionEngine(), name: 'soniox' },
       ],
     });
     base = `http://localhost:${handle.port}`;
@@ -671,8 +672,8 @@ describe('meeting engine choice', () => {
     const res = await fetch(`${base}/api/meeting-engines`);
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({
-      engines: ['assemblyai', 'assemblyai-pro', 'soniox'],
-      default: 'assemblyai',
+      engines: ['soniox', 'assemblyai', 'assemblyai-pro'],
+      default: 'soniox',
     });
   });
 
@@ -681,21 +682,23 @@ describe('meeting engine choice', () => {
     const client = await AudioClient.open(wsBase, 'default-engine');
     client.start();
     const ready = await client.waitFor('ready');
-    expect(ready.engine).toBe('assemblyai');
+    expect(ready.engine).toBe('soniox');
     client.stop();
     await client.waitFor('stopped');
     client.ws.close();
   });
 
   it('opens the engine a start names, and stamps the record with it', async () => {
+    // Names a NON-default engine, or this would pass on a server that
+    // ignored the field and always opened its first.
     const canonical = await createDoc('chosen-engine');
     const client = await AudioClient.open(wsBase, 'chosen-engine');
-    client.start(MEETING_SAMPLE_RATE, 'solo', 'soniox');
+    client.start(MEETING_SAMPLE_RATE, 'solo', 'assemblyai');
     const ready = await client.waitFor('ready');
-    expect(ready.engine).toBe('soniox');
+    expect(ready.engine).toBe('assemblyai');
     client.stop();
     await client.waitFor('stopped');
-    expect(listMeetings(dataDir, canonical)[0]?.engine).toBe('soniox');
+    expect(listMeetings(dataDir, canonical)[0]?.engine).toBe('assemblyai');
     client.ws.close();
   });
 

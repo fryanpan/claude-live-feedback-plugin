@@ -11,6 +11,7 @@ import {
   DEFAULT_MOCK_SCRIPT,
   type EngineTurn,
   createMockTranscriptionEngine,
+  orderedEngines,
 } from '../src/transcribe.ts';
 
 const CHUNK = new Uint8Array(320);
@@ -96,5 +97,31 @@ describe('mock transcription engine', () => {
     expect(partials[partials.length - 1]).not.toBe(settled?.text);
     expect(settled?.text).toContain('sync');
     expect(partials[partials.length - 1]).toContain('sink');
+  });
+});
+
+describe('orderedEngines — the default is the first name on the list', () => {
+  const named = (name: string) => ({ ...createMockTranscriptionEngine(), name });
+
+  it('leads with Soniox when every engine is configured (Bryan, 2026-09-01)', () => {
+    const list = orderedEngines({
+      soniox: named('soniox'),
+      assemblyAi: named('assemblyai'),
+      assemblyAiPro: named('assemblyai-pro'),
+    });
+    expect(list.map((e) => e.name)).toEqual(['soniox', 'assemblyai', 'assemblyai-pro']);
+  });
+
+  it('falls back to AssemblyAI as the default on a box without the Soniox key', () => {
+    const list = orderedEngines({
+      soniox: null,
+      assemblyAi: named('assemblyai'),
+      assemblyAiPro: named('assemblyai-pro'),
+    });
+    expect(list.map((e) => e.name)).toEqual(['assemblyai', 'assemblyai-pro']);
+  });
+
+  it('is empty — the not-configured state — when no key resolves at all', () => {
+    expect(orderedEngines({ soniox: null, assemblyAi: null, assemblyAiPro: null })).toEqual([]);
   });
 });
