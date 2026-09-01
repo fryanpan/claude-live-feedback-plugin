@@ -7943,9 +7943,13 @@ body.is-reading-width #editor > .live-zone {
 /* The zone hugs the last line of the doc: the editor's 60vh click-to-type
    floor would otherwise strand it below a screen of empty surface on a doc
    whose meeting has just started. Only while the zone is showing — an
-   ordinary doc keeps its clickable runway. */
+   ordinary doc keeps its clickable runway. `auto`, never `0`: in the
+   balloon-margin grid (redline-layout, below) an explicit min-height —
+   60vh or 0 — becomes the prose ROW's size and the prose overflows it,
+   which put the zone at a fixed 60vh over the notes; `auto` sizes the row
+   to the content, so the zone follows the last line. */
 #editor:has(> .live-zone:not([hidden])) > .ProseMirror {
-  min-height: 0;
+  min-height: auto;
 }
 .lz-head {
   display: flex;
@@ -10382,6 +10386,20 @@ body.redline-mode #toggle-suggest-mode {
 
 #editor.redline-layout > .ProseMirror {
   min-width: 0;
+}
+
+/* The provisional live zone (meeting-live-zone.ts) is appended after the
+   prose, so here it auto-places into a second row under the prose column.
+   The rows must not stretch to fill the pane (grid's default align-content
+   is stretch, which parked the zone a screen below a short doc); only while
+   the zone shows, so the ordinary layout is untouched. Its WIDTH is matched
+   to the prose in JS: the prose shrink-wraps to its widest line in this
+   grid (auto margins in a cell), which no rule here can coincide with. */
+#editor.redline-layout:has(> .live-zone:not([hidden])) {
+  align-content: start;
+}
+#editor.redline-layout > .live-zone {
+  grid-column: 1;
 }
 
 .markup-margin {
