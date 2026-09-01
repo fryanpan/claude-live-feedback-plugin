@@ -847,9 +847,13 @@ function GoalBand(props: {
 
   // Done attribution, where a one-line row can carry it: the tooltip. The
   // band's visible treatment is the muted title class alone — the mock shows
-  // no further chrome for a done goal, and none is invented here.
+  // no further chrome for a done goal, and none is invented here. A band in
+  // triage gets the same pair: the muted title, and a tooltip saying what the
+  // word in the meta slot holds back.
   let rowTitle: string | undefined;
-  if (section.status === 'done') {
+  if (section.status === 'triage') {
+    rowTitle = 'Triage — not ready to work on; nothing under this goal is dispatched';
+  } else if (section.status === 'done') {
     const when =
       section.doneAt !== undefined
         ? `, ${new Date(section.doneAt).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}`
@@ -863,6 +867,7 @@ function GoalBand(props: {
         'hub-band',
         section.isChores ? 'hub-band-reserved' : '',
         section.status === 'done' ? 'hub-band-done' : '',
+        section.status === 'triage' ? 'hub-band-triage' : '',
         folded ? 'is-collapsed' : '',
       ]
         .filter(Boolean)
@@ -932,10 +937,14 @@ function GoalBand(props: {
         {/* What sits right of the title, as plain muted text (decision 6 —
             explicitly not a chip, and no chip may return beside it). A done
             band takes the due date's SLOT rather than sitting beside it,
-            because a date a finished goal ran past is noise. */}
+            because a date a finished goal ran past is noise — and a band in
+            triage takes it for the opposite reason: a date on work nobody has
+            agreed to is not yet a commitment. */}
         <span class="hub-goal-meta">
           {!section.isChores && section.status === 'done' ? (
             <span class="hub-done-note">done</span>
+          ) : !section.isChores && section.status === 'triage' ? (
+            <span class="hub-triage-note">triage</span>
           ) : !section.isChores && section.dueAt !== undefined ? (
             <span
               class={section.dueAt < Date.now() ? 'hub-due hub-due-overdue' : 'hub-due'}
