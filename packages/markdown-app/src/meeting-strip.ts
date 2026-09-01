@@ -576,13 +576,16 @@ export function mountMeetingStrip(opts: MeetingStripOpts): MeetingStripHandle {
   root.classList.add('meeting-strip');
   root.classList.toggle('has-timing', timing !== null);
   root.replaceChildren(
-    ...(timing
-      ? [blinker, elapsed, feed, timing.element, scrim, pop]
-      : [blinker, elapsed, feed, scrim, pop]),
+    ...(timing ? [blinker, elapsed, feed, timing.element] : [blinker, elapsed, feed]),
   );
-  // After the strip children are set: the no-toolbar fallback docks the
-  // button in `root` itself, where a replaceChildren above would eat it.
-  (opts.toolbar ?? root).append(record);
+  // The scrim and the popovers dock beside the Record button, NOT inside
+  // `root`: `root` is the strip itself, which is `hidden` (⇒ `display: none`,
+  // taking its whole subtree with it) for exactly the idle state the start
+  // chooser has to open FROM. Both are `position: fixed`, so nesting them
+  // under the toolbar instead costs nothing visually. After the strip
+  // children are set: the no-toolbar fallback docks everything in `root`
+  // itself, where the `replaceChildren` above would eat it.
+  (opts.toolbar ?? root).append(record, scrim, pop);
 
   let state: StripState = { kind: 'idle' };
   let view: PopView = 'none';
