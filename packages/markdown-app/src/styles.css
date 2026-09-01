@@ -6750,7 +6750,12 @@ body.is-reading-width #editor > .ProseMirror {
 }
 #editor > .ProseMirror ul,
 #editor > .ProseMirror ol {
-  padding-left: 28px;
+  /* Wide enough that an outside marker (~22px of glyph + gap at the 16px
+     base size) lands clearly RIGHT of the body-paragraph text margin —
+     the whole list block reads as indented relative to prose (plan AC:
+     "bullet indent level should start to the right of body text").
+     Applies per nesting level, so deeper levels step proportionately. */
+  padding-left: 40px;
   margin: 0.4em 0 0.8em;
 }
 #editor > .ProseMirror li > p {
