@@ -50,6 +50,7 @@ import {
   type TaskStatus,
   type UptimeReport,
   activityRows,
+  answeredByLine,
   assigneeLabel,
   decisionAskedBy,
   describeEvent,
@@ -1365,6 +1366,63 @@ export function flattenComments(threads: TaskThread[]): StreamComment[] {
 }
 
 /**
+ * One row of the task's comment history: a comment, or a review item raised
+ * ON THE TICKET (`add_review_item(taskId, …)`), which has no comment of its
+ * own and so was never in the stream at all.
+ */
+export type StreamEntry =
+  | { kind: 'comment'; row: StreamComment }
+  | { kind: 'review-item'; item: HubReviewItem };
+
+/**
+ * Has this ticket-borne item been put in front of the reader? A held or
+ * still-being-judged item is on the ticket but not yet asked (it shows in the
+ * held note, with the judge's reason); an answered one has been, whatever
+ * the judge said — a person acted on it.
+ */
+function reviewItemAsked(item: HubReviewItem): boolean {
+  if (item.answer !== undefined) return true;
+  const verdict = item.judge?.verdict;
+  return verdict !== 'held' && verdict !== 'pending';
+}
+
+/**
+ * The task's whole discussion, oldest first: every comment on its threads AND
+ * every review item raised on the ticket itself, at the moment it was raised.
+ *
+ * Bryan, 2026-09-01: *"Review items disappear and I can't find them any
+ * more."* A ticket-borne item reached the panel only through the review-items
+ * route, which ships what is still WAITING; the moment he answered one it
+ * left that list, and nothing else read `task.reviews` except the held note.
+ * Forty-five tasks on the live board carried answered items with no renderer.
+ * A thread-borne item never had this problem — its declaring comment and the
+ * reply that answered it are both comments — so the fix is to give the
+ * ticket-borne item the same standing: a row in the history at its own time,
+ * carrying its answered record once somebody has answered it.
+ *
+ * Comments keep `flattenComments`' order; an item raised in the same
+ * millisecond as a comment sorts after it, deterministically.
+ */
+export function discussionStream(
+  threads: TaskThread[],
+  reviews: HubReviewItem[] | undefined,
+): StreamEntry[] {
+  const rows: Array<{ ts: number; order: number; entry: StreamEntry }> = flattenComments(
+    threads,
+  ).map((row, i) => ({ ts: row.comment.ts, order: i, entry: { kind: 'comment', row } }));
+  (reviews ?? []).forEach((item, i) => {
+    if (!reviewItemAsked(item)) return;
+    rows.push({
+      ts: item.createdAt ?? 0,
+      order: 1_000_000 + i,
+      entry: { kind: 'review-item', item },
+    });
+  });
+  rows.sort((a, b) => (a.ts !== b.ts ? a.ts - b.ts : a.order - b.order));
+  return rows.map((r) => r.entry);
+}
+
+/**
  * Where the one composer's next comment lands.
  *
  * The reader is never asked and is never shown a choice: Bryan, 2026-08-18,
@@ -1403,6 +1461,7 @@ export function commentRow(
   row: StreamComment,
   focusThreadId: string | undefined,
   now: number,
+  selfName?: string,
 ): HTMLLIElement {
   const c = row.comment;
   const li = document.createElement('li');
@@ -1443,15 +1502,7 @@ export function commentRow(
     // reader may already have acted on it — but badging it 'Question' is the
     // whole bug the verb exists to prevent, one surface over. The doc pane's
     // `reviewHeader` marks it the same way; both read the one predicate.
-    const retracted = reviewWithdrawn(c.review);
-    const badge = document.createElement('span');
-    badge.className = retracted ? 'hub-comment-review-k is-withdrawn' : 'hub-comment-review-k';
-    badge.textContent = retracted
-      ? 'Withdrawn'
-      : c.review.shape === 'decision'
-        ? 'Decision'
-        : 'Question';
-    head.append(badge);
+    head.append(reviewBadge(c.review.shape, reviewWithdrawn(c.review), reviewAnswered(c.review)));
   }
   // "Needs your reply" was a THREAD badge — it named a thread, because the
   // server's queue names threads — so it went with the rest of the thread
@@ -1482,6 +1533,133 @@ export function commentRow(
   // comment written by anyone with write access is inert markup.
   body.innerHTML = renderCommentMarkdown(c.text);
   li.append(body);
+  if (c.review && reviewAnswered(c.review)) {
+    // The answered state ON the declaration, in the history. The reply that
+    // answered it is also in the stream, further down — but a reader scanning
+    // for "what did I decide on this" finds it here, against the question.
+    li.classList.add('hub-comment-answered-item');
+    const r = c.review;
+    li.append(
+      answeredRecord(
+        {
+          ...(r.answeredBy !== undefined ? { by: r.answeredBy } : {}),
+          ...((r.answerText ?? optionLabel(r, r.answeredWith)) !== undefined
+            ? { text: r.answerText ?? optionLabel(r, r.answeredWith) }
+            : {}),
+          ...(r.answeredAt !== undefined ? { at: r.answeredAt } : {}),
+        },
+        now,
+        selfName,
+      ),
+    );
+  }
+  return li;
+}
+
+/** The kind chip on a review row — one spelling for a comment-borne and a
+ *  ticket-borne item, so the two cannot read differently. Withdrawn wins
+ *  over the kind: a retracted ask must not be badged as a question. */
+function reviewBadge(
+  shape: ReviewShape | undefined,
+  withdrawn: boolean,
+  answered: boolean,
+): HTMLSpanElement {
+  const badge = document.createElement('span');
+  badge.className = withdrawn
+    ? 'hub-comment-review-k is-withdrawn'
+    : answered
+      ? 'hub-comment-review-k is-answered'
+      : 'hub-comment-review-k';
+  badge.textContent = withdrawn ? 'Withdrawn' : shape === 'decision' ? 'Decision' : 'Question';
+  return badge;
+}
+
+/**
+ * "Answered by Bryan: “Read-only reference” · 2h ago" — the record under a
+ * review row in the history. The same words as the panel's answered card
+ * (`answeredByLine`), so the reader's own answer says "you" on both.
+ */
+function answeredRecord(
+  answer: { by?: string; text?: string; at?: number },
+  now: number,
+  selfName: string | undefined,
+): HTMLParagraphElement {
+  const p = document.createElement('p');
+  p.className = 'hub-comment-answered';
+  const words = document.createElement('span');
+  words.className = 'hub-comment-answered-text';
+  words.textContent = `${answeredByLine(answer.by, selfName)}${answer.text ?? ''}”`;
+  p.append(words);
+  if (answer.at !== undefined && answer.at > 0) {
+    const when = document.createElement('span');
+    when.className = 'hub-comment-when';
+    when.textContent = timeAgo(answer.at, now);
+    when.title = new Date(answer.at).toLocaleString();
+    p.append(when);
+  }
+  return p;
+}
+
+/**
+ * A review item raised on the TICKET, drawn as a row of the comment history.
+ *
+ * Same anatomy as a declaring comment's row (`commentRow`): who raised it and
+ * when, the kind chip, the headline, the detail as the body — and, once
+ * answered, the answered record. There is no comment text because there was
+ * no comment: the item is the whole of what the agent said.
+ */
+export function reviewItemRow(item: HubReviewItem, now: number, selfName?: string): HTMLLIElement {
+  const r = item.review;
+  const withdrawn = r.withdrawnAt !== undefined;
+  const li = document.createElement('li');
+  li.className = 'hub-comment hub-comment-review hub-comment-ticket-item';
+  li.dataset.reviewItemId = item.id;
+
+  const head = document.createElement('div');
+  head.className = 'hub-comment-head';
+  const who = document.createElement('span');
+  who.className = 'hub-comment-author';
+  who.textContent = item.createdBy ?? 'Someone';
+  head.append(who);
+  if (item.createdAt !== undefined) {
+    const when = document.createElement('span');
+    when.className = 'hub-comment-when';
+    when.textContent = timeAgo(item.createdAt, now);
+    when.title = new Date(item.createdAt).toLocaleString();
+    head.append(when);
+  }
+  head.append(reviewBadge(r.shape, withdrawn, item.answer !== undefined));
+  li.append(head);
+
+  const headline = document.createElement('p');
+  headline.className = withdrawn
+    ? 'hub-comment-review-headline is-withdrawn'
+    : 'hub-comment-review-headline';
+  headline.textContent = r.headline;
+  li.append(headline);
+
+  if (r.detail !== undefined && r.detail.trim() !== '') {
+    const body = document.createElement('div');
+    body.className = 'hub-comment-body';
+    body.innerHTML = renderCommentMarkdown(r.detail);
+    li.append(body);
+  }
+
+  if (item.answer !== undefined) {
+    li.classList.add('hub-comment-answered-item');
+    const a = item.answer;
+    li.append(
+      answeredRecord(
+        {
+          ...(a.by !== undefined ? { by: a.by } : {}),
+          text: a.text,
+          ...(a.ts !== undefined ? { at: a.ts } : {}),
+        },
+        now,
+        selfName,
+      ),
+    );
+  }
   return li;
 }
 
