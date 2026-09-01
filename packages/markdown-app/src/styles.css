@@ -7714,9 +7714,58 @@ body.is-reading-width #editor > .ProseMirror {
     padding: 0 8px;
     font-size: 13px;
   }
+  /* The 44px is the TAP TARGET; the thumb inside it is the mock's 24px.
+     Sizing a thumb means giving up the native control — `accent-color`
+     cannot do it and `::-webkit-slider-thumb` is inert until `appearance`
+     is none — which also gives up the blue progress fill, since Chrome has
+     no `::-webkit-slider-progress`. The fill is painted back as a gradient
+     driven by `--fill`, which the panel sets on the input as it moves. */
   .meeting-adv input[type="range"] {
     height: 44px;
     margin: 0;
+    appearance: none;
+    -webkit-appearance: none;
+    background: none;
+  }
+  .meeting-adv input[type="range"]::-webkit-slider-runnable-track {
+    height: 6px;
+    border-radius: 3px;
+    background: linear-gradient(
+      to right,
+      var(--accent) var(--fill, 0%),
+      var(--border) var(--fill, 0%)
+    );
+  }
+  .meeting-adv input[type="range"]::-webkit-slider-thumb {
+    appearance: none;
+    -webkit-appearance: none;
+    width: 24px;
+    height: 24px;
+    border: 0;
+    border-radius: 50%;
+    background: var(--accent);
+    box-shadow: 0 1px 3px rgb(0 0 0 / 30%);
+    /* Centres the 24px thumb on the 6px track: (6 - 24) / 2. */
+    margin-top: -9px;
+  }
+  /* Firefox paints its own progress, so the track stays flat there. */
+  .meeting-adv input[type="range"]::-moz-range-track {
+    height: 6px;
+    border-radius: 3px;
+    background: var(--border);
+  }
+  .meeting-adv input[type="range"]::-moz-range-progress {
+    height: 6px;
+    border-radius: 3px;
+    background: var(--accent);
+  }
+  .meeting-adv input[type="range"]::-moz-range-thumb {
+    width: 24px;
+    height: 24px;
+    border: 0;
+    border-radius: 50%;
+    background: var(--accent);
+    box-shadow: 0 1px 3px rgb(0 0 0 / 30%);
   }
   .meeting-adv-seg button {
     min-height: 44px;
