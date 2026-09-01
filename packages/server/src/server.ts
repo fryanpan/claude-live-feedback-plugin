@@ -122,6 +122,7 @@ import {
   taskDeepLink,
 } from './home-brief.ts';
 import {
+  PLAN_REQUEST_COMMENT,
   huddleAlias,
   huddleFilePath,
   huddleSeedMarkdown,
@@ -10941,10 +10942,15 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
             // doc is a member of a review, which is where `hubWorkspaceId`
             // deliberately stops.
             const backTo = visitor ? null : backTargetFor(docId, room.meta.workspaceId);
+            // Who the Make Plan float names ("Ask <lead> to create a plan").
+            // Owner-only like the board id it comes from; a lead id is
+            // already a display name everywhere the hub shows one.
+            const lead = hubWs ? taskStore.getWorkspace(hubWs)?.leadAgentId : undefined;
             return j(200, {
               meta: metaFor(room.meta),
               ...(taskRefs.length > 0 ? { tasks: taskRefs } : {}),
               ...(hubWs ? { hubWorkspaceId: hubWs } : {}),
+              ...(lead !== undefined ? { leadAgentId: lead } : {}),
               ...(backTo ? { backTo: { workspaceId: backTo.id, name: backTo.name } } : {}),
             });
           }
@@ -11011,6 +11017,38 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
               for (const wsId of rel.workspaceIds) taskProjection.ensureWorkspace(wsId);
             }
             return j(200, { docId, planState: state, released });
+          }
+          // The Make Plan float's press: the person asking this doc's agent
+          // for a plan. The ask IS a comment — a subject-anchored thread
+          // from the presser, riding the existing thread.created channel to
+          // whoever watches — plus a server-written stamp so a reopened doc
+          // renders "plan requested" rather than offering a first ask.
+          // Owner-only for the same reason `plan` is: asking for board work
+          // is a member's seat.
+          if (rest === 'plan-request' && req.method === 'POST') {
+            if (visitor) return j(403, { error: 'not available to share visitors' });
+            const body = await safeJson(req);
+            const author = authorFor(body?.author);
+            if (!author) return j(400, { error: 'author required' });
+            // The same door every other comment route holds: the ask names a
+            // person for the agent to answer, and the bare category "agent"
+            // names nobody.
+            if (isCategoryAuthor(author)) return refuseCategoryAuthor();
+            const thread = await rooms.postComment(
+              docId,
+              null,
+              author,
+              PLAN_REQUEST_COMMENT,
+              { kind: 'subject' },
+              { generate: false },
+            );
+            if (!thread) return j(404, { error: 'doc not found' });
+            const stamped = rooms.setPlanRequested(docId, author.name);
+            return j(200, {
+              docId,
+              threadId: thread.id,
+              ...(stamped.ok ? { requestedAt: stamped.requestedAt } : {}),
+            });
           }
           // --- The doc's repo home: pin, read, unpin. OWNER ONLY — a home is
           // host paths, which a share visitor must never see. The visitor

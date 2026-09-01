@@ -192,6 +192,16 @@ export interface DocMeta {
   planApprovedBy?: string;
   planApprovedAt?: number;
   /**
+   * Somebody pressed Make Plan on this doc — the server stamps who and when
+   * beside the comment thread the press files (the ask itself travels as a
+   * comment; this stamp is only what lets a reopened doc render "plan
+   * requested" instead of offering a first ask). Never cleared: the agent's
+   * answer is `planState: 'pending'`, which outranks it everywhere it is
+   * read. Server-written meta, like `planState`.
+   */
+  planRequestedAt?: number;
+  planRequestedBy?: string;
+  /**
    * How many settled AUTHORING edit bursts this doc's content has seen — a
    * monotonic counter, deliberately not a timestamp (see `wordsRevision` on
    * tasks: a millisecond is coarser than the events it must separate, and a

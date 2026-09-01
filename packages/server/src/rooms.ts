@@ -479,6 +479,8 @@ const SERVER_META_KEYS = [
   'planState',
   'planApprovedBy',
   'planApprovedAt',
+  'planRequestedAt',
+  'planRequestedBy',
   'contentRevision',
 ] as const;
 
@@ -5007,6 +5009,30 @@ export class Rooms {
     room.meta.contentRevision = revision;
     const ids = room.meta.alias ? [room.docId, room.meta.alias] : [room.docId];
     this.onContentRevision?.(ids, revision);
+  }
+
+  /**
+   * Stamp "somebody pressed Make Plan" on the doc. The ask itself is a
+   * comment thread the route files through `postComment`; this stamp is only
+   * what lets a reopened doc render the requested state. Overwritten by a
+   * later press on purpose — asking again is allowed, and the newest ask is
+   * the one worth naming.
+   */
+  setPlanRequested(
+    docId: string,
+    by: string,
+  ): { ok: true; docId: string; requestedAt: number } | { ok: false; error: 'not-found' } {
+    const room = this.get(docId);
+    if (!room) return { ok: false, error: 'not-found' };
+    const requestedAt = Date.now();
+    const m = room.ydoc.getMap('meta');
+    room.ydoc.transact(() => {
+      m.set('planRequestedAt', requestedAt);
+      m.set('planRequestedBy', by);
+    }, CONTENT_REVISION_ORIGIN);
+    room.meta.planRequestedAt = requestedAt;
+    room.meta.planRequestedBy = by;
+    return { ok: true, docId: room.docId, requestedAt };
   }
 
   /**
