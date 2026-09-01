@@ -190,6 +190,14 @@ import {
   type ReadyWorkSnapshot,
   isBoardActivity,
 } from './ready-nudge.ts';
+import {
+  CalendarAutoScheduler,
+  CalendarConnectionStore,
+  type GoogleOauthApp,
+  type RecallCalendarClient,
+  type RefreshTokenVault,
+  parseCalendarSyncWebhook,
+} from './recall-calendar.ts';
 import { RecallMeetingRelay } from './recall-meeting.ts';
 import { parseBotStatusWebhook } from './recall-status.ts';
 import { svixHeadersFrom, verifySvixSignature } from './recall-webhook-auth.ts';
@@ -929,6 +937,24 @@ export interface ServerOptions {
    */
   meetingBotWebhookSecret?: string;
   /**
+   * Calendar auto-join: Recall.ai Calendar V2 plus the Google OAuth app the
+   * connect flow speaks for. **No default**, the same seam rule as
+   * `meetingBot` directly above and with the same bill attached — a scheduled
+   * bot joins a real call and spends. Omitting it makes every
+   * `/api/calendar/*` route answer `not_configured` and the status webhook
+   * ignore `calendar.sync_events`. Only `bin.ts` constructs real ones
+   * (`createRecallCalendarClient`, `createGoogleOauthApp`,
+   * `createKeychainRefreshTokenVault`).
+   */
+  calendarBot?: {
+    client: RecallCalendarClient;
+    /** Null when the Google OAuth app is not configured: sync + opt-out still
+     *  work for a calendar connected earlier, but connect answers 503. */
+    google: GoogleOauthApp | null;
+    /** Where the refresh token rests so disconnect can revoke it at Google. */
+    vault?: RefreshTokenVault;
+  };
+  /**
    * The dedicated hostname Recall.ai's backend dials this deployment on —
    * `CW_RECALL_CALLBACK_HOST`, e.g. `recall.<domain>`, pointed at the same
    * tunnel as the operator hostname and with NO Cloudflare Access
@@ -1466,6 +1492,28 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
     // no id, so the replay window stays the doc's (see SseHub).
     broadcastTransient: (docId, payload) => sse.broadcastTransient(docId, payload),
   });
+  /**
+   * Calendar auto-join, beside the relay it schedules bots for. The store
+   * survives restarts because the webhook consumer must recognise the
+   * connected calendar after one, and an opt-out that lasted only until the
+   * next deploy would re-invite the bot to the exact meeting somebody
+   * removed it from.
+   */
+  const calendarStore = opts.calendarBot ? new CalendarConnectionStore(dataDir) : null;
+  const calendarScheduler =
+    opts.calendarBot && calendarStore
+      ? new CalendarAutoScheduler({
+          client: opts.calendarBot.client,
+          store: calendarStore,
+          ...(opts.meetingBot ? { botName: opts.meetingBot.config.botName } : {}),
+        })
+      : null;
+  /**
+   * CSRF states for the Google connect flow, minted at /connect and spent at
+   * /callback. In memory on purpose: a state that did not survive a restart
+   * only costs the person one more click on Connect.
+   */
+  const calendarOauthStates = new Map<string, number>();
   // Late-bound because Rooms is constructed before the task store and the
   // projection it needs. Nothing can fire through it until a room exists,
   // which is after both.
@@ -5964,6 +6012,19 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           }
           const event = parseBotStatusWebhook(parsed);
           if (event) recallRelay.onStatus(event);
+          // The same Svix-signed endpoint carries the CALENDAR webhooks —
+          // webhooks are workspace-level at the vendor — so a body that is
+          // not a bot status may be a `calendar.sync_events`. Consumed after
+          // the 200 is decided: the vendor's contract is "you got it", and a
+          // list-and-reconcile that takes seconds must not make it retry.
+          if (!event && calendarScheduler) {
+            const sync = parseCalendarSyncWebhook(parsed);
+            if (sync) {
+              calendarScheduler.onSync(sync).catch((err: unknown) => {
+                console.error('[calendar] sync_events consume failed:', err);
+              });
+            }
+          }
           return j(200, { ok: true });
         }
 
@@ -10449,6 +10510,158 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
             });
           }
           return j(200, { docId, meetingId, speakers: names });
+        }
+
+        // --- Calendar auto-join: connect a Google Calendar, opt meetings out ---
+        //
+        // All on the operator's surface — these are a PERSON's verbs, so they
+        // go through the same host/Access gating as every other /api route.
+        // The vendor's inbound half (`calendar.sync_events`) arrives on the
+        // Svix-signed status webhook above, on the callback hostname.
+        if (pathname === '/api/calendar' && req.method === 'GET') {
+          const google = opts.calendarBot?.google ?? null;
+          const connection = calendarStore?.connection() ?? null;
+          return j(200, {
+            configured: calendarScheduler !== null,
+            googleConfigured: google !== null,
+            connection: connection
+              ? { email: connection.email, connectedAt: connection.connectedAt }
+              : null,
+          });
+        }
+        if (pathname === '/api/calendar/google/connect' && req.method === 'GET') {
+          const google = opts.calendarBot?.google;
+          if (!google) {
+            return j(503, {
+              error: 'not_configured',
+              message:
+                'Google Calendar connect needs the OAuth app credentials (Keychain ' +
+                'service claude-workspaces-google-oauth, accounts client-id and ' +
+                'client-secret) and a Recall API key.',
+            });
+          }
+          // One-shot CSRF state, spent (or expired) at the callback. Expired
+          // entries are swept here rather than on a timer: this map only
+          // grows when somebody clicks Connect.
+          const now = Date.now();
+          for (const [state, expires] of calendarOauthStates) {
+            if (expires < now) calendarOauthStates.delete(state);
+          }
+          const stateBytes = new Uint8Array(16);
+          crypto.getRandomValues(stateBytes);
+          const state = [...stateBytes].map((b) => b.toString(16).padStart(2, '0')).join('');
+          calendarOauthStates.set(state, now + 10 * 60_000);
+          return new Response(null, {
+            status: 302,
+            headers: { location: google.consentUrl(state) },
+          });
+        }
+        if (pathname === '/api/calendar/google/callback' && req.method === 'GET') {
+          const google = opts.calendarBot?.google;
+          if (!google || !calendarStore) return j(503, { error: 'not_configured' });
+          // Google reports a refused consent screen as ?error=access_denied.
+          const denied = url.searchParams.get('error');
+          if (denied) return j(400, { error: 'consent_refused', message: denied });
+          const code = url.searchParams.get('code') ?? '';
+          const state = url.searchParams.get('state') ?? '';
+          const expires = calendarOauthStates.get(state);
+          calendarOauthStates.delete(state);
+          if (!code || expires === undefined || expires < Date.now()) {
+            return j(400, { error: 'bad_state', message: 'Start again from Connect.' });
+          }
+          try {
+            const { refreshToken } = await google.exchange(code);
+            // Recall owns the sync from here: it holds the app credentials
+            // and the refresh token and refreshes on its own schedule.
+            const calendar = await opts.calendarBot?.client.createCalendar({
+              refreshToken,
+              clientId: google.clientId,
+              clientSecret: google.clientSecret,
+            });
+            if (!calendar) return j(503, { error: 'not_configured' });
+            // Vaulted ONLY so disconnect can revoke the grant at Google; see
+            // RefreshTokenVault. Saved after the vendor accepted it, so a
+            // failed connect leaves no credential behind.
+            opts.calendarBot?.vault?.save(refreshToken);
+            calendarStore.setConnection({
+              calendarId: calendar.id,
+              email: calendar.email,
+              connectedAt: Date.now(),
+            });
+            return new Response(
+              '<!doctype html><meta charset="utf-8"><title>Connected</title>' +
+                '<p>Google Calendar connected. Meetings with a Zoom, Meet or Teams ' +
+                'link will get a bot automatically. You can close this tab.</p>',
+              { status: 200, headers: { 'content-type': 'text/html; charset=utf-8' } },
+            );
+          } catch (err) {
+            const error = err instanceof Error ? err.message : 'connect_failed';
+            return j(502, { error });
+          }
+        }
+        if (pathname === '/api/calendar/google' && req.method === 'DELETE') {
+          if (!calendarStore || !opts.calendarBot) return j(503, { error: 'not_configured' });
+          const connection = calendarStore.connection();
+          if (!connection) return j(404, { error: 'not_connected' });
+          // Order matters: the vendor's copy of the grant dies first (the
+          // calendar delete), then the grant itself (the revoke), then our
+          // record. A failure mid-way leaves MORE revoked than the record
+          // says, which is the safe direction.
+          await opts.calendarBot.client.deleteCalendar(connection.calendarId);
+          let revoked = false;
+          const token = opts.calendarBot.vault?.load() ?? null;
+          if (token) {
+            try {
+              await opts.calendarBot.google?.revoke(token);
+              revoked = true;
+            } catch (err) {
+              console.error('[calendar] google revoke failed:', err);
+            }
+            opts.calendarBot.vault?.clear();
+          }
+          calendarStore.setConnection(null);
+          return j(200, { ok: true, revoked });
+        }
+        if (pathname === '/api/calendar/events' && req.method === 'GET') {
+          if (!calendarScheduler || !calendarStore || !opts.calendarBot) {
+            return j(503, { error: 'not_configured' });
+          }
+          const connection = calendarStore.connection();
+          if (!connection) return j(404, { error: 'not_connected' });
+          try {
+            const events = await opts.calendarBot.client.listUpcoming(
+              connection.calendarId,
+              new Date().toISOString(),
+            );
+            return j(200, {
+              events: events.map((event) => ({
+                id: event.id,
+                startTime: event.startTime,
+                meetingUrl: event.meetingUrl,
+                botScheduled: event.botsScheduled > 0,
+                optedOut: calendarStore.isOptedOut(event.id),
+              })),
+            });
+          } catch (err) {
+            return j(502, { error: err instanceof Error ? err.message : 'list_failed' });
+          }
+        }
+        const calendarOptOut = pathname.match(/^\/api\/calendar\/events\/([^/]+)\/opt-out$/);
+        if (calendarOptOut) {
+          if (req.method !== 'POST') return j(405, { error: 'method not allowed' });
+          if (!calendarScheduler) return j(503, { error: 'not_configured' });
+          const eventId = decodeURIComponent(calendarOptOut[1] ?? '');
+          const body = (await req.json().catch(() => null)) as { optOut?: unknown } | null;
+          // Absent means "opt out" — the button this backs is "don't record
+          // this one", and opting back in is the explicit `optOut: false`.
+          const optOut = body?.optOut !== false;
+          try {
+            const outcome = await calendarScheduler.setOptOut(eventId, optOut);
+            if (!outcome) return j(404, { error: 'not_connected' });
+            return j(200, { optOut, ...outcome });
+          } catch (err) {
+            return j(502, { error: err instanceof Error ? err.message : 'opt_out_failed' });
+          }
         }
 
         // --- A doc's meeting bot: invite one, read its state, send it home ---
