@@ -5,13 +5,13 @@
  * to look up, a thing only the agent knows. Today the only gesture over a
  * selection is "comment", so all four of those arrive as prose somebody has
  * to re-read later and act on by hand. This is the menu the approved mock
- * puts behind that same selection: five ways for a line to leave the doc as
+ * puts behind that same selection: four ways for a line to leave the doc as
  * work, anchored on the line itself so nothing has to be re-described.
  *
  * ONLY on huddle docs. An ordinary review doc's pill stays exactly what it
  * was — a comment affordance — because a doc under review is not a place work
- * is generated from, and a five-item menu over a proofreading selection is
- * four wrong answers and the one you wanted.
+ * is generated from, and a four-item menu over a proofreading selection is
+ * three wrong answers and the one you wanted.
  *
  * Everything here rides verbs that already exist: a task create with a `doc`
  * origin (the same one the meeting assistant files its captured tasks
@@ -40,13 +40,13 @@ export interface SpinoffAnchor {
   deletedSnippet?: string;
 }
 
-/** Which of the five. `comment` is the old behaviour, kept as a row. */
+/** Which of the four. `comment` is the old behaviour, kept as a row. */
 export type SpinoffId = SpinoffTaskId | 'question' | 'comment';
 
-/** The three that put a ROW on the board. Its own type because the caller
+/** The two that put a ROW on the board. Its own type because the caller
  *  that writes the link back into the prose only ever handles these, and
  *  saying so in the signature is cheaper than a guard it can forget. */
-export type SpinoffTaskId = 'task' | 'start' | 'research';
+export type SpinoffTaskId = 'task' | 'research';
 
 export interface SpinoffAction {
   id: SpinoffId;
@@ -56,14 +56,21 @@ export interface SpinoffAction {
 }
 
 /**
- * The five, in the mock's order — which is also frequency order for the
- * gesture: capturing a to-do is what a discussion mostly produces, and
- * "Leave a comment" is last because it is the only one that does not make
- * something happen.
+ * The four, in frequency order for the gesture: capturing a to-do is what a
+ * discussion mostly produces, and "Leave a comment" is last because it is the
+ * only one that does not make something happen.
+ *
+ * There were five. "Start now" sat second and did the same thing as "Create a
+ * task" plus `order: 0`, which a reviewer could not tell apart from it in the
+ * running product — two rows, one outcome, and no way to predict which you
+ * wanted. Bryan's call (2026-09-01) was to collapse them: both make a task
+ * row, and where that row lands is decided from what the row actually says
+ * rather than from which of two identical-looking buttons was pressed. A
+ * placement nobody can distinguish is not a choice, it is a coin toss with
+ * extra steps.
  */
 export const SPINOFF_ACTIONS: readonly SpinoffAction[] = [
   { id: 'task', label: 'Create a task', icon: 'M12 5v14M5 12h14' },
-  { id: 'start', label: 'Start now', icon: 'M5 3l14 9-14 9z' },
   {
     id: 'research',
     label: 'Research and come back',
@@ -134,6 +141,46 @@ export function deriveTaskTitle(quote: string, limit = TITLE_MAX): string {
 }
 
 /**
+ * Whether a row's own words are enough to pick it up — To do if so, Triage
+ * if not.
+ *
+ * A person's create normally lands in To do, and that is right when the
+ * person WROTE the row. A spin-off is not written, it is selected: the words
+ * are a fragment of somebody's sentence, and a reviewer's pass filed rows
+ * called "Cloudflare" and "Access" this way. Nobody can act on those, and a
+ * row nobody can act on sitting in To do is worse than the same row in
+ * Triage, because To do is the list people work from.
+ *
+ * Three words is the line, and it is deliberately crude: it separates a
+ * noun somebody happened to double-click from a phrase with something to do
+ * in it, which is the whole distinction being drawn. The cost of getting it
+ * wrong is one drag between two columns, in either direction.
+ */
+export function readyToWork(title: string): boolean {
+  return title.trim().split(/\s+/).filter(Boolean).length >= 3;
+}
+
+/**
+ * The agent the doc's board is led by, or undefined when nothing names one.
+ *
+ * Its own round trip, on the research path only, because that is the one
+ * action whose owner is NOT the person who tapped it. Undefined on any
+ * failure — a research row belonging to a name we guessed is worse than one
+ * that goes through triage to be given an owner on purpose.
+ */
+async function leadAgentFor(deps: SpinoffDeps): Promise<string | undefined> {
+  try {
+    const body = (await deps.fetchJson(`/api/docs/${encodeURIComponent(deps.docId)}`)) as {
+      leadAgentId?: unknown;
+    };
+    const lead = typeof body?.leadAgentId === 'string' ? body.leadAgentId.trim() : '';
+    return lead === '' ? undefined : lead;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
  * The link a spun-off task is written back into the prose as.
  *
  * Root-relative on purpose, and byte-identical to the server's
@@ -195,6 +242,10 @@ export interface SpinoffResult {
   action: SpinoffId;
   /** Present when the action created a task. */
   taskId?: string;
+  /** Where the board actually put it — `todo` or `triage`. Read back from
+   *  the create rather than predicted, so the toast cannot tell somebody
+   *  their row is in a column it is not in. */
+  status?: string;
   /** The row's title as the board now holds it — so the toast can name what
    *  was made rather than saying "Task created" about nothing in particular,
    *  and so the person can tell whether the title came out sane. */
@@ -241,10 +292,12 @@ export async function runSpinoff(
   // that a person writes it.
   if (action === 'comment' || action === 'question') return { action };
 
-  const title =
-    action === 'research'
-      ? `Research: ${deriveTaskTitle(deps.quote, TITLE_MAX - 10)}`
-      : deriveTaskTitle(deps.quote);
+  const said = deriveTaskTitle(deps.quote, action === 'research' ? TITLE_MAX - 10 : TITLE_MAX);
+  const title = action === 'research' ? `Research: ${said}` : said;
+  // Research is the agent's errand, not the tapper's. Left unsaid, the create
+  // route falls the assignee back to the author, which put "go and find out
+  // about this" on the plate of the person who asked the question.
+  const lead = action === 'research' ? await leadAgentFor(deps) : undefined;
   const res = (await post(deps, `/api/workspaces/${encodeURIComponent(deps.workspaceId)}/tasks`, {
     title,
     body: spinoffBody(deps.quote, deps.docTitle),
@@ -252,15 +305,26 @@ export async function runSpinoff(
     // Where it came from, the way the meeting assistant's captured tasks
     // say it — one origin kind for "a doc line became this".
     origin: { kind: 'doc', docId: deps.docId },
-    // "Start now" is a placement, not a status. Nothing is actually in
-    // progress the instant somebody taps a line, so claiming `in-progress`
-    // would put a lie on the board; what the tap means is "work this
-    // next", and the top of the band is where that is said.
-    ...(action === 'start' ? { order: 0 } : {}),
-  })) as { task?: { id?: string } };
+    ...(lead !== undefined ? { assignee: lead, assigneeKind: 'agent' } : {}),
+    // Where the row lands, decided from what the row SAYS. A thin selection
+    // makes a row nobody can pick up, and triage is where a row goes to be
+    // given enough to act on — see `readyToWork`. A research errand with no
+    // agent to hand it to is thin in the same way: it says what to find out
+    // and not who is finding it out.
+    ...(!readyToWork(said) || (action === 'research' && lead === undefined)
+      ? { triage: true }
+      : {}),
+  })) as { task?: { id?: string; status?: string } };
   const taskId = res?.task?.id;
   if (taskId === undefined) return null;
-  return { action, taskId, title, href: taskLinkHref(deps.workspaceId, taskId) };
+  const status = typeof res.task?.status === 'string' ? res.task.status : undefined;
+  return {
+    action,
+    taskId,
+    title,
+    ...(status !== undefined ? { status } : {}),
+    href: taskLinkHref(deps.workspaceId, taskId),
+  };
 }
 
 export interface SpinoffMenuOpts {

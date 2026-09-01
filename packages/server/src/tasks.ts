@@ -1299,6 +1299,23 @@ export interface CreateTaskOpts {
    * routes when the source doc's plan gate is pending — see `Task.planHold`.
    */
   planHold?: { docId: string };
+  /**
+   * File this row in `triage` whoever filed it, because the row itself does
+   * not carry enough to act on.
+   *
+   * A person's create normally lands in `todo`, and that is right when the
+   * person wrote the row. A spin-off is different: the row's words are a
+   * fragment of a conversation that the tapper selected rather than composed,
+   * and "Cloudflare" is a two-word row nobody can pick up. Triage is where a
+   * row goes to be given enough to act on — so this says "not ready", which
+   * is a claim about the CONTENT, where `planHold` is a claim about its
+   * provenance. Neither implies the other and both force the same status.
+   *
+   * Unlike `planHold` nothing later releases it: a person editing the row
+   * out of triage is the release, because the thing that was missing was
+   * words only a person can add.
+   */
+  fileToTriage?: boolean;
   /** Who is creating it, when the caller knows — attributed on the event
    *  and in the audit log. Optional: the create routes predate it and a
    *  missing author must not become an anonymous 400. */
@@ -3924,8 +3941,12 @@ export class TaskStore {
       order,
       // A plan draft is triage WHOEVER filed it: the batch declared its rows
       // drafts of an unapproved plan, and a person's rows are not exempt from
-      // their own declaration.
-      status: opts.planHold !== undefined ? 'triage' : initialTaskStatus(opts.actor),
+      // their own declaration. `fileToTriage` is the same shape of claim made
+      // about the row's CONTENT rather than its provenance.
+      status:
+        opts.planHold !== undefined || opts.fileToTriage === true
+          ? 'triage'
+          : initialTaskStatus(opts.actor),
       after,
       ...(afterEnforce.length > 0 ? { afterEnforce } : {}),
       ...(opts.dueAt !== undefined ? { dueAt: opts.dueAt } : {}),
