@@ -467,6 +467,28 @@ describe('the board renders the readout and leaves the rows alone', () => {
     renderBoard(host, boardSectionsWithEffort(GOALS, tasks, filters(), NOW), {} as never);
   };
 
+  // A goal in triage is not yet work, so its band carries no projection: a
+  // date for something nobody has agreed to start is a date for nothing.
+  it('draws no strip at all under a band in triage', () => {
+    const rows = [closed(DAY), closed(2 * DAY), closed(3 * DAY), task()];
+    renderBoard(
+      host,
+      boardSectionsWithEffort(
+        [{ ...GOALS[0], status: 'triage' }] as HubGoal[],
+        rows,
+        filters(),
+        NOW,
+      ),
+      {} as never,
+    );
+    expect(host.querySelector('.hub-goal-effort')).toBeNull();
+    // POSITIVE CONTROL: the same rows under the agreed band draw it.
+    disposeBoards();
+    host.replaceChildren();
+    paint(rows);
+    expect(host.querySelector('.hub-goal-effort')).not.toBeNull();
+  });
+
   it('draws "estimate only" under the date, never in the title row', () => {
     // Scored under an older ask: three closes set a pace, and none of them
     // corrected the factor the date divides.
