@@ -196,6 +196,7 @@ import {
   type GoogleOauthApp,
   type RecallCalendarClient,
   type RefreshTokenVault,
+  eligibleForBot,
   parseCalendarSyncWebhook,
 } from './recall-calendar.ts';
 import { RecallMeetingRelay } from './recall-meeting.ts';
@@ -937,8 +938,10 @@ export interface ServerOptions {
    */
   meetingBotWebhookSecret?: string;
   /**
-   * Calendar auto-join: Recall.ai Calendar V2 plus the Google OAuth app the
-   * connect flow speaks for. **No default**, the same seam rule as
+   * Calendar meeting-join: Recall.ai Calendar V2 plus the Google OAuth app
+   * the connect flow speaks for. No bot joins anything by default — the
+   * connection tracks upcoming meetings and only an explicit per-event join
+   * schedules one. **No default**, the same seam rule as
    * `meetingBot` directly above and with the same bill attached — a scheduled
    * bot joins a real call and spends. Omitting it makes every
    * `/api/calendar/*` route answer `not_configured` and the status webhook
@@ -10512,7 +10515,11 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           return j(200, { docId, meetingId, speakers: names });
         }
 
-        // --- Calendar auto-join: connect a Google Calendar, opt meetings out ---
+        // --- Calendar: connect a Google Calendar, join meetings one click ---
+        //
+        // No bot joins anything by default — the connection tracks upcoming
+        // meetings so an explicit per-event join is one click instead of a
+        // pasted URL.
         //
         // All on the operator's surface — these are a PERSON's verbs, so they
         // go through the same host/Access gating as every other /api route.
@@ -10590,8 +10597,9 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
             });
             return new Response(
               '<!doctype html><meta charset="utf-8"><title>Connected</title>' +
-                '<p>Google Calendar connected. Meetings with a Zoom, Meet or Teams ' +
-                'link will get a bot automatically. You can close this tab.</p>',
+                '<p>Google Calendar connected. No bot joins anything on its own — ' +
+                'upcoming meetings can now be given a bot with one click. ' +
+                'You can close this tab.</p>',
               { status: 200, headers: { 'content-type': 'text/html; charset=utf-8' } },
             );
           } catch (err) {
@@ -10633,34 +10641,42 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
               connection.calendarId,
               new Date().toISOString(),
             );
+            // The shape a join surface (the coming workspace banner) needs:
+            // which meeting, when, whether a bot COULD join it, and whether
+            // one WILL. The URL itself stays server-side — presence is what
+            // the click needs, and this list renders places a meeting link
+            // does not belong.
             return j(200, {
               events: events.map((event) => ({
                 id: event.id,
+                title: event.title,
                 startTime: event.startTime,
-                meetingUrl: event.meetingUrl,
+                hasMeetingLink: event.meetingUrl !== null,
+                joinable: eligibleForBot(event),
+                joined: calendarStore.isOptedIn(event.id),
                 botScheduled: event.botsScheduled > 0,
-                optedOut: calendarStore.isOptedOut(event.id),
               })),
             });
           } catch (err) {
             return j(502, { error: err instanceof Error ? err.message : 'list_failed' });
           }
         }
-        const calendarOptOut = pathname.match(/^\/api\/calendar\/events\/([^/]+)\/opt-out$/);
-        if (calendarOptOut) {
+        const calendarJoin = pathname.match(/^\/api\/calendar\/events\/([^/]+)\/join$/);
+        if (calendarJoin) {
           if (req.method !== 'POST') return j(405, { error: 'method not allowed' });
           if (!calendarScheduler) return j(503, { error: 'not_configured' });
-          const eventId = decodeURIComponent(calendarOptOut[1] ?? '');
-          const body = (await req.json().catch(() => null)) as { optOut?: unknown } | null;
-          // Absent means "opt out" — the button this backs is "don't record
-          // this one", and opting back in is the explicit `optOut: false`.
-          const optOut = body?.optOut !== false;
+          const eventId = decodeURIComponent(calendarJoin[1] ?? '');
+          const body = (await req.json().catch(() => null)) as { join?: unknown } | null;
+          // Absent means "join" — the button this backs is the explicit
+          // opt-IN (bots join nothing by default), and withdrawing it is the
+          // explicit `join: false`.
+          const join = body?.join !== false;
           try {
-            const outcome = await calendarScheduler.setOptOut(eventId, optOut);
+            const outcome = await calendarScheduler.setJoin(eventId, join);
             if (!outcome) return j(404, { error: 'not_connected' });
-            return j(200, { optOut, ...outcome });
+            return j(200, { join, ...outcome });
           } catch (err) {
-            return j(502, { error: err instanceof Error ? err.message : 'opt_out_failed' });
+            return j(502, { error: err instanceof Error ? err.message : 'join_failed' });
           }
         }
 

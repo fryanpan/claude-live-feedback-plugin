@@ -1,8 +1,9 @@
 /**
- * The calendar connect / disconnect / opt-out routes and the sync-webhook
+ * The calendar connect / disconnect / join routes and the sync-webhook
  * consumer, over a real server. The route layer is the part nothing
  * type-checks — a predicate wired into the wrong branch is invisible to every
- * unit test.
+ * unit test. The load-bearing claim throughout: NO event gets a bot from a
+ * sync alone; only an explicit join schedules one.
  *
  * Every credential is a literal this suite invents; the Google flow and the
  * Recall client are fakes, because the real ones spend money. Fixture names
@@ -12,11 +13,11 @@ import { afterAll, beforeAll, describe, expect, it } from 'bun:test';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import {
-  type GoogleOauthApp,
-  type RecallCalendarClient,
-  type RecallCalendarEvent,
-  type RefreshTokenVault,
+import type {
+  GoogleOauthApp,
+  RecallCalendarClient,
+  RecallCalendarEvent,
+  RefreshTokenVault,
 } from '../src/recall-calendar.ts';
 import { type ServerHandle, createServer } from '../src/server.ts';
 
@@ -137,11 +138,11 @@ describe('calendar routes', () => {
     });
   });
 
-  it('opt-out and events answer not_connected until a calendar exists', async () => {
+  it('join and events answer not_connected until a calendar exists', async () => {
     const events = await fetch(`${base}/api/calendar/events`);
     expect(events.status).toBe(404);
-    const optOut = await fetch(`${base}/api/calendar/events/evt-1/opt-out`, { method: 'POST' });
-    expect((await optOut.json()).error).toBe('not_connected');
+    const joinRes = await fetch(`${base}/api/calendar/events/evt-1/join`, { method: 'POST' });
+    expect((await joinRes.json()).error).toBe('not_connected');
   });
 
   it('connect redirects to the consent screen with a one-shot state', async () => {
@@ -178,20 +179,23 @@ describe('calendar routes', () => {
     expect(status.connection?.email).toBe('casey@example.com');
   });
 
-  it('a calendar.sync_events webhook drives schedule and unschedule', async () => {
+  it('THE DEFAULT: a sync schedules NO bot for a linked event nobody joined', async () => {
     fakes.events.length = 0;
     fakes.events.push(
       {
         id: 'evt-meet',
+        title: 'Design sync',
         startTime: '2026-09-02T15:00:00Z',
         meetingUrl: 'https://meet.google.com/abc-defg-hij',
         isDeleted: false,
         botsScheduled: 0,
       },
+      // A bot already on an un-joined event (a leftover) is actively removed.
       {
-        id: 'evt-lunch',
+        id: 'evt-leftover',
+        title: 'Vendor call',
         startTime: '2026-09-02T12:00:00Z',
-        meetingUrl: null,
+        meetingUrl: 'https://zoom.us/j/1234567890',
         isDeleted: false,
         botsScheduled: 1,
       },
@@ -207,45 +211,75 @@ describe('calendar routes', () => {
       }),
     });
     expect(res.status).toBe(200);
-    await eventually(() => fakes.calls.scheduled.length === 1);
-    expect(fakes.calls.scheduled[0]).toEqual({
-      eventId: 'evt-meet',
-      deduplicationKey: '2026-09-02T15:00:00Z-https://meet.google.com/abc-defg-hij',
-    });
-    await eventually(() => fakes.calls.unscheduled.includes('evt-lunch'));
+    // The unschedule of the leftover proves the consumer RAN; only then is
+    // the empty scheduled list a real negative and not a consumer that never
+    // fired (a zero needs its positive control).
+    await eventually(() => fakes.calls.unscheduled.includes('evt-leftover'));
+    expect(fakes.calls.scheduled).toEqual([]);
   });
 
-  it('lists upcoming events with their bot + opt-out flags', async () => {
+  it('lists upcoming events with what a join surface needs', async () => {
     const res = await fetch(`${base}/api/calendar/events`);
     expect(res.status).toBe(200);
-    const body = (await res.json()) as { events: { id: string; optedOut: boolean }[] };
-    expect(body.events.map((e) => e.id)).toEqual(['evt-meet', 'evt-lunch']);
-    expect(body.events.every((e) => e.optedOut === false)).toBe(true);
+    const body = (await res.json()) as { events: Record<string, unknown>[] };
+    expect(body.events).toEqual([
+      {
+        id: 'evt-meet',
+        title: 'Design sync',
+        startTime: '2026-09-02T15:00:00Z',
+        hasMeetingLink: true,
+        joinable: true,
+        joined: false,
+        botScheduled: false,
+      },
+      {
+        id: 'evt-leftover',
+        title: 'Vendor call',
+        startTime: '2026-09-02T12:00:00Z',
+        hasMeetingLink: true,
+        joinable: true,
+        joined: false,
+        botScheduled: true,
+      },
+    ]);
   });
 
-  it('opt-out removes the bot from that event immediately, opt-in restores it', async () => {
-    fakes.calls.unscheduled.length = 0;
-    fakes.calls.scheduled.length = 0;
-    const out = await fetch(`${base}/api/calendar/events/evt-meet/opt-out`, {
+  it('an explicit join schedules the bot with the dedup key, and un-join withdraws it', async () => {
+    const joinRes = await fetch(`${base}/api/calendar/events/evt-meet/join`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ optOut: true }),
+      body: JSON.stringify({ join: true }),
     });
-    expect(out.status).toBe(200);
-    // The fake reports 0 bots on evt-meet, so the reconcile records the
-    // opt-out and has nothing to remove; the flag is the durable part.
+    expect(joinRes.status).toBe(200);
+    expect(((await joinRes.json()) as { action: string }).action).toBe('scheduled');
+    expect(fakes.calls.scheduled).toEqual([
+      {
+        eventId: 'evt-meet',
+        deduplicationKey: '2026-09-02T15:00:00Z-https://meet.google.com/abc-defg-hij',
+      },
+    ]);
     const listed = (await (await fetch(`${base}/api/calendar/events`)).json()) as {
-      events: { id: string; optedOut: boolean }[];
+      events: { id: string; joined: boolean }[];
     };
-    expect(listed.events.find((e) => e.id === 'evt-meet')?.optedOut).toBe(true);
+    expect(listed.events.find((e) => e.id === 'evt-meet')?.joined).toBe(true);
 
-    const back = await fetch(`${base}/api/calendar/events/evt-meet/opt-out`, {
+    // The vendor would now report the bot; the fake follows suit so the
+    // un-join has something real to remove.
+    const meetEvent = fakes.events.find((e) => e.id === 'evt-meet');
+    if (meetEvent) meetEvent.botsScheduled = 1;
+    fakes.calls.unscheduled.length = 0;
+    const leave = await fetch(`${base}/api/calendar/events/evt-meet/join`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ optOut: false }),
+      body: JSON.stringify({ join: false }),
     });
-    expect(back.status).toBe(200);
-    expect(fakes.calls.scheduled.map((s) => s.eventId)).toEqual(['evt-meet']);
+    expect(leave.status).toBe(200);
+    expect(((await leave.json()) as { action: string }).action).toBe('unscheduled');
+    expect(fakes.calls.unscheduled).toEqual(['evt-meet']);
+    const after = (await (await fetch(`${base}/api/calendar/events`)).json()) as {
+      events: { id: string; joined: boolean }[];
+    };
+    expect(after.events.find((e) => e.id === 'evt-meet')?.joined).toBe(false);
   });
 
   it('disconnect deletes the Recall calendar, revokes at Google, clears the vault', async () => {
@@ -279,7 +313,7 @@ describe('calendar routes without the feature', () => {
       expect((await fetch(`${base}/api/calendar/google/connect`)).status).toBe(503);
       expect((await fetch(`${base}/api/calendar/events`)).status).toBe(503);
       expect(
-        (await fetch(`${base}/api/calendar/events/evt-1/opt-out`, { method: 'POST' })).status,
+        (await fetch(`${base}/api/calendar/events/evt-1/join`, { method: 'POST' })).status,
       ).toBe(503);
       expect((await fetch(`${base}/api/calendar/google`, { method: 'DELETE' })).status).toBe(503);
     } finally {

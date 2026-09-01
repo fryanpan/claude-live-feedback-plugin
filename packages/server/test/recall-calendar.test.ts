@@ -1,9 +1,10 @@
 /**
- * Calendar auto-join, without a vendor: the OAuth URL and token calls, the
+ * Calendar meeting-join, without a vendor: the OAuth URL and token calls, the
  * Calendar V2 request shapes, the sync-webhook parse, and the scheduler's
- * reconcile decisions. Every credential here is a literal this test invents;
- * every fetch is a fake — a real schedule call spends money when the bot
- * joins. Fixture emails and hosts are fictional.
+ * reconcile decisions — above all THE DEFAULT: no event gets a bot unless a
+ * person explicitly joined it. Every credential here is a literal this test
+ * invents; every fetch is a fake — a real schedule call spends money when the
+ * bot joins. Fixture emails and hosts are fictional.
  */
 import { describe, expect, it } from 'bun:test';
 import { mkdtempSync, rmSync } from 'node:fs';
@@ -144,6 +145,7 @@ describe('calendar sync webhook parse', () => {
 describe('event mapping and decisions', () => {
   const event = (over: Partial<RecallCalendarEvent> = {}): RecallCalendarEvent => ({
     id: 'evt-1',
+    title: 'Design sync',
     startTime: '2026-09-01T15:00:00Z',
     meetingUrl: 'https://meet.google.com/abc-defg-hij',
     isDeleted: false,
@@ -151,7 +153,7 @@ describe('event mapping and decisions', () => {
     ...over,
   });
 
-  it('maps the vendor shape, counting scheduled bots', () => {
+  it('maps the vendor shape, reading the title from the platform raw record', () => {
     expect(
       parseCalendarEvent({
         id: 'evt-9',
@@ -159,14 +161,22 @@ describe('event mapping and decisions', () => {
         meeting_url: 'https://zoom.us/j/1234567890',
         is_deleted: false,
         bots: [{ bot_id: 'b1' }],
+        // Recall's own event carries no title; Google's raw record says
+        // `summary`, Outlook's says `subject`.
+        raw: { summary: 'Quarterly review' },
       }),
     ).toEqual({
       id: 'evt-9',
+      title: 'Quarterly review',
       startTime: '2026-09-02T09:00:00Z',
       meetingUrl: 'https://zoom.us/j/1234567890',
       isDeleted: false,
       botsScheduled: 1,
     });
+    expect(parseCalendarEvent({ id: 'evt-8', raw: { subject: 'Outlook one' } })?.title).toBe(
+      'Outlook one',
+    );
+    expect(parseCalendarEvent({ id: 'evt-7' })?.title).toBeNull();
     expect(parseCalendarEvent({ start_time: 'x' })).toBeNull();
   });
 
@@ -176,7 +186,7 @@ describe('event mapping and decisions', () => {
     );
   });
 
-  it('eligible = live event with a link the bot relay could join', () => {
+  it('joinable = live event with a link the bot relay could join — not a decision to join it', () => {
     expect(eligibleForBot(event())).toBe(true);
     expect(eligibleForBot(event({ meetingUrl: 'https://zoom.us/j/1234567890' }))).toBe(true);
     expect(eligibleForBot(event({ meetingUrl: null }))).toBe(false);
@@ -253,28 +263,30 @@ describe('recall calendar client', () => {
 });
 
 describe('connection store', () => {
-  it('persists the connection and opt-outs across instances, and clears opt-outs on disconnect', () => {
+  it('persists the connection and joins across instances, and clears joins on disconnect', () => {
     const dir = mkdtempSync(join(tmpdir(), 'calendar-store-'));
     try {
       const store = new CalendarConnectionStore(dir);
       expect(store.connection()).toBeNull();
+      expect(store.isOptedIn('evt-1')).toBe(false);
       store.setConnection({ calendarId: 'cal-1', email: 'casey@example.com', connectedAt: 5 });
-      store.setOptOut('evt-1', true);
+      store.setOptIn('evt-1', true);
 
       const reread = new CalendarConnectionStore(dir);
       expect(reread.connection()?.calendarId).toBe('cal-1');
-      expect(reread.isOptedOut('evt-1')).toBe(true);
+      expect(reread.isOptedIn('evt-1')).toBe(true);
 
-      // Opt-outs are per-calendar facts; a new connection starts clean.
+      // Joins are per-calendar permissions; a new connection starts with none
+      // granted, never with a stale grant nobody remembers.
       reread.setConnection(null);
-      expect(new CalendarConnectionStore(dir).isOptedOut('evt-1')).toBe(false);
+      expect(new CalendarConnectionStore(dir).isOptedIn('evt-1')).toBe(false);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
   });
 });
 
-describe('auto-scheduler', () => {
+describe('scheduler — the default is NO bot', () => {
   const fakeClient = (events: RecallCalendarEvent[]) => {
     const scheduled: { eventId: string; deduplicationKey: string; botName: string }[] = [];
     const unscheduled: string[] = [];
@@ -303,6 +315,7 @@ describe('auto-scheduler', () => {
 
   const meet = (id: string, over: Partial<RecallCalendarEvent> = {}): RecallCalendarEvent => ({
     id,
+    title: 'Weekly huddle',
     startTime: '2026-09-01T15:00:00Z',
     meetingUrl: 'https://meet.google.com/abc-defg-hij',
     isDeleted: false,
@@ -323,43 +336,69 @@ describe('auto-scheduler', () => {
     }
   });
 
-  it('schedules eligible events with the dedup key, unschedules the rest, skips deleted ones', async () => {
+  it('THE DEFAULT: an event with a Zoom/Meet link gets NO bot unless explicitly joined', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'calendar-sched-'));
     try {
-      const events = [
-        meet('evt-link'),
-        meet('evt-no-link', { meetingUrl: null, botsScheduled: 1 }),
-        // Cancelled: Recall unschedules an unjoined bot itself and refuses
-        // writes on a deleted event, so the right move is no move.
-        meet('evt-cancelled', { isDeleted: true, botsScheduled: 1 }),
-      ];
-      const { client, scheduled, unscheduled } = fakeClient(events);
-      const scheduler = new CalendarAutoScheduler({
-        client,
-        store: connectedStore(dir),
-        botName: 'Meeting Assistant',
-      });
-      const outcomes = await scheduler.onSync({ calendarId: 'cal-1', lastUpdatedTs: 't' });
-      expect(scheduled).toEqual([
-        {
-          eventId: 'evt-link',
-          deduplicationKey: '2026-09-01T15:00:00Z-https://meet.google.com/abc-defg-hij',
-          botName: 'Meeting Assistant',
-        },
+      const { client, scheduled, unscheduled } = fakeClient([
+        meet('evt-meet'),
+        meet('evt-zoom', { meetingUrl: 'https://zoom.us/j/1234567890' }),
       ]);
-      expect(unscheduled).toEqual(['evt-no-link']);
-      expect(outcomes.map((o) => o.action)).toEqual(['scheduled', 'unscheduled', 'skipped']);
+      const scheduler = new CalendarAutoScheduler({ client, store: connectedStore(dir) });
+      const outcomes = await scheduler.onSync({ calendarId: 'cal-1', lastUpdatedTs: 't' });
+      expect(scheduled).toEqual([]);
+      expect(unscheduled).toEqual([]);
+      expect(outcomes.map((o) => o.reason)).toEqual(['not_joined', 'not_joined']);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
   });
 
-  it('a moved event is simply re-scheduled — the re-POST carries the new timing', async () => {
+  it('only joined events are scheduled, under the dedup key; leftover bots come off', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'calendar-sched-'));
+    try {
+      const events = [
+        meet('evt-joined'),
+        // A bot on an un-joined event — a withdrawn join, or a leftover from
+        // before no-bot became the default — is actively removed.
+        meet('evt-leftover', { botsScheduled: 1 }),
+        // Cancelled: Recall unschedules an unjoined bot itself and refuses
+        // writes on a deleted event, so the right move is no move — but the
+        // join permission dies with the meeting.
+        meet('evt-cancelled', { isDeleted: true, botsScheduled: 1 }),
+      ];
+      const { client, scheduled, unscheduled } = fakeClient(events);
+      const store = connectedStore(dir);
+      store.setOptIn('evt-joined', true);
+      store.setOptIn('evt-cancelled', true);
+      const scheduler = new CalendarAutoScheduler({
+        client,
+        store,
+        botName: 'Meeting Assistant',
+      });
+      const outcomes = await scheduler.onSync({ calendarId: 'cal-1', lastUpdatedTs: 't' });
+      expect(scheduled).toEqual([
+        {
+          eventId: 'evt-joined',
+          deduplicationKey: '2026-09-01T15:00:00Z-https://meet.google.com/abc-defg-hij',
+          botName: 'Meeting Assistant',
+        },
+      ]);
+      expect(unscheduled).toEqual(['evt-leftover']);
+      expect(outcomes.map((o) => o.action)).toEqual(['scheduled', 'unscheduled', 'skipped']);
+      expect(store.isOptedIn('evt-cancelled')).toBe(false);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('a moved joined event is simply re-scheduled — the re-POST carries the new timing', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'calendar-sched-'));
     try {
       const moved = meet('evt-moved', { startTime: '2026-09-01T16:00:00Z', botsScheduled: 1 });
       const { client, scheduled } = fakeClient([moved]);
-      const scheduler = new CalendarAutoScheduler({ client, store: connectedStore(dir) });
+      const store = connectedStore(dir);
+      store.setOptIn('evt-moved', true);
+      const scheduler = new CalendarAutoScheduler({ client, store });
       await scheduler.onSync({ calendarId: 'cal-1', lastUpdatedTs: 't' });
       expect(scheduled[0]?.deduplicationKey).toBe(
         '2026-09-01T16:00:00Z-https://meet.google.com/abc-defg-hij',
@@ -378,11 +417,10 @@ describe('auto-scheduler', () => {
         if (eventId === 'evt-stale') throw new Error('recall-calendar: event already ended');
         return refuse(eventId, args);
       };
-      const scheduler = new CalendarAutoScheduler({
-        client,
-        store: connectedStore(dir),
-        log: () => {},
-      });
+      const store = connectedStore(dir);
+      store.setOptIn('evt-stale', true);
+      store.setOptIn('evt-fine', true);
+      const scheduler = new CalendarAutoScheduler({ client, store, log: () => {} });
       const outcomes = await scheduler.onSync({ calendarId: 'cal-1', lastUpdatedTs: 't' });
       expect(outcomes.map((o) => o.action)).toEqual(['skipped', 'scheduled']);
       expect(scheduled.map((s) => s.eventId)).toEqual(['evt-fine']);
@@ -391,23 +429,45 @@ describe('auto-scheduler', () => {
     }
   });
 
-  it('opt-out takes the bot off that event now, and opt-in puts it back', async () => {
+  it('join schedules the bot now, and un-join removes it now', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'calendar-sched-'));
     try {
-      const { client, scheduled, unscheduled } = fakeClient([meet('evt-1', { botsScheduled: 1 })]);
+      const { client, scheduled, unscheduled } = fakeClient([meet('evt-1')]);
       const store = connectedStore(dir);
       const scheduler = new CalendarAutoScheduler({ client, store });
 
-      const out = await scheduler.setOptOut('evt-1', true);
-      expect(out?.action).toBe('unscheduled');
-      expect(out?.reason).toBe('opted_out');
-      expect(unscheduled).toEqual(['evt-1']);
-      expect(store.isOptedOut('evt-1')).toBe(true);
-
-      const back = await scheduler.setOptOut('evt-1', false);
-      expect(back?.action).toBe('scheduled');
+      const joined = await scheduler.setJoin('evt-1', true);
+      expect(joined?.action).toBe('scheduled');
       expect(scheduled.map((s) => s.eventId)).toEqual(['evt-1']);
-      expect(store.isOptedOut('evt-1')).toBe(false);
+      expect(store.isOptedIn('evt-1')).toBe(true);
+
+      // The fake now reports a bot on the event, as the vendor would.
+      const { client: client2, unscheduled: unscheduled2 } = fakeClient([
+        meet('evt-1', { botsScheduled: 1 }),
+      ]);
+      const scheduler2 = new CalendarAutoScheduler({ client: client2, store });
+      const left = await scheduler2.setJoin('evt-1', false);
+      expect(left?.action).toBe('unscheduled');
+      expect(left?.reason).toBe('not_joined');
+      expect(unscheduled2).toEqual(['evt-1']);
+      expect(store.isOptedIn('evt-1')).toBe(false);
+      expect(unscheduled).toEqual([]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('a join on an event the vendor does not know grants nothing', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'calendar-sched-'));
+    try {
+      const { client, scheduled } = fakeClient([]);
+      const store = connectedStore(dir);
+      const scheduler = new CalendarAutoScheduler({ client, store });
+      const outcome = await scheduler.setJoin('evt-ghost', true);
+      expect(outcome?.reason).toBe('unknown_event');
+      expect(scheduled).toEqual([]);
+      // The flag is taken back off — no permission floats on an unknown id.
+      expect(store.isOptedIn('evt-ghost')).toBe(false);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
