@@ -3516,6 +3516,40 @@ write-once in practice, and the repair verb for a moved file cannot repair it.
   (`ulimit -n 64`) when building an exhaustion control, and assert the
   exhaustion actually happened, or the control passes vacuously.
 
+## A hand-rolled CSS "parser" that calls the text before `{` a selector disarms itself the day someone writes a comment above the rule
+
+- **The shape.** `packages/markdown-app/test/meeting-advanced-css.test.ts`
+  (shipped in #556) split the stylesheet on `{` and treated the preceding text
+  as the rule's selector. That is right until a comment sits above the rule —
+  then the "selector" is the comment plus the selector, and any **prose comma**
+  inside it splits the string into fragments that match nothing. The
+  assertions keep running, keep passing, and no longer look at the rule they
+  name.
+- **Why it passes instead of throwing: the lookup returned an empty list, and
+  the assertions read empty as "no such rule" rather than "the parser broke".**
+  Both produce the same value and only one is a reason to be quiet — the same
+  trap as *"Empty output is not a 'no'"*. A helper that derives structure
+  should distinguish *found nothing* from *could not look*; a caller that
+  cannot tell them apart will take the reassuring reading every time.
+- **Nothing fails when it breaks.** No test goes red, no build warns, and the
+  diff that disarms it edits a COMMENT — the least-reviewed line in any patch.
+  It was caught in #557 only because its author added a comment above the very
+  rule under test and noticed the assertion stopped biting; a comment added
+  anywhere else in the file would have gone unremarked for as long as the test
+  lived. Fix was to strip comments before parsing.
+- **The general form: a test whose subject is derived by string-munging its own
+  source can lose its subject silently.** Grepping a stylesheet, a bundle or a
+  skill file for a literal is fine — the literal is either there or it is not.
+  Deriving *structure* from that text with a split is not: the derivation has
+  failure modes the assertion cannot see, and its failure mode is always
+  "matches nothing", which reads as green.
+- **The check, and it is cheap: mutate the thing the test claims to guard and
+  watch it go red** — shrink the value, delete the rule, add a comment above
+  it. Same discipline as a positive control on a negative probe (see *"A
+  negative result needs the gate checked"*), and the sibling of *"An assertion
+  whose alternation can match either way pins nothing"* above: that one never
+  bit, this one stopped biting.
+
 ## `rsync -a` preserves a symlink's absolute target, so a copied release root can silently resolve back onto the volume you were escaping
 
 - **The trap.** Migrating prod's client releases to the boot disk, `rsync -a`

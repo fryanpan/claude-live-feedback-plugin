@@ -22,6 +22,7 @@ const HASHED = [
   'app.js',
   'hub.js',
   'signin.js',
+  'landing.js',
   'sentry.js',
   'sw.js',
   'styles.css',
@@ -123,6 +124,27 @@ async function emit(buildId: string): Promise<boolean> {
   if (!signinResult.success) {
     console.error('signin build failed:');
     for (const m of signinResult.logs) console.error(m);
+    if (!isWatch) process.exit(1);
+    return false;
+  }
+
+  // The landing page: its own entry (served at /app/landing.js by the shell
+  // renderLanding emits). It defines <meeting-banner> and nothing else —
+  // splitting off because the page is a list and one self-styling element.
+  const landingResult = await Bun.build({
+    entrypoints: [join(pkgRoot, 'src', 'landing-app.ts')],
+    outdir: dist,
+    target: 'browser',
+    format: 'esm',
+    splitting: false,
+    sourcemap: 'external',
+    define,
+    naming: { entry: 'landing.js', chunk: '[name]-[hash].js', asset: '[name].[ext]' },
+    minify: process.env.NODE_ENV !== 'dev' && !isWatch,
+  });
+  if (!landingResult.success) {
+    console.error('landing build failed:');
+    for (const m of landingResult.logs) console.error(m);
     if (!isWatch) process.exit(1);
     return false;
   }

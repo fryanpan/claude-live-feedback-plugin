@@ -7,8 +7,10 @@
  * 2026-08-27):
  *
  *  - `wss://streaming.assemblyai.com/v3/ws`, with the whole session config as
- *    query params — `sample_rate`, `encoding`, `format_turns`. There is no
- *    configuration message; the URL is the configuration.
+ *    query params — `sample_rate`, `encoding`, `format_turns`. The URL is the
+ *    configuration, with ONE exception: an `UpdateConfiguration` JSON frame
+ *    on the open socket can change the turn-detection knobs mid-session
+ *    (the live set in meeting-tuning.ts) — `session.update` sends it.
  *  - the key travels in the `Authorization` header with NO `Bearer` prefix.
  *  - audio goes up as raw binary frames on that same socket. No framing of
  *    ours, no base64, no envelope.
@@ -45,7 +47,7 @@
  * The socket is injected because a test of this mapping must not open one.
  */
 
-import { MAX_ROOM_SPEAKERS, MIN_ROOM_SPEAKERS } from '@feedback/core';
+import { MAX_ROOM_SPEAKERS, MIN_ROOM_SPEAKERS, type MeetingTuning } from '@feedback/core';
 import { readKeychainPassword } from './share/keychain.ts';
 import type {
   TranscriptionEngine,
@@ -235,6 +237,7 @@ export function streamingUrl(
   detectSpeakers: boolean,
   maxSpeakers?: number,
   speechModel?: string,
+  tuning?: MeetingTuning,
 ): string {
   const params = new URLSearchParams({
     sample_rate: String(sampleRate),
@@ -271,6 +274,17 @@ export function streamingUrl(
       );
       params.set('max_speakers', String(capped));
     }
+  }
+  // The person's Advanced Options, LAST so a moved knob overrides the
+  // defaults set above (`continuous_partials` on pro is exactly that case).
+  // The caller sanitized these against this engine's spec, so every key here
+  // is one the engine documents; term lists travel as a JSON array in the
+  // query string, which is the shape the docs give for `keyterms_prompt`.
+  // `max_speakers` is not a URL knob of its own — it arrived through the
+  // dedicated parameter above, inside the diarization branch it belongs to.
+  for (const [key, value] of Object.entries(tuning ?? {})) {
+    if (key === 'max_speakers') continue;
+    params.set(key, Array.isArray(value) ? JSON.stringify(value) : String(value));
   }
   return `${STREAM_URL}?${params.toString()}`;
 }
@@ -406,6 +420,12 @@ function buildEngine(opts: AssemblyAiOptions, variant: EngineVariant): Transcrip
          * also got, and downstream one would silently overwrite the other.
          */
         let nextId = 0;
+        /**
+         * The tuning every leg connects with — seeded from the open, and
+         * MERGED with each live update so a three-hour rollover reopens with
+         * what the person tuned the meeting to, not what it started as.
+         */
+        let tuning: MeetingTuning = { ...(sessionOpts.tuning ?? {}) };
         let cancelRollover: (() => void) | null = null;
         /** Resolves `close()` once the last leg says it has flushed. */
         let settleClose: (() => void) | null = null;
@@ -476,6 +496,7 @@ function buildEngine(opts: AssemblyAiOptions, variant: EngineVariant): Transcrip
                 sessionOpts.detectSpeakers,
                 sessionOpts.maxSpeakers,
                 variant.speechModel,
+                tuning,
               ),
               // No `Bearer` prefix — the key is the whole header value.
               headers: { Authorization: key },
@@ -496,6 +517,14 @@ function buildEngine(opts: AssemblyAiOptions, variant: EngineVariant): Transcrip
                   begun = true;
                   cancelConnect();
                   leg.expiresAt = expiryFrom(msg.expires_at);
+                  // The engine's own word on this session's configuration.
+                  // Logged because the docs disagree about the pro model's
+                  // defaults (max_turn_silence 1000 vs 1536, vad 0.3 vs 0.2,
+                  // both shifting again with speaker labels) — the Begin
+                  // frame is the only place the EFFECTIVE defaults are ever
+                  // stated, and this line is where to read them instead of
+                  // trusting a doc page. Nothing sensitive rides in it.
+                  console.log(`[${variant.name}] session Begin: ${text}`);
                   resolveLeg(leg);
                   return;
                 }
@@ -660,6 +689,21 @@ function buildEngine(opts: AssemblyAiOptions, variant: EngineVariant): Transcrip
             const leg = active;
             if (closing || !leg || leg.done) return;
             leg.socket.send(audio);
+          },
+          /**
+           * Mid-meeting tuning: one `UpdateConfiguration` frame on the open
+           * socket, per the streaming API reference. The caller already
+           * filtered to this engine's LIVE set, so everything here is a key
+           * the session can take. Merged into `tuning` FIRST, so a rollover
+           * mid-meeting — or an update that lands between legs — still
+           * reaches the engine on the next connect URL.
+           */
+          update(settings: MeetingTuning): void {
+            tuning = { ...tuning, ...settings };
+            const leg = active;
+            if (closing || !leg || leg.done || leg.terminating) return;
+            if (Object.keys(settings).length === 0) return;
+            leg.socket.send(JSON.stringify({ type: 'UpdateConfiguration', ...settings }));
           },
           close(): Promise<void> {
             const leg = active;

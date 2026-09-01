@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { positiveEnvDuration, readRenamedEnv } from '@feedback/core/env-names';
 import { resolvePostmarkCodeSender } from './auth/postmark-code-sender.ts';
 import { clientReleaseStatus, resolveClientDists } from './client-release.ts';
+import { resolveDataDir } from './data-dir.ts';
 import { confirmDeployBoot, createDeployer, deployLogPath } from './deploy.ts';
 import { effortEstimateEnabled, haikuEffortEstimator } from './effort-estimator.ts';
 import { installLogSquelch } from './log-squelch.ts';
@@ -13,6 +14,13 @@ import { createHaikuTaskCaptureExtractor } from './meeting-task-capture.ts';
 import { createPluginRefresher } from './plugin-refresh.ts';
 import { acquirePort, classifyBindError, probeLocalPort, shouldWalkPorts } from './port-bind.ts';
 import { lanHostnames, normalizePublicBaseUrl, tailscaleHost } from './public-host.ts';
+import {
+  GOOGLE_OAUTH_KEYCHAIN_SERVICE,
+  createGoogleOauthApp,
+  createKeychainRefreshTokenVault,
+  createRecallCalendarClient,
+  resolveGoogleOauthCreds,
+} from './recall-calendar.ts';
 import {
   createRecallClient,
   normalizeRecallCallbackHost,
@@ -46,7 +54,7 @@ function arg(name: string, fallback?: string): string | undefined {
 }
 
 const requestedPort = Number(arg('port', process.env.PORT ?? '8787'));
-const dataDir = arg('data-dir', join(repoRoot, 'data'));
+const dataDir = arg('data-dir', resolveDataDir(process.env, repoRoot));
 
 // Which browser bundles to serve. PROD passes published release directories
 // (see client-release.ts) so the served client is NOT read out of a git
@@ -548,6 +556,49 @@ if (meetingBot?.config.publicWsBase && !meetingBotWebhookSecret) {
       'accepted unsigned. Set it to the signing secret from the Recall dashboard.',
   );
 }
+// Calendar auto-join — the ONLY place real calendar-side pieces are
+// constructed, same seam rule as the bot client above: a scheduled bot joins
+// a real call and spends. The Recall key gates the whole feature; the Google
+// OAuth app (Keychain service `claude-workspaces-google-oauth`, accounts
+// `client-id` / `client-secret`) gates only the CONNECT flow, so a calendar
+// connected earlier keeps syncing even if those entries go missing.
+const calendarClient = createRecallCalendarClient({});
+const googleOauthCreds = calendarClient ? resolveGoogleOauthCreds(process.env) : null;
+// The redirect URI is registered at Google verbatim, so it is stated rather
+// than guessed: the env override wins, else it derives from the same public
+// base URL every human-facing link uses.
+const googleRedirectUri =
+  process.env.CW_GOOGLE_OAUTH_REDIRECT_URI?.trim() ||
+  (publicBaseUrlOverride
+    ? `${publicBaseUrlOverride.replace(/\/+$/, '')}/api/calendar/google/callback`
+    : null);
+const calendarBot = calendarClient
+  ? {
+      client: calendarClient,
+      google:
+        googleOauthCreds && googleRedirectUri
+          ? createGoogleOauthApp({ creds: googleOauthCreds, redirectUri: googleRedirectUri })
+          : null,
+      vault: createKeychainRefreshTokenVault(),
+    }
+  : null;
+if (calendarBot) {
+  if (calendarBot.google) {
+    console.log(
+      `[calendar] Google connect armed; redirect URI ${googleRedirectUri} ` +
+        '(must match the OAuth app registration at Google).',
+    );
+  } else {
+    console.log(
+      '[calendar] connect is off: ' +
+        (googleOauthCreds
+          ? 'CW_PUBLIC_BASE_URL (or CW_GOOGLE_OAUTH_REDIRECT_URI) is unset.'
+          : `no Google OAuth app in Keychain service ${GOOGLE_OAUTH_KEYCHAIN_SERVICE} ` +
+            '(accounts client-id and client-secret). A calendar connected earlier keeps syncing.'),
+    );
+  }
+}
+
 // Where Recall dials in, and whether each of the two routes there is actually
 // armed. Printed whenever a callback hostname is configured, because "did this
 // take effect?" is otherwise only answerable by making a bot join a real call
@@ -636,7 +687,7 @@ let handle: ReturnType<typeof createServer> | null = null;
 const deployer = args.includes('--deploy')
   ? createDeployer({
       repoRoot,
-      dataDir: dataDir ?? join(repoRoot, 'data'),
+      dataDir: dataDir ?? resolveDataDir(process.env, repoRoot),
       // Only documents bound INSIDE the deploy source can be clobbered by
       // its pull; one bound from another checkout is not this deploy's
       // business.
@@ -713,6 +764,7 @@ while (!handle) {
       accessTunnelHosts: accessTunnelReady ? accessTunnelHosts : [],
       proxiedTrustedHosts: proxiedTrustedReady ? proxiedTrustedHosts : [],
       ...(recallCallbackHost ? { recallCallbackHost } : {}),
+      ...(calendarBot ? { calendarBot } : {}),
       proxiedTrustedEmails,
       allowedOrigins,
       publicBaseUrl: publicBaseUrlOverride,
@@ -784,7 +836,9 @@ port = handle.port;
 // record pending, and the detached watchdog the deploy spawned expires it
 // into `boot-failed` (deploy.ts, "Dependencies are part of the delivery").
 if (deployer) {
-  const confirmed = confirmDeployBoot(deployLogPath(dataDir ?? join(repoRoot, 'data')));
+  const confirmed = confirmDeployBoot(
+    deployLogPath(dataDir ?? resolveDataDir(process.env, repoRoot)),
+  );
   if (confirmed) {
     console.log(`[deploy] boot confirmed healthy for the deploy recorded at ${confirmed.ranAt}`);
   }

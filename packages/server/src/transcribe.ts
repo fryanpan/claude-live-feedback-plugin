@@ -18,12 +18,22 @@
  * into "sync".
  */
 
+import type { MeetingTuning } from '@feedback/core';
+
 /** One live connection to a transcription engine. */
 export interface TranscriptionSession {
   /** Feed one chunk of PCM16LE mono audio. */
   send(audio: Uint8Array): void;
   /** Stop; resolves once the engine has flushed any final turn. */
   close(): Promise<void>;
+  /**
+   * Apply already-sanitized LIVE tuning to the open session, where the
+   * protocol has an update message (AssemblyAI's `UpdateConfiguration`).
+   * Absent on engines whose config is fixed once open (Soniox, the mock) —
+   * the caller treats absence as "nothing applied" and the change waits for
+   * the next recording.
+   */
+  update?(tuning: MeetingTuning): void;
 }
 
 /**
@@ -77,6 +87,13 @@ export interface TranscriptionOpenOpts {
    * caller knows how many chairs are occupied; see `maxSpeakersFor`.
    */
   maxSpeakers?: number;
+  /**
+   * Advanced options for this session — only the knobs the person moved,
+   * already sanitized by the relay against this engine's specs
+   * (`sanitizeTuning`). Untouched knobs are ABSENT, so the engine runs its
+   * own defaults rather than a copy of ours; see meeting-tuning.ts.
+   */
+  tuning?: MeetingTuning;
   onTurn: (turn: EngineTurn) => void;
   onError: (message: string) => void;
 }
@@ -91,10 +108,11 @@ export interface TranscriptionEngine {
  * decided. A `start` naming no engine opens the first configured engine, and
  * `/api/meeting-engines` reports it as the default the chooser preselects.
  *
- * Soniox leads (Bryan, 2026-09-01); on a box without the Soniox key the
- * default falls back to AssemblyAI, which is what every server ran before
- * the choice existed. A function rather than an array literal in `bin.ts`
- * so the ordering is a fact a test can hold still.
+ * Soniox leads — Bryan chose it after a live side-by-side of the engines
+ * (2026-09-01). On a box without the Soniox key the default falls back to
+ * AssemblyAI, which is what every server ran before the choice existed.
+ * A function rather than an array literal in `bin.ts` so the ordering is
+ * a fact a test can hold still.
  */
 export function orderedEngines(available: {
   soniox: TranscriptionEngine | null;
