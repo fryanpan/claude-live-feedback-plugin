@@ -13918,6 +13918,13 @@ function resolveAgentAuthor(env) {
   return { name, color: hashToColor(name), id: agentIdForName(name), kind: "known" };
 }
 
+// packages/mcp/src/channel-gate.ts
+function isChannelEvent(event) {
+  if (event.startsWith("meeting."))
+    return false;
+  return true;
+}
+
 // packages/mcp/src/claim-warning.ts
 function truncate(s, n) {
   return s.length > n ? `${s.slice(0, n - 1)}…` : s;
@@ -14095,13 +14102,6 @@ function createDeferredEmitter(schedule = (fn) => {
     },
     pending: () => queue.length
   };
-}
-
-// packages/mcp/src/channel-gate.ts
-function isChannelEvent(event) {
-  if (event.startsWith("meeting."))
-    return false;
-  return true;
 }
 
 // packages/mcp/src/frame-dedup.ts
