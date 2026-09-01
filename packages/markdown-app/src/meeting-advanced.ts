@@ -272,8 +272,13 @@ export interface AdvancedSectionOpts {
   onToggleOpen: () => void;
   /** A control changed (state is already updated). The caller re-renders. */
   onChange: (key: string) => void;
-  /** Reset pressed (state is already reset). The caller re-renders. */
-  onReset: () => void;
+  /**
+   * Reset pressed (state is already reset). `wasModified` names the keys the
+   * reset just put back — mid-meeting, the caller reverts the live ones on
+   * the open session too, or the panel would claim defaults the engine is
+   * not running. The caller re-renders.
+   */
+  onReset: (wasModified: string[]) => void;
   /**
    * A meeting is RUNNING on this engine: keys outside the live set carry an
    * "applies to the next recording" note, and keys inside it may flash the
@@ -282,6 +287,13 @@ export interface AdvancedSectionOpts {
   recording: boolean;
   /** Keys whose last change the server confirmed applying to the live session. */
   applied?: ReadonlySet<string>;
+  /**
+   * Live keys the panel has moved but the open session could NOT be moved to
+   * match — today only a term list emptied mid-meeting, which has no wire
+   * form (the sanitizer reads `[]` as "no change"). The control says so
+   * rather than showing an empty box over terms the engine is still running.
+   */
+  stale?: ReadonlySet<string>;
 }
 
 /**
@@ -298,6 +310,12 @@ export function buildAdvancedSection(opts: AdvancedSectionOpts): HTMLElement {
   const section = document.createElement('div');
   section.className = `meeting-adv${opts.open ? ' is-open' : ''}`;
 
+  // The reset link is a SIBLING of the toggle button, not a child: a button
+  // inside a button is invalid HTML, and the nested click bubbled into the
+  // toggle — pressing Reset collapsed the panel over the values it had just
+  // put back, so nobody saw them snap.
+  const headRow = document.createElement('div');
+  headRow.className = 'meeting-adv-headrow';
   const head = document.createElement('button');
   head.type = 'button';
   head.className = 'meeting-adv-head';
@@ -315,7 +333,7 @@ export function buildAdvancedSection(opts: AdvancedSectionOpts): HTMLElement {
     head.append(dot);
   }
   head.addEventListener('click', () => opts.onToggleOpen());
-  section.append(head);
+  headRow.append(head);
 
   if (opts.open && modified.length > 0) {
     const reset = document.createElement('button');
@@ -323,11 +341,13 @@ export function buildAdvancedSection(opts: AdvancedSectionOpts): HTMLElement {
     reset.className = 'meeting-adv-reset';
     reset.textContent = 'Reset to defaults';
     reset.addEventListener('click', () => {
+      const wasModified = modifiedKeys(opts.engineId, opts.state);
       Object.assign(opts.state, defaultAdvancedState(opts.engineId));
-      opts.onReset();
+      opts.onReset(wasModified);
     });
-    head.append(reset);
+    headRow.append(reset);
   }
+  section.append(headRow);
 
   if (!opts.open) return section;
 
@@ -401,11 +421,12 @@ function buildControl(
     input.addEventListener('change', commit);
     row.append(input);
   } else if (ctl.type === 'seg') {
+    // With a `defText` the control never claims a concrete default (the pro
+    // mode preset), so the modified readout says "· engine default" rather
+    // than the clumsy "· default engine default".
     val.innerHTML = isDefault
       ? (ctl.defText ?? `<b>${segLabel(ctl, value)}</b> · default`)
-      : `<b>${segLabel(ctl, value)}</b> · default ${
-          ctl.defText === undefined ? segLabel(ctl, ctl.def) : ctl.defText
-        }`;
+      : `<b>${segLabel(ctl, value)}</b> · ${ctl.defText ?? `default ${segLabel(ctl, ctl.def)}`}`;
     labelRow.append(val);
     const seg = document.createElement('div');
     seg.className = 'meeting-adv-seg';
@@ -523,6 +544,14 @@ function buildControl(
       ok.className = 'meeting-adv-note is-applied';
       ok.textContent = 'Applied.';
       row.append(ok);
+    } else if (opts.stale?.has(ctl.key)) {
+      // The panel and the engine disagree and the wire cannot settle it, so
+      // the control admits it instead of letting the empty box imply a
+      // clearing that never reached the session.
+      const diverged = document.createElement('div');
+      diverged.className = 'meeting-adv-note is-stale';
+      diverged.textContent = 'Cleared here — this recording keeps the terms it already has.';
+      row.append(diverged);
     } else if (!live.has(ctl.key)) {
       const wait = document.createElement('div');
       wait.className = 'meeting-adv-note';

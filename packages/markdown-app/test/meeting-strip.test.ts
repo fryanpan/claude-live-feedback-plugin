@@ -1442,6 +1442,18 @@ describe('advanced options in the chrome', () => {
     h.pop().querySelector<HTMLButtonElement>('.meeting-adv-head')?.click();
   };
 
+  /** Type one term into a chips control and commit it with Enter. */
+  const addTerm = (h: Harness, key: string, term: string): void => {
+    const input = h
+      .pop()
+      .querySelector<HTMLInputElement>(
+        `.meeting-adv-ctl[data-key="${key}"] .meeting-adv-chips input`,
+      );
+    if (!input) throw new Error(`no chips control for ${key}`);
+    input.value = term;
+    input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+  };
+
   /** Drag one range control to a value and settle the drag. */
   const drag = (h: Harness, key: string, value: string): void => {
     const input = h
@@ -1550,6 +1562,65 @@ describe('advanced options in the chrome', () => {
       h.pop().querySelector('.meeting-adv-ctl[data-key="vad_threshold"] .meeting-adv-note')
         ?.textContent,
     ).toBe('Applied.');
+
+    // Reset mid-meeting reverts the LIVE session too, not just the panel —
+    // a panel claiming defaults over an engine still running the tuned
+    // values would be lying. The revert travels as the documented default.
+    h.pop().querySelector<HTMLButtonElement>('.meeting-adv-reset')?.click();
+    const tunes =
+      h.sockets[0]?.sent
+        .map((f) => JSON.parse(String(f)) as Record<string, unknown>)
+        .filter((m) => m.type === 'tune') ?? [];
+    expect(tunes.at(-1)?.settings).toEqual({ vad_threshold: 0.4 });
+    // And the panel is open with defaults showing, not collapsed over them.
+    expect(h.pop().querySelector('.meeting-adv-body')).not.toBeNull();
+    expect(h.pop().querySelector('.meeting-adv-moddot')).toBeNull();
+  });
+
+  it('admits the one key a mid-meeting reset cannot revert on the live session', async () => {
+    // `keyterms_prompt` IS live-tunable, so it earns no "next recording"
+    // note — but an EMPTIED list has no wire form (the server reads `[]` as
+    // "no change"). Reset therefore leaves the engine running the terms it
+    // was given, and the control has to say so instead of showing an empty
+    // box over a live list.
+    const h = mount(undefined, { listEngines: threeEngines, mode: 'solo' });
+    await settle();
+    h.record().click();
+    h.pick('AssemblyAI');
+    h.startCta().click();
+    await settle();
+    h.sockets[0]?.onopen?.();
+    h.sockets[0]?.serve({ type: 'ready', meetingId: 'm1', startedAt: 1_000, engine: 'assemblyai' });
+    h.record().click();
+    h.pop().querySelector<HTMLButtonElement>('.meeting-adv-head')?.click();
+
+    addTerm(h, 'keyterms_prompt', 'Kubernetes');
+    const sentTerms = h.sockets[0]?.sent
+      .map((f) => JSON.parse(String(f)) as Record<string, unknown>)
+      .find((m) => m.type === 'tune');
+    expect(sentTerms?.settings).toEqual({ keyterms_prompt: ['Kubernetes'] });
+    // The engine confirms it, which is what makes the divergence real.
+    h.sockets[0]?.serve({ type: 'tuned', applied: ['keyterms_prompt'] });
+
+    const framesBefore = h.sockets[0]?.sent.length ?? 0;
+    h.pop().querySelector<HTMLButtonElement>('.meeting-adv-reset')?.click();
+    // No frame goes out for the emptied list — one would apply nothing and
+    // still earn an "Applied." the session has not earned.
+    expect(h.sockets[0]?.sent.length).toBe(framesBefore);
+    expect(
+      h.pop().querySelector('.meeting-adv-ctl[data-key="keyterms_prompt"] .meeting-adv-note')
+        ?.textContent,
+    ).toBe('Cleared here — this recording keeps the terms it already has.');
+
+    // Typing a term again settles the disagreement: the frame travels and
+    // the admission goes away.
+    addTerm(h, 'keyterms_prompt', 'Postgres');
+    expect(h.sockets[0]?.sent.length).toBe(framesBefore + 1);
+    expect(
+      h
+        .pop()
+        .querySelector('.meeting-adv-ctl[data-key="keyterms_prompt"] .meeting-adv-note.is-stale'),
+    ).toBeNull();
   });
 
   it('sends no tune frame for an engine that cannot take one', async () => {

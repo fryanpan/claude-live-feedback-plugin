@@ -135,14 +135,56 @@ describe('the section', () => {
     expect(moved.el.querySelector('.meeting-adv-reset')).toBeNull();
   });
 
-  it('Reset to defaults puts every knob back and tells the caller', () => {
+  it('Reset to defaults puts every knob back and names what it put back', () => {
     const state = defaultAdvancedState('assemblyai');
     state.vad_threshold = 0.9;
     state.max_speakers = 3;
     const s = section('assemblyai', { state });
     s.el.querySelector<HTMLButtonElement>('.meeting-adv-reset')?.click();
-    expect(s.onReset).toHaveBeenCalledTimes(1);
+    // The keys that were off their defaults, so a mid-meeting caller can
+    // revert them on the live session too.
+    expect(s.onReset).toHaveBeenCalledWith(['vad_threshold', 'max_speakers']);
     expect(modifiedKeys('assemblyai', state)).toEqual([]);
+    // The reset is a SIBLING of the header toggle, not a nested button: its
+    // click must not bubble into the toggle and collapse the panel over the
+    // values it just put back.
+    expect(s.onToggleOpen).not.toHaveBeenCalled();
+    expect(s.el.querySelector('.meeting-adv-head .meeting-adv-reset')).toBeNull();
+  });
+
+  it('a live key the session could not be moved to match says so, over the other notes', () => {
+    // `keyterms_prompt` is live-tunable, so it earns no "next recording"
+    // note — and an emptied list cannot travel. Without this the control
+    // renders an empty box, silently, over terms the engine still runs.
+    const state = defaultAdvancedState('assemblyai');
+    const s = section('assemblyai', {
+      state,
+      recording: true,
+      stale: new Set(['keyterms_prompt']),
+    });
+    const note = s.el.querySelector(
+      '.meeting-adv-ctl[data-key="keyterms_prompt"] .meeting-adv-note',
+    );
+    expect(note?.textContent).toBe('Cleared here — this recording keeps the terms it already has.');
+    expect(note?.classList.contains('is-stale')).toBe(true);
+    // A key the session genuinely cannot take still says the other thing.
+    // The cap carries its own explanatory note first, so it is the LAST note
+    // on the row that the recording adds.
+    const capNotes = s.el.querySelectorAll(
+      '.meeting-adv-ctl[data-key="max_speakers"] .meeting-adv-note',
+    );
+    expect(capNotes[capNotes.length - 1]?.textContent).toBe('Applies to the next recording.');
+    // And nothing says it before the recording starts.
+    const idle = section('assemblyai', { stale: new Set(['keyterms_prompt']) });
+    expect(idle.el.querySelector('.meeting-adv-note.is-stale')).toBeNull();
+  });
+
+  it('a modified pro preset reads against "engine default", not a claimed number', () => {
+    const state = defaultAdvancedState('assemblyai-pro');
+    state.mode = 'max_accuracy';
+    const s = section('assemblyai-pro', { state });
+    const val = s.el.querySelector('.meeting-adv-ctl[data-key="mode"] .meeting-adv-val');
+    expect(val?.textContent).toBe('max accuracy · engine default');
   });
 
   it('steps the cap down from uncapped to the ceiling, and up past it to uncapped', () => {

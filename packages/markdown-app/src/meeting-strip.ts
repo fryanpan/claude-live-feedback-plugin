@@ -760,6 +760,14 @@ export function mountMeetingStrip(opts: MeetingStripOpts): MeetingStripHandle {
   let recordingEngine: string | null = null;
   /** Keys the server confirmed applying to the live session ("Applied."). */
   const appliedKeys = new Set<string>();
+  /**
+   * Live keys the panel moved that the open session could not be moved to
+   * match. Only a term list the engine already took and the panel then
+   * EMPTIED gets in here: `[]` has no wire form (the server's sanitizer
+   * reads an empty list as "no change"), so the engine keeps running the
+   * terms it has. The control says so until the key travels again.
+   */
+  const staleKeys = new Set<string>();
 
   function advFor(engineId: string): AdvancedState {
     let state = advStates.get(engineId);
@@ -1232,10 +1240,23 @@ export function mountMeetingStrip(opts: MeetingStripOpts): MeetingStripHandle {
    * says under itself.
    */
   function sendTune(engineId: string, key: string): void {
+    // Whether the ENGINE is currently running this key, per the server's own
+    // `tuned` answer — the only honest basis for claiming it still is.
+    const wasApplied = appliedKeys.has(key);
     appliedKeys.delete(key);
     if (!socketOpen || !liveTuningKeys(engineId).has(key)) return;
     const value = advFor(engineId)[key];
     if (value === undefined) return;
+    // An emptied term list cannot travel — the server's sanitizer drops
+    // `[]` (an empty list IS the default) — so the frame would apply
+    // nothing and still flash "Applied.". If the engine already took a list
+    // this session it is still running it, and the control has to say so:
+    // an empty box over live terms is the panel lying about the session.
+    if (Array.isArray(value) && value.length === 0) {
+      if (wasApplied) staleKeys.add(key);
+      return;
+    }
+    staleKeys.delete(key);
     socket?.send(
       JSON.stringify({
         type: 'tune',
@@ -1270,11 +1291,24 @@ export function mountMeetingStrip(opts: MeetingStripOpts): MeetingStripHandle {
       open: advOpen,
       recording,
       applied: appliedKeys,
+      stale: staleKeys,
       onToggleOpen: () => {
         advOpen = !advOpen;
         renderPop();
       },
-      onReset: () => renderPop(),
+      onReset: (wasModified) => {
+        // Mid-meeting, the panel's defaults must reach the live session too,
+        // or the UI claims defaults the engine is not running. Each reverted
+        // live key goes up as its own tune frame carrying the documented
+        // default the panel showed beside the knob. Keys the session cannot
+        // take already say "next recording" under themselves; a term list it
+        // CAN take but cannot be emptied over the wire is the one case that
+        // ends diverged, and `sendTune` marks it so the control admits it.
+        if (recording) {
+          for (const key of wasModified) sendTune(engineId, key);
+        }
+        renderPop();
+      },
       onChange: (key) => {
         if (recording) sendTune(engineId, key);
         rerenderKeeping(key);
@@ -1637,6 +1671,7 @@ export function mountMeetingStrip(opts: MeetingStripOpts): MeetingStripHandle {
       // the next recording starts from.
       recordingEngine = null;
       appliedKeys.clear();
+      staleKeys.clear();
     }
     render();
   }
@@ -1732,6 +1767,7 @@ export function mountMeetingStrip(opts: MeetingStripOpts): MeetingStripHandle {
         // the ask and the answer differ when the ask was refused.
         recordingEngine = msg.engine || null;
         appliedKeys.clear();
+        staleKeys.clear();
         // Where a rename lands once this meeting's socket is gone.
         if (msg.meetingId) lastMeetingId = msg.meetingId;
         // And the announcement follows the mode the SERVER opened, not the
