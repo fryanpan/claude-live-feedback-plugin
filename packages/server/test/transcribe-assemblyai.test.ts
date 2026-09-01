@@ -67,6 +67,8 @@ function harness(
     manualSchedule?: boolean;
     /** Build the `universal-3-5-pro` variant instead of the original engine. */
     pro?: boolean;
+    /** Advanced options on the open, as the relay would pass them. */
+    tuning?: Record<string, number | string | boolean | string[]>;
   } = {},
 ) {
   const sockets: FakeSocket[] = [];
@@ -82,7 +84,7 @@ function harness(
   const errors: string[] = [];
   /** Every rollover the engine armed, newest last. */
   const scheduled: Array<{ ms: number; fire: () => void; cancelled: boolean }> = [];
-  const { manualSchedule, pro, ...engineOpts } = opts;
+  const { manualSchedule, pro, tuning, ...engineOpts } = opts;
   const create = pro ? createAssemblyAiProEngine : createAssemblyAiEngine;
   const engine = create({
     apiKey: 'test-key-not-a-real-credential',
@@ -111,6 +113,7 @@ function harness(
     // them; the solo case has its own test on the URL, which is the only
     // place the decision is expressed.
     detectSpeakers: opts.detectSpeakers ?? true,
+    ...(tuning ? { tuning } : {}),
     onTurn: (t) => {
       raw.push({ ...t });
       const { engineMs: _engineMs, audioEndMs: _audioEndMs, ...rest } = t;
@@ -777,5 +780,101 @@ describe('assemblyai speaker labels', () => {
       ],
     });
     expect(h.turns).toEqual([{ turn: 1, text: 'Sure.', final: true, speaker: 'B' }]);
+  });
+});
+
+describe('assemblyai tuning', () => {
+  it('lands each tuning key on the URL, term lists as a JSON array', () => {
+    const url = new URL(
+      streamingUrl(16_000, true, 3, undefined, {
+        end_of_turn_confidence_threshold: 0.7,
+        min_turn_silence: 250,
+        keyterms_prompt: ['Fryanpan', 'ydoc'],
+      }),
+    );
+    expect(url.searchParams.get('end_of_turn_confidence_threshold')).toBe('0.7');
+    expect(url.searchParams.get('min_turn_silence')).toBe('250');
+    // The docs' shape for the query string: a JSON array, not a CSV.
+    expect(url.searchParams.get('keyterms_prompt')).toBe('["Fryanpan","ydoc"]');
+    // The cap came through its dedicated parameter, not the tuning loop.
+    expect(url.searchParams.get('max_speakers')).toBe('3');
+  });
+
+  it('never writes max_speakers from the tuning bag — that is the dedicated parameter', () => {
+    // A tuning bag that still carries the key (the relay strips it into the
+    // maxSpeakers argument, but a caller that forgot must not double-write).
+    const url = new URL(streamingUrl(16_000, false, undefined, undefined, { max_speakers: 5 }));
+    expect(url.searchParams.get('max_speakers')).toBeNull();
+  });
+
+  it('lets a moved knob override the pro defaults set before it', () => {
+    const url = new URL(
+      streamingUrl(16_000, false, undefined, PRO_SPEECH_MODEL, {
+        continuous_partials: false,
+        mode: 'max_accuracy',
+      }),
+    );
+    // The builder sets continuous_partials=true on pro; the person's choice
+    // must win over it, so tuning is applied last.
+    expect(url.searchParams.get('continuous_partials')).toBe('false');
+    expect(url.searchParams.get('mode')).toBe('max_accuracy');
+  });
+
+  it('connects with the tuning it was opened with', async () => {
+    const h = harness({ tuning: { vad_threshold: 0.6 } });
+    const url = new URL(h.fake().args.url);
+    expect(url.searchParams.get('vad_threshold')).toBe('0.6');
+    h.fake().begin();
+    await h.opening;
+  });
+
+  it('sends one UpdateConfiguration frame with exactly the changed keys', async () => {
+    const h = harness();
+    h.fake().begin();
+    const session = await h.opening;
+    session.update?.({ end_of_turn_confidence_threshold: 0.55, min_turn_silence: 300 });
+    expect(
+      h
+        .fake()
+        .textFrames()
+        .map((f) => JSON.parse(f)),
+    ).toEqual([
+      {
+        type: 'UpdateConfiguration',
+        end_of_turn_confidence_threshold: 0.55,
+        min_turn_silence: 300,
+      },
+    ]);
+    expect(h.errors).toEqual([]);
+  });
+
+  it('sends nothing for an update that changed nothing', async () => {
+    const h = harness();
+    h.fake().begin();
+    const session = await h.opening;
+    session.update?.({});
+    expect(h.fake().textFrames()).toEqual([]);
+  });
+
+  it('carries a mid-meeting update across the three-hour rollover', async () => {
+    const soon = Math.floor(Date.now() / 1000) + 120;
+    const h = harness({
+      manualSchedule: true,
+      rolloverMarginMs: 60_000,
+      tuning: { vad_threshold: 0.2 },
+    });
+    h.fake(0).begin(soon);
+    const session = await h.opening;
+    // Tuned mid-meeting: the frame goes up on the OPEN leg…
+    session.update?.({ end_of_turn_confidence_threshold: 0.9 });
+    h.pending().fire();
+    h.fake(1).begin(soon);
+    await Promise.resolve();
+    await Promise.resolve();
+    // …and the replacement leg connects with the merged state, or the
+    // person's setting silently reverts three hours into the meeting.
+    const url = new URL(h.fake(1).args.url);
+    expect(url.searchParams.get('vad_threshold')).toBe('0.2');
+    expect(url.searchParams.get('end_of_turn_confidence_threshold')).toBe('0.9');
   });
 });
