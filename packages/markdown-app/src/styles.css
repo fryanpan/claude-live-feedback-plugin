@@ -711,56 +711,104 @@ body.has-set .doc-switcher-caret {
   user-select: none;
 }
 
-/* The plan gate's one control (src/plan-gate.ts) — a floating Approve Plan
-   button, always visible at the bottom of the editor pane, unmistakably the
-   primary action on a pending plan doc (Bryan, on the mock). It replaces two
-   retired surfaces: the derived-work chip strip (#531 — the tasks a doc
-   produced now read through the links written in its prose, decorated by
-   task-link-chips.ts) and the plan-gate one-line bar (#536 — "don't design
-   for plan approval here", this ticket's redesign). Anchored to
-   #editor-pane's `position: relative`, so it pins to the visible pane, not
-   to the scrolling prose. The green is the approval green the link chips
-   use; the shadow is what separates it from the prose that scrolls
-   beneath. */
-.plan-approve-float {
+/* The plan doc's one floating control (src/plan-gate.ts) — always at the
+   bottom of the editor pane, wearing one of four faces as the doc moves from
+   an unasked goal to an approved plan: Make Plan, Plan requested, Approve
+   Plan, ✓ Plan Approved. One element rather than a dock of buttons because
+   only ever one of them applies.
+
+   It replaces two retired surfaces: the derived-work chip strip (#531 — the
+   tasks a doc produced now read through the links written in its prose,
+   decorated by task-link-chips.ts) and the plan-gate one-line bar (#536 —
+   "don't design for plan approval here"). Anchored to #editor-pane's
+   `position: relative`, so it pins to the visible pane, not to the scrolling
+   prose. Two lines, label over subtitle, per the approved mock: the subtitle
+   is what makes a press predictable ("Creates the goal and tickets, starts
+   work") rather than a leap. The shadow is what separates it from the prose
+   that scrolls beneath. */
+.plan-float {
   position: absolute;
   left: 50%;
   bottom: 22px;
   transform: translateX(-50%);
   z-index: 30;
   display: inline-flex;
+  flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 10px;
+  gap: 1px;
   min-height: 44px;
-  padding: 12px 26px;
+  padding: 10px 26px;
   border: 0;
-  border-radius: var(--radius-pill);
+  /* 12px, not --radius-lg's 8: a two-line float reads as a card at 8 and the
+     mock draws it softer than the token's buttons. */
+  border-radius: 12px;
   cursor: pointer;
-  background: var(--green-strong);
+  background: var(--accent);
   color: #fff;
   font: 700 16px var(--sans);
-  box-shadow: 0 8px 28px rgba(26, 127, 55, 0.42);
+  text-align: center;
+  box-shadow: 0 8px 28px rgba(46, 125, 215, 0.38);
 }
 /* `display: inline-flex` out-specifies the UA's `[hidden]` rule, so without
    this the float showed on EVERY doc — plan-gate.ts sets `hidden` on all
-   but a pending plan, and the attribute did nothing (Bryan, 2026-08-31:
+   but a plan doc, and the attribute did nothing (Bryan, 2026-08-31:
    "there should not be an Approve Plan button in all docs"). Same guard
    `.plan-gate-error[hidden]` and `.meeting-strip[hidden]` already carry. */
-.plan-approve-float[hidden] {
+.plan-float[hidden] {
   display: none;
 }
-.plan-approve-float:hover {
+.plan-float-label {
+  font: 700 15px var(--sans);
+  line-height: 1.2;
+}
+.plan-float-sub {
+  font: 400 11.5px var(--sans);
+  opacity: 0.88;
+  line-height: 1.3;
+}
+.plan-float-sub[hidden] {
+  display: none;
+}
+/* Approve keeps the approval green the link chips use — it is the one press
+   here that changes the board, and it has read green since #536. */
+.plan-float--approve {
+  background: var(--green-strong);
+  box-shadow: 0 8px 28px rgba(26, 127, 55, 0.42);
+}
+.plan-float--approve:hover {
   background: var(--green);
 }
-.plan-approve-float:disabled {
-  opacity: 0.7;
+/* Already asked: still pressable (asking twice is allowed), but it reads as
+   a state rather than an invitation. */
+.plan-float--requested {
+  background: var(--bg);
+  color: var(--fg-muted);
+  border: 1px solid var(--border);
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.1);
+}
+/* The receipt, for its few seconds. Not a control — plan-gate.ts disables
+   it — so it must not offer a pointer. */
+.plan-float--done {
+  background: var(--green-strong);
+  box-shadow: 0 8px 28px rgba(26, 127, 55, 0.42);
   cursor: default;
+}
+.plan-float:hover {
+  filter: brightness(1.06);
+}
+.plan-float:disabled {
+  cursor: default;
+}
+.plan-float--make:disabled,
+.plan-float--approve:disabled,
+.plan-float--requested:disabled {
+  opacity: 0.7;
 }
 @media (max-width: 640px) {
   /* Edge-to-edge above the home indicator: a centred pill at phone width is
      a small target over the one control the doc is waiting on. */
-  .plan-approve-float {
+  .plan-float {
     left: 12px;
     right: 12px;
     transform: none;

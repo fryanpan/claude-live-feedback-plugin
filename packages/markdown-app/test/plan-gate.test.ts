@@ -1,11 +1,14 @@
 /**
- * The doc page's plan gate (src/plan-gate.ts): a floating "Approve Plan"
- * button, shown only while the plan is pending. The one-line bar and the
- * derived-work chip strip it replaced are asserted GONE — links in the prose
- * carry task status now (task-link-chips), so nothing renders above the
- * prose on an ordinary doc.
+ * The plan doc's floating control (src/plan-gate.ts) and its four faces:
+ * Make Plan on an unasked plan doc, Plan requested once somebody has,
+ * Approve Plan while the drafts are held, and the ✓ Plan Approved receipt
+ * for the seconds after a press. The one-line bar and the derived-work chip
+ * strip it replaced are asserted GONE — links in the prose carry task status
+ * now (task-link-chips), so nothing renders above the prose on an ordinary
+ * doc.
  *
- * Driven entirely through the injected fetch seam — no server. Fixtures are
+ * Driven entirely through the injected fetch seam — no server, and the
+ * receipt's timer is injected too so nothing here sleeps. Fixtures are
  * synthetic (jordan@partner.example register).
  */
 import type { User } from '@feedback/core';
@@ -21,18 +24,24 @@ beforeEach(() => {
 });
 
 interface DocAnswer {
-  meta?: { planState?: string };
+  meta?: {
+    planState?: string;
+    huddleKind?: string;
+    planRequestedAt?: number;
+    planRequestedBy?: string;
+  };
   tasks?: Array<{ id: string; planHeld?: boolean; workspaceId?: string }>;
+  leadAgentId?: string;
 }
 
 /** A fetch stub that answers the doc GET from `answers` in order (the last
- *  one repeats), records every call, and accepts the plan POST. */
-function stubFetch(answers: DocAnswer[]) {
+ *  one repeats), records every call, and accepts every POST with `post`. */
+function stubFetch(answers: DocAnswer[], post: unknown = { released: [] }) {
   const calls: Array<{ url: string; init?: RequestInit }> = [];
   let reads = 0;
   const fetchJson = (url: string, init?: RequestInit): Promise<unknown> => {
     calls.push({ url, init });
-    if (init?.method === 'POST') return Promise.resolve({ ok: true });
+    if (init?.method === 'POST') return Promise.resolve(post);
     const answer = answers[Math.min(reads, answers.length - 1)];
     reads += 1;
     return Promise.resolve(answer);
@@ -40,8 +49,38 @@ function stubFetch(answers: DocAnswer[]) {
   return { fetchJson, calls };
 }
 
+/** Hand-cranked timers, so the receipt's expiry is a step in the test rather
+ *  than six real seconds of waiting. */
+function stubTimers() {
+  const pending = new Map<number, () => void>();
+  let next = 1;
+  return {
+    setTimer: (fn: () => void) => {
+      const h = next++;
+      pending.set(h, fn);
+      return h;
+    },
+    clearTimer: (h: number) => {
+      pending.delete(h);
+    },
+    /** Fire every timer that is still armed. */
+    flush: () => {
+      const fns = [...pending.values()];
+      pending.clear();
+      for (const fn of fns) fn();
+    },
+    armed: () => pending.size,
+  };
+}
+
 function approveBtn(): HTMLButtonElement | null {
-  return document.querySelector<HTMLButtonElement>('.plan-approve-float');
+  return document.querySelector<HTMLButtonElement>('.plan-float');
+}
+function label(): string | undefined {
+  return approveBtn()?.querySelector('.plan-float-label')?.textContent ?? undefined;
+}
+function sub(): string | undefined {
+  return approveBtn()?.querySelector('.plan-float-sub')?.textContent ?? undefined;
 }
 
 describe('mountPlanGate', () => {
@@ -77,9 +116,13 @@ describe('mountPlanGate', () => {
     await gate.ready;
     const btn = approveBtn();
     expect(btn?.hidden).toBe(false);
-    // Just the label — no held-drafts count, no checkmark (Bryan, on the
-    // mock): the button is loud enough by being the only floating thing.
-    expect(btn?.textContent).toBe('Approve Plan');
+    expect(gate.face()).toBe('approve');
+    // Label plus the subtitle that makes the press predictable — no
+    // held-drafts count, no checkmark (Bryan, on the mock).
+    expect(btn?.querySelector('.plan-float-label')?.textContent).toBe('Approve Plan');
+    expect(btn?.querySelector('.plan-float-sub')?.textContent).toBe(
+      'Creates the goal and tickets, starts work',
+    );
     gate.destroy();
   });
 
@@ -117,17 +160,24 @@ describe('mountPlanGate', () => {
     gate.destroy();
   });
 
-  it('Approve posts, reloads, and the button disappears', async () => {
-    const stub = stubFetch([
-      { meta: { planState: 'pending' }, tasks: [{ id: 't-a', planHeld: true }] },
-      { meta: { planState: 'approved' }, tasks: [{ id: 't-a' }] },
-    ]);
+  it('Approve posts, reloads, shows the receipt, and then the button goes for good', async () => {
+    const stub = stubFetch(
+      [
+        { meta: { planState: 'pending' }, tasks: [{ id: 't-a', planHeld: true }] },
+        { meta: { planState: 'approved' }, tasks: [{ id: 't-a' }] },
+      ],
+      // What the release actually moved — the receipt counts THIS.
+      { released: ['t-a', 't-b', 't-c'] },
+    );
+    const timers = stubTimers();
     const gate = mountPlanGate({
       docId: 'd-gate',
       root,
       user: JORDAN,
       canWrite: true,
       fetchJson: stub.fetchJson,
+      setTimer: timers.setTimer,
+      clearTimer: timers.clearTimer,
     });
     await gate.ready;
     approveBtn()?.click();
@@ -135,7 +185,155 @@ describe('mountPlanGate', () => {
     const post = stub.calls.find((c) => c.init?.method === 'POST');
     expect(post?.url).toBe('/api/docs/d-gate/plan');
     expect(JSON.parse(String(post?.init?.body))).toEqual({ state: 'approved', author: JORDAN });
+
+    // The receipt, naming what the release reported and claiming no goal —
+    // the release does not report one.
+    await vi.waitFor(() => expect(gate.face()).toBe('approved'));
+    expect(approveBtn()?.hidden).toBe(false);
+    expect(label()).toBe('✓ Plan Approved');
+    expect(sub()).toBe('3 tickets created — work started');
+    expect(sub()).not.toContain('Goal');
+    // Not a control any more.
+    expect(approveBtn()?.disabled).toBe(true);
+
+    // …and it is a receipt, not a state: when its timer fires it is gone.
+    expect(timers.armed()).toBe(1);
+    timers.flush();
+    expect(gate.face()).toBe('none');
     expect(approveBtn()?.hidden).toBe(true);
+    gate.destroy();
+  });
+
+  it('a release that moved nothing gets no invented second line', async () => {
+    const stub = stubFetch(
+      [
+        { meta: { planState: 'pending' }, tasks: [] },
+        { meta: { planState: 'approved' }, tasks: [] },
+      ],
+      { released: [] },
+    );
+    const timers = stubTimers();
+    const gate = mountPlanGate({
+      docId: 'd-none',
+      root,
+      user: JORDAN,
+      canWrite: true,
+      fetchJson: stub.fetchJson,
+      setTimer: timers.setTimer,
+      clearTimer: timers.clearTimer,
+    });
+    await gate.ready;
+    approveBtn()?.click();
+    await vi.waitFor(() => expect(gate.face()).toBe('approved'));
+    expect(label()).toBe('✓ Plan Approved');
+    expect(sub()).toBe('');
+    expect(approveBtn()?.querySelector<HTMLElement>('.plan-float-sub')?.hidden).toBe(true);
+    gate.destroy();
+  });
+
+  it('offers Make Plan on an unasked plan doc, naming the board lead', async () => {
+    const stub = stubFetch([
+      { meta: { huddleKind: 'plan' }, tasks: [], leadAgentId: 'Workspaces' },
+    ]);
+    const gate = mountPlanGate({
+      docId: 'd-goal',
+      root,
+      user: JORDAN,
+      canWrite: true,
+      fetchJson: stub.fetchJson,
+    });
+    await gate.ready;
+    expect(gate.face()).toBe('make');
+    expect(approveBtn()?.hidden).toBe(false);
+    expect(label()).toBe('Make Plan');
+    expect(sub()).toBe('Ask Workspaces to create a plan');
+    gate.destroy();
+  });
+
+  it('falls back to "your agent" when the board names no lead', async () => {
+    const gate = mountPlanGate({
+      docId: 'd-unled',
+      root,
+      user: JORDAN,
+      canWrite: true,
+      fetchJson: stubFetch([{ meta: { huddleKind: 'plan' }, tasks: [] }]).fetchJson,
+    });
+    await gate.ready;
+    expect(sub()).toBe('Ask your agent to create a plan');
+    gate.destroy();
+  });
+
+  it('a discussion huddle offers no Make Plan — only a plan doc does', async () => {
+    // The narrowing control for the test above: same shape, different kind.
+    const gate = mountPlanGate({
+      docId: 'd-disc',
+      root,
+      user: JORDAN,
+      canWrite: true,
+      fetchJson: stubFetch([{ meta: { huddleKind: 'discussion' }, tasks: [] }]).fetchJson,
+    });
+    await gate.ready;
+    expect(gate.face()).toBe('none');
+    expect(approveBtn()?.hidden).toBe(true);
+    gate.destroy();
+  });
+
+  it('Make Plan asks over plan-request, and the doc then reads as requested', async () => {
+    const stub = stubFetch([
+      { meta: { huddleKind: 'plan' }, tasks: [], leadAgentId: 'Workspaces' },
+      { meta: { huddleKind: 'plan', planRequestedAt: 1e12 }, tasks: [], leadAgentId: 'Workspaces' },
+    ]);
+    const gate = mountPlanGate({
+      docId: 'd-ask',
+      root,
+      user: JORDAN,
+      canWrite: true,
+      fetchJson: stub.fetchJson,
+    });
+    await gate.ready;
+    approveBtn()?.click();
+    await vi.waitFor(() => expect(gate.face()).toBe('requested'));
+    const post = stub.calls.find((c) => c.init?.method === 'POST');
+    // The ask goes to plan-request — NOT to the plan gate, which would
+    // approve a plan that does not exist yet.
+    expect(post?.url).toBe('/api/docs/d-ask/plan-request');
+    expect(JSON.parse(String(post?.init?.body))).toEqual({ author: JORDAN });
+    expect(label()).toBe('Plan requested');
+    expect(sub()).toBe('Waiting for Workspaces');
+    // Still pressable: an agent that missed the first comment gets another.
+    expect(approveBtn()?.disabled).toBe(false);
+    gate.destroy();
+  });
+
+  it('a reader sees no Make Plan either', async () => {
+    const gate = mountPlanGate({
+      docId: 'd-goal-ro',
+      root,
+      user: JORDAN,
+      canWrite: false,
+      fetchJson: stubFetch([{ meta: { huddleKind: 'plan' }, tasks: [] }]).fetchJson,
+    });
+    await gate.ready;
+    expect(gate.face()).toBe('none');
+    expect(approveBtn()?.hidden).toBe(true);
+    gate.destroy();
+  });
+
+  it('a pending plan shows Approve even on a plan doc that was requested', async () => {
+    // planState outranks the request stamp everywhere it is read: the agent
+    // answered, so the doc is past asking.
+    const gate = mountPlanGate({
+      docId: 'd-answered',
+      root,
+      user: JORDAN,
+      canWrite: true,
+      fetchJson: stubFetch([
+        { meta: { huddleKind: 'plan', planRequestedAt: 1e12, planState: 'pending' }, tasks: [] },
+      ]).fetchJson,
+    });
+    await gate.ready;
+    expect(gate.face()).toBe('approve');
+    expect(label()).toBe('Approve Plan');
     gate.destroy();
   });
 
