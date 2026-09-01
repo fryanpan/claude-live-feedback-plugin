@@ -3,6 +3,13 @@ import { cpSync, existsSync, mkdirSync, readFileSync, rmSync, watch, writeFileSy
 import { createRequire } from 'node:module';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import {
+  ASSET_MANIFEST_FILE,
+  type AssetManifest,
+  SHELL_ASSETS,
+  hashedAssetName,
+  rewriteAssetRefs,
+} from '@feedback/core/asset-manifest';
 import { computeBuildId } from '../src/build-id.ts';
 import { OPEN_PROPS_FILES } from '../src/tokens-manifest.ts';
 
@@ -197,7 +204,6 @@ async function emit(buildId: string): Promise<boolean> {
     return false;
   }
 
-  cpSync(join(pkgRoot, 'index.html'), join(dist, 'index.html'));
   cpSync(join(pkgRoot, 'src', 'styles.css'), join(dist, 'styles.css'));
   // The Open Props trial layer: the vendored subset (self-hosted — a strict
   // CSP and offline tailnet use forbid CDN hosts) concatenated with the
@@ -214,6 +220,39 @@ async function emit(buildId: string): Promise<boolean> {
   // adding an icon size later needs no build change — and `client-release.ts`
   // copies dist recursively, so they reach production the same way chunks do.
   cpSync(join(pkgRoot, 'public'), dist, { recursive: true });
+
+  // ── Content-addressed copies of everything a shell names ────────────────
+  //
+  // The shells (this index.html, and the hub/sign-in shells the server
+  // renders) used to point at permanent URLs, so whether a reloaded tab got
+  // the new bundle was the browser's call and nothing the server sent could
+  // overrule it. Emitting `app-<hash>.js` beside `app.js` makes new bytes a
+  // new URL, which no cache can already hold.
+  //
+  // The plain names stay on disk on purpose, and this is the transition
+  // rather than tidiness: a shell that a browser cached BEFORE this change
+  // still asks for `/app/app.js`, and that request has to keep answering — a
+  // 404 there is a blank page, which is worse than the banner this fixes.
+  // They cost disk, never bandwidth: nothing emitted from here references
+  // them any more.
+  const assets: AssetManifest = {};
+  for (const name of SHELL_ASSETS) {
+    const from = join(dist, name);
+    if (!existsSync(from)) continue;
+    const bytes = readFileSync(from);
+    const emitted = hashedAssetName(name, bytes);
+    writeFileSync(join(dist, emitted), bytes);
+    assets[name] = emitted;
+  }
+  writeFileSync(join(dist, ASSET_MANIFEST_FILE), `${JSON.stringify(assets, null, 2)}\n`);
+
+  // index.html is copied LAST, after the hashes exist, and rewritten on the
+  // way so it references them. The server rewrites its own shells at serve
+  // time from the same manifest.
+  writeFileSync(
+    join(dist, 'index.html'),
+    rewriteAssetRefs(readFileSync(join(pkgRoot, 'index.html'), 'utf8'), assets),
+  );
 
   if (!existsSync(join(dist, 'app.js'))) {
     console.error('app.js missing from dist — build emitted:');
