@@ -18,12 +18,22 @@
  * into "sync".
  */
 
+import type { MeetingTuning } from '@feedback/core';
+
 /** One live connection to a transcription engine. */
 export interface TranscriptionSession {
   /** Feed one chunk of PCM16LE mono audio. */
   send(audio: Uint8Array): void;
   /** Stop; resolves once the engine has flushed any final turn. */
   close(): Promise<void>;
+  /**
+   * Apply already-sanitized LIVE tuning to the open session, where the
+   * protocol has an update message (AssemblyAI's `UpdateConfiguration`).
+   * Absent on engines whose config is fixed once open (Soniox, the mock) —
+   * the caller treats absence as "nothing applied" and the change waits for
+   * the next recording.
+   */
+  update?(tuning: MeetingTuning): void;
 }
 
 /**
@@ -77,6 +87,13 @@ export interface TranscriptionOpenOpts {
    * caller knows how many chairs are occupied; see `maxSpeakersFor`.
    */
   maxSpeakers?: number;
+  /**
+   * Advanced options for this session — only the knobs the person moved,
+   * already sanitized by the relay against this engine's specs
+   * (`sanitizeTuning`). Untouched knobs are ABSENT, so the engine runs its
+   * own defaults rather than a copy of ours; see meeting-tuning.ts.
+   */
+  tuning?: MeetingTuning;
   onTurn: (turn: EngineTurn) => void;
   onError: (message: string) => void;
 }
