@@ -450,3 +450,89 @@ describe('a held review item is a finding once it has stood past the window', ()
     expect(rows.map((r) => r.reviewItemId)).toEqual(['ri-old', 'ri-young']);
   });
 });
+
+describe('the parallelism cap decides which rows are judged at all', () => {
+  // Three runnable rows, quiet for hours, in the board's own priority order
+  // a → b → c. Bryan, 2026-08-31: the stall check "only checks that the top
+  // <n> tasks are in flight" — so with a cap of two, `c` is idle by rule and
+  // its silence is not a finding.
+  const quietTasks = () => [
+    task({ id: 't-a', status: 'in-progress' }),
+    task({ id: 't-b', status: 'todo', transitions: [{ ts: now - 200 * MIN, to: 'todo' }] }),
+    task({ id: 't-c', status: 'todo', transitions: [{ ts: now - 200 * MIN, to: 'todo' }] }),
+  ];
+
+  it('judges only the top <cap> runnable rows of the priority order, and counts the rest', () => {
+    const verdict = evaluateStalls({
+      tasks: quietTasks(),
+      events: [],
+      reviewItems: [],
+      bands,
+      now,
+      parallelismCap: 2,
+      priorityOrder: ['t-a', 't-b', 't-c'],
+    });
+    expect(verdict.stalled.map((r) => r.id).sort()).toEqual(['t-a', 't-b']);
+    expect(verdict.beyondCapacity).toBe(1);
+    // The denominator still counts every open row: "three considered, one
+    // beyond the cap" is the honest reading, not "two rows".
+    expect(verdict.considered).toBe(3);
+  });
+
+  it('a blocked row at the top of the queue spends no slot', () => {
+    // `t-a` waits on a dependency: not runnable, so it must not shadow a
+    // real stall two rows down. With a cap of one, `t-b` is judged.
+    const verdict = evaluateStalls({
+      tasks: [
+        task({ id: 't-dep', status: 'todo', transitions: [{ ts: now - MIN, to: 'todo' }] }),
+        task({ id: 't-a', status: 'in-progress', after: ['t-dep'] }),
+        task({ id: 't-b', status: 'todo', transitions: [{ ts: now - 200 * MIN, to: 'todo' }] }),
+        task({ id: 't-c', status: 'todo', transitions: [{ ts: now - 200 * MIN, to: 'todo' }] }),
+      ],
+      events: [],
+      reviewItems: [],
+      bands,
+      now,
+      parallelismCap: 1,
+      // `t-dep` is fresh (one minute old) and so not stalled, but it IS
+      // runnable and first in the order — it takes the one slot.
+      priorityOrder: ['t-a', 't-dep', 't-b', 't-c'],
+    });
+    expect(verdict.stalled.map((r) => r.id)).toEqual([]);
+    expect(verdict.beyondCapacity).toBe(2);
+  });
+
+  it('without a cap every row is judged, exactly as before', () => {
+    const verdict = evaluateStalls({
+      tasks: quietTasks(),
+      events: [],
+      reviewItems: [],
+      bands,
+      now,
+    });
+    expect(verdict.stalled).toHaveLength(3);
+    expect(verdict.beyondCapacity).toBe(0);
+  });
+
+  it('an unfiled ask past the cap is still a finding — capacity excuses no protocol violation', () => {
+    const verdict = evaluateStalls({
+      tasks: [
+        ...quietTasks(),
+        task({
+          id: 't-ask',
+          status: 'todo',
+          ownerKind: 'person',
+          transitions: [{ ts: now - 200 * MIN, to: 'todo' }],
+        }),
+      ],
+      events: [],
+      reviewItems: [],
+      bands,
+      now,
+      parallelismCap: 1,
+      priorityOrder: ['t-a', 't-b', 't-c', 't-ask'],
+    });
+    expect(verdict.unfiled.map((r) => r.id)).toEqual(['t-ask']);
+    expect(verdict.stalled.map((r) => r.id)).toEqual(['t-a']);
+  });
+});

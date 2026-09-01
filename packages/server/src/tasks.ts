@@ -261,6 +261,23 @@ export function refKey(ref: Ref): string {
   }
 }
 
+/** How many builders a board may run at once when nobody has set a number
+ *  for it — four (Bryan, 2026-08-31: *"Let's make it default 4, but Team
+ *  Lead can adjust down (and so can Bryan)"*). The same "keep the board
+ *  moving without starving higher-priority work" tension every lead already
+ *  reads about in `workspace-board.md`'s "Respect capacity" bullet, made a
+ *  number an owner can change instead of a judgment call every lead makes
+ *  alone. */
+export const DEFAULT_PARALLELISM_CAP = 4;
+/** Below one, "limiting parallelism" has stopped meaning anything — a cap of
+ *  zero would refuse every dispatch forever with no way back short of a
+ *  second write, which is a worse failure than the validation that prevents
+ *  it. */
+export const PARALLELISM_CAP_MIN = 1;
+/** Generous on purpose: this is a guard against the board never noticing it
+ *  is starving other work, not a guess at anyone's real ceiling. */
+export const PARALLELISM_CAP_MAX = 50;
+
 export interface WorkspaceGoal {
   id: string;
   title: string;
@@ -372,6 +389,16 @@ export interface HubWorkspace {
    * reader, so the default lives in exactly one place.
    */
   effortEstimatePrompt?: string;
+  /**
+   * How many builders this board's lead may have dispatched at once — a
+   * ceiling on `register_dispatch`, not a scheduler (Bryan, 2026-08-31: "add
+   * support for limiting parallelism in the workspace"). Absent means
+   * `DEFAULT_PARALLELISM_CAP`; `parallelismCap()` is the one reader, the same
+   * shape and reasoning as `reviewItemCriteria` above — a board on the
+   * default and a board that has never been asked read identically, and both
+   * are the ordinary case.
+   */
+  parallelismCap?: number;
   /**
    * Where this board's planning/discussion notes get checked in: a repo +
    * branch + directory, from which `POST /api/docs` derives a file (and a
@@ -4951,6 +4978,48 @@ export class TaskStore {
       ok: true,
       workspace: state.workspace,
       prompt: read ?? { value: DEFAULT_EFFORT_ESTIMATE_PROMPT, isDefault: true },
+    };
+  }
+
+  /**
+   * How many builders this board's lead may dispatch at once: the owner's own
+   * number, or `DEFAULT_PARALLELISM_CAP` when nobody has set one. The ONE
+   * reader of `HubWorkspace.parallelismCap`, the same shape and reasoning as
+   * `reviewItemCriteria` above. `undefined` for a board that does not exist —
+   * distinct from a board on the default.
+   */
+  parallelismCap(workspaceId: string): { value: number; isDefault: boolean } | undefined {
+    const state = this.workspaces.get(workspaceId);
+    if (!state) return undefined;
+    const own = state.workspace.parallelismCap;
+    return own !== undefined
+      ? { value: own, isDefault: false }
+      : { value: DEFAULT_PARALLELISM_CAP, isDefault: true };
+  }
+
+  /**
+   * Set — or, with `undefined`, clear back to the default — how many
+   * builders this board's lead may dispatch at once. A settings write, not a
+   * board event, the same contract as `setReviewItemCriteria`: the next
+   * `register_dispatch` call reads it. The caller (the settings route)
+   * validates the range; this stores it.
+   */
+  setParallelismCap(
+    workspaceId: string,
+    cap: number | undefined,
+    _opts: { actor: { id: string; name: string; kind?: string } },
+  ):
+    | { ok: true; workspace: HubWorkspace; parallelismCap: { value: number; isDefault: boolean } }
+    | { ok: false; error: 'workspace-not-found' } {
+    const state = this.workspaces.get(workspaceId);
+    if (!state) return { ok: false, error: 'workspace-not-found' };
+    state.workspace.parallelismCap = cap;
+    this.scheduleSave(workspaceId);
+    const read = this.parallelismCap(workspaceId);
+    return {
+      ok: true,
+      workspace: state.workspace,
+      parallelismCap: read ?? { value: DEFAULT_PARALLELISM_CAP, isDefault: true },
     };
   }
 

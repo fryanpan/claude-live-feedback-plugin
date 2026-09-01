@@ -144,6 +144,14 @@ export interface StallVerdict {
   considered: number;
   /** Rows whose state could not be read. Not stalled, and not healthy. */
   undetermined: StallUndeterminedRow[];
+  /**
+   * Runnable rows the board's parallelism cap put out of reach — ranked past
+   * the top `parallelismCap` of `priorityOrder` — and so NOT judged for
+   * stalling. Zero when no cap was given. Stated for the same reason
+   * `considered` is: a board with two quiet rows and a cap of one must read
+   * as "one judged, one beyond the cap", never as one healthy row.
+   */
+  beyondCapacity: number;
 }
 
 export interface EvaluateStallsInput {
@@ -186,6 +194,28 @@ export interface EvaluateStallsInput {
   /** Test seam over `BUILDER_SILENT_MULTIPLIER_DEFAULT` — same reason
    *  `quietMs` is one. */
   builderSilentMultiplier?: number;
+  /**
+   * The board's parallelism cap, with the rows in the board's own priority
+   * order (`buildQueue`'s, the order `next_tasks` serves). Together they say
+   * which rows the board is ALLOWED to have in flight: the first `cap`
+   * runnable rows of `priorityOrder`. Only those are judged for stalling
+   * (Bryan, 2026-08-31: *"the stall check takes the cap into account and
+   * only checks that the top <n> tasks are in flight"*). A runnable row past
+   * them is idle by rule — there is no slot for it — so its silence is not a
+   * finding; it is counted in `beyondCapacity` instead.
+   *
+   * "Runnable" is the classifier's word, not a new one: `in-progress` or
+   * `ready-unpicked`, the two buckets that can stall at all. A row waiting on
+   * a person or a dependency takes no slot, so the cap does not skip over
+   * it — otherwise a blocked row at the top of the queue would spend a slot
+   * on nothing and hide a real stall two rows down.
+   *
+   * Both absent: every row is judged, exactly as before the cap existed.
+   * `unfiled` and `undetermined` are untouched either way — a question filed
+   * nowhere and a row nobody could read are findings whatever the capacity.
+   */
+  parallelismCap?: number;
+  priorityOrder?: readonly string[];
 }
 
 /**
@@ -212,6 +242,24 @@ export function evaluateStalls(input: EvaluateStallsInput): StallVerdict {
     input.threadActivity,
   );
 
+  // Which runnable rows the cap leaves out of reach — see `parallelismCap` on
+  // the input. Walked in priority order, spending a slot only on a row that
+  // could actually be in flight, and only when a cap was given at all.
+  const beyond = new Set<string>();
+  if (input.parallelismCap !== undefined && input.priorityOrder !== undefined) {
+    const runnable = new Map(
+      rows
+        .filter((r) => r.bucket === 'in-progress' || r.bucket === 'ready-unpicked')
+        .map((r) => [r.id, r] as const),
+    );
+    let slots = Math.max(0, input.parallelismCap);
+    for (const id of input.priorityOrder) {
+      if (!runnable.has(id)) continue;
+      if (slots > 0) slots -= 1;
+      else beyond.add(id);
+    }
+  }
+
   const stalled: StalledRow[] = [];
   const unfiled: StalledRow[] = [];
   const undetermined: StallUndeterminedRow[] = [];
@@ -223,6 +271,9 @@ export function evaluateStalls(input: EvaluateStallsInput): StallVerdict {
       undetermined.push({ id: row.id, reason: 'review-items-unreadable' });
       continue;
     }
+    // A row the cap keeps out of flight is not judged for stalling — nobody
+    // was supposed to be on it. Counted, never named.
+    if (beyond.has(row.id)) continue;
     const named: StalledRow = {
       id: row.id,
       title: row.title,
@@ -263,7 +314,13 @@ export function evaluateStalls(input: EvaluateStallsInput): StallVerdict {
   }
   // `classifyOpenTasks` already sorts by silence, longest first, and both
   // lists inherit that order — the row at the top is the one to start with.
-  return { stalled, unfiled, considered: rows.length, undetermined };
+  return {
+    stalled,
+    unfiled,
+    considered: rows.length,
+    undetermined,
+    beyondCapacity: beyond.size,
+  };
 }
 
 /**

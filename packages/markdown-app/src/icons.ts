@@ -4,10 +4,11 @@
  * way, so anything that sits beside them has to be drawn this way too.
  *
  * The mic lives here rather than in `hub/hub-app.ts` with the nav glyphs
- * because three surfaces mount a mic — the board's docked one, the capture
- * composer's, and the review doc's — and only one of them is a hub module.
- * Importing `hub-app.ts` from `voice-dock.ts` to reach a string would pull the
- * whole board into the doc bundle.
+ * because more than one surface mounts a mic — the board's docked one and the
+ * capture composer's — and importing `hub-app.ts` from outside the hub to
+ * reach a string would pull the whole board into the doc bundle. (The review
+ * doc's own hold-to-talk dock retired with the top-bar overhaul; recording
+ * lives behind the Record Audio button now.)
  */
 
 /** The opening attributes every icon shares. Split from the closing ones so a

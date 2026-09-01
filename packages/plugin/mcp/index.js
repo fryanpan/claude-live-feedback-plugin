@@ -14218,7 +14218,8 @@ function stalledLine(p) {
   const parts = [];
   const rows = p.rows ?? [];
   const count = p.stalledCount ?? rows.length;
-  const denominator = p.consideredCount === undefined ? "" : ` (of ${p.consideredCount} open row(s) checked)`;
+  const beyond = p.beyondCapacity !== undefined && p.beyondCapacity > 0 ? `; ${p.beyondCapacity} beyond the parallelism cap and not judged` : "";
+  const denominator = p.consideredCount === undefined ? "" : ` (of ${p.consideredCount} open row(s) checked${beyond})`;
   if (count > 0) {
     const subject = count === 1 ? "1 task has" : `${count} tasks have`;
     const list = rows.length > 0 ? ` — ${stalledRowsClause(rows)}` : "";
