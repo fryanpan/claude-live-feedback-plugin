@@ -1632,10 +1632,10 @@ export function renderRelatedLinks(
   wrap.append(heading, list);
   // `null` (not `undefined`) means the server WAS asked and came back with
   // nothing — a genuinely untitled doc, not a lookup still in flight. The
-  // raw doc id is never the fallback here: the AC is title-only links
-  // (Bryan, 2026-08-31 — a reviewer should never see a raw doc id in this
-  // slot). `undefined` (not yet asked) leaves the placeholder text alone
-  // so a later hydration pass can still land.
+  // raw doc id is never the fallback here: the AC is title-only links —
+  // a reviewer should never see a raw doc id in this slot. `undefined`
+  // (not yet asked) leaves the placeholder text alone so a later
+  // hydration pass can still land.
   const applyTitle = (a: HTMLAnchorElement): void => {
     const title = cachedLinkTitle(a.getAttribute('href') ?? '');
     if (typeof title === 'string' && title !== '') a.textContent = title;
