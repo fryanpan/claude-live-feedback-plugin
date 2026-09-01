@@ -362,6 +362,10 @@ export function parseTaskCreate(
       // Forward undefined untouched: an omitted goal is what routes the task
       // through triage (an explicit 'chores' would skip it).
       goal: body.goal as string | undefined,
+      // Only `true` means anything — a caller that says nothing gets the
+      // ordinary person-or-agent derivation, and a caller that says `false`
+      // is not asserting the row IS ready, it is just not asserting.
+      ...(body.triage === true ? { fileToTriage: true } : {}),
       order: typeof body.order === 'number' ? Number(body.order) : undefined,
       after: Array.isArray(body.after) ? (body.after as string[]) : undefined,
       afterEnforce: Array.isArray(body.afterEnforce) ? (body.afterEnforce as string[]) : undefined,

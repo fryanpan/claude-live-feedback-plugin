@@ -1,5 +1,5 @@
 /**
- * The spin-off menu (src/spinoff-menu.ts) — the five ways a line of a huddle
+ * The spin-off menu (src/spinoff-menu.ts) — the four ways a line of a huddle
  * doc leaves the doc as work.
  *
  * Two halves, tested apart: `runSpinoff` is the verb chain and is driven
@@ -58,6 +58,9 @@ function deps(over: Partial<SpinoffDeps> = {}): { deps: SpinoffDeps; calls: Call
         method: init?.method,
         body: JSON.parse(String(init?.body ?? '{}')) as Record<string, unknown>,
       });
+      // The doc GET is the research path's lead lookup — a second call, and
+      // the reason the create is found by method rather than by index.
+      if (init?.method !== 'POST') return Promise.resolve({ leadAgentId: 'Workspaces' });
       return Promise.resolve(
         url.endsWith('/threads') ? { thread: { id: 'th-1' } } : { task: { id: 't-99' } },
       );
@@ -67,18 +70,19 @@ function deps(over: Partial<SpinoffDeps> = {}): { deps: SpinoffDeps; calls: Call
   return { deps: base, calls };
 }
 
-describe('the five actions', () => {
-  it('are the mock’s five, in its order', () => {
-    expect(SPINOFF_ACTIONS.map((a) => a.id)).toEqual([
-      'task',
-      'start',
-      'research',
-      'question',
-      'comment',
-    ]);
+/** The create, found by method — the research path makes a GET first. */
+function created(calls: Call[]): Call | undefined {
+  return calls.find((c) => c.method === 'POST');
+}
+
+describe('the four actions', () => {
+  it('are four, in frequency order — "Start now" is gone', () => {
+    // It was second, and it did what "Create a task" did plus `order: 0`.
+    // Two rows with one outcome is not a choice, and a reviewer could not
+    // tell them apart in the running product (Bryan's call, 2026-09-01).
+    expect(SPINOFF_ACTIONS.map((a) => a.id)).toEqual(['task', 'research', 'question', 'comment']);
     expect(SPINOFF_ACTIONS.map((a) => a.label)).toEqual([
       'Create a task',
-      'Start now',
       'Research and come back',
       'Answer a question',
       'Leave a comment',
@@ -257,25 +261,116 @@ describe('runSpinoff', () => {
     expect((await runSpinoff('task', d))?.title).toBe('Cloudflare Access');
   });
 
-  it('Start now is the same row placed at the top — not a status claim', async () => {
+  /**
+   * Where a spun-off row lands, now that "Start now" is gone and the button
+   * pressed no longer decides it. A person's create normally lands in To do;
+   * a spin-off's words are SELECTED rather than written, and the reviewer's
+   * pass filed rows called "Cloudflare" that nobody could pick up.
+   */
+  describe('To do or Triage', () => {
+    it('sends a row nobody could act on to Triage', async () => {
+      const { deps: d, calls } = deps({ quote: 'Cloudflare' });
+      await runSpinoff('task', d);
+      expect(calls[0]?.body.title).toBe('Cloudflare');
+      expect(calls[0]?.body.triage).toBe(true);
+    });
+
+    it('leaves a row with something to do in it alone, for To do', async () => {
+      const { deps: d, calls } = deps();
+      await runSpinoff('task', d);
+      // Nothing said means the ordinary person-filed derivation, which is
+      // To do — the claim is only ever made in one direction.
+      expect(calls[0]?.body.triage).toBeUndefined();
+    });
+
+    it('reads the column back off the server instead of predicting it', async () => {
+      // The toast names the column. If this were predicted client-side, the
+      // toast could tell somebody their row is somewhere it is not.
+      const { deps: d } = deps({
+        fetchJson: () => Promise.resolve({ task: { id: 't-99', status: 'triage' } }),
+      });
+      expect((await runSpinoff('task', d))?.status).toBe('triage');
+    });
+  });
+
+  describe('Research and come back', () => {
+    it('belongs to the board’s agent, not to whoever tapped it', async () => {
+      // Left unsaid, the create route falls the assignee back to the author —
+      // which put "go and find out about this" on the plate of the person who
+      // asked the question (Bryan, 2026-09-01).
+      const { deps: d, calls } = deps();
+      await runSpinoff('research', d);
+      const create = created(calls);
+      expect(create?.body.assignee).toBe('Workspaces');
+      expect(create?.body.assigneeKind).toBe('agent');
+      expect(create?.body.triage).toBeUndefined();
+    });
+
+    it('goes to Triage when no agent can be named, rather than to the tapper', async () => {
+      // A research errand with nobody to run it says what to find out and not
+      // who is finding it out, which is thin in the same way a two-word title
+      // is. Guessing a name would be worse than routing it to be given one.
+      const { deps: d, calls } = deps({
+        fetchJson: (url, init) => {
+          calls.push({
+            url,
+            method: init?.method,
+            body: JSON.parse(String(init?.body ?? '{}')) as Record<string, unknown>,
+          });
+          if (init?.method !== 'POST') return Promise.resolve({});
+          return Promise.resolve({ task: { id: 't-99', status: 'triage' } });
+        },
+      });
+      await runSpinoff('research', d);
+      const create = calls.find((c) => c.method === 'POST');
+      expect(create?.body.assignee).toBeUndefined();
+      expect(create?.body.triage).toBe(true);
+    });
+
+    it('survives a lead lookup that fails outright', async () => {
+      const { deps: d, calls } = deps({
+        fetchJson: (url, init) => {
+          calls.push({
+            url,
+            method: init?.method,
+            body: JSON.parse(String(init?.body ?? '{}')) as Record<string, unknown>,
+          });
+          if (init?.method !== 'POST') return Promise.reject(new Error('offline'));
+          return Promise.resolve({ task: { id: 't-99' } });
+        },
+      });
+      expect(await runSpinoff('research', d)).not.toBeNull();
+      expect(calls.find((c) => c.method === 'POST')?.body.triage).toBe(true);
+    });
+
+    it('does NOT go looking for a lead on the ordinary create', async () => {
+      // One round trip for a task, two for research. The lookup exists for
+      // the one action whose owner is not the person who tapped it.
+      const { deps: d, calls } = deps();
+      await runSpinoff('task', d);
+      expect(calls).toHaveLength(1);
+      expect(calls[0]?.method).toBe('POST');
+    });
+  });
+
+  it('asks for no placement of its own — where it lands is the row’s own doing', async () => {
+    // "Start now" used to send `order: 0` and was otherwise identical to
+    // "Create a task", which is why a reviewer could not tell them apart.
+    // Bryan collapsed them (2026-09-01), and nothing may quietly reintroduce
+    // a second placement rule keyed on which button was pressed.
     const { deps: d, calls } = deps();
-    await runSpinoff('start', d);
-    expect(calls[0]?.body.order).toBe(0);
-    // Nothing is actually being worked the instant somebody taps a line, so
-    // the row must NOT claim in-progress, and there is no second call to
-    // transition it.
+    await runSpinoff('task', d);
     expect(calls).toHaveLength(1);
+    expect(calls[0]?.body.order).toBeUndefined();
+    // And it does not claim a status either: nothing is actually being worked
+    // the instant somebody taps a line.
     expect(calls[0]?.body.status).toBeUndefined();
-    // Control: the plain create does NOT ask for the top.
-    const plain = deps();
-    await runSpinoff('task', plain.deps);
-    expect(plain.calls[0]?.body.order).toBeUndefined();
   });
 
   it('Research and come back names itself as research in the title', async () => {
     const { deps: d, calls } = deps({ quote: 'Does Cloudflare Access cover the mockup route?' });
     await runSpinoff('research', d);
-    expect(String(calls[0]?.body.title)).toBe(
+    expect(String(created(calls)?.body.title)).toBe(
       'Research: Does Cloudflare Access cover the mockup route?',
     );
   });
@@ -283,8 +378,8 @@ describe('runSpinoff', () => {
   it('keeps a research title inside the cap once the prefix is on it', async () => {
     const { deps: d, calls } = deps({ quote: 'x'.repeat(200) });
     await runSpinoff('research', d);
-    expect(String(calls[0]?.body.title).length).toBeLessThanOrEqual(80);
-    expect(String(calls[0]?.body.title).startsWith('Research: ')).toBe(true);
+    expect(String(created(calls)?.body.title).length).toBeLessThanOrEqual(80);
+    expect(String(created(calls)?.body.title).startsWith('Research: ')).toBe(true);
   });
 
   it('Answer a question posts NOTHING — the person writes their own words', async () => {
@@ -314,9 +409,9 @@ describe('runSpinoff', () => {
   });
 
   it('reports a server that answered without an id rather than inventing one', async () => {
-    // Only the three task-creating actions can hit this: `question` and
+    // Only the two task-creating actions can hit this: `question` and
     // `comment` post nothing, so there is no id for a server to omit.
-    for (const action of ['task', 'start', 'research'] as const) {
+    for (const action of ['task', 'research'] as const) {
       const { deps: d } = deps({ fetchJson: () => Promise.resolve({}) });
       expect(await runSpinoff(action, d)).toBeNull();
     }
@@ -342,7 +437,7 @@ describe('mountSpinoffMenu', () => {
 
   it('renders one real control per action, labelled and named for a screen reader', () => {
     const menu = mountSpinoffMenu({ anchorEl: pill, onPick: () => {} });
-    expect(rows()).toHaveLength(5);
+    expect(rows()).toHaveLength(4);
     expect(rows().map((r) => r.textContent)).toEqual(SPINOFF_ACTIONS.map((a) => a.label));
     for (const row of rows()) {
       expect(row.tagName).toBe('BUTTON');
@@ -367,7 +462,7 @@ describe('mountSpinoffMenu', () => {
     const onDismiss = vi.fn();
     mountSpinoffMenu({ anchorEl: pill, onPick, onDismiss });
     rows()[1]?.click();
-    expect(onPick).toHaveBeenCalledWith('start');
+    expect(onPick).toHaveBeenCalledWith('research');
     expect(onDismiss).not.toHaveBeenCalled();
     expect(document.querySelector('.spinoff-menu')).toBeNull();
     expect(pill.getAttribute('aria-expanded')).toBe('false');

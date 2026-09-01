@@ -194,7 +194,7 @@ async function mountMarkdown(ctx: MountContext): Promise<void> {
   const composer = el<HTMLElement>('composer');
   const commentPill = el<HTMLButtonElement>('comment-pill');
   // The pill's markup says "Add comment" because that is all it ever did. On
-  // a huddle doc it now opens five actions, only one of which is a comment,
+  // a huddle doc it now opens four actions, only one of which is a comment,
   // so the label would send a screen-reader user somewhere the menu doesn't
   // go. Named for what it opens, not for the row it used to be.
   if (ctx.huddle === true) {
@@ -691,7 +691,7 @@ async function mountMarkdown(ctx: MountContext): Promise<void> {
       const sel = editor.getSelectionRel();
       if (sel) selection = sel;
     }
-    // On a HUDDLE doc the pill opens the five ways a line can leave the doc
+    // On a HUDDLE doc the pill opens the four ways a line can leave the doc
     // as work; everywhere else it is the comment affordance it has always
     // been, and opens the composer directly.
     if (ctx.huddle === true) {
@@ -790,8 +790,13 @@ async function mountMarkdown(ctx: MountContext): Promise<void> {
       }
       const named = made.title ? `“${made.title}”` : 'Task';
       const { taskId, href } = made;
+      // Name the column. The row's placement is now decided from what the
+      // row says rather than from which button was pressed, so "added to the
+      // board" would leave the person to go and find out which half of that
+      // decision they got.
+      const landed = made.status === 'triage' ? 'sent to Triage' : 'added to To do';
       showToast(
-        made.action === 'start' ? `${named} — top of the queue.` : `${named} — added to the board.`,
+        `${named} — ${landed}.`,
         taskId !== undefined
           ? { label: 'Undo', onAction: () => void undoSpinoff(taskId, href) }
           : undefined,
