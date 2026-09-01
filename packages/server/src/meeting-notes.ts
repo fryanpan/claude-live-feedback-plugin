@@ -763,12 +763,23 @@ export function beginNotesSession(
       const raw = [...carry, ...tick.turns];
       carry = [];
       if (raw.length === 0) return;
-      const turns = raw.map(withNames);
+      // Speaker tags belong to multi-speaker sessions only (owner's call,
+      // 2026-08-31: a solo huddle stamped with the speaker's own name on
+      // every note is pure noise — and a `conversation` capture with one
+      // person in the room is still solo). Until a second voice has been
+      // heard, the composer never learns who spoke, so it has nothing to tag.
+      const multi = seen.size >= 2;
+      const turns = multi
+        ? raw.map(withNames)
+        : raw.map((t): NotesTurn => ({ turn: t.turn, text: t.text }));
       let taskLinks: readonly NoteTaskLink[] = [];
       let docLinks: readonly NoteDocLink[] = [];
       // Read before the pass, written after it: this tick's words are the
-      // NEXT tick's overlap, never their own.
-      const priorTurns = priorRaw.map(withNames);
+      // NEXT tick's overlap, never their own. Same multi gate as `turns`:
+      // the capture pass must see exactly the window its guards see.
+      const priorTurns = multi
+        ? priorRaw.map(withNames)
+        : priorRaw.map((t): NotesTurn => ({ turn: t.turn, text: t.text }));
       priorRaw = raw;
       if (deps.captureIntents) {
         try {
@@ -847,7 +858,10 @@ export function beginNotesSession(
         // to — an attribution must name something the transcript contained.
         const checked = normalizeSpeakerTags(composed, {
           names,
-          known: seen,
+          // While the session is effectively solo the composer was shown no
+          // voices at all, so ANY tag it writes is invented — an empty known
+          // set unwraps them all.
+          known: multi ? seen : new Set<string>(),
           ...(input.humanNotes ? { protect: input.humanNotes } : {}),
           // What this tick actually carried, per voice. A mention the
           // composer has just written is stamped with it, so a later

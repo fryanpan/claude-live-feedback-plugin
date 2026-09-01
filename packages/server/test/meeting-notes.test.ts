@@ -434,6 +434,10 @@ describe('notes session', () => {
       },
       ids,
     );
+    // A second voice, heard only as a partial: tags and speaker names are
+    // suppressed until the session is genuinely multi-speaker (owner's call,
+    // 2026-08-31), and a partial registers the voice without adding a turn.
+    session.onTurn({ turn: 90, text: 'mm', final: false, speaker: 'Z' });
     session.onTurn({ turn: 0, text: 'Take it?', final: true, speaker: 'B' });
     schedule.fire();
     await new Promise((r) => setTimeout(r, 0));
@@ -493,6 +497,10 @@ describe('notes session', () => {
       },
       ids,
     );
+    // A second voice, heard only as a partial: tags and speaker names are
+    // suppressed until the session is genuinely multi-speaker (owner's call,
+    // 2026-08-31), and a partial registers the voice without adding a turn.
+    session.onTurn({ turn: 90, text: 'mm', final: false, speaker: 'Z' });
     session.onTurn({ turn: 0, text: 'One.', final: true, speaker: 'A' });
     schedule.fire();
     // Let the chained compose actually START — a rename before that point is
@@ -910,6 +918,10 @@ describe('task capture riding the notes session', () => {
       },
       ids,
     );
+    // A second voice, heard only as a partial: tags and speaker names are
+    // suppressed until the session is genuinely multi-speaker (owner's call,
+    // 2026-08-31), and a partial registers the voice without adding a turn.
+    session.onTurn({ turn: 90, text: 'mm', final: false, speaker: 'Z' });
     session.onTurn({
       turn: 0,
       text: 'That retry loop is the real cost.',
@@ -1111,6 +1123,10 @@ describe('inline speaker tags', () => {
       { composer: scripted([], inputs), quietMs: 1000, schedule, onNotes: () => {} },
       ids,
     );
+    // A second voice, heard only as a partial: tags and speaker names are
+    // suppressed until the session is genuinely multi-speaker (owner's call,
+    // 2026-08-31), and a partial registers the voice without adding a turn.
+    session.onTurn({ turn: 90, text: 'mm', final: false, speaker: 'Z' });
     session.onTurn({ turn: 0, text: 'Move the gate.', final: true, speaker: 'B' });
     await session.end();
     expect(inputs[0]?.tick.turns[0]).toMatchObject({
@@ -1148,6 +1164,10 @@ describe('inline speaker tags', () => {
       },
       ids,
     );
+    // A second voice, heard only as a partial: tags and speaker names are
+    // suppressed until the session is genuinely multi-speaker (owner's call,
+    // 2026-08-31), and a partial registers the voice without adding a turn.
+    session.onTurn({ turn: 90, text: 'mm', final: false, speaker: 'Z' });
     session.onTurn({ turn: 0, text: 'Move the gate.', final: true, speaker: 'B' });
     await session.end();
     expect(updates[0]?.notes).toContain('[@Speaker B](speaker:B?t=0) wants the gate moved.');
@@ -1200,6 +1220,10 @@ describe('inline speaker tags', () => {
       },
       ids,
     );
+    // A second voice, heard only as a partial: tags and speaker names are
+    // suppressed until the session is genuinely multi-speaker (owner's call,
+    // 2026-08-31), and a partial registers the voice without adding a turn.
+    session.onTurn({ turn: 90, text: 'mm', final: false, speaker: 'Z' });
     session.onTurn({ turn: 0, text: 'Move the gate.', final: true, speaker: 'B' });
     schedule.fire();
     await new Promise((r) => setTimeout(r, 0));
@@ -1228,6 +1252,10 @@ describe('inline speaker tags', () => {
       },
       ids,
     );
+    // A second voice, heard only as a partial: tags and speaker names are
+    // suppressed until the session is genuinely multi-speaker (owner's call,
+    // 2026-08-31), and a partial registers the voice without adding a turn.
+    session.onTurn({ turn: 90, text: 'mm', final: false, speaker: 'Z' });
     session.onTurn({ turn: 0, text: 'Move the gate.', final: true, speaker: 'B' });
     schedule.fire();
     await new Promise((r) => setTimeout(r, 0));
@@ -1263,6 +1291,10 @@ describe('inline speaker tags', () => {
       ids,
     );
     session.nameSpeaker('B', 'Devi');
+    // A second voice, heard only as a partial: tags and speaker names are
+    // suppressed until the session is genuinely multi-speaker (owner's call,
+    // 2026-08-31), and a partial registers the voice without adding a turn.
+    session.onTurn({ turn: 90, text: 'mm', final: false, speaker: 'Z' });
     session.onTurn({ turn: 0, text: 'Move the gate.', final: true, speaker: 'B' });
     schedule.fire();
     await new Promise((r) => setTimeout(r, 0));
@@ -1303,6 +1335,10 @@ describe('inline speaker tags', () => {
       },
       ids,
     );
+    // A second voice, heard only as a partial: tags and speaker names are
+    // suppressed until the session is genuinely multi-speaker (owner's call,
+    // 2026-08-31), and a partial registers the voice without adding a turn.
+    session.onTurn({ turn: 90, text: 'mm', final: false, speaker: 'Z' });
     session.onTurn({ turn: 0, text: 'One.', final: true, speaker: 'B' });
     schedule.fire();
     await new Promise((r) => setTimeout(r, 0));
@@ -1630,6 +1666,10 @@ describe('a late speaker correction reaches notes already written', () => {
       },
       ids,
     );
+    // A second voice, heard only as a partial: tags and speaker names are
+    // suppressed until the session is genuinely multi-speaker (owner's call,
+    // 2026-08-31), and a partial registers the voice without adding a turn.
+    session.onTurn({ turn: 90, text: 'mm', final: false, speaker: 'Z' });
     session.onTurn({ turn: 0, text: 'Move the gate.', final: true, speaker: 'B' });
     schedule.fire();
     await settle();
@@ -1672,6 +1712,10 @@ describe('a late speaker correction reaches notes already written', () => {
       },
       ids,
     );
+    // A second voice, heard only as a partial: tags and speaker names are
+    // suppressed until the session is genuinely multi-speaker (owner's call,
+    // 2026-08-31), and a partial registers the voice without adding a turn.
+    session.onTurn({ turn: 90, text: 'mm', final: false, speaker: 'Z' });
     session.onTurn({ turn: 0, text: 'Move the gate.', final: true, speaker: 'B' });
     session.onTurn({ turn: 1, text: 'Before merge.', final: true, speaker: 'B' });
     schedule.fire();
@@ -1708,6 +1752,10 @@ describe('a late speaker correction reaches notes already written', () => {
       },
       ids,
     );
+    // A second voice, heard only as a partial: tags and speaker names are
+    // suppressed until the session is genuinely multi-speaker (owner's call,
+    // 2026-08-31), and a partial registers the voice without adding a turn.
+    session.onTurn({ turn: 90, text: 'mm', final: false, speaker: 'Z' });
     session.onTurn({ turn: 0, text: 'Move the gate.', final: true, speaker: 'B' });
     session.onTurn({ turn: 1, text: 'Before merge.', final: true, speaker: 'B' });
     schedule.fire();
@@ -1771,6 +1819,10 @@ describe('a late speaker correction reaches notes already written', () => {
       { composer, quietMs: 1000, schedule, onNotes: () => {} },
       ids,
     );
+    // A second voice, heard only as a partial: tags and speaker names are
+    // suppressed until the session is genuinely multi-speaker (owner's call,
+    // 2026-08-31), and a partial registers the voice without adding a turn.
+    session.onTurn({ turn: 90, text: 'mm', final: false, speaker: 'Z' });
     session.onTurn({ turn: 0, text: 'Move the gate.', final: true, speaker: 'B' });
     schedule.fire();
     await settle();
@@ -1911,5 +1963,83 @@ describe('session start and tick lifecycle', () => {
       // The retry composes the carried turn beside the new one, and says so.
       { phase: 'written', turns: [0, 1] },
     ]);
+  });
+});
+
+describe('speaker tags only in multi-speaker sessions', () => {
+  const ids = { docId: 'doc-solo', meetingId: 'm-solo' };
+
+  it('one voice heard: the composer sees no speaker at all', async () => {
+    // A `conversation` capture with one person in the room is still solo
+    // (owner's call, 2026-08-31: a solo huddle stamped with the speaker's
+    // own name on every note is pure noise).
+    const schedule = new ManualScheduler();
+    const inputs: NotesComposeInput[] = [];
+    const composer: NotesComposer = {
+      name: 'capture',
+      compose(input) {
+        inputs.push(input);
+        return Promise.resolve('- noted');
+      },
+    };
+    const session = beginNotesSession(
+      { composer, quietMs: 1000, schedule, onNotes: () => {} },
+      ids,
+    );
+    session.onTurn({ turn: 0, text: 'Only me.', final: true, speaker: 'A' });
+    schedule.fire();
+    await session.end();
+    expect(inputs[0]?.tick.turns[0]?.speaker).toBeUndefined();
+    expect(inputs[0]?.tick.turns[0]?.speakerLabel).toBeUndefined();
+  });
+
+  it('a second voice turns attribution on for the ticks that follow', async () => {
+    const schedule = new ManualScheduler();
+    const inputs: NotesComposeInput[] = [];
+    const composer: NotesComposer = {
+      name: 'capture',
+      compose(input) {
+        inputs.push(input);
+        return Promise.resolve('- noted');
+      },
+    };
+    const session = beginNotesSession(
+      { composer, quietMs: 1000, schedule, onNotes: () => {} },
+      ids,
+    );
+    session.onTurn({ turn: 0, text: 'Only me so far.', final: true, speaker: 'A' });
+    schedule.fire();
+    await new Promise((r) => setTimeout(r, 0));
+    session.onTurn({ turn: 1, text: 'And me.', final: true, speaker: 'B' });
+    schedule.fire();
+    await session.end();
+    expect(inputs[0]?.tick.turns[0]?.speaker).toBeUndefined();
+    expect(inputs[1]?.tick.turns[0]).toMatchObject({ speaker: 'Speaker B', speakerLabel: 'B' });
+  });
+
+  it('a solo composer’s invented tag is unwrapped, even for a voice the meeting carried', async () => {
+    const schedule = new ManualScheduler();
+    const updates: NotesUpdate[] = [];
+    const composer: NotesComposer = {
+      name: 'inventive',
+      compose() {
+        return Promise.resolve('## Meeting notes\n\n- [@Speaker A](speaker:A) said it.');
+      },
+    };
+    const session = beginNotesSession(
+      {
+        composer,
+        quietMs: 1000,
+        schedule,
+        onNotes: (u) => updates.push(u),
+        onError: () => {},
+      },
+      ids,
+    );
+    session.onTurn({ turn: 0, text: 'Said it.', final: true, speaker: 'A' });
+    schedule.fire();
+    await session.end();
+    expect(updates[0]?.notes).not.toContain('speaker:A');
+    expect(updates[0]?.notes).toContain('said it.');
   });
 });
