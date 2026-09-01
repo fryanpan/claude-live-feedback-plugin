@@ -477,6 +477,29 @@ describe('planNotesMerge', () => {
     expect(plan.deletes.some((d) => d.md === 'a person typed this')).toBe(false);
   });
 
+  it('a line the composer repeats at a second place is not inserted twice — its own included', () => {
+    // A later tick re-lists an earlier point under the new material: the
+    // first copy anchors to the line already in the doc, the second is an
+    // echo of it, not a new note. Agent-owned lines were the gap — only a
+    // person's lines used to be checked for echoes, so the agent's own line
+    // came back as a duplicate.
+    const current = [item('agent one'), item('agent two'), item('a person typed this')];
+    const plan = planNotesMerge(
+      current,
+      [
+        incoming('agent one'),
+        incoming('agent two'),
+        incoming('a person typed this'),
+        incoming('agent two'),
+        incoming('a person typed this'),
+        incoming('agent three'),
+      ],
+      { ownership: claimsText(['agent one', 'agent two']) },
+    );
+    expect(plan.deletes).toEqual([]);
+    expect(plan.inserts.flatMap((run) => run.entries.map((e) => e.md))).toEqual(['agent three']);
+  });
+
   it("carries the agent's unchanged items forward in the ledger", () => {
     const current = [item('agent one'), item('a person typed this')];
     const plan = planNotesMerge(
