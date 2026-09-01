@@ -121,6 +121,48 @@ describe('spinning a whole line off', () => {
     editor.destroy();
   });
 
+  it('links only the FIRST line when the drag crossed several', () => {
+    // A spin-off makes one row, and that row's title comes from the opening
+    // sentence. Marking all four paragraphs would turn a page into a single
+    // anchor pointing at a row that describes only its first line — and the
+    // whole passage would navigate away on a click.
+    const editor = mount('<p>One thing</p><p>Another thing</p><p>A third thing</p>');
+    const before = lines(editor);
+    const first = wholeLine(editor, 0);
+    const last = wholeLine(editor, 2);
+
+    expect(linkSpinoffRange(editor, { from: first.from, to: last.to }, HREF)).toBe(true);
+
+    expect(lines(editor)).toEqual(before);
+    expect(linked(editor, HREF).map((l) => l.text)).toEqual(['One thing']);
+  });
+
+  it('links only the first BULLET, not the whole list around it', () => {
+    // A list is ONE top-level block holding many items, so "the first block"
+    // read at top level would take every bullet. The line is the textblock.
+    const editor = mount(
+      '<ul><li><p>Ask about the tunnel</p></li><li><p>And the share links</p></li></ul><p>after</p>',
+    );
+    const before = lines(editor);
+
+    // Everything, as a select-all would give it.
+    linkSpinoffRange(editor, { from: 0, to: editor.state.doc.content.size }, HREF);
+
+    expect(lines(editor)).toEqual(before);
+    expect(linked(editor, HREF).map((l) => l.text)).toEqual(['Ask about the tunnel']);
+  });
+
+  it('clips a drag that STARTS mid-line to the rest of that line only', () => {
+    const editor = mount('<p>Check whether Access covers it</p><p>Another thing</p>');
+    const before = lines(editor);
+    const from = 1 + 'Check whether '.length;
+
+    linkSpinoffRange(editor, { from, to: wholeLine(editor, 1).to }, HREF);
+
+    expect(lines(editor)).toEqual(before);
+    expect(linked(editor, HREF).map((l) => l.text)).toEqual(['Access covers it']);
+  });
+
   it('refuses an empty range rather than marking a caret', () => {
     const editor = mount(DOC);
     const before = lines(editor);

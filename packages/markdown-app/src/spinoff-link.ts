@@ -22,15 +22,55 @@
  * Marking the words instead of re-emitting them cannot duplicate at all.
  */
 import type { Editor } from '@tiptap/core';
+import type { Node as ProseNode } from '@tiptap/pm/model';
 
 /** The mark's name in the schema — TipTap's `Link` extension. */
 const LINK = 'link';
 
 /**
- * Mark `range` as the task's link, in one transaction, with no text written.
+ * The FIRST line the selection touches, clipped to that line.
  *
- * Returns false when the range is empty or the schema has no link mark, so a
- * caller can tell "nothing to mark" from "marked it".
+ * A spin-off is anchored on a line, and a task is one thing. Somebody who
+ * drags across four paragraphs and taps "Create a task" gets one row, so
+ * marking all four would turn a page into a single anchor pointing at a row
+ * that only describes its opening sentence — and the whole passage would then
+ * navigate away on a click.
+ *
+ * "Line" here is the innermost TEXTBLOCK, not the top-level node: a bullet
+ * list is one top-level block containing many list items, and linking the
+ * whole list because somebody selected its first bullet is the same mistake
+ * one level up.
+ */
+function firstLineIn(
+  doc: ProseNode,
+  range: { from: number; to: number },
+): {
+  from: number;
+  to: number;
+} | null {
+  let found: { from: number; to: number } | null = null;
+  doc.descendants((node, pos) => {
+    if (found) return false;
+    // Containers (lists, blockquotes, table cells) are walked THROUGH; only a
+    // textblock is a line.
+    if (!node.isTextblock) return true;
+    const start = pos + 1;
+    const end = pos + 1 + node.content.size;
+    if (range.from < end && range.to > start) {
+      found = { from: Math.max(range.from, start), to: Math.min(range.to, end) };
+    }
+    return false;
+  });
+  return found;
+}
+
+/**
+ * Mark the selection as the task's link, in one transaction, with no text
+ * written — clipped to the first line it touches.
+ *
+ * Returns false when there is nothing to mark (an empty range, a selection
+ * over no text, a schema with no link mark), so a caller can tell "nothing to
+ * mark" from "marked it".
  */
 export function linkSpinoffRange(
   editor: Editor,
@@ -40,10 +80,12 @@ export function linkSpinoffRange(
   const { state } = editor;
   const linkType = state.schema.marks[LINK];
   if (!linkType || range.to <= range.from) return false;
+  const line = firstLineIn(state.doc, range);
+  if (!line || line.to <= line.from) return false;
   const tr = state.tr;
   // `addMark` over a range that already carries a link replaces it, which is
   // what spinning the same line off twice should do: one line, one row.
-  tr.addMark(range.from, range.to, linkType.create({ href }));
+  tr.addMark(line.from, line.to, linkType.create({ href }));
   editor.view.dispatch(tr);
   return true;
 }

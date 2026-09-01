@@ -29,6 +29,10 @@ interface DocAnswer {
     huddleKind?: string;
     planRequestedAt?: number;
     planRequestedBy?: string;
+    /** Not read by the gate — here so a fixture can change something in the
+     *  meta map that ISN'T the plan, which is the negative control for the
+     *  watcher: the RE-READ decides, not the event. */
+    title?: string;
   };
   tasks?: Array<{ id: string; planHeld?: boolean; workspaceId?: string }>;
   leadAgentId?: string;
@@ -403,6 +407,57 @@ describe('mountPlanGate', () => {
     expect(label()).toBe('Approve Plan');
     gate.destroy();
     expect(stopped).toBe(true);
+  });
+
+  it('a meta change that is NOT the plan leaves the face alone', async () => {
+    // The negative control for the test above. The watcher fires on ANY
+    // change to the doc's meta map — a title edit, a speaker rename — because
+    // the map is one object and Yjs does not offer a per-key observer worth
+    // the complexity here. So the re-read has to be what decides, not the
+    // event: a fire whose re-read still says "requested" must leave the float
+    // exactly where it was. Without this, "it advanced" and "it advances on
+    // any twitch" are the same passing test.
+    let fire: (() => void) | undefined;
+    const stub = stubFetch([
+      {
+        meta: { huddleKind: 'plan', planRequestedAt: 1e12, planRequestedBy: 'Jordan' },
+        tasks: [],
+        leadAgentId: 'Workspaces',
+      },
+      // The doc changed — its title did — and the plan did NOT arrive.
+      {
+        meta: {
+          huddleKind: 'plan',
+          planRequestedAt: 1e12,
+          planRequestedBy: 'Jordan',
+          title: 'Renamed while we waited',
+        },
+        tasks: [],
+        leadAgentId: 'Workspaces',
+      },
+    ]);
+    const gate = mountPlanGate({
+      docId: 'd-live',
+      root,
+      user: JORDAN,
+      canWrite: true,
+      fetchJson: stub.fetchJson,
+      watchDocMeta: (onChange) => {
+        fire = onChange;
+        return () => {};
+      },
+    });
+    await gate.ready;
+    expect(gate.face()).toBe('requested');
+
+    fire?.();
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(gate.face()).toBe('requested');
+    expect(label()).toBe('Plan requested');
+    gate.destroy();
   });
 
   it('a reader sees no Make Plan either', async () => {
