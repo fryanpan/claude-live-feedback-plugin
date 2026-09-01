@@ -27,7 +27,7 @@ import { CLOSED_WALK, walkAimAfterOpen } from '../src/hub/hub-model';
  * as long as it lived inline.
  */
 describe('walkAimAfterOpen', () => {
-  const aim = { index: 2, key: 'doc-thread:d-1:th-1', hold: null };
+  const aim = { index: 2, key: 'doc-thread:d-1:th-1' };
 
   it('a same-page open leaves the walkthrough closed', () => {
     // The panel took over the screen; the walk is genuinely put away, and the
@@ -35,7 +35,6 @@ describe('walkAimAfterOpen', () => {
     expect(walkAimAfterOpen(aim, true)).toEqual({
       index: CLOSED_WALK.index,
       key: CLOSED_WALK.key,
-      hold: null,
     });
   });
 
@@ -43,13 +42,8 @@ describe('walkAimAfterOpen', () => {
     expect(walkAimAfterOpen(aim, false)).toEqual(aim);
   });
 
-  it('keeps the hold too, so an item waiting on its owner is still held on return', () => {
-    const held = { index: 1, key: 'k', hold: { key: 'k', index: 1, item: null } };
-    expect(walkAimAfterOpen(held as never, false)).toEqual(held);
-  });
-
   it('an already-closed walk stays closed either way', () => {
-    const closed = { index: -1, key: null, hold: null };
+    const closed = { index: -1, key: null };
     expect(walkAimAfterOpen(closed, true)).toEqual(closed);
     expect(walkAimAfterOpen(closed, false)).toEqual(closed);
   });

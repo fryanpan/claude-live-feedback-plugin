@@ -133,6 +133,7 @@ function walk(over: Partial<WalkthroughHandlers> = {}): WalkthroughHandlers {
     onAnswer: vi.fn(),
     onReply: vi.fn(),
     onAskOnItem: vi.fn(),
+    onQuestionOnItem: vi.fn(),
     onOpenItem: vi.fn(),
     onOpenThread: vi.fn(),
     onStep: vi.fn(),

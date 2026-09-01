@@ -84,13 +84,16 @@ describe('the review-item comment furniture is thumb-sized and height-frugal', (
     expect(card).not.toMatch(/min-height:/);
   });
 
-  it('the ask box stacks under a thumb like the answer box does', () => {
+  it('the ask boxes stack under a thumb like the answer box does', () => {
     // The stacked-composer rule the answer box has at ≤900px must name the
-    // thread form too, or the field and its button sit side by side at 430px.
+    // thread form AND the question form too, or the field and its button sit
+    // side by side at 430px.
     const src = declarationsOnly(CSS);
-    const at = src.indexOf('.hub-walk-answer,\n  .hub-walk-thread-form {');
-    expect(at, 'the ≤900px stacking rule does not cover .hub-walk-thread-form').toBeGreaterThan(-1);
-    expect(src.slice(at, at + 200)).toContain('flex-direction: column');
+    const at = src.indexOf(
+      '.hub-walk-answer,\n  .hub-walk-thread-form,\n  .hub-walk-question-form {',
+    );
+    expect(at, 'the ≤900px stacking rule does not cover both ask forms').toBeGreaterThan(-1);
+    expect(src.slice(at, at + 220)).toContain('flex-direction: column');
   });
 
   it('the revised phrase wears the editor’s resolved-range treatment inside the card body', () => {
