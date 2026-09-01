@@ -26,6 +26,9 @@ import { HUDDLE_MODE_PARAM } from '../huddle-entry.ts';
 import { MIC_ICON, SVG, SVG_ENDS } from '../icons.ts';
 import { ensureUserIdentity } from '../identity-prompt.ts';
 import { wireKeyboardInset } from '../keyboard-inset.ts';
+// Defines <meeting-banner>, rendered by buildShell at the top of the board
+// column. Import for the side effect; the element manages itself.
+import '../meeting-banner.ts';
 import { staleTaskLinkStatuses } from '../link-titles.ts';
 import { startReadingTracker } from '../reading-tracker.ts';
 import { pageSentry } from '../sentry-page.ts';
@@ -381,7 +384,7 @@ const NAV_ITEMS: ReadonlyArray<{ nav: HubNav; label: string; icon: string }> = [
 ];
 
 /** Static shell — built once; regions re-render into their containers. */
-function buildShell(root: HTMLElement, name: string): void {
+function buildShell(root: HTMLElement, name: string, workspaceId: string): void {
   root.innerHTML = `
     <header class="hub-topbar">
       <a href="/" class="back-link" title="All workspaces" aria-label="Back">←</a>
@@ -469,6 +472,11 @@ function buildShell(root: HTMLElement, name: string): void {
         <div id="hub-walkthrough" class="hub-walkthrough hidden"></div>
       </section>
       <section class="hub-board-col">
+        <!-- The calendar meeting offer, IN FLOW at the top of the content
+             (approved mockup, round 4): header bar, then this, then the New
+             task row — pushed-down content, never an overlay. Hidden with the
+             whole column on the Home pane. -->
+        <meeting-banner workspace-id="${escapeHtml(workspaceId)}"></meeting-banner>
         <div id="hub-decisions" class="hub-decisions hidden"></div>
         <div id="hub-quick" class="hub-quick"></div>
         <div id="hub-board" class="hub-board"></div>
@@ -607,7 +615,7 @@ async function main(): Promise<void> {
     `/api/workspaces/${encodeURIComponent(workspaceId)}`,
   );
   if (initial) state.info = initial.workspace;
-  buildShell(root, state.info?.name ?? workspaceId);
+  buildShell(root, state.info?.name ?? workspaceId, workspaceId);
   // Now that there is a header to sit under. See signin/write-gate.ts.
   if (!writeAccess.canWrite) showSignInBar();
   // The Preact proving island (hidden; owns its own wrapper under root).
