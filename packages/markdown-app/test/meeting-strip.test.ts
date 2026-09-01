@@ -1346,7 +1346,13 @@ describe('the engine seam', () => {
       [...old.pop().querySelectorAll('.meeting-choice-group-label')].map((e) => e.textContent),
     ).not.toContain('Engine');
     old.strip.destroy();
-    const h = mount(undefined, { listEngines: twoEngines });
+    const h = mount(undefined, {
+      listEngines: () =>
+        Promise.resolve({
+          engines: ['assemblyai', 'assemblyai-pro', 'soniox'],
+          default: 'assemblyai',
+        }),
+    });
     await settle();
     h.record().click();
     const labels = [...h.pop().querySelectorAll('.meeting-choice-group-label')].map(
@@ -1355,6 +1361,7 @@ describe('the engine seam', () => {
     expect(labels).toContain('Engine');
     const titles = [...h.pop().querySelectorAll('.meeting-choice-title')].map((e) => e.textContent);
     expect(titles).toContain('AssemblyAI');
+    expect(titles).toContain('AssemblyAI Pro');
     expect(titles).toContain('Soniox');
   });
 

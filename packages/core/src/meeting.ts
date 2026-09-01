@@ -129,7 +129,7 @@ export function maxSpeakersFor(mode: CaptureMode, speakers?: number): number | u
  * on its keys; `GET /api/meeting-engines` reports that, and a `start` naming
  * an engine the server does not hold answers `unavailable`.
  */
-export const TRANSCRIPTION_ENGINE_NAMES = ['assemblyai', 'soniox'] as const;
+export const TRANSCRIPTION_ENGINE_NAMES = ['assemblyai', 'assemblyai-pro', 'soniox'] as const;
 export type TranscriptionEngineName = (typeof TRANSCRIPTION_ENGINE_NAMES)[number];
 
 /**

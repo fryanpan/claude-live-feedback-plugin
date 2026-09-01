@@ -87,6 +87,26 @@ export interface TranscriptionEngine {
 }
 
 /**
+ * The server's engine list, DEFAULT FIRST — the one place the default is
+ * decided. A `start` naming no engine opens the first configured engine, and
+ * `/api/meeting-engines` reports it as the default the chooser preselects.
+ *
+ * Soniox leads (Bryan, 2026-09-01); on a box without the Soniox key the
+ * default falls back to AssemblyAI, which is what every server ran before
+ * the choice existed. A function rather than an array literal in `bin.ts`
+ * so the ordering is a fact a test can hold still.
+ */
+export function orderedEngines(available: {
+  soniox: TranscriptionEngine | null;
+  assemblyAi: TranscriptionEngine | null;
+  assemblyAiPro: TranscriptionEngine | null;
+}): TranscriptionEngine[] {
+  return [available.soniox, available.assemblyAi, available.assemblyAiPro].filter(
+    (e): e is TranscriptionEngine => e !== null,
+  );
+}
+
+/**
  * One scripted turn for the mock engine: the words it reveals, and what the
  * turn settles to once the engine stops revising it.
  */
