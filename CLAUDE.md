@@ -106,10 +106,36 @@ does (a 200 on the POST is not delivery; read the verdict). Manual fallback
 when the server is down (run `bun install` yourself after the pull):
 
 ```bash
-git pull --ff-only origin main    # in the PRIMARY checkout — prod's deploy source
+# in PROD'S OWN checkout — see "Where prod lives" below. NOT Bryan's working copy.
+cd ~/Library/Application\ Support/claude-workspaces/repo
+git pull --ff-only origin main
 launchctl kickstart -k gui/$(id -u)/com.fryanpan.claude-workspaces   # NOT ...live-feedback
-cat ~/.local/state/claude-workspaces/client/current/release.json
+cat ~/Library/Application\ Support/claude-workspaces/client/current/release.json
 ```
+
+### Where prod lives — all of it on the boot disk (2026-09-01)
+
+macOS blocks a **launchd-started** process from reading `/Volumes/Data`, so
+every path the service needs sits under
+`~/Library/Application Support/claude-workspaces/`: `repo/` (prod's own
+checkout, tracking `origin/main`), `data/` (the `.ydoc` corpus — set by
+`CW_DATA_DIR`), `client/` (releases — set by `CW_CLIENT_ROOT`), and
+`bin/bun`. A process started from a TERMINAL is unaffected, which is why
+dev checkouts and worktrees stay on `/Volumes/Data`.
+
+- **Prod's deploy source is whatever checkout the plist's `WorkingDirectory`
+  names** — nothing else defines it, because `bin.ts` derives `repoRoot` from
+  its own file location. Moving prod means editing that key.
+- The primary checkout is no longer prod's deploy source, so a mid-edit or
+  unpulled working tree can no longer ship the wrong client.
+- `~/.local`, `~/.claude` and `~/.bun` are **symlinks onto `/Volumes/Data`**,
+  so a launchd process cannot read them. Anything prod needs from `$HOME`
+  must resolve to real `~/Library` storage — the discovery file
+  (`~/.claude/claude-workspaces/`) is a symlink to boot-disk storage for
+  exactly this reason. Audit every new `homedir()` path against this.
+- Diagnosing it: `launchctl submit` a `/bin/cat` of a file under the path in
+  question. `Operation not permitted` is the block; run the same probe on a
+  `~/Library` file as the positive control, or a broken job looks identical.
 
 Done when `release.json`'s `sourceRef` matches the commit you shipped AND the
 deploy's `verification` reads `healthy` — a healthy restart over an unpulled
@@ -121,7 +147,9 @@ deploy (`force` accepts the loss); a failed `bun install` refuses the restart
 ## Staging — review a branch before merge
 
 `bun run staging` from a LINKED worktree (it refuses the primary checkout —
-prod's deploy source): :8788, throwaway data dir; prod stays on 8787. Agent:
+the guard is `--git-dir == --git-common-dir`, and it still holds: prod no
+longer deploys from there, but building bundles in the primary working copy
+is its own accident): :8788, throwaway data dir; prod stays on 8787. Agent:
 `FEEDBACK_BASE_URL=http://<host>:8788` at launch; data never migrates to prod.
 
 ## Pre-push leak gate (public repo)
