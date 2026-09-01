@@ -19,12 +19,14 @@
 import type { RefObject } from 'preact';
 import { useLayoutEffect, useRef } from 'preact/hooks';
 import { attachMarkdownComposer, focusMarkdownComposer } from '../md-composer.ts';
+import type { HubReviewItem } from './hub-model.ts';
 import {
   type TaskDiscussion,
   commentRow,
   composerTarget,
-  flattenComments,
+  discussionStream,
   requireText,
+  reviewItemRow,
 } from './hub-render.ts';
 
 /**
@@ -256,13 +258,22 @@ export function Discussion(props: {
   onComment?: (text: string, threadId?: string) => Promise<boolean> | undefined;
   /** Which comment the review queue sent the reader here to read. */
   focusThreadId?: string;
+  /** Review items raised on the TICKET itself — rows of this history at the
+   *  time they were raised, answered record and all. A goal passes none. */
+  reviewItems?: HubReviewItem[];
+  /** The reader's display name, so their own answer reads "Answered by you". */
+  selfName?: string;
   now: number;
 }) {
-  const { rowId, discussion, onComment, focusThreadId, now } = props;
+  const { rowId, discussion, onComment, focusThreadId, reviewItems, selfName, now } = props;
   const streamRef = useRef<HTMLOListElement | null>(null);
-  const rows = flattenComments(discussion.threads);
+  const rows = discussionStream(discussion.threads, reviewItems);
   useFill(streamRef as RefObject<HTMLElement>, () =>
-    rows.map((row) => commentRow(row, focusThreadId, now)),
+    rows.map((entry) =>
+      entry.kind === 'comment'
+        ? commentRow(entry.row, focusThreadId, now, selfName)
+        : reviewItemRow(entry.item, now, selfName),
+    ),
   );
   // One box, one verb, no target row above it. The destination is DERIVED
   // rather than picked, and the reader is not told about it — being told about
@@ -271,7 +282,7 @@ export function Discussion(props: {
   return (
     <section class="hub-discussion">
       {discussion.loading && <p class="hub-discussion-loading">Loading the discussion…</p>}
-      {!discussion.loading && discussion.threads.length === 0 && (
+      {!discussion.loading && rows.length === 0 && (
         <p class="hub-discussion-empty">No comments yet.</p>
       )}
       {rows.length > 0 && <ol ref={streamRef} class="hub-comment-stream" />}

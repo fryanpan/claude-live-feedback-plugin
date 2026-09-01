@@ -220,10 +220,23 @@ export interface HubTask {
 /** A projected review item, as far as the hub reads it. */
 export interface HubReviewItem {
   id: string;
-  review: { headline: string; detail?: string };
+  /** The declaration. `shape`, `options` and `withdrawnAt` are read by the
+   *  comment stream's row for the item; an older fixture carrying only the
+   *  headline still renders as a question. */
+  review: {
+    headline: string;
+    detail?: string;
+    shape?: 'review' | 'decision';
+    options?: Array<{ id: string; label: string }>;
+    withdrawnAt?: number;
+  };
   createdBy?: string;
-  /** Present when it has been answered; the hold is moot then. */
-  answer?: { text: string };
+  /** When it was raised — its place in the task's comment history. */
+  createdAt?: number;
+  /** Present when it has been answered; the hold is moot then. `by`, `ts`
+   *  and `answeredWith` are what the answered record in the stream shows —
+   *  who, when, and which option the words came from. */
+  answer?: { text: string; by?: string; ts?: number; answeredWith?: string };
   /** The quality gate's verdict on the current words. `held` is the one
    *  that shows on the ticket. */
   judge?: { at: number; verdict: 'ok' | 'held' | 'unavailable' | 'pending'; reason: string };
@@ -2583,6 +2596,7 @@ export const ACTIVITY_REFRESH_EVENTS = [
   'task.archived',
   'task.restored',
   'task.regrouped',
+  'review_item.added',
   'decision.answered',
   'decision.answer_withdrawn',
   'decision.info_requested',
@@ -2707,6 +2721,14 @@ export function describeEvent(ev: ActivityEvent, titleOf: (taskId: string) => st
     // row, not off the task.
     case 'task.gate_refused':
       return `the gate refused ${actorName(ev)} on ${title()}: ${String(ev.riskTier)}-tier, → ${String(ev.to)}`;
+    case 'review_item.added': {
+      // The ask itself, so the trail reads question-then-answer rather than
+      // an answer to nothing. The verb follows the shape, as the card's kind
+      // chip does: a decision is raised, a question is asked.
+      const headline = typeof ev.headline === 'string' ? ev.headline : '';
+      const verb = ev.shape === 'decision' ? 'raised a decision on' : 'asked a question on';
+      return `${actorName(ev)} ${verb} ${title()}${headline ? `: “${headline}”` : ''}`;
+    }
     case 'decision.answered': {
       // The emitted row carries the answer as a plain STRING (the store's
       // `answer: text`), not the `{text, by, ts}` object the task field
