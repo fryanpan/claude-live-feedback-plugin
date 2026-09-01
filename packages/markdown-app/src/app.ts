@@ -375,7 +375,14 @@ async function mountMarkdown(ctx: MountContext): Promise<void> {
       // "<name>'s Claude Code Agent" — the bot walks into the call wearing
       // the name of the person who sent it, editable in the chooser.
       botNamePrefill: user.name ? `${user.name}'s Claude Code Agent` : 'Claude Code Agent',
-      autoStart: huddleStart,
+      // Which of the two entries this press was, read off the mode it
+      // carries: a solo huddle ("Make a plan") opens the microphone, and a
+      // conversation ("Have a discussion") opens the chooser instead,
+      // because a room cannot be recorded until somebody presses the button
+      // that tells it so. Nothing new on the address — the mode the Board
+      // already sends is the whole difference between the two buttons.
+      autoStart: huddleStart && huddleMode !== 'conversation',
+      autoChoose: huddleStart && huddleMode === 'conversation',
       // Read BEFORE the flag is stripped from the address above… it is, in
       // fact, read from `location.search` there too, so both come off the
       // same address; see `huddleCaptureMode`.
