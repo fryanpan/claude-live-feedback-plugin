@@ -5331,6 +5331,25 @@ a.hub-link-chip:hover {
   text-decoration: line-through;
   text-decoration-thickness: 1px;
 }
+/* An ANSWERED ask in the stream. The chip goes quiet so the eye stops on
+   what was decided, and the record under the row carries the answer, who
+   gave it and when — the same words as the panel's answered card. */
+.hub-comment-review-k.is-answered {
+  color: var(--fg-muted);
+}
+.hub-comment-answered {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin: 6px 0 0;
+  font-size: 13px;
+  line-height: 1.4;
+}
+.hub-comment-answered-text {
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
 .hub-comment-review-headline {
   margin: 2px 0 0;
   font-size: 14px;
