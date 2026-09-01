@@ -153,7 +153,11 @@ describe('the Related Links section on the panel', () => {
     expect(root.querySelector('.hub-related-links-k')?.textContent).toBe('Related Links');
     const link = root.querySelector<HTMLAnchorElement>('.hub-related-link');
     expect(link?.getAttribute('href')).toBe('/workspaces/w-test/docs/d-plan');
-    expect(link?.textContent).toBe('d-plan');
+    // Not the raw doc id, and not left blank either: "Loading…" is what a
+    // reader sees before the title-hydration fetch lands (or forever, if it
+    // fails) — the AC is title-only links, so the id is never a value this
+    // settles on, in flight or not.
+    expect(link?.textContent).toBe('Loading…');
     // The panel no longer has a "Source doc" field at all — this section
     // replaces it.
     expect(

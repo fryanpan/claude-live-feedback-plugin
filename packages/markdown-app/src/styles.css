@@ -3856,9 +3856,14 @@ body.hub-body {
    drops to a single column on a narrow phone, where `span 2` would create an
    implicit second column and overflow the panel, while `1 / -1` just means
    "full width" at every count.
+   An explicit modifier, not `:last-child` (what this was): position is an
+   accident, not an intent — the goal PANEL's own last field is Due, a date
+   input that must stay one column wide, and the task panel's own last field
+   is sometimes a hidden effort-detail drawer rather than Goal at all. Only
+   the cell that IS the free-text field gets this class.
    Status is NO LONGER the full-width one — it stopped being three chips and
    became a single value with a dropdown, which fits a column. */
-.hub-detail-field:last-child {
+.hub-detail-field--full {
   grid-column: 1 / -1;
 }
 /* --- the blocked note: a blocker is task state, and this is its one surface

@@ -342,24 +342,74 @@ function assigneePicker(
   return sel;
 }
 
+/** The shared class every title-hydrated doc anchor carries — the Activity
+ *  tab's doc-kind chips and the Related Links section both hydrate through
+ *  the one re-query in `hydrateDocTitles`, so either can kick off the fetch
+ *  and both catch the answer regardless of which is mounted when it lands. */
+const DOC_TITLE_LINK_CLASS = 'hub-doc-title-link';
+
+/** The canonical href for a doc: workspace-scoped when a workspaceId is
+ *  known (what every fresh link should be), the legacy `/review/<id>` shape
+ *  otherwise — the same fallback the old Source-doc field used. */
+function docLinkHref(docId: string, workspaceId?: string): string {
+  return workspaceId !== undefined
+    ? `/workspaces/${encodeURIComponent(workspaceId)}/docs/${encodeURIComponent(docId)}`
+    : `/review/${encodeURIComponent(docId)}`;
+}
+
+/** Applies the shared link-title cache to one title-hydrated anchor.
+ *  `null` (not `undefined`) means the server WAS asked and came back with
+ *  nothing — a genuinely untitled doc, not a lookup still in flight — so it
+ *  renders "Untitled doc". `undefined` (not yet asked) leaves the "Loading…"
+ *  placeholder alone so a later hydration pass can still land. The raw doc
+ *  id is never a value this settles on: the AC is title-only links, a
+ *  reviewer should never see one in this slot. */
+function applyDocTitle(a: HTMLAnchorElement): void {
+  const title = cachedLinkTitle(a.getAttribute('href') ?? '');
+  if (typeof title === 'string' && title !== '') a.textContent = title;
+  else if (title === null) a.textContent = 'Untitled doc';
+}
+
+/** Kicks off one title fetch for whichever `DOC_TITLE_LINK_CLASS` anchors
+ *  are still on the "Loading…" placeholder, and reapplies titles to
+ *  whatever is CURRENTLY mounted when it resolves. Never gated on any one
+ *  render's own DOM surviving: `useFill`'s no-deps effect can rebuild
+ *  either section on every parent re-render, tearing down the anchor that
+ *  issued the fetch well before it settles — re-querying the live document
+ *  is what closes that race. */
+function hydrateDocTitles(anchors: readonly HTMLAnchorElement[]): void {
+  const unresolved = anchors.filter((a) => a.textContent === 'Loading…');
+  if (unresolved.length === 0) return;
+  void fetchLinkInfos(unresolved.map((a) => a.getAttribute('href') ?? ''))
+    .then(() => {
+      for (const a of document.querySelectorAll<HTMLAnchorElement>(`.${DOC_TITLE_LINK_CLASS}`))
+        applyDocTitle(a);
+    })
+    .catch(() => {
+      // The ids stay — true, just less familiar.
+    });
+}
+
 /**
  * The task's `links`, as chips. Until this existed, a ref was stored, keyed
  * and backlinked and then never drawn — the store had it and no surface
  * could show it, which is the failure mode this codebase has already been
  * bitten by once with resolved threads.
  *
- * Only `url` refs become anchors. The internal kinds (doc / thread / task /
- * diff) are ids, and inventing hrefs for them here would be guessing at
- * route shapes that live on the server; they render as labelled chips so
- * their presence is at least visible. A ref of an unknown kind is skipped
+ * `url` refs become external anchors, and `doc` refs become title-hydrated
+ * internal anchors — the same title-only treatment Related Links gets, so a
+ * reviewer never sees a raw doc id here either. The remaining internal kinds
+ * (thread / task / diff) are ids with no titled destination this panel can
+ * resolve, so they stay labelled chips; a ref of an unknown kind is skipped
  * rather than thrown on — an older client must survive a newer server
  * adding a kind, and a task that fails to open is worse than a missing chip.
  */
-export function renderTaskLinks(task: HubTask): HTMLElement | null {
+export function renderTaskLinks(task: HubTask, workspaceId?: string): HTMLElement | null {
   const refs = Array.isArray(task.links) ? task.links : [];
   if (refs.length === 0) return null;
   const wrap = document.createElement('div');
   wrap.className = 'hub-detail-links';
+  const docAnchors: HTMLAnchorElement[] = [];
   for (const raw of refs) {
     if (typeof raw !== 'object' || raw === null) continue;
     const ref = raw as Record<string, unknown>;
@@ -391,12 +441,24 @@ export function renderTaskLinks(task: HubTask): HTMLElement | null {
     }
     const kind = typeof ref.kind === 'string' ? ref.kind : null;
     if (kind === null) continue;
+    if (kind === 'doc' && typeof ref.docId === 'string' && ref.docId !== '') {
+      const a = document.createElement('a');
+      a.className = `hub-link-chip ${DOC_TITLE_LINK_CLASS}`;
+      a.href = docLinkHref(ref.docId, workspaceId);
+      a.textContent = 'Loading…';
+      a.addEventListener('click', (ev) => ev.stopPropagation());
+      applyDocTitle(a);
+      wrap.append(a);
+      docAnchors.push(a);
+      continue;
+    }
     const id = ref.docId ?? ref.taskId ?? ref.workspaceId;
     const chip = document.createElement('span');
     chip.className = 'hub-link-chip hub-link-internal';
     chip.textContent = typeof id === 'string' ? `${kind}: ${id}` : kind;
     wrap.append(chip);
   }
+  hydrateDocTitles(docAnchors);
   return wrap.childElementCount > 0 ? wrap : null;
 }
 
@@ -1608,17 +1670,15 @@ export function renderRelatedLinks(
   heading.textContent = 'Related Links';
   const list = document.createElement('ul');
   list.className = 'hub-related-links-list';
-  const rows: { a: HTMLAnchorElement; docId: string }[] = [];
+  const anchors: HTMLAnchorElement[] = [];
   for (const link of links) {
     const li = document.createElement('li');
     const a = document.createElement('a');
-    a.className = 'hub-related-link';
-    a.href =
-      workspaceId !== undefined
-        ? `/workspaces/${encodeURIComponent(workspaceId)}/docs/${encodeURIComponent(link.docId)}`
-        : `/review/${encodeURIComponent(link.docId)}`;
-    a.textContent = link.docId;
+    a.className = `hub-related-link ${DOC_TITLE_LINK_CLASS}`;
+    a.href = docLinkHref(link.docId, workspaceId);
+    a.textContent = 'Loading…';
     a.addEventListener('click', (ev) => ev.stopPropagation());
+    applyDocTitle(a);
     li.append(a);
     if (link.held) {
       const held = document.createElement('span');
@@ -1627,41 +1687,10 @@ export function renderRelatedLinks(
       li.append(held);
     }
     list.append(li);
-    rows.push({ a, docId: link.docId });
+    anchors.push(a);
   }
   wrap.append(heading, list);
-  // `null` (not `undefined`) means the server WAS asked and came back with
-  // nothing — a genuinely untitled doc, not a lookup still in flight. The
-  // raw doc id is never the fallback here: the AC is title-only links —
-  // a reviewer should never see a raw doc id in this slot. `undefined`
-  // (not yet asked) leaves the placeholder text alone so a later
-  // hydration pass can still land.
-  const applyTitle = (a: HTMLAnchorElement): void => {
-    const title = cachedLinkTitle(a.getAttribute('href') ?? '');
-    if (typeof title === 'string' && title !== '') a.textContent = title;
-    else if (title === null) a.textContent = 'Untitled doc';
-  };
-  for (const { a } of rows) applyTitle(a);
-  const unresolved = rows.filter((r) => r.a.textContent === r.docId);
-  if (unresolved.length > 0) {
-    void fetchLinkInfos(unresolved.map((r) => r.a.getAttribute('href') ?? ''))
-      .then(() => {
-        // Re-read from the LIVE document rather than this call's own
-        // `rows`/`wrap` closure: the detail panel repaints this whole
-        // section on every parent re-render (`useFill` has no dependency
-        // list), so a fast-repainting parent can tear this particular
-        // instance down well before its own fetch settles. Querying fresh
-        // finds whichever instance is actually mounted right now and is
-        // what closes the race — gating on `wrap.isConnected` here left
-        // the reader looking at a raw doc id forever once the panel had
-        // repainted even once during the lookup.
-        for (const a of document.querySelectorAll<HTMLAnchorElement>('.hub-related-link'))
-          applyTitle(a);
-      })
-      .catch(() => {
-        // The ids stay — true, just less familiar.
-      });
-  }
+  hydrateDocTitles(anchors);
   return wrap;
 }
 
@@ -1685,9 +1714,9 @@ export function detailFields(
   // wrapper existed — "STATUS" sat in column one with the chips in column two
   // and "ASSIGNEE" in column three, which is exactly the jumble this row is
   // meant to end.
-  const cell = (key: string, value: Node | string): void => {
+  const cell = (key: string, value: Node | string, opts?: { full?: boolean }): void => {
     const wrap = document.createElement('div');
-    wrap.className = 'hub-detail-field';
+    wrap.className = opts?.full ? 'hub-detail-field hub-detail-field--full' : 'hub-detail-field';
     const dt = document.createElement('dt');
     dt.className = 'hub-detail-field-k';
     dt.textContent = key;
@@ -1785,7 +1814,12 @@ export function detailFields(
   goal.addEventListener('change', () => {
     if (goal.value && goal.value !== task.goal) handlers.onGoalSet?.(task, goal.value);
   });
-  cell('Goal', goal);
+  // Explicitly full-width, not "whichever field lands last": when effort
+  // fields are scored, the hidden effort-detail drawer is what's actually
+  // appended last, and DOM order is never a fact this panel wants to depend
+  // on for a completely different reason (the goal panel's own last field,
+  // Due, must never inherit this by coincidence of position).
+  cell('Goal', goal, { full: true });
 
   // Effort, last, and only when there is something to say.
   //

@@ -517,19 +517,22 @@ function GoalDetailPanel(props: {
         </div>
       )}
 
-      <div class="hub-detail-body">
-        <dl ref={fieldsRef} class="hub-detail-fields" />
-        {/* Title-only links to the docs this goal ties to — the approved
-            mock's Related Links section, right below the fields row. Absent
-            entirely when the goal names no doc. */}
-        {relatedLinks.length > 0 && <div ref={relatedLinksRef} class="hub-related-links-slot" />}
-        {/* The attribution the row can only whisper (its tooltip), said plainly
-            where there is room: a done goal is somebody's claim, and the claim
-            names its author. No open-children advisory beside it — the server
-            has always accepted a done declaration over open children, so it
-            spent two lines restating a rule nothing enforced. */}
-        {doneNote !== null && <p class="hub-goal-done-note">{doneNote}</p>}
-      </div>
+      {/* Siblings, not wrapped — the task panel's own fields/related-links/
+          notes sit flat too. `.hub-detail-body` is the DESCRIPTION prose's
+          class elsewhere in this file (serif font, indented lists); reusing
+          it here as a bare layout wrapper had these three inheriting both
+          by accident. */}
+      <dl ref={fieldsRef} class="hub-detail-fields" />
+      {/* Title-only links to the docs this goal ties to — the approved
+          mock's Related Links section, right below the fields row. Absent
+          entirely when the goal names no doc. */}
+      {relatedLinks.length > 0 && <div ref={relatedLinksRef} class="hub-related-links-slot" />}
+      {/* The attribution the row can only whisper (its tooltip), said plainly
+          where there is room: a done goal is somebody's claim, and the claim
+          names its author. No open-children advisory beside it — the server
+          has always accepted a done declaration over open children, so it
+          spent two lines restating a rule nothing enforced. */}
+      {doneNote !== null && <p class="hub-goal-done-note">{doneNote}</p>}
 
       {/* The prose the whole ticket is about: *"the most important object on
           the board is the only one you cannot explain"*. Drawn unconditionally,

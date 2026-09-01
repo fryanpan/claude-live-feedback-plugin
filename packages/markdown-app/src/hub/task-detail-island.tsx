@@ -843,8 +843,10 @@ function ActivityTab(props: { task: HubTask; handlers: DetailHandlers; hidden: b
     }),
   );
 
-  const links = renderTaskLinks(task);
-  useFill(linksRef as RefObject<HTMLElement>, () => [...(renderTaskLinks(task)?.childNodes ?? [])]);
+  const links = renderTaskLinks(task, handlers.workspaceId);
+  useFill(linksRef as RefObject<HTMLElement>, () => [
+    ...(renderTaskLinks(task, handlers.workspaceId)?.childNodes ?? []),
+  ]);
 
   return (
     <div
