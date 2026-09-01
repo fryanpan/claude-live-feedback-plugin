@@ -83,10 +83,13 @@ describe('renderQuickActions — the buttons in the quick-add slot', () => {
     const huddle = root.querySelector('.hub-huddle-start') as HTMLButtonElement;
     expect(newTask.textContent).toContain('New task');
     expect(newTask.classList.contains('hub-btn-primary')).toBe(true);
-    expect(huddle.textContent).toContain('Start a planning huddle');
+    // Round-4 mock (Bryan, 2026-09-01): verb-first, outcome-named — you
+    // leave with a plan doc, or with notes. The rename touches these entry
+    // buttons only; routes, params and doc titles keep the huddle name.
+    expect(huddle.textContent).toContain('Make a plan');
     expect(huddle.classList.contains('hub-btn')).toBe(true);
     const conversation = root.querySelector('.hub-conversation-start') as HTMLButtonElement;
-    expect(conversation.textContent).toContain('Record a conversation');
+    expect(conversation.textContent).toContain('Have a discussion');
     expect(conversation.type).toBe('button');
     // Not a submit: there is no form here to submit, and a stray Enter must
     // not file anything.
@@ -301,7 +304,7 @@ describe('hub-app wires the two buttons to the two routes', () => {
     expect(HUB_APP).toMatch(/focusTitle:\s*focusTitleTaskId === task\.id/);
   });
 
-  it('Start a planning huddle posts to the huddle route and leaves with the mic flag', () => {
+  it('Make a plan posts to the huddle route and leaves with the mic flag', () => {
     const body = fn('startHuddle');
     expect(body, 'startHuddle went missing').not.toBe('');
     expect(body).toMatch(/\/huddles`/);
@@ -311,11 +314,15 @@ describe('hub-app wires the two buttons to the two routes', () => {
     // thing that knows whether anyone else is in the room, and the editor
     // that opens the mic is a different page.
     expect(body).toContain('HUDDLE_MODE_PARAM');
+    // The KIND rides the request body: the server seeds a plan doc with the
+    // Goal heading and stamps `huddleKind`, so the editor can dress the two
+    // flows differently without re-deriving intent from the mode.
+    expect(body).toContain('kind');
   });
 
-  it('the two mic buttons are the same route with different modes', () => {
-    expect(HUB_APP).toContain("onStartHuddle: () => startHuddle('solo')");
-    expect(HUB_APP).toContain("onStartConversation: () => startHuddle('conversation')");
+  it('the two buttons are the same route with different kinds and modes', () => {
+    expect(HUB_APP).toContain("onStartHuddle: () => startHuddle('plan', 'solo')");
+    expect(HUB_APP).toContain("onStartConversation: () => startHuddle('discussion', 'conversation')");
   });
 
   it('the c shortcut presses New task now that there is no box to focus', () => {
