@@ -6838,8 +6838,43 @@ body.is-reading-width #editor > .ProseMirror {
     display: inline-flex;
     align-items: center;
     justify-content: center;
+    min-width: 44px;
+    min-height: 44px;
+  }
+  /* The crumb is `flex: 1` beside a toolbar that could not shrink, so when
+     edit mode added its Aa button the crumb was what gave: measured at 430px
+     the crumb was 8px wide — arrow and doc name both clipped inside it — and
+     the toolbar started at x=34. Two halves. The crumb gets a FLOOR (the
+     44px arrow plus enough of the name to tell two huddles apart), and the
+     toolbar becomes the side that yields: tighter buttons and gaps so the
+     whole bar fits at 430 (measured 274px in edit mode against 406 usable),
+     and a horizontal scroll — not a push off-screen, not a clipped crumb —
+     should a future button make it not fit. `align-self: stretch` because a
+     scroll container clips on both axes and the count badge sits 4px above
+     its button. */
+  #topbar {
+    gap: 8px;
+    padding-left: 12px;
+    padding-right: 12px;
+  }
+  .doc-crumb {
+    min-width: 112px;
+  }
+  .toolbar {
+    flex: 0 1 auto;
+    min-width: 0;
+    gap: 4px;
+    align-self: stretch;
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+  .toolbar::-webkit-scrollbar {
+    display: none;
+  }
+  .toolbar .icon-btn:not(.comment-nav) {
     min-width: 36px;
-    min-height: 36px;
+    padding-left: 7px;
+    padding-right: 7px;
   }
   .doc-path {
     font-size: 13px;
@@ -8042,10 +8077,18 @@ body.is-reading-width #editor > .ProseMirror {
 
 /* ---- narrow widths ---- */
 @media (max-width: 640px) {
+  /* Glyph only: at 121px the word "Record Audio" was a third of the phone's
+     toolbar, and the crumb beside it paid for it (see the topbar phone block).
+     The red dot and red border still say "recording", and the strip that
+     opens under the bar says it in words. */
   .meeting-record {
     padding: 0 9px;
     font-size: 12px;
     margin-left: 2px;
+    gap: 0;
+  }
+  .meeting-record-label {
+    display: none;
   }
   .meeting-strip {
     gap: 8px;

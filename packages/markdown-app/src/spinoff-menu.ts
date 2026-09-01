@@ -161,26 +161,6 @@ export function readyToWork(title: string): boolean {
 }
 
 /**
- * The agent the doc's board is led by, or undefined when nothing names one.
- *
- * Its own round trip, on the research path only, because that is the one
- * action whose owner is NOT the person who tapped it. Undefined on any
- * failure — a research row belonging to a name we guessed is worse than one
- * that goes through triage to be given an owner on purpose.
- */
-async function leadAgentFor(deps: SpinoffDeps): Promise<string | undefined> {
-  try {
-    const body = (await deps.fetchJson(`/api/docs/${encodeURIComponent(deps.docId)}`)) as {
-      leadAgentId?: unknown;
-    };
-    const lead = typeof body?.leadAgentId === 'string' ? body.leadAgentId.trim() : '';
-    return lead === '' ? undefined : lead;
-  } catch {
-    return undefined;
-  }
-}
-
-/**
  * The link a spun-off task is written back into the prose as.
  *
  * Root-relative on purpose, and byte-identical to the server's
@@ -294,10 +274,6 @@ export async function runSpinoff(
 
   const said = deriveTaskTitle(deps.quote, action === 'research' ? TITLE_MAX - 10 : TITLE_MAX);
   const title = action === 'research' ? `Research: ${said}` : said;
-  // Research is the agent's errand, not the tapper's. Left unsaid, the create
-  // route falls the assignee back to the author, which put "go and find out
-  // about this" on the plate of the person who asked the question.
-  const lead = action === 'research' ? await leadAgentFor(deps) : undefined;
   const res = (await post(deps, `/api/workspaces/${encodeURIComponent(deps.workspaceId)}/tasks`, {
     title,
     body: spinoffBody(deps.quote, deps.docTitle),
@@ -305,15 +281,18 @@ export async function runSpinoff(
     // Where it came from, the way the meeting assistant's captured tasks
     // say it — one origin kind for "a doc line became this".
     origin: { kind: 'doc', docId: deps.docId },
-    ...(lead !== undefined ? { assignee: lead, assigneeKind: 'agent' } : {}),
+    // Research is the agent's errand, not the tapper's. Left unsaid, the
+    // create route falls the assignee back to the author, which put "go and
+    // find out about this" on the plate of the person who asked the question
+    // — and a client-side lead lookup that came back empty left that
+    // fallback in place. So the row is ADDRESSED to the board: the server
+    // hands it to the lead, or files it at triage owned by nobody when
+    // there is no lead, and never to whoever tapped.
+    ...(action === 'research' ? { assignToLead: true } : {}),
     // Where the row lands, decided from what the row SAYS. A thin selection
     // makes a row nobody can pick up, and triage is where a row goes to be
-    // given enough to act on — see `readyToWork`. A research errand with no
-    // agent to hand it to is thin in the same way: it says what to find out
-    // and not who is finding it out.
-    ...(!readyToWork(said) || (action === 'research' && lead === undefined)
-      ? { triage: true }
-      : {}),
+    // given enough to act on — see `readyToWork`.
+    ...(!readyToWork(said) ? { triage: true } : {}),
   })) as { task?: { id?: string; status?: string } };
   const taskId = res?.task?.id;
   if (taskId === undefined) return null;

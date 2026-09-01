@@ -138,6 +138,67 @@ describe('task creation records a real owner', () => {
     });
   });
 
+  describe('a row addressed to the board lead (`assignToLead`)', () => {
+    // The huddle's "Research and come back": an agent going away to find
+    // something out, never the person who asked. On a board with no lead the
+    // client sent no assignee and the author fallback handed the errand to
+    // the tapper — the one owner the action rules out.
+    const LEAD = 'agent-lookup';
+    async function seedLedWorkspace(): Promise<string> {
+      const { workspace } = await jj<{ workspace: { id: string } }>(
+        await post('/api/workspaces', {
+          name: 'led-board',
+          goal: 'Answer what the room asks.',
+          leadAgentId: LEAD,
+        }),
+      );
+      return workspace.id;
+    }
+    const RESEARCH = { title: 'Research: does Access cover the mockup route', author: PERSON };
+
+    it('goes to the lead, as an agent, when the board has one', async () => {
+      const wsId = await seedLedWorkspace();
+      const { task } = await jj<{ task: Task }>(
+        await post(`/api/workspaces/${wsId}/tasks`, { ...RESEARCH, assignToLead: true }),
+      );
+      const stored = (await getTasks(wsId)).find((t) => t.id === task.id);
+      expect(stored?.assignee).toBe(LEAD);
+      expect(stored?.assigneeKind).toBe('agent');
+      expect(stored?.status).not.toBe('triage');
+    });
+
+    it('lands at triage owned by nobody when there is no lead — never the tapper', async () => {
+      const wsId = await seedWorkspace();
+      const { task } = await jj<{ task: Task }>(
+        await post(`/api/workspaces/${wsId}/tasks`, { ...RESEARCH, assignToLead: true }),
+      );
+      const stored = (await getTasks(wsId)).find((t) => t.id === task.id);
+      expect(stored?.assignee).not.toBe(PERSON.name);
+      // The generic value is what the hub draws as "Unassigned" and what no
+      // agent's `next_tasks?assignee=<me>` matches: a vacancy, on purpose.
+      expect(stored?.assignee).toBe(GENERIC_ASSIGNEE);
+      expect(stored?.status).toBe('triage');
+      // POSITIVE CONTROL: the same create WITHOUT the flag is the tapper's, so
+      // it is the flag that moved the row and not a broken author fallback.
+      const { task: plain } = await jj<{ task: Task }>(
+        await post(`/api/workspaces/${wsId}/tasks`, RESEARCH),
+      );
+      expect((await getTasks(wsId)).find((t) => t.id === plain.id)?.assignee).toBe(PERSON.name);
+    });
+
+    it('still lets an explicit assignee win over the flag', async () => {
+      const wsId = await seedLedWorkspace();
+      const { task } = await jj<{ task: Task }>(
+        await post(`/api/workspaces/${wsId}/tasks`, {
+          ...RESEARCH,
+          assignToLead: true,
+          assignee: 'Search Revamp',
+        }),
+      );
+      expect((await getTasks(wsId)).find((t) => t.id === task.id)?.assignee).toBe('Search Revamp');
+    });
+  });
+
   describe('re-assign (POST /api/tasks/<id>/assignee)', () => {
     // The create routes refuse an owner that resolves to the generic word, but
     // ownership can also be SET after the fact — and that route took any

@@ -7662,7 +7662,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
             return j(409, { error: 'workspace-retired', message: retiredRefusal(targetBoard) });
           }
           // One reading of a create body, shared with the batch route below.
-          const parsed = parseTaskCreate(body, authorFor(body?.author));
+          const parsed = parseTaskCreate(body, authorFor(body?.author), targetBoard);
           if (!parsed.ok) {
             return j(400, {
               error: parsed.error,
@@ -7906,7 +7906,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
                     ...(refs.after !== undefined ? { after: refs.after } : {}),
                     ...(refs.afterEnforce !== undefined ? { afterEnforce: refs.afterEnforce } : {}),
                   };
-            const parsed = parseTaskCreate(resolvedRow, createdBy);
+            const parsed = parseTaskCreate(resolvedRow, createdBy, batchBoard);
             if (!parsed.ok) {
               failures.push({
                 index,
