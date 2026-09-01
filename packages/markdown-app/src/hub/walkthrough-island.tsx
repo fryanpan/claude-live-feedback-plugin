@@ -60,6 +60,7 @@ import {
   reviewHeadline,
   reviewItemAnchorTarget,
   reviewItemBadge,
+  reviewItemOwner,
   reviewRowTitle,
   revisedPhrase,
 } from './hub-model.ts';
@@ -698,9 +699,10 @@ function WalkCard(props: {
   // them, because there was nowhere else to keep them; here the instance is
   // the place, and it outlives every repaint of this item.
   const [bodyExpanded, setBodyExpanded] = useState(false);
-  // Commenting on a phrase of the item, doc-style. Only a TICKET-borne item
-  // has a phrase to anchor to (`reviewItemAnchorTarget`); the others render
-  // no pill at all rather than a pill that opens nothing.
+  // Commenting on a phrase of the item, doc-style. A TICKET-borne item and a
+  // ticket's own decision have something to anchor to
+  // (`reviewItemAnchorTarget`); a thread-borne one does not, and renders a
+  // line saying where its questions go rather than a link that opens nothing.
   const anchorable = reviewItemAnchorTarget(item) !== null;
   const bodyRef = useRef<HTMLDivElement | null>(null);
   // The phrase the thread card is open on (the selection pill's flow).
@@ -708,7 +710,7 @@ function WalkCard(props: {
   // Whether the card is in QUESTION mode — the "I have a question" link's
   // flow: the answer furniture gives way to one box for the question.
   const [asking, setAsking] = useState(false);
-  const owner = item.thread?.askedBy?.trim() || 'the owner';
+  const owner = reviewItemOwner(item) || 'the owner';
   // No pill while the question box is up: one way of asking at a time. (An
   // item already waiting on its owner never reaches this card — the server
   // drops it from the queue — so there is no "already asked" state to hide
@@ -750,9 +752,12 @@ function WalkCard(props: {
       Skip for now
     </button>
   );
-  // The link, beside Skip: both are ways out of answering. Only an item with
+  // The link, beside Skip: both are ways out of answering. An item with
   // somewhere for a question to land gets one — the same test as the pill.
-  const questionLink = anchorable && (
+  // A thread-borne item gets ONE LINE saying where its questions go instead:
+  // its reply box IS the thread. Without it two identical-looking cards
+  // behaved differently and nothing said why.
+  const questionLink = anchorable ? (
     <button
       type="button"
       class="hub-btn hub-btn-ghost hub-walk-question-link"
@@ -760,6 +765,10 @@ function WalkCard(props: {
     >
       I have a question
     </button>
+  ) : (
+    <span class="hub-walk-question-note">
+      Have a question? Reply above — this card is the thread.
+    </span>
   );
   // The question box, in place of the answer furniture. That furniture is
   // HIDDEN rather than unmounted, so a half-typed answer survives the reader
@@ -803,27 +812,35 @@ function WalkCard(props: {
                 {`You already asked: “${row.task.infoRequests[row.task.infoRequests.length - 1]?.text ?? ''}”`}
               </p>
             )}
-            {row.task.options && row.task.options.length > 0 && (
-              <WalkOptions
-                options={row.task.options}
-                onPick={(o) => void handlers.onAnswer(row.task, o.label, o.id)}
+            {questionBox}
+            <div class={answering}>
+              {row.task.options && row.task.options.length > 0 && (
+                <WalkOptions
+                  options={row.task.options}
+                  onPick={(o) => void handlers.onAnswer(row.task, o.label, o.id)}
+                />
+              )}
+              {/* Always present, options or not: the candidates are a shortcut,
+                never a closed set. */}
+              <PromptForm
+                className="hub-walk-answer"
+                placeholder="…or answer in your own words — the agent gets your text verbatim"
+                submitLabel="Send"
+                keepKey={`walk-answer:${row.task.id}`}
+                onSubmit={(text) => handlers.onAnswer(row.task, text)}
               />
-            )}
-            {/* Always present, options or not: the candidates are a shortcut,
-              never a closed set. */}
-            <PromptForm
-              className="hub-walk-answer"
-              placeholder="…or answer in your own words — the agent gets your text verbatim"
-              submitLabel="Send"
-              keepKey={`walk-answer:${row.task.id}`}
-              onSubmit={(text) => handlers.onAnswer(row.task, text)}
-            />
-            {/* The "Tell me more" box that sat here is gone (Bryan, 2026-08-29:
-              "maybe instead we can let me comment directly on the review item
-              like in a doc"). Asking back is a comment on a phrase of a
-              declared item now — the pill below — and a legacy decision's
-              words are the task body, reached through its discussion. */}
-            <div class="hub-walk-actions">{skip}</div>
+              {/* The "Tell me more" box that sat here is gone (Bryan,
+                2026-08-29: "maybe instead we can let me comment directly on
+                the review item like in a doc"). The ticket's own decision
+                asks the way a ticket-borne item does now: the link opens
+                the question box, the question is a thread anchored to the
+                derived `r-legacy` row, and the card leaves until the owner
+                revises the ticket's words. */}
+              <div class="hub-walk-actions">
+                {questionLink}
+                {skip}
+              </div>
+            </div>
           </Fragment>
         ) : (
           <Fragment>

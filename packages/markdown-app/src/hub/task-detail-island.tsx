@@ -274,12 +274,14 @@ function ReviewCard(props: {
   const { task, item, handlers, now, shown } = props;
   const [busy, setBusy] = useState(false);
   // QUESTION mode — "I have a question": the answer furniture gives way to
-  // one box for the question. Only a ticket-borne card can ask (the question
-  // becomes a thread anchored to the item — `panelQuestionRequest`), and only
-  // when the surface wired the handler.
+  // one box for the question. A ticket-borne card and the ticket's own
+  // decision can ask (the question becomes a thread anchored to the item —
+  // `panelQuestionRequest`), when the surface wired the handler. A
+  // thread-borne card cannot, and says where its questions go instead.
   const [asking, setAsking] = useState(false);
   const canAsk =
-    item.source === 'task-review' && item.reviewItemId !== undefined && !!handlers.onAskOnPanelItem;
+    !!handlers.onAskOnPanelItem &&
+    (item.source === 'task' || (item.source === 'task-review' && item.reviewItemId !== undefined));
   const owner = item.askedBy?.trim() || 'the owner';
 
   // Answering the task's own decision goes through `answer_decision`; every
@@ -444,6 +446,15 @@ function ReviewCard(props: {
               >
                 I have a question
               </button>
+            )}
+            {item.source === 'thread' && (
+              // No link on a thread-borne card, and one line saying why: its
+              // answer box replies on the thread, and that IS where a
+              // question goes. Two identical-looking cards must not behave
+              // differently in silence.
+              <p class="hub-decide-question-note">
+                Have a question? Reply above — this card is the thread.
+              </p>
             )}
           </div>
         </Fragment>

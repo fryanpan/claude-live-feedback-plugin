@@ -42,6 +42,7 @@ import {
   type HubReviewItem,
   type HubTask,
   type HubTransition,
+  LEGACY_REVIEW_ITEM_ID,
   type LeadSeatView,
   type ReviewQueue,
   type ReviewThreadItem,
@@ -2250,7 +2251,11 @@ export function panelReviewQueue(
   discussion?: TaskDiscussion,
 ): PanelReviewItem[] {
   const items: PanelReviewItem[] = [];
-  if (!task.answer && task.needs === 'decision') {
+  // The ticket's own decision — unless it is WAITING on its owner: the
+  // reader asked on it, and it comes back marked Revised when the owner
+  // revises (the same rule that keeps a waiting ticket item off the
+  // review-items route, read off the projection here).
+  if (!task.answer && task.needs === 'decision' && task.decisionState !== 'waiting') {
     const blurb = decisionBlurb(task.body);
     items.push({
       id: `task:${task.id}`,
@@ -2267,6 +2272,19 @@ export function panelReviewQueue(
       ...(decisionAskedBy(task) !== undefined ? { askedBy: decisionAskedBy(task) } : {}),
       since: task.createdAt,
       asked: true,
+      // Came back revised after the reader asked: say so, quote the question,
+      // and aim the focus-scroll at the thread — as a ticket item does.
+      ...(task.decisionRevision
+        ? {
+            revision: {
+              at: task.decisionRevision.at,
+              ...(task.decisionRevision.question !== undefined
+                ? { question: task.decisionRevision.question }
+                : {}),
+            },
+            ...(task.decisionRevision.threadId ? { threadId: task.decisionRevision.threadId } : {}),
+          }
+        : {}),
     });
   }
   for (const a of asks ?? []) {
@@ -2436,14 +2454,24 @@ export function panelAnswerRequest(
  * card's way of asking back without selecting a phrase. The same thread the
  * Home walkthrough's card makes (`reviewItemThreadRequest`, quoting the
  * headline as the phrase), so the item is derived `waiting` by the same rule
- * and leaves both queues on the same re-read. Only a ticket-borne card has
- * an item to anchor to; null for the rest, and the link is not drawn.
+ * and leaves both queues on the same re-read. A ticket-borne card anchors
+ * to its item; the ticket's OWN decision anchors to the derived `r-legacy`
+ * row, quoting the title (its headline, server-side). A thread-borne card
+ * has no item — its thread is where a question goes — so null, and the
+ * card says so instead of drawing the link.
  */
 export function panelQuestionRequest(
-  task: Pick<HubTask, 'id'>,
+  task: Pick<HubTask, 'id' | 'title'>,
   item: PanelReviewItem,
   question: string,
 ): { path: string; body: Record<string, unknown> } | null {
+  if (item.source === 'task') {
+    return reviewItemThreadRequest(
+      { taskId: task.id, reviewItemId: LEGACY_REVIEW_ITEM_ID },
+      task.title,
+      question,
+    );
+  }
   if (item.source !== 'task-review' || !item.reviewItemId) return null;
   return reviewItemThreadRequest(
     { taskId: task.id, reviewItemId: item.reviewItemId },
