@@ -2293,7 +2293,9 @@ async function recordReviewAnswer(args: {
  * nothing; the ticket's own decision is addressed by `taskId` with no
  * `reviewItemId`, as it always was.
  */
-async function resolveReviewItemId(reviewItemId: string): Promise<
+async function resolveReviewItemId(
+  reviewItemId: string,
+): Promise<
   | { kind: 'doc-thread'; docId: string; threadId: string; commentId: string }
   | { kind: 'task-item'; taskId: string; workspaceId?: string }
 > {
