@@ -21,7 +21,13 @@ import { describe, expect, it } from 'vitest';
  * measured in a browser against a real build; that is what closes the
  * criterion.
  */
-const CSS = readFileSync(resolve('packages/markdown-app/src/styles.css'), 'utf8');
+// Comments are stripped before anything is parsed: a selector is read as the
+// text before a rule's `{`, and prose commas inside a preceding comment would
+// otherwise split that text and hide the selector.
+const CSS = readFileSync(resolve('packages/markdown-app/src/styles.css'), 'utf8').replace(
+  /\/\*[\s\S]*?\*\//g,
+  '',
+);
 
 /** The mobile tier per design-mobile.md, opened verbatim. */
 const MOBILE_CONDITION = '@media (max-width: 1100px) {';
@@ -71,8 +77,8 @@ describe('the mobile tier', () => {
     const sized: ReadonlyArray<[string, RegExp]> = [
       ['.meeting-adv-head', /min-height:\s*44px/],
       ['.meeting-adv-reset', /min-height:\s*44px/],
-      // The slider keeps its native thumb; the INPUT grows into the target,
-      // which is what the review measured at 16px.
+      // The INPUT is the 44px target the review measured at 16px; the thumb
+      // inside it is sized separately, below.
       ['.meeting-adv input[type="range"]', /height:\s*44px/],
       ['.meeting-adv-seg button', /min-height:\s*44px/],
       ['.meeting-adv-stepper button', /min-(?:width|height):\s*44px/],
@@ -94,6 +100,37 @@ describe('the mobile tier', () => {
     const toggle = rulesFor(body, '.meeting-adv-toggle').join('');
     expect(toggle).toMatch(/width:\s*51px/);
     expect(toggle).toMatch(/height:\s*31px/);
+  });
+
+  it('paints a 24px slider thumb, and the fill the native control stops providing', () => {
+    const { body } = advancedMobileBlock();
+    // Sizing a thumb at all requires giving up the native control.
+    const input = rulesFor(body, '.meeting-adv input[type="range"]').join('');
+    expect(input).toMatch(/-webkit-appearance:\s*none/);
+    expect(input).toMatch(/(^|[^-])appearance:\s*none/);
+    // The mock's 24px, on both engines' pseudo-elements.
+    for (const thumb of [
+      '.meeting-adv input[type="range"]::-webkit-slider-thumb',
+      '.meeting-adv input[type="range"]::-moz-range-thumb',
+    ]) {
+      const rule = rulesFor(body, thumb).join('');
+      expect(rule, `${thumb} is missing`).not.toBe('');
+      expect(rule, `${thumb} is not 24px`).toMatch(/width:\s*24px/);
+      expect(rule, `${thumb} is not 24px`).toMatch(/height:\s*24px/);
+    }
+    // `appearance: none` costs Chrome its progress fill (there is no
+    // ::-webkit-slider-progress), so the track paints it from --fill. Losing
+    // this leaves a flat grey track under a thumb that appears to do nothing.
+    const track = rulesFor(
+      body,
+      '.meeting-adv input[type="range"]::-webkit-slider-runnable-track',
+    ).join('');
+    expect(track).toMatch(/var\(--fill/);
+    expect(track).toMatch(/linear-gradient/);
+    // Firefox paints its own, so it gets the progress pseudo-element instead.
+    expect(
+      rulesFor(body, '.meeting-adv input[type="range"]::-moz-range-progress').join(''),
+    ).toMatch(/background:\s*var\(--accent\)/);
   });
 
   it('declares after the desktop sizes it has to beat', () => {
