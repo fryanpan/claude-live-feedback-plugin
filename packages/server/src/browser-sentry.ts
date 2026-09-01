@@ -37,6 +37,7 @@
  *
  * The DSN itself is box config (`CW_SENTRY_DSN`), never the repo.
  */
+import { type AssetManifest, assetHref } from '@feedback/core/asset-manifest';
 
 /**
  * The kinds of page whose load times are compared. One value per surface a
@@ -69,16 +70,24 @@ const escapeAttr = (v: string): string =>
  * The head tags a shell needs, or `''` when Sentry is unconfigured.
  *
  * The meta tags are how server config reaches a bundle that the server does
- * not template — `/app/sentry.js` is a static file, identical on every box.
+ * not template — the sentry bundle is a static file, identical on every box.
  */
-export function sentryHeadTags(cfg: BrowserSentryConfig | null, pageType: PageType): string {
+export function sentryHeadTags(
+  cfg: BrowserSentryConfig | null,
+  pageType: PageType,
+  assets: AssetManifest = {},
+): string {
   if (!cfg?.dsn) return '';
   const release = cfg.release?.trim();
   return [
     `<meta name="sentry-dsn" content="${escapeAttr(cfg.dsn)}" />`,
     `<meta name="sentry-page-type" content="${escapeAttr(pageType)}" />`,
     ...(release ? [`<meta name="sentry-release" content="${escapeAttr(release)}" />`] : []),
-    '<script type="module" src="/app/sentry.js"></script>',
+    // Content-addressed like every other asset a shell names, so a deploy
+    // cannot leave a page reporting from last week's monitoring bundle.
+    // No manifest (unbuilt dist, or one from before hashing) falls back to
+    // the plain name, which is still served.
+    `<script type="module" src="${assetHref(assets, 'sentry.js')}"></script>`,
   ].join('\n    ');
 }
 
@@ -103,8 +112,9 @@ export function injectSentryHead(
   html: string,
   cfg: BrowserSentryConfig | null,
   pageType: PageType,
+  assets: AssetManifest = {},
 ): string {
-  const tags = sentryHeadTags(cfg, pageType);
+  const tags = sentryHeadTags(cfg, pageType, assets);
   if (!tags) return html;
   const block = `\n    ${tags}\n  `;
   if (HEAD_CLOSE.test(html)) return html.replace(HEAD_CLOSE, (m) => `${block}${m}`);
