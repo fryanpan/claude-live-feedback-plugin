@@ -97,6 +97,7 @@ import { clientReleaseStatus } from './client-release.ts';
 import { maybeCompress, maybeNotModified } from './compress.ts';
 import type { Deployer } from './deploy.ts';
 import { DispatchRegistry, type WatchFactory, isValidDispatchTaskId } from './dispatch-registry.ts';
+import { canonicalRepoRoot, normalizeDocHome, resolveHomeCheckout } from './doc-home.ts';
 import { RESERVED_DOC_PREFIXES } from './doc-ids.ts';
 import {
   EFFORT_ESTIMATE_MODEL,
@@ -271,6 +272,7 @@ import {
   type TaskEffortEstimate,
   type TaskStatus,
   TaskStore,
+  type WorkspaceNotesHome,
   eventsLogPath,
   isAttachmentRuntime,
   isRetired,
@@ -5901,7 +5903,45 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           const docId = (body?.docId as string) ?? '';
           if (!isValidDocId(docId)) return j(400, { error: 'bad docId' });
           const type = (body?.type as DocType) ?? 'markdown';
-          const sourceUrl = body?.sourceUrl as string | undefined;
+          let sourceUrl = body?.sourceUrl as string | undefined;
+          // A markdown doc created WITHOUT a path can be placed by its
+          // workspace's configured notes home: the file is derived as
+          // `<dir>/<docId>.md` on the home branch and the doc is pinned
+          // there (see rooms.setDocHome), which is what gets planning notes
+          // checked in instead of scattered wherever a session's checkout
+          // happens to sit. Opt-in twice over — the workspace set a
+          // notesHome, and the caller named the workspace.
+          let derivedHome: { repoRoot: string; branch: string; relPath: string } | null = null;
+          if (type === 'markdown' && !sourceUrl) {
+            const wsForNotes =
+              typeof body?.hubWorkspaceId === 'string' ? body.hubWorkspaceId : undefined;
+            const notes = wsForNotes ? taskStore.notesHome(wsForNotes) : undefined;
+            if (notes) {
+              const fileName = `${docId.replace(/[^a-zA-Z0-9._-]/g, '-')}.md`;
+              const norm = normalizeDocHome({
+                repoRoot: notes.repoRoot,
+                branch: notes.branch,
+                relPath: `${notes.dir}/${fileName}`,
+              });
+              if (!norm.ok) return j(400, { error: 'bad_notes_home', hint: norm.error });
+              const placed = resolveHomeCheckout(norm.home);
+              if (!placed.placed) {
+                return j(409, {
+                  error: 'notes_home_unplaced',
+                  reason: placed.reason,
+                  hint: `The workspace notes home is ${notes.repoRoot} branch "${notes.branch}", but ${
+                    placed.reason === 'repo-missing'
+                      ? 'that path is not a git checkout any more'
+                      : placed.reason === 'path-escapes-checkout'
+                        ? 'the notes dir passes through a symlink that leaves the checkout'
+                        : 'no worktree has that branch checked out right now'
+                  }. Check the branch out (git worktree add <path> "${notes.branch}") and retry, or pass an explicit sourceUrl.`,
+                });
+              }
+              derivedHome = norm.home;
+              sourceUrl = placed.absPath;
+            }
+          }
           // Every markdown doc is file-backed. POST /api/docs is the sole
           // creation path for markdown — sourceUrl is required, and the
           // server attaches the file (loads content + sets up bidirectional
@@ -5990,6 +6030,10 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           if (type === 'markdown' && sourceUrl) {
             attached = rooms.attachFile(canonicalId, sourceUrl);
             if (!attached.ok) return j(409, { error: 'attach_failed', attached });
+            // Notes-home creation: pin the doc to the derived home. The pin
+            // exports the (possibly still missing) file and takes over the
+            // binding, so branch churn from here on follows the branch.
+            if (derivedHome) rooms.setDocHome(canonicalId, derivedHome);
           } else if (type === 'code' && sourceUrl) {
             attached = rooms.attachReadonlyFile(canonicalId, sourceUrl);
             if (!attached.ok) return j(409, { error: 'attach_failed', attached });
@@ -6665,6 +6709,47 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
               hasReviewCriteria = true;
               reviewCriteriaValue = typeof raw === 'string' ? raw : undefined;
             }
+            // Same merge contract as the prompt fields: named-and-null
+            // clears, absent leaves it. The shape borrows a doc home's
+            // validation (`dir` is a relPath with the same traversal rules)
+            // and additionally insists repoRoot is a checkout NOW — a typo'd
+            // path stored here would park every note the board ever derives.
+            let hasNotesHome = false;
+            let notesHomeValue: WorkspaceNotesHome | undefined;
+            if (body && Object.hasOwn(body, 'notesHome')) {
+              const raw = body.notesHome as {
+                repoRoot?: unknown;
+                branch?: unknown;
+                dir?: unknown;
+              } | null;
+              if (raw !== null) {
+                const norm = normalizeDocHome({
+                  repoRoot: raw?.repoRoot,
+                  branch: raw?.branch,
+                  relPath: raw?.dir,
+                });
+                if (!norm.ok) {
+                  return j(400, {
+                    error: `notesHome must be { repoRoot, branch, dir } or null to clear: ${norm.error.replace('relPath', 'dir')}`,
+                  });
+                }
+                // Store the MAIN checkout's root, not the caller's spelling:
+                // a notes home declared from a linked worktree must survive
+                // that worktree's removal (canonicalRepoRoot in doc-home.ts).
+                const canonRoot = canonicalRepoRoot(norm.home.repoRoot);
+                if (canonRoot === null) {
+                  return j(400, {
+                    error: `notesHome.repoRoot ${norm.home.repoRoot} is not a git checkout`,
+                  });
+                }
+                notesHomeValue = {
+                  repoRoot: canonRoot,
+                  branch: norm.home.branch,
+                  dir: norm.home.relPath,
+                };
+              }
+              hasNotesHome = true;
+            }
             let hasEffortPrompt = false;
             let effortPromptValue: string | undefined;
             if (body && Object.hasOwn(body, 'effortEstimatePrompt')) {
@@ -6694,14 +6779,20 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
               });
               if (!res.ok) return j(404, res);
             }
+            if (hasNotesHome) {
+              const res = taskStore.setNotesHome(workspaceId, notesHomeValue, { actor: author });
+              if (!res.ok) return j(404, res);
+            }
           }
           const criteria = taskStore.reviewItemCriteria(workspaceId);
           const effortPrompt = taskStore.effortEstimatePrompt(workspaceId);
           if (!criteria || !effortPrompt) return j(404, { error: 'workspace not found' });
+          const notesHome = taskStore.notesHome(workspaceId);
           return j(200, {
             workspaceId,
             reviewItemCriteria: { ...criteria, default: DEFAULT_REVIEW_ITEM_CRITERIA },
             effortEstimatePrompt: { ...effortPrompt, default: DEFAULT_EFFORT_ESTIMATE_PROMPT },
+            ...(notesHome ? { notesHome } : {}),
           });
         }
         const wsBoardRenameMatch = pathname.match(/^\/api\/workspaces\/([^/]+)\/rename$/);
@@ -10064,6 +10155,29 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
               for (const wsId of rel.workspaceIds) taskProjection.ensureWorkspace(wsId);
             }
             return j(200, { docId, planState: state, released });
+          }
+          // --- The doc's repo home: pin, read, unpin. OWNER ONLY — a home is
+          // host paths, which a share visitor must never see. The visitor
+          // allowlist in host-guard already refuses unknown doc subroutes;
+          // this is the local stop for the collab-host path.
+          if (rest === 'home') {
+            if (visitor) return j(403, { error: 'not available on a share' });
+            if (req.method === 'GET') {
+              const status = rooms.docHomeStatus(docId);
+              return status ? j(200, { docId, ...status }) : j(404, { error: 'no home pinned' });
+            }
+            if (req.method === 'PUT') {
+              const body = await safeJson(req);
+              // Accept `{ home: {...} }` or the three fields at top level.
+              const res = rooms.setDocHome(docId, body?.home ?? body);
+              if (!res.ok) return j(res.error === 'not-found' ? 404 : 400, res);
+              return j(200, { docId, home: res.home, placement: res.placement });
+            }
+            if (req.method === 'DELETE') {
+              const res = rooms.clearDocHome(docId);
+              return res.ok ? j(200, { docId, ok: true }) : j(404, { error: 'no home pinned' });
+            }
+            return j(405, { error: 'method not allowed' });
           }
           const threadIdMatch = rest.match(/^threads\/([^/]+)(\/.*)?$/);
           if (threadIdMatch) {
