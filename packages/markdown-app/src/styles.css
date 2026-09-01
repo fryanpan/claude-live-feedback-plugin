@@ -6757,7 +6757,8 @@ body.is-reading-width #editor > .ProseMirror {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  min-height: 34px;
+  /* design-mobile.md tap-target floor; it is a real control on a phone. */
+  min-height: 36px;
   padding: 0 11px;
   margin-left: 4px;
   border: 1px solid var(--border);
@@ -6830,7 +6831,7 @@ body.is-reading-width #editor > .ProseMirror {
   content: "";
   position: absolute;
   top: -6px;
-  right: 96px;
+  right: 64px;
   width: 10px;
   height: 10px;
   transform: rotate(45deg);
@@ -7231,6 +7232,8 @@ body.is-reading-width #editor > .ProseMirror {
   align-items: center;
   gap: 8px;
   margin: 0 10px 10px;
+  /* design-mobile.md tap-target floor; the whole label toggles the box. */
+  min-height: 36px;
   font-size: 13px;
   color: var(--fg-muted);
   cursor: pointer;
@@ -7328,13 +7331,15 @@ body.is-reading-width #editor > .ProseMirror {
   }
 }
 @media (min-width: 721px) {
-  /* The strip runs as a ROW here, so wrapping puts the readout on the next
-     LINE and the bar's fixed 40px has to give. Both of these are scoped to
-     this media query on purpose: at 720px and below the strip is a COLUMN,
-     where `flex-wrap: wrap` wraps into a new COLUMN instead — measured at
-     430px it made the stacked panel 447px wide inside a 430px window — and
-     `flex-basis: 100%` would ask for the container's whole HEIGHT. The column
-     layout needs neither: it is already `height: auto` and one item per row. */
+  /* The strip runs as a single ROW at every width now — it never stacks into
+     a column. The timing line already gets its own full-width row inside
+     that flex container unconditionally, via `order: 99` + `flex-basis:
+     100%` above. This query only refines that for ≥721px: `height: auto`
+     lets the strip grow past its 36px floor to fit the wrapped line, and
+     pinning the timing row to `flex: 0 0 100%` keeps it rigid once there is
+     room to show the stats in full. Below 721px the unconditional `1 1 100%`
+     stays in effect so the row can shrink instead of overflowing a narrow
+     window. */
   .meeting-strip.has-timing {
     height: auto;
     flex-wrap: wrap;

@@ -438,6 +438,26 @@ describe('the chrome at rest', () => {
     expect(toolbar.querySelector('.meeting-record')).toBeNull();
   });
 
+  it('destroy takes the scrim and popover with it, not just the button', () => {
+    // The scrim and both popovers dock beside the button in the TOOLBAR, not
+    // in `root` (root is `hidden` while idle — see the chooser-was-
+    // unreachable-while-idle fix). A destroy that only removed the button
+    // left them behind: a SPA navigation to the next doc re-mounts a fresh
+    // strip, but the ORPHANED scrim from the last one still sits over the
+    // new Record button, and the orphaned popover's own Escape listener is
+    // gone (it was removed from `document`, not from the element), so nothing
+    // closes it.
+    const toolbar = document.createElement('div');
+    document.body.append(toolbar);
+    const h = mount(undefined, { toolbar });
+    toolbar.querySelector<HTMLButtonElement>('.meeting-record')?.click();
+    expect(toolbar.querySelector<HTMLElement>('.meeting-pop')?.hidden).toBe(false);
+    h.strip.destroy();
+    expect(toolbar.querySelector('.meeting-record')).toBeNull();
+    expect(toolbar.querySelector('.meeting-scrim')).toBeNull();
+    expect(toolbar.querySelector('.meeting-pop')).toBeNull();
+  });
+
   it('a press opens the start chooser; the scrim and Escape both close it', () => {
     const h = mount();
     expect(h.pop().hidden).toBe(true);

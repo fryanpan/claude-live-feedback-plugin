@@ -705,7 +705,10 @@ export function mountMeetingStrip(opts: MeetingStripOpts): MeetingStripHandle {
    * The chooser's speaker choice. Multiple by default — this product's
    * ordinary meeting has other people in it, and the approved mock preselects
    * it; "Just me" is the deliberate cheaper pick. An address that says solo
-   * (a Board solo huddle) presets it the other way.
+   * (a Board solo huddle) presets it the other way — `opts.mode` is only
+   * ever set for that huddle-start case (`app.ts` leaves it `undefined`
+   * otherwise, on purpose: see its comment there), so this fallback is the
+   * one place the mock's default actually applies.
    */
   let chooseMode: CaptureMode = opts.mode ?? 'conversation';
   /** "I'll ask for consent" — the person says the sentence, not the device. */
@@ -1893,7 +1896,10 @@ export function mountMeetingStrip(opts: MeetingStripOpts): MeetingStripHandle {
       stopClock?.();
       stopClock = null;
       clearTurnSpans();
+      closePop();
       record.remove();
+      scrim.remove();
+      pop.remove();
       root.classList.remove('is-live', 'is-bot');
       root.hidden = true;
       root.removeAttribute('data-state');

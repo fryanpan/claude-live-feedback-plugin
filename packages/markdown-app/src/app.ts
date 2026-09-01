@@ -1,11 +1,4 @@
-import {
-  DEFAULT_CAPTURE_MODE,
-  type User,
-  connect,
-  escapeHtml,
-  readDocMeta,
-  suggestOps,
-} from '@feedback/core';
+import { type User, connect, escapeHtml, readDocMeta, suggestOps } from '@feedback/core';
 import { mountCode } from './code/code-app.ts';
 import { saveStateView, settlePending, watchConnection } from './connection-state.ts';
 import { renderDiffNav, setActiveFile } from './diff-nav.ts';
@@ -339,8 +332,13 @@ async function mountMarkdown(ctx: MountContext): Promise<void> {
     // "Record a conversation" is the only thing that says someone else is in
     // the room, and it is a press on the Board — a page that is gone by the
     // time this mounts. It rides in on the address with the start flag and
-    // leaves with it.
-    const huddleMode = huddleStart ? huddleCaptureMode(location.search) : DEFAULT_CAPTURE_MODE;
+    // leaves with it. Left `undefined` outside a huddle start on purpose:
+    // this feeds the start chooser's own preselection (`meeting-strip.ts`'s
+    // `chooseMode`), and that default is the approved mock's Multiple
+    // Speakers, not `DEFAULT_CAPTURE_MODE` — passing the default here always
+    // made it look like the address had asked for solo, so the chooser never
+    // showed the mock's preselection to anyone who opened a doc directly.
+    const huddleMode = huddleStart ? huddleCaptureMode(location.search) : undefined;
     const roomSpeakers = huddleRoomSpeakers(location.search);
     const roomAudio = huddleRoomAudio(location.search);
     // Which engine transcribes here. A preference like `speakers`, not a
