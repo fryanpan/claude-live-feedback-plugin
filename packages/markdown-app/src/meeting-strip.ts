@@ -355,6 +355,22 @@ export interface MeetingStripOpts {
    */
   autoStart?: boolean;
   /**
+   * Open the start CHOOSER on mount instead of the microphone — the entry
+   * "Have a discussion" takes, where `autoStart` is what "Make a plan" takes.
+   *
+   * The difference is who else is in the room. A plan is one person thinking
+   * out loud, so the fastest honest thing is an open mic. A discussion has
+   * other people in it, and the sentence that tells them they are being
+   * recorded is now a button they have to press — so a discussion cannot
+   * begin without somebody choosing, and "begin the huddle" has to land on
+   * the choice rather than on the recording.
+   *
+   * Mutually exclusive with `autoStart`, which wins if both are set: an open
+   * mic is the stronger claim and a chooser over a live recording would be
+   * offering a decision that has already been taken.
+   */
+  autoChoose?: boolean;
+  /**
    * What this capture expects to hear. `solo` opens a cheap session with no
    * diarization; `conversation` pays for speaker labels. The Board's "Record
    * a conversation" button carries it in on the address; the chooser's
@@ -510,8 +526,13 @@ async function defaultListEngines(): Promise<{
  * paths: the device's is a caption for something the room is already hearing,
  * and the person's is a line to READ, so it has to carry the instruction.
  * Both quote the sentence itself, because the sentence is the record.
+ *
+ * `skipped` is excluded from the parameter rather than handled: there is no
+ * note for an announcement that was declined, and typing it out keeps a
+ * caller from ever reaching the `spoken` branch by falling off the end of a
+ * widened union — which is exactly what it did before this line existed.
  */
-export function announcementNote(by: AnnouncedBy | 'tap'): string {
+export function announcementNote(by: Exclude<AnnouncedBy, 'skipped'> | 'tap'): string {
   const said = `“${RECORDING_ANNOUNCEMENT}”`;
   // A third job, and the only one that is an INSTRUCTION TO THE DEVICE: the
   // device was handed the sentence and never began it, and one tap is what
@@ -734,8 +755,12 @@ export function mountMeetingStrip(opts: MeetingStripOpts): MeetingStripHandle {
    * one place the mock's default actually applies.
    */
   let chooseMode: CaptureMode = opts.mode ?? 'conversation';
-  /** "I'll ask for consent" — the person says the sentence, not the device. */
-  let chooseConsent = false;
+  /*
+   * There is no consent FLAG here any more, and its absence is the design.
+   * The announcement used to hang off a remembered checkbox; it is now two
+   * start buttons, so the choice cannot be carried from one recording into
+   * the next one. See `buildChooser`'s skip button.
+   */
   /**
    * The engine picked, only meaningful when more than one was offered.
    * Starts as the address's ask (`?engine=soniox`), the same start-time-only
@@ -1491,18 +1516,46 @@ export function mountMeetingStrip(opts: MeetingStripOpts): MeetingStripHandle {
       pop.append(buildAdvancedPanel(chooseEngine, false));
     }
 
-    const consent = document.createElement('label');
-    consent.className = 'meeting-consent';
-    const consentBox = document.createElement('input');
-    consentBox.type = 'checkbox';
-    consentBox.checked = chooseConsent;
-    consentBox.addEventListener('change', () => {
-      chooseConsent = consentBox.checked;
-    });
-    const consentText = document.createElement('span');
-    consentText.textContent = 'I’ll ask for consent';
-    consent.append(consentBox, consentText);
-    pop.append(consent);
+    syncStartActions();
+  }
+
+  /**
+   * The tail of the chooser — the announcement quote, the error line, and the
+   * two start verbs — rebuilt from the choices as they stand.
+   *
+   * Separate from `buildChooser` because these three follow the SOURCE and
+   * SPEAKERS cards, which are picked without a rebuild: a flip to "Just me"
+   * used to leave a chooser still promising to play an announcement to a
+   * room that the same screen had just said was empty.
+   *
+   * They stay direct children of `pop` rather than moving into a wrapper of
+   * their own: `.meeting-start-actions` is sticky, and a sticky element can
+   * only travel inside its parent's box — put it in a wrapper the height of
+   * its own contents and it has nowhere to stick to.
+   */
+  function syncStartActions(): void {
+    for (const sel of ['.meeting-announce-quote', '.meeting-pop-error', '.meeting-start-actions']) {
+      pop.querySelector(sel)?.remove();
+    }
+
+    // Whether this press is one a room is owed a sentence for. The bot has no
+    // local mic to speak through, and a solo capture has nobody to tell — in
+    // both, an announcement quote would be chrome about something that is not
+    // going to happen, and a "skip the announcement" button would invite
+    // somebody to decline something nobody was ever going to hear.
+    const announces = chooseSource === 'mic' && announcesRecording(chooseMode);
+
+    if (announces) {
+      // The sentence itself, above the button that plays it. It used to be
+      // behind a checkbox ("I'll ask for consent") whose unchecked state was
+      // the announcing one — so the only way to read what the room was about
+      // to be told was to start the recording and hear it. Quoting it here
+      // means the decision and its content are the same glance.
+      const quote = document.createElement('p');
+      quote.className = 'meeting-announce-quote';
+      quote.textContent = `🔊 “${RECORDING_ANNOUNCEMENT}”`;
+      pop.append(quote);
+    }
 
     const err = document.createElement('span');
     err.className = 'meeting-pop-error';
@@ -1512,13 +1565,43 @@ export function mountMeetingStrip(opts: MeetingStripOpts): MeetingStripHandle {
     err.textContent = chooseError;
     pop.append(err);
 
+    // Both verbs ride ONE sticky footer rather than sticking individually:
+    // two elements each holding `bottom: 0` land on top of each other, and
+    // the skip would scroll away under the button it belongs with. The
+    // chooser outgrows the iPad tier's height as soon as Advanced Options is
+    // open, so this is the ordinary case, not the edge one.
+    const actions = document.createElement('div');
+    actions.className = 'meeting-start-actions';
+
     const startCta = document.createElement('button');
     startCta.type = 'button';
     startCta.className = 'meeting-start-cta';
-    startCta.textContent = '● Start Recording';
+    // The verb names what the button DOES, which when a room is listening is
+    // two things in one press.
+    startCta.textContent = announces ? '● Play announcement & start' : '● Start Recording';
     startCta.disabled = chooseBusy;
-    startCta.addEventListener('click', onStartPressed);
-    pop.append(startCta);
+    startCta.addEventListener('click', () => onStartPressed(false));
+    actions.append(startCta);
+
+    if (announces) {
+      // The escape hatch, and deliberately NOT a checkbox: a person recording
+      // alone should not have to understand a consent control to get past it,
+      // and a checkbox that silences an announcement is a control whose
+      // unchecked state is the safe one — the exact shape that gets clicked
+      // without being read. As a second button the choice is made once, in
+      // words, at the moment it applies, and it is never remembered: the next
+      // recording asks again, because the next recording may have a room in
+      // it.
+      const skipCta = document.createElement('button');
+      skipCta.type = 'button';
+      skipCta.className = 'meeting-skip-cta';
+      skipCta.textContent = 'It’s just me — skip the announcement';
+      skipCta.disabled = chooseBusy;
+      skipCta.addEventListener('click', () => onStartPressed(true));
+      actions.append(skipCta);
+    }
+
+    pop.append(actions);
   }
 
   /** Re-mark the selected cards without rebuilding inputs mid-interaction. */
@@ -1527,6 +1610,10 @@ export function mountMeetingStrip(opts: MeetingStripOpts): MeetingStripHandle {
       const input = card.querySelector('input');
       card.classList.toggle('is-selected', input?.checked === true);
     }
+    // The verbs below depend on what was just picked. Guarded because this
+    // runs off card clicks, and only the chooser has cards — a menu that
+    // grew one later must not sprout a Start button.
+    if (view === 'chooser') syncStartActions();
   }
 
   /**
@@ -1535,7 +1622,7 @@ export function mountMeetingStrip(opts: MeetingStripOpts): MeetingStripHandle {
    * inside it, and the announcement itself cannot be spoken yet because it
    * has to wait for the microphone. See meeting-announce.ts.
    */
-  function onStartPressed(): void {
+  function onStartPressed(skip: boolean): void {
     chooseError = '';
     if (chooseSource === 'bot') {
       if (chooseBusy || !bot) return;
@@ -1556,7 +1643,10 @@ export function mountMeetingStrip(opts: MeetingStripOpts): MeetingStripHandle {
       return;
     }
     mode = chooseMode;
-    const by: AnnouncedBy = chooseConsent ? 'spoken' : 'device';
+    // A declined offer is recorded as a decline, not as an absence: `skipped`
+    // says a person was asked and said no, where absent says nobody was ever
+    // owed a sentence. See `AnnouncedBy`.
+    const by: AnnouncedBy = skip ? 'skipped' : 'device';
     if (announcesRecording(mode) && by === 'device') announcer.prime();
     closePop();
     void start(false, by);
@@ -1913,6 +2003,15 @@ export function mountMeetingStrip(opts: MeetingStripOpts): MeetingStripHandle {
    * thing anybody would later be asked to show.
    */
   async function announce(by: AnnouncedBy, attempt: number): Promise<void> {
+    if (by === 'skipped') {
+      // Nothing is said and nothing is shown — the person already read the
+      // sentence in the chooser and declined it. What is left is the record,
+      // written at exactly the same moment a real announcement would have
+      // been claimed: once the engine is receiving, so the decision sits in
+      // the meeting it was made about.
+      claim('skipped');
+      return;
+    }
     if (by === 'spoken') {
       // Held, not merely shown: this one is a line to READ, and a partial
       // from anywhere in the room would otherwise take it away mid-read.
@@ -2153,6 +2252,11 @@ export function mountMeetingStrip(opts: MeetingStripOpts): MeetingStripHandle {
 
   render();
   if (opts.autoStart) void start(true, 'device');
+  // A discussion arrives at the choice, not at the microphone. No `prime()`
+  // here and none owed: the announcement is unlocked by the press on "Play
+  // announcement & start", which is a real gesture inside this page — the
+  // thing the auto-start path never has.
+  else if (opts.autoChoose) openPop('chooser');
   if (opts.loadSpeakers) {
     // A doc opened after its meeting ended still owes its owner the names:
     // the cast comes back off the record, and a tap renames over HTTP. A

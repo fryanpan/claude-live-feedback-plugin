@@ -173,10 +173,17 @@ export const RECORDING_ANNOUNCEMENT =
  *
  * `spoken` is a weaker claim than `device` and the record must not be read as
  * if it were not: the client knows it displayed the sentence, and it cannot
- * know that anybody actually read it. Absent means no announcement was made
- * at all — a `solo` capture, or a client built before this existed.
+ * know that anybody actually read it.
+ *
+ * `skipped` is not an announcement at all — it is the record that one was
+ * OFFERED and declined, which the chooser now asks as its own button ("It's
+ * just me — skip the announcement"). It exists because absent already means
+ * something else and cannot mean this too: absent is "no announcement was
+ * ever due" — a `solo` capture, or a client built before any of this — and a
+ * declined offer is a decision somebody made. Reading `skipped` as consent
+ * would be exactly backwards; it is the evidence that consent was NOT sought.
  */
-export type AnnouncedBy = 'device' | 'spoken';
+export type AnnouncedBy = 'device' | 'spoken' | 'skipped';
 
 /** The path taken when nobody asked for the other one. */
 export const DEFAULT_ANNOUNCED_BY: AnnouncedBy = 'device';
@@ -191,7 +198,9 @@ export const DEFAULT_ANNOUNCED_BY: AnnouncedBy = 'device';
  * of a typo.
  */
 export function parseAnnouncedBy(raw: unknown): AnnouncedBy | undefined {
-  return raw === 'device' || raw === 'spoken' ? raw : undefined;
+  // `device` and `spoken` predate `skipped` and keep parsing exactly as they
+  // did: this widened, it did not change.
+  return raw === 'device' || raw === 'spoken' || raw === 'skipped' ? raw : undefined;
 }
 
 /** Whether a capture in this mode announces itself. Only a room needs telling. */
