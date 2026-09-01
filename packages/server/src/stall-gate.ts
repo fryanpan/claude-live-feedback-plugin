@@ -157,8 +157,10 @@ export interface EvaluateStallsInput {
   /** Open questions waiting on a person, by row. Presence is what "an ask is
    *  filed" means. */
   reviewItems: readonly ReviewItemRow[];
-  /** Which goals dispatch and which are the owner's own queue. */
-  bands: { dispatchable: Set<string>; ownerBand: Set<string> };
+  /** Which goals dispatch, which are the owner's own queue, and which are
+   *  still in triage — a row under a triage band is not judged at all, not
+   *  even as backlog (`classifyOpenTasks` states why at the skip). */
+  bands: { dispatchable: Set<string>; ownerBand: Set<string>; triage?: ReadonlySet<string> };
   /**
    * Rows whose stored review items could not be PARSED. Passed in rather than
    * derived, because only the caller holds the store that failed to read them

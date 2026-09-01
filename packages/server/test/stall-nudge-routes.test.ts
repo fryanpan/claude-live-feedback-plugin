@@ -232,6 +232,53 @@ describe('the board tells its lead which rows have stopped', () => {
     await ctx.tab.stop();
   });
 
+  /**
+   * A goal in triage is a band nobody has agreed to: the ready gate holds
+   * every row under it out of dispatch, and the stall loop does not judge
+   * those rows at all — a wake over them would ask the lead to drive work the
+   * board itself says is not ready. Agreeing to the band (any move out of
+   * triage) puts its rows back in front of the clock on the next tick.
+   */
+  it('does not judge a row under a goal in triage, and does once the goal is agreed to', async () => {
+    const ctx = await boardWithLead();
+    const goals = await seedGoalsOverHttp(
+      base,
+      ctx.workspaceId,
+      [{ key: 'pending', title: 'Rebuild the ranker' }],
+      PERSON,
+      { leaveInTriage: true },
+    );
+    const goalId = goals.pending as string;
+    expect(handle.tasks.getGoalRow(goalId)?.status).toBe('triage');
+    const taskId = await addRow(ctx.workspaceId, 'Rank results by recency', 'in-progress', {
+      goal: goalId,
+    });
+    await settle();
+
+    handle.nudgeStalls();
+    await settle(400);
+    expect(stalls(ctx.lead.frames)).toHaveLength(0);
+
+    // POSITIVE CONTROL, and the release: the same row, the same silence, the
+    // band agreed to — the wake names it.
+    await jj(
+      await post(`/api/tasks/${goalId}/transition`, {
+        to: 'todo',
+        author: PERSON,
+        workspaceId: ctx.workspaceId,
+      }),
+    );
+    await settle();
+    handle.nudgeStalls();
+    const got = await waitForFrames(ctx.lead.frames, STALL_EVENT, 1);
+    expect(got).toHaveLength(1);
+    expect(got[0]?.data?.taskId).toBe(taskId);
+    expect(got[0]?.data?.consideredCount).toBe(1);
+
+    await ctx.lead.stop();
+    await ctx.tab.stop();
+  });
+
   it('says nothing while the quiet window has not passed', async () => {
     // Its own server, because this is the one assertion the zero-length
     // window above cannot make: that the threshold is consulted at all.
@@ -473,9 +520,10 @@ describe('the board tells its lead which rows have stopped', () => {
    *
    * A band in triage dispatches nothing under it, so a row sitting there is
    * idle BY RULE and naming it as stalled would tell the lead to go and drive
-   * work the board has not decided to do. The band's status lives on the goal
-   * ROWS; the ordered goal list carries none, so this is the one path that
-   * proves the snapshot goes and reads them.
+   * work the board has not decided to do. It is not judged at all — it leaves
+   * the denominator too, so the count below is the agreed row alone. The
+   * band's status lives on the goal ROWS; the ordered goal list carries none,
+   * so this is the one path that proves the snapshot goes and reads them.
    *
    * The control row is moved into the AGREED band rather than left without
    * one: on a board that has bands, a row with no goal is formal backlog and
@@ -513,7 +561,7 @@ describe('the board tells its lead which rows have stopped', () => {
 
     expect(got).toHaveLength(1);
     expect(rowsOf(got[0] as Frame).map((r) => r.id)).toEqual([freeId]);
-    expect(got[0]?.data?.consideredCount).toBe(2);
+    expect(got[0]?.data?.consideredCount).toBe(1);
 
     await ctx.lead.stop();
     await ctx.tab.stop();

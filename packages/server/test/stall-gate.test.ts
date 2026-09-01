@@ -158,6 +158,65 @@ describe('rows the gate refuses to name', () => {
     expect(verdict.stalled).toHaveLength(0);
   });
 
+  /**
+   * A BAND in triage is a goal nobody has agreed to (2026-08-25: new goals
+   * start there). The ready gate already holds every row under it out of
+   * dispatch as `goal-triage`, so nobody was supposed to be moving those rows
+   * — and a clock over them measures only how long the band has gone
+   * unagreed. They are not judged at all: not stalled, not unfiled, and not
+   * in the denominator, so an empty verdict over such a board reads as "zero
+   * rows examined" rather than "one row, accounted for".
+   */
+  describe('a row under a band in triage', () => {
+    const triageBands = {
+      dispatchable: new Set(['g1']),
+      ownerBand: new Set(['decisions']),
+      triage: new Set(['g-pending']),
+    };
+    const judge = (
+      tasks: TaskRow[],
+      b: { dispatchable: Set<string>; ownerBand: Set<string>; triage?: Set<string> } = triageBands,
+    ) => evaluateStalls({ tasks, events: [], reviewItems: [], bands: b, now });
+
+    it('is neither stalled nor counted, even when claimed and silent', () => {
+      const verdict = judge([task({ id: 't-1', status: 'in-progress', goal: 'g-pending' })]);
+      expect(verdict.stalled).toEqual([]);
+      expect(verdict.considered).toBe(0);
+      // POSITIVE CONTROL: the same row under the agreed band is exactly the
+      // stall this gate exists to name.
+      const control = judge([task({ id: 't-1', status: 'in-progress', goal: 'g1' })]);
+      expect(control.stalled.map((r) => r.id)).toEqual(['t-1']);
+      expect(control.considered).toBe(1);
+    });
+
+    it('is not an unfiled ask either, whoever owns it', () => {
+      const verdict = judge([
+        task({ id: 't-1', status: 'todo', goal: 'g-pending', ownerKind: 'person' }),
+      ]);
+      expect(verdict.unfiled).toEqual([]);
+      expect(verdict.considered).toBe(0);
+      const control = judge([task({ id: 't-1', status: 'todo', goal: 'g1', ownerKind: 'person' })]);
+      expect(control.unfiled.map((r) => r.id)).toEqual(['t-1']);
+    });
+
+    it('is judged again the moment the band is agreed to', () => {
+      const agreed = { ...triageBands, triage: new Set<string>() };
+      // The band left the triage set but is not dispatchable either — that is
+      // formal backlog, and reads as such rather than as a stall.
+      const verdict = judge([task({ id: 't-1', status: 'todo', goal: 'g-pending' })], agreed);
+      expect(verdict.considered).toBe(1);
+      expect(verdict.stalled).toEqual([]);
+    });
+
+    it('reads as absent when the caller passes no triage set', () => {
+      const verdict = judge([task({ id: 't-1', status: 'in-progress', goal: 'g-pending' })], {
+        dispatchable: new Set(['g1']),
+        ownerBand: new Set<string>(),
+      });
+      expect(verdict.considered).toBe(1);
+    });
+  });
+
   it('a row deliberately deferred to triage is never stalled', () => {
     const verdict = evaluate({ tasks: [task({ id: 't-1', status: 'triage' })] });
     expect(verdict.considered).toBe(0);
