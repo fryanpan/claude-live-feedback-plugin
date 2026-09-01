@@ -34,3 +34,16 @@ export const PEOPLE_ICON = `<svg ${SVG} ${SVG_ENDS}><circle cx="9" cy="8" r="3.2
 
 /** New task — the Board's primary action, drawn in the same vocabulary. */
 export const PLUS_ICON = `<svg ${SVG} ${SVG_ENDS}><path d="M12 5v14"/><path d="M5 12h14"/></svg>`;
+
+/**
+ * A pencil — the Board's "Make a plan". Named for the outcome, not the
+ * mechanism (round-4 entry mock): you leave with a plan doc, so the glyph is
+ * the writing tool, not the mic that happens to be listening.
+ */
+export const PENCIL_ICON = `<svg ${SVG} ${SVG_ENDS}><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z"/></svg>`;
+
+/**
+ * A speech bubble — the Board's "Have a discussion". Same rename: you leave
+ * with notes of what was said, so the glyph is the saying.
+ */
+export const SPEECH_ICON = `<svg ${SVG} ${SVG_ENDS}><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>`;

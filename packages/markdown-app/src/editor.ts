@@ -25,6 +25,7 @@ import { workspaceIdFromPath } from './doc-path.ts';
 import { resolveDocLink, safeLinkHref } from './link-open.ts';
 import { ListBehavior } from './list-behavior.ts';
 import { MermaidCodeBlock } from './mermaid-code-block.ts';
+import { PlanPlaceholder } from './plan-placeholder.ts';
 import { SuggestionChips } from './redline/suggestion-chips.ts';
 import type { InlineThreadCard } from './review-surface.ts';
 import { SettleWash, type SettleWashOptions } from './settle-wash.ts';
@@ -164,6 +165,10 @@ export function createEditor(opts: CreateEditorOpts): EditorHandle {
       // lists are load-bearing there (they carry per-hunk anchors).
       ListBehavior,
       ...(opts.settleWash ? [SettleWash.configure(opts.settleWash)] : []),
+      // "Type or say what problem you'd like to solve…" on an unwritten
+      // plan doc — render-time only, self-gating on the doc's own meta, so
+      // it costs nothing on every other surface.
+      PlanPlaceholder.configure({ ydoc: opts.ydoc }),
       ...(opts.extraExtensions ?? []),
     ],
     onSelectionUpdate: () => opts.onSelectionChange?.(),

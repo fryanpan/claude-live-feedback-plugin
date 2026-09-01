@@ -74,12 +74,27 @@ describe("the review shell's back arrow on a phone", () => {
     expect(body).toContain('.doc-crumb .back-link');
   });
 
-  it('reaches the 36px minimum in BOTH dimensions', () => {
+  it('reaches the 44px target in BOTH dimensions', () => {
     // 26 × 20 was the measured size, so a height-only fix would still leave a
-    // thumb missing it horizontally.
+    // thumb missing it horizontally. 36 was the first floor; 44 is the one
+    // the phone's only navigation affordance gets (review of #564).
     const rule = /\.doc-crumb \.back-link\s*\{([^}]*)\}/.exec(topbarPhoneBlock())?.[1] ?? '';
-    expect(rule).toMatch(/min-width:\s*36px/);
-    expect(rule).toMatch(/min-height:\s*36px/);
+    expect(rule).toMatch(/min-width:\s*44px/);
+    expect(rule).toMatch(/min-height:\s*44px/);
+  });
+
+  it('keeps the crumb from collapsing under the toolbar in edit mode', () => {
+    // Measured at 430px before the floor: the crumb was 8px wide with the
+    // arrow and doc name clipped inside it. The floor holds the crumb open and
+    // the toolbar is the side that yields — it may shrink and scroll, and it
+    // must never push off-screen or clip the crumb.
+    const block = topbarPhoneBlock();
+    const crumb = /\n\s*\.doc-crumb\s*\{([^}]*)\}/.exec(block)?.[1] ?? '';
+    expect(crumb).toMatch(/min-width:\s*\d+px/);
+    const toolbar = /\n\s*\.toolbar\s*\{([^}]*)\}/.exec(block)?.[1] ?? '';
+    expect(toolbar).toMatch(/flex:\s*0 1 auto/);
+    expect(toolbar).toMatch(/min-width:\s*0/);
+    expect(toolbar).toMatch(/overflow-x:\s*auto/);
   });
 
   it('centres the glyph in the grown box rather than letting it sit top-left', () => {

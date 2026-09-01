@@ -371,11 +371,18 @@ describe('meeting store: who said it', () => {
   });
 });
 
-describe('meeting store: how the room was told', () => {
+/**
+ * The consent step is gone from the record too — this is its negative
+ * control. `setAnnounced` used to be the only writer of an `announced` field
+ * on the meeting record; nothing writes or reads one now, and a store that
+ * quietly kept doing so would leave a defensibility claim in the corpus that
+ * no UI stands behind any more.
+ */
+describe('meeting store: no consent record survives', () => {
   let dataDir: string;
 
   beforeAll(() => {
-    dataDir = mkdtempSync(join(tmpdir(), 'cw-announced-'));
+    dataDir = mkdtempSync(join(tmpdir(), 'cw-no-consent-'));
   });
   afterAll(() => {
     rmSync(dataDir, { recursive: true, force: true });
@@ -390,86 +397,44 @@ describe('meeting store: how the room was told', () => {
       .filter((l) => l.trim())
       .map((l) => JSON.parse(l) as Record<string, unknown>);
 
-  it('claims NOTHING at start — an announcement is a thing that has happened', () => {
-    // The load-bearing one. A claim written when the mic opened would stand
-    // even for a meeting stopped mid-sentence, and this record is the thing
-    // anybody would later be asked to show.
-    const meeting = start('doc-just-started');
-    expect(indexLines('doc-just-started')[0]).not.toHaveProperty('announced');
+  it('writes no announcement line and no announcement field, start to stop', () => {
+    const meeting = start('doc-conversation');
+    meeting?.recordTurn(0, 'So the sync is the bottleneck.', 'A');
     const record = meeting?.stop();
     expect(record && 'announced' in record).toBe(false);
-    const read = listMeetings(dataDir, 'doc-just-started')[0];
+    expect(indexLines('doc-conversation').some((l) => 'announced' in l)).toBe(false);
+    const read = listMeetings(dataDir, 'doc-conversation')[0];
     expect(read && 'announced' in read).toBe(false);
+    // The positive control: the record IS being written and read back, so
+    // the three assertions above are about a missing field rather than a
+    // missing record.
+    expect(read?.mode).toBe('conversation');
+    expect(read?.turns).toBe(1);
   });
 
-  it('writes the path once the room has been told, and reads it back off disk', () => {
-    const meeting = start('doc-device');
-    meeting?.setAnnounced('device');
+  it('no longer offers a way to claim one', () => {
+    // `setAnnounced` was the whole surface. A store that still carried it
+    // would be a step that had lost its buttons, not one that was removed.
+    const meeting = start('doc-no-setter');
+    expect(meeting && 'setAnnounced' in meeting).toBe(false);
     meeting?.stop();
-    expect(listMeetings(dataDir, 'doc-device')[0]?.announced).toBe('device');
   });
 
-  it('takes a LATER correction over an earlier one', () => {
-    // The device was asked to speak, could not, and a person was asked to
-    // read the sentence instead.
-    const meeting = start('doc-fallback');
-    meeting?.setAnnounced('device');
-    meeting?.setAnnounced('spoken');
-    expect(meeting?.stop().announced).toBe('spoken');
-    expect(listMeetings(dataDir, 'doc-fallback')[0]?.announced).toBe('spoken');
-    // Append-only: both lines are still there, in order.
-    const announcements = indexLines('doc-fallback').filter((l) => 'announced' in l);
-    expect(announcements.map((l) => l.announced)).toEqual(['device', 'spoken']);
-  });
-
-  it('writes no line when the claim repeats one already made', () => {
-    const meeting = start('doc-noop');
-    meeting?.setAnnounced('spoken');
-    meeting?.setAnnounced('spoken');
-    meeting?.stop();
-    expect(indexLines('doc-noop').filter((l) => 'announced' in l)).toHaveLength(1);
-  });
-
-  it('ignores a claim after the meeting stopped', () => {
-    const meeting = start('doc-late');
-    meeting?.stop();
-    meeting?.setAnnounced('spoken');
-    const read = listMeetings(dataDir, 'doc-late')[0];
-    expect(read && 'announced' in read).toBe(false);
-  });
-
-  it('does not invent a path from an unreadable index line', () => {
-    // The permissive direction here would write a consent record out of a
-    // typo, so an unknown value has to fold to "nothing is claimed".
-    const meeting = start('doc-garbage');
-    meeting?.setAnnounced('device');
+  it('ignores an announcement line an OLD client already wrote to the index', () => {
+    // The corpus has these lines in it. Nothing destroys them — the index is
+    // append-only — but the folded record must not resurrect the field from
+    // one, because there is no longer anything that means it.
+    const meeting = start('doc-legacy');
     meeting?.stop();
     appendFileSync(
-      meetingIndexPath(dataDir, 'doc-garbage'),
-      `${JSON.stringify({ meetingId: meeting?.meetingId, announced: 'shouted' })}\n`,
+      meetingIndexPath(dataDir, 'doc-legacy'),
+      `${JSON.stringify({ meetingId: meeting?.meetingId, announced: 'device' })}\n`,
     );
-    expect(listMeetings(dataDir, 'doc-garbage')[0]?.announced).toBe('device');
-  });
-
-  it('REFUSES a claim on a solo meeting, however the frame got here', () => {
-    // The frame is client-controlled and a solo capture had nobody to
-    // announce to, so the invariant is enforced where the record is written
-    // rather than trusted of whatever opened the socket.
-    const meeting = start('doc-solo-claim', 'solo');
-    meeting?.setAnnounced('device');
-    const record = meeting?.stop();
-    expect(record && 'announced' in record).toBe(false);
-    expect(indexLines('doc-solo-claim').some((l) => 'announced' in l)).toBe(false);
-    const read = listMeetings(dataDir, 'doc-solo-claim')[0];
+    const read = listMeetings(dataDir, 'doc-legacy')[0];
     expect(read && 'announced' in read).toBe(false);
-  });
-
-  it('a solo meeting nobody claimed anything for reads back with no field', () => {
-    const meeting = start('doc-solo', 'solo');
-    meeting?.stop();
-    const read = listMeetings(dataDir, 'doc-solo')[0];
-    expect(read?.mode).toBe('solo');
-    expect(read && 'announced' in read).toBe(false);
+    // …and the meeting it belongs to still reads back, so this is the field
+    // being dropped rather than the line poisoning the fold.
+    expect(read?.meetingId).toBe(meeting?.meetingId ?? '');
   });
 });
 

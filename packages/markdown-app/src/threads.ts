@@ -20,7 +20,7 @@ import {
   restoreComposerFocus,
   restoreScrollTops,
 } from './composer-keep.ts';
-import { answeredByLine, askedMetaLine } from './hub/hub-model.ts';
+import { askedMetaLine, decidedMetaLine } from './hub/hub-model.ts';
 import { decisionOutcome, threadDecision } from './long-thread.ts';
 import { attachMarkdownComposer } from './md-composer.ts';
 import {
@@ -810,28 +810,47 @@ export class ThreadPanel {
   }
 
   /**
-   * The answered RECORD, directly below the item it answers: the same shape a
-   * tapped option and a typed answer produce everywhere — "Answered by you:
-   * …" and a persistent Undo. "you" when the reader answered; the words
-   * render markdown-inline because they are a comment's words. Undo is the
-   * recovery path for a single unconfirmed tap, so it persists rather than
-   * expiring with a toast.
+   * The settled RECORD, directly below the item it settles — the whole point
+   * of which is that the card above it stays intact. A decided item keeps its
+   * full headline and detail body exactly as they were asked (neither is
+   * clamped), and the outcome arrives as a LABELLED strip rather than as a
+   * sentence wrapped around it: "Answered by Cara: “AssemblyAI…”" put the
+   * outcome mid-sentence, where the one word a person scans for — what was
+   * decided — had no visual home. The approved mock gives it one.
+   *
+   * Three parts, in reading order: the label ("Decision" or "Answer",
+   * following the same shape the card's kind chip reads), the verbatim
+   * outcome, then who settled it and when. Undo is the recovery path for a
+   * single unconfirmed tap, so it persists rather than expiring with a toast.
+   *
+   * The words render markdown-inline because they are a comment's words.
    */
   private answeredRecord(t: Thread, c: Comment, review: ReviewPayload): HTMLElement {
+    const decision = review.shape === 'decision';
     const wrap = div('thread-answered');
-    const line = document.createElement('p');
-    line.className = 'thread-answered-line';
-    line.append(
-      document.createTextNode(answeredByLine(review.answeredBy, this.opts.currentUser.name)),
-    );
+    const strip = div('thread-decision-strip');
+    const label = span('thread-decision-label');
+    label.textContent = decision ? 'Decision' : 'Answer';
     const words = span('thread-answer-words');
     // A legacy tapped answer may predate `answerText`; the tapped option's
     // label is the verbatim words it recorded.
     const answerText =
       review.answerText ?? review.options?.find((o) => o.id === review.answeredWith)?.label ?? '';
     words.innerHTML = renderCommentMarkdownInline(answerText);
-    line.append(words, document.createTextNode('”'));
-    wrap.append(line);
+    strip.append(label, words);
+    wrap.append(strip);
+
+    const meta = document.createElement('p');
+    meta.className = 'thread-answered-meta';
+    meta.textContent = decidedMetaLine(
+      review.answeredBy,
+      this.opts.currentUser.name,
+      review.answeredAt,
+      Date.now(),
+      decision,
+    );
+    wrap.append(meta);
+
     if (this.opts.onUndoAnswer) {
       const undo = btn('Undo', 'thread-answer-undo', () => this.opts.onUndoAnswer?.(t.id, c.id));
       undo.title = 'Take this answer back — it reopens the item and keeps a record';

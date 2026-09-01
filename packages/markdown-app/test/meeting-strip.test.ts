@@ -1,21 +1,18 @@
 import {
-  type AnnouncedBy,
   type CaptureMode,
   MAX_SPEAKER_NAME,
   MEETING_AUDIO_ENCODING,
   MEETING_SAMPLE_RATE,
   type MeetingBotState,
   type MeetingBotStatus,
-  RECORDING_ANNOUNCEMENT,
+  RECORDING_CONSENT_NOTE,
   isTerminalBotState,
   meetingSocketPath,
   parseMeetingClientMessage,
 } from '@feedback/core';
 import type { MeetingTranscriptEvent } from '@feedback/core';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import type { Announcer, SpeechOutcome } from '../src/meeting-announce.ts';
 import type { RoomAudioProcessing } from '../src/meeting-audio.ts';
-import { captureConstraints } from '../src/meeting-audio.ts';
 import type { MeetingCaptureStart } from '../src/meeting-audio.ts';
 import type { MeetingBotClient } from '../src/meeting-bot-client.ts';
 import {
@@ -176,54 +173,6 @@ class FakeSocket implements MeetingSocket {
   }
 }
 
-/** An announcer whose speech ends only when the test says it does. */
-class FakeAnnouncer implements Announcer {
-  primes = 0;
-  cancels = 0;
-  said: string[] = [];
-  /** Resolvers for each pending `speak`, in call order. */
-  private pending: Array<(outcome: SpeechOutcome) => void> = [];
-  constructor(
-    private readonly can = true,
-    private readonly log: string[] = [],
-  ) {}
-  supported(): boolean {
-    return this.can;
-  }
-  /** As the real one: a gesture has been spent iff `prime()` was reached. */
-  primed(): boolean {
-    return this.primes > 0;
-  }
-  prime(): void {
-    this.primes += 1;
-    this.log.push('prime');
-  }
-  speak(text: string): Promise<SpeechOutcome> {
-    this.said.push(text);
-    this.log.push('speak');
-    if (!this.can) return Promise.resolve('failed');
-    return new Promise<SpeechOutcome>((resolve) => this.pending.push(resolve));
-  }
-  cancel(): void {
-    this.cancels += 1;
-  }
-  /** The engine finishing (or failing) the sentence. */
-  settle(outcome: SpeechOutcome): void {
-    for (const resolve of this.pending.splice(0)) resolve(outcome);
-  }
-  /**
-   * Only the OLDEST pending utterance answers. A cancelled sentence can stay
-   * unsettled for its whole timeout while a second meeting starts and speaks,
-   * and the tests that care about that need the two to land separately.
-   */
-  settleOldest(outcome: SpeechOutcome): void {
-    this.pending.shift()?.(outcome);
-  }
-  get speaking(): boolean {
-    return this.pending.length > 0;
-  }
-}
-
 /** A minimal status the strip can render. */
 const botStatus = (state: MeetingBotState, speakers: string[] = []): MeetingBotStatus => ({
   botId: 'b-1',
@@ -304,9 +253,8 @@ interface Harness {
   stopCta(): HTMLButtonElement;
   /** Pick a chooser radio card by its title ("Just me", "Soniox", …). */
   pick(title: string): void;
-  consent(): HTMLInputElement;
-  /** The whole start gesture: open the chooser, adjust it, press the CTA. */
-  pressStart(o?: { pick?: string; consent?: boolean }): void;
+  /** The whole start gesture: open the chooser, adjust it, press Start. */
+  pressStart(o?: { pick?: string }): void;
   /** The whole stop gesture: open the menu, press Stop Recording. */
   pressStop(): void;
   elapsed(): string;
@@ -336,13 +284,13 @@ function mount(
   capture?: (opts: CaptureCall) => Promise<MeetingCaptureStart>,
   extra: {
     autoStart?: boolean;
+    autoChoose?: boolean;
     promptName?: (current: string) => string | null;
     mode?: CaptureMode;
     speakers?: number;
     room?: RoomAudioProcessing;
     engine?: 'assemblyai' | 'soniox';
     listEngines?: () => Promise<{ engines: string[]; default: string | null } | null>;
-    announcer?: Announcer;
     loadSpeakers?: () => Promise<DocSpeakers | null>;
     postName?: (meetingId: string, speaker: string, name: string) => Promise<boolean>;
     bot?: MeetingBotClient;
@@ -378,9 +326,6 @@ function mount(
           ok: true,
           capture: { stop, setEchoCancellation: () => Promise.resolve() },
         })),
-    // Nothing here should reach a real speech queue; tests that care pass
-    // their own FakeAnnouncer and read it.
-    announcer: extra.announcer ?? new FakeAnnouncer(),
     ...extra,
   });
   cleanups.push(() => strip.destroy());
@@ -398,7 +343,6 @@ function mount(
   };
   const startCta = () => root.querySelector('.meeting-start-cta') as HTMLButtonElement;
   const stopCta = () => root.querySelector('.meeting-stop-cta') as HTMLButtonElement;
-  const consent = () => root.querySelector('.meeting-consent input') as HTMLInputElement;
   return {
     root,
     strip,
@@ -411,15 +355,9 @@ function mount(
     startCta,
     stopCta,
     pick,
-    consent,
     pressStart: (o = {}) => {
       record().click();
       if (o.pick) pick(o.pick);
-      if (o.consent) {
-        const box = consent();
-        box.checked = true;
-        box.dispatchEvent(new Event('change'));
-      }
       startCta().click();
     },
     pressStop: () => {
@@ -875,6 +813,54 @@ describe('the strip opened by the Board’s huddle button', () => {
     expect(h.record().textContent).toContain('Recording');
   });
 
+  /**
+   * The Board has two entry buttons and they are not the same gesture.
+   * "Make a plan" is one person thinking out loud, so it opens the mic on
+   * arrival — the press already happened, on a page that is gone. "Have a
+   * discussion" has other people in it, and the sentence that tells them
+   * they are being recorded is now a button somebody has to press, so it
+   * arrives at the CHOICE instead.
+   */
+  describe('a discussion arrives at the chooser, not at the microphone', () => {
+    it('opens the chooser and touches no microphone', () => {
+      const capture = vi.fn(() => Promise.resolve({ ok: true as const, capture: fakeCapture() }));
+      const h = mount(capture, { autoChoose: true, mode: 'conversation' });
+      expect(capture).not.toHaveBeenCalled();
+      expect(h.root.dataset.state).toBe('idle');
+      expect(h.pop().hidden).toBe(false);
+      expect(h.pop().getAttribute('aria-label')).toBe('Start recording');
+      // One verb, and the same one whichever mode is selected: the room's
+      // announcement and its decline button are gone.
+      expect(h.startCta().textContent).toBe('● Start Recording');
+      expect(h.pop().querySelectorAll('button')).toHaveLength(1);
+    });
+
+    it('preselects Multiple Speakers, so the choice made on the Board carries', () => {
+      const h = mount(undefined, { autoChoose: true, mode: 'conversation' });
+      const selected = [...h.pop().querySelectorAll('.meeting-choice')]
+        .filter((el) => el.querySelector('input')?.checked === true)
+        .map((el) => el.querySelector('.meeting-choice-title')?.textContent);
+      expect(selected).toContain('Multiple Speakers');
+    });
+
+    it('an open microphone outranks it — a chooser over a live capture decides nothing', async () => {
+      const capture = vi.fn(() => Promise.resolve({ ok: true as const, capture: fakeCapture() }));
+      const h = mount(capture, { autoStart: true, autoChoose: true, mode: 'conversation' });
+      expect(capture).toHaveBeenCalledTimes(1);
+      await settle();
+      expect(h.pop().hidden).toBe(true);
+    });
+
+    it('is not the plan entry — that one still opens the mic', () => {
+      // Positive control for the assertion above it: the same mount with the
+      // other flag really does reach the microphone, so "not called" is a
+      // fact about the flag rather than about the fixture.
+      const capture = vi.fn(() => Promise.resolve({ ok: true as const, capture: fakeCapture() }));
+      mount(capture, { autoStart: true, mode: 'solo' });
+      expect(capture).toHaveBeenCalledTimes(1);
+    });
+  });
+
   it('stays at rest when not asked — a plain doc never opens a mic on its own', () => {
     const capture = vi.fn(() => Promise.resolve({ ok: true as const, capture: fakeCapture() }));
     const h = mount(capture);
@@ -993,8 +979,7 @@ describe('the strip across stop and start', () => {
     expect(h.caption()).not.toContain('old words');
     second?.serve({ type: 'transcript', turn: 0, text: 'new words', final: false });
     expect(h.caption()).toContain('new words');
-    // Nothing was sent on the dead socket; the new meeting announced itself
-    // on its own.
+    // Nothing was sent on the dead socket; the new meeting opened its own.
     expect(JSON.parse(String(second?.sent[0]))).toMatchObject({ type: 'start' });
   });
 });
@@ -1859,488 +1844,48 @@ describe('the meeting bot in the chrome', () => {
 });
 
 /**
- * The recording announcement.
+ * What replaced the consent step.
  *
- * The claim worth testing is an ORDERING one, and it is the opposite of the
- * intuitive order: the microphone opens first and the sentence is spoken into
- * it, so the announcement is part of the captured audio rather than a moment
- * before the recording that nothing can show afterwards. What no test here
- * can show is that a real room hears it, or that a real engine transcribes a
- * device speaking through its own microphone — see the note in
- * docs/architecture/meeting-assistant.md.
+ * The step that stood here spoke a fixed sentence into the room's own
+ * microphone, offered a second button that declined it, and wrote down which
+ * path was taken. Bryan removed all of it on 2026-09-01 — "This is too much
+ * fiddling. I'll manually handle consent for now." — and what is left is one
+ * line at the head of the transcript.
+ *
+ * These are mostly NEGATIVE tests, so each one carries the positive control
+ * that says the strip is still doing its job: a chooser that renders nothing
+ * has no skip button either, and a transcript panel that never draws has no
+ * announcement in it.
  */
-
-/** A capture that hands the test its own microphone. */
-function pumpCapture(log: string[] = []) {
-  let emit: ((pcm: Int16Array) => void) | null = null;
-  const stop = vi.fn();
-  /** Every echo-cancellation flip, in order — the announcement's hedge. */
-  const aec: boolean[] = [];
-  const setEchoCancellation = vi.fn((on: boolean) => {
-    aec.push(on);
-    log.push(`aec:${on ? 'on' : 'off'}`);
-    return Promise.resolve();
-  });
-  const start = vi.fn((opts: { onFrame: (pcm: Int16Array) => void }) => {
-    emit = opts.onFrame;
-    log.push('mic-open');
-    return Promise.resolve({ ok: true as const, capture: { stop, setEchoCancellation } });
-  });
-  return { start, stop, aec, setEchoCancellation, speakInto: (n = 1) => emit?.(new Int16Array(n)) };
-}
-
-/** Bring a conversation capture all the way to `recording` via the chooser. */
-async function recordingConversation(announcer: FakeAnnouncer, log: string[] = []) {
-  const mic = pumpCapture(log);
-  const h = mount(mic.start, { mode: 'conversation', announcer });
-  h.pressStart();
-  await settle();
-  const sock = h.sockets[0];
-  sock?.onopen?.();
-  log.push('start-frame');
-  sock?.serve({
-    type: 'ready',
-    meetingId: 'm1',
-    startedAt: 1_000,
-    engine: 'test',
-    mode: 'conversation',
-  });
-  // The announcement suspends echo cancellation before it speaks, which is a
-  // promise; let that settle so callers see the sentence underway.
-  await settle();
-  return { h, mic, sock };
-}
-
-const startFrame = (sock: { sent: Array<string | ArrayBufferView> } | undefined) =>
-  parseMeetingClientMessage(sock?.sent.find((x) => typeof x === 'string') ?? '');
-
-/** Every JSON frame the strip put on the socket, in order. */
-const textFrames = (sock: { sent: Array<string | ArrayBufferView> } | undefined) =>
-  (sock?.sent ?? [])
-    .filter((x): x is string => typeof x === 'string')
-    .map((x) => JSON.parse(x) as { type: string; by?: AnnouncedBy });
-
-describe('announcing a room capture', () => {
-  it('speaks only AFTER the mic is open and the audio path is live', async () => {
-    const log: string[] = [];
-    const announcer = new FakeAnnouncer(true, log);
-    await recordingConversation(announcer, log);
-    // The whole point: the sentence is spoken into an already-open
-    // microphone. Reverse these two and the announcement stops being part of
-    // the recording, which is the only thing that makes it evidence.
-    expect(log).toEqual(['prime', 'mic-open', 'start-frame', 'aec:off', 'speak']);
-    expect(announcer.said).toEqual([RECORDING_ANNOUNCEMENT]);
+describe('the consent step is gone', () => {
+  it('offers ONE start verb, the same one, whichever room the chooser is set to', () => {
+    const h = mount(undefined, { mode: 'conversation' });
+    h.record().click();
+    expect(h.startCta().textContent).toBe('● Start Recording');
+    // The skip verb was the decline path. It is the button whose absence is
+    // the removal, so it is asserted by class as well as by count.
+    expect(h.pop().querySelector('.meeting-skip-cta')).toBeNull();
+    expect(h.pop().querySelectorAll('button')).toHaveLength(1);
+    // Flipping to the solo room used to change both the verb's words and the
+    // button count. Now it changes neither.
+    h.pick('Just me');
+    expect(h.startCta().textContent).toBe('● Start Recording');
+    expect(h.pop().querySelectorAll('button')).toHaveLength(1);
   });
 
-  it('carries audio to the socket THROUGHOUT the announcement', async () => {
-    const announcer = new FakeAnnouncer();
-    const { mic, sock } = await recordingConversation(announcer);
-    // Mid-sentence — the device is still talking.
-    expect(announcer.speaking).toBe(true);
-    mic.speakInto(160);
-    expect(sock?.sent.filter((x) => typeof x !== 'string')).toHaveLength(1);
-    announcer.settle('spoke');
-    await settle();
-    // …and after it, with nothing torn down in between.
-    mic.speakInto(160);
-    expect(sock?.sent.filter((x) => typeof x !== 'string')).toHaveLength(2);
+  it('quotes no sentence for the room to hear', () => {
+    const h = mount(undefined, { mode: 'conversation' });
+    h.record().click();
+    expect(h.pop().querySelector('.meeting-announce-quote')).toBeNull();
+    expect(h.pop().textContent).not.toMatch(/being recorded and transcribed/i);
+    // The positive control: the chooser IS built, so the two assertions above
+    // are about missing chrome rather than a missing popover.
+    expect(h.pop().textContent).toContain('Multiple Speakers');
   });
 
-  it('primes speech inside the CTA press, before anything is awaited', async () => {
-    // iOS Safari unlocks synthesis only from the gesture's own task, and the
-    // announcement itself cannot be spoken there — it has to wait for the
-    // mic. The tap is spent on the unlock instead.
-    const announcer = new FakeAnnouncer();
-    const mic = pumpCapture();
-    const h = mount(mic.start, { mode: 'conversation', announcer });
+  it('says nothing on the wire about how the room was told', async () => {
+    const h = mount(undefined, { mode: 'conversation' });
     h.pressStart();
-    expect(announcer.primes).toBe(1);
-    expect(announcer.said).toEqual([]);
-    await settle();
-  });
-
-  it('claims NOTHING while the device is still mid-sentence', async () => {
-    // The claim is not on the start frame and is not made early: a meeting
-    // stopped here leaves a record that says the room was never told, which
-    // is exactly what happened.
-    const announcer = new FakeAnnouncer();
-    const { sock, h } = await recordingConversation(announcer);
-    expect(startFrame(sock)).toMatchObject({ mode: 'conversation' });
-    expect(startFrame(sock) && 'announced' in (startFrame(sock) as object)).toBe(false);
-    expect(textFrames(sock).some((f) => f.type === 'announced')).toBe(false);
-    expect(h.strip.announced()).toBeUndefined();
-  });
-
-  it('tells the server the room was told once the sentence FINISHED', async () => {
-    const announcer = new FakeAnnouncer();
-    const { sock, h } = await recordingConversation(announcer);
-    announcer.settle('spoke');
-    await settle();
-    expect(textFrames(sock).at(-1)).toEqual({ type: 'announced', by: 'device' });
-    expect(h.strip.announced()).toBe('device');
-  });
-
-  it('claims nothing when the meeting is stopped mid-sentence', async () => {
-    const announcer = new FakeAnnouncer();
-    const { sock, h } = await recordingConversation(announcer);
-    h.pressStop();
-    announcer.settle('spoke');
-    await settle();
-    // Not even a late `device`: the room heard half a sentence at most.
-    expect(textFrames(sock).some((f) => f.type === 'announced')).toBe(false);
-    expect(h.strip.announced()).toBeUndefined();
-  });
-
-  it('shows the sentence on the strip while the device says it', async () => {
-    const announcer = new FakeAnnouncer();
-    const { h } = await recordingConversation(announcer);
-    expect(h.note()).toContain(RECORDING_ANNOUNCEMENT);
-  });
-
-  it('gives the announcement back to the transcript once words arrive', async () => {
-    const announcer = new FakeAnnouncer();
-    const { h, sock } = await recordingConversation(announcer);
-    sock?.serve({ type: 'transcript', turn: 0, text: 'so the sync is', final: false });
-    expect(h.note()).toBe('');
-    expect(h.caption()).toContain('so the sync is');
-  });
-});
-
-describe('a solo capture announces nothing', () => {
-  it('says no words and claims nothing on the wire', async () => {
-    const announcer = new FakeAnnouncer();
-    const mic = pumpCapture();
-    const h = mount(mic.start, { announcer });
-    h.pressStart({ pick: 'Just me' });
-    await settle();
-    h.sockets[0]?.onopen?.();
-    h.sockets[0]?.serve({ type: 'ready', meetingId: 'm1', startedAt: 1_000, engine: 'test' });
-    expect(announcer.said).toEqual([]);
-    expect(announcer.primes).toBe(0);
-    const frame = startFrame(h.sockets[0]);
-    expect(frame).toMatchObject({ mode: 'solo' });
-    expect(frame && 'announced' in frame).toBe(false);
-    expect(h.strip.announced()).toBeUndefined();
-  });
-
-  it('the consent checkbox is moot there — there is nobody to tell', async () => {
-    const announcer = new FakeAnnouncer();
-    const mic = pumpCapture();
-    const h = mount(mic.start, { announcer });
-    h.pressStart({ pick: 'Just me', consent: true });
-    await settle();
-    h.sockets[0]?.onopen?.();
-    h.sockets[0]?.serve({ type: 'ready', meetingId: 'm1', startedAt: 1_000, engine: 'test' });
-    expect(h.note()).toBe('');
-    expect(textFrames(h.sockets[0]).some((f) => f.type === 'announced')).toBe(false);
-    expect(h.strip.announced()).toBeUndefined();
-  });
-});
-
-describe('"I\'ll ask for consent" — the person takes the sentence', () => {
-  it('starts the capture itself and keeps the device quiet', async () => {
-    const announcer = new FakeAnnouncer();
-    const mic = pumpCapture();
-    const h = mount(mic.start, { mode: 'conversation', announcer });
-    h.pressStart({ consent: true });
-    await settle();
-    // It IS a Start: a person saying it needs the mic open exactly as much
-    // as the device does, or their words are not in the recording either.
-    expect(mic.start).toHaveBeenCalledTimes(1);
-    h.sockets[0]?.onopen?.();
-    h.sockets[0]?.serve({
-      type: 'ready',
-      meetingId: 'm1',
-      startedAt: 1_000,
-      engine: 'test',
-      mode: 'conversation',
-    });
-    expect(h.root.dataset.state).toBe('recording');
-    expect(announcer.said).toEqual([]);
-    expect(announcer.primes).toBe(0);
-  });
-
-  it('puts the sentence on screen to read, and records that path', async () => {
-    const announcer = new FakeAnnouncer();
-    const mic = pumpCapture();
-    const h = mount(mic.start, { mode: 'conversation', announcer });
-    h.pressStart({ consent: true });
-    await settle();
-    h.sockets[0]?.onopen?.();
-    h.sockets[0]?.serve({
-      type: 'ready',
-      meetingId: 'm1',
-      startedAt: 1_000,
-      engine: 'test',
-      mode: 'conversation',
-    });
-    expect(h.note()).toContain(RECORDING_ANNOUNCEMENT);
-    expect(h.note()).toMatch(/say this out loud/i);
-    // `spoken` is claimed at once, because putting the sentence on screen is
-    // the whole of what `spoken` claims — the strip cannot know whether
-    // anybody read it aloud, and it never pretends to.
-    expect(textFrames(h.sockets[0]).at(-1)).toEqual({ type: 'announced', by: 'spoken' });
-    expect(h.strip.announced()).toBe('spoken');
-  });
-});
-
-describe('a device that turns out not to be able to speak', () => {
-  const failing = async (announcer: FakeAnnouncer, outcome: SpeechOutcome = 'failed') => {
-    const got = await recordingConversation(announcer);
-    announcer.settle(outcome);
-    await settle();
-    return got;
-  };
-
-  it('falls back to the person and CORRECTS the record', async () => {
-    const announcer = new FakeAnnouncer();
-    const { h, sock } = await failing(announcer);
-    expect(h.note()).toMatch(/say this out loud/i);
-    expect(h.note()).toContain(RECORDING_ANNOUNCEMENT);
-    // The fallback is the point. A record saying the device announced it
-    // when the device said nothing is worse than one that claims less.
-    expect(textFrames(sock).at(-1)).toEqual({ type: 'announced', by: 'spoken' });
-    expect(textFrames(sock).filter((f) => f.type === 'announced')).toHaveLength(1);
-    expect(h.strip.announced()).toBe('spoken');
-  });
-
-  it('keeps recording — a mute announcement is not a failed meeting', async () => {
-    const announcer = new FakeAnnouncer();
-    const { h, mic, sock } = await failing(announcer);
-    expect(h.root.dataset.state).toBe('recording');
-    mic.speakInto(160);
-    expect(sock?.sent.filter((x) => typeof x !== 'string')).toHaveLength(1);
-  });
-
-  it('a browser with no synthesis at all takes the same path', async () => {
-    const announcer = new FakeAnnouncer(false);
-    const { h } = await recordingConversation(announcer);
-    await settle();
-    expect(h.note()).toMatch(/say this out loud/i);
-    expect(h.strip.announced()).toBe('spoken');
-  });
-});
-
-// ---------------------------------------------------------------------------
-
-/**
- * The Board's "Record a conversation", on an iPad.
- *
- * Reported by Bryan on a real iPad, 2026-08-30: the room heard nothing. The
- * button is on the BOARD and it navigates (`location.assign`), so the gesture
- * it carries dies with that page and the strip mounts on the doc with nothing
- * having touched it. iOS Safari does not refuse the sentence there — it
- * accepts the utterance into a queue no gesture has unlocked and never begins
- * it, so the old code waited out a twelve-second timeout and then put a line
- * on a strip nobody was looking at, and a room that was told nothing had a
- * record saying a person had been asked to speak.
- *
- * A navigation cannot carry a gesture, so none of this can be fixed on the
- * board's side. The fix is to ASK for the one tap, on the doc, where the
- * announcement is owed — and to ask within seconds rather than after twelve.
- */
-
-/** The board's button, as the doc sees it: a mount that starts itself. */
-async function autoStartedConversation(announcer: FakeAnnouncer, log: string[] = []) {
-  const mic = pumpCapture(log);
-  const h = mount(mic.start, { mode: 'conversation', announcer, autoStart: true });
-  await settle();
-  const sock = h.sockets[0];
-  sock?.onopen?.();
-  sock?.serve({
-    type: 'ready',
-    meetingId: 'm1',
-    startedAt: 1_000,
-    engine: 'test',
-    mode: 'conversation',
-  });
-  await settle();
-  return { h, mic, sock };
-}
-
-/** The announcement line, which is always a control. */
-const noteButton = (h: Harness) => h.root.querySelector('.meeting-note') as HTMLButtonElement;
-
-describe('an auto-started meeting whose device never begins the sentence', () => {
-  /** Auto-start, and the queue turns out to be the locked one. */
-  async function muted(log: string[] = []) {
-    const announcer = new FakeAnnouncer(true, log);
-    const got = await autoStartedConversation(announcer, log);
-    announcer.settle('mute');
-    await settle();
-    return { ...got, announcer };
-  }
-
-  it('primed nothing on the way in — a navigation carries no gesture', async () => {
-    const { announcer } = await muted();
-    expect(announcer.primes).toBe(0);
-    expect(announcer.said).toEqual([RECORDING_ANNOUNCEMENT]);
-  });
-
-  it('asks for one tap instead of silently downgrading to a line to read', async () => {
-    const { h } = await muted();
-    expect(h.note()).toMatch(/tap to announce/i);
-    expect(h.note()).toContain(RECORDING_ANNOUNCEMENT);
-    expect(noteButton(h).tagName).toBe('BUTTON');
-  });
-
-  it('spends that tap on the unlock and then says it, in that order', async () => {
-    const log: string[] = [];
-    const { h, announcer } = await muted(log);
-    noteButton(h).click();
-    await settle();
-    expect(announcer.primes).toBe(1);
-    expect(announcer.said).toEqual([RECORDING_ANNOUNCEMENT, RECORDING_ANNOUNCEMENT]);
-    // The unlock is synchronous inside the click — that is the whole of what
-    // iOS is waiting for — and the sentence follows the microphone's echo
-    // cancellation exactly as the first attempt did.
-    expect(log.slice(log.indexOf('prime'))).toEqual(['prime', 'aec:off', 'speak']);
-  });
-
-  it('claims `spoken` while the offer stands, and upgrades once it is heard', async () => {
-    const { h, sock, announcer } = await muted();
-    // The sentence IS on screen for a person, which is the whole of what
-    // `spoken` claims — the same claim the old fallback made, so a room that
-    // nobody taps for is recorded no worse than before.
-    expect(h.strip.announced()).toBe('spoken');
-    noteButton(h).click();
-    await settle();
-    announcer.settle('spoke');
-    await settle();
-    expect(h.strip.announced()).toBe('device');
-    expect(textFrames(sock).at(-1)).toEqual({ type: 'announced', by: 'device' });
-  });
-
-  it('gives the line back to the transcript once the room has actually heard it', async () => {
-    const { h, announcer } = await muted();
-    noteButton(h).click();
-    await settle();
-    announcer.settle('spoke');
-    await settle();
-    expect(h.note()).toBe('');
-  });
-
-  it('falls back to the person when the tap does not get speech either', async () => {
-    const { h, sock, announcer } = await muted();
-    noteButton(h).click();
-    await settle();
-    announcer.settle('failed');
-    await settle();
-    expect(h.note()).toMatch(/say this out loud/i);
-    expect(h.note()).toContain(RECORDING_ANNOUNCEMENT);
-    expect(h.strip.announced()).toBe('spoken');
-    // And says so once: the record already said `spoken`, and repeating a
-    // claim on the wire is not a second announcement.
-    expect(textFrames(sock).filter((f) => f.type === 'announced')).toHaveLength(1);
-  });
-
-  it('keeps recording throughout — a mute announcement is not a failed meeting', async () => {
-    const { h, mic, sock } = await muted();
-    expect(h.root.dataset.state).toBe('recording');
-    mic.speakInto(160);
-    expect(sock?.sent.filter((x) => typeof x !== 'string')).toHaveLength(1);
-  });
-
-  it('does NOT offer a tap when a gesture was already spent on the unlock', async () => {
-    // Pressing Start primes inside the click. If the queue stayed silent
-    // after that, a tap is not what is missing — and a button that cannot
-    // work is worse than the line it replaces.
-    const announcer = new FakeAnnouncer();
-    const { h } = await recordingConversation(announcer);
-    announcer.settle('mute');
-    await settle();
-    expect(h.note()).toMatch(/say this out loud/i);
-    expect(h.note()).not.toMatch(/tap to announce/i);
-  });
-
-  it('a second tap on a sentence already in flight is not a second announcement', async () => {
-    // The double tap, which is the ordinary way a person answers a control
-    // that does not visibly change: a second `speak()` cancels the first
-    // mid-sentence, and the FIRST call's continuation then restores echo
-    // cancellation and puts the read-it-yourself line up while the second is
-    // still talking — the announcement taken back out of the recording by the
-    // tap that asked for it.
-    const { h, mic, announcer } = await muted();
-    const offer = noteButton(h);
-    offer.click();
-    offer.click();
-    await settle();
-    expect(announcer.said).toHaveLength(2);
-    expect(announcer.primes).toBe(1);
-    // Echo cancellation went down once for the sentence, and is still down
-    // while it is spoken.
-    expect(mic.aec.filter((on) => !on)).toHaveLength(2);
-    expect(mic.aec.at(-1)).toBe(false);
-    announcer.settle('spoke');
-    await settle();
-    expect(h.strip.announced()).toBe('device');
-    expect(mic.aec.at(-1)).toBe(true);
-  });
-
-  it('a later meeting can still be tapped after one that ended mid-sentence', async () => {
-    // The in-flight guard is held by attempt, not as a flag: an utterance
-    // cancelled by a stop can stay unresolved for its whole timeout, and the
-    // next meeting's offer must not be locked out by it.
-    const { h, announcer } = await muted();
-    noteButton(h).click();
-    await settle();
-    h.pressStop();
-    h.pressStart();
-    await settle();
-    h.sockets[1]?.onopen?.();
-    h.sockets[1]?.serve({
-      type: 'ready',
-      meetingId: 'm2',
-      startedAt: 2_000,
-      engine: 'test',
-      mode: 'conversation',
-    });
-    await settle();
-    // The second meeting's own press primed it, so this one gets the plain
-    // line rather than the offer — but the guard is what is under test: its
-    // sentence was spoken at all. Settled together with the cancelled one it
-    // inherited, which answers for nothing.
-    announcer.settle('spoke');
-    await settle();
-    expect(h.strip.announced()).toBe('device');
-  });
-
-  it('a meeting stopped before the tap says nothing into the room it left', async () => {
-    const { h, announcer } = await muted();
-    const offer = noteButton(h);
-    h.pressStop();
-    expect(h.root.dataset.state).toBe('idle');
-    offer.click();
-    await settle();
-    // Not even the unlock: there is no meeting for it to be spent on.
-    expect(announcer.primes).toBe(0);
-    expect(announcer.said).toHaveLength(1);
-  });
-});
-
-describe('a meeting stopped mid-announcement', () => {
-  it('silences the device and does not rewrite the strip afterwards', async () => {
-    const announcer = new FakeAnnouncer();
-    const { h } = await recordingConversation(announcer);
-    h.pressStop();
-    expect(announcer.cancels).toBeGreaterThanOrEqual(1);
-    expect(h.root.dataset.state).toBe('idle');
-    // The sentence resolving late belongs to a meeting that is over; it must
-    // not put a "say this out loud" prompt on an idle strip.
-    announcer.settle('failed');
-    await settle();
-    expect(h.root.dataset.state).toBe('idle');
-    expect(h.note()).not.toMatch(/say this out loud/i);
-  });
-});
-
-describe('the sentence a person has to READ stays on screen', () => {
-  /** Bring up the read-it-yourself prompt on a live capture. */
-  async function prompting() {
-    const announcer = new FakeAnnouncer();
-    const mic = pumpCapture();
-    const h = mount(mic.start, { mode: 'conversation', announcer });
-    h.pressStart({ consent: true });
     await settle();
     const sock = h.sockets[0];
     sock?.onopen?.();
@@ -2351,343 +1896,117 @@ describe('the sentence a person has to READ stays on screen', () => {
       engine: 'test',
       mode: 'conversation',
     });
-    return { h, sock, announcer };
-  }
-
-  it('survives partials — an air conditioner must not wipe it mid-read', async () => {
-    const { h, sock } = await prompting();
-    expect(h.note()).toContain(RECORDING_ANNOUNCEMENT);
-    sock?.serve({ type: 'transcript', turn: 0, text: 'mmm', final: false });
-    sock?.serve({ type: 'transcript', turn: 0, text: 'mmm hh', final: false });
-    expect(h.note()).toContain(RECORDING_ANNOUNCEMENT);
-    expect(h.caption()).not.toContain('mmm hh');
+    await settle();
+    const frames = (sock?.sent ?? [])
+      .filter((x): x is string => typeof x === 'string')
+      .map((x) => JSON.parse(x) as { type: string });
+    expect(frames.map((f) => f.type)).not.toContain('announced');
+    // Positive control: the socket carried the frame it is supposed to.
+    expect(frames.map((f) => f.type)).toContain('start');
+    // And the handle no longer reports a consent path at all.
+    expect('announced' in h.strip).toBe(false);
   });
 
-  it('gives the line back once a whole utterance has SETTLED', async () => {
-    const { h, sock } = await prompting();
-    sock?.serve({ type: 'transcript', turn: 0, text: 'partial', final: false });
+  it('does not report the room as told even for a conversation that runs', async () => {
+    // The strip used to hold this on `mode === conversation`, which is the
+    // one setting that could resurrect it silently.
+    const h = mount(undefined, { mode: 'conversation' });
+    h.pressStart();
+    await settle();
+    const sock = h.sockets[0];
+    sock?.onopen?.();
+    sock?.serve({
+      type: 'ready',
+      meetingId: 'm1',
+      startedAt: 1_000,
+      engine: 'test',
+      mode: 'conversation',
+    });
+    await settle();
+    expect(h.strip.mode()).toBe('conversation');
+    expect(h.root.dataset.state).toBe('recording');
+  });
+});
+
+describe('the transcript panel opens with the consent reminder', () => {
+  /** A conversation capture taken all the way to `recording`. */
+  const recording = async (mode: CaptureMode = 'conversation') => {
+    const h = mount(undefined, { mode });
+    h.pressStart();
+    await settle();
+    const sock = h.sockets[0];
+    sock?.onopen?.();
+    sock?.serve({ type: 'ready', meetingId: 'm1', startedAt: 1_000, engine: 'test', mode });
+    await settle();
+    return { h, sock };
+  };
+
+  it('shows the single line, and no more than it', async () => {
+    const { h } = await recording();
+    expect(h.note()).toBe(RECORDING_CONSENT_NOTE);
+    expect(h.root.querySelectorAll('.meeting-note')).toHaveLength(1);
+    // It is the fixed line, not a sentence composed here: the words are
+    // asserted through the export, and their substance in core's own test.
+    expect(h.note()).toMatch(/^By recording/);
+  });
+
+  it('is chrome, not a turn — it is not a caption anybody said', async () => {
+    const { h } = await recording();
+    // The class the stylesheet italicises it by. A note that lost it would
+    // read as a transcript line, which is the one thing it must not be.
+    expect(h.root.querySelector('.meeting-consent-note')).not.toBeNull();
+    expect(h.root.querySelectorAll('.meeting-turn')).toHaveLength(0);
+  });
+
+  it('gives the line to the words the moment there are any', async () => {
+    const { h, sock } = await recording();
     sock?.serve({
       type: 'transcript',
       turn: 0,
-      text: 'Just so everyone knows, this conversation is being recorded.',
-      final: true,
+      text: 'So the sync is the bottleneck',
+      final: false,
     });
-    expect(h.note()).toBe('');
-    // Nothing said while it held was lost — it draws as soon as the line
-    // comes back.
-    expect(h.caption()).toContain('this conversation is being recorded');
+    expect(h.caption()).toContain('So the sync is the bottleneck');
+    expect(h.root.querySelector('.meeting-consent-note')).toBeNull();
   });
 
-  it('can be tapped away by someone who has already said it', async () => {
-    const { h, sock } = await prompting();
-    const note = h.root.querySelector('.meeting-note') as HTMLButtonElement;
-    expect(note.tagName).toBe('BUTTON');
-    note.click();
-    expect(h.note()).toBe('');
-    sock?.serve({ type: 'transcript', turn: 1, text: 'right, so', final: false });
-    expect(h.caption()).toContain('right, so');
+  it('does not come back over a transcript that has already started', async () => {
+    // A settled turn used to be what released the announcement's hold. The
+    // reminder has no hold to release, and must not reappear between turns.
+    const { h, sock } = await recording();
+    sock?.serve({ type: 'transcript', turn: 0, text: 'First.', final: true });
+    sock?.serve({ type: 'transcript', turn: 1, text: 'Second.', final: false });
+    expect(h.root.querySelector('.meeting-consent-note')).toBeNull();
+    expect(h.caption()).toContain('Second.');
   });
 
-  it('does NOT hold the line when the device is the one talking', async () => {
-    // That caption is a courtesy for something the room is already hearing.
-    const announcer = new FakeAnnouncer();
-    const { h, sock } = await recordingConversation(announcer);
-    expect(h.note()).toContain(RECORDING_ANNOUNCEMENT);
-    sock?.serve({ type: 'transcript', turn: 0, text: 'so the sync', final: false });
-    expect(h.note()).toBe('');
-    expect(h.caption()).toContain('so the sync');
+  it('shows it for a solo capture too — the asking is the same person’s either way', async () => {
+    const { h } = await recording('solo');
+    expect(h.note()).toBe(RECORDING_CONSENT_NOTE);
   });
 
-  it('lets go when the meeting ends, whatever it was holding', async () => {
-    const { h, sock } = await prompting();
-    sock?.serve({ type: 'stopped', meetingId: 'm1', endedAt: 2_000 });
-    expect(h.root.dataset.state).toBe('idle');
-    expect(h.note()).toBe('');
+  it('is not on the strip before a recording starts', async () => {
+    // The strip is hidden at rest, so a reminder there would be a line about
+    // a recording that is not happening.
+    const h = mount(undefined, { mode: 'conversation' });
+    expect(h.root.hidden).toBe(true);
+    expect(h.root.querySelector('.meeting-consent-note')).toBeNull();
   });
-});
 
-describe('the SERVER decides whether there is a room to announce to', () => {
-  /** Start a capture in `asked`, and have the server answer `opened`. */
-  async function negotiated(asked: CaptureMode, opened: CaptureMode) {
-    const announcer = new FakeAnnouncer();
-    const mic = pumpCapture();
-    const h = mount(mic.start, { mode: asked, announcer });
+  it('yields to the reason a meeting could not start', async () => {
+    // `unavailable` writes its own note through the same line. The reminder
+    // must not sit under a meeting that is not recording anything.
+    const h = mount(undefined, { mode: 'conversation' });
     h.pressStart();
     await settle();
-    h.sockets[0]?.onopen?.();
-    h.sockets[0]?.serve({
-      type: 'ready',
-      meetingId: 'm1',
-      startedAt: 1_000,
-      engine: 'test',
-      mode: opened,
+    const sock = h.sockets[0];
+    sock?.onopen?.();
+    sock?.serve({
+      type: 'unavailable',
+      reason: 'not_configured',
+      message: 'Transcription is not configured on this server.',
     });
-    return { h, announcer };
-  }
-
-  it('says nothing when the server opened a SOLO session we asked to be a room', async () => {
-    // An old server answering `solo`: the strip has just relabelled this
-    // capture solo, and a solo capture announces nothing.
-    const { h, announcer } = await negotiated('conversation', 'solo');
-    expect(h.strip.mode()).toBe('solo');
-    expect(announcer.said).toEqual([]);
-    expect(h.note()).not.toContain(RECORDING_ANNOUNCEMENT);
-    expect(h.strip.announced()).toBeUndefined();
-  });
-
-  it('announces when the server opened a ROOM we asked to be solo', async () => {
-    // The inverse mismatch, and the one that matters: a room is owed an
-    // announcement whatever the client asked for.
-    const { h, announcer } = await negotiated('solo', 'conversation');
-    await settle();
-    expect(h.strip.mode()).toBe('conversation');
-    expect(announcer.said).toEqual([RECORDING_ANNOUNCEMENT]);
-    expect(h.note()).toContain(RECORDING_ANNOUNCEMENT);
-  });
-});
-
-describe('nothing keeps announcing a meeting that ended', () => {
-  /** Every way a meeting can end that is not the Stop button. */
-  const endings: Array<[string, (sock: FakeSocket) => void]> = [
-    ['the relay reports an error', (s) => s.serve({ type: 'error', message: 'engine died' })],
-    ['the server stops it', (s) => s.serve({ type: 'stopped', meetingId: 'm1', endedAt: 2_000 })],
-    [
-      'the engine turns out to be unavailable',
-      (s) => s.serve({ type: 'unavailable', reason: 'engine_unavailable', message: 'no' }),
-    ],
-    ['the socket drops', (s) => s.onclose?.()],
-  ];
-
-  for (const [name, end] of endings) {
-    it(`silences the device when ${name}`, async () => {
-      const announcer = new FakeAnnouncer();
-      const { h, sock } = await recordingConversation(announcer);
-      expect(announcer.speaking).toBe(true);
-      if (sock) end(sock);
-      // The device must not carry on telling a room it is being recorded
-      // into a room where it is not.
-      expect(announcer.cancels).toBeGreaterThanOrEqual(1);
-      // And the sentence resolving afterwards writes nothing: no claim on a
-      // meeting that failed, and no prompt on a strip that has moved on.
-      const before = h.root.dataset.state;
-      announcer.settle('spoke');
-      await settle();
-      expect(h.root.dataset.state).toBe(before);
-      expect(h.strip.announced()).toBeUndefined();
-      expect(h.note()).not.toMatch(/say this out loud/i);
-    });
-  }
-});
-
-describe('the device speaking is not cancelled out of its own recording', () => {
-  it('suspends echo cancellation across the sentence and restores it after', async () => {
-    // Echo cancellation is asked for on every capture and its whole job is
-    // to remove what this device plays from what its microphone hears —
-    // which is the one moment that has to work the other way round.
-    const log: string[] = [];
-    const announcer = new FakeAnnouncer(true, log);
-    const { mic } = await recordingConversation(announcer, log);
-    expect(mic.aec).toEqual([false]);
-    announcer.settle('spoke');
-    await settle();
-    // Restored: a whole meeting captured without echo cancellation would
-    // transcribe its own speaker output for the rest of the hour.
-    expect(mic.aec).toEqual([false, true]);
-    expect(log.indexOf('aec:off')).toBeLessThan(log.indexOf('speak'));
-    expect(log.indexOf('speak')).toBeLessThan(log.indexOf('aec:on'));
-  });
-
-  it('leaves it alone when a person is the one talking', async () => {
-    const announcer = new FakeAnnouncer();
-    const mic = pumpCapture();
-    const h = mount(mic.start, { mode: 'conversation', announcer });
-    h.pressStart({ consent: true });
-    await settle();
-    h.sockets[0]?.onopen?.();
-    h.sockets[0]?.serve({
-      type: 'ready',
-      meetingId: 'm1',
-      startedAt: 1_000,
-      engine: 'test',
-      mode: 'conversation',
-    });
-    await settle();
-    // Their voice reaches the mic the way every other voice in the room
-    // does; the canceller was never in the way of it.
-    expect(mic.aec).toEqual([]);
-  });
-
-  it("a cancelled sentence never un-suspends the NEXT meeting's microphone", async () => {
-    // The hazard: cancelling speech does not settle its promise, so the
-    // restore half of a dead announcement can run minutes later — by which
-    // time the strip holds a different microphone, mid-announcement. Undoing
-    // the suspension there is precisely the bug the suspension exists to
-    // prevent, and it would be silent.
-    const announcer = new FakeAnnouncer();
-    const mics: Array<{ aec: boolean[] }> = [];
-    const startCapture = () => {
-      const aec: boolean[] = [];
-      mics.push({ aec });
-      return Promise.resolve({
-        ok: true as const,
-        capture: {
-          stop: vi.fn(),
-          setEchoCancellation: (on: boolean) => {
-            aec.push(on);
-            return Promise.resolve();
-          },
-        },
-      });
-    };
-    const h = mount(startCapture, { mode: 'conversation', announcer });
-    const ready = async (i: number) => {
-      h.sockets[i]?.onopen?.();
-      h.sockets[i]?.serve({
-        type: 'ready',
-        meetingId: `m${i}`,
-        startedAt: 1_000,
-        engine: 'test',
-        mode: 'conversation',
-      });
-      await settle();
-    };
-
-    h.pressStart();
-    await settle();
-    await ready(0);
-    // Stopped mid-sentence: the utterance is abandoned, not answered.
-    h.pressStop();
-    h.pressStart();
-    await settle();
-    await ready(1);
-    expect(mics).toHaveLength(2);
-    expect(mics[1]?.aec).toEqual([false]);
-
-    // Now the abandoned utterance finally comes back.
-    announcer.settleOldest('spoke');
-    await settle();
-    expect(mics[0]?.aec).toEqual([false, true]);
-    // The live meeting is still speaking, so its canceller is still down.
-    // Bound to the closure instead of the instance, this reads [false, true].
-    expect(mics[1]?.aec).toEqual([false]);
-  });
-
-  it('restores echo cancellation to what the ROOM asked for, not to on', async () => {
-    // `?mic=ec0-…` turns echo cancellation off for a room, and the
-    // announcement is made on exactly the mode that knob applies to. Restoring
-    // a hardcoded `true` afterwards would switch it back on mid-meeting, for
-    // the rest of the meeting, with nothing saying so — and the knob is what
-    // the microphone measurement varies.
-    const announcer = new FakeAnnouncer();
-    const mic = pumpCapture();
-    const h = mount(mic.start, {
-      mode: 'conversation',
-      announcer,
-      room: { echoCancellation: false, noiseSuppression: true, autoGainControl: false },
-    });
-    h.pressStart();
-    await settle();
-    h.sockets[0]?.onopen?.();
-    h.sockets[0]?.serve({
-      type: 'ready',
-      meetingId: 'm1',
-      startedAt: 1_000,
-      engine: 'test',
-      mode: 'conversation',
-    });
-    await settle();
-    announcer.settleOldest('spoke');
-    await settle();
-    // Down for the sentence, and back to OFF — where the room put it.
-    expect(mic.aec).toEqual([false, false]);
-  });
-
-  it('ignores a room config that the mode it is recording in would not apply', async () => {
-    // A stale `?mic=ec0-…` on the address while the chooser says solo. The
-    // capture opens with the SOLO processing, so the restore must too — the
-    // announcement is unreachable in solo today, and this pins the rule to
-    // the constraints the microphone was opened with rather than to that.
-    const announcer = new FakeAnnouncer();
-    const mic = pumpCapture();
-    const room = { echoCancellation: false, noiseSuppression: false, autoGainControl: false };
-    const h = mount(mic.start, { mode: 'conversation', announcer, room });
-    h.pressStart();
-    await settle();
-    // Flip to solo and back is not available mid-meeting; instead assert the
-    // room path, then that `captureConstraints` is what decides it.
-    expect((captureConstraints('solo', room).audio as MediaTrackConstraints).echoCancellation).toBe(
-      true,
-    );
-    expect(
-      (captureConstraints('conversation', room).audio as MediaTrackConstraints).echoCancellation,
-    ).toBe(false);
-  });
-
-  it('restores it to ON for a room that never asked for anything else', async () => {
-    // The positive control: the fix must not simply stop restoring. The
-    // default room wants cancellation, and gets it back.
-    const announcer = new FakeAnnouncer();
-    const { mic } = await recordingConversation(announcer);
-    announcer.settleOldest('spoke');
-    await settle();
-    expect(mic.aec).toEqual([false, true]);
-  });
-
-  it('a meeting that ends while the constraint is in flight is never announced', async () => {
-    // `cancel()` reaches an utterance that has started. It cannot reach one
-    // that has not — and suspending the canceller is a promise, so there is a
-    // window where a stop lands before `speak()` is even called. Speaking
-    // there tells a room it is being recorded when it is not.
-    const announcer = new FakeAnnouncer();
-    const held: Array<() => void> = [];
-    const mic = pumpCapture();
-    mic.setEchoCancellation.mockImplementation(() => new Promise<void>((r) => void held.push(r)));
-    const h = mount(mic.start, { mode: 'conversation', announcer });
-    h.pressStart();
-    await settle();
-    h.sockets[0]?.onopen?.();
-    h.sockets[0]?.serve({
-      type: 'ready',
-      meetingId: 'm1',
-      startedAt: 1_000,
-      engine: 'test',
-      mode: 'conversation',
-    });
-    await settle();
-    // Suspension still pending, so nothing has been spoken yet.
-    expect(announcer.said).toEqual([]);
-    h.pressStop();
-    await settle();
-    for (const r of held.splice(0)) r();
-    await settle();
-    // The room is not told about a meeting that is over.
-    expect(announcer.said).toEqual([]);
-    expect(h.strip.announced()).toBeUndefined();
-  });
-
-  it('announces anyway when the browser REFUSES the constraint', async () => {
-    // The hedge is best-effort, and its failure must not take the sentence
-    // down with it — the one thing that must never happen here is silence.
-    const announcer = new FakeAnnouncer();
-    const mic = pumpCapture();
-    mic.setEchoCancellation.mockImplementation(() => Promise.reject(new Error('nope')));
-    const h = mount(mic.start, { mode: 'conversation', announcer });
-    h.pressStart();
-    await settle();
-    h.sockets[0]?.onopen?.();
-    h.sockets[0]?.serve({
-      type: 'ready',
-      meetingId: 'm1',
-      startedAt: 1_000,
-      engine: 'test',
-      mode: 'conversation',
-    });
-    await settle();
-    expect(mic.setEchoCancellation).toHaveBeenCalled();
-    expect(announcer.said).toEqual([RECORDING_ANNOUNCEMENT]);
-    // …and the record still follows the sentence, not the hedge.
-    announcer.settle('spoke');
-    await settle();
-    expect(h.strip.announced()).toBe('device');
+    expect(h.note()).toBe('Transcription is not configured on this server.');
+    expect(h.root.querySelector('.meeting-consent-note')).toBeNull();
   });
 });

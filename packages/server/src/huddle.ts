@@ -12,6 +12,9 @@
 
 import { randomBytes } from 'node:crypto';
 import { join } from 'node:path';
+import type { HuddleKind } from '@feedback/core';
+
+export type { HuddleKind };
 
 /** Longer than this and it is a paragraph, not a topic. */
 export const HUDDLE_TOPIC_MAX = 200;
@@ -58,8 +61,37 @@ export function parseHuddleTopic(raw: unknown): { ok: true; topic?: string } | {
   return { ok: true, topic };
 }
 
-/** The file's first bytes: the topic as the first heading, else nothing. */
-export function huddleSeedMarkdown(topic?: string): string {
+/**
+ * Which of the Board's two entry flows is asking. `'plan'` is "Make a plan"
+ * — the doc opens goal-shaped; `'discussion'` is "Have a discussion" — live
+ * notes over an empty doc. Absent is the old payload (a caller from before
+ * the split) and keeps the old behavior exactly.
+ */
+export function parseHuddleKind(raw: unknown): { ok: true; kind?: HuddleKind } | { ok: false } {
+  if (raw === undefined || raw === null) return { ok: true };
+  if (raw === 'plan' || raw === 'discussion') return { ok: true, kind: raw };
+  return { ok: false };
+}
+
+/**
+ * What the Make Plan press says. The ask travels as an ordinary comment
+ * thread from the presser — comments are the product's ask channel, so it
+ * rides the existing thread.created webhook and board channel to whichever
+ * agent watches this doc, with no new event type. Fixed text: the button is
+ * one tap, and the goal it points at is the doc itself.
+ */
+export const PLAN_REQUEST_COMMENT =
+  'Please make a plan from this goal. Append it to this doc as a "Plan" section, and file the first tickets from it.';
+
+/**
+ * The file's first bytes. A plan doc always opens under a `# Goal` heading —
+ * that heading is what the placeholder copy and the Make Plan float hang off
+ * — with a topic, when one was given, filed under it as the first line of
+ * the goal statement rather than replacing the heading. Everything else:
+ * the topic as the first heading, else nothing.
+ */
+export function huddleSeedMarkdown(topic?: string, kind?: HuddleKind): string {
+  if (kind === 'plan') return topic ? `# Goal\n\n${topic}\n` : '# Goal\n';
   return topic ? `# ${topic}\n` : '';
 }
 

@@ -15,7 +15,6 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
-  type AnnouncedBy,
   type CaptureMode,
   MEETING_AUDIO_ENCODING,
   MEETING_SAMPLE_RATE,
@@ -64,9 +63,6 @@ class AudioClient {
   }
 
   /** The room HAS been told — never sent with `start`. */
-  announced(by: AnnouncedBy): void {
-    this.ws.send(JSON.stringify({ type: 'announced', by }));
-  }
 
   /** One 20ms frame of silence — the relay only counts chunks, not samples. */
   speak(chunks: number): void {
@@ -521,13 +517,13 @@ describe('meeting audio socket with two voices', () => {
 });
 
 /**
- * The announcement, as far as the SERVER is concerned: it writes down what
- * the strip says happened and never guesses. What no test here can show is
- * that a room heard anything — see the ordering tests in
- * `packages/markdown-app/test/meeting-strip.test.ts` for the mechanism, and
- * docs/architecture/meeting-assistant.md for what is still unverified.
+ * The consent step's server half is gone — the `announced` frame, its parse
+ * branch, and the field it wrote onto the meeting record. This is the
+ * negative control for that removal at the socket, which is the layer a
+ * removed button cannot speak for: a client built before 2026-09-01 is still
+ * out there and will still send the frame.
  */
-describe('the meeting record says how the room was told', () => {
+describe('the announcement frame no longer reaches the record', () => {
   let handle: ServerHandle;
   let dataDir: string;
   let base: string;
@@ -546,7 +542,7 @@ describe('the meeting record says how the room was told', () => {
   };
 
   beforeAll(async () => {
-    dataDir = mkdtempSync(join(tmpdir(), 'cw-meeting-announced-'));
+    dataDir = mkdtempSync(join(tmpdir(), 'cw-meeting-no-consent-'));
     handle = createServer({ port: 0, dataDir, transcription: createMockTranscriptionEngine() });
     base = `http://localhost:${handle.port}`;
     wsBase = `ws://localhost:${handle.port}`;
@@ -557,72 +553,22 @@ describe('the meeting record says how the room was told', () => {
     rmSync(dataDir, { recursive: true, force: true });
   });
 
-  it('records the path only once the strip says the room was told', async () => {
-    const canonical = await createDoc('device-said-it');
-    const client = await AudioClient.open(wsBase, 'device-said-it');
+  it('answers an old client’s `announced` frame as unreadable, and records nothing', async () => {
+    const canonical = await createDoc('old-client-announces');
+    const client = await AudioClient.open(wsBase, 'old-client-announces');
     client.start(MEETING_SAMPLE_RATE, 'conversation');
     await client.waitFor('ready');
-    // Nothing claimed yet — a meeting stopped here would say nothing.
-    client.announced('device');
-    client.stop();
-    await client.waitFor('stopped');
-    expect(listMeetings(dataDir, canonical)[0]?.announced).toBe('device');
-  });
-
-  it('claims NOTHING for a meeting stopped before the sentence finished', async () => {
-    // The whole reason the claim does not ride the start frame: the room
-    // heard half a sentence at most, so the record must not say it was told.
-    const canonical = await createDoc('cut-off-mid-sentence');
-    const client = await AudioClient.open(wsBase, 'cut-off-mid-sentence');
-    client.start(MEETING_SAMPLE_RATE, 'conversation');
-    await client.waitFor('ready');
-    client.stop();
-    await client.waitFor('stopped');
-    const record = listMeetings(dataDir, canonical)[0];
-    expect(record?.mode).toBe('conversation');
-    expect(record && 'announced' in record).toBe(false);
-  });
-
-  it('takes the correction a mute device sends afterwards', async () => {
-    const canonical = await createDoc('device-could-not');
-    const client = await AudioClient.open(wsBase, 'device-could-not');
-    client.start(MEETING_SAMPLE_RATE, 'conversation');
-    await client.waitFor('ready');
-    client.announced('device');
-    client.announced('spoken');
-    client.stop();
-    await client.waitFor('stopped');
-    expect(listMeetings(dataDir, canonical)[0]?.announced).toBe('spoken');
-  });
-
-  it('claims nothing for a solo capture, even when a client sends one', async () => {
-    // Websocket frames are client-controlled; a solo capture had nobody to
-    // announce to, and the record refuses to say otherwise.
-    const canonical = await createDoc('nobody-to-tell');
-    const client = await AudioClient.open(wsBase, 'nobody-to-tell');
-    client.start();
-    await client.waitFor('ready');
-    client.announced('device');
-    client.stop();
-    await client.waitFor('stopped');
-    const record = listMeetings(dataDir, canonical)[0];
-    expect(record?.mode).toBe('solo');
-    expect(record && 'announced' in record).toBe(false);
-  });
-
-  it('does not let an unreadable announcement frame close the meeting', async () => {
-    // A frame naming no path says nothing; the socket carries on, and the
-    // record keeps what the start frame claimed.
-    const canonical = await createDoc('garbled-announcement');
-    const client = await AudioClient.open(wsBase, 'garbled-announcement');
-    client.start(MEETING_SAMPLE_RATE, 'conversation');
-    await client.waitFor('ready');
-    client.announced('device');
-    client.ws.send(JSON.stringify({ type: 'announced', by: 'shouted' }));
+    client.ws.send(JSON.stringify({ type: 'announced', by: 'device' }));
+    // Unreadable, not fatal: the meeting carries on, which is the half that
+    // matters for a peer running a stale bundle mid-conversation.
     await client.waitFor('error');
     client.stop();
     await client.waitFor('stopped');
-    expect(listMeetings(dataDir, canonical)[0]?.announced).toBe('device');
+    const record = listMeetings(dataDir, canonical)[0];
+    expect(record && 'announced' in record).toBe(false);
+    // The positive control: the meeting really did run and get written, so
+    // the assertion above is a missing field and not a missing record.
+    expect(record?.mode).toBe('conversation');
   });
 });
 
