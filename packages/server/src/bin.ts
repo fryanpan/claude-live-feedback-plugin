@@ -27,6 +27,7 @@ import { KEYCHAIN_SERVICE, ThreadSummarizer } from './summarize.ts';
 import {
   KEYCHAIN_SERVICE as ASSEMBLYAI_KEYCHAIN_SERVICE,
   createAssemblyAiEngine,
+  createAssemblyAiProEngine,
 } from './transcribe-assemblyai.ts';
 import { SONIOX_KEYCHAIN_SERVICE, createSonioxEngine } from './transcribe-soniox.ts';
 import { haikuVoiceComplete } from './voice.ts';
@@ -489,10 +490,16 @@ if (!effortEstimator) {
 // that opens a metered streaming session per server it spins up. No key → null
 // → the meeting socket answers `not_configured` and the strip says so.
 const assemblyAi = createAssemblyAiEngine();
+// The same key opens the pro model, so the two appear and disappear together.
+const assemblyAiPro = createAssemblyAiProEngine();
 const soniox = createSonioxEngine();
 // AssemblyAI first: the first engine is what a `start` naming none gets, so
 // the default stays what it has always been wherever both keys exist.
-const engines = [...(assemblyAi ? [assemblyAi] : []), ...(soniox ? [soniox] : [])];
+const engines = [
+  ...(assemblyAi ? [assemblyAi] : []),
+  ...(assemblyAiPro ? [assemblyAiPro] : []),
+  ...(soniox ? [soniox] : []),
+];
 const transcription = engines.length > 0 ? engines : null;
 if (!transcription) {
   console.log(

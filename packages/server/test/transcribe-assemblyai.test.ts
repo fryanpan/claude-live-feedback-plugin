@@ -16,7 +16,9 @@ import {
   type EngineSocket,
   type EngineSocketArgs,
   KEYCHAIN_SERVICE,
+  PRO_SPEECH_MODEL,
   createAssemblyAiEngine,
+  createAssemblyAiProEngine,
   expiryFrom,
   resolveAssemblyAiKey,
   streamingUrl,
@@ -63,6 +65,8 @@ function harness(
     rolloverMarginMs?: number;
     /** Capture the rollover timer instead of letting a real clock run it. */
     manualSchedule?: boolean;
+    /** Build the `universal-3-5-pro` variant instead of the original engine. */
+    pro?: boolean;
   } = {},
 ) {
   const sockets: FakeSocket[] = [];
@@ -78,8 +82,9 @@ function harness(
   const errors: string[] = [];
   /** Every rollover the engine armed, newest last. */
   const scheduled: Array<{ ms: number; fire: () => void; cancelled: boolean }> = [];
-  const { manualSchedule, ...engineOpts } = opts;
-  const engine = createAssemblyAiEngine({
+  const { manualSchedule, pro, ...engineOpts } = opts;
+  const create = pro ? createAssemblyAiProEngine : createAssemblyAiEngine;
+  const engine = create({
     apiKey: 'test-key-not-a-real-credential',
     socketFactory: (args) => {
       const socket = new FakeSocket(args);
@@ -169,6 +174,101 @@ describe('assemblyai connect url', () => {
     expect(url.searchParams.get('sample_rate')).toBe('16000');
     expect(url.searchParams.get('encoding')).toBe('pcm_s16le');
     expect(url.searchParams.get('format_turns')).toBe('true');
+  });
+});
+
+describe('assemblyai pro — universal-3-5-pro', () => {
+  it('selects the model on the URL, with continuous partials and no formatting ask', () => {
+    const url = new URL(streamingUrl(16_000, false, undefined, PRO_SPEECH_MODEL));
+    expect(url.origin + url.pathname).toBe('wss://streaming.assemblyai.com/v3/ws');
+    expect(url.searchParams.get('speech_model')).toBe(PRO_SPEECH_MODEL);
+    // `format_turns` is Universal Streaming only — on pro it is inert noise a
+    // reader would have to work out is ignored.
+    expect(url.searchParams.get('format_turns')).toBeNull();
+    // Explicit, because the server drops it on its own when speaker labels
+    // are on, and the ~3s cadence is wanted in every mode.
+    expect(url.searchParams.get('continuous_partials')).toBe('true');
+    // And the original engine sends neither: its sessions are untouched.
+    const legacy = new URL(streamingUrl(16_000, false));
+    expect(legacy.searchParams.get('speech_model')).toBeNull();
+    expect(legacy.searchParams.get('continuous_partials')).toBeNull();
+  });
+
+  it('is a distinct engine a chooser can name, opening the pro URL on the same key', async () => {
+    const h = harness({ pro: true });
+    expect(h.engine.name).toBe('assemblyai-pro');
+    expect(h.fake().args.headers).toEqual({ Authorization: 'test-key-not-a-real-credential' });
+    expect(h.fake().args.url).toBe(streamingUrl(16_000, true, undefined, PRO_SPEECH_MODEL));
+    h.fake().begin();
+    expect(await h.opening).toBeDefined();
+  });
+
+  it('settles a turn on end_of_turn alone — no formatted second final is coming', async () => {
+    const h = harness({ pro: true });
+    h.fake().begin();
+    await h.opening;
+    // Two continuous partials — cumulative revisions of the whole turn at the
+    // ~3s cadence, arriving as ordinary open Turn frames.
+    h.fake().deliver({
+      type: 'Turn',
+      turn_order: 0,
+      turn_is_formatted: false,
+      end_of_turn: false,
+      transcript: 'the sink is',
+      words: [],
+    });
+    h.fake().deliver({
+      type: 'Turn',
+      turn_order: 0,
+      turn_is_formatted: false,
+      end_of_turn: false,
+      transcript: 'the sink is the bottleneck',
+      words: [],
+    });
+    // The end of the turn. On the live pro model `turn_is_formatted` mirrors
+    // `end_of_turn`; delivered here as false to prove the adapter does not
+    // WAIT on the mirror — an engine that waited would hold this turn open
+    // forever on a model that never formats.
+    h.fake().deliver({
+      type: 'Turn',
+      turn_order: 0,
+      turn_is_formatted: false,
+      end_of_turn: true,
+      transcript: 'the sink is the bottleneck',
+      words: [],
+    });
+    expect(h.turns).toEqual([
+      { turn: 0, text: 'the sink is', final: false },
+      { turn: 0, text: 'the sink is the bottleneck', final: false },
+      { turn: 0, text: 'the sink is the bottleneck', final: true },
+    ]);
+    expect(h.errors).toEqual([]);
+  });
+
+  it('still holds the original engine to the formatted final', async () => {
+    // The same frame shape on the ORIGINAL engine stays open: its formatted
+    // second final is still coming, and settling early would write the
+    // unpunctuated draft to disk. The positive control for the test above.
+    const h = harness();
+    h.fake().begin();
+    await h.opening;
+    h.fake().deliver({
+      type: 'Turn',
+      turn_order: 0,
+      turn_is_formatted: false,
+      end_of_turn: true,
+      transcript: 'the sink is the bottleneck',
+      words: [],
+    });
+    expect(h.turns).toEqual([{ turn: 0, text: 'the sink is the bottleneck', final: false }]);
+  });
+
+  it('names itself in what it reports, so a two-engine failure reads unambiguously', async () => {
+    const h = harness({ pro: true });
+    h.fake().begin();
+    await h.opening;
+    h.fake().deliver({ type: 'Error', error: 'rate limit exceeded' });
+    expect(h.errors).toEqual(['assemblyai-pro: rate limit exceeded']);
   });
 });
 

@@ -463,6 +463,7 @@ function defaultPromptName(current: string): string | null {
 /** What the chooser calls an engine. The wire name for one it has no word for. */
 export function engineLabel(name: string): string {
   if (name === 'assemblyai') return 'AssemblyAI';
+  if (name === 'assemblyai-pro') return 'AssemblyAI Pro';
   if (name === 'soniox') return 'Soniox';
   return name;
 }

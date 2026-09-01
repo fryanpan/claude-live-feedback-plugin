@@ -647,13 +647,14 @@ describe('meeting engine choice', () => {
 
   beforeAll(async () => {
     dataDir = mkdtempSync(join(tmpdir(), 'cw-meeting-engines-'));
-    // Two engines under the CLIENT-nameable names, both mocks: the choice is
+    // Three engines under the CLIENT-nameable names, all mocks: the choice is
     // the thing under test, and nothing here may open a billed session.
     handle = createServer({
       port: 0,
       dataDir,
       transcription: [
         { ...createMockTranscriptionEngine(), name: 'assemblyai' },
+        { ...createMockTranscriptionEngine(), name: 'assemblyai-pro' },
         { ...createMockTranscriptionEngine(), name: 'soniox' },
       ],
     });
@@ -670,7 +671,7 @@ describe('meeting engine choice', () => {
     const res = await fetch(`${base}/api/meeting-engines`);
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({
-      engines: ['assemblyai', 'soniox'],
+      engines: ['assemblyai', 'assemblyai-pro', 'soniox'],
       default: 'assemblyai',
     });
   });
@@ -695,6 +696,18 @@ describe('meeting engine choice', () => {
     client.stop();
     await client.waitFor('stopped');
     expect(listMeetings(dataDir, canonical)[0]?.engine).toBe('soniox');
+    client.ws.close();
+  });
+
+  it('opens the pro variant when the start names it — three choices, all wired', async () => {
+    const canonical = await createDoc('pro-engine');
+    const client = await AudioClient.open(wsBase, 'pro-engine');
+    client.start(MEETING_SAMPLE_RATE, 'solo', 'assemblyai-pro');
+    const ready = await client.waitFor('ready');
+    expect(ready.engine).toBe('assemblyai-pro');
+    client.stop();
+    await client.waitFor('stopped');
+    expect(listMeetings(dataDir, canonical)[0]?.engine).toBe('assemblyai-pro');
     client.ws.close();
   });
 });

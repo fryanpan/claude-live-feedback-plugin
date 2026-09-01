@@ -176,6 +176,7 @@ describe('room speaker cap', () => {
 describe('parseEngineName', () => {
   it('reads the engines a client may name, and nothing else', () => {
     expect(parseEngineName('assemblyai')).toBe('assemblyai');
+    expect(parseEngineName('assemblyai-pro')).toBe('assemblyai-pro');
     expect(parseEngineName('soniox')).toBe('soniox');
     // The mock is deliberately not nameable from a browser: a wordless
     // meeting must not be one a client can talk a server into.
