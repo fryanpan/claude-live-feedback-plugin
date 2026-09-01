@@ -126,6 +126,15 @@ describe('renderRelatedLinks', () => {
     expect(legacy?.querySelector('.hub-related-link')?.getAttribute('href')).toBe('/review/d-plan');
   });
 
+  it('falls back to "Untitled doc" for a resolved-but-titleless doc — never the raw id', () => {
+    // `primeLinkTitle(url, null)` is the server saying "asked, and there is
+    // nothing" (as opposed to never having asked) — the AC is title-only
+    // links, so the raw doc id must never be the steady-state text.
+    primeLinkTitle('/review/d-blank', null, null);
+    const el = renderRelatedLinks([{ docId: 'd-blank' }]);
+    expect(el?.querySelector('.hub-related-link')?.textContent).toBe('Untitled doc');
+  });
+
   it('carries the held note on the marked entry only', () => {
     const el = renderRelatedLinks([{ docId: 'd-plan', held: true }, { docId: 'd-other' }]);
     const items = [...(el?.querySelectorAll('li') ?? [])];

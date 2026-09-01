@@ -1630,18 +1630,33 @@ export function renderRelatedLinks(
     rows.push({ a, docId: link.docId });
   }
   wrap.append(heading, list);
-  const hydrate = (): void => {
-    for (const { a } of rows) {
-      const title = cachedLinkTitle(a.getAttribute('href') ?? '');
-      if (typeof title === 'string' && title !== '') a.textContent = title;
-    }
+  // `null` (not `undefined`) means the server WAS asked and came back with
+  // nothing — a genuinely untitled doc, not a lookup still in flight. The
+  // raw doc id is never the fallback here: the AC is title-only links
+  // (Bryan, 2026-08-31 — a reviewer should never see an id like
+  // "d-PjoIyraOt1bW"). `undefined` (not yet asked) leaves the placeholder
+  // text alone so a later hydration pass can still land.
+  const applyTitle = (a: HTMLAnchorElement): void => {
+    const title = cachedLinkTitle(a.getAttribute('href') ?? '');
+    if (typeof title === 'string' && title !== '') a.textContent = title;
+    else if (title === null) a.textContent = 'Untitled doc';
   };
-  hydrate();
+  for (const { a } of rows) applyTitle(a);
   const unresolved = rows.filter((r) => r.a.textContent === r.docId);
   if (unresolved.length > 0) {
     void fetchLinkInfos(unresolved.map((r) => r.a.getAttribute('href') ?? ''))
       .then(() => {
-        if (wrap.isConnected) hydrate();
+        // Re-read from the LIVE document rather than this call's own
+        // `rows`/`wrap` closure: the detail panel repaints this whole
+        // section on every parent re-render (`useFill` has no dependency
+        // list), so a fast-repainting parent can tear this particular
+        // instance down well before its own fetch settles. Querying fresh
+        // finds whichever instance is actually mounted right now and is
+        // what closes the race — gating on `wrap.isConnected` here left
+        // the reader looking at a raw doc id forever once the panel had
+        // repainted even once during the lookup.
+        for (const a of document.querySelectorAll<HTMLAnchorElement>('.hub-related-link'))
+          applyTitle(a);
       })
       .catch(() => {
         // The ids stay — true, just less familiar.
