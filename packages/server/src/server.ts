@@ -899,9 +899,13 @@ export interface ServerOptions {
    * minute for as long as a socket stays open. Omitting it makes
    * `/audio/<docId>` answer `unavailable` with reason `not_configured`, which
    * is a state the strip renders rather than a failure. Only `bin.ts`
-   * constructs a real one (`createAssemblyAiEngine`).
+   * constructs real ones (`createAssemblyAiEngine`, `createSonioxEngine`).
+   *
+   * An array is several engines the client may choose between by name on its
+   * `start` frame, FIRST one the default; a bare engine is that one engine,
+   * exactly as before.
    */
-  transcription?: TranscriptionEngine;
+  transcription?: TranscriptionEngine | readonly TranscriptionEngine[];
   /**
    * The Recall.ai client that puts a BOT in a Zoom / Meet call. **No
    * default**, the same seam rule as `transcription` directly above and for
@@ -1381,7 +1385,11 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
   const meetingStore = new MeetingStore(dataDir);
   const meetingRelay = new MeetingRelay({
     store: meetingStore,
-    engine: opts.transcription ?? null,
+    engines: Array.isArray(opts.transcription)
+      ? opts.transcription
+      : opts.transcription
+        ? [opts.transcription as TranscriptionEngine]
+        : [],
     // The server supplies the notes sink — the write into the meeting doc —
     // and the context resolver (doc title, board task titles). Thunks, not
     // references: rooms and the task store are constructed below, and both
@@ -9984,6 +9992,17 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
         }
 
         // --- A doc's meeting bot: invite one, read its state, send it home ---
+        if (pathname === '/api/meeting-engines') {
+          if (req.method !== 'GET') return j(405, { error: 'method not allowed' });
+          // Which engines a `start` frame may name on THIS server, default
+          // first — server-global, because keys are. It is why a chooser can
+          // hide an engine whose key is absent instead of offering a button
+          // that answers `unavailable`. Names only; nothing about keys
+          // beyond their existence leaves the machine.
+          const engines = meetingRelay.engineNames();
+          return j(200, { engines, default: engines[0] ?? null });
+        }
+
         const botMatch = pathname.match(/^\/api\/docs\/([^/]+)\/meeting-bot$/);
         if (botMatch) {
           const addressed = decodeURIComponent(botMatch[1] ?? '');

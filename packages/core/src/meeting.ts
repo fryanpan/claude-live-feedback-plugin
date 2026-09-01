@@ -123,6 +123,29 @@ export function maxSpeakersFor(mode: CaptureMode, speakers?: number): number | u
 }
 
 /**
+ * The engines a capture may name. The list the CLIENT may ask for — the mock
+ * is not on it, because a browser must not be able to talk a server into a
+ * wordless meeting. Which of these a given server can actually open depends
+ * on its keys; `GET /api/meeting-engines` reports that, and a `start` naming
+ * an engine the server does not hold answers `unavailable`.
+ */
+export const TRANSCRIPTION_ENGINE_NAMES = ['assemblyai', 'soniox'] as const;
+export type TranscriptionEngineName = (typeof TRANSCRIPTION_ENGINE_NAMES)[number];
+
+/**
+ * An engine name, or nothing. Nothing — rather than a default — for an
+ * absent or unreadable value, so "nobody chose" reaches the server as
+ * itself and the server's default (its first configured engine) applies in
+ * ONE place. The permissive direction would route a typo to a paid session
+ * on an engine nobody picked.
+ */
+export function parseEngineName(raw: unknown): TranscriptionEngineName | undefined {
+  return (TRANSCRIPTION_ENGINE_NAMES as readonly string[]).includes(raw as string)
+    ? (raw as TranscriptionEngineName)
+    : undefined;
+}
+
+/**
  * What the room hears when an in-person capture starts.
  *
  * ONE SENTENCE, FIXED, NOT LOCALIZED. It is the thing that makes a recording
@@ -196,6 +219,15 @@ export type MeetingClientMessage =
        * the cap existed, both of which fall back to `DEFAULT_ROOM_SPEAKERS`.
        */
       speakers?: number;
+      /**
+       * Which transcription engine to open, when the person chose one.
+       * Absent means the server's default — AssemblyAI wherever both are
+       * configured — so a client built before the choice existed, and a
+       * person who never touched the option, keep getting exactly what they
+       * got. Start-time only, like `mode`: an engine session's config is
+       * fixed once open, so there is no later switch.
+       */
+      engine?: TranscriptionEngineName;
       /**
        * Measure this meeting's stage latencies (`?timing=1` on the address).
        * Absent on every ordinary meeting, and a server that is not asked
@@ -335,6 +367,7 @@ export function parseMeetingClientMessage(raw: unknown): MeetingClientMessage | 
     }
     if (m.encoding !== MEETING_AUDIO_ENCODING) return null;
     const speakers = parseRoomSpeakers(m.speakers);
+    const engine = parseEngineName(m.engine);
     return {
       type: 'start',
       sampleRate: Math.round(rate),
@@ -348,6 +381,9 @@ export function parseMeetingClientMessage(raw: unknown): MeetingClientMessage | 
       // typed into an address bar and the meeting is worth more than the
       // typo.
       ...(speakers !== undefined ? { speakers } : {}),
+      // An unknown engine name is dropped rather than refused: the meeting
+      // is worth more than the typo, and absent is the server's default.
+      ...(engine !== undefined ? { engine } : {}),
       // Only the literal `true` opts in: a stray truthy value on this frame
       // should read as a client that does not know about timing, not as one
       // asking for it.

@@ -10,6 +10,7 @@ import {
   maxSpeakersFor,
   parseAnnouncedBy,
   parseCaptureMode,
+  parseEngineName,
   parseMeetingClientMessage,
   parseRoomSpeakers,
   speakerDisplayName,
@@ -147,6 +148,39 @@ describe('room speaker cap', () => {
     // not a refused one — it just says nothing about the room.
     expect(start({})).not.toHaveProperty('speakers');
     expect(start({ speakers: 'lots' })).not.toHaveProperty('speakers');
+  });
+
+  it('carries a chosen engine on the start frame, and drops an unknown one', () => {
+    const start = (over: Record<string, unknown>) =>
+      parseMeetingClientMessage(
+        JSON.stringify({
+          type: 'start',
+          sampleRate: 16_000,
+          encoding: MEETING_AUDIO_ENCODING,
+          mode: 'solo',
+          ...over,
+        }),
+      );
+    expect(start({ engine: 'soniox' })).toMatchObject({ engine: 'soniox' });
+    expect(start({ engine: 'assemblyai' })).toMatchObject({ engine: 'assemblyai' });
+    // A frame from a client built before the choice existed says nothing, and
+    // an unknown name says nothing rather than refusing the meeting — absent
+    // is the server's default, decided in one place.
+    expect(start({})).not.toHaveProperty('engine');
+    expect(start({ engine: 'mock' })).not.toHaveProperty('engine');
+    expect(start({ engine: 42 })).not.toHaveProperty('engine');
+  });
+});
+
+describe('parseEngineName', () => {
+  it('reads the engines a client may name, and nothing else', () => {
+    expect(parseEngineName('assemblyai')).toBe('assemblyai');
+    expect(parseEngineName('soniox')).toBe('soniox');
+    // The mock is deliberately not nameable from a browser: a wordless
+    // meeting must not be one a client can talk a server into.
+    expect(parseEngineName('mock')).toBeUndefined();
+    expect(parseEngineName('')).toBeUndefined();
+    expect(parseEngineName(null)).toBeUndefined();
   });
 });
 

@@ -55,7 +55,7 @@ describe('the room size on the way to the engine', () => {
     const { engine, opens } = recordingEngine();
     const relay = new MeetingRelay({
       store: new MeetingStore(dataDir),
-      engine,
+      engines: [engine],
       notes: null,
       broadcast: () => {},
     });
