@@ -1,6 +1,6 @@
 import { Extension } from '@tiptap/core';
 import type { Node as ProseNode } from '@tiptap/pm/model';
-import { Plugin, PluginKey, type Transaction } from '@tiptap/pm/state';
+import { Plugin, PluginKey } from '@tiptap/pm/state';
 import { Decoration, DecorationSet } from '@tiptap/pm/view';
 // Same key instance Collaboration registers under — see editor.ts's import
 // note; y-prosemirror's own export is a different key and never matches.
@@ -8,7 +8,7 @@ import { ySyncPluginKey } from '@tiptap/y-tiptap';
 
 /**
  * The settle wash: when the notetaker's freshly composed note arrives in the
- * doc mid-meeting, the block it landed in is highlighted and the highlight
+ * doc mid-meeting, the lines it wrote are highlighted and the highlight
  * lingers (~2.8s: hold, then fade — the approved mock's `settle-wash`), so
  * the eye can follow a chunk of provisional transcript "up" into the note it
  * became. No label, no chip — the wash IS the whole announcement (owner's
@@ -18,8 +18,9 @@ import { ySyncPluginKey } from '@tiptap/y-tiptap';
  * remote Yjs update, so the gate is the conjunction that is true for notes
  * and rarely for anything else: the transaction is REMOTE (carries the
  * y-sync meta — a local keystroke never does), a meeting is live on THIS
- * surface (`isLive`), and the inserted content sits inside the "Meeting
- * notes" section. A collaborator typing into the notes section during a
+ * surface (`isLive`), and the "Meeting notes" section holds lines it did
+ * not hold before (`newNoteLines` — a content diff, see there for why the
+ * step map cannot be used). A collaborator typing into the notes section during a
  * recording gets washed too; that is acceptable noise, where washing every
  * remote edit anywhere would not be.
  *
@@ -58,43 +59,51 @@ export function notesSectionStart(doc: ProseNode): number | null {
   return at;
 }
 
-/** The ranges `tr` inserted, in the coordinates of its resulting doc. */
-export function insertedRanges(tr: Transaction): Array<{ from: number; to: number }> {
-  const out: Array<{ from: number; to: number }> = [];
-  tr.mapping.maps.forEach((map, i) => {
-    map.forEach((_oldFrom, _oldTo, newFrom, newTo) => {
-      if (newTo <= newFrom) return;
-      // Into the final doc's coordinates, through the steps that follow.
-      const from = tr.mapping.slice(i + 1).map(newFrom, 1);
-      const to = tr.mapping.slice(i + 1).map(newTo, -1);
-      if (to > from) out.push({ from, to });
-    });
-  });
-  return out;
+export interface NoteLine {
+  from: number;
+  to: number;
+  /** The line's content, marks included — what "the same line" means. */
+  key: string;
 }
 
-/** The blocks to wash for one inserted range: list items where the content
- *  is a list, textblocks otherwise — the smallest thing that reads as "the
- *  note that just arrived" rather than "the whole notes section". */
-function washTargets(
-  doc: ProseNode,
-  range: { from: number; to: number },
-): Array<{ from: number; to: number }> {
-  const out: Array<{ from: number; to: number }> = [];
-  const from = Math.max(0, Math.min(range.from, doc.content.size));
-  const to = Math.max(from, Math.min(range.to, doc.content.size));
-  doc.nodesBetween(from, to, (node, pos) => {
-    if (node.type.name === 'listItem') {
-      out.push({ from: pos, to: pos + node.nodeSize });
-      return false;
-    }
+/** The lines the notes section is made of: every textblock (a bullet's
+ *  paragraph, a heading, a paragraph) from the section heading to the end of
+ *  the doc. A bullet with children is several lines, one per textblock. */
+export function noteLines(doc: ProseNode): NoteLine[] {
+  const start = notesSectionStart(doc);
+  if (start === null) return [];
+  const out: NoteLine[] = [];
+  doc.nodesBetween(start, doc.content.size, (node, pos) => {
     if (node.isTextblock) {
-      out.push({ from: pos, to: pos + node.nodeSize });
+      out.push({ from: pos, to: pos + node.nodeSize, key: JSON.stringify(node.toJSON()) });
       return false;
     }
     return true;
   });
   return out;
+}
+
+/**
+ * The lines of `after`'s notes section that `before`'s did not hold — the
+ * lines this write added or changed. A content diff rather than the
+ * transaction's step map, because the collaboration binding applies every
+ * remote update as ONE replace of the whole document (y-tiptap's
+ * `_typeChanged`): the map says "everything was inserted", and washing what
+ * it says would light the entire section on every tick — which it did.
+ * A line that appears twice consumes one match per copy, so a duplicated
+ * line washes once, at its second copy.
+ */
+export function newNoteLines(before: ProseNode, after: ProseNode): NoteLine[] {
+  const had = new Map<string, number>();
+  for (const line of noteLines(before)) had.set(line.key, (had.get(line.key) ?? 0) + 1);
+  return noteLines(after).filter((line) => {
+    const n = had.get(line.key) ?? 0;
+    if (n > 0) {
+      had.set(line.key, n - 1);
+      return false;
+    }
+    return true;
+  });
 }
 
 export const SettleWash = Extension.create<SettleWashOptions>({
@@ -128,19 +137,10 @@ export const SettleWash = Extension.create<SettleWashOptions>({
             // Opening a doc mid-meeting must not wash its entire notes
             // section, so a write over an empty doc never washes.
             if (tr.before.textContent === '') return next;
-            const start = notesSectionStart(tr.doc);
-            if (start === null) return next;
             const until = Date.now() + SETTLE_WASH_MS;
-            const decos: Decoration[] = [];
-            for (const range of insertedRanges(tr)) {
-              if (range.to <= start) continue;
-              for (const block of washTargets(tr.doc, range)) {
-                if (block.from < start) continue;
-                decos.push(
-                  Decoration.node(block.from, block.to, { class: 'settle-wash' }, { until }),
-                );
-              }
-            }
+            const decos = newNoteLines(tr.before, tr.doc).map((line) =>
+              Decoration.node(line.from, line.to, { class: 'settle-wash' }, { until }),
+            );
             return decos.length > 0 ? next.add(tr.doc, decos) : next;
           },
         },

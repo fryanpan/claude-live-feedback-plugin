@@ -1,4 +1,5 @@
 import { prose } from '@feedback/core';
+import { Fragment, Slice } from '@tiptap/pm/model';
 import type { EditorView } from '@tiptap/pm/view';
 import { ySyncPluginKey } from '@tiptap/y-tiptap';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -60,6 +61,34 @@ function appendNote(view: EditorView, text: string, remote: boolean): void {
   view.dispatch(tr);
 }
 
+/**
+ * What the collaboration binding actually does with a remote update: ONE
+ * replace of the whole document with the new content (y-tiptap's
+ * `_typeChanged`). `edit` builds the new doc from the old one.
+ */
+function replaceWholeDoc(
+  view: EditorView,
+  edit: (doc: EditorView['state']['doc']) => Fragment,
+): void {
+  const { state } = view;
+  const next = edit(state.doc);
+  view.dispatch(
+    state.tr
+      .replace(0, state.doc.content.size, new Slice(next, 0, 0))
+      .setMeta(ySyncPluginKey, { isChangeOrigin: true }),
+  );
+}
+
+/** Index of the doc's last bulletList (a trailing empty paragraph follows it). */
+function lastListIndex(doc: EditorView['state']['doc']): number {
+  let at = -1;
+  doc.forEach((n, _pos, i) => {
+    if (n.type.name === 'bulletList') at = i;
+  });
+  if (at < 0) throw new Error('fixture: no list');
+  return at;
+}
+
 const washed = (parent: HTMLElement): string[] =>
   [...parent.querySelectorAll<HTMLElement>('.settle-wash')].map((el) => el.textContent ?? '');
 
@@ -74,6 +103,41 @@ describe('the settle wash', () => {
     // …and ONLY the arrived block, not the whole section.
     expect(hits.join(' ')).not.toContain('an earlier note');
     expect(landed).toBe(1);
+  });
+
+  it('washes ONLY the lines a whole-doc replace added — not the section it re-sent', () => {
+    // Two notes already there, then the binding replaces the whole doc with
+    // one that holds them both plus a third: the step map says everything
+    // was inserted; the wash must say one line was.
+    const { view, parent } = mountEditor(`${DOC}- a second earlier note\n`, { on: true });
+    replaceWholeDoc(view, (doc) => {
+      const { schema } = view.state;
+      const li = schema.nodes.listItem.create(
+        null,
+        schema.nodes.paragraph.create(null, schema.text('the third, freshly composed')),
+      );
+      const at = lastListIndex(doc);
+      const list = doc.child(at);
+      const grown = list.copy(list.content.append(Fragment.from(li)));
+      return doc.content.replaceChild(at, grown);
+    });
+    expect(washed(parent)).toEqual(['the third, freshly composed']);
+  });
+
+  it('a line the write CHANGED washes; its untouched neighbours do not', () => {
+    const { view, parent } = mountEditor(`${DOC}- a second earlier note\n`, { on: true });
+    replaceWholeDoc(view, (doc) => {
+      const { schema } = view.state;
+      const at = lastListIndex(doc);
+      const list = doc.child(at);
+      const reworded = schema.nodes.listItem.create(
+        null,
+        schema.nodes.paragraph.create(null, schema.text('a second earlier note, reworded')),
+      );
+      const items = list.copy(list.content.replaceChild(1, reworded));
+      return doc.content.replaceChild(at, items);
+    });
+    expect(washed(parent)).toEqual(['a second earlier note, reworded']);
   });
 
   it('a local edit is never washed — the meta is the authorship signal', () => {
