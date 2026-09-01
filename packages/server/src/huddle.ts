@@ -74,6 +74,16 @@ export function parseHuddleKind(raw: unknown): { ok: true; kind?: HuddleKind } |
 }
 
 /**
+ * What the Make Plan press says. The ask travels as an ordinary comment
+ * thread from the presser — comments are the product's ask channel, so it
+ * rides the existing thread.created webhook and board channel to whichever
+ * agent watches this doc, with no new event type. Fixed text: the button is
+ * one tap, and the goal it points at is the doc itself.
+ */
+export const PLAN_REQUEST_COMMENT =
+  'Please make a plan from this goal. Append it to this doc as a "Plan" section, and file the first tickets from it.';
+
+/**
  * The file's first bytes. A plan doc always opens under a `# Goal` heading —
  * that heading is what the placeholder copy and the Make Plan float hang off
  * — with a topic, when one was given, filed under it as the first line of
