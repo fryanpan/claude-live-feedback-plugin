@@ -23,6 +23,7 @@ import type { Awareness } from 'y-protocols/awareness';
 import * as Y from 'yjs';
 import { workspaceIdFromPath } from './doc-path.ts';
 import { resolveDocLink, safeLinkHref } from './link-open.ts';
+import { ListBehavior } from './list-behavior.ts';
 import { MermaidCodeBlock } from './mermaid-code-block.ts';
 import { SuggestionChips } from './redline/suggestion-chips.ts';
 import type { InlineThreadCard } from './review-surface.ts';
@@ -152,6 +153,11 @@ export function createEditor(opts: CreateEditorOpts): EditorHandle {
       // never written into the fragment. In the base list because every
       // prose surface may hold a task link (meeting notes are the driver).
       TaskLinkChips,
+      // Bullet-list ergonomics: Tab-indent for a first/sole list item and
+      // auto-join of adjacent same-type lists. Deliberately NOT part of the
+      // redline surface (redline-editor.ts builds its own Editor) — adjacent
+      // lists are load-bearing there (they carry per-hunk anchors).
+      ListBehavior,
       ...(opts.extraExtensions ?? []),
     ],
     onSelectionUpdate: () => opts.onSelectionChange?.(),
