@@ -69,9 +69,13 @@ describe('the strip lives in its own section of the stylesheet', () => {
 describe('the shell reserves a row for the strip', () => {
   it('gives #shell three tracks: topbar, strip, main', () => {
     // The strip's `auto` track is what makes it RESERVE its height instead of
-    // covering the prose; it costs nothing unmounted — a hidden strip is a
-    // zero-height track.
-    expect(rule('#shell')).toMatch(/grid-template-rows:\s*48px auto 1fr/);
+    // covering the prose. That track is not sufficient on its own: a hidden
+    // strip is `display: none`, which drops it out of the grid's item list
+    // rather than collapsing its track, so #main used to auto-place into the
+    // strip's row and leave the last one empty. The three children are pinned
+    // explicitly now — shell-grid-placement.test.ts owns that invariant and
+    // the control that proves the bug is still detectable.
+    expect(rule('#shell')).toMatch(/grid-template-rows:\s*48px auto minmax\(0,\s*1fr\)/);
   });
 
   it('no longer asks #editor-pane for that row — the strip left the pane', () => {
