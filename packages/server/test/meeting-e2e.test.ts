@@ -427,4 +427,107 @@ describe('a meeting end to end: pauses become notes, stop/start stays consistent
     await waitFor(() => client.frames.some((f) => f.type === 'stopped'), 'stopped');
     client.ws.close();
   });
+
+  it('a rename AFTER the meeting stopped still reaches the record and the notes', async () => {
+    // The gap this closes: the socket is the only live rename channel, and it
+    // is gone the moment capture stops — which is exactly when a person on
+    // the recording device gets around to naming the voices. The REST route
+    // has to do what the socket did: index line, and the backwards rewrite.
+    const path = join(dataDir, 'late-rename.md');
+    writeFileSync(path, '# Late rename\n\nBody about Speaker B stays.\n');
+    const created = await fetch(`${base}/api/docs`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ docId: 'late-rename', sourceUrl: path, title: 'Late rename' }),
+    });
+    expect(created.status, await created.clone().text()).toBe(200);
+    const lateDocId = ((await created.json()) as { docId: string }).docId;
+    const lateMarkdown = (): string => {
+      const room = handle.rooms.get(lateDocId);
+      if (!room) throw new Error(`no room for ${lateDocId}`);
+      return prose.serializeFragmentToMarkdown(prose.getProseFragment(room.ydoc));
+    };
+
+    // A two-voice conversation, composed into notes, then stopped.
+    const client = await AudioClient.open(wsBase, lateDocId);
+    client.start('conversation');
+    await waitFor(() => client.frames.some((f) => f.type === 'ready'), 'ready');
+    const ready = client.frames.filter((f) => f.type === 'ready').at(-1);
+    const meetingId = String(ready?.meetingId);
+    client.speak(7);
+    await waitFor(() => client.finals().length === 1, 'the first settled turn');
+    client.speak(4);
+    await waitFor(() => client.finals().length === 2, 'the second settled turn');
+    const before = updates.length;
+    schedule.fire();
+    await waitFor(() => updates.length > before, 'the notes for this meeting');
+    expect(lateMarkdown()).toContain("Speaker B: Let's measure it first.");
+    client.stop();
+    await waitFor(() => client.frames.some((f) => f.type === 'stopped'), 'stopped');
+    client.ws.close();
+
+    // The rename, over HTTP — no socket exists any more.
+    const renameUrl = `${base}/api/docs/${lateDocId}/meetings/${meetingId}/speakers`;
+    const renamed = await fetch(renameUrl, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ speaker: 'B', name: 'Priya' }),
+    });
+    expect(renamed.status, await renamed.clone().text()).toBe(200);
+    expect(((await renamed.json()) as { speakers: unknown }).speakers).toEqual({ B: 'Priya' });
+
+    // 1. The record keeps the name, folded like a live rename's.
+    expect(
+      listMeetings(dataDir, lateDocId).find((m) => m.meetingId === meetingId)?.speakers,
+    ).toEqual({ B: 'Priya' });
+    // 2. The rename reaches BACKWARDS into notes already written…
+    await waitFor(
+      () => lateMarkdown().includes("Priya: Let's measure it first."),
+      'the rename to rewrite the note already written',
+    );
+    const rewritten = lateMarkdown();
+    // …and only into the notes section: the person's own paragraph keeps its
+    // words, however it happens to spell a label.
+    expect(rewritten).toContain('Body about Speaker B stays.');
+    expect(rewritten).toContain('Speaker A: So the sync is the bottleneck.');
+    // 3. The transcript still says 'B' — the engine's word is not rewritten.
+    expect(readTranscript(dataDir, lateDocId, meetingId).map((t) => t.speaker)).toEqual(['A', 'B']);
+
+    // The refusals, each with the status a strip can explain from:
+    // a voice this meeting never carried…
+    const nobody = await fetch(renameUrl, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ speaker: 'C', name: 'Jordan' }),
+    });
+    expect(nobody.status).toBe(400);
+    // …a meeting the doc never held…
+    const missing = await fetch(`${base}/api/docs/${lateDocId}/meetings/never/speakers`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ speaker: 'B', name: 'Jordan' }),
+    });
+    expect(missing.status).toBe(404);
+    // …a name too long for the record (same cap the socket enforces)…
+    const oversize = await fetch(renameUrl, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ speaker: 'B', name: 'x'.repeat(80) }),
+    });
+    expect(oversize.status).toBe(400);
+    // …and a meeting still LIVE, whose rename belongs to the socket.
+    const second = await AudioClient.open(wsBase, lateDocId);
+    second.start('conversation');
+    await waitFor(() => second.frames.some((f) => f.type === 'ready'), 'the second ready');
+    const liveId = String(second.frames.filter((f) => f.type === 'ready').at(-1)?.meetingId);
+    const live = await fetch(`${base}/api/docs/${lateDocId}/meetings/${liveId}/speakers`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ speaker: 'A', name: 'Jordan' }),
+    });
+    expect(live.status).toBe(409);
+    second.stop();
+    await waitFor(() => second.frames.some((f) => f.type === 'stopped'), 'the second stopped');
+    second.ws.close();
+  });
 });

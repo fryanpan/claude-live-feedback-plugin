@@ -46,9 +46,11 @@ import {
   type MeetingTimingMark,
   type MeetingUnavailableReason,
   RECORDING_ANNOUNCEMENT,
+  type TranscriptionEngineName,
   announcesRecording,
   meetingSocketPath,
   parseCaptureMode,
+  parseEngineName,
   speakerDisplayName,
 } from '@feedback/core';
 import { type Announcer, createAnnouncer } from './meeting-announce.ts';
@@ -61,6 +63,7 @@ import {
   startMeetingCapture,
 } from './meeting-audio.ts';
 import { type TimingSession, createTimingSession } from './meeting-timing-client.ts';
+import type { DocSpeakers } from './speaker-voices.ts';
 
 /**
  * How many turns stay on the strip. Three is what fits the phone's two wrapped
@@ -301,12 +304,39 @@ export interface MeetingStripOpts {
   speakers?: number;
   room?: RoomAudioProcessing;
   /**
+   * Which transcription engine the next capture opens (`?engine=soniox` on
+   * the address). Absent means the server's default, which is also what a
+   * server built before the choice existed opens. Start-time only, like
+   * `mode` — an engine session's config is fixed once open.
+   */
+  engine?: TranscriptionEngineName;
+  /**
+   * The engines this server can open, asked for once at mount — what decides
+   * whether the strip shows a chooser at all. Injectable so a test drives it
+   * without a server; absent, the strip asks `/api/meeting-engines`. Null
+   * (an old server, a failed fetch) hides the chooser and changes nothing.
+   */
+  listEngines?: () => Promise<{ engines: string[]; default: string | null } | null>;
+  /**
    * Ask the person what to call a speaker; `current` is what the tag says
    * now. Null or blank means leave it. Defaults to `window.prompt` — the
    * strip is a 40px bar with no room for an inline field, and a name is
    * typed once per voice per meeting.
    */
   promptName?: (current: string) => string | null;
+  /**
+   * The last meeting's cast, asked for once at mount — what the strip's
+   * rename surface shows on a doc opened AFTER its meeting ended. Null means
+   * the doc has never held one. Absent, a reloaded strip starts bare.
+   */
+  loadSpeakers?: () => Promise<DocSpeakers | null>;
+  /**
+   * Name a voice on a meeting whose audio socket is gone — the rename
+   * channel once capture has stopped. Resolves true when the server recorded
+   * it; false is a refusal the strip must not paper over, because a name
+   * that only ever landed on screen reads as saved.
+   */
+  postName?: (meetingId: string, speaker: string, name: string) => Promise<boolean>;
   /**
    * Says the announcement out loud. Injectable because no test environment
    * has speech synthesis, and because the interesting cases here are the ones
@@ -381,6 +411,32 @@ function defaultPromptName(current: string): string | null {
   return window.prompt('Who is this?', current);
 }
 
+/** What the chooser calls an engine. The wire name for one it has no word for. */
+export function engineLabel(name: string): string {
+  if (name === 'assemblyai') return 'AssemblyAI';
+  if (name === 'soniox') return 'Soniox';
+  return name;
+}
+
+async function defaultListEngines(): Promise<{
+  engines: string[];
+  default: string | null;
+} | null> {
+  try {
+    const res = await fetch('/api/meeting-engines');
+    if (!res.ok) return null;
+    const body = (await res.json()) as { engines?: unknown; default?: unknown };
+    const engines = Array.isArray(body.engines)
+      ? body.engines.filter((e): e is string => typeof e === 'string')
+      : [];
+    return { engines, default: typeof body.default === 'string' ? body.default : null };
+  } catch {
+    // An old server has no such route, and a strip on one behaves exactly as
+    // it always did: no chooser, the server's one engine.
+    return null;
+  }
+}
+
 /**
  * The announcement as the strip shows it, which is not the same job in the two
  * paths: the device's is a caption for something the room is already hearing,
@@ -445,6 +501,17 @@ export function mountMeetingStrip(opts: MeetingStripOpts): MeetingStripHandle {
    * It appears only where it means something — a `conversation` capture that
    * has not started yet — because on a solo capture there is nobody to tell.
    */
+  /**
+   * Which engine transcribes — shown ONLY when the server holds more than
+   * one, so the strip on every single-engine server is byte-for-byte what it
+   * was. A <select> rather than a toggle because the set is open-ended, and
+   * it sits with the mode switch because it is the same kind of fact: chosen
+   * before the mic starts, fixed while it runs.
+   */
+  const engineSelect = document.createElement('select');
+  engineSelect.className = 'meeting-engine';
+  engineSelect.hidden = true;
+  engineSelect.setAttribute('aria-label', 'Transcription engine');
   const announceToggle = document.createElement('button');
   announceToggle.type = 'button';
   announceToggle.className = 'meeting-announce';
@@ -455,7 +522,7 @@ export function mountMeetingStrip(opts: MeetingStripOpts): MeetingStripHandle {
   const toggle = document.createElement('button');
   toggle.type = 'button';
   toggle.className = 'meeting-toggle';
-  strip.append(meta, modeToggle, announceToggle, toggle);
+  strip.append(meta, modeToggle, engineSelect, announceToggle, toggle);
 
   const caption = document.createElement('div');
   caption.className = 'meeting-caption';
@@ -503,6 +570,37 @@ export function mountMeetingStrip(opts: MeetingStripOpts): MeetingStripHandle {
    * it for.
    */
   let mode: CaptureMode = opts.mode ?? DEFAULT_CAPTURE_MODE;
+  /**
+   * Which engine the next start asks for. Undefined is "the server's
+   * default", never a name — so a strip that learned nothing (an old
+   * server, a failed fetch) sends the same start frame it always sent.
+   * Held across start/stop within one mount for the same reason `mode` is.
+   */
+  let engine: TranscriptionEngineName | undefined = opts.engine;
+  const listEngines = opts.listEngines ?? defaultListEngines;
+  void listEngines().then((info) => {
+    if (disposed || !info || info.engines.length < 2) {
+      // One engine (or none, or no answer) is not a choice. The address's
+      // own ask stands even unlisted — the server, not this fetch, is the
+      // authority on what it refuses, and it refuses by naming the engine.
+      return;
+    }
+    for (const name of info.engines) {
+      const option = document.createElement('option');
+      option.value = name;
+      option.textContent = engineLabel(name);
+      engineSelect.append(option);
+    }
+    engineSelect.value =
+      engine !== undefined && info.engines.includes(engine)
+        ? engine
+        : (info.default ?? info.engines[0] ?? '');
+    engineSelect.hidden = false;
+    renderMode();
+  });
+  engineSelect.onchange = () => {
+    engine = parseEngineName(engineSelect.value);
+  };
   /** The auto-start was refused in the way a missing gesture is: the button
    *  is the tap that supplies one, and says so. Cleared by any press. */
   let tapToStart = false;
@@ -559,6 +657,37 @@ export function mountMeetingStrip(opts: MeetingStripOpts): MeetingStripHandle {
    * a meeting starts, never carried into the next.
    */
   let names: Record<string, string> = {};
+  /**
+   * Every label this meeting has shown, whether or not its turn is still on
+   * the three-turn window — the cast the stopped strip's rename surface
+   * lists. Emptied with `names` when a meeting starts; seeded from the last
+   * meeting's record on a doc opened after its meeting ended.
+   */
+  let seen = new Set<string>();
+  /**
+   * The meeting a post-stop rename is addressed to. Survives `stopped` — it
+   * is only useful once the socket is gone — and is replaced when a new
+   * capture opens or the last meeting's record loads.
+   */
+  let lastMeetingId: string | null = null;
+
+  /**
+   * The button both surfaces (a turn's tag, the stopped strip's cast) use.
+   * The pill is a child so the button itself can stay free of the overflow
+   * that clipping a long name needs — a clip anywhere on the button eats its
+   * own tap target.
+   */
+  function speakerButton(): HTMLButtonElement {
+    const tag = document.createElement('button');
+    tag.type = 'button';
+    tag.className = 'meeting-speaker';
+    tag.title = 'Tap to name this speaker';
+    const pill = document.createElement('span');
+    pill.className = 'meeting-speaker-pill';
+    tag.append(pill);
+    tag.addEventListener('click', () => nameSpeaker(tag.dataset.speaker ?? ''));
+    return tag;
+  }
 
   /** The tag every turn with this label wears, as it should read now. The
    *  name goes on the PILL, never on the button: the button is the tap
@@ -577,12 +706,32 @@ export function mountMeetingStrip(opts: MeetingStripOpts): MeetingStripHandle {
     const current = speakerDisplayName(label, names);
     const answer = clipSpeakerName(promptName(current)?.trim() ?? '');
     if (!answer || answer === current) return;
+    const hadName = label in names;
     names[label] = answer;
     for (const entry of rendered.values()) {
       if (entry.tag?.dataset.speaker === label) renderTag(entry, label);
     }
+    renderCaption();
     if (socketOpen) {
       socket?.send(JSON.stringify({ type: 'name_speaker', speaker: label, name: answer }));
+    } else if (lastMeetingId && opts.postName) {
+      // The socket died with the capture; the rename rides HTTP to the
+      // meeting it belongs to. A refusal takes the name back off the screen —
+      // shown-but-unsaved is the bug this channel exists to close.
+      void opts
+        .postName(lastMeetingId, label, answer)
+        .catch(() => false)
+        .then((tookIt) => {
+          if (disposed || tookIt) return;
+          // Only undo THIS answer: a newer rename may already be in flight.
+          if (names[label] !== answer) return;
+          if (hadName) names[label] = current;
+          else delete names[label];
+          for (const entry of rendered.values()) {
+            if (entry.tag?.dataset.speaker === label) renderTag(entry, label);
+          }
+          renderCaption();
+        });
     }
   }
 
@@ -593,6 +742,20 @@ export function mountMeetingStrip(opts: MeetingStripOpts): MeetingStripHandle {
     // A note and a transcript share the line, so the reason the last attempt
     // gave has to go when words start arriving.
     line.querySelector('.meeting-note')?.remove();
+    // A stopped meeting's words leave with it, but its VOICES stay nameable:
+    // the strip is on the device the recording was made from, and after the
+    // meeting is exactly when a person gets around to the names. The cast
+    // takes the caption line over from the turns while the strip is idle.
+    line.querySelector('.meeting-legend')?.remove();
+    if (state.kind === 'idle') {
+      const cast = [...new Set([...seen, ...Object.keys(names)])].sort((a, b) =>
+        a.localeCompare(b),
+      );
+      if (cast.length > 0) {
+        renderLegend(cast);
+        return;
+      }
+    }
     for (const [turn, entry] of rendered) {
       if (!turns.some((t) => t.turn === turn)) {
         entry.span.remove();
@@ -616,17 +779,7 @@ export function mountMeetingStrip(opts: MeetingStripOpts): MeetingStripHandle {
         entry.tag = null;
       } else {
         if (!entry.tag) {
-          const tag = document.createElement('button');
-          tag.type = 'button';
-          tag.className = 'meeting-speaker';
-          tag.title = 'Tap to name this speaker';
-          // The pill is a child so the button itself can stay free of the
-          // overflow that clipping a long name needs — a clip anywhere on
-          // the button eats its own tap target.
-          const pill = document.createElement('span');
-          pill.className = 'meeting-speaker-pill';
-          tag.append(pill);
-          tag.addEventListener('click', () => nameSpeaker(tag.dataset.speaker ?? ''));
+          const tag = speakerButton();
           entry.span.prepend(tag);
           entry.tag = tag;
         }
@@ -663,6 +816,24 @@ export function mountMeetingStrip(opts: MeetingStripOpts): MeetingStripHandle {
   function clearCaption(): void {
     rendered.clear();
     line.replaceChildren();
+  }
+
+  /** The stopped strip's rename surface: the cast, each voice a button. */
+  function renderLegend(cast: string[]): void {
+    clearCaption();
+    const legend = document.createElement('span');
+    legend.className = 'meeting-legend';
+    const hint = document.createElement('span');
+    hint.className = 'meeting-legend-hint';
+    hint.textContent = 'Tap a voice to name it:';
+    legend.append(hint);
+    for (const label of cast) {
+      const tag = speakerButton();
+      tag.dataset.speaker = label;
+      renderTag({ tag }, label);
+      legend.append(tag);
+    }
+    line.append(legend);
   }
 
   function showNote(text: string): void {
@@ -745,6 +916,12 @@ export function mountMeetingStrip(opts: MeetingStripOpts): MeetingStripHandle {
     modeToggle.title = live
       ? 'Set before the mic starts — stop and start again to change it.'
       : 'Label who is talking. Leave it off when you are the only voice: it costs more.';
+    // Same one-shot rule as the mode, for the same reason: an engine
+    // session's configuration is fixed the moment it opens.
+    engineSelect.disabled = live;
+    engineSelect.title = live
+      ? 'Set before the mic starts — stop and start again to change it.'
+      : 'Which service turns this recording into words.';
     // Only where it means something: a room capture that has not begun. While
     // one runs, the announcement has already happened; on a solo capture
     // there was never anyone to announce it to; and where Start itself cannot
@@ -911,6 +1088,8 @@ export function mountMeetingStrip(opts: MeetingStripOpts): MeetingStripHandle {
         // diarizes; showing its answer is still better than showing a claim
         // nothing checked.
         mode = msg.mode;
+        // Where a rename lands once this meeting's socket is gone.
+        if (msg.meetingId) lastMeetingId = msg.meetingId;
         // And the announcement follows the mode the SERVER opened, not the
         // one that was asked for. An old server answering `solo` to a
         // conversation request would otherwise announce a session the strip
@@ -934,6 +1113,9 @@ export function mountMeetingStrip(opts: MeetingStripOpts): MeetingStripHandle {
         // the announcement stops owning the line. Partials are not: one
         // arrives from any noise in the room.
         if (msg.final) releaseAnnouncement();
+        // The cast outlives the three-turn window — a voice that spoke early
+        // and went quiet must still be nameable when the meeting stops.
+        if (msg.speaker !== undefined) seen.add(msg.speaker);
         turns = rollTranscript(turns, {
           turn: msg.turn,
           text: msg.text,
@@ -1098,6 +1280,11 @@ export function mountMeetingStrip(opts: MeetingStripOpts): MeetingStripHandle {
     const attempt = ++generation;
     turns = [];
     names = {};
+    // The engine hands out "A" afresh each session: the old cast, and the
+    // meeting a late rename would have been addressed to, belong to the
+    // meeting that is over.
+    seen = new Set();
+    lastMeetingId = null;
     tapToStart = false;
     // A solo capture announces nothing, whichever button was pressed — the
     // announce button is hidden there, but the mode can also come in off the
@@ -1153,6 +1340,9 @@ export function mountMeetingStrip(opts: MeetingStripOpts): MeetingStripHandle {
           // Absent unless somebody said, so the server's default stays the
           // one place the room size is guessed.
           ...(opts.speakers !== undefined ? { speakers: opts.speakers } : {}),
+          // Absent unless somebody chose, so the server's default stays the
+          // one place the engine is decided.
+          ...(engine !== undefined ? { engine } : {}),
           ...(timing ? { timing: true } : {}),
         }),
       );
@@ -1217,6 +1407,27 @@ export function mountMeetingStrip(opts: MeetingStripOpts): MeetingStripHandle {
 
   render();
   if (opts.autoStart) void start(true);
+  if (opts.loadSpeakers) {
+    // A doc opened after its meeting ended still owes its owner the names:
+    // the cast comes back off the record, and a tap renames over HTTP. A
+    // capture started before the answer arrives outranks it — that meeting's
+    // labels are new people — which is what the generation check drops.
+    const attempt = generation;
+    void opts
+      .loadSpeakers()
+      .then((cast) => {
+        if (disposed || attempt !== generation || !cast || state.kind !== 'idle') return;
+        lastMeetingId = cast.meetingId;
+        for (const voice of cast.voices) {
+          seen.add(voice.label);
+          if (voice.name !== speakerDisplayName(voice.label, {})) names[voice.label] = voice.name;
+        }
+        renderCaption();
+      })
+      .catch(() => {
+        // A record that cannot load costs the strip its cast, never itself.
+      });
+  }
 
   return {
     state: () => state,

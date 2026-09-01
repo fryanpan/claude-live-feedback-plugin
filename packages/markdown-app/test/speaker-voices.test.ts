@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { loadDocVoices } from '../src/speaker-voices.ts';
+import { loadDocSpeakers, loadDocVoices, postSpeakerName } from '../src/speaker-voices.ts';
 
 const ok = (body: unknown) =>
   ({ ok: true, status: 200, json: () => Promise.resolve(body) }) as unknown as Response;
@@ -57,5 +57,53 @@ describe('loadDocVoices', () => {
     });
     await loadDocVoices('a/b', fetchImpl as unknown as typeof fetch);
     expect(seen[0]).toBe('/api/docs/a%2Fb/meetings');
+  });
+});
+
+describe('loadDocSpeakers', () => {
+  it('says WHICH meeting the cast belongs to — a later rename is addressed to it', async () => {
+    const fetchImpl = vi.fn(async (url: string | URL | Request) => {
+      if (String(url).endsWith('/meetings')) {
+        return ok({ meetings: [{ meetingId: 'm-1', startedAt: 100 }] });
+      }
+      return ok({ transcript: [{ text: 'Hi.', speaker: 'A' }] });
+    });
+    expect(await loadDocSpeakers('huddle', fetchImpl as unknown as typeof fetch)).toEqual({
+      meetingId: 'm-1',
+      voices: [{ label: 'A', name: 'Speaker A', lastSaid: 'Hi.' }],
+    });
+  });
+
+  it('answers null, not an empty cast, for a doc that has never held a meeting', async () => {
+    const fetchImpl = vi.fn(async () => ok({ meetings: [] }));
+    expect(await loadDocSpeakers('plain', fetchImpl as unknown as typeof fetch)).toBeNull();
+  });
+});
+
+describe('postSpeakerName', () => {
+  it('posts the name to the meeting it belongs to, and reports the server took it', async () => {
+    const calls: Array<[string, RequestInit]> = [];
+    const fetchImpl = async (url: string | URL | Request, init?: RequestInit) => {
+      calls.push([String(url), init ?? {}]);
+      return { ok: true, status: 200 } as unknown as Response;
+    };
+    const took = await postSpeakerName(
+      { docId: 'a/b', meetingId: 'm 1', speaker: 'B', name: 'Priya' },
+      fetchImpl as unknown as typeof fetch,
+    );
+    expect(took).toBe(true);
+    expect(calls[0]?.[0]).toBe('/api/docs/a%2Fb/meetings/m%201/speakers');
+    expect(calls[0]?.[1].method).toBe('POST');
+    expect(JSON.parse(String(calls[0]?.[1].body))).toEqual({ speaker: 'B', name: 'Priya' });
+  });
+
+  it('reports a refusal as false — the caller must not show a name the record refused', async () => {
+    const fetchImpl = vi.fn(async () => ({ ok: false, status: 409 }) as unknown as Response);
+    expect(
+      await postSpeakerName(
+        { docId: 'doc', meetingId: 'm-1', speaker: 'A', name: 'Sam' },
+        fetchImpl as unknown as typeof fetch,
+      ),
+    ).toBe(false);
   });
 });

@@ -24,6 +24,7 @@ import {
   parseMeetingServerMessage,
   rollTranscript,
 } from '../src/meeting-strip.ts';
+import type { DocSpeakers } from '../src/speaker-voices.ts';
 
 /**
  * The strip is the only surface a meeting has, so every way a meeting can fail
@@ -189,7 +190,11 @@ function mount(
     mode?: CaptureMode;
     speakers?: number;
     room?: RoomAudioProcessing;
+    engine?: 'assemblyai' | 'soniox';
+    listEngines?: () => Promise<{ engines: string[]; default: string | null } | null>;
     announcer?: Announcer;
+    loadSpeakers?: () => Promise<DocSpeakers | null>;
+    postName?: (meetingId: string, speaker: string, name: string) => Promise<boolean>;
   } = {},
 ): Harness {
   const root = document.createElement('div');
@@ -858,6 +863,115 @@ describe('who is speaking', () => {
   });
 });
 
+describe('naming a voice after the meeting', () => {
+  /** A two-voice conversation, recorded and then stopped by the server. */
+  const stopped = async (extra: Parameters<typeof mount>[1] = {}) => {
+    const h = mount(undefined, extra);
+    h.toggle().click();
+    await settle();
+    h.sockets[0]?.onopen?.();
+    h.sockets[0]?.serve({ type: 'ready', meetingId: 'm1', startedAt: 1_000, engine: 'test' });
+    h.sockets[0]?.serve({
+      type: 'transcript',
+      turn: 0,
+      text: 'Take it?',
+      final: true,
+      speaker: 'A',
+    });
+    h.sockets[0]?.serve({ type: 'transcript', turn: 1, text: 'Sure.', final: true, speaker: 'B' });
+    h.sockets[0]?.serve({ type: 'stopped', meetingId: 'm1', endedAt: 2_000 });
+    return h;
+  };
+
+  const legendTags = (h: ReturnType<typeof mount>) =>
+    [...h.root.querySelectorAll('.meeting-legend .meeting-speaker')].map(
+      (el) => el.textContent ?? '',
+    );
+
+  it('the stopped strip keeps a rename surface: the cast, each voice a button', async () => {
+    const h = await stopped({ promptName: () => null });
+    expect(h.root.dataset.state).toBe('idle');
+    // The words are gone with the meeting; the voices are not.
+    expect(h.caption()).not.toContain('Sure.');
+    expect(legendTags(h)).toEqual(['Speaker A', 'Speaker B']);
+    // It says what it is for — the affordance Bryan could not find.
+    expect(h.caption()).toContain('Tap a voice to name it');
+  });
+
+  it('a tap after stop renames over HTTP — the socket is gone', async () => {
+    const postName = vi.fn(() => Promise.resolve(true));
+    const h = await stopped({ promptName: () => 'Priya', postName });
+    const tag = h.root.querySelectorAll('.meeting-legend .meeting-speaker')[1] as HTMLButtonElement;
+    tag.click();
+    await settle();
+    expect(legendTags(h)).toEqual(['Speaker A', 'Priya']);
+    expect(postName).toHaveBeenCalledWith('m1', 'B', 'Priya');
+    // Nothing rode the dead socket.
+    const sent = (h.sockets[0]?.sent ?? []).filter((d) => typeof d === 'string');
+    expect(sent.some((d) => String(d).includes('name_speaker'))).toBe(false);
+  });
+
+  it('a name the server refused does not stay on screen claiming it was saved', async () => {
+    const postName = vi.fn(() => Promise.resolve(false));
+    const h = await stopped({ promptName: () => 'Priya', postName });
+    const tag = h.root.querySelectorAll('.meeting-legend .meeting-speaker')[1] as HTMLButtonElement;
+    tag.click();
+    await settle();
+    expect(legendTags(h)).toEqual(['Speaker A', 'Speaker B']);
+  });
+
+  it('a reloaded doc offers its last meeting’s cast, and renames it over HTTP', async () => {
+    const postName = vi.fn(() => Promise.resolve(true));
+    const h = mount(undefined, {
+      promptName: () => 'Priya',
+      postName,
+      loadSpeakers: () =>
+        Promise.resolve({
+          meetingId: 'm-9',
+          voices: [
+            { label: 'A', name: 'Devi', lastSaid: 'Move the gate.' },
+            { label: 'B', name: 'Speaker B', lastSaid: 'Sure.' },
+          ],
+        }),
+    });
+    await settle();
+    // The names given live come back; the unnamed voice is still a label.
+    expect(legendTags(h)).toEqual(['Devi', 'Speaker B']);
+    const tag = h.root.querySelectorAll('.meeting-legend .meeting-speaker')[1] as HTMLButtonElement;
+    tag.click();
+    await settle();
+    expect(legendTags(h)).toEqual(['Devi', 'Priya']);
+    expect(postName).toHaveBeenCalledWith('m-9', 'B', 'Priya');
+  });
+
+  it('starting a new capture clears the old cast — labels are per meeting', async () => {
+    const h = mount(undefined, {
+      loadSpeakers: () =>
+        Promise.resolve({
+          meetingId: 'm-9',
+          voices: [{ label: 'A', name: 'Devi', lastSaid: 'Hi.' }],
+        }),
+    });
+    await settle();
+    expect(legendTags(h)).toEqual(['Devi']);
+    h.toggle().click();
+    await settle();
+    h.sockets[0]?.onopen?.();
+    h.sockets[0]?.serve({ type: 'ready', meetingId: 'm2', startedAt: 1_000, engine: 'test' });
+    expect(legendTags(h)).toEqual([]);
+    h.sockets[0]?.serve({ type: 'transcript', turn: 0, text: 'Hi.', final: true, speaker: 'A' });
+    // The new meeting's A is a different person; the old name must not stick.
+    expect(h.tags()).toEqual(['Speaker A']);
+  });
+
+  it('a doc with no meetings keeps its empty caption', async () => {
+    const h = mount(undefined, { loadSpeakers: () => Promise.resolve(null) });
+    await settle();
+    expect(legendTags(h)).toEqual([]);
+    expect(h.caption().trim()).toBe('');
+  });
+});
+
 describe('teardown', () => {
   it('releases the mic and the socket when the doc is navigated away from', async () => {
     const stop = vi.fn();
@@ -954,6 +1068,74 @@ describe('what the strip tells the microphone and the server about the room', ()
     h.toggle().click();
     await settle();
     expect(calls[0]?.mode).toBe('conversation');
+  });
+});
+
+// ---------------------------------------------------------------------------
+
+describe('which engine transcribes', () => {
+  const twoEngines = () =>
+    Promise.resolve({ engines: ['assemblyai', 'soniox'], default: 'assemblyai' });
+  const select = (root: HTMLElement) => root.querySelector('.meeting-engine') as HTMLSelectElement;
+
+  /** Press Start and hand back the start frame the socket saw. */
+  async function startFrame(h: ReturnType<typeof mount>): Promise<Record<string, unknown>> {
+    h.toggle().click();
+    await settle();
+    h.sockets[0]?.onopen?.();
+    const sent = (h.sockets[0]?.sent ?? [])
+      .filter((raw): raw is string => typeof raw === 'string')
+      .map((raw) => JSON.parse(raw) as Record<string, unknown>);
+    const frame = sent.find((m) => m.type === 'start');
+    if (!frame) throw new Error('no start frame went up');
+    return frame;
+  }
+
+  it('carries the address’s engine on the start frame, and nothing by default', async () => {
+    const chosen = mount(undefined, { engine: 'soniox', listEngines: () => Promise.resolve(null) });
+    expect((await startFrame(chosen)).engine).toBe('soniox');
+    // Absent unless somebody chose: the server's default is decided on the
+    // server, and this frame is byte-for-byte what an older strip sent.
+    const bare = mount(undefined, { listEngines: () => Promise.resolve(null) });
+    expect(await startFrame(bare)).not.toHaveProperty('engine');
+  });
+
+  it('shows the chooser only when the server holds a choice', async () => {
+    const both = mount(undefined, { listEngines: twoEngines });
+    await settle();
+    expect(select(both.root).hidden).toBe(false);
+    expect([...select(both.root).options].map((o) => o.value)).toEqual(['assemblyai', 'soniox']);
+    expect(select(both.root).value).toBe('assemblyai');
+
+    // One engine is not a choice; an old server (no route) answers null.
+    const one = mount(undefined, {
+      listEngines: () => Promise.resolve({ engines: ['assemblyai'], default: 'assemblyai' }),
+    });
+    const old = mount(undefined, { listEngines: () => Promise.resolve(null) });
+    await settle();
+    expect(select(one.root).hidden).toBe(true);
+    expect(select(old.root).hidden).toBe(true);
+  });
+
+  it('starts with the engine the chooser picked, and shows the address’s pick', async () => {
+    const h = mount(undefined, { listEngines: twoEngines });
+    await settle();
+    select(h.root).value = 'soniox';
+    select(h.root).dispatchEvent(new Event('change'));
+    expect((await startFrame(h)).engine).toBe('soniox');
+
+    const fromAddress = mount(undefined, { engine: 'soniox', listEngines: twoEngines });
+    await settle();
+    expect(select(fromAddress.root).value).toBe('soniox');
+  });
+
+  it('settles the choice when the mic starts, like the mode beside it', async () => {
+    const h = mount(undefined, { listEngines: twoEngines });
+    await settle();
+    expect(select(h.root).disabled).toBe(false);
+    h.toggle().click();
+    await settle();
+    expect(select(h.root).disabled).toBe(true);
   });
 });
 

@@ -735,6 +735,11 @@ export class TaskProjection {
             ...goalStatusMeta(r),
             bodyDocId: taskBodyDocId(r.id),
             ...projectBody(r.body),
+            // The docs this goal ties to (backfill + settle-time scan) —
+            // projected like a task's links so the goal panel can draw them.
+            // Conditional: an absent key is how "no linked docs" reads, and
+            // the refresh deletes keys this object stops carrying.
+            ...(r.links !== undefined && r.links.length > 0 ? { links: r.links } : {}),
             ...(comments > 0 ? { commentCount: comments } : {}),
             ...(r.assignee !== undefined
               ? {

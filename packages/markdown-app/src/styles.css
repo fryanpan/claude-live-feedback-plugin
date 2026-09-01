@@ -679,102 +679,14 @@ body.has-set .doc-switcher-caret {
 #editor-pane {
   position: relative; /* anchors the floating diff/file view toggle */
   display: grid;
-  /* format bar, derived-work strip, document, transcript strip. The auto
-     tracks are what make each strip RESERVE its height instead of covering
-     the prose: the editor keeps the 1fr and shrinks by exactly their height.
-     They cost nothing unmounted — a hidden strip is a zero-height track. */
-  grid-template-rows: auto auto 1fr auto;
+  /* format bar, document, transcript strip. The auto tracks are what make
+     each strip RESERVE its height instead of covering the prose: the editor
+     keeps the 1fr and shrinks by exactly their height. They cost nothing
+     unmounted — a hidden strip is a zero-height track. */
+  grid-template-rows: auto 1fr auto;
   overflow: hidden;
   background: var(--bg);
   border-right: 1px solid var(--border);
-}
-
-/* Work derived from this doc (src/plan-tasks.ts): a slim row of task chips
-   between the format bar and the prose, plus the plan gate's Approve button.
-   One line that wraps; chips stay tappable at 430px (≥36px targets via
-   padding) and the row spends height, not width, on iPad landscape. */
-.plan-tasks {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 6px 10px;
-  padding: 6px 12px;
-  border-bottom: 1px solid var(--border);
-  font-size: 13px;
-  background: var(--bg);
-}
-
-.plan-tasks[hidden] {
-  display: none;
-}
-
-.plan-tasks-label {
-  color: var(--text-secondary, #666);
-  font-weight: 600;
-  white-space: nowrap;
-}
-
-.plan-tasks-list {
-  display: contents;
-}
-
-.plan-task-chip {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 4px 8px;
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  color: inherit;
-  text-decoration: none;
-  max-width: 100%;
-}
-
-a.plan-task-chip:hover {
-  background: var(--bg-hover, rgba(0, 0, 0, 0.04));
-}
-
-.plan-task-chip .plan-task-title {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  max-width: 32ch;
-}
-
-/* A held draft reads muted: filed, visible, deliberately not queued. */
-.plan-task-chip.is-draft {
-  border-style: dashed;
-  color: var(--text-secondary, #666);
-}
-
-/* Possibly stale = quiet yellow, the shared "look again" vocabulary. */
-.plan-task-chip.is-stale {
-  border-color: var(--yellow, #b58900);
-}
-
-.plan-task-stale {
-  color: var(--yellow, #b58900);
-  font-size: 12px;
-  white-space: nowrap;
-}
-
-.plan-tasks-approve {
-  padding: 4px 10px;
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  background: var(--bg);
-  cursor: pointer;
-  font: inherit;
-  font-weight: 600;
-}
-
-.plan-tasks-approve:hover:not(:disabled) {
-  background: var(--bg-hover, rgba(0, 0, 0, 0.04));
-}
-
-.plan-tasks-error {
-  color: var(--red, #dc322f);
-  font-size: 12px;
 }
 
 /* ================= WORKSPACE HUB =================
@@ -4177,10 +4089,6 @@ body.hub-body {
   color: var(--fg-muted);
   font-size: 12px;
 }
-.hub-sourcedoc-stale {
-  color: var(--yellow, #b58900);
-  font-size: 12px;
-}
 /* Link chips: what a `url` ref is FOR. Wraps rather than scrolls — the
    detail panel has vertical room and a hidden link is the bug this
    replaced. */
@@ -7051,6 +6959,33 @@ body.is-reading-width #editor > .ProseMirror {
   color: var(--fg);
   border-color: var(--border-strong);
 }
+/* The pill says it is editable WITHOUT hover: a pencil before the name. The
+   dotted underline alone did not read as tappable on the iPad — the reported
+   failure was a real two-voice meeting with "no ability to edit the speaker
+   names". CSS content rather than markup so the button's aria-label ("Name
+   Speaker A") stays the accessible name, and at the START of the pill so the
+   ellipsis clipping a long name can never eat it. */
+.meeting-speaker-pill::before {
+  content: "✎ ";
+}
+/* The rename surface a finished meeting leaves behind: the cast on the
+   caption line while the strip is idle. Same button, same pill, same
+   hit-box arithmetic as a turn's tag — the legend lives inside the
+   caption's clip, so the ~38px the tag measures is this bar's ceiling too;
+   a 44px target would mean a taller strip row. `wrap` is for the phone
+   panel: two named voices overflow one 430px line, and a legend that
+   widened the panel would push the strip off the window edge. */
+.meeting-legend {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 2px 10px;
+  max-width: 100%;
+}
+.meeting-legend-hint {
+  color: var(--fg-muted);
+  white-space: nowrap;
+}
 /* Why no words are coming — an unconfigured server, a refused mic, an origin
    the browser gives no mic on. It occupies the transcript's line because it is
    the answer to the same question. */
@@ -7267,6 +7202,31 @@ body.is-reading-width #editor > .ProseMirror {
 .meeting-announce[hidden] {
   display: none;
 }
+/* Which engine transcribes — present only when the server holds a choice, so
+   on most installs this rule styles nothing. The same pill as its two
+   neighbours (36px floor, design-mobile.md) so a control that appears when a
+   second key lands does not read as a foreign object. */
+.meeting-engine {
+  flex: none;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  padding: 4px 11px;
+  min-height: 36px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--fg-muted);
+  border-radius: var(--radius-pill);
+  cursor: pointer;
+  white-space: nowrap;
+}
+.meeting-engine:disabled {
+  cursor: default;
+  opacity: 0.65;
+}
+.meeting-engine[hidden] {
+  display: none;
+}
 @media (min-width: 721px) {
   /* The strip is one row here, so the micro-row stops being a box and its
      children join the strip's own flex line. That flattens them in SOURCE
@@ -7284,14 +7244,19 @@ body.is-reading-width #editor > .ProseMirror {
   .meeting-mode {
     order: 3;
   }
+  /* Beside the mode switch it qualifies: both are facts about the session
+     being configured, settled before Start. */
+  .meeting-engine {
+    order: 4;
+  }
   /* Between the mode switch and Start: it is a start button, so it belongs to
      the controls at the end of the line, and it is the secondary one, so it
      sits before the primary rather than past it. */
   .meeting-announce {
-    order: 4;
+    order: 5;
   }
   .meeting-toggle {
-    order: 5;
+    order: 6;
   }
   /* The strip runs as a ROW here, so wrapping puts the readout on the next
      LINE and the bar's fixed 40px has to give. Both of these are scoped to
@@ -8267,6 +8232,13 @@ body.threads-resizing {
   border-style: dashed;
   border-color: var(--yellow);
   color: var(--yellow);
+}
+/* A plan-held draft: filed, visible, deliberately not queued — muted, not
+   the triage yellow, because nobody should look until the plan is approved. */
+.ws-chip-draft {
+  border-style: dashed;
+  border-color: var(--border);
+  color: var(--fg-muted, #656d76);
 }
 .ws-chip-in-progress {
   border-color: var(--accent);

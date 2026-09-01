@@ -66,10 +66,9 @@ describe('the strip lives in its own section of the stylesheet', () => {
 
 describe('the editor pane reserves a row for the strip', () => {
   it('gives #editor-pane a final, content-sized track', () => {
-    // Four tracks since the plan-tasks strip claimed the second: format bar,
-    // derived-work strip, document, transcript strip. The strip's track is
-    // still the LAST auto — content-sized, after the editor's 1fr.
-    expect(rule('#editor-pane')).toMatch(/grid-template-rows:\s*auto auto 1fr auto/);
+    // Three tracks: format bar, document, transcript strip. The strip's
+    // track is the LAST auto — content-sized, after the editor's 1fr.
+    expect(rule('#editor-pane')).toMatch(/grid-template-rows:\s*auto 1fr auto/);
   });
 
   it('positive control: the shell really puts the strip in that pane, after the editor', () => {
@@ -263,6 +262,26 @@ describe('the speaker tag', () => {
     expect(rule('.meeting-speaker-pill', declarationsOnly(SECTION))).toMatch(
       /text-decoration:\s*underline dotted/,
     );
+    // And the underline alone still did not read as tappable there — the
+    // reported failure was a real two-voice meeting with "no ability to edit
+    // the speaker names". The pencil is at the START so the ellipsis on a
+    // long name can never eat it.
+    expect(rule('.meeting-speaker-pill::before', declarationsOnly(SECTION))).toMatch(
+      /content:\s*["']✎ ["']/,
+    );
+  });
+
+  it('the stopped strip’s cast shares the tag’s button, and wraps on the phone', () => {
+    // The legend reuses .meeting-speaker wholesale — same pill, same hit-box
+    // arithmetic the measurements above assert — so it only needs layout.
+    const legend = rule('.meeting-legend', declarationsOnly(SECTION));
+    expect(legend, 'no .meeting-legend rule in the MEETING section').not.toBe('');
+    expect(legend).toMatch(/flex-wrap:\s*wrap/);
+    expect(legend).toMatch(/max-width:\s*100%/);
+    // The strip renders the cast inside the caption line the tags live in.
+    expect(MOUNT).toContain("legend.className = 'meeting-legend'");
+    // And the buttons it fills the legend with are the measured tag itself.
+    expect(MOUNT).toContain('speakerButton()');
   });
 
   it('gives each turn its own line, so a tag never strands above its words', () => {
@@ -303,11 +322,15 @@ describe('at 1180x820 the strip is one 40px bar', () => {
     expect(rule('.meeting-meta', declarationsOnly(wide))).toMatch(/order:\s*1/);
     expect(rule('.meeting-caption', declarationsOnly(wide))).toMatch(/order:\s*2/);
     expect(rule('.meeting-mode', declarationsOnly(wide))).toMatch(/order:\s*3/);
+    // The engine chooser qualifies the mode switch beside it — both are
+    // session facts settled before Start — and on most installs it is not
+    // rendered at all.
+    expect(rule('.meeting-engine', declarationsOnly(wide))).toMatch(/order:\s*4/);
     // "I'll say it" is a start button, so it belongs with the controls at the
     // end of the line — and it is the secondary one, so it sits BEFORE Start
     // rather than past it.
-    expect(rule('.meeting-announce', declarationsOnly(wide))).toMatch(/order:\s*4/);
-    expect(rule('.meeting-toggle', declarationsOnly(wide))).toMatch(/order:\s*5/);
+    expect(rule('.meeting-announce', declarationsOnly(wide))).toMatch(/order:\s*5/);
+    expect(rule('.meeting-toggle', declarationsOnly(wide))).toMatch(/order:\s*6/);
   });
 
   it('gives the announce button the same 36px tap target as the two beside it', () => {
@@ -374,7 +397,7 @@ describe('at 1180x820 the strip is one 40px bar', () => {
     // at 40px — measured, one line asks for 42 and two ask for 64. Safe
     // because the editor pane's last grid track is `auto`, so the strip
     // reserves its height instead of covering the prose.
-    expect(rule('#editor-pane')).toMatch(/grid-template-rows:\s*auto auto 1fr auto/);
+    expect(rule('#editor-pane')).toMatch(/grid-template-rows:\s*auto 1fr auto/);
     const grown = rule('.meeting-strip:has(.meeting-note-dismiss)');
     expect(grown, 'the bar never grows, so the sentence is clipped').not.toBe('');
     expect(grown).toMatch(/height:\s*auto/);

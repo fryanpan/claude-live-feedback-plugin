@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { positiveEnvDuration, readRenamedEnv } from '@feedback/core/env-names';
 import { resolvePostmarkCodeSender } from './auth/postmark-code-sender.ts';
 import { clientReleaseStatus, resolveClientDists } from './client-release.ts';
-import { createDeployer } from './deploy.ts';
+import { confirmDeployBoot, createDeployer, deployLogPath } from './deploy.ts';
 import { effortEstimateEnabled, haikuEffortEstimator } from './effort-estimator.ts';
 import { installLogSquelch } from './log-squelch.ts';
 import { createHaikuNotesComposer } from './meeting-notes-composer.ts';
@@ -28,6 +28,7 @@ import {
   KEYCHAIN_SERVICE as ASSEMBLYAI_KEYCHAIN_SERVICE,
   createAssemblyAiEngine,
 } from './transcribe-assemblyai.ts';
+import { SONIOX_KEYCHAIN_SERVICE, createSonioxEngine } from './transcribe-soniox.ts';
 import { haikuVoiceComplete } from './voice.ts';
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -487,11 +488,24 @@ if (!effortEstimator) {
 // and here it is also the difference between a test suite that is free and one
 // that opens a metered streaming session per server it spins up. No key → null
 // → the meeting socket answers `not_configured` and the strip says so.
-const transcription = createAssemblyAiEngine();
+const assemblyAi = createAssemblyAiEngine();
+const soniox = createSonioxEngine();
+// AssemblyAI first: the first engine is what a `start` naming none gets, so
+// the default stays what it has always been wherever both keys exist.
+const engines = [...(assemblyAi ? [assemblyAi] : []), ...(soniox ? [soniox] : [])];
+const transcription = engines.length > 0 ? engines : null;
 if (!transcription) {
   console.log(
     '[meetings] no transcription key; live meetings answer "not configured". ' +
       `Add one with: security add-generic-password -a "$USER" -s ${ASSEMBLYAI_KEYCHAIN_SERVICE} -w`,
+  );
+} else if (!soniox) {
+  // Not a failure — the option simply does not appear in any chooser. Named
+  // so the person wondering where the Soniox option went finds the answer in
+  // the log rather than in the code.
+  console.log(
+    '[meetings] no Soniox key; the soniox engine option stays hidden. ' +
+      `Add one with: security add-generic-password -a "$USER" -s ${SONIOX_KEYCHAIN_SERVICE} -w`,
   );
 }
 
@@ -755,6 +769,19 @@ while (!handle) {
   }
 }
 port = handle.port;
+
+// The other half of the deploy's boot verification. A deploy records its
+// restart as `pending` and then dies; the only process that can honestly say
+// the restart WORKED is this one, standing here — port bound, documents
+// hydrated, about to serve. A boot that never reaches this line leaves the
+// record pending, and the detached watchdog the deploy spawned expires it
+// into `boot-failed` (deploy.ts, "Dependencies are part of the delivery").
+if (deployer) {
+  const confirmed = confirmDeployBoot(deployLogPath(dataDir ?? join(repoRoot, 'data')));
+  if (confirmed) {
+    console.log(`[deploy] boot confirmed healthy for the deploy recorded at ${confirmed.ranAt}`);
+  }
+}
 
 const ts = tailscaleHost();
 const lan = lanHostnames();

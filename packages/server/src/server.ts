@@ -4,6 +4,7 @@ import {
   type Anchor,
   type DocMeta,
   type DocType,
+  MAX_SPEAKER_NAME,
   type ReviewItemJudgement,
   type ReviewPayload,
   type TaskReviewItem,
@@ -36,6 +37,7 @@ import {
   reviewItemState,
   reviewPayloadMessage,
   reviewPayloadVersion,
+  speakerDisplayName,
   suggestOps,
   summaryHash,
 } from '@feedback/core';
@@ -96,6 +98,7 @@ import { clientReleaseStatus } from './client-release.ts';
 import { maybeCompress, maybeNotModified } from './compress.ts';
 import type { Deployer } from './deploy.ts';
 import { DispatchRegistry, type WatchFactory, isValidDispatchTaskId } from './dispatch-registry.ts';
+import { canonicalRepoRoot, normalizeDocHome, resolveHomeCheckout } from './doc-home.ts';
 import { RESERVED_DOC_PREFIXES } from './doc-ids.ts';
 import {
   EFFORT_ESTIMATE_MODEL,
@@ -191,6 +194,7 @@ import { RecallMeetingRelay } from './recall-meeting.ts';
 import { parseBotStatusWebhook } from './recall-status.ts';
 import { svixHeadersFrom, verifySvixSignature } from './recall-webhook-auth.ts';
 import { type RecallClient, unreachableCallbackReason } from './recall.ts';
+import { runRefsBackfill, scanSettledDocRefs } from './refs-backfill.ts';
 import { listArchivedDocs, listArchivedReviews, readDocArchiveManifest } from './review-archive.ts';
 import { backfillReviewFiling } from './review-backfill.ts';
 import { type ReviewJudge, type ReviewJudgeVerdict } from './review-judge.ts';
@@ -269,6 +273,7 @@ import {
   type TaskEffortEstimate,
   type TaskStatus,
   TaskStore,
+  type WorkspaceNotesHome,
   eventsLogPath,
   isAttachmentRuntime,
   isRetired,
@@ -895,9 +900,13 @@ export interface ServerOptions {
    * minute for as long as a socket stays open. Omitting it makes
    * `/audio/<docId>` answer `unavailable` with reason `not_configured`, which
    * is a state the strip renders rather than a failure. Only `bin.ts`
-   * constructs a real one (`createAssemblyAiEngine`).
+   * constructs real ones (`createAssemblyAiEngine`, `createSonioxEngine`).
+   *
+   * An array is several engines the client may choose between by name on its
+   * `start` frame, FIRST one the default; a bare engine is that one engine,
+   * exactly as before.
    */
-  transcription?: TranscriptionEngine;
+  transcription?: TranscriptionEngine | readonly TranscriptionEngine[];
   /**
    * The Recall.ai client that puts a BOT in a Zoom / Meet call. **No
    * default**, the same seam rule as `transcription` directly above and for
@@ -1377,7 +1386,11 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
   const meetingStore = new MeetingStore(dataDir);
   const meetingRelay = new MeetingRelay({
     store: meetingStore,
-    engine: opts.transcription ?? null,
+    engines: Array.isArray(opts.transcription)
+      ? opts.transcription
+      : opts.transcription
+        ? [opts.transcription as TranscriptionEngine]
+        : [],
     // The server supplies the notes sink — the write into the meeting doc —
     // and the context resolver (doc title, board task titles). Thunks, not
     // references: rooms and the task store are constructed below, and both
@@ -2444,7 +2457,20 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
   // (§3.6's table is exhaustive), so the projection refresh happens here,
   // the same pattern as the links route.
   rooms.onContentRevision = (docIds, revision) => {
-    for (const workspaceId of taskStore.flagStaleFromDocEdit(docIds, revision)) {
+    const touched = new Set(taskStore.flagStaleFromDocEdit(docIds, revision));
+    // The settled doc's prose is the linkage record: any task/goal link the
+    // edit wrote (or that was never mined) becomes a structured ref now, so
+    // the Docs field on the row side stays true without a second call. Ids
+    // arrive as canonical + alias; scanning the first that resolves scans
+    // the one doc they both name.
+    const scanned = new Set<string>();
+    for (const docId of docIds) {
+      const canonical = rooms.resolveDocId(docId);
+      if (scanned.has(canonical)) continue;
+      scanned.add(canonical);
+      for (const wsId of scanSettledDocRefs(rooms, taskStore, canonical)) touched.add(wsId);
+    }
+    for (const workspaceId of touched) {
       taskProjection.ensureWorkspace(workspaceId);
     }
   };
@@ -5886,7 +5912,45 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           const docId = (body?.docId as string) ?? '';
           if (!isValidDocId(docId)) return j(400, { error: 'bad docId' });
           const type = (body?.type as DocType) ?? 'markdown';
-          const sourceUrl = body?.sourceUrl as string | undefined;
+          let sourceUrl = body?.sourceUrl as string | undefined;
+          // A markdown doc created WITHOUT a path can be placed by its
+          // workspace's configured notes home: the file is derived as
+          // `<dir>/<docId>.md` on the home branch and the doc is pinned
+          // there (see rooms.setDocHome), which is what gets planning notes
+          // checked in instead of scattered wherever a session's checkout
+          // happens to sit. Opt-in twice over — the workspace set a
+          // notesHome, and the caller named the workspace.
+          let derivedHome: { repoRoot: string; branch: string; relPath: string } | null = null;
+          if (type === 'markdown' && !sourceUrl) {
+            const wsForNotes =
+              typeof body?.hubWorkspaceId === 'string' ? body.hubWorkspaceId : undefined;
+            const notes = wsForNotes ? taskStore.notesHome(wsForNotes) : undefined;
+            if (notes) {
+              const fileName = `${docId.replace(/[^a-zA-Z0-9._-]/g, '-')}.md`;
+              const norm = normalizeDocHome({
+                repoRoot: notes.repoRoot,
+                branch: notes.branch,
+                relPath: `${notes.dir}/${fileName}`,
+              });
+              if (!norm.ok) return j(400, { error: 'bad_notes_home', hint: norm.error });
+              const placed = resolveHomeCheckout(norm.home);
+              if (!placed.placed) {
+                return j(409, {
+                  error: 'notes_home_unplaced',
+                  reason: placed.reason,
+                  hint: `The workspace notes home is ${notes.repoRoot} branch "${notes.branch}", but ${
+                    placed.reason === 'repo-missing'
+                      ? 'that path is not a git checkout any more'
+                      : placed.reason === 'path-escapes-checkout'
+                        ? 'the notes dir passes through a symlink that leaves the checkout'
+                        : 'no worktree has that branch checked out right now'
+                  }. Check the branch out (git worktree add <path> "${notes.branch}") and retry, or pass an explicit sourceUrl.`,
+                });
+              }
+              derivedHome = norm.home;
+              sourceUrl = placed.absPath;
+            }
+          }
           // Every markdown doc is file-backed. POST /api/docs is the sole
           // creation path for markdown — sourceUrl is required, and the
           // server attaches the file (loads content + sets up bidirectional
@@ -5975,6 +6039,10 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           if (type === 'markdown' && sourceUrl) {
             attached = rooms.attachFile(canonicalId, sourceUrl);
             if (!attached.ok) return j(409, { error: 'attach_failed', attached });
+            // Notes-home creation: pin the doc to the derived home. The pin
+            // exports the (possibly still missing) file and takes over the
+            // binding, so branch churn from here on follows the branch.
+            if (derivedHome) rooms.setDocHome(canonicalId, derivedHome);
           } else if (type === 'code' && sourceUrl) {
             attached = rooms.attachReadonlyFile(canonicalId, sourceUrl);
             if (!attached.ok) return j(409, { error: 'attach_failed', attached });
@@ -6695,6 +6763,47 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
               hasReviewCriteria = true;
               reviewCriteriaValue = typeof raw === 'string' ? raw : undefined;
             }
+            // Same merge contract as the prompt fields: named-and-null
+            // clears, absent leaves it. The shape borrows a doc home's
+            // validation (`dir` is a relPath with the same traversal rules)
+            // and additionally insists repoRoot is a checkout NOW — a typo'd
+            // path stored here would park every note the board ever derives.
+            let hasNotesHome = false;
+            let notesHomeValue: WorkspaceNotesHome | undefined;
+            if (body && Object.hasOwn(body, 'notesHome')) {
+              const raw = body.notesHome as {
+                repoRoot?: unknown;
+                branch?: unknown;
+                dir?: unknown;
+              } | null;
+              if (raw !== null) {
+                const norm = normalizeDocHome({
+                  repoRoot: raw?.repoRoot,
+                  branch: raw?.branch,
+                  relPath: raw?.dir,
+                });
+                if (!norm.ok) {
+                  return j(400, {
+                    error: `notesHome must be { repoRoot, branch, dir } or null to clear: ${norm.error.replace('relPath', 'dir')}`,
+                  });
+                }
+                // Store the MAIN checkout's root, not the caller's spelling:
+                // a notes home declared from a linked worktree must survive
+                // that worktree's removal (canonicalRepoRoot in doc-home.ts).
+                const canonRoot = canonicalRepoRoot(norm.home.repoRoot);
+                if (canonRoot === null) {
+                  return j(400, {
+                    error: `notesHome.repoRoot ${norm.home.repoRoot} is not a git checkout`,
+                  });
+                }
+                notesHomeValue = {
+                  repoRoot: canonRoot,
+                  branch: norm.home.branch,
+                  dir: norm.home.relPath,
+                };
+              }
+              hasNotesHome = true;
+            }
             let hasEffortPrompt = false;
             let effortPromptValue: string | undefined;
             if (body && Object.hasOwn(body, 'effortEstimatePrompt')) {
@@ -6724,14 +6833,20 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
               });
               if (!res.ok) return j(404, res);
             }
+            if (hasNotesHome) {
+              const res = taskStore.setNotesHome(workspaceId, notesHomeValue, { actor: author });
+              if (!res.ok) return j(404, res);
+            }
           }
           const criteria = taskStore.reviewItemCriteria(workspaceId);
           const effortPrompt = taskStore.effortEstimatePrompt(workspaceId);
           if (!criteria || !effortPrompt) return j(404, { error: 'workspace not found' });
+          const notesHome = taskStore.notesHome(workspaceId);
           return j(200, {
             workspaceId,
             reviewItemCriteria: { ...criteria, default: DEFAULT_REVIEW_ITEM_CRITERIA },
             effortEstimatePrompt: { ...effortPrompt, default: DEFAULT_EFFORT_ESTIMATE_PROMPT },
+            ...(notesHome ? { notesHome } : {}),
           });
         }
         const wsBoardRenameMatch = pathname.match(/^\/api\/workspaces\/([^/]+)\/rename$/);
@@ -7549,6 +7664,23 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           if (!isValidRef(ref)) return j(400, { error: BAD_REF_ERROR });
           return j(200, { ref, tasks: taskStore.backlinksFor(ref).map(taskChip) });
         }
+        // Mine the links people already wrote into structured refs — every
+        // doc body, task body, goal body, and stored url ref, both
+        // directions. Idempotent (a second run creates nothing), and
+        // `dryRun: true` counts what WOULD land without writing, so the
+        // sweep can be sized before it runs. One-shot per deployment in
+        // practice; the settle-time scan keeps it from going stale.
+        if (pathname === '/api/refs/backfill' && req.method === 'POST') {
+          const body = await safeJson(req);
+          const dryRun = body?.dryRun === true;
+          const stats = runRefsBackfill({ rooms, tasks: taskStore, dryRun });
+          // Link writes emit no store event (§3.6's exhaustive table), so
+          // the projection refresh happens here — same as the links route.
+          if (!dryRun) {
+            for (const wsId of stats.workspacesTouched) taskProjection.ensureWorkspace(wsId);
+          }
+          return j(200, { dryRun, ...stats });
+        }
         // Titles for pasted workspace URLs — the comment renderer's lookup.
         // Batched (one call per render burst, not one per link) and read-only.
         // Members only: the share-scope middleware above never whitelists this
@@ -7582,9 +7714,15 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
                   // the status machine, and a pasted goal link should read
                   // as its title + status like any other row.
                   const t = taskStore.getTask(taskId) ?? taskStore.getGoalRow(taskId);
-                  return t
-                    ? { title: t.title, workspaceId: t.workspaceId, status: t.status }
-                    : undefined;
+                  if (!t) return undefined;
+                  return {
+                    title: t.title,
+                    workspaceId: t.workspaceId,
+                    status: t.status,
+                    // Only a Task can be a held draft; a GoalRow never
+                    // carries the field.
+                    ...('planHold' in t && t.planHold !== undefined ? { planHeld: true } : {}),
+                  };
                 },
                 workspaceName: (workspaceId) => taskStore.getWorkspace(workspaceId)?.name,
               },
@@ -9878,8 +10016,90 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           // other by accident.
           return j(200, { ...record, transcript: meetingStore.transcript(docId, meetingId) });
         }
+        // --- Naming a voice AFTER the meeting ---
+        //
+        // During a meeting the audio socket carries `name_speaker`; this is
+        // the same verb for a meeting whose socket is gone — which is exactly
+        // when a person on the recording device gets around to the names. It
+        // writes the same index line and routes the same backwards rewrite
+        // into notes already written. A LIVE meeting is refused (409): its
+        // rename must also rewrite the composer's memory of what it wrote,
+        // which only the session on the socket can do.
+        const lateNameMatch = pathname.match(/^\/api\/docs\/([^/]+)\/meetings\/([^/]+)\/speakers$/);
+        if (lateNameMatch && req.method === 'POST') {
+          // A durable write to the meeting record plus a rewrite of the doc's
+          // notes: owner-side only, like every other mutating route here.
+          if (visitor) return j(403, { error: 'not available to share visitors' });
+          const addressed = decodeURIComponent(lateNameMatch[1] ?? '');
+          const meetingId = decodeURIComponent(lateNameMatch[2] ?? '');
+          if (!isValidDocId(addressed)) return j(400, { error: 'bad docId' });
+          const docId = rooms.get(addressed)?.docId ?? addressed;
+          const body = (await req.json().catch(() => null)) as {
+            speaker?: unknown;
+            name?: unknown;
+          } | null;
+          const speaker = typeof body?.speaker === 'string' ? body.speaker : '';
+          const name = typeof body?.name === 'string' ? body.name.trim() : '';
+          // The caps the socket's parser enforces by dropping the frame;
+          // refused out loud here, because HTTP can.
+          if (!speaker || speaker.length > 16 || !name || name.length > MAX_SPEAKER_NAME) {
+            return j(400, {
+              error: `speaker and name required; name at most ${MAX_SPEAKER_NAME} chars`,
+            });
+          }
+          const result = meetingStore.nameSpeakerLater({ docId, meetingId, speaker, name });
+          if (!result.ok) {
+            if (result.reason === 'unknown_meeting') return j(404, { error: 'meeting not found' });
+            if (result.reason === 'recording') {
+              return j(409, { error: 'meeting is live — rename it over the audio socket' });
+            }
+            return j(400, { error: 'that speaker is not in this meeting' });
+          }
+          // The rename reaches backwards, exactly as a live one does — same
+          // relabel, same sink. `from` is what the composer actually wrote
+          // (the prior name, or the placeholder), read BEFORE the map moved.
+          const names = result.speakers;
+          const from = speakerDisplayName(speaker, result.priorNames);
+          const to = speakerDisplayName(speaker, names);
+          const notes = meetingRelay.notesDeps;
+          if (from !== to && notes?.onRelabel) {
+            // Two voices can collide on one name; then the words in the notes
+            // do not say which voice they were, and only tagged mentions —
+            // which carry the label — are rewritten. Same narrowing, same
+            // reason as the live session's.
+            const labels = new Set([
+              ...meetingStore
+                .transcript(docId, meetingId)
+                .flatMap((t) => (t.speaker ? [t.speaker] : [])),
+              ...Object.keys(names),
+            ]);
+            const ambiguous = [...labels].some(
+              (label) => label !== speaker && speakerDisplayName(label, names) === from,
+            );
+            notes.onRelabel({
+              docId,
+              meetingId,
+              label: speaker,
+              from,
+              to,
+              rewriteUntagged: !ambiguous,
+            });
+          }
+          return j(200, { docId, meetingId, speakers: names });
+        }
 
         // --- A doc's meeting bot: invite one, read its state, send it home ---
+        if (pathname === '/api/meeting-engines') {
+          if (req.method !== 'GET') return j(405, { error: 'method not allowed' });
+          // Which engines a `start` frame may name on THIS server, default
+          // first — server-global, because keys are. It is why a chooser can
+          // hide an engine whose key is absent instead of offering a button
+          // that answers `unavailable`. Names only; nothing about keys
+          // beyond their existence leaves the machine.
+          const engines = meetingRelay.engineNames();
+          return j(200, { engines, default: engines[0] ?? null });
+        }
+
         const botMatch = pathname.match(/^\/api\/docs\/([^/]+)\/meeting-bot$/);
         if (botMatch) {
           const addressed = decodeURIComponent(botMatch[1] ?? '');
@@ -10051,6 +10271,29 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
               for (const wsId of rel.workspaceIds) taskProjection.ensureWorkspace(wsId);
             }
             return j(200, { docId, planState: state, released });
+          }
+          // --- The doc's repo home: pin, read, unpin. OWNER ONLY — a home is
+          // host paths, which a share visitor must never see. The visitor
+          // allowlist in host-guard already refuses unknown doc subroutes;
+          // this is the local stop for the collab-host path.
+          if (rest === 'home') {
+            if (visitor) return j(403, { error: 'not available on a share' });
+            if (req.method === 'GET') {
+              const status = rooms.docHomeStatus(docId);
+              return status ? j(200, { docId, ...status }) : j(404, { error: 'no home pinned' });
+            }
+            if (req.method === 'PUT') {
+              const body = await safeJson(req);
+              // Accept `{ home: {...} }` or the three fields at top level.
+              const res = rooms.setDocHome(docId, body?.home ?? body);
+              if (!res.ok) return j(res.error === 'not-found' ? 404 : 400, res);
+              return j(200, { docId, home: res.home, placement: res.placement });
+            }
+            if (req.method === 'DELETE') {
+              const res = rooms.clearDocHome(docId);
+              return res.ok ? j(200, { docId, ok: true }) : j(404, { error: 'no home pinned' });
+            }
+            return j(405, { error: 'method not allowed' });
           }
           const threadIdMatch = rest.match(/^threads\/([^/]+)(\/.*)?$/);
           if (threadIdMatch) {

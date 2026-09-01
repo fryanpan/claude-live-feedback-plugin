@@ -48,8 +48,13 @@ export interface MeetingClient {
 
 export interface MeetingRelayDeps {
   store: MeetingStore;
-  /** No engine is the configured-off state, not an error. See `transcribe.ts`. */
-  engine: TranscriptionEngine | null;
+  /**
+   * Every engine this server can open, in preference order: the FIRST is
+   * what a `start` naming no engine gets, so existing clients keep getting
+   * exactly what they got. Empty is the configured-off state, not an error.
+   * See `transcribe.ts`.
+   */
+  engines: readonly TranscriptionEngine[];
   /**
    * Pause-driven notes. Same no-default seam as the engine — null means no
    * meeting composes notes, and nothing constructed here can reach an LLM.
@@ -210,7 +215,7 @@ export class MeetingRelay {
       // Synchronously, before the handshake is awaited: audio may arrive
       // during it, and those chunks belong in the ledger too.
       conn.wantsTiming = msg.timing === true;
-      this.track(this.start(ws, conn, msg.sampleRate, msg.mode, msg.speakers));
+      this.track(this.start(ws, conn, msg.sampleRate, msg.mode, msg.speakers, msg.engine));
       return;
     }
     if (msg.type === 'announced') {
@@ -317,24 +322,40 @@ export class MeetingRelay {
     }
   }
 
+  /** The engine names a client may ask for here, default first. */
+  engineNames(): string[] {
+    return this.deps.engines.map((e) => e.name);
+  }
+
   private async start(
     ws: MeetingClient,
     conn: Conn,
     sampleRate: number,
     mode: CaptureMode,
     speakers?: number,
+    engineName?: string,
   ): Promise<void> {
     if (conn.state !== 'idle') return;
     // Resolved once, here, so the default for "nobody said how many" lives in
     // one place and the engine call below reads as the decision it is.
     const maxSpeakers = maxSpeakersFor(mode, speakers);
     const docId = ws.data.docId;
-    const engine = this.deps.engine;
+    // No name means the first configured engine — the server's default, and
+    // exactly what every client sent before the choice existed. A name the
+    // server cannot open is refused rather than substituted: a person who
+    // picked an engine must not be silently billed on a different one.
+    const engine =
+      engineName === undefined
+        ? (this.deps.engines[0] ?? null)
+        : (this.deps.engines.find((e) => e.name === engineName) ?? null);
     if (!engine) {
       this.send(ws, {
         type: 'unavailable',
         reason: 'not_configured',
-        message: 'No transcription engine is configured on this server.',
+        message:
+          engineName === undefined
+            ? 'No transcription engine is configured on this server.'
+            : `The ${engineName} transcription engine is not configured on this server.`,
       });
       return;
     }

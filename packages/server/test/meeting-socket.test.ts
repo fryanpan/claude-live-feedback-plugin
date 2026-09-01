@@ -51,9 +51,15 @@ class AudioClient {
   }
 
   /** Solo by default — the mode a client that never heard of modes gets. */
-  start(sampleRate = MEETING_SAMPLE_RATE, mode: CaptureMode = 'solo'): void {
+  start(sampleRate = MEETING_SAMPLE_RATE, mode: CaptureMode = 'solo', engine?: string): void {
     this.ws.send(
-      JSON.stringify({ type: 'start', sampleRate, encoding: MEETING_AUDIO_ENCODING, mode }),
+      JSON.stringify({
+        type: 'start',
+        sampleRate,
+        encoding: MEETING_AUDIO_ENCODING,
+        mode,
+        ...(engine !== undefined ? { engine } : {}),
+      }),
     );
   }
 
@@ -617,5 +623,133 @@ describe('the meeting record says how the room was told', () => {
     client.stop();
     await client.waitFor('stopped');
     expect(listMeetings(dataDir, canonical)[0]?.announced).toBe('device');
+  });
+});
+
+describe('meeting engine choice', () => {
+  let handle: ServerHandle;
+  let dataDir: string;
+  let base: string;
+  let wsBase: string;
+
+  /** Returns the doc's CANONICAL id — the record on disk is named after it. */
+  const createDoc = async (docId: string): Promise<string> => {
+    const path = join(dataDir, `${docId}.md`);
+    writeFileSync(path, `# ${docId}\n`);
+    const res = await fetch(`${base}/api/docs`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ docId, sourceUrl: path, title: docId }),
+    });
+    expect(res.status, await res.clone().text()).toBe(200);
+    return ((await res.json()) as { docId: string }).docId;
+  };
+
+  beforeAll(async () => {
+    dataDir = mkdtempSync(join(tmpdir(), 'cw-meeting-engines-'));
+    // Two engines under the CLIENT-nameable names, both mocks: the choice is
+    // the thing under test, and nothing here may open a billed session.
+    handle = createServer({
+      port: 0,
+      dataDir,
+      transcription: [
+        { ...createMockTranscriptionEngine(), name: 'assemblyai' },
+        { ...createMockTranscriptionEngine(), name: 'soniox' },
+      ],
+    });
+    base = `http://localhost:${handle.port}`;
+    wsBase = `ws://localhost:${handle.port}`;
+  });
+
+  afterAll(async () => {
+    await handle.stop();
+    rmSync(dataDir, { recursive: true, force: true });
+  });
+
+  it('lists the engines a start may name, default first', async () => {
+    const res = await fetch(`${base}/api/meeting-engines`);
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({
+      engines: ['assemblyai', 'soniox'],
+      default: 'assemblyai',
+    });
+  });
+
+  it('opens the default for a start naming no engine — the old frame, unchanged', async () => {
+    await createDoc('default-engine');
+    const client = await AudioClient.open(wsBase, 'default-engine');
+    client.start();
+    const ready = await client.waitFor('ready');
+    expect(ready.engine).toBe('assemblyai');
+    client.stop();
+    await client.waitFor('stopped');
+    client.ws.close();
+  });
+
+  it('opens the engine a start names, and stamps the record with it', async () => {
+    const canonical = await createDoc('chosen-engine');
+    const client = await AudioClient.open(wsBase, 'chosen-engine');
+    client.start(MEETING_SAMPLE_RATE, 'solo', 'soniox');
+    const ready = await client.waitFor('ready');
+    expect(ready.engine).toBe('soniox');
+    client.stop();
+    await client.waitFor('stopped');
+    expect(listMeetings(dataDir, canonical)[0]?.engine).toBe('soniox');
+    client.ws.close();
+  });
+});
+
+describe('meeting engine choice on a server without that engine', () => {
+  let handle: ServerHandle;
+  let dataDir: string;
+  let base: string;
+  let wsBase: string;
+
+  beforeAll(async () => {
+    dataDir = mkdtempSync(join(tmpdir(), 'cw-meeting-one-engine-'));
+    handle = createServer({
+      port: 0,
+      dataDir,
+      transcription: { ...createMockTranscriptionEngine(), name: 'assemblyai' },
+    });
+    base = `http://localhost:${handle.port}`;
+    wsBase = `ws://localhost:${handle.port}`;
+  });
+
+  afterAll(async () => {
+    await handle.stop();
+    rmSync(dataDir, { recursive: true, force: true });
+  });
+
+  it('lists only what it holds, so a chooser can hide the rest', async () => {
+    expect(await (await fetch(`${base}/api/meeting-engines`)).json()).toEqual({
+      engines: ['assemblyai'],
+      default: 'assemblyai',
+    });
+  });
+
+  it('refuses a start naming the missing engine rather than substituting', async () => {
+    // A person who picked an engine must not be silently billed on another.
+    const path = join(dataDir, 'wants-soniox.md');
+    writeFileSync(path, '# wants-soniox\n');
+    await fetch(`${base}/api/docs`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ docId: 'wants-soniox', sourceUrl: path, title: 'wants-soniox' }),
+    });
+    const client = await AudioClient.open(wsBase, 'wants-soniox');
+    client.start(MEETING_SAMPLE_RATE, 'solo', 'soniox');
+    const frame = await client.waitFor('unavailable');
+    expect(frame.reason).toBe('not_configured');
+    expect(String(frame.message)).toContain('soniox');
+    expect(client.of('ready')).toHaveLength(0);
+    // The refusal marks nothing as recording: the default engine still works
+    // on this same socket afterwards.
+    client.start();
+    const ready = await client.waitFor('ready');
+    expect(ready.engine).toBe('assemblyai');
+    client.stop();
+    await client.waitFor('stopped');
+    client.ws.close();
   });
 });

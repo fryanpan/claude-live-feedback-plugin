@@ -21,16 +21,26 @@ interface MeetingSummary {
   speakers?: Record<string, string>;
 }
 
-/** The voices of this doc's latest meeting, or none if it has never had one. */
-export async function loadDocVoices(
+/** The latest meeting's cast, with the meeting it came from. */
+export interface DocSpeakers {
+  meetingId: string;
+  voices: RosterVoice[];
+}
+
+/**
+ * The voices of this doc's latest meeting — and WHICH meeting, because a
+ * rename after the meeting is addressed to it. Null if the doc has never
+ * held one.
+ */
+export async function loadDocSpeakers(
   docId: string,
   fetchImpl: typeof fetch = fetch,
-): Promise<RosterVoice[]> {
+): Promise<DocSpeakers | null> {
   const listed = await fetchImpl(`/api/docs/${encodeURIComponent(docId)}/meetings`);
   if (!listed.ok) throw new Error(`meetings ${listed.status}`);
   const body = (await listed.json()) as { meetings?: MeetingSummary[] };
   const meetings = body.meetings ?? [];
-  if (meetings.length === 0) return [];
+  if (meetings.length === 0) return null;
   // Latest by start, falling back to the order the index returned when a row
   // predates `startedAt` — an older record is still a usable roster.
   const latest = meetings.reduce((best, m) =>
@@ -44,5 +54,37 @@ export async function loadDocVoices(
     speakers?: Record<string, string>;
     transcript?: Array<{ text: string; speaker?: string }>;
   };
-  return speakerRoster(record.transcript ?? [], record.speakers ?? latest.speakers ?? {});
+  return {
+    meetingId: latest.meetingId,
+    voices: speakerRoster(record.transcript ?? [], record.speakers ?? latest.speakers ?? {}),
+  };
+}
+
+/** The voices of this doc's latest meeting, or none if it has never had one. */
+export async function loadDocVoices(
+  docId: string,
+  fetchImpl: typeof fetch = fetch,
+): Promise<RosterVoice[]> {
+  return (await loadDocSpeakers(docId, fetchImpl))?.voices ?? [];
+}
+
+/**
+ * Name a voice on a meeting that already ended — the strip's fallback once
+ * the audio socket (the live rename channel) is gone. True when the server
+ * recorded it; false is a refusal the caller must surface, because a name
+ * that only ever lands on the screen reads as saved.
+ */
+export async function postSpeakerName(
+  args: { docId: string; meetingId: string; speaker: string; name: string },
+  fetchImpl: typeof fetch = fetch,
+): Promise<boolean> {
+  const res = await fetchImpl(
+    `/api/docs/${encodeURIComponent(args.docId)}/meetings/${encodeURIComponent(args.meetingId)}/speakers`,
+    {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ speaker: args.speaker, name: args.name }),
+    },
+  );
+  return res.ok;
 }
