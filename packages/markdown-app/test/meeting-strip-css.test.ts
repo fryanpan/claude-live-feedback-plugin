@@ -66,10 +66,9 @@ describe('the strip lives in its own section of the stylesheet', () => {
 
 describe('the editor pane reserves a row for the strip', () => {
   it('gives #editor-pane a final, content-sized track', () => {
-    // Four tracks since the plan gate claimed the second: format bar,
-    // plan gate, document, transcript strip. The strip's track is
-    // still the LAST auto — content-sized, after the editor's 1fr.
-    expect(rule('#editor-pane')).toMatch(/grid-template-rows:\s*auto auto 1fr auto/);
+    // Three tracks: format bar, document, transcript strip. The strip's
+    // track is the LAST auto — content-sized, after the editor's 1fr.
+    expect(rule('#editor-pane')).toMatch(/grid-template-rows:\s*auto 1fr auto/);
   });
 
   it('positive control: the shell really puts the strip in that pane, after the editor', () => {
@@ -398,7 +397,7 @@ describe('at 1180x820 the strip is one 40px bar', () => {
     // at 40px — measured, one line asks for 42 and two ask for 64. Safe
     // because the editor pane's last grid track is `auto`, so the strip
     // reserves its height instead of covering the prose.
-    expect(rule('#editor-pane')).toMatch(/grid-template-rows:\s*auto auto 1fr auto/);
+    expect(rule('#editor-pane')).toMatch(/grid-template-rows:\s*auto 1fr auto/);
     const grown = rule('.meeting-strip:has(.meeting-note-dismiss)');
     expect(grown, 'the bar never grows, so the sentence is clipped').not.toBe('');
     expect(grown).toMatch(/height:\s*auto/);

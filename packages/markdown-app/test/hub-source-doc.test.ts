@@ -1,8 +1,7 @@
 /**
  * The task panel's Source-doc field: a doc-derived row names the doc it came
- * from as a first-class field near the top, with the plan-gate and staleness
- * marks on the same cell. Until this, the origin ref was stored and keyed
- * and never drawn.
+ * from as a first-class field near the top, with the plan-hold mark on the
+ * same cell. Until this, the origin ref was stored and keyed and never drawn.
  *
  * Fixtures are synthetic (jordan@partner.example register).
  */
@@ -93,7 +92,7 @@ describe('the Source-doc field on the panel', () => {
     expect(root.querySelector('.hub-sourcedoc-link')?.textContent).toBe('Sprint plan');
   });
 
-  it('carries the plan-hold and staleness marks, and omits them on a plain row', () => {
+  it('carries the plan-hold mark, and never a staleness mark (dropped by design)', () => {
     renderTaskDetail(
       root,
       task({
@@ -104,7 +103,9 @@ describe('the Source-doc field on the panel', () => {
       handlers({ workspaceId: 'w-test' }),
     );
     expect(root.querySelector('.hub-sourcedoc-held')?.textContent).toContain('held until');
-    expect(root.querySelector('.hub-sourcedoc-stale')?.textContent).toBe('plan edited since filed');
+    // A possiblyStale row draws NO "plan edited since filed" mark — the flag
+    // gives the reader nothing to act on (Bryan, 2026-08-31).
+    expect(root.querySelector('.hub-sourcedoc-stale')).toBeNull();
 
     renderTaskDetail(
       root,
@@ -113,6 +114,5 @@ describe('the Source-doc field on the panel', () => {
     );
     expect(root.querySelector('.hub-sourcedoc-link')).not.toBeNull(); // control
     expect(root.querySelector('.hub-sourcedoc-held')).toBeNull();
-    expect(root.querySelector('.hub-sourcedoc-stale')).toBeNull();
   });
 });
