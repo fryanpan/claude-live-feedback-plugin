@@ -57,6 +57,7 @@ import {
   ownerKindSuffix,
   ownerMarkKind,
   reviewBannerText,
+  reviewItemThreadRequest,
   statusLabel,
   statusOptions,
   timeAgo,
@@ -996,6 +997,14 @@ export interface DetailHandlers {
     text: string,
     optionId?: string,
   ) => Promise<boolean>;
+  /**
+   * "I have a question" on a ticket-borne card: the question goes to the
+   * item's owner as a thread on this task's doc (`panelQuestionRequest`),
+   * and the item leaves the reader's queue until the owner revises it.
+   * Resolves to whether the question LANDED — anything else keeps the words
+   * in the box. Absent on a surface that cannot ask (the link is not drawn).
+   */
+  onAskOnPanelItem?: (task: HubTask, item: PanelReviewItem, question: string) => Promise<boolean>;
   /** Take back this task's recorded answer. Without it the answered banner
    *  renders with no way out, which is the state this handler exists to end. */
   onUndoAnswer?: (task: HubTask) => Promise<boolean> | undefined;
@@ -2420,6 +2429,27 @@ export function panelAnswerRequest(
         },
       }
     : { path: `/api/docs/${doc}/threads/${thread}/comments`, body: { text } };
+}
+
+/**
+ * Where a panel card's QUESTION gets written — "I have a question", the
+ * card's way of asking back without selecting a phrase. The same thread the
+ * Home walkthrough's card makes (`reviewItemThreadRequest`, quoting the
+ * headline as the phrase), so the item is derived `waiting` by the same rule
+ * and leaves both queues on the same re-read. Only a ticket-borne card has
+ * an item to anchor to; null for the rest, and the link is not drawn.
+ */
+export function panelQuestionRequest(
+  task: Pick<HubTask, 'id'>,
+  item: PanelReviewItem,
+  question: string,
+): { path: string; body: Record<string, unknown> } | null {
+  if (item.source !== 'task-review' || !item.reviewItemId) return null;
+  return reviewItemThreadRequest(
+    { taskId: task.id, reviewItemId: item.reviewItemId },
+    item.headline,
+    question,
+  );
 }
 
 /** The verbatim words a tapped option recorded, when the payload still holds

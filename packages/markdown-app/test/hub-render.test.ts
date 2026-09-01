@@ -18,6 +18,7 @@ import {
   discussionIsBusy,
   flattenComments,
   panelAnswerRequest,
+  panelQuestionRequest,
   panelReviewQueue,
   renderActivity,
   renderHomeBrief,
@@ -1161,6 +1162,159 @@ describe('renderTaskDetail — discussion', () => {
     );
     expect(root.querySelector('.hub-decide-k-revised')).toBeNull();
     expect(root.querySelector('.hub-decide-question')).toBeNull();
+  });
+
+  /**
+   * "I have a question" on the panel's card (Bryan, 2026-08-31): the reader
+   * who has a question rather than an answer taps a link, the card turns
+   * into a question box, and Send goes to the owner through the SAME thread
+   * the Home walkthrough's card makes — the item then leaves this queue on
+   * the re-read. No phrase selection, which on the panel never existed: the
+   * only way to ask here was to type a question into the answer box and
+   * trust the server to notice.
+   */
+  describe('"I have a question" on a ticket-borne card', () => {
+    const ticketAsk = (over: Record<string, unknown> = {}) =>
+      askItem({
+        kind: 'task-review' as const,
+        band: 'declared' as const,
+        docId: undefined,
+        threadId: undefined,
+        reviewItemId: 'r-1',
+        ask: 'Which cache do we keep?',
+        askedBy: 'Helper',
+        review: {
+          shape: 'decision' as const,
+          headline: 'Which cache do we keep?',
+          detail: 'Disk survives a restart; memory is faster.',
+          options: [
+            { id: 'o-disk', label: 'Keep disk' },
+            { id: 'o-mem', label: 'Keep memory' },
+          ],
+        },
+        ...over,
+      });
+    const paintTicket = (extra: Record<string, unknown> = {}) =>
+      renderTaskDetail(
+        root,
+        task({ id: 't-1', title: 'Ship the widget' }),
+        detailHandlers({ asks: [ticketAsk()], now: NOW, onAnswerThread: vi.fn(), ...extra }),
+        { loading: false, threads: [] },
+      );
+    const link = () => root.querySelector<HTMLElement>('.hub-decide-question-link');
+    const box = () => root.querySelector<HTMLElement>('.hub-decide-question-box');
+    const answering = () => root.querySelector<HTMLElement>('.hub-decide-answering');
+
+    it('shows the link under the answer box when the surface can ask', () => {
+      paintTicket({ onAskOnPanelItem: vi.fn() });
+      const l = link();
+      expect(l?.textContent).toBe('I have a question');
+      expect(l?.closest('.hub-decide-card')).not.toBeNull();
+      expect(box()).toBeNull();
+      // Answer furniture in front, as ever.
+      expect(answering()?.classList.contains('hidden')).toBe(false);
+    });
+
+    it('draws no link without a handler, nor on a thread-borne card', () => {
+      paintTicket();
+      expect(link()).toBeNull();
+      renderTaskDetail(
+        root,
+        task({ id: 't-1' }),
+        detailHandlers({
+          asks: [askItem({ review: { shape: 'review' as const, headline: 'Thread ask' } })],
+          now: NOW,
+          onAnswerThread: vi.fn(),
+          onAskOnPanelItem: vi.fn(),
+        }),
+        { loading: false, threads: [] },
+      );
+      expect(root.querySelector('.hub-decide-card')).not.toBeNull();
+      expect(link()).toBeNull();
+    });
+
+    it('tapping it turns the card into a question box — textarea, Send, Cancel — hiding the answer furniture', () => {
+      paintTicket({ onAskOnPanelItem: vi.fn() });
+      link()?.click();
+      const b = box();
+      expect(b).not.toBeNull();
+      expect(b?.querySelector('.hub-decide-question-form textarea')).not.toBeNull();
+      expect(b?.querySelector('.hub-decide-question-form button[type="submit"]')?.textContent).toBe(
+        'Send',
+      );
+      expect(b?.querySelector('.hub-decide-question-cancel')?.textContent).toBe('Cancel');
+      expect(b?.querySelector('.hub-decide-form-hint')?.textContent).toContain('Ask Helper');
+      // Hidden, not unmounted: the answer box keeps its draft.
+      expect(answering()?.classList.contains('hidden')).toBe(true);
+      expect(root.querySelector('.hub-decide-form textarea')).not.toBeNull();
+      (b?.querySelector('.hub-decide-question-cancel') as HTMLElement).click();
+      expect(box()).toBeNull();
+      expect(answering()?.classList.contains('hidden')).toBe(false);
+    });
+
+    it('opening the box puts the caret in it — the link that opened it has left the tab order', async () => {
+      paintTicket({ onAskOnPanelItem: vi.fn() });
+      // Control: the panel takes focus on open; nothing on the card has it.
+      expect(document.activeElement?.closest('.hub-decide-card')).toBeNull();
+      link()?.click();
+      // The caret is in the box's field — the editor's surface once the editor
+      // has mounted (a live editor takes the caret on the next frame), the
+      // textarea until then.
+      const form = box()?.querySelector<HTMLFormElement>('.hub-decide-question-form');
+      expect(form).not.toBeNull();
+      await new Promise((r) => setTimeout(r, 30));
+      expect(document.activeElement?.closest('.hub-detail-panel')).not.toBeNull();
+      expect(form?.contains(document.activeElement)).toBe(true);
+    });
+
+    it('Send asks through the panel question handler with the task, the item and the words', async () => {
+      const onAskOnPanelItem = vi.fn().mockResolvedValue(true);
+      const onAnswerThread = vi.fn();
+      paintTicket({ onAskOnPanelItem, onAnswerThread });
+      link()?.click();
+      const form = root.querySelector('.hub-decide-question-form') as HTMLFormElement;
+      (form.querySelector('textarea') as HTMLTextAreaElement).value = 'Does disk survive a reboot?';
+      form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+      expect(onAskOnPanelItem).toHaveBeenCalledWith(
+        expect.objectContaining({ id: 't-1' }),
+        expect.objectContaining({ source: 'task-review', reviewItemId: 'r-1' }),
+        'Does disk survive a reboot?',
+      );
+      // A question is not an answer: nothing reached the answer route.
+      expect(onAnswerThread).not.toHaveBeenCalled();
+      await Promise.resolve();
+      await Promise.resolve();
+      // The box closes once the write lands (the re-read then drops the card).
+      expect(box()).toBeNull();
+    });
+
+    it('a refused send keeps the box and the words', async () => {
+      const onAskOnPanelItem = vi.fn().mockResolvedValue(false);
+      paintTicket({ onAskOnPanelItem });
+      link()?.click();
+      const form = root.querySelector('.hub-decide-question-form') as HTMLFormElement;
+      const ta = form.querySelector('textarea') as HTMLTextAreaElement;
+      ta.value = 'Does disk survive a reboot?';
+      form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(box()).not.toBeNull();
+      expect(ta.value).toBe('Does disk survive a reboot?');
+    });
+
+    it('POSITIVE CONTROL: the answer path is untouched — a tapped option still answers', () => {
+      const onAnswerThread = vi.fn().mockResolvedValue(true);
+      const onAskOnPanelItem = vi.fn();
+      paintTicket({ onAnswerThread, onAskOnPanelItem });
+      [...root.querySelectorAll<HTMLElement>('.hub-decide-option')][1]?.click();
+      expect(onAnswerThread).toHaveBeenCalledWith(
+        expect.objectContaining({ id: 't-1' }),
+        expect.objectContaining({ source: 'task-review', reviewItemId: 'r-1' }),
+        'Keep memory',
+        'o-mem',
+      );
+      expect(onAskOnPanelItem).not.toHaveBeenCalled();
+    });
   });
 
   /**
@@ -2795,6 +2949,33 @@ describe('the panel’s review queue', () => {
           'Green',
         )?.path,
       ).toBe('/api/docs/doc-9/threads/th-1/answer');
+    });
+
+    it('a question on a ticket-borne card is a thread on the task doc, quoting the headline', () => {
+      // The same request the Home walkthrough's link makes — one thread
+      // shape, so the item is derived `waiting` by the same rule and leaves
+      // both queues together.
+      const item = base({
+        source: 'task-review',
+        reviewItemId: 'r-1',
+        declared: true,
+        headline: 'Which cache do we keep?',
+      });
+      expect(panelQuestionRequest(t, item, 'Does disk survive a reboot?')).toEqual({
+        path: '/api/docs/task%3At-1/threads',
+        body: {
+          text: 'Does disk survive a reboot?',
+          anchor: {
+            kind: 'review-item',
+            reviewItemId: 'r-1',
+            snippet: { text: 'Which cache do we keep?' },
+          },
+        },
+      });
+      // Nowhere to send one from a thread card, or from a ticket card that
+      // lost its id — the link is not drawn for those.
+      expect(panelQuestionRequest(t, base({ threadId: 'th-1', declared: true }), 'x')).toBeNull();
+      expect(panelQuestionRequest(t, base({ source: 'task-review' }), 'x')).toBeNull();
     });
 
     it('replies to an inferred thread card as a plain comment', () => {

@@ -18,7 +18,7 @@
  */
 import type { RefObject } from 'preact';
 import { useLayoutEffect, useRef } from 'preact/hooks';
-import { attachMarkdownComposer } from '../md-composer.ts';
+import { attachMarkdownComposer, focusMarkdownComposer } from '../md-composer.ts';
 import {
   type TaskDiscussion,
   commentRow,
@@ -72,6 +72,10 @@ export interface ComposerSpec {
   /** Told when a write is in flight, so the card can grey its option buttons
    *  alongside the box. */
   onBusy?: (busy: boolean) => void;
+  /** Put the caret in the box as it is built. For a box that appears on a
+   *  tap — the question box — where the control that opened it leaves the
+   *  tab order the moment it opens, and focus would otherwise fall to BODY. */
+  autoFocus?: boolean;
 }
 
 /**
@@ -187,7 +191,12 @@ export function ComposerForm(props: ComposerSpec & { className: string; hint?: s
   useLayoutEffect(() => {
     const node = form.current;
     if (!node) return;
-    return fillComposerForm(node, () => latest.current);
+    const teardown = fillComposerForm(node, () => latest.current);
+    if (latest.current.autoFocus) {
+      const ta = node.querySelector('textarea');
+      if (ta) focusMarkdownComposer(ta);
+    }
+    return teardown;
   }, [keepKey]);
   // The hint is the one part of the form that can change under an unchanged
   // box — a decision that gains an option gains the word "Or" — so it is

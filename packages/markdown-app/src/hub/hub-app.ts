@@ -80,7 +80,6 @@ import {
   type ReviewThreadItem,
   type UptimeReport,
   type WalkAim,
-  type WalkHold,
   type WalkSources,
   advanceWalk,
   applyRefresh,
@@ -95,7 +94,6 @@ import {
   goalBandIds,
   goalLabel,
   goalSection,
-  holdWaitingItem,
   hubTabTitle,
   humanBlockerRows,
   initialsOf,
@@ -107,6 +105,7 @@ import {
   presenceIdentity,
   refreshReviewItems,
   reviewItemAskRequest,
+  reviewItemQuestionRequest,
   reviewQueue,
   reviewReplyRequest,
   reviewRow,
@@ -125,6 +124,7 @@ import {
   type TaskThread,
   discussionIsBusy,
   panelAnswerRequest,
+  panelQuestionRequest,
   renderActivity,
   renderArchivedList,
   renderHomeBrief,
@@ -251,10 +251,6 @@ interface HubState {
   /** What this sitting has cleared, so the surface can say that answering
    *  moved you rather than leaving you to infer it from a shrinking total. */
   walkProgress: WalkProgress;
-  /** The item the reader just asked on, kept on its card while the server's
-   *  queue has dropped it (it is the owner's turn) — see `holdWaitingItem`.
-   *  Cleared by anything that moves the reader off the card. */
-  walkHold: WalkHold | null;
   followedKey: string | null;
 }
 
@@ -584,7 +580,6 @@ async function main(): Promise<void> {
     walkIndex: -1,
     walkKey: null,
     walkProgress: { cleared: 0, last: null },
-    walkHold: null,
     followedKey: null,
   };
 
@@ -1132,7 +1127,6 @@ async function main(): Promise<void> {
     // carrying the last one's over would open on "4 cleared" before the
     // reader has answered anything.
     state.walkProgress = { cleared: 0, last: null };
-    state.walkHold = null;
     state.walkIndex = 0;
     state.walkKey = currentQueue().items[0]?.key ?? null;
     renderWalkthrough();
@@ -1150,7 +1144,6 @@ async function main(): Promise<void> {
     // A new sitting, exactly as `Review All` starts one: the tally counts what
     // this pass cleared, and a leftover count would open on "4 cleared".
     state.walkProgress = { cleared: 0, last: null };
-    state.walkHold = null;
     state.walkIndex = index;
     state.walkKey = item.key;
     renderWalkthrough();
@@ -1580,6 +1573,7 @@ async function main(): Promise<void> {
         onTitleCommit: (t, title) => void renameTask(t, title),
         onAnswer: (t, text, optionId) => answerTaskDecision(t, text, optionId),
         onAnswerThread: (t, item, text, optionId) => answerPanelThreadItem(t, item, text, optionId),
+        onAskOnPanelItem: (t, item, question) => askOnPanelItem(t, item, question),
         onUndoAnswer: (t) => undoTaskAnswer(t),
         onReleaseHeld: (t, item) => releaseHeldReviewItem(t, item),
         onUndoThreadAnswer: (t, item) => undoThreadAnswer(t, item),
@@ -1800,7 +1794,6 @@ async function main(): Promise<void> {
     state.walkIndex = CLOSED_WALK.index;
     state.walkKey = CLOSED_WALK.key;
     state.walkProgress = { cleared: 0, last: null };
-    state.walkHold = null;
   }
 
   /**
@@ -1824,16 +1817,14 @@ async function main(): Promise<void> {
    * can point its back arrow at the queue. Only an OPEN walk has one to give.
    */
   function openFromWalk(open: (returnItem: string | null) => boolean): void {
-    const aim: WalkAim = { index: state.walkIndex, key: state.walkKey, hold: state.walkHold };
+    const aim: WalkAim = { index: state.walkIndex, key: state.walkKey };
     const back = aim.index >= 0 ? aim.key : null;
     state.walkIndex = CLOSED_WALK.index;
     state.walkKey = CLOSED_WALK.key;
-    state.walkHold = null;
     const stillHere = open(back);
     const next = walkAimAfterOpen(aim, stillHere);
     state.walkIndex = next.index;
     state.walkKey = next.key;
-    state.walkHold = next.hold;
     if (stillHere) renderWalkthrough();
   }
 
@@ -1846,11 +1837,7 @@ async function main(): Promise<void> {
    * offered to you.
    */
   function renderWalkthrough(): void {
-    // The item the reader just asked on stays on its card while the server's
-    // queue (which drops a waiting item at once) catches up to the reader
-    // stepping off it — otherwise the card they typed into is replaced under
-    // them before the "waiting" note has been read.
-    const queue = holdWaitingItem(currentQueue(), state.walkHold);
+    const queue = currentQueue();
     // Resolve the aim before rendering, and write the result back: from here
     // on the index is a cache of where the key IS, not an independent claim
     // about where the reader stands.
@@ -1889,13 +1876,16 @@ async function main(): Promise<void> {
           if (wrote === 'asked') return true;
           return finishWalkItem(current, next, async () => wrote === 'answered');
         },
-        // Not a finish either: nothing was answered, and the card stays put
-        // with the note that the item is now waiting on its owner.
+        // Not a finish either: nothing was answered. The item is the
+        // owner's now, so the queue drops it and the next card takes its
+        // place — the toast is what says the question went (Bryan,
+        // 2026-08-31: the card that stayed put read as "nothing happened").
         onAskOnItem: (item, phrase, question) => askOnReviewItem(item, phrase, question),
+        onQuestionOnItem: (item, question) => askOnReviewItem(item, null, question),
         onReply: async (item, text, optionId) => {
           // Same split as `onAnswer`: a reply the server read as a question
-          // holds the card with its waiting note (`replyToReviewItem` sets the
-          // hold) instead of settling and advancing past an unanswered ask.
+          // is an ask, not an answer — the item leaves the queue for its
+          // owner's turn without being counted as cleared.
           const wrote = await replyToReviewItem(item, text, optionId);
           if (wrote === 'asked') return true;
           return finishWalkItem(item, next, async () => wrote === 'answered');
@@ -1910,17 +1900,12 @@ async function main(): Promise<void> {
           // a place in the list they can see. Re-aim from that position so the
           // next repaint follows the item rather than the number.
           const to = Math.max(0, i);
-          // Aim by the KEY the reader can see at that position, then release
-          // the hold: the waiting item leaves the walkthrough the way it
-          // already left Home, and the index is re-found in the queue without
-          // it so the step lands on the item pointed at rather than skipping
-          // one past the row that vanished.
+          // Aim by the KEY the reader can see at that position, so the step
+          // lands on the item pointed at even if the queue moved under it.
           const target = queue.items[to]?.key ?? null;
-          state.walkHold = null;
           state.walkKey = target;
-          const after = currentQueue();
-          const at = target ? after.items.findIndex((it) => it.key === target) : -1;
-          state.walkIndex = at >= 0 ? at : Math.min(to, after.items.length);
+          const at = target ? queue.items.findIndex((it) => it.key === target) : -1;
+          state.walkIndex = at >= 0 ? at : Math.min(to, queue.items.length);
           renderWalkthrough();
         },
         onClose: () => {
@@ -1970,8 +1955,6 @@ async function main(): Promise<void> {
     const ok = await write();
     if (!ok || !item) return ok;
     state.walkProgress = { cleared: state.walkProgress.cleared + 1, last: item };
-    // Answering a held item ends the hold — it was answered, not waited on.
-    if (state.walkHold?.key === item.key) state.walkHold = null;
     // Answered items stay in the Home stack marked done (approved design)
     // instead of vanishing — a per-sitting display ledger, not stored state.
     state.homeSettled.set(item.key, item);
@@ -2578,24 +2561,49 @@ async function main(): Promise<void> {
   }
 
   /**
-   * Ask on a phrase of a ticket-borne review item — a thread on the task's
-   * doc anchored to that phrase of that item (`reviewItemAskRequest`). The
-   * server records the question on the item and drops it from the queue
-   * while it waits on its owner; the owner hears about it the way it hears
-   * every task-doc thread. The hold keeps the card in front of the reader
-   * across the refresh, carrying the note — "Waiting on Helper" — until they
-   * step off it.
+   * Ask on a ticket-borne review item — a thread on the task's doc anchored
+   * to a PHRASE of the item (the selection pill, `reviewItemAskRequest`) or
+   * to the item as a whole (the card's "I have a question" link,
+   * `reviewItemQuestionRequest`; `phrase` is null). Same route either way:
+   * the server records the question on the item WITH the thread it made,
+   * which is what takes the item off the queue while it waits on its owner,
+   * and the owner hears about it the way it hears every task-doc thread.
+   *
+   * The card LEAVES in the same interaction. It used to be held in place with
+   * a "Waiting on <owner>" note until the reader stepped off it — the reason
+   * given was that the next card replacing the one just typed into "reads as
+   * the page losing the thing they were doing". Measured the other way round
+   * (Bryan, 2026-08-31: *"I hit submit and then nothing happens"*): a card
+   * that stays put after Send reads as the send not having happened. The
+   * toast says the question went and where it is now; the next card is the
+   * proof the queue moved.
    *
    * The old `POST /api/tasks/:id/more-info` box that stood here is gone from
    * the hub (Bryan, 2026-08-29); the route stays for its other callers.
    */
   async function askOnReviewItem(
     item: ReviewItem,
-    phrase: { text: string },
+    phrase: { text: string } | null,
     question: string,
   ): Promise<boolean> {
-    const reqSpec = reviewItemAskRequest(item, phrase.text, question);
+    const reqSpec = phrase
+      ? reviewItemAskRequest(item, phrase.text, question)
+      : reviewItemQuestionRequest(item, question);
     if (!reqSpec) return false;
+    return sendReviewItemQuestion(reqSpec, item.thread?.taskId, item.thread?.askedBy);
+  }
+
+  /**
+   * The POST behind both asking surfaces (the walkthrough card above, the
+   * task panel's card in `askOnPanelItem`), with the one refusal they share
+   * spelled once. Resolves to whether the question LANDED; the caller's box
+   * keeps its words on anything else.
+   */
+  async function sendReviewItemQuestion(
+    reqSpec: { path: string; body: Record<string, unknown> },
+    taskId: string | undefined,
+    askedBy: string | undefined,
+  ): Promise<boolean> {
     const res = await send(reqSpec.path, 'POST', { ...reqSpec.body, author });
     if (!res.ok) {
       // A stale card: the pill hides itself once THIS session learns the item
@@ -2609,7 +2617,6 @@ async function main(): Promise<void> {
             ? res.data.message
             : 'Already waiting on the owner — add to the open thread instead';
         const openThreadId = typeof res.data.threadId === 'string' ? res.data.threadId : undefined;
-        const taskId = item.thread?.taskId;
         showToast(
           message,
           openThreadId && taskId
@@ -2622,17 +2629,41 @@ async function main(): Promise<void> {
       showToast('Sending the question failed — your words are still in the box');
       return false;
     }
-    const owner = item.thread?.askedBy ?? 'the owner';
-    state.walkHold = {
-      key: item.key,
-      index: Math.max(0, state.walkIndex),
-      item: { ...item, waiting: { question, owner } },
-    };
-    showToast(`Asked — waiting on ${owner}`);
-    // Home drops the item now (it is the owner's turn); the hold above keeps
-    // the walkthrough card where the reader is.
+    showToast(askedToast('Asked', askedBy));
+    // The item is the owner's turn now: the queue drops it on this re-read
+    // and every surface that shows the queue — Home, the walkthrough, the
+    // task panel's card — repaints without it.
     await loadReviewItems();
     return true;
+  }
+
+  /** "Asked — waiting on Helper. It comes back to your queue when they
+   *  revise it." One sentence for what happened, one for what happens next:
+   *  the card is gone, so the toast is the only thing that says where it
+   *  went. */
+  function askedToast(lead: string, askedBy: string | undefined): string {
+    const owner = askedBy?.trim() || 'the owner';
+    return `${lead} — waiting on ${owner}. It comes back to your queue when they revise it.`;
+  }
+
+  /**
+   * "I have a question" on the task panel's card — the same thread the
+   * walkthrough card makes (`reviewItemThreadRequest`, quoting the item's
+   * headline), so the item's state is derived the same way and it leaves the
+   * panel's queue on the same re-read. Only a ticket-borne item has the
+   * anchor; `panelQuestionRequest` answers null for the rest.
+   */
+  async function askOnPanelItem(
+    task: HubTask,
+    item: PanelReviewItem,
+    question: string,
+  ): Promise<boolean> {
+    const reqSpec = panelQuestionRequest(task, item, question);
+    if (!reqSpec) return false;
+    const ok = await sendReviewItemQuestion(reqSpec, task.id, item.askedBy);
+    // The thread it made is in this task's discussion; show it there too.
+    if (ok) await loadDiscussion(task, true);
+    return ok;
   }
 
   /**
@@ -2712,19 +2743,16 @@ async function main(): Promise<void> {
       return false;
     }
     // The server read the words as a QUESTION asked back at the item —
-    // nothing was answered. A ticket-borne item is now waiting on its owner,
-    // so hold its card exactly as `askOnReviewItem` does; a thread item stays
-    // where the conversation is either way.
+    // nothing was answered. A ticket-borne item is now waiting on its owner
+    // and leaves the queue on the re-read, exactly as `askOnReviewItem`'s
+    // does; a thread item stays where the conversation is either way.
     if (res.data?.asked === true) {
-      const owner = item.thread?.askedBy ?? 'the owner';
-      if (item.thread?.kind === 'task-review') {
-        state.walkHold = {
-          key: item.key,
-          index: Math.max(0, state.walkIndex),
-          item: { ...item, waiting: { question: text, owner } },
-        };
-      }
-      showToast(`Sent as a question — waiting on ${owner}`);
+      const owner = item.thread?.askedBy?.trim() || 'the owner';
+      showToast(
+        item.thread?.kind === 'task-review'
+          ? askedToast('Sent as a question', owner)
+          : `Sent as a question — waiting on ${owner}`,
+      );
       await loadReviewItems();
       return 'asked';
     }
