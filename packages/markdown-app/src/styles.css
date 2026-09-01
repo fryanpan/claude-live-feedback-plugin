@@ -1938,6 +1938,15 @@ body.hub-body {
   .hub-review-thread-link {
     min-height: 44px;
   }
+  /* The question link, its box's Send and Cancel: thumb targets too. The
+     link's 36px base rule sits with the actions row further down the file,
+     AFTER this block, so the phone rule needs the row's specificity to win —
+     measured at 36px on a 430px viewport before it did. */
+  .hub-walk-actions .hub-walk-question-link,
+  .hub-walk-question-cancel,
+  .hub-walk-question-form .hub-btn {
+    min-height: 44px;
+  }
 }
 .hub-walk-asked {
   margin: 0;
@@ -2053,7 +2062,8 @@ body.hub-body {
 /* The reply box (mockup `.replybox`): the field and its dark Send side by
    side, stacking under a thumb — see the ≤900px block. */
 .hub-walk-answer,
-.hub-walk-thread-form {
+.hub-walk-thread-form,
+.hub-walk-question-form {
   display: flex;
   gap: 8px;
   align-items: flex-end;
@@ -2061,8 +2071,10 @@ body.hub-body {
 }
 .hub-walk-answer textarea,
 .hub-walk-thread-form textarea,
+.hub-walk-question-form textarea,
 .hub-walk-answer .md-composer-surface,
-.hub-walk-thread-form .md-composer-surface {
+.hub-walk-thread-form .md-composer-surface,
+.hub-walk-question-form .md-composer-surface {
   flex: 1;
   min-width: 0;
   font: inherit;
@@ -2073,17 +2085,60 @@ body.hub-body {
   resize: vertical;
 }
 .hub-walk-answer .md-composer-surface:focus-within,
-.hub-walk-thread-form .md-composer-surface:focus-within {
+.hub-walk-thread-form .md-composer-surface:focus-within,
+.hub-walk-question-form .md-composer-surface:focus-within {
   border-color: var(--accent);
 }
-/* Skip (mockup `.actions`). The "Tell me more" control that shared this row
-   is gone — asking back is a comment on a phrase of the item now. */
+/* Skip (mockup `.actions`), and "I have a question" beside it — both are
+   ways out of answering. The old "Tell me more" control that shared this row
+   is gone; asking back is a thread on the item now, opened from the link or
+   from a selected phrase. */
 .hub-walk-actions {
   display: flex;
   gap: 8px;
   flex-wrap: wrap;
   align-items: center;
   margin: 0;
+}
+/* The answer furniture (box + actions row) as one unit, so the question box
+   can stand in for it — hidden rather than unmounted, keeping a half-typed
+   answer. The card's own column and gap, so the wrapper costs no spacing. */
+.hub-walk-answering {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+/* "I have a question" (Bryan, 2026-08-31: selecting a phrase to ask was
+   "really confusing"). A ghost link, the same as Skip; the 36px floor every
+   link on the card has, 44px on the phone tier below. */
+.hub-walk-question-link {
+  min-height: 36px;
+}
+/* The box the link opens, in the answer furniture's place: the thread
+   card's dressing (`.hub-walk-thread`) minus the quoted phrase — the question
+   is about the whole item, and its headline is right above. */
+.hub-walk-question-box {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-left: 3px solid rgba(191, 135, 0, 0.55);
+  border-radius: var(--radius);
+  background: var(--bg-panel);
+}
+/* "Ask Helper — the item leaves your queue and comes back when they revise
+   it": what Send does, said before it is pressed, because the card is gone
+   the moment it is. */
+.hub-walk-question-hint {
+  margin: 0;
+  font-size: 13px;
+  color: var(--fg-muted);
+  overflow-wrap: anywhere;
+}
+.hub-walk-question-actions {
+  display: flex;
+  justify-content: flex-end;
 }
 /* The mockup's `.btn.ghost` — no border, no fill, muted. Used by the three
    controls that are ways OUT of answering rather than answers. */
@@ -4670,6 +4725,38 @@ a.hub-link-chip:hover {
 .hub-decide-form button {
   align-self: flex-start;
 }
+/* "I have a question" (Bryan, 2026-08-31), under the answer box — for the
+   reader who has a question rather than an answer, where they are looking
+   when they realise it. The walkthrough card's link, on the panel's card. */
+.hub-decide-question-link {
+  margin-top: 8px;
+  min-height: 36px;
+}
+/* The box the link opens, in the answer furniture's place — which is hidden
+   rather than unmounted, so a half-typed answer survives Cancel. The
+   walkthrough's question box dressing, on the panel's card. */
+.hub-decide-question-box {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 0 0 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-left: 3px solid rgba(191, 135, 0, 0.55);
+  border-radius: var(--radius);
+  background: var(--bg-panel);
+}
+.hub-decide-question-cancel {
+  align-self: flex-end;
+}
+@media (max-width: 1100px) {
+  /* Thumb targets on the phone tier, like every comment control there. */
+  .hub-decide-question-link,
+  .hub-decide-question-cancel,
+  .hub-decide-question-form button {
+    min-height: 44px;
+  }
+}
 .hub-answer-form textarea,
 .hub-answer-form .md-composer-surface {
   width: 100%;
@@ -5797,12 +5884,14 @@ a.hub-link-chip:hover {
      box stacked, since a field and a button side by side at 430px leaves the
      field too narrow to read what you typed. */
   .hub-walk-answer,
-  .hub-walk-thread-form {
+  .hub-walk-thread-form,
+  .hub-walk-question-form {
     flex-direction: column;
     align-items: stretch;
   }
   .hub-walk-answer .hub-btn,
-  .hub-walk-thread-form .hub-btn {
+  .hub-walk-thread-form .hub-btn,
+  .hub-walk-question-form .hub-btn {
     width: 100%;
   }
   /* The card's tail still ends under one viewport-fixed launcher — the

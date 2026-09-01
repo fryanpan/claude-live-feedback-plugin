@@ -321,5 +321,9 @@ export function focusMarkdownComposer(
     field.editor.focus(sel ?? null, opts);
     return;
   }
+  // The textarea IS the box until the editor chunk lands, so the caret goes
+  // there now — a reader who tapped "I have a question" is typing before the
+  // chunk arrives — and moves into the editor the moment it mounts.
+  ta.focus({ preventScroll: opts.scroll === false });
   field.pendingFocus = { sel: sel ?? null, opts };
 }
