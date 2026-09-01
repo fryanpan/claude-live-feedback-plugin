@@ -1491,14 +1491,6 @@ export interface ReviewItem {
    * Read off the server row; never set client-side.
    */
   revision?: ReviewRevisionNote;
-  /**
-   * The reader just asked on this item and it is the owner's turn. Set ONLY
-   * by the walkthrough's hold (`holdWaitingItem`): the server drops a waiting
-   * item from the queue, and the card the reader asked from must not vanish
-   * under them — so the item is kept on its card, with this note, until they
-   * step off it. Nothing else reads it, and a re-fetch never carries it.
-   */
-  waiting?: { question: string; owner: string };
 }
 
 export interface ReviewRevisionNote {
@@ -1944,12 +1936,34 @@ export function reviewItemAnchorTarget(
 }
 
 /**
- * Where a question on a phrase of an item gets WRITTEN: a thread on the
- * task's doc with a `review-item` anchor. Snippet only, no offsets — the
- * card renders the detail as HTML, and the server locates the phrase in the
- * markdown source itself (uniquely, or it stores the words alone). Mirrors
- * `reviewReplyRequest`: one spelling, minus the author the caller adds.
+ * Where a question on an item gets WRITTEN: a thread on the task's doc with
+ * a `review-item` anchor. Snippet only, no offsets — the card renders the
+ * detail as HTML, and the server locates the phrase in the markdown source
+ * itself (uniquely, or it stores the words alone). ONE spelling for the two
+ * surfaces that ask (the walkthrough card and the task panel's card) and the
+ * two ways of asking (on a phrase, or on the whole item); the author is the
+ * caller's to add. This route — not `…/review-items/:rid/more-info` — is
+ * what takes the item off the reader's queue: the server records the
+ * question WITH the thread it made, and `reviewItemState` reads only a
+ * threaded question as "waiting on the owner"; the more-info route is the
+ * agent-side "tell me more" that deliberately leaves the item on the queue.
  */
+export function reviewItemThreadRequest(
+  target: { taskId: string; reviewItemId: string },
+  phrase: string,
+  question: string,
+): { path: string; body: Record<string, unknown> } {
+  return {
+    path: `/api/docs/${encodeURIComponent(`task:${target.taskId}`)}/threads`,
+    body: {
+      text: question,
+      anchor: { kind: 'review-item', reviewItemId: target.reviewItemId, snippet: { text: phrase } },
+    },
+  };
+}
+
+/** The request for a question asked ON A PHRASE of a queue item — the
+ *  selection pill's flow. Null for an item with nothing to anchor to. */
 export function reviewItemAskRequest(
   item: ReviewItem,
   phrase: string,
@@ -1957,13 +1971,30 @@ export function reviewItemAskRequest(
 ): { path: string; body: Record<string, unknown> } | null {
   const target = reviewItemAnchorTarget(item);
   if (!target) return null;
-  return {
-    path: `/api/docs/${encodeURIComponent(target.docId)}/threads`,
-    body: {
-      text: question,
-      anchor: { kind: 'review-item', reviewItemId: target.reviewItemId, snippet: { text: phrase } },
-    },
-  };
+  return reviewItemThreadRequest(target, phrase, question);
+}
+
+/**
+ * The phrase a question about the WHOLE item is anchored to: its headline.
+ *
+ * "I have a question" needs no selection, but the thread it makes still
+ * needs a snippet to quote — and the headline is what the item is, in its
+ * author's words. Same shape the server itself uses when it converts a
+ * question typed into the answer box (`answerAsksBack`): the anchor quotes
+ * the headline, offsets only if those words happen to sit uniquely in the
+ * detail, so the two ways of asking about the whole item land identically.
+ */
+export function wholeItemPhrase(item: ReviewItem): string {
+  return item.review?.headline ?? item.ask;
+}
+
+/** The request for a question about the item AS A WHOLE — the card's
+ *  "I have a question" link. Null for an item with nothing to anchor to. */
+export function reviewItemQuestionRequest(
+  item: ReviewItem,
+  question: string,
+): { path: string; body: Record<string, unknown> } | null {
+  return reviewItemAskRequest(item, wholeItemPhrase(item), question);
 }
 
 /** The words of the current detail that a revision changed, when the range
@@ -1975,35 +2006,6 @@ export function revisedPhrase(item: ReviewItem): string | undefined {
   if (!range || detail === undefined) return undefined;
   const phrase = detail.slice(range.start, range.end);
   return phrase.trim() === '' ? undefined : phrase;
-}
-
-/** The walkthrough's hold on an item the reader just asked on. */
-export interface WalkHold {
-  key: string;
-  /** Where the card stood when the ask was sent. */
-  index: number;
-  /** The item as it read then, carrying `waiting`. */
-  item: ReviewItem;
-}
-
-/**
- * Keep an asked-on item on its card while the queue has dropped it.
- *
- * The server takes a waiting item off the queue at once (it is the owner's
- * turn), and the walkthrough re-derives its queue on every paint — so without
- * this the card the reader just typed a question into would be replaced by
- * the next item before they had read the "waiting" note, which reads as the
- * page losing the thing they were doing. The copy goes back at the position
- * it held; the total is left as the server's count, because the hold is a
- * display ledger and not a queue row. Returns the queue itself (same object)
- * when there is nothing to hold or the item is back on its own.
- */
-export function holdWaitingItem(queue: ReviewQueue, hold: WalkHold | null): ReviewQueue {
-  if (!hold) return queue;
-  if (queue.items.some((i) => i.key === hold.key)) return queue;
-  const items = queue.items.slice();
-  items.splice(Math.min(Math.max(0, hold.index), items.length), 0, hold.item);
-  return { ...queue, items };
 }
 
 /** "Blocking 2 tasks" / "Hard-blocking 1 task". One phrasing everywhere a
@@ -2036,11 +2038,10 @@ export function blockedNoteLine(row: BlockerRow): string {
  */
 export const CLOSED_WALK = { index: -1, key: null } as const;
 
-/** Where the walkthrough is aimed: the three fields that survive a render. */
+/** Where the walkthrough is aimed: the two fields that survive a render. */
 export interface WalkAim {
   index: number;
   key: string | null;
-  hold: WalkHold | null;
 }
 
 /**
@@ -2060,7 +2061,7 @@ export interface WalkAim {
  */
 export function walkAimAfterOpen(aim: WalkAim, stillOnPage: boolean): WalkAim {
   if (!stillOnPage) return aim;
-  return { index: CLOSED_WALK.index, key: CLOSED_WALK.key, hold: null };
+  return { index: CLOSED_WALK.index, key: CLOSED_WALK.key };
 }
 
 /**

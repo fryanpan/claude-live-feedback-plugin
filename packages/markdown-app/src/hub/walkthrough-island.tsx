@@ -75,10 +75,15 @@ export interface WalkthroughHandlers {
   onAnswer: (task: HubTask, text: string, optionId?: string) => Promise<boolean>;
   /** A question asked ON a phrase of a ticket-borne review item — doc-style,
    *  the way "Tell me more" now works (Bryan, 2026-08-29). Opens a thread
-   *  anchored to that phrase of that item; the item then waits on its owner.
-   *  Deliberately does NOT advance: nothing was answered, and the card stays
-   *  where the reader is with the note that it is waiting. */
+   *  anchored to that phrase of that item; the item then waits on its owner
+   *  and leaves the queue — the loader's re-read drops it, and the next card
+   *  takes its place. Not counted as cleared: nothing was answered. */
   onAskOnItem: (item: ReviewItem, phrase: { text: string }, question: string) => Promise<boolean>;
+  /** A question about the item AS A WHOLE — the card's "I have a question"
+   *  link, for the reader who has one but no phrase to pin it on (Bryan,
+   *  2026-08-31: selecting words to ask was "really confusing"). Same thread,
+   *  same route, same exit from the queue as `onAskOnItem`. */
+  onQuestionOnItem: (item: ReviewItem, question: string) => Promise<boolean>;
   /** Answer a thread without leaving the queue. Posts a reply on the thread the
    *  item came from, wherever that thread lives. `optionId` rides along when
    *  the reply came from tapping one of a declared item's candidates — the same
@@ -133,6 +138,7 @@ export interface WalkthroughView {
 const IDLE_HANDLERS: WalkthroughHandlers = {
   onAnswer: () => Promise.resolve(false),
   onAskOnItem: () => Promise.resolve(false),
+  onQuestionOnItem: () => Promise.resolve(false),
   onReply: () => Promise.resolve(false),
   onOpenItem: () => {},
   onOpenThread: () => {},
@@ -558,16 +564,41 @@ function WalkRevision(props: { item: ReviewItem; handlers: WalkthroughHandlers }
 }
 
 /**
- * "Waiting on Helper" — the item is the owner's to move now. Subtle on
- * purpose: the card stays exactly where it was (no collapse, no advance), and
- * this one line is the only thing that changed. The question is quoted so the
- * reader can see what they sent without opening the thread.
+ * The question box the "I have a question" link opens, IN the card where the
+ * answer furniture stood: one box, Send, Cancel. No quoted phrase — the
+ * question is about the item as a whole, and the headline is right above it.
+ * Its `PromptForm` keeps its node across a repaint like the answer box does,
+ * so a board event mid-sentence loses nothing.
  */
-function WalkWaiting(props: { waiting: { question: string; owner: string } }) {
+function WalkQuestionBox(props: {
+  item: ReviewItem;
+  owner: string;
+  onSend: (question: string) => Promise<boolean>;
+  onCancel: () => void;
+}) {
   return (
-    <p class="hub-walk-waiting">
-      {`Waiting on ${props.waiting.owner} — you asked: “${props.waiting.question}”`}
-    </p>
+    <div class="hub-walk-question-box">
+      <p class="hub-walk-question-hint">
+        {`Ask ${props.owner} — the item leaves your queue and comes back when they revise it.`}
+      </p>
+      <PromptForm
+        className="hub-walk-question-form"
+        placeholder="What do you need to know?"
+        submitLabel="Send"
+        submitClass="hub-btn hub-btn-primary"
+        keepKey={`walk-question:${props.item.key}`}
+        onSubmit={props.onSend}
+      />
+      <div class="hub-walk-question-actions">
+        <button
+          type="button"
+          class="hub-btn hub-btn-ghost hub-walk-question-cancel"
+          onClick={props.onCancel}
+        >
+          Cancel
+        </button>
+      </div>
+    </div>
   );
 }
 
@@ -643,35 +674,36 @@ function WalkCard(props: {
   // no pill at all rather than a pill that opens nothing.
   const anchorable = reviewItemAnchorTarget(item) !== null;
   const bodyRef = useRef<HTMLDivElement | null>(null);
-  // The phrase the thread card is open on, and the question this card sent
-  // (until the server's row catches up — the hold in hub-app carries
-  // `item.waiting` across repaints; this is the same fact one render early).
+  // The phrase the thread card is open on (the selection pill's flow).
   const [draft, setDraft] = useState<string | null>(null);
-  const [asked, setAsked] = useState<{ question: string; owner: string; at: number } | null>(null);
-  const owner = item.thread?.askedBy ?? 'the owner';
-  // The waiting note: the hold's word first; else this card's own, unless
-  // a revision has landed since — then it is the reader's turn again and the
-  // note would be stale.
-  const waiting =
-    item.waiting ?? (asked && !(item.revision && item.revision.at >= asked.at) ? asked : null);
-  // A second question cannot be filed while the item is already waiting on
-  // its owner — the server refuses it (409 `waiting`), and a pill that only
-  // bounces is worse than none. Computed from the SAME `waiting` the note
-  // reads, so the two can never disagree about whose turn it is.
-  const pill = useSelectionPill(bodyRef, anchorable && !waiting);
+  // Whether the card is in QUESTION mode — the "I have a question" link's
+  // flow: the answer furniture gives way to one box for the question.
+  const [asking, setAsking] = useState(false);
+  const owner = item.thread?.askedBy?.trim() || 'the owner';
+  // No pill while the question box is up: one way of asking at a time. (An
+  // item already waiting on its owner never reaches this card — the server
+  // drops it from the queue — so there is no "already asked" state to hide
+  // the pill for; a second ask from a stale card is refused by the server
+  // and surfaced by the loader.)
+  const pill = useSelectionPill(bodyRef, anchorable && !asking);
   const openThread = (): void => {
     if (!pill.phrase) return;
     setDraft(pill.phrase);
     pill.clear();
     window.getSelection()?.removeAllRanges();
   };
+  // A successful ask takes the item off the queue on the loader's re-read,
+  // which unmounts this card (keyed on the item) — the state resets below
+  // only matter when the write landed and the card is somehow still here.
   const ask = async (question: string): Promise<boolean> => {
     if (draft === null) return false;
     const ok = await handlers.onAskOnItem(item, { text: draft }, question);
-    if (ok) {
-      setAsked({ question, owner, at: Date.now() });
-      setDraft(null);
-    }
+    if (ok) setDraft(null);
+    return ok;
+  };
+  const sendQuestion = async (question: string): Promise<boolean> => {
+    const ok = await handlers.onQuestionOnItem(item, question);
+    if (ok) setAsking(false);
     return ok;
   };
 
@@ -689,6 +721,29 @@ function WalkCard(props: {
       Skip for now
     </button>
   );
+  // The link, beside Skip: both are ways out of answering. Only an item with
+  // somewhere for a question to land gets one — the same test as the pill.
+  const questionLink = anchorable && (
+    <button
+      type="button"
+      class="hub-btn hub-btn-ghost hub-walk-question-link"
+      onClick={() => setAsking(true)}
+    >
+      I have a question
+    </button>
+  );
+  // The question box, in place of the answer furniture. That furniture is
+  // HIDDEN rather than unmounted, so a half-typed answer survives the reader
+  // changing their mind ("actually, I need to ask first") and Cancel.
+  const questionBox = asking && (
+    <WalkQuestionBox
+      item={item}
+      owner={owner}
+      onSend={sendQuestion}
+      onCancel={() => setAsking(false)}
+    />
+  );
+  const answering = asking ? 'hub-walk-answering hidden' : 'hub-walk-answering';
 
   return (
     // The stage (approved mock `.demo-doc-layout`): the card, and a margin
@@ -710,7 +765,6 @@ function WalkCard(props: {
           going through the queue must not mean leaving the queue on every
           item — but a comment sometimes only makes sense in place. */}
         <WalkWhere item={item} handlers={handlers} />
-        {waiting && draft === null && <WalkWaiting waiting={waiting} />}
 
         {row ? (
           <Fragment>
@@ -756,14 +810,14 @@ function WalkCard(props: {
                   bodyRef={bodyRef}
                   mark={revisedPhrase(item)}
                 />
-                {anchorable && !waiting && (
+                {anchorable && !asking && (
                   // The editor's pill, on the card: fixed-position, placed by
                   // the hook beside the selection's end. `mousedown` is
                   // swallowed so the tap does not blur the selection before
                   // the click lands (the editor's pill does the same; touch is
                   // left alone, since cancelling it cancels the click on iOS).
-                  // Absent entirely while the item is waiting on its owner —
-                  // see the note where `waiting` is computed above.
+                  // Absent while the question box is up — one way of asking
+                  // at a time.
                   <button
                     type="button"
                     class={`comment-pill hub-walk-pill${pill.phrase ? '' : ' hidden'}`}
@@ -795,17 +849,23 @@ function WalkCard(props: {
                 </div>
               )
             )}
-            {/* Always present, options or not — the candidates are a shortcut,
-              never a closed set, and a review item with no options only has
-              this. */}
-            <PromptForm
-              className="hub-walk-answer"
-              placeholder={review?.options?.length ? '…or answer in your own words' : 'Reply…'}
-              submitLabel="Send"
-              keepKey={`walk-answer:${item.key}`}
-              onSubmit={(text) => handlers.onReply(item, text)}
-            />
-            <div class="hub-walk-actions">{skip}</div>
+            {questionBox}
+            <div class={answering}>
+              {/* Always present, options or not — the candidates are a
+                shortcut, never a closed set, and a review item with no
+                options only has this. */}
+              <PromptForm
+                className="hub-walk-answer"
+                placeholder={review?.options?.length ? '…or answer in your own words' : 'Reply…'}
+                submitLabel="Send"
+                keepKey={`walk-answer:${item.key}`}
+                onSubmit={(text) => handlers.onReply(item, text)}
+              />
+              <div class="hub-walk-actions">
+                {questionLink}
+                {skip}
+              </div>
+            </div>
           </Fragment>
         )}
       </div>

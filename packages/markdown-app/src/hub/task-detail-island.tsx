@@ -273,6 +273,14 @@ function ReviewCard(props: {
 }) {
   const { task, item, handlers, now, shown } = props;
   const [busy, setBusy] = useState(false);
+  // QUESTION mode — "I have a question": the answer furniture gives way to
+  // one box for the question. Only a ticket-borne card can ask (the question
+  // becomes a thread anchored to the item — `panelQuestionRequest`), and only
+  // when the surface wired the handler.
+  const [asking, setAsking] = useState(false);
+  const canAsk =
+    item.source === 'task-review' && item.reviewItemId !== undefined && !!handlers.onAskOnPanelItem;
+  const owner = item.askedBy?.trim() || 'the owner';
 
   // Answering the task's own decision goes through `answer_decision`; every
   // other card — a thread-borne item, answered by a REPLY on its thread so the
@@ -351,45 +359,92 @@ function ReviewCard(props: {
         <ThreadAnsweredNote task={task} item={item} answered={item.answered} handlers={handlers} />
       ) : (
         <Fragment>
-          {item.options && item.options.length > 0 && (
-            <DecideOptions
-              options={item.options}
-              busy={busy}
-              onPick={(o) => {
-                setBusy(true);
-                void Promise.resolve(answer(o.label, o.id)).finally(() => setBusy(false));
-              }}
-            />
+          {asking && (
+            // The question box, where the answer furniture stood. That
+            // furniture is HIDDEN below rather than unmounted, so a half-typed
+            // answer survives "actually, I need to ask first" and Cancel.
+            <div class="hub-decide-question-box">
+              <ComposerForm
+                className="hub-answer-form hub-decide-form hub-decide-question-form"
+                hint={`Ask ${owner} — the item leaves your queue and comes back when they revise it`}
+                placeholder="What do you need to know?"
+                submitLabel="Send"
+                submitClass="hub-btn hub-btn-primary"
+                rows={3}
+                emptyMessage="Write a question first"
+                keepKey={`question:${task.id}:${item.id}`}
+                onSubmit={(text) => {
+                  const sent = handlers.onAskOnPanelItem?.(task, item, text);
+                  void Promise.resolve(sent).then((ok) => {
+                    if (ok === true) setAsking(false);
+                  });
+                  return sent;
+                }}
+                refused={(ok) => ok !== true}
+                onBusy={setBusy}
+              />
+              <button
+                type="button"
+                class="hub-btn hub-btn-ghost hub-decide-question-cancel"
+                onClick={() => setAsking(false)}
+              >
+                Cancel
+              </button>
+            </div>
           )}
-          {/* Always present, options or not: the candidates are a shortcut,
+          <div class={asking ? 'hub-decide-answering hidden' : 'hub-decide-answering'}>
+            {item.options && item.options.length > 0 && (
+              <DecideOptions
+                options={item.options}
+                busy={busy}
+                onPick={(o) => {
+                  setBusy(true);
+                  void Promise.resolve(answer(o.label, o.id)).finally(() => setBusy(false));
+                }}
+              />
+            )}
+            {/* Always present, options or not: the candidates are a shortcut,
               never a closed set. */}
-          <ComposerForm
-            className="hub-answer-form hub-decide-form"
-            // Says which of the two this box is. With options above it and no
-            // line between, the box read as a required second step rather than
-            // as an alternative.
-            hint={
-              item.options && item.options.length > 0
-                ? 'Or answer in your own words'
-                : 'Answer in your own words'
-            }
-            placeholder="Record your answer, verbatim…"
-            submitLabel="Record answer"
-            submitClass="hub-btn hub-btn-primary"
-            rows={3}
-            emptyMessage="Write an answer first"
-            // Keyed by ITEM, so walking to the next question and back does not
-            // hand the reader the answer they were drafting for a different
-            // one.
-            keepKey={`answer:${task.id}:${item.id}`}
-            onSubmit={(text) => answer(text)}
-            // Only an explicit `false` is a refusal. A handler that returns
-            // nothing has said nothing about success, and reading that as
-            // failure would put a "your words are still in the box" story over
-            // a write that landed.
-            refused={(ok) => ok === false}
-            onBusy={setBusy}
-          />
+            <ComposerForm
+              className="hub-answer-form hub-decide-form"
+              // Says which of the two this box is. With options above it and no
+              // line between, the box read as a required second step rather than
+              // as an alternative.
+              hint={
+                item.options && item.options.length > 0
+                  ? 'Or answer in your own words'
+                  : 'Answer in your own words'
+              }
+              placeholder="Record your answer, verbatim…"
+              submitLabel="Record answer"
+              submitClass="hub-btn hub-btn-primary"
+              rows={3}
+              emptyMessage="Write an answer first"
+              // Keyed by ITEM, so walking to the next question and back does not
+              // hand the reader the answer they were drafting for a different
+              // one.
+              keepKey={`answer:${task.id}:${item.id}`}
+              onSubmit={(text) => answer(text)}
+              // Only an explicit `false` is a refusal. A handler that returns
+              // nothing has said nothing about success, and reading that as
+              // failure would put a "your words are still in the box" story over
+              // a write that landed.
+              refused={(ok) => ok === false}
+              onBusy={setBusy}
+            />
+            {canAsk && (
+              // The way to ask instead of answer. A link under the answer box,
+              // where the reader who has a question rather than an answer is
+              // looking when they realise it (Bryan, 2026-08-31).
+              <button
+                type="button"
+                class="hub-btn hub-btn-ghost hub-decide-question-link"
+                onClick={() => setAsking(true)}
+              >
+                I have a question
+              </button>
+            )}
+          </div>
         </Fragment>
       )}
     </div>
