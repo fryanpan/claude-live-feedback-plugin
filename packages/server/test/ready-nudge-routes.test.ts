@@ -899,7 +899,9 @@ describe('the board wakes its lead over the wire', () => {
         // is held for capacity rather than named.
         expect(got[0]?.data?.taskId).toBeUndefined();
         expect(got[0]?.data?.readyCount).toBe(0);
-        expect(got[0]?.data?.held).toEqual({ 'parallelism-cap': 1 });
+        // Beside the gate's own hold on the busy row (`claimed`: somebody is
+        // already on it), never instead of it — the two are separate facts.
+        expect(got[0]?.data?.held).toEqual({ claimed: 1, 'parallelism-cap': 1 });
 
         // Closing the dispatch frees the slot; the SAME row the cap was
         // holding is what the very next pass names.
@@ -911,7 +913,8 @@ describe('the board wakes its lead over the wire', () => {
         handle.nudgeReadyWork();
         const freed = await waitForFrames(lead.frames, READY_IDLE_EVENT, 2);
         expect(freed).toHaveLength(2);
-        expect(freed[1]?.data?.held).toBeUndefined();
+        // The busy row is still claimed; only the capacity hold is gone.
+        expect(freed[1]?.data?.held).toEqual({ claimed: 1 });
         expect(freed[1]?.data?.readyCount).toBe(1);
       } finally {
         rmSync(worktree, { recursive: true, force: true });
