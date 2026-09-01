@@ -1,7 +1,8 @@
 import { type Editor, Extension } from '@tiptap/core';
 import type { Node as ProseNode } from '@tiptap/pm/model';
-import { Plugin, PluginKey, TextSelection } from '@tiptap/pm/state';
+import { Plugin, PluginKey, Selection, TextSelection } from '@tiptap/pm/state';
 import { canJoin } from '@tiptap/pm/transform';
+import { Decoration, DecorationSet } from '@tiptap/pm/view';
 
 /**
  * Bullet-list ergonomics for the doc editor (meeting-notes UX plan, AC 3):
@@ -14,9 +15,15 @@ import { canJoin } from '@tiptap/pm/transform';
  *    the only item. The schema (`listItem: 'paragraph block*'`) requires the
  *    host item to open with a paragraph, so the host gets an empty one; the
  *    shape round-trips through the core markdown layer as `- \n  - x`.
- *    Shift-Tab recognises that exact host shape and reverses it (the stock
- *    `liftListItem` would lift the item but strand the empty host bullet);
- *    any other nested item falls through to the stock lift.
+ *    The host is IMPLICIT: the person asked for an indent and must see one,
+ *    not a blank parent bullet above their line — so a host of exactly that
+ *    shape is decorated `implicit-host` and the stylesheet draws neither its
+ *    marker nor its empty line, and a caret that lands in the empty line
+ *    (arrow keys, a click on the blank) is moved on past it, in the
+ *    direction it was travelling. Shift-Tab — and Backspace at the start of
+ *    the indented line — recognise the shape and reverse it (the stock lift
+ *    would lift the item but strand the host bullet); any other nested item
+ *    falls through to the stock commands.
  *
  * 2. Adjacent sibling lists of the SAME type auto-join. Enter-splitting a
  *    numbered list and deleting the empty item leaves two orderedLists that
@@ -69,6 +76,15 @@ function sinkFirstListItem(editor: Editor): boolean {
   return true;
 }
 
+/** The host shape sinkFirstListItem builds, and nothing else: a list item
+ *  holding an empty paragraph and then one nested list. */
+function isImplicitHost(item: ProseNode): boolean {
+  if (item.type.name !== 'listItem' || item.childCount !== 2) return false;
+  const first = item.child(0);
+  if (first.type.name !== 'paragraph' || first.content.size !== 0) return false;
+  return LIST_TYPE_NAMES.has(item.child(1).type.name);
+}
+
 /**
  * Reverse of sinkFirstListItem: when the selection sits in a nested list
  * whose host item is exactly (empty paragraph, that list), replace the host
@@ -84,15 +100,49 @@ function liftFromEmptyHost(editor: Editor): boolean {
   if ($to.depth < depth || $to.node(depth) !== $from.node(depth)) return false;
   const innerList = $from.node(depth - 1);
   const host = $from.node(depth - 2);
-  if (host.type.name !== 'listItem' || host.childCount !== 2) return false;
-  const first = host.child(0);
-  if (first.type.name !== 'paragraph' || first.content.size !== 0) return false;
-  if (host.child(1) !== innerList) return false;
+  if (!isImplicitHost(host) || host.child(1) !== innerList) return false;
   const hostPos = $from.before(depth - 2);
   const tr = state.tr.replaceWith(hostPos, hostPos + host.nodeSize, innerList.content);
   tr.setSelection(TextSelection.create(tr.doc, $from.pos - 4, $to.pos - 4)).scrollIntoView();
   editor.view.dispatch(tr);
   return true;
+}
+
+/** One `implicit-host` node decoration per host item in `doc`. */
+function implicitHostDecorations(doc: ProseNode): DecorationSet {
+  const decos: Decoration[] = [];
+  doc.descendants((node, pos) => {
+    if (isImplicitHost(node)) {
+      decos.push(Decoration.node(pos, pos + node.nodeSize, { class: 'implicit-host' }));
+    }
+    return true;
+  });
+  return DecorationSet.create(doc, decos);
+}
+
+const implicitHostKey = new PluginKey<DecorationSet>('implicit-host');
+
+/**
+ * Where a cursor that came to rest in an implicit host's empty paragraph
+ * belongs instead: before the host when it was travelling up (an arrow up
+ * out of the nested item, which reads as "the line above"), into the nested
+ * item when it was travelling down or arrived from nowhere in particular.
+ * Null when the selection is anywhere else.
+ */
+function stepPastImplicitHost(oldSel: Selection, sel: Selection): Selection | null {
+  if (!(sel instanceof TextSelection) || !sel.empty) return null;
+  const { $from } = sel;
+  if ($from.depth < 2 || $from.parent.type.name !== 'paragraph') return null;
+  const host = $from.node($from.depth - 1);
+  if ($from.index($from.depth - 1) !== 0 || !isImplicitHost(host)) return null;
+  const hostPos = $from.before($from.depth - 1);
+  if (sel.from < oldSel.from) {
+    const before = Selection.findFrom($from.doc.resolve(hostPos), -1, true);
+    if (before) return before;
+  }
+  // Past the paragraph close, the nested list open and the item open: the
+  // same +4 sinkFirstListItem moves the caret by.
+  return TextSelection.create($from.doc, $from.pos + 4);
 }
 
 /** First position where a list sits right after a same-type sibling list. */
@@ -124,11 +174,38 @@ export const ListBehavior = Extension.create({
         return sinkFirstListItem(this.editor);
       },
       'Shift-Tab': () => liftFromEmptyHost(this.editor),
+      // Backspace at the very start of the indented item: the stock
+      // joinBackward would lift the item out beside its host, leaving the
+      // blank host bullet visible — the one thing the implicit host must
+      // never become. Lift the way Shift-Tab does instead.
+      Backspace: () => {
+        const { $from, empty } = this.editor.state.selection;
+        if (!empty || $from.parentOffset !== 0) return false;
+        const depth = listItemDepth(this.editor);
+        if (depth < 3 || $from.index(depth) !== 0 || $from.index(depth - 1) !== 0) return false;
+        return liftFromEmptyHost(this.editor);
+      },
     };
   },
 
   addProseMirrorPlugins() {
     return [
+      new Plugin<DecorationSet>({
+        key: implicitHostKey,
+        state: {
+          init: (_config, state) => implicitHostDecorations(state.doc),
+          apply: (tr, set) => (tr.docChanged ? implicitHostDecorations(tr.doc) : set),
+        },
+        props: {
+          decorations(state) {
+            return implicitHostKey.getState(state);
+          },
+        },
+        appendTransaction: (_trs, oldState, newState) => {
+          const to = stepPastImplicitHost(oldState.selection, newState.selection);
+          return to ? newState.tr.setSelection(to) : null;
+        },
+      }),
       new Plugin({
         key: new PluginKey('list-join'),
         appendTransaction: (transactions, _oldState, newState) => {
