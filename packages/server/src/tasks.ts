@@ -13,11 +13,14 @@ import { join } from 'node:path';
 import {
   type ReviewItemJudgement,
   type ReviewItemRange,
+  type ReviewItemRevision,
+  type ReviewOption,
   type ReviewPayload,
   type TaskReviewItem,
   agentIdCandidates,
   agentIdForName,
   applyReviewRevision,
+  changedRange,
   checkReviewPayload,
   isReviewItemGated,
   isReviewItemHeld,
@@ -708,6 +711,19 @@ export interface InfoRequest {
   /** Display name (§3.3 visitor contract — no actor ids in projected state). */
   by: string;
   ts: number;
+  /**
+   * The thread the question was asked ON, when it was asked the way a
+   * question on a review item is — the card's "I have a question", or a
+   * phrase of the body selected and commented on. The same two fields
+   * `ReviewInfoRequest` carries, for the same reason: `legacyReviewItem`
+   * copies these onto the derived `r-legacy` row, and `reviewItemState`
+   * reads a THREADED question as "waiting on the owner". A question typed
+   * into the old "tell me more" box (the `/more-info` routes, the
+   * `request_more_info` tool) carries neither and leaves the decision on
+   * the queue — that is the agent-side ask, and it is meant to.
+   */
+  threadId?: string;
+  range?: ReviewItemRange;
 }
 
 /**
@@ -1116,6 +1132,19 @@ export interface Task {
    * through the gate rather than whoever opened the row.
    */
   decisionFiledBy?: { id: string; name: string; kind?: TaskActor['kind'] };
+  /**
+   * Every superseded reading of the ticket's OWN decision — what the title,
+   * body and options said before each `reviseTaskDecision`. The legacy twin
+   * of `StoredReviewItem.revisions`, kept on the task for the reason
+   * `decisionJudge` is: the derived `r-legacy` row is rebuilt on every read
+   * and can hold nothing of its own. `legacyReviewItem` hangs this on that
+   * row as `revisions`, which is what lets `reviewItemState` read the
+   * ticket's decision as `revised` — back on the queue, marked — after the
+   * reader asked on it. Written only by `reviseTaskDecision`; a
+   * `rewrite_task` or a title edit through any other door is not a
+   * revision in answer to anything and records nothing here.
+   */
+  decisionRevisions?: ReviewItemRevision[];
 }
 
 /**
@@ -2904,6 +2933,65 @@ function cryptoId(prefix: string): string {
 export const LEGACY_REVIEW_ITEM_ID = 'r-legacy';
 
 /**
+ * The one legacy decision a task carries, as a review item — or undefined
+ * when the task is not a decision.
+ *
+ * The body of `TaskStore.legacyReviewItem`, lifted to a PURE module function
+ * so the board projection can derive the same row (and read its state) from
+ * a task alone: `projectTask` holds no store, and the browser draws the
+ * Home decision card off the projection rather than off `GET /review-items`.
+ * One derivation, so the queue route and the projection cannot disagree
+ * about whether a decision is waiting on its owner.
+ *
+ * `needs === 'decision'` is the WHOLE condition. It used to also require
+ * that no stored row existed, which made an unanswered decision disappear
+ * from every reader as soon as somebody filed a second question on the same
+ * ticket — see `listReviewItems` for why that is the wrong key.
+ *
+ * What is carried across, beyond `reviewFromDecisionTask`'s payload: the
+ * task's own clock and filer, the legacy `answer` (an answered decision read
+ * as open is a queue that never empties), the info requests WITH their
+ * threads (a threaded one is what reads as `waiting`), and the decision's
+ * revisions (what reads as `revised`).
+ */
+export function legacyDecisionItem(task: Task): TaskReviewItem | undefined {
+  if (task.needs !== 'decision') return undefined;
+  const review: ReviewPayload = reviewFromDecisionTask(task);
+  const item: TaskReviewItem = {
+    id: LEGACY_REVIEW_ITEM_ID,
+    review,
+    createdAt: task.createdAt,
+    createdBy: taskAskedBy(task),
+    // The gate's verdict on these words, so a held decision is skipped by
+    // `isReviewItemGated` exactly as a held ticket item is. Derived here
+    // rather than stored on the row, for the reason `decisionJudge`
+    // carries: this item is rebuilt on every read.
+    ...(task.decisionJudge !== undefined ? { judge: task.decisionJudge } : {}),
+  };
+  if (task.answer) {
+    item.answer = {
+      text: task.answer.text,
+      by: task.answer.by,
+      ts: task.answer.ts,
+      ...(task.answer.optionId !== undefined ? { answeredWith: task.answer.optionId } : {}),
+    };
+  }
+  if (task.infoRequests && task.infoRequests.length > 0) {
+    item.infoRequests = task.infoRequests.map((r) => ({
+      text: r.text,
+      by: r.by,
+      ts: r.ts,
+      ...(r.threadId !== undefined ? { threadId: r.threadId } : {}),
+      ...(r.range !== undefined ? { range: r.range } : {}),
+    }));
+  }
+  if (task.decisionRevisions && task.decisionRevisions.length > 0) {
+    item.revisions = task.decisionRevisions;
+  }
+  return item;
+}
+
+/**
  * Who is ASKING the decision a ticket carries — the display name every
  * surface spells after "Asked by". One reader for three writers (the derived
  * legacy review item, the board projection, and through those the REST
@@ -4393,7 +4481,14 @@ export class TaskStore {
   requestMoreInfo(
     taskId: string,
     question: string,
-    opts: { actor: { id: string; name: string; kind?: string } },
+    opts: {
+      actor: { id: string; name: string; kind?: string };
+      /** The thread the question was asked on, and the phrase — see
+       *  `InfoRequest.threadId`. Present only when the question came in the
+       *  review-item way; the typed "tell me more" carries neither. */
+      threadId?: string;
+      range?: ReviewItemRange;
+    },
   ): RequestMoreInfoResult {
     const task = this.getTask(taskId);
     if (!task) return { ok: false, error: 'not-found' };
@@ -4404,7 +4499,16 @@ export class TaskStore {
       name: opts.actor.name,
       kind: classifyActor(opts.actor),
     };
-    task.infoRequests = [...(task.infoRequests ?? []), { text: question, by: actor.name, ts }];
+    task.infoRequests = [
+      ...(task.infoRequests ?? []),
+      {
+        text: question,
+        by: actor.name,
+        ts,
+        ...(opts.threadId !== undefined ? { threadId: opts.threadId } : {}),
+        ...(opts.range !== undefined ? { range: opts.range } : {}),
+      },
+    ];
     task.updatedAt = ts;
     this.scheduleSave(task.workspaceId);
     this.emit({
@@ -4791,6 +4895,40 @@ export class TaskStore {
     if (!check.ok) {
       return { ok: false, error: 'bad-review', message: decisionShapeMessage(check) };
     }
+    // The superseded reading, filed the way `reviseReviewItem` files one on
+    // a stored item — stamped with the thread of the question it answers
+    // (the newest threaded one, as `latestThreadedQuestion` reads it) and
+    // with where in the new body the change landed. This record is what
+    // puts a decision the reader asked on BACK on their queue, marked
+    // Revised: `legacyDecisionItem` hangs it on the derived row and
+    // `reviewItemState` reads it. Kept before the words move, because the
+    // words are what it keeps.
+    const before = this.legacyReviewItem(task);
+    const asked = before ? latestThreadedQuestion(before) : undefined;
+    const revisedRange =
+      typeof detail === 'string' && detail !== (task.body ?? '')
+        ? changedRange(task.body ?? '', detail)
+        : undefined;
+    const previous: ReviewItemRevision = {
+      at: Date.now(),
+      by: opts.actor.name,
+      headline: task.title,
+      ...(typeof task.body === 'string' && task.body.trim() !== '' ? { detail: task.body } : {}),
+      ...(task.options && task.options.length > 0
+        ? {
+            options: task.options.map(
+              (o): ReviewOption => ({
+                id: o.id,
+                label: o.label,
+                ...(o.detail !== undefined ? { detail: o.detail } : {}),
+              }),
+            ),
+          }
+        : {}),
+      ...(asked?.threadId !== undefined ? { threadId: asked.threadId } : {}),
+      ...(revisedRange !== undefined ? { revisedRange } : {}),
+    };
+    task.decisionRevisions = [...(task.decisionRevisions ?? []), previous];
     if (options !== undefined) task.options = nextOptions;
     if (detail !== undefined) {
       task.body = nextBody;
@@ -5092,35 +5230,7 @@ export class TaskStore {
    * `assignee` — that is who has to answer, a different person.
    */
   private legacyReviewItem(task: Task): TaskReviewItem | undefined {
-    // `needs === 'decision'` is the WHOLE condition. It used to also require
-    // that no stored row existed, which made an unanswered decision disappear
-    // from every reader as soon as somebody filed a second question on the
-    // same ticket — see `listReviewItems` for why that is the wrong key.
-    if (task.needs !== 'decision') return undefined;
-    const review: ReviewPayload = reviewFromDecisionTask(task);
-    const item: TaskReviewItem = {
-      id: LEGACY_REVIEW_ITEM_ID,
-      review,
-      createdAt: task.createdAt,
-      createdBy: taskAskedBy(task),
-      // The gate's verdict on these words, so a held decision is skipped by
-      // `isReviewItemGated` exactly as a held ticket item is. Derived here
-      // rather than stored on the row, for the reason `decisionJudge`
-      // carries: this item is rebuilt on every read.
-      ...(task.decisionJudge !== undefined ? { judge: task.decisionJudge } : {}),
-    };
-    if (task.answer) {
-      item.answer = {
-        text: task.answer.text,
-        by: task.answer.by,
-        ts: task.answer.ts,
-        ...(task.answer.optionId !== undefined ? { answeredWith: task.answer.optionId } : {}),
-      };
-    }
-    if (task.infoRequests && task.infoRequests.length > 0) {
-      item.infoRequests = task.infoRequests.map((r) => ({ text: r.text, by: r.by, ts: r.ts }));
-    }
-    return item;
+    return legacyDecisionItem(task);
   }
 
   /**
@@ -5232,7 +5342,15 @@ export class TaskStore {
     if (!task) return { ok: false, error: 'not-found' };
 
     if (reviewItemId === LEGACY_REVIEW_ITEM_ID && this.legacyReviewItem(task)) {
-      const res = this.requestMoreInfo(taskId, question, { actor: opts.actor });
+      // The thread and the phrase ride along: a threaded question is what
+      // takes the ticket's own decision off the reader's queue, exactly as
+      // it takes a stored item off it — same derivation, `reviewItemState`
+      // on the row `legacyReviewItem` builds from these.
+      const res = this.requestMoreInfo(taskId, question, {
+        actor: opts.actor,
+        ...(opts.threadId !== undefined ? { threadId: opts.threadId } : {}),
+        ...(opts.range !== undefined ? { range: opts.range } : {}),
+      });
       if (!res.ok) return res;
       const item = this.legacyReviewItem(res.task);
       if (!item) return { ok: false, error: 'unknown-review-item' };

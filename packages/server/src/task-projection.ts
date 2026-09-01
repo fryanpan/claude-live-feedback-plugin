@@ -1,4 +1,11 @@
-import { decodeEntities, listThreads, prose, readTaskReviewItem } from '@feedback/core';
+import {
+  decodeEntities,
+  latestThreadedQuestion,
+  listThreads,
+  prose,
+  readTaskReviewItem,
+  reviewItemState,
+} from '@feedback/core';
 import type { TaskReviewItem } from '@feedback/core';
 import * as Y from 'yjs';
 import { TASK_NOTES_READ_CAP } from './agent-notes.ts';
@@ -17,6 +24,7 @@ import {
   type TaskStore,
   type TaskStoreEvent,
   goalStatusMeta,
+  legacyDecisionItem,
   taskAskedBy,
 } from './tasks.ts';
 
@@ -174,6 +182,52 @@ function projectBody(body: string | undefined): {
 /** The ticket's review items, normalized, or nothing at all. Absent rather
  *  than empty: `refresh` deletes projected keys missing from the object, so an
  *  empty array would be a key every board carries forever saying nothing. */
+/**
+ * Where the ticket's OWN decision stands with the reader, when that is
+ * something other than plainly open: `waiting` — the reader asked on it
+ * (the card's "I have a question", or a phrase of the body) and the owner
+ * has not revised since — or `revised`, with what the revision answered.
+ *
+ * Derived here, on the projection, because the browser draws the Home
+ * decision card and the panel's own-decision card off THIS row, not off
+ * `GET /review-items` — that route already drops a waiting `r-legacy` row
+ * and marks a revised one, but a card built from `needs`/`answer` alone
+ * would keep showing a decision the reader had just sent away. Same
+ * derivation as the route's (`legacyDecisionItem` + `reviewItemState`), so
+ * the two surfaces cannot disagree. Absent when open or answered: the
+ * refresh deletes keys absent here, so a revision followed by an answer
+ * clears the mark on its own.
+ */
+function projectDecisionState(task: Task): {
+  decisionState?: 'waiting' | 'revised';
+  decisionRevision?: {
+    at: number;
+    question?: string;
+    threadId?: string;
+    range?: { start: number; end: number };
+  };
+} {
+  const item = legacyDecisionItem(task);
+  if (!item) return {};
+  const state = reviewItemState(item);
+  if (state === 'waiting') return { decisionState: 'waiting' };
+  if (state !== 'revised') return {};
+  const revision = item.revisions?.at(-1);
+  if (!revision) return {};
+  // The question is quoted only when the revision answered one — the same
+  // pairing `taskReviewItems` in review-queue.ts makes for a stored item.
+  const question = latestThreadedQuestion(item);
+  return {
+    decisionState: 'revised',
+    decisionRevision: {
+      at: revision.at,
+      ...(question !== undefined ? { question: question.text } : {}),
+      ...(question?.threadId !== undefined ? { threadId: question.threadId } : {}),
+      ...(revision.revisedRange ? { range: revision.revisedRange } : {}),
+    },
+  };
+}
+
 function projectReviews(reviews: TaskReviewItem[] | undefined): {
   reviews?: TaskReviewItem[];
 } {
@@ -276,6 +330,10 @@ export function projectTask(
     // — the browser already has `options`/`answer` on this same object, and
     // projecting both spellings would list one decision twice.
     ...projectReviews(task.reviews),
+    // The ticket's own decision, waiting on its owner or back revised — the
+    // one fact about the derived `r-legacy` row the browser cannot read off
+    // `options`/`answer`. See `projectDecisionState`.
+    ...projectDecisionState(task),
     goal: task.goal,
     order: task.order,
     after: task.after,

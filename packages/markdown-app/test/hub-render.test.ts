@@ -1215,7 +1215,7 @@ describe('renderTaskDetail — discussion', () => {
       expect(answering()?.classList.contains('hidden')).toBe(false);
     });
 
-    it('draws no link without a handler, nor on a thread-borne card', () => {
+    it('draws no link without a handler, nor on a thread-borne card — which says why', () => {
       paintTicket();
       expect(link()).toBeNull();
       renderTaskDetail(
@@ -1231,6 +1231,44 @@ describe('renderTaskDetail — discussion', () => {
       );
       expect(root.querySelector('.hub-decide-card')).not.toBeNull();
       expect(link()).toBeNull();
+      expect(root.querySelector('.hub-decide-question-note')?.textContent).toContain('Reply above');
+    });
+
+    /**
+     * The ticket's OWN decision (`needs: 'decision'`) renders the identical
+     * card, and until 2026-08-31 it was the one card with no link — the
+     * server refused an anchor on the derived `r-legacy` row. It asks the
+     * same way now.
+     */
+    it('the ticket’s own decision card offers the link, and Send asks through the panel handler', async () => {
+      const onAskOnPanelItem = vi.fn().mockResolvedValue(true);
+      const onAnswer = vi.fn();
+      renderTaskDetail(
+        root,
+        task({
+          id: 't-1',
+          title: 'Pick a retry budget',
+          needs: 'decision',
+          body: 'Three tries or once?',
+          createdBy: 'Poller Bot',
+        }),
+        detailHandlers({ asks: [], now: NOW, onAskOnPanelItem, onAnswer }),
+        { loading: false, threads: [] },
+      );
+      const l = link();
+      expect(l?.textContent).toBe('I have a question');
+      expect(root.querySelector('.hub-decide-question-note')).toBeNull();
+      l?.click();
+      const form = root.querySelector('.hub-decide-question-form') as HTMLFormElement;
+      expect(form.closest('.hub-decide-question-box')?.textContent).toContain('Ask Poller Bot');
+      (form.querySelector('textarea') as HTMLTextAreaElement).value = 'What does a blip cost?';
+      form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+      expect(onAskOnPanelItem).toHaveBeenCalledWith(
+        expect.objectContaining({ id: 't-1' }),
+        expect.objectContaining({ source: 'task', id: 'task:t-1' }),
+        'What does a blip cost?',
+      );
+      expect(onAnswer).not.toHaveBeenCalled();
     });
 
     it('tapping it turns the card into a question box — textarea, Send, Cancel — hiding the answer furniture', () => {
@@ -2787,6 +2825,29 @@ describe('the panel’s review queue', () => {
       expect(panelReviewQueue(t, [])[0]?.headline).toBe('Decide the index order');
     });
 
+    it('a decision WAITING on its owner is not a card; a REVISED one is, marked and aimed at its thread', () => {
+      const waiting = task({
+        id: 't-1',
+        needs: 'decision',
+        body: 'Ship?',
+        decisionState: 'waiting',
+      });
+      expect(panelReviewQueue(waiting, [ask({ threadId: 'th-a' })]).map((i) => i.id)).toEqual([
+        'thread:th-a',
+      ]);
+      const revised = task({
+        id: 't-1',
+        needs: 'decision',
+        body: 'Ship Thursday?',
+        decisionState: 'revised',
+        decisionRevision: { at: NOW - 5_000, question: 'Which Thursday?', threadId: 'th-q' },
+      });
+      const [card] = panelReviewQueue(revised, []);
+      expect(card?.source).toBe('task');
+      expect(card?.revision).toEqual({ at: NOW - 5_000, question: 'Which Thursday?' });
+      expect(card?.threadId).toBe('th-q');
+    });
+
     /**
      * The keys DISAGREE here on purpose. `th-old` is the oldest and would win
      * on age alone; `th-declared` carries a declaration and `th-direct` names a
@@ -2976,6 +3037,22 @@ describe('the panel’s review queue', () => {
       // lost its id — the link is not drawn for those.
       expect(panelQuestionRequest(t, base({ threadId: 'th-1', declared: true }), 'x')).toBeNull();
       expect(panelQuestionRequest(t, base({ source: 'task-review' }), 'x')).toBeNull();
+      // The ticket's OWN decision anchors to the derived row, quoting the
+      // title — its headline server-side — not the panel's derived blurb.
+      const own = task({ id: 't-7', title: 'Pick a retry budget' });
+      expect(
+        panelQuestionRequest(own, base({ source: 'task', headline: 'Three or once?' }), 'Why?'),
+      ).toEqual({
+        path: '/api/docs/task%3At-7/threads',
+        body: {
+          text: 'Why?',
+          anchor: {
+            kind: 'review-item',
+            reviewItemId: 'r-legacy',
+            snippet: { text: 'Pick a retry budget' },
+          },
+        },
+      });
     });
 
     it('replies to an inferred thread card as a plain comment', () => {
