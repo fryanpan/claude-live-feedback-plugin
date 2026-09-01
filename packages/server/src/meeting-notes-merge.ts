@@ -108,6 +108,12 @@ function headingText(el: Y.XmlElement): string {
  * its body (the next heading at the same or a higher level, or the end).
  * Null when the heading is absent — the "never written yet" state, not a
  * failure.
+ *
+ * The LAST matching heading, not the first. A doc can carry more than one
+ * "Meeting notes" heading once a meeting has started a fresh section at the
+ * end (see `mergeNotesSection`'s trailing rule) — the live meeting writes
+ * into the newest one, and an earlier meeting's section becomes ordinary
+ * content the note-taker no longer reaches.
  */
 export function findNotesSection(
   fragment: Y.XmlFragment,
@@ -122,7 +128,6 @@ export function findNotesSection(
     if (headingText(el) !== heading) continue;
     start = i;
     level = prose.headingLevelOf(el);
-    break;
   }
   if (start < 0) return null;
   let endExclusive = top.length;
@@ -242,14 +247,26 @@ export interface NotesOwnership {
   claims(el: Y.XmlElement, md: string): boolean;
   /** Record what the agent owns after a write. */
   record(items: ReadonlyArray<{ el: Y.XmlElement; md: string }>): void;
+  /**
+   * Drop every claim. Called when a NEW meeting starts on the doc: the notes
+   * a previous recording wrote are finished writing — a fresh session that
+   * still claimed them would delete them on its first from-scratch compose,
+   * which is the stop-and-restart data loss the owner reported ("recording
+   * replaces all existing notes"). Released, they read as somebody else's:
+   * kept where they are, revisable only by suggestion.
+   */
+  release(): void;
 }
 
 export function createNotesOwnership(): NotesOwnership {
-  const byElement = new WeakMap<Y.XmlElement, string>();
+  let byElement = new WeakMap<Y.XmlElement, string>();
   return {
     claims: (el, md) => byElement.get(el) === md,
     record(items) {
       for (const item of items) byElement.set(item.el, item.md);
+    },
+    release() {
+      byElement = new WeakMap();
     },
   };
 }
@@ -798,10 +815,24 @@ export function mergeNotesSection(
   if (incoming.length === 0) return empty('empty');
 
   const fragment = prose.getProseFragment(ydoc);
-  const span = findNotesSection(fragment, heading);
+  const found = findNotesSection(fragment, heading);
+  // A section that is NOT at the end of the doc, and in which the ledger
+  // claims nothing, is a PREVIOUS meeting's notes — content a person has
+  // since written past. Notes go at the end of the doc (owner's call,
+  // 2026-08-31: "notetaker always inserts at the end of the doc"), so this
+  // meeting starts a fresh section there rather than growing one mid-doc.
+  // The claims half matters: a section THIS meeting is writing stays its
+  // target even when somebody types a heading below it mid-meeting — the
+  // section a meeting writes into is chosen once, not per tick.
+  const span =
+    found &&
+    found.endExclusive < fragment.length &&
+    !itemsInSection(fragment, found).some((item) => opts.ownership.claims(item.el, item.md))
+      ? null
+      : found;
   if (!span) {
-    // First write: there is no section, so there is nothing of anybody's to
-    // protect. Append it whole.
+    // First write of this meeting's section: nothing of anybody's to
+    // protect in it. Append it whole, at the end of the doc.
     let blocks: Y.XmlElement[];
     try {
       blocks = prose.parseMarkdownBlocks(`## ${heading}\n\n${body}`);

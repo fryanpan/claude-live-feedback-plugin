@@ -578,6 +578,13 @@ export interface MeetingNotesDeps {
    */
   onReattribute?: (reattribution: NotesReattribution) => void;
   onError?: (message: string) => void;
+  /**
+   * A new session is beginning on this doc — called synchronously from
+   * `beginNotesSession`, before any tick can fire. The server sink releases
+   * the ownership ledger's claims here, so a stop-and-restart can never
+   * replace the notes the previous recording wrote.
+   */
+  onSessionStart?: (ids: { docId: string; meetingId: string }) => void;
 }
 
 /**
@@ -679,6 +686,9 @@ export function beginNotesSession(
   deps: MeetingNotesDeps,
   ids: { docId: string; meetingId: string },
 ): MeetingNotesSession {
+  // Before anything else: whatever a previous recording wrote on this doc is
+  // finished writing, and this session must never replace it.
+  deps.onSessionStart?.(ids);
   const context = deps.resolveContext?.(ids.docId) ?? deps.context;
   let previous: string | null = null;
   /** Raw engine labels, never display names — a carried turn is re-mapped

@@ -34,6 +34,7 @@ const HEADING = 'Meeting notes';
 const claimsText = (mds: readonly string[]): NotesOwnership => ({
   claims: (_el, md) => mds.includes(md),
   record: () => {},
+  release: () => {},
 });
 
 function docFrom(markdown: string): Y.Doc {
@@ -592,5 +593,123 @@ describe('a suggestion may not re-attribute a person’s note', () => {
     expect(merged.suggested).toBe(1);
     // And his words are still the accepted state until he accepts it.
     expect(markdownOf(ydoc)).toContain('we shuold ship on friday');
+  });
+});
+
+describe('a stop-and-restart never replaces what is already written', () => {
+  // The reported data loss (owner, 2026-08-31: "recording replaces all
+  // existing notes"): a new session's first tick composes from scratch, so
+  // any item the ledger still claimed from the PREVIOUS recording was
+  // deleted as "the agent's own note, no longer in the notes". Releasing
+  // the claims at session start is the fix; these tests are its guard.
+
+  it('released claims turn a from-scratch compose into an append', () => {
+    const ydoc = docFrom('# Doc\n\nIntro.');
+    const ownership = createNotesOwnership();
+    const first = mergeNotesSection(ydoc, '- old note one\n- old note two', HEADING, {
+      ownership,
+    });
+    expect(first.ok).toBe(true);
+
+    // The recording stops; a new one starts. Session start releases claims.
+    ownership.release();
+
+    // The new meeting's first tick composes from scratch: only its own note.
+    const read = readNotesSection(ydoc, HEADING, ownership);
+    const second = mergeNotesSection(ydoc, '- a brand new note', HEADING, {
+      ownership,
+      basedOn: read?.items ?? [],
+    });
+    expect(second.ok).toBe(true);
+    expect(second.deleted).toBe(0);
+
+    const md = markdownOf(ydoc);
+    expect(md).toContain('old note one');
+    expect(md).toContain('old note two');
+    expect(md).toContain('a brand new note');
+    // Appended after the finished notes, not above them.
+    expect(md.indexOf('old note two')).toBeLessThan(md.indexOf('a brand new note'));
+  });
+
+  it('a revision of a finished meeting’s note lands as a suggestion, not a rewrite', () => {
+    const ydoc = docFrom('# Doc');
+    const ownership = createNotesOwnership();
+    mergeNotesSection(ydoc, '- we ship the gate on Friday', HEADING, { ownership });
+    ownership.release();
+
+    const read = readNotesSection(ydoc, HEADING, ownership);
+    const res = mergeNotesSection(ydoc, '- we ship the gate on Thursday', HEADING, {
+      ownership,
+      basedOn: read?.items ?? [],
+    });
+    expect(res.ok).toBe(true);
+    expect(res.deleted).toBe(0);
+    expect(res.suggested).toBe(1);
+    // The accepted state is still the finished meeting's words.
+    expect(markdownOf(ydoc)).toContain('we ship the gate on Friday');
+  });
+
+  it('a new meeting starts a fresh section at the end when the old one is mid-doc', () => {
+    // Bryan's report: "notes got inserted in the top in the original Meeting
+    // notes section, not at the end of the doc". The old section sits above
+    // content he wrote after it; the new meeting's notes go at the END.
+    const ydoc = docFrom('# Doc\n\n## Meeting notes\n\n- old note\n\n## Next steps\n\nHis plan.');
+    const ownership = createNotesOwnership();
+    const res = mergeNotesSection(ydoc, '- new meeting note', HEADING, { ownership });
+    expect(res.ok).toBe(true);
+    expect(res.mode).toBe('appended');
+
+    const md = markdownOf(ydoc);
+    // Two sections now: the old one untouched, the new one at the doc's end.
+    expect(md.split('## Meeting notes').length).toBe(3);
+    expect(md).toContain('old note');
+    expect(md).toContain('His plan.');
+    expect(md.indexOf('His plan.')).toBeLessThan(md.indexOf('new meeting note'));
+  });
+
+  it('the section this meeting is writing stays its target when a person types below it', () => {
+    const ydoc = docFrom('# Doc');
+    const ownership = createNotesOwnership();
+    mergeNotesSection(ydoc, '- first note', HEADING, { ownership });
+
+    // Mid-meeting, a person writes a heading after the section.
+    const fragment = prose.getProseFragment(ydoc);
+    ydoc.transact(() => {
+      fragment.insert(fragment.length, prose.parseMarkdownBlocks('## Aside\n\nTyped below.'));
+    }, 'browser');
+
+    // The next tick still merges into the claimed section — no third heading.
+    const read = readNotesSection(ydoc, HEADING, ownership);
+    const res = mergeNotesSection(ydoc, '- first note\n- second note', HEADING, {
+      ownership,
+      basedOn: read?.items ?? [],
+    });
+    expect(res.ok).toBe(true);
+    expect(res.mode).toBe('merged');
+    const md = markdownOf(ydoc);
+    expect(md.split('## Meeting notes').length).toBe(2);
+    expect(md.indexOf('second note')).toBeLessThan(md.indexOf('Typed below.'));
+  });
+
+  it('a trailing section from a finished meeting is joined, not duplicated', () => {
+    const ydoc = docFrom('# Doc\n\n## Meeting notes\n\n- old note');
+    const ownership = createNotesOwnership(); // fresh session: claims nothing
+    const res = mergeNotesSection(ydoc, '- new note', HEADING, { ownership });
+    expect(res.ok).toBe(true);
+    const md = markdownOf(ydoc);
+    expect(md.split('## Meeting notes').length).toBe(2);
+    expect(md).toContain('old note');
+    expect(md.indexOf('old note')).toBeLessThan(md.indexOf('new note'));
+  });
+
+  it('findNotesSection answers the LAST matching heading', () => {
+    const ydoc = docFrom(
+      '# Doc\n\n## Meeting notes\n\n- old note\n\n## Between\n\nx\n\n## Meeting notes\n\n- live note',
+    );
+    const fragment = prose.getProseFragment(ydoc);
+    const span = findNotesSection(fragment, HEADING);
+    expect(span).not.toBeNull();
+    const items = itemsInSection(fragment, span!);
+    expect(items.map((i) => i.md)).toEqual(['live note']);
   });
 });
