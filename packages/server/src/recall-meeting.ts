@@ -157,7 +157,11 @@ export class RecallMeetingRelay {
     return rec ? toStatus(rec) : null;
   }
 
-  async invite(args: { docId: string; meetingUrl: string }): Promise<InviteResult> {
+  async invite(args: {
+    docId: string;
+    meetingUrl: string;
+    botName?: string;
+  }): Promise<InviteResult> {
     const client = this.deps.client;
     if (!client) {
       return {
@@ -245,6 +249,7 @@ export class RecallMeetingRelay {
         meetingUrl,
         realtimeUrl: `${wsBase}/recall/${token}`,
         permissionDeniedTimeoutSec: PERMISSION_DENIED_TIMEOUT_SEC,
+        ...(args.botName !== undefined ? { botName: args.botName } : {}),
       });
       rec.botId = bot.id;
     } catch (err) {

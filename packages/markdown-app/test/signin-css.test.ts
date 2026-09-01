@@ -87,7 +87,8 @@ describe('sign-in page css', () => {
     expect(bar).toContain('display: flex');
     // The doc shell declares its own rows, so the bar's row has to be
     // declared too — otherwise it lands inside the topbar's 48px and clips.
-    expect(rule('body.signin-gated #shell')).toContain('grid-template-rows: auto 48px 1fr');
+    // Four tracks: the bar, the topbar, the meeting strip's auto row, the doc.
+    expect(rule('body.signin-gated #shell')).toContain('grid-template-rows: auto 48px auto 1fr');
     // The fallback for a surface with no header still floats, and docks to
     // the bottom rather than to the band the doc title lives in.
     const floating = rule('.signin-bar--floating');

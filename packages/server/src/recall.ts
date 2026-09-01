@@ -369,6 +369,12 @@ export interface CreateBotArgs {
   realtimeUrl: string;
   /** Zoom only — see the header. Seconds before a refused bot gives up. */
   permissionDeniedTimeoutSec?: number;
+  /**
+   * The name in the call's participant list, for THIS bot. The person
+   * sending the bot names it at invite time (the start chooser prefills
+   * "<name>'s Claude Code Agent"); absent, the configured default stands.
+   */
+  botName?: string;
 }
 
 export interface RecallBotStatusChange {
@@ -423,7 +429,7 @@ export function buildCreateBotBody(
 ): Record<string, unknown> {
   return {
     meeting_url: args.meetingUrl,
-    bot_name: config.botName,
+    bot_name: args.botName ?? config.botName,
     recording_config: {
       transcript: {
         provider: {

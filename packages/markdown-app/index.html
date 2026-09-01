@@ -142,6 +142,12 @@
           </button>
         </div>
       </header>
+      <!-- Live-meeting chrome: the transcript strip fused under the top bar,
+           grown out of the Record Audio button the markdown mount docks in
+           the toolbar above (src/meeting-strip.ts). It is #shell's second
+           grid row, so its height comes OUT of the editor below rather than
+           sitting on top of the prose; hidden, the row is zero. -->
+      <div id="meeting-strip" class="meeting-strip" hidden></div>
       <div
         id="suggestions-menu"
         class="suggestions-menu hidden"
@@ -251,11 +257,6 @@
             >↔</button>
           </div>
           <div id="editor" class="prose"></div>
-          <!-- Live-meeting transcript strip. Empty and hidden until a markdown
-               doc mounts it (src/meeting-strip.ts); it is #editor-pane's third
-               grid row, so its height comes OUT of the scrolling editor rather
-               than sitting on top of the prose. -->
-          <div id="meeting-strip" class="meeting-strip" hidden></div>
         </section>
 
         <!-- Small inline "comment" pill. Floats near the selection end
