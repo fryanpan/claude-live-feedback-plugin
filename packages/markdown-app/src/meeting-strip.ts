@@ -87,6 +87,7 @@ import {
   startMeetingCapture,
 } from './meeting-audio.ts';
 import type { MeetingBotClient } from './meeting-bot-client.ts';
+import type { MeetingLiveZone } from './meeting-live-zone.ts';
 import { type TimingSession, createTimingSession } from './meeting-timing-client.ts';
 import type { DocSpeakers } from './speaker-voices.ts';
 
@@ -235,6 +236,19 @@ export function parseMeetingServerMessage(raw: unknown): MeetingServerMessage | 
         final: m.final === true,
         ...(typeof m.speaker === 'string' && m.speaker ? { speaker: m.speaker } : {}),
         ...(timing ? { timing } : {}),
+      };
+    }
+    case 'notes_progress': {
+      if (typeof m.tick !== 'number' || !Number.isFinite(m.tick)) return null;
+      const phase = m.phase;
+      if (phase !== 'composing' && phase !== 'written' && phase !== 'failed') return null;
+      return {
+        type: 'notes_progress',
+        tick: m.tick,
+        phase,
+        turns: Array.isArray(m.turns)
+          ? m.turns.filter((t): t is number => typeof t === 'number' && Number.isFinite(t))
+          : [],
       };
     }
     case 'timing_pong': {
@@ -417,6 +431,15 @@ export interface MeetingStripOpts {
    * `meeting-timing-client.ts`.
    */
   timing?: boolean;
+  /**
+   * The provisional zone at the end of the doc (meeting-live-zone.ts). When
+   * present it is the ONLY transcript surface: the strip stops rendering the
+   * rolling words on its own line — one meeting shown in two places reads as
+   * two meetings — and instead feeds every frame (words, names, the
+   * `notes_progress` lifecycle) to the zone. The strip keeps everything
+   * else: the button, the clock, the announcement, the states.
+   */
+  liveZone?: MeetingLiveZone;
 }
 
 /**
@@ -867,6 +890,7 @@ export function mountMeetingStrip(opts: MeetingStripOpts): MeetingStripHandle {
     for (const entry of rendered.values()) {
       if (entry.tag?.dataset.speaker === label) renderTag(entry, label);
     }
+    opts.liveZone?.setNames({ ...names });
     renderFeed();
     renderPop();
     if (socketOpen) {
@@ -887,6 +911,7 @@ export function mountMeetingStrip(opts: MeetingStripOpts): MeetingStripHandle {
           for (const entry of rendered.values()) {
             if (entry.tag?.dataset.speaker === label) renderTag(entry, label);
           }
+          opts.liveZone?.setNames({ ...names });
           renderFeed();
           renderPop();
         });
@@ -950,6 +975,12 @@ export function mountMeetingStrip(opts: MeetingStripOpts): MeetingStripHandle {
    * meeting) or the fixed label a bot meeting's turns wear.
    */
   function renderTurns(tappable: boolean): void {
+    // The zone at the end of the doc is the transcript surface when it
+    // exists; the same words rolling in two places read as two meetings.
+    if (opts.liveZone) {
+      clearTurnSpans();
+      return;
+    }
     for (const [turn, entry] of rendered) {
       if (!turns.some((t) => t.turn === turn)) {
         entry.span.remove();
@@ -1777,7 +1808,13 @@ export function mountMeetingStrip(opts: MeetingStripOpts): MeetingStripHandle {
         // a room is owed.
         if (!announcesRecording(mode)) announceBy = undefined;
         else announceBy ??= DEFAULT_ANNOUNCED_BY;
-        setState({ kind: 'recording', startedAt: now() });
+        {
+          const startedAt = now();
+          // Same clock reading for the state and the zone, so the strip's
+          // elapsed readout and the zone's per-line stamps agree.
+          opts.liveZone?.begin(startedAt);
+          setState({ kind: 'recording', startedAt });
+        }
         // AFTER the state change, and that ordering is the feature: `ready`
         // means the engine is receiving, so everything from here is in the
         // transcript — including this. Announcing before the mic was open
@@ -1808,8 +1845,18 @@ export function mountMeetingStrip(opts: MeetingStripOpts): MeetingStripHandle {
           final: msg.final,
           ...(msg.speaker !== undefined ? { speaker: msg.speaker } : {}),
         });
+        opts.liveZone?.onTurn({
+          turn: msg.turn,
+          text: msg.text,
+          final: msg.final,
+          ...(msg.speaker !== undefined ? { speaker: msg.speaker } : {}),
+        });
         renderFeed();
         timing?.domUpdated();
+        break;
+      case 'notes_progress':
+        // The zone is the only reader; a strip without one drops the frame.
+        opts.liveZone?.onProgress(msg);
         break;
       case 'timing_pong':
         timing?.onPong(msg, recvMs);
@@ -1828,18 +1875,21 @@ export function mountMeetingStrip(opts: MeetingStripOpts): MeetingStripHandle {
         endAnnouncement();
         releaseAudio();
         closeSocket();
+        opts.liveZone?.end();
         setState({ kind: 'unavailable', reason: msg.reason, message: msg.message });
         break;
       case 'stopped':
         endAnnouncement();
         releaseAudio();
         closeSocket();
+        opts.liveZone?.end();
         setState({ kind: 'idle' });
         break;
       case 'error':
         endAnnouncement();
         releaseAudio();
         closeSocket();
+        opts.liveZone?.end();
         setState({ kind: 'error', message: msg.message || 'The meeting ended unexpectedly.' });
         break;
     }
@@ -2063,6 +2113,7 @@ export function mountMeetingStrip(opts: MeetingStripOpts): MeetingStripHandle {
       socketOpen = false;
       endAnnouncement();
       releaseAudio();
+      opts.liveZone?.end();
       setState({ kind: 'error', message: 'The connection to the meeting was lost.' });
     };
     // `error` is always followed by `close`; reporting both would overwrite the
@@ -2077,6 +2128,7 @@ export function mountMeetingStrip(opts: MeetingStripOpts): MeetingStripHandle {
     if (socketOpen) socket?.send(JSON.stringify({ type: 'stop' }));
     releaseAudio();
     closeSocket();
+    opts.liveZone?.end();
     setState({ kind: 'idle' });
   }
 
@@ -2116,6 +2168,9 @@ export function mountMeetingStrip(opts: MeetingStripOpts): MeetingStripHandle {
         seen = new Set();
         lastMeetingId = null;
       }
+      // The zone follows the same boundary: a bot meeting ending clears it
+      // (it began on the bot's first word), and one starting begins fresh.
+      if (!live && state.kind === 'idle') opts.liveZone?.end();
     }
     render();
   });
@@ -2134,10 +2189,23 @@ export function mountMeetingStrip(opts: MeetingStripOpts): MeetingStripHandle {
       // The platform's name for the voice fills the map a person fills by
       // tapping on the microphone path; a later frame naming it differently
       // (a disambiguated duplicate) wins, as a later tap would.
-      if (frame.speakerName) names[frame.speaker] = frame.speakerName;
+      if (frame.speakerName) {
+        names[frame.speaker] = frame.speakerName;
+        opts.liveZone?.setNames({ ...names });
+      }
       if (grew && view === 'menu') renderPop();
     }
     turns = rollTranscript(turns, {
+      turn: frame.turn,
+      text: frame.text,
+      final: frame.final,
+      ...(frame.speaker !== undefined ? { speaker: frame.speaker } : {}),
+    });
+    // A bot meeting has no `ready` frame on this socket, so the zone starts
+    // on the first word. Its stamps count from that word rather than from
+    // the call's true start — the bot's stream carries no start time here.
+    if (opts.liveZone && !opts.liveZone.active()) opts.liveZone.begin(now());
+    opts.liveZone?.onTurn({
       turn: frame.turn,
       text: frame.text,
       final: frame.final,

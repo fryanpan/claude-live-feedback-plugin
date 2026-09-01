@@ -131,6 +131,24 @@ describe('parseMeetingServerMessage', () => {
     ).toEqual({ type: 'transcript', turn: 2, text: 'hi', final: false, speaker: 'A' });
   });
 
+  it('accepts a notes_progress frame, and drops non-numeric turn ids', () => {
+    expect(
+      parseMeetingServerMessage(
+        JSON.stringify({ type: 'notes_progress', tick: 1, phase: 'composing', turns: [0, 1] }),
+      ),
+    ).toEqual({ type: 'notes_progress', tick: 1, phase: 'composing', turns: [0, 1] });
+    expect(
+      parseMeetingServerMessage(
+        JSON.stringify({ type: 'notes_progress', tick: 2, phase: 'written', turns: [3, 'x'] }),
+      ),
+    ).toEqual({ type: 'notes_progress', tick: 2, phase: 'written', turns: [3] });
+    expect(
+      parseMeetingServerMessage(
+        JSON.stringify({ type: 'notes_progress', tick: 1, phase: 'later', turns: [] }),
+      ),
+    ).toBeNull();
+  });
+
   it('returns null for anything malformed rather than throwing', () => {
     expect(parseMeetingServerMessage('not json')).toBeNull();
     expect(parseMeetingServerMessage(JSON.stringify({ type: 'nope' }))).toBeNull();

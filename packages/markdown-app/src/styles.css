@@ -7921,6 +7921,144 @@ body.is-reading-width #editor > .ProseMirror {
   }
 }
 
+/* ========== provisional live zone (meeting-live-zone.ts) ==========
+   The live transcript at the END of the doc — appended after the editor's
+   content, never inside it. Approved mock: provisional-text-mock-1, option A.
+   Sans throughout: provisional text is a different material from the notes,
+   so it can never be mistaken for one. No status dots; the caret on the line
+   still being spoken is the one animated thing in the stream. */
+.live-zone {
+  margin: 18px 0 4px;
+  padding: 9px 14px 12px;
+  border: 1.5px dashed var(--border-strong);
+  border-radius: var(--radius-lg);
+  background: var(--bg-panel);
+  font-family: var(--sans);
+}
+.lz-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 7px;
+  font-size: 11.5px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: var(--fg-muted);
+}
+/* Each transcript line leads with its own meeting time — a line's own time
+   is the thing you want when you read it back. */
+.lz-ts {
+  font-size: 0.76em;
+  font-variant-numeric: tabular-nums;
+  color: var(--fg-muted);
+  margin-right: 0.45em;
+  white-space: nowrap;
+}
+.lz-speaker {
+  font-size: 0.78em;
+  font-weight: 550;
+  letter-spacing: 0.01em;
+  padding: 0.1em 0.5em;
+  margin-right: 0.35em;
+  border-radius: var(--radius-pill);
+  background: rgba(127, 127, 127, 0.12);
+  color: var(--fg-muted);
+  white-space: nowrap;
+}
+.lz-line {
+  font-size: 15.5px;
+  line-height: 1.55;
+  color: #4b535c;
+  margin: 0;
+}
+.lz-line + .lz-line {
+  margin-top: 0.5em;
+}
+.lz-partial > .lz-text::after {
+  content: "";
+  display: inline-block;
+  width: 2px;
+  height: 1em;
+  vertical-align: -0.15em;
+  background: var(--red);
+  margin-left: 2px;
+  animation: lz-caret-blink 1s step-end infinite;
+}
+@keyframes lz-caret-blink {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0;
+  }
+}
+/* The splitting-off card: settled lines lift out of the dashed frame as a
+   solid card that says what is happening to them, while the remainder keeps
+   streaming below. */
+.lz-chunk {
+  position: relative;
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--accent);
+  border-radius: var(--radius);
+  background: var(--bg);
+  box-shadow: 0 3px 12px rgba(27, 31, 35, 0.13);
+  padding: 8px 11px 10px;
+  margin: -2px -8px 12px -12px;
+}
+.lz-chunk-lines .lz-line {
+  color: var(--fg);
+}
+.lz-chunk-note {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--accent);
+  margin-top: 5px;
+}
+.lz-spinner {
+  width: 11px;
+  height: 11px;
+  border-radius: 50%;
+  border: 2px solid color-mix(in srgb, var(--accent) 30%, transparent);
+  border-top-color: var(--accent);
+  animation: lz-spin 850ms linear infinite;
+}
+@keyframes lz-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+/* The settle wash: the note a chunk just became, highlighted where it landed
+   (settle-wash.ts decorates the block). ~1.5s held at full wash, then a
+   1.3s fade. No provenance label — the highlight IS the provenance. */
+#editor > .ProseMirror .settle-wash {
+  animation: settle-wash 2800ms ease-out;
+}
+@keyframes settle-wash {
+  0% {
+    background: color-mix(in srgb, var(--accent) 18%, transparent);
+    box-shadow: -20px 0 0 color-mix(in srgb, var(--accent) 18%, transparent);
+  }
+  55% {
+    background: color-mix(in srgb, var(--accent) 16%, transparent);
+    box-shadow: -20px 0 0 color-mix(in srgb, var(--accent) 16%, transparent);
+  }
+  100% {
+    background: transparent;
+    box-shadow: -20px 0 0 transparent;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .lz-partial > .lz-text::after,
+  .lz-spinner,
+  #editor > .ProseMirror .settle-wash {
+    animation: none;
+  }
+}
+
 /* ================= COMMENT PILL (inline, near selection/caret) =================
    Small circular button anchored near the end of the selection (or the
    caret when the selection is empty). Positioned absolutely inside the

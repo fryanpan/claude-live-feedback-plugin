@@ -27,6 +27,7 @@ import { ListBehavior } from './list-behavior.ts';
 import { MermaidCodeBlock } from './mermaid-code-block.ts';
 import { SuggestionChips } from './redline/suggestion-chips.ts';
 import type { InlineThreadCard } from './review-surface.ts';
+import { SettleWash, type SettleWashOptions } from './settle-wash.ts';
 import { SuggestInput } from './suggest-input.ts';
 import { SuggestDelete, SuggestInsert } from './suggest-marks.ts';
 import { TaskLinkChips } from './task-link-chips.ts';
@@ -73,6 +74,10 @@ export interface CreateEditorOpts {
    *  to a sibling file navigates in-SPA (via `navigate`) instead of opening
    *  a raw relative URL that 404s. Omit for standalone docs. */
   docLink?: { workspaceId: string; relPath: string; navigate: (url: string) => void };
+  /** Doc surface with a meeting strip: wash freshly arrived remote notes so
+   *  the eye can follow the live transcript up into the note it became
+   *  (settle-wash.ts). Absent = no plugin, nothing watched. */
+  settleWash?: SettleWashOptions;
   /**
    * Whether the surface accepts typing AT ALL, from its first paint. Defaults
    * to `true` — the markdown surface owns its own view/edit toggle and calls
@@ -158,6 +163,7 @@ export function createEditor(opts: CreateEditorOpts): EditorHandle {
       // redline surface (redline-editor.ts builds its own Editor) — adjacent
       // lists are load-bearing there (they carry per-hunk anchors).
       ListBehavior,
+      ...(opts.settleWash ? [SettleWash.configure(opts.settleWash)] : []),
       ...(opts.extraExtensions ?? []),
     ],
     onSelectionUpdate: () => opts.onSelectionChange?.(),

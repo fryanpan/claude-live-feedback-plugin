@@ -418,7 +418,10 @@ describe('a meeting end to end: pauses become notes, stop/start stays consistent
     expect(client.finals().map((f) => f.speaker)).toEqual(['A', 'B']);
 
     // 2. The durable record keeps the label with the turn.
-    expect(readTranscript(dataDir, carryDocId, meetingId).map((t) => t.speaker)).toEqual(['A', 'B']);
+    expect(readTranscript(dataDir, carryDocId, meetingId).map((t) => t.speaker)).toEqual([
+      'A',
+      'B',
+    ]);
 
     // 3. The notes name them. The composer stub renders `speaker: text`, and
     //    the speaker it renders has been through `speakerDisplayName` — so
@@ -436,10 +439,13 @@ describe('a meeting end to end: pauses become notes, stop/start stays consistent
     //    and every later render of that label resolves to the name.
     client.ws.send(JSON.stringify({ type: 'name_speaker', speaker: 'A', name: 'Dana' }));
     await waitFor(
-      () => listMeetings(dataDir, carryDocId).some((m) => m.meetingId === meetingId && m.speakers?.A),
+      () =>
+        listMeetings(dataDir, carryDocId).some((m) => m.meetingId === meetingId && m.speakers?.A),
       'the name to reach the meeting record',
     );
-    expect(listMeetings(dataDir, carryDocId).find((m) => m.meetingId === meetingId)?.speakers).toEqual({
+    expect(
+      listMeetings(dataDir, carryDocId).find((m) => m.meetingId === meetingId)?.speakers,
+    ).toEqual({
       A: 'Dana',
     });
 
