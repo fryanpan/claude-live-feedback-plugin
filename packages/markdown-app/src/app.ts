@@ -765,8 +765,21 @@ async function mountMarkdown(ctx: MountContext): Promise<void> {
     }
   }
 
-  /** ` <title>` carrying a link mark, dropped just past the selection. */
-  function insertTaskLink(at: number, title: string, href: string): void {
+  /**
+   * ` <title>` carrying a link mark, dropped at the end of the LINE the
+   * selection sits on — not at the end of the selection.
+   *
+   * The two are the same thing only when somebody selected a whole sentence.
+   * Selecting a phrase and landing the link at `range.to` put it inside a
+   * word: "Check whether Cloudflare Acces [link]s covers the mockup route"
+   * — the word "Access" split around a link. The mock anchors the spin-off
+   * on the doc line, and shows the link after the line's own words.
+   *
+   * `$pos.end()` is the end of the innermost node around the position, which
+   * for a position in prose is the paragraph or list item holding it.
+   */
+  function insertTaskLink(selectionEnd: number, title: string, href: string): void {
+    const at = editor.editor.state.doc.resolve(selectionEnd).end();
     editor.editor
       .chain()
       .focus()
