@@ -17311,7 +17311,7 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
           if (reviewItemId === undefined) {
             return err("which item? Pass its reviewItemId (from the queue row or the ticket), or taskId — alone for a ticket that is itself a decision, with reviewItemId for one of the items filed on it");
           }
-          const address = await resolveReviewItemId(reviewItemId);
+          const address = await http("GET", `/api/review-items/${encodeURIComponent(reviewItemId)}`);
           if (address.kind === "doc-thread") {
             await http("POST", `/api/docs/${encodeURIComponent(address.docId)}/threads/${encodeURIComponent(address.threadId)}/comments`, { author: AUTHOR, text: question });
             return ok({

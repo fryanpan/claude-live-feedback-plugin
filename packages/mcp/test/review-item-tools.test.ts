@@ -93,10 +93,21 @@ function replyFor(path: string): unknown {
   if (path.endsWith('/settings')) {
     return { reviewItemCriteria: { value: 'Every option names a cost.', isDefault: false } };
   }
-  // The resolve route: WHERE a bare minted id lives. (An rt-… id never gets
-  // here from the handlers under test — they decode it locally.)
+  // The resolve route: WHERE a bare id lives. Most handlers decode an rt-…
+  // id locally and never get here with one — request_more_info is the
+  // exception, resolving through the server to verify the item exists.
   if (/^\/api\/review-items\/[^/]+$/.test(path)) {
     const id = decodeURIComponent(path.split('/').at(-1) ?? '');
+    if (id.startsWith('rt-')) {
+      return {
+        reviewItemId: id,
+        kind: 'doc-thread',
+        docId: 'mockup-notes',
+        threadId: 'th-91',
+        commentId: 'c-17',
+        workspaceId: 'w-resolved',
+      };
+    }
     return { reviewItemId: id, kind: 'task-item', taskId: 't-resolved', workspaceId: 'w-resolved' };
   }
   return { ok: true, task: { id: 't-1', links: [{ kind: 'task', taskId: 't-2' }] } };
@@ -726,6 +737,12 @@ describe('reviewItemId is a universal address', () => {
       question: 'Which breakpoint did you measure at?',
     });
     okReply(reply);
+    // Resolved through the SERVER first, even though the id decodes locally:
+    // the reply below is an ordinary comment, so the item's existence must be
+    // verified here — a stale or forged id would otherwise land a question on
+    // whatever unrelated thread it names.
+    expect(seen.at(-2)?.method).toBe('GET');
+    expect(seen.at(-2)?.path).toBe(`/api/review-items/${encodeURIComponent(RT_ID)}`);
     // A doc-thread item's conversation IS its thread — asking back is a
     // comment there, exactly where the asker is already listening.
     expect(last().path).toBe('/api/docs/mockup-notes/threads/th-91/comments');

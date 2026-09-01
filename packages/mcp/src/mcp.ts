@@ -3989,7 +3989,18 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
               'which item? Pass its reviewItemId (from the queue row or the ticket), or taskId — alone for a ticket that is itself a decision, with reviewItemId for one of the items filed on it',
             );
           }
-          const address = await resolveReviewItemId(reviewItemId);
+          // Resolved through the SERVER even for a decodable rt-… id, unlike
+          // the sibling tools: they hand a decoded address to a doc route
+          // that itself refuses a comment carrying no review, while this
+          // branch posts an ORDINARY reply — so if the item's existence is
+          // not checked here, a stale or forged id would land a question on
+          // whatever unrelated thread it happens to name (codex review).
+          const address = (await http(
+            'GET',
+            `/api/review-items/${encodeURIComponent(reviewItemId)}`,
+          )) as
+            | { kind: 'doc-thread'; docId: string; threadId: string }
+            | { kind: 'task-item'; taskId: string };
           // A doc-thread item's conversation IS its thread — asking back is a
           // reply there, where the asker is already listening. No answer is
           // stamped, so the item stays open and stays on the queue, exactly
