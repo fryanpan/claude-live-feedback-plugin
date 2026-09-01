@@ -286,9 +286,16 @@ interface Harness {
   stopCta(): HTMLButtonElement;
   /** Pick a chooser radio card by its title ("Just me", "Soniox", …). */
   pick(title: string): void;
-  consent(): HTMLInputElement;
-  /** The whole start gesture: open the chooser, adjust it, press the CTA. */
-  pressStart(o?: { pick?: string; consent?: boolean }): void;
+  /** "It's just me — skip the announcement", when the chooser offers it. */
+  skipCta(): HTMLButtonElement | null;
+  /** The quoted sentence above the two start verbs, when there is one. */
+  announceQuote(): string | null;
+  /**
+   * The whole start gesture: open the chooser, adjust it, press a verb.
+   * `skip: true` presses the skip button instead of the red one — the
+   * chooser's two verbs are the only way an announcement is decided now.
+   */
+  pressStart(o?: { pick?: string; skip?: boolean }): void;
   /** The whole stop gesture: open the menu, press Stop Recording. */
   pressStop(): void;
   elapsed(): string;
@@ -318,6 +325,7 @@ function mount(
   capture?: (opts: CaptureCall) => Promise<MeetingCaptureStart>,
   extra: {
     autoStart?: boolean;
+    autoChoose?: boolean;
     promptName?: (current: string) => string | null;
     mode?: CaptureMode;
     speakers?: number;
@@ -380,7 +388,7 @@ function mount(
   };
   const startCta = () => root.querySelector('.meeting-start-cta') as HTMLButtonElement;
   const stopCta = () => root.querySelector('.meeting-stop-cta') as HTMLButtonElement;
-  const consent = () => root.querySelector('.meeting-consent input') as HTMLInputElement;
+  const skipCta = () => root.querySelector('.meeting-skip-cta') as HTMLButtonElement | null;
   return {
     root,
     strip,
@@ -393,14 +401,16 @@ function mount(
     startCta,
     stopCta,
     pick,
-    consent,
+    skipCta,
+    announceQuote: () => root.querySelector('.meeting-announce-quote')?.textContent?.trim() ?? null,
     pressStart: (o = {}) => {
       record().click();
       if (o.pick) pick(o.pick);
-      if (o.consent) {
-        const box = consent();
-        box.checked = true;
-        box.dispatchEvent(new Event('change'));
+      if (o.skip) {
+        const skip = skipCta();
+        if (!skip) throw new Error('the chooser offers no skip — nothing to decline here');
+        skip.click();
+        return;
       }
       startCta().click();
     },
@@ -855,6 +865,53 @@ describe('the strip opened by the Board’s huddle button', () => {
     h.sockets[0]?.serve({ type: 'ready', meetingId: 'm1', startedAt: 1_000, engine: 'test' });
     expect(h.root.dataset.state).toBe('recording');
     expect(h.record().textContent).toContain('Recording');
+  });
+
+  /**
+   * The Board has two entry buttons and they are not the same gesture.
+   * "Make a plan" is one person thinking out loud, so it opens the mic on
+   * arrival — the press already happened, on a page that is gone. "Have a
+   * discussion" has other people in it, and the sentence that tells them
+   * they are being recorded is now a button somebody has to press, so it
+   * arrives at the CHOICE instead.
+   */
+  describe('a discussion arrives at the chooser, not at the microphone', () => {
+    it('opens the chooser and touches no microphone', () => {
+      const capture = vi.fn(() => Promise.resolve({ ok: true as const, capture: fakeCapture() }));
+      const h = mount(capture, { autoChoose: true, mode: 'conversation' });
+      expect(capture).not.toHaveBeenCalled();
+      expect(h.root.dataset.state).toBe('idle');
+      expect(h.pop().hidden).toBe(false);
+      expect(h.pop().getAttribute('aria-label')).toBe('Start recording');
+      // And it is the consent-gated chooser, because the mode says a room.
+      expect(h.startCta().textContent).toBe('● Play announcement & start');
+      expect(h.announceQuote()).toContain(RECORDING_ANNOUNCEMENT);
+    });
+
+    it('preselects Multiple Speakers, so the choice made on the Board carries', () => {
+      const h = mount(undefined, { autoChoose: true, mode: 'conversation' });
+      const selected = [...h.pop().querySelectorAll('.meeting-choice')]
+        .filter((el) => el.querySelector('input')?.checked === true)
+        .map((el) => el.querySelector('.meeting-choice-title')?.textContent);
+      expect(selected).toContain('Multiple Speakers');
+    });
+
+    it('an open microphone outranks it — a chooser over a live capture decides nothing', async () => {
+      const capture = vi.fn(() => Promise.resolve({ ok: true as const, capture: fakeCapture() }));
+      const h = mount(capture, { autoStart: true, autoChoose: true, mode: 'conversation' });
+      expect(capture).toHaveBeenCalledTimes(1);
+      await settle();
+      expect(h.pop().hidden).toBe(true);
+    });
+
+    it('is not the plan entry — that one still opens the mic', () => {
+      // Positive control for the assertion above it: the same mount with the
+      // other flag really does reach the microphone, so "not called" is a
+      // fact about the flag rather than about the fixture.
+      const capture = vi.fn(() => Promise.resolve({ ok: true as const, capture: fakeCapture() }));
+      mount(capture, { autoStart: true, mode: 'solo' });
+      expect(capture).toHaveBeenCalledTimes(1);
+    });
   });
 
   it('stays at rest when not asked — a plain doc never opens a mic on its own', () => {
@@ -2005,11 +2062,20 @@ describe('a solo capture announces nothing', () => {
     expect(h.strip.announced()).toBeUndefined();
   });
 
-  it('the consent checkbox is moot there — there is nobody to tell', async () => {
+  it('offers no announcement to decide — there is nobody to tell', async () => {
     const announcer = new FakeAnnouncer();
     const mic = pumpCapture();
     const h = mount(mic.start, { announcer });
-    h.pressStart({ pick: 'Just me', consent: true });
+    h.record().click();
+    h.pick('Just me');
+    // Neither the sentence nor the skip: an announcement that is not going
+    // to happen is not a decision to put in front of anybody, and a "skip
+    // the announcement" button over a solo capture invites a person to
+    // decline something nobody was ever going to hear.
+    expect(h.announceQuote()).toBeNull();
+    expect(h.skipCta()).toBeNull();
+    expect(h.startCta().textContent).toBe('● Start Recording');
+    h.startCta().click();
     await settle();
     h.sockets[0]?.onopen?.();
     h.sockets[0]?.serve({ type: 'ready', meetingId: 'm1', startedAt: 1_000, engine: 'test' });
@@ -2019,15 +2085,42 @@ describe('a solo capture announces nothing', () => {
   });
 });
 
-describe('"I\'ll ask for consent" — the person takes the sentence', () => {
-  it('starts the capture itself and keeps the device quiet', async () => {
+/**
+ * The two start verbs replaced a checkbox — "I'll ask for consent" — whose
+ * UNCHECKED state was the announcing one. Two consequences it is worth being
+ * explicit about, because both are behaviour changes and not refactors:
+ *
+ * The chooser no longer offers `spoken` at all. That path was "I will say it
+ * myself", and it survives only where it was always the honest answer: as the
+ * fallback when the device turns out not to be able to speak (covered in its
+ * own describe below). What the chooser offers instead is `skipped`, which is
+ * a different claim — nobody said it, and somebody decided that.
+ *
+ * And the decision is not remembered. A checkbox is state; two buttons are a
+ * question asked at the moment it applies, and the next recording may have a
+ * room in it.
+ */
+describe('the chooser quotes the sentence and makes the start the decision', () => {
+  it('shows the words the room will hear, above the button that plays them', () => {
+    const h = mount(pumpCapture().start, { mode: 'conversation' });
+    h.record().click();
+    expect(h.announceQuote()).toContain(RECORDING_ANNOUNCEMENT);
+    expect(h.startCta().textContent).toBe('● Play announcement & start');
+    expect(h.skipCta()?.textContent).toMatch(/skip the announcement/i);
+    // The quote reads ABOVE both verbs: it is what they are about.
+    const kids = [...h.pop().children];
+    expect(kids.findIndex((el) => el.classList.contains('meeting-announce-quote'))).toBeLessThan(
+      kids.findIndex((el) => el.classList.contains('meeting-start-actions')),
+    );
+  });
+
+  it('starts the capture on the skip, and keeps the device quiet', async () => {
     const announcer = new FakeAnnouncer();
     const mic = pumpCapture();
     const h = mount(mic.start, { mode: 'conversation', announcer });
-    h.pressStart({ consent: true });
+    h.pressStart({ skip: true });
     await settle();
-    // It IS a Start: a person saying it needs the mic open exactly as much
-    // as the device does, or their words are not in the recording either.
+    // It IS a Start — the skip declines the sentence, not the recording.
     expect(mic.start).toHaveBeenCalledTimes(1);
     h.sockets[0]?.onopen?.();
     h.sockets[0]?.serve({
@@ -2039,14 +2132,19 @@ describe('"I\'ll ask for consent" — the person takes the sentence', () => {
     });
     expect(h.root.dataset.state).toBe('recording');
     expect(announcer.said).toEqual([]);
+    // Not even primed: priming exists to unlock a speech queue this press is
+    // never going to use.
     expect(announcer.primes).toBe(0);
+    // And nothing is shown. The person read the sentence in the chooser and
+    // said no; putting it back on screen would be arguing with them.
+    expect(h.note()).toBe('');
   });
 
-  it('puts the sentence on screen to read, and records that path', async () => {
+  it('records the decline as a decline — not as an absence', async () => {
     const announcer = new FakeAnnouncer();
     const mic = pumpCapture();
     const h = mount(mic.start, { mode: 'conversation', announcer });
-    h.pressStart({ consent: true });
+    h.pressStart({ skip: true });
     await settle();
     h.sockets[0]?.onopen?.();
     h.sockets[0]?.serve({
@@ -2056,13 +2154,59 @@ describe('"I\'ll ask for consent" — the person takes the sentence', () => {
       engine: 'test',
       mode: 'conversation',
     });
-    expect(h.note()).toContain(RECORDING_ANNOUNCEMENT);
-    expect(h.note()).toMatch(/say this out loud/i);
-    // `spoken` is claimed at once, because putting the sentence on screen is
-    // the whole of what `spoken` claims — the strip cannot know whether
-    // anybody read it aloud, and it never pretends to.
-    expect(textFrames(h.sockets[0]).at(-1)).toEqual({ type: 'announced', by: 'spoken' });
-    expect(h.strip.announced()).toBe('spoken');
+    // The distinction the whole `skipped` value exists for: absent means no
+    // announcement was ever due, and this one was offered and turned down.
+    expect(textFrames(h.sockets[0]).at(-1)).toEqual({ type: 'announced', by: 'skipped' });
+    expect(h.strip.announced()).toBe('skipped');
+  });
+
+  it('claims the decline once, however many frames follow', async () => {
+    const announcer = new FakeAnnouncer();
+    const mic = pumpCapture();
+    const h = mount(mic.start, { mode: 'conversation', announcer });
+    h.pressStart({ skip: true });
+    await settle();
+    h.sockets[0]?.onopen?.();
+    h.sockets[0]?.serve({
+      type: 'ready',
+      meetingId: 'm1',
+      startedAt: 1_000,
+      engine: 'test',
+      mode: 'conversation',
+    });
+    h.sockets[0]?.serve({ type: 'transcript', turn: 0, text: 'anyway', final: true });
+    expect(textFrames(h.sockets[0]).filter((f) => f.type === 'announced')).toHaveLength(1);
+  });
+
+  it('forgets the skip — the next recording asks again', async () => {
+    const announcer = new FakeAnnouncer();
+    const mic = pumpCapture();
+    const h = mount(mic.start, { mode: 'conversation', announcer });
+    h.pressStart({ skip: true });
+    await settle();
+    h.sockets[0]?.onopen?.();
+    h.sockets[0]?.serve({
+      type: 'ready',
+      meetingId: 'm1',
+      startedAt: 1_000,
+      engine: 'test',
+      mode: 'conversation',
+    });
+    h.pressStop();
+    await settle();
+    // Reopened: the red verb still says it will play the announcement, and
+    // the skip is still an unpressed button rather than a remembered answer.
+    h.record().click();
+    expect(h.startCta().textContent).toBe('● Play announcement & start');
+    expect(h.announceQuote()).toContain(RECORDING_ANNOUNCEMENT);
+  });
+
+  it('offers neither verb to the bot — it has no microphone to speak through', () => {
+    const h = mount(pumpCapture().start, { mode: 'conversation', bot: new FakeBot() });
+    h.record().click();
+    h.pick('Join Zoom / Google Meet');
+    expect(h.announceQuote()).toBeNull();
+    expect(h.skipCta()).toBeNull();
   });
 });
 
@@ -2317,22 +2461,19 @@ describe('a meeting stopped mid-announcement', () => {
 });
 
 describe('the sentence a person has to READ stays on screen', () => {
-  /** Bring up the read-it-yourself prompt on a live capture. */
+  /**
+   * Bring up the read-it-yourself prompt on a live capture.
+   *
+   * Reached through a device that CANNOT speak, which is now the only way to
+   * reach it: the chooser used to offer "I'll ask for consent" and no longer
+   * does, so `spoken` is exactly what its name says — the fallback when the
+   * announcement could not be made by the machine.
+   */
   async function prompting() {
     const announcer = new FakeAnnouncer();
-    const mic = pumpCapture();
-    const h = mount(mic.start, { mode: 'conversation', announcer });
-    h.pressStart({ consent: true });
+    const { h, sock } = await recordingConversation(announcer);
+    announcer.settle('failed');
     await settle();
-    const sock = h.sockets[0];
-    sock?.onopen?.();
-    sock?.serve({
-      type: 'ready',
-      meetingId: 'm1',
-      startedAt: 1_000,
-      engine: 'test',
-      mode: 'conversation',
-    });
     return { h, sock, announcer };
   }
 
@@ -2479,11 +2620,15 @@ describe('the device speaking is not cancelled out of its own recording', () => 
     expect(log.indexOf('speak')).toBeLessThan(log.indexOf('aec:on'));
   });
 
-  it('leaves it alone when a person is the one talking', async () => {
+  it('leaves it alone when nothing is going to be played', async () => {
+    // The skip. Suspending echo cancellation exists to keep the device's own
+    // speaker out of the recording, so a press that plays nothing must not
+    // touch it — and this is now the path that reaches that state, since the
+    // chooser no longer offers "I'll say it myself".
     const announcer = new FakeAnnouncer();
     const mic = pumpCapture();
     const h = mount(mic.start, { mode: 'conversation', announcer });
-    h.pressStart({ consent: true });
+    h.pressStart({ skip: true });
     await settle();
     h.sockets[0]?.onopen?.();
     h.sockets[0]?.serve({
@@ -2494,8 +2639,6 @@ describe('the device speaking is not cancelled out of its own recording', () => 
       mode: 'conversation',
     });
     await settle();
-    // Their voice reaches the mic the way every other voice in the room
-    // does; the canceller was never in the way of it.
     expect(mic.aec).toEqual([]);
   });
 

@@ -208,9 +208,17 @@ describe('the recording announcement', () => {
 });
 
 describe('parseAnnouncedBy', () => {
-  it('reads the two paths', () => {
+  it('reads the two announcement paths', () => {
     expect(parseAnnouncedBy('device')).toBe('device');
     expect(parseAnnouncedBy('spoken')).toBe('spoken');
+  });
+
+  it('reads a declined offer, which is a record and not an announcement', () => {
+    // `skipped` says a person was shown the sentence and chose not to have
+    // it played. It cannot be folded into absent: absent means no
+    // announcement was ever due — a solo capture, or a client built before
+    // any of this — and those are different facts about consent.
+    expect(parseAnnouncedBy('skipped')).toBe('skipped');
   });
 
   it('answers UNDEFINED for anything else rather than defaulting', () => {
