@@ -301,31 +301,44 @@ describe('answering with a question asks back instead of closing', () => {
   // ── The legacy task decision route: the hub's own-decision door ──────────
 
   describe('the task’s own decision (/api/tasks/:id/answer)', () => {
-    it('a person’s question records a request for more info and the decision stays open', async () => {
+    /**
+     * Until 2026-08-31 this recorded a THREADLESS request and asserted the
+     * decision "stays open and counted" — which meant the card stayed put
+     * under the reader's own question, while the same words typed on a
+     * stored item's card sent it away. The two boxes make the same thread
+     * now, and the decision waits on its owner the same way.
+     */
+    it('a person’s question threads it on the ticket’s own decision, which then waits', async () => {
       const ws = await seedWorkspace();
       const task = await seedTask(ws, {
         title: 'How should boards share work?',
         needs: 'decision',
         body: 'Push rows across, or mirror the whole board?',
       });
+      expect((await queueRows(ws, task.id)).map((r) => r.state)).toEqual(['open']);
 
-      const res = await jj<{ asked?: boolean }>(
+      const res = await jj<{ asked?: boolean; threadId?: string }>(
         await post(`/api/tasks/${task.id}/answer`, {
           text: 'Why is this important?',
           author: PERSON,
         }),
       );
       expect(res.asked).toBe(true);
+      expect(typeof res.threadId).toBe('string');
 
       const stored = (await storedTask(ws, task.id)) as Task & {
         answer?: unknown;
-        infoRequests?: Array<{ text: string; by: string }>;
+        infoRequests?: Array<{ text: string; by: string; threadId?: string }>;
       };
       expect(stored.answer).toBeUndefined();
       expect(stored.infoRequests?.length).toBe(1);
       expect(stored.infoRequests?.[0]?.text).toBe('Why is this important?');
-      // Open and still counted — the derived row is on the queue, not closed.
-      expect((await queueRows(ws, task.id)).length).toBe(1);
+      expect(stored.infoRequests?.[0]?.threadId).toBe(res.threadId);
+      // The thread is anchored to the derived row, on the task doc.
+      const t = await thread(task.id, res.threadId as string);
+      expect(t.anchor.reviewItemId).toBe('r-legacy');
+      // The owner's turn: off the queue until they revise the ticket's words.
+      expect(await queueRows(ws, task.id)).toEqual([]);
     });
 
     it('a question after the decision is answered is refused, not recorded', async () => {

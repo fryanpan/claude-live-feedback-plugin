@@ -18,6 +18,7 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { type ServerHandle, createServer } from '../src/server.ts';
+import { projectTask } from '../src/task-projection.ts';
 import type { Task } from '../src/tasks.ts';
 
 const PERSON = { id: 'known-jordan', name: 'Jordan', kind: 'known', color: '#2e7dd7' };
@@ -570,6 +571,222 @@ describe('review-item comments and revisions', () => {
         }),
       );
       expect(await queueRows(ws, task.id)).toEqual([]);
+    });
+  });
+
+  // ── The ticket's OWN decision: the derived `r-legacy` row ──────────────
+
+  /**
+   * A `needs: 'decision'` ticket reaches the reader as a card that looks
+   * exactly like a review item's — and until 2026-08-31 it was the one card
+   * with no way to ask: the threads route refused an `r-legacy` anchor, so
+   * its only exit was Skip. The same cycle now runs on it: ask → the
+   * decision waits (off the queue, `decisionState: 'waiting'` on the
+   * projection the Home card is drawn from) → the owner revises the
+   * ticket's words → back on the queue marked Revised, quoting the question.
+   */
+  describe('the ticket’s own decision (r-legacy)', () => {
+    const BODY =
+      'How many times should the poller retry? Three tries costs a minute per failure; once loses the row on a blip. Blocked: the poller rollout.';
+    async function seedDecision(ws: string): Promise<Task> {
+      const { task } = await jj<{ task: Task }>(
+        await post(`/api/workspaces/${ws}/tasks`, {
+          title: 'Pick a retry budget',
+          body: BODY,
+          assignee: 'human',
+          needs: 'decision',
+          options: [{ label: 'Three' }, { label: 'Once' }],
+          author: AGENT,
+        }),
+      );
+      return task;
+    }
+    async function stored(ws: string, taskId: string) {
+      const { tasks } = await jj<{
+        tasks: Array<
+          Task & {
+            infoRequests?: Array<{ text: string; threadId?: string }>;
+            decisionRevisions?: Array<{
+              at: number;
+              by: string;
+              headline: string;
+              detail?: string;
+              threadId?: string;
+              revisedRange?: { start: number; end: number };
+            }>;
+          }
+        >;
+      }>(await fetch(`${base}/api/workspaces/${ws}/tasks`));
+      const t = tasks.find((x) => x.id === taskId);
+      expect(t, 'the task is on the board').toBeTruthy();
+      return t as NonNullable<typeof t>;
+    }
+    /** The projection the Home decision card is drawn from. */
+    const projected = (t: Task) =>
+      projectTask(t) as { decisionState?: string; decisionRevision?: Record<string, unknown> };
+    /** The card's "I have a question": a thread anchored to `r-legacy`,
+     *  quoting the title — snippet only, since the title is not in the body. */
+    async function askOnDecision(task: Task, text = 'What does a blip cost us?') {
+      const { thread } = await jj<{ thread: { id: string } }>(
+        await post(`/api/docs/task:${task.id}/threads`, {
+          anchor: { kind: 'review-item', reviewItemId: 'r-legacy', snippet: { text: task.title } },
+          text,
+          author: PERSON,
+        }),
+      );
+      return thread.id;
+    }
+
+    it('a question on it waits: recorded with its thread, off the queue, and the projection says so', async () => {
+      const ws = await seedWorkspace();
+      const task = await seedDecision(ws);
+      // Presence first: the derived row IS on the queue before the question.
+      expect((await queueRows(ws, task.id)).map((r) => [r.reviewItemId, r.state])).toEqual([
+        ['r-legacy', 'open'],
+      ]);
+      expect(projected(await stored(ws, task.id)).decisionState).toBeUndefined();
+
+      const threadId = await askOnDecision(task);
+
+      // A real task thread, anchored to the derived row, quoting the title.
+      const t = await thread(task.id, threadId);
+      expect(t.anchor.kind).toBe('review-item');
+      expect(t.anchor.reviewItemId).toBe('r-legacy');
+      expect(t.comments.map((c) => c.text)).toEqual(['What does a blip cost us?']);
+
+      // Recorded on the TASK's own request-more-info storage — no phantom
+      // stored row minted beside the decision — now carrying the thread.
+      const s = await stored(ws, task.id);
+      expect(s.reviews ?? []).toEqual([]);
+      expect(s.answer).toBeUndefined();
+      expect(s.infoRequests?.map((r) => [r.text, r.threadId])).toEqual([
+        ['What does a blip cost us?', threadId],
+      ]);
+
+      // The owner's turn: off the reader's queue, and the projection the
+      // browser draws the card from says so.
+      expect(await queueRows(ws, task.id)).toEqual([]);
+      expect(projected(s).decisionState).toBe('waiting');
+    });
+
+    it('a second question while it waits is refused, naming the open thread', async () => {
+      const ws = await seedWorkspace();
+      const task = await seedDecision(ws);
+      const first = await askOnDecision(task);
+      const res = await post(`/api/docs/task:${task.id}/threads`, {
+        anchor: { kind: 'review-item', reviewItemId: 'r-legacy', snippet: { text: task.title } },
+        text: 'And on a manual run?',
+        author: PERSON,
+      });
+      expect(res.status).toBe(409);
+      const body = (await res.json()) as { error: string; threadId?: string };
+      expect(body.error).toBe('waiting');
+      expect(body.threadId).toBe(first);
+    });
+
+    it('revising the ticket’s words brings it back marked Revised, quoting the question', async () => {
+      const ws = await seedWorkspace();
+      const task = await seedDecision(ws);
+      const threadId = await askOnDecision(task);
+      expect(await queueRows(ws, task.id)).toEqual([]);
+
+      const detail = `${BODY} A blip costs one row.`;
+      await jj(
+        await post(`/api/tasks/${task.id}/review-items/r-legacy/revise`, {
+          headline: 'Pick a retry budget for the poller',
+          detail,
+          author: AGENT,
+        }),
+      );
+
+      // The words moved on the ticket, and the superseded reading is kept
+      // on the task — user content is never overwritten in place.
+      const s = await stored(ws, task.id);
+      expect(s.title).toBe('Pick a retry budget for the poller');
+      expect(s.body).toBe(detail);
+      expect(s.reviews ?? []).toEqual([]);
+      expect(s.decisionRevisions?.length).toBe(1);
+      const rev = s.decisionRevisions?.[0];
+      expect(rev?.headline).toBe('Pick a retry budget');
+      expect(rev?.detail).toBe(BODY);
+      expect(rev?.by).toBe('Index Keeper');
+      expect(rev?.threadId).toBe(threadId);
+      expect(rev?.revisedRange).toEqual({ start: BODY.length, end: detail.length });
+
+      // Back on the queue, marked, with the question and thread beside it —
+      // the derived row, exactly as a stored item comes back.
+      const rows = await queueRows(ws, task.id);
+      expect(rows.length).toBe(1);
+      const row = rows[0] as ReviewRow;
+      expect(row.reviewItemId).toBe('r-legacy');
+      expect(row.state).toBe('revised');
+      expect(row.question).toBe('What does a blip cost us?');
+      expect(row.threadId).toBe(threadId);
+      expect(row.revisedAt).toBe(rev?.at as number);
+
+      // And the projection the Home card is drawn from says the same.
+      const p = projected(s);
+      expect(p.decisionState).toBe('revised');
+      expect(p.decisionRevision).toEqual({
+        at: rev?.at,
+        question: 'What does a blip cost us?',
+        threadId,
+        range: { start: BODY.length, end: detail.length },
+      });
+
+      // Answered after the revision: closed, and the mark clears with it.
+      await jj(
+        await post(`/api/tasks/${task.id}/review-items/r-legacy/answer`, {
+          text: 'Three',
+          answeredWith: s.options?.[0]?.id,
+          author: PERSON,
+        }),
+      );
+      expect(await queueRows(ws, task.id)).toEqual([]);
+      const after = projected(await stored(ws, task.id));
+      expect(after.decisionState).toBeUndefined();
+      expect(after.decisionRevision).toBeUndefined();
+    });
+
+    it('a question typed into the decision’s answer box makes the same thread and waits too', async () => {
+      const ws = await seedWorkspace();
+      const task = await seedDecision(ws);
+      const res = await jj<{ asked?: boolean; threadId?: string }>(
+        await post(`/api/tasks/${task.id}/review-items/r-legacy/answer`, {
+          text: 'Why does once lose the row?',
+          author: PERSON,
+        }),
+      );
+      expect(res.asked).toBe(true);
+      expect(typeof res.threadId).toBe('string');
+      const t = await thread(task.id, res.threadId as string);
+      expect(t.anchor.reviewItemId).toBe('r-legacy');
+      expect((await stored(ws, task.id)).infoRequests?.[0]?.threadId).toBe(res.threadId);
+      expect(await queueRows(ws, task.id)).toEqual([]);
+    });
+
+    /**
+     * CONTROL — the agent-side "tell me more" (`request_more_info`, through
+     * `/review-items/:rid/more-info`) records NO thread on purpose: an agent
+     * asking for context must not take the item off the person's queue. So
+     * a decision asked about this way is still `open`, still counted. This
+     * pins that the person's ask above did not get there by accident.
+     */
+    it('the agent-side more-info route leaves it on the queue — no thread, so never waiting', async () => {
+      const ws = await seedWorkspace();
+      const task = await seedDecision(ws);
+      await jj(
+        await post(`/api/tasks/${task.id}/review-items/r-legacy/more-info`, {
+          question: 'Which poller?',
+          author: AGENT,
+        }),
+      );
+      const s = await stored(ws, task.id);
+      expect(s.infoRequests?.map((r) => [r.text, r.threadId])).toEqual([
+        ['Which poller?', undefined],
+      ]);
+      expect((await queueRows(ws, task.id)).map((r) => r.state)).toEqual(['open']);
+      expect(projected(s).decisionState).toBeUndefined();
     });
   });
 

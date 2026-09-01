@@ -281,6 +281,7 @@ import {
   isAttachmentRuntime,
   isRetired,
   isValidRef,
+  legacyDecisionItem,
   retiredNotice,
   retiredRefusal,
   reviewItemVersion,
@@ -2377,6 +2378,105 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
   }
 
   /**
+   * A person's QUESTION typed where an answer goes, turned into the ask it
+   * is: a thread on the task doc anchored to the item, recorded on the item
+   * WITH that thread — which is what takes the item off the reader's queue
+   * (`reviewItemState` reads a threaded question as `waiting`) until the
+   * owner revises it. ONE implementation for the two answer routes — the
+   * review-item route and the task's own `/answer` — so a question typed
+   * into a stored item's card and one typed into the ticket's own decision
+   * card make the same thread and leave the queue by the same rule. `item`
+   * may be the derived `r-legacy` row: its `id` addresses it on the store,
+   * and its `detail` is the task body.
+   *
+   * The caller has already refused an ANSWERED item, which it can see on its
+   * own row; everything else about the conversion is here.
+   */
+  async function askBackOnItem(
+    task: Task,
+    item: TaskReviewItem,
+    text: string,
+    author: User,
+    visitor: boolean,
+  ): Promise<Response> {
+    // One open question at a time, the anchored ask's own rule: a second
+    // would orphan the first, because revise only answers the newest
+    // threaded question (`latestThreadedQuestion`).
+    if (reviewItemState(item) === 'waiting') {
+      const openThreadId = latestThreadedQuestion(item)?.threadId;
+      const owner = item.createdBy.trim() || 'the owner';
+      return j(409, {
+        error: 'waiting',
+        message: `Already waiting on ${owner} — add to the open thread instead`,
+        ...(openThreadId !== undefined ? { threadId: openThreadId } : {}),
+      });
+    }
+    // The question becomes a real thread on the item, exactly as a
+    // phrase-anchored ask does — the thread is where the owner replies, and
+    // what the card opens onto. It is about the WHOLE item, so the anchor
+    // quotes the headline (offsets only if those words happen to sit
+    // uniquely in the detail) and the recorded question carries no range:
+    // there is no phrase to mark.
+    const headlineRange = locateReviewItemRange(item.review.detail, {
+      text: item.review.headline,
+    });
+    const created = await rooms.postComment(
+      taskProjection.ensureBodyRoom(task),
+      null,
+      author,
+      text,
+      {
+        kind: 'review-item',
+        reviewItemId: item.id,
+        snippet: { text: item.review.headline },
+        ...(headlineRange?.start !== undefined && headlineRange?.end !== undefined
+          ? { start: headlineRange.start, end: headlineRange.end }
+          : {}),
+      },
+      { generate: !visitor },
+    );
+    if (!created) return j(500, { error: 'could not create thread' });
+    // Re-checked in the same synchronous stretch as the record — the
+    // `onlyIfUnanswered` discipline the fold path uses. The waiting check
+    // above is a claim about a moment before the thread write's await, and
+    // two readers can both pass it; recording both would bury the first
+    // question where revise can never answer it (`latestThreadedQuestion`
+    // reads only the newest). The loser is refused like any late asker; its
+    // thread stays on the item as an ordinary comment — the reader's words
+    // are user content, and this project does not delete those to tidy a
+    // race (codex review).
+    const now = taskStore.listReviewItems(task.id).find((r) => r.id === item.id);
+    if (now && reviewItemState(now) === 'answered') {
+      return j(409, {
+        error: 'answered',
+        message:
+          'this item was answered while your question was being posted — it stands as a comment on the item; undo the answer first, or ask on the item’s thread',
+      });
+    }
+    if (now && reviewItemState(now) === 'waiting') {
+      const openThreadId = latestThreadedQuestion(now)?.threadId;
+      const owner = now.createdBy.trim() || 'the owner';
+      return j(409, {
+        error: 'waiting',
+        message: `Already waiting on ${owner} — your question was posted as a comment on the item; add to the open thread instead`,
+        ...(openThreadId !== undefined ? { threadId: openThreadId } : {}),
+      });
+    }
+    const asked = taskStore.requestMoreInfoOnReview(task.id, item.id, text, {
+      actor: author,
+      threadId: created.id,
+    });
+    if (!asked.ok) return j(asked.error === 'not-found' ? 404 : 400, asked);
+    taskProjection.ensureWorkspace(asked.task.workspaceId);
+    return j(200, {
+      asked: true,
+      task: asked.task,
+      item: asked.item,
+      threadId: created.id,
+    });
+  }
+
+  /**
    * The words a goal id resolves to, for the scorer's prompt — a small
    * local copy of `task-queue.ts`'s private `goalTitleOf` (not exported,
    * and not worth widening its module's surface for one more caller).
@@ -3451,7 +3551,14 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
    */
   const homeQueueTotal = (workspace: HubWorkspace, items: ReviewItemRow[]): number => {
     const open = taskStore.listTasks(workspace.id).filter((t) => t.status !== 'done');
-    const decisions = open.filter((t) => t.needs === 'decision' && !t.answer);
+    // A decision the reader has asked on is the OWNER's turn and off the
+    // browser's queue (`decisionRows` reads `decisionState`), so it is not
+    // counted here either — the same derivation, on the same row.
+    const decisions = open.filter((t) => {
+      if (t.needs !== 'decision' || t.answer) return false;
+      const item = legacyDecisionItem(t);
+      return item === undefined || reviewItemState(item) !== 'waiting';
+    });
     const rendered = items.filter(
       (i) => i.kind !== 'task-review' || i.reviewItemId !== LEGACY_REVIEW_ITEM_ID,
     );
@@ -8117,12 +8224,26 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
             // already 'answered', which outranks the request this would
             // record — the question would be invisible. Refuse it, same as
             // the review-item route below.
-            if (taskStore.getTask(taskId)?.answer !== undefined) {
+            const task = taskStore.getTask(taskId);
+            if (task?.answer !== undefined) {
               return j(409, {
                 error: 'answered',
                 message:
                   'this decision is already answered — a question cannot displace the recorded answer; undo the answer first, or ask on the task',
               });
+            }
+            // The SAME ask a question on a review item makes: a thread on the
+            // task doc anchored to the derived `r-legacy` row, recorded with
+            // its thread — so the decision leaves the reader's queue and comes
+            // back Revised, whichever box the question was typed into. Until
+            // 2026-08-31 this recorded a threadless "tell me more" and the
+            // card stayed put under the question, while the same words typed
+            // on a stored item's card sent it away: two identical cards, two
+            // behaviours. A non-decision task (nothing derived) keeps the old
+            // record, which `requestMoreInfo` refuses as `not-a-decision`.
+            const decision = task ? legacyDecisionItem(task) : undefined;
+            if (task && decision) {
+              return askBackOnItem(task, decision, text, author, Boolean(visitor));
             }
             const asked = taskStore.requestMoreInfo(taskId, text, { actor: author });
             if (!asked.ok) return j(asked.error === 'not-found' ? 404 : 400, asked);
@@ -8250,18 +8371,12 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           ) {
             const task = taskStore.getTask(taskId);
             if (!task) return j(404, { error: 'not-found' });
-            if (reviewItemId === LEGACY_REVIEW_ITEM_ID) {
-              // The ticket's own decision has no item thread (its words are
-              // the task body), so the question is recorded through the
-              // shipped task-level "Tell me more" — the row stays open and
-              // counted rather than closing under a question.
-              const asked = taskStore.requestMoreInfoOnReview(taskId, reviewItemId, text, {
-                actor: author,
-              });
-              if (!asked.ok) return j(asked.error === 'not-found' ? 404 : 400, asked);
-              taskProjection.ensureWorkspace(asked.task.workspaceId);
-              return j(200, { asked: true, task: asked.task, item: asked.item });
-            }
+            // The ticket's OWN decision (`r-legacy`) takes this path too —
+            // `listReviewItems` derives its row. It used to be recorded
+            // through the task-level "tell me more" with no thread, which
+            // left the decision on the queue under a question the reader
+            // had just asked; now it gets the same thread and the same
+            // waiting state as a stored item.
             const item = taskStore.listReviewItems(taskId).find((r) => r.id === reviewItemId);
             // An unknown item falls through to the ordinary answer path below,
             // which owns that refusal. An ANSWERED one is refused here: the
@@ -8278,84 +8393,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
                   'this item is already answered — a question cannot displace the recorded answer; undo the answer first, or ask on the item’s thread',
               });
             }
-            if (item) {
-              // One open question at a time, the anchored ask's own rule: a
-              // second would orphan the first, because revise only answers the
-              // newest threaded question (`latestThreadedQuestion`).
-              if (reviewItemState(item) === 'waiting') {
-                const openThreadId = latestThreadedQuestion(item)?.threadId;
-                const owner = item.createdBy.trim() || 'the owner';
-                return j(409, {
-                  error: 'waiting',
-                  message: `Already waiting on ${owner} — add to the open thread instead`,
-                  ...(openThreadId !== undefined ? { threadId: openThreadId } : {}),
-                });
-              }
-              // The question becomes a real thread on the item, exactly as a
-              // phrase-anchored ask does — the thread is where the owner
-              // replies, and what the card opens onto. It is about the WHOLE
-              // item, so the anchor quotes the headline (offsets only if those
-              // words happen to sit uniquely in the detail) and the recorded
-              // question carries no range: there is no phrase to mark.
-              const headlineRange = locateReviewItemRange(item.review.detail, {
-                text: item.review.headline,
-              });
-              const created = await rooms.postComment(
-                taskProjection.ensureBodyRoom(task),
-                null,
-                author,
-                text,
-                {
-                  kind: 'review-item',
-                  reviewItemId: item.id,
-                  snippet: { text: item.review.headline },
-                  ...(headlineRange?.start !== undefined && headlineRange?.end !== undefined
-                    ? { start: headlineRange.start, end: headlineRange.end }
-                    : {}),
-                },
-                { generate: !visitor },
-              );
-              if (!created) return j(500, { error: 'could not create thread' });
-              // Re-checked in the same synchronous stretch as the record — the
-              // `onlyIfUnanswered` discipline the fold path uses. The waiting
-              // check above is a claim about a moment before the thread write's
-              // await, and two readers can both pass it; recording both would
-              // bury the first question where revise can never answer it
-              // (`latestThreadedQuestion` reads only the newest). The loser is
-              // refused like any late asker; its thread stays on the item as an
-              // ordinary comment — the reader's words are user content, and
-              // this project does not delete those to tidy a race (codex
-              // review).
-              const now = taskStore.listReviewItems(taskId).find((r) => r.id === reviewItemId);
-              if (now && reviewItemState(now) === 'answered') {
-                return j(409, {
-                  error: 'answered',
-                  message:
-                    'this item was answered while your question was being posted — it stands as a comment on the item; undo the answer first, or ask on the item’s thread',
-                });
-              }
-              if (now && reviewItemState(now) === 'waiting') {
-                const openThreadId = latestThreadedQuestion(now)?.threadId;
-                const owner = now.createdBy.trim() || 'the owner';
-                return j(409, {
-                  error: 'waiting',
-                  message: `Already waiting on ${owner} — your question was posted as a comment on the item; add to the open thread instead`,
-                  ...(openThreadId !== undefined ? { threadId: openThreadId } : {}),
-                });
-              }
-              const asked = taskStore.requestMoreInfoOnReview(taskId, reviewItemId, text, {
-                actor: author,
-                threadId: created.id,
-              });
-              if (!asked.ok) return j(asked.error === 'not-found' ? 404 : 400, asked);
-              taskProjection.ensureWorkspace(asked.task.workspaceId);
-              return j(200, {
-                asked: true,
-                task: asked.task,
-                item: asked.item,
-                threadId: created.id,
-              });
-            }
+            if (item) return askBackOnItem(task, item, text, author, Boolean(visitor));
           }
           const res = taskStore.answerTaskReview(taskId, reviewItemId, text, {
             actor: author,
@@ -8365,6 +8403,14 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           taskProjection.ensureWorkspace(res.task.workspaceId);
           return j(200, res);
         }
+        // "Tell me more" on ONE review item — the `request_more_info` tool's
+        // door, and deliberately NOT the reader's "I have a question". It
+        // records the question with no thread, so `reviewItemState` never
+        // reads the item as `waiting` and it stays on the queue: this is the
+        // agent-side ask for context, and an agent asking must not take an
+        // item off the person's queue. A person's question goes through the
+        // threads route (a `review-item` anchor on the task doc), which is
+        // what makes the item wait on its owner.
         const taskReviewInfoMatch = pathname.match(
           /^\/api\/tasks\/([^/]+)\/review-items\/([^/]+)\/more-info$/,
         );
@@ -11101,12 +11147,17 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
               }
               const taskId = docId.slice('task:'.length);
               if (!taskStore.getTask(taskId)) return j(404, { error: 'task not found' });
-              if (anchor.reviewItemId === 'r-legacy') {
-                return j(400, {
-                  error:
-                    "the legacy decision's words are the task body — anchor a text-range there instead",
-                });
-              }
+              // The derived `r-legacy` row is admitted like any other — it
+              // used to be refused here ("anchor a text-range there
+              // instead"), which left a `needs: 'decision'` ticket's card
+              // with no way to ask: an identical-looking card whose only
+              // exit was Skip. `listReviewItems` derives the row, the
+              // question is recorded on the task WITH its thread
+              // (`requestMoreInfoOnReview` → `requestMoreInfo`), and the
+              // decision leaves the reader's queue by the same derivation a
+              // stored item does. Its `detail` is the task body, so a phrase
+              // of the body anchors with offsets and the headline (the
+              // title) anchors snippet-only.
               const wanted = anchor.reviewItemId;
               const item = taskStore.listReviewItems(taskId).find((r) => r.id === wanted);
               if (!item) return j(404, { error: 'unknown-review-item' });

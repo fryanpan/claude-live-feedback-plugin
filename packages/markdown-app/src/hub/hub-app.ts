@@ -105,6 +105,7 @@ import {
   presenceIdentity,
   refreshReviewItems,
   reviewItemAskRequest,
+  reviewItemOwner,
   reviewItemQuestionRequest,
   reviewQueue,
   reviewReplyRequest,
@@ -906,6 +907,10 @@ async function main(): Promise<void> {
    * `openReviewItem`: whether the reader is still on this page.
    */
   function openReviewThread(item: ReviewItem, returnItem?: string | null): boolean {
+    // A revised DECISION's thread is on its task doc, like a ticket item's.
+    if (item.decision && item.revision?.threadId) {
+      return openTaskThread(item.decision.task.id, item.revision.threadId);
+    }
     const t = item.thread;
     const threadId = item.revision?.threadId ?? t?.threadId;
     if (!t || t.kind !== 'task-review' || !t.taskId || !threadId)
@@ -2590,7 +2595,9 @@ async function main(): Promise<void> {
       ? reviewItemAskRequest(item, phrase.text, question)
       : reviewItemQuestionRequest(item, question);
     if (!reqSpec) return false;
-    return sendReviewItemQuestion(reqSpec, item.thread?.taskId, item.thread?.askedBy);
+    // A ticket's own decision carries its task on `decision`, not `thread`.
+    const taskId = item.thread?.taskId ?? item.decision?.task.id;
+    return sendReviewItemQuestion(reqSpec, taskId, reviewItemOwner(item));
   }
 
   /**

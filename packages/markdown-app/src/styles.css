@@ -2114,6 +2114,15 @@ body.hub-body {
 .hub-walk-question-link {
   min-height: 36px;
 }
+/* The line a thread-borne card shows where the link would be: its reply box
+   IS the thread, so that is where a question goes. Muted, one line. */
+.hub-walk-question-note {
+  font-size: 12px;
+  color: var(--muted);
+  min-height: 36px;
+  display: inline-flex;
+  align-items: center;
+}
 /* The box the link opens, in the answer furniture's place: the thread
    card's dressing (`.hub-walk-thread`) minus the quoted phrase — the question
    is about the whole item, and its headline is right above. */
@@ -4731,6 +4740,13 @@ a.hub-link-chip:hover {
 .hub-decide-question-link {
   margin-top: 8px;
   min-height: 36px;
+}
+/* The line a thread-borne card shows where the link would be — see
+   `.hub-walk-question-note`. */
+.hub-decide-question-note {
+  margin: 8px 0 0;
+  font-size: 12px;
+  color: var(--muted);
 }
 /* The box the link opens, in the answer furniture's place — which is hidden
    rather than unmounted, so a half-typed answer survives Cancel. The

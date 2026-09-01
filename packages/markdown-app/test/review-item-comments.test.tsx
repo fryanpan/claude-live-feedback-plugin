@@ -25,9 +25,12 @@ import {
   mountHomeReviewIsland,
 } from '../src/hub/home-review-island.tsx';
 import {
+  CHORES_ID,
+  type HubTask,
   type ReviewItem,
   type ReviewQueue,
   type ReviewThreadItem,
+  decisionRows,
   reviewItemAskRequest,
   reviewItemQuestionRequest,
   reviewQueue,
@@ -700,6 +703,148 @@ describe('the walkthrough card: a revised item comes back marked', () => {
     expect(root.querySelector('.hub-walk-k-revised')).toBeNull();
     expect(root.querySelector('.hub-walk-question')).toBeNull();
     expect(root.querySelector('.hub-walk-thread-link')).toBeNull();
+  });
+});
+
+/** A ticket filed with `needs: 'decision'` — the card whose only exit was Skip. */
+function decisionTask(over: Partial<HubTask> = {}): HubTask {
+  return {
+    id: 'tk-9',
+    title: 'Pick a retry budget',
+    status: 'todo',
+    assignee: 'human',
+    needs: 'decision',
+    goal: CHORES_ID,
+    order: 1,
+    after: [],
+    links: [],
+    transitions: [],
+    bodyDocId: 'task:tk-9',
+    createdAt: NOW - 120_000,
+    createdBy: 'Poller Bot',
+    updatedAt: NOW - 120_000,
+    body: 'Three tries costs a minute per failure; once loses the row on a blip.',
+    options: [
+      { id: 'o-3', label: 'Three' },
+      { id: 'o-1', label: 'Once' },
+    ],
+    ...over,
+  } as HubTask;
+}
+
+describe('the model: a ticket’s own decision asks, waits and comes back like any item', () => {
+  it('a question about the decision goes to the threads route anchored to r-legacy, quoting the title', () => {
+    const [item] = reviewQueue([decisionTask()], [], NOW).items;
+    expect(item?.kind).toBe('decision');
+    expect(wholeItemPhrase(item as ReviewItem)).toBe('Pick a retry budget');
+    expect(reviewItemQuestionRequest(item as ReviewItem, 'What does a blip cost?')).toEqual({
+      path: '/api/docs/task%3Atk-9/threads',
+      body: {
+        text: 'What does a blip cost?',
+        anchor: {
+          kind: 'review-item',
+          reviewItemId: 'r-legacy',
+          snippet: { text: 'Pick a retry budget' },
+        },
+      },
+    });
+  });
+
+  it('a WAITING decision is off the queue; a REVISED one is on it, marked and quoting the question', () => {
+    expect(decisionRows([decisionTask({ decisionState: 'waiting' })])).toEqual([]);
+    expect(reviewQueue([decisionTask({ decisionState: 'waiting' })], [], NOW).items).toEqual([]);
+    // Control: open, and answered, read as before.
+    expect(decisionRows([decisionTask()]).length).toBe(1);
+    expect(
+      decisionRows([decisionTask({ answer: { text: 'Three', by: 'Jordan', ts: NOW } })]),
+    ).toEqual([]);
+    const revised = decisionTask({
+      decisionState: 'revised',
+      decisionRevision: {
+        at: NOW - 30_000,
+        question: 'What does a blip cost?',
+        threadId: 'th-9',
+        range: { start: 0, end: 5 },
+      },
+    });
+    const [item] = reviewQueue([revised], [], NOW).items;
+    expect(item?.revision).toEqual({
+      at: NOW - 30_000,
+      question: 'What does a blip cost?',
+      threadId: 'th-9',
+      range: { start: 0, end: 5 },
+    });
+  });
+});
+
+describe('the walkthrough card: a ticket’s own decision offers the link too', () => {
+  const link = () => root.querySelector('.hub-walk-question-link') as HTMLElement | null;
+  const box = () => root.querySelector('.hub-walk-question-box') as HTMLElement | null;
+  const note = () => root.querySelector('.hub-walk-question-note') as HTMLElement | null;
+
+  it('shows "I have a question" beside Skip on the decision card', () => {
+    mountWalk(reviewQueue([decisionTask()], [], NOW), walk());
+    expect(root.querySelector('.hub-walk-decision')).not.toBeNull();
+    const l = link();
+    expect(l?.textContent).toBe('I have a question');
+    expect(l?.closest('.hub-walk-actions')?.querySelector('.hub-walk-skip-link')).not.toBeNull();
+    expect(note()).toBeNull();
+  });
+
+  it('tapping it opens the question box in place of the answer furniture; Send asks about the decision', async () => {
+    const onQuestionOnItem = vi.fn().mockResolvedValue(true);
+    const onAnswer = vi.fn();
+    const q = reviewQueue([decisionTask()], [], NOW);
+    mountWalk(q, walk({ onQuestionOnItem, onAnswer }));
+    link()?.click();
+    await tick();
+    const b = box();
+    expect(b).not.toBeNull();
+    expect(b?.querySelector('.hub-walk-question-hint')?.textContent).toContain('Ask Poller Bot');
+    expect(root.querySelector('.hub-walk-answering')?.classList.contains('hidden')).toBe(true);
+    const form = b?.querySelector('.hub-walk-question-form') as HTMLFormElement;
+    (form.querySelector('textarea') as HTMLTextAreaElement).value = 'What does a blip cost?';
+    form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+    await tick();
+    expect(onQuestionOnItem).toHaveBeenCalledWith(
+      expect.objectContaining({ kind: 'decision' }),
+      'What does a blip cost?',
+    );
+    expect(onAnswer).not.toHaveBeenCalled();
+  });
+
+  it('a revised decision comes back marked, quoting the question, with the way to the thread', () => {
+    const onOpenThread = vi.fn();
+    const q = reviewQueue(
+      [
+        decisionTask({
+          decisionState: 'revised',
+          decisionRevision: {
+            at: NOW - 30_000,
+            question: 'What does a blip cost?',
+            threadId: 'th-9',
+          },
+        }),
+      ],
+      [],
+      NOW,
+    );
+    mountWalk(q, walk({ onOpenThread }));
+    expect(root.querySelector('.hub-walk-k-revised')?.textContent).toBe('Revised');
+    expect(root.querySelector('.hub-walk-question-text')?.textContent).toContain(
+      'What does a blip cost?',
+    );
+    (root.querySelector('.hub-walk-thread-link') as HTMLElement).click();
+    expect(onOpenThread).toHaveBeenCalledWith(q.items[0]);
+    // A fresh ask again: the link is there.
+    expect(link()).not.toBeNull();
+  });
+
+  it('CONTROL: a thread-borne card gets no link, and one line saying where its questions go', () => {
+    mountWalk(reviewQueue([], [threadRow()], NOW), walk());
+    expect(link()).toBeNull();
+    expect(note()?.textContent).toContain('Reply above');
+    expect(note()?.closest('.hub-walk-actions')).not.toBeNull();
   });
 });
 
