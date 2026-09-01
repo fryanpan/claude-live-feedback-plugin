@@ -1377,6 +1377,8 @@ function TaskDetailPanel(props: {
             {...(handlers.focusThreadId !== undefined
               ? { focusThreadId: handlers.focusThreadId }
               : {})}
+            {...(task.reviews !== undefined ? { reviewItems: task.reviews } : {})}
+            {...(handlers.selfName !== undefined ? { selfName: handlers.selfName } : {})}
             now={now}
           />
         )}

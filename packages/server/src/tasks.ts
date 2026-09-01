@@ -2288,6 +2288,27 @@ export interface VoiceRequestEvent {
 }
 
 /**
+ * A review item was RAISED on a ticket. Emitted at the store, before the
+ * quality gate has judged it, because "filed" is a fact whether or not the
+ * item reaches the reader's queue — and the task's Activity tab is where a
+ * reader goes to see a question was asked and later answered. Without this
+ * row the trail showed `decision.answered` with no ask before it, so an
+ * answered item read as an answer to nothing.
+ */
+export interface ReviewItemAddedEvent {
+  type: 'review_item.added';
+  workspaceId: string;
+  taskId: string;
+  reviewItemId: string;
+  shape: ReviewPayload['shape'];
+  /** The ask, verbatim — the trail names the question, not just its id. */
+  headline: string;
+  actor: TaskActor;
+  links: Ref[];
+  ts: number;
+}
+
+/**
  * A review item's words changed in place — the owner's half of the
  * doc-style exchange: a person asks on a phrase, the owner revises. The
  * item is back on the queue after this, marked, which is what a lead
@@ -2327,6 +2348,7 @@ export interface ReviewItemWithdrawnEvent {
 }
 
 export type TaskStoreEvent =
+  | ReviewItemAddedEvent
   | ReviewItemRevisedEvent
   | ReviewItemWithdrawnEvent
   | TaskCreatedEvent
@@ -4604,6 +4626,17 @@ export class TaskStore {
     task.reviews = [...(task.reviews ?? []), item];
     task.updatedAt = ts;
     this.scheduleSave(task.workspaceId);
+    this.emit({
+      type: 'review_item.added',
+      workspaceId: task.workspaceId,
+      taskId: task.id,
+      reviewItemId: item.id,
+      shape: payload.shape,
+      headline: payload.headline,
+      actor,
+      links: task.links,
+      ts,
+    });
 
     const advice = reviewGapAdvice(check.gaps);
     return { ok: true, task, item, ...(advice !== undefined ? { advice } : {}) };
