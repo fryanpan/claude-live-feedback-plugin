@@ -25,9 +25,11 @@ import {
   latestThreadedQuestion,
   readReviewPayload,
   readTaskReviewItem,
+  reinstateReview,
   reviewFromDecisionTask,
   reviewGapAdvice,
   reviewPayloadMessage,
+  withdrawReview,
 } from '@feedback/core';
 import { DEFAULT_EFFORT_ESTIMATE_PROMPT } from '@feedback/core/effort-estimate-prompt';
 import { DEFAULT_REVIEW_ITEM_CRITERIA } from '@feedback/core/review-judge-prompt';
@@ -2228,8 +2230,30 @@ export interface ReviewItemRevisedEvent {
   ts: number;
 }
 
+/**
+ * A review item's ASKER took it back — or put it back (`reinstated`). The
+ * words stay on the ticket verbatim; only the item's standing changed, so the
+ * reader's queue drops (or re-offers) it. The ticket-borne twin of the stamp
+ * the doc-thread withdraw route writes, emitted so the feed and the
+ * projection hear about a queue change no task row records.
+ */
+export interface ReviewItemWithdrawnEvent {
+  type: 'review_item.withdrawn';
+  workspaceId: string;
+  taskId: string;
+  reviewItemId: string;
+  /** True on the undo — the ask is back in front of the reader. */
+  reinstated?: boolean;
+  /** The asker's one line on why, when they wrote one. */
+  reason?: string;
+  actor: TaskActor;
+  links: Ref[];
+  ts: number;
+}
+
 export type TaskStoreEvent =
   | ReviewItemRevisedEvent
+  | ReviewItemWithdrawnEvent
   | TaskCreatedEvent
   | TaskTransitionedEvent
   | TaskGateRefusedEvent
@@ -2495,6 +2519,22 @@ export type ReviseReviewItemResult =
         | 'bad-range';
       /** The verbatim refusal, present for 'bad-review', 'answered', 'withdrawn'
        *  and 'bad-range'. */
+      message?: string;
+    };
+
+export type WithdrawReviewItemResult =
+  | { ok: true; task: Task; item: TaskReviewItem }
+  | {
+      ok: false;
+      error:
+        | 'not-found'
+        | 'unknown-review-item'
+        | 'not-withdrawable'
+        | 'answered'
+        | 'already-withdrawn'
+        | 'not-withdrawn';
+      /** The verbatim refusal, for the errors core phrases
+       *  ('answered', 'already-withdrawn', 'not-withdrawn'). */
       message?: string;
     };
 
@@ -5258,6 +5298,105 @@ export class TaskStore {
       ...(question?.threadId !== undefined ? { threadId: question.threadId } : {}),
       ...(advice !== undefined ? { advice } : {}),
     };
+  }
+
+  /**
+   * Take back one review item on a ticket, or put it back (`undo`) — the
+   * asker's own exit from its own ask, which the doc-thread surface has had
+   * since 2026-08-29 and the ticket surface lacked. The measured cost of the
+   * gap: a duplicate ticket-form decision could only leave the reader's queue
+   * by being revised into something else, which is a lie about what was asked.
+   *
+   * What "withdrawn" MEANS — the stamps, the refusals, the words never being
+   * touched — is core's (`withdrawReview` / `reinstateReview`), shared with
+   * the doc route so the two surfaces cannot drift. This method only decides
+   * where the payload lives (the item wrapper) and what else must be true of
+   * the WRAPPER: an answer recorded there closes the item just as payload
+   * stamps do, and core cannot see it.
+   *
+   * The derived legacy row is refused: the ticket's own decision has no
+   * stored item to stamp — its words ARE the title, body and options — and
+   * its exits are answering it or archiving the ticket.
+   */
+  withdrawReviewItem(
+    taskId: string,
+    reviewItemId: string,
+    opts: {
+      actor: { id: string; name: string; kind?: string };
+      reason?: string;
+      undo?: boolean;
+    },
+  ): WithdrawReviewItemResult {
+    const task = this.getTask(taskId);
+    if (!task) return { ok: false, error: 'not-found' };
+    if (reviewItemId === LEGACY_REVIEW_ITEM_ID) {
+      return {
+        ok: false,
+        error: 'not-withdrawable',
+        message:
+          "the ticket's own decision has no item to withdraw — its words are the ticket; answer it, rewrite the ticket, or archive it",
+      };
+    }
+    const item = task.reviews?.find((r) => r.id === reviewItemId);
+    if (!item) return { ok: false, error: 'unknown-review-item' };
+    if (item.answer && opts.undo !== true) {
+      return {
+        ok: false,
+        error: 'answered',
+        message: `review item ${reviewItemId} is already answered — withdrawing it would retract an answer somebody gave; undo the answer first if it was a mistake`,
+      };
+    }
+
+    const ts = Date.now();
+    const actor: TaskActor = {
+      id: opts.actor.id,
+      name: opts.actor.name,
+      kind: classifyActor(opts.actor),
+    };
+    const applied =
+      opts.undo === true
+        ? reinstateReview(item.review, { by: actor.name, at: ts })
+        : withdrawReview(item.review, {
+            by: actor.name,
+            at: ts,
+            ...(opts.reason !== undefined ? { reason: opts.reason } : {}),
+          });
+    if (!applied.ok) return { ok: false, error: applied.error, message: applied.message };
+    item.review = applied.next;
+    task.updatedAt = ts;
+    this.scheduleSave(task.workspaceId);
+    const reason = opts.reason?.trim();
+    this.emit({
+      type: 'review_item.withdrawn',
+      workspaceId: task.workspaceId,
+      taskId: task.id,
+      reviewItemId,
+      ...(opts.undo === true ? { reinstated: true } : {}),
+      ...(reason !== undefined && reason !== '' && opts.undo !== true ? { reason } : {}),
+      actor,
+      links: task.links,
+      ts,
+    });
+    return { ok: true, task, item };
+  }
+
+  /**
+   * WHICH ticket holds this review item — the lookup behind addressing an
+   * item by bare `reviewItemId`. Minted ids are unique by construction
+   * (twelve random base64url chars), so the first hit is the only hit; the
+   * fixed LEGACY_REVIEW_ITEM_ID is on every legacy-decision ticket at once
+   * and is refused by the route before it gets here. In-memory over the
+   * sidecars the store already holds — no doc is hydrated for this.
+   */
+  findReviewItem(reviewItemId: string): { taskId: string; workspaceId: string } | undefined {
+    for (const [workspaceId, state] of this.workspaces) {
+      for (const task of state.tasks.values()) {
+        if (task.reviews?.some((r) => r.id === reviewItemId)) {
+          return { taskId: task.id, workspaceId };
+        }
+      }
+    }
+    return undefined;
   }
 
   /**
