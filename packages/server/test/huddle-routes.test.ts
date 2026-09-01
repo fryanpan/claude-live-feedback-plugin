@@ -38,7 +38,13 @@ interface HuddleResponse {
   url: string;
   reviewUrl?: string;
   hubWorkspaceId: string;
-  meta: { docId: string; title?: string; type?: string; huddle?: boolean };
+  meta: {
+    docId: string;
+    title?: string;
+    type?: string;
+    huddle?: boolean;
+    huddleKind?: 'plan' | 'discussion';
+  };
 }
 
 interface DocRow {
@@ -165,6 +171,52 @@ describe('POST /api/workspaces/:id/huddles and the empty task', () => {
       expect(doc.blocks[0]?.text).toBe('# Onboarding flow');
       // The title is still the clock — the topic is content, not a name.
       expect(r.meta.title).toMatch(HUDDLE_TITLE);
+    });
+
+    it('kind "plan" stamps huddleKind and seeds the Goal heading', async () => {
+      // The Board's "Make a plan": the doc opens goal-shaped, so the person
+      // types (or says) the problem under a heading that names what the doc
+      // is for. The kind lands in CRDT meta so the editor can dress the doc
+      // — placeholder copy, the Make Plan float — without a second fetch.
+      const r = await jj<HuddleResponse>(await startHuddle(workspaceId, { kind: 'plan' }));
+      expect(r.meta.huddleKind).toBe('plan');
+      expect(r.meta.huddle).toBe(true);
+      expect(r.meta.title).toMatch(HUDDLE_TITLE);
+      const doc = await jj<{
+        blocks: Array<{ type: string | null; headingLevel?: number; text: string }>;
+      }>(await local(`/api/docs/${r.docId}/content`));
+      expect(doc.blocks[0]?.type).toBe('heading');
+      expect(doc.blocks[0]?.headingLevel).toBe(1);
+      expect(doc.blocks[0]?.text).toBe('# Goal');
+      const file = join(dataDir, 'huddles', `${r.docId}.md`);
+      expect(readFileSync(file, 'utf8')).toBe('# Goal\n');
+    });
+
+    it('kind "plan" with a topic keeps the Goal heading and files the topic under it', async () => {
+      const r = await jj<HuddleResponse>(
+        await startHuddle(workspaceId, { kind: 'plan', topic: 'Zoom notes to board' }),
+      );
+      const file = join(dataDir, 'huddles', `${r.docId}.md`);
+      expect(readFileSync(file, 'utf8')).toBe('# Goal\n\nZoom notes to board\n');
+    });
+
+    it('kind "discussion" stamps huddleKind and stays empty like today', async () => {
+      const r = await jj<HuddleResponse>(await startHuddle(workspaceId, { kind: 'discussion' }));
+      expect(r.meta.huddleKind).toBe('discussion');
+      const doc = await jj<{ plainText: string }>(await local(`/api/docs/${r.docId}/content`));
+      expect(doc.plainText.trim()).toBe('');
+    });
+
+    it('no kind stamps nothing — an old caller gets exactly the old doc', async () => {
+      // Back-compat: the shared server's REST routes can be called by a
+      // client that cannot be restarted. A missing kind is the old payload.
+      const r = await jj<HuddleResponse>(await startHuddle(workspaceId));
+      expect(r.meta.huddleKind).toBeUndefined();
+    });
+
+    it('400s a kind that is not one of the two', async () => {
+      const res = await startHuddle(workspaceId, { kind: 'seance' });
+      expect(res.status).toBe(400);
     });
 
     it('keeps the doc as a file-backed record under the data dir', async () => {

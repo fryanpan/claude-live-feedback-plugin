@@ -1586,6 +1586,8 @@ export class Rooms {
       alias?: string;
       /** A huddle doc — see `DocMeta.huddle`. */
       huddle?: boolean;
+      /** Which entry flow made it — see `DocMeta.huddleKind`. */
+      huddleKind?: 'plan' | 'discussion';
     },
     /**
      * Who is asking. Defaults to `caller`, which is what closes the two
@@ -1671,6 +1673,7 @@ export class Rooms {
         diffDeletions: init?.diffDeletions,
         alias: init?.alias,
         ...(init?.huddle ? { huddle: true } : {}),
+        ...(init?.huddleKind ? { huddleKind: init.huddleKind } : {}),
         createdAt: Date.now(),
       };
       initDocMeta(ydoc, now);

@@ -129,6 +129,7 @@ import {
   meetingDocAlias,
   meetingDocFilePath,
   meetingDocTitle,
+  parseHuddleKind,
   parseHuddleTopic,
 } from './huddle.ts';
 import { Identities, type IdentityRecord, userForIdentity } from './identities.ts';
@@ -7534,6 +7535,13 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
               hint: 'topic is an optional short string — it becomes the first heading.',
             });
           }
+          const parsedKind = parseHuddleKind(body?.kind);
+          if (!parsedKind.ok) {
+            return j(400, {
+              error: 'bad kind',
+              hint: 'kind is optional: "plan" or "discussion".',
+            });
+          }
           const startedAt = Date.now();
           // Minted, never re-used: `createForCaller` answers an existing doc
           // for a name that already resolves, and a huddle is always new.
@@ -7541,12 +7549,14 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
             type: 'markdown',
             title: huddleTitle(startedAt),
             huddle: true,
+            huddleKind: parsedKind.kind,
           });
           if (created.ok && !created.minted) {
             created = rooms.createForCaller(huddleAlias(startedAt), {
               type: 'markdown',
               title: huddleTitle(startedAt),
               huddle: true,
+              huddleKind: parsedKind.kind,
             });
           }
           if (!created.ok || !created.minted) {
@@ -7562,7 +7572,8 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           const file = huddleFilePath(dataDir, docId);
           try {
             mkdirSync(dirname(file), { recursive: true });
-            if (!existsSync(file)) writeFileSync(file, huddleSeedMarkdown(parsedTopic.topic));
+            if (!existsSync(file))
+              writeFileSync(file, huddleSeedMarkdown(parsedTopic.topic, parsedKind.kind));
           } catch (err) {
             console.error(`[huddle] could not write ${file}:`, err);
             return j(500, { error: 'huddle-file-failed' });
