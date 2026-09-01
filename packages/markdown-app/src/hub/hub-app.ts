@@ -1443,6 +1443,7 @@ async function main(): Promise<void> {
             },
             onTitleCommit: (goalId, title) => void retitleGoal(goalId, title),
             onStatusSet: (goalId, to) => void transitionGoal(goalId, to),
+            onDueSet: (goalId, dueAt) => void setGoalDue(goalId, section.title, dueAt),
             onComment: (goalId, text, threadId) =>
               postRowComment({ id: goalId, bodyDocId: goalBodyDocId(section) }, text, threadId),
             // The goal's description is a live room like a task's, so the SAME
@@ -1466,6 +1467,7 @@ async function main(): Promise<void> {
             onCascadeCount: (goalId) => goalCascadeCount(goalId),
             onArchive: (s) => void archiveGoal(s),
             onRestore: (s) => void restoreGoal(s),
+            workspaceId,
             ...(state.detailThreadId ? { focusThreadId: state.detailThreadId } : {}),
             now: Date.now(),
           },
@@ -2324,6 +2326,25 @@ async function main(): Promise<void> {
     );
     if (!res.ok) {
       showToast('Goal rename failed');
+      revertToServerTruth();
+    }
+  }
+
+  /**
+   * The goal panel's Due field. There is no dedicated goal-due route — the
+   * rename route already carries `dueAt` (it exists for the reason
+   * `retitleGoal`'s own comment gives: one row, by id, cannot strand tasks),
+   * so this resends the goal's own title alongside the new date. `null`
+   * clears, the same contract `setTaskDue` uses.
+   */
+  async function setGoalDue(sectionId: string, title: string, dueAt: number | null): Promise<void> {
+    const res = await send(
+      `/api/workspaces/${encodeURIComponent(workspaceId)}/goals/rename`,
+      'POST',
+      { goal: sectionId, title, dueAt, author },
+    );
+    if (!res.ok) {
+      showToast(dueAt === null ? 'Clearing the due date failed' : 'Setting the due date failed');
       revertToServerTruth();
     }
   }

@@ -18,9 +18,25 @@ import { parseWorkspaceLink } from '@feedback/core';
 import { taskIdOfBodyDoc } from './task-projection.ts';
 import type { TaskStatus } from './tasks.ts';
 
+/** The last-resort display name for a file-backed doc with no title and no
+ *  `relPath`: its own file's basename, or `null` when there is no
+ *  `sourceUrl` either (a doc that carries no file-shaped identity at all —
+ *  the caller falls back to the raw id in that case, which stays honest
+ *  rather than inventing a name). Mirrors `basenameOf` in server.ts; kept
+ *  local rather than imported to avoid a cycle (server.ts imports this
+ *  module). */
+function basenameOfSourceUrl(sourceUrl: string | undefined): string | null {
+  if (!sourceUrl) return null;
+  const m = sourceUrl.match(/[^/\\]+$/);
+  return m ? m[0] : sourceUrl;
+}
+
 export interface LinkTitleSources {
-  /** A doc's display meta, or undefined for an unknown docId. */
-  docMeta(docId: string): { title?: string; relPath?: string } | undefined;
+  /** A doc's display meta, or undefined for an unknown docId. `sourceUrl` is
+   *  the file path a mockup/markdown doc is bound to when it has no
+   *  `relPath` of its own (a bind outside a workspace's notes home) — the
+   *  last fallback before a caller would otherwise see the raw doc id. */
+  docMeta(docId: string): { title?: string; relPath?: string; sourceUrl?: string } | undefined;
   /** Whether the doc is filed on this board (directly or via its review). */
   docInWorkspace(docId: string, workspaceId: string): boolean;
   /** A task's — or a GOAL's, they share the id namespace and the status
@@ -87,8 +103,12 @@ export function linkInfoFor(url: string, sources: LinkTitleSources): ResolvedLin
       if (link.workspaceId !== null && !sources.docInWorkspace(link.docId, link.workspaceId))
         return { title: null };
       // A diff-review member has no stored title; its repo-relative path is
-      // what every sidebar calls it, so it is the honest display name.
-      return { title: meta.title ?? meta.relPath ?? null };
+      // what every sidebar calls it, so it is the honest display name. A doc
+      // bound by an absolute `sourceUrl` outside any notes home (no
+      // `relPath`) falls back one step further, to its file's own basename —
+      // same convention the doc-tree listing uses (`basenameOf` in
+      // server.ts) — so a Related Links entry is NEVER the raw doc id.
+      return { title: meta.title ?? meta.relPath ?? basenameOfSourceUrl(meta.sourceUrl) };
     }
     // A review's landing URL redirects to its entry doc; the set itself
     // stores no display title today, so the raw URL stands.

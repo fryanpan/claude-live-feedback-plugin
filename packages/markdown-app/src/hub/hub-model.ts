@@ -252,6 +252,13 @@ export interface HubGoal {
    *  band says nothing rather than saying zero. */
   commentCount?: number;
   /**
+   * The docs this goal ties to — the backfill and the settle-time doc scan,
+   * projected the same way `HubTask.links` is (`task-projection.ts`). The
+   * Related Links section reads this; absent or empty means the goal names
+   * no doc.
+   */
+  links?: unknown[];
+  /**
    * When this band was archived — the same three fields a task carries, read
    * through `isGoalArchived`, and hidden by `boardSections` rather than by
    * the projection: the restore list draws from the same board state, so a
@@ -491,6 +498,9 @@ export interface BoardSection {
   body?: string;
   bodyTruncated?: boolean;
   commentCount?: number;
+  /** The docs this goal ties to, carried the same way again — see `HubGoal`.
+   *  Absent or empty means the goal names no doc. */
+  links?: unknown[];
   /** The band's soft delete, carried the same way again. Present only on a
    *  section `goalSection` built — `boardSections` never returns one. */
   archivedAt?: number;
@@ -527,6 +537,7 @@ function carriedOf(g: HubGoal) {
     ...(g.body !== undefined ? { body: g.body } : {}),
     ...(g.bodyTruncated !== undefined ? { bodyTruncated: g.bodyTruncated } : {}),
     ...(g.commentCount !== undefined ? { commentCount: g.commentCount } : {}),
+    ...(g.links !== undefined && g.links.length > 0 ? { links: g.links } : {}),
     ...(g.archivedAt !== undefined ? { archivedAt: g.archivedAt } : {}),
     ...(g.archivedBy !== undefined ? { archivedBy: g.archivedBy } : {}),
     ...(g.archiveReason !== undefined ? { archiveReason: g.archiveReason } : {}),
