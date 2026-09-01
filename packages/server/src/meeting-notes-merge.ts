@@ -391,12 +391,14 @@ export function planNotesMerge(
   const vanished = missingFrom(opts.basedOn ?? [], current);
 
   const pairs = lcsPairs(current.map(itemKey), incoming.map(itemKey));
-  // The person's items that the composer's output does NOT line up with.
-  // An incoming entry matching one of these exactly is the composer echoing
-  // their line back somewhere else — the line is already in the doc, in
-  // their hand, so re-inserting it would leave two of it.
+  // The lines that are still in the doc after this write: everything the
+  // output lines up with (anchored — whoever wrote it, it stays), and the
+  // person's lines it does not. An incoming entry matching one of these
+  // exactly is the composer echoing a line back somewhere else — a second
+  // tick re-listing an earlier point, say — and the line is already in the
+  // doc, so re-inserting it would leave two of it.
   const anchored = new Set(pairs.map(([pi]) => pi));
-  const echoOf = consumable(current.filter((_, i) => !isAgent[i] && !anchored.has(i)).map(itemKey));
+  const echoOf = consumable(current.filter((_, i) => anchored.has(i) || !isAgent[i]).map(itemKey));
 
   const plan: MergePlan = {
     deletes: [],
