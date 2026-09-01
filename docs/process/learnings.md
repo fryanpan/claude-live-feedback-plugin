@@ -3563,3 +3563,32 @@ write-once in practice, and the repair verb for a moved file cannot repair it.
   soft-delete violation arriving by way of a backup flag.** Without it, a doc
   archived since the bulk copy keeps its stale top-level `.ydoc` and
   **resurrects unarchived**.
+
+## `grep` is line-based, so a phrase your own file wrapped across a line break can never match — and a control borrowed from another file proves nothing
+
+- **Verifying that a false claim had been removed from `CLAUDE.md`, the grep
+  returned 0 and the claim was still there.** The sentence is reflowed across
+  two lines by the file's 80-column wrap, and `grep` matches within a line, so
+  the pattern was structurally incapable of firing. Nothing about the output
+  said so: a "0" from a blind probe and a "0" from a clean file are the same
+  two characters.
+- **The tell was available before the grep ran, and it is the useful part.**
+  The corrected file quotes the false claim on purpose, inside a prohibition —
+  "Do not write, or repeat, `launchd cannot read /Volumes/Data`". So the
+  expected count was never 0. **When a fix works by naming the thing it
+  forbids, absence is the wrong assertion entirely** — a 0 there is proof the
+  probe broke, not that the fix landed.
+- **A positive control has to come from the same file as the negative one.**
+  Checking the same edit a second time, both my controls were phrases that
+  live in the memory note, not in `CLAUDE.md` — so all three greps returned 0
+  and the two that were supposed to reassure me were as blind as the one under
+  test. A control drawn from a different document measures that document.
+- What actually settled it: `grep -n -iE 'launchd|boot disk|TCC' CLAUDE.md` for
+  the *region*, then reading the section. For a multi-line phrase, flatten
+  first (`tr '\n' ' ' | tr -s ' '`) — but flattening only fixes the wrap; it
+  does not give you a control.
+- Same family as "A negative test needs a positive control or it proves
+  nothing" and "A positive control scanning the wrong data is worse than no
+  control". The new half is the mechanism: **prose wrapping silently changes
+  what a line-based tool can see, so the file's own formatting is part of the
+  probe's design.**
