@@ -1831,7 +1831,7 @@ describe('a late speaker correction reaches notes already written', () => {
   });
 });
 
-describe('session start', () => {
+describe('session start and tick lifecycle', () => {
   const ids = { docId: 'doc-lifecycle', meetingId: 'm-lifecycle' };
 
   it('announces the session before any tick can fire', async () => {
@@ -1850,5 +1850,66 @@ describe('session start', () => {
     // before the first compose reads the ledger.
     expect(starts).toEqual([{ docId: ids.docId, meetingId: ids.meetingId }]);
     await session.end();
+  });
+
+  it('a tick announces composing when it fires and written when it lands', async () => {
+    const schedule = new ManualScheduler();
+    const events: Array<{ phase: string; tick: number; turns: readonly number[] }> = [];
+    const session = beginNotesSession(
+      {
+        composer: createStubNotesComposer(),
+        quietMs: 1000,
+        schedule,
+        onNotes: () => {},
+        onTickLifecycle: (e) => events.push({ phase: e.phase, tick: e.tick, turns: e.turns }),
+      },
+      ids,
+    );
+    session.onTurn({ turn: 0, text: 'One.', final: true });
+    session.onTurn({ turn: 1, text: 'Two.', final: true });
+    schedule.fire();
+    await session.end();
+    expect(events).toEqual([
+      { phase: 'composing', tick: 1, turns: [0, 1] },
+      { phase: 'written', tick: 1, turns: [0, 1] },
+    ]);
+  });
+
+  it('a failed compose announces failed, and the retry carries its turns', async () => {
+    const schedule = new ManualScheduler();
+    const events: Array<{ phase: string; turns: readonly number[] }> = [];
+    let calls = 0;
+    const composer: NotesComposer = {
+      name: 'flaky',
+      compose(input) {
+        calls++;
+        if (calls === 1) return Promise.reject(new Error('over capacity'));
+        return Promise.resolve(`- ${input.tick.turns.map((t) => t.text).join(' / ')}`);
+      },
+    };
+    const session = beginNotesSession(
+      {
+        composer,
+        quietMs: 1000,
+        schedule,
+        onNotes: () => {},
+        onError: () => {},
+        onTickLifecycle: (e) => events.push({ phase: e.phase, turns: e.turns }),
+      },
+      ids,
+    );
+    session.onTurn({ turn: 0, text: 'One.', final: true });
+    schedule.fire();
+    await new Promise((r) => setTimeout(r, 0));
+    session.onTurn({ turn: 1, text: 'Two.', final: true });
+    schedule.fire();
+    await session.end();
+    expect(events).toEqual([
+      { phase: 'composing', turns: [0] },
+      { phase: 'failed', turns: [0] },
+      { phase: 'composing', turns: [1] },
+      // The retry composes the carried turn beside the new one, and says so.
+      { phase: 'written', turns: [0, 1] },
+    ]);
   });
 });

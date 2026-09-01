@@ -498,6 +498,21 @@ export interface NotesReattribution {
   names: Readonly<Record<string, string>>;
 }
 
+/**
+ * Where a tick is in its life, for the surface showing provisional text: the
+ * words split off to compose, they landed in the doc, or the compose failed
+ * and they are carried into the next tick. `turns` are engine turn ids — the
+ * identity the strip already tracks — so a client can move exactly those
+ * turns from its provisional block into "being written" and out again.
+ */
+export interface NotesTickLifecycle {
+  docId: string;
+  meetingId: string;
+  tick: number;
+  phase: 'composing' | 'written' | 'failed';
+  turns: readonly number[];
+}
+
 export interface MeetingNotesDeps {
   composer: NotesComposer;
   /** Quiet threshold; defaults to {@link DEFAULT_NOTES_QUIET_MS}. */
@@ -585,6 +600,12 @@ export interface MeetingNotesDeps {
    * replace the notes the previous recording wrote.
    */
   onSessionStart?: (ids: { docId: string; meetingId: string }) => void;
+  /**
+   * Tick progress for the surface showing provisional text. Per SESSION, not
+   * per server: the relay spreads the shared deps and adds this per socket,
+   * so the frames reach the one client whose meeting it is.
+   */
+  onTickLifecycle?: (event: NotesTickLifecycle) => void;
 }
 
 /**
@@ -723,8 +744,21 @@ export function beginNotesSession(
           speakerLabel: turn.speaker,
         };
 
+  const lifecycle = (phase: 'composing' | 'written' | 'failed', tick: number, turns: number[]) =>
+    deps.onTickLifecycle?.({ docId: ids.docId, meetingId: ids.meetingId, tick, phase, turns });
+
   const composeTick = (tick: NotesTick): void => {
     lastTickNo = Math.max(lastTickNo, tick.tick);
+    // Announced when the tick FIRES, not when the chain gets to it: this is
+    // the moment the settled words split off from the provisional stream,
+    // which is what the surface showing them wants to draw.
+    if (tick.turns.length > 0) {
+      lifecycle(
+        'composing',
+        tick.tick,
+        tick.turns.map((t) => t.turn),
+      );
+    }
     chain = chain.then(async () => {
       const raw = [...carry, ...tick.turns];
       carry = [];
@@ -837,8 +871,18 @@ export function beginNotesSession(
           notes,
           ...(live ? { basedOn: live.items } : {}),
         });
+        lifecycle(
+          'written',
+          tick.tick,
+          raw.map((t) => t.turn),
+        );
       } catch (err) {
         carry = [...raw, ...carry];
+        lifecycle(
+          'failed',
+          tick.tick,
+          raw.map((t) => t.turn),
+        );
         deps.onError?.(err instanceof Error ? err.message : 'notes composer failed');
       }
     });
