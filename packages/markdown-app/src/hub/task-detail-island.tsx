@@ -83,6 +83,8 @@ import {
   bodySlot,
   detailFields,
   panelReviewQueue,
+  relatedDocLinks,
+  renderRelatedLinks,
   renderTaskLinks,
   renderTransitionRow,
   wireInPlaceTitle,
@@ -963,6 +965,7 @@ function TaskDetailPanel(props: {
   const headRef = useRef<HTMLDivElement | null>(null);
   const titleRef = useRef<HTMLHeadingElement | null>(null);
   const fieldsRef = useRef<HTMLDListElement | null>(null);
+  const relatedLinksRef = useRef<HTMLDivElement | null>(null);
   const slotRef = useRef<HTMLDivElement | null>(null);
   const tabsRef = useRef<HTMLDivElement | null>(null);
   const [tab, setTab] = useState<DetailTab>(props.initialTab ?? 'comments');
@@ -1006,6 +1009,17 @@ function TaskDetailPanel(props: {
 
   useFill(fieldsRef as RefObject<HTMLElement>, () => [
     ...detailFields(task, handlers, calibration, calibrationGoal).childNodes,
+  ]);
+
+  // The Related Links section: title-only links to every doc this row ties
+  // to, directly below the fields row (approved mock, replacing the old
+  // "Source doc" field). Computed once as a pure list for the emptiness
+  // check below; `renderRelatedLinks` (which does the hydration fetch) runs
+  // only inside the fill, so a repaint that changes nothing about the links
+  // does not build the DOM twice.
+  const relatedLinks = relatedDocLinks(task);
+  useFill(relatedLinksRef as RefObject<HTMLElement>, () => [
+    ...(renderRelatedLinks(relatedLinks, handlers.workspaceId)?.childNodes ?? []),
   ]);
 
   // The description slot is the one node a repaint must never rebuild: the
@@ -1201,6 +1215,11 @@ function TaskDetailPanel(props: {
           metadata list, the preserved capture, and finally the description —
           spent the entire first screen on facts identical across every task. */}
       <dl ref={fieldsRef} class="hub-detail-fields" />
+
+      {/* Title-only links to the docs this row ties to — the approved mock's
+          Related Links section, right below the fields row. Absent entirely
+          when the row names no doc, rather than an empty heading. */}
+      {relatedLinks.length > 0 && <div ref={relatedLinksRef} class="hub-related-links-slot" />}
 
       {/* The blocked note (design point 5): this task is a person's own open
           work that other tasks wait on, and this panel is the ONE surface that

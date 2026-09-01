@@ -411,6 +411,11 @@ export interface GoalDetailHandlers {
    *  (the server's transition route accepts a goal row's id), which is how
    *  "somebody declares the goal done" happens from the board. */
   onStatusSet: (goalId: string, to: TaskStatus) => void;
+  /** Set the due date, or clear it with `null` — the same field the task
+   *  panel carries, and the same "all fields must be human editable" rule
+   *  (Bryan, 2026-08-18). Absent means the app has not wired one, and the
+   *  field renders read-only text rather than a control nothing answers. */
+  onDueSet?: (goalId: string, dueAt: number | null) => void;
   /**
    * Post to the goal's discussion. Resolves to whether it LANDED — the
    * composer keeps the text until it hears yes, so a failed post is
@@ -464,6 +469,11 @@ export interface GoalDetailHandlers {
   /** Put an archived band back, with the rows its archive took — the panel's
    *  other face, drawn in place of Archive when the open band is archived. */
   onRestore?: (section: BoardSection) => void;
+  /** The board's own workspace id, so the Related Links section can link
+   *  each doc at its canonical workspace address — same field, same reason,
+   *  as the task panel's. Without it the section still renders, linking the
+   *  legacy `/review/` shape instead. */
+  workspaceId?: string;
   /** Clock seam, so "3 hours ago" is assertable. */
   now?: number;
 }
@@ -1525,60 +1535,117 @@ export const BODY_LIVE_CLASS = 'hub-detail-body-live';
  * were pills, so the state you were IN read as a stray label rather than as
  * the selected one.
  */
-/** The doc this task was derived from, when its origin ref names one. A
- *  thread origin counts — the thread lives on a doc, and that doc is where
- *  the reader should land. Anything else (a task origin, a malformed ref,
- *  a newer kind) is null rather than guessed at. */
-export function sourceDocOf(task: HubTask): string | null {
-  const o = task.origin;
-  if (typeof o !== 'object' || o === null) return null;
-  const ref = o as Record<string, unknown>;
-  if (ref.kind !== 'doc' && ref.kind !== 'thread') return null;
-  return typeof ref.docId === 'string' && ref.docId !== '' ? ref.docId : null;
+/** One doc a row's Related Links section names. `held` marks the ORIGIN doc
+ *  of a plan-held draft — the one row this note can ever attach to. */
+export interface RelatedDocLink {
+  docId: string;
+  held?: boolean;
 }
 
 /**
- * The Source-doc field's value: a link to the origin doc, plus the plan-hold
- * mark while the row is a held draft. No staleness mark: a "plan edited since
- * filed" flag gives the reader nothing to act on (Bryan, 2026-08-31) — the
- * lead updates the tickets when the plan changes.
+ * Every doc a task or goal ties to, in Related-Links order: the origin doc
+ * first (a thread origin counts — the thread lives on a doc, and that doc is
+ * where the reader should land), then every doc-kind ref in `links`. Deduped
+ * by doc id — the backfill already avoids double-tying the same doc via
+ * origin AND links, but an older row or a hand-written link can still repeat
+ * one, and this is the one place that reads both arrays at once.
  *
- * The visible text starts as the doc id and swaps to the doc's title when
- * the shared link-title cache answers — the same display-only hydration
- * every pasted workspace link gets, so a rename never strands a stale label
- * in a stored task.
+ * Only doc-kind refs: after the 2026-08-31 linkage rework `links` holds
+ * doc ties exclusively (`refs-backfill.ts`), and a `url`/`diff` ref is
+ * rendered elsewhere as a chip rather than here as a title.
  */
-function sourceDocCell(task: HubTask, docId: string, workspaceId?: string): HTMLElement {
-  const wrap = document.createElement('span');
-  wrap.className = 'hub-detail-sourcedoc';
-  const a = document.createElement('a');
-  a.className = 'hub-sourcedoc-link';
-  a.href =
-    workspaceId !== undefined
-      ? `/workspaces/${encodeURIComponent(workspaceId)}/docs/${encodeURIComponent(docId)}`
-      : `/review/${encodeURIComponent(docId)}`;
-  a.textContent = docId;
-  a.addEventListener('click', (ev) => ev.stopPropagation());
+export function relatedDocLinks(row: {
+  links?: unknown[];
+  origin?: unknown;
+  planHold?: { docId: string };
+}): RelatedDocLink[] {
+  const out: RelatedDocLink[] = [];
+  const seen = new Set<string>();
+  const origin = row.origin;
+  if (typeof origin === 'object' && origin !== null) {
+    const ref = origin as Record<string, unknown>;
+    if (
+      (ref.kind === 'doc' || ref.kind === 'thread') &&
+      typeof ref.docId === 'string' &&
+      ref.docId !== ''
+    ) {
+      seen.add(ref.docId);
+      out.push({ docId: ref.docId, held: row.planHold?.docId === ref.docId });
+    }
+  }
+  for (const raw of row.links ?? []) {
+    if (typeof raw !== 'object' || raw === null) continue;
+    const ref = raw as Record<string, unknown>;
+    if (ref.kind !== 'doc') continue;
+    if (typeof ref.docId !== 'string' || ref.docId === '' || seen.has(ref.docId)) continue;
+    seen.add(ref.docId);
+    out.push({ docId: ref.docId });
+  }
+  return out;
+}
+
+/**
+ * The "Related Links" section: title-only links to every doc a row ties to,
+ * below the fields row on both the task and the goal panel. No source chips,
+ * no staleness mark — Bryan rejected both on the revised mock ("omit
+ * needless details"). `null` when the row names no doc, so the section is
+ * absent entirely rather than an empty heading.
+ *
+ * Each link's visible text starts as the doc id and swaps to its title when
+ * the shared link-title cache answers — the same display-only hydration
+ * every pasted workspace link gets, batched into one lookup rather than one
+ * per link.
+ */
+export function renderRelatedLinks(
+  links: readonly RelatedDocLink[],
+  workspaceId?: string,
+): HTMLElement | null {
+  if (links.length === 0) return null;
+  const wrap = document.createElement('div');
+  wrap.className = 'hub-related-links';
+  const heading = document.createElement('p');
+  heading.className = 'hub-related-links-k';
+  heading.textContent = 'Related Links';
+  const list = document.createElement('ul');
+  list.className = 'hub-related-links-list';
+  const rows: { a: HTMLAnchorElement; docId: string }[] = [];
+  for (const link of links) {
+    const li = document.createElement('li');
+    const a = document.createElement('a');
+    a.className = 'hub-related-link';
+    a.href =
+      workspaceId !== undefined
+        ? `/workspaces/${encodeURIComponent(workspaceId)}/docs/${encodeURIComponent(link.docId)}`
+        : `/review/${encodeURIComponent(link.docId)}`;
+    a.textContent = link.docId;
+    a.addEventListener('click', (ev) => ev.stopPropagation());
+    li.append(a);
+    if (link.held) {
+      const held = document.createElement('span');
+      held.className = 'hub-related-link-held';
+      held.textContent = 'Draft — held until the plan is approved';
+      li.append(held);
+    }
+    list.append(li);
+    rows.push({ a, docId: link.docId });
+  }
+  wrap.append(heading, list);
   const hydrate = (): void => {
-    const title = cachedLinkTitle(a.getAttribute('href') ?? '');
-    if (typeof title === 'string' && title !== '') a.textContent = title;
+    for (const { a } of rows) {
+      const title = cachedLinkTitle(a.getAttribute('href') ?? '');
+      if (typeof title === 'string' && title !== '') a.textContent = title;
+    }
   };
   hydrate();
-  if (a.textContent === docId) {
-    void fetchLinkInfos([a.getAttribute('href') ?? ''])
+  const unresolved = rows.filter((r) => r.a.textContent === r.docId);
+  if (unresolved.length > 0) {
+    void fetchLinkInfos(unresolved.map((r) => r.a.getAttribute('href') ?? ''))
       .then(() => {
-        if (a.isConnected) hydrate();
+        if (wrap.isConnected) hydrate();
       })
       .catch(() => {
-        // The id stays — true, just less familiar.
+        // The ids stay — true, just less familiar.
       });
-  }
-  wrap.append(a);
-  if (task.planHold !== undefined) {
-    const held = document.createElement('span');
-    held.className = 'hub-sourcedoc-held';
-    held.textContent = 'Draft — held until the plan is approved';
-    wrap.append(held);
   }
   return wrap;
 }
@@ -1650,15 +1717,6 @@ export function detailFields(
   });
   statusCtl.append(mark, status);
   cell('Status', statusCtl);
-
-  // Where this row CAME FROM, when it was filed out of a doc — the origin
-  // ref, drawn as a link near the top rather than left as a stored fact no
-  // surface shows (the `links` chips' own origin story). The plan-hold mark
-  // rides on the same cell while the row is a held draft.
-  const originDoc = sourceDocOf(task);
-  if (originDoc !== null) {
-    cell('Source doc', sourceDocCell(task, originDoc, handlers.workspaceId));
-  }
 
   cell(
     'Assignee',
