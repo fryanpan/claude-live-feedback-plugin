@@ -21,6 +21,7 @@
  */
 
 import type { MeetingTimingMark } from './meeting-timing.ts';
+import { MAX_ROOM_SPEAKERS, MIN_ROOM_SPEAKERS, parseRawTuning } from './meeting-tuning.ts';
 
 /** The audio the capture promises to send: mono, little-endian signed 16-bit. */
 export const MEETING_AUDIO_ENCODING = 'pcm_s16le' as const;
@@ -85,9 +86,7 @@ export function parseCaptureMode(raw: unknown): CaptureMode {
  */
 export const DEFAULT_ROOM_SPEAKERS = 2;
 
-/** The range AssemblyAI accepts for `max_speakers`. Not ours to widen. */
-export const MIN_ROOM_SPEAKERS = 1;
-export const MAX_ROOM_SPEAKERS = 10;
+export { MIN_ROOM_SPEAKERS, MAX_ROOM_SPEAKERS } from './meeting-tuning.ts';
 
 /**
  * A room size, clamped into the engine's range, or nothing.
@@ -229,6 +228,16 @@ export type MeetingClientMessage =
        */
       engine?: TranscriptionEngineName;
       /**
+       * The Advanced Options a person set for this capture — only the knobs
+       * they moved off the defaults, keyed by engine parameter name and
+       * sanitized server-side against `tuningSpecsFor(engine)`. PRESENCE is
+       * meaningful even empty: a client that sends the field owns the
+       * speaker cap in its Advanced panel (default uncapped), where a client
+       * that omits it gets the legacy `DEFAULT_ROOM_SPEAKERS` fallback — see
+       * `maxSpeakersFromTuning`.
+       */
+      tuning?: Record<string, unknown>;
+      /**
        * Measure this meeting's stage latencies (`?timing=1` on the address).
        * Absent on every ordinary meeting, and a server that is not asked
        * allocates nothing and attaches nothing — see `meeting-timing.ts`.
@@ -236,6 +245,15 @@ export type MeetingClientMessage =
       timing?: boolean;
     }
   | { type: 'stop' }
+  /**
+   * Advanced Options changed MID-MEETING. Only AssemblyAI's protocol has a
+   * mid-session update message, and only for some knobs; the relay applies
+   * what the live engine can take (`pickLiveTuning`) and answers `tuned`
+   * naming what it applied, so the strip can say "applied" only about knobs
+   * that actually reached the session. Everything else waits for the next
+   * recording, which the client already knows from the same specs.
+   */
+  | { type: 'tune'; settings: Record<string, unknown> }
   /**
    * One half of an NTP-style exchange, so the two network legs can be priced
    * across two clocks. Answered with `timing_pong` and nothing else; it never
@@ -323,6 +341,13 @@ export type MeetingServerMessage =
       serverRecvMs: number;
       serverSendMs: number;
     }
+  /**
+   * The answer to a `tune`: which keys reached the live engine session.
+   * Empty means none did — an engine with no update channel (Soniox), keys
+   * outside the live set, or no live meeting to apply them to; those take
+   * effect on the next recording instead.
+   */
+  | { type: 'tuned'; applied: string[] }
   /** The meeting ended; its transcript is durable. */
   | { type: 'stopped'; meetingId: string; endedAt: number }
   /** Something went wrong mid-meeting. Distinct from `unavailable`. */
@@ -340,6 +365,12 @@ export function parseMeetingClientMessage(raw: unknown): MeetingClientMessage | 
   if (typeof parsed !== 'object' || parsed === null) return null;
   const m = parsed as Record<string, unknown>;
   if (m.type === 'stop') return { type: 'stop' };
+  if (m.type === 'tune') {
+    // The settings are only shallow-checked here; the relay sanitizes them
+    // against the engine that is actually running. A frame with no readable
+    // settings still parses — the relay answers it with nothing applied.
+    return { type: 'tune', settings: parseRawTuning(m.settings) ?? {} };
+  }
   if (m.type === 'announced') {
     const by = parseAnnouncedBy(m.by);
     // A frame that names no path says nothing, and the record says nothing
@@ -368,6 +399,7 @@ export function parseMeetingClientMessage(raw: unknown): MeetingClientMessage | 
     if (m.encoding !== MEETING_AUDIO_ENCODING) return null;
     const speakers = parseRoomSpeakers(m.speakers);
     const engine = parseEngineName(m.engine);
+    const tuning = parseRawTuning(m.tuning);
     return {
       type: 'start',
       sampleRate: Math.round(rate),
@@ -384,6 +416,9 @@ export function parseMeetingClientMessage(raw: unknown): MeetingClientMessage | 
       // An unknown engine name is dropped rather than refused: the meeting
       // is worth more than the typo, and absent is the server's default.
       ...(engine !== undefined ? { engine } : {}),
+      // Kept even when empty — presence is the tuning-aware marker; see the
+      // field's comment above.
+      ...(tuning !== undefined ? { tuning } : {}),
       // Only the literal `true` opts in: a stray truthy value on this frame
       // should read as a client that does not know about timing, not as one
       // asking for it.

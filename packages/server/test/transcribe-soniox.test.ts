@@ -55,7 +55,14 @@ class FakeSocket implements EngineSocket {
   }
 }
 
-function harness(opts: { detectSpeakers?: boolean; flushTimeoutMs?: number } = {}) {
+function harness(
+  opts: {
+    detectSpeakers?: boolean;
+    flushTimeoutMs?: number;
+    /** Advanced options on the open, as the relay would pass them. */
+    tuning?: Record<string, number | string | boolean | string[]>;
+  } = {},
+) {
   const sockets: FakeSocket[] = [];
   /** Turns without the wall-clock mark, for whole-object assertions. */
   const turns: EngineTurn[] = [];
@@ -74,6 +81,7 @@ function harness(opts: { detectSpeakers?: boolean; flushTimeoutMs?: number } = {
   const opening = engine.open({
     sampleRate: 16_000,
     detectSpeakers: opts.detectSpeakers ?? true,
+    ...(opts.tuning ? { tuning: opts.tuning } : {}),
     onTurn: (t) => {
       raw.push({ ...t });
       const { engineMs: _engineMs, audioEndMs: _audioEndMs, ...rest } = t;
@@ -151,6 +159,35 @@ describe('soniox config frame', () => {
     expect(first.api_key).toBe('test-key-not-a-real-credential');
     expect(first.model).toBe(SONIOX_MODEL);
     expect(first.enable_speaker_diarization).toBe(true);
+  });
+
+  it('spreads tuning keys into the config frame, terms nested as context', () => {
+    const config = sonioxConfig(16_000, true, {
+      endpoint_sensitivity: 0.5,
+      max_endpoint_delay_ms: 1200,
+      context_terms: ['Fryanpan', 'ydoc'],
+      language_hints: ['en', 'yue'],
+    });
+    expect(config.endpoint_sensitivity).toBe(0.5);
+    expect(config.max_endpoint_delay_ms).toBe(1200);
+    // The API's own shape: an object holding the list, not a bare key.
+    expect(config.context).toEqual({ terms: ['Fryanpan', 'ydoc'] });
+    expect('context_terms' in config).toBe(false);
+    // Hints pass through under their own name.
+    expect(config.language_hints).toEqual(['en', 'yue']);
+  });
+
+  it('sends no context object for an absent or empty term list', () => {
+    expect('context' in sonioxConfig(16_000, true)).toBe(false);
+    expect('context' in sonioxConfig(16_000, true, { context_terms: [] })).toBe(false);
+  });
+
+  it('connects with the tuning it was opened with', async () => {
+    const h = harness({ tuning: { endpoint_sensitivity: -0.4 } });
+    h.fake().open();
+    await h.opening;
+    const first = JSON.parse(h.fake().textFrames()[0] ?? '{}') as Record<string, unknown>;
+    expect(first.endpoint_sensitivity).toBe(-0.4);
   });
 });
 
