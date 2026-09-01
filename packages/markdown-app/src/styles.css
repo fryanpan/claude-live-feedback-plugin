@@ -131,7 +131,10 @@ button {
 
 #shell {
   display: grid;
-  grid-template-rows: 48px 1fr;
+  /* topbar, meeting strip, main. The strip's `auto` track is what makes it
+     RESERVE its height under the topbar instead of covering the prose; it
+     costs nothing unmounted — a hidden strip is a zero-height track. */
+  grid-template-rows: 48px auto 1fr;
   /* Pin the single column to the viewport. The implicit column is
      max-content sized, so a long unbreakable topbar label (e.g. a diff
      doc's absolute worktree path) would otherwise push the whole shell
@@ -677,16 +680,101 @@ body.has-set .doc-switcher-caret {
 }
 
 #editor-pane {
-  position: relative; /* anchors the floating diff/file view toggle */
+  /* Anchors the floating diff/file view toggle AND the plan-approve float
+     (src/plan-gate.ts) — both `position: absolute` children pinned to this
+     pane, not to the scrolling prose. */
+  position: relative;
   display: grid;
-  /* format bar, document, transcript strip. The auto tracks are what make
-     each strip RESERVE its height instead of covering the prose: the editor
-     keeps the 1fr and shrinks by exactly their height. They cost nothing
-     unmounted — a hidden strip is a zero-height track. */
-  grid-template-rows: auto 1fr auto;
+  /* format bar, document. The meeting strip is the SHELL's row now, fused
+     under the topbar (src/meeting-strip.ts); the old derived-work-chips
+     strip and the plan gate's one-line bar are both gone (#526/#531/#536) —
+     the approve float and the prose's own link chips carry what they did.
+     The auto track is what makes the format bar RESERVE its height instead
+     of covering the prose: the editor keeps the 1fr and shrinks by exactly
+     its height, and costs nothing collapsed — a hidden bar is a zero-height
+     track. */
+  grid-template-rows: auto 1fr;
   overflow: hidden;
   background: var(--bg);
   border-right: 1px solid var(--border);
+}
+
+/* The plan gate's one control (src/plan-gate.ts) — a floating Approve Plan
+   button, always visible at the bottom of the editor pane, unmistakably the
+   primary action on a pending plan doc (Bryan, on the mock). It replaces two
+   retired surfaces: the derived-work chip strip (#531 — the tasks a doc
+   produced now read through the links written in its prose, decorated by
+   task-link-chips.ts) and the plan-gate one-line bar (#536 — "don't design
+   for plan approval here", this ticket's redesign). Anchored to
+   #editor-pane's `position: relative`, so it pins to the visible pane, not
+   to the scrolling prose. The green is the approval green the link chips
+   use; the shadow is what separates it from the prose that scrolls
+   beneath. */
+.plan-approve-float {
+  position: absolute;
+  left: 50%;
+  bottom: 22px;
+  transform: translateX(-50%);
+  z-index: 30;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  min-height: 44px;
+  padding: 12px 26px;
+  border: 0;
+  border-radius: var(--radius-pill);
+  cursor: pointer;
+  background: var(--green-strong);
+  color: #fff;
+  font: 700 16px var(--sans);
+  box-shadow: 0 8px 28px rgba(26, 127, 55, 0.42);
+}
+.plan-approve-float:hover {
+  background: var(--green);
+}
+.plan-approve-float:disabled {
+  opacity: 0.7;
+  cursor: default;
+}
+@media (max-width: 640px) {
+  /* Edge-to-edge above the home indicator: a centred pill at phone width is
+     a small target over the one control the doc is waiting on. */
+  .plan-approve-float {
+    left: 12px;
+    right: 12px;
+    transform: none;
+    bottom: calc(14px + var(--safe-bottom));
+  }
+}
+/* The refusal reason for a failed Approve press — only ever appears in
+   answer to one, floating just above the button it answers. */
+.plan-gate-error {
+  position: absolute;
+  left: 50%;
+  bottom: 74px;
+  transform: translateX(-50%);
+  z-index: 30;
+  max-width: min(90vw, 360px);
+  padding: 6px 12px;
+  border-radius: var(--radius);
+  background: var(--bg);
+  border: 1px solid var(--red, #dc322f);
+  color: var(--red, #dc322f);
+  font-size: 12.5px;
+  text-align: center;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.14);
+}
+.plan-gate-error[hidden] {
+  display: none;
+}
+@media (max-width: 640px) {
+  .plan-gate-error {
+    left: 12px;
+    right: 12px;
+    transform: none;
+    max-width: none;
+  }
 }
 
 /* ================= WORKSPACE HUB =================
@@ -5833,23 +5921,17 @@ a.hub-link-chip:hover {
 }
 
 /* ================= VOICE (hold-to-talk, §2.4/§3.8) =================
-   The mic button + streaming-dictation/ack indicator, shared by the hub and
-   the /review/<docId> doc surface.
+   The mic button + streaming-dictation/ack indicator. The hub/board is its
+   one surface now: the doc screen's hold-to-talk mic was retired by the
+   top-bar overhaul (the Record Audio button owns everything audio there —
+   see MEETING RECORD CHROME).
 
    Two things live here. The SHARED LOOK — a 44px round bordered button, the
-   stroked glyph, the recording red, the dimmed insecure-origin state — belongs
-   to the mic wherever it is mounted. The positioning in the same rule is the
-   FLOATING form, and nothing ships wearing it any more: the hub docks the mic
-   in its nav rail / bottom tab bar (`.hub-nav-dock`, workspace-hub section) and
-   the doc surface docks it at the head of the topbar's toolbar
-   (`.doc-nav-dock`, below). Both un-fix it.
-
-   The float is kept as the fallback for a shell with no toolbar to dock into
-   (`mountDocVoice` appends to <body> then), and it stays bottom-LEFT, out of
-   the deep-work path — the composer and the comment pill live
-   bottom-right/center — rising with the keyboard via --kb-bottom like every
-   bottom-docked element on that surface. It is a fallback rather than a
-   surface: the doc shell has had a toolbar since it was written. */
+   stroked glyph, the recording red, the dimmed insecure-origin state — and
+   the FLOATING positioning in the same rule, which nothing ships wearing:
+   the hub docks the mic in its nav rail / bottom tab bar (`.hub-nav-dock`,
+   workspace-hub section), which un-fixes it. The float stays as the fallback
+   for a shell with no dock, bottom-LEFT and riding --kb-bottom. */
 
 .voice-mic {
   position: fixed;
@@ -6012,69 +6094,6 @@ a.hub-link-chip:hover {
     border-top-color: var(--accent, #2e7dd7);
     opacity: 0.8;
   }
-}
-
-/* --- the mic docked in the review shell's topbar ---
-
-   The doc surface's answer to the same question the rail answered: the mic
-   needs a place that is not on top of the page. It has no nav rail and no tab
-   bar, so it takes the one strip of chrome it does have — `#topbar`, whose
-   height is a hard 48px from `#shell`'s `grid-template-rows: 48px 1fr`. A 44px
-   control fits that row whole, so docking here costs the reading area nothing:
-   the topbar does not grow, and the document gains a column no floating box
-   sits in.
-
-   Why this and not a reservation. As a `position: fixed` launcher the mic
-   covered prose at every width and every scroll position — a fixed box over a
-   scrolling document always covers something — and the fix for that is not a
-   gutter nothing may be laid out in (the promise the board spent two commits
-   renewing) but a home in the chrome. Same conclusion as `.hub-nav-dock`,
-   different chrome. */
-.doc-nav-dock {
-  /* Positioned, so the readout below hangs off the DOCK. A static wrapper
-     would silently re-anchor it: `#topbar` and `#shell` are both static, so an
-     absolute box inside them resolves against the viewport instead and the
-     readout lands wherever the page happens to be scrolled to. */
-  position: relative;
-  display: flex;
-  align-items: center;
-  flex: none;
-  /* *"slightly separate … so it's clear it's not a navbar item"*, in a
-     left-to-right toolbar: the rail's divider-below becomes a divider-after.
-     The 2px margin rides on top of `.toolbar`'s own 6px gap, so the mic has
-     8px of air either side of its rule. */
-  margin-right: 2px;
-  padding-right: 8px;
-  border-right: 1px solid var(--border);
-}
-.doc-nav-dock .voice-mic {
-  /* Out of the fixed layer entirely — the same undo the rail's dock does, and
-     for the same reason: the offsets and the z-index it needed as a FAB mean
-     nothing in flow, and leaving them set is how the next reader concludes it
-     is still floating. */
-  position: static;
-  left: auto;
-  bottom: auto;
-  z-index: auto;
-  flex: none;
-  /* A docked control casts no shadow — the shadow is what read as hovering
-     above the page. */
-  box-shadow: none;
-}
-/* The readout hangs BELOW the topbar, because the topbar is at the top: the
-   floating form's `bottom` would put a transcript above the window's edge.
-
-   Anchored RIGHT, unlike the rail's, and that is not symmetry for its own
-   sake. The box is `width: max-content` up to `min(92vw, 840px)`, and this
-   dock sits far along a wide screen — from `left: 0` a full sentence would
-   run off the right edge of the viewport. Growing leftwards into the page it
-   has the whole width to use at 1180px and still fits at 430px. */
-.doc-nav-dock .voice-indicator {
-  position: absolute;
-  top: calc(100% + 8px);
-  bottom: auto;
-  right: 0;
-  left: auto;
 }
 
 /* ================= FORMAT BAR ================= */
@@ -6762,158 +6781,180 @@ body.is-reading-width #editor > .ProseMirror {
   }
 }
 
-/* ================= MEETING TRANSCRIPT STRIP =================
-   The one thing a live meeting adds to the document editor. Secondary by
-   construction: panel background against the white doc, a top border, and sans
-   at 12.5px against the prose's 18px serif, with the text masked out as it
-   rolls up.
+/* ================= MEETING RECORD CHROME =================
+   One Record Audio button in the top bar owns everything audio; the live
+   transcript strip is #shell's second grid row, fused directly under the bar
+   the button sits in (the notch points at it), and the two popovers — the
+   speaker menu while recording, the start chooser while not — hang from the
+   same button. Secondary by construction against the doc: panel background,
+   sans at 13px against the prose's serif, one 36px row that is simply absent
+   (hidden ⇒ zero-height track) when there is nothing to say.
 
-   Two shapes. Above 720px it is a single 40px bar — clock, rolling words, and
-   the control at the far end — which is what the iPad reads. At or below it,
-   the bar has no room for a sentence, so the strip becomes its own panel: the
-   recording state on a micro-row above about two wrapped lines of transcript.
-   The design was drawn with container queries; this stylesheet has none, so
-   the switch is a media query at the same width. That leaves a 721-900px band
-   where the doc is already single-column and the strip is still the bar, which
-   is correct — the bar's constraint is horizontal room, not column count.
+   Every choice is made in the start chooser; the strip itself holds no
+   controls but the speaker tags — the controls live behind the button the
+   strip grows out of. */
 
-   On a phone the strip sits at the true bottom edge of the window. There is no
-   bottom bar on this surface (the one the hub draws is a different shell, and
-   its height variable resolves to nothing here), so the padding that keeps the
-   words clear of the home indicator and of an open keyboard is the strip's
-   own. */
-.meeting-strip {
+.meeting-record {
   flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  /* design-mobile.md tap-target floor; it is a real control on a phone. */
+  min-height: 36px;
+  padding: 0 11px;
+  margin-left: 4px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-pill);
+  background: var(--bg);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--fg);
+  cursor: pointer;
+}
+.meeting-record:hover {
+  background: var(--bg-hover);
+}
+.meeting-record.is-open {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 10%, var(--bg));
+}
+/* Solid red dot + "Recording": the button and the strip under it read as one
+   unit, and the person who was told they are being recorded can look up and
+   see that they still are. */
+.meeting-record.is-live {
+  border-color: var(--red);
+  background: color-mix(in srgb, var(--red) 8%, var(--bg));
+  color: var(--red-strong);
+}
+.meeting-record-glyph {
+  display: inline-flex;
+}
+.meeting-record-glyph svg {
+  width: 16px;
+  height: 16px;
+  display: block;
+}
+.meeting-record-dot {
+  flex: none;
+  width: 10px;
+  height: 10px;
+  border-radius: var(--radius-pill);
+  background: var(--red);
+}
+
+/* ---- the strip: blinker · clock · flowing feed ---- */
+.meeting-strip {
+  position: relative;
   display: flex;
   align-items: center;
-  gap: 12px;
-  height: 40px;
+  gap: 10px;
+  min-height: 36px;
   padding: 0 14px;
   background: var(--bg-panel);
-  border-top: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
   font-family: var(--sans);
-  font-size: 12.5px;
-  color: var(--fg-muted);
+  font-size: 13px;
+  color: var(--fg);
 }
-/* `display: flex` above out-specifies the UA's `[hidden]` rule, so the shell's
-   hidden strip would otherwise claim its grid row on every other surface. */
+/* `display: flex` out-specifies the UA's `[hidden]` rule, so a hidden strip
+   would otherwise claim its grid row on every surface with nothing to say. */
 .meeting-strip[hidden] {
   display: none;
 }
-/* A real box only in the stacked layout; see the wide-mode block below. */
-.meeting-strip-row {
-  display: flex;
-  align-items: center;
-  gap: 8px;
+.meeting-strip.is-live {
+  background: color-mix(in srgb, var(--red) 6%, var(--bg));
+  border-bottom-color: color-mix(in srgb, var(--red) 25%, var(--bg));
 }
-.meeting-meta {
-  flex: none;
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  font-variant-numeric: tabular-nums;
+/* The visual fuse: a notch pointing up at the Record button in the bar
+   above. Offset from the right edge to sit under the toolbar's last control;
+   cosmetic — nothing anchors it to the button's true box. */
+.meeting-strip::before {
+  content: "";
+  position: absolute;
+  top: -6px;
+  right: 64px;
+  width: 10px;
+  height: 10px;
+  transform: rotate(45deg);
+  background: var(--bg-panel);
+  border-top: 1px solid var(--border);
+  border-left: 1px solid var(--border);
 }
-.meeting-dot {
+.meeting-strip.is-live::before {
+  background: color-mix(in srgb, var(--red) 6%, var(--bg));
+  border-color: color-mix(in srgb, var(--red) 25%, var(--bg));
+}
+.meeting-blinker {
   flex: none;
-  width: 8px;
-  height: 8px;
+  width: 10px;
+  height: 10px;
   border-radius: var(--radius-pill);
-  background: var(--border-strong);
-}
-.meeting-strip.is-live .meeting-dot {
   background: var(--red);
-  animation: meeting-pulse 1.6s ease-in-out infinite;
+  animation: meeting-blink 1.2s ease-in-out infinite;
 }
-@keyframes meeting-pulse {
+@keyframes meeting-blink {
   0%,
   100% {
     opacity: 1;
-    transform: scale(1);
   }
   50% {
-    opacity: 0.3;
-    transform: scale(0.8);
+    opacity: 0.25;
   }
 }
-/* "Paused" is the phone's — the bar has the clock and no room for a word that
-   says nothing is happening. "REC" is every width's. The pulsing dot beside a
-   running clock did read as recording to whoever built the bar, but this strip
-   now announces itself to a ROOM, and the person who was told they are being
-   recorded has to be able to look over and see that they still are. A dot is
-   the weakest form that claim can take. */
-.meeting-status {
-  display: none;
+/* A strip that is not recording does not pulse: the bot dialling in or
+   waiting on the host is the orange of "in progress", and a settled failure
+   is no light at all — a blinking dot beside "the mic was refused" claims a
+   recording that is not happening. */
+.meeting-strip[data-state="requesting"] .meeting-blinker,
+.meeting-strip.is-bot:not(.is-live) .meeting-blinker {
+  background: var(--orange);
+  animation: none;
 }
-.meeting-strip.is-live .meeting-status {
-  display: inline;
-  font-size: 11px;
-  font-weight: 700;
-  letter-spacing: 0.05em;
-  text-transform: uppercase;
-  /* --red-strong, not --red, and measured rather than picked: this is 11px
-     text, so the 4.5:1 floor applies rather than the 3:1 a graphical object
-     gets. On --bg-panel, --red is 4.26:1 (base) and fails; --red-strong is
-     5.0:1 base and 5.1:1 through the Open Props layer. The dot keeps --red —
-     it is a shape, and 3:1 is its bar. */
-  color: var(--red-strong);
+.meeting-strip[data-state="unavailable"] .meeting-blinker,
+.meeting-strip[data-state="blocked"] .meeting-blinker,
+.meeting-strip[data-state="error"] .meeting-blinker {
+  background: var(--border-strong);
+  animation: none;
 }
 .meeting-elapsed {
-  font-weight: 600;
-  color: var(--fg);
+  flex: none;
+  font-weight: 700;
+  color: var(--red-strong);
   font-variant-numeric: tabular-nums;
 }
-/* One line of transcript, bottom-aligned, with the line above it fading out as
-   it rolls off — the mask is what keeps a half-visible line from reading as
-   clipped text.
-
-   THE PADDING IS THE TAP TARGET. `overflow: hidden` clips to the PADDING box,
-   so with no padding it also ate the speaker tag's hit area, which measured
-   19px against this project's 36px floor. The height below is the text
-   WINDOW (content-box); the 9px above and below widen the clip box to ~36px
-   so the tag's ::before survives, and the mask is anchored in px to the
-   window's own top edge so the taller box reveals nothing that was hidden
-   before. Grow one and the other has to move with it. */
-.meeting-caption {
+/* The clock is the microphone's; a bot meeting and every settled failure
+   would otherwise show 00:00 forever. */
+.meeting-strip:not([data-state="recording"]) .meeting-elapsed {
+  display: none;
+}
+/* One flowing line, newest words at the right, the tail fading out at the
+   left — the mask is what keeps a half-visible word from reading as clipped
+   text. */
+.meeting-feed {
   flex: 1 1 auto;
   min-width: 0;
-  box-sizing: content-box;
-  height: 1.45em;
-  padding-block: 10px;
   overflow: hidden;
-  display: flex;
-  flex-direction: column;
-  justify-content: flex-end;
-  /* Hard off above the window, then opaque within 2px of its top edge. The
-     long 0.8em ramp this replaces was inherited from when the caption had no
-     padding and a rolled-off line WAS half-visible inside the window. It is
-     not any more — everything above the window sits in the transparent
-     padding — so the ramp had stopped softening a rolling line and was only
-     washing out the top of the CURRENT one. That is why the speaker pill
-     rendered pale with no top border: it is 17.75px in an 18.125px window, so
-     its top edge is at the window's top edge however well it is centred, and
-     the old ramp put alpha 0 exactly there. Measured at 1180x820 the pill's
-     top lands 10.37px in, so the cut is HARD at 10px -- the content-box top.
-     Any ramp at all, however short, is inside the pill. The transparent 10px
-     is not decoration: overflow: hidden clips to the PADDING box, so the
-     rolled-off previous line really does paint over that strip, and the mask
-     is what hides it. */
-  -webkit-mask-image: linear-gradient(to bottom, transparent 0, transparent 10px, #000 10px);
-  mask-image: linear-gradient(to bottom, transparent 0, transparent 10px, #000 10px);
+  white-space: nowrap;
+  -webkit-mask-image: linear-gradient(90deg, transparent 0, #000 56px);
+  mask-image: linear-gradient(90deg, transparent 0, #000 56px);
 }
-.meeting-caption-line {
-  margin: 0;
-  line-height: 1.45;
-  overflow-wrap: anywhere;
+.meeting-feed-inner {
+  float: right;
 }
-/* A turn owns its lines. Inline, a turn began wherever the one before it
-   ended, which put its speaker tag at the END of the previous visual line —
-   above the words it labels, and on a phone that line is the faded one being
-   clipped away. As a block the tag always starts its turn's first line, so
-   the newest turn's tag sits at the head of the newest turn. It also puts the
-   full stop of one turn and the pill of the next on separate lines, which is
-   the space that was missing between them. */
+/* A note is read left-to-right from its start, and may need to wrap — the
+   flowing-feed treatment is for words that arrive forever, not for one
+   sentence with an audience. */
+.meeting-feed:has(.meeting-note) {
+  white-space: normal;
+  -webkit-mask-image: none;
+  mask-image: none;
+}
+.meeting-feed:has(.meeting-note) .meeting-feed-inner {
+  float: none;
+}
 .meeting-turn {
-  display: block;
+  display: inline;
 }
 /* One span per word, so a word the engine revises is rewritten where it
    already is rather than the line being redrawn under the reader. */
@@ -6933,14 +6974,14 @@ body.is-reading-width #editor > .ProseMirror {
   }
 }
 /* Who said the turn: a muted tag at the head of each turn's words, and the one
-   tap that names a voice for the meeting.
+   tap that names a voice from the feed itself.
 
    THE TARGET IS THE BUTTON'S OWN PADDING, and the button clips NOTHING. Two
-   rounds of review were lost to a pseudo-element hit area: first the caption's
-   `overflow: hidden` ate it, then — added for the ellipsis below — the
-   button's own did. A pseudo target is defeated by a clip on ANY ancestor,
-   its own element included, and it fails silently and measures 19px. Real
-   padding cannot be clipped away by a property somebody adds one level up.
+   rounds of review were lost to a pseudo-element hit area: first an
+   ancestor's `overflow: hidden` ate it, then the button's own did. A pseudo
+   target is defeated by a clip on ANY ancestor, its own element included, and
+   it fails silently and measures 19px. Real padding cannot be clipped away by
+   a property somebody adds one level up.
 
    So the two jobs are split across two elements, and must stay split: the
    BUTTON is a transparent box whose padding is the target, and the PILL
@@ -6948,22 +6989,6 @@ body.is-reading-width #editor > .ProseMirror {
    background, a border or an `overflow` and you have rebuilt the bug. */
 .meeting-speaker {
   display: inline-block;
-  /* 10px each side of the ~17.75px pill = 37.75px: the border box IS the
-     target, and 9px would have missed the 36px floor by a quarter pixel. The
-     negative vertical margin gives that height back to the line box, so the
-     caption's window stays one line and the words do not move.
-
-     `middle`, NOT `baseline`, and this is a measured bug rather than taste.
-     An inline-block that clips has its baseline redefined to its bottom
-     margin edge, so a baseline-aligned pill hung above the text with the
-     line's descender space empty beneath it — the box was the 37.75px
-     designed but sat 4.3px above the clip, measuring 34, and its top was up
-     inside the mask's fade, rendering the label washed out beside crisp
-     words. `middle` positions the box from its own margin box instead of
-     from a baseline the pill's overflow moves, so the centring survives the
-     next change to the line box. Do not enlarge the padding to buy slack
-     instead: at 430px the caption is two lines, and a taller target reaches
-     into the line above. */
   padding: 10px 4px;
   margin: -10px 0 -10px -4px;
   border: 0;
@@ -6973,10 +6998,10 @@ body.is-reading-width #editor > .ProseMirror {
   cursor: pointer;
   vertical-align: middle;
 }
-/* The pill: the whole look, and the clip that keeps a long name from wrapping
-   the caption line. The max-width is load-bearing, not tidiness — a
-   60-character name rendered a 335px pill that pushed every tag out of the
-   window, so naming a voice was what turned the labels off. */
+/* The pill: the whole look, and the clip that keeps a long name from growing
+   the line. The max-width is load-bearing, not tidiness — a 60-character
+   name rendered a 335px pill that pushed every tag out of the window, so
+   naming a voice was what turned the labels off. */
 .meeting-speaker-pill {
   display: inline-block;
   max-width: 11em;
@@ -7001,50 +7026,28 @@ body.is-reading-width #editor > .ProseMirror {
   color: var(--fg);
   border-color: var(--border-strong);
 }
-/* The pill says it is editable WITHOUT hover: a pencil before the name. The
-   dotted underline alone did not read as tappable on the iPad — the reported
-   failure was a real two-voice meeting with "no ability to edit the speaker
-   names". CSS content rather than markup so the button's aria-label ("Name
-   Speaker A") stays the accessible name, and at the START of the pill so the
-   ellipsis clipping a long name can never eat it. */
+/* The pill says it is editable WITHOUT hover: a pencil before the name. CSS
+   content rather than markup so the button's aria-label ("Name Speaker A")
+   stays the accessible name, and at the START of the pill so the ellipsis
+   clipping a long name can never eat it. */
 .meeting-speaker-pill::before {
   content: "✎ ";
 }
-/* The rename surface a finished meeting leaves behind: the cast on the
-   caption line while the strip is idle. Same button, same pill, same
-   hit-box arithmetic as a turn's tag — the legend lives inside the
-   caption's clip, so the ~38px the tag measures is this bar's ceiling too;
-   a 44px target would mean a taller strip row. `wrap` is for the phone
-   panel: two named voices overflow one 430px line, and a legend that
-   widened the panel would push the strip off the window edge. */
-.meeting-legend {
-  display: inline-flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 2px 10px;
-  max-width: 100%;
-}
-.meeting-legend-hint {
-  color: var(--fg-muted);
-  white-space: nowrap;
-}
 /* Why no words are coming — an unconfigured server, a refused mic, an origin
-   the browser gives no mic on. It occupies the transcript's line because it is
-   the answer to the same question. */
+   the browser gives no mic on, a bot's state. It occupies the feed because it
+   is the answer to the same question. */
 .meeting-note {
   color: var(--fg-muted);
 }
-/* The announcement a person is meant to READ. It holds the caption line until
-   a settled turn arrives or it is tapped away, so it is a button — a
+/* The announcement a person is meant to READ. It holds the feed until a
+   settled turn arrives or it is tapped away, so it is a button — a
    dismissible thing has to be reachable by more than a pointer. Stripped back
-   to look exactly like the note it replaces: the affordance is the whole line,
-   not a control someone has to find. The 36px floor does not apply, because
-   the caption already carries its own hit area (see the tag's lesson above)
-   and this button fills it. */
+   to look exactly like the note it replaces: the affordance is the whole
+   line, not a control someone has to find. */
 .meeting-note-dismiss {
   font: inherit;
-  /* NOT the strip's 12.5px, and not `--fg-muted`. Every other string here is
-     a readout, glanced at by the one person holding the device. This one is a
+  /* NOT the strip's 13px, and not `--fg-muted`. Every other string here is a
+     readout, glanced at by the one person holding the device. This one is a
      SCRIPT: somebody reads it out loud to a room, off an iPad at arm's
      length, while people wait. It gets body size and body colour because it
      is the only line in the strip with an audience. */
@@ -7061,92 +7064,249 @@ body.is-reading-width #editor > .ProseMirror {
 /* The same line when the tap DOES something — the device was handed the
    sentence, never began it, and this tap is the gesture its speech queue has
    been waiting for. It has to read as a control at rest: hover is not an
-   answer on the iPad (the tag above learned the same lesson), and the words
-   alone read as one more caption. The speaker tag's dotted underline rather
-   than a button shape, because the caption has no room for a second control
-   and the affordance is still the whole line. */
-.meeting-note-speak {
+   answer on the iPad, and the words alone read as one more caption. */
+.meeting-note-speak,
+.meeting-note-start {
   text-decoration: underline dotted;
   text-underline-offset: 3px;
-  /* And unlike the line that only dismisses, this one is a control someone
-     has to HIT — measured at 22px tall in the caption, which is under
-     design-mobile.md's floor and leaves the strip's own dead space above and
-     below the words. Padding rather than a min-height, so a sentence that
-     wraps to two lines on the phone grows the target instead of centring a
-     fixed box inside it. */
+  /* A control someone has to HIT — padding rather than a min-height, so a
+     sentence that wraps to two lines on the phone grows the target instead
+     of centring a fixed box inside it. */
   padding-block: 7px;
 }
-/* And it needs somewhere to be that size. The caption is a fixed window —
-   1.45em here, 2.9em on a phone — measured against the strip's 12.5px, so a
-   16px sentence would be clipped by the very rule that keeps a rolling
-   transcript from growing the bar. While the announcement holds the line the
-   window is released; it closes again the moment a settled turn arrives or
-   the line is tapped away.
-
-   Keyed off `:has()` rather than a class because the button IS the state:
-   it exists only while the announcement is up, so there is nothing to keep
-   in sync. Base section on purpose — the media queries set the fixed
-   heights, and one rule at higher specificity beats both. */
-.meeting-caption:has(.meeting-note-dismiss) {
-  height: auto;
-}
-/* And the bar gives it the room, rather than clipping it at 40px. Measured:
-   one line of the sentence makes a 42px caption, and in the 721-900px band
-   where the bar is narrow it wraps to two and asks for 64. The editor pane's
-   third grid track is `auto` — the strip RESERVES its height instead of
-   covering the prose — so growing here shortens the editor by exactly this
-   much and gives it straight back. Transient by construction: the rule stops
-   applying the moment a settled turn arrives or the line is tapped away. */
+/* And the row gives a held sentence the room, rather than clipping it at
+   36px. The shell's strip track is `auto` — the strip RESERVES its height —
+   so growing here shortens the editor by exactly this much and gives it
+   straight back. Transient by construction: the rule stops applying the
+   moment a settled turn arrives or the line is tapped away. */
 .meeting-strip:has(.meeting-note-dismiss) {
-  height: auto;
+  padding-block: 5px;
 }
-.meeting-toggle {
-  flex: none;
-  font: inherit;
-  font-size: 12px;
-  font-weight: 600;
-  padding: 4px 11px;
-  /* design-mobile.md tap-target floor; the strip's only control. */
-  min-height: 36px;
-  border: 1px solid var(--border);
+
+/* ---- the popovers: scrim, speaker menu, start chooser ---- */
+.meeting-scrim {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  background: rgba(27, 31, 35, 0.06);
+}
+.meeting-scrim[hidden] {
+  display: none;
+}
+.meeting-pop {
+  position: fixed;
+  top: calc(var(--safe-top) + 52px);
+  right: 10px;
+  z-index: 41;
+  width: 320px;
+  max-width: calc(100vw - 20px);
+  /* The scarce axis on the iPad is HEIGHT (~750px usable); the chooser holds
+     two groups, a checkbox and a CTA, so it scrolls before it clips. */
+  max-height: calc(100dvh - var(--safe-top) - 70px);
+  overflow: auto;
   background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  box-shadow: var(--shadow-lg);
+  padding: 6px;
+  font-family: var(--sans);
+  font-size: 14px;
   color: var(--fg);
-  border-radius: var(--radius-pill);
+}
+.meeting-pop[hidden] {
+  display: none;
+}
+.meeting-sheet {
+  width: 340px;
+}
+.meeting-pop-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px 6px;
+  font-size: 12px;
+  color: var(--fg-muted);
+}
+.meeting-pop-head .meeting-blinker {
+  width: 8px;
+  height: 8px;
+}
+.meeting-pop-speaker {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 36px;
+  padding: 2px 10px;
+  font-size: 13.5px;
+}
+.meeting-pop-speaker-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.meeting-pop-rename {
+  flex: none;
+  margin-left: auto;
+  min-height: 36px;
+  padding: 6px 8px;
+  font: inherit;
+  font-size: 12.5px;
+  color: var(--accent);
+  background: none;
+  border: 0;
   cursor: pointer;
 }
-.meeting-toggle:disabled {
-  color: var(--fg-muted);
+.meeting-pop-sep {
+  height: 1px;
+  background: var(--border);
+  margin: 5px 8px;
+}
+/* Stop is the menu's primary action and has to look like one: a full-width
+   red button at the bottom, not one more menu row (Bryan, on the mock: "make
+   this more like a button"). The chooser's Start is the same shape — the two
+   verbs of the same machine. */
+.meeting-stop-cta,
+.meeting-start-cta {
+  display: block;
+  width: calc(100% - 16px);
+  margin: 4px 8px 8px;
+  min-height: 40px;
+  padding: 10px;
+  border: 0;
+  border-radius: var(--radius-lg);
+  cursor: pointer;
+  background: var(--red);
+  color: #fff;
+  font: 700 14px var(--sans);
+}
+.meeting-stop-cta:hover,
+.meeting-start-cta:hover {
+  background: var(--red-strong);
+}
+.meeting-stop-cta:disabled,
+.meeting-start-cta:disabled {
+  opacity: 0.6;
   cursor: default;
 }
-/* ---- Latency readout (?timing=1) ----
-   Present ONLY on a measured meeting: `has-timing` is set from the same flag
-   that builds the timing session, so none of this can reach an ordinary load.
-
-   A LINE OF ITS OWN, never a fourth item on the bar. Above 721px the strip is
-   a 40px row whose middle is already the rolling transcript, and at 430px it
-   is a stacked panel of about two wrapped lines sitting on the home
-   indicator; there is no spare horizontal room at either width. So the strip
-   is allowed to grow for this one mode and the readout goes under it. The
-   numbers are tabular so a p95 that gains a digit does not shuffle the row.
-
-   THE ROW ITSELF WRAPS, and that is load-bearing rather than cosmetic. The
-   phone-width strip is a COLUMN whose width comes from its content, so a row
-   of `white-space: nowrap` cells contributes its whole max-content width to
-   the panel — measured at 430px, the first attempt (nowrap plus overflow-x)
-   made the strip 447px inside a 430px window, because `overflow-x` does not
-   shrink an element's max-content contribution and `min-width: 0` only
-   governs the MAIN axis, which in a column is the vertical one. Letting the
-   cells wrap drops the row's minimum to its widest single cell, and the panel
-   fits again. Each cell keeps its own label and number together. */
-.meeting-timing-row {
+.meeting-sheet-title {
+  margin: 4px 10px 8px;
+  font-size: 14px;
+}
+/* The last meeting's voices, still nameable after it ended — the surface the
+   old idle strip's legend carried, now living where the button leads. */
+.meeting-pop-cast {
+  margin: 0 8px 10px;
+  padding-bottom: 4px;
+  border-bottom: 1px solid var(--border);
+}
+.meeting-choice-group {
+  margin: 0 8px 10px;
+}
+.meeting-choice-group-label {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--fg-muted);
+  margin: 0 2px 5px;
+}
+.meeting-choice {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  padding: 9px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  margin-bottom: 6px;
+  cursor: pointer;
+}
+.meeting-choice.is-selected {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 8%, var(--bg));
+}
+.meeting-choice input[type="radio"] {
   flex: none;
+  margin: 2px 0 0;
+  accent-color: var(--accent);
+}
+.meeting-choice-body {
+  display: block;
   min-width: 0;
-  /* LAST, at every width and whatever the DOM order is. The readout is
-     appended when the strip mounts, so a control added to the strip later —
-     the bot row is one — lands after it in the DOM and would sit UNDER the
-     dashed rule, reading as part of the diagnostics rather than as a control.
-     A large order costs nothing and does not have to be revisited the next
-     time the strip grows. */
+  flex: 1;
+}
+.meeting-choice-title {
+  display: block;
+  font-weight: 600;
+  font-size: 13.5px;
+}
+.meeting-choice-detail {
+  display: block;
+  font-size: 12px;
+  color: var(--fg-muted);
+}
+.meeting-bot-url,
+.meeting-bot-name {
+  width: 100%;
+  min-height: 36px;
+  margin-top: 6px;
+  padding: 7px 8px;
+  font: 13px var(--sans);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg);
+  color: var(--fg);
+}
+/* The prefilled name reads as the default it is, not as something typed. */
+.meeting-bot-name {
+  color: var(--fg-muted);
+}
+.meeting-bot-name:focus {
+  color: var(--fg);
+}
+.meeting-bot-name-hint {
+  display: block;
+  margin-top: 8px;
+  font-size: 11px;
+  color: var(--fg-muted);
+}
+.meeting-consent {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 10px 10px;
+  /* design-mobile.md tap-target floor; the whole label toggles the box. */
+  min-height: 36px;
+  font-size: 13px;
+  color: var(--fg-muted);
+  cursor: pointer;
+}
+.meeting-consent input {
+  flex: none;
+  width: 16px;
+  height: 16px;
+  accent-color: var(--accent);
+}
+.meeting-pop-error {
+  display: block;
+  margin: 0 10px 6px;
+  font-size: 12.5px;
+  color: var(--red-strong);
+}
+.meeting-pop-error:empty {
+  display: none;
+}
+
+/* ---- the timing readout (`?timing=1`) ----
+   A row of its own under the strip's line, present only under the flag. The
+   cells wrap rather than scroll — measured at 430px, nowrap plus overflow-x
+   made the strip 447px inside a 430px window, because `overflow-x` does not
+   shrink an element's max-content contribution. */
+.meeting-strip.has-timing {
+  flex-wrap: wrap;
+}
+.meeting-timing-row {
+  flex: 1 1 100%;
+  min-width: 0;
   order: 99;
   display: flex;
   align-items: center;
@@ -7190,290 +7350,64 @@ body.is-reading-width #editor > .ProseMirror {
   cursor: pointer;
 }
 
-/* "Detect multiple speakers" — a switch, not a second Start. Unpressed it is
-   the quiet default (one voice, no diarization bill); pressed it fills, the
-   way the strip's own live state does. The label never changes with the
-   state: `aria-pressed` carries that, and a button whose words flip between
-   the state and the action reads as neither.
-
-   Same 36px floor as the toggle beside it (design-mobile.md) and nothing
-   inside it clips — the tag's lesson higher up this section. */
-.meeting-mode {
-  flex: none;
-  font: inherit;
-  font-size: 12px;
-  font-weight: 600;
-  padding: 4px 11px;
-  min-height: 36px;
-  border: 1px solid var(--border);
-  background: var(--bg);
-  color: var(--fg-muted);
-  border-radius: var(--radius-pill);
-  cursor: pointer;
-  white-space: nowrap;
-}
-.meeting-mode[aria-pressed="true"] {
-  border-color: var(--accent);
-  background: color-mix(in srgb, var(--accent) 12%, var(--bg));
-  color: var(--accent);
-}
-.meeting-mode:disabled {
-  cursor: default;
-  opacity: 0.65;
-}
-/* "I'll say it" — the hybrid's other Start, and it reads as the quieter of the
-   two: no fill, muted text, the same pill. It is an alternative to a default
-   that is already correct, not a thing anyone has to notice, so it must never
-   compete with Start for the eye. Same 36px floor as its two neighbours
-   (design-mobile.md) and `white-space: nowrap` for the same reason the mode
-   switch has it — the apostrophe and the two short words must not stack. */
-.meeting-announce {
-  flex: none;
-  font: inherit;
-  font-size: 12px;
-  font-weight: 600;
-  padding: 4px 11px;
-  min-height: 36px;
-  border: 1px solid var(--border);
-  background: transparent;
-  color: var(--fg-muted);
-  border-radius: var(--radius-pill);
-  cursor: pointer;
-  white-space: nowrap;
-}
-.meeting-announce[hidden] {
-  display: none;
-}
-/* Which engine transcribes — present only when the server holds a choice, so
-   on most installs this rule styles nothing. The same pill as its two
-   neighbours (36px floor, design-mobile.md) so a control that appears when a
-   second key lands does not read as a foreign object. */
-.meeting-engine {
-  flex: none;
-  font: inherit;
-  font-size: 12px;
-  font-weight: 600;
-  padding: 4px 11px;
-  min-height: 36px;
-  border: 1px solid var(--border);
-  background: var(--bg);
-  color: var(--fg-muted);
-  border-radius: var(--radius-pill);
-  cursor: pointer;
-  white-space: nowrap;
-}
-.meeting-engine:disabled {
-  cursor: default;
-  opacity: 0.65;
-}
-.meeting-engine[hidden] {
-  display: none;
+/* ---- narrow widths ---- */
+@media (max-width: 640px) {
+  .meeting-record {
+    padding: 0 9px;
+    font-size: 12px;
+    margin-left: 2px;
+  }
+  .meeting-strip {
+    gap: 8px;
+    padding: 0 10px;
+  }
+  .meeting-strip::before {
+    right: 60px;
+  }
+  /* The popovers become an edge-to-edge sheet under the bar. */
+  .meeting-pop,
+  .meeting-sheet {
+    left: 6px;
+    right: 6px;
+    width: auto;
+  }
 }
 @media (min-width: 721px) {
-  /* The strip is one row here, so the micro-row stops being a box and its
-     children join the strip's own flex line. That flattens them in SOURCE
-     order, which would put the control between the clock and the words; the
-     order properties restore the intended line. */
-  .meeting-strip-row {
-    display: contents;
-  }
-  .meeting-meta {
-    order: 1;
-  }
-  .meeting-caption {
-    order: 2;
-  }
-  .meeting-mode {
-    order: 3;
-  }
-  /* Beside the mode switch it qualifies: both are facts about the session
-     being configured, settled before Start. */
-  .meeting-engine {
-    order: 4;
-  }
-  /* Between the mode switch and Start: it is a start button, so it belongs to
-     the controls at the end of the line, and it is the secondary one, so it
-     sits before the primary rather than past it. */
-  .meeting-announce {
-    order: 5;
-  }
-  .meeting-toggle {
-    order: 6;
-  }
-  /* The strip runs as a ROW here, so wrapping puts the readout on the next
-     LINE and the bar's fixed 40px has to give. Both of these are scoped to
-     this media query on purpose: at 720px and below the strip is a COLUMN,
-     where `flex-wrap: wrap` wraps into a new COLUMN instead — measured at
-     430px it made the stacked panel 447px wide inside a 430px window — and
-     `flex-basis: 100%` would ask for the container's whole HEIGHT. The column
-     layout needs neither: it is already `height: auto` and one item per row. */
+  /* The strip runs as a single ROW at every width now — it never stacks into
+     a column. The timing line already gets its own full-width row inside
+     that flex container unconditionally, via `order: 99` + `flex-basis:
+     100%` above. This query only refines that for ≥721px: `height: auto`
+     lets the strip grow past its 36px floor to fit the wrapped line, and
+     pinning the timing row to `flex: 0 0 100%` keeps it rigid once there is
+     room to show the stats in full. Below 721px the unconditional `1 1 100%`
+     stays in effect so the row can shrink instead of overflowing a narrow
+     window. */
   .meeting-strip.has-timing {
     height: auto;
     flex-wrap: wrap;
   }
   .meeting-timing-row {
-    /* A line of its own on the flattened row; `order` comes from the base
-       rule, which already puts it last. */
+    /* A line of its own on the flattened row. */
     flex: 0 0 100%;
   }
 }
 @media (max-width: 720px) {
-  .meeting-strip {
-    height: auto;
-    flex-direction: column;
-    align-items: stretch;
-    /* No gap and no bottom padding of its own: the caption is the last child
-       and now carries 10px of its own on each side (the tag's hit area lives
-       in it). Doubling up would grow the panel by a whole 20px on the screen
-       with the least room for it. */
-    gap: 0;
-    padding: 7px 14px;
-    /* The last row of the window: clear of the home indicator, and lifted by
-       whatever an open keyboard is covering (--kb-bottom, published by
-       keyboard-inset.ts) so the words are not behind it. */
-    padding-bottom: calc(var(--safe-bottom) + var(--kb-bottom, 0px));
-  }
-  .meeting-status {
-    display: inline;
-    font-size: 11px;
-    font-weight: 700;
-    letter-spacing: 0.05em;
-    text-transform: uppercase;
-  }
-  .meeting-caption {
-    height: 2.9em;
-  }
-  /* The stacked micro-row: the mode sits with the clock and Start is pushed
-     to the far edge. Below 380px the words and both controls no longer fit on
-     one line, so the row wraps rather than squeezing the tap targets. */
-  .meeting-mode {
-    margin-left: auto;
-  }
-  /* No margin of its own: `.meeting-strip-row` already carries an 8px gap
-     here, and the one on Start beside it predates that gap and doubles it.
-     Adding a third margin is what tips this row into a wrap at 430px, which
-     costs the phone 42px of its bottom edge for a state nobody is looking
-     at (idle, before Start). */
-  .meeting-toggle {
-    margin-left: 8px;
-  }
-  .meeting-strip-row {
-    flex-wrap: wrap;
-    row-gap: 6px;
-  }
-  /* ---- The strip yields while an editor has focus ----
-     Bryan, from his phone after tapping a table cell: "the keyboard and voice
-     recording panel moved up to cover what I'm editing. I don't need the voice
-     recording panel while editing." At this width the strip is a stacked
-     panel, ~70px of #editor-pane's third row, and it is also the one thing on
-     screen with nothing to say while somebody types.
-
-     `data-edit-viewport` is published by edit-viewport.ts from `stripYield()`.
-     Yielding is layout ONLY: the strip is never unmounted and never gets
-     `hidden` (that attribute means "no meeting surface here"), so the socket,
-     the state machine and any in-progress capture run straight through an
-     edit. Re-checked inside this media query as well as by the JS, so a mode
-     left over from a rotation cannot reach the iPad's 40px bar. */
+  /* The strip yields while an editor has focus at phone width — height is
+     the scarce thing under a keyboard, and an idle strip has nothing to say
+     while somebody types. `data-edit-viewport` is published by
+     edit-viewport.ts from `stripYield()`, which never yields a RECORDING
+     strip to `hidden`: a live mic with no indicator is not a thing to ship.
+     Yielding is layout ONLY — the socket, the state machine and any
+     in-progress capture run straight through an edit. */
   body[data-edit-viewport="hidden"] .meeting-strip {
-    display: none;
-  }
-  /* A LIVE strip never disappears — a recording mic with no indicator is not a
-     thing to ship. It drops the transcript caption and keeps the meta row: the
-     pulsing dot, the clock, and Stop. */
-  body[data-edit-viewport="compact"] .meeting-strip {
-    gap: 0;
-    padding-top: 4px;
-    padding-bottom: calc(4px + var(--safe-bottom) + var(--kb-bottom, 0px));
-  }
-  body[data-edit-viewport="compact"] .meeting-caption {
-    display: none;
-  }
-  /* A live strip keeps the dot, the clock and Stop. The mode switch is
-     disabled for the length of a meeting anyway, and neither it, the second
-     Start, nor the readout has room to spare while a keyboard is up — the
-     caption's rule, applied to everything that is not the recording state. */
-  body[data-edit-viewport="compact"] .meeting-mode,
-  body[data-edit-viewport="compact"] .meeting-announce,
-  body[data-edit-viewport="compact"] .meeting-timing-row {
     display: none;
   }
 }
 @media (prefers-reduced-motion: reduce) {
-  .meeting-strip.is-live .meeting-dot,
+  .meeting-blinker,
   .meeting-caption-line .w.is-fixed {
     animation: none;
   }
-}
-
-/* ---------- meeting BOT row (Recall) ----------
-   A sibling of the strip row, not part of it. Hidden entirely by the module
-   when the server has no Recall key, so nothing here has a "disabled feature"
-   state to style. Wraps rather than scrolls: at 430px the link input takes a
-   line of its own, and the row must never push the caption out of the strip's
-   reserved grid track — it is inside that track, and it is two short lines at
-   its tallest. */
-.meeting-bot-row {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 8px;
-  font-size: 12px;
-  color: var(--muted);
-  min-width: 0;
-}
-.meeting-bot-state {
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  max-width: 100%;
-}
-.meeting-bot-form {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  flex: 1 1 220px;
-  min-width: 0;
-}
-.meeting-bot-url {
-  flex: 1 1 auto;
-  min-width: 0;
-  font: inherit;
-  padding: 4px 8px;
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  background: var(--bg);
-  color: var(--fg);
-}
-.meeting-bot-invite,
-.meeting-bot-leave {
-  font: inherit;
-  /* 32px of target on a control that sits in a height-scarce strip. The
-     transcript strip's own floor is 36 on a tap target that is a pseudo-
-     element inside clipped text; these are ordinary buttons that clip
-     nothing, and the strip's track is the constraint the caption needs. */
-  min-height: 32px;
-  padding: 4px 10px;
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  background: var(--bg-alt, transparent);
-  color: var(--fg);
-  cursor: pointer;
-  white-space: nowrap;
-}
-.meeting-bot-invite:disabled,
-.meeting-bot-leave:disabled {
-  opacity: 0.55;
-  cursor: default;
-}
-.meeting-bot-error {
-  color: var(--danger, #b3261e);
-  flex-basis: 100%;
-}
-/* The compact editor viewport hands the strip's grid row back to the
-   keyboard. The bot row goes with the caption for the same reason: a link
-   being pasted is not the thing a person needs while typing in the doc. */
-body[data-edit-viewport="compact"] .meeting-bot-row {
-  display: none;
 }
 
 /* ================= COMMENT PILL (inline, near selection/caret) =================
@@ -10550,10 +10484,10 @@ a.signin-link {
   border-bottom: 1px solid var(--border);
 }
 /* The doc shell declares its rows, so the row this bar occupies has to be
-   declared too — `#shell`'s `48px 1fr` has no track for a third child, and
-   without this the bar is laid into the topbar's 48px and clipped. */
+   declared too — `#shell`'s `48px auto 1fr` has no track for a fourth child,
+   and without this the bar is laid into the topbar's 48px and clipped. */
 body.signin-gated #shell {
-  grid-template-rows: auto 48px 1fr;
+  grid-template-rows: auto 48px auto 1fr;
 }
 /* Fallback for a surface with no header to sit under (see mountSignInBar).
    Bottom-docked, because the top of an unknown page is the band most likely

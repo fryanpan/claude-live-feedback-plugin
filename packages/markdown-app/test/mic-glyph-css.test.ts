@@ -27,7 +27,6 @@ const CSS = readFileSync(resolve(SRC, 'styles.css'), 'utf8');
 const ICONS = readFileSync(resolve(SRC, 'icons.ts'), 'utf8');
 const HUB_APP = readFileSync(resolve(SRC, 'hub/hub-app.ts'), 'utf8');
 const HUB_RENDER = readFileSync(resolve(SRC, 'hub/hub-render.ts'), 'utf8');
-const VOICE_DOCK = readFileSync(resolve(SRC, 'voice-dock.ts'), 'utf8');
 
 function declarationsOnly(css: string): string {
   return css.replace(/\/\*[\s\S]*?\*\//g, '');
@@ -44,7 +43,6 @@ function rule(selector: string): string {
 const MOUNTS: ReadonlyArray<[string, string]> = [
   ['the board’s docked mic (hub-app.ts)', HUB_APP],
   ['the huddle button’s mic (hub-render.ts)', HUB_RENDER],
-  ['the review doc’s mic (voice-dock.ts)', VOICE_DOCK],
 ];
 
 describe('the mic wears the nav’s icon convention', () => {

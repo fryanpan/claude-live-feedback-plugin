@@ -13,7 +13,7 @@ import { describe, expect, it } from 'vitest';
  *    returns 0 — the caret stays under the keyboard and the fix does nothing
  *    in exactly the case the bug was reported from.
  *  - The meeting strip yields its grid row while an editor has focus, and a
- *    RECORDING strip collapses rather than disappearing.
+ *    RECORDING strip stays on screen rather than disappearing.
  *
  * Measured rects at 430x932 and 1180x820 are in the PR body.
  */
@@ -67,15 +67,16 @@ describe('the voice strip yields while an editor has focus', () => {
     );
   });
 
-  it('collapses a RECORDING strip instead of hiding it', () => {
-    const compact = rule('body[data-edit-viewport="compact"] .meeting-strip');
-    expect(compact, 'no compact rule at all').not.toBe('');
-    expect(compact).toMatch(/padding-bottom:/);
-    // Still lifted clear of the keyboard and the home indicator while compact.
-    expect(compact).toMatch(/var\(--kb-bottom, 0px\)/);
-    // The caption is the part that goes; the meta row (dot, clock, Stop) stays.
-    expect(rule('body[data-edit-viewport="compact"] .meeting-caption')).toMatch(/display: none;/);
-    expect(DECLS).not.toMatch(/body\[data-edit-viewport="compact"\]\s*\.meeting-meta/);
+  it('keeps a RECORDING strip on screen whole', () => {
+    // `stripYield` publishes `compact` for a live strip, and since the
+    // top-bar overhaul no rule consumes it: the strip is one 36px line fused
+    // under the topbar, clear of the keyboard, and a live mic with no
+    // indicator is not a thing to ship. Only `hidden` — the idle strip's
+    // yield — may reach `display: none`.
+    expect(DECLS).not.toMatch(/data-edit-viewport="compact"[^{]*\{[^}]*display: none/);
+    // Positive control: the same probe finds the hidden-mode rule, so an
+    // accidental compact hide really would be caught here.
+    expect(DECLS).toMatch(/data-edit-viewport="hidden"[^{]*\{[^}]*display: none/);
   });
 
   it('yields in layout only — never by unmounting or setting [hidden]', () => {
