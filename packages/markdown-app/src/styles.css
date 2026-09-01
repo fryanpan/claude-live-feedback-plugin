@@ -747,6 +747,35 @@ body.has-set .doc-switcher-caret {
     bottom: calc(14px + var(--safe-bottom));
   }
 }
+/* The refusal reason for a failed Approve press — only ever appears in
+   answer to one, floating just above the button it answers. */
+.plan-gate-error {
+  position: absolute;
+  left: 50%;
+  bottom: 74px;
+  transform: translateX(-50%);
+  z-index: 30;
+  max-width: min(90vw, 360px);
+  padding: 6px 12px;
+  border-radius: var(--radius);
+  background: var(--bg);
+  border: 1px solid var(--red, #dc322f);
+  color: var(--red, #dc322f);
+  font-size: 12.5px;
+  text-align: center;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.14);
+}
+.plan-gate-error[hidden] {
+  display: none;
+}
+@media (max-width: 640px) {
+  .plan-gate-error {
+    left: 12px;
+    right: 12px;
+    transform: none;
+    max-width: none;
+  }
+}
 
 /* ================= WORKSPACE HUB =================
    The /workspaces/:id page: a left nav over two panes — Home (brief, review

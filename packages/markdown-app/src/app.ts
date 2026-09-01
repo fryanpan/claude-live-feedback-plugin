@@ -30,6 +30,7 @@ import { mountMeetingStrip } from './meeting-strip.ts';
 import { wantsLatencyTiming } from './meeting-timing-client.ts';
 import type { MountContext } from './mount-context.ts';
 import type { MountScope } from './mount-scope.ts';
+import { mountPlanGate } from './plan-gate.ts';
 import { startReadingTracker } from './reading-tracker.ts';
 import { mountMarkupMargin } from './redline/markup-margin.ts';
 import { mountRedline } from './redline/redline-app.ts';
@@ -391,6 +392,16 @@ async function mountMarkdown(ctx: MountContext): Promise<void> {
       postName: (meetingId, speaker, name) => postSpeakerName({ docId, meetingId, speaker, name }),
     });
     scope.onCleanup(() => strip.destroy());
+  }
+
+  // The plan gate's floating Approve button — rendered only while this doc
+  // is a plan whose drafts are held; nothing at all on ordinary docs. Same
+  // rule (and reason) as the meeting strip above: a review of somebody's
+  // branch, or a companion doc under `navDocId`, is not a plan a person
+  // approves.
+  if (ctx.docType === 'markdown' && ctx.navDocId === undefined) {
+    const planGate = mountPlanGate({ docId, root: editorMount, user, canWrite });
+    scope.onCleanup(() => planGate.destroy());
   }
 
   // Tapping a speaker tag in the notes offers the voices this doc's meetings
