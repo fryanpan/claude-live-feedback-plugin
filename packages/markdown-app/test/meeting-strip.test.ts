@@ -1335,7 +1335,7 @@ describe('the engine seam', () => {
     one.record().click();
     expect(
       [...one.pop().querySelectorAll('.meeting-choice-group-label')].map((e) => e.textContent),
-    ).not.toContain('Engine');
+    ).not.toContain('Choose speech recognition engine:');
     one.strip.destroy();
     // An old server (no route) or a failed fetch answers null — same as one
     // engine, no choice.
@@ -1344,7 +1344,7 @@ describe('the engine seam', () => {
     old.record().click();
     expect(
       [...old.pop().querySelectorAll('.meeting-choice-group-label')].map((e) => e.textContent),
-    ).not.toContain('Engine');
+    ).not.toContain('Choose speech recognition engine:');
     old.strip.destroy();
     const h = mount(undefined, {
       listEngines: () =>
@@ -1358,7 +1358,7 @@ describe('the engine seam', () => {
     const labels = [...h.pop().querySelectorAll('.meeting-choice-group-label')].map(
       (e) => e.textContent,
     );
-    expect(labels).toContain('Engine');
+    expect(labels).toContain('Choose speech recognition engine:');
     const titles = [...h.pop().querySelectorAll('.meeting-choice-title')].map((e) => e.textContent);
     expect(titles).toContain('AssemblyAI');
     expect(titles).toContain('AssemblyAI Pro');
@@ -1378,12 +1378,12 @@ describe('the engine seam', () => {
     h.record().click();
     expect(
       [...h.pop().querySelectorAll('.meeting-choice-group-label')].map((e) => e.textContent),
-    ).not.toContain('Engine');
+    ).not.toContain('Choose speech recognition engine:');
     resolveList?.({ engines: ['assemblyai', 'soniox'], default: 'assemblyai' });
     await settle();
     expect(
       [...h.pop().querySelectorAll('.meeting-choice-group-label')].map((e) => e.textContent),
-    ).toContain('Engine');
+    ).toContain('Choose speech recognition engine:');
   });
 
   it('sends the picked engine on the start frame — and only when one was offered', async () => {
@@ -1426,6 +1426,149 @@ describe('the engine seam', () => {
       (el) => el.querySelector('.meeting-choice-title')?.textContent === 'Soniox',
     );
     expect(card?.querySelector('input')?.checked).toBe(true);
+  });
+});
+
+describe('advanced options in the chrome', () => {
+  const threeEngines = () =>
+    Promise.resolve({
+      engines: ['soniox', 'assemblyai', 'assemblyai-pro'],
+      default: 'soniox',
+    });
+
+  /** Open the chooser, expand Advanced Options. */
+  const openAdvanced = (h: Harness): void => {
+    h.record().click();
+    h.pop().querySelector<HTMLButtonElement>('.meeting-adv-head')?.click();
+  };
+
+  /** Drag one range control to a value and settle the drag. */
+  const drag = (h: Harness, key: string, value: string): void => {
+    const input = h
+      .pop()
+      .querySelector<HTMLInputElement>(`.meeting-adv-ctl[data-key="${key}"] input[type="range"]`);
+    if (!input) throw new Error(`no range control for ${key}`);
+    input.value = value;
+    input.dispatchEvent(new Event('input'));
+    input.dispatchEvent(new Event('change'));
+  };
+
+  it('tags the engine cards the way the mock reads', async () => {
+    const h = mount(undefined, { listEngines: threeEngines });
+    await settle();
+    h.record().click();
+    const card = (title: string) =>
+      [...h.pop().querySelectorAll('.meeting-choice')].find(
+        (el) => el.querySelector('.meeting-choice-title')?.textContent === title,
+      );
+    const tags = (title: string) =>
+      [...(card(title)?.querySelectorAll('.meeting-engine-tag') ?? [])].map((el) => el.textContent);
+    expect(tags('Soniox')).toEqual(['default', 'fastest']);
+    expect(tags('AssemblyAI Pro')).toEqual(['highest quality']);
+    expect(card('AssemblyAI Pro')?.querySelector('.meeting-engine-meta')?.textContent).toContain(
+      '$0.45/hr',
+    );
+  });
+
+  it('says beside the Soniox speaker toggle that its labels have no cap', async () => {
+    const h = mount(undefined, { listEngines: threeEngines });
+    await settle();
+    h.record().click();
+    expect(h.pop().querySelector('.meeting-engine-hint')?.textContent).toBe(
+      "Soniox labels speakers but doesn't cap how many.",
+    );
+    // The hint is Soniox-and-conversation only: the cap it explains the
+    // absence of belongs to diarization, which the other engines do cap.
+    h.pick('AssemblyAI');
+    expect(h.pop().querySelector('.meeting-engine-hint')).toBeNull();
+  });
+
+  it('starts with the moved knobs on the frame — and just the field when nothing moved', async () => {
+    const h = mount(undefined, { listEngines: threeEngines, mode: 'solo' });
+    await settle();
+    openAdvanced(h);
+    h.pick('AssemblyAI');
+    drag(h, 'vad_threshold', '0.8');
+    h.startCta().click();
+    await settle();
+    h.sockets[0]?.onopen?.();
+    expect(JSON.parse(String(h.sockets[0]?.sent[0])).tuning).toEqual({ vad_threshold: 0.8 });
+    h.strip.destroy();
+    // Untouched: the field still travels (it marks the client as owning the
+    // speaker cap), but empty.
+    const plain = mount(undefined, { listEngines: threeEngines, mode: 'solo' });
+    await settle();
+    plain.pressStart();
+    await settle();
+    plain.sockets[0]?.onopen?.();
+    expect(JSON.parse(String(plain.sockets[0]?.sent[0])).tuning).toEqual({});
+  });
+
+  it('seeds the cap stepper from the address’s ?speakers, per engine panel', async () => {
+    const h = mount(undefined, { listEngines: threeEngines, speakers: 3 });
+    await settle();
+    openAdvanced(h);
+    h.pick('AssemblyAI');
+    expect(
+      h.pop().querySelector('.meeting-adv-ctl[data-key="max_speakers"] .meeting-adv-stepnum')
+        ?.textContent,
+    ).toBe('3');
+  });
+
+  it('keeps each engine’s tuned state across a flip away and back', async () => {
+    const h = mount(undefined, { listEngines: threeEngines });
+    await settle();
+    openAdvanced(h);
+    h.pick('AssemblyAI');
+    drag(h, 'vad_threshold', '0.8');
+    h.pick('Soniox');
+    // Soniox's own panel is untouched — no dot borrowed from a sibling.
+    expect(h.pop().querySelector('.meeting-adv-moddot')).toBeNull();
+    h.pick('AssemblyAI');
+    expect(h.pop().querySelector('.meeting-adv-moddot')).not.toBeNull();
+  });
+
+  it('tunes the live meeting from the menu and shows the server’s answer', async () => {
+    const h = mount(undefined, { listEngines: threeEngines, mode: 'solo' });
+    await settle();
+    h.record().click();
+    h.pick('AssemblyAI');
+    h.startCta().click();
+    await settle();
+    h.sockets[0]?.onopen?.();
+    h.sockets[0]?.serve({ type: 'ready', meetingId: 'm1', startedAt: 1_000, engine: 'assemblyai' });
+    h.record().click();
+    h.pop().querySelector<HTMLButtonElement>('.meeting-adv-head')?.click();
+    drag(h, 'vad_threshold', '0.8');
+    const tune = h.sockets[0]?.sent
+      .map((f) => JSON.parse(String(f)) as Record<string, unknown>)
+      .find((m) => m.type === 'tune');
+    expect(tune?.settings).toEqual({ vad_threshold: 0.8 });
+    // The confirmation arrives; the control under the finger now says so.
+    h.sockets[0]?.serve({ type: 'tuned', applied: ['vad_threshold'] });
+    expect(
+      h.pop().querySelector('.meeting-adv-ctl[data-key="vad_threshold"] .meeting-adv-note')
+        ?.textContent,
+    ).toBe('Applied.');
+  });
+
+  it('sends no tune frame for an engine that cannot take one', async () => {
+    const h = mount(undefined, { listEngines: threeEngines, mode: 'solo' });
+    await settle();
+    h.pressStart();
+    await settle();
+    h.sockets[0]?.onopen?.();
+    h.sockets[0]?.serve({ type: 'ready', meetingId: 'm1', startedAt: 1_000, engine: 'soniox' });
+    h.record().click();
+    h.pop().querySelector<HTMLButtonElement>('.meeting-adv-head')?.click();
+    drag(h, 'endpoint_sensitivity', '0.5');
+    const frames = h.sockets[0]?.sent.map((f) => JSON.parse(String(f)) as { type?: string }) ?? [];
+    expect(frames.some((m) => m.type === 'tune')).toBe(false);
+    // The panel already told the person where the change goes.
+    expect(
+      h.pop().querySelector('.meeting-adv-ctl[data-key="endpoint_sensitivity"] .meeting-adv-note')
+        ?.textContent,
+    ).toBe('Applies to the next recording.');
   });
 });
 

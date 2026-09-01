@@ -7432,6 +7432,261 @@ body.is-reading-width #editor > .ProseMirror {
   display: none;
 }
 
+/* ---- the engine chooser's tags + Advanced Options (approved mock 2) ----
+   The engine rows are ordinary choice cards wearing their one-word facts on
+   the right; Advanced Options is a collapsed section whose header carries an
+   amber dot while anything is off its default, with the same dot beside each
+   modified control. Max speakers lives IN here (AssemblyAI engines only). */
+.meeting-choice .meeting-engine-meta {
+  flex: none;
+  margin-left: auto;
+  align-self: center;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11.5px;
+  color: var(--fg-muted);
+}
+.meeting-engine-tag {
+  font-size: 10px;
+  color: var(--accent);
+  border: 1px solid var(--accent);
+  border-radius: 4px;
+  padding: 0 4px;
+  white-space: nowrap;
+}
+.meeting-engine-hint {
+  margin: -6px 10px 10px;
+  font-size: 11.5px;
+  color: var(--fg-muted);
+}
+.meeting-adv {
+  margin: 0 8px 10px;
+  border-top: 1px solid var(--border);
+  padding-top: 4px;
+}
+.meeting-adv-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  min-height: 36px;
+  padding: 4px 2px;
+  border: 0;
+  background: none;
+  font: 500 13px var(--sans);
+  color: var(--fg-muted);
+  cursor: pointer;
+  text-align: left;
+}
+.meeting-adv-chev {
+  width: 10px;
+  font-size: 10px;
+}
+.meeting-adv-moddot,
+.meeting-adv-ctldot {
+  flex: none;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--warn-fg);
+}
+.meeting-adv-reset {
+  margin-left: auto;
+  border: 0;
+  background: none;
+  font: inherit;
+  font-size: 11.5px;
+  font-weight: 400;
+  color: var(--accent);
+  cursor: pointer;
+  /* Its own tap target inside the header button's. */
+  min-height: 36px;
+  padding: 0 4px;
+}
+.meeting-adv-ctl {
+  padding: 9px 2px 7px;
+}
+.meeting-adv-ctl + .meeting-adv-ctl {
+  border-top: 1px solid var(--border);
+}
+.meeting-adv-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12.5px;
+  margin-bottom: 5px;
+}
+.meeting-adv-ctldot {
+  visibility: hidden;
+}
+.meeting-adv-ctl.is-modified .meeting-adv-ctldot {
+  visibility: visible;
+}
+.meeting-adv-labtext {
+  flex: 1;
+  min-width: 0;
+}
+.meeting-adv-val {
+  flex: none;
+  font-size: 12px;
+  color: var(--fg-muted);
+  white-space: nowrap;
+}
+.meeting-adv-val b {
+  color: var(--fg);
+  font-weight: 600;
+}
+.meeting-adv input[type="range"] {
+  width: 100%;
+  margin: 6px 0 2px;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+.meeting-adv-seg {
+  display: flex;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  overflow: hidden;
+}
+.meeting-adv-seg button {
+  flex: 1;
+  min-height: 36px;
+  padding: 5px 4px;
+  border: 0;
+  border-right: 1px solid var(--border);
+  background: none;
+  font: inherit;
+  font-size: 12px;
+  color: var(--fg-muted);
+  cursor: pointer;
+}
+.meeting-adv-seg button:last-child {
+  border-right: 0;
+}
+.meeting-adv-seg button.is-on {
+  background: color-mix(in srgb, var(--accent) 10%, var(--bg));
+  color: var(--accent);
+  font-weight: 600;
+}
+.meeting-adv-toggle {
+  flex: none;
+  width: 34px;
+  height: 20px;
+  border: 0;
+  border-radius: 10px;
+  background: var(--border);
+  position: relative;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+.meeting-adv-toggle::after {
+  content: "";
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.25);
+  transition: left 0.15s;
+}
+.meeting-adv-toggle.is-on {
+  background: var(--accent);
+}
+.meeting-adv-toggle.is-on::after {
+  left: 16px;
+}
+.meeting-adv-stepper {
+  display: inline-flex;
+  align-items: center;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  overflow: hidden;
+}
+.meeting-adv-stepper button {
+  min-width: 36px;
+  min-height: 32px;
+  border: 0;
+  background: color-mix(in srgb, var(--fg) 3%, var(--bg));
+  font: inherit;
+  font-size: 14px;
+  color: var(--fg-muted);
+  cursor: pointer;
+}
+.meeting-adv-stepper button:first-child {
+  border-right: 1px solid var(--border);
+}
+.meeting-adv-stepper button:last-child {
+  border-left: 1px solid var(--border);
+}
+.meeting-adv-stepnum {
+  min-width: 70px;
+  text-align: center;
+  font-size: 13px;
+  padding: 2px 9px;
+}
+.meeting-adv-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  align-items: center;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  padding: 6px 8px;
+  min-height: 36px;
+  cursor: text;
+}
+.meeting-adv-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 12px;
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 10%, var(--bg));
+  border-radius: 5px;
+  padding: 2px 2px 2px 7px;
+}
+.meeting-adv-chip-x {
+  border: 0;
+  background: none;
+  font: inherit;
+  font-size: 12px;
+  color: var(--accent);
+  opacity: 0.7;
+  cursor: pointer;
+  padding: 0 5px;
+}
+.meeting-adv-chips input {
+  flex: 1;
+  min-width: 90px;
+  border: 0;
+  outline: none;
+  background: transparent;
+  font: 12px var(--sans);
+  color: var(--fg);
+}
+.meeting-adv-chips input::placeholder {
+  color: var(--fg-muted);
+}
+.meeting-adv-note {
+  margin-top: 4px;
+  font-size: 11.5px;
+  color: var(--fg-muted);
+}
+.meeting-adv-note.is-applied {
+  color: var(--accent);
+}
+.meeting-adv-foot {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
+  font-size: 11.5px;
+  color: var(--fg-muted);
+  text-align: center;
+}
+
 /* ---- the timing readout (`?timing=1`) ----
    A row of its own under the strip's line, present only under the flag. The
    cells wrap rather than scroll — measured at 430px, nowrap plus overflow-x

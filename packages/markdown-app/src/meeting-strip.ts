@@ -19,13 +19,16 @@
  * asserted in `meeting-strip-css.test.ts`, because no DOM test resolves
  * layout.
  *
- * EVERY CHOICE HAPPENS AT START TIME. The chooser collects the source
+ * EVERY BILLED CHOICE HAPPENS AT START TIME. The chooser collects the source
  * (microphone, or a bot sent to a Zoom / Google Meet call), whether the room
- * has one voice or several, and who tells the room about the recording — and
- * nothing after Start offers a knob: a streaming session's configuration IS
- * its connect URL, so switching mid-meeting would mean a second session and a
- * second bill for the same conversation. Stop and start again is the whole
- * story, and the menu says nothing else.
+ * has one voice or several, which engine listens, and who tells the room
+ * about the recording — a streaming session's configuration IS its connect
+ * URL, so switching any of those mid-meeting would mean a second session and
+ * a second bill for the same conversation. The one exception is the Advanced
+ * Options panel (meeting-advanced.ts), which stays reachable from the menu
+ * while recording: AssemblyAI's protocol can change its turn-detection knobs
+ * on the open socket, and everything it cannot change waits for the next
+ * recording and says so under the control.
  *
  * IT ANNOUNCES A ROOM CAPTURE, AND THE ANNOUNCEMENT IS PART OF THE RECORDING.
  * A `conversation` capture is the one with other people in it, so it says so
@@ -66,6 +69,14 @@ import {
   speakerDisplayName,
 } from '@feedback/core';
 import type { MeetingTranscriptEvent } from '@feedback/core';
+import { liveTuningKeys, parseRoomSpeakers } from '@feedback/core';
+import {
+  type AdvancedState,
+  advancedControls,
+  buildAdvancedSection,
+  defaultAdvancedState,
+  tuningPayload,
+} from './meeting-advanced.ts';
 import { type Announcer, createAnnouncer } from './meeting-announce.ts';
 import {
   type MeetingCapture,
@@ -238,6 +249,13 @@ export function parseMeetingServerMessage(raw: unknown): MeetingServerMessage | 
       }
       return { type: 'timing_pong', id, clientMs, serverRecvMs, serverSendMs };
     }
+    case 'tuned':
+      return {
+        type: 'tuned',
+        applied: Array.isArray(m.applied)
+          ? m.applied.filter((k): k is string => typeof k === 'string')
+          : [],
+      };
     case 'stopped':
       return {
         type: 'stopped',
@@ -725,15 +743,51 @@ export function mountMeetingStrip(opts: MeetingStripOpts): MeetingStripHandle {
    * address named an engine this server does not actually hold.
    */
   let chooseEngine: string | undefined = opts.engine;
+  /** The server's default engine, for the chooser's "default" tag. */
+  let engineDefault: string | null = null;
+  /**
+   * Advanced Options per engine, created on first look and KEPT when the
+   * person flips between engines — flipping back must not lose a tuned
+   * panel. Per mount only: settings are per-recording facts, like `mode`,
+   * and a knob remembered from yesterday would silently shape a session
+   * nobody tuned it for.
+   */
+  const advStates = new Map<string, AdvancedState>();
+  /** Whether the Advanced section is unfolded — one flag across engines. */
+  let advOpen = false;
+  /** The engine the LIVE capture runs on, from `ready` — what the menu's
+   *  Advanced panel tunes. Null while idle. */
+  let recordingEngine: string | null = null;
+  /** Keys the server confirmed applying to the live session ("Applied."). */
+  const appliedKeys = new Set<string>();
+
+  function advFor(engineId: string): AdvancedState {
+    let state = advStates.get(engineId);
+    if (!state) {
+      state = defaultAdvancedState(engineId);
+      // The address's room size (`?speakers=3`) seeds the cap the panel now
+      // owns, so the knob that used to reach the engine directly still does.
+      const seeded = parseRoomSpeakers(opts.speakers);
+      if (seeded !== undefined && 'max_speakers' in state) state.max_speakers = seeded;
+      advStates.set(engineId, state);
+    }
+    return state;
+  }
+
   const listEngines = opts.listEngines ?? defaultListEngines;
   void listEngines().then((info) => {
-    if (disposed || !info || info.engines.length < 2) {
-      // One engine (or none, or no answer) is not a choice. The address's
-      // own ask stands even unlisted — the server, not this fetch, is the
-      // authority on what it refuses, and it refuses by naming the engine.
+    if (disposed || !info || info.engines.length === 0) {
+      // No answer (an old server, a failed fetch) or nothing configured: no
+      // chooser and no Advanced panel — the address's own engine ask stands
+      // even unlisted, because the server is the authority on refusals.
       return;
     }
-    engines = info.engines.map((id) => ({ id, label: engineLabel(id) }));
+    engineDefault = info.default ?? info.engines[0] ?? null;
+    // Fewer than two is not a choice, so the engine LIST stays absent — but
+    // the default is still known, which is what the Advanced panel keys on.
+    if (info.engines.length >= 2) {
+      engines = info.engines.map((id) => ({ id, label: engineLabel(id) }));
+    }
     chooseEngine =
       chooseEngine !== undefined && info.engines.includes(chooseEngine)
         ? chooseEngine
@@ -1094,6 +1148,14 @@ export function mountMeetingStrip(opts: MeetingStripOpts): MeetingStripHandle {
     } else {
       for (const label of cast()) pop.append(speakerRow(label));
     }
+    // Mid-meeting tuning (v1 keeps it to this same panel, no new chrome):
+    // the recording engine's own Advanced Options, still reachable while it
+    // runs. Changes the live session can take apply immediately and say
+    // "Applied."; the rest wait for the next recording and say that instead.
+    // A bot meeting has no microphone engine to tune, so it gets nothing.
+    if (!live && recordingEngine !== null && advancedControls(recordingEngine).length > 0) {
+      pop.append(buildAdvancedPanel(recordingEngine, true));
+    }
     const sep = document.createElement('div');
     sep.className = 'meeting-pop-sep';
     pop.append(sep);
@@ -1159,6 +1221,65 @@ export function mountMeetingStrip(opts: MeetingStripOpts): MeetingStripHandle {
     label.textContent = name;
     group.append(label);
     return { group, add: (el) => group.append(el) };
+  }
+
+  /**
+   * One change to the LIVE meeting's knobs. Sent only for a key the running
+   * engine can take on the open socket; the server answers `tuned` naming
+   * what it applied, which is what turns the control's note into "Applied."
+   * Everything else — Soniox entirely, and the non-live keys — changes the
+   * stored panel and waits for the next recording, which the control already
+   * says under itself.
+   */
+  function sendTune(engineId: string, key: string): void {
+    appliedKeys.delete(key);
+    if (!socketOpen || !liveTuningKeys(engineId).has(key)) return;
+    const value = advFor(engineId)[key];
+    if (value === undefined) return;
+    socket?.send(
+      JSON.stringify({
+        type: 'tune',
+        settings: { [key]: Array.isArray(value) ? [...value] : value },
+      }),
+    );
+  }
+
+  /**
+   * The Advanced Options section, shared by the chooser (pre-recording) and
+   * the menu (mid-meeting tuning). State lives in `advStates`; every change
+   * re-renders the popover — except a slider mid-drag, which the section
+   * repaints in place and only commits when the drag settles.
+   */
+  function buildAdvancedPanel(engineId: string, recording: boolean): HTMLElement {
+    const rerenderKeeping = (key: string | null): void => {
+      renderPop();
+      if (!key) return;
+      // Adding a chip rebuilds the panel under the keyboard; hand focus back
+      // to the field that was being typed in so a list of terms is one
+      // sitting, not one term per tap. The selector only matches a chips
+      // control, so a slider commit moves nothing.
+      pop
+        .querySelector<HTMLInputElement>(
+          `.meeting-adv-ctl[data-key="${key}"] .meeting-adv-chips input`,
+        )
+        ?.focus();
+    };
+    return buildAdvancedSection({
+      engineId,
+      state: advFor(engineId),
+      open: advOpen,
+      recording,
+      applied: appliedKeys,
+      onToggleOpen: () => {
+        advOpen = !advOpen;
+        renderPop();
+      },
+      onReset: () => renderPop(),
+      onChange: (key) => {
+        if (recording) sendTune(engineId, key);
+        rerenderKeeping(key);
+      },
+    });
   }
 
   /**
@@ -1251,6 +1372,49 @@ export function mountMeetingStrip(opts: MeetingStripOpts): MeetingStripHandle {
     }
     pop.append(source.group);
 
+    // The engine list, only when there is a real choice to make. Layout and
+    // copy per the approved mock: a plain question above the rows, and each
+    // engine wearing its own tags (the server's default, Soniox's speed,
+    // the pro model's price and quality).
+    if (engines.length > 1) {
+      const engine = choiceGroup('Choose speech recognition engine:');
+      engine.group.classList.add('meeting-engines');
+      for (const e of engines) {
+        const card = choice({
+          group: 'meeting-engine',
+          title: e.label,
+          detail: '',
+          checked: chooseEngine === e.id,
+          onPick: () => {
+            chooseEngine = e.id;
+            // The option set below follows the engine, so this is a rebuild,
+            // not a re-mark.
+            renderPop();
+          },
+        });
+        const meta = document.createElement('span');
+        meta.className = 'meeting-engine-meta';
+        if (e.id === 'assemblyai-pro') {
+          const price = document.createElement('span');
+          price.textContent = '$0.45/hr';
+          meta.append(price);
+        }
+        const tags: string[] = [];
+        if (e.id === engineDefault) tags.push('default');
+        if (e.id === 'soniox') tags.push('fastest');
+        if (e.id === 'assemblyai-pro') tags.push('highest quality');
+        for (const tag of tags) {
+          const chip = document.createElement('span');
+          chip.className = 'meeting-engine-tag';
+          chip.textContent = tag;
+          meta.append(chip);
+        }
+        if (meta.childNodes.length > 0) card.el.append(meta);
+        engine.add(card.el);
+      }
+      pop.append(engine.group);
+    }
+
     const speakers = choiceGroup('Speakers');
     speakers.add(
       choice({
@@ -1277,26 +1441,20 @@ export function mountMeetingStrip(opts: MeetingStripOpts): MeetingStripHandle {
       }).el,
     );
     pop.append(speakers.group);
+    // The one per-engine fact worth stating beside the toggle itself: the
+    // cap the AssemblyAI panels offer does not exist on Soniox at all.
+    if (chooseEngine === 'soniox' && chooseMode === 'conversation') {
+      const note = document.createElement('div');
+      note.className = 'meeting-engine-hint';
+      note.textContent = "Soniox labels speakers but doesn't cap how many.";
+      pop.append(note);
+    }
 
-    // The engine row, only when there is a real choice to make. The seam the
-    // in-flight engine integration slots into; see MeetingEngineChoice.
-    if (engines.length > 1) {
-      const engine = choiceGroup('Engine');
-      for (const e of engines) {
-        engine.add(
-          choice({
-            group: 'meeting-engine',
-            title: e.label,
-            detail: '',
-            checked: chooseEngine === e.id,
-            onPick: () => {
-              chooseEngine = e.id;
-              renderChoiceSelection();
-            },
-          }).el,
-        );
-      }
-      pop.append(engine.group);
+    // Advanced Options, below the engine chooser: the selected engine's own
+    // knobs, collapsed until asked for. Absent entirely when the engine is
+    // unknown (an old server never answered the list).
+    if (chooseEngine !== undefined && advancedControls(chooseEngine).length > 0) {
+      pop.append(buildAdvancedPanel(chooseEngine, false));
     }
 
     const consent = document.createElement('label');
@@ -1473,6 +1631,12 @@ export function mountMeetingStrip(opts: MeetingStripOpts): MeetingStripHandle {
     } else {
       stopClock?.();
       stopClock = null;
+      // However the meeting ended, there is no live session left to tune —
+      // the menu's Advanced panel and its "Applied." notes end with it. The
+      // tuned VALUES stay in `advStates`, which is the point: they are what
+      // the next recording starts from.
+      recordingEngine = null;
+      appliedKeys.clear();
     }
     render();
   }
@@ -1564,6 +1728,10 @@ export function mountMeetingStrip(opts: MeetingStripOpts): MeetingStripHandle {
         // diarizes; showing its answer is still better than showing a claim
         // nothing checked.
         mode = msg.mode;
+        // What the SERVER opened is what the menu's Advanced panel tunes —
+        // the ask and the answer differ when the ask was refused.
+        recordingEngine = msg.engine || null;
+        appliedKeys.clear();
         // Where a rename lands once this meeting's socket is gone.
         if (msg.meetingId) lastMeetingId = msg.meetingId;
         // And the announcement follows the mode the SERVER opened, not the
@@ -1609,6 +1777,13 @@ export function mountMeetingStrip(opts: MeetingStripOpts): MeetingStripHandle {
         break;
       case 'timing_pong':
         timing?.onPong(msg, recvMs);
+        break;
+      case 'tuned':
+        // Only what the server actually applied earns the "Applied." note —
+        // a key it names is one that reached the live engine session. The
+        // note stands until that knob moves again or the meeting ends.
+        for (const key of msg.applied) appliedKeys.add(key);
+        if (view === 'menu') renderPop();
         break;
       case 'unavailable':
         // The words are never coming, so the mic goes back rather than sitting
@@ -1827,6 +2002,14 @@ export function mountMeetingStrip(opts: MeetingStripOpts): MeetingStripHandle {
           // the field, and this frame is byte-for-byte what an older strip
           // sent.
           ...(chooseEngine !== undefined ? { engine: chooseEngine } : {}),
+          // The Advanced Options — modified knobs only, and PRESENT even
+          // when empty: sending the field is what hands the speaker cap to
+          // the panel (default uncapped) instead of the legacy fallback.
+          // Absent when the engine is unknown, which keeps an old server's
+          // frame byte-for-byte what it was.
+          ...(chooseEngine !== undefined && advancedControls(chooseEngine).length > 0
+            ? { tuning: tuningPayload(chooseEngine, advFor(chooseEngine)) }
+            : {}),
           ...(timing ? { timing: true } : {}),
         }),
       );
