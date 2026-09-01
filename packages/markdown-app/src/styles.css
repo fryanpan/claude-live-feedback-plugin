@@ -6924,7 +6924,12 @@ body.is-reading-width #editor > .ProseMirror {
 }
 #editor > .ProseMirror ul,
 #editor > .ProseMirror ol {
-  padding-left: 28px;
+  /* Wide enough that an outside marker (~22px of glyph + gap at the 16px
+     base size) lands clearly RIGHT of the body-paragraph text margin —
+     the whole list block reads as indented relative to prose (plan AC:
+     "bullet indent level should start to the right of body text").
+     Applies per nesting level, so deeper levels step proportionately. */
+  padding-left: 40px;
   margin: 0.4em 0 0.8em;
 }
 #editor > .ProseMirror li > p {
@@ -6932,6 +6937,20 @@ body.is-reading-width #editor > .ProseMirror {
 }
 #editor > .ProseMirror li {
   margin: 0.15em 0;
+}
+/* The implicit host (list-behavior.ts): Tab on a sole bullet has to nest it
+   under a parent item — the schema allows nothing else — so the extension
+   builds one with an empty paragraph and decorates it `implicit-host`. The
+   person asked for an indent and sees one: neither the host's marker nor
+   its empty line is drawn. Zero height rather than display:none so the
+   editor can still measure the node. */
+#editor > .ProseMirror li.implicit-host {
+  list-style: none;
+}
+#editor > .ProseMirror li.implicit-host > p:first-child {
+  height: 0;
+  margin: 0;
+  overflow: hidden;
 }
 #editor > .ProseMirror hr {
   border: 0;
@@ -7066,44 +7085,6 @@ body.is-reading-width #editor > .ProseMirror {
   }
   100% {
     background: rgba(255, 213, 79, 0.35);
-  }
-}
-
-/* ========== recent-edit wash (huddle docs) ==========
-   edit-wash.ts: each participant's last three edited top-level sections,
-   tinted with THAT person's identity color (`--edit-color`, set inline by
-   the decoration — Bryan blue, agents orange, per packages/core identity).
-   A node decoration, so the class lands on the block element itself; the
-   negative margin puts the bar in the editor's gutter and the text stays
-   exactly where it was. Rank 1 = that person's most recent section. */
-#editor > .ProseMirror .edit-wash {
-  --edit-alpha: 10%;
-  border-left: 3px solid var(--edit-color, var(--accent));
-  background: color-mix(in srgb, var(--edit-color, var(--accent)) var(--edit-alpha), transparent);
-  margin-left: -14px;
-  padding-left: 11px;
-  padding-top: 3px;
-  padding-bottom: 3px;
-  border-radius: 0 4px 4px 0;
-  transition: background 240ms ease;
-}
-#editor > .ProseMirror .edit-wash-1 {
-  --edit-alpha: 12%;
-}
-#editor > .ProseMirror .edit-wash-2 {
-  --edit-alpha: 10%;
-}
-#editor > .ProseMirror .edit-wash-3 {
-  --edit-alpha: 8%;
-}
-/* The wash is the live session, not the record: a printed huddle doc is
-   plain prose. */
-@media print {
-  #editor > .ProseMirror .edit-wash {
-    background: none;
-    border-left: 0;
-    margin-left: 0;
-    padding-left: 0;
   }
 }
 
@@ -8139,6 +8120,160 @@ body.is-reading-width #editor > .ProseMirror {
 @media (prefers-reduced-motion: reduce) {
   .meeting-blinker,
   .meeting-caption-line .w.is-fixed {
+    animation: none;
+  }
+}
+
+/* ========== provisional live zone (meeting-live-zone.ts) ==========
+   The live transcript at the END of the doc — appended after the editor's
+   content, never inside it. Approved mock: provisional-text-mock-1, option A.
+   Sans throughout: provisional text is a different material from the notes,
+   so it can never be mistaken for one. No status dots; the caret on the line
+   still being spoken is the one animated thing in the stream. */
+.live-zone {
+  margin: 18px 0 4px;
+  padding: 9px 14px 12px;
+  border: 1.5px dashed var(--border-strong);
+  border-radius: var(--radius-lg);
+  background: var(--bg-panel);
+  font-family: var(--sans);
+  max-width: min(100%, 1200px);
+  margin-inline: auto;
+}
+body.is-reading-width #editor > .live-zone {
+  max-width: 36rem;
+}
+/* The zone hugs the last line of the doc: the editor's 60vh click-to-type
+   floor would otherwise strand it below a screen of empty surface on a doc
+   whose meeting has just started. Only while the zone is showing — an
+   ordinary doc keeps its clickable runway. `auto`, never `0`: in the
+   balloon-margin grid (redline-layout, below) an explicit min-height —
+   60vh or 0 — becomes the prose ROW's size and the prose overflows it,
+   which put the zone at a fixed 60vh over the notes; `auto` sizes the row
+   to the content, so the zone follows the last line. */
+#editor:has(> .live-zone:not([hidden])) > .ProseMirror {
+  min-height: auto;
+}
+.lz-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 7px;
+  font-size: 11.5px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: var(--fg-muted);
+}
+/* Each transcript line leads with its own meeting time — a line's own time
+   is the thing you want when you read it back. */
+.lz-ts {
+  font-size: 0.76em;
+  font-variant-numeric: tabular-nums;
+  color: var(--fg-muted);
+  margin-right: 0.45em;
+  white-space: nowrap;
+}
+.lz-speaker {
+  font-size: 0.78em;
+  font-weight: 550;
+  letter-spacing: 0.01em;
+  padding: 0.1em 0.5em;
+  margin-right: 0.35em;
+  border-radius: var(--radius-pill);
+  background: rgba(127, 127, 127, 0.12);
+  color: var(--fg-muted);
+  white-space: nowrap;
+}
+.lz-line {
+  font-size: 15.5px;
+  line-height: 1.55;
+  color: #4b535c;
+  margin: 0;
+}
+.lz-line + .lz-line {
+  margin-top: 0.5em;
+}
+.lz-partial > .lz-text::after {
+  content: "";
+  display: inline-block;
+  width: 2px;
+  height: 1em;
+  vertical-align: -0.15em;
+  background: var(--red);
+  margin-left: 2px;
+  animation: lz-caret-blink 1s step-end infinite;
+}
+@keyframes lz-caret-blink {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0;
+  }
+}
+/* The splitting-off card: settled lines lift out of the dashed frame as a
+   solid card that says what is happening to them, while the remainder keeps
+   streaming below. */
+.lz-chunk {
+  position: relative;
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--accent);
+  border-radius: var(--radius);
+  background: var(--bg);
+  box-shadow: 0 3px 12px rgba(27, 31, 35, 0.13);
+  padding: 8px 11px 10px;
+  margin: -2px -8px 12px -12px;
+}
+.lz-chunk-lines .lz-line {
+  color: var(--fg);
+}
+.lz-chunk-note {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--accent);
+  margin-top: 5px;
+}
+.lz-spinner {
+  width: 11px;
+  height: 11px;
+  border-radius: 50%;
+  border: 2px solid color-mix(in srgb, var(--accent) 30%, transparent);
+  border-top-color: var(--accent);
+  animation: lz-spin 850ms linear infinite;
+}
+@keyframes lz-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+/* The settle wash: the note a chunk just became, highlighted where it landed
+   (settle-wash.ts decorates the block). ~1.5s held at full wash, then a
+   1.3s fade. No provenance label — the highlight IS the provenance. */
+#editor > .ProseMirror .settle-wash {
+  animation: settle-wash 2800ms ease-out;
+}
+@keyframes settle-wash {
+  0% {
+    background: color-mix(in srgb, var(--accent) 18%, transparent);
+    box-shadow: -20px 0 0 color-mix(in srgb, var(--accent) 18%, transparent);
+  }
+  55% {
+    background: color-mix(in srgb, var(--accent) 16%, transparent);
+    box-shadow: -20px 0 0 color-mix(in srgb, var(--accent) 16%, transparent);
+  }
+  100% {
+    background: transparent;
+    box-shadow: -20px 0 0 transparent;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .lz-partial > .lz-text::after,
+  .lz-spinner,
+  #editor > .ProseMirror .settle-wash {
     animation: none;
   }
 }
@@ -10510,6 +10645,20 @@ body.redline-mode #toggle-suggest-mode {
 
 #editor.redline-layout > .ProseMirror {
   min-width: 0;
+}
+
+/* The provisional live zone (meeting-live-zone.ts) is appended after the
+   prose, so here it auto-places into a second row under the prose column.
+   The rows must not stretch to fill the pane (grid's default align-content
+   is stretch, which parked the zone a screen below a short doc); only while
+   the zone shows, so the ordinary layout is untouched. Its WIDTH is matched
+   to the prose in JS: the prose shrink-wraps to its widest line in this
+   grid (auto margins in a cell), which no rule here can coincide with. */
+#editor.redline-layout:has(> .live-zone:not([hidden])) {
+  align-content: start;
+}
+#editor.redline-layout > .live-zone {
+  grid-column: 1;
 }
 
 .markup-margin {

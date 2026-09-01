@@ -22,12 +22,13 @@ import { Markdown } from 'tiptap-markdown';
 import type { Awareness } from 'y-protocols/awareness';
 import * as Y from 'yjs';
 import { workspaceIdFromPath } from './doc-path.ts';
-import { EditWash, createEditAttribution } from './edit-wash.ts';
 import { resolveDocLink, safeLinkHref } from './link-open.ts';
+import { ListBehavior } from './list-behavior.ts';
 import { MermaidCodeBlock } from './mermaid-code-block.ts';
 import { PlanPlaceholder } from './plan-placeholder.ts';
 import { SuggestionChips } from './redline/suggestion-chips.ts';
 import type { InlineThreadCard } from './review-surface.ts';
+import { SettleWash, type SettleWashOptions } from './settle-wash.ts';
 import { SuggestInput } from './suggest-input.ts';
 import { SuggestDelete, SuggestInsert } from './suggest-marks.ts';
 import { TaskLinkChips } from './task-link-chips.ts';
@@ -74,10 +75,10 @@ export interface CreateEditorOpts {
    *  to a sibling file navigates in-SPA (via `navigate`) instead of opening
    *  a raw relative URL that 404s. Omit for standalone docs. */
   docLink?: { workspaceId: string; relPath: string; navigate: (url: string) => void };
-  /** Huddle docs only: wash each participant's last three edited sections in
-   *  their color (edit-wash.ts). `whenSynced` gates attribution on the first
-   *  sync so hydration is nobody's edit. Absent = no wash, no plugin. */
-  recentEdits?: { whenSynced: (cb: () => void) => void };
+  /** Doc surface with a meeting strip: wash freshly arrived remote notes so
+   *  the eye can follow the live transcript up into the note it became
+   *  (settle-wash.ts). Absent = no plugin, nothing watched. */
+  settleWash?: SettleWashOptions;
   /**
    * Whether the surface accepts typing AT ALL, from its first paint. Defaults
    * to `true` — the markdown surface owns its own view/edit toggle and calls
@@ -92,21 +93,10 @@ export interface CreateEditorOpts {
 
 export function createEditor(opts: CreateEditorOpts): EditorHandle {
   // y-prosemirror awareness CURSORS are still a follow-up (once the Tiptap 3
-  // cursor extension lands upstream); awareness and the user identity are
-  // read today only by the huddle's recent-edit attribution below.
+  // cursor extension lands upstream); `awareness` and `user` are accepted now
+  // so callers don't churn when that wiring lands — nothing reads them yet.
 
   const fragmentName = opts.fragmentName ?? 'prose';
-
-  // Huddle-only: the recent-edit wash needs to know who wrote each change,
-  // which is reconstructed per transaction from the local user + awareness.
-  const attribution = opts.recentEdits
-    ? createEditAttribution({
-        ydoc: opts.ydoc,
-        awareness: opts.awareness,
-        localUser: opts.user ?? { name: 'You', color: '#2e7dd7' },
-        whenSynced: opts.recentEdits.whenSynced,
-      })
-    : null;
 
   const editor = new Editor({
     element: opts.parent,
@@ -169,11 +159,16 @@ export function createEditor(opts: CreateEditorOpts): EditorHandle {
       // never written into the fragment. In the base list because every
       // prose surface may hold a task link (meeting notes are the driver).
       TaskLinkChips,
+      // Bullet-list ergonomics: Tab-indent for a first/sole list item and
+      // auto-join of adjacent same-type lists. Deliberately NOT part of the
+      // redline surface (redline-editor.ts builds its own Editor) — adjacent
+      // lists are load-bearing there (they carry per-hunk anchors).
+      ListBehavior,
+      ...(opts.settleWash ? [SettleWash.configure(opts.settleWash)] : []),
       // "Type or say what problem you'd like to solve…" on an unwritten
       // plan doc — render-time only, self-gating on the doc's own meta, so
       // it costs nothing on every other surface.
       PlanPlaceholder.configure({ ydoc: opts.ydoc }),
-      ...(attribution ? [EditWash.configure({ authorOf: attribution.authorOf })] : []),
       ...(opts.extraExtensions ?? []),
     ],
     onSelectionUpdate: () => opts.onSelectionChange?.(),
@@ -317,7 +312,6 @@ export function createEditor(opts: CreateEditorOpts): EditorHandle {
     },
     destroy() {
       editor.view.dom.removeEventListener('click', onLinkClick);
-      attribution?.destroy();
       editor.destroy();
     },
   };

@@ -284,6 +284,19 @@ export type MeetingServerMessage =
       /** Stage marks for this frame, present only on a timing meeting. */
       timing?: MeetingTimingMark;
     }
+  /**
+   * Where a notes tick is in its life: its turns split off to compose
+   * (`composing`), the composed note landed in the doc (`written`), or the
+   * compose failed and the turns carry into the next tick (`failed`). `turns`
+   * are the same turn ids the `transcript` frames carry, so the provisional
+   * surface can move exactly those lines into "being written" and out again.
+   */
+  | {
+      type: 'notes_progress';
+      tick: number;
+      phase: 'composing' | 'written' | 'failed';
+      turns: number[];
+    }
   /** The answer to a `timing_ping`, carrying both server-side timestamps. */
   | {
       type: 'timing_pong';
