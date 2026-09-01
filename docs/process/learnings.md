@@ -3537,3 +3537,29 @@ write-once in practice, and the repair verb for a moved file cannot repair it.
   negative result needs the gate checked"*), and the sibling of *"An assertion
   whose alternation can match either way pins nothing"* above: that one never
   bit, this one stopped biting.
+
+## `rsync -a` preserves a symlink's absolute target, so a copied release root can silently resolve back onto the volume you were escaping
+
+- **The trap.** Migrating prod's client releases to the boot disk, `rsync -a`
+  faithfully copied `current` — an absolute symlink into
+  `~/.local/state/claude-workspaces/...`, itself a symlink onto
+  `/Volumes/Data`. The copy looked complete, the server started, the board
+  served. It was serving from the **old volume**, which is precisely what the
+  migration existed to stop. Caught by `readlink`, not by any status check.
+- **Nothing downstream can notice.** A release root that resolves onto the
+  wrong disk is byte-identical in behaviour until that disk becomes
+  unreadable — at which point it fails as an outage rather than as a
+  migration bug, weeks later, with no obvious link back.
+- **After any copy that includes symlinks, resolve the entry points and
+  assert the volume** (`realpath`, then `stat -f %Sd` or `df` on the result).
+  One line, and it is the only thing separating a real migration from a
+  decorated one.
+- **`launchctl bootout` is asynchronous**, so the old pid can still be listed
+  when the next step starts. Verify the corpus *after* the copy rather than
+  trusting an elapsed-time figure — the 3-second downtime number proved
+  nothing about consistency. Measured: two transient bookkeeping files
+  diverged, zero `.ydoc`, 6638 each side.
+- **`--delete` on the final mirror was deliberate, and its absence is a
+  soft-delete violation arriving by way of a backup flag.** Without it, a doc
+  archived since the bulk copy keeps its stale top-level `.ydoc` and
+  **resurrects unarchived**.
