@@ -366,7 +366,7 @@ function ReviewCard(props: {
             <div class="hub-decide-question-box">
               <ComposerForm
                 className="hub-answer-form hub-decide-form hub-decide-question-form"
-                hint={`Ask ${owner} — the item leaves your queue and comes back when they revise it`}
+                hint={`Ask ${owner} — the item leaves your queue and comes back when they revise it.`}
                 placeholder="What do you need to know?"
                 submitLabel="Send"
                 submitClass="hub-btn hub-btn-primary"

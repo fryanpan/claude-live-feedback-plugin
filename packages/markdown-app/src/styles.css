@@ -1930,8 +1930,11 @@ body.hub-body {
   .hub-review-thread-link {
     min-height: 44px;
   }
-  /* The question link, its box's Send and Cancel: thumb targets too. */
-  .hub-walk-question-link,
+  /* The question link, its box's Send and Cancel: thumb targets too. The
+     link's 36px base rule sits with the actions row further down the file,
+     AFTER this block, so the phone rule needs the row's specificity to win —
+     measured at 36px on a 430px viewport before it did. */
+  .hub-walk-actions .hub-walk-question-link,
   .hub-walk-question-cancel,
   .hub-walk-question-form .hub-btn {
     min-height: 44px;
