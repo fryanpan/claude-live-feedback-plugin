@@ -13,26 +13,39 @@
  * that IS the meeting; a bot is none of those things and shares none of that
  * state. The chrome renders both; it does not merge them.
  *
- * WHAT IT CARRIES AND WHAT IT DOES NOT. The bot's STATE — joining, waiting to
- * be let in, waiting on the host's recording consent, recording, gone. Not
- * the live transcript: a bot meeting's words have no socket back to this
- * browser, and pushing them over the doc's SSE channel would evict every real
- * doc event from its 200-event replay buffer inside a minute. The notes still
- * compose themselves into the doc, which is the thing the meeting was for.
+ * WHAT IT CARRIES. The bot's STATE — joining, waiting to be let in, waiting
+ * on the host's recording consent, recording, gone — and its WORDS: one
+ * `meeting.transcript` per vendor frame, partials included, on the SAME
+ * EventSource. Both ride the doc's existing event stream (no second socket
+ * per tab for a bot that has no browser of its own); the words are transient
+ * on the wire — never buffered, never given an id — so they cannot evict the
+ * doc's real events from the replay window. See `MEETING_TRANSCRIPT_EVENT`
+ * in core for the contract. The strip folds them through the same
+ * `rollTranscript` the microphone's socket frames go through.
  */
 
 import {
   MEETING_BOT_EVENT,
+  MEETING_TRANSCRIPT_EVENT,
   type MeetingBotStatus,
+  type MeetingTranscriptEvent,
   isTerminalBotState,
   meetingPlatformOf,
+  parseMeetingTranscriptEvent,
 } from '@feedback/core';
+
+/** The two things the doc's stream tells this client. One subscription
+ *  carries both — the point is that there is exactly one stream. */
+export interface MeetingBotStreamHandlers {
+  onStatus: (status: MeetingBotStatus) => void;
+  onTranscript: (frame: MeetingTranscriptEvent) => void;
+}
 
 export interface MeetingBotClientOpts {
   docId: string;
   /** Injected so a test drives this without a server or an EventSource. */
   fetchJson?: (url: string, init?: RequestInit) => Promise<unknown>;
-  subscribe?: (docId: string, onStatus: (status: MeetingBotStatus) => void) => () => void;
+  subscribe?: (docId: string, handlers: MeetingBotStreamHandlers) => () => void;
 }
 
 export interface MeetingBotClient {
@@ -56,6 +69,13 @@ export interface MeetingBotClient {
   leave(): Promise<void>;
   /** Fires on every status change, however it arrived. Returns a canceller. */
   onChange(cb: () => void): () => void;
+  /**
+   * Fires on every live transcript frame — partials included, the same
+   * turn number arriving again with more (or corrected) words. Nothing is
+   * retained here: a listener attached mid-meeting sees the frames from
+   * then on, exactly like a tab opened mid-meeting.
+   */
+  onTranscript(cb: (frame: MeetingTranscriptEvent) => void): () => void;
 }
 
 async function defaultFetchJson(url: string, init?: RequestInit): Promise<unknown> {
@@ -71,18 +91,24 @@ async function defaultFetchJson(url: string, init?: RequestInit): Promise<unknow
   return body;
 }
 
-function defaultSubscribe(docId: string, onStatus: (status: MeetingBotStatus) => void): () => void {
+function defaultSubscribe(docId: string, handlers: MeetingBotStreamHandlers): () => void {
   const es = new EventSource(`/events/${encodeURIComponent(docId)}`);
-  const handler = (ev: MessageEvent): void => {
+  const onStatus = (ev: MessageEvent): void => {
     try {
-      onStatus(JSON.parse(ev.data) as MeetingBotStatus);
+      handlers.onStatus(JSON.parse(ev.data) as MeetingBotStatus);
     } catch {
       // A frame we cannot read is not a reason to tear the channel down.
     }
   };
-  es.addEventListener(MEETING_BOT_EVENT, handler as EventListener);
+  const onTranscript = (ev: MessageEvent): void => {
+    const frame = parseMeetingTranscriptEvent(ev.data);
+    if (frame) handlers.onTranscript(frame);
+  };
+  es.addEventListener(MEETING_BOT_EVENT, onStatus as EventListener);
+  es.addEventListener(MEETING_TRANSCRIPT_EVENT, onTranscript as EventListener);
   return () => {
-    es.removeEventListener(MEETING_BOT_EVENT, handler as EventListener);
+    es.removeEventListener(MEETING_BOT_EVENT, onStatus as EventListener);
+    es.removeEventListener(MEETING_TRANSCRIPT_EVENT, onTranscript as EventListener);
     es.close();
   };
 }
@@ -98,6 +124,7 @@ export function createMeetingBotClient(opts: MeetingBotClientOpts): MeetingBotCl
   let disposed = false;
   let unsubscribe: (() => void) | null = null;
   const listeners = new Set<() => void>();
+  const transcriptListeners = new Set<(frame: MeetingTranscriptEvent) => void>();
 
   function notify(): void {
     for (const cb of listeners) cb();
@@ -113,10 +140,16 @@ export function createMeetingBotClient(opts: MeetingBotClientOpts): MeetingBotCl
       if (!payload.configured) return;
       isConfigured = true;
       current = payload.bot ?? null;
-      unsubscribe = subscribe(docId, (status) => {
-        if (disposed) return;
-        current = status;
-        notify();
+      unsubscribe = subscribe(docId, {
+        onStatus: (status) => {
+          if (disposed) return;
+          current = status;
+          notify();
+        },
+        onTranscript: (frame) => {
+          if (disposed) return;
+          for (const cb of transcriptListeners) cb(frame);
+        },
       });
       notify();
     })
@@ -155,9 +188,14 @@ export function createMeetingBotClient(opts: MeetingBotClientOpts): MeetingBotCl
       listeners.add(cb);
       return () => listeners.delete(cb);
     },
+    onTranscript: (cb) => {
+      transcriptListeners.add(cb);
+      return () => transcriptListeners.delete(cb);
+    },
     destroy: () => {
       disposed = true;
       listeners.clear();
+      transcriptListeners.clear();
       unsubscribe?.();
       unsubscribe = null;
     },
