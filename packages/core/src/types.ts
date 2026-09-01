@@ -40,6 +40,9 @@ export function contentKind(type: DocType): ContentKind {
 /** File change kind within a git diff review (git --name-status letter). */
 export type DiffFileStatus = 'added' | 'modified' | 'deleted' | 'renamed';
 
+/** The Board's two huddle entry flows — see `DocMeta.huddleKind`. */
+export type HuddleKind = 'plan' | 'discussion';
+
 /**
  * A doc's declared repo home: where its on-disk copy belongs, as
  * repo + branch + path-within-the-repo. `repoRoot` may be any checkout of
@@ -153,6 +156,16 @@ export interface DocMeta {
    */
   huddle?: boolean;
   /**
+   * Which of the Board's two entry flows made this huddle: `'plan'` ("Make a
+   * plan" — the doc opens goal-shaped and grows a Plan section) or
+   * `'discussion'` ("Have a discussion" — live notes). Absent on huddles
+   * from before the split and on docs a caller created without declaring
+   * one; every reader must treat absent as "plain huddle" and dress nothing.
+   * Beside `huddle` in the CRDT meta for the same reason it is: it describes
+   * the document.
+   */
+  huddleKind?: HuddleKind;
+  /**
    * Optional provenance passthrough captured at create/bind time, so the
    * activity event stream can attribute a doc to the agent + session that
    * produced it. `agentId` / `sessionId` are best-effort: supplied by the
@@ -178,6 +191,16 @@ export interface DocMeta {
    *  beside `planState: 'approved'`. */
   planApprovedBy?: string;
   planApprovedAt?: number;
+  /**
+   * Somebody pressed Make Plan on this doc — the server stamps who and when
+   * beside the comment thread the press files (the ask itself travels as a
+   * comment; this stamp is only what lets a reopened doc render "plan
+   * requested" instead of offering a first ask). Never cleared: the agent's
+   * answer is `planState: 'pending'`, which outranks it everywhere it is
+   * read. Server-written meta, like `planState`.
+   */
+  planRequestedAt?: number;
+  planRequestedBy?: string;
   /**
    * How many settled AUTHORING edit bursts this doc's content has seen — a
    * monotonic counter, deliberately not a timestamp (see `wordsRevision` on

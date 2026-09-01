@@ -5,7 +5,7 @@
  * src/plan-gate.ts mounts the float on EVERY doc page and toggles
  * `approve.hidden`; on prod 0 of 588 docs carried a planState, yet the
  * button showed on all of them. The cause is the cascade, not the toggle:
- * `.plan-approve-float { display: inline-flex }` (class, specificity 0-1-0)
+ * `.plan-float { display: inline-flex }` (class, specificity 0-1-0)
  * out-specifies the UA sheet's `[hidden] { display: none }`, so the `hidden`
  * attribute the code sets does nothing. `.plan-gate-error[hidden]` and
  * `.meeting-strip[hidden]` in the same stylesheet already guard against this
@@ -50,7 +50,7 @@ function mount(meta: { planState?: string }, canWrite: boolean) {
 }
 
 function floatDisplay(): string {
-  const btn = document.querySelector<HTMLButtonElement>('.plan-approve-float');
+  const btn = document.querySelector<HTMLButtonElement>('.plan-float');
   if (!btn) throw new Error('float not mounted');
   return getComputedStyle(btn).display;
 }
@@ -59,7 +59,7 @@ describe('the Approve Plan float is actually invisible when hidden', () => {
   it('an ordinary doc (no planState) does not DISPLAY the button, not merely flag it hidden', async () => {
     const gate = mount({}, true);
     await gate.ready;
-    expect(document.querySelector<HTMLElement>('.plan-approve-float')?.hidden).toBe(true);
+    expect(document.querySelector<HTMLElement>('.plan-float')?.hidden).toBe(true);
     expect(floatDisplay()).toBe('none');
     gate.destroy();
   });
