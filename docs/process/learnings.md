@@ -1146,6 +1146,31 @@ kernel-wide socket CREATION failing, and its cause is still unknown.**
   Fix: System Settings → Privacy & Security → Full Disk Access → add the
   binary (e.g. `~/.bun/bin/bun`). Shell-spawned processes inherit
   Terminal's TCC scope and don't hit this — only launchd does.
+- **The grant is per BINARY, and probing with the wrong one sends you after
+  the wrong bug** (2026-09-01). The bullet above is right, and it was still
+  misread as "launchd cannot read `/Volumes/Data`" — a volume-wide claim that
+  a whole prod migration was then justified by. What actually happened: the
+  probe was `launchctl submit` of `/bin/cat`, which holds no grant and duly
+  returned `Operation not permitted`, while the prod bun on the boot disk read
+  the same file fine. A full launchd server with `WorkingDirectory` on
+  `/Volumes/Data` booted, built both bundles and served. **Probe with the same
+  binary the service runs, and pair it with a positive control** — a system
+  binary is not a proxy. The board that day was down because the job was
+  **booted out**, which bootstrapping fixed on its own.
+- **Two failure modes on one binary in one boot session, unexplained.** That
+  morning `/bin/cat` on a Data file *hung* (the `getcwd` wedge above); that
+  afternoon the same call returned a clean `EPERM`. `kern.boottime` was
+  Aug 31 23:20 for both, so no restart explains it. Leading hypothesis,
+  unconfirmed: a TCC write made when the plist change was approved.
+  **Whether a grant survives a reboot is untested** — nothing observed spanned
+  one. Don't let this get retold as settled.
+- **Moving the service to the boot disk reduces the dependency; it does not
+  remove it.** Prod now runs from `~/Library/Application Support/claude-workspaces/`
+  and would boot and serve without the grant. But `~/.local`, `~/.claude` and
+  `~/.bun` are symlinks onto `/Volumes/Data`, so the discovery file every MCP
+  client resolves prod through is still a Data path, as are bound docs in Data
+  repos and the plugin cache. The durable reason to move was decoupling prod
+  from a working checkout the deploy fast-forwards — not TCC.
 - **`launchctl bootstrap gui/$(id -u)` is the modern entry point.**
   `launchctl load/unload` is deprecated on macOS 11+; `kickstart -k` is
   the modern way to force-restart a supervised service.
