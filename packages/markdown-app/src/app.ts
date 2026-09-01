@@ -17,6 +17,7 @@ import { type EditorHandle, createEditor } from './editor.ts';
 import { trackGesture } from './gesture.ts';
 import {
   huddleCaptureMode,
+  huddleEngine,
   huddleRoomAudio,
   huddleRoomSpeakers,
   wantsHuddleStart,
@@ -347,6 +348,9 @@ async function mountMarkdown(ctx: MountContext): Promise<void> {
     const huddleMode = huddleStart ? huddleCaptureMode(location.search) : DEFAULT_CAPTURE_MODE;
     const roomSpeakers = huddleRoomSpeakers(location.search);
     const roomAudio = huddleRoomAudio(location.search);
+    // Which engine transcribes here. A preference like `speakers`, not a
+    // gesture: read every visit, left on the address.
+    const engine = huddleEngine(location.search);
     if (huddleStart) {
       history.replaceState(
         history.state,
@@ -370,6 +374,7 @@ async function mountMarkdown(ctx: MountContext): Promise<void> {
       // the person flips the strip's own switch — and left on the address.
       ...(roomSpeakers !== undefined ? { speakers: roomSpeakers } : {}),
       ...(roomAudio ? { room: roomAudio } : {}),
+      ...(engine !== undefined ? { engine } : {}),
       timing: wantsLatencyTiming(location.search),
       // The rename surface a finished meeting leaves behind: the last
       // meeting's cast on mount, and the HTTP rename for a socket that is
