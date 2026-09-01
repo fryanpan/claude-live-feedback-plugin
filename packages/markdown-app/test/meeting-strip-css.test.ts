@@ -323,11 +323,15 @@ describe('at 1180x820 the strip is one 40px bar', () => {
     expect(rule('.meeting-meta', declarationsOnly(wide))).toMatch(/order:\s*1/);
     expect(rule('.meeting-caption', declarationsOnly(wide))).toMatch(/order:\s*2/);
     expect(rule('.meeting-mode', declarationsOnly(wide))).toMatch(/order:\s*3/);
+    // The engine chooser qualifies the mode switch beside it — both are
+    // session facts settled before Start — and on most installs it is not
+    // rendered at all.
+    expect(rule('.meeting-engine', declarationsOnly(wide))).toMatch(/order:\s*4/);
     // "I'll say it" is a start button, so it belongs with the controls at the
     // end of the line — and it is the secondary one, so it sits BEFORE Start
     // rather than past it.
-    expect(rule('.meeting-announce', declarationsOnly(wide))).toMatch(/order:\s*4/);
-    expect(rule('.meeting-toggle', declarationsOnly(wide))).toMatch(/order:\s*5/);
+    expect(rule('.meeting-announce', declarationsOnly(wide))).toMatch(/order:\s*5/);
+    expect(rule('.meeting-toggle', declarationsOnly(wide))).toMatch(/order:\s*6/);
   });
 
   it('gives the announce button the same 36px tap target as the two beside it', () => {

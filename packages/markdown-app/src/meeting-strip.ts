@@ -46,9 +46,11 @@ import {
   type MeetingTimingMark,
   type MeetingUnavailableReason,
   RECORDING_ANNOUNCEMENT,
+  type TranscriptionEngineName,
   announcesRecording,
   meetingSocketPath,
   parseCaptureMode,
+  parseEngineName,
   speakerDisplayName,
 } from '@feedback/core';
 import { type Announcer, createAnnouncer } from './meeting-announce.ts';
@@ -302,6 +304,20 @@ export interface MeetingStripOpts {
   speakers?: number;
   room?: RoomAudioProcessing;
   /**
+   * Which transcription engine the next capture opens (`?engine=soniox` on
+   * the address). Absent means the server's default, which is also what a
+   * server built before the choice existed opens. Start-time only, like
+   * `mode` — an engine session's config is fixed once open.
+   */
+  engine?: TranscriptionEngineName;
+  /**
+   * The engines this server can open, asked for once at mount — what decides
+   * whether the strip shows a chooser at all. Injectable so a test drives it
+   * without a server; absent, the strip asks `/api/meeting-engines`. Null
+   * (an old server, a failed fetch) hides the chooser and changes nothing.
+   */
+  listEngines?: () => Promise<{ engines: string[]; default: string | null } | null>;
+  /**
    * Ask the person what to call a speaker; `current` is what the tag says
    * now. Null or blank means leave it. Defaults to `window.prompt` — the
    * strip is a 40px bar with no room for an inline field, and a name is
@@ -395,6 +411,32 @@ function defaultPromptName(current: string): string | null {
   return window.prompt('Who is this?', current);
 }
 
+/** What the chooser calls an engine. The wire name for one it has no word for. */
+export function engineLabel(name: string): string {
+  if (name === 'assemblyai') return 'AssemblyAI';
+  if (name === 'soniox') return 'Soniox';
+  return name;
+}
+
+async function defaultListEngines(): Promise<{
+  engines: string[];
+  default: string | null;
+} | null> {
+  try {
+    const res = await fetch('/api/meeting-engines');
+    if (!res.ok) return null;
+    const body = (await res.json()) as { engines?: unknown; default?: unknown };
+    const engines = Array.isArray(body.engines)
+      ? body.engines.filter((e): e is string => typeof e === 'string')
+      : [];
+    return { engines, default: typeof body.default === 'string' ? body.default : null };
+  } catch {
+    // An old server has no such route, and a strip on one behaves exactly as
+    // it always did: no chooser, the server's one engine.
+    return null;
+  }
+}
+
 /**
  * The announcement as the strip shows it, which is not the same job in the two
  * paths: the device's is a caption for something the room is already hearing,
@@ -459,6 +501,17 @@ export function mountMeetingStrip(opts: MeetingStripOpts): MeetingStripHandle {
    * It appears only where it means something — a `conversation` capture that
    * has not started yet — because on a solo capture there is nobody to tell.
    */
+  /**
+   * Which engine transcribes — shown ONLY when the server holds more than
+   * one, so the strip on every single-engine server is byte-for-byte what it
+   * was. A <select> rather than a toggle because the set is open-ended, and
+   * it sits with the mode switch because it is the same kind of fact: chosen
+   * before the mic starts, fixed while it runs.
+   */
+  const engineSelect = document.createElement('select');
+  engineSelect.className = 'meeting-engine';
+  engineSelect.hidden = true;
+  engineSelect.setAttribute('aria-label', 'Transcription engine');
   const announceToggle = document.createElement('button');
   announceToggle.type = 'button';
   announceToggle.className = 'meeting-announce';
@@ -469,7 +522,7 @@ export function mountMeetingStrip(opts: MeetingStripOpts): MeetingStripHandle {
   const toggle = document.createElement('button');
   toggle.type = 'button';
   toggle.className = 'meeting-toggle';
-  strip.append(meta, modeToggle, announceToggle, toggle);
+  strip.append(meta, modeToggle, engineSelect, announceToggle, toggle);
 
   const caption = document.createElement('div');
   caption.className = 'meeting-caption';
@@ -517,6 +570,37 @@ export function mountMeetingStrip(opts: MeetingStripOpts): MeetingStripHandle {
    * it for.
    */
   let mode: CaptureMode = opts.mode ?? DEFAULT_CAPTURE_MODE;
+  /**
+   * Which engine the next start asks for. Undefined is "the server's
+   * default", never a name — so a strip that learned nothing (an old
+   * server, a failed fetch) sends the same start frame it always sent.
+   * Held across start/stop within one mount for the same reason `mode` is.
+   */
+  let engine: TranscriptionEngineName | undefined = opts.engine;
+  const listEngines = opts.listEngines ?? defaultListEngines;
+  void listEngines().then((info) => {
+    if (disposed || !info || info.engines.length < 2) {
+      // One engine (or none, or no answer) is not a choice. The address's
+      // own ask stands even unlisted — the server, not this fetch, is the
+      // authority on what it refuses, and it refuses by naming the engine.
+      return;
+    }
+    for (const name of info.engines) {
+      const option = document.createElement('option');
+      option.value = name;
+      option.textContent = engineLabel(name);
+      engineSelect.append(option);
+    }
+    engineSelect.value =
+      engine !== undefined && info.engines.includes(engine)
+        ? engine
+        : (info.default ?? info.engines[0] ?? '');
+    engineSelect.hidden = false;
+    renderMode();
+  });
+  engineSelect.onchange = () => {
+    engine = parseEngineName(engineSelect.value);
+  };
   /** The auto-start was refused in the way a missing gesture is: the button
    *  is the tap that supplies one, and says so. Cleared by any press. */
   let tapToStart = false;
@@ -832,6 +916,12 @@ export function mountMeetingStrip(opts: MeetingStripOpts): MeetingStripHandle {
     modeToggle.title = live
       ? 'Set before the mic starts — stop and start again to change it.'
       : 'Label who is talking. Leave it off when you are the only voice: it costs more.';
+    // Same one-shot rule as the mode, for the same reason: an engine
+    // session's configuration is fixed the moment it opens.
+    engineSelect.disabled = live;
+    engineSelect.title = live
+      ? 'Set before the mic starts — stop and start again to change it.'
+      : 'Which service turns this recording into words.';
     // Only where it means something: a room capture that has not begun. While
     // one runs, the announcement has already happened; on a solo capture
     // there was never anyone to announce it to; and where Start itself cannot
@@ -1250,6 +1340,9 @@ export function mountMeetingStrip(opts: MeetingStripOpts): MeetingStripHandle {
           // Absent unless somebody said, so the server's default stays the
           // one place the room size is guessed.
           ...(opts.speakers !== undefined ? { speakers: opts.speakers } : {}),
+          // Absent unless somebody chose, so the server's default stays the
+          // one place the engine is decided.
+          ...(engine !== undefined ? { engine } : {}),
           ...(timing ? { timing: true } : {}),
         }),
       );

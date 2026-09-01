@@ -12,7 +12,13 @@
  * applies it beside the back arrow, as shell chrome that outlives each mount.
  */
 
-import { type CaptureMode, parseCaptureMode, parseRoomSpeakers } from '@feedback/core';
+import {
+  type CaptureMode,
+  type TranscriptionEngineName,
+  parseCaptureMode,
+  parseEngineName,
+  parseRoomSpeakers,
+} from '@feedback/core';
 import { type RoomAudioProcessing, parseRoomAudio } from './meeting-audio.ts';
 
 /** `?huddle=1` — set by the Board, consumed by the markdown mount. */
@@ -45,6 +51,20 @@ export const ROOM_SPEAKERS_PARAM = 'speakers';
  * settings can be applied is the browser that opens the microphone.
  */
 export const ROOM_MIC_PARAM = 'mic';
+
+/**
+ * `?engine=soniox` — which transcription engine a recording here opens.
+ * Same rule as `speakers`: a preference, not a gesture, so it is read on
+ * every visit and left on the address across the one-shot flags coming off.
+ * Absent means the server's default (AssemblyAI), which is also what an
+ * address written before the choice existed says.
+ */
+export const ENGINE_PARAM = 'engine';
+
+/** The transcription engine this address asks for, if it says. */
+export function huddleEngine(search: string): TranscriptionEngineName | undefined {
+  return parseEngineName(new URLSearchParams(search).get(ENGINE_PARAM));
+}
 
 /** How many voices this address expects, if it says. */
 export function huddleRoomSpeakers(search: string): number | undefined {

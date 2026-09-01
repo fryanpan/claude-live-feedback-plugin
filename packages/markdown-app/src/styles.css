@@ -7294,6 +7294,31 @@ body.is-reading-width #editor > .ProseMirror {
 .meeting-announce[hidden] {
   display: none;
 }
+/* Which engine transcribes — present only when the server holds a choice, so
+   on most installs this rule styles nothing. The same pill as its two
+   neighbours (36px floor, design-mobile.md) so a control that appears when a
+   second key lands does not read as a foreign object. */
+.meeting-engine {
+  flex: none;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  padding: 4px 11px;
+  min-height: 36px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--fg-muted);
+  border-radius: var(--radius-pill);
+  cursor: pointer;
+  white-space: nowrap;
+}
+.meeting-engine:disabled {
+  cursor: default;
+  opacity: 0.65;
+}
+.meeting-engine[hidden] {
+  display: none;
+}
 @media (min-width: 721px) {
   /* The strip is one row here, so the micro-row stops being a box and its
      children join the strip's own flex line. That flattens them in SOURCE
@@ -7311,14 +7336,19 @@ body.is-reading-width #editor > .ProseMirror {
   .meeting-mode {
     order: 3;
   }
+  /* Beside the mode switch it qualifies: both are facts about the session
+     being configured, settled before Start. */
+  .meeting-engine {
+    order: 4;
+  }
   /* Between the mode switch and Start: it is a start button, so it belongs to
      the controls at the end of the line, and it is the secondary one, so it
      sits before the primary rather than past it. */
   .meeting-announce {
-    order: 4;
+    order: 5;
   }
   .meeting-toggle {
-    order: 5;
+    order: 6;
   }
   /* The strip runs as a ROW here, so wrapping puts the readout on the next
      LINE and the bar's fixed 40px has to give. Both of these are scoped to
