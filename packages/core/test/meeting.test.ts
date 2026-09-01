@@ -5,11 +5,9 @@ import {
   MAX_ROOM_SPEAKERS,
   MEETING_AUDIO_ENCODING,
   MIN_ROOM_SPEAKERS,
-  RECORDING_ANNOUNCEMENT,
-  announcesRecording,
+  RECORDING_CONSENT_NOTE,
   detectsSpeakers,
   maxSpeakersFor,
-  parseAnnouncedBy,
   parseCaptureMode,
   parseEngineName,
   parseMeetingClientMessage,
@@ -186,89 +184,73 @@ describe('parseEngineName', () => {
   });
 });
 
-describe('the recording announcement', () => {
-  it('is one fixed sentence, short enough to be said over a conversation', () => {
-    // Fixed because it is the thing anyone would be asked to show afterwards:
-    // a sentence composed per meeting is one nobody can quote back.
-    expect(RECORDING_ANNOUNCEMENT).toMatch(/recorded/i);
-    expect(RECORDING_ANNOUNCEMENT.split(/[.!?]/).filter((s) => s.trim()).length).toBe(1);
-    expect(RECORDING_ANNOUNCEMENT.length).toBeLessThan(120);
+describe('the recording consent note', () => {
+  it('is one fixed line, addressed to whoever is recording', () => {
+    // Fixed because it is the whole of what replaced a consent STEP: a line
+    // composed per meeting would be one nobody could point at afterwards,
+    // and the one this replaced was a sentence spoken to the room. This one
+    // is second-person — it tells the person holding the device that the
+    // asking is theirs to do.
+    expect(RECORDING_CONSENT_NOTE).toMatch(/consent/i);
+    expect(RECORDING_CONSENT_NOTE).toMatch(/\byou(?:'ve|r|)\b/i);
+    expect(RECORDING_CONSENT_NOTE.split(/[.!?]/).filter((s) => s.trim()).length).toBe(1);
   });
 
-  it('says nothing about WHO is recording, so either mouth can say it', () => {
-    // The device says these words and so does a person reading them off the
-    // strip. A first-person sentence would need a second sentence.
-    expect(RECORDING_ANNOUNCEMENT).not.toMatch(/\bI\b|\bmy\b/);
-  });
-
-  it('is made only where there is a room to make it to', () => {
-    expect(announcesRecording('conversation')).toBe(true);
-    expect(announcesRecording('solo')).toBe(false);
-  });
-});
-
-describe('parseAnnouncedBy', () => {
-  it('reads the two announcement paths', () => {
-    expect(parseAnnouncedBy('device')).toBe('device');
-    expect(parseAnnouncedBy('spoken')).toBe('spoken');
-  });
-
-  it('reads a declined offer, which is a record and not an announcement', () => {
-    // `skipped` says a person was shown the sentence and chose not to have
-    // it played. It cannot be folded into absent: absent means no
-    // announcement was ever due — a solo capture, or a client built before
-    // any of this — and those are different facts about consent.
-    expect(parseAnnouncedBy('skipped')).toBe('skipped');
-  });
-
-  it('answers UNDEFINED for anything else rather than defaulting', () => {
-    // The direction matters: this field is the evidence a room was told, so
-    // an unreadable value has to mean "no claim", never a claim nobody made.
-    expect(parseAnnouncedBy(undefined)).toBeUndefined();
-    expect(parseAnnouncedBy(null)).toBeUndefined();
-    expect(parseAnnouncedBy('')).toBeUndefined();
-    expect(parseAnnouncedBy('DEVICE')).toBeUndefined();
-    expect(parseAnnouncedBy(true)).toBeUndefined();
+  it('claims nothing on anybody’s behalf', () => {
+    // The step it replaced ended in a RECORD — "the room was told, this
+    // way" — and the whole reason it came out is that the client could not
+    // stand behind that claim. This line must not sound like one either: it
+    // says what the person confirms by recording, never that a room was
+    // told or that anyone agreed.
+    expect(RECORDING_CONSENT_NOTE).not.toMatch(
+      /\b(?:everyone|the room|has been|were) (?:knows|told|notified)\b/i,
+    );
+    expect(RECORDING_CONSENT_NOTE).toMatch(/^By recording/);
   });
 });
 
-describe('the announcement on the wire', () => {
-  const startFrame = (extra: Record<string, unknown>) =>
-    parseMeetingClientMessage(
+/**
+ * The consent step's own frame is gone, and this is the negative control for
+ * that: `announced` was a client→server message with a parse branch of its
+ * own, and a parser that still answered it would keep the removed step alive
+ * on the wire even with every button off the screen.
+ */
+describe('the announcement frame is gone from the wire', () => {
+  it('drops an `announced` frame the way it drops any unknown type', () => {
+    expect(
+      parseMeetingClientMessage(JSON.stringify({ type: 'announced', by: 'device' })),
+    ).toBeNull();
+    expect(
+      parseMeetingClientMessage(JSON.stringify({ type: 'announced', by: 'spoken' })),
+    ).toBeNull();
+    expect(
+      parseMeetingClientMessage(JSON.stringify({ type: 'announced', by: 'skipped' })),
+    ).toBeNull();
+  });
+
+  it('still reads the frames that were never part of it', () => {
+    // The positive control. Without it the assertions above pass just as
+    // well against a parser that has stopped reading anything at all.
+    expect(parseMeetingClientMessage(JSON.stringify({ type: 'stop' }))).toEqual({ type: 'stop' });
+    expect(
+      parseMeetingClientMessage(
+        JSON.stringify({ type: 'name_speaker', speaker: 'A', name: 'Jordan' }),
+      ),
+    ).toEqual({ type: 'name_speaker', speaker: 'A', name: 'Jordan' });
+  });
+
+  it('never let the start frame carry one either, and still does not', () => {
+    const frame = parseMeetingClientMessage(
       JSON.stringify({
         type: 'start',
         sampleRate: 16_000,
         encoding: MEETING_AUDIO_ENCODING,
         mode: 'conversation',
-        ...extra,
+        announced: 'device',
       }),
     );
-
-  it('is NEVER carried by the start frame', () => {
-    // A claim made when the microphone opened is a claim about something
-    // that has not happened yet, and a meeting stopped mid-sentence would
-    // leave it standing. The parser drops the field outright.
-    const frame = startFrame({ announced: 'device' });
     expect(frame).toMatchObject({ mode: 'conversation' });
     expect(frame && 'announced' in frame).toBe(false);
-  });
-
-  it('is its own frame, sent after the room has actually been told', () => {
-    expect(parseMeetingClientMessage(JSON.stringify({ type: 'announced', by: 'spoken' }))).toEqual({
-      type: 'announced',
-      by: 'spoken',
-    });
-    expect(parseMeetingClientMessage(JSON.stringify({ type: 'announced', by: 'device' }))).toEqual({
-      type: 'announced',
-      by: 'device',
-    });
-  });
-
-  it('drops a frame that names no path rather than defaulting one', () => {
-    expect(parseMeetingClientMessage(JSON.stringify({ type: 'announced' }))).toBeNull();
-    expect(
-      parseMeetingClientMessage(JSON.stringify({ type: 'announced', by: 'shouted' })),
-    ).toBeNull();
   });
 });
 

@@ -7369,11 +7369,10 @@ body.is-reading-width #editor > .ProseMirror {
   text-align: left;
   cursor: pointer;
 }
-/* The same line when the tap DOES something — the device was handed the
-   sentence, never began it, and this tap is the gesture its speech queue has
-   been waiting for. It has to read as a control at rest: hover is not an
-   answer on the iPad, and the words alone read as one more caption. */
-.meeting-note-speak,
+/* The same line when the tap DOES something — an auto-started huddle whose
+   mic is still waiting on a gesture. It has to read as a control at rest:
+   hover is not an answer on the iPad, and the words alone read as one more
+   caption. */
 .meeting-note-start {
   text-decoration: underline dotted;
   text-underline-offset: 3px;
@@ -7381,6 +7380,14 @@ body.is-reading-width #editor > .ProseMirror {
      sentence that wraps to two lines on the phone grows the target instead
      of centring a fixed box inside it. */
   padding-block: 7px;
+}
+/* The line the transcript opens with, before anybody has said anything.
+   Italic because every other line in this panel is something a person
+   actually said, and this one is not: it is addressed to whoever pressed
+   record. Muted and 13px like the rest of the strip's chrome — it is a
+   reminder, not a script to be read out to a room. */
+.meeting-consent-note {
+  font-style: italic;
 }
 /* And the row gives a held sentence the room, rather than clipping it at
    36px. The shell's strip track is `auto` — the strip RESERVES its height —
@@ -7585,29 +7592,11 @@ body.is-reading-width #editor > .ProseMirror {
   font-size: 11px;
   color: var(--fg-muted);
 }
-/* The announcement, quoted above the button that plays it. It replaced an
-   "I'll ask for consent" checkbox whose UNCHECKED state was the announcing
-   one — so the sentence the room was about to hear could only be discovered
-   by starting the recording. Styled as a quotation, not as a form control:
-   nothing here is editable, and the one job is that it reads as the words
-   themselves. */
-.meeting-announce-quote {
-  margin: 2px 10px 10px;
-  padding: 8px 12px;
-  border: 1px solid var(--accent-line, var(--border));
-  border-radius: var(--radius-md, 8px);
-  background: var(--accent-soft, rgba(46, 125, 215, 0.08));
-  color: var(--fg-muted);
-  font-size: 12.5px;
-  font-style: italic;
-  line-height: 1.45;
-}
-/* The chooser's verbs, in one sticky footer. The red CTA carries its own
-   `position: sticky` for the menu's Stop twin, which stands alone; here two
-   buttons stack, and two elements each holding `bottom: 0` would land on top
-   of each other. So the footer sticks and the button inside it goes static —
-   same scrollport, same edge, both verbs reachable with Advanced Options
-   open on a ~750px-tall iPad. */
+/* The chooser's verb, in a sticky footer. The red CTA carries its own
+   `position: sticky` for the menu's Stop twin; inside this footer it goes
+   static instead, so one element owns `bottom: 0` — same scrollport, same
+   edge, the verb reachable with Advanced Options open on a ~750px-tall
+   iPad. */
 .meeting-start-actions {
   position: sticky;
   bottom: 0;
@@ -7619,35 +7608,6 @@ body.is-reading-width #editor > .ProseMirror {
 .meeting-start-actions .meeting-start-cta {
   position: static;
   box-shadow: none;
-}
-/* "It's just me — skip the announcement": the quiet twin of the red verb
-   above it. Quiet because the announcing path is the one a room is owed, and
-   a second button in the same weight would read as two equal choices. It is
-   still a full-width 44px target — a deliberate choice is not a small one. */
-.meeting-skip-cta {
-  display: block;
-  width: calc(100% - 16px);
-  margin: 0 8px 10px;
-  min-height: 44px;
-  padding: 9px 10px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-lg);
-  background: var(--bg);
-  color: var(--fg-muted);
-  font: 600 13px var(--sans);
-  cursor: pointer;
-}
-.meeting-skip-cta:hover {
-  color: var(--fg);
-  border-color: var(--fg-muted);
-}
-.meeting-skip-cta:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: -2px;
-}
-.meeting-skip-cta:disabled {
-  opacity: 0.6;
-  cursor: default;
 }
 .meeting-pop-error {
   display: block;
