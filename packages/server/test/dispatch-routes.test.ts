@@ -322,6 +322,137 @@ describe('builder dispatches through the server', () => {
     }
   });
 
+  it('refuses a dispatch past the workspace parallelism cap, naming who holds the slots', async () => {
+    const wtA = mkdtempSync(join(tmpdir(), 'wt-'));
+    const wtB = mkdtempSync(join(tmpdir(), 'wt-'));
+    const wtC = mkdtempSync(join(tmpdir(), 'wt-'));
+    try {
+      const ctx = await boardWithLead();
+      const taskA = await inProgressRow(ctx.workspaceId, 'Rank results by recency');
+      const taskB = await inProgressRow(ctx.workspaceId, 'Dedupe near-identical rows');
+      const taskC = await inProgressRow(ctx.workspaceId, 'Cache the second-page query');
+      await jj(
+        await post('/api/dispatches', { taskId: taskA, worktreePath: wtA, agentName: 'Builder A' }),
+      );
+      await jj(
+        await post('/api/dispatches', { taskId: taskB, worktreePath: wtB, agentName: 'Builder B' }),
+      );
+
+      // Default cap is 2, and both slots are now spent.
+      const refused = await post('/api/dispatches', {
+        taskId: taskC,
+        worktreePath: wtC,
+        agentName: 'Builder C',
+      });
+      expect(refused.status).toBe(409);
+      const body = (await refused.json()) as {
+        error: string;
+        cap: number;
+        holders: Array<{ taskId: string; agentName?: string }>;
+      };
+      expect(body.error).toBe('parallelism-cap-reached');
+      expect(body.cap).toBe(2);
+      expect(body.holders.map((h) => h.agentName).sort()).toEqual(['Builder A', 'Builder B']);
+      expect(body.holders.map((h) => h.taskId).sort()).toEqual([taskA, taskB].sort());
+
+      const listed = await jj<{ dispatches: DispatchRecord[] }>(
+        await fetch(`${base}/api/dispatches`),
+      );
+      // The refusal never registered — only the two originals are open.
+      expect(listed.dispatches.map((d) => d.taskId).sort()).toEqual([taskA, taskB].sort());
+      await ctx.lead.stop();
+    } finally {
+      rmSync(wtA, { recursive: true, force: true });
+      rmSync(wtB, { recursive: true, force: true });
+      rmSync(wtC, { recursive: true, force: true });
+    }
+  });
+
+  it('re-registering the same task replaces its own slot rather than spending a second one', async () => {
+    const wtA = mkdtempSync(join(tmpdir(), 'wt-'));
+    const wtA2 = mkdtempSync(join(tmpdir(), 'wt-'));
+    const wtB = mkdtempSync(join(tmpdir(), 'wt-'));
+    try {
+      const ctx = await boardWithLead();
+      const taskA = await inProgressRow(ctx.workspaceId, 'Rank results by recency');
+      const taskB = await inProgressRow(ctx.workspaceId, 'Dedupe near-identical rows');
+      await jj(await post('/api/dispatches', { taskId: taskA, worktreePath: wtA }));
+      await jj(await post('/api/dispatches', { taskId: taskB, worktreePath: wtB }));
+      // Cap (2) is spent by A and B. Re-registering A over a fresh worktree
+      // (a crash-and-restart) must not be refused for the slot it already
+      // holds.
+      const reRegistered = await post('/api/dispatches', { taskId: taskA, worktreePath: wtA2 });
+      expect(reRegistered.status).toBe(200);
+      await ctx.lead.stop();
+    } finally {
+      rmSync(wtA, { recursive: true, force: true });
+      rmSync(wtA2, { recursive: true, force: true });
+      rmSync(wtB, { recursive: true, force: true });
+    }
+  });
+
+  it('a raised or lowered cap takes effect on the very next dispatch', async () => {
+    const wtA = mkdtempSync(join(tmpdir(), 'wt-'));
+    const wtB = mkdtempSync(join(tmpdir(), 'wt-'));
+    try {
+      const ctx = await boardWithLead();
+      const put = (path: string, body: unknown) =>
+        fetch(`${base}${path}`, {
+          method: 'PUT',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify(body),
+        });
+      await jj(
+        await put(`/api/workspaces/${ctx.workspaceId}/settings`, {
+          author: LEAD,
+          parallelismCap: 1,
+        }),
+      );
+      const taskA = await inProgressRow(ctx.workspaceId, 'Rank results by recency');
+      const taskB = await inProgressRow(ctx.workspaceId, 'Dedupe near-identical rows');
+      await jj(await post('/api/dispatches', { taskId: taskA, worktreePath: wtA }));
+      const refused = await post('/api/dispatches', { taskId: taskB, worktreePath: wtB });
+      expect(refused.status).toBe(409);
+
+      await jj(
+        await put(`/api/workspaces/${ctx.workspaceId}/settings`, {
+          author: LEAD,
+          parallelismCap: 2,
+        }),
+      );
+      const nowAllowed = await post('/api/dispatches', { taskId: taskB, worktreePath: wtB });
+      expect(nowAllowed.status).toBe(200);
+      await ctx.lead.stop();
+    } finally {
+      rmSync(wtA, { recursive: true, force: true });
+      rmSync(wtB, { recursive: true, force: true });
+    }
+  });
+
+  it('settings GET reports the cap, whether it is the default, and how many slots are in use', async () => {
+    const wtA = mkdtempSync(join(tmpdir(), 'wt-'));
+    try {
+      const ctx = await boardWithLead();
+      const get = (path: string) => fetch(`${base}${path}`);
+      const before = await jj<{
+        parallelismCap: { value: number; isDefault: boolean; default: number };
+        dispatchesInUse: number;
+      }>(await get(`/api/workspaces/${ctx.workspaceId}/settings`));
+      expect(before.parallelismCap).toEqual({ value: 2, isDefault: true, default: 2 });
+      expect(before.dispatchesInUse).toBe(0);
+
+      const taskA = await inProgressRow(ctx.workspaceId, 'Rank results by recency');
+      await jj(await post('/api/dispatches', { taskId: taskA, worktreePath: wtA }));
+      const after = await jj<{ dispatchesInUse: number }>(
+        await get(`/api/workspaces/${ctx.workspaceId}/settings`),
+      );
+      expect(after.dispatchesInUse).toBe(1);
+      await ctx.lead.stop();
+    } finally {
+      rmSync(wtA, { recursive: true, force: true });
+    }
+  });
+
   it('closing the dispatch withdraws the exoneration', async () => {
     const worktree = mkdtempSync(join(tmpdir(), 'wt-'));
     try {

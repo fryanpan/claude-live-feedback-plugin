@@ -136,6 +136,7 @@ import {
 import { hubShortcutKeydown } from './hub-shortcuts.ts';
 import { mountIslandProbe } from './island-probe.tsx';
 import { wireMeMenu } from './me-menu.ts';
+import { mountParallelismCap } from './parallelism-cap.ts';
 import {
   driftData,
   mountDriftIsland,
@@ -425,6 +426,21 @@ function buildShell(root: HTMLElement, name: string): void {
           <div class="hub-criteria-actions">
             <button type="button" id="hub-review-criteria-save" class="hub-btn hub-btn-primary">Save</button>
             <button type="button" id="hub-review-criteria-default" class="hub-btn">Use the default</button>
+          </div>
+        </div>
+        <!-- How many builders this board's lead may dispatch at once
+             (Bryan, by voice: "add support for limiting parallelism in the
+             workspace"). register_dispatch enforces the number server-side;
+             this is where it's read, changed, and shown alongside how many
+             slots are already spent. -->
+        <div class="hub-settings-row hub-settings-row--cap">
+          <label class="hub-settings-label" for="hub-parallelism-cap">Parallelism cap
+            <small id="hub-parallelism-cap-note" class="hub-settings-note"></small>
+          </label>
+          <input type="number" id="hub-parallelism-cap" class="hub-cap-input" min="1" step="1" aria-describedby="hub-parallelism-cap-note" />
+          <div class="hub-criteria-actions">
+            <button type="button" id="hub-parallelism-cap-save" class="hub-btn hub-btn-primary">Save</button>
+            <button type="button" id="hub-parallelism-cap-default" class="hub-btn">Use the default</button>
           </div>
         </div>
       </div>
@@ -3224,6 +3240,40 @@ async function main(): Promise<void> {
     toast: showToast,
   });
 
+  // How many builders this board's lead may dispatch at once, and how many
+  // of that are already spent. Read on every open for the same reason as the
+  // criteria above: an agent can change the cap or open a dispatch from a
+  // tool while this tab sits here, and a stale box that got saved would
+  // write the old number back over a change nobody here saw happen.
+  const parallelismCap = mountParallelismCap({
+    box: document.getElementById('hub-parallelism-cap') as HTMLInputElement,
+    note: el('hub-parallelism-cap-note'),
+    save: el('hub-parallelism-cap-save') as HTMLButtonElement,
+    useDefault: el('hub-parallelism-cap-default') as HTMLButtonElement,
+    read: async () => {
+      const data = await fetchJson<{
+        parallelismCap?: { value?: number; isDefault?: boolean };
+        dispatchesInUse?: number;
+      }>(`/api/workspaces/${encodeURIComponent(workspaceId)}/settings`);
+      const cap = data?.parallelismCap;
+      return typeof cap?.value === 'number'
+        ? {
+            value: cap.value,
+            isDefault: cap.isDefault === true,
+            ...(typeof data?.dispatchesInUse === 'number' ? { inUse: data.dispatchesInUse } : {}),
+          }
+        : null;
+    },
+    write: async (value) => {
+      const res = await send(`/api/workspaces/${encodeURIComponent(workspaceId)}/settings`, 'PUT', {
+        parallelismCap: value,
+        author,
+      });
+      return res.ok;
+    },
+    toast: showToast,
+  });
+
   el('hub-settings').addEventListener('click', () => {
     state.settingsOpen = !state.settingsOpen;
     renderSettingsPanel();
@@ -3233,6 +3283,7 @@ async function main(): Promise<void> {
     if (state.settingsOpen) {
       void pushToggle.refresh();
       void reviewCriteria.refresh();
+      void parallelismCap.refresh();
     }
   });
   // A popover that only closes by hitting the same small button again is one

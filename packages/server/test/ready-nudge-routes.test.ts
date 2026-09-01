@@ -849,4 +849,75 @@ describe('the board wakes its lead over the wire', () => {
 
     await revived.stop();
   });
+
+  /**
+   * The parallelism cap, over a real board and a real dispatch — the join the
+   * unit tests next door cannot see: whether `readyWorkSnapshot` actually
+   * counts THIS board's open dispatches (not the whole server's), and
+   * whether closing one frees the slot the very next pass reads.
+   */
+  describe('the parallelism cap trims what a wake may recommend', () => {
+    const put = (path: string, body: unknown) =>
+      fetch(`${base}${path}`, {
+        method: 'PUT',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+
+    it('holds ready rows past the cap, and says so instead of going silent', async () => {
+      const { workspaceId, lead, tab } = await boardWithReadyWork();
+      await jj(
+        await put(`/api/workspaces/${workspaceId}/settings`, { author: LEAD, parallelismCap: 1 }),
+      );
+
+      // Spend the one slot on a task the wake never names — an in-progress
+      // row the ready gate would not have offered anyway, so the count is
+      // provably the dispatch's, not a side effect of the held row.
+      const { task: busy } = await jj<{ task: { id: string } }>(
+        await post(`/api/workspaces/${workspaceId}/tasks`, {
+          title: 'Migrate the search index',
+          body: 'Agent can migrate the index so that queries stop timing out.',
+          assignee: LEAD.name,
+          assigneeKind: 'agent',
+          author: LEAD,
+        }),
+      );
+      await post(`/api/tasks/${busy.id}/transition`, { to: 'todo', author: PERSON, workspaceId });
+      await post(`/api/tasks/${busy.id}/transition`, {
+        to: 'in-progress',
+        author: LEAD,
+        workspaceId,
+      });
+      const worktree = mkdtempSync(join(tmpdir(), 'wt-cap-'));
+      try {
+        await jj(await post('/api/dispatches', { taskId: busy.id, worktreePath: worktree }));
+
+        handle.nudgeReadyWork();
+        const got = await waitForFrames(lead.frames, READY_IDLE_EVENT, 1);
+        expect(got).toHaveLength(1);
+        // The one open slot is spent; the ready row from `boardWithReadyWork`
+        // is held for capacity rather than named.
+        expect(got[0]?.data?.taskId).toBeUndefined();
+        expect(got[0]?.data?.readyCount).toBe(0);
+        expect(got[0]?.data?.held).toEqual({ 'parallelism-cap': 1 });
+
+        // Closing the dispatch frees the slot; the SAME row the cap was
+        // holding is what the very next pass names.
+        await jj(
+          await fetch(`${base}/api/dispatches/${encodeURIComponent(busy.id)}`, {
+            method: 'DELETE',
+          }),
+        );
+        handle.nudgeReadyWork();
+        const freed = await waitForFrames(lead.frames, READY_IDLE_EVENT, 2);
+        expect(freed).toHaveLength(2);
+        expect(freed[1]?.data?.held).toBeUndefined();
+        expect(freed[1]?.data?.readyCount).toBe(1);
+      } finally {
+        rmSync(worktree, { recursive: true, force: true });
+        await lead.stop();
+        await tab.stop();
+      }
+    });
+  });
 });

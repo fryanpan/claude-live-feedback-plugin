@@ -266,6 +266,50 @@ describe('a wake states what the pass examined, not just what it found', () => {
   });
 });
 
+describe('the parallelism cap trims what a wake may recommend', () => {
+  it('wakes about capacity-held rows even when nothing survived the trim', () => {
+    const { world, sent, nudger } = harness();
+    world.boards[0] = board({
+      lastActivityAt: world.now - 20 * MIN,
+      // The workspace snapshot builder already applied the cap: nothing is
+      // left in `ready`, and the three rows it trimmed ride `capacityHeld`.
+      ready: [],
+      capacityHeld: 3,
+    });
+
+    nudger.tick();
+
+    expect(sent).toHaveLength(1);
+    const frame = sent[0]!.frame;
+    // No row to name — the cap left nothing to recommend dispatching.
+    expect(frame.taskId).toBeUndefined();
+    expect(frame.readyCount).toBe(0);
+    expect(frame.held).toEqual({ 'parallelism-cap': 3 });
+  });
+
+  it('folds capacity-held rows into the held breakdown alongside the gate’s own holds', () => {
+    const { world, sent, nudger } = harness();
+    world.boards[0] = board({
+      lastActivityAt: world.now - 20 * MIN,
+      held: { blocked: 1 },
+      capacityHeld: 2,
+    });
+
+    nudger.tick();
+
+    expect(sent[0]!.frame.held).toEqual({ blocked: 1, 'parallelism-cap': 2 });
+  });
+
+  it('stays quiet when nothing is ready and nothing was held for capacity either', () => {
+    const { world, sent, nudger } = harness();
+    world.boards[0] = board({ lastActivityAt: world.now - 20 * MIN, ready: [], capacityHeld: 0 });
+
+    nudger.tick();
+
+    expect(sent).toHaveLength(0);
+  });
+});
+
 describe('a pass that could not evaluate a row says so', () => {
   const unreadable = (over: Partial<ReadyWorkSnapshot> = {}) =>
     board({

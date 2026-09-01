@@ -47,6 +47,8 @@ Staff the top of the queue, in parallel where the rows don't collide, and keep g
 
 **Respect capacity.** Parallelism stays within comfortable limits, and a resource-exclusive lane — a physical device, a host-wide build, a merge or deploy queue — holds ONE agent at a time; work needing an occupied lane queues behind it. Peers negotiate overlap directly with each other, not through the primary user.
 
+**The workspace's parallelism cap is enforced, not a guideline.** Every board has one (default 2, changeable from the workspace settings panel). `register_dispatch` refuses past it — `parallelism-cap-reached`, naming which agent holds each slot and on which task — so call it when you spawn a builder and `close_dispatch` the moment it reaches terminal; a slot you never opened or never closed queues work behind builders that finished. The ready-work nudge already respects the same cap: it omits ready rows past the open slots rather than telling you to dispatch into a refusal, so a wake naming fewer rows than the board actually has ready ones is the cap at work, not a shorter queue.
+
 ## 4. Registering as Lead
 
 ```

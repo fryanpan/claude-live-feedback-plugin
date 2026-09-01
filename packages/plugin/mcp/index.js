@@ -14446,7 +14446,7 @@ var STATUS_TEXT_MAX = 4000;
 function suggestionAuthor() {
   return { id: AUTHOR.id, name: AUTHOR.name, color: AUTHOR.color };
 }
-var PLUGIN_VERSION = "0.1.135";
+var PLUGIN_VERSION = "0.1.136";
 var PROCESS_ID = randomUUID();
 var server = new Server({
   name: "claude-workspaces",
@@ -16139,7 +16139,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     },
     {
       name: "register_dispatch",
-      description: "Tell the board a builder is working a task in a private git worktree, so the stall loop can read the worktree's file activity as the row moving instead of waking the lead over silence it cannot see. Call it when you spawn a builder; re-registering the same task replaces the old worktree. Close it with close_dispatch when the builder reaches terminal (done or died) — a worktree that is deleted closes its own dispatch.",
+      description: "Tell the board a builder is working a task in a private git worktree, so the stall loop can read the worktree's file activity as the row moving instead of waking the lead over silence it cannot see. Call it when you spawn a builder; re-registering the same task replaces the old worktree. Close it with close_dispatch when the builder reaches terminal (done or died) — a worktree that is deleted closes its own dispatch. Refused with `parallelism-cap-reached` when the workspace's parallelism cap is already spent — the error names who holds the slots; wait for one to close (or raise the cap in workspace settings) before retrying.",
       inputSchema: {
         type: "object",
         properties: {
@@ -16147,6 +16147,10 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           worktreePath: {
             type: "string",
             description: "Absolute path to the builder's git worktree on this machine."
+          },
+          agentName: {
+            type: "string",
+            description: "This builder's display name, so a parallelism-cap refusal on another dispatch can say who holds the slot. Defaults to this session's own (CW_AGENT_NAME)."
           }
         },
         required: ["taskId", "worktreePath"]
@@ -17278,8 +17282,12 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
         }));
       }
       case "register_dispatch": {
-        const { taskId, worktreePath } = a;
-        return ok(await http("POST", "/api/dispatches", { taskId, worktreePath }));
+        const { taskId, worktreePath, agentName } = a;
+        return ok(await http("POST", "/api/dispatches", {
+          taskId,
+          worktreePath,
+          agentName: agentName ?? AUTHOR.name
+        }));
       }
       case "close_dispatch": {
         const { taskId } = a;
