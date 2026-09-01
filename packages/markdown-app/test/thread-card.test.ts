@@ -652,8 +652,17 @@ describe('thread card — a thread that carries a review item IS the review item
     expect(kids).toEqual(['thread-item-card', 'thread-history-label', 'comments', 'thread-reply']);
 
     const record = face.querySelector('.thread-item-card .thread-answered') as HTMLElement;
-    expect(text(record)).toContain('Answered by you:');
+    // A labelled outcome, then who settled it — not one sentence with the
+    // outcome buried mid-way through it.
+    expect(text(record.querySelector('.thread-decision-label'))).toBe('Answer');
     expect(record.querySelector('.thread-answer-words em')?.textContent).toBe('fine');
+    expect(text(record.querySelector('.thread-answered-meta'))).toMatch(
+      /^Answered by you \d+ \w+ ago$/,
+    );
+    // The item it settles is still whole above it — a decided card keeps the
+    // question exactly as it was asked.
+    expect(text(face.querySelector('.thread-item-headline'))).not.toBe('');
+    expect(face.querySelector('.thread-item-body')).not.toBeNull();
     // Settled: no options, no composer inside the card — the plain Reply
     // outside it is the one way to keep talking.
     expect(face.querySelectorAll('.thread-item-option')).toHaveLength(0);
@@ -683,8 +692,50 @@ describe('thread card — a thread that carries a review item IS the review item
     panel.setThreads([t]);
     panel.setActive(t.id);
     const record = cardFor(t).querySelector('.thread-answered') as HTMLElement;
-    expect(text(record)).toContain('Answered by Cara:');
+    // A DECISION says "Decision" and "Decided by", following the same shape
+    // the card's kind chip reads — a question above would say Answer.
+    expect(text(record.querySelector('.thread-decision-label'))).toBe('Decision');
+    expect(text(record.querySelector('.thread-answered-meta'))).toMatch(
+      /^Decided by Cara \d+ \w+ ago$/,
+    );
     expect(text(record.querySelector('.thread-answer-words'))).toBe('Hold');
+  });
+
+  it('a settled record with no recorded clock keeps the line and drops only the time', () => {
+    // Records written before `answeredAt` existed: naming a time we do not
+    // have would be inventing one.
+    const t = makeThread({
+      comments: [
+        declaredComment(
+          asked({ shape: 'decision', answeredBy: 'Cara', answerText: 'Ship it', answeredAt: ts }),
+        ),
+      ],
+    });
+    // An option tapped before `answeredAt` existed — `answeredWith` alone is
+    // what marks it settled (see `reviewAnswered`).
+    const legacy = makeThread({
+      // Its own id — `makeThread` defaults every thread to `t1`, and two
+      // cards sharing one id is how the control below reads the wrong card.
+      id: 't2',
+      comments: [
+        declaredComment(
+          asked({
+            shape: 'decision',
+            options: [{ id: 'o1', label: 'Ship it' }],
+            answeredBy: 'Cara',
+            answeredWith: 'o1',
+          }),
+        ),
+      ],
+    });
+    const { panel, cardFor } = mountPanel();
+    panel.setThreads([t, legacy]);
+    // Control: the one that HAS a clock prints it, so a missing time below is
+    // a fact about the payload and not about the assertion.
+    panel.setActive(t.id);
+    expect(text(cardFor(t).querySelector('.thread-answered-meta'))).toMatch(/ago$/);
+    panel.setActive(legacy.id);
+    expect(text(cardFor(legacy).querySelector('.thread-answered-meta'))).toBe('Decided by Cara');
   });
 
   it('skips the history label when the declaring comment is the whole thread', () => {
