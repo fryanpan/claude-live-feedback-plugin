@@ -7262,6 +7262,12 @@ body.is-reading-width #editor > .ProseMirror {
 .meeting-bot-name:focus {
   color: var(--fg);
 }
+.meeting-bot-name-hint {
+  display: block;
+  margin-top: 8px;
+  font-size: 11px;
+  color: var(--fg-muted);
+}
 .meeting-consent {
   display: flex;
   align-items: center;

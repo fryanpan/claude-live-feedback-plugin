@@ -1122,15 +1122,21 @@ export function mountMeetingStrip(opts: MeetingStripOpts): MeetingStripHandle {
           renderChoiceSelection();
         }
       });
+      // Bryan's late redline on the mock: sighted users saw a plain text box
+      // with a prefilled string and no cue what it controlled. A visible
+      // caption, not just the aria-label, says what the value becomes.
+      const nameHint = document.createElement('span');
+      nameHint.className = 'meeting-bot-name-hint';
+      nameHint.textContent = 'Name shown in the meeting';
       const name = document.createElement('input');
       name.type = 'text';
       name.className = 'meeting-bot-name';
-      name.setAttribute('aria-label', 'Bot display name — tap to change');
+      name.setAttribute('aria-label', 'Bot display name shown in the meeting — tap to change');
       name.value = chooseBotName;
       name.addEventListener('input', () => {
         chooseBotName = name.value;
       });
-      botChoice.body.append(url, name);
+      botChoice.body.append(url, nameHint, name);
       source.add(botChoice.el);
     }
     pop.append(source.group);
