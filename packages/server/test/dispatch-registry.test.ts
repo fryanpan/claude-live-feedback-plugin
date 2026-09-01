@@ -52,6 +52,45 @@ describe('dispatch registry', () => {
     }
   });
 
+  it('carries the agentName through the record and survives a restart', () => {
+    const dataDir = tempDir();
+    const worktree = tempDir();
+    const first = fakeWatch();
+    const reg = new DispatchRegistry({ dataDir, watchFactory: first.factory });
+    try {
+      const res = reg.register('t-alpha', worktree, 'Builder A');
+      expect(res.ok && res.dispatch.agentName).toBe('Builder A');
+      expect(reg.list()[0]?.agentName).toBe('Builder A');
+      reg.stop();
+
+      const second = fakeWatch();
+      const revived = new DispatchRegistry({ dataDir, watchFactory: second.factory });
+      try {
+        expect(revived.list()[0]?.agentName).toBe('Builder A');
+      } finally {
+        revived.stop();
+      }
+    } finally {
+      rmSync(dataDir, { recursive: true, force: true });
+      rmSync(worktree, { recursive: true, force: true });
+    }
+  });
+
+  it('an omitted agentName leaves the record without one', () => {
+    const dataDir = tempDir();
+    const worktree = tempDir();
+    const { factory } = fakeWatch();
+    const reg = new DispatchRegistry({ dataDir, watchFactory: factory });
+    try {
+      const res = reg.register('t-alpha', worktree);
+      expect(res.ok && res.dispatch.agentName).toBeUndefined();
+    } finally {
+      reg.stop();
+      rmSync(dataDir, { recursive: true, force: true });
+      rmSync(worktree, { recursive: true, force: true });
+    }
+  });
+
   it('refuses a relative path, a missing path, and a bad task id', () => {
     const dataDir = tempDir();
     const worktree = tempDir();
