@@ -693,8 +693,10 @@ function TaskRow(props: {
 function GoalEffort(props: { section: BoardSection }): ComponentChildren {
   const { section } = props;
   // Backlog is a bucket, not a goal — no bar, no date (plan §4). A band the
-  // caller built without a rollup says nothing rather than guessing.
-  if (section.isChores || !section.effort) return null;
+  // caller built without a rollup says nothing rather than guessing. And a
+  // band in triage is not yet work: a projected finish for a goal nobody has
+  // agreed to is a date for something that may never start.
+  if (section.isChores || section.status === 'triage' || !section.effort) return null;
   const label = goalEffortLabel(section.effort, Date.now());
   if (!label.show) return null;
   // No bar on an unscored goal, deliberately. An empty grey track is exactly
