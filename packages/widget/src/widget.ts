@@ -173,6 +173,22 @@ class FeedbackWidgetEl extends HTMLElement {
   constructor() {
     super();
     this.shadow = this.attachShadow({ mode: 'open' });
+    // Keyboard events are `composed`: a keystroke typed into the shadow-DOM
+    // composer bubbles OUT of the shadow root and reaches host-page document
+    // listeners — and a page that preventDefaults ' ' for a play/pause
+    // shortcut (media players, slide decks, most dev servers) then cancels
+    // every space typed into a comment. Stop key events that originate in the
+    // widget's own editable controls at the shadow boundary. Scoped to those
+    // controls only: with feedback mode armed but nothing focused, the host
+    // keeps all its shortcuts. The widget's own Escape handler still runs —
+    // it captures on window, upstream of this bubble-phase stop.
+    const shieldKeys = (ev: Event) => {
+      const t = ev.target;
+      if (t instanceof HTMLElement && t.matches('input, textarea, select')) ev.stopPropagation();
+    };
+    for (const type of ['keydown', 'keypress', 'keyup'] as const) {
+      this.shadow.addEventListener(type, shieldKeys);
+    }
   }
 
   init(opts: WidgetOpts): void {
