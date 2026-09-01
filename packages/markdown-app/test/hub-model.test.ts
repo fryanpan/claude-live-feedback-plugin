@@ -238,12 +238,15 @@ describe('TASK_STATUS_ORDER', () => {
     expect([...TASK_STATUS_ORDER].sort()).toEqual(['done', 'in-progress', 'todo', 'triage']);
   });
 
-  it('leaves triage out of the GOAL list — a goal is never filed unvetted', () => {
-    expect([...GOAL_STATUS_ORDER]).toEqual(['todo', 'in-progress', 'done']);
-    expect(GOAL_STATUS_ORDER).not.toContain('triage');
-    // Same members otherwise, so the two lists cannot drift into disagreeing
-    // about what a status IS — only about which of them a goal may hold.
-    expect(TASK_STATUS_ORDER.filter((s) => s !== 'triage')).toEqual([...GOAL_STATUS_ORDER]);
+  // A goal holds triage on the same terms a task does: a band nobody has
+  // agreed to yet (new goals start there since 2026-08-25), and nothing under
+  // it is dispatched until somebody moves it on. The picker offers it, so a
+  // goal can be put back into triage from the board as well as out of it.
+  it('offers triage on the GOAL list too — a band nobody has agreed to', () => {
+    expect([...GOAL_STATUS_ORDER]).toEqual(['triage', 'todo', 'in-progress', 'done']);
+    // Same members as the task list, so the two cannot drift into disagreeing
+    // about what a status IS.
+    expect([...GOAL_STATUS_ORDER]).toEqual([...TASK_STATUS_ORDER]);
   });
 });
 

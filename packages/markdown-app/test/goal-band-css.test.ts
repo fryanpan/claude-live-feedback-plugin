@@ -136,15 +136,17 @@ describe('the goal band stylesheet', () => {
   // The done note is the hover-free half of a done band's treatment, and it
   // must not become a chip: it shares the due date's rule outright, so the
   // two can only ever be styled alike.
-  it('draws the done note as the due date’s own plain muted text — one rule, no chip', () => {
-    const shared = /\.hub-due,\s*\.hub-done-note\s*\{([^}]*)\}/.exec(CSS)?.[1];
-    expect(shared, 'the done note does not share the due date’s rule').toBeDefined();
+  it('draws the done and triage notes as the due date’s own plain muted text — one rule, no chip', () => {
+    const shared = /\.hub-due,\s*\.hub-done-note,\s*\.hub-triage-note\s*\{([^}]*)\}/.exec(CSS)?.[1];
+    expect(shared, 'the done/triage notes do not share the due date’s rule').toBeDefined();
     expect(shared as string).toMatch(/color:\s*var\(--fg-muted\)/);
     expect(shared as string).not.toMatch(/background|border-radius|border:/);
   });
 
-  it('mutes a done band’s title, and neutralises the reserved band’s accent', () => {
-    expect(ruleBody('.hub-band-done .hub-goal-title-text')).toMatch(/color:\s*var\(--fg-muted\)/);
+  it('mutes a done or triage band’s title, and neutralises the reserved band’s accent', () => {
+    expect(
+      ruleBody('.hub-band-done .hub-goal-title-text,\n.hub-band-triage .hub-goal-title-text'),
+    ).toMatch(/color:\s*var\(--fg-muted\)/);
     expect(ruleBody('.hub-band-reserved .hub-goal-row')).toMatch(
       /border-left-color:\s*var\(--border\)/,
     );

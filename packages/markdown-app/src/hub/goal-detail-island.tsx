@@ -210,8 +210,9 @@ function GoalDetailPanel(props: {
     statusCtl.className = 'hub-detail-statusctl';
     const status = document.createElement('select');
     status.className = 'hub-detail-select hub-detail-status hub-goal-detail-status';
-    // GOAL_STATUS_ORDER, not TASK_STATUS_ORDER: a goal is never filed unvetted,
-    // so triage is not one of the states this control may declare.
+    // GOAL_STATUS_ORDER carries triage too: a band nobody has agreed to holds
+    // its rows out of dispatch, and this control is where a person releases
+    // it — or sends it back.
     for (const s of statusOptions(section.status ?? 'todo', GOAL_STATUS_ORDER)) {
       const opt = document.createElement('option');
       opt.value = s;
@@ -353,6 +354,12 @@ function GoalDetailPanel(props: {
     handlers.onBodySlot?.(section, slotRef.current);
   });
 
+  // What triage HOLDS, said where the picker is. The word alone reads as a
+  // task's triage; on a goal it is the whole band that waits.
+  const triageNote =
+    section.status === 'triage'
+      ? 'In triage — not ready to work on. Nothing under this goal is dispatched until it moves to To do.'
+      : null;
   const doneNote =
     section.status === 'done'
       ? section.doneBy
@@ -533,6 +540,7 @@ function GoalDetailPanel(props: {
           has always accepted a done declaration over open children, so it
           spent two lines restating a rule nothing enforced. */}
       {doneNote !== null && <p class="hub-goal-done-note">{doneNote}</p>}
+      {triageNote !== null && <p class="hub-goal-triage-note">{triageNote}</p>}
 
       {/* The prose the whole ticket is about: *"the most important object on
           the board is the only one you cannot explain"*. Drawn unconditionally,
