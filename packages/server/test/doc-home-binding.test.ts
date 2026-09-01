@@ -54,6 +54,25 @@ function makeRooms(dataDir: string): Rooms {
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
+/**
+ * Wait until the file at `path` contains `needle`, polling; the write-back
+ * behind it is debounced (~1s) and CI boxes under load have missed a fixed
+ * 1.4s sleep by a few hundred ms. A deadline well past the debounce keeps
+ * the assertion honest: a write that never lands still fails, just later.
+ */
+async function waitForFileText(path: string, needle: string, deadlineMs = 8000): Promise<void> {
+  const until = Date.now() + deadlineMs;
+  for (;;) {
+    let text = '';
+    try {
+      text = readFileSync(path, 'utf8');
+    } catch {}
+    if (text.includes(needle)) return;
+    if (Date.now() > until) throw new Error(`${path} never contained ${JSON.stringify(needle)}`);
+    await sleep(100);
+  }
+}
+
 /** Replace the doc's prose with `md`, as an agent edit would. */
 function setProse(rooms: Rooms, docId: string, md: string): void {
   const room = rooms.get(docId);
@@ -237,7 +256,7 @@ describe('doc homes through the binding', () => {
     const wt2 = join(tmp, 'wt-plans-back');
     git(main, 'worktree', 'add', wt2, 'plans');
     setProse(rooms2, 'd1', '# Triage\n\nback from the dead\n');
-    await sleep(1400);
+    await waitForFileText(join(wt2, REL), 'back from the dead');
     expect(readFileSync(join(wt2, REL), 'utf8')).toContain('back from the dead');
     expect(rooms2.docHomeStatus('d1')?.boundPath).toBe(join(wt2, REL));
     await rooms2.flush();
