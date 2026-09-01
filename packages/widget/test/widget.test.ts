@@ -179,6 +179,61 @@ describe('widget', () => {
     expect(ev.defaultPrevented).toBe(false);
   });
 
+  /**
+   * Keyboard events are `composed`: a keystroke typed into the shadow-DOM
+   * composer bubbles OUT of the shadow root and reaches host-page document
+   * listeners. A host page that preventDefaults ' ' to drive a play/pause
+   * shortcut (media players, slide decks, most dev servers) then cancels
+   * every space typed into a comment — observed live as a comment arriving
+   * with all its spaces stripped. Key events originating in the widget's own
+   * inputs must not escape the shadow root; the host keeps its shortcuts
+   * everywhere else.
+   */
+  it('keys typed in the composer are shielded from host-page shortcut handlers', async () => {
+    const mod = await importWidget();
+    const el = mod.FeedbackWidget.init({ docId: 't-keys', user: 'bryan' });
+    const root = el.shadowRoot!;
+    // The host page's shortcut, exactly as the mockup registered it.
+    const hostSeen: string[] = [];
+    const hostShortcut = (ev: KeyboardEvent) => {
+      hostSeen.push(ev.key);
+      if (ev.key === ' ') ev.preventDefault();
+    };
+    document.addEventListener('keydown', hostShortcut);
+    try {
+      document.elementFromPoint = () => document.getElementById('hello') as HTMLElement;
+      (root.querySelector('.fab') as HTMLButtonElement).click();
+      window.dispatchEvent(new PointerEvent('pointerup', { clientX: 10, clientY: 10 }));
+      const ta = root.querySelector('.composer textarea') as HTMLTextAreaElement;
+      expect(ta).toBeTruthy();
+      // Type like a browser: key events are composed + cancelable, and the
+      // character lands only when nothing preventDefaulted the keydown.
+      const type = (target: HTMLElement, key: string) => {
+        const ev = new KeyboardEvent('keydown', {
+          key,
+          bubbles: true,
+          composed: true,
+          cancelable: true,
+        });
+        target.dispatchEvent(ev);
+        if (!ev.defaultPrevented && target instanceof HTMLTextAreaElement) target.value += key;
+      };
+      for (const key of ['h', 'i', ' ', 'y', 'o']) type(ta, key);
+      // The space landed — the host shortcut never got to cancel it …
+      expect(ta.value).toBe('hi yo');
+      // … because the composer's keys never reached the host at all.
+      expect(hostSeen).toEqual([]);
+      // Positive control — the shield is scoped to the widget's inputs: the
+      // same keystroke outside the composer still reaches the host's
+      // shortcut, even with feedback mode still armed.
+      expect(document.body.classList.contains('cfw-feedback-mode')).toBe(true);
+      type(document.body, ' ');
+      expect(hostSeen).toEqual([' ']);
+    } finally {
+      document.removeEventListener('keydown', hostShortcut);
+    }
+  });
+
   it('init is idempotent — repeat calls return the same element', async () => {
     const mod = await importWidget();
     const a = mod.FeedbackWidget.init({ docId: 'w-test-3', user: 'agent' });
