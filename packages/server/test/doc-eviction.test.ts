@@ -14,7 +14,16 @@
  * `get` rather than by writing to the map behind it.
  */
 import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
-import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  chmodSync,
+  existsSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  utimesSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { memberDocId } from '../src/binds.ts';
@@ -105,6 +114,43 @@ describe('evicting an idle doc', () => {
     const next = makeRooms(dataDir);
     try {
       expect(next.residentCount()).toBe(1);
+      next.flush();
+      expect(onDisk(path)).toContain('rescued');
+    } finally {
+      next.stop();
+    }
+  });
+
+  it('the boot reassert wins even when the stale .md and the .ydoc share an mtime', () => {
+    // The same repair, with the clock removed from the verdict. The bind,
+    // the edit and the evict-flush above all land inside a few ms, so on a
+    // coarse file clock the stale .md and the persisted .ydoc routinely
+    // carry the SAME mtime — and the attach's at-rest arbitration gave a tie
+    // to disk, leaving `first line` on disk with the row already cleared.
+    // (Seen in a full-suite run on 2026-09-01; the eviction red of 2026-08-31
+    // had the same signature.) The index row's `pendingFileWrite` is the
+    // fact the mtimes only approximate; the boot must trust it.
+    const path = bound('wedged');
+    rooms.flush();
+    expect(rooms.findAndReplace('wedged', { find: 'first line', replace: 'rescued' }).ok).toBe(
+      true,
+    );
+    chmodSync(srcDir, 0o500);
+    try {
+      expect(rooms.evictRoom('wedged')).toBe(true);
+      expect(onDisk(path)).toContain('first line');
+    } finally {
+      chmodSync(srcDir, 0o700);
+    }
+    // Force the tie a coarse clock produces: stamp the stale .md with the
+    // .ydoc's exact mtime.
+    const t = statSync(join(dataDir, 'wedged.ydoc')).mtime;
+    utimesSync(path, t, t);
+    expect(statSync(path).mtimeMs).toBe(statSync(join(dataDir, 'wedged.ydoc')).mtimeMs);
+
+    rooms.stop();
+    const next = makeRooms(dataDir);
+    try {
       next.flush();
       expect(onDisk(path)).toContain('rescued');
     } finally {
