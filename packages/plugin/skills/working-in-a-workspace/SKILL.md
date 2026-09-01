@@ -133,8 +133,9 @@ Someone who was not in the conversation should be able to see a task, know why i
 
 - Update task status as you work
   - `in-progress` when you **start**, not when you report.
-  - `done` means **delivered** — all acceptance criteria are met
-  - Work sitting in an unmerged PR stays `in-progress`
+  - `done` means **merged AND deployed** (Bryan, 2026-09-01, fleet-wide): the PR is in `main` and the production deploy that carries it reports a healthy verification. Every acceptance criterion is met on the deployed build. Nothing else is done — not "CI green", not "merged, deploy pending", not "verified on staging".
+  - Work sitting in an unmerged PR stays `in-progress`. So does a merged PR until its deploy verification reads healthy; if the deploy is batched or blocked, the row waits with it and the `note` says so.
+  - Name the deploy verdict in the `done` transition note: the merge commit and the deploy that carried it. A `done` without that note is a claim nobody can check.
   - Work you have decided to come back to LATER is `park_task(taskId, until, reason)` — the row moves to `triage` and the tool posts a comment saying when to come back and why, so the board stops treating it as work nobody got to. Write the `reason`, and give an `until` date whenever you have one: triage says a decision was made, and that comment is the only place that says what it was waiting for. There is no un-park — move the row on with `task_transition` when it is ready. **A row waiting on a person is not parked.** Waiting on the primary user's answer, test, or sign-off is work in flight: leave it `in-progress` and file the ask with `add_review_item` so it sits on their queue. Triage says "not yet shaped", which misleads about a finished feature waiting on one answer. Never move a row to `in-progress`, invent an `after` edge, or hand it to a person to quiet the ready-work nudge; all three make the board say something untrue.
   - Say what you did in the transition `note` — the PR, what you verified and what you couldn't. The note is the whole of what the trail keeps, so a move with an empty note is a move nobody can read back.
 - Share progress on a task with `post_status` at each milestone — these are
