@@ -1,16 +1,23 @@
 /**
- * Commenting on a review item like a doc (approved on the mock, 2026-08-29).
+ * Asking a question on a review item (approved on the mock, 2026-08-29; the
+ * link added 2026-08-31).
  *
- * The old "Tell me more" box is gone from the walkthrough card. In its place:
- * select a phrase of a ticket-borne item's detail and a comment pill appears;
- * tapping it opens a thread card quoting the phrase; sending the question
- * creates a thread anchored to THAT phrase of THAT item, and the card stays
- * where it is with a "Waiting on <owner>" note. When the owner revises the
- * item, the queue shows it again marked Revised, quoting the question, with
- * the revised phrase highlighted and a way to the thread.
+ * The old "Tell me more" box is gone from the walkthrough card. Two ways to
+ * ask stand in its place, and they make the SAME thread: select a phrase of
+ * a ticket-borne item's detail and a comment pill appears, opening a thread
+ * card that quotes the phrase; or tap "I have a question" and the card turns
+ * into a question box, no selection needed — the thread then quotes the
+ * item's headline. Either way the item is the owner's turn: it LEAVES the
+ * queue on the loader's re-read and the next card takes its place (Bryan,
+ * 2026-08-31: the card that stayed put with a "Waiting on…" note read as "I
+ * hit submit and then nothing happens"). When the owner revises the item,
+ * the queue shows it again marked Revised, quoting the question, with the
+ * revised phrase highlighted and a way to the thread.
  *
  * All fixtures are synthetic — invented names and ids throughout.
  */
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   type ReviewStripHandlers,
@@ -21,10 +28,11 @@ import {
   type ReviewItem,
   type ReviewQueue,
   type ReviewThreadItem,
-  holdWaitingItem,
   reviewItemAskRequest,
+  reviewItemQuestionRequest,
   reviewQueue,
   revisedPhrase,
+  wholeItemPhrase,
 } from '../src/hub/hub-model.ts';
 import {
   type WalkthroughHandlers,
@@ -91,6 +99,7 @@ function walk(over: Partial<WalkthroughHandlers> = {}): WalkthroughHandlers {
     onAnswer: vi.fn(),
     onReply: vi.fn(),
     onAskOnItem: vi.fn(),
+    onQuestionOnItem: vi.fn(),
     onOpenItem: vi.fn(),
     onOpenThread: vi.fn(),
     onStep: vi.fn(),
@@ -212,24 +221,26 @@ describe('the model: where a question on an item goes, and what a revision carri
     expect(revisedPhrase(item)).toBeUndefined();
   });
 
-  it('holds an asked item on its card while the queue has dropped it', () => {
-    const q = reviewQueue([], [ticketRow(), ticketRow({ reviewItemId: 'r-2' })], NOW);
-    const asked = q.items[0] as ReviewItem;
-    const after = reviewQueue([], [ticketRow({ reviewItemId: 'r-2' })], NOW);
-    const held = holdWaitingItem(after, {
-      key: asked.key,
-      index: 0,
-      item: { ...asked, waiting: { question: 'Which other?', owner: 'Helper' } },
-    });
-    expect(held.items.map((i) => i.key)).toEqual([asked.key, 'task-review:tk-1:r-2']);
-    expect(held.items[0]?.waiting).toEqual({ question: 'Which other?', owner: 'Helper' });
-    // The hold is a display ledger, not a queue row: the count stays honest.
-    expect(held.total).toBe(after.total);
-    // Once the item is back (revised), the hold defers to the real row.
-    const back = reviewQueue([], [revisedRow(), ticketRow({ reviewItemId: 'r-2' })], NOW);
-    const noHold = holdWaitingItem(back, { key: asked.key, index: 0, item: asked });
-    expect(noHold).toBe(back);
-    expect(holdWaitingItem(after, null)).toBe(after);
+  it('a question about the whole item goes to the SAME route, quoting the headline', () => {
+    // The link has no phrase to pin the question on, and the thread still
+    // needs one to quote — the headline is what the item IS. Same shape the
+    // server itself makes when a question is typed into the answer box, so
+    // the two whole-item asks land identically.
+    const q = reviewQueue([], [ticketRow()], NOW);
+    const item = q.items[0] as ReviewItem;
+    expect(wholeItemPhrase(item)).toBe('Green or blue?');
+    expect(reviewItemQuestionRequest(item, 'Which other?')).toEqual(
+      reviewItemAskRequest(item, 'Green or blue?', 'Which other?'),
+    );
+    expect(reviewItemQuestionRequest(item, 'Which other?')?.path).toBe(
+      '/api/docs/task%3Atk-1/threads',
+    );
+    // Not the more-info route: that one records no thread, and only a
+    // THREADED question takes the item off the queue (`reviewItemState`).
+    expect(reviewItemQuestionRequest(item, 'x')?.path).not.toContain('more-info');
+    // Nowhere to send it on a thread-borne item, same as the phrase flow.
+    const t = reviewQueue([], [threadRow()], NOW);
+    expect(reviewItemQuestionRequest(t.items[0] as ReviewItem, 'x')).toBeNull();
   });
 });
 
@@ -283,13 +294,12 @@ describe('the walkthrough card: select a phrase, ask on it, wait', () => {
       'Which other?',
     );
     await tick();
-    // The item STAYS on the card — no collapse, no advance — with the note.
-    expect(root.querySelector('.hub-walk-card')).not.toBeNull();
+    // The thread card closes. The island holds NOTHING back: whether the
+    // card stays is the queue's call, and the loader's re-read drops an
+    // asked-on item (see "the card leaves the queue" below). No note
+    // either — the toast carries the word, and the card is gone.
     expect(root.querySelector('.hub-walk-thread')).toBeNull();
-    const note = root.querySelector('.hub-walk-waiting') as HTMLElement;
-    expect(note.textContent).toContain('Waiting on Helper');
-    expect(note.textContent).toContain('Which other?');
-    expect(root.querySelector('.hub-walk-answer')).not.toBeNull();
+    expect(root.querySelector('.hub-walk-waiting')).toBeNull();
   });
 
   it('the thread card opens BESIDE the card, in its own margin column, not inside it', async () => {
@@ -359,57 +369,242 @@ describe('the walkthrough card: select a phrase, ask on it, wait', () => {
     expect(root.querySelector('.hub-walk-thread-quote')?.textContent).toContain('ships the other');
   });
 
-  it('a held (waiting) item renders the note without any tap', () => {
-    const q = reviewQueue([], [ticketRow()], NOW);
-    const item = q.items[0] as ReviewItem;
-    const held: ReviewQueue = {
-      ...q,
-      items: [{ ...item, waiting: { question: 'Which other?', owner: 'Helper' } }],
-    };
-    mountWalk(held, walk());
-    const note = root.querySelector('.hub-walk-waiting') as HTMLElement;
-    expect(note.textContent).toContain('Waiting on Helper');
-    expect(root.querySelector('.hub-walk-thread')).toBeNull();
-  });
-
-  it('a held (waiting) item offers no pill, and a selection does nothing', async () => {
-    const q = reviewQueue([], [ticketRow()], NOW);
-    const item = q.items[0] as ReviewItem;
-    const held: ReviewQueue = {
-      ...q,
-      items: [{ ...item, waiting: { question: 'Which other?', owner: 'Helper' } }],
-    };
-    mountWalk(held, walk());
-    expect(root.querySelector('.hub-walk-pill')).toBeNull();
-    await select(root.querySelector('.hub-walk-body') as HTMLElement, 'ships the other');
-    expect(root.querySelector('.hub-walk-pill')).toBeNull();
-    // The waiting note is unaffected by the selection.
-    expect((root.querySelector('.hub-walk-waiting') as HTMLElement).textContent).toContain(
-      'Waiting on Helper',
-    );
-  });
-
-  it('after a successful ask the pill goes away for that item; a fresh item still gets one', async () => {
-    const onAskOnItem = vi.fn().mockResolvedValue(true);
-    const q = reviewQueue([], [ticketRow()], NOW);
+  it('the card leaves the queue in the same interaction: the loader’s re-read drops it and the next card takes its place', async () => {
+    // What `askOnReviewItem` does after a landed write is re-read the queue;
+    // the server has dropped the waiting item, so the re-read arrives
+    // without it. The island is keyed on the item, so the asked-on card
+    // unmounts and the one that was next stands at the same position — no
+    // hold, no "Waiting on…" copy kept in front of the reader.
+    const q = reviewQueue([], [ticketRow(), ticketRow({ reviewItemId: 'r-2' })], NOW);
+    const after = reviewQueue([], [ticketRow({ reviewItemId: 'r-2' })], NOW);
+    const onAskOnItem = vi.fn().mockImplementation(async () => {
+      walkthroughData.value = { ...walkthroughData.value, queue: after };
+      return true;
+    });
     mountWalk(q, walk({ onAskOnItem }));
     await select(root.querySelector('.hub-walk-body') as HTMLElement, 'ships the other');
-    expect(root.querySelector('.hub-walk-pill')).not.toBeNull();
     (root.querySelector('.hub-walk-pill') as HTMLElement).click();
     await tick();
     const form = root.querySelector('.hub-walk-thread-form') as HTMLFormElement;
     (form.querySelector('textarea') as HTMLTextAreaElement).value = 'Which other?';
     form.dispatchEvent(new Event('submit', { cancelable: true }));
     await tick();
-    // Waiting now — no pill at all, and selecting again raises none.
-    expect(root.querySelector('.hub-walk-pill')).toBeNull();
-    await select(root.querySelector('.hub-walk-body') as HTMLElement, 'mockup shows');
-    expect(root.querySelector('.hub-walk-pill')).toBeNull();
-
-    // A fresh (not waiting) item still gets a pill.
-    mountWalk(reviewQueue([], [ticketRow({ reviewItemId: 'r-2' })], NOW), walk());
+    expect(onAskOnItem).toHaveBeenCalledTimes(1);
+    const card = root.querySelector('.hub-walk-card') as HTMLElement;
+    expect(card).not.toBeNull();
+    // The card on screen is r-2's — the asked-on one is gone, not held.
+    expect(card.querySelector('.hub-walk-answer textarea')?.getAttribute('data-keep')).toBe(
+      'walk-answer:task-review:tk-1:r-2',
+    );
+    expect(root.querySelector('.hub-walk-waiting')).toBeNull();
+    expect(root.querySelector('.hub-walk-thread')).toBeNull();
+    // Nothing about the queue is faked: the stepper counts the server's one.
+    expect((root.querySelector('.hub-walk-nav') as HTMLElement).textContent).toContain('1 of 1');
+    // Asking on the LAST item lands on the finished screen — not a stale card.
+    const onlyOne = reviewQueue([], [ticketRow()], NOW);
+    const empty = reviewQueue([], [], NOW);
+    mountWalk(
+      onlyOne,
+      walk({
+        onAskOnItem: vi.fn().mockImplementation(async () => {
+          walkthroughData.value = { ...walkthroughData.value, queue: empty };
+          return true;
+        }),
+      }),
+    );
     await select(root.querySelector('.hub-walk-body') as HTMLElement, 'ships the other');
-    expect(root.querySelector('.hub-walk-pill')).not.toBeNull();
+    (root.querySelector('.hub-walk-pill') as HTMLElement).click();
+    await tick();
+    const last = root.querySelector('.hub-walk-thread-form') as HTMLFormElement;
+    (last.querySelector('textarea') as HTMLTextAreaElement).value = 'Which other?';
+    last.dispatchEvent(new Event('submit', { cancelable: true }));
+    await tick();
+    expect(root.querySelector('.hub-walk-card')).toBeNull();
+    expect(root.querySelector('.hub-walk-done')).not.toBeNull();
+  });
+});
+
+describe('the walkthrough card: "I have a question" — asking without selecting a phrase', () => {
+  const link = () => root.querySelector('.hub-walk-question-link') as HTMLElement | null;
+  const box = () => root.querySelector('.hub-walk-question-box') as HTMLElement | null;
+  const answering = () => root.querySelector('.hub-walk-answering') as HTMLElement;
+
+  it('every ticket-borne card shows the link, beside Skip', () => {
+    mountWalk(reviewQueue([], [ticketRow()], NOW), walk());
+    const l = link();
+    expect(l).not.toBeNull();
+    expect(l?.textContent).toBe('I have a question');
+    expect(l?.closest('.hub-walk-actions')).not.toBeNull();
+    expect(l?.closest('.hub-walk-actions')?.querySelector('.hub-walk-skip-link')).not.toBeNull();
+    // A revised item coming back is a fresh ask: it gets the link too.
+    mountWalk(reviewQueue([], [revisedRow()], NOW), walk());
+    expect(link()).not.toBeNull();
+  });
+
+  it('no link on an item with nowhere for a question to land', () => {
+    mountWalk(reviewQueue([], [threadRow()], NOW), walk());
+    expect(root.querySelector('.hub-walk-answer')).not.toBeNull();
+    expect(link()).toBeNull();
+  });
+
+  it('tapping it turns the card into a question box: textarea, Send, Cancel — no selection needed', async () => {
+    mountWalk(reviewQueue([], [ticketRow()], NOW), walk());
+    expect(box()).toBeNull();
+    expect(answering().classList.contains('hidden')).toBe(false);
+    link()?.click();
+    await tick();
+    const b = box();
+    expect(b).not.toBeNull();
+    expect(b?.querySelector('.hub-walk-question-form textarea')).not.toBeNull();
+    expect(b?.querySelector('.hub-walk-question-form button[type="submit"]')?.textContent).toBe(
+      'Send',
+    );
+    expect(b?.querySelector('.hub-walk-question-cancel')?.textContent).toBe('Cancel');
+    expect(b?.querySelector('.hub-walk-question-hint')?.textContent).toContain('Ask Helper');
+    // The box stands IN the card, where the answer furniture was — which is
+    // hidden rather than gone (a half-typed answer survives), and the phrase
+    // pill is off while the box is up: one way of asking at a time.
+    expect(b?.closest('.hub-walk-card')).not.toBeNull();
+    expect(answering().classList.contains('hidden')).toBe(true);
+    expect(root.querySelector('.hub-walk-answer')).not.toBeNull();
+    expect(root.querySelector('.hub-walk-pill')).toBeNull();
+    expect(root.querySelector('.hub-walk-thread')).toBeNull();
+  });
+
+  it('Send asks about the whole item — the question handler, with the item and the words', async () => {
+    const onQuestionOnItem = vi.fn().mockResolvedValue(true);
+    const onAskOnItem = vi.fn().mockResolvedValue(true);
+    const q = reviewQueue([], [ticketRow()], NOW);
+    mountWalk(q, walk({ onQuestionOnItem, onAskOnItem }));
+    link()?.click();
+    await tick();
+    const form = root.querySelector('.hub-walk-question-form') as HTMLFormElement;
+    (form.querySelector('textarea') as HTMLTextAreaElement).value = 'Which other?';
+    form.dispatchEvent(new Event('submit', { cancelable: true }));
+    expect(onQuestionOnItem).toHaveBeenCalledWith(q.items[0], 'Which other?');
+    // Not through the phrase handler: there is no phrase.
+    expect(onAskOnItem).not.toHaveBeenCalled();
+    await tick();
+    // The box closes and the answer furniture is back — for the case where
+    // the card is still here; normally the loader's re-read removes it.
+    expect(box()).toBeNull();
+    expect(answering().classList.contains('hidden')).toBe(false);
+  });
+
+  it('the card leaves the queue in the same interaction, exactly as the phrase flow does', async () => {
+    const q = reviewQueue([], [ticketRow(), ticketRow({ reviewItemId: 'r-2' })], NOW);
+    const after = reviewQueue([], [ticketRow({ reviewItemId: 'r-2' })], NOW);
+    const onQuestionOnItem = vi.fn().mockImplementation(async () => {
+      walkthroughData.value = { ...walkthroughData.value, queue: after };
+      return true;
+    });
+    mountWalk(q, walk({ onQuestionOnItem }));
+    link()?.click();
+    await tick();
+    const form = root.querySelector('.hub-walk-question-form') as HTMLFormElement;
+    (form.querySelector('textarea') as HTMLTextAreaElement).value = 'Which other?';
+    form.dispatchEvent(new Event('submit', { cancelable: true }));
+    await tick();
+    const card = root.querySelector('.hub-walk-card') as HTMLElement;
+    expect(card.querySelector('.hub-walk-answer textarea')?.getAttribute('data-keep')).toBe(
+      'walk-answer:task-review:tk-1:r-2',
+    );
+    // The next card arrives in answer mode, its own link ready.
+    expect(box()).toBeNull();
+    expect(link()).not.toBeNull();
+    expect(root.querySelector('.hub-walk-waiting')).toBeNull();
+  });
+
+  it('a refused send keeps the box and the words', async () => {
+    const onQuestionOnItem = vi.fn().mockResolvedValue(false);
+    mountWalk(reviewQueue([], [ticketRow()], NOW), walk({ onQuestionOnItem }));
+    link()?.click();
+    await tick();
+    const form = root.querySelector('.hub-walk-question-form') as HTMLFormElement;
+    (form.querySelector('textarea') as HTMLTextAreaElement).value = 'Which other?';
+    form.dispatchEvent(new Event('submit', { cancelable: true }));
+    await tick();
+    expect(box()).not.toBeNull();
+    expect((form.querySelector('textarea') as HTMLTextAreaElement).value).toBe('Which other?');
+  });
+
+  it('Cancel puts the box away and the answer furniture back, draft intact', async () => {
+    mountWalk(reviewQueue([], [ticketRow()], NOW), walk());
+    const answer = root.querySelector('.hub-walk-answer textarea') as HTMLTextAreaElement;
+    answer.value = 'Blue, I think';
+    link()?.click();
+    await tick();
+    (root.querySelector('.hub-walk-question-cancel') as HTMLElement).click();
+    await tick();
+    expect(box()).toBeNull();
+    expect(answering().classList.contains('hidden')).toBe(false);
+    const after = root.querySelector('.hub-walk-answer textarea') as HTMLTextAreaElement;
+    expect(after).toBe(answer);
+    expect(after.value).toBe('Blue, I think');
+  });
+
+  it('the question box keeps its draft across a repaint, like the answer box', async () => {
+    mountWalk(reviewQueue([], [ticketRow()], NOW), walk());
+    link()?.click();
+    await tick();
+    const ta = root.querySelector('.hub-walk-question-form textarea') as HTMLTextAreaElement;
+    ta.value = 'Which oth';
+    walkthroughData.value = { ...walkthroughData.value, now: NOW + 30_000 };
+    await tick();
+    const after = root.querySelector('.hub-walk-question-form textarea') as HTMLTextAreaElement;
+    expect(after).toBe(ta);
+    expect(after.value).toBe('Which oth');
+  });
+
+  it('POSITIVE CONTROL: the phrase flow still submits through the phrase handler', async () => {
+    const onAskOnItem = vi.fn().mockResolvedValue(true);
+    const onQuestionOnItem = vi.fn().mockResolvedValue(true);
+    const q = reviewQueue([], [ticketRow()], NOW);
+    mountWalk(q, walk({ onAskOnItem, onQuestionOnItem }));
+    await select(root.querySelector('.hub-walk-body') as HTMLElement, 'ships the other');
+    (root.querySelector('.hub-walk-pill') as HTMLElement).click();
+    await tick();
+    const form = root.querySelector('.hub-walk-thread-form') as HTMLFormElement;
+    (form.querySelector('textarea') as HTMLTextAreaElement).value = 'Which other?';
+    form.dispatchEvent(new Event('submit', { cancelable: true }));
+    expect(onAskOnItem).toHaveBeenCalledWith(
+      q.items[0],
+      { text: 'ships the other' },
+      'Which other?',
+    );
+    expect(onQuestionOnItem).not.toHaveBeenCalled();
+  });
+});
+
+// hub-app has no boot harness (the pin pattern of walk-return.test.ts): the
+// wiring is asserted in source, and the behaviour — the card leaving on Send,
+// the toast — was verified headlessly against a built client; see the PR.
+describe('hub-app wires both asks to one POST and holds nothing back', () => {
+  const src = readFileSync(join(__dirname, '..', 'src', 'hub', 'hub-app.ts'), 'utf8');
+
+  it('the link and the pill share askOnReviewItem, which re-reads the queue after a landed write', () => {
+    expect(src).toMatch(
+      /onAskOnItem: \(item, phrase, question\) => askOnReviewItem\(item, phrase, question\)/,
+    );
+    expect(src).toMatch(
+      /onQuestionOnItem: \(item, question\) => askOnReviewItem\(item, null, question\)/,
+    );
+    expect(src).toMatch(
+      /async function sendReviewItemQuestion[\s\S]{0,1800}showToast\(askedToast\('Asked', askedBy\)\);[\s\S]{0,400}await loadReviewItems\(\);\s*return true;/,
+    );
+    // The panel's card goes through the same POST.
+    expect(src).toMatch(
+      /onAskOnPanelItem: \(t, item, question\) => askOnPanelItem\(t, item, question\)/,
+    );
+    expect(src).toMatch(
+      /async function askOnPanelItem[\s\S]{0,600}sendReviewItemQuestion\(reqSpec/,
+    );
+  });
+
+  it('the hold is gone: no walkHold, no holdWaitingItem, no waiting copy of the item', () => {
+    expect(src).not.toMatch(/walkHold/);
+    expect(src).not.toMatch(/holdWaitingItem/);
+    expect(src).not.toMatch(/waiting: \{ question/);
   });
 });
 
