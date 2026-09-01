@@ -25,6 +25,7 @@ import { workspaceIdFromPath } from './doc-path.ts';
 import { EditWash, createEditAttribution } from './edit-wash.ts';
 import { resolveDocLink, safeLinkHref } from './link-open.ts';
 import { MermaidCodeBlock } from './mermaid-code-block.ts';
+import { PlanPlaceholder } from './plan-placeholder.ts';
 import { SuggestionChips } from './redline/suggestion-chips.ts';
 import type { InlineThreadCard } from './review-surface.ts';
 import { SuggestInput } from './suggest-input.ts';
@@ -168,6 +169,10 @@ export function createEditor(opts: CreateEditorOpts): EditorHandle {
       // never written into the fragment. In the base list because every
       // prose surface may hold a task link (meeting notes are the driver).
       TaskLinkChips,
+      // "Type or say what problem you'd like to solve…" on an unwritten
+      // plan doc — render-time only, self-gating on the doc's own meta, so
+      // it costs nothing on every other surface.
+      PlanPlaceholder.configure({ ydoc: opts.ydoc }),
       ...(attribution ? [EditWash.configure({ authorOf: attribution.authorOf })] : []),
       ...(opts.extraExtensions ?? []),
     ],
