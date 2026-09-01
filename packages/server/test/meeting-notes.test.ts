@@ -1830,3 +1830,25 @@ describe('a late speaker correction reaches notes already written', () => {
     expect(inputs[1]?.tick.turns[0]).toMatchObject({ turn: 0, speakerLabel: 'C' });
   });
 });
+
+describe('session start', () => {
+  const ids = { docId: 'doc-lifecycle', meetingId: 'm-lifecycle' };
+
+  it('announces the session before any tick can fire', async () => {
+    const starts: Array<{ docId: string; meetingId: string }> = [];
+    const session = beginNotesSession(
+      {
+        composer: createStubNotesComposer(),
+        quietMs: 1000,
+        schedule: new ManualScheduler(),
+        onNotes: () => {},
+        onSessionStart: (s) => starts.push(s),
+      },
+      ids,
+    );
+    // Synchronous, at construction — the release it triggers must be done
+    // before the first compose reads the ledger.
+    expect(starts).toEqual([{ docId: ids.docId, meetingId: ids.meetingId }]);
+    await session.end();
+  });
+});
