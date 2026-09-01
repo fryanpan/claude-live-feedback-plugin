@@ -15,7 +15,7 @@ Goals describe **real-world outcomes** and say what is in scope. Ambitious, spec
 
 **Ask the primary user questions until the goal is falsifiable.** A goal you wrote alone, that nobody can tell you has been met, will quietly rank everything below it wrong for a week. That is a review item, not a chat message.
 
-**A goal starts in triage, and stays there until somebody agrees to it.** A band in `triage` is not ready to work on: nothing under it reaches `next_tasks` or the ready nudge, and the stall check does not judge its rows. `task_transition(taskId: <goal id>, to: "todo")` releases the band; the same call with `to: "triage"` holds it again when a goal turns out not to be agreed. The board's goal panel offers the same states.
+**A goal starts in triage, and stays there until somebody agrees to it.** A band in `triage` is not ready to work on: nothing under it reaches `next_tasks` or the ready nudge, and the stall check does not judge its rows. `task_transition(taskId: <goal id>, to: "todo")` releases the band; the same call with `to: "triage"` holds it again when a goal turns out not to be agreed. The board's goal panel offers the same states. Triage is for goals and rows nobody has agreed to yet — never a holding pen for a row that is waiting on the primary user; that row stays `in-progress` with a review item (the general skill says how).
 
 ## 2. Make every task clear, and ranked
 
