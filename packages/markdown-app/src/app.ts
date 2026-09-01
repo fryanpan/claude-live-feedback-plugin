@@ -414,7 +414,21 @@ async function mountMarkdown(ctx: MountContext): Promise<void> {
   // branch, or a companion doc under `navDocId`, is not a plan a person
   // approves.
   if (ctx.docType === 'markdown' && ctx.navDocId === undefined) {
-    const planGate = mountPlanGate({ docId, root: editorMount, user, canWrite });
+    const planGate = mountPlanGate({
+      docId,
+      root: editorMount,
+      user,
+      canWrite,
+      // `setPlanState` writes planState into this same map on the server, so
+      // observing it is how the float hears that the plan landed — no event
+      // stream carries that transition. Any meta change re-reads; the read is
+      // one small GET and the map changes rarely.
+      watchDocMeta: (onChange) => {
+        const meta = ydoc.getMap('meta');
+        meta.observe(onChange);
+        return () => meta.unobserve(onChange);
+      },
+    });
     scope.onCleanup(() => planGate.destroy());
   }
 
