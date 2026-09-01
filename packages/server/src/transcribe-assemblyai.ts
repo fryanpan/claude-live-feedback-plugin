@@ -59,6 +59,25 @@ const STREAM_URL = 'wss://streaming.assemblyai.com/v3/ws';
 export const KEYCHAIN_SERVICE = 'assemblyai-api-key';
 export const ENV_VAR = 'ASSEMBLYAI_API_KEY';
 
+/**
+ * THE PRO VARIANT (https://assemblyai.com/docs/api-reference/streaming-api/streaming-api,
+ * read 2026-09-01): the same v3 socket, with `speech_model` on the URL
+ * selecting `universal-3-5-pro`. Two contract differences, both handled by
+ * the variant seam below rather than a second adapter:
+ *
+ *  - `format_turns` is Universal Streaming (English and Multilingual) ONLY.
+ *    On the pro model `turn_is_formatted` merely mirrors `end_of_turn`, so a
+ *    settled turn is `end_of_turn` alone — waiting for a formatted second
+ *    final that never differs would be waiting on a mirror.
+ *  - `continuous_partials` (pro only) emits cumulative whole-turn revisions
+ *    at a ~3s cadence during long turns, as ordinary `end_of_turn: false`
+ *    Turn frames — exactly the revise-in-place shape the seam already
+ *    carries. Sent explicitly because the server turns it OFF by default
+ *    when `speaker_labels` is on, and a conversation is precisely where a
+ *    long turn going silent on screen reads as a dead microphone.
+ */
+export const PRO_SPEECH_MODEL = 'universal-3-5-pro';
+
 /** The encoding `MEETING_AUDIO_ENCODING` promises, spelled AssemblyAI's way. */
 const ENCODING = 'pcm_s16le';
 
@@ -215,15 +234,25 @@ export function streamingUrl(
   sampleRate: number,
   detectSpeakers: boolean,
   maxSpeakers?: number,
+  speechModel?: string,
 ): string {
   const params = new URLSearchParams({
     sample_rate: String(sampleRate),
     encoding: ENCODING,
+  });
+  if (speechModel === undefined) {
     // The punctuated final. Without it every turn settles as lowercase,
     // unpunctuated text, and the transcript a notes agent reads later is the
-    // rough draft rather than the sentence.
-    format_turns: 'true',
-  });
+    // rough draft rather than the sentence. Universal Streaming only — on the
+    // pro model the parameter is inert and the flag it governs is a mirror
+    // (see PRO_SPEECH_MODEL), so it is not sent there.
+    params.set('format_turns', 'true');
+  } else {
+    params.set('speech_model', speechModel);
+    // Explicit, not defaulted: the server drops this to `false` on its own
+    // when speaker labels are on, and the ~3s cadence is wanted in every mode.
+    params.set('continuous_partials', 'true');
+  }
   // Who said it. Priced per session hour on top of the base rate (see the
   // header); without it every turn reads as one voice, which is the right
   // answer when there IS one voice.
@@ -309,6 +338,28 @@ function timer(ms: number, fn: () => void): () => void {
  * separate enabled flag exists to disagree with the key.
  */
 export function createAssemblyAiEngine(opts: AssemblyAiOptions = {}): TranscriptionEngine | null {
+  return buildEngine(opts, { name: 'assemblyai' });
+}
+
+/**
+ * The same engine on `universal-3-5-pro` — same socket, same key, same
+ * account; the differences are the URL and how a turn settles (see
+ * PRO_SPEECH_MODEL). A separate engine rather than a flag on the first so
+ * the chooser can offer both and a meeting record names which one ran.
+ */
+export function createAssemblyAiProEngine(
+  opts: AssemblyAiOptions = {},
+): TranscriptionEngine | null {
+  return buildEngine(opts, { name: 'assemblyai-pro', speechModel: PRO_SPEECH_MODEL });
+}
+
+interface EngineVariant {
+  name: string;
+  /** Absent means the account default the original engine has always run on. */
+  speechModel?: string;
+}
+
+function buildEngine(opts: AssemblyAiOptions, variant: EngineVariant): TranscriptionEngine | null {
   const key = resolveAssemblyAiKey(
     opts.apiKey,
     opts.env ?? process.env,
@@ -322,8 +373,14 @@ export function createAssemblyAiEngine(opts: AssemblyAiOptions = {}): Transcript
   const rolloverMarginMs = opts.rolloverMarginMs ?? ROLLOVER_MARGIN_MS;
   const schedule = opts.schedule ?? timer;
 
+  // How a turn settles is the one behavioural difference between the models:
+  // with `format_turns` on, the formatted final supersedes the unformatted
+  // one at the same `turn_order`; on the pro model there is no formatting
+  // pass and `end_of_turn` alone is the settled turn.
+  const requiresFormattedFinal = variant.speechModel === undefined;
+
   return {
-    name: 'assemblyai',
+    name: variant.name,
     open(sessionOpts: TranscriptionOpenOpts): Promise<TranscriptionSession> {
       return new Promise<TranscriptionSession>((resolve, reject) => {
         /**
@@ -408,7 +465,7 @@ export function createAssemblyAiEngine(opts: AssemblyAiOptions = {}): Transcript
               if (begun) return;
               leg.done = true;
               leg.socket.close();
-              rejectLeg(new Error('assemblyai: no Begin within the connect timeout'));
+              rejectLeg(new Error(`${variant.name}: no Begin within the connect timeout`));
             });
             const emit = (order: number, text: string, speaker: { speaker?: string }): void => {
               sessionOpts.onTurn({ turn: idFor(leg, order), text, final: true, ...speaker });
@@ -418,6 +475,7 @@ export function createAssemblyAiEngine(opts: AssemblyAiOptions = {}): Transcript
                 sessionOpts.sampleRate,
                 sessionOpts.detectSpeakers,
                 sessionOpts.maxSpeakers,
+                variant.speechModel,
               ),
               // No `Bearer` prefix — the key is the whole header value.
               headers: { Authorization: key },
@@ -447,8 +505,11 @@ export function createAssemblyAiEngine(opts: AssemblyAiOptions = {}): Transcript
                   if (typeof order !== 'number' || typeof transcript !== 'string') return;
                   // Both flags, for the reason at the top of this file: with
                   // `format_turns` on the unformatted final arrives first and
-                  // is superseded.
-                  const final = msg.end_of_turn === true && msg.turn_is_formatted === true;
+                  // is superseded. On the pro model there is no formatted
+                  // second final coming, so `end_of_turn` alone settles it.
+                  const final =
+                    msg.end_of_turn === true &&
+                    (!requiresFormattedFinal || msg.turn_is_formatted === true);
                   const speaker = speakerFromLabel(msg.speaker_label);
                   if (final) leg.settled.set(order, { text: transcript, ...speaker });
                   const audioEndMs = audioEndMsFromTurn(msg);
@@ -503,26 +564,26 @@ export function createAssemblyAiEngine(opts: AssemblyAiOptions = {}): Transcript
                 }
                 if (msg.type === 'Error') {
                   const detail = typeof msg.error === 'string' ? msg.error : 'engine error';
-                  sessionOpts.onError(`assemblyai: ${detail}`);
+                  sessionOpts.onError(`${variant.name}: ${detail}`);
                 }
               },
               onError: (message) => {
                 if (!begun) {
                   leg.done = true;
                   cancelConnect();
-                  rejectLeg(new Error(`assemblyai: ${message}`));
+                  rejectLeg(new Error(`${variant.name}: ${message}`));
                   return;
                 }
                 // A leg that is no longer carrying audio has been asked to go
                 // away; its complaints on the way out are not the meeting's.
-                if (leg === active) sessionOpts.onError(`assemblyai: ${message}`);
+                if (leg === active) sessionOpts.onError(`${variant.name}: ${message}`);
               },
               onClose: () => {
                 if (!begun) {
                   cancelConnect();
                   if (!leg.done) {
                     leg.done = true;
-                    rejectLeg(new Error('assemblyai: socket closed before the session began'));
+                    rejectLeg(new Error(`${variant.name}: socket closed before the session began`));
                   }
                   return;
                 }
@@ -531,7 +592,7 @@ export function createAssemblyAiEngine(opts: AssemblyAiOptions = {}): Transcript
                 // reported as a failure. A retired leg is never the meeting.
                 if (!leg.done && !leg.terminating && leg === active) {
                   leg.done = true;
-                  sessionOpts.onError('assemblyai: session closed unexpectedly');
+                  sessionOpts.onError(`${variant.name}: session closed unexpectedly`);
                 }
                 leg.done = true;
                 if (leg === active) finishClose();
@@ -573,7 +634,7 @@ export function createAssemblyAiEngine(opts: AssemblyAiOptions = {}): Transcript
             (err) => {
               // Not fatal yet: the old session is still carrying audio and
               // still has the margin left to run in. Try again inside it.
-              console.error('[assemblyai] session rollover failed, retrying:', err);
+              console.error(`[${variant.name}] session rollover failed, retrying:`, err);
               armRetry(old);
             },
           );
