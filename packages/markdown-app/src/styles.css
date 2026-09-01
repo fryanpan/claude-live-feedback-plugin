@@ -9423,6 +9423,29 @@ body.composer-open #editor > .ProseMirror ::selection {
   transform: translateX(-50%) translateY(12px);
   pointer-events: none;
 }
+/* The toast's one optional button — Undo, after a spin-off wrote a row to
+   somebody's board. 44px of touch target inside a 40px pill: the padding is
+   generous rather than the box tall, so the toast keeps its shape while the
+   tappable area does not shrink on the phone tier. */
+#toast .toast-action {
+  margin-left: 14px;
+  padding: 6px 10px;
+  border: 0;
+  border-radius: 99px;
+  background: rgba(255, 255, 255, 0.16);
+  color: #fff;
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+  min-height: 32px;
+}
+#toast .toast-action:hover {
+  background: rgba(255, 255, 255, 0.26);
+}
+#toast .toast-action:focus-visible {
+  outline: 2px solid #fff;
+  outline-offset: 2px;
+}
 
 /* ================= CONNECTION STATE =================
    The board's "we're reconnecting" strip. Next to the stale-client notice

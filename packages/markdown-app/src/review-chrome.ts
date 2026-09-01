@@ -243,7 +243,7 @@ export interface ReviewChrome {
   mobile: MobileReview;
   openThreadView: (id: string) => void;
   closeThreadView: () => void;
-  openComposer: () => void;
+  openComposer: (prefill?: string) => void;
   hideComposer: () => void;
   renderDocLabel: () => void;
   /** Tear down the chrome for this document: signal-bound listeners are
@@ -878,7 +878,13 @@ export function mountReviewChrome(opts: ChromeOpts): ReviewChrome {
    *  (timeout, dropped response) doesn't get posted twice on retry either. */
   let composerRequestId: string | null = null;
 
-  function openComposer(): void {
+  /**
+   * `prefill` seeds the box with words the person can edit or clear before
+   * sending. It is a starting point, never a send: the spin-off menu's
+   * "Answer a question" used to POST a fixed sentence nobody typed, which put
+   * words in a person's mouth over one tap.
+   */
+  function openComposer(prefill?: string): void {
     const use = opts.getSelection();
     if (!use) {
       showToast(opts.selectHint);
@@ -893,8 +899,8 @@ export function mountReviewChrome(opts: ChromeOpts): ReviewChrome {
     composerScrim.classList.remove('hidden');
     document.body.classList.add('composer-open');
     opts.hidePill?.();
-    composerText.value = '';
-    // Emptying the box in code is invisible to the editor, so it has to be
+    composerText.value = prefill ?? '';
+    // Setting the box in code is invisible to the editor, so it has to be
     // told — otherwise the previous comment is still sitting in the box the
     // reviewer just opened for a new one.
     refreshComposer();
@@ -1344,14 +1350,44 @@ export function el<T extends HTMLElement>(id: string): T {
   return e as T;
 }
 
+/** One thing a toast can offer to do — in practice, Undo. */
+export interface ToastAction {
+  label: string;
+  onAction: () => void;
+}
+
 let toastTimer: ReturnType<typeof setTimeout> | null = null;
-export function showToast(msg: string): void {
+/**
+ * A toast, optionally carrying one button.
+ *
+ * The button exists so that an action which wrote to somebody else's board
+ * can be taken back from where it was taken: spinning a line off creates a
+ * row, and the only way to un-create it used to be to go and find it. An
+ * offer nobody can reach in time is not an offer, so a toast with an action
+ * stays up appreciably longer than a bare one.
+ */
+export function showToast(msg: string, action?: ToastAction): void {
   const t = document.getElementById('toast');
   if (!t) return;
-  t.textContent = msg;
+  // Wholesale, never "update the words in place": whatever the last toast
+  // left here goes, button included. A surviving Undo is an offer to
+  // archive a row the person has since stopped looking at.
+  t.replaceChildren(msg);
+  if (action) {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'toast-action';
+    btn.textContent = action.label;
+    btn.addEventListener('click', () => {
+      if (toastTimer) clearTimeout(toastTimer);
+      t.classList.add('hidden');
+      action.onAction();
+    });
+    t.append(btn);
+  }
   t.classList.remove('hidden');
   if (toastTimer) clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => t.classList.add('hidden'), 2400);
+  toastTimer = setTimeout(() => t.classList.add('hidden'), action ? 7000 : 2400);
 }
 
 export function makeBtn(label: string, onClick: () => void, primary = false): HTMLButtonElement {

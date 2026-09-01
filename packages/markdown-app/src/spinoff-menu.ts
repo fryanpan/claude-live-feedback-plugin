@@ -41,7 +41,12 @@ export interface SpinoffAnchor {
 }
 
 /** Which of the five. `comment` is the old behaviour, kept as a row. */
-export type SpinoffId = 'task' | 'start' | 'research' | 'question' | 'comment';
+export type SpinoffId = SpinoffTaskId | 'question' | 'comment';
+
+/** The three that put a ROW on the board. Its own type because the caller
+ *  that writes the link back into the prose only ever handles these, and
+ *  saying so in the signature is cheaper than a guard it can forget. */
+export type SpinoffTaskId = 'task' | 'start' | 'research';
 
 export interface SpinoffAction {
   id: SpinoffId;
@@ -98,6 +103,37 @@ export function clipTitle(text: string, limit = TITLE_MAX): string {
 }
 
 /**
+ * A row's title, from the words somebody selected.
+ *
+ * The selection is a line of talk, and a line of talk is not a title. What
+ * shipped first was `clipTitle(quote)` — the raw selection, verbatim — which
+ * put rows on the board called "## Cloudflare" and "- so we should check
+ * whether Access covers the mockup route,". Three things are wrong there and
+ * each is fixed below:
+ *
+ * - **The markdown marker is structure, not words.** A heading's `##` and a
+ *   bullet's `-` describe where the line sits in the doc; neither is part of
+ *   what the line says, and neither belongs in a title on a board that has no
+ *   headings.
+ * - **A paragraph is not a title.** When the selection runs to several
+ *   sentences the first one is the subject and the rest is elaboration, which
+ *   belongs in the body (`spinoffBody` already quotes the whole thing). The
+ *   `{12,}` floor keeps an abbreviation's full stop — "Mr. Smith", "e.g." —
+ *   from being read as the end of the sentence and leaving a two-word title.
+ * - **Trailing punctuation is a seam, not a word.** A line clipped mid-clause
+ *   ends on a comma; a title never should. `?` and `!` are the exception and
+ *   stay: they are the last word of the sentence rather than a join between
+ *   two, and "Research: Does Access cover the mockup route" asks nothing.
+ */
+export function deriveTaskTitle(quote: string, limit = TITLE_MAX): string {
+  const flat = quote.trim().replace(/\s+/g, ' ');
+  const bare = flat.replace(/^(?:#{1,6}\s+|>\s+|[-*+]\s+|\d+[.)]\s+)+/, '');
+  const firstSentence = bare.match(/^(.{12,}?[.!?])(?:\s|$)/)?.[1] ?? bare;
+  const tidy = firstSentence.replace(/[\s,;:.…\-–—]+$/, '');
+  return clipTitle(tidy, limit) || clipTitle(flat, limit);
+}
+
+/**
  * The link a spun-off task is written back into the prose as.
  *
  * Root-relative on purpose, and byte-identical to the server's
@@ -130,11 +166,10 @@ export function boardIdFor(meta: {
   return meta.backTo?.workspaceId?.trim() || meta.workspaceId?.trim() || '';
 }
 
-/** What the agent is asked, when somebody taps "Answer a question" on a line.
- *  Fixed text: the gesture is one tap, and the question IS the line — which
- *  the thread's anchor carries, quoted, with no retyping. */
-export const SPINOFF_QUESTION_TEXT =
-  'Can you answer this? It came up in the discussion and nobody here knew.';
+/** The composer's starting words when somebody taps "Answer a question" — a
+ *  PREFILL the person edits or clears, never a posted sentence. The line
+ *  itself rides along as the thread's anchor, so only the ask needs typing. */
+export const SPINOFF_QUESTION_PREFILL = 'Can you answer this? ';
 
 export interface SpinoffDeps {
   docId: string;
@@ -160,6 +195,10 @@ export interface SpinoffResult {
   action: SpinoffId;
   /** Present when the action created a task. */
   taskId?: string;
+  /** The row's title as the board now holds it — so the toast can name what
+   *  was made rather than saying "Task created" about nothing in particular,
+   *  and so the person can tell whether the title came out sane. */
+  title?: string;
   /** The href to write over the selection, when there is one. */
   href?: string;
   /** Present when the action opened a thread. */
@@ -193,26 +232,19 @@ export async function runSpinoff(
   action: SpinoffId,
   deps: SpinoffDeps,
 ): Promise<SpinoffResult | null> {
-  if (action === 'comment') return { action };
-
-  if (action === 'question') {
-    // A plain anchored thread, NOT a `review` payload. A review item is
-    // addressed to a person's Home queue; this asks the agent watching the
-    // doc, and the mechanism for that is the `thread.created` event a plain
-    // thread already fires.
-    const res = (await post(deps, `/api/docs/${encodeURIComponent(deps.docId)}/threads`, {
-      author: deps.user,
-      text: SPINOFF_QUESTION_TEXT,
-      anchor: deps.anchor,
-    })) as { thread?: { id?: string } };
-    const threadId = res?.thread?.id;
-    return threadId === undefined ? null : { action, threadId };
-  }
+  // Both open the caller's composer rather than posting anything. `question`
+  // used to POST a fixed sentence — "Can you answer this? …" — the moment the
+  // row was tapped, so a thread appeared under someone's name containing
+  // words they had never written. One tap is not consent to be quoted. The
+  // question still reaches the agent watching the doc the same way it always
+  // did, over the `thread.created` a posted comment fires; the difference is
+  // that a person writes it.
+  if (action === 'comment' || action === 'question') return { action };
 
   const title =
     action === 'research'
-      ? `Research: ${clipTitle(deps.quote, TITLE_MAX - 10)}`
-      : clipTitle(deps.quote);
+      ? `Research: ${deriveTaskTitle(deps.quote, TITLE_MAX - 10)}`
+      : deriveTaskTitle(deps.quote);
   const res = (await post(deps, `/api/workspaces/${encodeURIComponent(deps.workspaceId)}/tasks`, {
     title,
     body: spinoffBody(deps.quote, deps.docTitle),
@@ -228,7 +260,7 @@ export async function runSpinoff(
   })) as { task?: { id?: string } };
   const taskId = res?.task?.id;
   if (taskId === undefined) return null;
-  return { action, taskId, href: taskLinkHref(deps.workspaceId, taskId) };
+  return { action, taskId, title, href: taskLinkHref(deps.workspaceId, taskId) };
 }
 
 export interface SpinoffMenuOpts {

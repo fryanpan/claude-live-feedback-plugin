@@ -55,10 +55,11 @@ import {
 } from './signin/write-gate.ts';
 import { mountSpeakerReassign } from './speaker-reassign-menu.ts';
 import { loadDocSpeakers, loadDocVoices, postSpeakerName } from './speaker-voices.ts';
+import { linkSpinoffRange, unlinkSpinoffHref } from './spinoff-link.ts';
 import {
-  type SpinoffId,
+  SPINOFF_QUESTION_PREFILL,
+  type SpinoffTaskId,
   boardIdFor,
-  clipTitle,
   mountSpinoffMenu,
   runSpinoff,
 } from './spinoff-menu.ts';
@@ -192,6 +193,14 @@ async function mountMarkdown(ctx: MountContext): Promise<void> {
   const editorMount = el<HTMLElement>('editor');
   const composer = el<HTMLElement>('composer');
   const commentPill = el<HTMLButtonElement>('comment-pill');
+  // The pill's markup says "Add comment" because that is all it ever did. On
+  // a huddle doc it now opens five actions, only one of which is a comment,
+  // so the label would send a screen-reader user somewhere the menu doesn't
+  // go. Named for what it opens, not for the row it used to be.
+  if (ctx.huddle === true) {
+    commentPill.setAttribute('aria-label', 'Turn this line into work');
+    commentPill.title = 'Turn this line into work';
+  }
   const formatBar = el<HTMLElement>('format-bar');
   const toggleFormat = el<HTMLButtonElement>('toggle-format');
   const toggleEditMode = el<HTMLButtonElement>('toggle-edit-mode');
@@ -716,8 +725,14 @@ async function mountMarkdown(ctx: MountContext): Promise<void> {
       onPick: (action) => {
         spinoff = null;
         hidePill();
+        // Both of these are the person's own words, so both open the
+        // composer and post nothing until they send it.
         if (action === 'comment') {
           reviewChrome.openComposer();
+          return;
+        }
+        if (action === 'question') {
+          reviewChrome.openComposer(SPINOFF_QUESTION_PREFILL);
           return;
         }
         void takeSpinoff(action, sel, range);
@@ -726,7 +741,7 @@ async function mountMarkdown(ctx: MountContext): Promise<void> {
   }
 
   async function takeSpinoff(
-    action: SpinoffId,
+    action: SpinoffTaskId,
     sel: ChromeSelection,
     range: { from: number; to: number } | null,
   ): Promise<void> {
@@ -767,45 +782,47 @@ async function mountMarkdown(ctx: MountContext): Promise<void> {
         showToast("That didn't go through — try again.");
         return;
       }
-      if (made.action === 'question') {
-        showToast('Asked — the agent watching this doc will answer here.');
-        return;
-      }
-      // The task's link goes in AFTER the line, not over it: the words stay
-      // the words somebody said, and `task-link-chips.ts` decorates the link
-      // with the row's live status the moment it lands.
+      // The selected words BECOME the task's link — nothing is written into
+      // the doc. `task-link-chips.ts` hangs the row's live status beside
+      // them, so the line reads as itself with a status on the end.
       if (made.href !== undefined && range) {
-        insertTaskLink(range.to, clipTitle(sel.snippet), made.href);
+        linkSpinoffRange(editor.editor, range, made.href);
       }
-      showToast(made.action === 'start' ? 'Task created — top of the queue.' : 'Task created.');
+      const named = made.title ? `“${made.title}”` : 'Task';
+      const { taskId, href } = made;
+      showToast(
+        made.action === 'start' ? `${named} — top of the queue.` : `${named} — added to the board.`,
+        taskId !== undefined
+          ? { label: 'Undo', onAction: () => void undoSpinoff(taskId, href) }
+          : undefined,
+      );
     } catch (err) {
       showToast(err instanceof Error ? err.message : "That didn't go through.");
     }
   }
 
   /**
-   * ` <title>` carrying a link mark, dropped at the end of the LINE the
-   * selection sits on — not at the end of the selection.
+   * Take a spin-off back: archive the row, and un-link the words.
    *
-   * The two are the same thing only when somebody selected a whole sentence.
-   * Selecting a phrase and landing the link at `range.to` put it inside a
-   * word: "Check whether Cloudflare Acces [link]s covers the mockup route"
-   * — the word "Access" split around a link. The mock anchors the spin-off
-   * on the doc line, and shows the link after the line's own words.
-   *
-   * `$pos.end()` is the end of the innermost node around the position, which
-   * for a position in prose is the paragraph or list item holding it.
+   * Archive rather than delete — a spun-off row may already have been read,
+   * ranked or replied to in the seconds the toast was up, and this project
+   * does not destroy content to undo a tap. The board stops showing it, and
+   * it is still there to restore.
    */
-  function insertTaskLink(selectionEnd: number, title: string, href: string): void {
-    const at = editor.editor.state.doc.resolve(selectionEnd).end();
-    editor.editor
-      .chain()
-      .focus()
-      .insertContentAt(at, [
-        { type: 'text', text: ' ' },
-        { type: 'text', text: title, marks: [{ type: 'link', attrs: { href } }] },
-      ])
-      .run();
+  async function undoSpinoff(taskId: string, href: string | undefined): Promise<void> {
+    try {
+      const res = await fetch(`/api/tasks/${encodeURIComponent(taskId)}/archive`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ author: user, reason: 'Undone from the doc it was spun off from' }),
+      });
+      if (!res.ok) throw new Error(String(res.status));
+    } catch {
+      showToast("Couldn't undo that — the task is still on the board.");
+      return;
+    }
+    if (href !== undefined) unlinkSpinoffHref(editor.editor, href);
+    showToast('Undone.');
   }
   scope.onCleanup(() => spinoff?.destroy());
 
@@ -1243,7 +1260,7 @@ async function mountMarkdown(ctx: MountContext): Promise<void> {
   // main() already awaited, so the first `setEditable` of this mount is
   // already the right one. There is no window in which the document is live
   // and the answer is outstanding — the mount had the answer before it ran.
-  let editMode: EditMode = initialEditMode(canWrite);
+  let editMode: EditMode = initialEditMode(canWrite, { justStarted: startedHuddleHere });
   applyEditMode(editMode);
   scope.listen(toggleEditMode, 'click', () => {
     // A disabled button fires no click. Kept anyway: `lockDocToReading` is
