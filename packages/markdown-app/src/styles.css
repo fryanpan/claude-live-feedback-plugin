@@ -131,10 +131,23 @@ button {
 
 #shell {
   display: grid;
-  /* topbar, meeting strip, main. The strip's `auto` track is what makes it
-     RESERVE its height under the topbar instead of covering the prose; it
-     costs nothing unmounted — a hidden strip is a zero-height track. */
-  grid-template-rows: 48px auto 1fr;
+  /* topbar, meeting strip, main — each PINNED to its track by the block
+     below, never auto-placed. This comment used to claim "a hidden strip is
+     a zero-height track"; that was aspirational, and only the explicit
+     placement makes it true. A hidden strip is `display: none`, which drops
+     it from the grid's ITEM LIST entirely, so auto-placement slid `#main` up
+     into the strip's `auto` track and left the last track holding nothing.
+     Measured on a short doc with the strip hidden: tracks came out
+     `48px 732px 40px` at 1180x820 and `48px 779px 105px` at 430px wide, with
+     `#main` ending 40px / 105px above the bottom of the window and that band
+     hit-testing to `#shell` instead of the editor. */
+  grid-template-rows: 48px auto minmax(0, 1fr);
+  /* `minmax(0, 1fr)` (not `1fr`) so the last track can shrink below #main's
+     content. `1fr` is `minmax(auto, 1fr)`, whose min is content-driven; it
+     behaves here only because #main sets `overflow: hidden`, which zeroes an
+     item's automatic minimum size. Writing the `0` makes this rule stand on
+     its own rather than depending on a property 300 lines away — the same
+     footgun the column below spells out. */
   /* Pin the single column to the viewport. The implicit column is
      max-content sized, so a long unbreakable topbar label (e.g. a diff
      doc's absolute worktree path) would otherwise push the whole shell
@@ -142,6 +155,26 @@ button {
      #main, one level up. */
   grid-template-columns: minmax(0, 1fr);
   height: 100dvh;
+}
+
+/* The shell's row contract, kept next to the template it refers to rather
+   than scattered across three sections. Explicit placement is what makes the
+   rows independent of how many children are DISPLAYED — the property
+   auto-placement cannot give, because it assigns slots by counting items.
+   It also improves the failure mode for whatever comes next: a future
+   in-flow child that forgets to place itself lands in a visible implicit
+   row 4, which someone notices, instead of silently taking #main's track,
+   which only a measurement finds. #shell's six other children are
+   `position: fixed` / `absolute` and are not grid items at all.
+   Guarded by test/shell-grid-placement.test.ts. */
+#topbar {
+  grid-row: 1;
+}
+#meeting-strip {
+  grid-row: 2;
+}
+#main {
+  grid-row: 3;
 }
 
 /* ================= TOP BAR ================= */
