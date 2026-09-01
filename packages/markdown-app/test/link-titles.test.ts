@@ -14,6 +14,7 @@ import {
   hydrateLinkTitles,
   primeLinkTitle,
   staleTaskLinkStatuses,
+  statusChipEl,
 } from '../src/link-titles.ts';
 
 // happy-dom's page origin — the one origin the renderer may trust.
@@ -275,5 +276,34 @@ describe('hydrateLinkTitles', () => {
     expect(el.querySelector(`a[data-ws-link="/review/bulk-119"]`)?.textContent).toBe(
       'Title /review/bulk-119',
     );
+  });
+});
+
+/**
+ * The chip is a bare word sitting beside a link — "To do", "Done". Sighted
+ * readers get the relationship from its pill shape and the gap before it; a
+ * screen reader reaching it after the link text gets the word alone, with
+ * nothing saying what it is the status OF.
+ */
+describe('statusChipEl', () => {
+  it('says what the word means, not just the word', () => {
+    const chip = statusChipEl('todo');
+    expect(chip.textContent).toBe('To do');
+    expect(chip.getAttribute('aria-label')).toBe('Task: To do');
+  });
+
+  it('carries the label for every status, including one it has no words for', () => {
+    expect(statusChipEl('in-progress').getAttribute('aria-label')).toBe('Task: In progress');
+    expect(statusChipEl('done').getAttribute('aria-label')).toBe('Task: Done');
+    expect(statusChipEl('triage').getAttribute('aria-label')).toBe('Task: Triage');
+    // An unknown status renders raw rather than being swallowed — the label
+    // has to agree with the words, whatever they are.
+    expect(statusChipEl('parked').getAttribute('aria-label')).toBe('Task: parked');
+  });
+
+  it('labels a held draft as the draft it is, matching its words', () => {
+    const chip = statusChipEl('todo', true);
+    expect(chip.textContent).toBe('Draft');
+    expect(chip.getAttribute('aria-label')).toBe('Task: Draft');
   });
 });

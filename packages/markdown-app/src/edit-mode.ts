@@ -68,7 +68,22 @@ export function writeEditModePref(mode: EditMode): void {
  * preference to `view` WITHOUT clearing it: this browser may be signed in
  * again in a minute, and the preference is still what this person likes.
  */
-export function initialEditMode(canWrite: boolean): EditMode {
+export function initialEditMode(canWrite: boolean, opts?: InitialEditModeOpts): EditMode {
   if (!canWrite) return 'view';
+  // A doc somebody just created in order to write in it opens ready to write.
+  // The default is `view` because a review surface reads first — but a huddle
+  // the person started seconds ago is not a surface they arrived at to read,
+  // and it mounted read-only under a placeholder that said "Type or say…",
+  // which is an invitation the page then refused.
+  //
+  // This mount only. Nothing is stored, so the next visit to the same doc is
+  // an ordinary arrival and reads the preference like everywhere else.
+  if (opts?.justStarted) return 'edit';
   return readEditModePref();
+}
+
+export interface InitialEditModeOpts {
+  /** This mount is the one that FOLLOWED the create — the huddle start flag
+   *  was on the address. A later visit to the same doc never sets it. */
+  justStarted?: boolean;
 }
