@@ -39,10 +39,19 @@ function rule(selector: string): string {
   return at?.[2] ?? '';
 }
 
-/** Every mic-bearing module, and the string each one mounts. */
+/**
+ * Every mic-bearing module, and the string each one mounts.
+ *
+ * hub-render.ts used to be here: the board's entry button wore the mic while
+ * it was called "Start a planning huddle". The round-4 entry rework renamed
+ * the two buttons after their OUTCOMES — "Make a plan" (pencil) and "Have a
+ * discussion" (speech) — so neither is a mic any more, and the docked
+ * hold-to-talk control is the only mic the board draws. The negative
+ * assertion below is what keeps that from being a silent regression to an
+ * emoji rather than a decision.
+ */
 const MOUNTS: ReadonlyArray<[string, string]> = [
   ['the board’s docked mic (hub-app.ts)', HUB_APP],
-  ['the huddle button’s mic (hub-render.ts)', HUB_RENDER],
 ];
 
 describe('the mic wears the nav’s icon convention', () => {
@@ -60,7 +69,7 @@ describe('the mic wears the nav’s icon convention', () => {
     expect(ICONS).toMatch(/viewBox="0 0 24 24"/);
   });
 
-  it('is the single source all three mics mount', () => {
+  it('is the single source every mic mounts', () => {
     for (const [where, src] of MOUNTS) {
       expect(src, `${where} does not use MIC_ICON`).toContain('MIC_ICON');
       expect(src, `${where} still imports nothing from icons.ts`).toMatch(
@@ -78,6 +87,13 @@ describe('the mic wears the nav’s icon convention', () => {
       );
       expect(src, `${where} still ships an emoji mic`).not.toMatch(/\u{1F399}|\u{1F3A4}/u);
     }
+    // The board's entry buttons dropped the mic when they were renamed after
+    // their outcomes; what they must never do is grow an emoji one back.
+    expect(HUB_RENDER, 'the board’s entry buttons ship an emoji mic').not.toMatch(
+      /\u{1F399}|\u{1F3A4}/u,
+    );
+    // Control for that negative: the file really is the one drawing them.
+    expect(HUB_RENDER).toMatch(/hub-huddle-start/);
   });
 
   /**

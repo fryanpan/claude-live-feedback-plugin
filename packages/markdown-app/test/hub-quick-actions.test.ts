@@ -322,7 +322,9 @@ describe('hub-app wires the two buttons to the two routes', () => {
 
   it('the two buttons are the same route with different kinds and modes', () => {
     expect(HUB_APP).toContain("onStartHuddle: () => startHuddle('plan', 'solo')");
-    expect(HUB_APP).toContain("onStartConversation: () => startHuddle('discussion', 'conversation')");
+    expect(HUB_APP).toContain(
+      "onStartConversation: () => startHuddle('discussion', 'conversation')",
+    );
   });
 
   it('the c shortcut presses New task now that there is no box to focus', () => {

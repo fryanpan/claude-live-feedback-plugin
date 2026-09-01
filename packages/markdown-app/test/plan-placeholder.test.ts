@@ -45,8 +45,7 @@ const seedGoal = (editor: Editor): void => {
   editor.commands.setContent('<h1>Goal</h1><p></p>');
 };
 
-const placeholder = (el: HTMLElement): HTMLElement | null =>
-  el.querySelector('.plan-placeholder');
+const placeholder = (el: HTMLElement): HTMLElement | null => el.querySelector('.plan-placeholder');
 
 afterEach(() => {
   document.body.innerHTML = '';
