@@ -409,6 +409,18 @@ function buildControl(
     input.max = String(ctl.max);
     input.step = String(ctl.step);
     input.value = String(shown);
+    // How much of the track reads as filled. The mobile tier paints its own
+    // track (it has to, to size the thumb to the mock's 24px) and Chrome
+    // offers no `::-webkit-slider-progress` to fill it, so the percentage
+    // travels as a custom property the track's gradient reads. Desktop keeps
+    // the native control, where this is simply unused.
+    const paintFill = (v: number): void => {
+      const min = ctl.min ?? 0;
+      const max = ctl.max ?? 1;
+      const pct = max === min ? 0 : ((v - min) / (max - min)) * 100;
+      input.style.setProperty('--fill', `${pct}%`);
+    };
+    paintFill(shown);
     // The readout and the dot follow the drag in place; the popover is only
     // re-rendered when the drag settles, so the thumb survives the gesture.
     input.addEventListener('input', () => {
@@ -416,6 +428,7 @@ function buildControl(
       state[ctl.key] = v;
       const nowDefault = isDefaultValue(ctl, v);
       paint(v, nowDefault);
+      paintFill(v);
       row.classList.toggle('is-modified', !nowDefault);
     });
     input.addEventListener('change', commit);

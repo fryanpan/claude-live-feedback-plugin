@@ -179,6 +179,33 @@ describe('the section', () => {
     expect(idle.el.querySelector('.meeting-adv-note.is-stale')).toBeNull();
   });
 
+  it('tracks the slider fill as a percentage, because the mobile track paints itself', () => {
+    // The mobile tier replaces the native control to size the thumb, which
+    // costs the browser's own progress fill; the gradient that replaces it
+    // reads this property. A wrong number here is a track that disagrees
+    // with the thumb sitting on it.
+    const state = defaultAdvancedState('assemblyai');
+    const s = section('assemblyai', { state });
+    const input = s.el.querySelector<HTMLInputElement>(
+      '.meeting-adv-ctl[data-key="vad_threshold"] input[type="range"]',
+    );
+    if (!input) throw new Error('no range input');
+    // vad_threshold runs 0–1 and defaults to 0.4.
+    expect(input.style.getPropertyValue('--fill')).toBe('40%');
+    input.value = '0.75';
+    input.dispatchEvent(new Event('input'));
+    expect(input.style.getPropertyValue('--fill')).toBe('75%');
+
+    // A control whose range does not start at zero still reads off its own
+    // ends, not off the raw value.
+    const silence = s.el.querySelector<HTMLInputElement>(
+      '.meeting-adv-ctl[data-key="min_turn_silence"] input[type="range"]',
+    );
+    if (!silence) throw new Error('no silence input');
+    // 100–2000 ms, default 400 → (400-100)/1900.
+    expect(silence.style.getPropertyValue('--fill')).toBe(`${((400 - 100) / 1900) * 100}%`);
+  });
+
   it('a modified pro preset reads against "engine default", not a claimed number', () => {
     const state = defaultAdvancedState('assemblyai-pro');
     state.mode = 'max_accuracy';
