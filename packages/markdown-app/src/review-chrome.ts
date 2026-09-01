@@ -1103,11 +1103,18 @@ export function mountReviewChrome(opts: ChromeOpts): ReviewChrome {
       title: m.title,
       docId: m.docId,
       labelHint: opts.labelHint,
+      huddle: m.huddle,
     });
     // On mobile the full path eats the topbar — show just the basename
     // truncated to ~32 chars, full path in `title` for tap-and-hold.
     const mobile = window.matchMedia('(max-width: 720px)').matches;
-    docTitleEl.textContent = mobile ? mobileLabel(full) : full;
+    // The huddle pill beside the arrow already says "Huddle", and the title
+    // leads with the same word — "Huddle  Huddle 2026-09-01 14:40" read as a
+    // stutter at 1180px. The crumb's own text drops it; the tab and the
+    // tooltip keep the whole title, and on a phone (pill hidden) the crumb
+    // shows the clock's tail either way.
+    const shown = m.huddle === true ? full.replace(/^Huddle\s+/, '') : full;
+    docTitleEl.textContent = mobile ? mobileLabel(shown) : shown;
     docTitleEl.title = full;
     // The browser tab names the DOC, not the product — otherwise every open
     // review reads the same until it truncates. This is the one place all
@@ -1418,9 +1425,15 @@ export function docLabel(opts: {
   title?: string;
   docId?: string;
   labelHint?: string;
+  huddle?: boolean;
 }): string {
   return (
     (opts.type === 'diff' ? opts.relPath : undefined) ??
+    // A huddle is named by the clock — "Huddle 2026-09-01 14:40" — and its
+    // file is a generated path under the data dir that nobody chose, so the
+    // title is the name and the path is plumbing. Every other file-backed
+    // doc keeps the path: there the file IS what the person opened.
+    (opts.huddle === true ? opts.title : undefined) ??
     opts.labelHint ??
     opts.title ??
     opts.docId ??

@@ -33,6 +33,31 @@ describe('docLabel', () => {
     expect(docLabel({ type: 'markdown', labelHint: 'notes.md', docId: 'shared' })).toBe('notes.md');
   });
 
+  it('names a huddle by its title, never by the generated file behind it', () => {
+    // A huddle's file lives under the data dir at a path nobody chose; the
+    // crumb and the tab both read "d-….md" until this preferred the title.
+    expect(
+      docLabel({
+        type: 'markdown',
+        huddle: true,
+        title: 'Huddle 2026-09-01 14:40',
+        labelHint: '/Volumes/Data/dev/repo/data/huddles/d-huddle1.md',
+        docId: 'd-huddle1',
+      }),
+    ).toBe('Huddle 2026-09-01 14:40');
+  });
+
+  it('still shows a huddle its file while the title has not arrived', () => {
+    expect(
+      docLabel({
+        type: 'markdown',
+        huddle: true,
+        labelHint: '/Volumes/Data/dev/repo/data/huddles/d-huddle1.md',
+        docId: 'd-huddle1',
+      }),
+    ).toBe('/Volumes/Data/dev/repo/data/huddles/d-huddle1.md');
+  });
+
   it('prefers an explicit title when there is no path at all', () => {
     expect(docLabel({ type: 'markdown', title: 'Launch plan', docId: 'd1' })).toBe('Launch plan');
   });

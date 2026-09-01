@@ -775,7 +775,9 @@ export interface Task {
   /** 'human' for work only a person can do, otherwise a named identity —
    *  the agent or person who owns it. Every route that creates a task
    *  resolves this from the caller and REFUSES the generic word (see
-   *  task-owner.ts), so a stored 'agent' is a pre-enforcement row. */
+   *  task-owner.ts), so a stored 'agent' is a pre-enforcement row — or a
+   *  row deliberately filed with NO owner: `assignToLead` on a board with
+   *  no lead, held at triage until somebody is named. */
   assignee: string;
   /**
    * The roster's ONE id for `assignee`, when the roster can place it — an

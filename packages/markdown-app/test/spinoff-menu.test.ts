@@ -58,8 +58,8 @@ function deps(over: Partial<SpinoffDeps> = {}): { deps: SpinoffDeps; calls: Call
         method: init?.method,
         body: JSON.parse(String(init?.body ?? '{}')) as Record<string, unknown>,
       });
-      // The doc GET is the research path's lead lookup — a second call, and
-      // the reason the create is found by method rather than by index.
+      // No path makes a GET any more (the research path's lead lookup moved
+      // to the server); answering one keeps the helper honest if that changes.
       if (init?.method !== 'POST') return Promise.resolve({ leadAgentId: 'Workspaces' });
       return Promise.resolve(
         url.endsWith('/threads') ? { thread: { id: 'th-1' } } : { task: { id: 't-99' } },
@@ -70,7 +70,7 @@ function deps(over: Partial<SpinoffDeps> = {}): { deps: SpinoffDeps; calls: Call
   return { deps: base, calls };
 }
 
-/** The create, found by method — the research path makes a GET first. */
+/** The create, found by method rather than by index. */
 function created(calls: Call[]): Call | undefined {
   return calls.find((c) => c.method === 'POST');
 }
@@ -294,62 +294,38 @@ describe('runSpinoff', () => {
   });
 
   describe('Research and come back', () => {
-    it('belongs to the board’s agent, not to whoever tapped it', async () => {
+    it('is addressed to the board, not to whoever tapped it', async () => {
       // Left unsaid, the create route falls the assignee back to the author —
       // which put "go and find out about this" on the plate of the person who
-      // asked the question (Bryan, 2026-09-01).
+      // asked the question (Bryan, 2026-09-01). The first fix looked the lead
+      // up here and sent it as `assignee`; on a board with no lead that sent
+      // nothing, and the fallback handed the row to the tapper anyway. Now the
+      // row says whose it is — the lead's, or nobody's — and the server holds
+      // that line (task-owner.test.ts).
       const { deps: d, calls } = deps();
       await runSpinoff('research', d);
       const create = created(calls);
-      expect(create?.body.assignee).toBe('Workspaces');
-      expect(create?.body.assigneeKind).toBe('agent');
+      expect(create?.body.assignToLead).toBe(true);
+      expect(create?.body.assignee).toBeUndefined();
+      expect(create?.body.assigneeKind).toBeUndefined();
+      // A research errand is not thin for lacking a name; only the selection
+      // decides triage, the same as every other spin-off.
       expect(create?.body.triage).toBeUndefined();
     });
 
-    it('goes to Triage when no agent can be named, rather than to the tapper', async () => {
-      // A research errand with nobody to run it says what to find out and not
-      // who is finding it out, which is thin in the same way a two-word title
-      // is. Guessing a name would be worse than routing it to be given one.
-      const { deps: d, calls } = deps({
-        fetchJson: (url, init) => {
-          calls.push({
-            url,
-            method: init?.method,
-            body: JSON.parse(String(init?.body ?? '{}')) as Record<string, unknown>,
-          });
-          if (init?.method !== 'POST') return Promise.resolve({});
-          return Promise.resolve({ task: { id: 't-99', status: 'triage' } });
-        },
-      });
+    it('is ONE round trip — the lead is the server’s to resolve', async () => {
+      const { deps: d, calls } = deps();
       await runSpinoff('research', d);
-      const create = calls.find((c) => c.method === 'POST');
-      expect(create?.body.assignee).toBeUndefined();
-      expect(create?.body.triage).toBe(true);
+      expect(calls).toHaveLength(1);
+      expect(calls[0]?.method).toBe('POST');
     });
 
-    it('survives a lead lookup that fails outright', async () => {
-      const { deps: d, calls } = deps({
-        fetchJson: (url, init) => {
-          calls.push({
-            url,
-            method: init?.method,
-            body: JSON.parse(String(init?.body ?? '{}')) as Record<string, unknown>,
-          });
-          if (init?.method !== 'POST') return Promise.reject(new Error('offline'));
-          return Promise.resolve({ task: { id: 't-99' } });
-        },
-      });
-      expect(await runSpinoff('research', d)).not.toBeNull();
-      expect(calls.find((c) => c.method === 'POST')?.body.triage).toBe(true);
-    });
-
-    it('does NOT go looking for a lead on the ordinary create', async () => {
-      // One round trip for a task, two for research. The lookup exists for
-      // the one action whose owner is not the person who tapped it.
+    it('does not address the ordinary create to the board', async () => {
+      // A to-do somebody captures is theirs; only research is the agent's.
       const { deps: d, calls } = deps();
       await runSpinoff('task', d);
       expect(calls).toHaveLength(1);
-      expect(calls[0]?.method).toBe('POST');
+      expect(calls[0]?.body.assignToLead).toBeUndefined();
     });
   });
 

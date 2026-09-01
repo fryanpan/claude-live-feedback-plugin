@@ -28,6 +28,7 @@ import {
   ASSIGNEE_REQUIRED_MESSAGE,
   BAD_ASSIGNEE_KIND_ERROR,
   BAD_ASSIGNEE_KIND_MESSAGE,
+  GENERIC_ASSIGNEE,
   parseAssigneeKind,
   resolveAssignee,
 } from './task-owner.ts';
@@ -292,10 +293,15 @@ export type TaskCreateParse =
  * rewritten before anything trusts it). It serves two purposes and they are
  * not the same: it attributes the create, AND it is the fallback owner when
  * the body names none.
+ *
+ * `board` is the workspace the row is filed on, for the one body that
+ * addresses its owner to the BOARD rather than to a name: `assignToLead:
+ * true` (see the owner block below).
  */
 export function parseTaskCreate(
   raw: unknown,
   author: { id: string; name: string; kind?: string } | undefined,
+  board?: { leadAgentId?: string },
 ): TaskCreateParse {
   const body = (raw ?? {}) as Record<string, unknown>;
   // The ONE way past the blank-title refusal: the caller SAYS the row has no
@@ -336,10 +342,25 @@ export function parseTaskCreate(
   // Nothing enters the board belonging to nobody: an unnamed assignee falls
   // back to the caller's own identity, and a create that still resolves to
   // the generic word is refused rather than filed under it.
-  const owner = resolveAssignee(body.assignee, author);
+  //
+  // The one row that is NOT the caller's to own: `assignToLead: true` says
+  // the errand belongs to whoever leads the board — the huddle's "Research
+  // and come back", which is an agent going away to find something out and
+  // never the person who asked. It goes to the board's lead when there is
+  // one. With no lead it is filed at triage owned by nobody — the generic
+  // value the hub draws as "Unassigned" and no agent's queue matches —
+  // because the author fallback would hand it to the asker, which is the
+  // exact outcome the flag exists to prevent. An explicit `assignee` beside
+  // the flag still wins: a caller that names somebody has said more.
+  const explicit = resolveAssignee(body.assignee, undefined);
+  const toLead = body.assignToLead === true;
+  const lead = toLead ? resolveAssignee(board?.leadAgentId, undefined) : null;
+  const owner =
+    explicit ?? lead ?? (toLead ? GENERIC_ASSIGNEE : resolveAssignee(undefined, author));
   if (!owner) {
     return { ok: false, error: ASSIGNEE_REQUIRED_ERROR, message: ASSIGNEE_REQUIRED_MESSAGE };
   }
+  const vacancy = toLead && owner === GENERIC_ASSIGNEE;
   return {
     ok: true,
     ignoredLinks: links.ignored,
@@ -355,8 +376,9 @@ export function parseTaskCreate(
       // Left undefined when the caller said nothing — the store then derives
       // it from the author, and derives NOTHING when the owner is somebody
       // else. Guessing from the name here is exactly what this field exists
-      // to avoid.
-      assigneeKind: kind.assigneeKind,
+      // to avoid. A row handed to the board's lead is the one case the kind
+      // is known without being said: the lead seat is an agent's.
+      assigneeKind: kind.assigneeKind ?? (explicit === null && lead !== null ? 'agent' : undefined),
       needs: needs.needs,
       options: options.options,
       // Forward undefined untouched: an omitted goal is what routes the task
@@ -365,7 +387,7 @@ export function parseTaskCreate(
       // Only `true` means anything — a caller that says nothing gets the
       // ordinary person-or-agent derivation, and a caller that says `false`
       // is not asserting the row IS ready, it is just not asserting.
-      ...(body.triage === true ? { fileToTriage: true } : {}),
+      ...(body.triage === true || vacancy ? { fileToTriage: true } : {}),
       order: typeof body.order === 'number' ? Number(body.order) : undefined,
       after: Array.isArray(body.after) ? (body.after as string[]) : undefined,
       afterEnforce: Array.isArray(body.afterEnforce) ? (body.afterEnforce as string[]) : undefined,
