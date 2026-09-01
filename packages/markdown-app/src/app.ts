@@ -217,7 +217,6 @@ async function mountMarkdown(ctx: MountContext): Promise<void> {
   // Forward ref, same shape as `chrome`: the zone is created down where the
   // meeting strip mounts (it only exists on docs that can hold a meeting),
   // but the wash extension must be declared at editor construction.
-  // biome-ignore lint/style/useConst: assigned beside the meeting strip mount
   let liveZone: MeetingLiveZone | undefined;
   const editor: EditorHandle = createEditor({
     parent: editorMount,
@@ -374,7 +373,7 @@ async function mountMarkdown(ctx: MountContext): Promise<void> {
     // The provisional zone at the end of the doc: the live transcript, the
     // splitting-off card, and (via the wash extension declared on the editor
     // above) the settle highlight on each freshly written note.
-    liveZone = createMeetingLiveZone({ parent: editorMount });
+    liveZone = createMeetingLiveZone({ parent: editorMount, prose: editor.editor.view.dom });
     const zone = liveZone;
     scope.onCleanup(() => zone.destroy());
     const strip = mountMeetingStrip({
