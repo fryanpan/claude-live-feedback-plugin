@@ -1538,8 +1538,10 @@ export function sourceDocOf(task: HubTask): string | null {
 }
 
 /**
- * The Source-doc field's value: a link to the origin doc, plus the plan-gate
- * and staleness marks when the row carries them.
+ * The Source-doc field's value: a link to the origin doc, plus the plan-hold
+ * mark while the row is a held draft. No staleness mark: a "plan edited since
+ * filed" flag gives the reader nothing to act on (Bryan, 2026-08-31) — the
+ * lead updates the tickets when the plan changes.
  *
  * The visible text starts as the doc id and swaps to the doc's title when
  * the shared link-title cache answers — the same display-only hydration
@@ -1577,13 +1579,6 @@ function sourceDocCell(task: HubTask, docId: string, workspaceId?: string): HTML
     held.className = 'hub-sourcedoc-held';
     held.textContent = 'Draft — held until the plan is approved';
     wrap.append(held);
-  }
-  if (task.possiblyStale !== undefined) {
-    const stale = document.createElement('span');
-    stale.className = 'hub-sourcedoc-stale';
-    stale.textContent = 'plan edited since filed';
-    stale.title = 'The source doc changed after this task was filed — the body may be out of date.';
-    wrap.append(stale);
   }
   return wrap;
 }
@@ -1658,10 +1653,8 @@ export function detailFields(
 
   // Where this row CAME FROM, when it was filed out of a doc — the origin
   // ref, drawn as a link near the top rather than left as a stored fact no
-  // surface shows (the `links` chips' own origin story). The plan-gate and
-  // staleness marks ride on the same cell: they are facts about this row's
-  // relationship to that doc, and a reader deciding what to do with the row
-  // needs all three in one glance.
+  // surface shows (the `links` chips' own origin story). The plan-hold mark
+  // rides on the same cell while the row is a held draft.
   const originDoc = sourceDocOf(task);
   if (originDoc !== null) {
     cell('Source doc', sourceDocCell(task, originDoc, handlers.workspaceId));

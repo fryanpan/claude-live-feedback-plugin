@@ -679,58 +679,14 @@ body.has-set .doc-switcher-caret {
 #editor-pane {
   position: relative; /* anchors the floating diff/file view toggle */
   display: grid;
-  /* format bar, plan gate, document, transcript strip. The auto
-     tracks are what make each strip RESERVE its height instead of covering
-     the prose: the editor keeps the 1fr and shrinks by exactly their height.
-     They cost nothing unmounted — a hidden strip is a zero-height track. */
-  grid-template-rows: auto auto 1fr auto;
+  /* format bar, document, transcript strip. The auto tracks are what make
+     each strip RESERVE its height instead of covering the prose: the editor
+     keeps the 1fr and shrinks by exactly their height. They cost nothing
+     unmounted — a hidden strip is a zero-height track. */
+  grid-template-rows: auto 1fr auto;
   overflow: hidden;
   background: var(--bg);
   border-right: 1px solid var(--border);
-}
-
-/* The plan gate (src/plan-gate.ts): one quiet line between the format bar
-   and the prose — the pending-plan note and the Approve press — rendered
-   ONLY while the doc is a plan whose drafts are held. The derived-work chips
-   strip that used to live here is gone: links written in the prose carry the
-   live status (task-link-chips), so ordinary docs spend no height up top. */
-.plan-gate {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 6px 10px;
-  padding: 6px 12px;
-  border-bottom: 1px solid var(--border);
-  font-size: 13px;
-  background: var(--bg);
-}
-
-.plan-gate[hidden] {
-  display: none;
-}
-
-.plan-gate-label {
-  color: var(--text-secondary, #666);
-  font-weight: 600;
-}
-
-.plan-gate-approve {
-  padding: 4px 10px;
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  background: var(--bg);
-  cursor: pointer;
-  font: inherit;
-  font-weight: 600;
-}
-
-.plan-gate-approve:hover:not(:disabled) {
-  background: var(--bg-hover, rgba(0, 0, 0, 0.04));
-}
-
-.plan-gate-error {
-  color: var(--red, #dc322f);
-  font-size: 12px;
 }
 
 /* ================= WORKSPACE HUB =================
@@ -4155,10 +4111,6 @@ body.hub-body {
 }
 .hub-sourcedoc-held {
   color: var(--fg-muted);
-  font-size: 12px;
-}
-.hub-sourcedoc-stale {
-  color: var(--yellow, #b58900);
   font-size: 12px;
 }
 /* Link chips: what a `url` ref is FOR. Wraps rather than scrolls — the
