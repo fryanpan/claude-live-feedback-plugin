@@ -330,6 +330,24 @@ export interface RoomsConfig {
  * serialized fragment back to the file. First attach seeds from disk
  * if the fragment is empty.
  */
+/**
+ * What a caller can tell an attach that the files cannot.
+ *
+ * `liveWins`: the live doc holds content the file does not — an un-flushed
+ * write-back the index row recorded at shutdown, or the very edit that
+ * triggered this attach — so the at-rest arbitration reasserts the doc
+ * (disk version backed up) instead of asking the clock. Without it a fresh
+ * attach with no bookkeeping compares the file's mtime against the persisted
+ * `.ydoc`'s, and EQUAL goes to disk. The two are routinely written inside one
+ * file-timestamp tick (~4ms on a stock Linux kernel): an evict-flush right after
+ * the bind, a `git worktree add` a few ms before the rebind's persist. Both
+ * reverted a live edit with the file's stale copy — the doc-home-binding and
+ * doc-eviction reds of 2026-08-31/09-01 — and read as a bare timeout.
+ */
+interface AttachOpts {
+  liveWins?: boolean;
+}
+
 interface FileBinding {
   path: string;
   writeTimer?: ReturnType<typeof setTimeout> | null;
@@ -1495,6 +1513,9 @@ export class Rooms {
     // would only make the board fail to come back after a restart.
     const room = this.getOrCreate(docId, undefined, { authority: 'server' });
     const src = room.meta.sourceUrl;
+    // The index row remembers a write-back that had not landed at shutdown:
+    // the doc holds content the file does not, whatever the two mtimes say.
+    const liveWins = this.docIndex.get(docId)?.pendingFileWrite === true;
     // A hub-owned room is never file-bound (§3.3), so a sourceUrl on one
     // can only have arrived from a peer's ydoc write. Refusing to bind
     // here is the second, independent stop behind `guardPrivateMeta` —
@@ -1517,12 +1538,12 @@ export class Rooms {
         );
         return false;
       }
-      this.retargetHomeBinding(room, placement.absPath);
+      this.retargetHomeBinding(room, placement.absPath, { liveWins });
       return this.fileBindings.has(docId);
     }
     if (!src || !existsSync(src)) return false;
     if (contentKind(room.meta.type) === 'prose') {
-      return this.attachFile(docId, src).ok;
+      return this.attachFile(docId, src, { liveWins }).ok;
     }
     if (contentKind(room.meta.type) === 'flat') {
       // Working-tree diff docs have a sourceUrl and re-arm their live
@@ -1535,7 +1556,7 @@ export class Rooms {
         room.meta.type === 'diff' &&
         !room.meta.diffTarget &&
         !(room.meta.relPath ?? '').toLowerCase().endsWith('.md');
-      return this.attachFlatFile(docId, src, { writeBack }).ok;
+      return this.attachFlatFile(docId, src, { writeBack, liveWins }).ok;
     }
     return false;
   }
@@ -3696,6 +3717,7 @@ export class Rooms {
   attachFile(
     docId: string,
     filePath: string,
+    opts: AttachOpts = {},
   ): {
     ok: boolean;
     error?: 'not-found' | 'path-empty' | 'read-failed';
@@ -3779,7 +3801,10 @@ export class Rooms {
             // false conflict (backup + syncError) though disk never moved.
             if (md === prior || diskNormalized === prior) this.scheduleFileWrite(room, binding);
             else this.reconcileFromDisk(room, binding);
-          } else if (prior === undefined && !this.diskNewerThanState(docId, abs)) {
+          } else if (
+            prior === undefined &&
+            (opts.liveWins || !this.diskNewerThanState(docId, abs))
+          ) {
             // Fresh attach with NO bookkeeping (post-restart hydrate) and the
             // .md is OLDER than the persisted .ydoc: the crash happened inside
             // the 800ms write-back window, so the hydrated doc is the newer
@@ -3787,7 +3812,8 @@ export class Rooms {
             // startup (codex P1). Reassert the live doc to disk instead —
             // snapshotting the disk version first, symmetric with the apply
             // branch below (this is the one writer that replaces content the
-            // server never wrote).
+            // server never wrote). `liveWins` reaches the same branch on the
+            // caller's knowledge instead of the clock — see `AttachOpts`.
             this.backupExternalVersion(docId, md);
             binding.lastWritten = md;
             this.scheduleFileWrite(room, binding);
@@ -3858,7 +3884,7 @@ export class Rooms {
   attachFlatFile(
     docId: string,
     filePath: string,
-    opts: { writeBack?: boolean } = {},
+    opts: AttachOpts & { writeBack?: boolean } = {},
   ): { ok: boolean; error?: 'not-found' | 'path-empty' | 'read-failed'; resolvedPath?: string } {
     if (!filePath || filePath.trim() === '') return { ok: false, error: 'path-empty' };
     const room = this.resolveRoom(docId);
@@ -3887,7 +3913,11 @@ export class Rooms {
     // sweep as a live edit.
     let reassertDoc = false;
     if (existsSync(abs) && text !== content.toString()) {
-      if (opts.writeBack && content.length > 0 && !this.diskNewerThanState(docId, abs)) {
+      if (
+        opts.writeBack &&
+        content.length > 0 &&
+        (opts.liveWins || !this.diskNewerThanState(docId, abs))
+      ) {
         this.backupExternalVersion(docId, text);
         reassertDoc = true;
       } else {
@@ -4044,7 +4074,7 @@ export class Rooms {
    * is dropped whole and the attach runs the same mtime arbitration a
    * restart does (losing side backed up, never silently discarded).
    */
-  private retargetHomeBinding(room: DocRoom, absPath: string): void {
+  private retargetHomeBinding(room: DocRoom, absPath: string, opts: AttachOpts = {}): void {
     const docId = room.docId;
     const old = this.fileBindings.get(docId);
     if (old) {
@@ -4057,7 +4087,9 @@ export class Rooms {
     // A branch whose checkout holds no copy yet: the pin (or retarget) IS
     // the export. Write the doc's content first, atomically, so the attach
     // below finds an in-sync file instead of never creating one (attachFile
-    // arms nothing for a missing path).
+    // arms nothing for a missing path). A copy the checkout DOES hold is
+    // arbitrated by the attach — by the caller's knowledge when it has any
+    // (`opts.liveWins`), by mtime otherwise.
     if (!existsSync(absPath)) {
       const md = prose.serializeFragmentToMarkdown(prose.getProseFragment(room.ydoc));
       try {
@@ -4071,7 +4103,7 @@ export class Rooms {
     }
     // attachFile only records sourceUrl when absent; a retarget must repoint.
     room.meta.sourceUrl = absPath;
-    this.attachFile(docId, absPath);
+    this.attachFile(docId, absPath, opts);
     this.saveToDisk(room);
     console.log(`[rooms] ${docId}: home binding now at ${absPath}`);
   }
@@ -4096,13 +4128,15 @@ export class Rooms {
     this.homeRebindAttemptAt.set(room.docId, now);
     const placement = resolveHomeCheckout(home);
     if (!placement.placed) return;
-    // Persist BEFORE attaching: the attach's at-rest arbitration compares
-    // the home's file against the persisted .ydoc (diskNewerThanState), and
-    // when the trigger is the edit itself the .ydoc still holds the
-    // pre-edit state — a freshly checked-out copy would win and revert the
-    // very edit that resumed syncing.
+    // Persist BEFORE attaching so the .ydoc the attach's at-rest arbitration
+    // reads (diskNewerThanState) holds the current state, not the pre-edit
+    // one. When the trigger is the edit itself that arbitration is not
+    // trusted at all: the live doc is the newer side by construction, and
+    // `liveWins` says so instead of letting a clock tie decide (see
+    // `AttachOpts`). A forced rebind (reparse) is the caller declaring disk
+    // the winner, and the reparse that follows reads disk in regardless.
     this.persistRoomNow(room);
-    this.retargetHomeBinding(room, placement.absPath);
+    this.retargetHomeBinding(room, placement.absPath, { liveWins: !opts?.force });
   }
 
   /**
