@@ -106,10 +106,58 @@ does (a 200 on the POST is not delivery; read the verdict). Manual fallback
 when the server is down (run `bun install` yourself after the pull):
 
 ```bash
-git pull --ff-only origin main    # in the PRIMARY checkout — prod's deploy source
+# in PROD'S OWN checkout — see "Where prod lives" below. NOT Bryan's working copy.
+cd ~/Library/Application\ Support/claude-workspaces/repo
+git pull --ff-only origin main
 launchctl kickstart -k gui/$(id -u)/com.fryanpan.claude-workspaces   # NOT ...live-feedback
-cat ~/.local/state/claude-workspaces/client/current/release.json
+cat ~/Library/Application\ Support/claude-workspaces/client/current/release.json
 ```
+
+### Where prod lives — all of it on the boot disk (2026-09-01)
+
+Everything the service needs sits under
+`~/Library/Application Support/claude-workspaces/`: `repo/` (prod's own
+checkout, tracking `origin/main`), `data/` (the `.ydoc` corpus — set by
+`CW_DATA_DIR`), `client/` (releases — set by `CW_CLIENT_ROOT`), and
+`bin/bun`. Dev checkouts and worktrees stay on `/Volumes/Data`.
+
+**TCC attaches per BINARY, not per volume.** The rule is that the executable
+must live on the boot disk and hold Full Disk Access; what it reads afterwards
+follows that grant. A launchd job whose bun is `bin/bun` reads `/Volumes/Data`
+fine — verified by booting a full launchd server with `WorkingDirectory` on
+Data, which built and served normally. Do not write, or repeat, "launchd
+cannot read /Volumes/Data": that claim came from probing with `/bin/cat`,
+which holds no grant, and it is how this section read on the day it was
+written.
+
+- **Prod's deploy source is whatever checkout the plist's `WorkingDirectory`
+  names** — nothing else defines it, because `bin.ts` derives `repoRoot` from
+  its own file location. Moving prod means editing that key.
+- The primary checkout is no longer prod's deploy source, so a mid-edit or
+  unpulled working tree can no longer ship the wrong client. **This, not TCC,
+  is the durable reason the move was worth doing.**
+- **The move reduced the grant dependency; it did not remove it.** Without the
+  grant prod still boots and serves the board — repo, corpus, releases, logs,
+  bun and `~/.ssh` are all boot disk. Three things would still break:
+  the **discovery file** (`~/.local`, `~/.claude` and `~/.bun` are symlinks
+  onto `/Volumes/Data`, so `~/.claude/claude-workspaces/server.json` is a Data
+  path and every MCP client resolves prod through it), **bound docs and
+  folders rooted in Data repos**, and the plugin-cache refresh. Symlinking
+  `~/.claude/claude-workspaces` to boot-disk storage would remove the first —
+  it works under launchd, but it is NOT currently installed. Audit every new
+  `homedir()` path against this.
+- **Whether the grant survives a reboot is OPEN.** Nothing observed on
+  2026-09-01 spanned one (`kern.boottime` was Aug 31 23:20 throughout). A
+  `/bin/cat` probe that *hung* in the morning returned a clean `Operation not
+  permitted` that afternoon — two failure modes on one binary in a single boot
+  session, still **unexplained**. Leading hypothesis, unconfirmed: a TCC write
+  made when the plist change was approved. Do not let this get retold as
+  settled.
+- Diagnosing it: `launchctl submit` a probe **using the same binary the
+  service runs**, and pair it with a positive control on a path you expect to
+  work. A system binary like `/bin/cat` is not a proxy for bun — it will
+  report a block the service does not have, which is exactly the false
+  negative that sent this migration after the wrong bug.
 
 Done when `release.json`'s `sourceRef` matches the commit you shipped AND the
 deploy's `verification` reads `healthy` — a healthy restart over an unpulled
@@ -121,7 +169,9 @@ deploy (`force` accepts the loss); a failed `bun install` refuses the restart
 ## Staging — review a branch before merge
 
 `bun run staging` from a LINKED worktree (it refuses the primary checkout —
-prod's deploy source): :8788, throwaway data dir; prod stays on 8787. Agent:
+the guard is `--git-dir == --git-common-dir`, and it still holds: prod no
+longer deploys from there, but building bundles in the primary working copy
+is its own accident): :8788, throwaway data dir; prod stays on 8787. Agent:
 `FEEDBACK_BASE_URL=http://<host>:8788` at launch; data never migrates to prod.
 
 ## Pre-push leak gate (public repo)

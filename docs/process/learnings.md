@@ -1146,6 +1146,31 @@ kernel-wide socket CREATION failing, and its cause is still unknown.**
   Fix: System Settings → Privacy & Security → Full Disk Access → add the
   binary (e.g. `~/.bun/bin/bun`). Shell-spawned processes inherit
   Terminal's TCC scope and don't hit this — only launchd does.
+- **The grant is per BINARY, and probing with the wrong one sends you after
+  the wrong bug** (2026-09-01). The bullet above is right, and it was still
+  misread as "launchd cannot read `/Volumes/Data`" — a volume-wide claim that
+  a whole prod migration was then justified by. What actually happened: the
+  probe was `launchctl submit` of `/bin/cat`, which holds no grant and duly
+  returned `Operation not permitted`, while the prod bun on the boot disk read
+  the same file fine. A full launchd server with `WorkingDirectory` on
+  `/Volumes/Data` booted, built both bundles and served. **Probe with the same
+  binary the service runs, and pair it with a positive control** — a system
+  binary is not a proxy. The board that day was down because the job was
+  **booted out**, which bootstrapping fixed on its own.
+- **Two failure modes on one binary in one boot session, unexplained.** That
+  morning `/bin/cat` on a Data file *hung* (the `getcwd` wedge above); that
+  afternoon the same call returned a clean `EPERM`. `kern.boottime` was
+  Aug 31 23:20 for both, so no restart explains it. Leading hypothesis,
+  unconfirmed: a TCC write made when the plist change was approved.
+  **Whether a grant survives a reboot is untested** — nothing observed spanned
+  one. Don't let this get retold as settled.
+- **Moving the service to the boot disk reduces the dependency; it does not
+  remove it.** Prod now runs from `~/Library/Application Support/claude-workspaces/`
+  and would boot and serve without the grant. But `~/.local`, `~/.claude` and
+  `~/.bun` are symlinks onto `/Volumes/Data`, so the discovery file every MCP
+  client resolves prod through is still a Data path, as are bound docs in Data
+  repos and the plugin cache. The durable reason to move was decoupling prod
+  from a working checkout the deploy fast-forwards — not TCC.
 - **`launchctl bootstrap gui/$(id -u)` is the modern entry point.**
   `launchctl load/unload` is deprecated on macOS 11+; `kickstart -k` is
   the modern way to force-restart a supervised service.
@@ -3478,3 +3503,92 @@ write-once in practice, and the repair verb for a moved file cannot repair it.
   kern.maxfilesperproc — under a 64 soft limit). Lower the HARD limit
   (`ulimit -n 64`) when building an exhaustion control, and assert the
   exhaustion actually happened, or the control passes vacuously.
+
+## A hand-rolled CSS "parser" that calls the text before `{` a selector disarms itself the day someone writes a comment above the rule
+
+- **The shape.** `packages/markdown-app/test/meeting-advanced-css.test.ts`
+  (shipped in #556) split the stylesheet on `{` and treated the preceding text
+  as the rule's selector. That is right until a comment sits above the rule —
+  then the "selector" is the comment plus the selector, and any **prose comma**
+  inside it splits the string into fragments that match nothing. The
+  assertions keep running, keep passing, and no longer look at the rule they
+  name.
+- **Why it passes instead of throwing: the lookup returned an empty list, and
+  the assertions read empty as "no such rule" rather than "the parser broke".**
+  Both produce the same value and only one is a reason to be quiet — the same
+  trap as *"Empty output is not a 'no'"*. A helper that derives structure
+  should distinguish *found nothing* from *could not look*; a caller that
+  cannot tell them apart will take the reassuring reading every time.
+- **Nothing fails when it breaks.** No test goes red, no build warns, and the
+  diff that disarms it edits a COMMENT — the least-reviewed line in any patch.
+  It was caught in #557 only because its author added a comment above the very
+  rule under test and noticed the assertion stopped biting; a comment added
+  anywhere else in the file would have gone unremarked for as long as the test
+  lived. Fix was to strip comments before parsing.
+- **The general form: a test whose subject is derived by string-munging its own
+  source can lose its subject silently.** Grepping a stylesheet, a bundle or a
+  skill file for a literal is fine — the literal is either there or it is not.
+  Deriving *structure* from that text with a split is not: the derivation has
+  failure modes the assertion cannot see, and its failure mode is always
+  "matches nothing", which reads as green.
+- **The check, and it is cheap: mutate the thing the test claims to guard and
+  watch it go red** — shrink the value, delete the rule, add a comment above
+  it. Same discipline as a positive control on a negative probe (see *"A
+  negative result needs the gate checked"*), and the sibling of *"An assertion
+  whose alternation can match either way pins nothing"* above: that one never
+  bit, this one stopped biting.
+
+## `rsync -a` preserves a symlink's absolute target, so a copied release root can silently resolve back onto the volume you were escaping
+
+- **The trap.** Migrating prod's client releases to the boot disk, `rsync -a`
+  faithfully copied `current` — an absolute symlink into
+  `~/.local/state/claude-workspaces/...`, itself a symlink onto
+  `/Volumes/Data`. The copy looked complete, the server started, the board
+  served. It was serving from the **old volume**, which is precisely what the
+  migration existed to stop. Caught by `readlink`, not by any status check.
+- **Nothing downstream can notice.** A release root that resolves onto the
+  wrong disk is byte-identical in behaviour until that disk becomes
+  unreadable — at which point it fails as an outage rather than as a
+  migration bug, weeks later, with no obvious link back.
+- **After any copy that includes symlinks, resolve the entry points and
+  assert the volume** (`realpath`, then `stat -f %Sd` or `df` on the result).
+  One line, and it is the only thing separating a real migration from a
+  decorated one.
+- **`launchctl bootout` is asynchronous**, so the old pid can still be listed
+  when the next step starts. Verify the corpus *after* the copy rather than
+  trusting an elapsed-time figure — the 3-second downtime number proved
+  nothing about consistency. Measured: two transient bookkeeping files
+  diverged, zero `.ydoc`, 6638 each side.
+- **`--delete` on the final mirror was deliberate, and its absence is a
+  soft-delete violation arriving by way of a backup flag.** Without it, a doc
+  archived since the bulk copy keeps its stale top-level `.ydoc` and
+  **resurrects unarchived**.
+
+## `grep` is line-based, so a phrase your own file wrapped across a line break can never match — and a control borrowed from another file proves nothing
+
+- **Verifying that a false claim had been removed from `CLAUDE.md`, the grep
+  returned 0 and the claim was still there.** The sentence is reflowed across
+  two lines by the file's 80-column wrap, and `grep` matches within a line, so
+  the pattern was structurally incapable of firing. Nothing about the output
+  said so: a "0" from a blind probe and a "0" from a clean file are the same
+  two characters.
+- **The tell was available before the grep ran, and it is the useful part.**
+  The corrected file quotes the false claim on purpose, inside a prohibition —
+  "Do not write, or repeat, `launchd cannot read /Volumes/Data`". So the
+  expected count was never 0. **When a fix works by naming the thing it
+  forbids, absence is the wrong assertion entirely** — a 0 there is proof the
+  probe broke, not that the fix landed.
+- **A positive control has to come from the same file as the negative one.**
+  Checking the same edit a second time, both my controls were phrases that
+  live in the memory note, not in `CLAUDE.md` — so all three greps returned 0
+  and the two that were supposed to reassure me were as blind as the one under
+  test. A control drawn from a different document measures that document.
+- What actually settled it: `grep -n -iE 'launchd|boot disk|TCC' CLAUDE.md` for
+  the *region*, then reading the section. For a multi-line phrase, flatten
+  first (`tr '\n' ' ' | tr -s ' '`) — but flattening only fixes the wrap; it
+  does not give you a control.
+- Same family as "A negative test needs a positive control or it proves
+  nothing" and "A positive control scanning the wrong data is worse than no
+  control". The new half is the mechanism: **prose wrapping silently changes
+  what a line-based tool can see, so the file's own formatting is part of the
+  probe's design.**
