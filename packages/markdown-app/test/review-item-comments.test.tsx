@@ -471,6 +471,44 @@ describe('the walkthrough card: "I have a question" — asking without selecting
     expect(root.querySelector('.hub-walk-thread')).toBeNull();
   });
 
+  it('opening the box puts the caret in it — the link that opened it has left the tab order', async () => {
+    mountWalk(reviewQueue([], [ticketRow()], NOW), walk());
+    // Control: before the tap nothing on the card holds focus.
+    expect(document.activeElement).toBe(document.body);
+    link()?.click();
+    await tick();
+    // The caret is in the box's field — the editor's surface once the editor
+    // has mounted (it has, here), the textarea until then.
+    const form = box()?.querySelector<HTMLFormElement>('.hub-walk-question-form');
+    expect(form).not.toBeNull();
+    expect(document.activeElement).not.toBe(document.body);
+    expect(form?.contains(document.activeElement)).toBe(true);
+  });
+
+  it('Send on an empty box says so instead of doing nothing', async () => {
+    const onQuestionOnItem = vi.fn().mockResolvedValue(true);
+    mountWalk(reviewQueue([], [ticketRow()], NOW), walk({ onQuestionOnItem }));
+    link()?.click();
+    await tick();
+    const form = box()?.querySelector<HTMLFormElement>('.hub-walk-question-form');
+    expect(form).not.toBeNull();
+    expect(form?.querySelector('.hub-form-error')).toBeNull();
+    form?.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+    await tick();
+    expect(onQuestionOnItem).not.toHaveBeenCalled();
+    expect(form?.querySelector('.hub-form-error')?.textContent).toBe('Write a question first');
+    // The note goes the moment the reader starts typing.
+    const ta = form?.querySelector('textarea') as HTMLTextAreaElement;
+    ta.value = 'W';
+    ta.dispatchEvent(new Event('input', { bubbles: true }));
+    expect(form?.querySelector('.hub-form-error')).toBeNull();
+    // Positive control: the same submit with words in the box reaches the handler.
+    ta.value = 'Which build?';
+    form?.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+    await tick();
+    expect(onQuestionOnItem).toHaveBeenCalledTimes(1);
+  });
+
   it('Send asks about the whole item — the question handler, with the item and the words', async () => {
     const onQuestionOnItem = vi.fn().mockResolvedValue(true);
     const onAskOnItem = vi.fn().mockResolvedValue(true);

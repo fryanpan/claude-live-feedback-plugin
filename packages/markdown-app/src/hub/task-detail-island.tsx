@@ -372,6 +372,7 @@ function ReviewCard(props: {
                 submitClass="hub-btn hub-btn-primary"
                 rows={3}
                 emptyMessage="Write a question first"
+                autoFocus
                 keepKey={`question:${task.id}:${item.id}`}
                 onSubmit={(text) => {
                   const sent = handlers.onAskOnPanelItem?.(task, item, text);

@@ -44,7 +44,11 @@ import { signal } from '@preact/signals';
 import { Fragment, render } from 'preact';
 import { type MutableRef, useLayoutEffect, useRef, useState } from 'preact/hooks';
 import { renderCommentMarkdown } from '../comment-markdown.ts';
-import { attachMarkdownComposer, refreshMarkdownComposer } from '../md-composer.ts';
+import {
+  attachMarkdownComposer,
+  focusMarkdownComposer,
+  refreshMarkdownComposer,
+} from '../md-composer.ts';
 import {
   type HubDecisionOption,
   type HubTask,
@@ -59,6 +63,7 @@ import {
   reviewRowTitle,
   revisedPhrase,
 } from './hub-model.ts';
+import { requireText } from './hub-render.ts';
 import { markPhrase, unmarkPhrase } from './review-item-phrase.ts';
 import { useSelectionPill } from './selection-pill.ts';
 
@@ -173,6 +178,11 @@ interface PromptSpec {
    *  card that moves to a different item rebuilds the box rather than handing
    *  the next reader the last one's draft. */
   keepKey: string;
+  /** What to say when Send is pressed on an empty box. Without it an empty
+   *  submit is a silent no-op, which the answer box accepts (its options are
+   *  the main path) and the question box must not: an enabled Send that does
+   *  nothing reads as broken, not as a refusal. */
+  emptyMessage?: string;
   onSubmit: (text: string) => Promise<boolean>;
 }
 
@@ -213,7 +223,11 @@ function fillPromptForm(form: HTMLFormElement, spec: PromptSpec): () => void {
   const onSubmit = (ev: Event): void => {
     ev.preventDefault();
     const text = ta.value.trim();
-    if (!text || busy) return;
+    if (!text) {
+      if (spec.emptyMessage) requireText(ta, submit, spec.emptyMessage);
+      return;
+    }
+    if (busy) return;
     busy = true;
     ta.disabled = true;
     submit.disabled = true;
@@ -270,6 +284,11 @@ function PromptForm(props: {
   submitClass?: string;
   keepKey: string;
   hidden?: boolean;
+  emptyMessage?: string;
+  /** Put the caret in the box as it is built. For a box that appears on a
+   *  tap — the question box — where the control that opened it is gone from
+   *  the tab order the moment it opens. */
+  autoFocus?: boolean;
   formRef?: MutableRef<HTMLFormElement | null>;
   onSubmit: (text: string) => Promise<boolean>;
 }) {
@@ -285,13 +304,21 @@ function PromptForm(props: {
   useLayoutEffect(() => {
     const node = form.current;
     if (!node) return;
-    return fillPromptForm(node, {
+    const teardown = fillPromptForm(node, {
       placeholder: latest.current.placeholder,
       submitLabel: latest.current.submitLabel,
       submitClass: latest.current.submitClass ?? 'hub-btn hub-btn-ink',
       keepKey,
+      ...(latest.current.emptyMessage !== undefined
+        ? { emptyMessage: latest.current.emptyMessage }
+        : {}),
       onSubmit: (text) => latest.current.onSubmit(text),
     });
+    if (latest.current.autoFocus) {
+      const ta = node.querySelector('textarea');
+      if (ta) focusMarkdownComposer(ta);
+    }
+    return teardown;
     // The box's IDENTITY, and nothing else. Any other dependency is a way for
     // a repaint that changed only the clock to rebuild the box the reader is
     // typing in — which is the whole defect this island exists to remove.
@@ -587,6 +614,8 @@ function WalkQuestionBox(props: {
         submitLabel="Send"
         submitClass="hub-btn hub-btn-primary"
         keepKey={`walk-question:${props.item.key}`}
+        emptyMessage="Write a question first"
+        autoFocus
         onSubmit={props.onSend}
       />
       <div class="hub-walk-question-actions">

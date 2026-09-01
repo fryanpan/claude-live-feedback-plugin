@@ -1252,6 +1252,21 @@ describe('renderTaskDetail — discussion', () => {
       expect(answering()?.classList.contains('hidden')).toBe(false);
     });
 
+    it('opening the box puts the caret in it — the link that opened it has left the tab order', async () => {
+      paintTicket({ onAskOnPanelItem: vi.fn() });
+      // Control: the panel takes focus on open; nothing on the card has it.
+      expect(document.activeElement?.closest('.hub-decide-card')).toBeNull();
+      link()?.click();
+      // The caret is in the box's field — the editor's surface once the editor
+      // has mounted (a live editor takes the caret on the next frame), the
+      // textarea until then.
+      const form = box()?.querySelector<HTMLFormElement>('.hub-decide-question-form');
+      expect(form).not.toBeNull();
+      await new Promise((r) => setTimeout(r, 30));
+      expect(document.activeElement?.closest('.hub-detail-panel')).not.toBeNull();
+      expect(form?.contains(document.activeElement)).toBe(true);
+    });
+
     it('Send asks through the panel question handler with the task, the item and the words', async () => {
       const onAskOnPanelItem = vi.fn().mockResolvedValue(true);
       const onAnswerThread = vi.fn();
