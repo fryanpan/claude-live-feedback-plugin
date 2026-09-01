@@ -5,6 +5,7 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  readdirSync,
   realpathSync,
   rmSync,
   utimesSync,
@@ -58,17 +59,26 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
  * Wait until the file at `path` contains `needle`, polling; the write-back
  * behind it is debounced (~1s) and CI boxes under load have missed a fixed
  * 1.4s sleep by a few hundred ms. A deadline well past the debounce keeps
- * the assertion honest: a write that never lands still fails, just later.
+ * the assertion honest: a write that never lands still fails, just later —
+ * and says what the file DID hold, so a red run names the state instead of
+ * a bare timeout. Any test that awaits this must carry its own timeout
+ * above `deadlineMs` (bun's default is 5s) or the runner kills the test
+ * before this message can be thrown.
  */
 async function waitForFileText(path: string, needle: string, deadlineMs = 8000): Promise<void> {
   const until = Date.now() + deadlineMs;
   for (;;) {
-    let text = '';
+    let text: string | null = null;
     try {
       text = readFileSync(path, 'utf8');
     } catch {}
-    if (text.includes(needle)) return;
-    if (Date.now() > until) throw new Error(`${path} never contained ${JSON.stringify(needle)}`);
+    if (text?.includes(needle)) return;
+    if (Date.now() > until) {
+      const actual = text === null ? '<missing>' : JSON.stringify(text.slice(0, 200));
+      throw new Error(
+        `${path} never contained ${JSON.stringify(needle)} within ${deadlineMs}ms; it holds ${actual}`,
+      );
+    }
     await sleep(100);
   }
 }
@@ -232,7 +242,13 @@ describe('doc homes through the binding', () => {
     expect(readFileSync(join(wt, REL), 'utf8')).toContain('live edit wins');
   });
 
-  it('a doc parked AT HYDRATE resumes on the next edit once the branch has a checkout', async () => {
+  /**
+   * Commit the pinned doc on its branch, take the server "down", remove the
+   * branch's only checkout, and bring a fresh Rooms up: hydration parks the
+   * doc (no checkout on the branch, so no binding at all). Returns the
+   * parked instance and the path a re-checkout will get.
+   */
+  async function parkAtHydrate(): Promise<{ rooms2: Rooms; wt2: string }> {
     rooms.setDocHome('d1', { repoRoot: main, branch: 'plans', relPath: REL });
     await sleep(1100);
     git(wt, 'add', '-A');
@@ -242,25 +258,57 @@ describe('doc homes through the binding', () => {
     // While "down": the branch loses its only checkout entirely.
     git(main, 'worktree', 'remove', '--force', wt);
 
-    // Hydration parks — no checkout on the branch, so no binding at all.
     const rooms2 = makeRooms(dataDir);
     expect(docText(rooms2, 'd1')).toContain('first pass');
     expect(rooms2.docHomeStatus('d1')?.placement).toEqual({
       placed: false,
       reason: 'no-checkout-on-branch',
     });
+    return { rooms2, wt2: join(tmp, 'wt-plans-back') };
+  }
+
+  it('a doc parked AT HYDRATE resumes on the next edit once the branch has a checkout', async () => {
+    const { rooms2, wt2 } = await parkAtHydrate();
 
     // The branch gets a checkout again; the next EDIT must re-place the
     // home — the recovery homeGuard provides for live parks hangs off a
     // binding this doc doesn't have.
-    const wt2 = join(tmp, 'wt-plans-back');
     git(main, 'worktree', 'add', wt2, 'plans');
     setProse(rooms2, 'd1', '# Triage\n\nback from the dead\n');
+    // The rebind runs inside the edit's update hook. If it let the
+    // checkout's stale copy win, the doc is already reverted HERE — assert
+    // it now so a failure names the revert, not a write that never came.
+    expect(docText(rooms2, 'd1')).toContain('back from the dead');
+    expect(rooms2.docHomeStatus('d1')?.boundPath).toBe(join(wt2, REL));
     await waitForFileText(join(wt2, REL), 'back from the dead');
     expect(readFileSync(join(wt2, REL), 'utf8')).toContain('back from the dead');
-    expect(rooms2.docHomeStatus('d1')?.boundPath).toBe(join(wt2, REL));
     await rooms2.flush();
-  });
+  }, 15_000);
+
+  it('the edit that resumes a hydrate-parked doc wins over the checkout copy even when the clock ties', async () => {
+    // The 2026-09-01 CI flake: the rebind persisted the .ydoc and then let
+    // attach arbitrate by mtime. A fresh `git worktree add` and that
+    // persist land ~3ms apart, inside one Linux file-timestamp tick, and a
+    // tie went to disk — the checkout's committed copy replaced the edit
+    // that had just resumed syncing. Stamping the checkout's copy AHEAD
+    // reproduces the tie deterministically on every platform.
+    const { rooms2, wt2 } = await parkAtHydrate();
+    git(main, 'worktree', 'add', wt2, 'plans');
+    const ahead = new Date(Date.now() + 60_000);
+    utimesSync(join(wt2, REL), ahead, ahead);
+
+    setProse(rooms2, 'd1', '# Triage\n\nback from the dead\n');
+    expect(docText(rooms2, 'd1')).toContain('back from the dead');
+    expect(docText(rooms2, 'd1')).not.toContain('first pass');
+    expect(rooms2.docHomeStatus('d1')?.boundPath).toBe(join(wt2, REL));
+    await waitForFileText(join(wt2, REL), 'back from the dead');
+    // The losing side is backed up, never silently discarded.
+    const backups = readdirSync(join(dataDir, 'clobber-backups')).map((f) =>
+      readFileSync(join(dataDir, 'clobber-backups', f), 'utf8'),
+    );
+    expect(backups.some((b) => b.includes('first pass'))).toBe(true);
+    await rooms2.flush();
+  }, 15_000);
 
   it('a forced reparse must not pull a switched checkout’s branch copy into the doc', async () => {
     rooms.setDocHome('d1', { repoRoot: main, branch: 'plans', relPath: REL });
