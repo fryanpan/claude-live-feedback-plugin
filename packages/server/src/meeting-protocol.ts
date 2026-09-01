@@ -423,7 +423,24 @@ export class MeetingRelay {
     // the turn in progress — the meeting's last sentence must still have a
     // pipeline to land in when that settle arrives.
     const notes = notesDeps
-      ? beginNotesSession(notesDeps, { docId, meetingId: meeting.meetingId })
+      ? beginNotesSession(
+          {
+            // Spread, never mutated: the deps (and the ownership ledger their
+            // sink holds) are shared with the bot relay, so the per-socket
+            // lifecycle callback is layered on a copy.
+            ...notesDeps,
+            onTickLifecycle: (e) => {
+              this.send(ws, {
+                type: 'notes_progress',
+                tick: e.tick,
+                phase: e.phase,
+                turns: [...e.turns],
+              });
+              notesDeps.onTickLifecycle?.(e);
+            },
+          },
+          { docId, meetingId: meeting.meetingId },
+        )
       : null;
     conn.notes = notes;
     // Held as a local for the same reason `notes` is: `stop()` detaches the
