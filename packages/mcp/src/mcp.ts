@@ -109,7 +109,7 @@ function suggestionAuthor(): { id: string; name: string; color: string } {
  * bundle than the deploy source would install. A second literal would be a
  * fourth version site, and this file's history is that version sites drift.
  */
-const PLUGIN_VERSION = '0.1.138';
+const PLUGIN_VERSION = '0.1.139';
 
 /**
  * One nonce per PROCESS, minted at module load and sent on every attach.

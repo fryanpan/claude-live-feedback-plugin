@@ -730,6 +730,14 @@ body.has-set .doc-switcher-caret {
   font: 700 16px var(--sans);
   box-shadow: 0 8px 28px rgba(26, 127, 55, 0.42);
 }
+/* `display: inline-flex` out-specifies the UA's `[hidden]` rule, so without
+   this the float showed on EVERY doc — plan-gate.ts sets `hidden` on all
+   but a pending plan, and the attribute did nothing (Bryan, 2026-08-31:
+   "there should not be an Approve Plan button in all docs"). Same guard
+   `.plan-gate-error[hidden]` and `.meeting-strip[hidden]` already carry. */
+.plan-approve-float[hidden] {
+  display: none;
+}
 .plan-approve-float:hover {
   background: var(--green);
 }

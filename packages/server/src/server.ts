@@ -1588,13 +1588,42 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
   // Which builder worktrees are working which tasks — the witness that keeps
   // the stall loop from waking a lead over a row whose builder is busy in a
   // checkout the board cannot see. See dispatch-registry.ts.
+  //
+  // A dispatch on a task that is `done` or archived is over, whatever the
+  // registry's own evidence says — the builder's checkout often lingers on
+  // disk after its PR merges, so the path check alone kept counting slots
+  // for finished work (hub, 2026-08-31: `inUse 12 / free 0`, all twelve
+  // holders done). The predicate is handed to the registry rather than
+  // applied here so EVERY reader — the cap view, the dispatch refusal, the
+  // stall gate's watching set, `/api/dispatches` — sees the same pruned set;
+  // a task the store cannot find is left to the workspace join below, which
+  // cannot attribute it to a board and so never counts it.
   const dispatches = new DispatchRegistry({
     dataDir,
+    isTaskOver: (taskId) => {
+      const task = taskStore.getTask(taskId);
+      return task !== undefined && (task.status === 'done' || task.archivedAt !== undefined);
+    },
     ...(opts.dispatchWatchFactory !== undefined ? { watchFactory: opts.dispatchWatchFactory } : {}),
   });
   if (dispatches.loadError) {
     console.error(`[dispatch] ${dispatches.loadError}`);
   }
+  if (dispatches.prunedAtBoot.length > 0) {
+    console.log(
+      `[dispatch] closed ${dispatches.prunedAtBoot.length} stale dispatch(es) at boot: ${dispatches.prunedAtBoot.join(', ')}`,
+    );
+  }
+  // The row reaching `done` or the archive IS the dispatch's terminal
+  // statement — the registry hears it here, so a builder that never sent
+  // `close_dispatch` (an older bundle, a crash after the merge) cannot leave
+  // its slot held. Prune-on-read above would catch it eventually; this
+  // catches it at the moment the board learns.
+  taskStore.onEvent((ev) => {
+    if ((ev.type === 'task.transitioned' && ev.to === 'done') || ev.type === 'task.archived') {
+      dispatches.close(ev.taskId);
+    }
+  });
 
   /**
    * Every OPEN dispatch whose task belongs to `workspaceId`, excluding
