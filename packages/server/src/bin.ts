@@ -14,6 +14,13 @@ import { createPluginRefresher } from './plugin-refresh.ts';
 import { acquirePort, classifyBindError, probeLocalPort, shouldWalkPorts } from './port-bind.ts';
 import { lanHostnames, normalizePublicBaseUrl, tailscaleHost } from './public-host.ts';
 import {
+  GOOGLE_OAUTH_KEYCHAIN_SERVICE,
+  createGoogleOauthApp,
+  createKeychainRefreshTokenVault,
+  createRecallCalendarClient,
+  resolveGoogleOauthCreds,
+} from './recall-calendar.ts';
+import {
   createRecallClient,
   normalizeRecallCallbackHost,
   recallStatusWebhookUrl,
@@ -548,6 +555,49 @@ if (meetingBot?.config.publicWsBase && !meetingBotWebhookSecret) {
       'accepted unsigned. Set it to the signing secret from the Recall dashboard.',
   );
 }
+// Calendar auto-join — the ONLY place real calendar-side pieces are
+// constructed, same seam rule as the bot client above: a scheduled bot joins
+// a real call and spends. The Recall key gates the whole feature; the Google
+// OAuth app (Keychain service `claude-workspaces-google-oauth`, accounts
+// `client-id` / `client-secret`) gates only the CONNECT flow, so a calendar
+// connected earlier keeps syncing even if those entries go missing.
+const calendarClient = createRecallCalendarClient({});
+const googleOauthCreds = calendarClient ? resolveGoogleOauthCreds(process.env) : null;
+// The redirect URI is registered at Google verbatim, so it is stated rather
+// than guessed: the env override wins, else it derives from the same public
+// base URL every human-facing link uses.
+const googleRedirectUri =
+  process.env.CW_GOOGLE_OAUTH_REDIRECT_URI?.trim() ||
+  (publicBaseUrlOverride
+    ? `${publicBaseUrlOverride.replace(/\/+$/, '')}/api/calendar/google/callback`
+    : null);
+const calendarBot = calendarClient
+  ? {
+      client: calendarClient,
+      google:
+        googleOauthCreds && googleRedirectUri
+          ? createGoogleOauthApp({ creds: googleOauthCreds, redirectUri: googleRedirectUri })
+          : null,
+      vault: createKeychainRefreshTokenVault(),
+    }
+  : null;
+if (calendarBot) {
+  if (calendarBot.google) {
+    console.log(
+      `[calendar] Google connect armed; redirect URI ${googleRedirectUri} ` +
+        '(must match the OAuth app registration at Google).',
+    );
+  } else {
+    console.log(
+      '[calendar] connect is off: ' +
+        (googleOauthCreds
+          ? 'CW_PUBLIC_BASE_URL (or CW_GOOGLE_OAUTH_REDIRECT_URI) is unset.'
+          : `no Google OAuth app in Keychain service ${GOOGLE_OAUTH_KEYCHAIN_SERVICE} ` +
+            '(accounts client-id and client-secret). A calendar connected earlier keeps syncing.'),
+    );
+  }
+}
+
 // Where Recall dials in, and whether each of the two routes there is actually
 // armed. Printed whenever a callback hostname is configured, because "did this
 // take effect?" is otherwise only answerable by making a bot join a real call
@@ -713,6 +763,7 @@ while (!handle) {
       accessTunnelHosts: accessTunnelReady ? accessTunnelHosts : [],
       proxiedTrustedHosts: proxiedTrustedReady ? proxiedTrustedHosts : [],
       ...(recallCallbackHost ? { recallCallbackHost } : {}),
+      ...(calendarBot ? { calendarBot } : {}),
       proxiedTrustedEmails,
       allowedOrigins,
       publicBaseUrl: publicBaseUrlOverride,

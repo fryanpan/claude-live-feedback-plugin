@@ -73,3 +73,34 @@ export function huddleSeedMarkdown(topic?: string): string {
 export function huddleFilePath(dataDir: string, docId: string): string {
   return join(dataDir, 'huddles', `${docId}.md`);
 }
+
+// ---------------------------------------------------------------------------
+// A calendar meeting's discussion doc — the same shape of decisions, made for
+// the doc the "join this meeting" click creates. A meeting doc is a huddle
+// whose conversation happens in a video call the bot is listening to.
+// ---------------------------------------------------------------------------
+
+/**
+ * The event's own title when the calendar has one; the clock, huddle-style,
+ * when it does not — an untitled event is still a real meeting, and "Meeting"
+ * plus when it happened is how a person will look for it later.
+ */
+export function meetingDocTitle(eventTitle: string | null, at: number): string {
+  if (eventTitle) return eventTitle;
+  const d = new Date(at);
+  return `Meeting ${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
+/** `meeting-20260901-1405-x7q2` — same construction as `huddleAlias`. */
+export function meetingDocAlias(at: number): string {
+  const d = new Date(at);
+  const stamp = `${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}-${pad(d.getHours())}${pad(d.getMinutes())}`;
+  return `meeting-${stamp}-${randomBytes(3)
+    .toString('base64url')
+    .replace(/[^A-Za-z0-9]/g, 'x')}`;
+}
+
+/** Beside the huddles, for the same reason huddles live under the data dir. */
+export function meetingDocFilePath(dataDir: string, docId: string): string {
+  return join(dataDir, 'meetings', `${docId}.md`);
+}
