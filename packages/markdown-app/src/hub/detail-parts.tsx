@@ -150,6 +150,16 @@ function fillComposerForm(form: HTMLFormElement, latest: () => ComposerSpec): ()
       });
   };
   form.addEventListener('submit', onSubmit);
+  // Cmd+Enter sends (Ctrl+Enter off a Mac). The listener sits on the textarea
+  // rather than the form because that is the one address every keystroke
+  // reaches: the mounted editor's surface re-dispatches its Enter keydowns
+  // onto the textarea (md-composer.ts) and honours a consumed proxy — the
+  // preventDefault inside `onSubmit` is what keeps the editor from also
+  // inserting a paragraph under the send.
+  ta.addEventListener('keydown', (ev) => {
+    if (ev.key !== 'Enter' || !(ev.metaKey || ev.ctrlKey) || ev.isComposing) return;
+    onSubmit(ev);
+  });
   return () => {
     form.removeEventListener('submit', onSubmit);
     form.replaceChildren();

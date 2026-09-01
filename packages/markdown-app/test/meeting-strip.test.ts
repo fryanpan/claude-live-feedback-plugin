@@ -306,6 +306,8 @@ function mount(
     mode?: CaptureMode;
     speakers?: number;
     room?: RoomAudioProcessing;
+    engine?: 'assemblyai' | 'soniox';
+    listEngines?: () => Promise<{ engines: string[]; default: string | null } | null>;
     announcer?: Announcer;
     loadSpeakers?: () => Promise<DocSpeakers | null>;
     postName?: (meetingId: string, speaker: string, name: string) => Promise<boolean>;
@@ -1428,6 +1430,74 @@ describe('the meeting bot in the chrome', () => {
     // Dismissible: the farewell is a line, not a permanent fixture.
     (h2.root.querySelector('.meeting-note-dismiss') as HTMLButtonElement).click();
     expect(h2.root.hidden).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+
+describe('which engine transcribes', () => {
+  const twoEngines = () =>
+    Promise.resolve({ engines: ['assemblyai', 'soniox'], default: 'assemblyai' });
+  const select = (root: HTMLElement) => root.querySelector('.meeting-engine') as HTMLSelectElement;
+
+  /** Press Start and hand back the start frame the socket saw. */
+  async function startFrame(h: ReturnType<typeof mount>): Promise<Record<string, unknown>> {
+    h.toggle().click();
+    await settle();
+    h.sockets[0]?.onopen?.();
+    const sent = (h.sockets[0]?.sent ?? [])
+      .filter((raw): raw is string => typeof raw === 'string')
+      .map((raw) => JSON.parse(raw) as Record<string, unknown>);
+    const frame = sent.find((m) => m.type === 'start');
+    if (!frame) throw new Error('no start frame went up');
+    return frame;
+  }
+
+  it('carries the address’s engine on the start frame, and nothing by default', async () => {
+    const chosen = mount(undefined, { engine: 'soniox', listEngines: () => Promise.resolve(null) });
+    expect((await startFrame(chosen)).engine).toBe('soniox');
+    // Absent unless somebody chose: the server's default is decided on the
+    // server, and this frame is byte-for-byte what an older strip sent.
+    const bare = mount(undefined, { listEngines: () => Promise.resolve(null) });
+    expect(await startFrame(bare)).not.toHaveProperty('engine');
+  });
+
+  it('shows the chooser only when the server holds a choice', async () => {
+    const both = mount(undefined, { listEngines: twoEngines });
+    await settle();
+    expect(select(both.root).hidden).toBe(false);
+    expect([...select(both.root).options].map((o) => o.value)).toEqual(['assemblyai', 'soniox']);
+    expect(select(both.root).value).toBe('assemblyai');
+
+    // One engine is not a choice; an old server (no route) answers null.
+    const one = mount(undefined, {
+      listEngines: () => Promise.resolve({ engines: ['assemblyai'], default: 'assemblyai' }),
+    });
+    const old = mount(undefined, { listEngines: () => Promise.resolve(null) });
+    await settle();
+    expect(select(one.root).hidden).toBe(true);
+    expect(select(old.root).hidden).toBe(true);
+  });
+
+  it('starts with the engine the chooser picked, and shows the address’s pick', async () => {
+    const h = mount(undefined, { listEngines: twoEngines });
+    await settle();
+    select(h.root).value = 'soniox';
+    select(h.root).dispatchEvent(new Event('change'));
+    expect((await startFrame(h)).engine).toBe('soniox');
+
+    const fromAddress = mount(undefined, { engine: 'soniox', listEngines: twoEngines });
+    await settle();
+    expect(select(fromAddress.root).value).toBe('soniox');
+  });
+
+  it('settles the choice when the mic starts, like the mode beside it', async () => {
+    const h = mount(undefined, { listEngines: twoEngines });
+    await settle();
+    expect(select(h.root).disabled).toBe(false);
+    h.toggle().click();
+    await settle();
+    expect(select(h.root).disabled).toBe(true);
   });
 });
 

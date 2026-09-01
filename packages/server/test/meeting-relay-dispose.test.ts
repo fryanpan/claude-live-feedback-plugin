@@ -60,7 +60,7 @@ describe('meeting relay dispose', () => {
     const stopped: string[] = [];
     const relay = new MeetingRelay({
       store,
-      engine,
+      engines: [engine],
       notes: null,
       broadcast: (_docId, payload) => {
         if (payload.event === 'meeting.stopped') stopped.push(String(payload.meetingId));
@@ -112,7 +112,7 @@ describe('meeting relay dispose', () => {
     const stopped: string[] = [];
     const relay = new MeetingRelay({
       store,
-      engine,
+      engines: [engine],
       notes: null,
       broadcast: (_docId, payload) => {
         if (payload.event === 'meeting.stopped') stopped.push(String(payload.meetingId));
@@ -156,7 +156,7 @@ describe('meeting relay dispose', () => {
       open: () => new Promise<TranscriptionSession>(() => {}),
     };
     const store = new MeetingStore(dataDir);
-    const relay = new MeetingRelay({ store, engine, notes: null, broadcast: () => {} });
+    const relay = new MeetingRelay({ store, engines: [engine], notes: null, broadcast: () => {} });
     const ws: MeetingClient = { data: { docId: 'wedged-doc' }, send: () => {} };
     relay.onOpen(ws);
     relay.onText(ws, JSON.stringify({ type: 'start', sampleRate: 16000, encoding: 'pcm_s16le' }));
@@ -182,7 +182,7 @@ describe('meeting relay dispose', () => {
         Promise.resolve({ send: () => {}, close: () => Promise.resolve() }),
     };
     const store = new MeetingStore(dataDir);
-    const relay = new MeetingRelay({ store, engine, notes: null, broadcast: () => {} });
+    const relay = new MeetingRelay({ store, engines: [engine], notes: null, broadcast: () => {} });
     const ws: MeetingClient = { data: { docId: 'orphan-doc' }, send: () => {} };
     relay.onOpen(ws);
     relay.onText(ws, JSON.stringify({ type: 'start', sampleRate: 16000, encoding: 'pcm_s16le' }));

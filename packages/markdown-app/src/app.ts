@@ -17,6 +17,7 @@ import { type EditorHandle, createEditor } from './editor.ts';
 import { trackGesture } from './gesture.ts';
 import {
   huddleCaptureMode,
+  huddleEngine,
   huddleRoomAudio,
   huddleRoomSpeakers,
   wantsHuddleStart,
@@ -29,7 +30,6 @@ import { mountMeetingStrip } from './meeting-strip.ts';
 import { wantsLatencyTiming } from './meeting-timing-client.ts';
 import type { MountContext } from './mount-context.ts';
 import type { MountScope } from './mount-scope.ts';
-import { mountPlanTasks } from './plan-tasks.ts';
 import { startReadingTracker } from './reading-tracker.ts';
 import { mountMarkupMargin } from './redline/markup-margin.ts';
 import { mountRedline } from './redline/redline-app.ts';
@@ -342,6 +342,9 @@ async function mountMarkdown(ctx: MountContext): Promise<void> {
     const huddleMode = huddleStart ? huddleCaptureMode(location.search) : DEFAULT_CAPTURE_MODE;
     const roomSpeakers = huddleRoomSpeakers(location.search);
     const roomAudio = huddleRoomAudio(location.search);
+    // Which engine transcribes here. A preference like `speakers`, not a
+    // gesture: read every visit, left on the address.
+    const engine = huddleEngine(location.search);
     if (huddleStart) {
       history.replaceState(
         history.state,
@@ -379,6 +382,7 @@ async function mountMarkdown(ctx: MountContext): Promise<void> {
       // the person flips the strip's own switch — and left on the address.
       ...(roomSpeakers !== undefined ? { speakers: roomSpeakers } : {}),
       ...(roomAudio ? { room: roomAudio } : {}),
+      ...(engine !== undefined ? { engine } : {}),
       timing: wantsLatencyTiming(location.search),
       // The rename surface a finished meeting leaves behind: the last
       // meeting's cast on mount, and the HTTP rename for a socket that is
@@ -387,15 +391,6 @@ async function mountMarkdown(ctx: MountContext): Promise<void> {
       postName: (meetingId, speaker, name) => postSpeakerName({ docId, meetingId, speaker, name }),
     });
     scope.onCleanup(() => strip.destroy());
-  }
-
-  // Work derived from THIS doc, as live chips above the prose — and the
-  // Approve control when the doc is a plan whose drafts are held. Ordinary
-  // markdown docs only, same rule (and reason) as the meeting strip.
-  const planTasksEl = document.getElementById('plan-tasks');
-  if (planTasksEl && ctx.docType === 'markdown' && ctx.navDocId === undefined) {
-    const planTasks = mountPlanTasks({ docId, root: planTasksEl, user, canWrite });
-    scope.onCleanup(() => planTasks.destroy());
   }
 
   // Tapping a speaker tag in the notes offers the voices this doc's meetings

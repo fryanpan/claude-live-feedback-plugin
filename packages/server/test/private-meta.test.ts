@@ -25,6 +25,7 @@ import {
 describe('private meta keys', () => {
   it('names exactly the host-describing fields', () => {
     expect([...PRIVATE_META_KEYS].sort()).toEqual([
+      'docHome',
       'owner',
       'producedBy',
       'sourceUrl',

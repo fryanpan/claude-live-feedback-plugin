@@ -58,6 +58,7 @@ import {
   type MeetingTimingMark,
   type MeetingUnavailableReason,
   RECORDING_ANNOUNCEMENT,
+  type TranscriptionEngineName,
   announcesRecording,
   describeBotState,
   meetingSocketPath,
@@ -277,13 +278,12 @@ export function meetingSocketUrl(docId: string): string {
 }
 
 /**
- * A transcription engine the chooser could offer.
+ * A transcription engine the chooser could offer — the shape `/api/meeting-
+ * engines` is turned into once fetched (see `mountMeetingStrip`'s `engines`
+ * state and `engineLabel`).
  *
  * The Engine row renders only when there is more than one — a row with a
- * single answer is a fact wearing a control's clothes. Today the server runs
- * one engine and no caller passes two; the seam exists so the engine
- * integration that is in flight can slot its list in without reshaping the
- * chooser.
+ * single answer is a fact wearing a control's clothes.
  */
 export interface MeetingEngineChoice {
   id: string;
@@ -309,8 +309,6 @@ export interface MeetingStripOpts {
    * chooser simply never offers the bot source.
    */
   bot?: MeetingBotClient;
-  /** The engines the chooser may offer; see `MeetingEngineChoice`. */
-  engines?: MeetingEngineChoice[];
   /**
    * What the bot-name field starts as — "<who>'s Claude Code Agent" from the
    * signed-in identity. Absent, the server's configured default stands and
@@ -354,9 +352,24 @@ export interface MeetingStripOpts {
   speakers?: number;
   room?: RoomAudioProcessing;
   /**
+   * Which transcription engine the next capture opens (`?engine=soniox` on
+   * the address). Absent means the server's default, which is also what a
+   * server built before the choice existed opens. Start-time only, like
+   * `mode` — an engine session's config is fixed once open.
+   */
+  engine?: TranscriptionEngineName;
+  /**
+   * The engines this server can open, asked for once at mount — what decides
+   * whether the strip shows a chooser at all. Injectable so a test drives it
+   * without a server; absent, the strip asks `/api/meeting-engines`. Null
+   * (an old server, a failed fetch) hides the chooser and changes nothing.
+   */
+  listEngines?: () => Promise<{ engines: string[]; default: string | null } | null>;
+  /**
    * Ask the person what to call a speaker; `current` is what the row says
-   * now. Null or blank means leave it. Defaults to `window.prompt` — a name
-   * is typed once per voice per meeting.
+   * now. Null or blank means leave it. Defaults to `window.prompt` — the
+   * popover has no room for an inline field, and a name is typed once per
+   * voice per meeting.
    */
   promptName?: (current: string) => string | null;
   /**
@@ -446,6 +459,32 @@ function defaultPromptName(current: string): string | null {
   return window.prompt('Who is this?', current);
 }
 
+/** What the chooser calls an engine. The wire name for one it has no word for. */
+export function engineLabel(name: string): string {
+  if (name === 'assemblyai') return 'AssemblyAI';
+  if (name === 'soniox') return 'Soniox';
+  return name;
+}
+
+async function defaultListEngines(): Promise<{
+  engines: string[];
+  default: string | null;
+} | null> {
+  try {
+    const res = await fetch('/api/meeting-engines');
+    if (!res.ok) return null;
+    const body = (await res.json()) as { engines?: unknown; default?: unknown };
+    const engines = Array.isArray(body.engines)
+      ? body.engines.filter((e): e is string => typeof e === 'string')
+      : [];
+    return { engines, default: typeof body.default === 'string' ? body.default : null };
+  } catch {
+    // An old server has no such route, and a strip on one behaves exactly as
+    // it always did: no chooser, the server's one engine.
+    return null;
+  }
+}
+
 /**
  * The announcement as the strip shows it, which is not the same job in the two
  * paths: the device's is a caption for something the room is already hearing,
@@ -478,7 +517,14 @@ export function mountMeetingStrip(opts: MeetingStripOpts): MeetingStripHandle {
   const promptName = opts.promptName ?? defaultPromptName;
   const announcer = opts.announcer ?? createAnnouncer();
   const bot = opts.bot;
-  const engines = opts.engines ?? [];
+  /**
+   * The engines the chooser may offer. Populated once, from `/api/meeting-
+   * engines` unless a test injects `listEngines` — the seam that lets the
+   * real engine integration slot its list in without reshaping the chooser
+   * (see `MeetingEngineChoice`). Fewer than two answers is not a choice, so
+   * the Engine row stays absent and the fetch changes nothing.
+   */
+  let engines: MeetingEngineChoice[] = [];
 
   // ---- the Record Audio button, docked in the top bar -----------------------
   const record = document.createElement('button');
@@ -661,8 +707,30 @@ export function mountMeetingStrip(opts: MeetingStripOpts): MeetingStripHandle {
   let chooseMode: CaptureMode = opts.mode ?? 'conversation';
   /** "I'll ask for consent" — the person says the sentence, not the device. */
   let chooseConsent = false;
-  /** The engine picked, only meaningful when more than one was offered. */
-  let chooseEngine: string | undefined = engines.length > 1 ? engines[0]?.id : undefined;
+  /**
+   * The engine picked, only meaningful when more than one was offered.
+   * Starts as the address's ask (`?engine=soniox`), the same start-time-only
+   * fact `mode` is; refined once the fetch below answers, in case the
+   * address named an engine this server does not actually hold.
+   */
+  let chooseEngine: string | undefined = opts.engine;
+  const listEngines = opts.listEngines ?? defaultListEngines;
+  void listEngines().then((info) => {
+    if (disposed || !info || info.engines.length < 2) {
+      // One engine (or none, or no answer) is not a choice. The address's
+      // own ask stands even unlisted — the server, not this fetch, is the
+      // authority on what it refuses, and it refuses by naming the engine.
+      return;
+    }
+    engines = info.engines.map((id) => ({ id, label: engineLabel(id) }));
+    chooseEngine =
+      chooseEngine !== undefined && info.engines.includes(chooseEngine)
+        ? chooseEngine
+        : (info.default ?? info.engines[0]);
+    // The chooser may already be open (a fast mount, a slow fetch); redraw it
+    // so the Engine row does not wait for a second open to appear.
+    if (view === 'chooser') renderPop();
+  });
   let chooseBotUrl = '';
   let chooseBotName = opts.botNamePrefill ?? '';
   /** Why the last chooser press did not start, shown in the sheet. */
@@ -1712,9 +1780,11 @@ export function mountMeetingStrip(opts: MeetingStripOpts): MeetingStripHandle {
           // Absent unless somebody said, so the server's default stays the
           // one place the room size is guessed.
           ...(opts.speakers !== undefined ? { speakers: opts.speakers } : {}),
-          // Only when the chooser offered a real choice; a server that has
-          // never heard of engines never receives the field.
-          ...(chooseEngine !== undefined && engines.length > 1 ? { engine: chooseEngine } : {}),
+          // Absent unless the address named one or the chooser offered a real
+          // pick — a server that has never heard of engines never receives
+          // the field, and this frame is byte-for-byte what an older strip
+          // sent.
+          ...(chooseEngine !== undefined ? { engine: chooseEngine } : {}),
           ...(timing ? { timing: true } : {}),
         }),
       );

@@ -5,10 +5,11 @@ import { Plugin, PluginKey } from '@tiptap/pm/state';
 import type { EditorView } from '@tiptap/pm/view';
 import { Decoration, DecorationSet } from '@tiptap/pm/view';
 import {
+  cachedLinkHeld,
   cachedLinkStatus,
   fetchLinkInfos,
   staleTaskLinkStatuses,
-  statusChipLabel,
+  statusChipEl,
 } from './link-titles.ts';
 
 /**
@@ -97,13 +98,6 @@ export function taskLinkRunsIn(doc: ProseNode): TaskLinkRun[] {
   return runs;
 }
 
-function chipEl(status: string): HTMLSpanElement {
-  const chip = document.createElement('span');
-  chip.className = `ws-status-chip ws-chip-${status}`;
-  chip.textContent = statusChipLabel(status);
-  return chip;
-}
-
 function build(doc: ProseNode): ChipState {
   const decos: Decoration[] = [];
   const pending = new Set<string>();
@@ -114,11 +108,15 @@ function build(doc: ProseNode): ChipState {
       continue;
     }
     if (status === null) continue; // resolved: not a task, no chip
+    // A plan-held draft's chip reads "Draft" — the doc's own links are the
+    // one surface that shows the plan gate's state now the strip is gone.
+    const held = cachedLinkHeld(run.url);
     decos.push(
-      Decoration.widget(run.to, () => chipEl(status), {
-        // The key is the widget's identity: an unchanged url+status pair is
-        // the same widget across rebuilds, so repaints never churn the DOM.
-        key: `${run.url}|${status}`,
+      Decoration.widget(run.to, () => statusChipEl(status, held), {
+        // The key is the widget's identity: an unchanged url+status+held
+        // triple is the same widget across rebuilds, so repaints never churn
+        // the DOM.
+        key: held ? `${run.url}|${status}|draft` : `${run.url}|${status}`,
         side: 1,
         ignoreSelection: true,
       }),

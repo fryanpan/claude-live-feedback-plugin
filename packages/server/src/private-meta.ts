@@ -20,7 +20,13 @@ import type * as Y from 'yjs';
  * syntax-highlighting language — the redacted REST payload supplies a
  * basename `relPath` for exactly that), so the move is server-internal.
  */
-export const PRIVATE_META_KEYS = ['sourceUrl', 'owner', 'workspaceRoot', 'producedBy'] as const;
+export const PRIVATE_META_KEYS = [
+  'sourceUrl',
+  'owner',
+  'workspaceRoot',
+  'producedBy',
+  'docHome',
+] as const;
 
 export type PrivateMetaKey = (typeof PRIVATE_META_KEYS)[number];
 export type PrivateMeta = Pick<DocMeta, PrivateMetaKey>;

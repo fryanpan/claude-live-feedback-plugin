@@ -680,94 +680,36 @@ body.has-set .doc-switcher-caret {
 }
 
 #editor-pane {
-  position: relative; /* anchors the floating diff/file view toggle */
+  /* Anchors the floating diff/file view toggle AND the plan-approve float
+     (src/plan-gate.ts) — both `position: absolute` children pinned to this
+     pane, not to the scrolling prose. */
+  position: relative;
   display: grid;
-  /* format bar, derived-work strip, document. The auto tracks are what make
-     each strip RESERVE its height instead of covering the prose: the editor
-     keeps the 1fr and shrinks by exactly their height. They cost nothing
-     unmounted — a hidden strip is a zero-height track. (The meeting strip is
-     the SHELL's row now, fused under the topbar.) */
-  grid-template-rows: auto auto 1fr;
+  /* format bar, document. The meeting strip is the SHELL's row now, fused
+     under the topbar (src/meeting-strip.ts); the old derived-work-chips
+     strip and the plan gate's one-line bar are both gone (#526/#531/#536) —
+     the approve float and the prose's own link chips carry what they did.
+     The auto track is what makes the format bar RESERVE its height instead
+     of covering the prose: the editor keeps the 1fr and shrinks by exactly
+     its height, and costs nothing collapsed — a hidden bar is a zero-height
+     track. */
+  grid-template-rows: auto 1fr;
   overflow: hidden;
   background: var(--bg);
   border-right: 1px solid var(--border);
 }
 
-/* Work derived from this doc (src/plan-tasks.ts): a slim row of task chips
-   between the format bar and the prose, plus the plan gate's Approve button.
-   One line that wraps; chips stay tappable at 430px (≥36px targets via
-   padding) and the row spends height, not width, on iPad landscape. */
-.plan-tasks {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 6px 10px;
-  padding: 6px 12px;
-  border-bottom: 1px solid var(--border);
-  font-size: 13px;
-  background: var(--bg);
-}
-
-.plan-tasks[hidden] {
-  display: none;
-}
-
-.plan-tasks-label {
-  color: var(--text-secondary, #666);
-  font-weight: 600;
-  white-space: nowrap;
-}
-
-.plan-tasks-list {
-  display: contents;
-}
-
-.plan-task-chip {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 4px 8px;
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  color: inherit;
-  text-decoration: none;
-  max-width: 100%;
-}
-
-a.plan-task-chip:hover {
-  background: var(--bg-hover, rgba(0, 0, 0, 0.04));
-}
-
-.plan-task-chip .plan-task-title {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  max-width: 32ch;
-}
-
-/* A held draft reads muted: filed, visible, deliberately not queued. */
-.plan-task-chip.is-draft {
-  border-style: dashed;
-  color: var(--text-secondary, #666);
-}
-
-/* Possibly stale = quiet yellow, the shared "look again" vocabulary. */
-.plan-task-chip.is-stale {
-  border-color: var(--yellow, #b58900);
-}
-
-.plan-task-stale {
-  color: var(--yellow, #b58900);
-  font-size: 12px;
-  white-space: nowrap;
-}
-
-/* The plan gate's one control, floating at the bottom of the editor pane —
-   always visible, unmistakably the primary action on a pending plan doc
-   (Bryan, on the mock). Anchored to #editor-pane's `position: relative`, so
-   it pins to the visible pane, not to the scrolling prose. The green is the
-   approval green the chips use; the shadow is what separates it from the
-   prose that scrolls beneath. */
+/* The plan gate's one control (src/plan-gate.ts) — a floating Approve Plan
+   button, always visible at the bottom of the editor pane, unmistakably the
+   primary action on a pending plan doc (Bryan, on the mock). It replaces two
+   retired surfaces: the derived-work chip strip (#531 — the tasks a doc
+   produced now read through the links written in its prose, decorated by
+   task-link-chips.ts) and the plan-gate one-line bar (#536 — "don't design
+   for plan approval here", this ticket's redesign). Anchored to
+   #editor-pane's `position: relative`, so it pins to the visible pane, not
+   to the scrolling prose. The green is the approval green the link chips
+   use; the shadow is what separates it from the prose that scrolls
+   beneath. */
 .plan-approve-float {
   position: absolute;
   left: 50%;
@@ -804,15 +746,6 @@ a.plan-task-chip:hover {
     transform: none;
     bottom: calc(14px + var(--safe-bottom));
   }
-}
-
-.plan-tasks-approve:hover:not(:disabled) {
-  background: var(--bg-hover, rgba(0, 0, 0, 0.04));
-}
-
-.plan-tasks-error {
-  color: var(--red, #dc322f);
-  font-size: 12px;
 }
 
 /* ================= WORKSPACE HUB =================
@@ -4215,10 +4148,6 @@ body.hub-body {
   color: var(--fg-muted);
   font-size: 12px;
 }
-.hub-sourcedoc-stale {
-  color: var(--yellow, #b58900);
-  font-size: 12px;
-}
 /* Link chips: what a `url` ref is FOR. Wraps rather than scrolls — the
    detail panel has vertical room and a hidden link is the bug this
    replaced. */
@@ -7369,6 +7298,23 @@ body.is-reading-width #editor > .ProseMirror {
     width: auto;
   }
 }
+@media (min-width: 721px) {
+  /* The strip runs as a ROW here, so wrapping puts the readout on the next
+     LINE and the bar's fixed 40px has to give. Both of these are scoped to
+     this media query on purpose: at 720px and below the strip is a COLUMN,
+     where `flex-wrap: wrap` wraps into a new COLUMN instead — measured at
+     430px it made the stacked panel 447px wide inside a 430px window — and
+     `flex-basis: 100%` would ask for the container's whole HEIGHT. The column
+     layout needs neither: it is already `height: auto` and one item per row. */
+  .meeting-strip.has-timing {
+    height: auto;
+    flex-wrap: wrap;
+  }
+  .meeting-timing-row {
+    /* A line of its own on the flattened row. */
+    flex: 0 0 100%;
+  }
+}
 @media (max-width: 720px) {
   /* The strip yields while an editor has focus at phone width — height is
      the scarce thing under a keyboard, and an idle strip has nothing to say
@@ -8186,6 +8132,13 @@ body.threads-resizing {
   border-style: dashed;
   border-color: var(--yellow);
   color: var(--yellow);
+}
+/* A plan-held draft: filed, visible, deliberately not queued — muted, not
+   the triage yellow, because nobody should look until the plan is approved. */
+.ws-chip-draft {
+  border-style: dashed;
+  border-color: var(--border);
+  color: var(--fg-muted, #656d76);
 }
 .ws-chip-in-progress {
   border-color: var(--accent);

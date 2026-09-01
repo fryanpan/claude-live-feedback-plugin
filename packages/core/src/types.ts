@@ -40,6 +40,20 @@ export function contentKind(type: DocType): ContentKind {
 /** File change kind within a git diff review (git --name-status letter). */
 export type DiffFileStatus = 'added' | 'modified' | 'deleted' | 'renamed';
 
+/**
+ * A doc's declared repo home: where its on-disk copy belongs, as
+ * repo + branch + path-within-the-repo. `repoRoot` may be any checkout of
+ * the repo — the server resolves the repo's identity (git common dir) from
+ * it, then finds whichever worktree has `branch` checked out. That is what
+ * lets the binding survive worktree churn: the home names a branch, never a
+ * checkout.
+ */
+export interface DocHome {
+  repoRoot: string;
+  branch: string;
+  relPath: string;
+}
+
 export interface DocMeta {
   docId: string;
   type: DocType;
@@ -97,6 +111,16 @@ export interface DocMeta {
    * stored on every member doc so the tree is derivable without a registry.
    */
   workspaceRoot?: string;
+  /**
+   * The doc's pinned repo home (see `DocHome`). Private-meta: it names host
+   * paths, so it lives in the sidecar next to the `.ydoc`, never in the CRDT
+   * a share visitor syncs. When set, both sync directions verify the bound
+   * path is still a checkout of this repo ON this branch before moving
+   * bytes; a checkout that switched branches is re-resolved to the worktree
+   * now holding the branch, or the writes park (the .ydoc stays the durable
+   * copy). Absent = classic binding to an explicit path, unguarded.
+   */
+  docHome?: DocHome;
   /**
    * The workspace's own bind-time configuration, replicated onto every
    * member the same way `workspaceRoot` is — there is no workspace registry,

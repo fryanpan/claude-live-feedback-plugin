@@ -370,7 +370,27 @@ export interface HubWorkspace {
    * reader, so the default lives in exactly one place.
    */
   effortEstimatePrompt?: string;
+  /**
+   * Where this board's planning/discussion notes get checked in: a repo +
+   * branch + directory, from which `POST /api/docs` derives a file (and a
+   * pinned doc home) for a markdown doc created without an explicit path.
+   * Absent means docs must name their own file — the fleet's
+   * `<repo>/.claude/reviews/` scratch convention is untouched either way.
+   * Host paths: served on the owner settings route only, never projected
+   * into the `ws:` room a share visitor can sync (the settings route is not
+   * on the visitor allowlist).
+   */
+  notesHome?: WorkspaceNotesHome;
   createdAt: number;
+}
+
+/** A workspace's default location for planning notes — see
+ *  `HubWorkspace.notesHome`. `dir` is relative to the repo root, same
+ *  traversal rules as a doc home's relPath. */
+export interface WorkspaceNotesHome {
+  repoRoot: string;
+  branch: string;
+  dir: string;
 }
 
 /**
@@ -1114,6 +1134,13 @@ export interface GoalRow {
   /** Absent means nobody owns it — a vacancy, not a person. */
   assignee?: string;
   dueAt?: number;
+  /**
+   * Cross-references, mirroring `Task.links` — in practice the docs this
+   * goal came out of or is discussed in, written by the ref backfill and the
+   * settle-time doc scan (a doc whose prose links this goal). Row-owned, so
+   * `syncGoalRows` never touches it and it survives every goal-list edit.
+   */
+  links?: Ref[];
   /** Fractional sort key among the board's goal rows: priority order. */
   order: number;
   status: TaskStatus;
@@ -4818,6 +4845,33 @@ export class TaskStore {
     };
   }
 
+  /** This board's notes home, or undefined (board missing, or none set —
+   *  there is deliberately no default: checking notes into a repo is an
+   *  opt-in). */
+  notesHome(workspaceId: string): WorkspaceNotesHome | undefined {
+    return this.workspaces.get(workspaceId)?.workspace.notesHome;
+  }
+
+  /**
+   * Set — or, with `undefined`, clear — where this board's planning notes
+   * get checked in. A settings write, not a board event, the same contract
+   * as `setReviewItemCriteria`: the next doc creation reads it. The caller
+   * (the settings route) validates the shape; this stores it.
+   */
+  setNotesHome(
+    workspaceId: string,
+    home: WorkspaceNotesHome | undefined,
+    _opts: { actor: { id: string; name: string; kind?: string } },
+  ):
+    | { ok: true; workspace: HubWorkspace; notesHome?: WorkspaceNotesHome }
+    | { ok: false; error: 'workspace-not-found' } {
+    const state = this.workspaces.get(workspaceId);
+    if (!state) return { ok: false, error: 'workspace-not-found' };
+    state.workspace.notesHome = home;
+    this.scheduleSave(workspaceId);
+    return { ok: true, workspace: state.workspace, ...(home ? { notesHome: home } : {}) };
+  }
+
   /**
    * What this board's ticket-effort scorer weighs: the owner's own text, or
    * the default when nobody has written any. The ONE reader of
@@ -6668,6 +6722,30 @@ export class TaskStore {
     task.updatedAt = Date.now();
     this.scheduleSave(task.workspaceId);
     return { ok: true, task, changed: true };
+  }
+
+  /**
+   * The goal half of `linkRef`: add a cross-reference to a goal row's
+   * `links`. Same idempotency contract; a goal cannot self-ref (its own id
+   * is a task-kind ref, refused for symmetry with `linkRef`).
+   */
+  linkGoalRef(
+    goalId: string,
+    ref: Ref,
+  ):
+    | { ok: true; goal: GoalRow; changed: boolean }
+    | { ok: false; error: 'not-found' | 'bad-ref' | 'self-ref' } {
+    const goal = this.getGoalRow(goalId);
+    if (!goal) return { ok: false, error: 'not-found' };
+    if (!isValidRef(ref)) return { ok: false, error: 'bad-ref' };
+    if (ref.kind === 'task' && ref.taskId === goalId) return { ok: false, error: 'self-ref' };
+    const key = refKey(ref);
+    if ((goal.links ?? []).some((r) => refKey(r) === key))
+      return { ok: true, goal, changed: false };
+    goal.links = [...(goal.links ?? []), ref];
+    goal.updatedAt = Date.now();
+    this.scheduleSave(goal.workspaceId);
+    return { ok: true, goal, changed: true };
   }
 
   /** Remove a cross-reference. Removing one that isn't there is a no-op

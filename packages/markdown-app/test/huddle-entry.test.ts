@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
+  ENGINE_PARAM,
   HUDDLE_MODE_PARAM,
   HUDDLE_START_PARAM,
   ROOM_MIC_PARAM,
@@ -9,6 +10,7 @@ import {
   applyHuddleCrumb,
   applyReadingCrumb,
   huddleCaptureMode,
+  huddleEngine,
   huddleRoomAudio,
   huddleRoomSpeakers,
   resetReadingCrumbForTest,
@@ -165,6 +167,23 @@ describe('the room knobs on the address', () => {
       autoGainControl: false,
     });
     expect(huddleRoomAudio('?huddle=1')).toBeUndefined();
+  });
+
+  it('reads which transcription engine to open, and nothing for an unknown one', () => {
+    expect(huddleEngine(`?${ENGINE_PARAM}=soniox`)).toBe('soniox');
+    expect(huddleEngine(`?${ENGINE_PARAM}=assemblyai`)).toBe('assemblyai');
+    // Absent or unreadable says nothing: the server's default is decided on
+    // the server, and a typo must not route a recording anywhere.
+    expect(huddleEngine('?huddle=1')).toBeUndefined();
+    expect(huddleEngine(`?${ENGINE_PARAM}=whisper`)).toBeUndefined();
+  });
+
+  it('keeps the engine when the one-shot huddle flags are taken back off the address', () => {
+    // A preference like the room knobs below: a reload must open the same
+    // engine, or the comparison Bryan is running resets itself mid-trial.
+    const kept = withoutHuddleStart(`/review/d1?huddle=1&${ENGINE_PARAM}=soniox`);
+    expect(huddleEngine(kept.slice(kept.indexOf('?')))).toBe('soniox');
+    expect(wantsHuddleStart(kept.slice(kept.indexOf('?')))).toBe(false);
   });
 
   it('keeps both when the one-shot huddle flags are taken back off the address', () => {
