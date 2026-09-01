@@ -18,11 +18,12 @@ import type { User } from '@feedback/core';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   SPINOFF_ACTIONS,
-  SPINOFF_QUESTION_TEXT,
+  SPINOFF_QUESTION_PREFILL,
   type SpinoffAnchor,
   type SpinoffDeps,
   boardIdFor,
   clipTitle,
+  deriveTaskTitle,
   mountSpinoffMenu,
   runSpinoff,
   taskLinkHref,
@@ -116,6 +117,66 @@ describe('clipTitle', () => {
   });
 });
 
+/**
+ * The titles a fresh-eyes review actually got on the board, and what each
+ * should have been. What shipped first was the raw selection, so a tap on a
+ * heading filed a row called "## Cloudflare".
+ */
+describe('deriveTaskTitle', () => {
+  it('keeps an ordinary line as it stands', () => {
+    expect(deriveTaskTitle('Check whether Access covers the mockup route')).toBe(
+      'Check whether Access covers the mockup route',
+    );
+  });
+
+  it('drops the markdown marker, which is structure and not words', () => {
+    expect(deriveTaskTitle('## Cloudflare Access')).toBe('Cloudflare Access');
+    expect(deriveTaskTitle('- Check the tunnel config')).toBe('Check the tunnel config');
+    expect(deriveTaskTitle('* Check the tunnel config')).toBe('Check the tunnel config');
+    expect(deriveTaskTitle('1. Check the tunnel config')).toBe('Check the tunnel config');
+    expect(deriveTaskTitle('2) Check the tunnel config')).toBe('Check the tunnel config');
+    expect(deriveTaskTitle('> Check the tunnel config')).toBe('Check the tunnel config');
+  });
+
+  it('takes the first sentence and leaves the elaboration to the body', () => {
+    expect(
+      deriveTaskTitle('Do the iPad review pass. It has to happen before we share anything.'),
+    ).toBe('Do the iPad review pass');
+  });
+
+  it('does not read an abbreviation as the end of the sentence', () => {
+    // The `{12,}` floor. Without it this files a row called "Ask Dr".
+    expect(deriveTaskTitle('Ask Dr. Reyes whether the tunnel is in scope')).toBe(
+      'Ask Dr. Reyes whether the tunnel is in scope',
+    );
+  });
+
+  it('ends on a word, never on the comma a clipped clause ends with', () => {
+    expect(deriveTaskTitle('so we should check whether Access covers it,')).toBe(
+      'so we should check whether Access covers it',
+    );
+    expect(deriveTaskTitle('Ship the widget —')).toBe('Ship the widget');
+  });
+
+  it('flattens the whitespace a multi-line selection carries', () => {
+    expect(deriveTaskTitle('  Ship   the\nwidget  ')).toBe('Ship the widget');
+  });
+
+  it('still caps a long line, at a word boundary', () => {
+    const long = `${'word '.repeat(40)}end`;
+    const out = deriveTaskTitle(long);
+    expect(out.length).toBeLessThanOrEqual(80);
+    expect(out.endsWith('…')).toBe(true);
+  });
+
+  it('falls back to the raw words rather than filing an empty title', () => {
+    // Everything the tidying steps strip, and nothing else. A row with no
+    // title at all is worse than a row called "???".
+    expect(deriveTaskTitle('???')).toBe('???');
+    expect(deriveTaskTitle('##')).toBe('##');
+  });
+});
+
 describe('boardIdFor', () => {
   /**
    * The bug this was extracted for, found in a browser on staging: a huddle
@@ -167,20 +228,33 @@ describe('runSpinoff', () => {
     const call = calls[0]!;
     expect(call.url).toBe('/api/workspaces/w-board/tasks');
     expect(call.method).toBe('POST');
-    expect(call.body.title).toBe(ANCHOR.snippet.text);
+    // The TITLE is derived, not the raw selection — the trailing full stop
+    // is a seam between two sentences and not part of the row's name.
+    expect(call.body.title).toBe('Check whether Cloudflare Access covers the mockup route too');
     // The author is the PERSON who tapped — an agent-authored create would
     // land at triage instead of todo, which is not what a tap means.
     expect(call.body.author).toEqual(JORDAN);
     // Where it came from, machine-readable…
     expect(call.body.origin).toEqual({ kind: 'doc', docId: 'd-huddle' });
-    // …and in words, for whoever reads the ticket a week later.
+    // …and in words, VERBATIM, for whoever reads the ticket a week later:
+    // the body quotes what was actually said, punctuation and all, which is
+    // the half the title is allowed to tidy because the body keeps it.
     expect(String(call.body.body)).toContain('Discussion — widget rollout');
     expect(String(call.body.body)).toContain(ANCHOR.snippet.text);
     expect(made).toEqual({
       action: 'task',
       taskId: 't-99',
+      title: 'Check whether Cloudflare Access covers the mockup route too',
       href: '/workspaces/w-board?task=t-99',
     });
+  });
+
+  it('hands the title back, so the toast can name what it made', async () => {
+    // The reviewer got "Task created." over and over with no way to tell
+    // which row, or whether the title had come out sane, without leaving the
+    // doc for the board.
+    const { deps: d } = deps({ quote: '## Cloudflare Access' });
+    expect((await runSpinoff('task', d))?.title).toBe('Cloudflare Access');
   });
 
   it('Start now is the same row placed at the top — not a status claim', async () => {
@@ -213,18 +287,24 @@ describe('runSpinoff', () => {
     expect(String(calls[0]?.body.title).startsWith('Research: ')).toBe(true);
   });
 
-  it('Answer a question opens an anchored thread — not a review item', async () => {
+  it('Answer a question posts NOTHING — the person writes their own words', async () => {
+    // It used to POST a fixed sentence the instant the row was tapped, so a
+    // thread appeared under somebody's name containing words they had never
+    // written. One tap is not consent to be quoted.
     const { deps: d, calls } = deps();
     const made = await runSpinoff('question', d);
-    expect(calls[0]?.url).toBe('/api/docs/d-huddle/threads');
-    expect(calls[0]?.body.anchor).toEqual(ANCHOR);
-    expect(calls[0]?.body.text).toBe(SPINOFF_QUESTION_TEXT);
-    // A `review` payload addresses a PERSON's Home queue. This asks the agent
-    // watching the doc, which is what a plain thread's `thread.created` does.
-    expect(calls[0]?.body.review).toBeUndefined();
-    expect(made).toEqual({ action: 'question', threadId: 'th-1' });
-    // No task, so nothing to link into the prose.
+    expect(calls).toHaveLength(0);
+    expect(made).toEqual({ action: 'question' });
+    // Nothing was created, so there is nothing to link into the prose.
     expect(made?.href).toBeUndefined();
+    expect(made?.threadId).toBeUndefined();
+  });
+
+  it('offers the question as a prefill the person can edit or clear', () => {
+    // A starting point, not a sentence: it ends open so the ask continues it,
+    // and it never claims anything on the person's behalf.
+    expect(SPINOFF_QUESTION_PREFILL.trim().endsWith('?')).toBe(true);
+    expect(SPINOFF_QUESTION_PREFILL.endsWith(' ')).toBe(true);
   });
 
   it('Leave a comment touches the network not at all', async () => {
@@ -234,10 +314,12 @@ describe('runSpinoff', () => {
   });
 
   it('reports a server that answered without an id rather than inventing one', async () => {
-    const { deps: d } = deps({ fetchJson: () => Promise.resolve({}) });
-    expect(await runSpinoff('task', d)).toBeNull();
-    const { deps: q } = deps({ fetchJson: () => Promise.resolve({}) });
-    expect(await runSpinoff('question', q)).toBeNull();
+    // Only the three task-creating actions can hit this: `question` and
+    // `comment` post nothing, so there is no id for a server to omit.
+    for (const action of ['task', 'start', 'research'] as const) {
+      const { deps: d } = deps({ fetchJson: () => Promise.resolve({}) });
+      expect(await runSpinoff(action, d)).toBeNull();
+    }
   });
 
   it('lets a refusal through to the caller instead of swallowing it', async () => {
