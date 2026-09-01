@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { positiveEnvDuration, readRenamedEnv } from '@feedback/core/env-names';
 import { resolvePostmarkCodeSender } from './auth/postmark-code-sender.ts';
 import { clientReleaseStatus, resolveClientDists } from './client-release.ts';
+import { resolveDataDir } from './data-dir.ts';
 import { confirmDeployBoot, createDeployer, deployLogPath } from './deploy.ts';
 import { effortEstimateEnabled, haikuEffortEstimator } from './effort-estimator.ts';
 import { installLogSquelch } from './log-squelch.ts';
@@ -53,7 +54,7 @@ function arg(name: string, fallback?: string): string | undefined {
 }
 
 const requestedPort = Number(arg('port', process.env.PORT ?? '8787'));
-const dataDir = arg('data-dir', join(repoRoot, 'data'));
+const dataDir = arg('data-dir', resolveDataDir(process.env, repoRoot));
 
 // Which browser bundles to serve. PROD passes published release directories
 // (see client-release.ts) so the served client is NOT read out of a git
@@ -686,7 +687,7 @@ let handle: ReturnType<typeof createServer> | null = null;
 const deployer = args.includes('--deploy')
   ? createDeployer({
       repoRoot,
-      dataDir: dataDir ?? join(repoRoot, 'data'),
+      dataDir: dataDir ?? resolveDataDir(process.env, repoRoot),
       // Only documents bound INSIDE the deploy source can be clobbered by
       // its pull; one bound from another checkout is not this deploy's
       // business.
@@ -835,7 +836,9 @@ port = handle.port;
 // record pending, and the detached watchdog the deploy spawned expires it
 // into `boot-failed` (deploy.ts, "Dependencies are part of the delivery").
 if (deployer) {
-  const confirmed = confirmDeployBoot(deployLogPath(dataDir ?? join(repoRoot, 'data')));
+  const confirmed = confirmDeployBoot(
+    deployLogPath(dataDir ?? resolveDataDir(process.env, repoRoot)),
+  );
   if (confirmed) {
     console.log(`[deploy] boot confirmed healthy for the deploy recorded at ${confirmed.ranAt}`);
   }
