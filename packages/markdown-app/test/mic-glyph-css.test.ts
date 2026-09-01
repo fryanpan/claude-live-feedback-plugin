@@ -50,9 +50,7 @@ function rule(selector: string): string {
  * assertion below is what keeps that from being a silent regression to an
  * emoji rather than a decision.
  */
-const MOUNTS: ReadonlyArray<[string, string]> = [
-  ['the board’s docked mic (hub-app.ts)', HUB_APP],
-];
+const MOUNTS: ReadonlyArray<[string, string]> = [['the board’s docked mic (hub-app.ts)', HUB_APP]];
 
 describe('the mic wears the nav’s icon convention', () => {
   it('draws it as a stroked, currentColor SVG like every other glyph', () => {

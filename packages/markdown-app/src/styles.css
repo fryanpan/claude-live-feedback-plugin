@@ -8251,25 +8251,58 @@ body.threads-resizing {
   border-top: 0;
   padding-top: 0;
 }
-/* The answered RECORD, in place: one line and a persistent Undo, same shape
-   as the hub's `.hub-detail-answered`. Undo is quiet but never smaller than
-   a finger — it is the recovery path for a single unconfirmed tap. */
+/* The settled RECORD, in place: a labelled outcome strip, the provenance
+   under it, and a persistent Undo. The outcome used to sit mid-sentence
+   ("Answered by Cara: “AssemblyAI — go with what we prototyped”"), where the
+   one thing a person scans a settled item for had no visual home; the
+   approved mock gives it one. Undo is quiet but never smaller than a finger
+   — it is the recovery path for a single unconfirmed tap. */
 .thread-answered {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 10px;
-  flex-wrap: wrap;
   margin-top: 8px;
 }
-.thread-answered-line {
-  margin: 0;
+/* The outcome itself. A left rule in the settled green, so the strip reads as
+   the conclusion of the card above rather than another paragraph of it. */
+.thread-decision-strip {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  padding: 8px 12px;
+  border: 1px solid var(--green-soft-border, var(--border));
+  border-left: 4px solid var(--green-strong);
+  border-radius: var(--radius);
+  background: var(--bg);
+}
+.thread-decision-label {
+  flex: 0 0 auto;
+  font-size: 10.5px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--green-strong);
+}
+.thread-answer-words {
   font-weight: 600;
   font-size: 13px;
-  flex: 1 1 180px;
   overflow-wrap: anywhere;
 }
+/* At a phone's width the label and the words fight over one line and the
+   words win by wrapping under a hanging label. Stacking is what the mock
+   draws for exactly this width, and it keeps the label a label. */
+@media (max-width: 640px) {
+  .thread-decision-strip {
+    flex-direction: column;
+    gap: 4px;
+  }
+}
+/* Who settled it and when — the counterpart to `.thread-item-meta` on the
+   card above, and quiet for the same reason. */
+.thread-answered-meta {
+  margin: 6px 0 0;
+  font-size: 12px;
+  color: var(--fg-muted);
+}
 .thread-answer-undo {
+  margin-top: 8px;
   flex: none;
   min-height: 44px;
   padding: 8px 14px;
