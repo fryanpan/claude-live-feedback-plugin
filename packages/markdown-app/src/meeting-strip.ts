@@ -1266,7 +1266,7 @@ export function mountMeetingStrip(opts: MeetingStripOpts): MeetingStripHandle {
       chooseConsent = consentBox.checked;
     });
     const consentText = document.createElement('span');
-    consentText.textContent = "I’ll ask for consent";
+    consentText.textContent = 'I’ll ask for consent';
     consent.append(consentBox, consentText);
     pop.append(consent);
 
