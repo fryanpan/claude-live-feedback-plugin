@@ -699,6 +699,18 @@ body.has-set .doc-switcher-caret {
   border-right: 1px solid var(--border);
 }
 
+/* The "Make a plan" entry's one line of guidance (src/plan-placeholder.ts)
+   — a render-time widget under the Goal heading of an unwritten plan doc.
+   Muted and unselectable: it reads as the editor talking, not as content,
+   and it must never catch a tap meant for the empty paragraph under it. */
+.plan-placeholder {
+  color: var(--fg-muted);
+  font-size: 16px;
+  line-height: 1.5;
+  pointer-events: none;
+  user-select: none;
+}
+
 /* The plan gate's one control (src/plan-gate.ts) — a floating Approve Plan
    button, always visible at the bottom of the editor pane, unmistakably the
    primary action on a pending plan doc (Bryan, on the mock). It replaces two
