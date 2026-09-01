@@ -443,9 +443,10 @@ describe('the tab row is reachable where it appears', () => {
 describe('the panel’s fields and headings', () => {
   it('gives the goal its own line, because a goal title is free text', () => {
     // *"Goal field: own line — the goal title can be longer than the column
-    // has room for."* Goal is the LAST field, which is why the selector moved
-    // off `:first-child` when the status chip row went away.
-    expect(rule('.hub-detail-field:last-child')).toMatch(/grid-column:\s*1 \/ -1/);
+    // has room for."* An explicit modifier now, not a `:last-child` position
+    // accident — the goal PANEL's own last field is Due, which must stay one
+    // column wide, so the two panels cannot share a positional selector.
+    expect(rule('.hub-detail-field--full')).toMatch(/grid-column:\s*1 \/ -1/);
     // Status is emphatically no longer the full-width one.
     expect(rule('.hub-detail-field:first-child')).toBe('');
   });

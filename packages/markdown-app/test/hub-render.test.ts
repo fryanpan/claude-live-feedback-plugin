@@ -24,6 +24,7 @@ import {
   renderLeadStrip,
   renderReviewBanner,
 } from '../src/hub/hub-render.ts';
+import { _resetLinkTitlesForTest, primeLinkTitle } from '../src/link-titles.ts';
 import {
   composerSelection,
   focusMarkdownComposer,
@@ -614,8 +615,30 @@ describe('renderTaskDetail', () => {
         detailHandlers(),
       ),
     ).not.toThrow();
-    // …and the ref it DOES understand still made it through.
-    expect(root.querySelector('.hub-detail-links')?.textContent).toContain('d-1');
+    // …and the ref it DOES understand still made it through — as a
+    // title-hydrated anchor (no title cached here, so it reads "Loading…"),
+    // never the raw id.
+    const a = root.querySelector<HTMLAnchorElement>('.hub-detail-links a');
+    expect(a?.getAttribute('href')).toBe('/review/d-1');
+    expect(a?.textContent).toBe('Loading…');
+  });
+
+  it('shows the doc TITLE for a doc-kind link, basename-fallback included — never a raw id', () => {
+    _resetLinkTitlesForTest();
+    primeLinkTitle('/review/d-titled', 'Sprint plan', null);
+    primeLinkTitle('/review/d-blank', null, null);
+    renderTaskDetail(
+      root,
+      task({
+        links: [
+          { kind: 'doc', docId: 'd-titled' },
+          { kind: 'doc', docId: 'd-blank' },
+        ],
+      }),
+      detailHandlers(),
+    );
+    const anchors = [...root.querySelectorAll<HTMLAnchorElement>('.hub-detail-links a')];
+    expect(anchors.map((a) => a.textContent)).toEqual(['Sprint plan', 'Untitled doc']);
   });
 
   it('shows the answer form for an unanswered decision and records verbatim text', () => {
