@@ -38,6 +38,25 @@ export function readKeychainPassword(
   );
 }
 
+/**
+ * Read a generic-password entry addressed by SERVICE AND ACCOUNT — for the
+ * services that hold several values under one service name (the Google OAuth
+ * app keeps `client-id` and `client-secret` as two accounts of
+ * `claude-workspaces-google-oauth`). No env override and no any-account
+ * fallback: the account IS the selector here, and falling back to "any"
+ * would hand a caller asking for the id the secret. Returns null when absent
+ * — the callers treat missing as "not configured", never as an error.
+ */
+export function readKeychainAccountPassword(
+  serviceName: string,
+  account: string,
+  run: KeychainRunner = spawnKeychain,
+): string | null {
+  const result = run(['find-generic-password', '-a', account, '-s', serviceName, '-w']);
+  if (result.status !== 0) return null;
+  return result.stdout.trim() || null;
+}
+
 /** What `security` is asked, in order: this account's entry, then any account's. */
 export function keychainLookups(serviceName: string, account: string | undefined): string[][] {
   const byAccount = account
