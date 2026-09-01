@@ -55,7 +55,13 @@ import {
 } from './signin/write-gate.ts';
 import { mountSpeakerReassign } from './speaker-reassign-menu.ts';
 import { loadDocSpeakers, loadDocVoices, postSpeakerName } from './speaker-voices.ts';
-import { type SpinoffId, clipTitle, mountSpinoffMenu, runSpinoff } from './spinoff-menu.ts';
+import {
+  type SpinoffId,
+  boardIdFor,
+  clipTitle,
+  mountSpinoffMenu,
+  runSpinoff,
+} from './spinoff-menu.ts';
 import { installStaleClientNotice } from './stale-client.ts';
 import { readSuggestModePref, setSuggesting, writeSuggestModePref } from './suggest-input.ts';
 import { registerMarkdownMount } from './surface-registry.ts';
@@ -706,10 +712,21 @@ async function mountMarkdown(ctx: MountContext): Promise<void> {
     sel: ChromeSelection,
     range: { from: number; to: number } | null,
   ): Promise<void> {
-    // The board this doc is filed on. `ctx` has it on a doc opened through a
-    // workspace URL; the CRDT is the fallback for one opened directly.
-    const workspaceId = ctx.workspaceId ?? readDocMeta(ydoc).workspaceId;
-    if (workspaceId === undefined) {
+    // The BOARD this doc is filed on, which is `backTo` — not `workspaceId`.
+    //
+    // Those are two different ids and the difference is the whole bug this
+    // comment exists for: `meta.workspaceId` is the GROUPING id of a diff
+    // review or a folder browse, and a huddle doc has none at all. Reading it
+    // gave the empty string, which is not `undefined`, so the guard below
+    // passed and the create went to `/api/workspaces//tasks` — a 404 the
+    // person saw as a toast reading "404".
+    //
+    // `backTo` is what the server answers when it can name the board a doc
+    // was reached from, which for a huddle is the board that started it.
+    const workspaceId = boardIdFor(ctx);
+    // Empty, not undefined, is how "no board" actually arrives — `DocMeta`
+    // defaults both ids to `''`.
+    if (!workspaceId) {
       showToast('This doc is not on a board yet.');
       return;
     }

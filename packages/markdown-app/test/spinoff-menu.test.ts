@@ -21,6 +21,7 @@ import {
   SPINOFF_QUESTION_TEXT,
   type SpinoffAnchor,
   type SpinoffDeps,
+  boardIdFor,
   clipTitle,
   mountSpinoffMenu,
   runSpinoff,
@@ -112,6 +113,39 @@ describe('clipTitle', () => {
     const out = clipTitle('supercalifragilisticexpialidocious', 12);
     expect(out.length).toBeLessThanOrEqual(12);
     expect(out.endsWith('…')).toBe(true);
+  });
+});
+
+describe('boardIdFor', () => {
+  /**
+   * The bug this was extracted for, found in a browser on staging: a huddle
+   * doc has NO `meta.workspaceId` at all — its board is `backTo`. Reading the
+   * wrong id gave the empty string, which is not `undefined`, so the
+   * "is it on a board" guard passed and the create went to
+   * `/api/workspaces//tasks`. The person got a toast reading "404".
+   */
+  it('prefers the board the doc was reached from', () => {
+    expect(boardIdFor({ backTo: { workspaceId: 'w-board' }, workspaceId: 'w-grouping' })).toBe(
+      'w-board',
+    );
+  });
+
+  it('is the board of a huddle doc, which carries no grouping id at all', () => {
+    expect(boardIdFor({ backTo: { workspaceId: 'w-board' }, workspaceId: '' })).toBe('w-board');
+  });
+
+  it('falls back to the grouping id when there is no board link', () => {
+    // A diff review's own workspace: no `backTo`, and its grouping id IS
+    // where a row filed from it belongs.
+    expect(boardIdFor({ workspaceId: 'w-grouping' })).toBe('w-grouping');
+  });
+
+  it('treats every empty shape as no board — not as a board named ""', () => {
+    // Each of these used to build `/api/workspaces//tasks`.
+    expect(boardIdFor({})).toBe('');
+    expect(boardIdFor({ workspaceId: '' })).toBe('');
+    expect(boardIdFor({ backTo: {}, workspaceId: '' })).toBe('');
+    expect(boardIdFor({ backTo: { workspaceId: '   ' }, workspaceId: '  ' })).toBe('');
   });
 });
 

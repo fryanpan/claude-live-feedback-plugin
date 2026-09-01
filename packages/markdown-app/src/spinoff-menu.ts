@@ -109,6 +109,27 @@ export function taskLinkHref(workspaceId: string, taskId: string): string {
   return `/workspaces/${encodeURIComponent(workspaceId)}?task=${encodeURIComponent(taskId)}`;
 }
 
+/**
+ * Which board a spun-off row is filed on.
+ *
+ * Two ids, and they are not the same thing. `backTo` is the BOARD a doc was
+ * reached from — for a huddle, the board that started it. `workspaceId` is the
+ * GROUPING id of a diff review or a folder browse, and a huddle doc has none
+ * at all.
+ *
+ * It is a function, and tested, because reading the wrong one of the two
+ * failed silently in exactly the way an id mix-up does: `DocMeta` defaults
+ * both to the empty string, so an `=== undefined` guard let `''` through and
+ * the create went to `/api/workspaces//tasks`. The person got a toast that
+ * said "404".
+ */
+export function boardIdFor(meta: {
+  backTo?: { workspaceId?: string };
+  workspaceId?: string;
+}): string {
+  return meta.backTo?.workspaceId?.trim() || meta.workspaceId?.trim() || '';
+}
+
 /** What the agent is asked, when somebody taps "Answer a question" on a line.
  *  Fixed text: the gesture is one tap, and the question IS the line — which
  *  the thread's anchor carries, quoted, with no retyping. */
