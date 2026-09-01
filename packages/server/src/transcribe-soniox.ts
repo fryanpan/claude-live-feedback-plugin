@@ -41,6 +41,7 @@
  * The socket is injected because a test of this mapping must not open one.
  */
 
+import type { MeetingTuning } from '@feedback/core';
 import { readKeychainPassword } from './share/keychain.ts';
 import type {
   EngineSocket,
@@ -100,8 +101,20 @@ export function resolveSonioxKey(
  * `maxSpeakers` has no Soniox counterpart — there is no cap parameter in
  * their config — so the caller's cap is accepted and quietly unused rather
  * than refused: the caller states intent once, whichever engine listens.
+ *
+ * `tuning` is the person's Advanced Options, already sanitized against this
+ * engine's spec (meeting-tuning.ts). All of it rides in this one frame —
+ * Soniox has no mid-session update message, so every change here waits for
+ * the next recording. Two keys are renamed on the way in: our UI-neutral
+ * `context_terms` becomes the `context.terms` object the API takes, and the
+ * rest are Soniox's own names already.
  */
-export function sonioxConfig(sampleRate: number, detectSpeakers: boolean): Record<string, unknown> {
+export function sonioxConfig(
+  sampleRate: number,
+  detectSpeakers: boolean,
+  tuning?: MeetingTuning,
+): Record<string, unknown> {
+  const { context_terms: contextTerms, ...rest } = tuning ?? {};
   return {
     model: SONIOX_MODEL,
     audio_format: 'pcm_s16le',
@@ -114,6 +127,13 @@ export function sonioxConfig(sampleRate: number, detectSpeakers: boolean): Recor
     // same rule as AssemblyAI holds: a session nobody called a conversation
     // does not ask, so a solo transcript never grows invented voices.
     ...(detectSpeakers ? { enable_speaker_diarization: true } : {}),
+    // AFTER the fixed fields it could never be allowed to override — the
+    // sanitizer only passes spec keys, and none of them collide, but the
+    // order states the intent.
+    ...rest,
+    ...(Array.isArray(contextTerms) && contextTerms.length > 0
+      ? { context: { terms: contextTerms } }
+      : {}),
   };
 }
 
@@ -285,7 +305,11 @@ export function createSonioxEngine(opts: SonioxOptions = {}): TranscriptionEngin
             socket.send(
               JSON.stringify({
                 api_key: key,
-                ...sonioxConfig(sessionOpts.sampleRate, sessionOpts.detectSpeakers),
+                ...sonioxConfig(
+                  sessionOpts.sampleRate,
+                  sessionOpts.detectSpeakers,
+                  sessionOpts.tuning,
+                ),
               }),
             );
             resolve(session);

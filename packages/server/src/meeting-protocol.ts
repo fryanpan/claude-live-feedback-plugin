@@ -30,7 +30,10 @@ import {
   type MeetingTimingMark,
   detectsSpeakers,
   maxSpeakersFor,
+  maxSpeakersFromTuning,
   parseMeetingClientMessage,
+  pickLiveTuning,
+  sanitizeTuning,
 } from '@feedback/core';
 import {
   type MeetingNotesDeps,
@@ -92,6 +95,11 @@ interface Conn {
   pendingRecv: number[];
   /** This connection asked to be measured. Set synchronously from `start`. */
   wantsTiming: boolean;
+  /**
+   * The engine this connection's meeting runs on, once one is chosen — what
+   * a mid-meeting `tune` frame is sanitized against. Null while idle.
+   */
+  engineName: string | null;
   /** What was forwarded and when, once the meeting is live. */
   ledger: AudioChunkLedger | null;
   /**
@@ -180,6 +188,7 @@ export class MeetingRelay {
       pending: [],
       pendingRecv: [],
       wantsTiming: false,
+      engineName: null,
       ledger: null,
       pendingStop: null,
     });
@@ -215,7 +224,27 @@ export class MeetingRelay {
       // Synchronously, before the handshake is awaited: audio may arrive
       // during it, and those chunks belong in the ledger too.
       conn.wantsTiming = msg.timing === true;
-      this.track(this.start(ws, conn, msg.sampleRate, msg.mode, msg.speakers, msg.engine));
+      this.track(
+        this.start(ws, conn, msg.sampleRate, msg.mode, msg.speakers, msg.engine, msg.tuning),
+      );
+      return;
+    }
+    if (msg.type === 'tune') {
+      // Advanced Options changed mid-meeting. Sanitized against the engine
+      // that is actually running, narrowed to what its protocol can change
+      // on an open session, and answered with exactly what was applied —
+      // everything else waits for the next recording, and the client knows
+      // which is which from the same shared specs.
+      const engineName = conn.engineName;
+      const session = conn.session;
+      if (conn.state !== 'live' || !engineName || !session?.update) {
+        this.send(ws, { type: 'tuned', applied: [] });
+        return;
+      }
+      const live = pickLiveTuning(engineName, sanitizeTuning(engineName, msg.settings));
+      const applied = Object.keys(live);
+      if (applied.length > 0) session.update(live);
+      this.send(ws, { type: 'tuned', applied });
       return;
     }
     if (msg.type === 'announced') {
@@ -334,11 +363,9 @@ export class MeetingRelay {
     mode: CaptureMode,
     speakers?: number,
     engineName?: string,
+    rawTuning?: Record<string, unknown>,
   ): Promise<void> {
     if (conn.state !== 'idle') return;
-    // Resolved once, here, so the default for "nobody said how many" lives in
-    // one place and the engine call below reads as the decision it is.
-    const maxSpeakers = maxSpeakersFor(mode, speakers);
     const docId = ws.data.docId;
     // No name means the first configured engine — the server's default, and
     // exactly what every client sent before the choice existed. A name the
@@ -359,6 +386,19 @@ export class MeetingRelay {
       });
       return;
     }
+    // The person's Advanced Options, sanitized against the engine that will
+    // actually run — and the speaker cap resolved once, here. A tuning-aware
+    // client owns the cap in its Advanced panel where the default is
+    // UNCAPPED (the engine's own default); a client that never sent the
+    // field keeps the legacy fallback, `speakers` or DEFAULT_ROOM_SPEAKERS.
+    // Either way a solo session gets no cap, because it asks for no labels.
+    const tuning = rawTuning !== undefined ? sanitizeTuning(engine.name, rawTuning) : undefined;
+    const maxSpeakers =
+      tuning !== undefined
+        ? detectsSpeakers(mode)
+          ? maxSpeakersFromTuning(tuning)
+          : undefined
+        : maxSpeakersFor(mode, speakers);
     // Claim the doc BEFORE the handshake: two sockets starting at once would
     // otherwise both pass the check and both open a billed session.
     const meeting = this.deps.store.start({ docId, engine: engine.name, sampleRate, mode });
@@ -372,6 +412,7 @@ export class MeetingRelay {
     }
     conn.state = 'opening';
     conn.meeting = meeting;
+    conn.engineName = engine.name;
     // The notes pipeline exists for exactly the meeting's lifetime. Created
     // before the handshake so the closure below can feed it, but it holds no
     // resource until a turn arrives — abandoning it on a failed handshake
@@ -402,6 +443,9 @@ export class MeetingRelay {
         // part of the session's configuration, so a person arriving late does
         // not raise it.
         ...(maxSpeakers !== undefined ? { maxSpeakers } : {}),
+        // The knobs the person moved, already clamped into this engine's
+        // ranges. Untouched knobs are absent — the engine's own defaults run.
+        ...(tuning !== undefined && Object.keys(tuning).length > 0 ? { tuning } : {}),
         onTurn: (turn) => {
           this.send(ws, {
             type: 'transcript',
@@ -432,6 +476,7 @@ export class MeetingRelay {
       meeting.stop();
       conn.state = 'idle';
       conn.meeting = null;
+      conn.engineName = null;
       // Nothing has fed it, so there is nothing to flush — just let it go.
       conn.notes = null;
       // The socket stays open after `unavailable`, so a client may retry
@@ -510,6 +555,7 @@ export class MeetingRelay {
     conn.session = null;
     conn.meeting = null;
     conn.notes = null;
+    conn.engineName = null;
     conn.pending = [];
     conn.pendingRecv = [];
     conn.ledger = null;

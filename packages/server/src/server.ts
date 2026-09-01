@@ -12273,7 +12273,10 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
             collectLandingProjects(rooms),
             Date.now(),
           );
-          return new Response(renderLanding(model, browserSentry), {
+          // The landing banner's join files its doc under the default board
+          // (the join POST carries no workspaceId from `/`), so the offer
+          // names that destination on its face.
+          return new Response(renderLanding(model, browserSentry, DEFAULT_HUB_WORKSPACE_NAME), {
             headers: { 'content-type': 'text/html; charset=utf-8' },
           });
         }
@@ -13359,7 +13362,11 @@ function renderLandingProjectLink(p: LandingProjectLink): string {
   </a></li>`;
 }
 
-function renderLanding(model: LandingModel, sentry: BrowserSentryConfig | null): string {
+function renderLanding(
+  model: LandingModel,
+  sentry: BrowserSentryConfig | null,
+  notesWorkspaceName: string,
+): string {
   const days = Math.round(model.windowMs / 86_400_000);
   // Retired boards are NOT in this denominator. "Nothing active, 3 inactive
   // below" has to mean three rows a reader can go and look at; counting
@@ -13426,6 +13433,8 @@ function renderLanding(model: LandingModel, sentry: BrowserSentryConfig | null):
     'Workspaces',
     `<h1>Workspaces</h1>
 <div class="summary">Active in the last ${days} days, most recent first</div>
+<meeting-banner workspace-name="${escape(notesWorkspaceName)}"></meeting-banner>
+<script type="module" src="/app/landing.js"></script>
 ${allbar}
 ${active}
 ${inactive}
