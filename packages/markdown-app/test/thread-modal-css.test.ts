@@ -168,14 +168,16 @@ describe('the mic no longer stands down under an open card', () => {
     );
   });
 
-  it('docks the mic in the topbar instead, out of the flow of the page', () => {
-    // The reason the hide is safe to drop: the mic is no longer over the
-    // document at all. `.doc-nav-dock` un-fixes it the way `.hub-nav-dock`
-    // does on the board.
-    const docked = /\.doc-nav-dock \.voice-mic\s*\{([^}]*)\}/.exec(declarationsOnly(CSS))?.[1];
-    expect(docked, 'nothing styles the doc mic once it is docked').toBeDefined();
-    expect(docked).toMatch(/position:\s*static/);
-    expect(docked).toMatch(/left:\s*auto/);
-    expect(docked).toMatch(/bottom:\s*auto/);
+  it('the doc surface has no hold-to-talk mic left at all', () => {
+    // The reason the hide is safe to drop got stronger: the top-bar overhaul
+    // retired the doc's hold-to-talk mic entirely (the Record Audio button
+    // owns everything audio on that screen), so there is no doc mic for a
+    // card to cover. The hub's docked mic (`.hub-nav-dock`) stays.
+    const decls = declarationsOnly(CSS);
+    expect(decls).not.toContain('.doc-nav-dock');
+    // Positive control: the class name really would be findable if a rule
+    // still used it.
+    expect(`${decls}\n.doc-nav-dock .voice-mic {}`).toContain('.doc-nav-dock');
+    expect(decls).toContain('.hub-nav-dock .voice-mic');
   });
 });

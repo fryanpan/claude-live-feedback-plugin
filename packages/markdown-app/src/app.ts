@@ -1,11 +1,4 @@
-import {
-  DEFAULT_CAPTURE_MODE,
-  type User,
-  connect,
-  escapeHtml,
-  readDocMeta,
-  suggestOps,
-} from '@feedback/core';
+import { type User, connect, escapeHtml, readDocMeta, suggestOps } from '@feedback/core';
 import { mountCode } from './code/code-app.ts';
 import { saveStateView, settlePending, watchConnection } from './connection-state.ts';
 import { renderDiffNav, setActiveFile } from './diff-nav.ts';
@@ -25,11 +18,12 @@ import {
 } from './huddle-entry.ts';
 import { ensureUserIdentity } from './identity-prompt.ts';
 import { wireKeyboardInset } from './keyboard-inset.ts';
-import { mountMeetingBotRow } from './meeting-bot-row.ts';
+import { createMeetingBotClient } from './meeting-bot-client.ts';
 import { mountMeetingStrip } from './meeting-strip.ts';
 import { wantsLatencyTiming } from './meeting-timing-client.ts';
 import type { MountContext } from './mount-context.ts';
 import type { MountScope } from './mount-scope.ts';
+import { mountPlanGate } from './plan-gate.ts';
 import { startReadingTracker } from './reading-tracker.ts';
 import { mountMarkupMargin } from './redline/markup-margin.ts';
 import { mountRedline } from './redline/redline-app.ts';
@@ -64,7 +58,6 @@ import { readSuggestModePref, setSuggesting, writeSuggestModePref } from './sugg
 import { registerMarkdownMount } from './surface-registry.ts';
 import { type TableMenuItem, tableMenuItems } from './table-menu.ts';
 import { watchTaskLinkStatuses } from './task-link-chips.ts';
-import { mountDocVoice } from './voice-dock.ts';
 import { renderWorkspaceTree } from './workspace-tree.ts';
 
 const DEFAULT_WS_PATH = (docId: string, type: string) =>
@@ -149,10 +142,6 @@ async function main(): Promise<void> {
     },
     writeAccess.canWrite ? {} : { suppressNamePrompt: true },
   );
-  // Voice on the doc surface (§3.8): one dock for the whole session; each
-  // utterance reads the CURRENT doc + topmost heading at release time, so
-  // the anchor follows navigation without remounting.
-  mountDocVoice(user);
   registerMarkdownMount(mountMarkdown);
   startRouter({
     user,
@@ -343,8 +332,13 @@ async function mountMarkdown(ctx: MountContext): Promise<void> {
     // "Record a conversation" is the only thing that says someone else is in
     // the room, and it is a press on the Board — a page that is gone by the
     // time this mounts. It rides in on the address with the start flag and
-    // leaves with it.
-    const huddleMode = huddleStart ? huddleCaptureMode(location.search) : DEFAULT_CAPTURE_MODE;
+    // leaves with it. Left `undefined` outside a huddle start on purpose:
+    // this feeds the start chooser's own preselection (`meeting-strip.ts`'s
+    // `chooseMode`), and that default is the approved mock's Multiple
+    // Speakers, not `DEFAULT_CAPTURE_MODE` — passing the default here always
+    // made it look like the address had asked for solo, so the chooser never
+    // showed the mock's preselection to anyone who opened a doc directly.
+    const huddleMode = huddleStart ? huddleCaptureMode(location.search) : undefined;
     const roomSpeakers = huddleRoomSpeakers(location.search);
     const roomAudio = huddleRoomAudio(location.search);
     // Which engine transcribes here. A preference like `speakers`, not a
@@ -361,9 +355,23 @@ async function mountMarkdown(ctx: MountContext): Promise<void> {
     // running numbers. Left in the address on purpose, unlike the huddle
     // flag: a reload should keep measuring, and it opens no mic by itself —
     // which is also why it is read after the huddle flag has been stripped.
+    // The bot's lifecycle is its own client — one endpoint, one SSE event —
+    // and the strip's chrome renders it: the invite lives in the start
+    // chooser, the state in the strip and menu. It hides itself when the
+    // server has no Recall key, so this costs one GET on a doc that cannot
+    // use it.
+    const botClient = createMeetingBotClient({ docId });
+    scope.onCleanup(() => botClient.destroy());
     const strip = mountMeetingStrip({
       docId,
       root: meetingStripEl,
+      // The Record Audio button docks at the end of the top bar's toolbar;
+      // the strip fuses to it from the row below.
+      toolbar: document.querySelector<HTMLElement>('#topbar .toolbar'),
+      bot: botClient,
+      // "<name>'s Claude Code Agent" — the bot walks into the call wearing
+      // the name of the person who sent it, editable in the chooser.
+      botNamePrefill: user.name ? `${user.name}'s Claude Code Agent` : 'Claude Code Agent',
       autoStart: huddleStart,
       // Read BEFORE the flag is stripped from the address above… it is, in
       // fact, read from `location.search` there too, so both come off the
@@ -382,11 +390,16 @@ async function mountMarkdown(ctx: MountContext): Promise<void> {
       postName: (meetingId, speaker, name) => postSpeakerName({ docId, meetingId, speaker, name }),
     });
     scope.onCleanup(() => strip.destroy());
-    // A sibling of the strip, not part of it: a bot has its own lifecycle and
-    // shares none of the microphone's state. It hides itself when the server
-    // has no Recall key, so this costs one GET on a doc that cannot use it.
-    const botRow = mountMeetingBotRow({ docId, root: meetingStripEl });
-    scope.onCleanup(() => botRow.destroy());
+  }
+
+  // The plan gate's floating Approve button — rendered only while this doc
+  // is a plan whose drafts are held; nothing at all on ordinary docs. Same
+  // rule (and reason) as the meeting strip above: a review of somebody's
+  // branch, or a companion doc under `navDocId`, is not a plan a person
+  // approves.
+  if (ctx.docType === 'markdown' && ctx.navDocId === undefined) {
+    const planGate = mountPlanGate({ docId, root: editorMount, user, canWrite });
+    scope.onCleanup(() => planGate.destroy());
   }
 
   // Tapping a speaker tag in the notes offers the voices this doc's meetings

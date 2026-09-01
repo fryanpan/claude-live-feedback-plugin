@@ -1,6 +1,8 @@
 /**
- * The live-meeting transcript strip: a bar along the bottom of the editor pane
- * that owns the doc's audio socket and renders what is being heard.
+ * The meeting chrome: one Record Audio button in the top bar that owns
+ * everything audio, the live transcript strip fused under it, and the two
+ * popovers behind the button — the speaker menu while recording, the start
+ * chooser while not.
  *
  * IT IS THE ONLY SURFACE A MEETING HAS. The transcript is never written into
  * the document — the notes agent does that later, from the durable transcript
@@ -10,11 +12,20 @@
  * nothing in those cases is a Start button that does nothing when pressed,
  * which is the failure this file exists to avoid.
  *
- * IT RESERVES HEIGHT. The strip is the editor pane's third grid row, so the
- * scrolling document is shorter by exactly its height rather than running
- * underneath it. Layout rules live in styles.css under MEETING TRANSCRIPT
- * STRIP and are asserted in `meeting-strip-css.test.ts`, because no DOM test
- * resolves layout.
+ * IT RESERVES HEIGHT. The strip is the shell's second grid row, directly
+ * under the top bar it grows out of, so the editor below is shorter by
+ * exactly its height rather than running underneath it. Hidden, the row is
+ * zero. Layout rules live in styles.css under MEETING RECORD CHROME and are
+ * asserted in `meeting-strip-css.test.ts`, because no DOM test resolves
+ * layout.
+ *
+ * EVERY CHOICE HAPPENS AT START TIME. The chooser collects the source
+ * (microphone, or a bot sent to a Zoom / Google Meet call), whether the room
+ * has one voice or several, and who tells the room about the recording — and
+ * nothing after Start offers a knob: a streaming session's configuration IS
+ * its connect URL, so switching mid-meeting would mean a second session and a
+ * second bill for the same conversation. Stop and start again is the whole
+ * story, and the menu says nothing else.
  *
  * IT ANNOUNCES A ROOM CAPTURE, AND THE ANNOUNCEMENT IS PART OF THE RECORDING.
  * A `conversation` capture is the one with other people in it, so it says so
@@ -22,10 +33,10 @@
  * opposite of the obvious one: the microphone opens FIRST and the sentence is
  * spoken into it, so the announcement is in the captured audio and in the
  * transcript rather than in a moment before the recording that nothing can be
- * shown afterwards. `I'll say it` starts the same capture and puts the
- * sentence on screen instead, for a person who would rather say it themselves
- * — and it is also where a device that cannot speak ends up. A `solo` capture
- * announces nothing; there is nobody to tell.
+ * shown afterwards. The "I'll ask for consent" checkbox starts the same
+ * capture and puts the sentence on screen instead, for a person who would
+ * rather say it themselves — and it is also where a device that cannot speak
+ * ends up. A `solo` capture announces nothing; there is nobody to tell.
  *
  * CORRECTIONS LAND ON THE WORD ALREADY ON SCREEN. A `transcript` frame carries
  * the WHOLE turn as currently understood, so a later frame for the same turn
@@ -42,15 +53,16 @@ import {
   MAX_SPEAKER_NAME,
   MEETING_AUDIO_ENCODING,
   MEETING_SAMPLE_RATE,
+  type MeetingBotStatus,
   type MeetingServerMessage,
   type MeetingTimingMark,
   type MeetingUnavailableReason,
   RECORDING_ANNOUNCEMENT,
   type TranscriptionEngineName,
   announcesRecording,
+  describeBotState,
   meetingSocketPath,
   parseCaptureMode,
-  parseEngineName,
   speakerDisplayName,
 } from '@feedback/core';
 import { type Announcer, createAnnouncer } from './meeting-announce.ts';
@@ -62,12 +74,13 @@ import {
   captureConstraints,
   startMeetingCapture,
 } from './meeting-audio.ts';
+import type { MeetingBotClient } from './meeting-bot-client.ts';
 import { type TimingSession, createTimingSession } from './meeting-timing-client.ts';
 import type { DocSpeakers } from './speaker-voices.ts';
 
 /**
- * How many turns stay on the strip. Three is what fits the phone's two wrapped
- * lines; the bar shows the tail of the same three.
+ * How many turns stay on the strip. Three is what the flowing line holds
+ * before the mask has faded the oldest out anyway.
  */
 export const TRANSCRIPT_KEEP = 3;
 
@@ -237,7 +250,7 @@ export function parseMeetingServerMessage(raw: unknown): MeetingServerMessage | 
   }
 }
 
-/** What the strip is showing. */
+/** What the meeting machinery is doing. */
 export type StripState =
   | { kind: 'idle' }
   | { kind: 'requesting' }
@@ -264,10 +277,44 @@ export function meetingSocketUrl(docId: string): string {
   return `${scheme}://${location.host}${meetingSocketPath(docId)}`;
 }
 
+/**
+ * A transcription engine the chooser could offer — the shape `/api/meeting-
+ * engines` is turned into once fetched (see `mountMeetingStrip`'s `engines`
+ * state and `engineLabel`).
+ *
+ * The Engine row renders only when there is more than one — a row with a
+ * single answer is a fact wearing a control's clothes.
+ */
+export interface MeetingEngineChoice {
+  id: string;
+  label: string;
+}
+
 export interface MeetingStripOpts {
   docId: string;
   /** The shell element the strip renders into — `#meeting-strip`. */
   root: HTMLElement;
+  /**
+   * Where the Record Audio button docks — `#topbar .toolbar`. The strip
+   * grows out of this button, which is why the button belongs to this mount
+   * rather than to the static shell: they are one control in two boxes, and
+   * they come and go together. Falls back to `root` where the shell has no
+   * toolbar (a stripped embed, a test).
+   */
+  toolbar?: HTMLElement | null;
+  /**
+   * The doc's meeting-bot lifecycle, when the caller mounted one. Its verbs
+   * (invite, leave) are behind the chooser and the menu; its state renders in
+   * the strip. Absent — or present but unconfigured on this server — the
+   * chooser simply never offers the bot source.
+   */
+  bot?: MeetingBotClient;
+  /**
+   * What the bot-name field starts as — "<who>'s Claude Code Agent" from the
+   * signed-in identity. Absent, the server's configured default stands and
+   * the field shows it as a placeholder-shaped fact rather than a value.
+   */
+  botNamePrefill?: string;
   now?: () => number;
   /** Run `fn` every `ms`; returns a canceller. Injectable so the clock is
    *  deterministic in tests. */
@@ -283,15 +330,16 @@ export interface MeetingStripOpts {
    * huddle" button was the press, on a page that is gone by the time this
    * mounts. A browser that wants the gesture INSIDE this page refuses the
    * mic exactly the way it refuses a real denial; the strip cannot tell them
-   * apart, so it offers its one button as "Tap to start the mic" rather than
-   * reporting a refusal nobody made. A tap is a gesture, so a refusal after
-   * that is reported as what it is.
+   * apart, so it offers a "tap to start the mic" note rather than reporting a
+   * refusal nobody made. A tap is a gesture, so a refusal after that is
+   * reported as what it is.
    */
   autoStart?: boolean;
   /**
-   * What this capture expects to hear. `solo` (the default) opens a cheap
-   * session with no diarization; `conversation` pays for speaker labels. The
-   * Board's "Record a conversation" button carries it in on the address.
+   * What this capture expects to hear. `solo` opens a cheap session with no
+   * diarization; `conversation` pays for speaker labels. The Board's "Record
+   * a conversation" button carries it in on the address; the chooser's
+   * Just me / Multiple Speakers choice sets it for a press made here.
    */
   mode?: CaptureMode;
   /**
@@ -318,16 +366,16 @@ export interface MeetingStripOpts {
    */
   listEngines?: () => Promise<{ engines: string[]; default: string | null } | null>;
   /**
-   * Ask the person what to call a speaker; `current` is what the tag says
+   * Ask the person what to call a speaker; `current` is what the row says
    * now. Null or blank means leave it. Defaults to `window.prompt` — the
-   * strip is a 40px bar with no room for an inline field, and a name is
-   * typed once per voice per meeting.
+   * popover has no room for an inline field, and a name is typed once per
+   * voice per meeting.
    */
   promptName?: (current: string) => string | null;
   /**
-   * The last meeting's cast, asked for once at mount — what the strip's
-   * rename surface shows on a doc opened AFTER its meeting ended. Null means
-   * the doc has never held one. Absent, a reloaded strip starts bare.
+   * The last meeting's cast, asked for once at mount — what the chooser's
+   * rename rows show on a doc opened AFTER its meeting ended. Null means
+   * the doc has never held one. Absent, a reloaded chooser starts bare.
    */
   loadSpeakers?: () => Promise<DocSpeakers | null>;
   /**
@@ -355,7 +403,7 @@ export interface MeetingStripOpts {
 /**
  * A typed name the server will actually accept. Past MAX_SPEAKER_NAME its
  * parser drops the frame without answering, so an unclipped name would sit on
- * the tag while the record and the notes never heard it. The clip falls back
+ * the row while the record and the notes never heard it. The clip falls back
  * to a word boundary and SAYS it happened: cut mid-word and silent, "VP of
  * Platform Engineering, EMEA" came back as "…VP of Platform Engi", which
  * reads as a typo rather than as a name that was too long.
@@ -368,7 +416,7 @@ export function clipSpeakerName(name: string): string {
   // Only honour a word boundary that leaves a name behind, never one that
   // clips back to a single word.
   const kept = lastSpace > room / 2 ? cut.slice(0, lastSpace) : cut;
-  return `${kept.trimEnd()}\u2026`;
+  return `${kept.trimEnd()}…`;
 }
 
 export interface MeetingStripHandle {
@@ -444,7 +492,7 @@ async function defaultListEngines(): Promise<{
  * Both quote the sentence itself, because the sentence is the record.
  */
 export function announcementNote(by: AnnouncedBy | 'tap'): string {
-  const said = `\u201c${RECORDING_ANNOUNCEMENT}\u201d`;
+  const said = `“${RECORDING_ANNOUNCEMENT}”`;
   // A third job, and the only one that is an INSTRUCTION TO THE DEVICE: the
   // device was handed the sentence and never began it, and one tap is what
   // its speech queue is waiting for. The sentence is quoted here too, so
@@ -454,6 +502,12 @@ export function announcementNote(by: AnnouncedBy | 'tap'): string {
   return by === 'device' ? `Announcing: ${said}` : `Say this out loud: ${said}`;
 }
 
+/** The speaker icon on the idle Record Audio button. */
+const RECORD_ICON = `<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3 6.5v3h2.6L9 12.6V3.4L5.6 6.5H3z" fill="currentColor"/><path d="M10.8 5.2a3.4 3.4 0 0 1 0 5.6M12.4 3.4a5.8 5.8 0 0 1 0 9.2" stroke="currentColor" stroke-width="1.3" fill="none" stroke-linecap="round"/></svg>`;
+
+/** Which popover the Record button has open, if any. */
+type PopView = 'none' | 'menu' | 'chooser';
+
 export function mountMeetingStrip(opts: MeetingStripOpts): MeetingStripHandle {
   const { docId, root } = opts;
   const now = opts.now ?? Date.now;
@@ -462,81 +516,58 @@ export function mountMeetingStrip(opts: MeetingStripOpts): MeetingStripHandle {
   const startCapture = opts.startCapture ?? startMeetingCapture;
   const promptName = opts.promptName ?? defaultPromptName;
   const announcer = opts.announcer ?? createAnnouncer();
+  const bot = opts.bot;
+  /**
+   * The engines the chooser may offer. Populated once, from `/api/meeting-
+   * engines` unless a test injects `listEngines` — the seam that lets the
+   * real engine integration slot its list in without reshaping the chooser
+   * (see `MeetingEngineChoice`). Fewer than two answers is not a choice, so
+   * the Engine row stays absent and the fetch changes nothing.
+   */
+  let engines: MeetingEngineChoice[] = [];
 
-  const strip = document.createElement('div');
-  strip.className = 'meeting-strip-row';
-  const meta = document.createElement('span');
-  meta.className = 'meeting-meta';
-  const dot = document.createElement('span');
-  dot.className = 'meeting-dot';
-  dot.setAttribute('aria-hidden', 'true');
-  const status = document.createElement('span');
-  status.className = 'meeting-status';
+  // ---- the Record Audio button, docked in the top bar -----------------------
+  const record = document.createElement('button');
+  record.type = 'button';
+  record.className = 'meeting-record';
+  record.setAttribute('aria-haspopup', 'menu');
+  record.setAttribute('aria-expanded', 'false');
+  const recordGlyph = document.createElement('span');
+  recordGlyph.className = 'meeting-record-glyph';
+  recordGlyph.innerHTML = RECORD_ICON;
+  const recordDot = document.createElement('span');
+  recordDot.className = 'meeting-record-dot';
+  recordDot.setAttribute('aria-hidden', 'true');
+  recordDot.hidden = true;
+  const recordLabel = document.createElement('span');
+  recordLabel.className = 'meeting-record-label';
+  recordLabel.textContent = 'Record Audio';
+  record.append(recordGlyph, recordDot, recordLabel);
+
+  // ---- the strip: blinker, clock, flowing feed ------------------------------
+  const blinker = document.createElement('span');
+  blinker.className = 'meeting-blinker';
+  blinker.setAttribute('aria-hidden', 'true');
   const elapsed = document.createElement('span');
   elapsed.className = 'meeting-elapsed';
-  meta.append(dot, status, elapsed);
-  /**
-   * "Detect multiple speakers" — the one thing that buys diarization.
-   *
-   * It is a switch rather than two Start buttons because it is a fact about
-   * the room, not a second way to record, and it reads the same on the board
-   * (where "Record a conversation" sets it) and on a doc Bryan is talking to
-   * himself over. The label never changes with the state — `aria-pressed`
-   * carries that — because a button whose text flips between the state and
-   * the action cannot be read either way.
-   */
-  const modeToggle = document.createElement('button');
-  modeToggle.type = 'button';
-  modeToggle.className = 'meeting-mode';
-  modeToggle.textContent = 'Multiple speakers';
-  modeToggle.setAttribute('aria-label', 'Detect multiple speakers');
-  /**
-   * "I'll say it" — the second half of the hybrid, and a START button rather
-   * than a preference.
-   *
-   * It has to start the capture itself, not merely change who speaks: the
-   * announcement only counts if it is IN the recording, so a person saying it
-   * needs the microphone already open exactly as much as the device does.
-   * Pressing it opens the mic, puts the sentence on screen, and keeps quiet.
-   * It appears only where it means something — a `conversation` capture that
-   * has not started yet — because on a solo capture there is nobody to tell.
-   */
-  /**
-   * Which engine transcribes — shown ONLY when the server holds more than
-   * one, so the strip on every single-engine server is byte-for-byte what it
-   * was. A <select> rather than a toggle because the set is open-ended, and
-   * it sits with the mode switch because it is the same kind of fact: chosen
-   * before the mic starts, fixed while it runs.
-   */
-  const engineSelect = document.createElement('select');
-  engineSelect.className = 'meeting-engine';
-  engineSelect.hidden = true;
-  engineSelect.setAttribute('aria-label', 'Transcription engine');
-  const announceToggle = document.createElement('button');
-  announceToggle.type = 'button';
-  announceToggle.className = 'meeting-announce';
-  announceToggle.textContent = "I'll say it";
-  announceToggle.title =
-    'Start recording and read the announcement out yourself, instead of the device saying it.';
-  announceToggle.setAttribute('aria-label', 'Start recording and announce it yourself');
-  const toggle = document.createElement('button');
-  toggle.type = 'button';
-  toggle.className = 'meeting-toggle';
-  strip.append(meta, modeToggle, engineSelect, announceToggle, toggle);
+  const feed = document.createElement('div');
+  feed.className = 'meeting-feed';
+  const line = document.createElement('div');
+  line.className = 'meeting-feed-inner meeting-caption-line';
+  line.setAttribute('aria-live', 'polite');
+  feed.append(line);
 
-  const caption = document.createElement('div');
-  caption.className = 'meeting-caption';
-  caption.setAttribute('aria-live', 'polite');
-  const line = document.createElement('p');
-  line.className = 'meeting-caption-line';
-  caption.append(line);
+  // ---- the popovers: scrim + one panel that is menu or chooser --------------
+  const scrim = document.createElement('div');
+  scrim.className = 'meeting-scrim';
+  scrim.hidden = true;
+  const pop = document.createElement('div');
+  pop.className = 'meeting-pop';
+  pop.hidden = true;
 
   /**
-   * Built only for a measured meeting. The readout is a THIRD child rather
-   * than another item on the strip's one line: at 1180px the bar is 40px with
-   * the caption already claiming the middle, and at 430px the panel is two
-   * wrapped lines above the home indicator. A row of its own, present only
-   * under the flag, cannot crowd either.
+   * Built only for a measured meeting. A row of its own, present only under
+   * the flag, so it cannot crowd the feed.
    */
   const timing: TimingSession | null = opts.timing
     ? createTimingSession({ now, send: (json) => socket?.send(json) })
@@ -544,10 +575,20 @@ export function mountMeetingStrip(opts: MeetingStripOpts): MeetingStripHandle {
 
   root.classList.add('meeting-strip');
   root.classList.toggle('has-timing', timing !== null);
-  root.replaceChildren(...(timing ? [strip, caption, timing.element] : [strip, caption]));
-  root.hidden = false;
+  root.replaceChildren(
+    ...(timing ? [blinker, elapsed, feed, timing.element] : [blinker, elapsed, feed]),
+  );
+  // The scrim and the popovers dock beside the Record button, NOT inside
+  // `root`: `root` is the strip itself, which is `hidden` (⇒ `display: none`,
+  // taking its whole subtree with it) for exactly the idle state the start
+  // chooser has to open FROM. Both are `position: fixed`, so nesting them
+  // under the toolbar instead costs nothing visually. After the strip
+  // children are set: the no-toolbar fallback docks everything in `root`
+  // itself, where the `replaceChildren` above would eat it.
+  (opts.toolbar ?? root).append(record, scrim, pop);
 
   let state: StripState = { kind: 'idle' };
+  let view: PopView = 'none';
   let turns: TranscriptTurn[] = [];
   let capture: MeetingCapture | null = null;
   let socket: MeetingSocket | null = null;
@@ -559,55 +600,24 @@ export function mountMeetingStrip(opts: MeetingStripOpts): MeetingStripHandle {
    * for as long as the person looks at it, and Stop (or a navigation, or a
    * second Start) during that window has to leave the mic that eventually
    * arrives with nowhere to go — otherwise it opens behind a strip that says
-   * Paused.
+   * nothing is happening.
    */
   let generation = 0;
   /**
-   * Solo unless this capture was asked to listen for a room. Held across
-   * start/stop within one mount: the person who turned it on is still in the
-   * same conversation after a pause. Never persisted beyond the mount —
-   * a mode remembered from yesterday spends money on a session nobody chose
-   * it for.
+   * Solo unless this capture was asked to listen for a room. Set by the
+   * chooser at start time and held across start/stop within one mount; never
+   * persisted beyond it — a mode remembered from yesterday spends money on a
+   * session nobody chose it for.
    */
   let mode: CaptureMode = opts.mode ?? DEFAULT_CAPTURE_MODE;
-  /**
-   * Which engine the next start asks for. Undefined is "the server's
-   * default", never a name — so a strip that learned nothing (an old
-   * server, a failed fetch) sends the same start frame it always sent.
-   * Held across start/stop within one mount for the same reason `mode` is.
-   */
-  let engine: TranscriptionEngineName | undefined = opts.engine;
-  const listEngines = opts.listEngines ?? defaultListEngines;
-  void listEngines().then((info) => {
-    if (disposed || !info || info.engines.length < 2) {
-      // One engine (or none, or no answer) is not a choice. The address's
-      // own ask stands even unlisted — the server, not this fetch, is the
-      // authority on what it refuses, and it refuses by naming the engine.
-      return;
-    }
-    for (const name of info.engines) {
-      const option = document.createElement('option');
-      option.value = name;
-      option.textContent = engineLabel(name);
-      engineSelect.append(option);
-    }
-    engineSelect.value =
-      engine !== undefined && info.engines.includes(engine)
-        ? engine
-        : (info.default ?? info.engines[0] ?? '');
-    engineSelect.hidden = false;
-    renderMode();
-  });
-  engineSelect.onchange = () => {
-    engine = parseEngineName(engineSelect.value);
-  };
-  /** The auto-start was refused in the way a missing gesture is: the button
-   *  is the tap that supplies one, and says so. Cleared by any press. */
+  /** The auto-start was refused in the way a missing gesture is: the note in
+   *  the strip is the tap that supplies one, and says so. Cleared by any
+   *  press. */
   let tapToStart = false;
   /**
-   * Which button started this capture, and so who is meant to say the
-   * sentence. Undefined when there is nobody to tell. This is an INTENTION —
-   * it is not what the record is told.
+   * Who is meant to say the sentence for this capture. Undefined when there
+   * is nobody to tell. This is an INTENTION — it is not what the record is
+   * told.
    */
   let announceBy: AnnouncedBy | undefined;
   /**
@@ -620,16 +630,13 @@ export function mountMeetingStrip(opts: MeetingStripOpts): MeetingStripHandle {
    */
   let announced: AnnouncedBy | undefined;
   /**
-   * The announcement prompt owns the caption line and will not be pushed off
-   * it by words.
-   *
-   * A person reading the sentence aloud needs it to STAY there, and the
-   * caption is one line: a partial from an air conditioner, or from whoever
-   * was already mid-thought, would otherwise wipe the sentence out from
-   * under them a moment after it appeared. So while this holds, transcript
-   * turns accumulate in `turns` but are not drawn. It lifts on a SETTLED
-   * turn — a whole utterance has finished, which is the earliest evidence
-   * the sentence has been said — or on a tap, whichever comes first.
+   * The announcement prompt owns the feed line and will not be pushed off
+   * it by words. A person reading the sentence aloud needs it to STAY there:
+   * a partial from an air conditioner would otherwise wipe the sentence out
+   * from under them a moment after it appeared. So while this holds,
+   * transcript turns accumulate in `turns` but are not drawn. It lifts on a
+   * SETTLED turn — a whole utterance has finished, which is the earliest
+   * evidence the sentence has been said — or on a tap, whichever comes first.
    */
   let holdAnnouncement = false;
   /**
@@ -659,9 +666,9 @@ export function mountMeetingStrip(opts: MeetingStripOpts): MeetingStripHandle {
   let names: Record<string, string> = {};
   /**
    * Every label this meeting has shown, whether or not its turn is still on
-   * the three-turn window — the cast the stopped strip's rename surface
-   * lists. Emptied with `names` when a meeting starts; seeded from the last
-   * meeting's record on a doc opened after its meeting ended.
+   * the three-turn window — the cast the menu's rename rows list. Emptied
+   * with `names` when a meeting starts; seeded from the last meeting's
+   * record on a doc opened after its meeting ended.
    */
   let seen = new Set<string>();
   /**
@@ -671,11 +678,76 @@ export function mountMeetingStrip(opts: MeetingStripOpts): MeetingStripHandle {
    */
   let lastMeetingId: string | null = null;
 
+  // ---- bot presence ---------------------------------------------------------
+  /** Whether this mount has seen the bot alive — a terminal state found
+   *  already-terminal at load is history, not news, and is not shown. */
+  let sawLiveBot = false;
+  /** A terminal bot state the person tapped away. */
+  let botNoteDismissed = false;
+
+  /** The bot's status while it will still act, or null. */
+  function liveBot(): MeetingBotStatus | null {
+    return bot?.live() ?? null;
+  }
+
+  /** The terminal state worth a line: the bot WAS alive under this mount. */
+  function botFarewell(): string | null {
+    const s = bot?.status();
+    if (!s || !sawLiveBot || botNoteDismissed) return null;
+    if (bot?.live()) return null;
+    return describeBotState(s.state);
+  }
+
+  // ---- chooser form state ---------------------------------------------------
+  /** The chooser's source choice. Mic unless the last press said otherwise. */
+  let chooseSource: 'mic' | 'bot' = 'mic';
   /**
-   * The button both surfaces (a turn's tag, the stopped strip's cast) use.
-   * The pill is a child so the button itself can stay free of the overflow
-   * that clipping a long name needs — a clip anywhere on the button eats its
-   * own tap target.
+   * The chooser's speaker choice. Multiple by default — this product's
+   * ordinary meeting has other people in it, and the approved mock preselects
+   * it; "Just me" is the deliberate cheaper pick. An address that says solo
+   * (a Board solo huddle) presets it the other way — `opts.mode` is only
+   * ever set for that huddle-start case (`app.ts` leaves it `undefined`
+   * otherwise, on purpose: see its comment there), so this fallback is the
+   * one place the mock's default actually applies.
+   */
+  let chooseMode: CaptureMode = opts.mode ?? 'conversation';
+  /** "I'll ask for consent" — the person says the sentence, not the device. */
+  let chooseConsent = false;
+  /**
+   * The engine picked, only meaningful when more than one was offered.
+   * Starts as the address's ask (`?engine=soniox`), the same start-time-only
+   * fact `mode` is; refined once the fetch below answers, in case the
+   * address named an engine this server does not actually hold.
+   */
+  let chooseEngine: string | undefined = opts.engine;
+  const listEngines = opts.listEngines ?? defaultListEngines;
+  void listEngines().then((info) => {
+    if (disposed || !info || info.engines.length < 2) {
+      // One engine (or none, or no answer) is not a choice. The address's
+      // own ask stands even unlisted — the server, not this fetch, is the
+      // authority on what it refuses, and it refuses by naming the engine.
+      return;
+    }
+    engines = info.engines.map((id) => ({ id, label: engineLabel(id) }));
+    chooseEngine =
+      chooseEngine !== undefined && info.engines.includes(chooseEngine)
+        ? chooseEngine
+        : (info.default ?? info.engines[0]);
+    // The chooser may already be open (a fast mount, a slow fetch); redraw it
+    // so the Engine row does not wait for a second open to appear.
+    if (view === 'chooser') renderPop();
+  });
+  let chooseBotUrl = '';
+  let chooseBotName = opts.botNamePrefill ?? '';
+  /** Why the last chooser press did not start, shown in the sheet. */
+  let chooseError = '';
+  /** An invite is in flight; the CTA must not send a second bot. */
+  let chooseBusy = false;
+
+  /**
+   * The button every rename surface uses. The pill is a child so the button
+   * itself can stay free of the overflow that clipping a long name needs — a
+   * clip anywhere on the button eats its own tap target.
    */
   function speakerButton(): HTMLButtonElement {
     const tag = document.createElement('button');
@@ -711,7 +783,8 @@ export function mountMeetingStrip(opts: MeetingStripOpts): MeetingStripHandle {
     for (const entry of rendered.values()) {
       if (entry.tag?.dataset.speaker === label) renderTag(entry, label);
     }
-    renderCaption();
+    renderFeed();
+    renderPop();
     if (socketOpen) {
       socket?.send(JSON.stringify({ type: 'name_speaker', speaker: label, name: answer }));
     } else if (lastMeetingId && opts.postName) {
@@ -730,31 +803,54 @@ export function mountMeetingStrip(opts: MeetingStripOpts): MeetingStripHandle {
           for (const entry of rendered.values()) {
             if (entry.tag?.dataset.speaker === label) renderTag(entry, label);
           }
-          renderCaption();
+          renderFeed();
+          renderPop();
         });
     }
   }
 
-  function renderCaption(): void {
+  /** The cast so far: every voice this meeting (or the last one) has shown. */
+  function cast(): string[] {
+    return [...new Set([...seen, ...Object.keys(names)])].sort((a, b) => a.localeCompare(b));
+  }
+
+  function renderFeed(): void {
     if (state.kind !== 'idle' && state.kind !== 'recording') return;
     // The announcement holds the line against the words; see `holdAnnouncement`.
     if (holdAnnouncement) return;
     // A note and a transcript share the line, so the reason the last attempt
     // gave has to go when words start arriving.
     line.querySelector('.meeting-note')?.remove();
-    // A stopped meeting's words leave with it, but its VOICES stay nameable:
-    // the strip is on the device the recording was made from, and after the
-    // meeting is exactly when a person gets around to the names. The cast
-    // takes the caption line over from the turns while the strip is idle.
-    line.querySelector('.meeting-legend')?.remove();
     if (state.kind === 'idle') {
-      const cast = [...new Set([...seen, ...Object.keys(names)])].sort((a, b) =>
-        a.localeCompare(b),
-      );
-      if (cast.length > 0) {
-        renderLegend(cast);
+      // An idle strip with a live bot narrates the bot; with a farewell, the
+      // farewell; otherwise the strip is hidden and the line stays empty.
+      const live = liveBot();
+      if (live) {
+        clearTurnSpans();
+        const who = live.speakers.length ? ` · ${live.speakers.join(', ')}` : '';
+        const note = document.createElement('span');
+        note.className = 'meeting-note meeting-bot-note';
+        note.textContent = `${describeBotState(live.state)}${who}`;
+        line.append(note);
         return;
       }
+      const farewell = botFarewell();
+      if (farewell) {
+        clearTurnSpans();
+        const note = document.createElement('button');
+        note.type = 'button';
+        note.className = 'meeting-note meeting-note-dismiss meeting-bot-note';
+        note.textContent = farewell;
+        note.title = 'Tap to dismiss';
+        note.addEventListener('click', () => {
+          botNoteDismissed = true;
+          render();
+        });
+        line.append(note);
+        return;
+      }
+      clearTurnSpans();
+      return;
     }
     for (const [turn, entry] of rendered) {
       if (!turns.some((t) => t.turn === turn)) {
@@ -798,8 +894,8 @@ export function mountMeetingStrip(opts: MeetingStripOpts): MeetingStripHandle {
           entry.words[i] = el;
         }
         // A leading space on every word, never a generated one: a ::before
-        // cannot line-break, which on the phone's wrapped lines would pin a
-        // word boundary mid-line. At the start of a line it collapses away.
+        // cannot line-break, and at the start of a line a real space
+        // collapses away.
         el.textContent = ` ${word.text}`;
         el.classList.remove('is-fixed');
         if (word.changed) {
@@ -813,31 +909,13 @@ export function mountMeetingStrip(opts: MeetingStripOpts): MeetingStripHandle {
     }
   }
 
-  function clearCaption(): void {
+  function clearTurnSpans(): void {
     rendered.clear();
     line.replaceChildren();
   }
 
-  /** The stopped strip's rename surface: the cast, each voice a button. */
-  function renderLegend(cast: string[]): void {
-    clearCaption();
-    const legend = document.createElement('span');
-    legend.className = 'meeting-legend';
-    const hint = document.createElement('span');
-    hint.className = 'meeting-legend-hint';
-    hint.textContent = 'Tap a voice to name it:';
-    legend.append(hint);
-    for (const label of cast) {
-      const tag = speakerButton();
-      tag.dataset.speaker = label;
-      renderTag({ tag }, label);
-      legend.append(tag);
-    }
-    line.append(legend);
-  }
-
   function showNote(text: string): void {
-    clearCaption();
+    clearTurnSpans();
     const note = document.createElement('span');
     note.className = 'meeting-note';
     note.textContent = text;
@@ -851,7 +929,7 @@ export function mountMeetingStrip(opts: MeetingStripOpts): MeetingStripHandle {
    */
   function holdLine(text: string, hint: string, onTap: () => void, extra?: string): void {
     holdAnnouncement = true;
-    clearCaption();
+    clearTurnSpans();
     const note = document.createElement('button');
     note.type = 'button';
     note.className = extra
@@ -894,88 +972,462 @@ export function mountMeetingStrip(opts: MeetingStripOpts): MeetingStripHandle {
   function releaseAnnouncement(): void {
     if (!holdAnnouncement) return;
     holdAnnouncement = false;
-    clearCaption();
-    renderCaption();
+    clearTurnSpans();
+    renderFeed();
   }
 
   function tickClock(): void {
     elapsed.textContent =
       state.kind === 'recording' ? formatElapsed(now() - state.startedAt) : formatElapsed(0);
+    // The menu head quotes the same clock; a menu left open must keep pace.
+    if (view === 'menu') {
+      const head = pop.querySelector('.meeting-pop-headline');
+      if (head) head.textContent = menuHeadline();
+    }
+  }
+
+  // ---- popover rendering ----------------------------------------------------
+
+  /** `Recording · microphone · 2 speakers · 12:47` — the menu's one line of
+   *  facts, every one settled at start time except the clock. */
+  function menuHeadline(): string {
+    const live = liveBot();
+    if (live) {
+      const parts = [describeBotState(live.state), 'meeting bot'];
+      if (live.speakers.length > 0) {
+        parts.push(`${live.speakers.length} speaker${live.speakers.length === 1 ? '' : 's'}`);
+      }
+      return parts.join(' · ');
+    }
+    const parts = [state.kind === 'recording' ? 'Recording' : 'Starting…', 'microphone'];
+    const voices = cast().length;
+    if (mode === 'conversation') {
+      parts.push(voices > 0 ? `${voices} speaker${voices === 1 ? '' : 's'}` : 'multiple speakers');
+    }
+    if (state.kind === 'recording') parts.push(formatElapsed(now() - state.startedAt));
+    return parts.join(' · ');
+  }
+
+  /** One rename row: the display name (label until renamed, then only the
+   *  name — never both) and the Rename affordance. */
+  function speakerRow(label: string): HTMLElement {
+    const row = document.createElement('div');
+    row.className = 'meeting-pop-speaker';
+    const name = document.createElement('span');
+    name.className = 'meeting-pop-speaker-name';
+    name.textContent = speakerDisplayName(label, names);
+    const rename = document.createElement('button');
+    rename.type = 'button';
+    rename.className = 'meeting-pop-rename';
+    rename.textContent = 'Rename';
+    rename.setAttribute('aria-label', `Rename ${speakerDisplayName(label, names)}`);
+    rename.addEventListener('click', () => nameSpeaker(label));
+    row.append(name, rename);
+    return row;
+  }
+
+  /** The speaker menu: the facts line, the cast, and Stop as the one action. */
+  function buildMenu(): void {
+    pop.replaceChildren();
+    pop.className = 'meeting-pop meeting-menu';
+    pop.setAttribute('role', 'menu');
+    pop.removeAttribute('aria-label');
+    const head = document.createElement('div');
+    head.className = 'meeting-pop-head';
+    const headBlink = document.createElement('span');
+    headBlink.className = 'meeting-blinker';
+    headBlink.setAttribute('aria-hidden', 'true');
+    const headline = document.createElement('span');
+    headline.className = 'meeting-pop-headline';
+    headline.textContent = menuHeadline();
+    head.append(headBlink, headline);
+    pop.append(head);
+    const live = liveBot();
+    if (live) {
+      // A bot's speakers are display names from the call — nothing here to
+      // rename; the rename that reaches backwards lives on the notes' tags.
+      for (const who of live.speakers) {
+        const row = document.createElement('div');
+        row.className = 'meeting-pop-speaker';
+        const name = document.createElement('span');
+        name.className = 'meeting-pop-speaker-name';
+        name.textContent = who;
+        row.append(name);
+        pop.append(row);
+      }
+    } else {
+      for (const label of cast()) pop.append(speakerRow(label));
+    }
+    const sep = document.createElement('div');
+    sep.className = 'meeting-pop-sep';
+    pop.append(sep);
+    const stopCta = document.createElement('button');
+    stopCta.type = 'button';
+    stopCta.className = 'meeting-stop-cta';
+    stopCta.textContent = live ? '■ Send the bot home' : '■ Stop Recording';
+    stopCta.addEventListener('click', () => {
+      if (live) {
+        stopCta.disabled = true;
+        void bot
+          ?.leave()
+          .catch(() => {
+            // The strip keeps showing the bot's real state; a failed leave
+            // changes nothing worth a second surface.
+          })
+          .finally(() => {
+            if (!disposed) closePop();
+          });
+        return;
+      }
+      stop();
+      closePop();
+    });
+    pop.append(stopCta);
+  }
+
+  /** One radio card in the chooser. */
+  function choice(args: {
+    group: string;
+    title: string;
+    detail: string;
+    checked: boolean;
+    onPick: () => void;
+  }): { el: HTMLLabelElement; body: HTMLElement; input: HTMLInputElement } {
+    const label = document.createElement('label');
+    label.className = args.checked ? 'meeting-choice is-selected' : 'meeting-choice';
+    const input = document.createElement('input');
+    input.type = 'radio';
+    input.name = args.group;
+    input.checked = args.checked;
+    const body = document.createElement('span');
+    body.className = 'meeting-choice-body';
+    const title = document.createElement('span');
+    title.className = 'meeting-choice-title';
+    title.textContent = args.title;
+    const detail = document.createElement('span');
+    detail.className = 'meeting-choice-detail';
+    detail.textContent = args.detail;
+    body.append(title, detail);
+    label.append(input, body);
+    input.addEventListener('change', () => {
+      if (input.checked) args.onPick();
+    });
+    return { el: label, body, input };
+  }
+
+  function choiceGroup(name: string): { group: HTMLElement; add: (el: HTMLElement) => void } {
+    const group = document.createElement('div');
+    group.className = 'meeting-choice-group';
+    const label = document.createElement('div');
+    label.className = 'meeting-choice-group-label';
+    label.textContent = name;
+    group.append(label);
+    return { group, add: (el) => group.append(el) };
   }
 
   /**
-   * The mode is settled when the mic starts and cannot move while it runs:
-   * a streaming session's configuration IS its connect URL, so switching
-   * mid-meeting would mean a second session and a second bill for the same
-   * conversation. Stop and start says that plainly.
+   * The start chooser: every decision a recording takes, taken here, and a
+   * red Start Recording that is the only verb.
    */
-  function renderMode(): void {
-    const live = state.kind === 'recording' || state.kind === 'requesting';
-    modeToggle.setAttribute('aria-pressed', String(mode === 'conversation'));
-    modeToggle.disabled = live;
-    modeToggle.title = live
-      ? 'Set before the mic starts — stop and start again to change it.'
-      : 'Label who is talking. Leave it off when you are the only voice: it costs more.';
-    // Same one-shot rule as the mode, for the same reason: an engine
-    // session's configuration is fixed the moment it opens.
-    engineSelect.disabled = live;
-    engineSelect.title = live
-      ? 'Set before the mic starts — stop and start again to change it.'
-      : 'Which service turns this recording into words.';
-    // Only where it means something: a room capture that has not begun. While
-    // one runs, the announcement has already happened; on a solo capture
-    // there was never anyone to announce it to; and where Start itself cannot
-    // be pressed, neither can this.
-    announceToggle.hidden = !announcesRecording(mode) || live || toggle.disabled;
+  function buildChooser(): void {
+    pop.replaceChildren();
+    pop.className = 'meeting-pop meeting-sheet';
+    pop.setAttribute('role', 'dialog');
+    pop.setAttribute('aria-label', 'Start recording');
+    const h = document.createElement('h3');
+    h.className = 'meeting-sheet-title';
+    h.textContent = 'Start recording';
+    pop.append(h);
+
+    // The last meeting's voices, still nameable after it ended — the behavior
+    // the old strip's idle legend carried, now living where the button leads.
+    const idleCast = cast();
+    if (idleCast.length > 0) {
+      const castWrap = document.createElement('div');
+      castWrap.className = 'meeting-pop-cast';
+      const hint = document.createElement('div');
+      hint.className = 'meeting-choice-group-label';
+      hint.textContent = 'Speakers from the last recording';
+      castWrap.append(hint);
+      for (const label of idleCast) castWrap.append(speakerRow(label));
+      pop.append(castWrap);
+    }
+
+    const source = choiceGroup('Source');
+    const micChoice = choice({
+      group: 'meeting-source',
+      title: 'Use microphone',
+      detail: 'Record the room from this device',
+      checked: chooseSource === 'mic',
+      onPick: () => {
+        chooseSource = 'mic';
+        renderChoiceSelection();
+      },
+    });
+    micChoice.el.classList.add('meeting-choice-mic');
+    source.add(micChoice.el);
+    // Only where the server can actually field one: no key means no bot
+    // source at all rather than a card that always fails.
+    if (bot?.configured()) {
+      const botChoice = choice({
+        group: 'meeting-source',
+        title: 'Join Zoom / Google Meet',
+        detail: 'A bot joins the call and records it',
+        checked: chooseSource === 'bot',
+        onPick: () => {
+          chooseSource = 'bot';
+          renderChoiceSelection();
+        },
+      });
+      botChoice.el.classList.add('meeting-choice-bot');
+      const url = document.createElement('input');
+      url.type = 'url';
+      url.className = 'meeting-bot-url';
+      url.placeholder = 'Paste the meeting link';
+      url.setAttribute('aria-label', 'Meeting link for the bot to join');
+      url.value = chooseBotUrl;
+      url.addEventListener('input', () => {
+        chooseBotUrl = url.value;
+      });
+      // Typing a link IS choosing the bot; make the radio agree.
+      url.addEventListener('focus', () => {
+        if (chooseSource !== 'bot') {
+          chooseSource = 'bot';
+          renderChoiceSelection();
+        }
+      });
+      // Bryan's late redline on the mock: sighted users saw a plain text box
+      // with a prefilled string and no cue what it controlled. A visible
+      // caption, not just the aria-label, says what the value becomes.
+      const nameHint = document.createElement('span');
+      nameHint.className = 'meeting-bot-name-hint';
+      nameHint.textContent = 'Name shown in the meeting';
+      const name = document.createElement('input');
+      name.type = 'text';
+      name.className = 'meeting-bot-name';
+      name.setAttribute('aria-label', 'Bot display name shown in the meeting — tap to change');
+      name.value = chooseBotName;
+      name.addEventListener('input', () => {
+        chooseBotName = name.value;
+      });
+      botChoice.body.append(url, nameHint, name);
+      source.add(botChoice.el);
+    }
+    pop.append(source.group);
+
+    const speakers = choiceGroup('Speakers');
+    speakers.add(
+      choice({
+        group: 'meeting-speakers',
+        title: 'Just me',
+        detail: 'No speaker labels',
+        checked: chooseMode === 'solo',
+        onPick: () => {
+          chooseMode = 'solo';
+          renderChoiceSelection();
+        },
+      }).el,
+    );
+    speakers.add(
+      choice({
+        group: 'meeting-speakers',
+        title: 'Multiple Speakers',
+        detail: 'Labels each voice in the transcript',
+        checked: chooseMode === 'conversation',
+        onPick: () => {
+          chooseMode = 'conversation';
+          renderChoiceSelection();
+        },
+      }).el,
+    );
+    pop.append(speakers.group);
+
+    // The engine row, only when there is a real choice to make. The seam the
+    // in-flight engine integration slots into; see MeetingEngineChoice.
+    if (engines.length > 1) {
+      const engine = choiceGroup('Engine');
+      for (const e of engines) {
+        engine.add(
+          choice({
+            group: 'meeting-engine',
+            title: e.label,
+            detail: '',
+            checked: chooseEngine === e.id,
+            onPick: () => {
+              chooseEngine = e.id;
+              renderChoiceSelection();
+            },
+          }).el,
+        );
+      }
+      pop.append(engine.group);
+    }
+
+    const consent = document.createElement('label');
+    consent.className = 'meeting-consent';
+    const consentBox = document.createElement('input');
+    consentBox.type = 'checkbox';
+    consentBox.checked = chooseConsent;
+    consentBox.addEventListener('change', () => {
+      chooseConsent = consentBox.checked;
+    });
+    const consentText = document.createElement('span');
+    consentText.textContent = 'I’ll ask for consent';
+    consent.append(consentBox, consentText);
+    pop.append(consent);
+
+    const err = document.createElement('span');
+    err.className = 'meeting-pop-error';
+    // Assertive: this one only ever appears in answer to a press, and it is
+    // the reason the thing the person just asked for did not happen.
+    err.setAttribute('aria-live', 'assertive');
+    err.textContent = chooseError;
+    pop.append(err);
+
+    const startCta = document.createElement('button');
+    startCta.type = 'button';
+    startCta.className = 'meeting-start-cta';
+    startCta.textContent = '● Start Recording';
+    startCta.disabled = chooseBusy;
+    startCta.addEventListener('click', onStartPressed);
+    pop.append(startCta);
+  }
+
+  /** Re-mark the selected cards without rebuilding inputs mid-interaction. */
+  function renderChoiceSelection(): void {
+    for (const card of pop.querySelectorAll('.meeting-choice')) {
+      const input = card.querySelector('input');
+      card.classList.toggle('is-selected', input?.checked === true);
+    }
+  }
+
+  /**
+   * The chooser's one verb. The device-announcement priming happens HERE,
+   * synchronously in the gesture's own task — iOS only unlocks speech from
+   * inside it, and the announcement itself cannot be spoken yet because it
+   * has to wait for the microphone. See meeting-announce.ts.
+   */
+  function onStartPressed(): void {
+    chooseError = '';
+    if (chooseSource === 'bot') {
+      if (chooseBusy || !bot) return;
+      chooseBusy = true;
+      renderPop();
+      void bot
+        .invite(chooseBotUrl.trim(), chooseBotName)
+        .then(() => {
+          chooseBusy = false;
+          chooseBotUrl = '';
+          if (!disposed) closePop();
+        })
+        .catch((e: Error) => {
+          chooseBusy = false;
+          chooseError = e.message;
+          if (!disposed) renderPop();
+        });
+      return;
+    }
+    mode = chooseMode;
+    const by: AnnouncedBy = chooseConsent ? 'spoken' : 'device';
+    if (announcesRecording(mode) && by === 'device') announcer.prime();
+    closePop();
+    void start(false, by);
+  }
+
+  function openPop(next: Exclude<PopView, 'none'>): void {
+    view = next;
+    renderPop();
+    scrim.hidden = false;
+    pop.hidden = false;
+    record.classList.add('is-open');
+    record.setAttribute('aria-expanded', 'true');
+  }
+
+  function closePop(): void {
+    view = 'none';
+    scrim.hidden = true;
+    pop.hidden = true;
+    record.classList.remove('is-open');
+    record.setAttribute('aria-expanded', 'false');
+  }
+
+  function renderPop(): void {
+    if (view === 'menu') buildMenu();
+    else if (view === 'chooser') buildChooser();
+  }
+
+  /** Which popover a press on the button should lead to right now. */
+  function popForNow(): Exclude<PopView, 'none'> {
+    const busy = state.kind === 'recording' || state.kind === 'requesting' || liveBot() !== null;
+    return busy ? 'menu' : 'chooser';
+  }
+
+  /** Whether the strip row earns its height right now. */
+  function stripVisible(): boolean {
+    if (holdAnnouncement) return true;
+    if (state.kind !== 'idle') return true;
+    if (liveBot()) return true;
+    if (botFarewell()) return true;
+    return false;
   }
 
   function render(): void {
     root.dataset.state = state.kind;
-    root.classList.toggle('is-live', state.kind === 'recording');
-    // The visible label is one bare word in a strip that never says what it
-    // is — the accessible name carries the feature's name instead.
-    toggle.setAttribute(
+    const botLive = liveBot();
+    const isRecording = state.kind === 'recording' || botLive?.state === 'recording';
+    root.classList.toggle('is-live', isRecording);
+    root.classList.toggle('is-bot', botLive !== null && state.kind === 'idle');
+    root.hidden = !stripVisible();
+    // The button: Record Audio with the speaker glyph when idle, a solid red
+    // dot and Recording while live — the strip and its owner read as one unit.
+    recordLabel.textContent = isRecording ? 'Recording' : 'Record Audio';
+    recordGlyph.hidden = isRecording;
+    recordDot.hidden = !isRecording;
+    record.classList.toggle('is-live', isRecording);
+    record.title = isRecording ? 'Recording — open controls' : 'Record audio';
+    record.setAttribute(
       'aria-label',
-      `${state.kind === 'recording' ? 'Stop' : 'Start'} meeting transcription`,
+      isRecording ? 'Recording — open recording controls' : 'Record audio',
     );
     switch (state.kind) {
-      case 'idle':
-        status.textContent = 'Paused';
-        toggle.textContent = 'Start';
-        toggle.disabled = false;
-        break;
       case 'requesting':
-        status.textContent = 'Starting…';
-        toggle.textContent = 'Start';
-        toggle.disabled = true;
         showNote('Asking for the microphone…');
         break;
-      case 'recording':
-        status.textContent = 'REC';
-        toggle.textContent = 'Stop';
-        toggle.disabled = false;
-        break;
       case 'unavailable':
-        status.textContent = 'Off';
-        toggle.textContent = 'Start';
-        // Nothing is retrying and no key is going to appear on its own; the
-        // other two reasons can clear without anyone editing a config.
-        toggle.disabled = state.reason === 'not_configured';
         showNote(state.message || unavailableFallback(state.reason));
         break;
       case 'blocked':
       case 'error':
-        status.textContent = 'Off';
-        toggle.textContent = tapToStart ? 'Tap to start the mic' : 'Start';
-        // Deliberately pressable: the press is how someone sees the reason
-        // again after granting the permission the message named.
-        toggle.disabled = false;
-        showNote(tapToStart ? 'The huddle is on — the mic needs one tap to start.' : state.message);
+        if (tapToStart) {
+          // Deliberately a button: the tap is the gesture the auto-start was
+          // missing, and pressing it is how the huddle gets its mic.
+          clearTurnSpans();
+          const note = document.createElement('button');
+          note.type = 'button';
+          note.className = 'meeting-note meeting-note-dismiss meeting-note-start';
+          note.textContent = 'The huddle is on — the mic needs one tap to start.';
+          note.addEventListener('click', () => {
+            if (announcesRecording(mode)) announcer.prime();
+            void start(false, 'device');
+          });
+          line.append(note);
+        } else {
+          showNote(state.message);
+        }
+        break;
+      default:
         break;
     }
-    renderMode();
+    // A popover built for a state that ended re-renders for the one that is:
+    // a chooser open when `ready` lands becomes controls; a menu open when
+    // the meeting dies becomes the chooser.
+    if (view !== 'none') {
+      const want = popForNow();
+      if (want !== view) view = want;
+      renderPop();
+    }
     tickClock();
-    renderCaption();
+    renderFeed();
   }
 
   function setState(next: StripState): void {
@@ -995,35 +1447,17 @@ export function mountMeetingStrip(opts: MeetingStripOpts): MeetingStripHandle {
   }
 
   /**
-   * The meeting is over, however it ended: nothing may still be announcing
-   * it.
-   *
-   * Called from EVERY terminal path, not only from Stop, and that is the
-   * point — a relay error or a dropped socket ends a recording just as
-   * finally as the button does. Without this the device carries on saying
-   * "this conversation is being recorded" into a room where it is not, and
-   * the sentence's late resolution can write a claim onto a meeting that
-   * failed. The generation bump is what makes the pending `announce()`
-   * return without touching anything.
-   */
-  /**
    * The echo-cancellation hedge, and its own failure swallowed HERE rather
-   * than trusted of the capture.
+   * than trusted of the capture: an announcement that a room is owed must not
+   * be able to fail because a hedge did.
    *
-   * `setEchoCancellation` promises never to reject, but an announcement that
-   * a room is owed must not be able to fail because a hedge did: a rejection
-   * reaching `announce` would take the whole sentence down with it, and the
-   * one thing that must never happen here is silence.
-   */
-  /**
    * The capture is passed in rather than read from the closure, and that is
    * the whole point of the parameter. An utterance that was cancelled can
    * stay pending for its full timeout, so the restore half of this pair can
    * run long after its meeting ended — by which time `capture` is the NEXT
-   * meeting's microphone, in the middle of the NEXT announcement. Restoring
-   * cancellation there is exactly the bug this suspension exists to prevent.
-   * Bound to the instance, a stale restore lands on a track that is already
-   * stopped, which is nothing.
+   * meeting's microphone, in the middle of the NEXT announcement. Bound to
+   * the instance, a stale restore lands on a track that is already stopped,
+   * which is nothing.
    */
   async function suspendEchoCancellation(
     mic: MeetingCapture | null,
@@ -1046,16 +1480,22 @@ export function mountMeetingStrip(opts: MeetingStripOpts): MeetingStripHandle {
    *
    * Read off `captureConstraints` at the press, so this is the same rule the
    * capture itself used rather than a second copy of it that has to be kept
-   * in step. Deriving it from `opts.room` instead would be wrong for any mode
-   * the room config does not apply to — solo does not announce today, so that
-   * path is unreachable, but the invariant should not depend on a guard two
-   * hundred lines away staying where it is.
+   * in step.
    */
   let openedEchoCancellation: boolean = ROOM_AUDIO_DEFAULT.echoCancellation;
   function wantsEchoCancellation(): boolean {
     return openedEchoCancellation;
   }
 
+  /**
+   * The meeting is over, however it ended: nothing may still be announcing
+   * it. Called from EVERY terminal path, not only from Stop — a relay error
+   * or a dropped socket ends a recording just as finally as the button does.
+   * Without this the device carries on saying "this conversation is being
+   * recorded" into a room where it is not, and the sentence's late resolution
+   * can write a claim onto a meeting that failed. The generation bump is what
+   * makes the pending `announce()` return without touching anything.
+   */
   function endAnnouncement(): void {
     generation += 1;
     holdAnnouncement = false;
@@ -1115,14 +1555,20 @@ export function mountMeetingStrip(opts: MeetingStripOpts): MeetingStripHandle {
         if (msg.final) releaseAnnouncement();
         // The cast outlives the three-turn window — a voice that spoke early
         // and went quiet must still be nameable when the meeting stops.
-        if (msg.speaker !== undefined) seen.add(msg.speaker);
+        if (msg.speaker !== undefined) {
+          const grew = !seen.has(msg.speaker);
+          seen.add(msg.speaker);
+          // The menu lists the cast; a voice arriving while it is open must
+          // land as a row, not wait for the next open.
+          if (grew && view === 'menu') renderPop();
+        }
         turns = rollTranscript(turns, {
           turn: msg.turn,
           text: msg.text,
           final: msg.final,
           ...(msg.speaker !== undefined ? { speaker: msg.speaker } : {}),
         });
-        renderCaption();
+        renderFeed();
         timing?.domUpdated();
         break;
       case 'timing_pong':
@@ -1152,16 +1598,6 @@ export function mountMeetingStrip(opts: MeetingStripOpts): MeetingStripHandle {
     }
   }
 
-  /**
-   * Tell the room, now that the microphone is live.
-   *
-   * The device path can fail in three indistinguishable ways — no synthesis,
-   * a refused gesture, an utterance that never comes back — and all three end
-   * in the same place: the sentence goes on screen for a person, and the
-   * server is told the record should say `spoken`. That correction matters
-   * more than the announcement's own convenience, because the record is the
-   * thing anybody would later be asked to show.
-   */
   /**
    * Tell the server the room HAS been told — never before it has, and never
    * twice for the same path: a claim repeated on the wire is not a second
@@ -1219,6 +1655,16 @@ export function mountMeetingStrip(opts: MeetingStripOpts): MeetingStripHandle {
     }
   }
 
+  /**
+   * Tell the room, now that the microphone is live.
+   *
+   * The device path can fail in three indistinguishable ways — no synthesis,
+   * a refused gesture, an utterance that never comes back — and all three end
+   * in the same place: the sentence goes on screen for a person, and the
+   * server is told the record should say `spoken`. That correction matters
+   * more than the announcement's own convenience, because the record is the
+   * thing anybody would later be asked to show.
+   */
   async function announce(by: AnnouncedBy, attempt: number): Promise<void> {
     if (by === 'spoken') {
       // Held, not merely shown: this one is a line to READ, and a partial
@@ -1286,9 +1732,9 @@ export function mountMeetingStrip(opts: MeetingStripOpts): MeetingStripHandle {
     seen = new Set();
     lastMeetingId = null;
     tapToStart = false;
-    // A solo capture announces nothing, whichever button was pressed — the
-    // announce button is hidden there, but the mode can also come in off the
-    // address, and the record must not claim a room was told when the mode
+    // A solo capture announces nothing, whichever path started it — the
+    // consent checkbox is moot there, and the mode can also come in off the
+    // address, so the record must not claim a room was told when the mode
     // says there was no room.
     announceBy = announcesRecording(mode) ? by : undefined;
     announced = undefined;
@@ -1302,7 +1748,7 @@ export function mountMeetingStrip(opts: MeetingStripOpts): MeetingStripHandle {
         // ordinal the server's ledger gives the chunk it receives.
         timing?.frameSent();
       },
-      // Read HERE rather than at mount: the switch can be flipped between
+      // Read HERE rather than at mount: the chooser can change it between
       // meetings, and the constraints belong to the microphone this press is
       // about to open.
       mode,
@@ -1340,9 +1786,11 @@ export function mountMeetingStrip(opts: MeetingStripOpts): MeetingStripHandle {
           // Absent unless somebody said, so the server's default stays the
           // one place the room size is guessed.
           ...(opts.speakers !== undefined ? { speakers: opts.speakers } : {}),
-          // Absent unless somebody chose, so the server's default stays the
-          // one place the engine is decided.
-          ...(engine !== undefined ? { engine } : {}),
+          // Absent unless the address named one or the chooser offered a real
+          // pick — a server that has never heard of engines never receives
+          // the field, and this frame is byte-for-byte what an older strip
+          // sent.
+          ...(chooseEngine !== undefined ? { engine: chooseEngine } : {}),
           ...(timing ? { timing: true } : {}),
         }),
       );
@@ -1377,36 +1825,37 @@ export function mountMeetingStrip(opts: MeetingStripOpts): MeetingStripHandle {
     setState({ kind: 'idle' });
   }
 
-  const onToggle = (): void => {
-    if (state.kind === 'recording' || state.kind === 'requesting') {
-      stop();
+  const onRecordClick = (): void => {
+    if (view !== 'none') {
+      closePop();
       return;
     }
-    // PRIMED HERE, SYNCHRONOUSLY, AND NOWHERE ELSE. iOS Safari only unlocks
-    // speech from inside the gesture's own task, and the announcement itself
-    // cannot be spoken here — it has to wait for the microphone. So the tap
-    // spends its gesture on a silent utterance, and the real sentence rides
-    // the unlock later. See meeting-announce.ts.
-    if (announcesRecording(mode)) announcer.prime();
-    void start(false, 'device');
+    openPop(popForNow());
   };
-  toggle.addEventListener('click', onToggle);
-  const onAnnounceToggle = (): void => {
-    if (state.kind === 'recording' || state.kind === 'requesting') return;
-    // No priming: the whole point of this button is that the device stays
-    // quiet and a person says it.
-    void start(false, 'spoken');
+  record.addEventListener('click', onRecordClick);
+  const onScrim = (): void => closePop();
+  scrim.addEventListener('click', onScrim);
+  const onKeydown = (ev: KeyboardEvent): void => {
+    if (ev.key === 'Escape' && view !== 'none') closePop();
   };
-  announceToggle.addEventListener('click', onAnnounceToggle);
-  const onModeToggle = (): void => {
-    if (state.kind === 'recording' || state.kind === 'requesting') return;
-    mode = mode === 'conversation' ? 'solo' : 'conversation';
-    renderMode();
-  };
-  modeToggle.addEventListener('click', onModeToggle);
+  document.addEventListener('keydown', onKeydown);
+
+  const offBot = bot?.onChange(() => {
+    if (disposed) return;
+    if (bot.live()) {
+      sawLiveBot = true;
+      botNoteDismissed = false;
+    }
+    render();
+  });
+  // The bot feature answers whether it exists a beat after mount; a chooser
+  // opened in that beat should grow the bot source when the answer lands.
+  void bot?.ready.then(() => {
+    if (!disposed && view === 'chooser') renderPop();
+  });
 
   render();
-  if (opts.autoStart) void start(true);
+  if (opts.autoStart) void start(true, 'device');
   if (opts.loadSpeakers) {
     // A doc opened after its meeting ended still owes its owner the names:
     // the cast comes back off the record, and a tap renames over HTTP. A
@@ -1422,10 +1871,10 @@ export function mountMeetingStrip(opts: MeetingStripOpts): MeetingStripHandle {
           seen.add(voice.label);
           if (voice.name !== speakerDisplayName(voice.label, {})) names[voice.label] = voice.name;
         }
-        renderCaption();
+        if (view === 'chooser') renderPop();
       })
       .catch(() => {
-        // A record that cannot load costs the strip its cast, never itself.
+        // A record that cannot load costs the chooser its cast, never itself.
       });
   }
 
@@ -1437,16 +1886,21 @@ export function mountMeetingStrip(opts: MeetingStripOpts): MeetingStripHandle {
       disposed = true;
       generation += 1;
       announcer.cancel();
-      toggle.removeEventListener('click', onToggle);
-      announceToggle.removeEventListener('click', onAnnounceToggle);
-      modeToggle.removeEventListener('click', onModeToggle);
+      record.removeEventListener('click', onRecordClick);
+      scrim.removeEventListener('click', onScrim);
+      document.removeEventListener('keydown', onKeydown);
+      offBot?.();
       timing?.destroy();
       releaseAudio();
       closeSocket();
       stopClock?.();
       stopClock = null;
-      clearCaption();
-      root.classList.remove('is-live');
+      clearTurnSpans();
+      closePop();
+      record.remove();
+      scrim.remove();
+      pop.remove();
+      root.classList.remove('is-live', 'is-bot');
       root.hidden = true;
       root.removeAttribute('data-state');
       root.replaceChildren();
