@@ -3478,3 +3478,31 @@ write-once in practice, and the repair verb for a moved file cannot repair it.
   kern.maxfilesperproc — under a 64 soft limit). Lower the HARD limit
   (`ulimit -n 64`) when building an exhaustion control, and assert the
   exhaustion actually happened, or the control passes vacuously.
+
+## A hand-rolled CSS "parser" that calls the text before `{` a selector disarms itself the day someone writes a comment above the rule
+
+- **The shape.** `packages/markdown-app/test/meeting-advanced-css.test.ts`
+  (shipped in #556) split the stylesheet on `{` and treated the preceding text
+  as the rule's selector. That is right until a comment sits above the rule —
+  then the "selector" is the comment plus the selector, and any **prose comma**
+  inside it splits the string into fragments that match nothing. The
+  assertions keep running, keep passing, and no longer look at the rule they
+  name.
+- **Nothing fails when it breaks.** No test goes red, no build warns, and the
+  diff that disarms it edits a COMMENT — the least-reviewed line in any patch.
+  It was caught in #557 only because its author added a comment above the very
+  rule under test and noticed the assertion stopped biting; a comment added
+  anywhere else in the file would have gone unremarked for as long as the test
+  lived. Fix was to strip comments before parsing.
+- **The general form: a test whose subject is derived by string-munging its own
+  source can lose its subject silently.** Grepping a stylesheet, a bundle or a
+  skill file for a literal is fine — the literal is either there or it is not.
+  Deriving *structure* from that text with a split is not: the derivation has
+  failure modes the assertion cannot see, and its failure mode is always
+  "matches nothing", which reads as green.
+- **The check, and it is cheap: mutate the thing the test claims to guard and
+  watch it go red** — shrink the value, delete the rule, add a comment above
+  it. Same discipline as a positive control on a negative probe (see *"A
+  negative result needs the gate checked"*), and the sibling of *"An assertion
+  whose alternation can match either way pins nothing"* above: that one never
+  bit, this one stopped biting.
