@@ -13719,6 +13719,56 @@ function resolveDiscoveryFile(home, exists) {
   return discoveryCandidates(home).find(exists);
 }
 
+// packages/core/src/review-item-id.ts
+var B64URL = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+function decodeBase64Url(s) {
+  if (s.length === 0 || s.length % 4 === 1)
+    return;
+  const bytes = [];
+  let buffer = 0;
+  let bits = 0;
+  for (const ch of s) {
+    const v = B64URL.indexOf(ch);
+    if (v < 0)
+      return;
+    buffer = buffer << 6 | v;
+    bits += 6;
+    if (bits >= 8) {
+      bits -= 8;
+      bytes.push(buffer >> bits & 255);
+    }
+  }
+  return Uint8Array.from(bytes);
+}
+var THREAD_ID_PREFIX = "rt-";
+function parseThreadReviewItemId(id) {
+  if (!id.startsWith(THREAD_ID_PREFIX))
+    return;
+  const bytes = decodeBase64Url(id.slice(THREAD_ID_PREFIX.length));
+  if (!bytes)
+    return;
+  let payload;
+  try {
+    payload = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+  } catch {
+    return;
+  }
+  const commentAt = payload.lastIndexOf(`
+`);
+  if (commentAt < 0)
+    return;
+  const threadAt = payload.lastIndexOf(`
+`, commentAt - 1);
+  if (threadAt < 0)
+    return;
+  const docId = payload.slice(0, threadAt);
+  const threadId = payload.slice(threadAt + 1, commentAt);
+  const commentId = payload.slice(commentAt + 1);
+  if (docId === "" || threadId === "" || commentId === "")
+    return;
+  return { docId, threadId, commentId };
+}
+
 // packages/mcp/src/attach-backlog.ts
 async function deliverAttachBacklog(workspaceId, backlog, deps) {
   let comments = 0;
@@ -15636,12 +15686,16 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
         type: "object",
         properties: {
           workspaceId: { type: "string" },
+          reviewItemId: {
+            type: "string",
+            description: "Instead of workspaceId: any review item id, addressing the board that judges that item."
+          },
           criteria: {
             type: "string",
             description: "The criteria, as prose the judge will read. Up to 4,000 characters. Omit to restore the default."
           }
         },
-        required: ["workspaceId"]
+        required: []
       }
     },
     {
@@ -15928,7 +15982,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           taskId: { type: "string" },
           reviewItemId: {
             type: "string",
-            description: "Which item is being answered (from list_tasks / the ticket's `reviews`). Omit it on a ticket that is itself a decision — the answer then lands on that decision."
+            description: "Which item is being answered (from list_tasks / the ticket's `reviews`, or any queue row). Alone — no taskId — it addresses the item wherever it lives, a doc-thread item included. Omit it on a ticket that is itself a decision — the answer then lands on that decision."
           },
           text: { type: "string", description: "The human's verbatim answer." },
           answeredWith: {
@@ -15936,7 +15990,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
             description: "The id of the option they picked, if they picked one. The answer is still `text` — pass the option's label as the text. Omit when they answered in their own words."
           }
         },
-        required: ["taskId", "text"]
+        required: ["text"]
       }
     },
     {
@@ -15948,11 +16002,11 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           taskId: { type: "string" },
           reviewItemId: {
             type: "string",
-            description: "Which item is being asked about. Omit on a ticket that is itself an old-style decision, same rule as answer_review_item."
+            description: "Which item is being asked about. Alone — no taskId — it addresses the item wherever it lives; on a doc-thread item the question posts as a reply on its thread. Omit on a ticket that is itself an old-style decision, same rule as answer_review_item."
           },
           question: { type: "string", description: "What they want to know, verbatim." }
         },
-        required: ["taskId", "question"]
+        required: ["question"]
       }
     },
     {
@@ -15967,7 +16021,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           },
           reviewItemId: {
             type: "string",
-            description: "Ticket form: which item on the ticket to revise. Omit for the ticket's own decision — the question a `needs: 'decision'` row asks in its title and body, which carries no item id."
+            description: "Which item to revise. Alone — no taskId — it addresses the item wherever it lives, a doc-thread item included. With taskId, one of the items filed on that ticket. Omit for the ticket's own decision — the question a `needs: 'decision'` row asks in its title and body, which carries no item id."
           },
           docId: {
             type: "string",
@@ -16000,15 +16054,26 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     },
     {
       name: "withdraw_review_item",
-      description: "Take back a review item on a doc thread — normally one you raised, for an ask that turned out to be wrong or that a later one replaced; any agent in the workspace can retire a stale one, and the item records who did. The reader stops being asked: it leaves their queue and reads as withdrawn in the thread, with your reason beside it. Your words stay there verbatim, because they may already have read them. Prefer revise_review_item when the question still stands and only its wording is wrong; withdraw is for when there is nothing left to ask. This is how you clean up a thread carrying TWO of your items without touching the other one — resolve_thread would retire the whole thread and take the live ask with it. Refused on an item somebody has already answered: that would retract their answer. `undo: true` puts it back.",
+      description: "Take back a review item — normally one you raised, for an ask that turned out to be wrong or that a later one replaced; any agent in the workspace can retire a stale one, and the item records who did. Address it by bare reviewItemId wherever it lives (a ticket item or a doc-thread item alike), or by the doc-thread triple as before. The reader stops being asked: it leaves their queue and reads as withdrawn where it was raised, with your reason beside it. Your words stay there verbatim, because they may already have read them. Prefer revise_review_item when the question still stands and only its wording is wrong; withdraw is for when there is nothing left to ask. On a shared doc thread this is how you clean up one of TWO items without touching the other — resolve_thread would retire the whole thread and take the live ask with it. Refused on an item somebody has already answered: that would retract their answer. `undo: true` puts it back.",
       inputSchema: {
         type: "object",
         properties: {
-          docId: { type: "string", description: "The doc the thread lives on." },
-          threadId: { type: "string", description: "The thread the item was raised on." },
+          reviewItemId: {
+            type: "string",
+            description: "The item, by its id — from the queue row, the ticket, or add_review_item. Addresses either surface; no other id needed."
+          },
+          taskId: {
+            type: "string",
+            description: "Optional with reviewItemId: the ticket you already know holds the item, skipping a lookup."
+          },
+          docId: { type: "string", description: "Doc-thread form: the doc the thread lives on." },
+          threadId: {
+            type: "string",
+            description: "Doc-thread form: the thread the item was raised on."
+          },
           commentId: {
             type: "string",
-            description: "The comment carrying the review payload — `thread.comments[].id` in what create_thread / post_reply returned when you raised the item."
+            description: "Doc-thread form: the comment carrying the review payload — `thread.comments[].id` in what create_thread / post_reply returned when you raised the item."
           },
           reason: {
             type: "string",
@@ -16019,7 +16084,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
             description: "Put a withdrawn item back in front of the reader."
           }
         },
-        required: ["docId", "threadId", "commentId"]
+        required: []
       }
     },
     {
@@ -16275,6 +16340,17 @@ async function recordReviewAnswer(args) {
     ...answeredWith !== undefined ? { answeredWith } : {},
     author: AUTHOR
   });
+}
+async function resolveReviewItemId(reviewItemId) {
+  const thread = parseThreadReviewItemId(reviewItemId);
+  if (thread)
+    return { kind: "doc-thread", ...thread };
+  const res = await http("GET", `/api/review-items/${encodeURIComponent(reviewItemId)}`);
+  return {
+    kind: "task-item",
+    taskId: res.taskId,
+    ...res.workspaceId !== undefined ? { workspaceId: res.workspaceId } : {}
+  };
 }
 async function maybeAutoWatch(name, args) {
   if (NO_AUTO_WATCH_TOOLS.has(name))
@@ -16806,13 +16882,24 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
         return declared.isError === true ? err(String(declared.message)) : ok(declared);
       }
       case "set_review_item_criteria": {
-        const { workspaceId, criteria } = a;
-        const res = await http("PUT", `/api/workspaces/${encodeURIComponent(workspaceId)}/settings`, {
+        const { workspaceId, criteria, reviewItemId } = a;
+        let effectiveWorkspaceId = workspaceId;
+        if (effectiveWorkspaceId === undefined) {
+          if (reviewItemId === undefined) {
+            return err("which board? Pass workspaceId, or a reviewItemId — the criteria then land on the board that judges that item");
+          }
+          const res2 = await http("GET", `/api/review-items/${encodeURIComponent(reviewItemId)}`);
+          if (res2.workspaceId === undefined) {
+            return err("that item's doc is not attached to any workspace, so it names no board — pass workspaceId");
+          }
+          effectiveWorkspaceId = res2.workspaceId;
+        }
+        const res = await http("PUT", `/api/workspaces/${encodeURIComponent(effectiveWorkspaceId)}/settings`, {
           reviewItemCriteria: criteria !== undefined && criteria.trim() !== "" ? criteria : null,
           author: AUTHOR
         });
         return ok({
-          workspaceId,
+          workspaceId: effectiveWorkspaceId,
           criteria: res.reviewItemCriteria.value,
           isDefault: res.reviewItemCriteria.isDefault
         });
@@ -17111,14 +17198,37 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
       }
       case "answer_review_item": {
         const { taskId, reviewItemId, text, answeredWith } = a;
+        let effectiveTaskId = taskId;
+        if (effectiveTaskId === undefined) {
+          if (reviewItemId === undefined) {
+            return err("which item? Pass its reviewItemId (from the queue row or the ticket), or taskId — alone for a ticket that is itself a decision, with reviewItemId for one of the items filed on it");
+          }
+          const address = await resolveReviewItemId(reviewItemId);
+          if (address.kind === "doc-thread") {
+            await http("POST", `/api/docs/${encodeURIComponent(address.docId)}/threads/${encodeURIComponent(address.threadId)}/answer`, {
+              text,
+              commentId: address.commentId,
+              ...answeredWith !== undefined ? { optionId: answeredWith } : {},
+              author: AUTHOR
+            });
+            return ok({
+              reviewItemId,
+              docId: address.docId,
+              threadId: address.threadId,
+              commentId: address.commentId,
+              recorded: true
+            });
+          }
+          effectiveTaskId = address.taskId;
+        }
         const res = await recordReviewAnswer({
-          taskId,
+          taskId: effectiveTaskId,
           text,
           ...reviewItemId !== undefined ? { reviewItemId } : {},
           ...answeredWith !== undefined ? { answeredWith } : {}
         });
         return ok({
-          taskId,
+          taskId: effectiveTaskId,
           ...reviewItemId !== undefined ? { reviewItemId } : {},
           recorded: true,
           links: res.task.links ?? []
@@ -17157,16 +17267,35 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
           const docRes = await http("POST", `/api/docs/${encodeURIComponent(docId)}/threads/${encodeURIComponent(threadId)}/revise`, { ...patch, commentId });
           return ok({ docId, threadId, commentId, revised: true, ...heldResult(docRes) });
         }
-        if (taskId === undefined) {
-          return err("which item? taskId (+ reviewItemId for one of the items filed on the ticket), or docId + threadId + commentId for one raised on a doc thread");
+        let effectiveTaskId = taskId;
+        if (effectiveTaskId === undefined) {
+          if (reviewItemId === undefined) {
+            return err("which item? A bare reviewItemId (from the queue row or the ticket), taskId (+ reviewItemId for one of the items filed on the ticket), or docId + threadId + commentId for one raised on a doc thread");
+          }
+          const address = await resolveReviewItemId(reviewItemId);
+          if (address.kind === "doc-thread") {
+            if (reply !== undefined) {
+              return err("`reply` is ticket-only — a doc-thread item already lives in its thread, so point at the change there with post_reply");
+            }
+            const docRes = await http("POST", `/api/docs/${encodeURIComponent(address.docId)}/threads/${encodeURIComponent(address.threadId)}/revise`, { ...patch, commentId: address.commentId });
+            return ok({
+              reviewItemId,
+              docId: address.docId,
+              threadId: address.threadId,
+              commentId: address.commentId,
+              revised: true,
+              ...heldResult(docRes)
+            });
+          }
+          effectiveTaskId = address.taskId;
         }
         if (reviewItemId === undefined && reply !== undefined) {
           return err("`reply` needs an item thread to land on, and a ticket's own decision has none — revise without `reply`, then point at the change with post_reply on the task");
         }
         const targetItemId = reviewItemId ?? "r-legacy";
-        const res = await http("POST", `/api/tasks/${encodeURIComponent(taskId)}/review-items/${encodeURIComponent(targetItemId)}/revise`, { ...patch, ...reply !== undefined ? { reply } : {} });
+        const res = await http("POST", `/api/tasks/${encodeURIComponent(effectiveTaskId)}/review-items/${encodeURIComponent(targetItemId)}/revise`, { ...patch, ...reply !== undefined ? { reply } : {} });
         return ok({
-          taskId,
+          taskId: effectiveTaskId,
           ...reviewItemId !== undefined ? { reviewItemId } : { decision: true },
           revised: true,
           ...res.threadId !== undefined ? { threadId: res.threadId } : {},
@@ -17176,16 +17305,54 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
         });
       }
       case "withdraw_review_item": {
-        const { docId, threadId, commentId, reason, undo } = a;
-        await http("POST", `/api/docs/${encodeURIComponent(docId)}/threads/${encodeURIComponent(threadId)}/withdraw${undo ? "/undo" : ""}`, { commentId, author: AUTHOR, ...reason !== undefined ? { reason } : {} });
-        return ok({ docId, threadId, commentId, withdrawn: undo !== true });
+        const { reviewItemId, taskId, docId, threadId, commentId, reason, undo } = a;
+        const body = { author: AUTHOR, ...reason !== undefined ? { reason } : {} };
+        const docWithdraw = async (address) => {
+          await http("POST", `/api/docs/${encodeURIComponent(address.docId)}/threads/${encodeURIComponent(address.threadId)}/withdraw${undo ? "/undo" : ""}`, { ...body, commentId: address.commentId });
+          return ok({
+            ...reviewItemId !== undefined ? { reviewItemId } : {},
+            ...address,
+            withdrawn: undo !== true
+          });
+        };
+        if (reviewItemId !== undefined) {
+          if (docId !== undefined || threadId !== undefined || commentId !== undefined) {
+            return err("two addresses in one call — pass reviewItemId alone (it carries its own address), or the docId + threadId + commentId triple, not both");
+          }
+          const address = taskId !== undefined ? { kind: "task-item", taskId } : await resolveReviewItemId(reviewItemId);
+          if (address.kind === "doc-thread")
+            return docWithdraw(address);
+          await http("POST", `/api/tasks/${encodeURIComponent(address.taskId)}/review-items/${encodeURIComponent(reviewItemId)}/withdraw${undo ? "/undo" : ""}`, body);
+          return ok({ taskId: address.taskId, reviewItemId, withdrawn: undo !== true });
+        }
+        if (docId === undefined || threadId === undefined || commentId === undefined) {
+          return err("which item? Pass its reviewItemId (from the queue row or the ticket), or the full docId + threadId + commentId triple for one raised on a doc thread");
+        }
+        return docWithdraw({ docId, threadId, commentId });
       }
       case "request_more_info": {
         const { taskId, reviewItemId, question } = a;
-        const path = reviewItemId === undefined ? `/api/tasks/${encodeURIComponent(taskId)}/more-info` : `/api/tasks/${encodeURIComponent(taskId)}/review-items/${encodeURIComponent(reviewItemId)}/more-info`;
+        let effectiveTaskId = taskId;
+        if (effectiveTaskId === undefined) {
+          if (reviewItemId === undefined) {
+            return err("which item? Pass its reviewItemId (from the queue row or the ticket), or taskId — alone for a ticket that is itself a decision, with reviewItemId for one of the items filed on it");
+          }
+          const address = await http("GET", `/api/review-items/${encodeURIComponent(reviewItemId)}`);
+          if (address.kind === "doc-thread") {
+            await http("POST", `/api/docs/${encodeURIComponent(address.docId)}/threads/${encodeURIComponent(address.threadId)}/comments`, { author: AUTHOR, text: question });
+            return ok({
+              reviewItemId,
+              docId: address.docId,
+              threadId: address.threadId,
+              asked: true
+            });
+          }
+          effectiveTaskId = address.taskId;
+        }
+        const path = reviewItemId === undefined ? `/api/tasks/${encodeURIComponent(effectiveTaskId)}/more-info` : `/api/tasks/${encodeURIComponent(effectiveTaskId)}/review-items/${encodeURIComponent(reviewItemId)}/more-info`;
         const res = await http("POST", path, { question, author: AUTHOR });
         return ok({
-          taskId,
+          taskId: effectiveTaskId,
           ...reviewItemId !== undefined ? { reviewItemId } : {},
           asked: true,
           links: res.task.links ?? []
