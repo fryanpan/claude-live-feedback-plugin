@@ -6764,6 +6764,20 @@ body.is-reading-width #editor > .ProseMirror {
 #editor > .ProseMirror li {
   margin: 0.15em 0;
 }
+/* The implicit host (list-behavior.ts): Tab on a sole bullet has to nest it
+   under a parent item — the schema allows nothing else — so the extension
+   builds one with an empty paragraph and decorates it `implicit-host`. The
+   person asked for an indent and sees one: neither the host's marker nor
+   its empty line is drawn. Zero height rather than display:none so the
+   editor can still measure the node. */
+#editor > .ProseMirror li.implicit-host {
+  list-style: none;
+}
+#editor > .ProseMirror li.implicit-host > p:first-child {
+  height: 0;
+  margin: 0;
+  overflow: hidden;
+}
 #editor > .ProseMirror hr {
   border: 0;
   border-top: 1px solid var(--border);

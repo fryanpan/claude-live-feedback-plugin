@@ -74,6 +74,52 @@ describe('Tab on a sole list item', () => {
     expect(view.state.selection.from).toBe(7);
   });
 
+  it('the host is implicit: decorated so the stylesheet draws neither marker nor blank line', () => {
+    const { handle, view } = mountEditor('- alpha\n');
+    handle.editor.commands.setTextSelection(3);
+    press(view, 'Tab');
+    const hosts = [...view.dom.querySelectorAll('li.implicit-host')];
+    expect(hosts).toHaveLength(1);
+    expect(hosts[0]?.firstElementChild?.tagName).toBe('P');
+    // The nested item — the person's line — is an ordinary item.
+    expect(hosts[0]?.querySelector('li')?.classList.contains('implicit-host')).toBe(false);
+    // Shift-Tab dissolves the host, and the decoration with it.
+    press(view, 'Tab', { shiftKey: true });
+    expect(view.dom.querySelectorAll('li.implicit-host')).toHaveLength(0);
+  });
+
+  it("a caret that lands in the host's blank line is moved past it, the way it was going", () => {
+    const { handle, view } = mountEditor('Intro.\n\n- alpha\n');
+    const alphaAt = (): number => {
+      let at = -1;
+      handle.editor.state.doc.descendants((n, pos) => {
+        if (n.isText && n.text === 'alpha') at = pos;
+        return at < 0;
+      });
+      return at;
+    };
+    handle.editor.commands.setTextSelection(alphaAt() + 2);
+    press(view, 'Tab');
+    // host li > (empty p, ul > li > p 'alpha'): the blank line is 4 before the text.
+    const blank = alphaAt() - 4;
+    // Travelling up (from the nested text): lands at the end of "Intro.".
+    handle.editor.commands.setTextSelection(blank);
+    expect(handle.editor.state.selection.from).toBe(7);
+    // Travelling down (from the intro): lands at the start of the nested text.
+    handle.editor.commands.setTextSelection(blank);
+    expect(handle.editor.state.selection.from).toBe(alphaAt());
+  });
+
+  it('Backspace at the start of the indented item lifts it back to one plain bullet', () => {
+    const { fragment, handle, view } = mountEditor('- alpha\n');
+    handle.editor.commands.setTextSelection(3);
+    press(view, 'Tab');
+    handle.editor.commands.setTextSelection(7); // start of 'alpha', nested
+    expect(press(view, 'Backspace')).toBe(true);
+    expect(view.dom.querySelectorAll('li.implicit-host')).toHaveLength(0);
+    expect(prose.serializeFragmentToMarkdown(fragment)).toBe('- alpha\n');
+  });
+
   it('works for an ordered list too, nesting into a nested orderedList', () => {
     const { handle, view } = mountEditor('1. alpha\n');
     handle.editor.commands.setTextSelection(3);
