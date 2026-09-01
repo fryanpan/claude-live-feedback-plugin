@@ -39,6 +39,7 @@ import {
   clientReleaseRoot,
   prepareClientRelease,
 } from '../packages/server/src/client-release.ts';
+import { resolveDataDir } from '../packages/server/src/data-dir.ts';
 import { readDeploySource } from '../packages/server/src/deploy-source.ts';
 import {
   type BindErrorKind,
@@ -58,6 +59,7 @@ const noWatch = args.includes('--no-watch');
 const requestedPort = Number(arg('port') ?? process.env.PORT ?? '8787');
 const here = dirname(fileURLToPath(import.meta.url));
 const repoRoot = join(here, '..');
+const dataDir = resolveDataDir(process.env, repoRoot);
 
 /**
  * DEV only. Walk to the next port when this one is occupied, so two agents on
@@ -246,6 +248,14 @@ const serverArgs = [
   // it — which is invisible to the bind-health watchdog below (it polls the
   // port it ASKED for) and was the engine of the 2026-08-29 restart storm.
   ...(noWatch ? ['--no-port-walk'] : []),
+  // Where the durable record lives. Passed explicitly — and in every mode —
+  // because until now the child resolved it alone, which made prod's corpus
+  // an unstated consequence of where the checkout sat: nothing the supervisor
+  // printed, and nothing a plist could move. `resolveDataDir` returns the old
+  // `<repoRoot>/data` unless CW_DATA_DIR says otherwise, so dev and staging
+  // are unchanged.
+  '--data-dir',
+  dataDir,
   // PROD only: the published release to serve. Empty in dev, where the
   // bundler watches this checkout's dist and the server should follow it.
   ...clientArgs,
@@ -314,6 +324,10 @@ console.log('[supervisor] markdown review: .../review/<docId>?as=bryan');
 console.log('[supervisor] demo mockup:    .../demos/mockup');
 console.log('[supervisor] mobile preview: append  &mobile=iphone16pm  to a review URL');
 if (noWatch) console.log('[supervisor] mode: prod (no hot-reload; bind-health watchdog on)');
+// Named on every start because "which corpus is this serving" was previously
+// answerable only by deriving it from the checkout's location, and a server
+// that booted against the wrong one looked identical to a healthy one.
+console.log(`[supervisor] data dir: ${dataDir}`);
 console.log('');
 
 let cleaningUp = false;
