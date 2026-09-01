@@ -268,6 +268,58 @@ describe('SseHub replay buffer bounds', () => {
   });
 });
 
+describe('SseHub transient fan-out — word-rate frames never touch the replay window', () => {
+  /** A sink that records what it was written, id line included. */
+  const sinkOf = (log: Array<{ event: string; id?: string }>) => ({
+    write: (event: string, _data: unknown, id?: string) => {
+      log.push({ event, ...(id !== undefined ? { id } : {}) });
+    },
+    close: () => {},
+  });
+
+  it('reaches every open stream live, carries NO id, and buffers nothing', () => {
+    const hub = new SseHub();
+    const a: Array<{ event: string; id?: string }> = [];
+    const b: Array<{ event: string; id?: string }> = [];
+    hub.add('doc-t', sinkOf(a));
+    hub.add('doc-t', sinkOf(b));
+    hub.broadcast('doc-t', { event: 'thread.created', n: 1 } as never);
+    const mark = hub.lastIdOn('doc-t');
+    for (let i = 0; i < REPLAY_MAX_EVENTS + 50; i++) {
+      hub.broadcastTransient('doc-t', { event: 'meeting.transcript', turn: i } as never);
+    }
+    // Both live streams got every word…
+    expect(a.filter((f) => f.event === 'meeting.transcript')).toHaveLength(REPLAY_MAX_EVENTS + 50);
+    expect(b.filter((f) => f.event === 'meeting.transcript')).toHaveLength(REPLAY_MAX_EVENTS + 50);
+    // …none of them with an id, so no client cursor can ever point at one…
+    expect(a.filter((f) => f.event === 'meeting.transcript').every((f) => f.id === undefined)).toBe(
+      true,
+    );
+    // …and the buffer still holds exactly the one real event, at the same
+    // mark, so a reconnect at that cursor is a clean no-op rather than a gap.
+    expect(hub.eventsOn('doc-t')).toHaveLength(1);
+    expect(hub.lastIdOn('doc-t')).toBe(mark);
+    expect(hub.replayAfter('doc-t', mark as string)).toEqual({ ok: true, events: [] });
+  });
+
+  it('POSITIVE CONTROL: the same volume through broadcast evicts the real event', () => {
+    const hub = new SseHub();
+    hub.broadcast('doc-u', { event: 'thread.created', n: 1 } as never);
+    const mark = hub.lastIdOn('doc-u') as string;
+    for (let i = 0; i < REPLAY_MAX_EVENTS + 50; i++) {
+      hub.broadcast('doc-u', { event: 'meeting.transcript', turn: i } as never);
+    }
+    expect(hub.replayAfter('doc-u', mark)).toEqual({ ok: false });
+  });
+
+  it('with nobody subscribed a transient frame reaches zero sinks and leaves no trace', () => {
+    const hub = new SseHub();
+    expect(hub.broadcastTransient('doc-v', { event: 'meeting.transcript' } as never)).toBe(0);
+    expect(hub.eventsOn('doc-v')).toHaveLength(0);
+    expect(hub.lastIdOn('doc-v')).toBeUndefined();
+  });
+});
+
 describe('SseHub replay negative control', () => {
   it('the newest id yields an empty ok replay — never a gap, never a duplicate', () => {
     const hub = new SseHub();

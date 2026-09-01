@@ -13918,6 +13918,13 @@ function resolveAgentAuthor(env) {
   return { name, color: hashToColor(name), id: agentIdForName(name), kind: "known" };
 }
 
+// packages/mcp/src/channel-gate.ts
+function isChannelEvent(event) {
+  if (event.startsWith("meeting."))
+    return false;
+  return true;
+}
+
 // packages/mcp/src/claim-warning.ts
 function truncate(s, n) {
   return s.length > n ? `${s.slice(0, n - 1)}…` : s;
@@ -14497,7 +14504,7 @@ var STATUS_TEXT_MAX = 4000;
 function suggestionAuthor() {
   return { id: AUTHOR.id, name: AUTHOR.name, color: AUTHOR.color };
 }
-var PLUGIN_VERSION = "0.1.139";
+var PLUGIN_VERSION = "0.1.140";
 var PROCESS_ID = randomUUID();
 var server = new Server({
   name: "claude-workspaces",
@@ -17761,7 +17768,7 @@ async function handleFrame(raw) {
     });
     return;
   }
-  if (shouldForwardFrame.shouldForward(ev, payload)) {
+  if (isChannelEvent(ev) && shouldForwardFrame.shouldForward(ev, payload)) {
     await emitChannelMessage(ev, payload);
   }
   await ackCommentRow(payload);
