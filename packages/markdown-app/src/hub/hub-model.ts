@@ -80,6 +80,10 @@ export interface HubInfoRequest {
   text: string;
   by: string;
   ts: number;
+  /** The thread the question was asked on, when it was asked the review-item
+   *  way (the card's link, or a phrase of the body). A question with one is
+   *  what makes the decision `waiting` — see `HubTask.decisionState`. */
+  threadId?: string;
 }
 
 /** One task as projected into the `tasks` Y.Map (§3.3 visitor contract —
@@ -131,6 +135,24 @@ export interface HubTask {
   /** "I can't answer this yet, tell me more" — recorded rather than answered,
    *  so the decision stays open and the asker gets the question. */
   infoRequests?: HubInfoRequest[];
+  /**
+   * Where the ticket's OWN decision stands with the reader, when that is not
+   * plainly open: `waiting` — the reader asked on it and the owner has not
+   * revised since, so it is OFF the queue (`decisionRows` drops it) — or
+   * `revised`, back on the queue and marked. Derived by the SERVER
+   * (`projectDecisionState`) from the same row `GET /review-items` reads, so
+   * the Home card and that route cannot disagree; absent when open or
+   * answered, and on a projection from a server older than the field.
+   */
+  decisionState?: 'waiting' | 'revised';
+  /** On a `revised` decision: when, what the reader had asked, the thread
+   *  that asked, and which span of the NEW body changed. */
+  decisionRevision?: {
+    at: number;
+    question?: string;
+    threadId?: string;
+    range?: { start: number; end: number };
+  };
   answer?: { text: string; by: string; ts: number; optionId?: string };
   triagedAgainst?: { goalId: string; ts: number };
   transitions: HubTransition[];
@@ -1205,9 +1227,21 @@ export function stepTarget(
  *  tasks (§3.2: a decision is a task with needs:'decision'), not a second
  *  entity. */
 export function decisionRows(tasks: HubTask[]): HubTask[] {
-  return tasks
-    .filter((t) => t.needs === 'decision' && t.status !== 'done' && !t.answer)
-    .sort((a, b) => a.createdAt - b.createdAt || a.id.localeCompare(b.id));
+  return (
+    tasks
+      // WAITING is the owner's turn: the reader asked on it, and it comes
+      // back — marked Revised — when the owner revises. The same rule that
+      // keeps a waiting ticket item off `GET /review-items`, read off the
+      // projection because this card is drawn from the projection.
+      .filter(
+        (t) =>
+          t.needs === 'decision' &&
+          t.status !== 'done' &&
+          !t.answer &&
+          t.decisionState !== 'waiting',
+      )
+      .sort((a, b) => a.createdAt - b.createdAt || a.id.localeCompare(b.id))
+  );
 }
 
 /** One open decision plus the work that is actually waiting on it. */
@@ -1727,6 +1761,25 @@ export function reviewQueue(
         why: row.blocks.length === 0 ? 'Nothing is waiting on this yet' : blockingLine(row),
         since: row.task.createdAt,
         decision: row,
+        // Marked Revised exactly as a ticket-borne item is, off the same
+        // server derivation — so a decision the reader asked on comes back
+        // saying so, quoting their question, rather than as a fresh ask.
+        ...(row.task.decisionRevision
+          ? {
+              revision: {
+                at: row.task.decisionRevision.at,
+                ...(row.task.decisionRevision.question !== undefined
+                  ? { question: row.task.decisionRevision.question }
+                  : {}),
+                ...(row.task.decisionRevision.threadId !== undefined
+                  ? { threadId: row.task.decisionRevision.threadId }
+                  : {}),
+                ...(row.task.decisionRevision.range
+                  ? { range: row.task.decisionRevision.range }
+                  : {}),
+              },
+            }
+          : {}),
       },
       rank: rankOf(row.task, BAND_TASK_ROW, false, row.task.createdAt, row.task.id),
     });
@@ -1922,17 +1975,32 @@ export function reviewReplyRequest(
 
 /**
  * What a question asked ON a review item anchors to: the item, on its task's
- * doc. Only a TICKET-borne item has one — a thread-borne declaration's words
- * live in a comment, and a legacy decision's words are the task body, which
- * the server refuses to anchor this way. Null means "no pill on this card".
+ * doc. A TICKET-borne item has one, and so does a ticket's OWN decision — it
+ * anchors as the derived `r-legacy` row, which the server admits since
+ * 2026-08-31 (before that a `needs: 'decision'` card was the one card with
+ * no way to ask). A thread-borne declaration's words live in a comment, and
+ * its thread is where a question goes. Null means "no link on this card".
  */
 export function reviewItemAnchorTarget(
   item: ReviewItem,
 ): { docId: string; taskId: string; reviewItemId: string } | null {
+  if (item.decision) {
+    const taskId = item.decision.task.id;
+    return { docId: `task:${taskId}`, taskId, reviewItemId: LEGACY_REVIEW_ITEM_ID };
+  }
   const t = item.thread;
   if (!t || t.kind !== 'task-review' || !t.taskId || !t.reviewItemId) return null;
   if (t.reviewItemId === LEGACY_REVIEW_ITEM_ID) return null;
   return { docId: `task:${t.taskId}`, taskId: t.taskId, reviewItemId: t.reviewItemId };
+}
+
+/** Who a question on this item goes to — the item's asker, or for a
+ *  ticket's own decision the ticket's filer — named in the box's hint and
+ *  the toast. Undefined when nothing recorded one. */
+export function reviewItemOwner(item: ReviewItem): string | undefined {
+  const who = item.thread?.askedBy?.trim();
+  if (who) return who;
+  return item.decision ? decisionAskedBy(item.decision.task) : undefined;
 }
 
 /**
@@ -1985,7 +2053,9 @@ export function reviewItemAskRequest(
  * detail, so the two ways of asking about the whole item land identically.
  */
 export function wholeItemPhrase(item: ReviewItem): string {
-  return item.review?.headline ?? item.ask;
+  // A ticket's own decision has no payload here; its headline IS the title
+  // (`reviewFromDecisionTask`), and the title is what the server quotes.
+  return item.review?.headline ?? item.decision?.task.title ?? item.ask;
 }
 
 /** The request for a question about the item AS A WHOLE — the card's
