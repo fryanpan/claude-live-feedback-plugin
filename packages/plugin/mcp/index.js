@@ -14218,7 +14218,8 @@ function stalledLine(p) {
   const parts = [];
   const rows = p.rows ?? [];
   const count = p.stalledCount ?? rows.length;
-  const denominator = p.consideredCount === undefined ? "" : ` (of ${p.consideredCount} open row(s) checked)`;
+  const beyond = p.beyondCapacity !== undefined && p.beyondCapacity > 0 ? `; ${p.beyondCapacity} beyond the parallelism cap and not judged` : "";
+  const denominator = p.consideredCount === undefined ? "" : ` (of ${p.consideredCount} open row(s) checked${beyond})`;
   if (count > 0) {
     const subject = count === 1 ? "1 task has" : `${count} tasks have`;
     const list = rows.length > 0 ? ` — ${stalledRowsClause(rows)}` : "";
@@ -14496,7 +14497,7 @@ var STATUS_TEXT_MAX = 4000;
 function suggestionAuthor() {
   return { id: AUTHOR.id, name: AUTHOR.name, color: AUTHOR.color };
 }
-var PLUGIN_VERSION = "0.1.136";
+var PLUGIN_VERSION = "0.1.137";
 var PROCESS_ID = randomUUID();
 var server = new Server({
   name: "claude-workspaces",
@@ -15698,8 +15699,23 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
       }
     },
     {
+      name: "set_parallelism_cap",
+      description: "Set how many builders this board may have dispatched at once — the workspace's parallelism cap (default 4; the lead and the owner can lower or raise it, floor 1). Takes effect on the NEXT register_dispatch: nothing running is stopped. next_tasks and the ready-work nudge offer at most the free slots, and the stall check judges only the top <cap> rows of the queue. Omit `cap` to restore the default. Answers with the cap, whether it is the default, the slots in use and who holds them (agent + task), and how many are free — so lowering it below the current use is visible in the same call. get_workspace reads the same numbers.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          workspaceId: { type: "string" },
+          cap: {
+            type: "number",
+            description: "Whole number of builders, at least 1. Omit to restore the default (4). Zero is refused — pausing a board is retire_workspace, not a cap."
+          }
+        },
+        required: ["workspaceId"]
+      }
+    },
+    {
       name: "get_workspace",
-      description: "Read a board's goals in priority order, with per-goal task counts. First row is the highest band. Call it before deciding what to work on — list_tasks returns goal ids only, so without this the ordering is invisible. Cheap by design: pair it with next_tasks, which carries the tasks themselves.",
+      description: "Read a board's goals in priority order, with per-goal task counts. First row is the highest band. Call it before deciding what to work on — list_tasks returns goal ids only, so without this the ordering is invisible. Cheap by design: pair it with next_tasks, which carries the tasks themselves. Also carries the board's parallelism cap and how many of its slots are in use.",
       inputSchema: {
         type: "object",
         properties: { workspaceId: { type: "string" } },
@@ -16204,7 +16220,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     },
     {
       name: "register_dispatch",
-      description: "Tell the board a builder is working a task in a private git worktree, so the stall loop can read the worktree's file activity as the row moving instead of waking the lead over silence it cannot see. Call it when you spawn a builder; re-registering the same task replaces the old worktree. Close it with close_dispatch when the builder reaches terminal (done or died) — a worktree that is deleted closes its own dispatch.",
+      description: "Tell the board a builder is working a task in a private git worktree, so the stall loop can read the worktree's file activity as the row moving instead of waking the lead over silence it cannot see. Call it when you spawn a builder; re-registering the same task replaces the old worktree. Close it with close_dispatch when the builder reaches terminal (done or died) — a worktree that is deleted closes its own dispatch. Refused with `parallelism-cap-reached` when the workspace's parallelism cap (default 4) is already spent — the error names who holds the slots; wait for one to close, or change the cap with set_parallelism_cap, before retrying.",
       inputSchema: {
         type: "object",
         properties: {
@@ -16212,6 +16228,10 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           worktreePath: {
             type: "string",
             description: "Absolute path to the builder's git worktree on this machine."
+          },
+          agentName: {
+            type: "string",
+            description: "This builder's display name, so a parallelism-cap refusal on another dispatch can say who holds the slot. Defaults to this session's own (CW_AGENT_NAME)."
           }
         },
         required: ["taskId", "worktreePath"]
@@ -16949,6 +16969,11 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
           quote: res.task.quote
         });
       }
+      case "set_parallelism_cap": {
+        const { workspaceId, cap } = a;
+        const res = await http("PUT", `/api/workspaces/${encodeURIComponent(workspaceId)}/parallelism-cap`, { cap: cap === undefined ? null : cap, author: AUTHOR });
+        return ok(res);
+      }
       case "get_workspace": {
         const { workspaceId } = a;
         const res = await http("GET", `/api/workspaces/${encodeURIComponent(workspaceId)}`);
@@ -16956,6 +16981,7 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
           workspaceId: res.workspace.id,
           name: res.workspace.name,
           leadAgentId: res.workspace.leadAgentId,
+          ...res.parallelismCap !== undefined ? { parallelismCap: res.parallelismCap } : {},
           ...res.workspace.reviewItemCriteria !== undefined ? { reviewItemCriteria: res.workspace.reviewItemCriteria } : {},
           ...res.retired ? { retired: res.retired } : {},
           goals: res.goalSummary
@@ -17445,8 +17471,12 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
         }));
       }
       case "register_dispatch": {
-        const { taskId, worktreePath } = a;
-        return ok(await http("POST", "/api/dispatches", { taskId, worktreePath }));
+        const { taskId, worktreePath, agentName } = a;
+        return ok(await http("POST", "/api/dispatches", {
+          taskId,
+          worktreePath,
+          agentName: agentName ?? AUTHOR.name
+        }));
       }
       case "close_dispatch": {
         const { taskId } = a;

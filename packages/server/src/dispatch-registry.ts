@@ -86,6 +86,11 @@ export interface DispatchRecord {
   /** False when the watcher failed to arm or died: activity cannot be seen,
    *  so the row falls back to the ordinary stall clock. */
   watching: boolean;
+  /** Display name of the agent driving this dispatch, if the caller named
+   *  one. Purely descriptive — nothing here keys off it — and it exists so a
+   *  parallelism-cap refusal can name who holds the slot instead of just the
+   *  task id. Absent for callers on an older bundle that never sent it. */
+  agentName?: string;
 }
 
 export type RegisterResult =
@@ -97,11 +102,12 @@ interface Entry {
   registeredAt: number;
   lastActivityAt?: number;
   watcher: { close: () => void } | null;
+  agentName?: string;
 }
 
 interface FileShape {
   version: number;
-  dispatches: Record<string, { worktreePath: string; registeredAt: number }>;
+  dispatches: Record<string, { worktreePath: string; registeredAt: number; agentName?: string }>;
 }
 
 export interface DispatchRegistryOptions {
@@ -135,6 +141,9 @@ export class DispatchRegistry {
           worktreePath: rec.worktreePath,
           registeredAt: typeof rec.registeredAt === 'number' ? rec.registeredAt : this.now(),
           watcher: null,
+          ...(typeof rec.agentName === 'string' && rec.agentName.length > 0
+            ? { agentName: rec.agentName }
+            : {}),
         };
         this.entries.set(taskId, entry);
         // A path already gone stays until a read prunes it; arming would
@@ -153,14 +162,19 @@ export class DispatchRegistry {
     }
   }
 
-  register(taskId: string, worktreePath: string): RegisterResult {
+  register(taskId: string, worktreePath: string, agentName?: string): RegisterResult {
     if (!isValidDispatchTaskId(taskId)) return { ok: false, error: 'bad-task-id' };
     if (!worktreePath.startsWith('/')) return { ok: false, error: 'path-not-absolute' };
     if (!existsSync(worktreePath)) return { ok: false, error: 'no-such-path' };
     // Re-registering replaces: the newest dispatch is the live one, and the
     // old worktree's activity must not vouch for the new worktree's silence.
     this.closeEntry(taskId);
-    const entry: Entry = { worktreePath, registeredAt: this.now(), watcher: null };
+    const entry: Entry = {
+      worktreePath,
+      registeredAt: this.now(),
+      watcher: null,
+      ...(agentName ? { agentName } : {}),
+    };
     this.entries.set(taskId, entry);
     this.arm(entry);
     this.save();
@@ -255,6 +269,7 @@ export class DispatchRegistry {
       registeredAt: entry.registeredAt,
       ...(entry.lastActivityAt !== undefined ? { lastActivityAt: entry.lastActivityAt } : {}),
       watching: entry.watcher !== null,
+      ...(entry.agentName !== undefined ? { agentName: entry.agentName } : {}),
     };
   }
 
@@ -265,6 +280,7 @@ export class DispatchRegistry {
       dispatches[taskId] = {
         worktreePath: entry.worktreePath,
         registeredAt: entry.registeredAt,
+        ...(entry.agentName !== undefined ? { agentName: entry.agentName } : {}),
       };
     }
     const tmp = `${this.path}.tmp`;

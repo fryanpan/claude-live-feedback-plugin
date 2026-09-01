@@ -328,6 +328,15 @@ describe('stalledLine', () => {
     expect(stalledLine(STALL)).toContain('Cache the facet counts');
   });
 
+  it('says how many rows the parallelism cap kept out of the pass, inside the denominator', () => {
+    // Nine open rows checked, five judged — the four beyond the cap are idle
+    // by rule, and a reader must not count them as healthy.
+    expect(stalledLine({ ...STALL, beyondCapacity: 4 })).toContain(
+      '9 open row(s) checked; 4 beyond the parallelism cap and not judged',
+    );
+    expect(stalledLine(STALL)).not.toContain('beyond the parallelism cap');
+  });
+
   it('summarises the tail rather than pasting a wall of rows', () => {
     const many = {
       ...STALL,

@@ -141,6 +141,15 @@ export interface ReadyWorkSnapshot {
   /** What the gate withheld, by reason. Absent keys, never zeroes. */
   held: Partial<Record<HoldReason, number>>;
   /**
+   * Ready rows trimmed by the workspace's parallelism cap, on top of
+   * `held` rather than folded into it — a row here was never examined by the
+   * dependency gate at all, and reporting it as another `HoldReason` would
+   * claim a fact ready-gate.ts is careful never to claim about a row it
+   * didn't read (see its `HoldReason` doc). Absent when nothing was trimmed,
+   * matching every other absent-means-zero count on this snapshot.
+   */
+  capacityHeld?: number;
+  /**
    * Rows the gate could not evaluate at all.
    *
    * Kept separate from `held` and from `ready` because it is neither: a row
@@ -552,7 +561,13 @@ export class ReadyWorkNudger {
       this.counted.set(key, stamp);
       this.tallySuppressed(board);
     }
-    if (board.ready.length === 0 && undetermined.length === 0) {
+    // "Nothing to say" now ALSO requires no ready row held back by the
+    // parallelism cap. A board with three ready rows and zero open slots must
+    // not go silent the same way an empty board does — that is exactly the
+    // "I could not look" reasoning `undetermined` already carries here,
+    // applied to capacity instead of readability: the lead needs to hear
+    // there IS work waiting even when there is nowhere to put it yet.
+    if (board.ready.length === 0 && undetermined.length === 0 && !board.capacityHeld) {
       this.armed.delete(key);
       return;
     }
@@ -568,13 +583,21 @@ export class ReadyWorkNudger {
     if (!this.reachable(key, lead)) return;
     const top = board.ready[0];
     const held = describeHeld(board.held);
+    // Folded in beside the dependency gate's own holds rather than merged
+    // into `board.held` upstream — see the field's doc on `ReadyWorkSnapshot`
+    // for why the two must stay separate all the way to here, and only meet
+    // on the wire, where `NudgeFrame.held` is already a loose string record.
+    const heldWithCapacity =
+      board.capacityHeld && board.capacityHeld > 0
+        ? { ...(held ?? {}), 'parallelism-cap': board.capacityHeld }
+        : held;
     this.emit(key, lead, {
       event: READY_IDLE_EVENT,
       workspaceId: key,
       ...(top ? { taskId: top.id, title: top.title } : {}),
       readyCount: board.ready.length,
       consideredCount: board.considered,
-      ...(held ? { held } : {}),
+      ...(heldWithCapacity ? { held: heldWithCapacity } : {}),
       ...(undetermined.length > 0
         ? { undetermined: { count: undetermined.length, reasons: reasonsOf(undetermined) } }
         : {}),

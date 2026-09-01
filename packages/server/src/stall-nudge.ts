@@ -135,6 +135,9 @@ export interface StallSnapshot {
   considered: number;
   /** Rows the gate could not evaluate. Neither stalled nor healthy. */
   undetermined: readonly StallUndeterminedRow[];
+  /** Runnable rows past the board's parallelism cap, which the gate did not
+   *  judge (`stall-gate.ts`). Absent when none — the same as zero. */
+  beyondCapacity?: number;
   /** Review items the quality gate is holding past the window — asks that
    *  exist on a ticket and on nobody's queue. Absent on a snapshot from a
    *  caller that does not read them, which is the same as none. */
@@ -213,6 +216,14 @@ export interface StallNudgeFrame {
    * and that one it does not send at all.
    */
   undetermined?: { count: number; reasons: readonly string[] };
+  /**
+   * Runnable rows the board's parallelism cap kept out of this pass — ranked
+   * past the top `cap` of the queue, so not judged. Absent when none. Sent so
+   * the reader can tell "nine rows checked, two stalled" from "nine rows,
+   * five judged, two stalled": the unjudged rows are idle by rule, not
+   * healthy.
+   */
+  beyondCapacity?: number;
   /**
    * Review items held by the quality gate past the window, oldest first.
    * Absent when there are none. A frame carrying ONLY this is a real wake:
@@ -472,6 +483,9 @@ export class StallNudger {
       consideredCount: board.considered,
       ...(board.stalled.length > 0 ? { rows: board.stalled } : {}),
       ...(board.unfiled.length > 0 ? { unfiled: board.unfiled } : {}),
+      ...(board.beyondCapacity !== undefined && board.beyondCapacity > 0
+        ? { beyondCapacity: board.beyondCapacity }
+        : {}),
       // `heldItems`, not `held`: the ready_idle frame already spends `held` on
       // its withheld-row counts, and the plugin reads both frames into one type.
       ...(held.length > 0 ? { heldItems: held } : {}),

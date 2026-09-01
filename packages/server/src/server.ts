@@ -266,9 +266,12 @@ import { TaskProjection, taskBodyDocId, taskIdOfBodyDoc } from './task-projectio
 import { buildQueue, placeableGoals, summarizeGoals } from './task-queue.ts';
 import { clipToWordBoundary } from './task-title.ts';
 import {
+  DEFAULT_PARALLELISM_CAP,
   type GoalListEntry,
   type HubWorkspace,
   LEGACY_REVIEW_ITEM_ID,
+  PARALLELISM_CAP_MAX,
+  PARALLELISM_CAP_MIN,
   type Task,
   type TaskEffortEstimate,
   type TaskStatus,
@@ -1589,6 +1592,91 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
     console.error(`[dispatch] ${dispatches.loadError}`);
   }
 
+  /**
+   * Every OPEN dispatch whose task belongs to `workspaceId`, excluding
+   * `excludeTaskId` — pass the dispatch's own task there when checking
+   * whether IT would push the board over its cap, since re-registering the
+   * same task replaces its slot rather than taking a second one.
+   *
+   * `dispatches` is one registry for the whole server (task ids are unique
+   * across boards), so this is the join back to "which board" every caller
+   * that wants a per-workspace count needs. A dispatch for a task the store
+   * no longer has (soft-deleted, or a stale record from before a restart)
+   * cannot be attributed to any board and is silently excluded — the same
+   * "coordination state, not user content" posture dispatch-registry.ts
+   * already takes with a vanished worktree.
+   */
+  const dispatchesInWorkspace = (
+    workspaceId: string,
+    excludeTaskId?: string,
+  ): ReturnType<typeof dispatches.list> =>
+    dispatches
+      .list()
+      .filter(
+        (d) =>
+          d.taskId !== excludeTaskId && taskStore.getTask(d.taskId)?.workspaceId === workspaceId,
+      );
+
+  /**
+   * The board's parallelism cap as every reader sees it: the number, whether
+   * it is the shipped default, how many slots are spent and by whom, and how
+   * many are free. ONE builder for the settings route, the cap route, the
+   * dispatch refusal, the workspace read and the two nudges — so "in use"
+   * cannot mean open dispatches on one surface and in-progress rows on
+   * another. A slot is an OPEN DISPATCH (`register_dispatch`): a builder the
+   * lead never registered holds none, which is why the lead skill makes
+   * registering the dispatch rule rather than a courtesy.
+   *
+   * Holders carry the task id, its title and the agent's display name — all
+   * workspace content, visible to every member by the board's own rule — and
+   * never the worktree path, which is host-machine fact (`/api/dispatches`
+   * has a visitor check for exactly that; this view is served without one).
+   * `undefined` for a board that does not exist.
+   */
+  const parallelismCapView = (
+    workspaceId: string,
+    excludeTaskId?: string,
+  ):
+    | {
+        cap: number;
+        isDefault: boolean;
+        default: number;
+        inUse: number;
+        free: number;
+        holders: Array<{ taskId: string; title?: string; agentName?: string }>;
+      }
+    | undefined => {
+    const read = taskStore.parallelismCap(workspaceId);
+    if (!read) return undefined;
+    const holders = dispatchesInWorkspace(workspaceId, excludeTaskId).map((d) => {
+      const title = taskStore.getTask(d.taskId)?.title;
+      return {
+        taskId: d.taskId,
+        ...(title !== undefined ? { title } : {}),
+        ...(d.agentName !== undefined ? { agentName: d.agentName } : {}),
+      };
+    });
+    return {
+      cap: read.value,
+      isDefault: read.isDefault,
+      default: DEFAULT_PARALLELISM_CAP,
+      inUse: holders.length,
+      free: Math.max(0, read.value - holders.length),
+      holders,
+    };
+  };
+
+  /** One sentence naming who holds the slots, for a refusal or a note. */
+  const holdersClause = (
+    holders: ReadonlyArray<{ taskId: string; title?: string; agentName?: string }>,
+  ): string =>
+    holders
+      .map(
+        (h) =>
+          `${h.agentName ?? 'an unnamed agent'} on ${h.title !== undefined ? `"${h.title}"` : h.taskId}`,
+      )
+      .join(', ');
+
   // The per-agent unfiled-ask counters the daily chat audit publishes, kept
   // so a session can read its own number back. The audit is the only writer
   // — the server cannot see chat — see chat-audit.ts for the honest limits.
@@ -2644,13 +2732,24 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
         },
       },
     );
+    // The parallelism cap trims the READY set on top of the dependency
+    // gate's own verdict, never inside it: `evaluateReadyWork` reasons about
+    // one row at a time, and how many builders the board may run at once is
+    // a fact about the WHOLE BOARD, not something any row carries (see the
+    // module doc on `HoldReason` in ready-gate.ts). Priority order is
+    // `verdict.ready`'s own, so trimming to `available` slots keeps exactly
+    // the top-ranked rows a lead would actually be told to dispatch.
+    const available = parallelismCapView(workspace.id)?.free ?? DEFAULT_PARALLELISM_CAP;
+    const ready = verdict.ready.slice(0, available);
+    const capacityHeld = verdict.ready.length - ready.length;
     return {
       workspaceId: workspace.id,
       ...(workspace.leadAgentId !== undefined ? { leadAgentId: workspace.leadAgentId } : {}),
       retired: workspace.retiredAt !== undefined,
-      ready: verdict.ready,
+      ready,
       considered: verdict.considered,
       held: verdict.held,
+      ...(capacityHeld > 0 ? { capacityHeld } : {}),
       undetermined: verdict.undetermined,
       // The store's durable half of the idle clock. Survives a restart, which
       // the in-process observations cannot — see ready-nudge.ts.
@@ -2802,6 +2901,17 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
         .filter((d) => d.watching)
         .map((d) => d.taskId),
     );
+    // The cap and the board's own priority order, so the gate judges only
+    // the rows the board may have in flight (stall-gate.ts, `parallelismCap`).
+    // The order is `buildQueue`'s — the SAME computation `next_tasks` and the
+    // ready-work nudge rank by — asked with `includeBlocked` so a blocked row
+    // keeps its place in the order rather than vanishing and promoting the
+    // row behind it; the gate itself decides which rows spend a slot.
+    const parallelismCap = taskStore.parallelismCap(workspace.id)?.value ?? DEFAULT_PARALLELISM_CAP;
+    const priorityOrder = buildQueue(tasks, goals, {
+      includeBlocked: true,
+      goalRows: taskStore.listGoalRows(workspace.id),
+    }).map((row) => row.id);
     const input = {
       tasks: rows,
       events,
@@ -2809,6 +2919,8 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
       bands: { dispatchable, ownerBand },
       unreadableReviewTaskIds,
       now,
+      parallelismCap,
+      priorityOrder,
       ...(opts.stallNudgeQuietMs !== undefined ? { quietMs: opts.stallNudgeQuietMs } : {}),
       ...(watchingDispatchTaskIds.size > 0 ? { watchingDispatchTaskIds } : {}),
       ...(opts.stallBuilderSilentMultiplier !== undefined
@@ -2999,6 +3111,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
       unfiled: verdict.unfiled,
       considered: verdict.considered,
       undetermined: verdict.undetermined,
+      ...(verdict.beyondCapacity > 0 ? { beyondCapacity: verdict.beyondCapacity } : {}),
       ...(held.length > 0 ? { held } : {}),
     };
   };
@@ -6337,8 +6450,22 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           // in this payload and no MCP tool read it, so ordering lived in
           // each agent's head; the counts are what make the list answer
           // "where is the open work" without a second call per goal.
+          const capView = parallelismCapView(workspaceId);
           return j(200, {
             workspace,
+            // How many builders the board may run and how many it is running,
+            // so an agent deciding what to work on sees the ceiling in the
+            // same read as the goals — `set_parallelism_cap` changes it.
+            ...(capView
+              ? {
+                  parallelismCap: {
+                    value: capView.cap,
+                    isDefault: capView.isDefault,
+                    inUse: capView.inUse,
+                    free: capView.free,
+                  },
+                }
+              : {}),
             // The rows argument is what lets each band carry its own status
             // (and done attribution) — the counts say where the open work is,
             // the status says what somebody declared about the band itself.
@@ -6564,9 +6691,42 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           // finishable — but the caller is told what it is looking at BEFORE
           // it picks a row. This is the surface an agent hits when it asks
           // "what should I do next", so silence here is the lost night.
+          //
+          // THE PARALLELISM CAP TRIMS WHAT IS OFFERED. A `todo` row is an
+          // offer to dispatch, and the board may only have `free` more
+          // builders, so only the top `free` todo rows are listed — the same
+          // trim the ready-work nudge applies, so the two surfaces cannot tell
+          // a lead two different queues. In-progress rows pass through
+          // untouched: they are the work already in flight (a builder reading
+          // this route to find its own row must still find it), and hiding
+          // them would not free a slot. `capacity` says what was withheld, so
+          // a short list reads as the cap at work and not as a short queue.
+          const capView = parallelismCapView(workspaceId);
+          let offers = capView?.free ?? Number.POSITIVE_INFINITY;
+          let heldForCapacity = 0;
+          const withinCapacity = withPresence.filter((row) => {
+            const task = byId.get(row.id);
+            if (!task || task.status !== 'todo') return true;
+            if (offers > 0) {
+              offers -= 1;
+              return true;
+            }
+            heldForCapacity += 1;
+            return false;
+          });
           return j(200, {
             workspaceId,
-            tasks: withPresence,
+            tasks: withinCapacity,
+            ...(capView
+              ? {
+                  capacity: {
+                    cap: capView.cap,
+                    inUse: capView.inUse,
+                    free: capView.free,
+                    ...(heldForCapacity > 0 ? { heldForCapacity } : {}),
+                  },
+                }
+              : {}),
             ...(isRetired(workspace) ? { retired: retiredNotice(workspace) } : {}),
           });
         }
@@ -6723,6 +6883,61 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
         // rename_workspace. The name was set once at creation and nothing
         // changed it, which is how two live boards ended up sharing one — and
         // a name is how an agent picks which to work.
+        // The board's parallelism cap on its own address (Bryan, 2026-08-31:
+        // "Bryan and Team Lead can set a parallelism limit on the workspace").
+        // GET reads it; PUT `{cap}` sets it, `{cap: null}` restores the
+        // default. Both answer with the full view — cap, default, slots in
+        // use, who holds them, how many are free — so the caller that just
+        // lowered the cap sees in the same response whether the board is
+        // already over it. It takes effect on the NEXT dispatch: nothing
+        // running is touched, and the stall check and both nudges read the
+        // new number on their next pass. Own route rather than only a field
+        // on `/settings` because Team Lead's session calls REST directly to
+        // manage cross-project capacity, and a one-field verb is the shape
+        // that call wants; `/settings` still carries the field for the panel.
+        const wsCapMatch = pathname.match(/^\/api\/workspaces\/([^/]+)\/parallelism-cap$/);
+        if (wsCapMatch && (req.method === 'GET' || req.method === 'PUT')) {
+          const workspaceId = decodeURIComponent(wsCapMatch[1] ?? '');
+          if (!taskStore.getWorkspace(workspaceId)) {
+            return j(404, { error: 'workspace not found' });
+          }
+          if (req.method === 'PUT') {
+            const body = await safeJson(req);
+            if (!body || !Object.hasOwn(body, 'cap')) {
+              return j(400, { error: 'cap required: an integer, or null to restore the default' });
+            }
+            const raw = body.cap;
+            if (raw !== null && (typeof raw !== 'number' || !Number.isInteger(raw))) {
+              return j(400, { error: 'cap must be an integer, or null to restore the default' });
+            }
+            // Zero is refused outright rather than stored: it would turn every
+            // dispatch away with nothing to wait for. "Lower it" bottoms out
+            // at one (PARALLELISM_CAP_MIN) — pausing a board is a different
+            // verb (retire_workspace), not a cap.
+            if (
+              typeof raw === 'number' &&
+              (raw < PARALLELISM_CAP_MIN || raw > PARALLELISM_CAP_MAX)
+            ) {
+              return j(400, {
+                error: `cap must be between ${PARALLELISM_CAP_MIN} and ${PARALLELISM_CAP_MAX}`,
+              });
+            }
+            const actor = authorFor(body.author) ?? {
+              id: 'agent-unknown',
+              name: 'unknown',
+              kind: 'agent',
+            };
+            const res = taskStore.setParallelismCap(
+              workspaceId,
+              typeof raw === 'number' ? raw : undefined,
+              { actor },
+            );
+            if (!res.ok) return j(404, res);
+          }
+          const view = parallelismCapView(workspaceId);
+          if (!view) return j(404, { error: 'workspace not found' });
+          return j(200, { workspaceId, ...view });
+        }
         // Workspace settings — two tunable prompts today: what the quality
         // gate judges a review item against, and what the effort scorer
         // weighs. GET reads both effective values and says which are on the
@@ -6821,6 +7036,32 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
               hasEffortPrompt = true;
               effortPromptValue = typeof raw === 'string' ? raw : undefined;
             }
+            // How many builders this board's lead may dispatch at once
+            // (Bryan, 2026-08-31: "add support for limiting parallelism in the
+            // workspace"). Same merge contract as the two prompt fields —
+            // named-and-null clears to `DEFAULT_PARALLELISM_CAP` — but the
+            // value is a bounded integer rather than free text, so it is
+            // validated against the range register_dispatch itself enforces.
+            let hasParallelismCap = false;
+            let parallelismCapValue: number | undefined;
+            if (body && Object.hasOwn(body, 'parallelismCap')) {
+              const raw = body.parallelismCap;
+              if (raw !== null && (typeof raw !== 'number' || !Number.isInteger(raw))) {
+                return j(400, {
+                  error: 'parallelismCap must be an integer, or null to restore the default',
+                });
+              }
+              if (
+                typeof raw === 'number' &&
+                (raw < PARALLELISM_CAP_MIN || raw > PARALLELISM_CAP_MAX)
+              ) {
+                return j(400, {
+                  error: `parallelismCap must be between ${PARALLELISM_CAP_MIN} and ${PARALLELISM_CAP_MAX}`,
+                });
+              }
+              hasParallelismCap = true;
+              parallelismCapValue = typeof raw === 'number' ? raw : undefined;
+            }
             if (hasReviewCriteria) {
               const res = taskStore.setReviewItemCriteria(workspaceId, reviewCriteriaValue, {
                 actor: author,
@@ -6833,6 +7074,12 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
               });
               if (!res.ok) return j(404, res);
             }
+            if (hasParallelismCap) {
+              const res = taskStore.setParallelismCap(workspaceId, parallelismCapValue, {
+                actor: author,
+              });
+              if (!res.ok) return j(404, res);
+            }
             if (hasNotesHome) {
               const res = taskStore.setNotesHome(workspaceId, notesHomeValue, { actor: author });
               if (!res.ok) return j(404, res);
@@ -6840,12 +7087,24 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           }
           const criteria = taskStore.reviewItemCriteria(workspaceId);
           const effortPrompt = taskStore.effortEstimatePrompt(workspaceId);
-          if (!criteria || !effortPrompt) return j(404, { error: 'workspace not found' });
+          const capView = parallelismCapView(workspaceId);
+          if (!criteria || !effortPrompt || !capView) {
+            return j(404, { error: 'workspace not found' });
+          }
           const notesHome = taskStore.notesHome(workspaceId);
           return j(200, {
             workspaceId,
             reviewItemCriteria: { ...criteria, default: DEFAULT_REVIEW_ITEM_CRITERIA },
             effortEstimatePrompt: { ...effortPrompt, default: DEFAULT_EFFORT_ESTIMATE_PROMPT },
+            // The same view `/parallelism-cap` serves, in this route's own
+            // `{value, isDefault, default}` shape so the panel reads all three
+            // settings alike; the slot count rides beside it.
+            parallelismCap: {
+              value: capView.cap,
+              isDefault: capView.isDefault,
+              default: capView.default,
+            },
+            dispatchesInUse: capView.inUse,
             ...(notesHome ? { notesHome } : {}),
           });
         }
@@ -9123,11 +9382,34 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
             const body = await safeJson(req);
             const taskId = body?.taskId;
             const worktreePath = body?.worktreePath;
+            const agentName = typeof body?.agentName === 'string' ? body.agentName.trim() : '';
             if (!isValidDispatchTaskId(taskId)) return j(400, { error: 'bad-task-id' });
             if (typeof worktreePath !== 'string' || worktreePath.length === 0) {
               return j(400, { error: 'path-not-absolute' });
             }
-            const res = dispatches.register(taskId, worktreePath);
+            // The workspace's parallelism cap (Bryan, 2026-08-31), checked before
+            // the registry ever sees the call. Re-registering the SAME task
+            // replaces its own slot rather than taking a second one, so it is
+            // excluded from the count it is being checked against — otherwise
+            // a builder's own re-dispatch (a worktree replaced after a crash)
+            // would be refused for the slot it already holds.
+            //
+            // A task this store has no record of (soft-deleted, or a stray
+            // id) cannot be attributed to a board, so the cap cannot be
+            // evaluated — the same "cannot look, so cannot enforce" posture
+            // the ready-gate takes with an unreadable row, applied here to a
+            // dispatch instead of a wake.
+            const task = taskStore.getTask(taskId);
+            const view = task ? parallelismCapView(task.workspaceId, taskId) : undefined;
+            if (view && view.free === 0) {
+              return j(409, {
+                error: 'parallelism-cap-reached',
+                message: `parallelism cap (${view.cap}) reached — held by: ${holdersClause(view.holders)}`,
+                cap: view.cap,
+                holders: view.holders,
+              });
+            }
+            const res = dispatches.register(taskId, worktreePath, agentName || undefined);
             if (!res.ok) return j(400, { error: res.error });
             return j(200, res);
           }

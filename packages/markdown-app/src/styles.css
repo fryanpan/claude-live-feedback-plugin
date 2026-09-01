@@ -1076,6 +1076,30 @@ body.hub-body {
 .hub-criteria-actions .hub-btn {
   min-height: 44px;
 }
+/* Same stacked shape as `.hub-settings-row--criteria` next door — label, then
+   the control, then the save/default actions — but the control is a single
+   short number rather than a paragraph, so it does not need the textarea's
+   width or its scroll behaviour. */
+.hub-settings-row--cap {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 6px;
+}
+.hub-cap-input {
+  width: 80px;
+  box-sizing: border-box;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg);
+  color: var(--fg);
+  font: inherit;
+  font-size: 13px;
+}
+.hub-cap-input:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
 /* 24px keeps the hit area honest on a phone without making the panel taller
    on the iPad, where vertical room is the scarce axis. */
 .hub-check {
