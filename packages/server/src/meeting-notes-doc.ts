@@ -80,6 +80,7 @@ import {
   type NotesOwnership,
   agentOwnedElements,
   createNotesOwnership,
+  findNotesSection,
   mergeNotesSection,
   readNotesSection,
   reclaimAfterInPlaceEdit,
@@ -117,12 +118,6 @@ export interface ReplaceNotesResult {
   error?: 'empty' | 'parse-failed';
   /** `replaced` when the section existed, `appended` on its first write. */
   mode?: 'replaced' | 'appended';
-}
-
-/** The heading's text, read the same way the serializer would render it. */
-function headingText(el: Y.XmlElement): string {
-  const line = prose.serializeBlockToMarkdown(el).split('\n', 1)[0] ?? '';
-  return line.replace(/^#{1,6}\s+/, '').trim();
 }
 
 /**
@@ -169,37 +164,15 @@ export function replaceNotesSection(
   return { ok: true, mode: 'replaced' };
 }
 
-/** Where the notes section sits in the top-level fragment: the heading's own
- *  index, and the first index past its body (the next heading at the same or
- *  a higher level, or the end of the doc). Null when the heading is absent —
- *  which is the "never written yet" state, not a failure. */
+/** Where the notes section sits in the top-level fragment — the LAST heading
+ *  match, shared with the merge so every notes path targets the same section
+ *  once a meeting has started a fresh one at the end of the doc. Null when
+ *  the heading is absent — the "never written yet" state, not a failure. */
 function findNotesSectionSpan(
   fragment: Y.XmlFragment,
   heading: string,
 ): { start: number; endExclusive: number } | null {
-  const top = fragment.toArray() as Y.XmlElement[];
-  let start = -1;
-  let level = 0;
-  for (let i = 0; i < top.length; i++) {
-    const el = top[i]!;
-    if (el.nodeName !== 'heading') continue;
-    if (headingText(el) !== heading) continue;
-    start = i;
-    level = prose.headingLevelOf(el);
-    break;
-  }
-  if (start < 0) return null;
-
-  let endExclusive = top.length;
-  for (let i = start + 1; i < top.length; i++) {
-    const el = top[i]!;
-    if (el.nodeName !== 'heading') continue;
-    if (prose.headingLevelOf(el) <= level) {
-      endExclusive = i;
-      break;
-    }
-  }
-  return { start, endExclusive };
+  return findNotesSection(fragment, heading);
 }
 
 /**
@@ -595,10 +568,15 @@ export interface NotesContextTasks {
  * doc's notes section, and the ONLY thing separating the agent's own bullets
  * from a person's writing.
  *
- * Per DOC, not per meeting, and it outlives a meeting deliberately: a second
- * meeting on the same doc still recognises the first one's notes as its own
- * and revises them, the way it always has. Nothing a person touched is in
- * there, so the longer life costs them nothing.
+ * Per DOC, but its CLAIMS live per meeting: `beginMeeting` releases them when
+ * a new session starts on the doc. The ledger used to outlive a meeting so a
+ * second meeting could revise the first one's notes — and that is exactly the
+ * stop-and-restart data loss the owner reported ("recording replaces all
+ * existing notes"): the new session's first tick composes from scratch, so
+ * the merge deleted every prior-meeting item the ledger still claimed. Once
+ * a recording stops, its notes are written; the next one appends after them
+ * and may only SUGGEST on them (owner's call, 2026-08-31: "a stop-and-restart
+ * never replaces what is already written").
  *
  * In memory only, so a restarted server claims nothing — which the merge
  * reads as "everything in this section is somebody else's". That is the safe
@@ -607,6 +585,9 @@ export interface NotesContextTasks {
  */
 export interface NotesLedger {
   forDoc(docId: string): NotesOwnership;
+  /** A new meeting is starting on this doc: release every claim, so nothing
+   *  a previous recording wrote can be replaced by this one. */
+  beginMeeting(docId: string): void;
 }
 
 export function createNotesLedger(): NotesLedger {
@@ -618,6 +599,9 @@ export function createNotesLedger(): NotesLedger {
       const created = createNotesOwnership();
       byDoc.set(docId, created);
       return created;
+    },
+    beginMeeting(docId) {
+      byDoc.get(docId)?.release();
     },
   };
 }
@@ -832,6 +816,13 @@ export function withServerNotesSinks(
   return {
     ...options,
     ...(captureIntents ? { captureIntents } : {}),
+    onSessionStart: (ids): void => {
+      // A new recording on this doc: whatever the previous one wrote is
+      // finished writing. Releasing the claims is what makes stop-and-restart
+      // append instead of replace — the reported data-loss bug.
+      ledger.beginMeeting(ids.docId);
+      options.onSessionStart?.(ids);
+    },
     resolveContext: (docId: string): NotesProjectContext | undefined => {
       const gathered: NotesProjectContext = {};
       try {

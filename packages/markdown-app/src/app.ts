@@ -19,6 +19,7 @@ import {
 import { ensureUserIdentity } from './identity-prompt.ts';
 import { wireKeyboardInset } from './keyboard-inset.ts';
 import { createMeetingBotClient } from './meeting-bot-client.ts';
+import { type MeetingLiveZone, createMeetingLiveZone } from './meeting-live-zone.ts';
 import { mountMeetingStrip } from './meeting-strip.ts';
 import { wantsLatencyTiming } from './meeting-timing-client.ts';
 import type { MountContext } from './mount-context.ts';
@@ -231,6 +232,10 @@ async function mountMarkdown(ctx: MountContext): Promise<void> {
   // during the first Yjs application, before this is wired.
   // biome-ignore lint/style/useConst: assigned after the meeting strip mounts
   let editViewport: ReturnType<typeof wireEditViewport> | undefined;
+  // Forward ref, same shape as `chrome`: the zone is created down where the
+  // meeting strip mounts (it only exists on docs that can hold a meeting),
+  // but the wash extension must be declared at editor construction.
+  let liveZone: MeetingLiveZone | undefined;
   const editor: EditorHandle = createEditor({
     parent: editorMount,
     ydoc,
@@ -243,9 +248,12 @@ async function mountMarkdown(ctx: MountContext): Promise<void> {
     docLink: ctx.workspaceId
       ? { workspaceId: ctx.workspaceId, relPath: ctx.relPath, navigate: navigateTo }
       : undefined,
-    // A huddle washes each participant's recent sections in their color;
-    // every other doc is untouched (no plugin registered at all).
-    recentEdits: ctx.huddle === true ? { whenSynced: (cb) => client.onReady(cb) } : undefined,
+    // Inert until the zone exists AND a meeting is (recently) live; the
+    // zone's bot fallback rides the same signal.
+    settleWash: {
+      isLive: () => liveZone?.washActive() ?? false,
+      onNotesInsert: () => liveZone?.clearSettled(),
+    },
   });
   // Editor teardown runs before the client closes (LIFO — client.close was
   // registered first by the router), so the y-prosemirror binding detaches
@@ -384,6 +392,12 @@ async function mountMarkdown(ctx: MountContext): Promise<void> {
     // use it.
     const botClient = createMeetingBotClient({ docId });
     scope.onCleanup(() => botClient.destroy());
+    // The provisional zone at the end of the doc: the live transcript, the
+    // splitting-off card, and (via the wash extension declared on the editor
+    // above) the settle highlight on each freshly written note.
+    liveZone = createMeetingLiveZone({ parent: editorMount, prose: editor.editor.view.dom });
+    const zone = liveZone;
+    scope.onCleanup(() => zone.destroy());
     const strip = mountMeetingStrip({
       docId,
       root: meetingStripEl,
@@ -417,6 +431,7 @@ async function mountMarkdown(ctx: MountContext): Promise<void> {
       // gone. Same record the reassign menu below reads.
       loadSpeakers: () => loadDocSpeakers(docId),
       postName: (meetingId, speaker, name) => postSpeakerName({ docId, meetingId, speaker, name }),
+      liveZone: zone,
     });
     scope.onCleanup(() => strip.destroy());
   }
