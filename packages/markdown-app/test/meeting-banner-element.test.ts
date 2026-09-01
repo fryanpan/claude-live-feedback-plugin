@@ -109,7 +109,7 @@ describe('<meeting-banner>', () => {
     const { el } = mount({ events: [ev()] });
     el.setAttribute('workspace-name', 'Unfiled');
     await el.refresh();
-    expect(shadowText(el)).toContain('notes land in Unfiled');
+    expect(shadowText(el)).toContain('notes land on the Unfiled board');
   });
 
   it('renders nothing on 503 (not configured) and stops polling', async () => {
@@ -180,8 +180,18 @@ describe('<meeting-banner>', () => {
     expect(el.shadowRoot?.querySelector('.banner.joined')).toBeTruthy();
     expect(shadowText(el)).toContain('Bot in call');
     expect(button(el, 'Pull bot out')).toBeTruthy();
-    // No open-notes affordance: the join click already opened the doc.
+    // No open-notes BUTTON (approved mock) — but the title links to the
+    // discussion doc, for a reader whose join click happened elsewhere.
     expect(el.shadowRoot?.querySelectorAll('button')).toHaveLength(1);
+    const link = el.shadowRoot?.querySelector('a.title') as HTMLAnchorElement | null;
+    expect(link?.getAttribute('href')).toBe('/workspaces/w1/docs/d1');
+    expect(link?.textContent).toBe('Design sync');
+  });
+
+  it('a joined event with no docUrl renders the title as plain text', async () => {
+    const { el } = mount({ events: [ev({ joined: true })] });
+    await settle();
+    expect(el.shadowRoot?.querySelector('.banner.joined')).toBeTruthy();
     expect(el.shadowRoot?.querySelectorAll('a')).toHaveLength(0);
   });
 

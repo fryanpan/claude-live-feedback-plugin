@@ -464,6 +464,11 @@ function buildShell(root: HTMLElement, name: string, workspaceId: string): void 
         </div>
       </nav>
       <section id="hub-home" class="hub-home hidden">
+        <!-- The banner again, for the pane landing links open on: the board
+             column's copy is display:none here, and a live "Bot in call" —
+             the only pull-out surface — must not be. Its own instance with
+             its own poll; the two panes never show at once. -->
+        <meeting-banner workspace-id="${escapeHtml(workspaceId)}"></meeting-banner>
         <div id="hub-home-page">
           <div id="hub-home-review"></div>
           <div id="hub-home-activity"></div>

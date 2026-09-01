@@ -63,11 +63,13 @@ const STYLES = `
 .glyph { flex-shrink: 0; font-size: 16px; }
 .text { flex: 1; min-width: 180px; }
 .title {
+  display: block;
   font-weight: 650;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+a.title { color: inherit; text-decoration: underline; text-underline-offset: 3px; }
 .caption { color: var(--fg-muted, #57606a); font-size: 12.5px; margin-top: 1px; }
 .actions { display: flex; gap: 8px; flex-shrink: 0; }
 button {
@@ -126,8 +128,15 @@ export class MeetingBannerEl extends HTMLElement {
     this.shadow.append(style);
     document.addEventListener('visibilitychange', this.onVisibility);
     void this.refresh();
+    // The hub mounts one instance per pane and only one pane shows at a
+    // time, so a hidden instance skips its ticks — every poll is a vendor
+    // list call. It catches up on its next tick once shown, the same ≤60s
+    // freshness the visible one has. `checkVisibility` is absent in the
+    // test DOM; absent means poll.
     this.pollTimer = setInterval(() => {
-      if (document.visibilityState === 'visible') void this.refresh();
+      if (document.visibilityState === 'visible' && (this.checkVisibility?.() ?? true)) {
+        void this.refresh();
+      }
     }, POLL_MS);
   }
 
@@ -182,9 +191,13 @@ export class MeetingBannerEl extends HTMLElement {
 
     const text = document.createElement('div');
     text.className = 'text';
-    const title = document.createElement('div');
+    // A joined meeting's title is the way back to its discussion doc — the
+    // join click opened it once, but a person arriving from another device
+    // needs a path of their own (UX review on PR #555).
+    const title = document.createElement(kind === 'joined' && event.docUrl ? 'a' : 'div');
     title.className = 'title';
     title.textContent = event.title ?? 'Untitled meeting';
+    if (title instanceof HTMLAnchorElement && event.docUrl) title.href = event.docUrl;
     const caption = document.createElement('div');
     caption.className = 'caption';
     if (kind === 'joined') {
@@ -193,8 +206,8 @@ export class MeetingBannerEl extends HTMLElement {
       const workspace = this.getAttribute('workspace-name');
       const line = bannerTimeLine(event, this.now());
       // The landing page is outside any workspace, so its offer says where
-      // the notes doc will be filed; the board's own banner files there.
-      caption.textContent = workspace ? `${line} · notes land in ${workspace}` : line;
+      // the notes doc will be filed — named as a place, not a lost state.
+      caption.textContent = workspace ? `${line} · notes land on the ${workspace} board` : line;
     }
     text.append(title, caption);
 
