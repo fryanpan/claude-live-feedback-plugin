@@ -1,5 +1,5 @@
 /**
- * The workspace parallelism cap, end to end (t-GjJAOKpXfLg8: "Bryan and
+ * The workspace parallelism cap, end to end (Bryan, 2026-08-31: "Bryan and
  * Team Lead can set a parallelism limit on the workspace so that the board
  * keeps moving as fast as the tokens allow without starving higher-priority
  * projects").

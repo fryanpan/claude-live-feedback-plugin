@@ -6837,7 +6837,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
         // rename_workspace. The name was set once at creation and nothing
         // changed it, which is how two live boards ended up sharing one — and
         // a name is how an agent picks which to work.
-        // The board's parallelism cap on its own address (t-GjJAOKpXfLg8:
+        // The board's parallelism cap on its own address (Bryan, 2026-08-31:
         // "Bryan and Team Lead can set a parallelism limit on the workspace").
         // GET reads it; PUT `{cap}` sets it, `{cap: null}` restores the
         // default. Both answer with the full view — cap, default, slots in
@@ -6991,7 +6991,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
               effortPromptValue = typeof raw === 'string' ? raw : undefined;
             }
             // How many builders this board's lead may dispatch at once
-            // (t-GjJAOKpXfLg8: "add support for limiting parallelism in the
+            // (Bryan, 2026-08-31: "add support for limiting parallelism in the
             // workspace"). Same merge contract as the two prompt fields —
             // named-and-null clears to `DEFAULT_PARALLELISM_CAP` — but the
             // value is a bounded integer rather than free text, so it is
@@ -9290,7 +9290,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
             if (typeof worktreePath !== 'string' || worktreePath.length === 0) {
               return j(400, { error: 'path-not-absolute' });
             }
-            // The workspace's parallelism cap (t-GjJAOKpXfLg8), checked before
+            // The workspace's parallelism cap (Bryan, 2026-08-31), checked before
             // the registry ever sees the call. Re-registering the SAME task
             // replaces its own slot rather than taking a second one, so it is
             // excluded from the count it is being checked against — otherwise
