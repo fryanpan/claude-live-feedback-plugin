@@ -7934,6 +7934,18 @@ body.is-reading-width #editor > .ProseMirror {
   border-radius: var(--radius-lg);
   background: var(--bg-panel);
   font-family: var(--sans);
+  max-width: min(100%, 1200px);
+  margin-inline: auto;
+}
+body.is-reading-width #editor > .live-zone {
+  max-width: 36rem;
+}
+/* The zone hugs the last line of the doc: the editor's 60vh click-to-type
+   floor would otherwise strand it below a screen of empty surface on a doc
+   whose meeting has just started. Only while the zone is showing — an
+   ordinary doc keeps its clickable runway. */
+#editor:has(> .live-zone:not([hidden])) > .ProseMirror {
+  min-height: 0;
 }
 .lz-head {
   display: flex;
