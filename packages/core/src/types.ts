@@ -202,6 +202,17 @@ export interface DocMeta {
   planRequestedAt?: number;
   planRequestedBy?: string;
   /**
+   * Somebody pressed Review on this huddle doc — the same shape as the plan
+   * stamp: the ask itself is the subject thread the press files, and this
+   * only lets a reopened doc render "review requested" while that thread is
+   * still open. `reviewThreadId` names the thread so the float can watch it
+   * resolve and offer another ask; a review, unlike a plan, is asked for
+   * more than once in a meeting. Server-written meta.
+   */
+  reviewRequestedAt?: number;
+  reviewRequestedBy?: string;
+  reviewThreadId?: string;
+  /**
    * How many settled AUTHORING edit bursts this doc's content has seen — a
    * monotonic counter, deliberately not a timestamp (see `wordsRevision` on
    * tasks: a millisecond is coarser than the events it must separate, and a

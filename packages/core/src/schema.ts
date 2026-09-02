@@ -73,6 +73,9 @@ export function readDocMeta(doc: Y.Doc): DocMeta {
   const planApprovedAt = m.get('planApprovedAt') as number | undefined;
   const planRequestedAt = m.get('planRequestedAt') as number | undefined;
   const planRequestedBy = m.get('planRequestedBy') as string | undefined;
+  const reviewRequestedAt = m.get('reviewRequestedAt') as number | undefined;
+  const reviewRequestedBy = m.get('reviewRequestedBy') as string | undefined;
+  const reviewThreadId = m.get('reviewThreadId') as string | undefined;
   const contentRevision = m.get('contentRevision') as number | undefined;
   return {
     docId,
@@ -104,6 +107,9 @@ export function readDocMeta(doc: Y.Doc): DocMeta {
     planApprovedAt,
     planRequestedAt,
     planRequestedBy,
+    reviewRequestedAt,
+    reviewRequestedBy,
+    reviewThreadId,
     contentRevision,
   };
 }

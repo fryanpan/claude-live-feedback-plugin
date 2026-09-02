@@ -1,13 +1,12 @@
 /**
- * The spin-off menu (src/spinoff-menu.ts) — the four ways a line of a huddle
+ * The spin-off verbs (src/spinoff-menu.ts) — the two ways a line of a huddle
  * doc leaves the doc as work.
  *
- * Two halves, tested apart: `runSpinoff` is the verb chain and is driven
- * entirely through an injected fetch, so no server runs here; `mountSpinoffMenu`
- * is the popover, and what matters about it is that every row is a real
- * control a keyboard and a thumb can both reach.
+ * `runSpinoff` is the verb chain and is driven entirely through an injected
+ * fetch, so no server runs here. The pill that offers the two verbs is
+ * `pointer-pill.ts`, tested beside this file.
  *
- * The branch that decides a huddle doc gets this menu at all lives in
+ * The branch that decides a huddle doc gets the pill at all lives in
  * `app.ts`, which runs `main()` on import and cannot be mounted from a test
  * (see doc-meta.ts's own note on that seam). It is verified in a browser at
  * 1180×820 and 430px instead, and reported with the PR.
@@ -15,16 +14,14 @@
  * Fixtures are synthetic (jordan@partner.example register).
  */
 import type { User } from '@feedback/core';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import {
   SPINOFF_ACTIONS,
-  SPINOFF_QUESTION_PREFILL,
   type SpinoffAnchor,
   type SpinoffDeps,
   boardIdFor,
   clipTitle,
   deriveTaskTitle,
-  mountSpinoffMenu,
   runSpinoff,
   taskLinkHref,
 } from '../src/spinoff-menu.ts';
@@ -75,18 +72,15 @@ function created(calls: Call[]): Call | undefined {
   return calls.find((c) => c.method === 'POST');
 }
 
-describe('the four actions', () => {
-  it('are four, in frequency order — "Start now" is gone', () => {
-    // It was second, and it did what "Create a task" did plus `order: 0`.
-    // Two rows with one outcome is not a choice, and a reviewer could not
-    // tell them apart in the running product (Bryan's call, 2026-09-01).
-    expect(SPINOFF_ACTIONS.map((a) => a.id)).toEqual(['task', 'research', 'question', 'comment']);
-    expect(SPINOFF_ACTIONS.map((a) => a.label)).toEqual([
-      'Create a task',
-      'Research and come back',
-      'Answer a question',
-      'Leave a comment',
-    ]);
+describe('the two actions', () => {
+  it('are exactly Research and Create Task, in that order, as plain text', () => {
+    // Bryan's round-4 call (2026-09-01): two text buttons and nothing else.
+    // "Start now" went because it was "Create a task" under another name;
+    // "Answer a question" and "Leave a comment" went with the menu they
+    // lived in, since both only ever opened the composer.
+    expect(SPINOFF_ACTIONS.map((a) => a.id)).toEqual(['research', 'task']);
+    expect(SPINOFF_ACTIONS.map((a) => a.label)).toEqual(['Research', 'Create Task']);
+    for (const a of SPINOFF_ACTIONS) expect(Object.keys(a).sort()).toEqual(['id', 'label']);
   });
 });
 
@@ -358,35 +352,7 @@ describe('runSpinoff', () => {
     expect(String(created(calls)?.body.title).startsWith('Research: ')).toBe(true);
   });
 
-  it('Answer a question posts NOTHING — the person writes their own words', async () => {
-    // It used to POST a fixed sentence the instant the row was tapped, so a
-    // thread appeared under somebody's name containing words they had never
-    // written. One tap is not consent to be quoted.
-    const { deps: d, calls } = deps();
-    const made = await runSpinoff('question', d);
-    expect(calls).toHaveLength(0);
-    expect(made).toEqual({ action: 'question' });
-    // Nothing was created, so there is nothing to link into the prose.
-    expect(made?.href).toBeUndefined();
-    expect(made?.threadId).toBeUndefined();
-  });
-
-  it('offers the question as a prefill the person can edit or clear', () => {
-    // A starting point, not a sentence: it ends open so the ask continues it,
-    // and it never claims anything on the person's behalf.
-    expect(SPINOFF_QUESTION_PREFILL.trim().endsWith('?')).toBe(true);
-    expect(SPINOFF_QUESTION_PREFILL.endsWith(' ')).toBe(true);
-  });
-
-  it('Leave a comment touches the network not at all', async () => {
-    const { deps: d, calls } = deps();
-    expect(await runSpinoff('comment', d)).toEqual({ action: 'comment' });
-    expect(calls).toHaveLength(0);
-  });
-
   it('reports a server that answered without an id rather than inventing one', async () => {
-    // Only the two task-creating actions can hit this: `question` and
-    // `comment` post nothing, so there is no id for a server to omit.
     for (const action of ['task', 'research'] as const) {
       const { deps: d } = deps({ fetchJson: () => Promise.resolve({}) });
       expect(await runSpinoff(action, d)).toBeNull();
@@ -396,80 +362,5 @@ describe('runSpinoff', () => {
   it('lets a refusal through to the caller instead of swallowing it', async () => {
     const { deps: d } = deps({ fetchJson: () => Promise.reject(new Error('workspace-retired')) });
     await expect(runSpinoff('task', d)).rejects.toThrow('workspace-retired');
-  });
-});
-
-describe('mountSpinoffMenu', () => {
-  let pill: HTMLElement;
-  beforeEach(() => {
-    document.body.replaceChildren();
-    pill = document.createElement('button');
-    document.body.append(pill);
-  });
-
-  function rows(): HTMLButtonElement[] {
-    return Array.from(document.querySelectorAll<HTMLButtonElement>('.spinoff-menu-item'));
-  }
-
-  it('renders one real control per action, labelled and named for a screen reader', () => {
-    const menu = mountSpinoffMenu({ anchorEl: pill, onPick: () => {} });
-    expect(rows()).toHaveLength(4);
-    expect(rows().map((r) => r.textContent)).toEqual(SPINOFF_ACTIONS.map((a) => a.label));
-    for (const row of rows()) {
-      expect(row.tagName).toBe('BUTTON');
-      expect(row.getAttribute('role')).toBe('menuitem');
-    }
-    expect(document.querySelector('.spinoff-menu')?.getAttribute('role')).toBe('menu');
-    expect(pill.getAttribute('aria-expanded')).toBe('true');
-    menu.destroy();
-  });
-
-  it('renders a label as TEXT, never as markup', () => {
-    // The labels are ours today; the row builder must stay markup-free so
-    // that stays true of whatever is added to the list later.
-    const menu = mountSpinoffMenu({ anchorEl: pill, onPick: () => {} });
-    const label = document.querySelector('.spinoff-menu-label') as HTMLElement;
-    expect(label.children).toHaveLength(0);
-    menu.destroy();
-  });
-
-  it('picks an action, closes, and does not also call dismiss', () => {
-    const onPick = vi.fn();
-    const onDismiss = vi.fn();
-    mountSpinoffMenu({ anchorEl: pill, onPick, onDismiss });
-    rows()[1]?.click();
-    expect(onPick).toHaveBeenCalledWith('research');
-    expect(onDismiss).not.toHaveBeenCalled();
-    expect(document.querySelector('.spinoff-menu')).toBeNull();
-    expect(pill.getAttribute('aria-expanded')).toBe('false');
-  });
-
-  it('closes on the scrim and on Escape, reporting a dismissal each time', () => {
-    const onDismiss = vi.fn();
-    mountSpinoffMenu({ anchorEl: pill, onPick: () => {}, onDismiss });
-    document.querySelector<HTMLElement>('.spinoff-menu-scrim')?.click();
-    expect(onDismiss).toHaveBeenCalledTimes(1);
-    expect(document.querySelector('.spinoff-menu')).toBeNull();
-
-    mountSpinoffMenu({ anchorEl: pill, onPick: () => {}, onDismiss });
-    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
-    expect(onDismiss).toHaveBeenCalledTimes(2);
-    expect(document.querySelector('.spinoff-menu')).toBeNull();
-  });
-
-  it('stops listening once destroyed — a later Escape reaches nothing', () => {
-    const onDismiss = vi.fn();
-    const menu = mountSpinoffMenu({ anchorEl: pill, onPick: () => {}, onDismiss });
-    menu.destroy();
-    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
-    expect(onDismiss).not.toHaveBeenCalled();
-    // And destroying twice is not an error the caller has to guard.
-    expect(() => menu.destroy()).not.toThrow();
-  });
-
-  it('gives the keyboard somewhere to land', () => {
-    const menu = mountSpinoffMenu({ anchorEl: pill, onPick: () => {} });
-    expect(document.activeElement).toBe(rows()[0]);
-    menu.destroy();
   });
 });

@@ -130,6 +130,7 @@ import {
 } from './home-brief.ts';
 import {
   PLAN_REQUEST_COMMENT,
+  REVIEW_REQUEST_COMMENT,
   huddleAlias,
   huddleFilePath,
   huddleSeedMarkdown,
@@ -11058,6 +11059,33 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
             );
             if (!thread) return j(404, { error: 'doc not found' });
             const stamped = rooms.setPlanRequested(docId, author.name);
+            return j(200, {
+              docId,
+              threadId: thread.id,
+              ...(stamped.ok ? { requestedAt: stamped.requestedAt } : {}),
+            });
+          }
+          // The Review float's press — the meeting's other one-tap ask: the
+          // presser asking this doc's agent to read the notes and transcript
+          // and question what is thin. Same shape as plan-request: the ask is
+          // a subject thread from the presser, and the stamp names that
+          // thread so the float can offer another ask once it is resolved.
+          if (rest === 'review-request' && req.method === 'POST') {
+            if (visitor) return j(403, { error: 'not available to share visitors' });
+            const body = await safeJson(req);
+            const author = authorFor(body?.author);
+            if (!author) return j(400, { error: 'author required' });
+            if (isCategoryAuthor(author)) return refuseCategoryAuthor();
+            const thread = await rooms.postComment(
+              docId,
+              null,
+              author,
+              REVIEW_REQUEST_COMMENT,
+              { kind: 'subject' },
+              { generate: false },
+            );
+            if (!thread) return j(404, { error: 'doc not found' });
+            const stamped = rooms.setReviewRequested(docId, author.name, thread.id);
             return j(200, {
               docId,
               threadId: thread.id,
