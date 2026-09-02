@@ -3,14 +3,11 @@ import { mountCode } from '../code/code-app.ts';
 import { isEditableRedlineMember } from '../code/editable-policy.ts';
 import { renderDiffNav, wireDiffNavRefresh } from '../diff-nav.ts';
 import { el } from '../doc/chrome-dom.ts';
+import { wireThreadRangeClicks } from '../doc/chrome-panels.ts';
 import type { MountContext } from '../mount-context.ts';
 import type { MountScope } from '../mount-scope.ts';
 import { startReadingTracker } from '../reading-tracker.ts';
-import {
-  type ChromeSelection,
-  mountReviewChrome,
-  wireThreadRangeClicks,
-} from '../review-chrome.ts';
+import { type ChromeSelection, mountReviewChrome } from '../review-chrome.ts';
 import type { ReviewSurface } from '../review-surface.ts';
 import { navigateTo, remountCurrent } from '../router.ts';
 import { asBackgroundWrite, lockDocToReading } from '../signin/write-gate.ts';

@@ -6,6 +6,7 @@ import { renderDiffNav, setActiveFile } from './diff-nav.ts';
 import { fetchDocMeta } from './doc-meta.ts';
 import { docHref, workspaceIdFromPath } from './doc-path.ts';
 import { el, showToast } from './doc/chrome-dom.ts';
+import { wireThreadRangeClicks } from './doc/chrome-panels.ts';
 import { mountDocMeeting } from './doc/doc-meeting-mount.ts';
 import { wireDocModes } from './doc/doc-modes.ts';
 import { applyWidthPref, wireFormatBar } from './doc/editor-toolbar.ts';
@@ -29,7 +30,6 @@ import {
   type ReviewChrome,
   anchorBody,
   mountReviewChrome,
-  wireThreadRangeClicks,
 } from './review-chrome.ts';
 import { mountReviewFloat } from './review-float.ts';
 import { navigateTo, startRouter } from './router.ts';
