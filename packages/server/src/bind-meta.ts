@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { basename } from 'node:path';
 import { type DocMeta, type DocType, reviewIdOf } from '@feedback/core';
-import type { BindDiffOpts } from './binds.ts';
+import type { BindDiffOpts } from './bind-diff.ts';
 import type { DiffFileEntry } from './git-diff.ts';
 import { isPrivateMetaKey } from './private-meta.ts';
 import type { DocRoom } from './rooms.ts';
