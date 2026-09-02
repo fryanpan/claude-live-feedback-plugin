@@ -893,15 +893,31 @@ not owned by one. `withServerNotesSinks` now takes `boardOf`, wired to the
 doc page's own back-target lookup, so the board a huddle's asks land on is
 the board its back arrow points at. New rows are attributed to the `Meeting
 Assistant` agent actor and enter triage; a request judged actionable by the
-model AND ready by the pill's rule goes to the chores band at `todo` and
-wakes the board's lead through `ReadyWorkNudger.taskReady` — the composer
-never claims `in-progress` itself. A repeated mention links the row the board
+model AND ready by the pill's rule is PLACED — `TaskStore.placeSpinoff`: the
+board's top active band (first in priority order that is `todo` or
+`in-progress`, chores excluded; else chores, never triage), owned by the lead
+when the seat is held — moved to `todo`, and wakes the board's lead through
+`ReadyWorkNudger.taskReady`. The pill's Create Task asks for the same
+placement with `spinoff: true` on its create (Bryan, 2026-09-01: *"tasks
+were created in Backlog and not automatically started"*). The rule's first
+step — the goal of the meeting's originating task — is written down and
+skipped: a huddle is started with a kind and a topic and records no task.
+The composer never claims `in-progress` itself. A repeated mention links the row the board
 already has (find-or-create on a normalized title, then two shared
 significant words) rather than filing twice. The composer receives the resolved links and writes
 plain markdown links into the notes; the doc editor's `TaskLinkChips`
 decoration (markdown-app) renders title + live status chip beside them,
 refreshed on the board's `task.transitioned` SSE push, without ever touching
 stored content.
+
+**Make Plan shows on both huddle kinds** (2026-09-01: Bryan started a
+discussion, reached a plan, and had no button). The plan gate's face rule
+admitted only `huddleKind: 'plan'`; the plan-request route never refused a
+discussion. And both floats' receipts — "Plan requested", "Review requested"
+— read *no lead agent attached, it will be answered when one attaches* while
+the seat is empty, off the lead banner's own answer (`LeadBanner.watch`),
+because Bryan pressed Review with the agent offline and the receipt said
+"waiting for your agent" as if one were coming.
 
 ## Acting on speech, not only recording it
 
@@ -926,7 +942,20 @@ address somebody — the lead — so each lands where that person reads. A
 CORRECTION does neither: it *changes something already written*, so it is
 the only intent whose guard cannot be finished in the capture pass at all.
 
-### "Can you research that" — the pill's Research row, plus a placeholder
+### "Can you research that" — a placeholder in the notes, and the lead's errand
+
+**The pointer pill's Research is a section in the doc, not a task**
+(2026-09-01, after Bryan pressed it on prod: *"it just creates a task — does
+not follow the flow in the mockups"*). `POST /api/docs/:id/research-request`
+files an anchored thread on the selected line from the presser — the same
+comment channel Make Plan and Review ride — and inserts `## Research:
+<topic>` with a *Researching — in progress.* line as a top-level block after
+that line (`researchPlaceholderMarkdown`, huddle.ts). The thread names the
+section so the agent writes there and resolves the thread when it has.
+
+The SPOKEN ask below still files the lead's row as well as the section: a
+meeting has no selection to anchor on, and the row is what wakes the lead
+through the ready-nudge channel. Both leave the same section shape.
 
 The ask this catches almost never contains the word *research*: it is "go
 look into that", "dig into why it does that", "find out what it would take".
