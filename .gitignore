@@ -65,3 +65,7 @@ open-pr-versions.json
 
 # Deployed copy of the share-link Worker config, with the real route hostnames
 infra/share-link-worker/wrangler.local.toml
+
+# Coverage output — `bun run coverage` rewrites it every run.
+.coverage/
+coverage/
