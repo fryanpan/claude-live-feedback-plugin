@@ -18,6 +18,7 @@ import {
 } from './huddle-entry.ts';
 import { ensureUserIdentity } from './identity-prompt.ts';
 import { wireKeyboardInset } from './keyboard-inset.ts';
+import { mountLeadBanner } from './lead-banner.ts';
 import { createMeetingBotClient } from './meeting-bot-client.ts';
 import { type MeetingLiveZone, createMeetingLiveZone } from './meeting-live-zone.ts';
 import { mountMeetingStrip } from './meeting-strip.ts';
@@ -430,6 +431,14 @@ async function mountMarkdown(ctx: MountContext): Promise<void> {
       liveZone: zone,
     });
     scope.onCleanup(() => strip.destroy());
+    // The standing line for an empty lead seat — huddle docs only, because
+    // a huddle is the doc whose every ask addresses that seat (the floats
+    // above, the assistant's spoken captures). Sits at the top of the
+    // scrolling prose; see lead-banner.ts for what "listening" means.
+    if (ctx.huddle === true) {
+      const banner = mountLeadBanner({ docId, parent: editorMount });
+      scope.onCleanup(() => banner.destroy());
+    }
   }
 
   // The plan gate's floating Approve button — rendered only while this doc
