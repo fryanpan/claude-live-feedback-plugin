@@ -29,9 +29,7 @@ const batchReply = {
 let mcp: BundleHarness;
 
 beforeAll(async () => {
-  mcp = await startBundle((req: Recorded) =>
-    req.path.endsWith('/tasks/batch') ? batchReply : {},
-  );
+  mcp = await startBundle((req: Recorded) => (req.path.endsWith('/tasks/batch') ? batchReply : {}));
 }, 60_000);
 afterAll(async () => {
   await mcp?.stop();

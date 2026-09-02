@@ -42,16 +42,11 @@ const batchReply = {
 let mcp: BundleHarness;
 
 beforeAll(async () => {
-  mcp = await startBundle((req: Recorded) =>
-    req.path.endsWith('/tasks/batch') ? batchReply : {},
-  );
+  mcp = await startBundle((req: Recorded) => (req.path.endsWith('/tasks/batch') ? batchReply : {}));
 }, 60_000);
 afterAll(async () => {
   await mcp?.stop();
 });
-
-/** The whole declaration as a client receives it, description and schema. */
-const declText = (tool: string) => JSON.stringify(mcp.tool(tool) ?? {});
 
 const createTwo = () =>
   mcp.call('create_tasks', {
