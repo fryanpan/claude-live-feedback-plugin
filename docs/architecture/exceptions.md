@@ -19,7 +19,7 @@ find packages \( -name '*.ts' -o -name '*.css' \) \
 ```
 
 Audited 2026-09-02 at `3a39db67`, and re-audited after A1 and A2 landed.
-**161 files** over 500 lines: 66 source and 95 test.
+**162 files** over 500 lines: 67 source and 95 test.
 
 Test files are judged by a narrower rule, in their own table below: a long test
 file is an exception unless two *unrelated harnesses* share it. Many `describe`
@@ -40,7 +40,8 @@ blocks over one set of fixtures is one harness, however long the file gets.
 | `packages/server/src/task-agents.ts` | 1506 | Split | Agents on a board, moved whole out of `tasks.ts` in A2: attachments and the lead seat, plus the two delivery queues that hold work for an agent that is not live. The seam is already a banner in the file — `// ── Voice` and `// ── Comment queue` are one store each (`queueVoiceRequest`/`drainVoiceQueue`, `queueComment`/`takeDeliverableComments`), reachable only through `AgentStorePersistence`, and they would come out the same way this file did. Not re-cut in the same PR that moved it, because the move was verified by keeping every verb byte-identical. **M** |
 | `packages/server/src/task-goals.ts` | 811 | Exception | The goal bands, moved whole out of `tasks.ts` in A2. It looks like two files — the band list (`setGoalList`, `renameGoal`, `addGoal`, `reorderGoals`) and placement (`setTaskGoal`) — and is deliberately one: placement IS triage on this board, so all five have to agree about what a band change does to the rows sitting in it, and `setGoalList` calls the same sweep `setTaskGoal` does. Splitting them would put that agreement in a comment instead of in one reading. |
 | `packages/server/src/tasks.ts` | 4714 | Split | Down from 10,827 lines of store across A2's three commits. What is left is one responsibility — task rows — plus the event bus and the sidecar persistence every extracted store writes through. The next seam is those two: the emit/audit choke point and `persist`/`load` are a layer below the verbs, not a fourth responsibility beside them. **M** |
-| `packages/server/src/rooms.ts` | 5589 | Split | A3 took document mutation out to `doc-edit-ops.ts` and threads to `doc-threads.ts`. Still queued: the workspace / bind / archive surface (`buildWorkspaceTree`, `archiveReview`, `attachFile`) → `rooms-workspaces.ts`, after which what is left is the room lifecycle (`getOrCreate`, `evictIdleRooms`, `flush`), the file bindings and the websocket fan-out. **M** |
+| `packages/server/src/rooms.ts` | 4801 | Split | A3 took document mutation out to `doc-edit-ops.ts`, threads to `doc-threads.ts` and the workspace surface to `rooms-workspaces.ts`. What is left is one subject in three layers: the room lifecycle (`getOrCreate`, `hydrateDoc`, `evictIdleRooms`, `teardownRoom`, `flush`), the file bindings that ride on it (`attachFile`, the mtime poll, the write-back and its conflict reconcile), and the websocket fan-out. The bindings are the next seam — `file-binding.ts`, roughly 900 lines — but they reach into the room's `ydoc` and its persist timers on every path, so that split needs a room handle designed for it rather than a line range. **M** |
+| `packages/server/src/rooms-workspaces.ts` | 1040 | Exception | The workspace surface of a review, out of `rooms.ts` in A3: the projections that answer "what is in this review" (tree, grouped diff, all-files, thread roll-up, the lazy context and companion opens) and the archive verbs that retire one as a unit. Both walk the same member list — `list()` filtered by `reviewIdOf` — and the archive path is written in terms of the projections' own vocabulary, so splitting them would leave two files reading one index. |
 | `packages/server/src/doc-threads.ts` | 755 | Exception | Comment threads, moved whole out of `rooms.ts` in A3: open, reply, resolve, reopen, re-anchor, and the review payload a thread can carry. The review verbs look like a second file and are not: a review IS a field on a thread here, all five end in the same `thread.replied` frame, and splitting them would put the payload's rules in one file and the thread they are a property of in another. |
 | `packages/server/src/voice.ts` | 2109 | Split | Two free-function groups sit above `VoiceRouter` with explicit args and no shared state: prompt building and reply parsing (`buildVoicePrompt`, `parseVoiceReply`, `renderResourceBlock`) → `voice-prompt.ts` ~450, and the write guardrail (`VOICE_ACTIONS`, `resolveVoiceAction`) → `voice-action.ts` ~350. **S** |
 | `packages/server/src/meeting-task-capture.ts` | 1348 | Split | Three responsibilities. The LLM contract (`buildTaskCapturePrompt`, `parseTaskCaptureReply`, the `*_PROMPT_RULE` constants) → `meeting-capture-prompt.ts` ~380; the transcript guards (`tickMentionsCandidate`, `phraseSpokenOnTick`, `captureWindow`) → `meeting-capture-guards.ts` ~200; `runTaskCapture` and the extractor stay ~600. **M** |
@@ -256,7 +257,7 @@ months, so splitting it buys almost nothing.
 | 5 | `packages/markdown-app/src/hub/hub-render.ts` | 2707 | 95 | M |
 | 6 | `hub-board-model.ts` + `hub-review-model.ts` + `hub-presence-model.ts` (was `hub-model.ts`, split in B1) | 3645 | 89 | M |
 | 7 | `packages/server/src/tasks.ts` | 4714 | 87 | M |
-| 8 | `packages/server/src/rooms.ts` | 5589 | 71 | M |
+| 8 | `packages/server/src/rooms.ts` | 4801 | 71 | M |
 | 9 | `packages/markdown-app/src/app.ts` | 1918 | 55 | M |
 | 10 | `packages/server/src/bin.ts` | 1013 | 50 | M |
 | 11 | `packages/server/src/task-projection.ts` | 743 | 43 | done |
