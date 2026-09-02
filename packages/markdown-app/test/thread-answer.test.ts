@@ -285,11 +285,25 @@ describe('the full item interface in the carrying thread', () => {
       panel.setActive('t1');
       expect(container.querySelector('.thread-item-card')).not.toBeNull();
       expect(container.querySelector('.comment-review')).toBeNull();
-      // The headline appears exactly once on the whole card.
+      // The headline appears exactly once on the SHOWING face. The folded
+      // face leads with the headline too (comments mock 3: the ask is the
+      // line you see before you open the card), but the two faces are never
+      // visible together — the resting one is inert and aria-hidden.
       const headlines = Array.from(container.querySelectorAll('*')).filter(
-        (n) => n.children.length === 0 && n.textContent === 'Pick the rota order',
+        (n) =>
+          n.children.length === 0 &&
+          n.textContent === 'Pick the rota order' &&
+          !n.closest('[aria-hidden="true"]'),
       );
       expect(headlines).toHaveLength(1);
+      panel.setActive(null);
+      const folded = Array.from(container.querySelectorAll('*')).filter(
+        (n) =>
+          n.children.length === 0 &&
+          n.textContent === 'Pick the rota order' &&
+          !n.closest('[aria-hidden="true"]'),
+      );
+      expect(folded).toHaveLength(1);
     });
 
     it('drops it in the history too, when a REPLY is the ask the card carries', () => {

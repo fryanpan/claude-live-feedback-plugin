@@ -95,6 +95,9 @@ export interface MarkupMarginHandle {
   relayout: () => void;
   /** Debounced relayout — wire this to editor transactions. */
   scheduleRelayout: () => void;
+  /** The column element — the off-screen hints (`comment-hints.ts`) sit
+   *  inside it, sticky to the scroller's edges. */
+  marginEl: HTMLElement;
   /**
    * Scroll a thread's balloon into view and pulse it — the balloon-side half
    * of "click an anchored range, see its comment" (the editor-side click
@@ -584,11 +587,13 @@ export function mountMarkupMargin(opts: MarkupMarginOpts): MarkupMarginHandle {
     return view.dom.querySelector(`.thread-range[data-thread-id="${cssEscape(id)}"]`);
   }
 
-  /** Open threads with a resolvable, currently-decorated anchor — resolved
-   *  and orphaned threads have nowhere to anchor a balloon. */
+  /** Threads with a resolvable, currently-decorated anchor. Resolved ones
+   *  render too, folded to a faded line (approved: comments mock 3) — the
+   *  tick on the sentence needs a card to land on; orphaned threads have no
+   *  anchor and nowhere to sit. */
   function eligibleThreads(): Thread[] {
     if (!opts.threads || !opts.chrome) return [];
-    return opts.threads().filter((t) => t.status === 'open' && threadSpan(t.id) != null);
+    return opts.threads().filter((t) => threadSpan(t.id) != null);
   }
 
   function buildCommentBalloon(thread: Thread, pendingReply?: string): HTMLElement {
@@ -660,7 +665,9 @@ export function mountMarkupMargin(opts: MarkupMarginOpts): MarkupMarginHandle {
     // and yanks the viewport with it.
     const keptFocus = keptComposerFocus(marginEl);
 
-    marginEl.textContent = '';
+    // Only the balloons go — the off-screen hints live in this column too
+    // and must survive every rebuild.
+    for (const r of rendered) r.el.remove();
     const nextDel: RenderedDelBalloon[] = delGroups.map((group, i) => {
       const expanded = isExpanded(`d:${group.blockKey}`);
       const el = expanded ? buildDelBalloon(group) : buildCollapsedDel(group);
@@ -985,5 +992,5 @@ export function mountMarkupMargin(opts: MarkupMarginOpts): MarkupMarginHandle {
   });
 
   relayout();
-  return { relayout, scheduleRelayout, revealThreadBalloon };
+  return { marginEl, relayout, scheduleRelayout, revealThreadBalloon };
 }
