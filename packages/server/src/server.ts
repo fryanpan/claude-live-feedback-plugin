@@ -6266,8 +6266,18 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           // created upfront via POST /api/docs (which auto-attaches a file).
           // The browser navigating to /review/<docId> before the agent has
           // created the doc gets a clean 404 from /review's own handler.
+          // Decided BEFORE the creation below, not after it. Creating a room
+          // and filing a workspace row is a write like any other, and it used
+          // to run above this line: a browser that had proven nobody could
+          // open `/y/<any-new-id>?type=mockup` and make the server create a
+          // doc and file it under the hub workspace, with the read-only carry
+          // only stopping the ydoc edits that came afterwards.
+          const readOnly = requireSignInToWrite && browserProvedNobody();
           if (!rooms.get(docId)) {
             if (type === 'mockup') {
+              // Nothing to read yet, so refusing here gates no read: the doc
+              // this socket would have created does not exist for anybody.
+              if (readOnly) return j(401, signInRequiredBody());
               rooms.getOrCreate(docId, { type, sourceUrl });
               // The widget is the third creation path (next to POST /api/docs
               // and the MCP tools that front it), so it files its doc too —
@@ -6286,7 +6296,6 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           // (see yjs-protocol.ts). Decided once here, at the handshake, and
           // then carried for the life of the connection: the same shape the
           // share authorization uses two lines up.
-          const readOnly = requireSignInToWrite && browserProvedNobody();
           const upgraded = server.upgrade(req, {
             data: {
               docId,
