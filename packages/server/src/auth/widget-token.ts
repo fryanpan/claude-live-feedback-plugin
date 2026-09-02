@@ -32,12 +32,13 @@
  *    while a token lifted out of the dev server's localStorage is worth
  *    nothing from curl, from another origin, or from an opaque one.
  *
- * Same construction as session.ts: HMAC over a dotted payload, key derived
- * from the shared cookie key under its own domain string so neither format
- * can ever verify as the other.
+ * Same construction as session.ts and the share cookie, which is now one
+ * module (`signed-token.ts`): HMAC over a dotted payload, key derived from
+ * the shared cookie key under its own domain string so no format can ever
+ * verify as another.
  */
-import { createHmac, timingSafeEqual } from 'node:crypto';
 import type { SessionClaims } from './session.ts';
+import { type TokenFormat, mintToken, tokenClaims, tokenKey } from './signed-token.ts';
 
 /** Seven days. Short-lived relative to the session (which never expires) —
  *  the per-use liveness check is what actually ends a token early. */
@@ -57,9 +58,45 @@ export interface WidgetTokenClaims {
   origin: string;
 }
 
+/**
+ * `wt1.<identityId>.<sessionId>.<sessionIssuedAt>.<expiresAt>.<origin>` —
+ * the origin base64url-encoded because an origin is full of dots and the
+ * payload is dot-split.
+ *
+ * Unlike the session cookie this always expires, so `expiresAt` always
+ * answers a number and the shared verifier enforces the TTL.
+ */
+export const widgetToken: TokenFormat<WidgetTokenClaims> = {
+  purpose: 'widget-token',
+  keyDomain: 'cw-widget-token-v1',
+  tags: [VERSION],
+  encode: (claims) =>
+    [
+      VERSION,
+      claims.identityId,
+      claims.sessionId,
+      claims.sessionIssuedAt,
+      claims.expiresAt,
+      Buffer.from(claims.origin).toString('base64url'),
+    ].join('.'),
+  decode(payload) {
+    const parts = payload.split('.');
+    if (parts.length !== 6) return null;
+    const [version, identityId, sessionId, issuedRaw, expiresRaw, originRaw] = parts;
+    if (version !== VERSION || !identityId || !sessionId || !originRaw) return null;
+    const sessionIssuedAt = Number(issuedRaw);
+    const expiresAt = Number(expiresRaw);
+    if (!Number.isSafeInteger(sessionIssuedAt) || !Number.isSafeInteger(expiresAt)) return null;
+    const origin = Buffer.from(originRaw, 'base64url').toString();
+    if (!origin) return null;
+    return { identityId, sessionId, sessionIssuedAt, expiresAt, origin };
+  },
+  expiresAt: (claims) => claims.expiresAt,
+};
+
 /** The widget-token key, derived from the shared cookie key. */
 export function widgetTokenKey(cookieKey: string): string {
-  return createHmac('sha256', cookieKey).update('cw-widget-token-v1').digest('hex');
+  return tokenKey(cookieKey, widgetToken);
 }
 
 /**
@@ -75,16 +112,17 @@ export function mintWidgetToken(
   now: number = Date.now(),
 ): string | null {
   if (session.sessionId === null) return null;
-  const payload = [
-    VERSION,
-    session.identityId,
-    session.sessionId,
-    session.issuedAt,
-    now + WIDGET_TOKEN_TTL_MS,
-    // base64url: an origin is full of dots, and the payload is dot-split.
-    Buffer.from(origin).toString('base64url'),
-  ].join('.');
-  return `${payload}.${mac(payload, key)}`;
+  return mintToken(
+    widgetToken,
+    {
+      identityId: session.identityId,
+      sessionId: session.sessionId,
+      sessionIssuedAt: session.issuedAt,
+      expiresAt: now + WIDGET_TOKEN_TTL_MS,
+      origin,
+    },
+    key,
+  );
 }
 
 /**
@@ -97,29 +135,5 @@ export function verifyWidgetToken(
   key: string,
   now: number = Date.now(),
 ): WidgetTokenClaims | null {
-  if (!value) return null;
-  const dot = value.lastIndexOf('.');
-  if (dot <= 0) return null;
-  const payload = value.slice(0, dot);
-  const provided = value.slice(dot + 1);
-  const a = Buffer.from(provided);
-  const b = Buffer.from(mac(payload, key));
-  if (a.length !== b.length) return null;
-  if (!timingSafeEqual(a, b)) return null;
-
-  const parts = payload.split('.');
-  if (parts.length !== 6) return null;
-  const [version, identityId, sessionId, issuedRaw, expiresRaw, originRaw] = parts;
-  if (version !== VERSION || !identityId || !sessionId || !originRaw) return null;
-  const sessionIssuedAt = Number(issuedRaw);
-  const expiresAt = Number(expiresRaw);
-  if (!Number.isSafeInteger(sessionIssuedAt) || !Number.isSafeInteger(expiresAt)) return null;
-  if (expiresAt <= now) return null;
-  const origin = Buffer.from(originRaw, 'base64url').toString();
-  if (!origin) return null;
-  return { identityId, sessionId, sessionIssuedAt, expiresAt, origin };
-}
-
-function mac(payload: string, key: string): string {
-  return createHmac('sha256', key).update(payload).digest('base64url');
+  return tokenClaims(widgetToken, value, key, now);
 }
