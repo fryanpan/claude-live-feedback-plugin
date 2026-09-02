@@ -5482,6 +5482,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
             pathname,
             widgetIdentity,
             browserProvedNobody,
+            provenIdentityFor,
           });
           if (handled) return handled;
         }

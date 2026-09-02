@@ -6,6 +6,11 @@ it counts proxies for three of these and ratchets the counts down via
 `scripts/test-audit.baseline.json`. A count may only fall — lower the baseline
 in the same commit that lowers the count.
 
+It reads untracked files as well as tracked ones, so a test you have written
+but not staged is judged locally exactly as CI will judge it once committed.
+It used to enumerate with `git ls-files` alone, which made the gate blind to
+the new tests it exists to check.
+
 ## 1. Assert behaviour, not source shape
 
 Drive the thing and assert what it did. A regex over a bundle, a source file
