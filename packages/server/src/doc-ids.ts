@@ -85,3 +85,13 @@ export function newDocId(): string {
 export function isMintedDocId(docId: string): boolean {
   return /^d-[A-Za-z0-9_-]{12}$/.test(docId);
 }
+
+/**
+ * The one doc every hub's feedback widget writes to.
+ *
+ * Deliberately NOT per-workspace: a comment on the hub UI is about the
+ * product, so it should reach the same agent from every hub rather than
+ * whoever happens to own the workspace you were standing in. The anchor's
+ * url carries which hub it came from.
+ */
+export const HUB_FEEDBACK_DOC_ID = 'lf-hub-feedback';

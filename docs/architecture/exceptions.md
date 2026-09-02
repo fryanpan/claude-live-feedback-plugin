@@ -18,8 +18,8 @@ find packages \( -name '*.ts' -o -name '*.css' \) \
   | xargs wc -l | awk '$1>500' | sort -rn
 ```
 
-Audited 2026-09-02 at `3a39db67`. **149 files** over 500 lines: 54 source and 95
-test. **33 Split**, **116 Exception**.
+Audited 2026-09-02 at `3a39db67`, and re-audited after A1 landed. **153 files**
+over 500 lines: 58 source and 95 test. **34 Split**, **119 Exception**.
 
 Test files are judged by a narrower rule, in their own table below: a long test
 file is an exception unless two *unrelated harnesses* share it. Many `describe`
@@ -31,7 +31,11 @@ blocks over one set of fixtures is one harness, however long the file gets.
 
 | File | Lines | Verdict | Reason / seam |
 |---|---|---|---|
-| `packages/server/src/server.ts` | 10794 | Split | `createServer` is one function spanning lines 1158–9820. The `routes/` extraction already proves the seam (`handleXRoutes(ctx, rq) → Response \| undefined`, chained by `??`) and five more families sit inline: `routes/auth-share.ts` (~640), `routes/docs.ts` (~570), `routes/meetings-calendar.ts` (~1300), `routes/ops.ts` (~260), and `shells.ts` for the HTML renderers `renderHubShell` / `renderLanding` / `renderProjectPage` / `serveStatic` (~1640). **L** |
+| `packages/server/src/server.ts` | 7131 | Split | A1 took five families out (see below); what is left is `createServer` itself — the closure that builds every collaborator and the request wrapper that walks the chain. The next seam is the composition, not the routes: A4 moves env resolution and adapter construction to `server-config.ts` / `server-deps.ts`, after which the remaining route blocks (agents, chat-audit, reviews, workspaces-resource, static and page routes) are extractable the same way the five were. **L** |
+| `packages/server/src/routes/docs.ts` | 1972 | Split | Extracted whole from `server.ts` in A1 and deliberately not re-cut on the way out: the move was verified by keeping every route byte-identical and in order, and re-cutting in the same PR would have destroyed that property. The seam is already visible — three exported entry points, one per chain position — and the third, `handleDocResourceRoutes` (the `/api/docs/:id/...` block, ~1,200 lines), splits along `rest ===` families into `doc-resource.ts`, `doc-threads-routes.ts` and `doc-edit-routes.ts` the way `routes/tasks.ts` split into six. **M** |
+| `packages/server/src/shells.ts` | 930 | Exception | One job: the HTML this server renders before any bundle runs. Every shell is a complete document with its own `<style>`, which is the point — nothing here may depend on an asset that has not loaded. Splitting per page would separate each shell from the `escape` / `landingShell` / `HTML_SHELL_HEADERS` trio all five share, and the file has no logic to test apart from the strings. |
+| `packages/server/src/routes/auth-share.ts` | 781 | Exception | Two families that look separable and are not: the share routes' refusals are stated in terms of the session the auth routes mint, and the order between them is behaviour (the browser-write refusal sits above every share route so a mint added later is covered by construction). A split would need the boundary written down in two headers instead of one, and the chain position asserted twice. |
+| `packages/server/src/routes/meetings-calendar.ts` | 562 | Exception | Just over the line, and one chain position: every `/api/docs/<id>/meetings...` pattern must be tried before the doc catch-all. Splitting meetings from calendar would make that one ordering constraint span two files for 62 lines of relief. |
 | `packages/server/src/tasks.ts` | 6880 | Split | `class TaskStore` runs 2255–6880 over four responsibilities; `review-items/` is the in-file precedent that extraction works. Agent presence and delivery queues (`attachAgent`, `heartbeat`, `leadSeatHealth`, `queueComment`) → `task-agents.ts` ~1300; goal-list machinery (`setGoalList`, `renameGoal`, `reorderGoals`, `setTaskGoal`) → `task-goals.ts` ~1000; the workspace registry (`createWorkspace`, `renameWorkspace`, `setLeadAgent`) → `workspace-store.ts` ~700. **L** |
 | `packages/server/src/rooms.ts` | 6301 | Split | `class Rooms` is 641–6227 and mixes three jobs behind one `this`. Document mutation (`setDocContent`, `findAndReplace`, `createSuggestion`, `deleteSection`) → `doc-edit-ops.ts` ~1000; comments and threads (`postComment`, `resolve`, `reanchor`, `listThreads`) → `doc-threads.ts` ~1200; the workspace/bind/archive surface (`buildWorkspaceTree`, `archiveReview`, `attachFile`) → `rooms-workspaces.ts` ~1100. The room lifecycle (`getOrCreate`, `evictIdleRooms`, `flush`) stays. **L** |
 | `packages/server/src/voice.ts` | 2109 | Split | Two free-function groups sit above `VoiceRouter` with explicit args and no shared state: prompt building and reply parsing (`buildVoicePrompt`, `parseVoiceReply`, `renderResourceBlock`) → `voice-prompt.ts` ~450, and the write guardrail (`VOICE_ACTIONS`, `resolveVoiceAction`) → `voice-action.ts` ~350. **S** |
@@ -237,7 +241,7 @@ months, so splitting it buys almost nothing.
 
 | # | File | Lines | Commits (90d) | Size |
 |---|---|---|---|---|
-| 1 | `packages/server/src/server.ts` | 10794 | 233 | L |
+| 1 | `packages/server/src/server.ts` | 7131 | 233 | L |
 | 2 | `packages/markdown-app/src/styles.css` | 12042 | 158 | M |
 | 3 | `packages/mcp/src/mcp.ts` | 5563 | 156 | M |
 | 4 | `packages/markdown-app/src/hub/hub-app.ts` | 3594 | 102 | L |
