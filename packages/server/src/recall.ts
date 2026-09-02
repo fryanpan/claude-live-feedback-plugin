@@ -414,7 +414,20 @@ export interface RecallClient {
   leaveCall(botId: string): Promise<void>;
   /** Zoom's native consent prompt. Resolves false when Recall refused to ask. */
   requestRecordingPermission(botId: string): Promise<boolean>;
+  /**
+   * One cheap read against the configured region, so a key that belongs to a
+   * DIFFERENT region is named at boot instead of at the first invite. Recall
+   * keys are region-bound and answer 401 everywhere else; `RECALL_REGION`
+   * unset silently means `us-east-1`, which is how a working setup turned
+   * into a 502 on every Meet join (2026-09-01: the launchd plist lost the
+   * variable in a move). Never throws — a network failure is `status: 0`.
+   */
+  checkKeyRegion(): Promise<RecallKeyCheck>;
 }
+
+export type RecallKeyCheck =
+  | { ok: true; region: RecallRegion }
+  | { ok: false; region: RecallRegion; status: number };
 
 /**
  * The exact body sent to `POST /api/v1/bot/`.
@@ -516,6 +529,18 @@ export function createRecallClient(opts: RecallClientOptions = {}): RecallClient
 
   return {
     config,
+    async checkKeyRegion(): Promise<RecallKeyCheck> {
+      try {
+        const res = await doFetch(`${base}/v1/bot/?limit=1`, {
+          headers: { Authorization: apiKey, accept: 'application/json' },
+        });
+        return res.ok
+          ? { ok: true, region: config.region }
+          : { ok: false, region: config.region, status: res.status };
+      } catch {
+        return { ok: false, region: config.region, status: 0 };
+      }
+    },
     async createBot(args: CreateBotArgs): Promise<RecallBot> {
       const res = await send('/v1/bot/', {
         method: 'POST',
