@@ -29,8 +29,13 @@
  *    (`loadCookieKey`), different derived key, so a value minted for one
  *    protocol can never verify under the other however the two formats
  *    happen to line up.
+ *
+ * The HMAC construction itself is `signed-token.ts`, shared with the share
+ * cookie and the widget token; what stays here is this protocol's format and
+ * its cookie plumbing.
  */
-import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
+import { randomBytes } from 'node:crypto';
+import { type TokenFormat, mintToken, tokenClaims, tokenKey } from './signed-token.ts';
 
 export const SESSION_COOKIE = 'cw_session';
 
@@ -66,21 +71,59 @@ export interface SessionClaims {
 }
 
 /**
+ * `v2.<identityId>.<sessionId>.<issuedAt>.<mac>` — opaque to the client.
+ *
+ * Claims without a session id encode as the old `v1.<identityId>.<issuedAt>.
+ * <expiresAt>.<mac>`, which exists so tests can mint what old devices hold;
+ * both tags are accepted so those devices stay signed in.
+ *
+ * Only the v1 shape carries an expiry, so `expiresAt` answers null for a v2
+ * session: this cookie ends by revocation, which needs storage this module
+ * does not have and which the caller checks.
+ */
+export const emailSessionToken: TokenFormat<SessionClaims> = {
+  purpose: 'email-session',
+  keyDomain: 'cw-email-session-v1',
+  tags: [VERSION, 'v1'],
+  encode(claims) {
+    if (claims.sessionId !== null) {
+      return `${VERSION}.${claims.identityId}.${claims.sessionId}.${claims.issuedAt}`;
+    }
+    return `v1.${claims.identityId}.${claims.issuedAt}.${claims.expiresAt ?? 0}`;
+  },
+  decode(payload) {
+    const parts = payload.split('.');
+    if (parts.length !== 4) return null;
+    const [version, identityId, thirdRaw, fourthRaw] = parts;
+    if (!identityId) return null;
+    if (version === VERSION) {
+      const sessionId = thirdRaw;
+      const issuedAt = Number(fourthRaw);
+      if (!sessionId || !Number.isSafeInteger(issuedAt)) return null;
+      return { identityId, sessionId, issuedAt, expiresAt: null };
+    }
+    if (version !== 'v1') return null;
+    const issuedAt = Number(thirdRaw);
+    const expiresAt = Number(fourthRaw);
+    if (!Number.isSafeInteger(issuedAt) || !Number.isSafeInteger(expiresAt)) return null;
+    return { identityId, sessionId: null, issuedAt, expiresAt };
+  },
+  expiresAt: (claims) => claims.expiresAt,
+};
+
+/**
  * The session key, derived from the shared cookie key.
  *
- * One key file on disk (mode 600, `loadCookieKey`), two protocols that must
- * never verify each other's values.
+ * One key file on disk (mode 600, `loadCookieKey`), several protocols that
+ * must never verify each other's values.
  */
 export function sessionKey(cookieKey: string): string {
-  return createHmac('sha256', cookieKey).update('cw-email-session-v1').digest('hex');
+  return tokenKey(cookieKey, emailSessionToken);
 }
 
-/** `v2.<identityId>.<sessionId>.<issuedAt>.<mac>` — opaque to the client.
- *  Claims without a session id sign as the old `v1.<identityId>.<issuedAt>.
- *  <expiresAt>.<mac>`, which exists so tests can mint what old devices hold. */
+/** The signed cookie value for these claims. */
 export function signSession(claims: SessionClaims, key: string): string {
-  const payload = payloadOf(claims);
-  return `${payload}.${mac(payload, key)}`;
+  return mintToken(emailSessionToken, claims, key);
 }
 
 /**
@@ -97,35 +140,7 @@ export function verifySession(
   key: string,
   now: number = Date.now(),
 ): SessionClaims | null {
-  if (!value) return null;
-  const dot = value.lastIndexOf('.');
-  if (dot <= 0) return null;
-  const payload = value.slice(0, dot);
-  const provided = value.slice(dot + 1);
-  const expected = mac(payload, key);
-  const a = Buffer.from(provided);
-  const b = Buffer.from(expected);
-  if (a.length !== b.length) return null;
-  if (!timingSafeEqual(a, b)) return null;
-
-  const parts = payload.split('.');
-  if (parts.length !== 4) return null;
-  const [version, identityId, thirdRaw, fourthRaw] = parts;
-  if (!identityId) return null;
-  if (version === VERSION) {
-    const sessionId = thirdRaw;
-    const issuedAt = Number(fourthRaw);
-    if (!sessionId || !Number.isSafeInteger(issuedAt)) return null;
-    return { identityId, sessionId, issuedAt, expiresAt: null };
-  }
-  if (version === 'v1') {
-    const issuedAt = Number(thirdRaw);
-    const expiresAt = Number(fourthRaw);
-    if (!Number.isSafeInteger(issuedAt) || !Number.isSafeInteger(expiresAt)) return null;
-    if (expiresAt <= now) return null;
-    return { identityId, sessionId: null, issuedAt, expiresAt };
-  }
-  return null;
+  return tokenClaims(emailSessionToken, value, key, now);
 }
 
 /** Whether a live session has used enough of its life to be re-issued. */
@@ -193,15 +208,4 @@ function cookie(value: string, maxAge: number, secure: boolean): string {
     'SameSite=Lax',
     `Max-Age=${maxAge}`,
   ].join('; ');
-}
-
-function payloadOf(claims: SessionClaims): string {
-  if (claims.sessionId !== null) {
-    return `${VERSION}.${claims.identityId}.${claims.sessionId}.${claims.issuedAt}`;
-  }
-  return `v1.${claims.identityId}.${claims.issuedAt}.${claims.expiresAt ?? 0}`;
-}
-
-function mac(payload: string, key: string): string {
-  return createHmac('sha256', key).update(payload).digest('base64url');
 }
