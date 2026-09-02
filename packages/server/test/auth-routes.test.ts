@@ -256,11 +256,12 @@ describe('GET /api/auth/session', () => {
     // knows, and a field appearing here silently is how a client starts
     // acting on something nobody meant to publish. `signInToWrite`/`canWrite`
     // joined it with the sign-in write gate (middleware/write-gate.ts) — both
-    // report the gate's default-off state.
+    // report the gate's default-ON state, as seen by an agent (no `Origin`),
+    // which may write regardless.
     expect(await res.json()).toEqual({
       required: false,
       authenticated: false,
-      signInToWrite: false,
+      signInToWrite: true,
       canWrite: true,
     });
   });
