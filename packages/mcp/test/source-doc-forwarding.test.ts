@@ -1,70 +1,97 @@
 /**
- * `create_tasks`'s `sourceDoc` reaches the server and the peers.
+ * `create_tasks` carries `sourceDoc` to the batch route, and carries the
+ * gate's verdict back.
  *
- * The doc→task tie only works if the MCP layer forwards it: a schema field
- * the handler drops files the rows with no origin and no plan gate, and
- * nothing else would report the miss (the batch still succeeds). Same
- * "one layer away from where it's consumed" hazard create-tasks-tool.test.ts
- * guards for `placement`, and the same bundle hazard: `.mcp.json` loads the
- * committed `packages/plugin/mcp/index.js`, so a source-only change reaches
- * nobody.
+ * The server routes are covered end to end; what was uncovered is the layer
+ * between — an MCP handler that accepts a field and drops it before the wire,
+ * or reads a response field and never returns it. Both fail only in a peer's
+ * session, and both look like success everywhere else.
  *
- * Source-reading, like tool-wiring.test.ts: mcp.ts is a bundle entry point
- * and exports nothing.
+ * This used to slice `mcp.ts` for `sourceDoc !== undefined ? { sourceDoc }` and
+ * then check the built bundle contains the word `sourceDoc`. Neither is
+ * evidence: the source pattern is a shape a refactor breaks while the feature
+ * works, and the bundle string is present whether or not anything sends it.
+ * The harness runs the committed bundle against a recording stub, so the
+ * forward is the body the server received.
  */
-import { readFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
-import { fileURLToPath } from 'node:url';
-import { describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { type BundleHarness, type Recorded, startBundle } from './harness/mcp-bundle.ts';
 
-const HERE = dirname(fileURLToPath(import.meta.url));
-const SRC = readFileSync(join(HERE, '../src/mcp.ts'), 'utf8');
-const BUNDLE = readFileSync(join(HERE, '../../plugin/mcp/index.js'), 'utf8');
+const SOURCE_DOC = { docId: 'plan-doc-1', mode: 'plan' as const };
 
-/** The `case 'x': {` block for one tool, up to the next case. */
-function handlerFor(tool: string): string {
-  const start = SRC.indexOf(`case '${tool}': {`);
-  expect(start, `no handler for ${tool}`).toBeGreaterThan(-1);
-  const rest = SRC.slice(start + 1);
-  return rest.slice(0, rest.indexOf('case '));
-}
+/** The batch route's answer: one row, and the gate's verdict on the doc. */
+const batchReply = {
+  tasks: [{ id: 't-1', title: 'Ship the search revamp', status: 'triage' }],
+  failures: [],
+  sourceDoc: { docId: 'plan-doc-1', mode: 'plan', held: true },
+};
 
-/** The declaration block for one tool, up to the next tool entry. */
-function declarationFor(tool: string): string {
-  const start = SRC.indexOf(`name: '${tool}',\n      description:`);
-  expect(start, `no declaration for ${tool}`).toBeGreaterThan(-1);
-  const rest = SRC.slice(start);
-  return rest.slice(0, rest.indexOf('},\n    {'));
-}
+let mcp: BundleHarness;
+
+beforeAll(async () => {
+  mcp = await startBundle((req: Recorded) =>
+    req.path.endsWith('/tasks/batch') ? batchReply : {},
+  );
+}, 60_000);
+afterAll(async () => {
+  await mcp?.stop();
+});
+
+const batchOf = (sent: Recorded[]) => sent.find((r) => r.path.endsWith('/tasks/batch'));
 
 describe('create_tasks declares sourceDoc', () => {
+  it('POSITIVE CONTROL: the running bundle serves a known tool', () => {
+    expect(mcp.tool('list_attachments')).toBeDefined();
+    expect(mcp.tool('create_tasks_from_doc')).toBeUndefined();
+  });
+
   it('the schema names the field, both modes, and what the plan gate does', () => {
-    const decl = declarationFor('create_tasks');
-    expect(decl).toContain('sourceDoc');
-    expect(decl).toMatch(/'plan'/);
-    expect(decl).toMatch(/'discussion'/);
+    const decl = mcp.tool('create_tasks');
+    expect(decl).toBeDefined();
+    const schema = JSON.stringify(decl?.inputSchema ?? {});
+    expect(schema).toContain('sourceDoc');
+    expect(schema).toContain("'plan'");
+    expect(schema).toContain("'discussion'");
     // The consequence is the contract: an agent must learn from the schema
     // that plan rows are held drafts, not silently-queued work.
-    expect(decl).toMatch(/held in triage until a person approves/);
-    expect(decl).toMatch(/structured origin ref/);
+    expect(schema).toContain('held in triage until a person approves');
+    expect(schema).toContain('structured origin ref');
   });
 });
 
 describe('the handler forwards sourceDoc both ways', () => {
-  it('sends it to the batch route and returns the gate verdict', () => {
-    const h = handlerFor('create_tasks');
-    expect(h).toMatch(/sourceDoc !== undefined \? \{ sourceDoc \}/); // request
-    expect(h).toMatch(/sourceDoc: res\.sourceDoc/); // response
+  it('sends it to the batch route', async () => {
+    const res = await mcp.call('create_tasks', {
+      workspaceId: 'w-1',
+      tasks: [{ title: 'Ship the search revamp' }],
+      sourceDoc: SOURCE_DOC,
+    });
+    expect(res.isError).toBe(false);
+    const batch = batchOf(res.sent);
+    expect(batch?.method).toBe('POST');
+    expect((batch?.body as { sourceDoc?: unknown })?.sourceDoc).toEqual(SOURCE_DOC);
   });
-});
 
-describe('the committed bundle peers load carries it', () => {
-  it('has the schema text and the forwarding', () => {
-    // Positive control first: a long-shipped literal is present, so a bundle
-    // read that returned something useless fails here rather than letting
-    // the assertions below pass vacuously.
-    expect(BUNDLE).toContain('the only create verb');
-    expect(BUNDLE).toContain('held in triage until a person approves');
-    expect(BUNDLE).toContain('sourceDoc');
+  it('returns the gate verdict rather than swallowing it', async () => {
+    const res = await mcp.call('create_tasks', {
+      workspaceId: 'w-1',
+      tasks: [{ title: 'Ship the search revamp' }],
+      sourceDoc: SOURCE_DOC,
+    });
+    expect((res.json as { sourceDoc?: unknown }).sourceDoc).toEqual({
+      docId: 'plan-doc-1',
+      mode: 'plan',
+      held: true,
+    });
+  });
+
+  // CONTROL: the field is optional, and a batch without it must not invent
+  // one — a phantom sourceDoc would hold rows the gate never looked at.
+  it('sends no sourceDoc key when the caller passed none', async () => {
+    const res = await mcp.call('create_tasks', {
+      workspaceId: 'w-1',
+      tasks: [{ title: 'Ship the search revamp' }],
+    });
+    expect(Object.keys(batchOf(res.sent)?.body as object)).not.toContain('sourceDoc');
   });
 });
