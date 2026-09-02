@@ -27,6 +27,39 @@ const IDLE = {
 };
 
 describe('readyIdleLine', () => {
+  it('names who set the cap and when, beside the rows it held', () => {
+    const line = readyIdleLine({
+      ...IDLE,
+      readyCount: 0,
+      consideredCount: 3,
+      held: { claimed: 1, 'parallelism-cap': 2 },
+      ts: 10 * 60 * 60_000,
+      parallelismCap: {
+        value: 1,
+        lastChange: {
+          actor: { id: 'agent-cartographer', name: 'Cartographer', kind: 'agent' },
+          ts: 9 * 60 * 60_000 + 15 * 60_000,
+          from: 4,
+          to: 1,
+        },
+      },
+    });
+    expect(line).toContain(
+      '3 open rows checked; held: 1 claimed, 2 parallelism-cap (cap 1, set by Cartographer 45m ago, was 4)',
+    );
+  });
+
+  it('a held count on a cap nobody moved states the cap without a setter', () => {
+    const line = readyIdleLine({
+      ...IDLE,
+      consideredCount: 5,
+      held: { 'parallelism-cap': 2 },
+      parallelismCap: { value: 4 },
+    });
+    expect(line).toContain('2 parallelism-cap (cap 4)');
+    expect(line).not.toContain('set by');
+  });
+
   it('names the task the lead should start with, by title and id', () => {
     const line = readyIdleLine(IDLE);
     expect(line).toContain('Ship the search revamp');
@@ -335,6 +368,32 @@ describe('stalledLine', () => {
       '9 open row(s) checked; 4 beyond the parallelism cap and not judged',
     );
     expect(stalledLine(STALL)).not.toContain('beyond the parallelism cap');
+  });
+
+  it('names who set the cap and when, in the same sentence as the rows it held', () => {
+    const line = stalledLine({
+      ...STALL,
+      beyondCapacity: 4,
+      ts: 10 * 60 * 60_000,
+      parallelismCap: {
+        value: 1,
+        lastChange: {
+          actor: { id: 'known-jordan', name: 'Jordan', kind: 'person' },
+          ts: 8 * 60 * 60_000,
+          from: 4,
+          to: 1,
+        },
+      },
+    });
+    expect(line).toContain(
+      '9 open row(s) checked; 4 beyond the parallelism cap of 1, set by Jordan 2h ago (was 4), and not judged',
+    );
+  });
+
+  it('a cap nobody moved is stated bare, never with an invented setter', () => {
+    const line = stalledLine({ ...STALL, beyondCapacity: 2, parallelismCap: { value: 4 } });
+    expect(line).toContain('2 beyond the parallelism cap of 4 and not judged');
+    expect(line).not.toContain('set by');
   });
 
   it('summarises the tail rather than pasting a wall of rows', () => {

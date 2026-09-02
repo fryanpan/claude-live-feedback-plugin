@@ -15,12 +15,12 @@
  * register. The repo is public.
  */
 import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { type ServerHandle, createServer } from '../src/server.ts';
 import { STALL_EVENT } from '../src/stall-nudge.ts';
-import { DEFAULT_PARALLELISM_CAP, TaskStore } from '../src/tasks.ts';
+import { DEFAULT_PARALLELISM_CAP, TaskStore, eventsLogPath } from '../src/tasks.ts';
 
 const PERSON = { id: 'known-jordan', name: 'Jordan', kind: 'person' };
 const LEAD = { id: 'agent-cartographer', name: 'Cartographer', kind: 'agent' };
@@ -118,7 +118,7 @@ describe('the cap is a setting on the workspace record', () => {
 
     const rehydrated = new TaskStore({ dataDir, debounceMs: 5 });
     try {
-      expect(rehydrated.parallelismCap(ws.id)).toEqual({ value: 2, isDefault: false });
+      expect(rehydrated.parallelismCap(ws.id)).toMatchObject({ value: 2, isDefault: false });
     } finally {
       rehydrated.stop();
     }
@@ -133,9 +133,94 @@ describe('the cap is a setting on the workspace record', () => {
     store.stop();
     const rehydrated = new TaskStore({ dataDir, debounceMs: 5 });
     try {
-      expect(rehydrated.parallelismCap(ws.id)).toEqual({ value: 4, isDefault: true });
+      expect(rehydrated.parallelismCap(ws.id)).toMatchObject({ value: 4, isDefault: true });
     } finally {
       rehydrated.stop();
+    }
+  });
+
+  // A moved cap must never be a mystery (board row "Agent can see who changed
+  // a board's parallelism cap and when"): the record names the actor, the
+  // time, and both values, and the event log keeps every change.
+  it('records who moved it, when, from what and to what — and the event log keeps every change', async () => {
+    const store = new TaskStore({ dataDir, debounceMs: 5 });
+    const ws = store.createWorkspace('search-revamp');
+    const seen: Array<{ from: number; to: number }> = [];
+    store.onEvent((ev) => {
+      if (ev.type === 'workspace.parallelism_cap_changed') seen.push(ev);
+    });
+    const before = Date.now();
+    const first = store.setParallelismCap(ws.id, 2, { actor: PERSON });
+    expect(first.ok && first.changed).toBe(true);
+    const read = store.parallelismCap(ws.id);
+    expect(read).toMatchObject({ value: 2, isDefault: false });
+    expect(read?.lastChange).toMatchObject({
+      actor: { id: PERSON.id, name: PERSON.name, kind: 'person' },
+      from: 4,
+      to: 2,
+    });
+    expect(read?.lastChange?.ts).toBeGreaterThanOrEqual(before);
+
+    // Back to the default is a change too — "to" is the effective number,
+    // and the reader sees who reset it.
+    const second = store.setParallelismCap(ws.id, undefined, { actor: LEAD });
+    expect(second.ok && second.changed).toBe(true);
+    expect(store.parallelismCap(ws.id)?.lastChange).toMatchObject({
+      actor: { id: LEAD.id, name: LEAD.name, kind: 'agent' },
+      from: 2,
+      to: 4,
+    });
+    // Both emitted, in order, with both values on each.
+    expect(seen.map((e) => [e.from, e.to])).toEqual([
+      [4, 2],
+      [2, 4],
+    ]);
+    // Durable: the per-board events log holds BOTH rows — the earlier change
+    // is not overwritten by the later one.
+    const rows = readFileSync(eventsLogPath(dataDir, ws.id), 'utf8')
+      .trim()
+      .split('\n')
+      .map((line) => JSON.parse(line) as Record<string, unknown>)
+      .filter((row) => row.event === 'workspace.parallelism_cap_changed');
+    expect(rows.map((r) => [r.from, r.to])).toEqual([
+      [4, 2],
+      [2, 4],
+    ]);
+    expect(rows[0]?.actor).toEqual({ id: PERSON.id, name: PERSON.name, kind: 'person' });
+    expect(rows[1]?.actor).toEqual({ id: LEAD.id, name: LEAD.name, kind: 'agent' });
+
+    // The last change survives a reload with the number.
+    await settle(60);
+    store.stop();
+    const rehydrated = new TaskStore({ dataDir, debounceMs: 5 });
+    try {
+      expect(rehydrated.parallelismCap(ws.id)?.lastChange).toMatchObject({
+        actor: { id: LEAD.id },
+        from: 2,
+        to: 4,
+      });
+    } finally {
+      rehydrated.stop();
+    }
+  });
+
+  it('a write that leaves the effective cap where it was records nothing', () => {
+    const store = new TaskStore({ dataDir, debounceMs: 5 });
+    try {
+      const ws = store.createWorkspace('search-revamp');
+      const seen: unknown[] = [];
+      store.onEvent((ev) => {
+        if (ev.type === 'workspace.parallelism_cap_changed') seen.push(ev);
+      });
+      // Explicitly setting the default number, and clearing an unset cap.
+      const a = store.setParallelismCap(ws.id, DEFAULT_PARALLELISM_CAP, { actor: PERSON });
+      const b = store.setParallelismCap(ws.id, undefined, { actor: PERSON });
+      expect(a.ok && a.changed).toBe(false);
+      expect(b.ok && b.changed).toBe(false);
+      expect(seen).toHaveLength(0);
+      expect(store.parallelismCap(ws.id)?.lastChange).toBeUndefined();
+    } finally {
+      store.stop();
     }
   });
 });
@@ -295,10 +380,21 @@ describe('the cap through the server', () => {
         expect(restored).toMatchObject({ cap: 4, isDefault: true, inUse: 1, free: 3 });
         // And the settings panel's read agrees.
         const settings = await jj<{
-          parallelismCap: { value: number; isDefault: boolean; default: number };
+          parallelismCap: {
+            value: number;
+            isDefault: boolean;
+            default: number;
+            lastChange?: unknown;
+          };
           dispatchesInUse: number;
         }>(await get(`/api/workspaces/${workspaceId}/settings`));
-        expect(settings.parallelismCap).toEqual({ value: 4, isDefault: true, default: 4 });
+        expect(settings.parallelismCap).toMatchObject({ value: 4, isDefault: true, default: 4 });
+        // The panel's read names who put it back and from what.
+        expect(settings.parallelismCap.lastChange).toMatchObject({
+          actor: { id: LEAD.id, name: LEAD.name },
+          from: 1,
+          to: 4,
+        });
         expect(settings.dispatchesInUse).toBe(1);
       } finally {
         rmSync(worktree, { recursive: true, force: true });
@@ -332,8 +428,60 @@ describe('the cap through the server', () => {
       await jj(
         await put(`/api/workspaces/${workspaceId}/parallelism-cap`, { cap: 2, author: LEAD }),
       );
-      const ws = await jj<{ parallelismCap: unknown }>(await get(`/api/workspaces/${workspaceId}`));
-      expect(ws.parallelismCap).toEqual({ value: 2, isDefault: false, inUse: 0, free: 2 });
+      const ws = await jj<{ parallelismCap: Record<string, unknown> }>(
+        await get(`/api/workspaces/${workspaceId}`),
+      );
+      expect(ws.parallelismCap).toMatchObject({ value: 2, isDefault: false, inUse: 0, free: 2 });
+      // And who moved it, when, from what — so a moved cap is never a mystery.
+      expect(ws.parallelismCap.lastChange).toMatchObject({
+        actor: { id: LEAD.id, name: LEAD.name, kind: 'agent' },
+        from: 4,
+        to: 2,
+      });
+      expect(typeof (ws.parallelismCap.lastChange as { ts: unknown }).ts).toBe('number');
+      await lead.stop();
+    });
+
+    it('a board never asked carries no last change at all', async () => {
+      const { workspaceId, lead } = await boardWithLead();
+      const ws = await jj<{ parallelismCap: Record<string, unknown> }>(
+        await get(`/api/workspaces/${workspaceId}`),
+      );
+      expect(ws.parallelismCap.lastChange).toBeUndefined();
+      const view = await jj<CapView & { lastChange?: unknown }>(
+        await get(`/api/workspaces/${workspaceId}/parallelism-cap`),
+      );
+      expect(view.lastChange).toBeUndefined();
+      await lead.stop();
+    });
+
+    it('the settings route (the panel’s path) records the same actor the cap route does', async () => {
+      const { workspaceId, lead } = await boardWithLead();
+      await jj(
+        await put(`/api/workspaces/${workspaceId}/settings`, { author: PERSON, parallelismCap: 3 }),
+      );
+      const view = await jj<CapView & { lastChange?: Record<string, unknown> }>(
+        await get(`/api/workspaces/${workspaceId}/parallelism-cap`),
+      );
+      expect(view.lastChange).toMatchObject({
+        actor: { id: PERSON.id, name: PERSON.name, kind: 'person' },
+        from: 4,
+        to: 3,
+      });
+      // Both routes append to the one log; a second change through the other
+      // route does not overwrite the first.
+      await jj(
+        await put(`/api/workspaces/${workspaceId}/parallelism-cap`, { cap: 1, author: LEAD }),
+      );
+      const rows = readFileSync(eventsLogPath(dataDir, workspaceId), 'utf8')
+        .trim()
+        .split('\n')
+        .map((line) => JSON.parse(line) as Record<string, unknown>)
+        .filter((row) => row.event === 'workspace.parallelism_cap_changed');
+      expect(rows.map((r) => [(r.actor as { id: string }).id, r.from, r.to])).toEqual([
+        [PERSON.id, 4, 3],
+        [LEAD.id, 3, 1],
+      ]);
       await lead.stop();
     });
   });
@@ -420,6 +568,12 @@ describe('the cap through the server', () => {
       expect(frame.stalledCount).toBe(1);
       expect((frame.rows as Array<{ id: string }>).map((r) => r.id)).toEqual([top]);
       expect(frame.beyondCapacity).toBe(1);
+      // The wake that holds rows for the cap says who set it and when, so
+      // the lead is not sent to find out.
+      expect(frame.parallelismCap).toMatchObject({
+        value: 1,
+        lastChange: { actor: { id: LEAD.id, name: LEAD.name }, from: 4, to: 1 },
+      });
       // Both rows were examined — the denominator does not shrink to the cap.
       expect(frame.consideredCount).toBe(2);
       expect(JSON.stringify(frame.rows)).not.toContain(beyond);
@@ -438,6 +592,8 @@ describe('the cap through the server', () => {
       expect(got).toHaveLength(1);
       expect(got[0]?.data?.stalledCount).toBe(2);
       expect(got[0]?.data?.beyondCapacity).toBeUndefined();
+      // Nothing held for the cap, so the frame does not talk about it.
+      expect(got[0]?.data?.parallelismCap).toBeUndefined();
       expect(stalls(lead.frames)).toHaveLength(1);
       await lead.stop();
     });
