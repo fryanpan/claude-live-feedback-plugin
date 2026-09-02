@@ -81,13 +81,14 @@ import {
   renderTransitionRow,
 } from './hub-detail-render.ts';
 import { type ActivityEvent, taskActivity } from './hub-presence-model.ts';
-import { panelReviewQueue, wireInPlaceTitle } from './hub-render.ts';
+import { wireInPlaceTitle } from './hub-render.ts';
 import {
   answeredByLine,
   askedMetaLine,
   blockedNoteLine,
   heldMetaLine,
 } from './hub-review-model.ts';
+import { panelReviewQueue } from './hub-review-render.ts';
 import { markPhrase } from './review-item-phrase.ts';
 import { selectWordAtPoint, useSelectionPill } from './selection-pill.ts';
 import { NOBODY, type OpenComment, ThreadCard, draftThread } from './thread-card.tsx';

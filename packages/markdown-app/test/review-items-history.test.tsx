@@ -20,7 +20,7 @@ import {
 } from '../src/hub/hub-detail-render.ts';
 import { commentRow, discussionStream } from '../src/hub/hub-discussion-render.ts';
 import { describeEvent } from '../src/hub/hub-presence-model.ts';
-import { reviewItemRow } from '../src/hub/hub-render.ts';
+import { reviewItemRow } from '../src/hub/hub-review-render.ts';
 import { mountTaskDetailIsland, taskDetailData } from '../src/hub/task-detail-island.tsx';
 
 const NOW = 1_700_000_000_000;
