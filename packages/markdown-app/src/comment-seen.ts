@@ -112,7 +112,14 @@ export function createSeenTracker(opts: {
 
   return {
     isNew(t) {
-      return isNewThread(record, t, view);
+      const fresh = isNewThread(record, t, view);
+      // A first visit shows no dots — but it has to WRITE what it saw, or
+      // the next visit is a first visit too and nothing is ever new.
+      if (view.firstVisit && !fresh && record.threads[t.id] === undefined) {
+        record.threads[t.id] = t.lastActivity;
+        writeRecord(storage, key, record);
+      }
+      return fresh;
     },
     markSeen(t) {
       const before = this.isNew(t);

@@ -65,6 +65,20 @@ describe('createSeenTracker', () => {
     expect(tracker.isNew(b)).toBe(false);
   });
 
+  it('a first visit records what it saw, so the NEXT visit can tell what is new', () => {
+    const storage = memoryStorage();
+    const first = createSeenTracker({ docId: 'd', storage, now: () => 1000 });
+    expect(first.isNew({ id: 'a', lastActivity: 100 })).toBe(false);
+    expect(JSON.parse(storage.data.get(seenStorageKey('d')) ?? '{}')).toEqual({
+      threads: { a: 100 },
+    });
+    // Come back: `a` has a reply, `b` is brand new — both are new now.
+    const second = createSeenTracker({ docId: 'd', storage, now: () => 2000 });
+    expect(second.isNew({ id: 'a', lastActivity: 100 })).toBe(false);
+    expect(second.isNew({ id: 'a', lastActivity: 300 })).toBe(true);
+    expect(second.isNew({ id: 'b', lastActivity: 50 })).toBe(true);
+  });
+
   it('return visit: unseen threads are new until they have sat in view', () => {
     const storage = memoryStorage({
       [seenStorageKey('d')]: JSON.stringify({ threads: { a: 100 } }),

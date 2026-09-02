@@ -10899,30 +10899,20 @@ body.redline-mode #toggle-suggest-mode {
   min-width: 0;
 }
 
-/* The column stretches the whole row so the off-screen hints
-   (comment-hints.ts) can stick to the scroller's top and bottom edges from
-   inside it. Balloons are absolutely positioned and take no part in the flex
-   flow, so this changes nothing about where they land. */
-#editor.redline-layout > .markup-margin {
-  align-self: stretch;
-  display: flex;
-  flex-direction: column;
-  justify-content: space-between;
-}
-/* "4 comments & 1 question above" — a pill that hugs the edge of the scroller
-   and jumps to the nearest off-screen thread when tapped. Words on a wide
-   screen (`.w`); glyph + count + arrow (`.m`) on a phone — see the INLINE
-   THREAD CARDS block for that switch. */
+/* "4 comments & 1 question above" — a pill at the top or bottom edge of the
+   doc's viewport that jumps to the nearest off-screen thread when tapped.
+   Absolutely positioned in #editor-pane (not in the scrolling margin, where
+   a balloon could land on it); comment-hints.ts sets the insets — over the
+   balloon column on a wide screen, at the pane's corners on a phone. Words
+   on a wide screen (`.w`); glyph + count + arrow (`.m`) on a phone — see the
+   INLINE THREAD CARDS block for that switch. */
 .lf-offscreen {
-  position: sticky;
-  z-index: 3;
-  align-self: flex-start;
-  margin: 0 4px;
+  position: absolute;
+  z-index: 25;
   display: inline-flex;
   align-items: center;
-  flex-wrap: wrap;
+  justify-content: center;
   gap: 5px;
-  row-gap: 2px;
   font: 600 12px / 1.2 var(--sans);
   color: var(--fg);
   background: var(--bg);
@@ -10941,15 +10931,10 @@ body.redline-mode #toggle-suggest-mode {
   background: var(--bg-hover);
 }
 .lf-offscreen-top {
-  top: 0;
-  border-top: 0;
-  border-radius: 0 0 var(--radius) var(--radius);
+  top: 8px;
 }
 .lf-offscreen-bottom {
-  bottom: 0;
-  margin-top: auto;
-  border-bottom: 0;
-  border-radius: var(--radius) var(--radius) 0 0;
+  bottom: 12px;
 }
 .lf-offscreen b {
   font-weight: 700;
@@ -11477,25 +11462,16 @@ body.redline-mode #toggle-suggest-mode {
    dock that grows a line can never cover it. Glyph + count + arrow only —
    the words are the wide screen's. */
 @media (max-width: 1100px) {
-  .lf-offscreen-float {
-    position: fixed;
-    display: inline-flex;
+  .lf-offscreen {
     gap: 6px;
     padding: 6px 10px;
     min-height: 34px;
-    border: 1px solid var(--border-strong);
-    border-radius: var(--radius-pill);
-    z-index: 25;
   }
-  .lf-offscreen-float[hidden] {
-    display: none;
-  }
-  .lf-offscreen-float.lf-offscreen-top {
+  .lf-offscreen-top {
     right: 12px;
   }
-  .lf-offscreen-float.lf-offscreen-bottom {
+  .lf-offscreen-bottom {
     left: 12px;
-    margin: 0;
   }
   .lf-offscreen .w,
   .doc-asks .w {
@@ -11507,11 +11483,6 @@ body.redline-mode #toggle-suggest-mode {
   .doc-asks {
     min-height: 34px;
     padding: 3px 8px;
-  }
-}
-@media (min-width: 1101px) {
-  .lf-offscreen-float {
-    display: none;
   }
 }
 /* Inside CodeMirror the card is a block widget in a monospace, pre-wrapped
