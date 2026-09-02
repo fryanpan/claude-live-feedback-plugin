@@ -26,7 +26,16 @@ import { OPEN_PROPS_FILES } from '../src/tokens-manifest.ts';
 const here = import.meta.dirname;
 const pkgRoot = resolve(here, '..');
 const TOKENS = readFileSync(join(pkgRoot, 'src', 'tokens.css'), 'utf8');
-const STYLES = readFileSync(join(pkgRoot, 'src', 'styles.css'), 'utf8');
+// The board's cascade is two files since the hub block moved to hub.css:
+// styles.css keeps the shared chrome, hub.css carries the board's own rules,
+// and the hub shell loads them in that order. A rule this suite pins may sit
+// in either, so read the pair the page actually loads. Two reads on purpose:
+// a one-line read is what `bun run test:audit` counts, and folding them into
+// a loop would hide a source-shape site rather than remove one.
+const STYLES = [
+  readFileSync(join(pkgRoot, 'src', 'styles.css'), 'utf8'),
+  readFileSync(join(pkgRoot, 'src', 'hub.css'), 'utf8'),
+].join('\n');
 const INDEX = readFileSync(join(pkgRoot, 'index.html'), 'utf8');
 
 // Resolve exactly the way scripts/build.ts does: from this package's root,

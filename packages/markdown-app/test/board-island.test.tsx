@@ -369,7 +369,7 @@ describe('the board island contract', () => {
     // `display: contents` the wrapper becomes a block between `.hub-board` and
     // its sections, which breaks the column's own spacing and — worse —
     // changes what `.closest('.hub-section')` walks past during a drag.
-    const css = readFileSync(resolve('packages/markdown-app/src/styles.css'), 'utf8');
+    const css = readFileSync(resolve('packages/markdown-app/src/hub.css'), 'utf8');
     const rule = css.match(/\.hub-board\s*>\s*\[data-preact-island\]\s*\{([^}]*)\}/)?.[1] ?? '';
     expect(rule).toContain('display'); // positive control: found the rule
     expect(rule).toMatch(/display:\s*contents/);
@@ -769,7 +769,7 @@ describe('renderBoard', () => {
 
     // The stylesheet's own declaration, read rather than restated — a literal
     // count here would just be a second place to forget to update.
-    const css = readFileSync(resolve('packages/markdown-app/src/styles.css'), 'utf8');
+    const css = readFileSync(resolve('packages/markdown-app/src/hub.css'), 'utf8');
     const decl = /\.hub-task-row\s*\{[^}]*grid-template-columns:\s*([^;]+);/.exec(css)?.[1];
     expect(decl).toBeDefined();
     // `minmax(0, 1fr)` holds a space after its comma, so split on whitespace
@@ -913,7 +913,7 @@ describe('the goal band row', () => {
       'hub-goal-open',
       'hub-owner-ctl',
     ]);
-    const css = readFileSync(resolve('packages/markdown-app/src/styles.css'), 'utf8');
+    const css = readFileSync(resolve('packages/markdown-app/src/hub.css'), 'utf8');
     const decl = /\.hub-goal-row\s*\{[^}]*grid-template-columns:\s*([^;]+);/.exec(css)?.[1];
     expect(decl).toBeDefined();
     const tracks = (decl as string).trim().split(/\s+(?![^(]*\))/);
