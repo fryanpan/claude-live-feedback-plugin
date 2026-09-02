@@ -74,6 +74,7 @@
  */
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import type { HoldReason, UndeterminedRow } from './ready-gate.ts';
+import type { ParallelismCapChange } from './tasks.ts';
 
 /**
  * Fifteen minutes — a DAMPER, no longer the evidence.
@@ -149,6 +150,9 @@ export interface ReadyWorkSnapshot {
    * matching every other absent-means-zero count on this snapshot.
    */
   capacityHeld?: number;
+  /** The cap itself and its last move, for the wake to name beside
+   *  `capacityHeld`. Absent from a caller that does not read it. */
+  parallelismCap?: ParallelismCapSummary;
   /**
    * Rows the gate could not evaluate at all.
    *
@@ -160,6 +164,13 @@ export interface ReadyWorkSnapshot {
   undetermined: readonly UndeterminedRow[];
   /** The store's durable record of when this board last moved (ms epoch). */
   lastActivityAt: number;
+}
+
+/** The board's cap as a wake carries it. `lastChange` is the store's own
+ *  record (`ParallelismCapChange`); absent until somebody has moved it. */
+export interface ParallelismCapSummary {
+  value: number;
+  lastChange?: ParallelismCapChange;
 }
 
 /** What goes on the wire. Flat, because the plugin's renderer reads these
@@ -183,6 +194,13 @@ export interface NudgeFrame {
   /** What the pass withheld and why — `{ 'awaiting-person': 2, backlog: 1 }`.
    *  Absent rather than empty when nothing was held. Idle nudges only. */
   held?: Readonly<Record<string, number>>;
+  /**
+   * The cap that held rows, with who moved it and when — sent ONLY beside a
+   * `parallelism-cap` hold, so a wake that never mentions the cap does not
+   * grow a field about it. The line puts the setter in the same sentence as
+   * the held count (Bryan: a moved cap is never a mystery).
+   */
+  parallelismCap?: ParallelismCapSummary;
   /**
    * Rows the pass could not evaluate. Absent when there were none, which is
    * the ordinary case — its PRESENCE is the whole signal.
@@ -598,6 +616,9 @@ export class ReadyWorkNudger {
       readyCount: board.ready.length,
       consideredCount: board.considered,
       ...(heldWithCapacity ? { held: heldWithCapacity } : {}),
+      ...(board.capacityHeld && board.capacityHeld > 0 && board.parallelismCap
+        ? { parallelismCap: board.parallelismCap }
+        : {}),
       ...(undetermined.length > 0
         ? { undetermined: { count: undetermined.length, reasons: reasonsOf(undetermined) } }
         : {}),
