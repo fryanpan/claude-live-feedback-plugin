@@ -16,7 +16,7 @@
  * which is why `?task=` already worked this way, and why `parseWorkspaceLink`
  * (the chip renderer's contract) recognizes params on the workspace path.
  */
-import { type HubNav, navFromPath, navPath } from './hub-model.ts';
+import { type HubNav, navFromPath, navPath } from './hub-presence-model.ts';
 
 export interface BoardLocation {
   nav: HubNav;

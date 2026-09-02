@@ -4,16 +4,15 @@ import {
   homeReviewData,
   mountHomeReviewIsland,
 } from '../src/hub/home-review-island.tsx';
+import { CHORES_ID, type HubTask } from '../src/hub/hub-board-model.ts';
 import {
-  CHORES_ID,
-  type HubTask,
   type ReviewItem,
   type ReviewThreadItem,
   advanceWalk,
   decisionRows,
   reviewQueue,
   walkPosition,
-} from '../src/hub/hub-model.ts';
+} from '../src/hub/hub-review-model.ts';
 import {
   type WalkProgress,
   type WalkthroughHandlers,

@@ -4,14 +4,14 @@ import type { Thread, User } from '@feedback/core';
 import { options } from 'preact';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
-  type ActivityEvent,
   CHORES_ID,
   type HubNote,
   type HubTask,
   type HubTransition,
   type TaskStatus,
-} from '../src/hub/hub-model.ts';
-import type { DetailHandlers, TaskDiscussion } from '../src/hub/hub-render.ts';
+} from '../src/hub/hub-board-model.ts';
+import type { DetailHandlers, TaskDiscussion } from '../src/hub/hub-detail-render.ts';
+import { type ActivityEvent } from '../src/hub/hub-presence-model.ts';
 import { mountTaskDetailIsland, taskDetailData } from '../src/hub/task-detail-island.tsx';
 import { frame, surfaceOf, typeInComposer } from './support/composer.ts';
 

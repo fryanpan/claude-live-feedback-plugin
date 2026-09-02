@@ -5,7 +5,7 @@
  *
  * Everything here is data: types, the status vocabulary, and the one sort
  * the board is ordered by. Behaviour (the store, the projection, the routes)
- * stays with whichever side owns it. The browser's `HubTask` (hub-model.ts)
+ * stays with whichever side owns it. The browser's `HubTask` (hub-board-model.ts)
  * is deliberately NOT this type: it is the §3.3 visitor projection —
  * display names only, no actor ids — and reads the pieces it shares from
  * here rather than restating them.
@@ -719,7 +719,7 @@ export interface Task {
 /** The board's sort, spelled once. `order` is a float a caller chose and
  *  nothing has ever forced it to be unique within a goal, so the two
  *  tiebreaks are reachable in ordinary data rather than theoretical. The
- *  server (`TaskStore`) and the browser (hub-model.ts) both sort with THIS
+ *  server (`TaskStore`) and the browser (hub-board-model.ts) both sort with THIS
  *  function — a placement computed at one end and applied at the other is
  *  only meaningful while both agree on what "after" means. */
 export function byBoardOrder(

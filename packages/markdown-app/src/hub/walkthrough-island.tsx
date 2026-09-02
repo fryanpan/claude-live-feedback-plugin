@@ -49,9 +49,8 @@ import {
   focusMarkdownComposer,
   refreshMarkdownComposer,
 } from '../md-composer.ts';
+import { type HubDecisionOption, type HubTask } from './hub-board-model.ts';
 import {
-  type HubDecisionOption,
-  type HubTask,
   type ReviewItem,
   type ReviewKind,
   type ReviewQueue,
@@ -63,8 +62,8 @@ import {
   reviewItemOwner,
   reviewRowTitle,
   revisedPhrase,
-} from './hub-model.ts';
-import { requireText } from './hub-render.ts';
+} from './hub-review-model.ts';
+import { requireText } from './hub-review-render.ts';
 import { markPhrase, unmarkPhrase } from './review-item-phrase.ts';
 import { useSelectionPill } from './selection-pill.ts';
 

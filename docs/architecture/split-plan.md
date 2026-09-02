@@ -201,10 +201,28 @@ CI is not.
 
 # Lane B — everything else
 
-## B1 · the hub
+## B1 · the hub — **DONE**
 
 Highest churn in the repo after `server.ts`. Nine commits, one per extracted
 file, in this order. **Effort M, M, L.**
+
+Landed as ten commits in one PR. What differed from the plan below:
+
+- `hub-model.ts` is gone rather than reduced — the presence half was the
+  remainder, so the third cut is a rename. Line counts came out 1397 / 1262 /
+  1019 against the estimated 1200 / 1100 / 1200.
+- `hub-detail-render.ts` is ~1120 rather than ~900. `assigneePicker` and the
+  doc-title hydration helpers had no caller left outside the panel, and
+  leaving them behind would have pointed `hub-render.ts` back at the file it
+  had just handed work to.
+- `hub-live-wiring.ts` is ~280 rather than ~600. The plan counted the loaders
+  the listeners call; those stayed in the entry, because the review controller
+  and the boot sequence call them too.
+- The three `hub-app.ts` files each export a `create*` / `wire*` function
+  taking one deps object. The entry destructures the result at the point the
+  declarations used to sit, so evaluation order is unchanged and every call
+  site — including the ones that pass a verb as a handler value — reads as it
+  did.
 
 | File | Becomes (in `hub/`) | Moves |
 |---|---|---|
