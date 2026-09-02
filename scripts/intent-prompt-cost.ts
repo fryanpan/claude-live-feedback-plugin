@@ -32,6 +32,7 @@ import {
   CORRECTION_PROMPT_RULE,
   LOOKUP_PROMPT_RULE,
   RESEARCH_PROMPT_RULE,
+  REVIEW_PROMPT_RULE,
   buildTaskCapturePrompt,
 } from '../packages/server/src/meeting-task-capture.ts';
 import { readKeychainPassword } from '../packages/server/src/share/keychain.ts';
@@ -50,6 +51,7 @@ const tick: NotesTurn[] = [
   { turn: 51, speaker: 'Priya', text: 'Can somebody go look into why the retry loop wakes it?' },
   { turn: 52, speaker: 'Marcus', text: "And pull in last week's notes while you are at it." },
   { turn: 53, speaker: 'Priya', text: 'And no, I said Thursday for the gate, not Tuesday.' },
+  { turn: 54, speaker: 'Marcus', text: 'Ask the team whether we still need the gate at all.' },
 ];
 
 async function countTokens(key: string, system: string, user: string): Promise<number> {
@@ -88,6 +90,42 @@ const RESEARCH_SHAPE = [
 ];
 const LOOKUP_SHAPE = ['         |{"kind":"lookup","query":"..."}]}'];
 const CORRECTION_SHAPE = ['         |{"kind":"correction","wrong":"...","right":"..."}]}'];
+const REVIEW_SHAPE = [
+  '         |{"kind":"review","question":"...",',
+  '           "requester":"who asked, omitted if unclear"}]}',
+];
+
+/** The header as the review intent left it, and as it read before. */
+const REVIEW_HEADER = {
+  from: [
+    'You listen to a live working meeting and extract six things: task',
+    'REQUESTS, task REFERENCES, RESEARCH asks, LOOKUP asks, CORRECTIONS and',
+    'REVIEW asks. Answer with JSON only, this shape:',
+  ].join('\n'),
+  to: [
+    'You listen to a live working meeting and extract five things: task',
+    'REQUESTS, task REFERENCES, RESEARCH asks, LOOKUP asks and CORRECTIONS.',
+    'Answer with JSON only, this shape:',
+  ].join('\n'),
+};
+
+/**
+ * The prompt as it read before the review intent: its rule, its shape lines,
+ * the count in the header, and the closing bracket handed back to the
+ * correction line. NOT stripped, because they cannot be told apart from the
+ * text around them: the direct-ask examples the same change added to the
+ * request and research rules ("make that a task", "can you research X").
+ * They are a few words each and ride in the "+ review ask" delta.
+ */
+function withoutReview(system: string): string {
+  const stripped = without(system, REVIEW_PROMPT_RULE, REVIEW_SHAPE);
+  const restored = stripped.replace(REVIEW_HEADER.from, REVIEW_HEADER.to);
+  if (restored === stripped) throw new Error('baseline strip found no review header to rewrite');
+  return restored.replace(
+    '         |{"kind":"correction","wrong":"...","right":"..."}\n',
+    '         |{"kind":"correction","wrong":"...","right":"..."}]}\n',
+  );
+}
 
 /**
  * The header line names the intents by count, so it moves with every one
@@ -129,7 +167,8 @@ async function main(): Promise<void> {
   const key = resolveKeyFrom(flagKey, readKeychainPassword);
 
   const built = buildTaskCapturePrompt({ turns: tick, candidates });
-  const beforeCorrection = withoutCorrection(built.system);
+  const beforeReview = withoutReview(built.system);
+  const beforeCorrection = withoutCorrection(beforeReview);
   const noLookup = without(beforeCorrection, LOOKUP_PROMPT_RULE, LOOKUP_SHAPE);
   const neither = without(noLookup, RESEARCH_PROMPT_RULE, RESEARCH_SHAPE);
 
@@ -137,7 +176,8 @@ async function main(): Promise<void> {
     ['requests + references only', neither],
     ['+ research', noLookup],
     ['+ lookup', beforeCorrection],
-    ['+ correction (shipped)', built.system],
+    ['+ correction', beforeReview],
+    ['+ review ask (shipped)', built.system],
   ];
 
   console.log('system prompt, characters:');
