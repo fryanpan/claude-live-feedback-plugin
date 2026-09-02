@@ -13,15 +13,13 @@
 import { options } from 'preact';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { CHORES_ID, type HubReviewItem, type HubTask } from '../src/hub/hub-board-model.ts';
-import { describeEvent } from '../src/hub/hub-presence-model.ts';
 import {
   type DetailHandlers,
   type TaskDiscussion,
   type TaskThread,
-  commentRow,
-  discussionStream,
-  reviewItemRow,
-} from '../src/hub/hub-render.ts';
+} from '../src/hub/hub-detail-render.ts';
+import { describeEvent } from '../src/hub/hub-presence-model.ts';
+import { commentRow, discussionStream, reviewItemRow } from '../src/hub/hub-render.ts';
 import { mountTaskDetailIsland, taskDetailData } from '../src/hub/task-detail-island.tsx';
 
 const NOW = 1_700_000_000_000;

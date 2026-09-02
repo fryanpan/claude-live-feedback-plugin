@@ -42,7 +42,7 @@ import {
   goalBandIds,
   goalEffortLabel,
 } from '../src/hub/hub-board-model.ts';
-import { effortComputationLines, effortFields } from '../src/hub/hub-render.ts';
+import { effortComputationLines, effortFields } from '../src/hub/hub-detail-render.ts';
 import { disposeBoards, renderBoard } from './support/board.ts';
 
 const NOW = Date.UTC(2026, 8, 1, 12, 0, 0);

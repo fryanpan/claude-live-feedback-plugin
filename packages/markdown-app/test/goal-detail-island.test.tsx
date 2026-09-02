@@ -8,7 +8,8 @@ import {
   DEFAULT_DONE_WINDOW,
   boardSections,
 } from '../src/hub/hub-board-model.ts';
-import type { GoalDetailHandlers, TaskDiscussion } from '../src/hub/hub-render.ts';
+import type { TaskDiscussion } from '../src/hub/hub-detail-render.ts';
+import type { GoalDetailHandlers } from '../src/hub/hub-render.ts';
 
 /**
  * The goal panel's ISLAND contract, as opposed to what the panel shows — that

@@ -17,7 +17,7 @@
  */
 import { options } from 'preact';
 import type { HubTask } from '../../src/hub/hub-board-model.ts';
-import type { DetailHandlers, TaskDiscussion } from '../../src/hub/hub-render.ts';
+import type { DetailHandlers, TaskDiscussion } from '../../src/hub/hub-detail-render.ts';
 import { mountTaskDetailIsland, taskDetailData } from '../../src/hub/task-detail-island.tsx';
 
 // Component re-renders are SCHEDULED, not synchronous: a signal write or a

@@ -9,7 +9,11 @@
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { CHORES_ID, type HubTask } from '../src/hub/hub-board-model.ts';
-import { type DetailHandlers, relatedDocLinks, renderRelatedLinks } from '../src/hub/hub-render.ts';
+import {
+  type DetailHandlers,
+  relatedDocLinks,
+  renderRelatedLinks,
+} from '../src/hub/hub-detail-render.ts';
 import { _resetLinkTitlesForTest, primeLinkTitle } from '../src/link-titles.ts';
 import { disposeTaskDetail, renderTaskDetail } from './support/task-detail.ts';
 

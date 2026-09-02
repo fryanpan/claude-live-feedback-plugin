@@ -79,6 +79,8 @@ import {
   goalSection,
   isTaskArchived,
 } from './hub-board-model.ts';
+import { type PanelReviewItem } from './hub-detail-render.ts';
+import { type TaskDiscussion, type TaskThread } from './hub-detail-render.ts';
 import {
   ACTIVITY_REFRESH_EVENTS,
   type ActivityEvent,
@@ -105,9 +107,6 @@ import {
   voiceHubContext,
 } from './hub-presence-model.ts';
 import {
-  type PanelReviewItem,
-  type TaskDiscussion,
-  type TaskThread,
   discussionIsBusy,
   panelAnswerRequest,
   panelQuestionRequest,
