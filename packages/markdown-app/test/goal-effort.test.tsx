@@ -632,7 +632,7 @@ describe('the board renders the readout and leaves the rows alone', () => {
 });
 
 describe('the stylesheet pins the columns and folds to two rows', () => {
-  const CSS = readFileSync(resolve(import.meta.dirname, '../src/styles.css'), 'utf8');
+  const CSS = readFileSync(resolve(import.meta.dirname, '../src/hub.css'), 'utf8');
 
   /** Every `@media <query> { … }` block's inner text, brace-matched. */
   function mediaBlocks(query: string): string {

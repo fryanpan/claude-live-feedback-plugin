@@ -80,7 +80,7 @@ describe('renderWorkspaceIdentity', () => {
   });
 });
 
-const CSS = readFileSync(resolve('packages/markdown-app/src/styles.css'), 'utf8');
+const CSS = readFileSync(resolve('packages/markdown-app/src/hub.css'), 'utf8');
 
 /** The declarations of the first rule whose selector list contains `sel`. */
 function block(sel: string): string {

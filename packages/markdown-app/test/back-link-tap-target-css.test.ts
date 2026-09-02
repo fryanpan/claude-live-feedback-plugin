@@ -21,7 +21,16 @@ import { describe, expect, it } from 'vitest';
  * order is the whole of it. The rendered size is measured in a browser against
  * a real build; that is what closes the criterion.
  */
-const CSS = readFileSync(resolve('packages/markdown-app/src/styles.css'), 'utf8');
+// The board's cascade is two files since the hub block moved to hub.css:
+// styles.css keeps the shared chrome, hub.css carries the board's own rules,
+// and the hub shell loads them in that order. A rule this suite pins may sit
+// in either, so read the pair the page actually loads. Two reads on purpose:
+// a one-line read is what `bun run test:audit` counts, and folding them into
+// a loop would hide a source-shape site rather than remove one.
+const CSS = [
+  readFileSync(resolve('packages/markdown-app/src/styles.css'), 'utf8'),
+  readFileSync(resolve('packages/markdown-app/src/hub.css'), 'utf8'),
+].join('\n');
 
 /** The review app's phone block, opened verbatim. */
 const PHONE_CONDITION = '@media (max-width: 720px) {';

@@ -19,7 +19,7 @@ find packages \( -name '*.ts' -o -name '*.css' \) \
 ```
 
 Audited 2026-09-02 at `3a39db67`, and re-audited after A1 and A2 landed.
-**161 files** over 500 lines: 66 source and 95 test.
+**162 files** over 500 lines: 67 source and 95 test.
 
 Test files are judged by a narrower rule, in their own table below: a long test
 file is an exception unless two *unrelated harnesses* share it. Many `describe`
@@ -73,7 +73,8 @@ blocks over one set of fixtures is one harness, however long the file gets.
 
 | File | Lines | Verdict | Reason / seam |
 |---|---|---|---|
-| `packages/markdown-app/src/styles.css` | 12042 | Split | Not a line-count split. `renderHubShell`, `renderSigninShell` and the review `index.html` are three pages with three separate JS bundles that all load this one stylesheet, so every hub visitor downloads the editor and diff CSS. The hub block is contiguous and self-labelled — 25 `HUB ·` sub-banners from 958 to 6287, with its own breakpoints — and the sign-in block runs 11727–EOF. Cut `hub.css` ~5330 and `signin.css` ~316. **M**, cascade order preserved per page. This strengthens the no-EOF-append rule rather than breaking it: hub and editor branches stop sharing a file. |
+| `packages/markdown-app/src/styles.css` | 6545 | Split | B2 took the board's half into `hub.css` (loaded BEFORE this file, which is where the block sat) and the sign-in page's into `signin.css`, which is what took this file from 12042. What is left is the review editor's own surfaces — file tree, meeting chrome, diff nav, threads pane — plus the chrome every page shares: design tokens, top bar, toast, connection banner, the first-arrival identity prompt. Splitting THAT means naming which blocks each page reaches, and the measurement is in the B2 PR body: about 2,459 lines are reached by the editor alone and by neither other page, which is the next cut. Doing it needs a shared base every page keeps loading, which is a design decision this PR did not take. |
+| `packages/markdown-app/src/hub.css` | 5364 | Exception | The board's whole stylesheet, lifted out of `styles.css` in B2 in source order so no rule changed the cascade it lands in. It is one page, and the 28 `##### HUB · …` sub-banners are the split: a rule goes under the banner naming the surface it paints (`grep -n '##### HUB' packages/markdown-app/src/hub.css`). Cutting it into files per surface would trade a labelled region for an import graph between stylesheets, and the board loads all of it on every visit either way. |
 | `packages/markdown-app/src/hub/hub-board-model.ts` | 1397 | Exception | One model, the board itself: what a row is (`HubTask`, `ownerKind`, `statusLabel`), which section it lands in (`taskVisible`, `boardSections`, `goalSection`), how much work a goal has left (`boardEffort`, `goalEffortLabel`) and where a drag drops it (`dropTarget`, `stepTarget`). Split out of `hub-model.ts` (B1). Cutting it further would separate a row's shape from the ordering rule that reads it, which is the pair `byBoardOrder` exists to keep in one place. |
 | `packages/markdown-app/src/hub/hub-review-model.ts` | 1262 | Exception | One queue end to end: what a review item is, the ranking that puts everything waiting on a person into one list (`reviewQueue`, `decisionQueue`, `humanBlockerRows`), the walkthrough that walks it (`advanceWalk`, `walkHandoff`), and the wording each row and card wears (`reviewHeadline`, `askedMeta`). Split out of `hub-model.ts` (B1). The ranking and the wording are asserted against each other — a row's title is derived from the same ask the rank reads — so a further cut would need both halves imported back. |
 | `packages/markdown-app/src/hub/hub-presence-model.ts` | 1019 | Exception | One strip of chrome fed by one clock: who is here (`presenceChips`, `leadSeatLabel`), what is running (`pluginDriftNotice`, `clientDriftNotice`, `uptimeSummary`), what has happened (`describeEvent`, `activityRows`) and where the hub is standing (`navFromPath`, `homeSinceLabel`). The remainder of `hub-model.ts` after B1's other two cuts. `timeAgo` dates a presence chip, a release and a trail row alike, so a further cut would put that one clock behind an import in three places. |
@@ -250,7 +251,7 @@ months, so splitting it buys almost nothing.
 | # | File | Lines | Commits (90d) | Size |
 |---|---|---|---|---|
 | 1 | `packages/server/src/server.ts` | 7131 | 233 | L |
-| 2 | `packages/markdown-app/src/styles.css` | 12042 | 158 | M |
+| 2 | `styles.css` + `hub.css` + `signin.css` (split in B2) | 12042 | 158 | M |
 | 3 | `packages/mcp/src/mcp.ts` | 5563 | 156 | M |
 | 4 | `packages/markdown-app/src/hub/hub-app.ts` | 3594 | 102 | L |
 | 5 | `packages/markdown-app/src/hub/hub-render.ts` | 2707 | 95 | M |

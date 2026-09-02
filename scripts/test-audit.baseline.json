@@ -1,6 +1,7 @@
 {
   "_comment": "Ratchet for bun run test:audit. Counts may only go down. Lower a number in the same commit that lowers the count.",
+  "_sourceShape": "67 -> 80 when the board's rules moved from styles.css into hub.css (PR group B2). Twelve suites pin rules on both sides of that seam and now read both files, which is two one-line reads where there was one; signin-css.test.ts reads three, because it pins the sign-in card, the hub identity chip and the chrome under both. No suite began asserting on source that was not already; folding the pair into a loop would have dropped these twelve sites off the list without changing a single test, so the number goes up instead.",
   "fixedSleeps": 0,
-  "sourceShape": 67,
+  "sourceShape": 80,
   "wallClock": 10
 }
