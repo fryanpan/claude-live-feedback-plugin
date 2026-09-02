@@ -3,15 +3,12 @@ import {
   type HubTask,
   archivedTasks,
   boardSections,
-  describeEvent,
   isTaskArchived,
   taskVisible,
-} from '../src/hub/hub-model.ts';
-import {
-  type ArchivedViewHandlers,
-  type DetailHandlers,
-  renderArchivedList,
-} from '../src/hub/hub-render.ts';
+} from '../src/hub/hub-board-model.ts';
+import { type DetailHandlers } from '../src/hub/hub-detail-render.ts';
+import { describeEvent } from '../src/hub/hub-presence-model.ts';
+import { type ArchivedViewHandlers, renderArchivedList } from '../src/hub/hub-render.ts';
 import { disposeBoards, renderBoard } from './support/board.ts';
 import { renderTaskDetail } from './support/task-detail.ts';
 

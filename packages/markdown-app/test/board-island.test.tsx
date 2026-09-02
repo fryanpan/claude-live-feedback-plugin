@@ -37,7 +37,7 @@ import {
   type HubGoal,
   type HubTask,
   boardSections,
-} from '../src/hub/hub-model.ts';
+} from '../src/hub/hub-board-model.ts';
 import { type ShimHandlers, disposeBoards, renderBoard } from './support/board.ts';
 import { renderTaskDetail } from './support/task-detail.ts';
 

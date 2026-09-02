@@ -8,29 +8,14 @@
  * mutation goes through the REST gate — never by writing into the maps,
  * which the server would revert.
  */
-import {
-  type CaptureMode,
-  type HuddleKind,
-  type ReviewPayload,
-  type Thread,
-  type User,
-  connect,
-  escapeHtml,
-} from '@feedback/core';
-import {
-  renderConnectionBanner,
-  renderLiveStaleNotice,
-  watchConnection,
-  watchLiveSync,
-} from '../connection-state.ts';
-import { HUDDLE_MODE_PARAM } from '../huddle-entry.ts';
+import { type ReviewPayload, type User, connect, escapeHtml } from '@feedback/core';
+import { renderConnectionBanner, watchConnection } from '../connection-state.ts';
 import { MIC_ICON, SVG, SVG_ENDS } from '../icons.ts';
 import { ensureUserIdentity } from '../identity-prompt.ts';
 import { wireKeyboardInset } from '../keyboard-inset.ts';
 // Defines <meeting-banner>, rendered by buildShell at the top of the board
 // column. Import for the side effect; the element manages itself.
 import '../meeting-banner.ts';
-import { staleTaskLinkStatuses } from '../link-titles.ts';
 import { startReadingTracker } from '../reading-tracker.ts';
 import { pageSentry } from '../sentry-page.ts';
 import {
@@ -41,7 +26,7 @@ import {
 } from '../signin/write-gate.ts';
 import { installStaleClientNotice } from '../stale-client.ts';
 import { type VoiceAck, createVoiceCapture } from '../voice-capture.ts';
-import { activityCommentRequest, asksOf } from './activity-model.ts';
+import { asksOf } from './activity-model.ts';
 import { type BoardHandlers, boardData, mountBoardIsland } from './board-island.tsx';
 import {
   type BoardLocation,
@@ -54,82 +39,52 @@ import {
 } from './board-url.ts';
 import { goalDetailData, mountGoalDetailIsland } from './goal-detail-island.tsx';
 import { homeActivityData, mountHomeActivityIsland } from './home-activity-island.tsx';
-import { startHomeClock } from './home-clock.ts';
 import { homeReviewData, mountHomeReviewIsland } from './home-review-island.tsx';
+import { type HubState, createHubActions, fetchJson, send, showToast } from './hub-actions.ts';
 import {
-  ACTIVITY_REFRESH_EVENTS,
-  type ActivityEvent,
-  type ActivityFilter,
   type BoardSection,
-  type BoardTab,
-  CLOSED_WALK,
-  type ClientRelease,
   DEFAULT_DONE_WINDOW,
   DONE_WINDOWS,
   type DoneWindow,
-  type DriftNotice,
-  type HomePayload,
   type HubGoal,
-  type HubNav,
-  type HubPane,
-  type HubReviewItem,
   type HubTask,
   type HubWorkspaceInfo,
-  type LeadSeatView,
-  type PluginRelease,
-  type PresenceAgent,
-  type PresencePerson,
   type ReorderTarget,
-  type ReviewItem,
-  type ReviewThreadItem,
-  type UptimeReport,
-  type WalkAim,
-  type WalkSources,
-  advanceWalk,
-  applyRefresh,
   archivedGoals,
   archivedTasks,
   bandOfGoal,
   boardCalibration,
   boardSections,
   boardSectionsWithEffort,
-  cascadePhrase,
-  clientDriftNotice,
   goalBandIds,
   goalLabel,
   goalSection,
-  hubTabTitle,
-  humanBlockerRows,
-  initialsOf,
   isTaskArchived,
+} from './hub-board-model.ts';
+import { type TaskDiscussion, type TaskThread } from './hub-detail-render.ts';
+import { wireHubLive } from './hub-live-wiring.ts';
+import {
+  type ActivityEvent,
+  type ClientRelease,
+  type DriftNotice,
+  type HomePayload,
+  type HubNav,
+  type LeadSeatView,
+  type PluginRelease,
+  type PresenceAgent,
+  type PresencePerson,
+  type UptimeReport,
+  clientDriftNotice,
+  hubTabTitle,
+  initialsOf,
   paneForNav,
-  panelAsks,
   pluginDriftNotice,
   presenceChips,
-  presenceIdentity,
-  refreshReviewItems,
-  reviewItemAskRequest,
-  reviewItemOwner,
-  reviewItemQuestionRequest,
-  reviewQueue,
-  reviewReplyRequest,
-  reviewRow,
   shouldPollHome,
   tabForNav,
   voiceHubContext,
-  walkAimAfterOpen,
-  walkHandoff,
-  walkHandoffReady,
-  walkNextUrl,
-  walkPosition,
-} from './hub-model.ts';
+} from './hub-presence-model.ts';
 import {
-  type PanelReviewItem,
-  type TaskDiscussion,
-  type TaskThread,
-  discussionIsBusy,
-  panelAnswerRequest,
-  panelQuestionRequest,
   renderActivity,
   renderArchivedList,
   renderHomeBrief,
@@ -138,6 +93,26 @@ import {
   renderReviewBanner,
   renderWorkspaceIdentity,
 } from './hub-render.ts';
+import { createHubReviewController } from './hub-review-controller.ts';
+import {
+  CLOSED_WALK,
+  type ReviewItem,
+  type ReviewThreadItem,
+  type WalkAim,
+  type WalkSources,
+  advanceWalk,
+  applyRefresh,
+  humanBlockerRows,
+  panelAsks,
+  refreshReviewItems,
+  reviewQueue,
+  reviewRow,
+  walkAimAfterOpen,
+  walkHandoff,
+  walkHandoffReady,
+  walkNextUrl,
+  walkPosition,
+} from './hub-review-model.ts';
 import { hubShortcutKeydown } from './hub-shortcuts.ts';
 import { mountIslandProbe } from './island-probe.tsx';
 import { wireMeMenu } from './me-menu.ts';
@@ -153,111 +128,7 @@ import { createRepaintGuard } from './repaint-guard.ts';
 import { mountReviewCriteria } from './review-criteria.ts';
 import { GOAL_PLACEHOLDER_TEXT, createTaskBodyEditorHost } from './task-body-editor.ts';
 import { type DetailTab, mountTaskDetailIsland, taskDetailData } from './task-detail-island.tsx';
-import {
-  type WalkProgress,
-  mountWalkthroughIsland,
-  walkthroughData,
-} from './walkthrough-island.tsx';
-
-interface HubState {
-  info: HubWorkspaceInfo | null;
-  tasks: Map<string, HubTask>;
-  /** Which of the four nav destinations is showing. THE source: `pane`,
-   *  `tab` and `view` below are derived from it in `setNav` and never set
-   *  anywhere else, so a deep link and a click cannot disagree. */
-  nav: HubNav;
-  /** Which page of the shell is showing — Home or the board. Derived. */
-  pane: HubPane;
-  /** The settings popover is open. App state rather than DOM state, so a
-   *  repaint cannot close it under someone mid-change. */
-  settingsOpen: boolean;
-  /** The Home payload for THIS reader, or null before the first load. */
-  home: HomePayload | null;
-  /** The recipe editor is open. App state, not DOM state, so a repaint
-   *  mid-edit cannot silently close the panel. */
-  homeEditingRecipe: boolean;
-  /** What this sitting has cleared, by key — answered items stay in the Home
-   *  stack marked done instead of vanishing (approved design). Client-side
-   *  and per-sitting on purpose: the server cannot un-answer a decision, so
-   *  "done" here is a display fact about this visit, not a stored one. */
-  homeSettled: Map<string, ReviewItem>;
-  /** When the current generating-poll run started; 0 when not polling. */
-  homePollStarted: number;
-  tab: BoardTab;
-  doneWindow: DoneWindow;
-  view: 'board' | 'activity';
-  /**
-   * The board column is showing the restore list instead of the lanes.
-   *
-   * A flag on the board rather than a fifth `nav` destination, and it is the
-   * shape the design asked for: the phone rail has four seats, and the way in
-   * is one line above the first goal. It rides `?view=archived` so a reload
-   * or a shared link lands back on it, and any nav tap clears it — leaving the
-   * board is leaving this.
-   */
-  showArchived: boolean;
-  activityFilter: ActivityFilter;
-  events: ActivityEvent[];
-  /** Deploy readiness (§3.12 commit 11) — null until the log has lines. */
-  uptime: UptimeReport | null;
-  agents: PresenceAgent[];
-  /** Whether the lead seat has anybody in it — read off the attachments poll
-   *  rather than the projected workspace info, because it changes with time
-   *  alone and a value stamped into the doc would still say "fine" hours
-   *  after the lead stopped answering. Null until the first read lands, and
-   *  null on any server older than the field: no claim, not a clear seat. */
-  seat: LeadSeatView | null;
-  /** Plugin versions: what the deploy source would install, and which
-   *  attached sessions are running something older. Null until the first
-   *  attachments read lands. */
-  pluginRelease: PluginRelease | null;
-  /** What the browser itself is running, and whether this deployment could
-   *  not replace it. Null on any server that publishes no client release
-   *  (dev, staging) — those must not report the prod machine's deploy. */
-  clientRelease: ClientRelease | null;
-  detailTaskId: string | null;
-  /** Which tab the task panel opens on. `comments` every way in but one: the
-   *  Home activity pane's title tap opens on Activity (Bryan, 2026-08-29).
-   *  Reset to `comments` when the panel closes, so nothing lingers into the
-   *  paths (deep link, `o`) that set `detailTaskId` without going through
-   *  `openTaskDetail`. */
-  detailTab: DetailTab;
-  /** The open GOAL, when the detail container is showing a goal band rather
-   *  than a task. The two panels share the container, so at most one of this
-   *  and `detailTaskId` is set — each opener clears the other, and
-   *  `renderDetail` enforces task-wins for the paths (deep link, voice) that
-   *  set a task id without knowing a goal was open. */
-  detailGoalId: string | null;
-  /** The thread the review queue aimed at, when the panel was opened from it.
-   *  Null every other way in. */
-  detailThreadId: string | null;
-  /**
-   * The open task's discussion, and the id it was fetched FOR. Keyed rather
-   * than just held, because a load that lands after the reader has moved to
-   * another task would otherwise show them someone else's argument.
-   */
-  discussion: TaskDiscussion;
-  discussionTaskId: string | null;
-  /**
-   * The thread-shaped half of "what needs you" — task discussions and doc
-   * comments whose newest word is an agent's. Server-computed, because
-   * whether a comment is an agent's is `classifyActor`'s call and there must
-   * not be a second one. Decisions are derived from `tasks` here.
-   */
-  reviewItems: ReviewThreadItem[];
-  /** Position in the review walkthrough; -1 when it is closed. A CACHE of
-   *  where `walkKey` resolved on the last render — see `walkPosition`. */
-  walkIndex: number;
-  /** What the walkthrough is aimed AT. The queue re-derives on every render
-   *  and shrinks under the reader, so the index alone steps over an item
-   *  whenever anything before it drops out. Null when nothing is aimed
-   *  (closed, or run off the end into the done state). */
-  walkKey: string | null;
-  /** What this sitting has cleared, so the surface can say that answering
-   *  moved you rather than leaving you to infer it from a shrinking total. */
-  walkProgress: WalkProgress;
-  followedKey: string | null;
-}
+import { mountWalkthroughIsland, walkthroughData } from './walkthrough-island.tsx';
 
 function workspaceIdFromPath(): string {
   const m = location.pathname.match(/\/workspaces\/([^/?#]+)/);
@@ -291,73 +162,6 @@ function wsUrl(docId: string, type: string): string {
   const proto = location.protocol === 'https:' ? 'wss' : 'ws';
   return `${proto}://${location.host}/y/${encodeURIComponent(docId)}?type=${encodeURIComponent(type)}`;
 }
-
-async function fetchJson<T>(path: string): Promise<T | null> {
-  try {
-    const res = await fetch(path);
-    if (!res.ok) return null;
-    return (await res.json()) as T;
-  } catch {
-    return null;
-  }
-}
-
-async function send(
-  path: string,
-  method: string,
-  body: unknown,
-): Promise<{ ok: boolean; status: number; data: Record<string, unknown> | null }> {
-  try {
-    const res = await fetch(path, {
-      method,
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify(body),
-    });
-    const data = (await res.json().catch(() => null)) as Record<string, unknown> | null;
-    return { ok: res.ok, status: res.status, data };
-  } catch {
-    return { ok: false, status: 0, data: null };
-  }
-}
-
-let toastTimer: ReturnType<typeof setTimeout> | null = null;
-/**
- * The board's one-line report, optionally carrying a way to take it back.
- *
- * `action` is what makes an undoable act safe to perform without a dialog:
- * the row leaves, and the way back is in the same place the news arrived,
- * for as long as the toast stands. Ten seconds for an archive rather than
- * the default three and a half — a confirm dialog is what this replaces, and
- * three seconds is not long enough to read a sentence and decide against it.
- */
-function showToast(msg: string, action?: { label: string; run: () => void; ms?: number }): void {
-  const el = document.getElementById('hub-toast');
-  if (!el) return;
-  el.replaceChildren(document.createTextNode(msg));
-  if (action) {
-    const btn = document.createElement('button');
-    btn.type = 'button';
-    btn.className = 'hub-toast-action';
-    btn.textContent = action.label;
-    btn.addEventListener('click', () => {
-      // Dismiss FIRST. The action re-renders the board, and a toast still
-      // offering "Undo" over a row that is already back reads as an undo
-      // that did not take.
-      if (toastTimer) clearTimeout(toastTimer);
-      el.classList.add('hidden');
-      action.run();
-    });
-    el.append(btn);
-  }
-  el.classList.remove('hidden');
-  if (toastTimer) clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => el.classList.add('hidden'), action?.ms ?? 3500);
-}
-
-/** How long the Undo stands after an archive. Ten seconds, and it is the
- *  reason no confirm dialog is asked for. */
-const ARCHIVE_UNDO_MS = 10_000;
-
 /** Icons. The four nav glyphs are the approved mockup's (home-pane-mockup-v1);
  *  share and settings are new, for the top-right cluster. The shared
  *  attributes and the mic come from `../icons.ts`, because the mic is mounted
@@ -1140,33 +944,6 @@ async function main(): Promise<void> {
   }
 
   // ── The Home pane ───────────────────────────────────────────────────────
-
-  function startWalkthrough(): void {
-    // A sitting starts empty: the tally counts what THIS pass cleared, so
-    // carrying the last one's over would open on "4 cleared" before the
-    // reader has answered anything.
-    state.walkProgress = { cleared: 0, last: null };
-    state.walkIndex = 0;
-    state.walkKey = currentQueue().items[0]?.key ?? null;
-    renderWalkthrough();
-  }
-
-  /**
-   * Tapping a row on Home: open the queue's card ON that row, in place.
-   *
-   * The same surface `Review All` opens, aimed at the item the reader pointed
-   * at rather than at the top — one card anatomy, one answer path, and the
-   * reader stays on Home. `walkKey` is what actually holds the aim; the index
-   * is the fallback for the repaint after the item leaves the queue.
-   */
-  function openInQueue(item: ReviewItem, index: number): void {
-    // A new sitting, exactly as `Review All` starts one: the tally counts what
-    // this pass cleared, and a leftover count would open on "4 cleared".
-    state.walkProgress = { cleared: 0, last: null };
-    state.walkIndex = index;
-    state.walkKey = item.key;
-    renderWalkthrough();
-  }
 
   function renderHomeRegion(): void {
     // Nav active state, all four destinations.
@@ -2103,751 +1880,69 @@ async function main(): Promise<void> {
   }
 
   // ── Mutations (all through the REST gate) ───────────────────────────────
+  //
+  // The board's REST verbs live in `hub-actions.ts` now, bound once to what
+  // they used to capture. Destructured here, at the point in `main()` they
+  // were declared, so evaluation order is unchanged and every call site below
+  // reads as it did.
+  const {
+    transitionTask,
+    assignTask,
+    setTaskGoal,
+    setTaskDue,
+    archiveTask,
+    restoreTask,
+    goalCascadeCount,
+    archiveGoal,
+    restoreGoal,
+    placeTask,
+    renameTask,
+    retitleGoal,
+    setGoalDue,
+    transitionGoal,
+    addGoal,
+    saveLead,
+    newTask,
+    startHuddle,
+  } = createHubActions({
+    workspaceId,
+    author,
+    state,
+    renderAll,
+    renderDetail,
+    renderLead,
+    focusTitle: (taskId) => {
+      focusTitleTaskId = taskId;
+    },
+  });
 
-  /**
-   * Put the controls back to what the SERVER says, after a write it refused.
-   *
-   * A select and a rename are the two places on this board where the reader's
-   * gesture changes the DOM before the server has agreed. When the write is
-   * refused they were left showing the rejected value — a select reading
-   * "Done" over a task the server still has in triage, a row wearing a title
-   * nobody saved — and only a reload put it right. A board that displays a
-   * status nobody set is worse than the refusal it just reported.
-   *
-   * "+ New goal" never had the problem, because it changes nothing locally
-   * and waits for the projection to paint the row. This is that same rule
-   * applied to the controls that cannot wait: repaint from `state`, which is
-   * the projection and nothing else. `useSelectValue` and the title's
-   * every-render text write (board-island.tsx, task-detail-island.tsx) then
-   * put each control back on their next pass.
-   */
-  function revertToServerTruth(): void {
-    renderAll();
-  }
-
-  async function transitionTask(task: HubTask, to: HubTask['status']): Promise<void> {
-    const res = await send(`/api/tasks/${encodeURIComponent(task.id)}/transition`, 'POST', {
-      to,
-      author,
-    });
-    if (res.status === 409) {
-      const blockers = (res.data?.blockers as Array<{ taskId: string; title?: string }>) ?? [];
-      const names = blockers.map((b) => b.title ?? b.taskId).join(', ');
-      showToast(`Blocked by open dependency: ${names || 'an enforced dependency'}`);
-      revertToServerTruth();
-    } else if (!res.ok) {
-      showToast('Status change failed');
-      revertToServerTruth();
-    }
-  }
-
-  async function assignTask(task: HubTask, assignee: string): Promise<void> {
-    const res = await send(`/api/tasks/${encodeURIComponent(task.id)}/assignee`, 'POST', {
-      assignee,
-      author,
-    });
-    if (!res.ok) {
-      showToast('Assignment failed');
-      revertToServerTruth();
-    }
-  }
-
-  /**
-   * The panel's Goal field. Sends the same `set_task_goal` write a drag does
-   * and an agent does — no `after`, because picking a band is not a placement
-   * within it, and inventing one would move the task to the end of the new
-   * band for no reason the reader gave.
-   */
-  async function setTaskGoal(task: HubTask, goal: string): Promise<void> {
-    const res = await send(`/api/tasks/${encodeURIComponent(task.id)}/goal`, 'POST', {
-      goal,
-      author,
-    });
-    if (!res.ok) showToast('Moving to that goal failed');
-  }
-
-  /** The panel's Due field. `null` clears — the route reads it as the explicit
-   *  clear it is, rather than as a missing value. */
-  async function setTaskDue(task: HubTask, dueAt: number | null): Promise<void> {
-    const res = await send(`/api/tasks/${encodeURIComponent(task.id)}/due`, 'POST', {
-      dueAt,
-      author,
-    });
-    if (!res.ok)
-      showToast(dueAt === null ? 'Clearing the due date failed' : 'Setting the due date failed');
-  }
-
-  /**
-   * Take a task off the board, and offer the way back in the same breath.
-   *
-   * No confirm dialog, deliberately. Archiving is reversible by construction
-   * — three fields on the row — and this is a SECONDARY action that must not
-   * cost a modal (Bryan, on the design thread: *"It's a secondary action.
-   * Should not take up space from primary flows."*). The ten-second Undo is
-   * what pays for the missing dialog, and it is the only thing that does, so
-   * it goes up on the success path only: a toast offering to undo a write
-   * that never landed is worse than no toast.
-   *
-   * The open panel closes, because a panel left standing on a row that just
-   * left the board is a surface with no way to explain itself.
-   */
-  async function archiveTask(task: HubTask): Promise<void> {
-    const res = await send(`/api/tasks/${encodeURIComponent(task.id)}/archive`, 'POST', { author });
-    if (!res.ok) {
-      showToast('Archiving failed — the task is still on the board');
-      return;
-    }
-    if (state.detailTaskId === task.id) {
-      state.detailTaskId = null;
-      renderDetail();
-    }
-    showToast(`Archived “${task.title}”`, {
-      label: 'Undo',
-      run: () => void restoreTask(task),
-      ms: ARCHIVE_UNDO_MS,
-    });
-  }
-
-  /** Put an archived task back. The Undo button, the panel's Restore, and the
-   *  restore list's rows are all this one call. */
-  async function restoreTask(task: HubTask): Promise<void> {
-    const res = await send(`/api/tasks/${encodeURIComponent(task.id)}/restore`, 'POST', { author });
-    if (!res.ok) {
-      showToast('Restoring failed — the task is still archived');
-      return;
-    }
-    showToast(`Restored “${task.title}”`);
-  }
-
-  /** How many rows the panel is about to say goodbye to. Straight from the
-   *  server's own walk, so the sentence in the confirmation and the write that
-   *  follows it cannot disagree. `null` = the question could not be asked, and
-   *  the panel then refuses to offer Archive at all. */
-  async function goalCascadeCount(goalId: string): Promise<{ tasks: number } | null> {
-    const res = await fetchJson<{ taskIds?: string[] }>(
-      `/api/goals/${encodeURIComponent(goalId)}/cascade`,
-    );
-    if (!res) return null;
-    return { tasks: res.taskIds?.length ?? 0 };
-  }
-
-  /** How many rows a goal archive or restore actually moved, off the response.
-   *  Read defensively: an older server answers without the lists, and the
-   *  toast then names the band alone rather than inventing a zero. */
-  function movedCount(data: Record<string, unknown> | null, key = 'taskIds'): number {
-    const ids = data?.[key];
-    return Array.isArray(ids) ? ids.length : 0;
-  }
-
-  /**
-   * Take a BAND off the board, with everything under it.
-   *
-   * The panel has already asked and named the number — this is the commit, so
-   * there is no second confirmation here. What there IS, exactly as on a task,
-   * is Undo in the same breath: the archive is reversible by construction and
-   * the toast is what makes that reachable without going and finding the
-   * restore list.
-   *
-   * The toast counts what the SERVER moved, not what the confirmation
-   * predicted. The two are the same in every ordinary case; when a peer files
-   * a fifteenth ticket between the question and the answer, the honest number
-   * is the one that happened.
-   */
-  async function archiveGoal(section: BoardSection): Promise<void> {
-    const res = await send(`/api/goals/${encodeURIComponent(section.id)}/archive`, 'POST', {
-      author,
-    });
-    if (!res.ok) {
-      showToast('Archiving failed — the goal is still on the board');
-      return;
-    }
-    if (state.detailGoalId === section.id) {
-      state.detailGoalId = null;
-      renderDetail();
-    }
-    // The same phrase the confirmation used, from the same builder: a reader
-    // told "and its 5 tasks" and then "and 3 tasks" would have to conclude
-    // two of them stayed.
-    const rode = cascadePhrase(movedCount(res.data, 'taskIds'));
-    showToast(`Archived “${section.title}”${rode ? ` and its ${rode}` : ''}`, {
-      label: 'Undo',
-      run: () => void restoreGoal(section),
-      ms: ARCHIVE_UNDO_MS,
-    });
-  }
-
-  /** Put an archived band back, with the rows its archive took. The Undo
-   *  button, the panel's Restore and the restore list's rows are all this. */
-  async function restoreGoal(section: BoardSection): Promise<void> {
-    const res = await send(`/api/goals/${encodeURIComponent(section.id)}/restore`, 'POST', {
-      author,
-    });
-    if (!res.ok) {
-      showToast('Restoring failed — the goal is still archived');
-      return;
-    }
-    const n = movedCount(res.data);
-    showToast(
-      `Restored “${section.title}”${n > 0 ? ` and ${n === 1 ? '1 task' : `${n} tasks`}` : ''}`,
-    );
-  }
-
-  /**
-   * A drag or an arrow-key move, sent as the placement it already is — the
-   * same `set_task_goal` write an agent performs, so there is deliberately no
-   * reordering API of its own, and a cross-goal drop is this call with a
-   * different goal.
-   *
-   * It sends `after` and NOT `position`. The two are alternative spellings of
-   * one placement and the server prefers `after`, so sending both would just
-   * be a number nobody reads — and a number the drop cannot compute correctly
-   * anyway, which is the bug this replaced (see the reordering section of
-   * hub-model.ts).
-   */
-  async function placeTask(task: HubTask, target: ReorderTarget): Promise<void> {
-    const res = await send(`/api/tasks/${encodeURIComponent(task.id)}/goal`, 'POST', {
-      goal: target.goal,
-      after: target.after,
-      author,
-    });
-    if (!res.ok) {
-      showToast('Move failed');
-      revertToServerTruth();
-    }
-  }
-
-  async function renameTask(task: HubTask, title: string): Promise<void> {
-    const res = await send(`/api/tasks/${encodeURIComponent(task.id)}/title`, 'POST', {
-      title,
-      author,
-    });
-    if (!res.ok) {
-      showToast('Rename failed');
-      revertToServerTruth();
-    }
-  }
-
-  /**
-   * Retitle one band. This used to clone the client's copy of the goal list,
-   * edit one title in it, and PUT the whole thing back — which is a full
-   * REPLACE keyed by id built from a read that may be minutes old. A band
-   * another writer added in between was simply absent from the clone, so the
-   * replace removed it: its open tasks to Backlog, its done tasks orphaned.
-   * The rename route touches one row by id and cannot move a task, so the
-   * stale copy stops being able to do damage at all.
-   */
-  async function retitleGoal(sectionId: string, title: string): Promise<void> {
-    const res = await send(
-      `/api/workspaces/${encodeURIComponent(workspaceId)}/goals/rename`,
-      'POST',
-      { goal: sectionId, title, author },
-    );
-    if (!res.ok) {
-      showToast('Goal rename failed');
-      revertToServerTruth();
-    }
-  }
-
-  /**
-   * The goal panel's Due field. There is no dedicated goal-due route — the
-   * rename route already carries `dueAt` (it exists for the reason
-   * `retitleGoal`'s own comment gives: one row, by id, cannot strand tasks),
-   * so this resends the goal's own title alongside the new date. `null`
-   * clears, the same contract `setTaskDue` uses.
-   */
-  async function setGoalDue(sectionId: string, title: string, dueAt: number | null): Promise<void> {
-    const res = await send(
-      `/api/workspaces/${encodeURIComponent(workspaceId)}/goals/rename`,
-      'POST',
-      { goal: sectionId, title, dueAt, author },
-    );
-    if (!res.ok) {
-      showToast(dueAt === null ? 'Clearing the due date failed' : 'Setting the due date failed');
-      revertToServerTruth();
-    }
-  }
-
-  /**
-   * Declare a goal's status — the same one-gate transition route a task
-   * uses (`tasks.ts` resolves goal rows through it too; that is the whole
-   * point of a goal being a row). Open children are ADVISORY on the server
-   * (enforce:false), so a done declaration over open tasks succeeds — the
-   * panel says so before the reader picks it.
-   */
-  async function transitionGoal(goalId: string, to: HubTask['status']): Promise<void> {
-    const res = await send(`/api/tasks/${encodeURIComponent(goalId)}/transition`, 'POST', {
-      to,
-      author,
-    });
-    if (!res.ok) {
-      showToast('Goal status change failed');
-      revertToServerTruth();
-    }
-  }
-
-  /** Add one band, for the same reason the rename above is its own route: a
-   *  client-built full list can only add by re-asserting everything it last
-   *  read, and what it did not read is what gets removed. */
-  async function addGoal(title: string, after?: string): Promise<void> {
-    const res = await send(`/api/workspaces/${encodeURIComponent(workspaceId)}/goals/add`, 'POST', {
-      title,
-      ...(after !== undefined ? { after } : {}),
-      author,
-    });
-    if (!res.ok) showToast('Could not add the goal');
-  }
-
-  async function saveLead(leadAgentId: string): Promise<void> {
-    const res = await send(`/api/workspaces/${encodeURIComponent(workspaceId)}/lead`, 'PUT', {
-      leadAgentId,
-      author,
-    });
-    if (!res.ok) {
-      showToast('Lead agent update failed');
-      renderLead();
-      return;
-    }
-    showToast(`${leadAgentId} now leads this workspace`);
-    // The projection carries the new lead back through wsMap; render now so
-    // the strip does not sit on the old value until that round-trips.
-    if (state.info) state.info = { ...state.info, leadAgentId };
-    renderLead();
-  }
-
-  /** Resolves to whether the answer LANDED — the walkthrough advances on that
-   *  and on nothing else, and the composer keeps the text until it hears yes. */
-  async function answerDecision(
-    task: HubTask,
-    text: string,
-    optionId?: string,
-  ): Promise<'answered' | 'asked' | false> {
-    // Posted with the PERSON's own identity: answer.by shows who decided.
-    // `text` is always the verbatim answer — tapping an option sends the
-    // option's label as the answer and its id alongside, so nothing about the
-    // recorded answer depends on the option list still existing later.
-    const res = await send(`/api/tasks/${encodeURIComponent(task.id)}/answer`, 'POST', {
-      text,
-      ...(optionId ? { optionId } : {}),
-      author,
-    });
-    if (!res.ok) {
-      showToast('Recording the answer failed — your words are still in the box');
-      return false;
-    }
-    // The server read the words as a QUESTION and recorded them as a request
-    // for more context — the decision stays open, and nothing was answered,
-    // so the caller must not settle or undo-toast it.
-    if (res.data?.asked === true) {
-      showToast('Sent as a question — the decision stays open until it is answered');
-      return 'asked';
-    }
-    return 'answered';
-  }
-
-  /**
-   * The task panel's three answering doors, all of which owe the reader the
-   * same thing: the write, then a REPAINT of the panel they are looking at.
-   *
-   * The walkthrough got that for free — it re-derives its queue on every
-   * render — and the panel did not, because its queue is handed down from
-   * `state.reviewItems` and nothing re-rendered the panel when that list
-   * moved. Measured 2026-08-18: a free-text answer on a thread item persisted
-   * server-side and the card sat unchanged 2.5 seconds later, so the natural
-   * retry posted it twice.
-   */
-  async function answerTaskDecision(
-    task: HubTask,
-    text: string,
-    optionId?: string,
-  ): Promise<boolean> {
-    const wrote = await answerDecision(task, text, optionId);
-    if (wrote === false) return false;
-    // A question already toasted for itself, and there is no answer to undo.
-    if (wrote === 'answered') showToast('Answer recorded — Undo is on the ticket');
-    // The row itself arrives over the ydoc; this is what moves the panel's
-    // own queue on, since the review items are a REST-fed projection.
-    await loadReviewItems();
-    return true;
-  }
-
-  /**
-   * Take back an answer recorded on a THREAD-borne item — the in-place
-   * record's persistent Undo. The server moves the stamps into
-   * `answerHistory` (soft, like every delete here) and the reply stays in the
-   * thread; every queue re-offers the item on its next read, so the repaint
-   * below is the whole client-side story. A 400 usually means somebody else
-   * undid it first — the refresh shows the reopened item either way.
-   */
-  async function undoThreadAnswer(task: HubTask, item: PanelReviewItem): Promise<boolean> {
-    if (!item.threadId || item.commentId === undefined) return false;
-    const doc = encodeURIComponent(item.docId ?? task.bodyDocId);
-    const thread = encodeURIComponent(item.threadId);
-    const res = await send(`/api/docs/${doc}/threads/${thread}/answer/undo`, 'POST', {
-      author,
-      commentId: item.commentId,
-    });
-    if (!res.ok) {
-      showToast('Taking the answer back failed');
-      // Repaint anyway: the likeliest refusal is that a peer already undid
-      // it, and a fresh read shows the reopened item rather than a stale
-      // record with a dead button.
-      await loadDiscussion(task, true);
-      await loadReviewItems();
-      return false;
-    }
-    showToast('Answer taken back — the item is open again');
-    // Both, and in this order: the discussion so the record leaves the card,
-    // the review items so the reopened item comes back to every queue.
-    await loadDiscussion(task, true);
-    await loadReviewItems();
-    return true;
-  }
-
-  async function undoTaskAnswer(task: HubTask): Promise<boolean> {
-    const res = await send(`/api/tasks/${encodeURIComponent(task.id)}/answer/undo`, 'POST', {
-      author,
-    });
-    if (!res.ok) {
-      showToast('Taking the answer back failed');
-      return false;
-    }
-    showToast('Answer taken back — the decision is open again');
-    await loadReviewItems();
-    return true;
-  }
-
-  /**
-   * Overrule the quality gate on one held item — "Ask me anyway".
-   *
-   * The item goes on the queue on the reader's authority, and the queue is
-   * re-read so it appears in the same repaint the note leaves in. No confirm:
-   * the act is undone by the filer revising, and a dialog in front of a
-   * one-tap override is what makes readers leave the hold alone.
-   */
-  async function releaseHeldReviewItem(task: HubTask, item: HubReviewItem): Promise<boolean> {
-    const res = await send(
-      `/api/tasks/${encodeURIComponent(task.id)}/review-items/${encodeURIComponent(item.id)}/release`,
-      'POST',
-      { author },
-    );
-    if (!res.ok) {
-      showToast('Could not put that item on your queue');
-      return false;
-    }
-    showToast('On your queue — the gate was overruled');
-    await loadReviewItems();
-    return true;
-  }
-
-  /**
-   * Answer an item the panel's queue got from a THREAD or from the TICKET.
-   *
-   * Same routes the walkthrough uses, for the same reason: a declared thread
-   * item records the answer against its declaring comment, an inferred one is
-   * answered by replying, and in both cases the REPLY is what takes the item
-   * out of the queue; a ticket-borne item is stamped at the task review-item
-   * route, which drops it from every queue's next read. The panel used to
-   * send this through the plain comment handler, which has nowhere to put the
-   * picked option and left the queue showing an item that had just been
-   * answered. ONE spelling of the destination — `panelAnswerRequest` — so a
-   * card with no thread cannot post at `/threads/undefined/…`.
-   */
-  async function answerPanelThreadItem(
-    task: HubTask,
-    item: PanelReviewItem,
-    text: string,
-    optionId?: string,
-  ): Promise<boolean> {
-    const reqSpec = panelAnswerRequest(task, item, text, optionId);
-    if (!reqSpec) return false;
-    const res = await send(reqSpec.path, 'POST', { ...reqSpec.body, author });
-    if (!res.ok) {
-      showToast('Posting the answer failed — your text is still in the box');
-      return false;
-    }
-    // A question converted server-side answered nothing — say what actually
-    // happened. The refreshes below repaint the row as waiting either way.
-    showToast(
-      res.data?.asked === true ? 'Sent as a question — the item stays open' : 'Answer posted',
-    );
-    // Both, and in this order: the discussion so a reply appears in the
-    // stream below (a ticket-borne answer writes no comment, but the reload
-    // is cheap and keeps one path), the review items so the card it answered
-    // leaves the queue.
-    await loadDiscussion(task, true);
-    await loadReviewItems();
-    return true;
-  }
-
-  /**
-   * Ask on a ticket-borne review item — a thread on the task's doc anchored
-   * to a PHRASE of the item (the selection pill, `reviewItemAskRequest`) or
-   * to the item as a whole (the card's "I have a question" link,
-   * `reviewItemQuestionRequest`; `phrase` is null). Same route either way:
-   * the server records the question on the item WITH the thread it made,
-   * which is what takes the item off the queue while it waits on its owner,
-   * and the owner hears about it the way it hears every task-doc thread.
-   *
-   * The card LEAVES in the same interaction. It used to be held in place with
-   * a "Waiting on <owner>" note until the reader stepped off it — the reason
-   * given was that the next card replacing the one just typed into "reads as
-   * the page losing the thing they were doing". Measured the other way round
-   * (Bryan, 2026-08-31: *"I hit submit and then nothing happens"*): a card
-   * that stays put after Send reads as the send not having happened. The
-   * toast says the question went and where it is now; the next card is the
-   * proof the queue moved.
-   *
-   * The old `POST /api/tasks/:id/more-info` box that stood here is gone from
-   * the hub (Bryan, 2026-08-29); the route stays for its other callers.
-   */
-  async function askOnReviewItem(
-    item: ReviewItem,
-    phrase: { text: string } | null,
-    question: string,
-  ): Promise<boolean> {
-    const reqSpec = phrase
-      ? reviewItemAskRequest(item, phrase.text, question)
-      : reviewItemQuestionRequest(item, question);
-    if (!reqSpec) return false;
-    // A ticket's own decision carries its task on `decision`, not `thread`.
-    const taskId = item.thread?.taskId ?? item.decision?.task.id;
-    return sendReviewItemQuestion(reqSpec, taskId, reviewItemOwner(item));
-  }
-
-  /**
-   * The POST behind both asking surfaces (the walkthrough card above, the
-   * task panel's card in `askOnPanelItem`), with the one refusal they share
-   * spelled once. Resolves to whether the question LANDED; the caller's box
-   * keeps its words on anything else.
-   */
-  async function sendReviewItemQuestion(
-    reqSpec: { path: string; body: Record<string, unknown> },
-    taskId: string | undefined,
-    askedBy: string | undefined,
-  ): Promise<boolean> {
-    const res = await send(reqSpec.path, 'POST', { ...reqSpec.body, author });
-    if (!res.ok) {
-      // A stale card: the pill hides itself once THIS session learns the item
-      // is waiting, but another session's question can put it there first.
-      // The server refuses with the open thread's id rather than filing a
-      // second question nobody would read — surface that thread instead of
-      // the generic failure, and refresh so the pill goes away here too.
-      if (res.status === 409 && res.data?.error === 'waiting') {
-        const message =
-          typeof res.data.message === 'string'
-            ? res.data.message
-            : 'Already waiting on the owner — add to the open thread instead';
-        const openThreadId = typeof res.data.threadId === 'string' ? res.data.threadId : undefined;
-        showToast(
-          message,
-          openThreadId && taskId
-            ? { label: 'Open thread', run: () => openTaskThread(taskId, openThreadId) }
-            : undefined,
-        );
-        await loadReviewItems();
-        return false;
-      }
-      showToast('Sending the question failed — your words are still in the box');
-      return false;
-    }
-    showToast(askedToast('Asked', askedBy));
-    // The item is the owner's turn now: the queue drops it on this re-read
-    // and every surface that shows the queue — Home, the walkthrough, the
-    // task panel's card — repaints without it.
-    await loadReviewItems();
-    return true;
-  }
-
-  /** "Asked — waiting on Helper. It comes back to your queue when they
-   *  revise it." One sentence for what happened, one for what happens next:
-   *  the card is gone, so the toast is the only thing that says where it
-   *  went. */
-  function askedToast(lead: string, askedBy: string | undefined): string {
-    const owner = askedBy?.trim() || 'the owner';
-    return `${lead} — waiting on ${owner}. It comes back to your queue when they revise it.`;
-  }
-
-  /**
-   * "I have a question" on the task panel's card — the same thread the
-   * walkthrough card makes (`reviewItemThreadRequest`, quoting the item's
-   * headline), so the item's state is derived the same way and it leaves the
-   * panel's queue on the same re-read. Only a ticket-borne item has the
-   * anchor; `panelQuestionRequest` answers null for the rest.
-   */
-  async function askOnPanelItem(
-    task: HubTask,
-    item: PanelReviewItem,
-    question: string,
-  ): Promise<boolean> {
-    const reqSpec = panelQuestionRequest(task, item, question);
-    if (!reqSpec) return false;
-    const ok = await sendReviewItemQuestion(reqSpec, task.id, item.askedBy);
-    // The thread it made is in this task's discussion; show it there too.
-    if (ok) await loadDiscussion(task, true);
-    return ok;
-  }
-
-  /**
-   * Comment on a phrase of a task's note (or its title) from the activity
-   * pane — a thread on the task's doc whose first comment quotes the phrase
-   * (`activityCommentRequest` says why the anchor is the task itself). The
-   * owner hears about it the way it hears every task-doc thread. Resolves to
-   * the thread the server made, which the pane's card then shows.
-   */
-  async function commentOnActivity(
-    taskId: string,
-    phrase: { text: string },
-    text: string,
-  ): Promise<Thread | null> {
-    const reqSpec = activityCommentRequest(taskId, phrase.text, text);
-    const res = await send(reqSpec.path, 'POST', { ...reqSpec.body, author });
-    const thread = res.ok ? (res.data?.thread as Thread | undefined) : undefined;
-    if (!thread) {
-      showToast('Posting the comment failed — your text is still in the box');
-      return null;
-    }
-    return thread;
-  }
-
-  /** A further reply on the thread the activity pane's card is showing —
-   *  the same POST the task panel's composer makes. Resolves to the thread
-   *  as the server now has it. */
-  async function replyOnActivity(
-    taskId: string,
-    threadId: string,
-    text: string,
-  ): Promise<Thread | null> {
-    const doc = encodeURIComponent(`task:${taskId}`);
-    const res = await send(
-      `/api/docs/${doc}/threads/${encodeURIComponent(threadId)}/comments`,
-      'POST',
-      {
-        author,
-        text,
-      },
-    );
-    const thread = res.ok ? (res.data?.thread as Thread | undefined) : undefined;
-    if (!thread) {
-      showToast('Posting the reply failed — your text is still in the box');
-      return null;
-    }
-    return thread;
-  }
-
-  /**
-   * Answer a queued comment from the queue itself. The reply is an ordinary
-   * thread comment — the same POST the doc and the task panel use — which is
-   * what takes the item OUT of the queue: the server ships a thread row only
-   * while a declared item or a direct ask is still waiting on a person, and a
-   * person's reply ends the unanswered run (`unansweredRun` in the server's
-   * review-queue.ts), so there is no separate dismissed flag to write and
-   * none to keep in sync. A declared item is retired the same way through
-   * `/answer`, which records the choice on the declaring comment.
-   */
-  async function replyToReviewItem(
-    item: ReviewItem,
-    text: string,
-    optionId?: string,
-  ): Promise<'answered' | 'asked' | false> {
-    // ONE spelling of "where does this answer go" (`reviewReplyRequest`): a
-    // declared thread item goes through the thread `/answer` route, which
-    // posts the SAME reply and additionally records which candidate it came
-    // from; an undeclared one is a plain comment; and a TICKET-borne item
-    // (`task-review`) posts to the task review-item answer route — it has no
-    // thread, and before the routing was shared this handler would have
-    // posted its answer at `/api/docs/undefined/…`.
-    const reqSpec = reviewReplyRequest(item, text, optionId);
-    if (!reqSpec) return false;
-    const res = await send(reqSpec.path, 'POST', { ...reqSpec.body, author });
-    if (!res.ok) {
-      showToast('Posting the reply failed — your text is still in the box');
-      return false;
-    }
-    // The server read the words as a QUESTION asked back at the item —
-    // nothing was answered. A ticket-borne item is now waiting on its owner
-    // and leaves the queue on the re-read, exactly as `askOnReviewItem`'s
-    // does; a thread item stays where the conversation is either way.
-    if (res.data?.asked === true) {
-      const owner = item.thread?.askedBy?.trim() || 'the owner';
-      showToast(
-        item.thread?.kind === 'task-review'
-          ? askedToast('Sent as a question', owner)
-          : `Sent as a question — waiting on ${owner}`,
-      );
-      await loadReviewItems();
-      return 'asked';
-    }
-    // Refresh BEFORE the advance: the queue has to have dropped the answered
-    // item before the new position is computed against it, or the aim lands on
-    // a list that still holds the thing just replied to.
-    await loadReviewItems();
-    return 'answered';
-  }
-
-  /**
-   * The Board's "New task": an EMPTY row, opened at once in the panel with the
-   * title ready to type (Bryan, 2026-08-29: *"creates an empty item in the
-   * usual task detail view"*). No prompt, no sheet — the panel IS the form.
-   *
-   * Filed as the person, to the person: the old capture box handed every idea
-   * to the lead agent, but a row Bryan is about to type into is his, and the
-   * route assigns it to the author when nobody else is named. `untitled` is
-   * the one way past the blank-title refusal; the server stores its own
-   * placeholder and clears the flag the moment a real title lands.
-   *
-   * The row itself arrives over the ydoc, not the response — so the panel is
-   * pointed at the id and `renderDetail` paints it when the projection lands,
-   * the way a boot deep link does.
-   */
-  async function newTask(): Promise<boolean> {
-    const res = await send(`/api/workspaces/${encodeURIComponent(workspaceId)}/tasks`, 'POST', {
-      untitled: true,
-      author,
-    });
-    const created = res.data?.task as { id?: unknown } | undefined;
-    const id = typeof created?.id === 'string' ? created.id : null;
-    if (!res.ok || !id) {
-      const why =
-        typeof res.data?.message === 'string' ? res.data.message : 'Could not file a new task';
-      showToast(why);
-      return false;
-    }
-    focusTitleTaskId = id;
-    state.detailTaskId = id;
-    state.detailGoalId = null;
-    state.detailThreadId = null;
-    renderDetail();
-    return true;
-  }
-
-  /**
-   * The Board's two huddle buttons: ONE call makes the huddle doc on this
-   * board, and the page leaves for it at once with the flag the editor reads
-   * to start the meeting assistant without a press. The click here is the
-   * person's gesture; `huddle-entry.ts` is the other half.
-   *
-   * "Make a plan" and "Have a discussion" are the same route and the same
-   * file; `kind` tells the server which doc to seed (a plan opens under a
-   * `# Goal` heading) and `mode` rides the address for the mic. Solo asks
-   * for no speaker labels and pays for none.
-   */
-  async function startHuddle(kind: HuddleKind, mode: CaptureMode): Promise<boolean> {
-    const res = await send(`/api/workspaces/${encodeURIComponent(workspaceId)}/huddles`, 'POST', {
-      kind,
-    });
-    const url = typeof res.data?.url === 'string' ? res.data.url : null;
-    if (!res.ok || !url) {
-      const why =
-        typeof res.data?.message === 'string' ? res.data.message : 'Could not start a huddle';
-      showToast(why);
-      return false;
-    }
-    // The mode rides the address beside the start flag: this press is the
-    // only thing that knows whether anyone else is in the room, and the
-    // editor that opens the mic is a different page.
-    location.assign(`${url}?huddle=1&${HUDDLE_MODE_PARAM}=${mode}`);
-    return true;
-  }
+  // ── The review queue's controller ───────────────────────────────────────
+  //
+  // Opening an item, walking a sitting, and answering or asking back live in
+  // `hub-review-controller.ts`, bound here to what they used to capture.
+  const {
+    startWalkthrough,
+    openInQueue,
+    answerDecision,
+    answerTaskDecision,
+    undoThreadAnswer,
+    undoTaskAnswer,
+    releaseHeldReviewItem,
+    answerPanelThreadItem,
+    askOnReviewItem,
+    askOnPanelItem,
+    commentOnActivity,
+    replyOnActivity,
+    replyToReviewItem,
+  } = createHubReviewController({
+    author,
+    state,
+    currentQueue,
+    renderWalkthrough,
+    loadReviewItems,
+    loadDiscussion,
+    openTaskThread,
+  });
 
   // ── Repaints wait for the reader's finger ───────────────────────────────
   //
@@ -3048,182 +2143,31 @@ async function main(): Promise<void> {
   });
 
   // ── Wiring ──────────────────────────────────────────────────────────────
-  // Both observers read the projection at once (state must be current the
-  // moment the ydoc moves) but paint through the guard: a peer's transition
-  // arriving over the ydoc rebuilds the same regions the SSE path does, and
-  // was eating taps the same way.
-  tasksMap.observeDeep(() => {
-    readProjection();
-    // Home rides along with the board — without it the first projection lands
-    // after Home's first paint and the queue stays empty while the board
-    // banner (painted by renderBoardRegion) counts it.
-    repaintGuard.schedule(repaintQueueRegions);
-    autoWalkTick?.();
-  });
-  const repaintWorkspaceRegions = (): void => {
-    renderLead();
-    renderBoardRegion();
-    renderHomeRegion();
-    // Goal facts (title, status, owner, due) travel on the WORKSPACE map,
-    // not the tasks map — an open goal panel repaints here or shows a peer's
-    // rename never.
-    if (state.detailGoalId) renderDetail();
-  };
-  wsMap.observeDeep(() => {
-    readProjection();
-    repaintGuard.schedule(repaintWorkspaceRegions);
-  });
-
-  client.awareness.setLocalState({
-    // `id` rides along because the presence strip has to know WHO, and a
-    // display name cannot answer that — two people called Alex would be one
-    // chip, and following either would sometimes land on the other. `User.id`
-    // is the stable per-browser id (localStorage, or a known user's own), so
-    // it is the same across this person's tabs and different for anybody else:
-    // exactly the two things the strip's row key must get right.
-    user: { id: user.id, name: user.name, color: user.color },
-    surface: 'hub',
-    lastActive: Date.now(),
-  });
-  client.awareness.on('update', () => {
-    renderPresenceRegion();
-    // Follow (§2.7): when the followed person's surface moves, ours does too.
-    // The key names the PERSON now, not one of their connections, so the
-    // follow is resolved back through awareness by identity and lands on
-    // whichever of their tabs moved most recently. That also means a follow
-    // survives the followed person reloading — under the old `p-<clientId>`
-    // key their new connection was a stranger, and the follow went quiet
-    // without ever saying so.
-    if (state.followedKey?.startsWith('p-')) {
-      const identity = state.followedKey.slice(2);
-      const [moved] = peopleFromAwareness()
-        .filter((p) => presenceIdentity(p) === identity && p.docId)
-        .sort((a, b) => b.lastActive - a.lastActive);
-      if (moved?.docId) location.assign(`/review/${encodeURIComponent(moved.docId)}`);
-    }
-  });
-  let lastActivePush = 0;
-  const touch = () => {
-    const now = Date.now();
-    if (now - lastActivePush < 30_000) return;
-    lastActivePush = now;
-    const cur = client.awareness.getLocalState() ?? {};
-    client.awareness.setLocalState({ ...cur, lastActive: now });
-  };
-  window.addEventListener('pointerdown', touch, { passive: true });
-  window.addEventListener('keydown', touch, { passive: true });
-  const presenceTick = setInterval(() => renderPresenceRegion(), 30_000);
-  // Home's ages and time-keyed flags advance without a board event: a minute
-  // tick, only while Home is showing (home-clock.ts).
-  const stopHomeClock = startHomeClock(() => state.pane === 'home', renderHomeRegion);
-  window.addEventListener('beforeunload', () => {
-    clearInterval(presenceTick);
-    stopHomeClock();
-    client.close();
-  });
-
-  // SSE: agent presence + activity refresh. Board changes arrive via the
-  // ydoc; SSE only nudges the REST-backed regions.
-  const es = new EventSource(`/events/workspace/${encodeURIComponent(workspaceId)}`);
-  for (const name of ['agent.attached', 'agent.detached', 'agent.heartbeat']) {
-    es.addEventListener(name, () => void loadAgents());
-  }
-  // The list lives beside `describeEvent` in hub-model, because the two must
-  // move together — an event the trail renders but this loop never hears is
-  // an Activity tab that silently misses it, on the writer's own screen as
-  // much as a peer's (the server echoes local writes back over SSE, which is
-  // what puts a row under the due date you just set).
-  for (const name of ACTIVITY_REFRESH_EVENTS) {
-    es.addEventListener(name, () => {
-      void loadEvents();
-      // The same board changes stale the Home brief. Refreshing only while
-      // Home is showing keeps a background board tab from queueing model
-      // calls nobody is reading.
-      if (state.pane === 'home') void loadHome();
-    });
-  }
-  // A reply to the question you just asked is the case this whole surface is
-  // for, so it lands in the open panel without a reload. These events reach
-  // the workspace channel only because a task body room fans out to it — the
-  // board is not subscribed to each task's own doc stream.
-  for (const name of ['thread.created', 'thread.replied', 'thread.resolved', 'thread.reopened']) {
-    es.addEventListener(name, () => {
-      // Every one of these can change what is waiting on a person — a new
-      // question arrives, someone answers one, a thread is closed. The strip
-      // is the surface that has to be right when Bryan comes back, so it
-      // refreshes whether or not a task panel happens to be open.
-      void loadReviewItems();
-      // Whichever panel is open — a goal's discussion goes as stale as a
-      // task's, and it is reached through the same room, so leaving it out
-      // would mean a comment landing on a goal was invisible until the reader
-      // closed and reopened the panel.
-      const open: DiscussionRow | undefined = state.detailTaskId
-        ? state.tasks.get(state.detailTaskId)
-        : state.detailGoalId
-          ? { id: state.detailGoalId, bodyDocId: `task:${state.detailGoalId}` }
-          : undefined;
-      if (!open || discussionIsBusy(document)) return;
-      void loadDiscussion(open, true);
-    });
-  }
-  // A task going done takes its discussion out of the queue.
-  es.addEventListener('task.transitioned', () => void loadReviewItems());
-  // …and stales every status chip a pasted task/goal link is wearing, so the
-  // chips re-ask on the same push instead of showing the old status forever.
-  es.addEventListener('task.transitioned', () => staleTaskLinkStatuses());
-
-  // ── Catching up after the stream could not reach us ────────────────────
   //
-  // Reported 2026-08-19: a new Home queue item did not appear until the page
-  // was reloaded. Everything above is correct WHILE the stream is up — an
-  // item posted against a healthy staging build paints in about a second.
-  // The gap was the window where the stream is down: the server replays
-  // nothing (there is no `Last-Event-ID` handling anywhere), and until now
-  // every refetch after boot hung off one of these listeners — no error
-  // handler, no reopen handler, no visibility handler, no poll. `EventSource`
-  // reconnects by itself, so the page came back looking healthy and silently
-  // missing whatever was created while it was away. That window is a server
-  // restart (so, every deploy), a slept laptop, or a backgrounded phone.
-  const streamStatus = (cb: (s: 'open' | 'closed') => void) => {
-    es.addEventListener('open', () => cb('open'));
-    // EventSource reports both a retriable drop and a fatal one here; the
-    // difference does not change what the reader needs, which is a refetch
-    // when it comes back and the truth on screen while it has not.
-    es.addEventListener('error', () => cb('closed'));
-  };
-  const onVisible = (cb: () => void) => {
-    document.addEventListener('visibilitychange', () => {
-      if (!document.hidden) cb();
-    });
-    // A network that comes back without the tab ever being hidden — the
-    // phone that changed cells while its owner was reading.
-    window.addEventListener('online', () => cb());
-  };
-  watchLiveSync({
-    onStatus: streamStatus,
-    onVisible,
-    // Everything the listeners above keep fresh, refetched as one batch. The
-    // brief is included only while Home is showing, for the same reason the
-    // per-event path does it: a background tab must not queue model calls.
-    resync: () => {
-      void loadAgents();
-      void loadEvents();
-      void loadReviewItems();
-      if (state.pane === 'home') void loadHome();
-    },
-  });
-  // Its own line, under the reconnect banner rather than sharing it: that one
-  // is about the editing socket and tells you to keep the tab open, this one
-  // is about the queue being a stale read. A reader who is not told acts on
-  // the stale list — silence that looks like calm.
-  const staleNotice = document.createElement('div');
-  staleNotice.className = 'conn-banner conn-banner--stale hidden';
-  staleNotice.setAttribute('role', 'status');
-  staleNotice.setAttribute('aria-live', 'polite');
-  document.getElementById('hub-connection')?.after(staleNotice);
-  watchConnection({
-    onStatus: streamStatus,
-    onView: (view) => renderLiveStaleNotice(staleNotice, view),
+  // The ydoc observers, the awareness feed, the SSE listeners and the catch-up
+  // are `hub-live-wiring.ts`, called here so subscription order is unchanged.
+  wireHubLive({
+    workspaceId,
+    user,
+    state,
+    client,
+    tasksMap,
+    wsMap,
+    readProjection,
+    repaintGuard,
+    repaintQueueRegions,
+    autoWalkTick: () => autoWalkTick?.(),
+    renderLead,
+    renderBoardRegion,
+    renderHomeRegion,
+    renderDetail,
+    renderPresenceRegion,
+    peopleFromAwareness,
+    loadAgents,
+    loadEvents,
+    loadHome,
+    loadReviewItems,
+    loadDiscussion,
   });
 
   // Controls.

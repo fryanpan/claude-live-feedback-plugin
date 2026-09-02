@@ -62,7 +62,7 @@ export function _resetLinkTitlesForTest(): void {
   cache.clear();
 }
 
-/** Chip words, mirroring hub-model's STATUS_LABEL — copied rather than
+/** Chip words, mirroring hub-board-model's STATUS_LABEL — copied rather than
  *  imported so the doc page's renderer does not pull the hub module in.
  *  An unknown status renders as its raw string: not nice, but TRUE. */
 const STATUS_CHIP_LABEL: Record<string, string> = {

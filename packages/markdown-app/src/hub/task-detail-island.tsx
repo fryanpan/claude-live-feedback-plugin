@@ -62,33 +62,33 @@ import { SPACE_HOLD_PAGE_ATTR } from '../voice-capture.ts';
 import { ageShort } from './activity-model.ts';
 import { ComposerForm, Discussion, useFill } from './detail-parts.tsx';
 import {
-  type ActivityEvent,
   type HubDecisionOption,
   type HubNote,
   type HubTask,
-  answeredByLine,
-  askedMetaLine,
-  blockedNoteLine,
-  heldMetaLine,
   heldReviewItems,
   isTaskArchived,
-  taskActivity,
-} from './hub-model.ts';
+} from './hub-board-model.ts';
+import { type PanelReviewItem, renderTaskLinks } from './hub-detail-render.ts';
 import {
   BODY_LIVE_CLASS,
   type DetailHandlers,
-  type PanelReviewItem,
   type TaskDiscussion,
   activityRow,
   bodySlot,
   detailFields,
-  panelReviewQueue,
   relatedDocLinks,
   renderRelatedLinks,
-  renderTaskLinks,
   renderTransitionRow,
-  wireInPlaceTitle,
-} from './hub-render.ts';
+} from './hub-detail-render.ts';
+import { type ActivityEvent, taskActivity } from './hub-presence-model.ts';
+import { wireInPlaceTitle } from './hub-render.ts';
+import {
+  answeredByLine,
+  askedMetaLine,
+  blockedNoteLine,
+  heldMetaLine,
+} from './hub-review-model.ts';
+import { panelReviewQueue } from './hub-review-render.ts';
 import { markPhrase } from './review-item-phrase.ts';
 import { selectWordAtPoint, useSelectionPill } from './selection-pill.ts';
 import { NOBODY, type OpenComment, ThreadCard, draftThread } from './thread-card.tsx';

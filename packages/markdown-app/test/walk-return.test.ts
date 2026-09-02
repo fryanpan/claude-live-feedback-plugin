@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { CLOSED_WALK, walkAimAfterOpen } from '../src/hub/hub-model';
+import { CLOSED_WALK, walkAimAfterOpen } from '../src/hub/hub-review-model';
 
 /**
  * Back from a doc has to land where the reader was.
