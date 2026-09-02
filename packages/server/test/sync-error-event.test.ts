@@ -6,10 +6,11 @@ import { Rooms } from '../src/rooms.ts';
 import { type ServerHandle, createServer } from '../src/server.ts';
 import { SseHub } from '../src/sse.ts';
 import { createWebhookDispatcher } from '../src/webhooks.ts';
+import { insideWriteBack, waitFor } from './wait-for.ts';
 
 /**
  * A lost write into a bound doc must tell SOMEBODY — the syncError needs an
- * event on the doc's watch channel (board ticket t-3bFI5h-F9qRW).
+ * event on the doc's watch channel.
  *
  * Measured twice before this suite existed (in-process Rooms and HTTP against
  * a spawned server): when an external write lands inside the 800ms write
@@ -124,11 +125,18 @@ describe('doc.sync_error broadcast (in-process Rooms)', () => {
     ).toBe(true);
     // Land the external write just before the write-back fires — the
     // stat-before-write guard routes this through the conflict arm.
-    await sleep(700);
+    // timed: the write has to land INSIDE the 800ms window; the delay is the
+    // setup for the race, not a wait for a result.
+    await sleep(insideWriteBack());
     writeExternal(path, EXT_ONE);
-    await sleep(600);
 
-    const events = syncErrorEvents('d1');
+    const events = await waitFor(
+      () => {
+        const found = syncErrorEvents('d1');
+        return found.length > 0 ? found : false;
+      },
+      { describe: 'the conflict arm to broadcast doc.sync_error' },
+    );
     expect(events.length).toBeGreaterThan(0);
     const ev = events[0] as SyncErrorEvent;
     expect(ev.docId).toBe('d1');
@@ -203,6 +211,8 @@ describe('doc.sync_error reaches a watching SSE stream (HTTP end-to-end)', () =>
     writeExternal(path, EXT_ONE);
     expect(handle.rooms.reconcileNow(h1)).toBe('conflict');
 
+    // timed: a failure DEADLINE, not a wait — the race settles the instant the
+    // event arrives, and only a stream that never delivers pays the 3s.
     const ev = await Promise.race([gotEvent, sleep(3000).then(() => null)]);
     controller.abort();
     if (!ev) throw new Error('watching stream never received doc.sync_error');

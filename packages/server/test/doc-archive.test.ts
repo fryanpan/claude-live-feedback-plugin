@@ -25,6 +25,7 @@ import {
 import { Rooms } from '../src/rooms.ts';
 import { SseHub } from '../src/sse.ts';
 import { createWebhookDispatcher } from '../src/webhooks.ts';
+import { waitForFile } from './wait-for.ts';
 
 const REVIEWER = { id: 'u1', name: 'Reviewer', kind: 'known' as const, color: '#2e7dd7' };
 
@@ -200,8 +201,7 @@ describe('Rooms.archiveDoc / unarchiveDoc', () => {
       replace: 'the edited md line',
     });
     expect(edited.ok).toBe(true);
-    await new Promise((r) => setTimeout(r, 1100));
-    expect(readFileSync(mdPath, 'utf8')).toContain('the edited md line');
+    await waitForFile(mdPath, (t) => t.includes('the edited md line'));
   });
 
   it('records an unarchive event naming who restored it', () => {

@@ -16,6 +16,7 @@ import { type ElementAnchor, type User, emailIdentityId } from '@feedback/core';
 import { activityLogPath, resetOwnerIdentities } from '../src/activity.ts';
 import { SESSION_COOKIE } from '../src/auth/session.ts';
 import { type ServerHandle, createServer } from '../src/server.ts';
+import { waitFor } from './wait-for.ts';
 
 // The log sender masks the code unless this is set — see
 // `auth/code-sender.ts`. This suite drives a real sign-in, so it needs the
@@ -317,7 +318,19 @@ describe('revocation kills the token', () => {
     const dataDir = mkdtempSync(join(tmpdir(), 'widget-token-watermark-'));
     const first = boot({ dataDir });
     const { token } = await signInAndMint(first.base, 'reviewer@example.com');
+    const mintedAt = Date.now();
     await first.handle.stop();
+
+    // The watermark ends what was minted STRICTLY before it, so the token and
+    // the second boot must not land in the same millisecond. Nothing stopped
+    // them: the whole test runs in under 10ms, and the collision handed the
+    // token a 200 in roughly one full-suite run in three. Wait for the clock
+    // to leave the mint's millisecond — an event, not a debounce, so there is
+    // no cadence to derive a duration from.
+    await waitFor(() => Date.now() > mintedAt || false, {
+      interval: 1,
+      describe: 'the clock to advance past the millisecond the token was minted in',
+    });
 
     // A corrupt denylist at boot fails closed, ends every session via the
     // sessionsValidFrom watermark, and restarts the list empty. A widget
