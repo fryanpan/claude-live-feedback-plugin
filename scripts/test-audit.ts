@@ -49,17 +49,35 @@ function isTimed(lines: string[], i: number): boolean {
 }
 
 // 1. Fixed sleeps of 500ms or more in the server suite.
-//    Matches `sleep(N)` and `setTimeout(fn, N)` with a literal N >= 500.
-const SLEEP = /(?:\bsleep\(\s*(\d+)\s*\)|\bsetTimeout\(\s*[A-Za-z_$][\w$]*\s*,\s*(\d+)\s*\))/g;
+//    Matches `sleep(N)` and `setTimeout(fn, N)`, where N is a literal OR the
+//    name of a millisecond constant declared in the same file. Resolving names
+//    matters: 16 waits of 2400ms hid behind one `SETTLE_MS` and this check
+//    reported zero while they ran.
+const SLEEP =
+  /(?:\bsleep\(\s*([\w$]+)\s*\)|\bsetTimeout\(\s*[A-Za-z_$][\w$]*\s*,\s*([\w$]+)\s*\))/g;
+const MS_CONST = /^\s*(?:const|let)\s+([A-Za-z_$][\w$]*)\s*(?::\s*number\s*)?=\s*(\d[\d_]*)\s*;/;
+
+/** Millisecond constants declared in a file, so `sleep(SETTLE_MS)` resolves. */
+function msConstants(lines: string[]): Map<string, number> {
+  const found = new Map<string, number>();
+  for (const line of lines) {
+    const m = line.match(MS_CONST);
+    if (m?.[1] && m[2]) found.set(m[1], Number(m[2].replace(/_/g, '')));
+  }
+  return found;
+}
+
 function fixedSleeps(): Check {
   const sites: Site[] = [];
   for (const file of gitFiles('packages/server/test/*.ts')) {
     const lines = read(file);
+    const consts = msConstants(lines);
     lines.forEach((text, i) => {
       // A sleep NAMED in a comment is prose, not a wait.
       if (COMMENT_LINE.test(text)) return;
       for (const m of text.matchAll(SLEEP)) {
-        const ms = Number(m[1] ?? m[2]);
+        const raw = m[1] ?? m[2] ?? '';
+        const ms = /^\d/.test(raw) ? Number(raw) : (consts.get(raw) ?? Number.NaN);
         if (ms >= 500 && !isTimed(lines, i)) sites.push({ file, line: i + 1, text: text.trim() });
       }
     });
@@ -67,7 +85,8 @@ function fixedSleeps(): Check {
   return {
     id: 'fixedSleeps',
     title: 'fixed sleeps >= 500ms (server suite)',
-    pattern: 'sleep(N) or setTimeout(fn, N) with N >= 500, without a `// timed:` marker',
+    pattern:
+      'sleep(N) or setTimeout(fn, N) with N >= 500 — N literal or a ms constant declared in the same file — without a `// timed:` marker',
     sites,
   };
 }

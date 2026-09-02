@@ -32,7 +32,6 @@ function makeRooms(dataDir: string): Rooms {
   });
 }
 
-
 const sattrs = (sid: string): SuggestionAttrs => ({
   sid,
   authorId: 'agent-1',

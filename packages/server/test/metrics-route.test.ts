@@ -19,6 +19,7 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { type ServerHandle, createServer } from '../src/server.ts';
+import { waitFor } from './wait-for.ts';
 
 interface Metrics {
   rssMb: number;
@@ -99,9 +100,17 @@ describe('GET /api/metrics', () => {
     // must be true is that they DRAIN, leaving a constant that does not grow
     // with the number of docs.
     expect(after.timers).toBeGreaterThan(0);
-    await new Promise((r) => setTimeout(r, 1200));
-    const settled = await metrics();
-    expect(settled.timers).toBeLessThanOrEqual(before.timers + 1);
+    // Draining IS the assertion: poll until the count comes back to the
+    // constant, and fail by timeout (naming the last count seen) if it never
+    // does, which is exactly what "timers scale with the corpus" would look
+    // like.
+    const settled = await waitFor(
+      async () => {
+        const m = await metrics();
+        return m.timers <= before.timers + 1 ? m : false;
+      },
+      { describe: 'the per-doc persist timers to drain back to a constant' },
+    );
     expect(settled.rooms).toBe(after.rooms);
   });
 

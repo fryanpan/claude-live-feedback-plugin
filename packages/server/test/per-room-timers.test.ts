@@ -19,6 +19,7 @@ import * as Y from 'yjs';
 import { Rooms, maintainAwareness } from '../src/rooms.ts';
 import { SseHub } from '../src/sse.ts';
 import { createWebhookDispatcher } from '../src/webhooks.ts';
+import { waitFor } from './wait-for.ts';
 
 function makeRooms(dataDir: string): Rooms {
   return new Rooms({
@@ -210,8 +211,9 @@ describe('per-room timers', () => {
     // new. Forcing it forward makes a failure here mean "not detected".
     const t = new Date(Date.now() + 2000);
     utimesSync(paths[0], t, t);
-    await sleep(1500);
-    expect(markdownOf(rooms, docIds[0])).toContain('arrived with nobody watching');
+    await waitFor(() => markdownOf(rooms, docIds[0]).includes('arrived with nobody watching'), {
+      describe: 'the unwatched bound doc to pick the external edit up',
+    });
   });
 
   it('a doc nobody has OPENED is not polled — and the edit is read on open', async () => {
@@ -229,6 +231,8 @@ describe('per-room timers', () => {
     writeFileSync(paths[0], '# Doc 0\n\nedited while cold\n');
     const t = new Date(Date.now() + 2000);
     utimesSync(paths[0], t, t);
+    // timed: the claim is that NOTHING polls a cold doc, so the window in
+    // which a poll could have run has to pass before the counts mean anything.
     await sleep(1500);
     // Nothing woke up: no poll ran, because there was no binding to run one.
     expect(rooms.stats().rooms).toBe(0);
@@ -250,8 +254,10 @@ describe('per-room timers', () => {
     writeFileSync(paths[0], '# Doc 0\n\nedited once\n');
     const t = new Date(Date.now() + 2000);
     utimesSync(paths[0], t, t);
-    // Long enough for the sweep to see it, the 150ms read debounce to fire,
-    // and the 800ms write-back debounce behind it to drain.
+    // timed: the assertion below is that no binding stays active, and an
+    // undrained write-back timer counts as active — so this waits out the
+    // sweep, the 150ms read debounce and the 800ms write-back deliberately.
+    // Polling for "drained" would assert the very thing under test.
     await sleep(2500);
 
     // Control: the edit really landed. Without it, "nothing is active" could
@@ -310,8 +316,9 @@ describe('per-room timers', () => {
     const room = rooms.get(docId);
     if (!room) throw new Error('room missing');
     room.conns.add({} as never);
-    await sleep(2000);
-    expect(markdownOf(rooms, docId)).toContain('edited before anyone connected');
+    await waitFor(() => markdownOf(rooms, docId).includes('edited before anyone connected'), {
+      describe: 'the connect path to re-stat the file and pull the edit in',
+    });
     room.conns.clear();
   });
 

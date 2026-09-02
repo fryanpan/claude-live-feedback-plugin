@@ -17,6 +17,7 @@ import { classifyExternalContent } from '../src/git-provenance.ts';
 import { Rooms } from '../src/rooms.ts';
 import { SseHub } from '../src/sse.ts';
 import { createWebhookDispatcher } from '../src/webhooks.ts';
+import { waitFor, waitForFile } from './wait-for.ts';
 
 /**
  * What a git operation does to a bound doc (task: "A git operation on a bound
@@ -42,11 +43,6 @@ import { createWebhookDispatcher } from '../src/webhooks.ts';
  * linked-worktree GIT_DIR rewrites the PRIMARY checkout's config, so the
  * environment is stripped of every GIT_* key and identity is passed per call.
  */
-
-const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
-
-/** One poll tick (500ms) + read debounce (150ms) + write debounce (800ms). */
-const SETTLE_MS = 2400;
 
 function cleanEnv(): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = {};
@@ -120,6 +116,14 @@ describe('git operations against a bound doc', () => {
   });
 
   const liveText = () => rooms.getDoc('d1')?.plainText ?? '';
+  /**
+   * The chain each assertion below is waiting on: one poll tick (500ms), the
+   * read debounce (150ms) and the write debounce (800ms). Nothing here waits
+   * for that span — each test waits for the doc, the file or the syncError it
+   * expects at the end of it, and only pays the span when something is wrong.
+   */
+  const untilLive = (needle: string): Promise<unknown> =>
+    waitFor(() => liveText().includes(needle), { describe: `the live doc to hold ${needle}` });
   const diskText = () => readFileSync(path, 'utf8');
   const dirty = () => git(repo, 'status', '--porcelain').trim();
 
@@ -133,8 +137,7 @@ describe('git operations against a bound doc', () => {
     writeFileSync(path, MAIN_DOC.replace('Intro paragraph on main.', 'Intro from an editor save.'));
     expect(statSync(path).mtimeMs).not.toBe(before);
 
-    await sleep(SETTLE_MS);
-    expect(liveText()).toContain('Intro from an editor save.');
+    await untilLive('Intro from an editor save.');
     expect(rooms.getSyncError('d1')).toBeUndefined();
   });
 
@@ -142,8 +145,7 @@ describe('git operations against a bound doc', () => {
     it('git checkout -- <file> reverts the doc under whoever is reading it', async () => {
       // A working-tree edit first, so the checkout has something to revert.
       writeFileSync(path, MAIN_DOC.replace('Intro paragraph on main.', 'Working-tree scratch.'));
-      await sleep(SETTLE_MS);
-      expect(liveText()).toContain('Working-tree scratch.');
+      await untilLive('Working-tree scratch.');
 
       const before = statSync(path).mtimeMs;
       git(repo, 'checkout', '--', 'doc.md');
@@ -151,11 +153,10 @@ describe('git operations against a bound doc', () => {
       expect(statSync(path).mtimeMs).not.toBe(before);
       expect(dirty()).toBe('');
 
-      await sleep(SETTLE_MS);
       // The reader's doc silently loses the scratch text. No syncError: as far
       // as the reconcile knows this was an ordinary external save.
+      await untilLive('Intro paragraph on main.');
       expect(liveText()).not.toContain('Working-tree scratch.');
-      expect(liveText()).toContain('Intro paragraph on main.');
       expect(rooms.getSyncError('d1')).toBeUndefined();
     });
 
@@ -166,8 +167,7 @@ describe('git operations against a bound doc', () => {
       git(repo, 'checkout', '-q', 'other');
       expect(statSync(path).mtimeMs).not.toBe(before);
 
-      await sleep(SETTLE_MS);
-      expect(liveText()).toContain('Intro paragraph on the other branch.');
+      await untilLive('Intro paragraph on the other branch.');
       expect(rooms.getSyncError('d1')).toBeUndefined();
       // Disk is untouched by us — the checkout stands.
       expect(dirty()).toBe('');
@@ -175,17 +175,15 @@ describe('git operations against a bound doc', () => {
 
     it('git stash takes the doc back to HEAD and leaves the tree clean', async () => {
       writeFileSync(path, MAIN_DOC.replace('Intro paragraph on main.', 'Working-tree scratch.'));
-      await sleep(SETTLE_MS);
-      expect(liveText()).toContain('Working-tree scratch.');
+      await untilLive('Working-tree scratch.');
 
       const before = statSync(path).mtimeMs;
       git(repo, 'stash');
       expect(statSync(path).mtimeMs).not.toBe(before);
 
-      await sleep(SETTLE_MS);
       // The stash stands: no reassert re-dirties the tree, because the doc had
       // nothing un-flushed to defend.
-      expect(liveText()).toContain('Intro paragraph on main.');
+      await untilLive('Intro paragraph on main.');
       expect(liveText()).not.toContain('Working-tree scratch.');
       expect(dirty()).toBe('');
       expect(rooms.getSyncError('d1')).toBeUndefined();
@@ -205,8 +203,9 @@ describe('git operations against a bound doc', () => {
       expect(rooms.getDoc('d2')?.plainText).toContain('Intro paragraph on main.');
 
       git(upstream, 'pull', '-q', '--ff-only', 'origin', 'main');
-      await sleep(SETTLE_MS);
-      expect(rooms.getDoc('d2')?.plainText).toContain('Pulled from upstream.');
+      await waitFor(() => rooms.getDoc('d2')?.plainText.includes('Pulled from upstream.'), {
+        describe: 'the pulled content to reach the cloned doc',
+      });
       expect(rooms.getSyncError('d2')).toBeUndefined();
     });
   });
@@ -226,10 +225,10 @@ describe('git operations against a bound doc', () => {
       expect(diskText()).toContain('Intro paragraph on the other branch.');
       expect(dirty()).toBe('');
 
-      await sleep(SETTLE_MS);
-
-      // ...and a second later the server has put the live doc back over it.
-      expect(diskText()).toContain('Live edit, not yet flushed.');
+      // ...and a moment later the server has put the live doc back over it.
+      await waitFor(() => diskText().includes('Live edit, not yet flushed.'), {
+        describe: 'the reassert to put the live edit back on disk',
+      });
       expect(diskText()).not.toContain('Intro paragraph on the other branch.');
       // The operator's only visible trace, and only if they look:
       expect(dirty()).toContain('doc.md');
@@ -237,7 +236,7 @@ describe('git operations against a bound doc', () => {
 
     it('git stash leaves the tree dirty with content that is neither HEAD nor the stash', async () => {
       writeFileSync(path, MAIN_DOC.replace('Intro paragraph on main.', 'Working-tree scratch.'));
-      await sleep(SETTLE_MS);
+      await untilLive('Working-tree scratch.');
       liveEdit('Working-tree scratch.');
 
       git(repo, 'stash');
@@ -245,34 +244,35 @@ describe('git operations against a bound doc', () => {
       expect(git(repo, 'stash', 'list')).toContain('stash@{0}');
       expect(diskText()).toContain('Intro paragraph on main.');
 
-      await sleep(SETTLE_MS);
-
       // The reassert re-dirties the tree the stash just cleaned — with content
       // that is in neither HEAD nor the stash, so a later `git stash pop` has
       // an unexpected working-tree change to contend with.
-      expect(diskText()).toContain('Live edit, not yet flushed.');
+      await waitFor(() => diskText().includes('Live edit, not yet flushed.'), {
+        describe: 'the reassert to re-dirty the tree',
+      });
       expect(dirty()).not.toBe('');
     });
 
     it('git checkout -- <file> is undone the same way', async () => {
       writeFileSync(path, MAIN_DOC.replace('Intro paragraph on main.', 'Working-tree scratch.'));
-      await sleep(SETTLE_MS);
+      await untilLive('Working-tree scratch.');
       liveEdit('Working-tree scratch.');
 
       git(repo, 'checkout', '--', 'doc.md');
       expect(dirty()).toBe('');
 
-      await sleep(SETTLE_MS);
-      expect(diskText()).toContain('Live edit, not yet flushed.');
+      await waitFor(() => diskText().includes('Live edit, not yet flushed.'), {
+        describe: 'the reassert to undo the checkout',
+      });
       expect(dirty()).not.toBe('');
     });
 
     it('the syncError names git as the cause and points at the backup', async () => {
       liveEdit('Intro paragraph on main.');
       git(repo, 'checkout', '-q', 'other');
-      await sleep(SETTLE_MS);
-
-      const err = rooms.getSyncError('d1');
+      const err = await waitFor(() => rooms.getSyncError('d1'), {
+        describe: 'the conflict to raise a syncError',
+      });
       expect(err).toBeDefined();
       // Pre-existing half: what happened and where the overwritten bytes went.
       expect(err?.message).toContain('clobber-backups');
@@ -308,10 +308,8 @@ describe('git operations against a bound doc', () => {
       expect(readFileSync(clonePath, 'utf8')).toContain('Arrived from the remote.');
       expect(git(upstream, 'status', '--porcelain').trim()).toBe('');
 
-      await sleep(SETTLE_MS);
-
-      // ...and the pulled content is gone from the working tree a second later.
-      expect(readFileSync(clonePath, 'utf8')).toContain('Live edit, not yet flushed.');
+      // ...and the pulled content is gone from the working tree a moment later.
+      await waitForFile(clonePath, (t) => t.includes('Live edit, not yet flushed.'));
       expect(readFileSync(clonePath, 'utf8')).not.toContain('Arrived from the remote.');
       expect(git(upstream, 'status', '--porcelain').trim()).toContain('doc.md');
       expect(rooms.getSyncError('d3')?.message).toContain('git command');
@@ -326,10 +324,10 @@ describe('git operations against a bound doc', () => {
     it('a bare reparse_from_disk does NOT bring the git version back; the backup does', async () => {
       liveEdit('Intro paragraph on main.');
       git(repo, 'checkout', '-q', 'other');
-      await sleep(SETTLE_MS);
-
       // The reassert already landed, so disk holds the LIVE text, not git's.
-      expect(diskText()).toContain('Live edit, not yet flushed.');
+      await waitFor(() => diskText().includes('Live edit, not yet flushed.'), {
+        describe: 'the reassert to overwrite the checked-out version',
+      });
       const message = rooms.getSyncError('d1')?.message ?? '';
 
       expect(rooms.reparseFromDisk('d1').ok).toBe(true); // ...and yet:
@@ -355,9 +353,9 @@ describe('git operations against a bound doc', () => {
       // unconditional and every assertion above would still pass.
       liveEdit('Intro paragraph on main.');
       writeFileSync(path, MAIN_DOC.replace('Intro paragraph on main.', 'A person typed this.'));
-      await sleep(SETTLE_MS);
-
-      const err = rooms.getSyncError('d1');
+      const err = await waitFor(() => rooms.getSyncError('d1'), {
+        describe: 'the editor-save conflict to raise a syncError',
+      });
       expect(err).toBeDefined();
       expect(err?.message).toContain('clobber-backups');
       expect(err?.message).not.toContain('git command');

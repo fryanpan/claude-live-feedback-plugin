@@ -914,6 +914,9 @@ describe('doc owner + lastActivityAt', () => {
     // let the create-time persist settle
     await new Promise((r) => setTimeout(r, 250));
     const before = (await getMeta(actId))!.lastActivityAt!;
+    // timed: lastActivityAt is a file mtime, so the two stamps have to be
+    // separated by more than the filesystem's granularity for "advanced" to
+    // be observable at all. The gap IS the setup.
     await new Promise((r) => setTimeout(r, 1100));
     await fetch(`${base}/api/docs/act-1/find_and_replace`, {
       method: 'POST',
