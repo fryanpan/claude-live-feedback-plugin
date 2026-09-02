@@ -34,9 +34,11 @@ added to an allowlist, say which one and why that is intended. Adding a
 route under an already-allowed prefix counts as widening.
 
 ### 5. Tokens through one signing module
-New signed values use an existing scheme — the share link-session cookie,
-the auth session cookie, or the widget popup token — with a domain-separated
-key. A fourth scheme needs a reason in the PR body, not just a diff.
+New signed values go through `packages/server/src/auth/signed-token.ts` as a
+`TokenFormat`, under an existing scheme where one fits — the share
+link-session cookie, the auth session cookie, or the widget popup token — and
+with a key of their own. A fourth scheme needs a reason in the PR body, not
+just a diff, and a hand-rolled HMAC outside that module needs a louder one.
 
 ### 6. Webhook replay protection intact
 The signature check still runs before the replay guard, the tolerance window
