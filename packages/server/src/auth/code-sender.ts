@@ -10,8 +10,18 @@
  * WHY A LOG SENDER AND NOT A STUB THAT SUCCEEDS SILENTLY. A sender that
  * accepted the code and dropped it would make every login fail in the one way
  * nothing reports: the person waits for mail that was never sent, and the
- * server's own logs say the send went fine. Printing it is the honest version
- * of "not wired yet" — visibly not private, and visibly working.
+ * server's own logs say the send went fine. Saying that a code was issued is
+ * the honest version of "not wired yet" — visibly not delivered, and visibly
+ * working.
+ *
+ * THE CODE ITSELF IS MASKED unless `CW_LOG_LOGIN_CODES=1`. This fallback
+ * engages silently on either half of a partial email config, and it is the
+ * server's default when no sender is passed, so on a real deployment whoever
+ * could read the service log could complete a sign-in for any address they
+ * could start a challenge for — including the owner's. Printing it is a
+ * DEVELOPMENT convenience and now says so out loud: the flag is the whole
+ * interface, and the masked line names it so a developer who needs the code
+ * is one environment variable away rather than lost.
  *
  * WHEN A PROVIDER IS PICKED, the shape it takes is decided and small:
  *
@@ -66,16 +76,54 @@ export function loginCodeText(req: CodeSendRequest): string {
 }
 
 /**
- * The default: print the code to the server log.
+ * Is printing the live code to the log turned on?
+ *
+ * Off unless `CW_LOG_LOGIN_CODES` is explicitly affirmative. Read per send
+ * rather than at construction, so a process that sets it before booting a
+ * server gets it either way round.
+ */
+export function loginCodeLoggingEnabled(
+  env: Record<string, string | undefined> = process.env,
+): boolean {
+  const raw = env.CW_LOG_LOGIN_CODES?.trim().toLowerCase();
+  return raw === '1' || raw === 'true' || raw === 'yes' || raw === 'on';
+}
+
+export interface LogCodeSenderOptions {
+  /**
+   * Print the code itself rather than masking it. Defaults to
+   * `loginCodeLoggingEnabled()`. Passed explicitly by tests, which must not
+   * depend on an environment variable another file may have set.
+   */
+  printCode?: boolean;
+}
+
+/**
+ * The default: record in the server log that a code was issued.
+ *
+ * The CODE is printed only when `printCode` says so — see the header. The
+ * recipient and the expiry are always printed: they are what makes "the flow
+ * ran" checkable, and neither of them completes a sign-in.
  *
  * `log` is injectable so a test can read what was sent without scraping
  * stdout, and so a future caller could route it somewhere else.
  */
-export function createLogCodeSender(log: (line: string) => void = console.log): CodeSender {
+export function createLogCodeSender(
+  log: (line: string) => void = console.log,
+  opts: LogCodeSenderOptions = {},
+): CodeSender {
   return {
     name: 'log',
     async send(req: CodeSendRequest): Promise<void> {
-      log(`[auth] login code for ${req.to}: ${req.code} (expires in ${req.expiresInMinutes}m)`);
+      const printCode = opts.printCode ?? loginCodeLoggingEnabled();
+      if (printCode) {
+        log(`[auth] login code for ${req.to}: ${req.code} (expires in ${req.expiresInMinutes}m)`);
+        return;
+      }
+      log(
+        `[auth] login code issued for ${req.to} (expires in ${req.expiresInMinutes}m) — ` +
+          'not delivered anywhere; set CW_LOG_LOGIN_CODES=1 to print it',
+      );
     },
   };
 }

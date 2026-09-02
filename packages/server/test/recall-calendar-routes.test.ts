@@ -133,15 +133,51 @@ const eventually = async (check: () => boolean, ms = 2_000): Promise<void> => {
   expect(check()).toBe(true);
 };
 
-const syncWebhook = (base: string): Promise<Response> =>
-  fetch(`${base}/recall/status`, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({
-      event: 'calendar.sync_events',
-      data: { calendar_id: 'cal-1', last_updated_ts: '2026-09-01T00:00:00Z' },
-    }),
+/**
+ * A signing secret this suite invents. `POST /recall/status` is armed only
+ * while its credential is configured — with the secret unset the route is a
+ * 404 on every host, not an unsigned-accept path — so the sync webhook below
+ * has to be signed the way Recall's backend signs one.
+ */
+const WEBHOOK_SECRET = `whsec_${btoa('claude-workspaces-calendar-test')}`;
+
+/** Svix headers for a body, signed the way Recall's backend signs one. */
+const signBody = async (body: string, id: string): Promise<Record<string, string>> => {
+  const timestamp = String(Math.floor(Date.now() / 1000));
+  const raw = WEBHOOK_SECRET.slice('whsec_'.length);
+  const key = await crypto.subtle.importKey(
+    'raw',
+    Uint8Array.from(atob(raw), (c) => c.charCodeAt(0)) as unknown as ArrayBuffer,
+    { name: 'HMAC', hash: 'SHA-256' },
+    false,
+    ['sign'],
+  );
+  const mac = new Uint8Array(
+    await crypto.subtle.sign('HMAC', key, new TextEncoder().encode(`${id}.${timestamp}.${body}`)),
+  );
+  return {
+    'webhook-id': id,
+    'webhook-timestamp': timestamp,
+    'webhook-signature': `v1,${btoa(String.fromCharCode(...mac))}`,
+  };
+};
+
+/** Each delivery needs its own id — a repeat inside the window is a replay
+ *  and answers 409, which would read here as a route that stopped working. */
+let syncDelivery = 0;
+
+const syncWebhook = async (base: string): Promise<Response> => {
+  const body = JSON.stringify({
+    event: 'calendar.sync_events',
+    data: { calendar_id: 'cal-1', last_updated_ts: '2026-09-01T00:00:00Z' },
   });
+  const headers = await signBody(body, `msg_calendar_sync_${++syncDelivery}`);
+  return fetch(`${base}/recall/status`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', ...headers },
+    body,
+  });
+};
 
 describe('calendar routes', () => {
   let dataDir: string;
@@ -156,6 +192,7 @@ describe('calendar routes', () => {
       port: 0,
       dataDir,
       meetingBot: fakes.relayClient,
+      meetingBotWebhookSecret: WEBHOOK_SECRET,
       calendarBot: { client: fakes.client, google: fakes.google, vault: fakes.vault },
     });
     base = `http://localhost:${handle.port}`;
