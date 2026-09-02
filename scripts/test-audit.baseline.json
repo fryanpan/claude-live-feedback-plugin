@@ -1,6 +1,6 @@
 {
   "_comment": "Ratchet for bun run test:audit. Counts may only go down. Lower a number in the same commit that lowers the count.",
   "fixedSleeps": 0,
-  "sourceShape": 77,
+  "sourceShape": 67,
   "wallClock": 10
 }
