@@ -14,8 +14,7 @@ import { join } from 'node:path';
 import { Rooms } from '../src/rooms.ts';
 import { SseHub } from '../src/sse.ts';
 import { createWebhookDispatcher } from '../src/webhooks.ts';
-
-const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+import { waitFor } from './wait-for.ts';
 
 describe('pendingFileWrites', () => {
   let dataDir: string;
@@ -51,8 +50,9 @@ describe('pendingFileWrites', () => {
     expect(busy[0]?.docId).toBe('c1');
     expect(busy[0]?.path).toBe(path);
 
-    await sleep(1100);
-    expect(rooms.pendingFileWrites()).toEqual([]);
+    await waitFor(() => rooms.pendingFileWrites().length === 0, {
+      describe: 'the pending write-back to drain',
+    });
   });
 
   it('reports only bindings under the root it was asked about', () => {

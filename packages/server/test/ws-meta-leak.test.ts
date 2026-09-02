@@ -10,7 +10,7 @@
  * an absence of secrets means anything.
  */
 import { afterAll, beforeAll, describe, expect, it } from 'bun:test';
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { getMeta } from '@feedback/core';
@@ -21,6 +21,7 @@ import * as Y from 'yjs';
 import { readPrivateMeta } from '../src/private-meta.ts';
 import { type ServerHandle, createServer } from '../src/server.ts';
 import { SHARE_COOKIE } from '../src/share/link-session.ts';
+import { waitForFile } from './wait-for.ts';
 
 const MSG_SYNC = 0;
 const PUBLIC_HOST = 'feedback.example.com';
@@ -217,8 +218,7 @@ describe('the sync channel leaks no host metadata', () => {
       method: 'POST',
       body: JSON.stringify({ find: CANARY, replace: 'RewrittenBody' }),
     });
-    await new Promise((r) => setTimeout(r, 1500));
-    expect(readFileSync(docPath, 'utf8')).toContain('RewrittenBody');
+    await waitForFile(docPath, (t) => t.includes('RewrittenBody'));
   });
 });
 
