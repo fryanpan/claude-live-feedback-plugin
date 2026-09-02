@@ -960,7 +960,16 @@ body.has-set .doc-switcher-caret {
    queue, walkthrough) and the board (goals as bands, quick add, review
    banner), with Activity as a board-pane view; presence and lead live in the
    settings panel. Mobile per design-mobile.md: minmax(0,1fr) columns, 16px
-   body text, ≥36px tap targets, single-column stack at ≤720px. */
+   body text, ≥36px tap targets, single-column stack at ≤720px.
+
+   This banner runs all the way to VOICE and is roughly half the
+   stylesheet, so every surface inside it carries a sub-banner of its own:
+
+       grep -n '##### HUB' packages/markdown-app/src/styles.css
+
+   Put a rule under the sub-banner named for the surface it paints.
+   Appending at the end of the hub region — or at the end of the file —
+   is what makes two branches conflict over a line neither cares about. */
 
 body.hub-body {
   overflow: auto;
@@ -1044,7 +1053,9 @@ body.hub-body {
   white-space: nowrap;
 }
 
-/* --- top-right cluster: who is here, share, settings, me ---
+/* ################# HUB · TOP-RIGHT CLUSTER #################
+   Who is here, share, settings, me.
+
    Everything that is ABOUT the workspace rather than IN it (Bryan, 2026-08-18:
    the header block above the task list should shrink drastically). Each of
    these had its own full-width strip before and between them they pushed the
@@ -1232,7 +1243,9 @@ body.hub-body {
   color: var(--red);
 }
 
-/* --- settings panel: the surfaces that are not the task list ---
+/* ################# HUB · SETTINGS PANEL #################
+   The surfaces that are not the task list.
+
    A true popover, anchored to the header's bottom-right under the settings
    button (Bryan, 2026-08-18: "Settings should be a popover, not a thing that
    shifts the whole page"). It overlays the board — opening it moves nothing.
@@ -1422,7 +1435,9 @@ body.hub-body {
   background: color-mix(in srgb, var(--fg) 85%, var(--bg-panel));
 }
 
-/* --- lead-agent strip: who is responsible for this board --- */
+/* ################# HUB · LEAD SEAT + PRESENCE STRIP #################
+   Who is responsible for this board (`.hub-lead`), and who is here
+   right now (`.hub-presence`, §2.7). */
 .hub-lead {
   display: flex;
   flex-wrap: wrap;
@@ -1540,7 +1555,10 @@ body.hub-body {
   overflow-wrap: anywhere;
 }
 
-/* --- main single-column layout ---
+/* ################# HUB · PANE LAYOUT + BOARD CONTROLS #################
+   The single content track, the board's own controls (§3.9), and the
+   quick actions that start work.
+
    Once the Docs and Open-threads rails came out (Bryan: "remove docs and live
    threads from the task list"), the board is the only content track at every
    width. `minmax(0, 1fr)` rather than `1fr`: `1fr` is `minmax(auto, 1fr)`, and
@@ -1651,7 +1669,8 @@ body.hub-body {
   }
 }
 
-/* --- decisions strip: the count first, the list second --- */
+/* ################# HUB · DECISIONS STRIP #################
+   The count first, the list second. */
 /* Since the Home pane took the full queue, this container carries ONE line —
    "N items are waiting for your review" + Go to Home — so it lays out as a
    row. It keeps the yellow alarm skin: the banner exists only while items
@@ -1795,7 +1814,9 @@ body.hub-body {
   color: var(--fg-muted);
 }
 
-/* --- review walkthrough: one at a time, in the derived order ---
+/* ################# HUB · REVIEW WALKTHROUGH #################
+   One item at a time, in the derived order.
+
    A PAGE inside the Home pane (approved mockup home-pane-mockup-v1), not an
    overlay: it takes the Home column, and Home's own content is hidden while
    it is up. It used to be a fixed dimmed dialog over the board, which is what
@@ -2375,7 +2396,10 @@ body.hub-body {
   color: var(--fg);
 }
 
-/* --- HOME PANE (What's New brief + For Your Review) + workspace nav ---
+/* ################# HUB · WORKSPACE NAV RAIL #################
+   Where you are in the workspace. The Home pane's own content has a
+   sub-banner of its own further down.
+
    The per-workspace Home page (approved mockup a30a15d): the since-last-read
    brief first, then the review queue, on a reading column.
 
@@ -2457,7 +2481,9 @@ body.hub-body {
   height: 100%;
 }
 
-/* --- the hold-to-talk mic, docked at the rail's foot ---
+/* ################# HUB · RAIL MIC (HOLD-TO-TALK) #################
+   Docked at the rail's foot.
+
 
    Bryan, 2026-08-19: *"can we make a more durable fix for the mic? Place it in
    a fixed location instead of floating. Put it in bottom left of left navbar
@@ -2551,6 +2577,9 @@ body.hub-body {
   bottom: calc(100% + 8px);
   z-index: auto;
 }
+/* ################# HUB · HOME BRIEF + REVIEW QUEUE #################
+   The since-last-read brief and the ranked For Your Review list, on a
+   reading column. */
 /* A reading column, not the full stage — the brief is prose and a full-width
    line is unreadable. The phone already has this width and needs no case. */
 .hub-home {
@@ -2805,7 +2834,9 @@ body.hub-body {
   color: var(--accent);
   cursor: pointer;
 }
-/* --- Recent activity: what moved lately, grouped BY TASK ---
+/* ################# HUB · HOME RECENT ACTIVITY #################
+   What moved lately, grouped BY TASK.
+
    The third Home section (approved mock, 2026-08-29): the queue's panel
    treatment and heading, one group per task, the group's header in the
    queue's own `.hub-review-row` anatomy, its recent notes as indented muted
@@ -2994,7 +3025,9 @@ body.hub-body {
 .hub-board > [data-preact-island] {
   display: contents;
 }
-/* --- the board's foot line: what is true of the LIST, under the last band ---
+/* ################# HUB · BOARD FOOT LINE + SECTIONS #################
+   What is true of the LIST, under the last band.
+
    One quiet line, drawn only when it has something to say. It is where the
    archived count lives, and it is NOT a nav item: the phone rail has exactly
    four seats and "what did I put down" is a thing people check, not a place
@@ -3037,7 +3070,10 @@ body.hub-body {
   font-size: 13px;
   margin: 2px 0 0;
 }
-/* --- the goal band: the goal IS a row, and the row carries its tasks ---
+/* ################# HUB · GOAL BANDS #################
+   The goal IS a row, and the row carries its tasks. Adding a goal from
+   the list itself lives here too.
+
    (Bryan's approved mock, 2026-08-23.) The bracket makes "the goal contains
    these" visible without an indent deep enough to make the tasks read as
    smaller work. The row carries NO working chrome — no counts, no drag
@@ -3415,7 +3451,8 @@ body.hub-body {
   font-size: 15px;
   font-weight: 600;
 }
-/* --- the goal DETAIL panel ---
+/* ################# HUB · GOAL DETAIL PANEL #################
+
    What a goal row's tap opens (decision 4). It reuses the task panel's
    chrome classes wholesale — panel, head, fields — so only what a goal
    panel has and a task panel does not is declared here. */
@@ -3482,7 +3519,9 @@ body.hub-body {
   background: var(--bg-hover);
   outline: none;
 }
-/* --- archived tasks: the restore list ---
+/* ################# HUB · ARCHIVED TASKS #################
+   The restore list.
+
    Deliberately not a board row. A board row is a working surface — handle,
    status, owner, reorder keys — and none of that applies to something that is
    off the board; offering it would invite edits whose only effect is to change
@@ -3555,7 +3594,8 @@ body.hub-body {
 .hub-archived-row--goal .hub-archived-title {
   font-weight: 600;
 }
-/* --- row anatomy: drag handle · status · title · badges · open caret · assignee --- */
+/* ################# HUB · TASK ROW ANATOMY #################
+   Drag handle · status · title · badges · open caret · assignee. */
 /* The handle is invisible until you go looking for it: a permanent column of
    ⠿ is noise on a list whose job is to be skimmed. Revealed by hovering the
    row (a pointer that can hover), and by focusing the handle itself — a
@@ -3776,7 +3816,7 @@ body.hub-body {
   border-color: var(--border);
   background: none;
 }
-/* --- dragging --- */
+/* ################# HUB · BOARD DRAG AND DROP ################# */
 .hub-task-row.hub-dragging {
   opacity: 0.45;
 }
@@ -3991,7 +4031,8 @@ body.hub-body {
   border-color: var(--red);
   color: var(--red);
 }
-/* --- activity view (exactly two filters — §3.9) --- */
+/* ################# HUB · BOARD ACTIVITY VIEW #################
+   Exactly two filters — §3.9. */
 /* Uptime banner (deploy readiness — §3.12 commit 11): the 99% target
    rendered where the after-the-fact review happens. */
 .hub-uptime {
@@ -4039,7 +4080,10 @@ body.hub-body {
   word-break: break-word;
 }
 
-/* --- task detail (opens instantly — §3.9) ---
+/* ################# HUB · TASK DETAIL PANEL #################
+   Opens instantly — §3.9. The key-fields row and the blocked note are
+   part of this surface.
+
 
    TWO RULES HOLD THIS WHOLE SURFACE TOGETHER, and both were reported missing
    ("laid out by a monkey… random elements not aligned and inconsistent spacing
@@ -4666,7 +4710,9 @@ a.hub-link-chip:hover {
   opacity: 0.6;
   cursor: progress;
 }
-/* --- the decision card: a question, the ways to answer it, and a box ---
+/* ################# HUB · TASK DECISION CARD #################
+   A question, the ways to answer it, and a box.
+
 
    Reported 2026-08-18: "options crammed against their details, no spacing
    between the answer buttons, no spacing between buttons and comment text,
@@ -5114,7 +5160,9 @@ a.hub-link-chip:hover {
 .hub-detail-body-head + .hub-detail-body-slot {
   margin-top: 0;
 }
-/* --- The Activity feed: moves, audit rows and every note, in full ---
+/* ################# HUB · TASK ACTIVITY FEED #################
+   Moves, audit rows and every note, in full.
+
    ONE list, newest first (Bryan, 2026-08-29: "all task events as well as
    agent end of turn updates in one feed"). A note row is the agent's whole
    message — the Stop hook's end-of-turn text or a posted status — rendered
@@ -5247,7 +5295,9 @@ a.hub-link-chip:hover {
   z-index: 800;
 }
 
-/* --- Comments | Activity: the two tabs below the description ---
+/* ################# HUB · TASK TABS + DISCUSSION #################
+   The two tabs below the description, and the task's own comments.
+
    The record (history, original words, the leftover fields, the link chips)
    used to sit inline under the discussion, so reaching the bottom of a
    conversation meant scrolling past a transition list first. */
@@ -5478,7 +5528,7 @@ a.hub-link-chip:hover {
   border-color: var(--accent);
 }
 
-/* --- help + toast --- */
+/* ################# HUB · HELP OVERLAY + TOAST ################# */
 .hub-help {
   position: fixed;
   inset: 0;
@@ -5548,7 +5598,9 @@ a.hub-link-chip:hover {
   background: color-mix(in srgb, var(--bg) 20%, transparent);
 }
 
-/* --- ≥1660px: the task detail is a right-hand split pane, not a modal ---
+/* ################# HUB · RESPONSIVE ≥1660px (SPLIT PANE) #################
+   The task detail is a right-hand split pane, not a modal.
+
 
    Bryan's report: "the current modal is cramped on bigger screens" — a centred
    860px card on a 1600px display leaves the board unreadable behind a dimmed
@@ -5679,7 +5731,9 @@ a.hub-link-chip:hover {
   }
 }
 
-/* --- ≤1100px: the nav rail becomes a horizontal strip above the content ---
+/* ################# HUB · RESPONSIVE ≤1100px (NAV STRIP) #################
+   The nav rail becomes a horizontal strip above the content.
+
 
    A 170px rail plus its gap costs too much of the board's width at laptop-
    window sizes, so the rail folds up into a tab strip on its own row. The
@@ -5942,7 +5996,9 @@ a.hub-link-chip:hover {
   }
 }
 
-/* --- mobile (≤720px per design-mobile.md) --- */
+/* ################# HUB · RESPONSIVE ≤720px (PHONE) #################
+   Per design-mobile.md. Row anatomy and task titles on a narrow
+   viewport are inside. */
 @media (max-width: 900px) {
   /* Home/Board nav: the bottom bar from the approved mockup. Fixed, so the
      switch is under the thumb wherever the board has scrolled to. z-index 60:
