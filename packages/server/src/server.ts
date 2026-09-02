@@ -6166,9 +6166,26 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
         // first would be answered `404 unknown endpoint` by the token
         // lookup. Order is load-bearing — keep these two adjacent.
         if (pathname === RECALL_STATUS_PATH && req.method === 'POST') {
-          const raw = await req.text();
           const secret = opts.meetingBotWebhookSecret;
-          if (secret) {
+          // ARMED ONLY WHILE ITS CREDENTIAL IS CONFIGURED — on every host,
+          // not just the dedicated callback one.
+          //
+          // `recallCallbackAllows` already closes this path on the callback
+          // hostname when `RECALL_WEBHOOK_SECRET` is unset, precisely because
+          // an unset secret used to mean "accept unsigned bodies". But the
+          // route is reachable on every other admitting host class too, and
+          // there the whole signature-and-replay block sat inside `if
+          // (secret)`: an unauthenticated non-browser caller on the LAN or the
+          // tailnet could inject arbitrary bot-status and calendar-sync
+          // events, unsigned and unbounded by the replay guard. Unset is the
+          // DEFAULT (`bin.ts` warns rather than refuses), so that was the
+          // shipped state.
+          //
+          // 404 rather than 401: without a secret there is no credential this
+          // route could check, so it is not a door that can be knocked on.
+          if (!secret) return j(404, { error: 'not_found' });
+          const raw = await req.text();
+          {
             const svix = svixHeadersFrom(req.headers);
             const signed = await verifySvixSignature({ secret, body: raw, headers: svix });
             if (!signed) return j(401, { error: 'bad signature' });
