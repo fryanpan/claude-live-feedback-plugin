@@ -1,8 +1,9 @@
 import { afterAll, beforeAll, describe, expect, it } from 'bun:test';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { type ServerHandle, createServer } from '../src/server.ts';
+import { waitForFile } from './wait-for.ts';
 
 /**
  * The layer no unit test covers: `POST /api/docs/:id/find_and_replace` is what
@@ -15,8 +16,6 @@ describe('find_and_replace over HTTP keeps the marks on a bound file', () => {
   let handle: ServerHandle;
   let dataDir: string;
   let base: string;
-
-  const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
   beforeAll(() => {
     dataDir = mkdtempSync(join(tmpdir(), 'feedback-marks-'));
@@ -63,8 +62,7 @@ describe('find_and_replace over HTTP keeps the marks on a bound file', () => {
     expect(body.ok).toBe(true);
     expect(body.marksDropped).toBeUndefined();
 
-    await sleep(1100); // debounced write-back
-    const written = readFileSync(path, 'utf8');
+    const written = await waitForFile(path, (t) => t.includes('**Fast, secure sharing**'));
     expect(written).toContain('**Fast, secure sharing**');
     // Positive control: the sibling label nobody touched still has its bold,
     // so "the file has ** in it" is not passing for an unrelated reason.

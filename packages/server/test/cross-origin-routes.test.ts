@@ -17,6 +17,7 @@ import * as encoding from 'lib0/encoding';
 import * as syncProtocol from 'y-protocols/sync';
 import * as Y from 'yjs';
 import { type ServerHandle, createServer } from '../src/server.ts';
+import { waitFor } from './wait-for.ts';
 
 const EVIL = 'https://evil.example.com';
 const CANARY = 'CanaryDocBody';
@@ -206,8 +207,14 @@ describe('cross-origin access to the trusted host', () => {
   });
 
   describe('websocket — CORS cannot help here', () => {
+    /**
+     * Open a socket and read back what it synced. `until` names the text the
+     * caller expects, so a sync that works returns as soon as it has landed;
+     * a caller that expects NOTHING passes no predicate and pays the window.
+     */
     const sync = async (
       origin: string | null,
+      until?: (text: string) => boolean,
     ): Promise<{ opened: boolean; text: string; closeCode: number | null }> => {
       const ydoc = new Y.Doc();
       const ws = new WebSocket(`ws://localhost:${handle.port}/y/doc-1`, {
@@ -234,7 +241,15 @@ describe('cross-origin access to the trusted host', () => {
         syncProtocol.readSyncMessage(dec, enc, ydoc, ws);
         if (encoding.length(enc) > 1) ws.send(encoding.toUint8Array(enc));
       });
-      await new Promise((r) => setTimeout(r, 1200));
+      if (until) {
+        await waitFor(() => until(ydoc.getXmlFragment('prose').toString()), {
+          describe: 'the socket to sync the document text',
+        });
+      } else {
+        // timed: a socket that must never sync has no observable to poll —
+        // only an elapsed window can say nothing arrived.
+        await new Promise((r) => setTimeout(r, 1200));
+      }
       const text = ydoc.getXmlFragment('prose').toString();
       try {
         ws.close();
@@ -245,23 +260,23 @@ describe('cross-origin access to the trusted host', () => {
     it('lets a same-origin page sync — POSITIVE CONTROL', async () => {
       // Without this, "evil got nothing" would be indistinguishable from a
       // socket that never works for anyone.
-      const ok = await sync(`http://${host}`);
+      const ok = await sync(`http://${host}`, (t) => t.includes(CANARY));
       expect(ok.opened).toBe(true);
       expect(ok.text).toContain(CANARY);
     });
 
     it('lets a loopback dev server sync — the widget', async () => {
-      const ok = await sync('http://localhost:3000');
+      const ok = await sync('http://localhost:3000', (t) => t.includes(CANARY));
       expect(ok.text).toContain(CANARY);
     });
 
     it('lets a dev server on this machine’s tailnet name sync', async () => {
-      const ok = await sync('http://mac-mini.example.ts.net:3000');
+      const ok = await sync('http://mac-mini.example.ts.net:3000', (t) => t.includes(CANARY));
       expect(ok.text).toContain(CANARY);
     });
 
     it('lets a non-browser client sync — agents and the MCP child', async () => {
-      const ok = await sync(null);
+      const ok = await sync(null, (t) => t.includes(CANARY));
       expect(ok.text).toContain(CANARY);
     });
 
@@ -440,6 +455,7 @@ describe('the public share host is same-origin only', () => {
       syncProtocol.readSyncMessage(dec, enc, ydoc, ws);
       if (encoding.length(enc) > 1) ws.send(encoding.toUint8Array(enc));
     });
+    // timed: the claim is that nothing ever syncs, so the window has to pass.
     await new Promise((r) => setTimeout(r, 1200));
     expect(ydoc.getXmlFragment('prose').toString()).toBe('');
     try {
@@ -491,6 +507,7 @@ describe('the public share host is same-origin only', () => {
       syncProtocol.readSyncMessage(dec, enc, ydoc, ws);
       if (encoding.length(enc) > 1) ws.send(encoding.toUint8Array(enc));
     });
+    // timed: the claim is that nothing ever syncs, so the window has to pass.
     await new Promise((r) => setTimeout(r, 1200));
     expect(ydoc.getXmlFragment('prose').toString()).toBe('');
     try {
