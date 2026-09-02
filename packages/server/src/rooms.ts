@@ -1806,6 +1806,16 @@ export class Rooms {
    * on disk at the cost of a map lookup. Resident first — a live room's meta
    * is newer than the last row written for it.
    */
+  /**
+   * The file a doc is bound to right now, if any — what the meeting record's
+   * `meeting.json` names so a transcript folder can be traced to its doc
+   * even after the doc moves or is committed.
+   */
+  boundPathOf(docId: string): string | undefined {
+    const target = this.peek(docId)?.docId ?? this.aliases.get(docId) ?? docId;
+    return this.fileBindings.get(target)?.path;
+  }
+
   peekMeta(docId: string): DocMeta | undefined {
     const resident = this.peek(docId);
     if (resident) return resident.meta;
