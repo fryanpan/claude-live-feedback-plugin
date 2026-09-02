@@ -591,6 +591,17 @@ it re-lists that an earlier section already holds are dropped rather than
 said twice. An earlier rule kept a section the ledger still claimed items in
 as the target "once chosen", which put live notes above text typed below them.
 
+**The live transcript is one run of text at the end of the doc.** The
+markdown app appends a dashed "Live transcript" zone after the editor's
+content (`meeting-live-zone.ts`, plain DOM, never Yjs) where the engine's
+turns render as inline spans joined by a space: no per-turn time stamp and no
+per-turn block, because a turn is the engine's unit of delivery, not anything
+a reader wants marked (owner, 2026-09-01: *"engine turns have no meaning or
+value to the viewer, I expect a stream of text"*). The only line breaks are
+ones the engine put in a turn's own text. When a tick fires, the settled
+words split off into a card above the stream; when the note lands they leave
+the zone, and the settle wash on the written note carries the eye up.
+
 **Two clocks fire a tick, and whichever comes first wins.**
 
 - **A pause** — no new turn activity for `DEFAULT_NOTES_QUIET_MS` (4s).
