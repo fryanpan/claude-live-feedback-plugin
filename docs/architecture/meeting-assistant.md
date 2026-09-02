@@ -917,7 +917,7 @@ stored content.
 discussion, reached a plan, and had no button). The plan gate's face rule
 admitted only `huddleKind: 'plan'`; the plan-request route never refused a
 discussion. And both floats' receipts — "Plan requested", "Review requested"
-— read *no lead agent attached, it will be answered when one attaches* while
+— read *no lead attached; answered when one joins* while
 the seat is empty, off the lead banner's own answer (`LeadBanner.watch`),
 because Bryan pressed Review with the agent offline and the receipt said
 "waiting for your agent" as if one were coming.

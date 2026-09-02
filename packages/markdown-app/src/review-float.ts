@@ -164,7 +164,7 @@ export function mountReviewFloat(opts: ReviewFloatOpts): ReviewFloatHandle {
     } else if (face === 'requested') {
       labelEl.textContent = 'Review requested';
       // The second half tells the truth about the wait: "waiting for X"
-      // while X is listening, and "no lead agent attached" while nobody
+      // while X is listening, and "no lead attached" while nobody
       // is — an unanswered ask that explains itself.
       const wait = leadReceiptSuffix(presence) ?? `waiting for ${named}`;
       subEl.textContent = requestedBy

@@ -330,7 +330,7 @@ describe('mountReviewFloat', () => {
       leadAgentId: 'Workspaces',
     };
 
-    it('reads "no lead agent attached" while the seat is empty, and flips back live', async () => {
+    it('reads "no lead attached" while the seat is empty, and flips back live', async () => {
       const feed = stubPresence();
       const float = mountReviewFloat({
         docId: 'd-h',
@@ -345,9 +345,7 @@ describe('mountReviewFloat', () => {
       expect(float.face()).toBe('requested');
       expect(sub()).toBe('Asked by Sam — waiting for Workspaces');
       feed.push(PRESENCE(false));
-      expect(sub()).toBe(
-        'Asked by Sam — no lead agent attached, it will be answered when one attaches',
-      );
+      expect(sub()).toBe('Asked by Sam — no lead attached; answered when one joins');
       feed.push(PRESENCE(true));
       expect(sub()).toBe('Asked by Sam — waiting for Workspaces');
       float.destroy();
@@ -369,7 +367,7 @@ describe('mountReviewFloat', () => {
       feed.push(PRESENCE(false));
       resolve(REQUESTED);
       await float.ready;
-      expect(sub()).toContain('no lead agent attached');
+      expect(sub()).toContain('no lead attached');
       float.destroy();
     });
 
@@ -385,7 +383,7 @@ describe('mountReviewFloat', () => {
       });
       await float.ready;
       feed.push(PRESENCE(false));
-      expect(sub()).toBe('No lead agent attached, it will be answered when one attaches');
+      expect(sub()).toBe('No lead attached; answered when one joins');
       float.destroy();
     });
 

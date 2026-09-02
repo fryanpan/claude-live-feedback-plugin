@@ -598,7 +598,7 @@ describe('mountPlanGate', () => {
     expect(sub()).toBe('Asked by Sam — waiting for Workspaces');
     feed.push({ event: 'lead.presence', docId: 'd-ask', workspaceId: 'w-1', live: false });
     expect(sub()).toBe(
-      'Asked by Sam — no lead agent attached, it will be answered when one attaches',
+      'Asked by Sam — no lead attached; answered when one joins',
     );
     feed.push({ event: 'lead.presence', docId: 'd-ask', workspaceId: 'w-1', live: true });
     expect(sub()).toBe('Asked by Sam — waiting for Workspaces');
