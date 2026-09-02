@@ -9,85 +9,94 @@
  *    the layer that silently dropped `groups` once already: every layer under
  *    it reports success while the caller gets nothing usable back.
  *  - **The bundle.** Peers load the committed `packages/plugin/mcp/index.js`,
- *    not the source, and a tool description IS the deliverable when the
- *    change is "here is the new way to say this" — there is no behaviour to
- *    notice, so nothing else reports the miss.
+ *    not the source, and a tool description IS the deliverable when the change
+ *    is "here is the new way to say this" — there is no behaviour to notice,
+ *    so nothing else reports the miss.
  *
- * Source-reading, like create-tasks-tool.test.ts: mcp.ts is a bundle entry
- * point and exports nothing.
+ * Both used to be checked by reading text: a slice of `mcp.ts` for the
+ * declaration, and `BUNDLE.toContain('created: res.created')` for the forward.
+ * The second is the weaker — it passes on a handler no client can reach, and
+ * breaks on a rename that changes nothing. The harness runs the committed
+ * bundle as a real MCP server, so a declaration is what `tools/list` returns
+ * and a forward is what the caller is actually handed back.
  */
-import { readFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
-import { fileURLToPath } from 'node:url';
-import { describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { type BundleHarness, type Recorded, startBundle } from './harness/mcp-bundle.ts';
 
-const HERE = dirname(fileURLToPath(import.meta.url));
-const SRC = readFileSync(join(HERE, '../src/mcp.ts'), 'utf8');
-const BUNDLE = readFileSync(join(HERE, '../../plugin/mcp/index.js'), 'utf8');
+/** The goals route's answer: one band created, and the rest of the verdict. */
+const goalsReply = {
+  changed: true,
+  created: [{ id: 'g-7Qa2', title: 'Ship the search revamp' }],
+  movedToChores: ['t-9'],
+  strandedDone: ['t-4'],
+};
 
-function handlerFor(tool: string): string {
-  const start = SRC.indexOf(`case '${tool}': {`);
-  expect(start, `no handler for ${tool}`).toBeGreaterThan(-1);
-  const rest = SRC.slice(start + 1);
-  return rest.slice(0, rest.indexOf('case '));
-}
+let mcp: BundleHarness;
 
-function declarationFor(tool: string): string {
-  const start = SRC.indexOf(`name: '${tool}',\n      description:`);
-  expect(start, `no declaration for ${tool}`).toBeGreaterThan(-1);
-  const rest = SRC.slice(start);
-  return rest.slice(0, rest.indexOf('},\n    {'));
-}
+beforeAll(async () => {
+  mcp = await startBundle((req: Recorded) => (req.path.endsWith('/goals') ? goalsReply : {}));
+}, 60_000);
+afterAll(async () => {
+  await mcp?.stop();
+});
+
+/** The whole declaration as a client receives it, description included. */
+const declText = (tool: string) => JSON.stringify(mcp.tool(tool) ?? {});
 
 describe('set_goal_list declares the generated-id contract', () => {
+  it('POSITIVE CONTROL: the running bundle serves a known tool', () => {
+    expect(mcp.tool('list_attachments')).toBeDefined();
+    expect(mcp.tool('set_goal_tree')).toBeUndefined();
+  });
+
   it('does not require an id', () => {
-    const decl = declarationFor('set_goal_list');
+    const goals = mcp.tool('set_goal_list')?.inputSchema?.properties?.goals as
+      | { items?: { required?: string[] } }
+      | undefined;
     // Positive control: the schema is really in view — `title` is required, so
-    // a decl slice that captured nothing fails here first.
-    expect(decl.match(/required: \['title'\]/g) ?? []).toHaveLength(1);
-    expect(decl).not.toMatch(/required: \['id', 'title'\]/);
+    // a lookup that captured nothing fails here first.
+    expect(goals?.items?.required).toEqual(['title']);
   });
 
   // Subgoals were removed from the product (Bryan, 2026-08-30). The tool must
   // stop offering a shape the store will only flatten — an agent that submits
   // one gets bands it did not mean to create.
   it('offers no nesting', () => {
-    expect(declarationFor('set_goal_list')).not.toMatch(/subgoals/);
-    expect(declarationFor('reorder_goals')).not.toMatch(/parent/);
+    expect(declText('set_goal_list')).not.toContain('subgoals');
+    expect(declText('reorder_goals')).not.toContain('parent');
   });
 
   it('says how to create, how to keep, and what happens to an id the board lacks', () => {
-    const decl = declarationFor('set_goal_list');
-    expect(decl).toMatch(/Goal ids are generated and permanent/);
-    expect(decl).toMatch(/no id to add a band/);
-    expect(decl).toMatch(/unknown-goal-id/);
-    expect(decl).toMatch(/created/);
+    const decl = declText('set_goal_list');
+    expect(decl).toContain('Goal ids are generated and permanent');
+    expect(decl).toContain('no id to add a band');
+    expect(decl).toContain('unknown-goal-id');
+    expect(decl).toContain('created');
   });
 
   it('the sibling verbs stop describing the re-key as something that lands', () => {
     // rename_goal used to explain that renaming through set_goal_list "is a
     // removal plus an addition" — true then, wrong now, and a description that
     // describes a gesture the server refuses sends the agent to do it anyway.
-    expect(declarationFor('rename_goal')).toMatch(/The id never moves/);
+    expect(declText('rename_goal')).toContain('The id never moves');
   });
 });
 
 describe('the handler forwards `created` rather than dropping it', () => {
-  it('reads it off the response and returns it', () => {
-    const h = handlerFor('set_goal_list');
-    expect(h).toMatch(/created: Array<\{ id: string; title: string \}>/);
-    expect(h).toMatch(/created: res\.created/);
-  });
-});
-
-describe('the committed bundle peers load carries all of it', () => {
-  it('has the contract text and the forwarding', () => {
-    // Positive control first: a tool that has shipped for months is present,
-    // so a bundle read that returned something useless fails here rather than
-    // passing the assertions below vacuously.
-    expect(BUNDLE).toContain('list_attachments');
-    expect(BUNDLE).toContain('Goal ids are generated and permanent');
-    expect(BUNDLE).toContain('unknown-goal-id');
-    expect(BUNDLE).toContain('created: res.created');
+  it('hands the caller the id of the band it just created', async () => {
+    const res = await mcp.call('set_goal_list', {
+      workspaceId: 'w-1',
+      goals: [{ title: 'Ship the search revamp' }],
+    });
+    expect(res.isError).toBe(false);
+    expect(res.sent.map((r) => `${r.method} ${r.path}`)).toEqual(['PUT /api/workspaces/w-1/goals']);
+    const out = res.json as typeof goalsReply & { workspaceId: string };
+    expect(out.created).toEqual([{ id: 'g-7Qa2', title: 'Ship the search revamp' }]);
+    // The neighbours it is hand-copied beside, so a copy that lost one field
+    // is not mistaken for a copy that lost this one.
+    expect(out.changed).toBe(true);
+    expect(out.movedToChores).toEqual(['t-9']);
+    expect(out.strandedDone).toEqual(['t-4']);
+    expect(out.workspaceId).toBe('w-1');
   });
 });

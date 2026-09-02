@@ -9,36 +9,37 @@
  *  - The argument check is a real unit (`parseCapArg`), because a refusal
  *    that reaches the server as a 400 arrives as a thrown route error, and
  *    the point of validating in the tool is a message that says what to send.
- *  - The handler is source-read, like dispatch-tools.test.ts and for its
- *    reasons: mcp.ts is a bundle entry point and exports nothing, and a
- *    handler pointed at the wrong route — or one that forgets `author`, so
- *    the change is recorded against `unknown` instead of this agent — fails
- *    only in a peer's session. The route itself is covered end to end in
+ *  - The tool itself is driven through the committed bundle. This file used to
+ *    slice `mcp.ts` for the handler and then assert the string
+ *    `set_parallelism_cap` appears in the built file — a check that passes on a
+ *    tool nobody can call. The harness asks the running bundle for its
+ *    declarations and records the request the handler makes, so "PUTs the
+ *    route carrying this agent as author" is the actual wire body. The route
+ *    itself is covered end to end in
  *    packages/server/test/parallelism-cap.test.ts.
  */
-import { readFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
-import { fileURLToPath } from 'node:url';
-import { describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { parseCapArg } from '../src/parallelism-cap.ts';
+import { type BundleHarness, startBundle } from './harness/mcp-bundle.ts';
 
-const HERE = dirname(fileURLToPath(import.meta.url));
-const SRC = readFileSync(join(HERE, '../src/mcp.ts'), 'utf8');
-const BUNDLE = readFileSync(join(HERE, '../../plugin/mcp/index.js'), 'utf8');
+const CAP_VIEW = {
+  cap: 3,
+  isDefault: false,
+  default: 4,
+  inUse: 2,
+  free: 1,
+  holders: [{ taskId: 't-1', title: 'Ship the search revamp', agentName: 'Builder One' }],
+  lastChange: { actor: { name: 'Harness Agent' }, ts: 1_700_000_000_000, from: 4, to: 3 },
+};
 
-function handlerFor(tool: string): string {
-  const start = SRC.indexOf(`case '${tool}': {`);
-  expect(start, `no handler for ${tool}`).toBeGreaterThan(-1);
-  const rest = SRC.slice(start + 1);
-  return rest.slice(0, rest.indexOf('case '));
-}
+let mcp: BundleHarness;
 
-function declarationFor(tool: string): string {
-  const start = SRC.indexOf(`name: '${tool}',\n      description:`);
-  expect(start, `no declaration for ${tool}`).toBeGreaterThan(-1);
-  const rest = SRC.slice(start);
-  return rest.slice(0, rest.indexOf('},\n    {'));
-}
+beforeAll(async () => {
+  mcp = await startBundle(() => CAP_VIEW);
+}, 60_000);
+afterAll(async () => {
+  await mcp?.stop();
+});
 
 describe('parseCapArg', () => {
   it('accepts a positive integer as-is', () => {
@@ -70,50 +71,53 @@ describe('parseCapArg', () => {
 });
 
 describe('set_parallelism_cap tool', () => {
-  it('is declared with the two arguments the skill names, both required', () => {
-    const decl = declarationFor('set_parallelism_cap');
-    expect(decl).toMatch(/workspaceId: \{ type: 'string'/);
-    expect(decl).toMatch(/cap: \{\s*type: 'integer'/);
-    expect(decl).toMatch(/required: \['workspaceId', 'cap'\]/);
-    // It tells the lead what a change does and does not do — the sentence
-    // the skill already makes, so the two never disagree.
-    expect(decl).toMatch(/next dispatch/);
+  // Positive control: a tool that has shipped for months is reachable, so a
+  // harness that listed nothing would fail here rather than pass the rest
+  // vacuously.
+  it('POSITIVE CONTROL: the running bundle serves a known tool', () => {
+    expect(mcp.tool('list_attachments')).toBeDefined();
+    expect(mcp.tool('set_parallelism_ceiling')).toBeUndefined();
   });
 
-  it('refuses before any request when the cap is not a positive integer', () => {
-    const h = handlerFor('set_parallelism_cap');
-    const check = h.indexOf('parseCapArg(');
-    const call = h.indexOf('http(');
-    expect(check).toBeGreaterThan(-1);
-    expect(call).toBeGreaterThan(-1);
-    expect(check).toBeLessThan(call);
-    expect(h).toMatch(/return err\(/);
+  it('is declared to a client with the two arguments the skill names, both required', () => {
+    const decl = mcp.tool('set_parallelism_cap');
+    expect(decl).toBeDefined();
+    expect(decl?.inputSchema?.required).toEqual(['workspaceId', 'cap']);
+    expect(decl?.inputSchema?.properties?.workspaceId?.type).toBe('string');
+    expect(decl?.inputSchema?.properties?.cap?.type).toBe('integer');
+    // It tells the lead what a change does and does not do — the sentence the
+    // skill already makes, so the two never disagree.
+    expect(decl?.description).toContain('next dispatch');
   });
 
-  it('PUTs the route the board uses, carrying this agent as author', () => {
-    const h = handlerFor('set_parallelism_cap');
-    expect(h).toMatch(
-      /http\(\s*'PUT',\s*`\/api\/workspaces\/\$\{encodeURIComponent\(workspaceId\)\}\/parallelism-cap`/,
-    );
-    // `author: AUTHOR` is how every write tool identifies the agent (see
-    // rename_goal); the route records the actor from it. Without it the
-    // change lands as `unknown`.
-    expect(h).toMatch(/author: AUTHOR/);
-    // Positive control for the pattern: the neighbour it copies sends it too.
-    expect(handlerFor('rename_goal')).toMatch(/author: AUTHOR/);
+  it('refuses a cap that is not a positive integer without sending anything', async () => {
+    const res = await mcp.call('set_parallelism_cap', { workspaceId: 'w-1', cap: 0 });
+    expect(res.isError).toBe(true);
+    // The refusal is the point: nothing reached the server, and the message
+    // says what to send instead of relaying a 400 as a thrown route error.
+    expect(res.sent).toEqual([]);
+    expect(res.text.toLowerCase()).toContain('positive');
   });
 
-  it('returns the cap and the recorded last change, not just an ack', () => {
-    const h = handlerFor('set_parallelism_cap');
-    expect(h).toMatch(/cap: res\.cap/);
-    expect(h).toMatch(/lastChange: res\.lastChange/);
+  it('PUTs the route the board uses, carrying this agent as author', async () => {
+    const res = await mcp.call('set_parallelism_cap', { workspaceId: 'w DRa7/Bg', cap: 3 });
+    expect(res.isError).toBe(false);
+    expect(res.sent).toHaveLength(1);
+    expect(res.sent[0]?.method).toBe('PUT');
+    expect(res.sent[0]?.url).toBe('/api/workspaces/w%20DRa7%2FBg/parallelism-cap');
+    const body = res.sent[0]?.body as { cap: number; author?: { name?: string } };
+    expect(body.cap).toBe(3);
+    // Without an author the change lands as `unknown` instead of this agent.
+    expect(body.author?.name).toBe('Harness Agent');
   });
 
-  it('is in the committed bundle peers actually load', () => {
-    // Positive control: a tool that has shipped for months is present too,
-    // so a bundle read returning nothing useful fails rather than passes.
-    expect(BUNDLE).toContain('list_attachments');
-    expect(BUNDLE).toContain('set_parallelism_cap');
-    expect(BUNDLE).toContain('/parallelism-cap');
+  it('returns the cap and the recorded last change, not just an ack', async () => {
+    const res = await mcp.call('set_parallelism_cap', { workspaceId: 'w-1', cap: 3 });
+    const out = res.json as typeof CAP_VIEW & { workspaceId: string };
+    expect(out.workspaceId).toBe('w-1');
+    expect(out.cap).toBe(3);
+    expect(out.free).toBe(1);
+    expect(out.holders).toEqual(CAP_VIEW.holders);
+    expect(out.lastChange).toEqual(CAP_VIEW.lastChange);
   });
 });
