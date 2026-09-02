@@ -1,5 +1,5 @@
-import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { basename, dirname, extname, join, resolve } from 'node:path';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { basename, dirname, extname, join } from 'node:path';
 import {
   type Anchor,
   type DocMeta,
@@ -27,7 +27,6 @@ import {
   latestThreadedQuestion,
   locateReviewItemRange,
   normalizeEmail,
-  parseThreadReviewItemId,
   pendingDeclaration,
   readReviewPayload,
   readTaskReviewItem,
@@ -47,11 +46,7 @@ import {
   isContentHashedAsset,
   parseAssetManifest,
 } from '@feedback/core/asset-manifest';
-import {
-  DEFAULT_EFFORT_ESTIMATE_PROMPT,
-  EFFORT_ESTIMATE_PROMPT_VERSION,
-} from '@feedback/core/effort-estimate-prompt';
-import { DEFAULT_REVIEW_ITEM_CRITERIA } from '@feedback/core/review-judge-prompt';
+import { EFFORT_ESTIMATE_PROMPT_VERSION } from '@feedback/core/effort-estimate-prompt';
 import { needsCall } from '@feedback/core/summary-prompt';
 import type { Server as BunServer } from 'bun';
 import { acquireActivityLock, releaseActivityLock } from './activity-lock.ts';
@@ -74,7 +69,6 @@ import {
 } from './agent-watches.ts';
 import { AllowRuleProposals } from './allow-rules.ts';
 import { ARTIFACT_CHECK_ACTOR, ArtifactChecker } from './artifact-check.ts';
-import { attachNotes } from './attach-notes.ts';
 import { type CodeSender, createLogCodeSender } from './auth/code-sender.ts';
 import { CODE_TTL_MS, EmailCodes } from './auth/email-code.ts';
 import { SessionRevocations } from './auth/session-revocations.ts';
@@ -100,11 +94,10 @@ import {
   sentryHeadTags,
 } from './browser-sentry.ts';
 import { ChatAudit, isSharedAgentName, localDay } from './chat-audit.ts';
-import { clientReleaseStatus } from './client-release.ts';
 import { maybeCompress, maybeNotModified } from './compress.ts';
 import type { Deployer } from './deploy.ts';
 import { DispatchRegistry, type WatchFactory } from './dispatch-registry.ts';
-import { canonicalRepoRoot, normalizeDocHome, resolveHomeCheckout } from './doc-home.ts';
+import { normalizeDocHome, resolveHomeCheckout } from './doc-home.ts';
 import { RESERVED_DOC_PREFIXES } from './doc-ids.ts';
 import { compactDocRow, matchesDocFilters, pageDocs, parseListDocsQuery } from './doc-listing.ts';
 import {
@@ -132,15 +125,9 @@ import {
   PLAN_REQUEST_COMMENT,
   RESEARCH_TOPIC_MAX,
   REVIEW_REQUEST_COMMENT,
-  huddleAlias,
-  huddleFilePath,
-  huddleSeedMarkdown,
-  huddleTitle,
   meetingDocAlias,
   meetingDocFilePath,
   meetingDocTitle,
-  parseHuddleKind,
-  parseHuddleTopic,
   researchAskComment,
   researchPlaceholderMarkdown,
   researchSectionTitle,
@@ -201,7 +188,6 @@ import {
 } from './park-migration.ts';
 import { parkNoteText } from './park-note.ts';
 import type { PluginRefresher } from './plugin-refresh.ts';
-import { agentsBehind, checkableAttachments, readReleasedPluginVersion } from './plugin-release.ts';
 import { localHostnames, publicBaseUrl } from './public-host.ts';
 import { type PushFetch, PushNotifier, reviewItemNotification } from './push-notify.ts';
 import { PushStore, loadOrCreateVapidKeys } from './push-store.ts';
@@ -240,6 +226,13 @@ import {
   handleDispatchAndNoteRoutes,
   handleTaskRoutes,
 } from './routes/tasks.ts';
+import {
+  type WorkspaceRoutesContext,
+  handleWorkspaceAttachmentRoutes,
+  handleWorkspaceDeleteRoute,
+  handleWorkspaceGoalRoutes,
+  handleWorkspaceRoutes,
+} from './routes/workspaces.ts';
 import { isWithinRoot } from './safe-path.ts';
 import { captureServerError, routePatternForSpan, withRouteSpan } from './sentry.ts';
 import { CfApi } from './share/cf-api.ts';
@@ -257,7 +250,6 @@ import {
   redactWorkspaceTreeForVisitor,
   relativeReviewUrl,
 } from './share/redact-meta.ts';
-import { redactHubWorkspaceForVisitor } from './share/redact-workspace.ts';
 import { Shares } from './share/shares.ts';
 import { SharingGate } from './share/sharing-gate.ts';
 import { resolveTtl } from './share/ttl.ts';
@@ -288,7 +280,6 @@ import {
   parseNeeds,
   parseOptions,
 } from './task-create.ts';
-import { applyImport, importBanner, importMarkerFor, parseTrackerMarkdown } from './task-import.ts';
 import {
   ASSIGNEE_REQUIRED_ERROR,
   ASSIGNEE_REQUIRED_MESSAGE,
@@ -301,89 +292,31 @@ import {
   resolveAssignee,
 } from './task-owner.ts';
 import { TaskProjection, taskBodyDocId, taskIdOfBodyDoc } from './task-projection.ts';
-import { buildQueue, placeableGoals, summarizeGoals } from './task-queue.ts';
+import { buildQueue, placeableGoals } from './task-queue.ts';
 import { clipToWordBoundary } from './task-title.ts';
 import {
   DEFAULT_PARALLELISM_CAP,
-  type GoalListEntry,
   type HubWorkspace,
   LEGACY_REVIEW_ITEM_ID,
-  PARALLELISM_CAP_MAX,
-  PARALLELISM_CAP_MIN,
   type ParallelismCapChange,
   type Task,
   type TaskEffortEstimate,
   TaskStore,
-  type WorkspaceNotesHome,
-  eventsLogPath,
-  isAttachmentRuntime,
   isRetired,
   legacyDecisionItem,
-  retiredNotice,
-  retiredRefusal,
   reviewItemVersion,
   taskChip,
   wordsRevisionOf,
 } from './tasks.ts';
 import { ThreadRequestDedup } from './thread-request-dedup.ts';
 import type { TranscriptionEngine } from './transcribe.ts';
-import { SERVER_TICK_EVENT, UptimeMonitor, analyzeUptime } from './uptime.ts';
-import { type VoiceComplete, VoiceRouter, parseVoiceContext } from './voice.ts';
+import { UptimeMonitor } from './uptime.ts';
+import { type VoiceComplete, VoiceRouter } from './voice.ts';
 import { type WebhookLogEntry, createWebhookDispatcher } from './webhooks.ts';
 import { widgetAuthPage } from './widget-auth-page.ts';
 import { onClose, onMessage, onOpen } from './yjs-protocol.ts';
 
 const DEFAULT_PORT = Number(process.env.PORT ?? 8787);
-
-/**
- * Structural validation for PUT /api/workspaces/:id/goals. Returns the
- * sanitized list, or null if any entry is malformed. Unknown keys are
- * dropped rather than persisted — the sidecar shape is a contract, not a
- * A stored or in-flight `subgoals` array is still ACCEPTED and validated one
- * level deep — the REST route has callers this build cannot restart, and a
- * board written before subgoals were removed still has them on disk. The
- * store FLATTENS what comes through; nothing here nests any more.
- *
- * `id` is OPTIONAL and that is the create/keep switch (see `GoalListEntry`):
- * omitted means "create this band, mint me an id", present means "the band
- * you already have with this id". A present-but-empty id is still malformed —
- * it is a caller trying to say something, not a caller omitting the key, and
- * reading it as "create" would turn a bug into a silent new band.
- */
-function parseGoalList(raw: unknown): GoalListEntry[] | null {
-  if (!Array.isArray(raw)) return null;
-  const goals: GoalListEntry[] = [];
-  for (const entry of raw) {
-    const g = entry as Record<string, unknown>;
-    if (g?.id !== undefined && (typeof g.id !== 'string' || g.id.length === 0)) return null;
-    if (typeof g?.title !== 'string' || g.title.length === 0) return null;
-    if (g.dueAt !== undefined && typeof g.dueAt !== 'number') return null;
-    let subgoals: Array<{ id?: string; title: string; dueAt?: number }> | undefined;
-    if (g.subgoals !== undefined) {
-      if (!Array.isArray(g.subgoals)) return null;
-      subgoals = [];
-      for (const sub of g.subgoals) {
-        const s = sub as Record<string, unknown>;
-        if (s?.id !== undefined && (typeof s.id !== 'string' || s.id.length === 0)) return null;
-        if (typeof s?.title !== 'string' || s.title.length === 0) return null;
-        if (s.dueAt !== undefined && typeof s.dueAt !== 'number') return null;
-        if (s.subgoals !== undefined) return null;
-        subgoals.push({
-          ...(s.id !== undefined ? { id: s.id as string } : {}),
-          title: s.title,
-          ...(s.dueAt !== undefined ? { dueAt: s.dueAt as number } : {}),
-        });
-      }
-    }
-    goals.push({
-      ...(g.id !== undefined ? { id: g.id as string } : {}),
-      title: g.title,
-      ...(g.dueAt !== undefined ? { dueAt: g.dueAt as number } : {}),
-      ...(subgoals !== undefined ? { subgoals } : {}),
-    });
-  }
-  return goals;
-}
 
 /**
  * The one doc every hub's feedback widget writes to.
@@ -505,13 +438,6 @@ function reviewFromBody(
 /** Attribution for a write that arrived with no author at all. Deliberately
  *  NOT Bryan: an unattributed action must never gain his authority just
  *  because a field was missing. */
-/** The longest criteria prompt a board may hold. A page of instructions is
- *  fine; a pasted document is not what the field is for, and every filing
- *  sends the whole thing to the judge. */
-const REVIEW_ITEM_CRITERIA_MAX_CHARS = 4_000;
-/** Same ceiling and the same reason as the review criteria above — a page
- *  of instructions is fine, and every scoring run sends the whole thing. */
-const EFFORT_ESTIMATE_PROMPT_MAX_CHARS = 4_000;
 
 const ANONYMOUS_ACTOR: User = {
   id: 'anon-unattributed',
@@ -4995,6 +4921,35 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
     regateDecisionWords,
     rewriteTaskBody,
   };
+  /**
+   * The same split for the workspace routes — see ./routes/workspaces.ts.
+   * Built once, for the same reason: every collaborator in it is long-lived,
+   * and the per-request half travels with each call.
+   */
+  const workspaceRoutesCtx: WorkspaceRoutesContext = {
+    taskStore,
+    taskProjection,
+    rooms,
+    sse,
+    homeBriefs,
+    agentWatches,
+    voiceRouter,
+    dataDir,
+    clientReleaseRootDir,
+    opts,
+    j,
+    safeJson,
+    isValidDocId,
+    externalBaseUrl,
+    withReviewUrl,
+    homePayload,
+    reviewItemsFor,
+    parallelismCapView,
+    resolveWorkspaceForDoc,
+    fileUnderHubWorkspace,
+    unfileFromDefault,
+    watchKeyExists,
+  };
 
   /**
    * What an upgrade attaches to a socket, for every socket this server opens.
@@ -6683,1184 +6638,21 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           });
         }
 
-        // --- REST: workspaces (hub create OR folder bind) ---
-        // One resource, two shapes: `folderPath` binds a folder of files
-        // (the review), `name` creates a hub Workspace —
-        // a NEW first-class entity with a crypto-random id that tasks and
-        // goals hang off (plan §3.12 commit 1). Nothing is migrated between
-        // the two; attach_doc LINKS existing docs/reviews to a hub workspace.
-        if (pathname === '/api/workspaces' && req.method === 'POST') {
-          const body = await safeJson(req);
-          const folderPath = body?.folderPath as string | undefined;
-          // Creating a board by name involves no file and stays open to the
-          // app; binding a FOLDER names a host path, and that is agents only
-          // — see browserCannotBindBody.
-          if (folderPath && isBrowserRequest(req.headers)) {
-            return j(403, browserCannotBindBody());
-          }
-          if (!folderPath && typeof body?.name === 'string' && body.name.trim().length > 0) {
-            // `body.goal` is the removed workspace-level text goal. Read
-            // deliberately nowhere: bundles built before the removal still
-            // send it, and refusing a field the server has stopped caring
-            // about would fail a caller for saying something harmless.
-            // Who leads the board. Explicit `leadAgentId` wins; otherwise the
-            // CREATING agent takes the seat — which is the whole point of
-            // "every workspace has a lead, always": the common path is an
-            // agent minting a board for work it is about to do. A person
-            // creating one leaves the seat open rather than being installed
-            // as an agent lead; the first agent to attach claims it.
-            const claimed = body?.leadAgentId;
-            const author = authorFor(body?.author);
-            const leadAgentId =
-              typeof claimed === 'string' && claimed.trim().length > 0
-                ? claimed.trim()
-                : author && classifyActor(author) === 'agent'
-                  ? author.id
-                  : undefined;
-            const workspace = taskStore.createWorkspace(body.name.trim(), {
-              ...(leadAgentId !== undefined ? { leadAgentId } : {}),
-            });
-            // createWorkspace emits no event (nothing subscribes to a
-            // workspace that doesn't exist yet), so the route brings the
-            // board room up itself.
-            taskProjection.ensureWorkspace(workspace.id);
-            return j(200, { workspace });
-          }
-          if (!folderPath || typeof folderPath !== 'string') {
-            return j(400, { error: 'folderPath (folder bind) or name (hub workspace) required' });
-          }
-          const res = rooms.bindFolder({
-            folderPath,
-            // `workspaceId` is what this body key was called before a review
-            // stopped being a workspace; both are read, neither is required.
-            setId: (body?.setId ?? body?.workspaceId) as string | undefined,
-            title: body?.title as string | undefined,
-            include: Array.isArray(body?.include) ? (body.include as string[]) : undefined,
-            // Accepted by bindFolder and honoured by the scan since forever,
-            // but this route never forwarded it — so bind_folder's exclude had
-            // no effect end-to-end. It matters more now: refresh_workspace
-            // persists and replays the exclude, which is meaningless if the
-            // bind could never set one. (/api/diffs already forwarded it.)
-            exclude: Array.isArray(body?.exclude) ? (body.exclude as string[]) : undefined,
-            maxFiles: typeof body?.maxFiles === 'number' ? Number(body.maxFiles) : undefined,
-            owner: body?.owner as string | undefined,
-            producedBy: body?.producedBy as { agentId?: string; sessionId?: string } | undefined,
+        // --- REST: workspaces (the board's own routes) — ./routes/ ---
+        // A board is created here, read here, and every field on it is
+        // written here: its Home queue, its next-work answer, its settings,
+        // its lead, and the docs and huddles filed onto it. They run HERE, in
+        // the position they were written in: the chain's order is behaviour,
+        // and `routes/workspaces.ts` keeps it.
+        {
+          const handled = await handleWorkspaceRoutes(workspaceRoutesCtx, {
+            req,
+            pathname,
+            url,
+            visitor,
+            authorFor,
           });
-          if (!res.ok) {
-            // not-found → 404; reserved-namespace → 400 (the caller chose an
-            // id it may not have, and no amount of narrowing fixes that);
-            // too-many-files → 409 (guardrail, caller must narrow the folder
-            // or raise maxFiles).
-            const status =
-              res.error === 'not-found' ? 404 : res.error === 'reserved-namespace' ? 400 : 409;
-            return j(status, res);
-          }
-          // The GROUPING goes on the board, not its members: `res.workspaceId`
-          // is the review id, and one row for the whole bind is the unit a
-          // reader thinks in. See the vocabulary note above `fileUnderHubWorkspace`.
-          const hubWorkspaceId = fileUnderHubWorkspace(
-            res.workspaceId,
-            body?.hubWorkspaceId as string | undefined,
-          );
-          return j(200, {
-            ...res,
-            // The review's id, under the name the CRDT already stores it as.
-            // `workspaceId` (from ...res) carries the SAME value and is
-            // deprecated for one release — a caller built before the rename
-            // reads it by that name, and a key must never change MEANING.
-            setId: res.workspaceId,
-            hubWorkspaceId,
-            files: res.files.map((f) => ({
-              ...f,
-              reviewUrl: withReviewUrl({ docId: f.docId, type: f.type }).reviewUrl,
-            })),
-          });
-        }
-        // --- REST: diff reviews ---
-        // One doc per changed file, grouped as a workspace (= the review id).
-        // Default mode diffs base → the WORKING TREE (live: docs bind to the
-        // files on disk and re-render as the agent edits); pass `target` for a
-        // review pinned to a commit. Returns per-file reviewUrls plus an
-        // entryUrl (first changed file) the agent can hand to a human.
-        if (pathname === '/api/diffs' && req.method === 'POST') {
-          const body = await safeJson(req);
-          const repoPath = body?.repo as string | undefined;
-          const base = body?.base as string | undefined;
-          const target = body?.target as string | undefined;
-          if (!repoPath) {
-            return j(400, {
-              error:
-                'repo is required. base optional: omit for a BROWSE workspace (no diff); pass base to diff against the working tree; base+target for a pinned range.',
-            });
-          }
-          if (target && !base) {
-            return j(400, { error: 'target requires base' });
-          }
-          const reviewId = body?.reviewId as string | undefined;
-          if (reviewId !== undefined && !isValidDocId(reviewId)) {
-            return j(400, { error: 'bad reviewId' });
-          }
-          const res = rooms.bindDiff({
-            repoPath,
-            base,
-            target,
-            reviewId,
-            title: body?.title as string | undefined,
-            exclude: Array.isArray(body?.exclude) ? (body.exclude as string[]) : undefined,
-            groups: Array.isArray(body?.groups)
-              ? (body.groups as Array<{ title: string; paths: string[]; details?: string }>)
-              : undefined,
-            maxFiles: typeof body?.maxFiles === 'number' ? Number(body.maxFiles) : undefined,
-            owner: body?.owner as string | undefined,
-            producedBy: body?.producedBy as { agentId?: string; sessionId?: string } | undefined,
-          });
-          if (!res.ok) {
-            const status =
-              res.error === 'not-found' || res.error === 'bad-ref'
-                ? 404
-                : res.error === 'empty-diff' ||
-                    res.error === 'group-details-too-long' ||
-                    res.error === 'bad-groups'
-                  ? 400
-                  : 409;
-            return j(status, res);
-          }
-          const files = res.files.map((f) => ({
-            ...f,
-            reviewUrl: withReviewUrl({ docId: f.docId, type: f.type }).reviewUrl,
-          }));
-          // Land the reviewer on the MEATIEST change, not the first file
-          // alphabetically (which is usually dotfile/config noise on a big
-          // review). The in-page tree navigates to everything else.
-          const entry = files.reduce(
-            (best, f) =>
-              (f.additions ?? 0) + (f.deletions ?? 0) >
-              (best.additions ?? 0) + (best.deletions ?? 0)
-                ? f
-                : best,
-            files[0],
-          );
-          // One row per REVIEW on the board, never one per changed file — the
-          // members are reachable through the review's own tree. Idempotent, so
-          // a re-run that omits `hubWorkspaceId` cannot sweep a live review out
-          // of the board a reviewer already filed it on.
-          const hubWorkspaceId = fileUnderHubWorkspace(
-            res.reviewId,
-            body?.hubWorkspaceId as string | undefined,
-          );
-          // `setId` is the same value as `reviewId`, under the name the CRDT
-          // stores it as — both stay, and neither changes meaning.
-          return j(200, {
-            ...res,
-            setId: res.reviewId,
-            hubWorkspaceId,
-            files,
-            entryUrl: entry?.reviewUrl,
-          });
-        }
-        // List bound workspaces with rolled-up triage signals (fileCount,
-        // openThreads, allIdle, owner, lastActivityAt). The daily triage uses
-        // this to treat a folder bind as one cleanup unit.
-        if (pathname === '/api/workspaces' && req.method === 'GET') {
-          return j(200, {
-            workspaces: rooms.listWorkspaces(),
-            // Hub workspaces (the boards) are a different thing from the
-            // reviews above and stay in their own key rather than
-            // being mixed into one list. They belong on this route because a
-            // workspace the SERVER materialized for an unfiled doc has no
-            // other way to be found: nobody was told its id at creation time.
-            hubWorkspaces: taskStore.listWorkspaces().map((w) => ({
-              id: w.id,
-              name: w.name,
-              docCount: w.docIds.length,
-              createdAt: w.createdAt,
-              // Present only when true, so a client that has never heard of
-              // retirement reads exactly what it read before, and one that
-              // has can filter on the key's presence.
-              ...(isRetired(w) ? { retired: true, retiredAt: w.retiredAt } : {}),
-            })),
-          });
-        }
-        // --- REST: hub workspaces + tasks (plan §3.10) ---
-        // Every handler below hand-copies body fields into the store call.
-        // A field that isn't copied is silently discarded while the request
-        // still returns 200 — so every param here has an HTTP-level test in
-        // task-routes.test.ts (the `groups` lesson).
-        const hubWsMatch = pathname.match(/^\/api\/workspaces\/([^/]+)$/);
-        if (hubWsMatch && req.method === 'GET') {
-          const workspaceId = decodeURIComponent(hubWsMatch[1] ?? '');
-          const stored = taskStore.getWorkspace(workspaceId);
-          if (!stored) return j(404, { error: 'workspace not found' });
-          // A visitor gets a PROJECTION, never the stored record. This route
-          // is on the visitor allowlist as "workspace name + goal text"
-          // (host-guard.ts), and the record it used to answer with verbatim
-          // carries `notesHome.repoRoot` — an absolute path on this machine —
-          // and `retiredBy`, an actor id every neighbouring visitor surface
-          // strips. See redactHubWorkspaceForVisitor. The local surface keeps
-          // the whole record: `notesHome` is what the settings panel edits.
-          const workspace = visitor ? redactHubWorkspaceForVisitor(stored) : stored;
-          // Goals with their counts, in priority order. The goals were always
-          // in this payload and no MCP tool read it, so ordering lived in
-          // each agent's head; the counts are what make the list answer
-          // "where is the open work" without a second call per goal.
-          const capView = parallelismCapView(workspaceId);
-          return j(200, {
-            workspace,
-            // How many builders the board may run and how many it is running,
-            // so an agent deciding what to work on sees the ceiling in the
-            // same read as the goals — `set_parallelism_cap` changes it.
-            ...(capView
-              ? {
-                  parallelismCap: {
-                    value: capView.cap,
-                    isDefault: capView.isDefault,
-                    inUse: capView.inUse,
-                    free: capView.free,
-                    // Who moved it last, when, from what — so a lowered cap
-                    // is a fact with an author, not a mystery.
-                    ...(capView.lastChange !== undefined ? { lastChange: capView.lastChange } : {}),
-                  },
-                }
-              : {}),
-            // The rows argument is what lets each band carry its own status
-            // (and done attribution) — the counts say where the open work is,
-            // the status says what somebody declared about the band itself.
-            goalSummary: summarizeGoals(
-              taskStore.listTasks(workspaceId),
-              stored.goals,
-              taskStore.listGoalRows(workspaceId),
-            ),
-            // The board has been stood down. Present only when it has, and
-            // carrying prose rather than a flag, because the reader is
-            // usually an agent deciding whether to work here and a boolean
-            // gives it nothing to act on.
-            ...(isRetired(stored) ? { retired: retiredNotice(stored) } : {}),
-          });
-        }
-        // The human's queue, to the board's agent-side `next` below: every
-        // open thread across this workspace's tasks and docs that is ASKING
-        // a person something — an unanswered agent comment with a direct
-        // question in it, OR a declared item nobody has answered, which
-        // stays whatever else is said in the thread. A status note is not a
-        // row (Bryan, 2026-08-21 — see `ReviewBand` in review-queue.ts).
-        // Decisions are NOT here — the board already holds every task, so
-        // shipping them again would put the priority rule in two places;
-        // the client merges the two halves and orders them (see
-        // `reviewQueue` in hub-model).
-        //
-        // One request rather than one per doc: a board with forty tasks is a
-        // board with forty rooms, and the strip has to be right at first
-        // paint or it is not a "what do I look at next" surface.
-        // WHERE a review item lives, from its bare id — the lookup that makes
-        // `reviewItemId` a universal address. Two id families, two answers
-        // from one route: a derived `rt-…` id decodes to the doc-thread
-        // triple it encodes (verified to still exist before it is answered —
-        // a decodable id is a claim, not a fact), and a minted `r-…` id is
-        // found on whichever ticket holds it. The fixed r-legacy id is on
-        // every legacy-decision ticket at once, so alone it addresses
-        // nothing and is refused by name.
-        const reviewItemResolveMatch = pathname.match(/^\/api\/review-items\/([^/]+)$/);
-        if (reviewItemResolveMatch && req.method === 'GET') {
-          if (visitor) return j(403, { error: 'not available to share visitors' });
-          const reviewItemId = decodeURIComponent(reviewItemResolveMatch[1] ?? '');
-          if (reviewItemId === LEGACY_REVIEW_ITEM_ID) {
-            return j(400, {
-              error: 'ambiguous',
-              message:
-                "every legacy-decision ticket derives this same id — address the ticket's own decision with its taskId and no reviewItemId",
-            });
-          }
-          const threadAddress = parseThreadReviewItemId(reviewItemId);
-          if (threadAddress) {
-            const { docId, threadId, commentId } = threadAddress;
-            const comment = rooms
-              .getThread(docId, threadId)
-              ?.comments.find((c) => c.id === commentId);
-            if (!comment?.review) return j(404, { error: 'unknown-review-item' });
-            const workspaceId = resolveWorkspaceForDoc(docId);
-            return j(200, {
-              reviewItemId,
-              kind: 'doc-thread',
-              docId,
-              threadId,
-              commentId,
-              ...(workspaceId !== undefined ? { workspaceId } : {}),
-            });
-          }
-          const found = taskStore.findReviewItem(reviewItemId);
-          if (!found) return j(404, { error: 'unknown-review-item' });
-          return j(200, {
-            reviewItemId,
-            kind: 'task-item',
-            taskId: found.taskId,
-            workspaceId: found.workspaceId,
-          });
-        }
-        const wsReviewMatch = pathname.match(/^\/api\/workspaces\/([^/]+)\/review-items$/);
-        if (wsReviewMatch && req.method === 'GET') {
-          const workspaceId = decodeURIComponent(wsReviewMatch[1] ?? '');
-          const workspace = taskStore.getWorkspace(workspaceId);
-          if (!workspace) return j(404, { error: 'workspace not found' });
-          return j(200, { workspaceId, items: reviewItemsFor(workspace) });
-        }
-        // ── Home pane (§ approved home-pane design) ──────────────────────
-        // GET: the brief + marker + instructions for ONE person. `user` is
-        // required because everything in the payload is per person — an
-        // anonymous read would silently share one marker between everyone.
-        const wsHomeMatch = pathname.match(/^\/api\/workspaces\/([^/]+)\/home$/);
-        if (wsHomeMatch && req.method === 'GET') {
-          const workspaceId = decodeURIComponent(wsHomeMatch[1] ?? '');
-          const workspace = taskStore.getWorkspace(workspaceId);
-          if (!workspace) return j(404, { error: 'workspace not found' });
-          const person = (url.searchParams.get('user') ?? '').trim();
-          if (person === '') {
-            return j(400, { error: 'user is required — the read marker and brief are per person' });
-          }
-          return j(200, homePayload(workspace, person, Date.now()));
-        }
-        // "Mark caught up": move the reader's marker. `at` supports undo —
-        // the response names what it replaced, and posting that value back
-        // restores it (0 = never read). A removal must be reversible.
-        const wsHomeReadMatch = pathname.match(/^\/api\/workspaces\/([^/]+)\/home\/read$/);
-        if (wsHomeReadMatch && req.method === 'POST') {
-          const workspaceId = decodeURIComponent(wsHomeReadMatch[1] ?? '');
-          const workspace = taskStore.getWorkspace(workspaceId);
-          if (!workspace) return j(404, { error: 'workspace not found' });
-          const body = await safeJson(req);
-          const person = String(
-            (body?.author as { name?: unknown } | undefined)?.name ?? '',
-          ).trim();
-          if (person === '') return j(400, { error: 'author.name is required' });
-          const at =
-            typeof body?.at === 'number' && Number.isFinite(body.at) && body.at >= 0
-              ? body.at
-              : Date.now();
-          return j(200, { ok: true, ...homeBriefs.markRead(workspaceId, person, at) });
-        }
-        // "Save & Update Summary": the instructions persist workspace-wide
-        // and apply to this summary and future summaries. Every cached brief
-        // is dropped (they were written under the old instructions), and the
-        // response is the full home payload so the caller repaints — with
-        // `generating` true when a summarizer is wired, because the drop
-        // makes every brief stale by construction.
-        const wsHomeInstrMatch = pathname.match(/^\/api\/workspaces\/([^/]+)\/home\/instructions$/);
-        if (wsHomeInstrMatch && req.method === 'PUT') {
-          const workspaceId = decodeURIComponent(wsHomeInstrMatch[1] ?? '');
-          const workspace = taskStore.getWorkspace(workspaceId);
-          if (!workspace) return j(404, { error: 'workspace not found' });
-          const body = await safeJson(req);
-          const person = String(
-            (body?.author as { name?: unknown } | undefined)?.name ?? '',
-          ).trim();
-          if (person === '') return j(400, { error: 'author.name is required' });
-          const instructions = typeof body?.instructions === 'string' ? body.instructions : '';
-          if (instructions.trim() === '') {
-            return j(400, { error: 'instructions are required — to reset, save the default text' });
-          }
-          homeBriefs.setInstructions(workspaceId, instructions);
-          return j(200, homePayload(workspace, person, Date.now()));
-        }
-        // The work queue: priority order, dependency-aware, grouped into
-        // waves that can run at once (§3.9 agent side).
-        const wsNextMatch = pathname.match(/^\/api\/workspaces\/([^/]+)\/next$/);
-        if (wsNextMatch && req.method === 'GET') {
-          const workspaceId = decodeURIComponent(wsNextMatch[1] ?? '');
-          const workspace = taskStore.getWorkspace(workspaceId);
-          if (!workspace) return j(404, { error: 'workspace not found' });
-          const limitRaw = url.searchParams.get('limit');
-          // Same additive flag as `/tasks`, and the same default: an archived
-          // row is not work to pick up, so it leaves the queue unless a caller
-          // asks for it by name.
-          const includeArchived = url.searchParams.get('includeArchived') === 'true';
-          const wantedOwner = url.searchParams.get('assignee') || undefined;
-          const rows = buildQueue(
-            taskStore.listTasks(workspaceId, { includeArchived }),
-            workspace.goals,
-            {
-              ...(wantedOwner !== undefined ? { assignee: wantedOwner } : {}),
-              // By id as well as by name: the store's matcher finds every
-              // spelling the roster folds into one agent, and `idOf` puts
-              // that id on the row.
-              owner: {
-                ...(wantedOwner !== undefined
-                  ? { matches: taskStore.ownerMatcher(wantedOwner) }
-                  : {}),
-                idOf: (t) => taskStore.ownerIdOf(t),
-              },
-              ...(limitRaw !== null && Number.isFinite(Number(limitRaw))
-                ? { limit: Number(limitRaw) }
-                : {}),
-              includeBlocked: url.searchParams.get('includeBlocked') === 'true',
-              // So each row can say whether its BAND has been agreed to. The
-              // row is still listed either way — a lead reading the queue
-              // should see the band and be able to disagree with it.
-              goalRows: taskStore.listGoalRows(workspaceId),
-              // The discussion the queue has always dropped. Every one of the
-              // five known stale-premise pickups had a comment on the task
-              // saying the premise had moved, and none of them reached the
-              // next reader, because this route returned `body` and nothing
-              // else. Passed as a reader rather than a map so `buildQueue`
-              // stays pure and only the armed rows pay for their notes.
-              discussion: (taskId) => taskProjection.discussionNotes(taskId),
-              ...(opts.premiseStaleAfterMs !== undefined
-                ? { staleAfterMs: opts.premiseStaleAfterMs }
-                : {}),
-            },
-          );
-          // WHO IS ALREADY ON EACH ROW, on the surface where the pickup
-          // decision is actually made. `list_tasks` has carried
-          // `ownerSession` for a while and this route did not, so the read
-          // existed and was one call away from every dispatcher who needed
-          // it — which on 2026-08-17 is how two sessions each built a
-          // complete answer to the same board task (#186 merged, #190 thrown
-          // away) with neither able to detect the other.
-          //
-          // Two fields because they answer two questions and the whole
-          // failure was one signal being read as an answer to the other:
-          // `ownerSession` is the session behind the row's OWNER, and
-          // `claimedBy` is the session that last moved it into in-progress —
-          // which is the only one that exists when nobody assigned it, since
-          // a transition never touches `assignee`.
-          //
-          // Both are recency reads (heartbeat + observed work), never content
-          // identity: a session that thinks for an hour produces no new
-          // commit and must still read as taken. Informational only — nothing
-          // here refuses anyone, because two agents on one row is sometimes
-          // right.
-          const ownerSessionOf = taskProjection.ownerSessionReader(workspaceId);
-          const claimSessionOf = taskProjection.claimSessionReader(workspaceId);
-          const byId = new Map(
-            taskStore.listTasks(workspaceId, { includeArchived }).map((t) => [t.id, t]),
-          );
-          const withPresence = rows.map((row) => {
-            const task = byId.get(row.id);
-            if (!task) return row;
-            const owner = ownerSessionOf(task);
-            const claim = claimSessionOf(task);
-            return {
-              ...row,
-              ...(owner !== undefined ? { ownerSession: owner } : {}),
-              ...(claim !== undefined ? { claimedBy: claim } : {}),
-            };
-          });
-          // The queue still ranks — a retired board's in-flight work is
-          // finishable — but the caller is told what it is looking at BEFORE
-          // it picks a row. This is the surface an agent hits when it asks
-          // "what should I do next", so silence here is the lost night.
-          //
-          // THE PARALLELISM CAP TRIMS WHAT IS OFFERED. A `todo` row is an
-          // offer to dispatch, and the board may only have `free` more
-          // builders, so only the top `free` todo rows are listed — the same
-          // trim the ready-work nudge applies, so the two surfaces cannot tell
-          // a lead two different queues. In-progress rows pass through
-          // untouched: they are the work already in flight (a builder reading
-          // this route to find its own row must still find it), and hiding
-          // them would not free a slot. `capacity` says what was withheld, so
-          // a short list reads as the cap at work and not as a short queue.
-          const capView = parallelismCapView(workspaceId);
-          let offers = capView?.free ?? Number.POSITIVE_INFINITY;
-          let heldForCapacity = 0;
-          const withinCapacity = withPresence.filter((row) => {
-            const task = byId.get(row.id);
-            if (!task || task.status !== 'todo') return true;
-            if (offers > 0) {
-              offers -= 1;
-              return true;
-            }
-            heldForCapacity += 1;
-            return false;
-          });
-          return j(200, {
-            workspaceId,
-            tasks: withinCapacity,
-            ...(capView
-              ? {
-                  capacity: {
-                    cap: capView.cap,
-                    inUse: capView.inUse,
-                    free: capView.free,
-                    ...(heldForCapacity > 0 ? { heldForCapacity } : {}),
-                  },
-                }
-              : {}),
-            ...(isRetired(workspace) ? { retired: retiredNotice(workspace) } : {}),
-          });
-        }
-        // Activity view (§3.9): the per-workspace events.jsonl audit log,
-        // read back as rows. This is the surface where the after-the-fact
-        // 80/95 review happens, built on the same file every subscriber saw
-        // (§3.6: the audit log can never disagree with what subscribers saw).
-        // Board load reports: one line per browser boot,
-        // appended by the client after its first paint, read back newest-first
-        // so "how slow was the board, and in which phase" is a recorded fact
-        // rather than a memory of watching a spinner. No external service —
-        // the report is a JSON object the client shaped, stamped here with
-        // when it arrived and what sent it.
-        const wsLoadMatch = pathname.match(/^\/api\/workspaces\/([^/]+)\/load-reports$/);
-        if (wsLoadMatch) {
-          const workspaceId = decodeURIComponent(wsLoadMatch[1] ?? '');
-          if (!taskStore.getWorkspace(workspaceId)) {
-            return j(404, { error: 'workspace not found' });
-          }
-          const logPath = join(dataDir, 'workspaces', `${workspaceId}.load-reports.jsonl`);
-          if (req.method === 'POST') {
-            const body = await safeJson(req);
-            if (!body || typeof body !== 'object') return j(400, { error: 'report required' });
-            // Body first, stamps last: ts and ua are the server's own record
-            // of when the report arrived and what sent it, and a body that
-            // claims its own must not be able to overwrite them.
-            const row = {
-              ...body,
-              ts: Date.now(),
-              ...(req.headers.get('user-agent') ? { ua: req.headers.get('user-agent') } : {}),
-            };
-            // The sidecar flush that normally creates this dir is debounced,
-            // so a report can arrive before it exists (same guard every other
-            // writer in tasks.ts carries).
-            mkdirSync(join(dataDir, 'workspaces'), { recursive: true });
-            appendFileSync(logPath, `${JSON.stringify(row)}\n`);
-            return j(200, { ok: true });
-          }
-          if (req.method === 'GET') {
-            let reports: unknown[] = [];
-            if (existsSync(logPath)) {
-              reports = readFileSync(logPath, 'utf8')
-                .split('\n')
-                .filter((line) => line.trim().length > 0)
-                .flatMap((line) => {
-                  try {
-                    return [JSON.parse(line)];
-                  } catch {
-                    // Same rule as the events log: a torn tail line must not
-                    // take the whole read down.
-                    return [];
-                  }
-                });
-            }
-            // Newest first, capped — the file grows, the read does not.
-            reports = reports.slice(-50).reverse();
-            return j(200, { workspaceId, reports });
-          }
-        }
-        const wsAuditMatch = pathname.match(/^\/api\/workspaces\/([^/]+)\/events$/);
-        if (wsAuditMatch && req.method === 'GET') {
-          const workspaceId = decodeURIComponent(wsAuditMatch[1] ?? '');
-          if (!taskStore.getWorkspace(workspaceId)) {
-            return j(404, { error: 'workspace not found' });
-          }
-          const logPath = eventsLogPath(dataDir, workspaceId);
-          let rows: Array<{ event?: unknown; ts?: unknown }> = [];
-          if (existsSync(logPath)) {
-            rows = readFileSync(logPath, 'utf8')
-              .split('\n')
-              .filter((line) => line.trim().length > 0)
-              .flatMap((line) => {
-                try {
-                  return [JSON.parse(line) as { event?: unknown; ts?: unknown }];
-                } catch {
-                  // A torn tail line (crash mid-append) must not take the
-                  // whole activity view down with it.
-                  return [];
-                }
-              });
-          }
-          // Uptime (§3.12 commit 11): every line — real event or liveness
-          // marker — is proof the server was alive when it was written, so
-          // the gap analysis runs over ALL timestamps, before any filtering.
-          const uptime = analyzeUptime(
-            rows.map((r) => r.ts).filter((t): t is number => typeof t === 'number'),
-            {
-              now: Date.now(),
-              ...(opts.uptimeTickMs !== undefined ? { tickMs: opts.uptimeTickMs } : {}),
-            },
-          );
-          // Ticks are measurement substrate, not activity — strip them from
-          // the review list (BEFORE the cap, so a week of beats can't crowd
-          // real rows out of it). server.started stays: a restart is honest
-          // activity.
-          let events: unknown[] = rows.filter((r) => r.event !== SERVER_TICK_EVENT);
-          // Cap the payload: the newest rows are the review's working set.
-          if (events.length > 1000) events = events.slice(-1000);
-          return j(200, { workspaceId, events, uptime });
-        }
-        // The workspace-level TEXT goal is GONE — the ordered goal LIST is
-        // the one goal system now. This route stays because it is on the
-        // SHARED server: plugin bundles built before the removal still call
-        // it from sessions nobody can restart, and a 404 here is
-        // indistinguishable from a bad workspace id while a 500 reads as an
-        // outage. So it answers deliberately, and it answers 410 rather than
-        // a 200 no-op: the caller is an agent that would otherwise record
-        // "goal set" for a write that never happened, and the MCP client
-        // surfaces a non-2xx body verbatim, which is how the sentence below
-        // reaches whoever needs to read it.
-        const wsGoalMatch = pathname.match(/^\/api\/workspaces\/([^/]+)\/goal$/);
-        if (wsGoalMatch && req.method === 'PUT') {
-          return j(410, {
-            deprecated: true,
-            error:
-              "the workspace-level text goal was removed — a workspace's goals are the ordered " +
-              'goal LIST now. Use set_goal_list to write the bands, rename_goal to retitle one, ' +
-              'reorder_goals to rank them, and set_task_goal to place work under one. Nothing ' +
-              'was written by this call.',
-          });
-        }
-        // retire_workspace / unretire_workspace: stand a board down, or bring
-        // it back. Deliberately NOT a flag on DELETE — that route rmSyncs the
-        // tasks sidecar and the events log, and this one writes a single
-        // field on a record that is already serialized wholesale, so nothing
-        // it does needs undoing beyond writing the field again.
-        const wsRetiredMatch = pathname.match(/^\/api\/workspaces\/([^/]+)\/retired$/);
-        if (wsRetiredMatch && req.method === 'PUT') {
-          const workspaceId = decodeURIComponent(wsRetiredMatch[1] ?? '');
-          const body = await safeJson(req);
-          const retired = body?.retired;
-          // Explicit both ways. A missing field defaulting to `true` would
-          // make an empty body retire a board, which is the one direction
-          // that must never happen by accident.
-          if (typeof retired !== 'boolean') {
-            return j(400, { error: 'retired must be true or false' });
-          }
-          const author = authorFor(body?.author);
-          if (!author) return j(400, { error: 'author required' });
-          const reason = typeof body?.reason === 'string' ? body.reason : undefined;
-          const res = taskStore.setWorkspaceRetired(workspaceId, retired, {
-            actor: author,
-            ...(reason !== undefined ? { reason } : {}),
-          });
-          if (!res.ok) return j(404, res);
-          // The store emits, but the projection reads the workspace record
-          // rather than the event payload, so the board room needs telling
-          // that the record moved — otherwise the badge appears only when
-          // some unrelated mutation next touches this workspace, which on a
-          // board somebody just retired is never.
-          taskProjection.ensureWorkspace(workspaceId);
-          return j(200, res);
-        }
-        // rename_workspace. The name was set once at creation and nothing
-        // changed it, which is how two live boards ended up sharing one — and
-        // a name is how an agent picks which to work.
-        // The board's parallelism cap on its own address (Bryan, 2026-08-31:
-        // "Bryan and Team Lead can set a parallelism limit on the workspace").
-        // GET reads it; PUT `{cap}` sets it, `{cap: null}` restores the
-        // default. Both answer with the full view — cap, default, slots in
-        // use, who holds them, how many are free — so the caller that just
-        // lowered the cap sees in the same response whether the board is
-        // already over it. It takes effect on the NEXT dispatch: nothing
-        // running is touched, and the stall check and both nudges read the
-        // new number on their next pass. Own route rather than only a field
-        // on `/settings` because Team Lead's session calls REST directly to
-        // manage cross-project capacity, and a one-field verb is the shape
-        // that call wants; `/settings` still carries the field for the panel.
-        const wsCapMatch = pathname.match(/^\/api\/workspaces\/([^/]+)\/parallelism-cap$/);
-        if (wsCapMatch && (req.method === 'GET' || req.method === 'PUT')) {
-          const workspaceId = decodeURIComponent(wsCapMatch[1] ?? '');
-          if (!taskStore.getWorkspace(workspaceId)) {
-            return j(404, { error: 'workspace not found' });
-          }
-          if (req.method === 'PUT') {
-            const body = await safeJson(req);
-            if (!body || !Object.hasOwn(body, 'cap')) {
-              return j(400, { error: 'cap required: an integer, or null to restore the default' });
-            }
-            const raw = body.cap;
-            if (raw !== null && (typeof raw !== 'number' || !Number.isInteger(raw))) {
-              return j(400, { error: 'cap must be an integer, or null to restore the default' });
-            }
-            // Zero is refused outright rather than stored: it would turn every
-            // dispatch away with nothing to wait for. "Lower it" bottoms out
-            // at one (PARALLELISM_CAP_MIN) — pausing a board is a different
-            // verb (retire_workspace), not a cap.
-            if (
-              typeof raw === 'number' &&
-              (raw < PARALLELISM_CAP_MIN || raw > PARALLELISM_CAP_MAX)
-            ) {
-              return j(400, {
-                error: `cap must be between ${PARALLELISM_CAP_MIN} and ${PARALLELISM_CAP_MAX}`,
-              });
-            }
-            const actor = authorFor(body.author) ?? {
-              id: 'agent-unknown',
-              name: 'unknown',
-              kind: 'agent',
-            };
-            const res = taskStore.setParallelismCap(
-              workspaceId,
-              typeof raw === 'number' ? raw : undefined,
-              { actor },
-            );
-            if (!res.ok) return j(404, res);
-          }
-          const view = parallelismCapView(workspaceId);
-          if (!view) return j(404, { error: 'workspace not found' });
-          return j(200, { workspaceId, ...view });
-        }
-        // Workspace settings — two tunable prompts today: what the quality
-        // gate judges a review item against, and what the effort scorer
-        // weighs. GET reads both effective values and says which are on the
-        // default; PUT MERGES — it writes only the field(s) the caller's
-        // body actually names, and `null` (or blank) on a named field
-        // restores that field's default. A caller changing one prompt must
-        // never silently clear the other back to its default, so absence of
-        // a key is "leave it", not "clear it" (`Object.hasOwn`, not `!==
-        // undefined` — a body that included the key as `undefined` would
-        // parse to the same JSON as one that omitted it entirely, so the two
-        // cannot be told apart and are treated alike). String fields rather
-        // than a rule table because the owner edits both in their own words.
-        const wsSettingsMatch = pathname.match(/^\/api\/workspaces\/([^/]+)\/settings$/);
-        if (wsSettingsMatch && (req.method === 'GET' || req.method === 'PUT')) {
-          const workspaceId = decodeURIComponent(wsSettingsMatch[1] ?? '');
-          if (req.method === 'PUT') {
-            const body = await safeJson(req);
-            const author = authorFor(body?.author);
-            if (!author) return j(400, { error: 'author required' });
-            // Validate EVERY supplied field before applying ANY of them. A
-            // caller sending both fields where only the second is malformed
-            // must get back a 400 that changed nothing — not a 400 that
-            // already wrote the first field to disk.
-            let hasReviewCriteria = false;
-            let reviewCriteriaValue: string | undefined;
-            if (body && Object.hasOwn(body, 'reviewItemCriteria')) {
-              const raw = body.reviewItemCriteria;
-              if (raw !== null && typeof raw !== 'string') {
-                return j(400, {
-                  error: 'reviewItemCriteria must be a string, or null to restore the default',
-                });
-              }
-              if (typeof raw === 'string' && raw.length > REVIEW_ITEM_CRITERIA_MAX_CHARS) {
-                return j(400, {
-                  error: `reviewItemCriteria is over ${REVIEW_ITEM_CRITERIA_MAX_CHARS} characters`,
-                });
-              }
-              hasReviewCriteria = true;
-              reviewCriteriaValue = typeof raw === 'string' ? raw : undefined;
-            }
-            // Same merge contract as the prompt fields: named-and-null
-            // clears, absent leaves it. The shape borrows a doc home's
-            // validation (`dir` is a relPath with the same traversal rules)
-            // and additionally insists repoRoot is a checkout NOW — a typo'd
-            // path stored here would park every note the board ever derives.
-            let hasNotesHome = false;
-            let notesHomeValue: WorkspaceNotesHome | undefined;
-            if (body && Object.hasOwn(body, 'notesHome')) {
-              const raw = body.notesHome as {
-                repoRoot?: unknown;
-                branch?: unknown;
-                dir?: unknown;
-              } | null;
-              if (raw !== null) {
-                const norm = normalizeDocHome({
-                  repoRoot: raw?.repoRoot,
-                  branch: raw?.branch,
-                  relPath: raw?.dir,
-                });
-                if (!norm.ok) {
-                  return j(400, {
-                    error: `notesHome must be { repoRoot, branch, dir } or null to clear: ${norm.error.replace('relPath', 'dir')}`,
-                  });
-                }
-                // Store the MAIN checkout's root, not the caller's spelling:
-                // a notes home declared from a linked worktree must survive
-                // that worktree's removal (canonicalRepoRoot in doc-home.ts).
-                const canonRoot = canonicalRepoRoot(norm.home.repoRoot);
-                if (canonRoot === null) {
-                  return j(400, {
-                    error: `notesHome.repoRoot ${norm.home.repoRoot} is not a git checkout`,
-                  });
-                }
-                notesHomeValue = {
-                  repoRoot: canonRoot,
-                  branch: norm.home.branch,
-                  dir: norm.home.relPath,
-                };
-              }
-              hasNotesHome = true;
-            }
-            let hasEffortPrompt = false;
-            let effortPromptValue: string | undefined;
-            if (body && Object.hasOwn(body, 'effortEstimatePrompt')) {
-              const raw = body.effortEstimatePrompt;
-              if (raw !== null && typeof raw !== 'string') {
-                return j(400, {
-                  error: 'effortEstimatePrompt must be a string, or null to restore the default',
-                });
-              }
-              if (typeof raw === 'string' && raw.length > EFFORT_ESTIMATE_PROMPT_MAX_CHARS) {
-                return j(400, {
-                  error: `effortEstimatePrompt is over ${EFFORT_ESTIMATE_PROMPT_MAX_CHARS} characters`,
-                });
-              }
-              hasEffortPrompt = true;
-              effortPromptValue = typeof raw === 'string' ? raw : undefined;
-            }
-            // How many builders this board's lead may dispatch at once
-            // (Bryan, 2026-08-31: "add support for limiting parallelism in the
-            // workspace"). Same merge contract as the two prompt fields —
-            // named-and-null clears to `DEFAULT_PARALLELISM_CAP` — but the
-            // value is a bounded integer rather than free text, so it is
-            // validated against the range register_dispatch itself enforces.
-            let hasParallelismCap = false;
-            let parallelismCapValue: number | undefined;
-            if (body && Object.hasOwn(body, 'parallelismCap')) {
-              const raw = body.parallelismCap;
-              if (raw !== null && (typeof raw !== 'number' || !Number.isInteger(raw))) {
-                return j(400, {
-                  error: 'parallelismCap must be an integer, or null to restore the default',
-                });
-              }
-              if (
-                typeof raw === 'number' &&
-                (raw < PARALLELISM_CAP_MIN || raw > PARALLELISM_CAP_MAX)
-              ) {
-                return j(400, {
-                  error: `parallelismCap must be between ${PARALLELISM_CAP_MIN} and ${PARALLELISM_CAP_MAX}`,
-                });
-              }
-              hasParallelismCap = true;
-              parallelismCapValue = typeof raw === 'number' ? raw : undefined;
-            }
-            if (hasReviewCriteria) {
-              const res = taskStore.setReviewItemCriteria(workspaceId, reviewCriteriaValue, {
-                actor: author,
-              });
-              if (!res.ok) return j(404, res);
-            }
-            if (hasEffortPrompt) {
-              const res = taskStore.setEffortEstimatePrompt(workspaceId, effortPromptValue, {
-                actor: author,
-              });
-              if (!res.ok) return j(404, res);
-            }
-            if (hasParallelismCap) {
-              const res = taskStore.setParallelismCap(workspaceId, parallelismCapValue, {
-                actor: author,
-              });
-              if (!res.ok) return j(404, res);
-            }
-            if (hasNotesHome) {
-              const res = taskStore.setNotesHome(workspaceId, notesHomeValue, { actor: author });
-              if (!res.ok) return j(404, res);
-            }
-          }
-          const criteria = taskStore.reviewItemCriteria(workspaceId);
-          const effortPrompt = taskStore.effortEstimatePrompt(workspaceId);
-          const capView = parallelismCapView(workspaceId);
-          if (!criteria || !effortPrompt || !capView) {
-            return j(404, { error: 'workspace not found' });
-          }
-          const notesHome = taskStore.notesHome(workspaceId);
-          return j(200, {
-            workspaceId,
-            reviewItemCriteria: { ...criteria, default: DEFAULT_REVIEW_ITEM_CRITERIA },
-            effortEstimatePrompt: { ...effortPrompt, default: DEFAULT_EFFORT_ESTIMATE_PROMPT },
-            // The same view `/parallelism-cap` serves, in this route's own
-            // `{value, isDefault, default}` shape so the panel reads all three
-            // settings alike; the slot count rides beside it.
-            parallelismCap: {
-              value: capView.cap,
-              isDefault: capView.isDefault,
-              default: capView.default,
-              ...(capView.lastChange !== undefined ? { lastChange: capView.lastChange } : {}),
-            },
-            dispatchesInUse: capView.inUse,
-            ...(notesHome ? { notesHome } : {}),
-          });
-        }
-        const wsBoardRenameMatch = pathname.match(/^\/api\/workspaces\/([^/]+)\/rename$/);
-        if (wsBoardRenameMatch && req.method === 'POST') {
-          const workspaceId = decodeURIComponent(wsBoardRenameMatch[1] ?? '');
-          const body = await safeJson(req);
-          const name = body?.name;
-          if (typeof name !== 'string') return j(400, { error: 'name required' });
-          const author = authorFor(body?.author);
-          if (!author) return j(400, { error: 'author required' });
-          const res = taskStore.renameWorkspace(workspaceId, name, { actor: author });
-          if (!res.ok) return j(res.error === 'workspace-not-found' ? 404 : 400, res);
-          taskProjection.ensureWorkspace(workspaceId);
-          return j(200, res);
-        }
-        // set_workspace_lead: hand the board's lead-agent seat to someone
-        // else. A standing assignment, not a session fact — the lead may be
-        // away, and a goal edit still has an addressee to queue for.
-        const wsLeadMatch = pathname.match(/^\/api\/workspaces\/([^/]+)\/lead$/);
-        if (wsLeadMatch && req.method === 'PUT') {
-          const workspaceId = decodeURIComponent(wsLeadMatch[1] ?? '');
-          const body = await safeJson(req);
-          const leadAgentId = body?.leadAgentId;
-          if (typeof leadAgentId !== 'string' || leadAgentId.trim().length === 0) {
-            return j(400, { error: 'leadAgentId required' });
-          }
-          const author = authorFor(body?.author);
-          if (!author) return j(400, { error: 'author required' });
-          // `takeover` is how a caller says it MEANS to displace a live lead.
-          // Absent it, claiming a seat a live agent already holds is refused
-          // (`declined: 'lead-held'`) rather than silently granted — an
-          // eviction nobody was told about routes every lead-addressed
-          // delivery to a session that has stopped expecting it. Old bundles
-          // never send the field, and they get the refusal, which is the safe
-          // side of the change.
-          const takeover = body?.takeover === true;
-          const res = taskStore.setLeadAgent(workspaceId, leadAgentId, {
-            actor: author,
-            // An id the workspace has NO attachment record of is refused with
-            // `unknown-lead-agent` (400): a seat routed to nobody silently
-            // stops every lead-addressed delivery. Self-declaration is exempt
-            // in the store — the caller is by definition real.
-            ...(takeover ? { takeover: true } : {}),
-          });
-          if (!res.ok) return j(res.error === 'workspace-not-found' ? 404 : 400, res);
-          return j(200, res);
-        }
-        // Voice (§3.8): transcript + per-surface context in, route decision +
-        // ack out. EVERY utterance gets an explicit ack naming what was heard
-        // and which route handles it — the router owns that invariant; this
-        // handler only validates and forwards (transcript VERBATIM).
-        const wsVoiceMatch = pathname.match(/^\/api\/workspaces\/([^/]+)\/voice$/);
-        if (wsVoiceMatch && req.method === 'POST') {
-          const workspaceId = decodeURIComponent(wsVoiceMatch[1] ?? '');
-          const body = await safeJson(req);
-          const transcript = typeof body?.transcript === 'string' ? body.transcript.trim() : '';
-          if (transcript.length === 0) return j(400, { error: 'transcript required' });
-          const author = authorFor(body?.author);
-          if (!author) return j(400, { error: 'author required' });
-          const context = parseVoiceContext(body?.context);
-          const res = await voiceRouter.handle(workspaceId, {
-            transcript,
-            ...(context !== undefined ? { context } : {}),
-            actor: author,
-          });
-          if (!res.ok) return j(404, res);
-          return j(200, res);
-        }
-        // attach_doc: link an existing doc or review to a hub workspace.
-        const wsAttachMatch = pathname.match(/^\/api\/workspaces\/([^/]+)\/docs$/);
-        if (wsAttachMatch && req.method === 'POST') {
-          const workspaceId = decodeURIComponent(wsAttachMatch[1] ?? '');
-          const body = await safeJson(req);
-          const addressed = body?.docId as string | undefined;
-          if (!addressed || typeof addressed !== 'string')
-            return j(400, { error: 'docId required' });
-          // The link target must exist: either a doc room, or a REVIEW id (a
-          // diff review / folder bind, attached as one unit). Only the first
-          // kind canonicalizes — a review id names no room, so there is
-          // nothing to resolve it to.
-          const attachRoom = rooms.get(addressed);
-          const docId = attachRoom?.docId ?? addressed;
-          const exists =
-            attachRoom !== undefined || rooms.list().some((m) => reviewIdOf(m) === docId);
-          if (!exists) return j(404, { error: 'doc not found', docId });
-          const res = taskStore.attachDoc(workspaceId, docId);
-          if (!res.ok) return j(404, res);
-          // A doc filed here is no longer unfiled.
-          unfileFromDefault(docId, workspaceId);
-          // attachDoc emits no store event; refresh the projection's docIds.
-          taskProjection.ensureWorkspace(workspaceId);
-          return j(200, { ok: true, workspace: taskStore.getWorkspace(workspaceId) });
-        }
-        // import_tasks_markdown (§3.10 / §3.12 commit 10): ingest a
-        // hand-maintained tracker (group headings + status tables). The
-        // DEFAULT is a dry-run that returns the mapping and touches nothing;
-        // apply:true creates the goals + tasks and stamps the source file
-        // with a banner + hub link so the old tracker can't quietly stay a
-        // second source of truth (a stamped file refuses re-import).
-        const wsImportMatch = pathname.match(/^\/api\/workspaces\/([^/]+)\/import-tasks$/);
-        if (wsImportMatch && req.method === 'POST') {
-          // Reads a markdown file off disk by path. Agents only — see
-          // browserCannotBindBody.
-          if (isBrowserRequest(req.headers)) return j(403, browserCannotBindBody());
-          const workspaceId = decodeURIComponent(wsImportMatch[1] ?? '');
-          const body = await safeJson(req);
-          const path = body?.path;
-          if (typeof path !== 'string' || path.length === 0) {
-            return j(400, { error: 'path required' });
-          }
-          const author = authorFor(body?.author);
-          if (!author) return j(400, { error: 'author required' });
-          const workspace = taskStore.getWorkspace(workspaceId);
-          if (!workspace) return j(404, { error: 'workspace not found' });
-          if (!existsSync(path)) return j(404, { error: 'file not found', path });
-          const markdown = readFileSync(path, 'utf8');
-          const alreadyImported = importMarkerFor(markdown);
-          const mapping = parseTrackerMarkdown(markdown, workspace);
-          if (body?.apply !== true) {
-            return j(200, {
-              dryRun: true,
-              workspaceId,
-              path,
-              ...(alreadyImported !== null ? { alreadyImported } : {}),
-              mapping,
-            });
-          }
-          if (alreadyImported !== null) {
-            return j(409, { error: 'already-imported', workspaceId: alreadyImported });
-          }
-          // An import inherits the importer's identity for every row that
-          // names nobody, so an anonymous importer would file those rows under
-          // the generic word — the one thing every other create refuses. The
-          // test is per row and the refusal is whole: a tracker whose owner
-          // column is filled in imports fine no matter who ran it, and one
-          // that isn't fails before anything is written, so there is no
-          // partial state to reason about. The dry run above stays allowed —
-          // it creates nothing, and it's what you read while fixing this.
-          if (mapping.tasks.some((row) => !resolveAssignee(row.assignee, author))) {
-            return j(400, { error: ASSIGNEE_REQUIRED_ERROR, message: ASSIGNEE_REQUIRED_MESSAGE });
-          }
-          // Looked up BEFORE the apply now: when the tracker is bound as a
-          // live doc, the imported rows carry a structured origin ref back to
-          // it — the doc→task tie used to exist only in the file's banner,
-          // which no backlink query can see. A pending plan gate on the bound
-          // doc holds the rows as drafts, same as the batch route.
-          const resolved = resolve(path);
-          const bound = rooms
-            .list()
-            .find((m) => m.sourceUrl !== undefined && resolve(m.sourceUrl) === resolved);
-          const res = applyImport(taskStore, workspaceId, mapping, {
-            actor: author,
-            ...(bound !== undefined ? { origin: { kind: 'doc', docId: bound.docId } } : {}),
-            ...(bound !== undefined && bound.planState === 'pending'
-              ? { planHold: { docId: bound.docId } }
-              : {}),
-          });
-          if (!res.ok) return j(res.error === 'workspace-not-found' ? 404 : 400, res);
-          // Stamp the source file. If the tracker is bound as a live doc,
-          // pull the banner into the live doc too — reparse right after our
-          // own write, so disk (which we just wrote) wins the race with the
-          // doc's debounced flush.
-          const hubUrl = `${externalBaseUrl()}/workspaces/${encodeURIComponent(workspaceId)}`;
-          writeFileSync(
-            path,
-            importBanner({
-              workspaceId,
-              hubUrl,
-              taskCount: res.tasksCreated.length,
-              ts: Date.now(),
-            }) + markdown,
-          );
-          if (bound) rooms.reparseFromDisk(bound.docId);
-          // Task/goal events already refreshed the projection; this covers a
-          // mapping with zero new goals and zero tasks (nothing emitted).
-          taskProjection.ensureWorkspace(workspaceId);
-          return j(200, {
-            ok: true,
-            workspaceId,
-            hubUrl,
-            stamped: true,
-            goalsCreated: res.goalsCreated,
-            tasksCreated: res.tasksCreated,
-            failures: res.failures,
-            skipped: mapping.skipped,
-            ignoredColumns: mapping.ignoredColumns,
-            // Hand-copied, like every field above it — a mapping field that
-            // isn't listed here is silently dropped on the apply path while
-            // the dry-run (which spreads `mapping`) still shows it.
-            warnings: mapping.warnings,
-          });
-        }
-        // --- REST: start a huddle ---
-        // The Board's "Start a planning huddle" button. ONE call: a
-        // workspace-tied markdown doc, titled by the clock, empty or headed
-        // by the topic, filed on this board exactly as every other board doc
-        // is (so `list_docs`, the hub's docs list and the board fan-out see
-        // it with no new verb), flagged `huddle`, and answered with where to
-        // open it. The mic is the browser's to start; the server's part ends
-        // at the doc. A share visitor never reaches this — the host guard
-        // refuses every mutation under /api/workspaces it has not named.
-        const wsHuddlesMatch = pathname.match(/^\/api\/workspaces\/([^/]+)\/huddles$/);
-        if (wsHuddlesMatch && req.method === 'POST') {
-          const workspaceId = decodeURIComponent(wsHuddlesMatch[1] ?? '');
-          const body = await safeJson(req);
-          const targetBoard = taskStore.getWorkspace(workspaceId);
-          if (!targetBoard) return j(404, { error: 'workspace-not-found' });
-          if (isRetired(targetBoard)) {
-            return j(409, { error: 'workspace-retired', message: retiredRefusal(targetBoard) });
-          }
-          const parsedTopic = parseHuddleTopic(body?.topic);
-          if (!parsedTopic.ok) {
-            return j(400, {
-              error: 'bad topic',
-              hint: 'topic is an optional short string — it becomes the first heading.',
-            });
-          }
-          const parsedKind = parseHuddleKind(body?.kind);
-          if (!parsedKind.ok) {
-            return j(400, {
-              error: 'bad kind',
-              hint: 'kind is optional: "plan" or "discussion".',
-            });
-          }
-          // The task this huddle is FOR, when there is one. Judged before
-          // the doc is minted so a bad id costs nothing; recorded after, as
-          // a link on the task (`links`, the same ref `link_refs` writes),
-          // which is what lets a row spun off the huddle join the task's
-          // band (`TaskStore.placeSpinoff`, rule 1). Optional: the Board's
-          // two buttons start a huddle with no task at all.
-          const huddleTaskId = body?.taskId;
-          if (huddleTaskId !== undefined) {
-            if (typeof huddleTaskId !== 'string' || huddleTaskId.trim().length === 0) {
-              return j(400, {
-                error: 'bad taskId',
-                hint: 'taskId is an optional task id on this board.',
-              });
-            }
-            if (taskStore.getTask(huddleTaskId)?.workspaceId !== workspaceId) {
-              return j(404, { error: 'task-not-found' });
-            }
-          }
-          const startedAt = Date.now();
-          // Minted, never re-used: `createForCaller` answers an existing doc
-          // for a name that already resolves, and a huddle is always new.
-          let created = rooms.createForCaller(huddleAlias(startedAt), {
-            type: 'markdown',
-            title: huddleTitle(startedAt),
-            huddle: true,
-            huddleKind: parsedKind.kind,
-          });
-          if (created.ok && !created.minted) {
-            created = rooms.createForCaller(huddleAlias(startedAt), {
-              type: 'markdown',
-              title: huddleTitle(startedAt),
-              huddle: true,
-              huddleKind: parsedKind.kind,
-            });
-          }
-          if (!created.ok || !created.minted) {
-            return j(500, { error: 'huddle-not-minted' });
-          }
-          const room = created.room;
-          const docId = room.docId;
-          const hubWorkspaceId = fileUnderHubWorkspace(docId, workspaceId);
-          // The file first, then the bind — `attachFile` seeds the room from
-          // the file when the room is empty, so the topic heading lands
-          // through the same path a bound project file's content does, and
-          // the doc is a record on disk before anyone has typed a word.
-          const file = huddleFilePath(dataDir, docId);
-          try {
-            mkdirSync(dirname(file), { recursive: true });
-            if (!existsSync(file))
-              writeFileSync(file, huddleSeedMarkdown(parsedTopic.topic, parsedKind.kind));
-          } catch (err) {
-            console.error(`[huddle] could not write ${file}:`, err);
-            return j(500, { error: 'huddle-file-failed' });
-          }
-          const attached = rooms.attachFile(docId, file);
-          if (!attached.ok) return j(409, { error: 'attach_failed', attached });
-          if (typeof huddleTaskId === 'string') {
-            const linked = taskStore.linkRef(huddleTaskId, { kind: 'doc', docId });
-            // Link changes emit no store event; refresh by hand, as the
-            // link-refs route does.
-            if (linked.ok) taskProjection.ensureWorkspace(linked.task.workspaceId);
-          }
-          const meta = withReviewUrl(room.meta, hubWorkspaceId);
-          return j(200, {
-            docId,
-            ...(typeof huddleTaskId === 'string' ? { taskId: huddleTaskId } : {}),
-            // Where the Board opens it — the SPA doc route under THIS board,
-            // relative so the client navigates within its own origin.
-            url: `/workspaces/${encodeURIComponent(hubWorkspaceId)}/docs/${encodeURIComponent(docId)}`,
-            ...(meta.reviewUrl !== undefined ? { reviewUrl: meta.reviewUrl } : {}),
-            hubWorkspaceId,
-            meta,
-            ...(parsedTopic.topic !== undefined ? { topic: parsedTopic.topic } : {}),
-          });
+          if (handled) return handled;
         }
 
         // --- REST: tasks (plan §3.10) — ./routes/ ---
@@ -7881,246 +6673,18 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           });
           if (handled) return handled;
         }
-        // The same pair for a BAND, and deliberately its own path rather than
-        // a goal id squeezed through `/api/tasks/:id/archive`. The transition
-        // route accepts either kind because a status change is literally the
-        // same write on both; an archive is not — this one cascades to the
-        // band's tasks, and its response carries the ids it moved. A caller that cannot tell which of those two things it just
-        // did is a caller that cannot report the count to the person who
-        // asked for it.
-        //
-        // What the count is FOR: the confirmation the board shows before the
-        // write ("Archive this goal and its 14 tasks?"). `GET .../cascade`
-        // answers it from the same walk the archive runs, so the sentence and
-        // the act cannot disagree.
-        const goalCascadeMatch = pathname.match(/^\/api\/goals\/([^/]+)\/cascade$/);
-        if (goalCascadeMatch && req.method === 'GET') {
-          const goalId = decodeURIComponent(goalCascadeMatch[1] ?? '');
-          if (!taskStore.getGoalRow(goalId)) return j(404, { error: 'not-found' });
-          return j(200, taskStore.goalCascade(goalId));
-        }
-        const goalArchiveMatch = pathname.match(/^\/api\/goals\/([^/]+)\/archive$/);
-        if (goalArchiveMatch && req.method === 'POST') {
-          const goalId = decodeURIComponent(goalArchiveMatch[1] ?? '');
-          const body = await safeJson(req);
-          const author = authorFor(body?.author);
-          if (!author) return j(400, { error: 'author required' });
-          const res = taskStore.archiveGoal(goalId, {
-            actor: author,
-            ...(typeof body?.reason === 'string' ? { reason: body.reason } : {}),
+        // --- REST: goal bands and the ordered goal list --- see
+        // ./routes/workspace-goals.ts. Same chain position as before the
+        // split: below the task routes, above the thread promote.
+        {
+          const handled = await handleWorkspaceGoalRoutes(workspaceRoutesCtx, {
+            req,
+            pathname,
+            url,
+            visitor,
+            authorFor,
           });
-          if (!res.ok) return j(404, res);
-          if (!res.changed) taskProjection.ensureWorkspace(res.goal.workspaceId);
-          return j(200, res);
-        }
-        const goalRestoreMatch = pathname.match(/^\/api\/goals\/([^/]+)\/restore$/);
-        if (goalRestoreMatch && req.method === 'POST') {
-          const goalId = decodeURIComponent(goalRestoreMatch[1] ?? '');
-          const body = await safeJson(req);
-          const author = authorFor(body?.author);
-          if (!author) return j(400, { error: 'author required' });
-          const res = taskStore.unarchiveGoal(goalId, { actor: author });
-          if (!res.ok) return j(404, res);
-          if (!res.changed) taskProjection.ensureWorkspace(res.goal.workspaceId);
-          return j(200, res);
-        }
-        // set_goal_list (§3.2 edit contract): replace the ordered board
-        // sections. Structural validation happens HERE because the store
-        // trusts its callers with shapes — a junk entry that reached the
-        // sidecar would render as a broken section forever.
-        const wsGoalsMatch = pathname.match(/^\/api\/workspaces\/([^/]+)\/goals$/);
-        if (wsGoalsMatch && req.method === 'PUT') {
-          const workspaceId = decodeURIComponent(wsGoalsMatch[1] ?? '');
-          const body = await safeJson(req);
-          const author = authorFor(body?.author);
-          if (!author) return j(400, { error: 'author required' });
-          const goals = parseGoalList(body?.goals);
-          if (!goals) {
-            return j(400, { error: 'goals must be [{id?, title, dueAt?, subgoals?}]' });
-          }
-          // `drop` is the caller's explicit "yes, remove that band even
-          // though it holds work". A malformed value must NOT read as absent
-          // — silently treating a string as no acknowledgement would turn a
-          // typo into a refusal the caller cannot explain.
-          const drop = body?.drop;
-          if (
-            drop !== undefined &&
-            (!Array.isArray(drop) || drop.some((id) => typeof id !== 'string' || id.length === 0))
-          ) {
-            return j(400, { error: 'drop must be an array of goal ids' });
-          }
-          const res = taskStore.setGoalList(workspaceId, goals, {
-            actor: author,
-            ...(drop !== undefined ? { drop: drop as string[] } : {}),
-          });
-          if (!res.ok) {
-            // The refusal is the whole feature, so it has to name the way
-            // out: the MCP layer surfaces this body verbatim as the error
-            // text an agent reads.
-            // An id this board does not hold is the re-key gesture arriving
-            // by its other spelling ("submit the list with a new id"), so the
-            // message has to name both ways out rather than just saying no.
-            const detail =
-              res.error === 'unknown-goal-id'
-                ? {
-                    message:
-                      `this board has no goal with id ${res.unknownIds
-                        .map((id) => `"${id}"`)
-                        .join(', ')}. ` +
-                      'Goal ids are generated and permanent: to CREATE a band, send the entry ' +
-                      'with no `id` at all and the new id comes back in `created`; to change a ' +
-                      "band's title, use rename_goal, which cannot move a task. There is no " +
-                      "way to give an existing band a different id, because a task's band IS " +
-                      'its goal id — re-keying one is what strands everything filed under it.',
-                  }
-                : res.error === 'would-strand-tasks'
-                  ? {
-                      message:
-                        'this replace would strand work filed under ' +
-                        `${res.stranding
-                          .map(
-                            (s) =>
-                              `"${s.title}" (${s.id}: ${s.openTasks} open, ${s.doneTasks} done)`,
-                          )
-                          .join('; ')}. ` +
-                        'If you meant to RENAME a band, use rename_goal — it changes the title ' +
-                        'in place and cannot move a task. If you meant to remove it, say so by ' +
-                        'listing its id in `drop`; open tasks then land at the bottom of Backlog ' +
-                        'and done tasks keep pointing at the removed id, both reported back.',
-                    }
-                  : {};
-            return j(res.error === 'workspace-not-found' ? 404 : 400, { ...res, ...detail });
-          }
-          return j(200, res);
-        }
-        // rename_goal (§3.2): change a band's TITLE without touching its id.
-        // Its own route rather than a flag on the PUT above, because the
-        // whole value is that it cannot reach the replace path at all — a
-        // task's band IS its goal id, and nothing here changes an id.
-        const wsRenameMatch = pathname.match(/^\/api\/workspaces\/([^/]+)\/goals\/rename$/);
-        if (wsRenameMatch && req.method === 'POST') {
-          const workspaceId = decodeURIComponent(wsRenameMatch[1] ?? '');
-          const body = await safeJson(req);
-          const author = authorFor(body?.author);
-          if (!author) return j(400, { error: 'author required' });
-          const goalId = body?.goal;
-          if (typeof goalId !== 'string' || goalId.length === 0) {
-            return j(400, { error: 'goal must be a goal id' });
-          }
-          const title = body?.title;
-          if (typeof title !== 'string' || title.trim().length === 0) {
-            return j(400, { error: 'title must be a non-empty string' });
-          }
-          // `null` clears dueAt, a number sets it, absent leaves it alone —
-          // three distinct meanings, so the parse keeps them distinct.
-          const dueAt = body?.dueAt;
-          if (dueAt !== undefined && dueAt !== null && typeof dueAt !== 'number') {
-            return j(400, { error: 'dueAt must be a number, or null to clear it' });
-          }
-          const res = taskStore.renameGoal(
-            workspaceId,
-            goalId,
-            {
-              title: title.trim(),
-              ...(dueAt !== undefined ? { dueAt: dueAt as number | null } : {}),
-            },
-            { actor: author },
-          );
-          if (!res.ok) {
-            // `chores` is a 400, not a 404: it is a row the caller really
-            // saw, so "no such goal" would send them hunting for a typo.
-            const status =
-              res.error === 'reserved-goal-id' ? 400 : res.error === 'goal-not-found' ? 404 : 404;
-            return j(status, res);
-          }
-          return j(200, res);
-        }
-        // add_goal: append ONE band. Separate from the PUT above for the same
-        // reason rename is — that one replaces the list, so a board adding a
-        // band through it submits the list it last read and removes anything
-        // another writer added in between.
-        const wsAddGoalMatch = pathname.match(/^\/api\/workspaces\/([^/]+)\/goals\/add$/);
-        if (wsAddGoalMatch && req.method === 'POST') {
-          const workspaceId = decodeURIComponent(wsAddGoalMatch[1] ?? '');
-          const body = await safeJson(req);
-          const author = authorFor(body?.author);
-          if (!author) return j(400, { error: 'author required' });
-          const title = body?.title;
-          if (typeof title !== 'string' || title.trim().length === 0) {
-            return j(400, { error: 'title must be a non-empty string' });
-          }
-          const dueAt = body?.dueAt;
-          if (dueAt !== undefined && typeof dueAt !== 'number') {
-            return j(400, { error: 'dueAt must be a number' });
-          }
-          const after = body?.after;
-          if (after !== undefined && (typeof after !== 'string' || after.length === 0)) {
-            return j(400, { error: 'after must be a goal id' });
-          }
-          const res = taskStore.addGoal(
-            workspaceId,
-            {
-              title: title.trim(),
-              ...(dueAt !== undefined ? { dueAt: dueAt as number } : {}),
-              ...(after !== undefined ? { after: after as string } : {}),
-            },
-            { actor: author },
-          );
-          if (!res.ok) {
-            const status = res.error === 'rejected' ? 400 : 404;
-            return j(status, res);
-          }
-          return j(200, res);
-        }
-        // reorder_goals (§3.2): the priority gesture, permutation-only. A
-        // separate route from the PUT above because that one REPLACES the
-        // list — the two params here (`order`, `parent`) are the whole
-        // contract, and `parent` is exactly the kind of param a hand-copying
-        // route drops while still answering 200, so both are asserted
-        // end-to-end in goal-reorder.test.ts (the `groups` lesson).
-        const wsReorderMatch = pathname.match(/^\/api\/workspaces\/([^/]+)\/goals\/reorder$/);
-        if (wsReorderMatch && req.method === 'POST') {
-          const workspaceId = decodeURIComponent(wsReorderMatch[1] ?? '');
-          const body = await safeJson(req);
-          const author = authorFor(body?.author);
-          if (!author) return j(400, { error: 'author required' });
-          const order = body?.order;
-          if (
-            !Array.isArray(order) ||
-            order.some((id) => typeof id !== 'string' || id.length === 0)
-          ) {
-            return j(400, { error: 'order must be an array of goal ids' });
-          }
-          const parent = body?.parent;
-          if (parent !== undefined && (typeof parent !== 'string' || parent.length === 0)) {
-            return j(400, { error: 'parent must be a goal id' });
-          }
-          const res = taskStore.reorderGoals(workspaceId, order as string[], {
-            actor: author,
-            ...(parent !== undefined ? { parent: parent as string } : {}),
-          });
-          if (!res.ok) {
-            // The refusal has to be readable by the agent that hit it: the
-            // MCP layer surfaces the raw body as the error text, so the ids
-            // and what to do about them belong right here.
-            const detail =
-              res.error === 'order-mismatch'
-                ? {
-                    message:
-                      'order must be exactly the goal ids at this scope. ' +
-                      `unknown: [${res.unknownIds.join(', ')}]; ` +
-                      // Named separately because the fix differs: an unknown
-                      // id means re-read, a reserved one means drop it.
-                      `reserved (never ordered — leave these out): [${res.reservedIds.join(', ')}]; ` +
-                      `missing: [${res.missingIds.join(', ')}]; ` +
-                      `duplicated: [${res.duplicateIds.join(', ')}]. ` +
-                      `Re-read the list with GET /api/workspaces/${workspaceId} and send back every ` +
-                      'row at this scope whose `reorderable` is true.',
-                  }
-                : {};
-            return j(res.error === 'workspace-not-found' ? 404 : 400, { ...res, ...detail });
-          }
-          return j(200, res);
+          if (handled) return handled;
         }
         // promote_to_task (§3.10): thread → task. Captures the origin ref,
         // the latest HUMAN comment as the verbatim quote (an agent's closing
@@ -8616,211 +7180,18 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           }
           return j(405, { error: 'method not allowed' });
         }
-        // --- REST: agent attachments (§4) ---
-        // AgentAttachment records live OUTSIDE every ydoc; this REST surface
-        // is their only read path. `endpoint` is host-machine-describing, so
-        // a share visitor's read is redacted (the private-meta pattern) and
-        // the mutations are owner-only outright — a visitor attaching an
-        // agent or forging a heartbeat is never legitimate.
-        const wsAgentsMatch = pathname.match(/^\/api\/workspaces\/([^/]+)\/attachments$/);
-        if (wsAgentsMatch && req.method === 'GET') {
-          const workspaceId = decodeURIComponent(wsAgentsMatch[1] ?? '');
-          if (!taskStore.getWorkspace(workspaceId)) {
-            return j(404, { error: 'workspace not found' });
-          }
-          const attachments = visitor
-            ? taskStore.listPublicAttachments(workspaceId)
-            : taskStore.listAttachments(workspaceId);
-          // Drift rides the same read the board already makes, so nobody has
-          // to run a command to discover that a merge never reached them.
-          // A plugin version is workspace-visible, not host-describing —
-          // it says which tools an agent here can use, so a visitor sees it
-          // for the same reason they see who is attached.
-          const released = readReleasedPluginVersion();
-          // The other half of "what is running where": the plugin drift above
-          // is about the agents, this is about the browser the reader is
-          // holding. A failed client build keeps the previous release live and
-          // used to say so only on stderr, so the split widened in silence.
-          //
-          // Owner-only: `lastError` is a build error off this machine's disk
-          // (absolute paths), and which release is live is a fact about the
-          // host's deploy rather than workspace content — the same line the
-          // `endpoint` redaction draws.
-          const clientRelease =
-            clientReleaseRootDir && !visitor ? clientReleaseStatus(clientReleaseRootDir) : null;
-          return j(200, {
-            workspaceId,
-            attachments,
-            // Who owns this board's asks, and whether they are there. It rides
-            // this read rather than the projected workspace info because seat
-            // health CHANGES WITH TIME and nothing else: a lead that stops
-            // answering writes no board event, so a value projected into the
-            // doc would still say "fine" hours later. The presence strip
-            // repaints off this list already.
-            seat: taskStore.leadSeatHealth(workspaceId),
-            ...(clientRelease ? { clientRelease } : {}),
-            pluginRelease: {
-              version: released,
-              behind: agentsBehind(released, attachments).map((a) => ({
-                agentId: a.agentId,
-                ...(a.pluginVersion !== undefined ? { pluginVersion: a.pluginVersion } : {}),
-              })),
-              // How many sessions the `behind` list was computed OVER. It
-              // ships beside the list because the list alone cannot be read:
-              // empty means "none of the ones checked", and for this board
-              // that has normally been one session — its own. Without the
-              // denominator the surface renders participation as clearance.
-              checked: checkableAttachments(attachments).length,
-            },
+        // --- REST: agent attachments (§4) --- see
+        // ./routes/workspace-attachments.ts. Same chain position as before
+        // the split: after the deploy routes, before the archive pair.
+        {
+          const handled = await handleWorkspaceAttachmentRoutes(workspaceRoutesCtx, {
+            req,
+            pathname,
+            url,
+            visitor,
+            authorFor,
           });
-        }
-        if (wsAgentsMatch && req.method === 'POST') {
-          if (visitor) return j(403, { error: 'not available to share visitors' });
-          const workspaceId = decodeURIComponent(wsAgentsMatch[1] ?? '');
-          const body = await safeJson(req);
-          const agentId = body?.agentId;
-          if (typeof agentId !== 'string' || agentId.trim().length === 0) {
-            return j(400, { error: 'agentId required' });
-          }
-          const runtime = body?.runtime;
-          if (!isAttachmentRuntime(runtime)) {
-            return j(400, { error: 'runtime must be claude-code-local | managed-agent | webhook' });
-          }
-          const res = taskStore.attachAgent(workspaceId, {
-            agentId: agentId.trim(),
-            // The display name the session runs under. Absent from older
-            // bundles, which attach under their id.
-            ...(typeof body?.agentName === 'string' && body.agentName.trim().length > 0
-              ? { agentName: body.agentName.trim() }
-              : {}),
-            runtime,
-            capabilities: Array.isArray(body?.capabilities)
-              ? (body.capabilities as unknown[]).filter((c): c is string => typeof c === 'string')
-              : undefined,
-            endpoint: typeof body?.endpoint === 'string' ? body.endpoint : undefined,
-            // The bundle this session is running. Absent from every peer
-            // older than the release that added it — which is the signal,
-            // not a gap to paper over with a default.
-            pluginVersion:
-              typeof body?.pluginVersion === 'string' && body.pluginVersion.trim().length > 0
-                ? body.pluginVersion.trim()
-                : undefined,
-            // Per-process nonce (see AgentAttachment.processId): same nonce
-            // means a live process re-attaching, so the drains respect the
-            // ack grace; absent (an older bundle) keeps bypass-always.
-            processId:
-              typeof body?.processId === 'string' && body.processId.trim().length > 0
-                ? body.processId.trim()
-                : undefined,
-          });
-          if (!res.ok) {
-            // 409: the id is real but no longer the one to use — the body
-            // names the survivor, and a 400 would read as a malformed request.
-            const status =
-              res.error === 'workspace-not-found' ? 404 : res.error === 'merged-away' ? 409 : 400;
-            return j(status, res);
-          }
-          // What this session is subscribed to, counted here because watches
-          // live outside the task store. A session that respawned under a new
-          // name comes up with none, and an empty list reads exactly like a
-          // session that simply has not subscribed yet — which is why the
-          // count ships with the seat rather than on its own. Together they
-          // are the two halves of "a rename took me off this board".
-          const watching = agentWatches.list(res.attachment.agentId, watchKeyExists).watches.length;
-          return j(200, { ...res, watching, notes: attachNotes(res, watching) });
-        }
-        const wsAgentHeartbeatMatch = pathname.match(
-          /^\/api\/workspaces\/([^/]+)\/attachments\/([^/]+)\/heartbeat$/,
-        );
-        if (wsAgentHeartbeatMatch && req.method === 'POST') {
-          if (visitor) return j(403, { error: 'not available to share visitors' });
-          const workspaceId = decodeURIComponent(wsAgentHeartbeatMatch[1] ?? '');
-          const agentId = decodeURIComponent(wsAgentHeartbeatMatch[2] ?? '');
-          const body = await safeJson(req);
-          const res = taskStore.heartbeat(workspaceId, agentId, {
-            // Forwarded, not re-derived: the runtime knows when it last did
-            // work; the route's job is only to not drop the field.
-            toolCallAt: typeof body?.toolCallAt === 'number' ? Number(body.toolCallAt) : undefined,
-          });
-          if (!res.ok) return j(404, res);
-          // Parked comments ride the observation, as ADDRESSED frames — the
-          // response body would not do (the keepalive that carries most
-          // heartbeats discards it), and a broadcast would bill every peer
-          // for a message that names one of them. Each frame replays the
-          // original payload plus this row's id; the receiving MCP's ack is
-          // what clears it.
-          //
-          // `sendToAgent` returning 0 is a REAL answer — the agent holds no
-          // stream (its keepalive still lands as plain HTTP while its SSE
-          // reconnect fails) — and the hand-over above already stamped the
-          // row emitted. Left stamped, the row waits out a full grace window
-          // per heartbeat while never actually going anywhere: an
-          // SSE-or-nothing loop wearing delivery bookkeeping. Same lesson as
-          // setTriageDelivery above ("0 is a real answer"): roll the mark
-          // back, so the NEXT heartbeat is a fresh attempt rather than a
-          // grace-window wait. Rows the route cannot even frame (no replay
-          // payload) are rolled back for the same reason — nothing was sent.
-          for (const q of res.queuedComments ?? []) {
-            let sent = 0;
-            const original =
-              q.payload && typeof q.payload === 'object'
-                ? (q.payload as Record<string, unknown>)
-                : undefined;
-            if (original && typeof original.event === 'string') {
-              const frame: Record<string, unknown> & { event: string } = {
-                ...original,
-                event: original.event,
-                workspaceId,
-                commentQueueId: q.id,
-              };
-              sent = sse.sendToAgent(`ws~${workspaceId}`, agentId, frame);
-            }
-            if (sent === 0) taskStore.clearCommentEmitted(workspaceId, q.id);
-          }
-          return j(200, res);
-        }
-        // The receipt that clears a queued comment — mirror of the voice ack
-        // below, with the same idempotency: a replayed receipt for a row
-        // already cleared answers 200 with cleared:false rather than an
-        // error.
-        const wsCommentAckMatch = pathname.match(
-          /^\/api\/workspaces\/([^/]+)\/comment-queue\/([^/]+)\/ack$/,
-        );
-        if (wsCommentAckMatch && req.method === 'POST') {
-          if (visitor) return j(403, { error: 'not available to share visitors' });
-          const workspaceId = decodeURIComponent(wsCommentAckMatch[1] ?? '');
-          const entryId = decodeURIComponent(wsCommentAckMatch[2] ?? '');
-          const cleared = taskStore.ackComment(workspaceId, entryId);
-          return j(200, { ok: true, cleared });
-        }
-        // The receipt that makes a live voice delivery durable. The server
-        // knows what it wrote to a socket and nothing more, so a row stays on
-        // the queue until the receiving process says it has it. Idempotent: a
-        // replayed receipt for a row already cleared answers 200 with
-        // cleared:false rather than an error, because a retrying client
-        // should not have to distinguish "gone because I acked it" from
-        // "gone because someone else drained it".
-        const wsVoiceAckMatch = pathname.match(
-          /^\/api\/workspaces\/([^/]+)\/voice-queue\/([^/]+)\/ack$/,
-        );
-        if (wsVoiceAckMatch && req.method === 'POST') {
-          if (visitor) return j(403, { error: 'not available to share visitors' });
-          const workspaceId = decodeURIComponent(wsVoiceAckMatch[1] ?? '');
-          const entryId = decodeURIComponent(wsVoiceAckMatch[2] ?? '');
-          const cleared = taskStore.ackVoiceRequest(workspaceId, entryId);
-          return j(200, { ok: true, cleared });
-        }
-        const wsAgentDetachMatch = pathname.match(
-          /^\/api\/workspaces\/([^/]+)\/attachments\/([^/]+)$/,
-        );
-        if (wsAgentDetachMatch && req.method === 'DELETE') {
-          if (visitor) return j(403, { error: 'not available to share visitors' });
-          const workspaceId = decodeURIComponent(wsAgentDetachMatch[1] ?? '');
-          const agentId = decodeURIComponent(wsAgentDetachMatch[2] ?? '');
-          if (!taskStore.detachAgent(workspaceId, agentId)) {
-            return j(404, { error: 'attachment not found' });
-          }
-          return j(200, { ok: true });
+          if (handled) return handled;
         }
         /** Boards that link this review, so an archive can put them back. */
         const boardsLinking = (attachmentId: string): string[] =>
@@ -8984,61 +7355,21 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
             url.searchParams.get('purge') === 'true',
           );
         }
-        const wsDeleteMatch = pathname.match(/^\/api\/workspaces\/([^/]+)$/);
-        if (wsDeleteMatch && req.method === 'DELETE') {
-          const workspaceId = decodeURIComponent(wsDeleteMatch[1] ?? '');
-          const force = url.searchParams.get('force') === 'true';
-          // COMPAT — this ONE route fronts two stores, dispatching by id, and
-          // it is the last place that does. A board is what it deletes now;
-          // a review id still resolves because `delete_workspace(reviewId)` is
-          // what every shipped plugin bundle and skill has always called, from
-          // sessions nobody can restart. New callers use DELETE
-          // /api/reviews/<setId> above, which cannot touch a board at all.
-          // Ask the task store first: `rooms.deleteWorkspace` enumerates DOC
-          // members, so a board — which has none — always came back not-found,
-          // and a board created for a five-minute experiment was permanent.
-          if (taskStore.getWorkspace(workspaceId)) {
-            const openTasks = taskStore.openTaskCount(workspaceId) ?? 0;
-            if (openTasks > 0 && !force) {
-              return j(409, { ok: false, error: 'has-open-tasks', openTasks });
-            }
-            // Three steps, ordered so that nothing irreversible happens
-            // while the operation can still fail. (1) STAGE the rooms' files
-            // — a rename, so it proves they are removable and can be undone;
-            // orphan .ydocs must not outlive the board, because once the
-            // store entry is gone the id no longer resolves as a board and
-            // nothing can come back for them. (2) Delete the board: the
-            // commit point. (3) Only now tear the live rooms down, which
-            // destroys each task's discussion threads and is therefore the
-            // one step that must never run ahead of a refusal. Both failure
-            // paths unstage, so a failed DELETE costs nothing at all — not
-            // even to a restart that lands right after it.
-            // Attached docs are untouched throughout: attachDoc is a LINK,
-            // so a doc a deleted board merely cited keeps working.
-            // Archived rows included: each still owns a `.ydoc`, and a stage
-            // that skipped them would orphan those files under a board that
-            // no longer exists — the exact outcome the staging step exists to
-            // prevent.
-            const taskIds = taskStore
-              .listTasks(workspaceId, { includeArchived: true })
-              .map((t) => t.id);
-            if (!taskProjection.stageWorkspaceFiles(workspaceId, taskIds).ok) {
-              taskProjection.unstageWorkspaceFiles(workspaceId, taskIds);
-              return j(500, { ok: false, error: 'rooms-cleanup-failed' });
-            }
-            // force: the open-task guard was applied above.
-            const hub = taskStore.deleteWorkspace(workspaceId, { force: true });
-            if (!hub.ok) {
-              taskProjection.unstageWorkspaceFiles(workspaceId, taskIds);
-              // 'persist-failed' is a 500, not a 404: the board is still
-              // there, and the caller must not read the refusal as "already
-              // gone" and stop asking.
-              return j(hub.error === 'persist-failed' ? 500 : 404, hub);
-            }
-            taskProjection.dropWorkspaceRooms(workspaceId, hub.taskIds);
-            return j(200, { ok: true, deletedTasks: hub.deletedTasks });
-          }
-          return deleteReview(workspaceId, force, url.searchParams.get('purge') === 'true');
+        // --- REST: the board delete --- see ./routes/workspace-delete.ts.
+        // It stays BELOW `DELETE /api/reviews/:id`, which is the whole reason
+        // that route exists: a board id reaching the review-only verb must
+        // answer not-found rather than being destroyed. `deleteReview` rides
+        // along on the request because it is built here, not in the context.
+        {
+          const handled = await handleWorkspaceDeleteRoute(workspaceRoutesCtx, {
+            req,
+            pathname,
+            url,
+            visitor,
+            authorFor,
+            deleteReview,
+          });
+          if (handled) return handled;
         }
         // File-tree view for a bound workspace: nested directory tree with
         // per-file unresolved-comment counts + folder roll-ups. Files are

@@ -48,14 +48,14 @@ Two questions are kept orthogonal on purpose, and the route layer reads both:
 **reachability** (may this caller talk to this server at all — the host gate,
 Cloudflare Access, a share session) and **identity** (who they are — a session
 cookie, an Access claim, a widget token). A local host bypasses the first and
-still owes the second (`packages/server/src/server.ts:5530`).
+still owes the second (`packages/server/src/server.ts:5485`).
 
 ## Who may read and write what
 
 | Caller | Reads | Writes | Gate |
 |---|---|---|---|
 | Loopback / tailnet / LAN agent (MCP, hooks, curl) | everything | everything except the binding-route browser refusal | `isTrustedLocalHost` (`middleware/host-guard.ts:188`) classifies `local`; no session required |
-| Browser on a local host | everything | only when signed in | `isGatedWrite` + `browserProvedNobody` (`server.ts:5584`) |
+| Browser on a local host | everything | only when signed in | `isGatedWrite` + `browserProvedNobody` (`server.ts:5539`) |
 | Share / link visitor | one board and its members | threads, suggestions, the reading tracker, **the prose of any in-scope doc** over the Yjs socket, and **new doc rooms** via `context-file` / `editable-file` — see the gap below | `shareScopeAllows` (`host-guard.ts:376`) — allowlist, closed by default; per-subroute rules in `docSubrouteAllowed` (`host-guard.ts:738`) |
 | Collab-host visitor | any board the path names, resolved per request | same | `isAccessTunnelHost` (`host-guard.ts:227`) → `collabScope` (`host-guard.ts:659`), which delegates to `shareScopeAllows` |
 | Operator's proxied host | everything `local` gets, after an Access token | same | `isProxiedTrustedHost` (`host-guard.ts:255`) |
@@ -80,6 +80,17 @@ defence-in-depth refusal of share visitors: six `if (visitor)` checks, five
 in `routes/dispatch-and-notes.ts` (dispatches, their close, both note routes,
 the ring read) and one in `routes/task-review-items.ts` (withdraw). Change one
 of those and you are changing this map.
+
+The workspace REST block followed it, on the same terms and off
+`WorkspaceRoutesContext` (`routes/workspace-routes-context.ts`). The gates
+above it did not move: the host gate, the write gate and `POST /api/docs`'s
+browser refusal all still run in `server.ts` ahead of the four call sites.
+Two things did travel with their handlers. The block's own six `if (visitor)`
+checks are now in `routes/workspace-home.ts` (the review-item address) and
+`routes/workspace-attachments.ts` (the attach, the heartbeat, the detach and
+both queue receipts). And two of the three binding-route browser refusals
+went with them, which is why the row below names two module paths — the
+routes are the same routes, and they still refuse the same callers.
 
 Two of a visitor's writes are easy to miss because neither is an ordinary
 POST, and both are deliberate. **Document prose** is edited over the Yjs
@@ -107,7 +118,7 @@ back is the way in: flip it from the box or the tailnet.
 `CW_REQUIRE_SIGNIN_TO_WRITE` defaults **on** — `signInToWriteFromEnv`
 (`middleware/write-gate.ts:52`) treats unset and every misspelling as on, and
 only `0`/`false`/`no`/`off` turn it off. `bin.ts:241` reads it and
-`server.ts:4770` defaults it to `true` when the option is absent.
+`server.ts:4696` defaults it to `true` when the option is absent.
 
 The predicate is keyed on **method**, not on a route list
 (`isGatedWrite`, `write-gate.ts:195`): every mutating route is a non-GET, so
@@ -150,8 +161,10 @@ handshake. Anyone adding a third has to do the same; nothing will catch it.
 `POST /api/docs`, `POST /api/workspaces` with a `folderPath`, and
 `POST /api/workspaces/<id>/import-tasks` turn a host path into content this
 server reads and serves. All three answer `browser_cannot_bind` to any
-browser, on any origin, signed in or not (`server.ts:6439`, `:6698`, `:7669`;
-body from `browserCannotBindBody`, `write-gate.ts:225`). This closes the
+browser, on any origin, signed in or not — one in `server.ts:6394` and the
+other two in the modules their routes moved to,
+`routes/workspaces-create-read.ts:43` and `routes/workspace-content.ts:84`
+(body from `browserCannotBindBody`, `write-gate.ts:225`). This closes the
 page-on-this-machine hole — a dev server on another local port passes the
 origin policy — not a determined agent.
 
@@ -196,7 +209,7 @@ set, and `/signin`, `/api/auth/session` and `/api/auth/start` all answer
 `403 out_of_share_scope` on the share host.
 
 An Access-fronted share or collab host is unaffected: `provenIdentityFor`
-(`server.ts:5161`) turns the verified Access email into an identity, so those
+(`server.ts:5116`) turns the verified Access email into an identity, so those
 visitors still write. This gap is link mode only, and it is a product
 decision — whether an invited reviewer must hold an account — not a bug with
 an obvious fix.
@@ -273,7 +286,7 @@ The widget token is narrower than the cookie it borrows from: it only
 attributes, it expires on its own (`WIDGET_TOKEN_TTL_MS`, seven days), every
 use is re-checked against the live session's revocation state, and it is
 accepted only from a request whose `Origin` matches the origin signed into it
-(`server.ts:5549`).
+(`server.ts:5504`).
 
 The wire format is frozen: cookies minted before the schemes were folded
 together are in browsers and share links are in the wild.
@@ -283,7 +296,7 @@ any payload shape fails there rather than in the field.
 
 ## Deploy, refresh and webhook surfaces
 
-`POST /api/deploy` (`server.ts:8548`) is the narrowest route on the server.
+`POST /api/deploy` (`server.ts:7112`) is the narrowest route on the server.
 It refuses share visitors, refuses when no deployer is configured, requires a
 **loopback peer address** (checked on `server.requestIP`, not the
 client-controlled `Host` header), and then refuses any request carrying
@@ -291,7 +304,7 @@ client-controlled `Host` header), and then refuses any request carrying
 from 127.0.0.1. `GET /api/deploy` stays at trusted-local: reporting what
 already happened cannot restart anything.
 
-`POST /api/plugin/refresh` (`server.ts:8447`) is the same shape one notch
+`POST /api/plugin/refresh` (`server.ts:7011`) is the same shape one notch
 wider: trusted-local rather than loopback, because a refresh interrupts
 nobody, plus the same `cf-ray` refusal.
 
@@ -304,7 +317,7 @@ machine-local hostname on any port; a local dev origin is same-site with this
 server, so a session cookie rides along; and `cf-ray` is absent on a request
 that never went through the edge.
 
-`POST /recall/status` (`server.ts:6161`) answers `404 not_found` on every host
+`POST /recall/status` (`server.ts:6116`) answers `404 not_found` on every host
 unless `RECALL_WEBHOOK_SECRET` is set — the signature is the route's only
 credential, so without one there is no door to knock on. It then verifies a
 Svix signature over `${id}.${timestamp}.${body}` with a five-minute tolerance
