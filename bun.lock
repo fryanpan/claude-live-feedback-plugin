@@ -93,6 +93,9 @@
       "dependencies": {
         "@modelcontextprotocol/sdk": "^1.29.0",
       },
+      "devDependencies": {
+        "@feedback/core": "workspace:*",
+      },
     },
     "packages/server": {
       "name": "@feedback/server",
