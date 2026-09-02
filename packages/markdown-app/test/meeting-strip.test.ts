@@ -246,6 +246,8 @@ interface Harness {
   clock: { at: number };
   /** The Record Audio button in the top bar (root, in these mounts). */
   record(): HTMLButtonElement;
+  /** The options button beside it — the chooser's door on a one-tap doc. */
+  options(): HTMLButtonElement;
   /** The one popover panel — the chooser or the menu, whichever is built. */
   pop(): HTMLElement;
   scrim(): HTMLElement;
@@ -285,6 +287,7 @@ function mount(
   extra: {
     autoStart?: boolean;
     autoChoose?: boolean;
+    alone?: () => boolean;
     promptName?: (current: string) => string | null;
     mode?: CaptureMode;
     speakers?: number;
@@ -350,6 +353,7 @@ function mount(
     clock,
     tick: () => ticker?.(),
     record,
+    options: () => root.querySelector('.meeting-record-options') as HTMLButtonElement,
     pop,
     scrim: () => root.querySelector('.meeting-scrim') as HTMLElement,
     startCta,
@@ -406,8 +410,10 @@ describe('the chrome at rest', () => {
     const btn = toolbar.querySelector('.meeting-record');
     expect(btn).not.toBeNull();
     expect(h.root.querySelector('.meeting-record')).toBeNull();
+    expect(toolbar.querySelector('.meeting-record-options')).not.toBeNull();
     h.strip.destroy();
     expect(toolbar.querySelector('.meeting-record')).toBeNull();
+    expect(toolbar.querySelector('.meeting-record-options')).toBeNull();
   });
 
   it('destroy takes the scrim and popover with it, not just the button', () => {
@@ -1325,50 +1331,83 @@ describe('what the strip tells the microphone and the server about the room', ()
   });
 });
 
-describe('the engine seam', () => {
-  const twoEngines = () =>
-    Promise.resolve({ engines: ['assemblyai', 'soniox'], default: 'assemblyai' });
+describe('the engine is not a start-time question', () => {
+  const threeEngines = () =>
+    Promise.resolve({
+      engines: ['assemblyai', 'assemblyai-pro', 'soniox'],
+      default: 'assemblyai',
+    });
 
-  it('renders an Engine group only when there is a real choice', async () => {
-    // A row with a single answer is a fact wearing a control's clothes.
-    const one = mount(undefined, {
-      listEngines: () => Promise.resolve({ engines: ['assemblyai'], default: 'assemblyai' }),
-    });
-    await settle();
-    one.record().click();
-    expect(
-      [...one.pop().querySelectorAll('.meeting-choice-group-label')].map((e) => e.textContent),
-    ).not.toContain('Choose speech recognition engine:');
-    one.strip.destroy();
-    // An old server (no route) or a failed fetch answers null — same as one
-    // engine, no choice.
-    const old = mount(undefined, { listEngines: () => Promise.resolve(null) });
-    await settle();
-    old.record().click();
-    expect(
-      [...old.pop().querySelectorAll('.meeting-choice-group-label')].map((e) => e.textContent),
-    ).not.toContain('Choose speech recognition engine:');
-    old.strip.destroy();
-    const h = mount(undefined, {
-      listEngines: () =>
-        Promise.resolve({
-          engines: ['assemblyai', 'assemblyai-pro', 'soniox'],
-          default: 'assemblyai',
-        }),
-    });
+  it('never renders an Engine group, however many engines the server holds', async () => {
+    const h = mount(undefined, { listEngines: threeEngines });
     await settle();
     h.record().click();
     const labels = [...h.pop().querySelectorAll('.meeting-choice-group-label')].map(
       (e) => e.textContent,
     );
-    expect(labels).toContain('Choose speech recognition engine:');
+    expect(labels).toEqual(['Source', 'Speakers']);
+    expect(h.pop().querySelector('input[name="meeting-engine"]')).toBeNull();
     const titles = [...h.pop().querySelectorAll('.meeting-choice-title')].map((e) => e.textContent);
-    expect(titles).toContain('AssemblyAI');
-    expect(titles).toContain('AssemblyAI Pro');
-    expect(titles).toContain('Soniox');
+    expect(titles).not.toContain('Soniox');
+    expect(titles).not.toContain('AssemblyAI');
+    expect(titles).not.toContain('AssemblyAI Pro');
   });
 
-  it('redraws an already-open chooser once a slow fetch answers', async () => {
+  it('starts on the server’s default engine, with nothing picked', async () => {
+    const h = mount(undefined, { listEngines: threeEngines, mode: 'solo' });
+    await settle();
+    h.pressStart();
+    await settle();
+    h.sockets[0]?.onopen?.();
+    expect(JSON.parse(String(h.sockets[0]?.sent[0])).engine).toBe('assemblyai');
+  });
+
+  it('sends no engine at all to a server that never listed one', async () => {
+    // An old server has no route; its frame stays byte-for-byte what it was.
+    const plain = mount(undefined, { listEngines: () => Promise.resolve(null), mode: 'solo' });
+    await settle();
+    plain.pressStart();
+    await settle();
+    plain.sockets[0]?.onopen?.();
+    expect(JSON.parse(String(plain.sockets[0]?.sent[0]))).not.toHaveProperty('engine');
+  });
+
+  it('honours the address’s engine as the preference — the one place it is chosen', async () => {
+    // Listed: the preference rides the frame over the default.
+    const listed = mount(undefined, { engine: 'soniox', listEngines: threeEngines, mode: 'solo' });
+    await settle();
+    listed.pressStart();
+    await settle();
+    listed.sockets[0]?.onopen?.();
+    expect(JSON.parse(String(listed.sockets[0]?.sent[0])).engine).toBe('soniox');
+    listed.strip.destroy();
+    // Unlisted (no route): the address's own ask stands — the server, not
+    // this fetch, is the authority on what it refuses.
+    const unlisted = mount(undefined, {
+      engine: 'soniox',
+      listEngines: () => Promise.resolve(null),
+      mode: 'solo',
+    });
+    await settle();
+    unlisted.pressStart();
+    await settle();
+    unlisted.sockets[0]?.onopen?.();
+    expect(JSON.parse(String(unlisted.sockets[0]?.sent[0])).engine).toBe('soniox');
+    unlisted.strip.destroy();
+    // Named but not held by this server: the default, not a refusal.
+    const held = mount(undefined, {
+      engine: 'soniox',
+      listEngines: () => Promise.resolve({ engines: ['assemblyai'], default: 'assemblyai' }),
+      mode: 'solo',
+    });
+    await settle();
+    held.pressStart();
+    await settle();
+    held.sockets[0]?.onopen?.();
+    expect(JSON.parse(String(held.sockets[0]?.sent[0])).engine).toBe('assemblyai');
+  });
+
+  it('redraws an already-open chooser once a slow fetch answers, so Advanced Options appear', async () => {
     let resolveList:
       | ((v: { engines: string[]; default: string | null } | null) => void)
       | undefined;
@@ -1379,56 +1418,128 @@ describe('the engine seam', () => {
         }),
     });
     h.record().click();
-    expect(
-      [...h.pop().querySelectorAll('.meeting-choice-group-label')].map((e) => e.textContent),
-    ).not.toContain('Choose speech recognition engine:');
+    expect(h.pop().querySelector('.meeting-adv-head')).toBeNull();
     resolveList?.({ engines: ['assemblyai', 'soniox'], default: 'assemblyai' });
     await settle();
-    expect(
-      [...h.pop().querySelectorAll('.meeting-choice-group-label')].map((e) => e.textContent),
-    ).toContain('Choose speech recognition engine:');
+    expect(h.pop().querySelector('.meeting-adv-head')).not.toBeNull();
+    // Still no engine row came with it.
+    expect(h.pop().querySelector('input[name="meeting-engine"]')).toBeNull();
+  });
+});
+
+describe('one tap when alone', () => {
+  const twoEngines = () =>
+    Promise.resolve({ engines: ['soniox', 'assemblyai'], default: 'soniox' });
+
+  it('a Record press on a doc with nobody else on it records at once — solo, no chooser', async () => {
+    const calls: CaptureCall[] = [];
+    const h = mount(
+      (o) => {
+        calls.push(o);
+        return Promise.resolve({ ok: true, capture: fakeCapture() });
+      },
+      { alone: () => true, listEngines: twoEngines },
+    );
+    await settle();
+    h.record().click();
+    expect(h.pop().hidden).toBe(true);
+    expect(h.root.dataset.state).toBe('requesting');
+    await settle();
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.mode).toBe('solo');
+    h.sockets[0]?.onopen?.();
+    const frame = JSON.parse(String(h.sockets[0]?.sent[0]));
+    expect(frame.type).toBe('start');
+    expect(frame.mode).toBe('solo');
+    // The server's default, with no picker in the way.
+    expect(frame.engine).toBe('soniox');
+    expect(h.strip.mode()).toBe('solo');
   });
 
-  it('sends the picked engine on the start frame — and only when one was offered', async () => {
-    const h = mount(undefined, { listEngines: twoEngines, mode: 'solo' });
+  it('with somebody else on the doc the press opens the chooser as before', () => {
+    const h = mount(undefined, { alone: () => false });
+    h.record().click();
+    expect(h.pop().hidden).toBe(false);
+    expect(h.pop().getAttribute('aria-label')).toBe('Start recording');
+    expect(h.root.dataset.state).toBe('idle');
+  });
+
+  it('a mount that cannot say who is here asks, as it always did', () => {
+    const h = mount();
+    h.record().click();
+    expect(h.pop().hidden).toBe(false);
+    expect(h.root.dataset.state).toBe('idle');
+  });
+
+  it('asks presence at the press, not at mount', async () => {
+    let alone = false;
+    const h = mount(undefined, { alone: () => alone });
+    h.record().click();
+    expect(h.pop().hidden).toBe(false);
+    h.scrim().click();
+    expect(h.pop().hidden).toBe(true);
+    alone = true;
+    h.record().click();
+    expect(h.pop().hidden).toBe(true);
+    expect(h.root.dataset.state).toBe('requesting');
+  });
+
+  it('the options button beside Record opens the chooser even when alone, and is gone while recording', async () => {
+    const h = mount(undefined, { alone: () => true });
+    expect(h.options().hidden).toBe(false);
+    expect(h.options().getAttribute('aria-label')).toBe('Recording options');
+    h.options().click();
+    expect(h.pop().hidden).toBe(false);
+    expect(h.pop().getAttribute('aria-label')).toBe('Start recording');
+    expect(h.root.dataset.state).toBe('idle');
+    // The chooser's own verb, with its choices honoured over the one-tap
+    // default: this is how a conversation gets asked for on a solo doc.
+    h.pick('Multiple Speakers');
+    h.startCta().click();
     await settle();
-    h.pressStart({ pick: 'Soniox' });
+    expect(h.strip.mode()).toBe('conversation');
+    expect(h.options().hidden).toBe(true);
+    // Record now opens the menu — never a second start.
+    h.record().click();
+    expect(h.pop().querySelector('.meeting-stop-cta')).not.toBeNull();
+    h.pressStop();
+    expect(h.options().hidden).toBe(false);
+  });
+
+  it('a live bot outranks the tap — Record opens the bot’s menu, not a microphone', async () => {
+    const calls: CaptureCall[] = [];
+    const bot = new FakeBot();
+    bot.set('recording', ['Ann']);
+    const h = mount(
+      (o) => {
+        calls.push(o);
+        return Promise.resolve({ ok: true, capture: fakeCapture() });
+      },
+      { alone: () => true, bot },
+    );
+    await settle();
+    h.record().click();
+    expect(calls).toHaveLength(0);
+    expect(h.pop().hidden).toBe(false);
+    expect(h.pop().querySelector('.meeting-stop-cta')?.textContent).toBe('■ Send the bot home');
+  });
+
+  it('a solo recording opens with no consent line — there is nobody to have asked', async () => {
+    const h = mount(undefined, { alone: () => true });
+    h.record().click();
     await settle();
     h.sockets[0]?.onopen?.();
-    expect(JSON.parse(String(h.sockets[0]?.sent[0])).engine).toBe('soniox');
-    h.strip.destroy();
-    // A server that has never heard of engines never receives the field.
-    const plain = mount(undefined, { listEngines: () => Promise.resolve(null), mode: 'solo' });
-    await settle();
-    plain.pressStart();
-    await settle();
-    plain.sockets[0]?.onopen?.();
-    expect(JSON.parse(String(plain.sockets[0]?.sent[0]))).not.toHaveProperty('engine');
-  });
-
-  it('carries the address’s engine on the start frame even with no chooser to show', async () => {
-    // The address's own ask stands even unlisted — the server, not this
-    // fetch, is the authority on what it refuses.
-    const chosen = mount(undefined, {
-      engine: 'soniox',
-      listEngines: () => Promise.resolve(null),
+    h.sockets[0]?.serve({
+      type: 'ready',
+      meetingId: 'm1',
+      startedAt: 1_000,
+      engine: 'test',
       mode: 'solo',
     });
     await settle();
-    chosen.pressStart();
-    await settle();
-    chosen.sockets[0]?.onopen?.();
-    expect(JSON.parse(String(chosen.sockets[0]?.sent[0])).engine).toBe('soniox');
-  });
-
-  it('preselects the address’s pick once the chooser has a real choice', async () => {
-    const h = mount(undefined, { engine: 'soniox', listEngines: twoEngines });
-    await settle();
-    h.record().click();
-    const card = [...h.pop().querySelectorAll('.meeting-choice')].find(
-      (el) => el.querySelector('.meeting-choice-title')?.textContent === 'Soniox',
-    );
-    expect(card?.querySelector('input')?.checked).toBe(true);
+    expect(h.root.dataset.state).toBe('recording');
+    expect(h.root.querySelector('.meeting-consent-note')).toBeNull();
+    expect(h.root.querySelectorAll('.meeting-note')).toHaveLength(0);
   });
 });
 
@@ -1437,6 +1548,13 @@ describe('advanced options in the chrome', () => {
     Promise.resolve({
       engines: ['soniox', 'assemblyai', 'assemblyai-pro'],
       default: 'soniox',
+    });
+  /** The same server with AssemblyAI as its default — the panel with the
+   *  most knobs. The engine is the server's default now, never a pick here. */
+  const assemblyFirst = () =>
+    Promise.resolve({
+      engines: ['assemblyai', 'soniox', 'assemblyai-pro'],
+      default: 'assemblyai',
     });
 
   /** Open the chooser, expand Advanced Options. */
@@ -1468,23 +1586,6 @@ describe('advanced options in the chrome', () => {
     input.dispatchEvent(new Event('change'));
   };
 
-  it('tags the engine cards the way the mock reads', async () => {
-    const h = mount(undefined, { listEngines: threeEngines });
-    await settle();
-    h.record().click();
-    const card = (title: string) =>
-      [...h.pop().querySelectorAll('.meeting-choice')].find(
-        (el) => el.querySelector('.meeting-choice-title')?.textContent === title,
-      );
-    const tags = (title: string) =>
-      [...(card(title)?.querySelectorAll('.meeting-engine-tag') ?? [])].map((el) => el.textContent);
-    expect(tags('Soniox')).toEqual(['default', 'fastest']);
-    expect(tags('AssemblyAI Pro')).toEqual(['highest quality']);
-    expect(card('AssemblyAI Pro')?.querySelector('.meeting-engine-meta')?.textContent).toContain(
-      '$0.45/hr',
-    );
-  });
-
   it('says beside the Soniox speaker toggle that its labels have no cap', async () => {
     const h = mount(undefined, { listEngines: threeEngines });
     await settle();
@@ -1494,15 +1595,17 @@ describe('advanced options in the chrome', () => {
     );
     // The hint is Soniox-and-conversation only: the cap it explains the
     // absence of belongs to diarization, which the other engines do cap.
-    h.pick('AssemblyAI');
-    expect(h.pop().querySelector('.meeting-engine-hint')).toBeNull();
+    h.strip.destroy();
+    const other = mount(undefined, { listEngines: assemblyFirst });
+    await settle();
+    other.record().click();
+    expect(other.pop().querySelector('.meeting-engine-hint')).toBeNull();
   });
 
   it('starts with the moved knobs on the frame — and just the field when nothing moved', async () => {
-    const h = mount(undefined, { listEngines: threeEngines, mode: 'solo' });
+    const h = mount(undefined, { listEngines: assemblyFirst, mode: 'solo' });
     await settle();
     openAdvanced(h);
-    h.pick('AssemblyAI');
     drag(h, 'vad_threshold', '0.8');
     h.startCta().click();
     await settle();
@@ -1520,34 +1623,19 @@ describe('advanced options in the chrome', () => {
   });
 
   it('seeds the cap stepper from the address’s ?speakers, per engine panel', async () => {
-    const h = mount(undefined, { listEngines: threeEngines, speakers: 3 });
+    const h = mount(undefined, { listEngines: assemblyFirst, speakers: 3 });
     await settle();
     openAdvanced(h);
-    h.pick('AssemblyAI');
     expect(
       h.pop().querySelector('.meeting-adv-ctl[data-key="max_speakers"] .meeting-adv-stepnum')
         ?.textContent,
     ).toBe('3');
   });
 
-  it('keeps each engine’s tuned state across a flip away and back', async () => {
-    const h = mount(undefined, { listEngines: threeEngines });
-    await settle();
-    openAdvanced(h);
-    h.pick('AssemblyAI');
-    drag(h, 'vad_threshold', '0.8');
-    h.pick('Soniox');
-    // Soniox's own panel is untouched — no dot borrowed from a sibling.
-    expect(h.pop().querySelector('.meeting-adv-moddot')).toBeNull();
-    h.pick('AssemblyAI');
-    expect(h.pop().querySelector('.meeting-adv-moddot')).not.toBeNull();
-  });
-
   it('tunes the live meeting from the menu and shows the server’s answer', async () => {
-    const h = mount(undefined, { listEngines: threeEngines, mode: 'solo' });
+    const h = mount(undefined, { listEngines: assemblyFirst, mode: 'solo' });
     await settle();
     h.record().click();
-    h.pick('AssemblyAI');
     h.startCta().click();
     await settle();
     h.sockets[0]?.onopen?.();
@@ -1586,10 +1674,9 @@ describe('advanced options in the chrome', () => {
     // "no change"). Reset therefore leaves the engine running the terms it
     // was given, and the control has to say so instead of showing an empty
     // box over a live list.
-    const h = mount(undefined, { listEngines: threeEngines, mode: 'solo' });
+    const h = mount(undefined, { listEngines: assemblyFirst, mode: 'solo' });
     await settle();
     h.record().click();
-    h.pick('AssemblyAI');
     h.startCta().click();
     await settle();
     h.sockets[0]?.onopen?.();
@@ -1980,9 +2067,12 @@ describe('the transcript panel opens with the consent reminder', () => {
     expect(h.caption()).toContain('Second.');
   });
 
-  it('shows it for a solo capture too — the asking is the same person’s either way', async () => {
+  it('is not shown for a solo capture — a reminder with nobody to have asked', async () => {
+    // "Just me" says there is no room; a line about asking it is a question
+    // with no answer (Urgent-fixes ticket, 2026-09-02).
     const { h } = await recording('solo');
-    expect(h.note()).toBe(RECORDING_CONSENT_NOTE);
+    expect(h.root.querySelector('.meeting-consent-note')).toBeNull();
+    expect(h.note()).toBe('');
   });
 
   it('is not on the strip before a recording starts', async () => {
