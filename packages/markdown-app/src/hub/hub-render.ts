@@ -68,9 +68,9 @@ import {
 import { caretOffsetIn } from './inline-rename.ts';
 
 /**
- * Swap a title element for an input; Enter commits, Escape or blur cancels
- * (§3.9: tap the title text to edit, Enter commits). Cancel restores the
- * original text — the caller re-renders on commit anyway.
+ * Swap a title element for an input; Enter or blur commits a changed title,
+ * Escape cancels (§3.9: tap the title text to edit, Enter commits). Cancel
+ * restores the original text — the caller re-renders on commit anyway.
  *
  * Enter/F2 on the element itself starts the edit, so renaming is not a
  * pointer-only gesture. That handler stops propagation for the same reason
@@ -142,8 +142,17 @@ export function wireInPlaceTitle(
       }
     });
     input.addEventListener('blur', () => {
-      // Blur cancels: an accidental tap must never rewrite a title.
-      if (el.contains(input)) restore();
+      // Blur SAVES a changed title (Bryan, 2026-09-01: "click outside while
+      // editing — expect that the title saves, but it reverts instead").
+      // It used to cancel, to protect against an accidental tap; the tap
+      // that opens the editor never changes the text, so an unchanged or
+      // emptied value still restores, and Escape is the deliberate cancel.
+      if (!el.contains(input)) return;
+      const v = input.value.trim();
+      if (v && v !== original) {
+        el.replaceChildren(put(v));
+        commit(v);
+      } else restore();
     });
     input.addEventListener('click', (ce) => ce.stopPropagation());
   };
