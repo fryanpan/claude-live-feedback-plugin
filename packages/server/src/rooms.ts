@@ -46,6 +46,7 @@ import { wordCount } from '@feedback/core/word-count';
 import type { ServerWebSocket } from 'bun';
 import * as awarenessProtocol from 'y-protocols/awareness';
 import * as Y from 'yjs';
+import { DocEditOps, type DocEditPersistence } from './doc-edit-ops.ts';
 
 import { type StoredSummary, needsCall } from '@feedback/core/summary-prompt';
 import {
@@ -522,9 +523,6 @@ const IDLE_EVICT_MS = 2 * 24 * 60 * 60 * 1000;
  *  happens. */
 const EVICT_SWEEP_MS = 10 * 60_000;
 
-/** Backups kept per doc by `backupReplacedContent` before rotation. */
-const REPLACE_BACKUP_CAP = 20;
-
 /**
  * Rooms the HUB owns rather than the filesystem: the `ws:<workspaceId>`
  * board room and every `task:<taskId>` body room (§3.3). They are never
@@ -664,9 +662,6 @@ export class Rooms {
    * is holding a stale copy. In-memory, like the marker it is compared to.
    */
   private agentReads = new Map<string, Map<string, number>>();
-  /** Monotonic suffix so two backups in the same millisecond keep distinct,
-   *  lexicographically ordered names. */
-  private backupSeq = 0;
   /**
    * Readable alias → the doc id it was minted alongside.
    *
@@ -737,6 +732,19 @@ export class Rooms {
   private failedFileWrites = new Set<string>();
 
   /** The eviction policy's clock. See `RoomsConfig.now`. */
+  /** The editing verbs, and this store seen through the contract they need. */
+  private readonly docEdits = new DocEditOps(this.docEditPersistence());
+
+  private docEditPersistence(): DocEditPersistence {
+    return {
+      dataDir: () => this.cfg.dataDir,
+      room: (docId) => this.resolveRoom(docId),
+      thread: (docId, threadId) => this.getThread(docId, threadId),
+      announceSuggestion: (room, event, sid, summary) =>
+        this.fireSuggestionEvent(room, event, sid, summary),
+    };
+  }
+
   private now(): number {
     return this.cfg.now?.() ?? Date.now();
   }
@@ -5190,70 +5198,18 @@ export class Rooms {
     return now - humanEditedAt < STALE_WRITE_WINDOW_MS ? { humanEditedAt } : null;
   }
 
-  /**
-   * Snapshot the markdown a whole-doc rewrite is about to replace into
-   * `<dataDir>/backups/<docId>/<ts>-<seq>.md`, rotating to a cap. Runs on
-   * EVERY accepted set_doc_content — including a confirmed overwrite — so
-   * "the guard was bypassed" is never the same event as "the words are
-   * gone". Backups are transient files: rotation hard-deletes the oldest.
-   * Never throws; the rewrite proceeds either way.
-   */
-  private backupReplacedContent(docId: string, content: string): string | null {
-    try {
-      const safeId = docId.replace(/[^A-Za-z0-9._-]/g, '_');
-      const dir = join(this.cfg.dataDir, 'backups', safeId);
-      if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
-      const seq = String(this.backupSeq++).padStart(6, '0');
-      const file = join(dir, `${Date.now()}-${seq}.md`);
-      writeFileSync(file, content);
-      const entries = readdirSync(dir)
-        .filter((f) => f.endsWith('.md'))
-        .sort();
-      for (const stale of entries.slice(0, Math.max(0, entries.length - REPLACE_BACKUP_CAP))) {
-        rmSync(join(dir, stale), { force: true });
-      }
-      return file;
-    } catch (err) {
-      console.error(`[rooms] set_doc_content backup failed for ${docId}:`, err);
-      return null;
-    }
-  }
+  // ── Editing the words ────────────────────────────────────────────────────
+  //
+  // The verbs live in `doc-edit-ops.ts`; what follows is the store's public
+  // surface forwarding onto them, signatures unchanged.
 
   setDocContent(
     docId: string,
     markdown: string,
   ): { ok: true } | { ok: false; error: 'not-found' | 'unsupported' | 'empty' | 'parse-failed' } {
-    const room = this.resolveRoom(docId);
-    if (!room) return { ok: false, error: 'not-found' };
-    // Flat docs (code / diff) are read-only review surfaces; their content
-    // comes from disk or a pinned commit, never from an agent payload.
-    if (contentKind(room.meta.type) !== 'prose') return { ok: false, error: 'unsupported' };
-    if (!markdown.trim()) return { ok: false, error: 'empty' };
-    let blocks: Y.XmlElement[];
-    try {
-      blocks = prose.parseMarkdownBlocks(markdown);
-    } catch {
-      return { ok: false, error: 'parse-failed' };
-    }
-    if (blocks.length === 0) return { ok: false, error: 'empty' };
-    const fragment = prose.getProseFragment(room.ydoc);
-    // Backup-on-replace: whatever the doc holds right now survives this
-    // rewrite on disk, whoever wrote it and whatever the caller believed.
-    this.backupReplacedContent(docId, prose.serializeFragmentToMarkdown(fragment));
-    // A doc-side edit origin (NOT 'file-watch'): the write-back observer must
-    // see this and flush it to disk like any other agent edit.
-    room.ydoc.transact(() => {
-      prose.applyMarkdownToFragment(fragment, markdown);
-    }, 'agent-set-content');
-    prose.normalizeHeadingLevels(room.ydoc);
-    return { ok: true };
+    return this.docEdits.setDocContent(docId, markdown);
   }
 
-  /**
-   * Replace `find` with `replace` inside the doc. Optional context
-   * string around the match disambiguates repeated phrases; pass
-   * `occurrence` to pick by index when you know the match count.
-   */
   findAndReplace(
     docId: string,
     opts: {
@@ -5267,41 +5223,18 @@ export class Rooms {
       parseInlineMarks?: boolean;
     },
   ): prose.ReplaceResult {
-    const room = this.resolveRoom(docId);
-    if (!room) return { ok: false, error: 'no-match' };
-    return prose.findAndReplace(room.ydoc, opts);
+    return this.docEdits.findAndReplace(docId, opts);
   }
 
-  /**
-   * Rewrite the range a text-range thread is anchored to. The thread
-   * anchor is authoritative — we never recompute offsets on the
-   * client. When the anchor is orphaned (user deleted the text) the
-   * caller gets `anchor-orphaned` back and should either re-anchor or
-   * fall back to `findAndReplace`.
-   */
   rewriteThreadRegion(
     docId: string,
     threadId: string,
     replacement: string,
     opts?: { parseInlineMarks?: boolean },
   ): prose.AnchoredEditResult {
-    const room = this.resolveRoom(docId);
-    if (!room) return { ok: false, error: 'anchor-not-found' };
-    const thread = this.getThread(docId, threadId);
-    if (!thread) return { ok: false, error: 'anchor-not-found' };
-    if (thread.anchor.kind !== 'text-range') return { ok: false, error: 'anchor-orphaned' };
-    return prose.rewriteRange(room.ydoc, {
-      startRel: thread.anchor.startRel,
-      endRel: thread.anchor.endRel,
-      replacement,
-      parseInlineMarks: opts?.parseInlineMarks === true,
-    });
+    return this.docEdits.rewriteThreadRegion(docId, threadId, replacement, opts);
   }
 
-  /**
-   * Agent anchors — the agent can mint its own named pointers into the
-   * doc for batch edits. Stored separately from comment threads.
-   */
   createAgentAnchor(
     docId: string,
     opts: {
@@ -5312,9 +5245,7 @@ export class Rooms {
       label?: string;
     },
   ): prose.CreateAnchorResult {
-    const room = this.resolveRoom(docId);
-    if (!room) return { ok: false, error: 'no-match' };
-    return prose.createAgentAnchor(room.ydoc, opts);
+    return this.docEdits.createAgentAnchor(docId, opts);
   }
 
   editAtAgentAnchor(
@@ -5322,51 +5253,17 @@ export class Rooms {
     anchorId: string,
     op: { kind: 'replace'; text: string } | { kind: 'insert_after'; text: string },
   ): prose.AnchoredEditResult {
-    const room = this.resolveRoom(docId);
-    if (!room) return { ok: false, error: 'anchor-not-found' };
-    const anchor = prose.readAgentAnchor(room.ydoc, anchorId);
-    if (!anchor) return { ok: false, error: 'anchor-not-found' };
-    if (op.kind === 'replace') {
-      return prose.rewriteRange(room.ydoc, {
-        startRel: anchor.startRel,
-        endRel: anchor.endRel,
-        replacement: op.text,
-      });
-    }
-    return prose.insertAfterRange(room.ydoc, { endRel: anchor.endRel, text: op.text });
+    return this.docEdits.editAtAgentAnchor(docId, anchorId, op);
   }
 
   deleteAgentAnchor(docId: string, anchorId: string): boolean {
-    const room = this.resolveRoom(docId);
-    if (!room) return false;
-    return prose.deleteAgentAnchor(room.ydoc, anchorId);
+    return this.docEdits.deleteAgentAnchor(docId, anchorId);
   }
 
-  // =========================================================================
-  // Suggested edits (redline-suggestions phase 2). Thin wrappers over the
-  // core suggest-ops: suggestions ARE marks in the prose fragment, so every
-  // operation rescans at execution time — no registry to keep in sync, and a
-  // sid that raced away (double-accept, external rewrite) reports not-found.
-  // All mutations run under the same 'agent' transaction origin the other
-  // agent edit tools use: the write-back observer flushes results to disk;
-  // a browser UndoManager never tracks them.
-  // =========================================================================
-
-  /** All pending proposals on the doc, in doc order. Empty for unknown docs
-   *  and for flat (code/diff) docs, whose prose fragment has no content. */
   listSuggestions(docId: string): suggestOps.SuggestionSummary[] {
-    const room = this.resolveRoom(docId);
-    if (!room) return [];
-    return suggestOps.listSuggestions(room.ydoc);
+    return this.docEdits.listSuggestions(docId);
   }
 
-  /**
-   * The suggestion-creation primitive: same find/context/occurrence matching
-   * as findAndReplace, but the replacement is written AS A PROPOSAL — the
-   * matched text marked suggestDelete, the new text inserted with
-   * suggestInsert, one shared sid, author from the caller. The doc's
-   * accepted state (and therefore disk) is unchanged until accepted.
-   */
   createSuggestion(
     docId: string,
     opts: {
@@ -5388,27 +5285,9 @@ export class Rooms {
         error: 'not-found' | 'no-match' | 'ambiguous' | 'match-in-pending-suggestion';
         candidates?: Array<{ docOffset: number; preview: string }>;
       } {
-    const room = this.resolveRoom(docId);
-    if (!room) return { ok: false, error: 'not-found' };
-    const res = suggestOps.suggestReplace(room.ydoc, opts);
-    if (!res.ok) return res;
-    this.fireSuggestionEvent(
-      room,
-      'suggestion.created',
-      res.sid,
-      suggestOps.listSuggestions(room.ydoc).find((s) => s.sid === res.sid),
-    );
-    return { ok: true, suggestionId: res.sid };
+    return this.docEdits.createSuggestion(docId, opts);
   }
 
-  /**
-   * The `rewrite_thread_region` twin of `createSuggestion`: propose the
-   * rewrite of a thread's anchored range instead of applying it directly.
-   * Same anchor resolution as `rewriteThreadRegion` — `anchor-orphaned` if
-   * the user deleted the anchored text, `cross-block` if the range somehow
-   * spans two blocks (shouldn't happen for a single-thread anchor, but
-   * mirrors `rewriteRange`'s own restriction).
-   */
   createSuggestionForThread(
     docId: string,
     threadId: string,
@@ -5421,152 +5300,54 @@ export class Rooms {
   ):
     | { ok: true; suggestionId: string }
     | { ok: false; error: 'anchor-not-found' | 'anchor-orphaned' | 'cross-block' } {
-    const room = this.resolveRoom(docId);
-    if (!room) return { ok: false, error: 'anchor-not-found' };
-    const thread = this.getThread(docId, threadId);
-    if (!thread) return { ok: false, error: 'anchor-not-found' };
-    if (thread.anchor.kind !== 'text-range') return { ok: false, error: 'anchor-orphaned' };
-    const res = suggestOps.suggestRewriteRange(room.ydoc, {
-      startRel: thread.anchor.startRel,
-      endRel: thread.anchor.endRel,
-      replacement: opts.replacement,
-      parseInlineMarks: opts.parseInlineMarks === true,
-      author: opts.author,
-      ts: opts.ts,
-    });
-    if (!res.ok) return res;
-    this.fireSuggestionEvent(
-      room,
-      'suggestion.created',
-      res.sid,
-      suggestOps.listSuggestions(room.ydoc).find((s) => s.sid === res.sid),
-    );
-    return { ok: true, suggestionId: res.sid };
+    return this.docEdits.createSuggestionForThread(docId, threadId, opts);
   }
 
-  /** Accept a proposal: it becomes real content and flows to disk via the
-   *  normal debounced write-back. Missing sid (or doc) → not-found — also
-   *  the correct answer to the double-accept race. */
   acceptSuggestion(docId: string, sid: string): suggestOps.SuggestionOpResult {
-    const room = this.resolveRoom(docId);
-    if (!room) return { ok: false, error: 'not-found' };
-    const before = suggestOps.listSuggestions(room.ydoc).find((s) => s.sid === sid);
-    const res = suggestOps.acceptSuggestion(room.ydoc, sid);
-    if (res.ok) this.fireSuggestionEvent(room, 'suggestion.accepted', sid, before);
-    return res;
+    return this.docEdits.acceptSuggestion(docId, sid);
   }
 
-  /** Reject a proposal: restores exactly the pre-suggestion text. */
   rejectSuggestion(docId: string, sid: string): suggestOps.SuggestionOpResult {
-    const room = this.resolveRoom(docId);
-    if (!room) return { ok: false, error: 'not-found' };
-    const before = suggestOps.listSuggestions(room.ydoc).find((s) => s.sid === sid);
-    const res = suggestOps.rejectSuggestion(room.ydoc, sid);
-    if (res.ok) this.fireSuggestionEvent(room, 'suggestion.rejected', sid, before);
-    return res;
+    return this.docEdits.rejectSuggestion(docId, sid);
   }
 
-  /** Accept or reject every pending proposal (optionally one author's). */
   resolveAllSuggestions(
     docId: string,
     opts: { action: 'accept' | 'reject'; authorId?: string },
   ): { ok: true; resolved: number; sids: string[] } | { ok: false; error: 'not-found' } {
-    const room = this.resolveRoom(docId);
-    if (!room) return { ok: false, error: 'not-found' };
-    const before = new Map(suggestOps.listSuggestions(room.ydoc).map((s) => [s.sid, s]));
-    const res = suggestOps.resolveAllSuggestions(room.ydoc, opts);
-    const event = opts.action === 'accept' ? 'suggestion.accepted' : 'suggestion.rejected';
-    for (const sid of res.sids) {
-      this.fireSuggestionEvent(room, event, sid, before.get(sid));
-    }
-    return res;
+    return this.docEdits.resolveAllSuggestions(docId, opts);
   }
 
-  /**
-   * Parse markdown into block elements and insert them as siblings
-   * immediately after the block that contains the agent anchor.
-   * Use this for adding new headings / paragraphs / lists / tables —
-   * `edit_at_anchor` with `insert_after` does a character-stream
-   * insert which keeps the new text inside the anchor's block,
-   * producing literal `## Heading` text instead of a heading element.
-   */
   insertBlocksAtAnchor(
     docId: string,
     anchorId: string,
     markdown: string,
     opts?: { placement?: prose.BlockPlacement },
   ): prose.AnchoredEditResult {
-    const room = this.resolveRoom(docId);
-    if (!room) return { ok: false, error: 'anchor-not-found' };
-    const anchor = prose.readAgentAnchor(room.ydoc, anchorId);
-    if (!anchor) return { ok: false, error: 'anchor-not-found' };
-    return prose.insertBlocksAfterAnchor(room.ydoc, {
-      anchorRel: anchor.endRel,
-      markdown,
-      placement: opts?.placement,
-    });
+    return this.docEdits.insertBlocksAtAnchor(docId, anchorId, markdown, opts);
   }
 
-  /** Append text at the END position of a thread's anchored range. */
   insertAfterThread(docId: string, threadId: string, text: string): prose.AnchoredEditResult {
-    const room = this.resolveRoom(docId);
-    if (!room) return { ok: false, error: 'anchor-not-found' };
-    const thread = this.getThread(docId, threadId);
-    if (!thread) return { ok: false, error: 'anchor-not-found' };
-    if (thread.anchor.kind !== 'text-range') return { ok: false, error: 'anchor-orphaned' };
-    return prose.insertAfterRange(room.ydoc, { endRel: thread.anchor.endRel, text });
+    return this.docEdits.insertAfterThread(docId, threadId, text);
   }
 
-  /**
-   * Parse markdown into block elements and insert them immediately
-   * after the block that contains the thread's anchor. Use this for
-   * "add a section below this comment" — the anchor picks the
-   * location, the markdown describes the new blocks.
-   */
   insertBlocksAfterThread(
     docId: string,
     threadId: string,
     markdown: string,
     opts?: { placement?: prose.BlockPlacement },
   ): prose.AnchoredEditResult {
-    const room = this.resolveRoom(docId);
-    if (!room) return { ok: false, error: 'anchor-not-found' };
-    const thread = this.getThread(docId, threadId);
-    if (!thread) return { ok: false, error: 'anchor-not-found' };
-    if (thread.anchor.kind !== 'text-range') return { ok: false, error: 'anchor-orphaned' };
-    return prose.insertBlocksAfterAnchor(room.ydoc, {
-      anchorRel: thread.anchor.endRel,
-      markdown,
-      placement: opts?.placement,
-    });
+    return this.docEdits.insertBlocksAfterThread(docId, threadId, markdown, opts);
   }
 
-  /**
-   * Delete the single block containing a thread's anchored range. Use
-   * for "remove the paragraph this comment points at." Empty-string
-   * find_and_replace cannot do this — it removes text but leaves the
-   * empty block element behind.
-   */
   deleteBlockAtThread(docId: string, threadId: string): prose.DeleteBlockResult {
-    const room = this.resolveRoom(docId);
-    if (!room) return { ok: false, error: 'anchor-orphaned' };
-    const thread = this.getThread(docId, threadId);
-    if (!thread) return { ok: false, error: 'anchor-orphaned' };
-    if (thread.anchor.kind !== 'text-range') return { ok: false, error: 'anchor-orphaned' };
-    return prose.deleteBlockAtAnchor(room.ydoc, { anchorRel: thread.anchor.startRel });
+    return this.docEdits.deleteBlockAtThread(docId, threadId);
   }
 
-  /** Same, keyed on an agent anchor. */
   deleteBlockAtAgentAnchor(docId: string, anchorId: string): prose.DeleteBlockResult {
-    const room = this.resolveRoom(docId);
-    if (!room) return { ok: false, error: 'anchor-orphaned' };
-    const anchor = prose.readAgentAnchor(room.ydoc, anchorId);
-    if (!anchor) return { ok: false, error: 'anchor-orphaned' };
-    return prose.deleteBlockAtAnchor(room.ydoc, { anchorRel: anchor.startRel });
+    return this.docEdits.deleteBlockAtAgentAnchor(docId, anchorId);
   }
 
-  /** Delete every top-level block from start match through end match.
-   *  Block-inclusive — partial match still deletes the whole block. */
   deleteBlocksInRange(
     docId: string,
     opts: {
@@ -5578,30 +5359,18 @@ export class Rooms {
       endOccurrence?: number;
     },
   ): prose.DeleteBlocksInRangeResult {
-    const room = this.resolveRoom(docId);
-    if (!room) return { ok: false, error: 'no-match' };
-    return prose.deleteBlocksInRange(room.ydoc, opts);
+    return this.docEdits.deleteBlocksInRange(docId, opts);
   }
 
-  /** Delete a heading block + everything until the next heading at ≤ level. */
   deleteSection(
     docId: string,
     opts: { heading: string; level?: number; occurrence?: number },
   ): prose.DeleteSectionResult {
-    const room = this.resolveRoom(docId);
-    if (!room) return { ok: false, error: 'no-match' };
-    return prose.deleteSection(room.ydoc, opts);
+    return this.docEdits.deleteSection(docId, opts);
   }
 
-  /**
-   * Sweep every text-range thread in a doc and best-effort re-anchor
-   * the ones whose Y.RelativePosition no longer resolves. Idempotent —
-   * safe to call on every significant doc change.
-   */
   autoReanchor(docId: string): { checked: number; reanchored: number; stillOrphan: number } | null {
-    const room = this.resolveRoom(docId);
-    if (!room) return null;
-    return prose.autoReanchorDoc(room.ydoc);
+    return this.docEdits.autoReanchor(docId);
   }
 
   listThreads(docId: string, filter?: { status?: 'open' | 'resolved' }): Thread[] {
