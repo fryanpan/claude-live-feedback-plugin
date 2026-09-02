@@ -240,6 +240,29 @@ describe('a verified Access email mints the same identity as a code', () => {
     expect(actorIds()).toContain(emailIdentityId('both-doors@example.com'));
   });
 
+  it('reports the Access identity as the signed-in session', async () => {
+    // The me-menu asks this route on open. Before this test it answered from
+    // the cookie alone, so a person whose Access login had just succeeded
+    // read "not signed in" on a board that attributed every write to them.
+    const email = 'session-door@example.com';
+    const res = await fetch(`${base}/api/auth/session`, {
+      headers: { 'cf-access-jwt-assertion': await sign({ email }) },
+    });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { authenticated: boolean; user?: { id: string } };
+    expect(body.authenticated).toBe(true);
+    expect(body.user?.id).toBe(emailIdentityId(email));
+    // Control: a token Access issued WITHOUT an email claim passes the gate
+    // but proves nobody, so the route must still answer unauthenticated —
+    // which is what makes the assertion above non-vacuous.
+    const bare = (await (
+      await fetch(`${base}/api/auth/session`, {
+        headers: { 'cf-access-jwt-assertion': await sign({}) },
+      })
+    ).json()) as { authenticated: boolean };
+    expect(bare.authenticated).toBe(false);
+  });
+
   it('falls back rather than inventing an identity when the claim is missing', async () => {
     // Access can be configured with a service token or a policy that emits no
     // email. That must not become an unattributed write, and it must not
