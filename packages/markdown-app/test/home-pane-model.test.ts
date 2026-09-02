@@ -12,14 +12,13 @@ import {
   paneForNav,
   paneFromPath,
   panePath,
-  reviewBannerText,
-  reviewQueue,
-  reviewRowTitle,
   shouldPollHome,
   tabForNav,
   waitingLabel,
 } from '../src/hub/hub-model.ts';
-import type { HubNav, ReviewItem, ReviewThreadItem } from '../src/hub/hub-model.ts';
+import type { HubNav } from '../src/hub/hub-model.ts';
+import { reviewBannerText, reviewQueue, reviewRowTitle } from '../src/hub/hub-review-model.ts';
+import type { ReviewItem, ReviewThreadItem } from '../src/hub/hub-review-model.ts';
 
 const NOW = 1_700_000_000_000;
 

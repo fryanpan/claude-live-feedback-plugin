@@ -10,7 +10,7 @@ import {
   walkHandoffReady,
   walkNextUrl,
   walkPosition,
-} from '../src/hub/hub-model';
+} from '../src/hub/hub-review-model';
 
 // The landing page's review chip and "Review all" bar (the walkthrough
 // handoff ticket) hand

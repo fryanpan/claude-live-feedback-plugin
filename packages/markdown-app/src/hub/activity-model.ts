@@ -19,7 +19,8 @@ import {
  * question the pane answers is "what is happening to the work", and an
  * agent's name is a detail on each line, not a heading.
  */
-import { type ReviewItem, reviewRowTitle, timeAgo } from './hub-model.ts';
+import { timeAgo } from './hub-model.ts';
+import { type ReviewItem, reviewRowTitle } from './hub-review-model.ts';
 
 /** Only movement inside this window is activity; a task quiet for longer
  *  than a day is not "recent" whatever it did before. */

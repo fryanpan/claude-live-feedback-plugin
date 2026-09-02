@@ -50,6 +50,7 @@ import {
   refreshMarkdownComposer,
 } from '../md-composer.ts';
 import { type HubDecisionOption, type HubTask } from './hub-board-model.ts';
+import { requireText } from './hub-render.ts';
 import {
   type ReviewItem,
   type ReviewKind,
@@ -62,8 +63,7 @@ import {
   reviewItemOwner,
   reviewRowTitle,
   revisedPhrase,
-} from './hub-model.ts';
-import { requireText } from './hub-render.ts';
+} from './hub-review-model.ts';
 import { markPhrase, unmarkPhrase } from './review-item-phrase.ts';
 import { useSelectionPill } from './selection-pill.ts';
 

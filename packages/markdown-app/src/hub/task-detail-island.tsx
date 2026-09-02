@@ -68,14 +68,7 @@ import {
   heldReviewItems,
   isTaskArchived,
 } from './hub-board-model.ts';
-import {
-  type ActivityEvent,
-  answeredByLine,
-  askedMetaLine,
-  blockedNoteLine,
-  heldMetaLine,
-  taskActivity,
-} from './hub-model.ts';
+import { type ActivityEvent, taskActivity } from './hub-model.ts';
 import {
   BODY_LIVE_CLASS,
   type DetailHandlers,
@@ -91,6 +84,12 @@ import {
   renderTransitionRow,
   wireInPlaceTitle,
 } from './hub-render.ts';
+import {
+  answeredByLine,
+  askedMetaLine,
+  blockedNoteLine,
+  heldMetaLine,
+} from './hub-review-model.ts';
 import { markPhrase } from './review-item-phrase.ts';
 import { selectWordAtPoint, useSelectionPill } from './selection-pill.ts';
 import { NOBODY, type OpenComment, ThreadCard, draftThread } from './thread-card.tsx';
