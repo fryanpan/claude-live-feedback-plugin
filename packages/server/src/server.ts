@@ -253,6 +253,7 @@ import {
   redactWorkspaceTreeForVisitor,
   relativeReviewUrl,
 } from './share/redact-meta.ts';
+import { redactHubWorkspaceForVisitor } from './share/redact-workspace.ts';
 import { Shares } from './share/shares.ts';
 import { SharingGate } from './share/sharing-gate.ts';
 import { resolveTtl } from './share/ttl.ts';
@@ -6858,8 +6859,16 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
         const hubWsMatch = pathname.match(/^\/api\/workspaces\/([^/]+)$/);
         if (hubWsMatch && req.method === 'GET') {
           const workspaceId = decodeURIComponent(hubWsMatch[1] ?? '');
-          const workspace = taskStore.getWorkspace(workspaceId);
-          if (!workspace) return j(404, { error: 'workspace not found' });
+          const stored = taskStore.getWorkspace(workspaceId);
+          if (!stored) return j(404, { error: 'workspace not found' });
+          // A visitor gets a PROJECTION, never the stored record. This route
+          // is on the visitor allowlist as "workspace name + goal text"
+          // (host-guard.ts), and the record it used to answer with verbatim
+          // carries `notesHome.repoRoot` — an absolute path on this machine —
+          // and `retiredBy`, an actor id every neighbouring visitor surface
+          // strips. See redactHubWorkspaceForVisitor. The local surface keeps
+          // the whole record: `notesHome` is what the settings panel edits.
+          const workspace = visitor ? redactHubWorkspaceForVisitor(stored) : stored;
           // Goals with their counts, in priority order. The goals were always
           // in this payload and no MCP tool read it, so ordering lived in
           // each agent's head; the counts are what make the list answer
@@ -6888,14 +6897,14 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
             // the status says what somebody declared about the band itself.
             goalSummary: summarizeGoals(
               taskStore.listTasks(workspaceId),
-              workspace.goals,
+              stored.goals,
               taskStore.listGoalRows(workspaceId),
             ),
             // The board has been stood down. Present only when it has, and
             // carrying prose rather than a flag, because the reader is
             // usually an agent deciding whether to work here and a boolean
             // gives it nothing to act on.
-            ...(isRetired(workspace) ? { retired: retiredNotice(workspace) } : {}),
+            ...(isRetired(stored) ? { retired: retiredNotice(stored) } : {}),
           });
         }
         // The human's queue, to the board's agent-side `next` below: every
