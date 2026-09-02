@@ -1,5 +1,6 @@
 import { type User, connect, escapeHtml, readDocMeta, suggestOps } from '@feedback/core';
 import { mountCode } from './code/code-app.ts';
+import { mountCommentHints } from './comment-hints.ts';
 import { saveStateView, settlePending, watchConnection } from './connection-state.ts';
 import { renderDiffNav, setActiveFile } from './diff-nav.ts';
 import { fetchDocMeta } from './doc-meta.ts';
@@ -328,9 +329,48 @@ async function mountMarkdown(ctx: MountContext): Promise<void> {
   // across every author) — per-suggestion Accept/Reject lives on the
   // balloon/chip card the margin just wired above.
   const suggestionsSummary = mountSuggestionsSummary({ docId, ydoc, scope });
+  // Off-screen comment counts + the "N questions for you" chip — the
+  // information scent for what the reader cannot see (comment-hints.ts).
+  // Jumping goes the same route a tap on the highlight takes: scroll, pulse,
+  // and open the card where it lives (balloon above 1100px, inline below).
+  const jumpToThread = (id: string): void => {
+    reviewChrome.refreshThreadDecorations(id);
+    const range = reviewChrome.resolveThreadRange(id);
+    if (range) {
+      editor.scrollToPos(range.from);
+      editor.pulseRange(range.from, range.to);
+    }
+    if (reviewChrome.openInModal(id)) return;
+    if (margin.revealThreadBalloon(id)) return;
+    if (reviewChrome.isMobile() || reviewChrome.mobile.inlineThreads().some((t) => t.id === id)) {
+      reviewChrome.mobile.showThread(id);
+      return;
+    }
+    reviewChrome.revealThread(id);
+  };
+  const hints = mountCommentHints({
+    scroller: editorMount,
+    marginEl: margin.marginEl,
+    floatParent:
+      editorMount.closest<HTMLElement>('#editor-pane') ??
+      editorMount.parentElement ??
+      document.body,
+    chipEl: document.getElementById('doc-asks'),
+    threads: () => reviewChrome.collectThreads(),
+    spanFor: (id) =>
+      editor.editor.view.dom.querySelector(`.thread-range[data-thread-id="${CSS.escape(id)}"]`),
+    isNew: (t) => reviewChrome.seen.isNew(t),
+    markSeen: (t) => reviewChrome.markSeen(t.id),
+    onSeen: () => margin.scheduleRelayout(),
+    onJump: jumpToThread,
+    dockEl: () => document.querySelector<HTMLElement>('#editor-pane .plan-float'),
+    marginVisible: () => !window.matchMedia('(max-width: 1100px)').matches,
+    scope,
+  });
   const onMarginTransaction = (): void => {
     margin.scheduleRelayout();
     suggestionsSummary.scheduleRefresh();
+    hints.refresh();
   };
   editor.editor.on('transaction', onMarginTransaction);
   scope.onCleanup(() => editor.editor.off('transaction', onMarginTransaction));

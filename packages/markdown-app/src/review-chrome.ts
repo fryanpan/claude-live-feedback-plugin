@@ -10,14 +10,16 @@ import {
   summaryPending,
 } from '@feedback/core';
 import type * as Y from 'yjs';
+import { type SeenTracker, createSeenTracker } from './comment-seen.ts';
 import { threadNeedsModal } from './long-thread.ts';
 import { attachMarkdownComposer, focusMarkdownComposer } from './md-composer.ts';
 import { type MobileReview, mountMobileReview } from './mobile-review.ts';
 import type { MountScope } from './mount-scope.ts';
 import type { ReviewSurface } from './review-surface.ts';
 import { setTabTitle, tabName } from './tab-title.ts';
+import { threadKind } from './thread-kind.ts';
 import { type ThreadModalHandle, mountThreadModal } from './thread-modal.ts';
-import { installSlotRemeasure, sizeThreadSlots } from './thread-morph.ts';
+import { installSlotRemeasure, sizeThreadSlots, threadCards } from './thread-morph.ts';
 import { ThreadPanel, type ThreadTab } from './threads.ts';
 
 /**
@@ -226,6 +228,15 @@ export interface ReviewChrome {
   collectThreads: () => Thread[];
   redrawThreads: () => void;
   refreshThreadDecorations: (activeId: string | null) => void;
+  /** What this reader has already looked at (`comment-seen.ts`). */
+  seen: SeenTracker;
+  /**
+   * The thread has sat in view long enough: record it seen and take the red
+   * dot off every copy of its card and off its highlight, IN PLACE — a
+   * rebuild would destroy a card mid-morph, and "new" is not in the render
+   * key for exactly that reason.
+   */
+  markSeen: (threadId: string) => boolean;
   /** Scroll+pulse the thread's range and focus it in panel / thread view. */
   revealThread: (id: string) => void;
   /**
@@ -503,6 +514,21 @@ export function mountReviewChrome(opts: ChromeOpts): ReviewChrome {
     pendingExpiryAt = Number.POSITIVE_INFINITY;
   }
 
+  // Per doc, per browser: which threads this reader has looked at. Drives the
+  // red "new" dot on the card, the highlight and the off-screen hints.
+  const seen = createSeenTracker({ docId });
+  function markSeen(threadId: string): boolean {
+    const t = collectThreads().find((x) => x.id === threadId);
+    if (!t) return false;
+    if (!seen.markSeen(t)) return false;
+    for (const el of threadCards(threadId)) {
+      el.classList.remove('is-new');
+      el.querySelector('.thread-new-tag')?.remove();
+    }
+    refreshThreadDecorations(activeThreadId);
+    return true;
+  }
+
   let activeThreadId: string | null = null;
   function redrawThreads(): void {
     const all = collectThreads();
@@ -529,7 +555,14 @@ export function mountReviewChrome(opts: ChromeOpts): ReviewChrome {
       .map((t) => {
         const r = resolveThreadRange(t.id);
         if (!r) return null;
-        return { id: t.id, from: r.from, to: r.to, status: t.status };
+        return {
+          id: t.id,
+          from: r.from,
+          to: r.to,
+          status: t.status,
+          kind: threadKind(t),
+          isNew: seen.isNew(t),
+        };
       })
       .filter((x): x is NonNullable<typeof x> => x != null);
     surface.setThreadRanges(ranges, activeId);
@@ -671,6 +704,7 @@ export function mountReviewChrome(opts: ChromeOpts): ReviewChrome {
       if (id !== threadModal.openThreadId()) threadModal.close();
     },
     onThreadClick: (id) => engageThread(id),
+    isNew: (t) => seen.isNew(t),
     onReply: async (id, text, answersCommentId, optionId) => {
       // Two routes, one reply. `/answer` posts the SAME comment and
       // additionally stamps `answeredAt` on the declaring comment, which is
@@ -1167,6 +1201,8 @@ export function mountReviewChrome(opts: ChromeOpts): ReviewChrome {
     collectThreads,
     redrawThreads,
     refreshThreadDecorations,
+    seen,
+    markSeen,
     revealThread,
     openInModal: maybeOpenModal,
     mobile,
