@@ -10,7 +10,7 @@ import { waitFor } from './wait-for.ts';
 
 /**
  * A lost write into a bound doc must tell SOMEBODY — the syncError needs an
- * event on the doc's watch channel (board ticket t-3bFI5h-F9qRW).
+ * event on the doc's watch channel.
  *
  * Measured twice before this suite existed (in-process Rooms and HTTP against
  * a spawned server): when an external write lands inside the 800ms write
