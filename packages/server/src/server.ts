@@ -5780,6 +5780,23 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
         }
 
         // --- REST: shares ---
+        // Every share MUTATION is an operator action, refused to browsers on
+        // the same terms as /api/deploy — see browserCannotOperateBody.
+        // Minting publishes a board to the internet and `enabled` can re-open
+        // external access after the operator closed it; the routes' own
+        // "local-only" comments are about the HOST class, which does not tell
+        // a page on a local dev origin from the agent that is the only real
+        // caller. Keyed on METHOD rather than a route list, the same way
+        // `isGatedWrite` is: a share mutation added later is covered by
+        // construction, and the GET stays open because reading the share list
+        // is what the board's own settings pane does.
+        if (
+          (pathname === '/api/share' || pathname.startsWith('/api/share/')) &&
+          req.method !== 'GET' &&
+          isBrowserRequest(req.headers)
+        ) {
+          return j(403, browserCannotOperateBody());
+        }
         if (pathname === '/api/share' && req.method === 'GET') {
           if (!shares) return j(404, { error: 'sharing not enabled' });
           // `listWithUrls` recomputes every link share's signed URL, which is
