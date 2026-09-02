@@ -1,5 +1,5 @@
+import { agentIdCandidates, agentIdForName } from '@feedback/core/identity';
 import { describe, expect, it } from 'vitest';
-import { agentIdCandidates, agentIdForName } from '../../core/src/identity.ts';
 import { resolveAgentAuthor } from '../src/author.ts';
 
 describe('resolveAgentAuthor', () => {
@@ -14,9 +14,9 @@ describe('resolveAgentAuthor', () => {
   });
 
   it('FEEDBACK_AGENT_NAME synthesizes a distinct per-agent identity', () => {
-    const a = resolveAgentAuthor({ FEEDBACK_AUTHOR: 'agent', FEEDBACK_AGENT_NAME: 'Quick Build' });
-    expect(a.name).toBe('Quick Build');
-    expect(a.id).toBe('agent-quick-build');
+    const a = resolveAgentAuthor({ FEEDBACK_AUTHOR: 'agent', FEEDBACK_AGENT_NAME: 'Beacon Bot' });
+    expect(a.name).toBe('Beacon Bot');
+    expect(a.id).toBe('agent-beacon-bot');
     expect(a.kind).toBe('known');
     expect(a.color).toMatch(/^#[0-9a-f]{6}$/);
   });
@@ -30,8 +30,8 @@ describe('resolveAgentAuthor', () => {
   });
 
   it('the same name always maps to the same id and color', () => {
-    const a = resolveAgentAuthor({ FEEDBACK_AGENT_NAME: 'Quick Build' });
-    const b = resolveAgentAuthor({ FEEDBACK_AGENT_NAME: 'Quick Build' });
+    const a = resolveAgentAuthor({ FEEDBACK_AGENT_NAME: 'Beacon Bot' });
+    const b = resolveAgentAuthor({ FEEDBACK_AGENT_NAME: 'Beacon Bot' });
     expect(b).toEqual(a);
   });
 
@@ -56,13 +56,13 @@ describe('resolveAgentAuthor', () => {
     // `AUTHOR.id`, the board matches a task's OWNER (a display name) against
     // that roster. When these two derivations drifted, every task owned by an
     // attached agent read "not recorded" — 83 rows on the main board.
-    for (const name of ['Live Feedback', 'Quick Build', 'Blog Assistant', '!!!']) {
+    for (const name of ['Live Feedback', 'Beacon Bot', 'Blog Assistant', '!!!']) {
       const minted = resolveAgentAuthor({ FEEDBACK_AGENT_NAME: name }).id;
       expect(minted).toBe(agentIdForName(name));
       expect(agentIdCandidates(name)).toContain(minted.toLowerCase());
     }
     // Positive control: the candidate set is not simply everything.
-    expect(agentIdCandidates('Live Feedback')).not.toContain('agent-quick-build');
+    expect(agentIdCandidates('Live Feedback')).not.toContain('agent-beacon-bot');
   });
 
   it('names with no alphanumerics still get distinct non-empty ids', () => {

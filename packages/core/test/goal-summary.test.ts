@@ -5,8 +5,8 @@ import {
   clipGoal,
   goalDisplay,
   goalTextHash,
-  wordCount,
 } from '../src/goal-summary.ts';
+import { wordCount } from '../src/word-count.ts';
 
 const LONG = [
   'First goal is to make task management smoother and easier for me and agents on the team.',

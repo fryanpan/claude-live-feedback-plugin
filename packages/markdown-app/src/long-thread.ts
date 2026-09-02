@@ -1,4 +1,10 @@
-import { type Comment, type ReviewPayload, type Thread, pendingDeclaration } from '@feedback/core';
+import {
+  type Comment,
+  type ReviewPayload,
+  type Thread,
+  pendingDeclaration,
+  wordCount,
+} from '@feedback/core';
 
 /**
  * Which comment threads have outgrown the balloon column.
@@ -35,11 +41,9 @@ import { type Comment, type ReviewPayload, type Thread, pendingDeclaration } fro
  */
 export const LONG_THREAD_WORDS = 100;
 
-/** Words in a chunk of prose. Whitespace-separated, runs collapsed. */
+/** Words in a chunk of prose; an absent field counts nothing. */
 function countWords(text: string | undefined): number {
-  if (!text) return 0;
-  const trimmed = text.trim();
-  return trimmed === '' ? 0 : trimmed.split(/\s+/).length;
+  return text ? wordCount(text) : 0;
 }
 
 /**
