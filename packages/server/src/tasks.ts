@@ -1,4 +1,3 @@
-import { randomBytes } from 'node:crypto';
 import {
   appendFileSync,
   existsSync,
@@ -13,29 +12,12 @@ import { join } from 'node:path';
 import {
   type ReviewItemJudgement,
   type ReviewItemRange,
-  type ReviewItemRevision,
-  type ReviewOption,
   type ReviewPayload,
   type TaskReviewItem,
   agentIdCandidates,
   agentIdForName,
-  applyReviewRevision,
-  changedRange,
-  checkReviewPayload,
-  isReviewItemGated,
-  isReviewItemHeld,
-  isReviewItemOpen,
-  latestThreadedQuestion,
-  readReviewPayload,
-  readTaskReviewItem,
-  reinstateReview,
-  reviewFromDecisionTask,
-  reviewGapAdvice,
-  reviewPayloadMessage,
-  withdrawReview,
 } from '@feedback/core';
 import { DEFAULT_EFFORT_ESTIMATE_PROMPT } from '@feedback/core/effort-estimate-prompt';
-import { DEFAULT_REVIEW_ITEM_CRITERIA } from '@feedback/core/review-judge-prompt';
 import {
   type ArtifactCheck,
   type DecisionOption,
@@ -58,6 +40,29 @@ import {
   checkDecisionShape,
   decisionShapeMessage,
 } from './decision-shape.ts';
+import { TaskDecisionStore } from './review-items/decisions.ts';
+import { ReviewJudgementStore } from './review-items/judgements.ts';
+import type { ReviewItemPersistence } from './review-items/persistence.ts';
+import { ReviewItemQueries } from './review-items/queries.ts';
+import { ReviewItemStore } from './review-items/store.ts';
+import type {
+  AddReviewItemResult,
+  AnswerDecisionResult,
+  AnswerTaskReviewResult,
+  HeldReviewItem,
+  RecordDecisionJudgementResult,
+  RecordReviewJudgementResult,
+  RequestInfoOnReviewResult,
+  RequestMoreInfoResult,
+  ReviewItemCriteriaRead,
+  ReviewStateCounts,
+  ReviseReviewItemResult,
+  ReviseTaskDecisionResult,
+  SetReviewItemCriteriaResult,
+  WithdrawAnswerResult,
+  WithdrawReviewItemResult,
+} from './review-items/types.ts';
+import { bumpWordsRevision, cryptoId, isArchived, wordsRevisionOf } from './task-fields.ts';
 import {
   AUTHOR_REQUIRED_MESSAGE,
   type DeclaredOwnerKind,
@@ -120,6 +125,41 @@ export {
   TASK_STATUSES,
   byBoardOrder,
 } from '@feedback/core/task-wire';
+
+/* The review-item store owns these now. Re-exported so every call site that
+   already imports them from here — routes, server.ts, the projection, the
+   suites — is untouched by the move. */
+export {
+  LEGACY_REVIEW_ITEM_ID,
+  legacyDecisionItem,
+  reviewItemVersion,
+} from './review-items/derive.ts';
+export { TaskDecisionStore } from './review-items/decisions.ts';
+export { ReviewJudgementStore } from './review-items/judgements.ts';
+export { ReviewItemQueries } from './review-items/queries.ts';
+export { ReviewItemStore } from './review-items/store.ts';
+export type { ReviewItemPersistence, ReviewItemStoreEvent } from './review-items/persistence.ts';
+export type {
+  AddReviewItemResult,
+  AnswerDecisionResult,
+  AnswerTaskReviewResult,
+  HeldReviewItem,
+  RecordDecisionJudgementResult,
+  RecordReviewJudgementResult,
+  RequestInfoOnReviewResult,
+  RequestMoreInfoResult,
+  ReviewItemCriteriaRead,
+  ReviewStateCounts,
+  ReviseReviewItemResult,
+  ReviseTaskDecisionResult,
+  SetReviewItemCriteriaResult,
+  WithdrawAnswerResult,
+  WithdrawReviewItemResult,
+} from './review-items/types.ts';
+
+/* Pure per-row facts, lifted to a leaf module so the review-item store can
+   share them without importing this file. */
+export { isArchived, taskAskedBy, wordsRevisionOf } from './task-fields.ts';
 
 /** Schemes a `url` ref may carry. A ref is rendered as a clickable chip, so
  *  the value becomes an href — `javascript:` and `data:` are script injection
@@ -449,19 +489,6 @@ export interface LegacyParkFields {
   parkedReason?: string;
 }
 
-/**
- * Is this row archived — soft-deleted, off every lane and every queue, and one
- * call from coming back?
- *
- * The ONE reader of `archivedAt`, deliberately: "archived" has to mean the
- * same thing to the board, the queue and the nudger, and a second comparison
- * of the field with a different default is how two surfaces come to disagree
- * about the same row.
- */
-export function isArchived(task: { archivedAt?: number }): boolean {
-  return task.archivedAt !== undefined;
-}
-
 /** How long a park or archive reason may run. A reason is a line on a chip and
  *  a line in the audit trail, not a place to restate the ticket. */
 const REASON_MAX = 200;
@@ -539,20 +566,6 @@ export function isReservedGoalId(id: string): boolean {
 /* `flattenGoals` lived here. It existed to walk a two-level list as one, and
    the list has one level now — `workspace.goals` IS the flat list, so its
    callers read it directly. */
-
-/** One refusal for every way an options array can be malformed — the caller
- *  fixes the shape, not one field at a time. */
-const BAD_DECISION_OPTIONS_MESSAGE =
-  'options must be an array of { label, detail? } — label is required and non-empty, and an id you already hold is kept as you sent it';
-
-/**
- * This row's words-and-goal revision, with the pre-field absence resolved.
- * One reader so the `?? 0` cannot disagree with itself across call sites —
- * the same shape `bodyWrittenAtOf` uses for `bodyWrittenAt`.
- */
-export function wordsRevisionOf(task: { wordsRevision?: number }): number {
-  return task.wordsRevision ?? 0;
-}
 
 /**
  * A goal as a board ROW — the thing whose `done` somebody declares.
@@ -1942,118 +1955,6 @@ export type SetLeadAgentResult =
       message: string;
     };
 
-export type AnswerDecisionResult =
-  | { ok: true; task: Task }
-  | { ok: false; error: 'not-found' | 'not-a-decision' | 'unknown-option' };
-
-export type WithdrawAnswerResult =
-  | { ok: true; task: Task }
-  | { ok: false; error: 'not-found' | 'not-a-decision' | 'no-answer' };
-
-export type RequestMoreInfoResult =
-  | { ok: true; task: Task }
-  | { ok: false; error: 'not-found' | 'not-a-decision' };
-
-/**
- * One HELD review item as the stall monitor reads it off the board: enough to
- * name the item and the ticket in a wake, and to address the filer.
- */
-/**
- * Which WORDS a review item currently has: its revision count. A judge's
- * verdict is about one version; `recordReviewJudgement` compares this so a
- * verdict that outlived the words it judged is dropped rather than applied
- * to the revision that replaced them.
- */
-export function reviewItemVersion(item: Pick<TaskReviewItem, 'revisions'>): number {
-  return item.revisions?.length ?? 0;
-}
-
-export interface HeldReviewItem {
-  taskId: string;
-  title: string;
-  reviewItemId: string;
-  headline: string;
-  /** The judge's reason — the gap the filer was asked to close. */
-  reason: string;
-  /** When the hold was placed; what the 5-minute clock runs from. */
-  heldAt: number;
-  /** Display name of the filer, for the line. */
-  filedBy: string;
-  /** The filer's agent id, for the addressed wake. Absent on an item whose
-   *  filer the store did not record (pre-gate rows cannot be held anyway). */
-  filerAgentId?: string;
-}
-
-export type AddReviewItemResult =
-  | {
-      ok: true;
-      task: Task;
-      item: TaskReviewItem;
-      /** The shared checker's GAPS, phrased as what to write. Advice on a
-       *  successful create, never a refusal — see `reviewGapAdvice`. */
-      advice?: string;
-    }
-  | {
-      ok: false;
-      error: 'not-found' | 'bad-review';
-      /** The gate's verbatim refusal, written to land in a retrying model's
-       *  context. Present exactly when `error` is 'bad-review'. */
-      message?: string;
-    };
-
-export type AnswerTaskReviewResult =
-  | { ok: true; task: Task; item: TaskReviewItem }
-  | {
-      ok: false;
-      error: 'not-found' | 'unknown-review-item' | 'unknown-option' | 'not-a-decision';
-    };
-
-export type RequestInfoOnReviewResult =
-  | { ok: true; task: Task; item: TaskReviewItem }
-  | { ok: false; error: 'not-found' | 'unknown-review-item' | 'not-a-decision' };
-
-export type ReviseReviewItemResult =
-  | {
-      ok: true;
-      task: Task;
-      item: TaskReviewItem;
-      /** The anchored thread the revision answers, when a question was asked
-       *  doc-style — where a reply belongs. */
-      threadId?: string;
-      advice?: string;
-    }
-  | {
-      ok: false;
-      error:
-        | 'not-found'
-        | 'unknown-review-item'
-        | 'not-revisable'
-        | 'answered'
-        | 'withdrawn'
-        | 'empty-patch'
-        | 'bad-review'
-        | 'bad-range';
-      /** The verbatim refusal, present for 'bad-review', 'answered', 'withdrawn'
-       *  and 'bad-range'. */
-      message?: string;
-    };
-
-export type WithdrawReviewItemResult =
-  | { ok: true; task: Task; item: TaskReviewItem }
-  | {
-      ok: false;
-      error:
-        | 'not-found'
-        | 'unknown-review-item'
-        | 'not-withdrawable'
-        | 'answered'
-        | 'already-withdrawn'
-        | 'not-withdrawn';
-      /** The verbatim refusal, for the errors core phrases
-       *  ('answered', 'already-withdrawn', 'not-withdrawn'). */
-      message?: string;
-    };
-
 export type SetDependenciesResult =
   | {
       ok: true;
@@ -2331,102 +2232,6 @@ export function eventsLogPath(dataDir: string, workspaceId: string): string {
   return join(dataDir, 'workspaces', `${workspaceId}.events.jsonl`);
 }
 
-function cryptoId(prefix: string): string {
-  // 9 random bytes → 12 base64url chars. URL-safe, filename-safe, and every
-  // char is legal in a docId (the future `task:<id>` body rooms need that).
-  return `${prefix}-${randomBytes(9).toString('base64url')}`;
-}
-
-/**
- * The id of the review item DERIVED from a task's legacy decision fields.
- *
- * Fixed rather than minted, and that is what makes the derivation safe to run
- * on every read: the same task always derives the same id, so an answer
- * addressed at it lands on the same row no matter how many times anything
- * re-derived it. A minted id would make a read a write.
- *
- * It cannot collide with a real one: `cryptoId('r')` emits `r-` plus twelve
- * base64url characters, and this is six.
- */
-export const LEGACY_REVIEW_ITEM_ID = 'r-legacy';
-
-/**
- * The one legacy decision a task carries, as a review item — or undefined
- * when the task is not a decision.
- *
- * The body of `TaskStore.legacyReviewItem`, lifted to a PURE module function
- * so the board projection can derive the same row (and read its state) from
- * a task alone: `projectTask` holds no store, and the browser draws the
- * Home decision card off the projection rather than off `GET /review-items`.
- * One derivation, so the queue route and the projection cannot disagree
- * about whether a decision is waiting on its owner.
- *
- * `needs === 'decision'` is the WHOLE condition. It used to also require
- * that no stored row existed, which made an unanswered decision disappear
- * from every reader as soon as somebody filed a second question on the same
- * ticket — see `listReviewItems` for why that is the wrong key.
- *
- * What is carried across, beyond `reviewFromDecisionTask`'s payload: the
- * task's own clock and filer, the legacy `answer` (an answered decision read
- * as open is a queue that never empties), the info requests WITH their
- * threads (a threaded one is what reads as `waiting`), and the decision's
- * revisions (what reads as `revised`).
- */
-export function legacyDecisionItem(task: Task): TaskReviewItem | undefined {
-  if (task.needs !== 'decision') return undefined;
-  const review: ReviewPayload = reviewFromDecisionTask(task);
-  const item: TaskReviewItem = {
-    id: LEGACY_REVIEW_ITEM_ID,
-    review,
-    createdAt: task.createdAt,
-    createdBy: taskAskedBy(task),
-    // The gate's verdict on these words, so a held decision is skipped by
-    // `isReviewItemGated` exactly as a held ticket item is. Derived here
-    // rather than stored on the row, for the reason `decisionJudge`
-    // carries: this item is rebuilt on every read.
-    ...(task.decisionJudge !== undefined ? { judge: task.decisionJudge } : {}),
-  };
-  if (task.answer) {
-    item.answer = {
-      text: task.answer.text,
-      by: task.answer.by,
-      ts: task.answer.ts,
-      ...(task.answer.optionId !== undefined ? { answeredWith: task.answer.optionId } : {}),
-    };
-  }
-  if (task.infoRequests && task.infoRequests.length > 0) {
-    item.infoRequests = task.infoRequests.map((r) => ({
-      text: r.text,
-      by: r.by,
-      ts: r.ts,
-      ...(r.threadId !== undefined ? { threadId: r.threadId } : {}),
-      ...(r.range !== undefined ? { range: r.range } : {}),
-    }));
-  }
-  if (task.decisionRevisions && task.decisionRevisions.length > 0) {
-    item.revisions = task.decisionRevisions;
-  }
-  return item;
-}
-
-/**
- * Who is ASKING the decision a ticket carries — the display name every
- * surface spells after "Asked by". One reader for three writers (the derived
- * legacy review item, the board projection, and through those the REST
- * queue), so the Home card, the task panel and `GET /review-items` cannot
- * name three different people for one question.
- *
- * The creator when the row recorded one; otherwise whoever first moved the
- * ticket, which is the only actor a row written before `createdBy` holds and
- * is what the Home card named all along. Empty — never invented — when the
- * row holds neither, and the card then states the clock alone.
- */
-export function taskAskedBy(task: Pick<Task, 'createdBy' | 'transitions'>): string {
-  const created = task.createdBy?.trim();
-  if (created) return created;
-  return task.transitions[0]?.by.name?.trim() ?? '';
-}
-
 /**
  * The id of a NEWLY CREATED goal. Opaque and server-generated, exactly like a
  * task id, and for the same reason: an identifier is the one thing that must
@@ -2474,6 +2279,37 @@ export class TaskStore {
    * tests), no stamp happens and no row ever flags, which changes nothing.
    */
   private docRevisionFor: ((docId: string) => number | undefined) | undefined;
+
+  /**
+   * The review-item verbs, over this store's own state.
+   *
+   * It holds no `TaskStore` — only the nine-member `ReviewItemPersistence`
+   * built below, which is the whole list of what a review verb may reach.
+   * Anything it needs that is not on that list is a deliberate decision to
+   * widen the contract, not an autocomplete away.
+   */
+  private readonly reviewItems = new ReviewItemStore(this.reviewItemPersistence());
+  /** The ticket's OWN decision (the derived `r-legacy` row). */
+  private readonly decisions = new TaskDecisionStore(this.reviewItemPersistence());
+  /** The quality gate's verdicts, on both shapes. */
+  private readonly judgements = new ReviewJudgementStore(this.reviewItemPersistence());
+  /** Reads across a ticket and a board, plus the judging criteria. */
+  private readonly reviewQueries = new ReviewItemQueries(this.reviewItemPersistence());
+
+  /** This store, seen through the review-item contract and nothing more. */
+  private reviewItemPersistence(): ReviewItemPersistence {
+    return {
+      getTask: (taskId) => this.getTask(taskId),
+      listTasksIn: (workspaceId) => this.workspaces.get(workspaceId)?.tasks.values() ?? [],
+      listWorkspaceIds: () => this.workspaces.keys(),
+      getWorkspaceRecord: (workspaceId) => this.workspaces.get(workspaceId)?.workspace,
+      save: (workspaceId) => this.scheduleSave(workspaceId),
+      emit: (event) => this.emit(event),
+      now: () => Date.now(),
+      noteBodyEdited: (taskId, opts) => this.noteBodyEdited(taskId, opts),
+      renameTask: (taskId, title, opts) => this.renameTask(taskId, title, opts),
+    };
+  }
 
   setDocRevisionReader(reader: ((docId: string) => number | undefined) | undefined): void {
     this.docRevisionFor = reader;
@@ -3858,132 +3694,31 @@ export class TaskStore {
     return { ok: true, task, note };
   }
 
+  // ── Review items ─────────────────────────────────────────────────────────
+
   /**
-   * Record a decision's VERBATIM answer (§3.2: decisions keep the human's
-   * exact words) and emit `decision.answered` carrying the text, the actor,
-   * and the decision task's links — a ready-made propagation checklist for
-   * the attached agent (§3.6). Recording the answer does NOT transition the
-   * task: status changes stay with the single gate, and what the answer
-   * unblocks is the agent's next move, not this method's side effect.
+   * The review-item verbs — the 0..n questions a ticket carries and the one a
+   * legacy decision derives — live in `ReviewItemStore` (src/review-items/),
+   * over the narrow `ReviewItemPersistence` this store satisfies. What
+   * follows is one thin delegate each, so every caller that already addresses
+   * them here — the routes, MCP, server.ts, the suites — keeps working while
+   * the behaviour has exactly one home.
    */
   answerDecision(
     taskId: string,
     text: string,
     opts: { actor: { id: string; name: string; kind?: string }; optionId?: string },
   ): AnswerDecisionResult {
-    const task = this.getTask(taskId);
-    if (!task) return { ok: false, error: 'not-found' };
-    if (task.needs !== 'decision') return { ok: false, error: 'not-a-decision' };
-    // An optionId that resolves to nothing would record an answer whose
-    // provenance is a lie — and the UI's whole point is that tapping a
-    // candidate is the same act as writing its words.
-    if (opts.optionId !== undefined && !task.options?.some((o) => o.id === opts.optionId)) {
-      return { ok: false, error: 'unknown-option' };
-    }
-    const ts = Date.now();
-    const actor: TaskActor = {
-      id: opts.actor.id,
-      name: opts.actor.name,
-      kind: classifyActor(opts.actor),
-    };
-    // A second answer landing over a standing one is a race, not a rewrite
-    // request — two browsers both showing the unanswered card, the slower tap
-    // arriving after the faster one recorded. Last write stands (the panel's
-    // busy-disable is DOM-local, so the server is the only place this can be
-    // handled), but the displaced words move to `answerHistory` exactly as an
-    // undo would move them: overwriting IS a withdrawal, performed by the
-    // overwriting actor, and a hard delete here is the loss that field was
-    // added to prevent.
-    if (task.answer) {
-      task.answerHistory = [
-        ...(task.answerHistory ?? []),
-        { ...task.answer, withdrawnAt: ts, withdrawnBy: actor.name },
-      ];
-    }
-    // `by` is the display name — the projection ships display names, not ids
-    // (§3.3 visitor contract), and the event carries the full actor anyway.
-    // `text` stays the answer whether it was typed or tapped: an option is a
-    // shortcut to words, never a replacement for them.
-    task.answer = {
-      text,
-      by: actor.name,
-      ts,
-      ...(opts.optionId !== undefined ? { optionId: opts.optionId } : {}),
-    };
-    task.updatedAt = ts;
-    this.scheduleSave(task.workspaceId);
-    this.emit({
-      type: 'decision.answered',
-      workspaceId: task.workspaceId,
-      taskId: task.id,
-      answer: text,
-      ...(opts.optionId !== undefined ? { optionId: opts.optionId } : {}),
-      actor,
-      links: task.links,
-      ts,
-    });
-    return { ok: true, task };
+    return this.decisions.answerDecision(taskId, text, opts);
   }
 
-  /**
-   * Take an answer back.
-   *
-   * Answering is one click with no confirmation step, and a stray one on a
-   * phone used to be permanent — the surface offered no way back, and the
-   * words were gone the moment a second answer overwrote them. This is the
-   * way back, and it is a SOFT delete: the answer moves to `answerHistory`
-   * with who withdrew it and when, so the record of what was decided (and
-   * un-decided) survives, which is the project-wide rule for user content.
-   *
-   * Refuses when there is nothing to withdraw rather than succeeding
-   * vacuously: two readers racing the same undo must not both be told they
-   * took something back.
-   */
   withdrawAnswer(
     taskId: string,
     opts: { actor: { id: string; name: string; kind?: string } },
   ): WithdrawAnswerResult {
-    const task = this.getTask(taskId);
-    if (!task) return { ok: false, error: 'not-found' };
-    if (task.needs !== 'decision') return { ok: false, error: 'not-a-decision' };
-    const answer = task.answer;
-    if (!answer) return { ok: false, error: 'no-answer' };
-    const ts = Date.now();
-    const actor: TaskActor = {
-      id: opts.actor.id,
-      name: opts.actor.name,
-      kind: classifyActor(opts.actor),
-    };
-    task.answerHistory = [
-      ...(task.answerHistory ?? []),
-      { ...answer, withdrawnAt: ts, withdrawnBy: actor.name },
-    ];
-    task.answer = undefined;
-    task.updatedAt = ts;
-    this.scheduleSave(task.workspaceId);
-    this.emit({
-      type: 'decision.answer_withdrawn',
-      workspaceId: task.workspaceId,
-      taskId: task.id,
-      answer: answer.text,
-      answeredBy: answer.by,
-      actor,
-      links: task.links,
-      ts,
-    });
-    return { ok: true, task };
+    return this.decisions.withdrawAnswer(taskId, opts);
   }
 
-  /**
-   * Ask a decision for more context INSTEAD of answering it — the third
-   * first-class response next to picking an option and writing your own
-   * answer, and the one that keeps options from becoming a closed set.
-   *
-   * Nothing about the task's status or answer changes: it stays open, stays
-   * counted at the top of the board, and stays in the walkthrough. What the
-   * attached agent owes back is context, which is why this is its own event
-   * rather than an answer carrying a flag.
-   */
   requestMoreInfo(
     taskId: string,
     question: string,
@@ -3996,209 +3731,25 @@ export class TaskStore {
       range?: ReviewItemRange;
     },
   ): RequestMoreInfoResult {
-    const task = this.getTask(taskId);
-    if (!task) return { ok: false, error: 'not-found' };
-    if (task.needs !== 'decision') return { ok: false, error: 'not-a-decision' };
-    const ts = Date.now();
-    const actor: TaskActor = {
-      id: opts.actor.id,
-      name: opts.actor.name,
-      kind: classifyActor(opts.actor),
-    };
-    task.infoRequests = [
-      ...(task.infoRequests ?? []),
-      {
-        text: question,
-        by: actor.name,
-        ts,
-        ...(opts.threadId !== undefined ? { threadId: opts.threadId } : {}),
-        ...(opts.range !== undefined ? { range: opts.range } : {}),
-      },
-    ];
-    task.updatedAt = ts;
-    this.scheduleSave(task.workspaceId);
-    this.emit({
-      type: 'decision.info_requested',
-      workspaceId: task.workspaceId,
-      taskId: task.id,
-      question,
-      actor,
-      links: task.links,
-      ts,
-    });
-    return { ok: true, task };
+    return this.decisions.requestMoreInfo(taskId, question, opts);
   }
 
-  // ── Review items: 0..n per ticket ─────────────────────────────────────────
-
-  /**
-   * Attach a review item to a ticket.
-   *
-   * `review` arrives as `unknown` because every door into this is a route
-   * carrying parsed JSON, and it is gated by `checkReviewPayload` — THE
-   * checker, the same one comment-borne declarations pass through. Writing a
-   * second gate here is precisely the "two spellings of one concept" this
-   * whole change deletes: a second copy of a limit is how a card ends up
-   * rendering something the API swore it had refused.
-   *
-   * The stored payload is the one `readReviewPayload` normalizes out of the
-   * input, so caller-supplied junk keys never reach the sidecar. Option ids
-   * are the CALLER'S — `checkReviewPayload` already demands they exist and be
-   * unique within the item, and re-minting them would break an `answeredWith`
-   * a client had already put on screen. Only the item id is minted here,
-   * `r-<crypto>`, the way options mint `o-<crypto>`.
-   *
-   * `gaps` come back as `advice` on SUCCESS. They were computed and read by
-   * nobody in the first cut of this feature: the call returned 200, the card
-   * came out thinner than the author meant, and nothing connected the two.
-   */
   addReviewItem(
     taskId: string,
     review: unknown,
     opts: { actor: { id: string; name: string; kind?: string } },
   ): AddReviewItemResult {
-    const task = this.getTask(taskId);
-    if (!task) return { ok: false, error: 'not-found' };
-
-    const check = checkReviewPayload(review);
-    if (!check.ok) {
-      return { ok: false, error: 'bad-review', message: reviewPayloadMessage(check) };
-    }
-    const payload = readReviewPayload(review);
-    // Unreachable for anything the gate passed — kept because "the checker said
-    // yes and the reader said no" must not become an undefined write.
-    if (!payload) {
-      return { ok: false, error: 'bad-review', message: reviewPayloadMessage(check) };
-    }
-
-    const ts = Date.now();
-    const actor: TaskActor = {
-      id: opts.actor.id,
-      name: opts.actor.name,
-      kind: classifyActor(opts.actor),
-    };
-    const item: TaskReviewItem = {
-      id: cryptoId('r'),
-      review: payload,
-      createdAt: ts,
-      // Display name, like every other projected `by` (§3.3 visitor contract).
-      createdBy: actor.name,
-    };
-    task.reviews = [...(task.reviews ?? []), item];
-    task.updatedAt = ts;
-    this.scheduleSave(task.workspaceId);
-    this.emit({
-      type: 'review_item.added',
-      workspaceId: task.workspaceId,
-      taskId: task.id,
-      reviewItemId: item.id,
-      shape: payload.shape,
-      headline: payload.headline,
-      actor,
-      links: task.links,
-      ts,
-    });
-
-    const advice = reviewGapAdvice(check.gaps);
-    return { ok: true, task, item, ...(advice !== undefined ? { advice } : {}) };
+    return this.reviewItems.addReviewItem(taskId, review, opts);
   }
 
-  /**
-   * Every review item on a ticket, in order.
-   *
-   * When the ticket IS a legacy decision, one derived row leads the list with
-   * the fixed id `r-legacy`. The derivation happens at READ time and writes
-   * nothing: it is idempotent by construction and cannot double-apply across a
-   * restart, which is strictly safer than the lazy back-fill `hydrateFromDisk`
-   * does for `unplacedSince`. Nothing is purged either — `needs`, `options`,
-   * `answer` and `infoRequests` keep being read and written exactly as before.
-   *
-   * Real rows do NOT suppress the derived one, and that is a correction rather
-   * than a preference. Suppressing on "a stored row exists" keys the decision
-   * on the wrong fact: the legacy decision is a SEPARATE open question from
-   * whatever somebody filed later, so the moment a ticket gained its second
-   * question the first one silently left this list — and with it `GET
-   * /review-items`, which is the one route that answers "what is waiting on
-   * me". The derived row leaves for exactly one reason now: the decision was
-   * answered, at which point it is still LISTED and merely closed.
-   *
-   * It leads rather than trails because it is the oldest question on the
-   * ticket (`createdAt` is the task's own), and this queue is oldest-first.
-   *
-   * Rows are read through `readTaskReviewItem`, so a row corrupted on disk
-   * drops out of the list instead of throwing inside a renderer that never
-   * touched this ticket — and because the derived row no longer depends on how
-   * many raw rows there are, an unreadable one can no longer take the legacy
-   * decision down with it.
-   */
   listReviewItems(taskId: string): TaskReviewItem[] {
-    const task = this.getTask(taskId);
-    if (!task) return [];
-    const out: TaskReviewItem[] = [];
-    const legacy = this.legacyReviewItem(task);
-    if (legacy) out.push(legacy);
-    for (const raw of task.reviews ?? []) {
-      const item = readTaskReviewItem(raw);
-      if (item) out.push(item);
-    }
-    return out;
+    return this.reviewQueries.listReviewItems(taskId);
   }
 
-  /**
-   * How much of this ticket is still waiting on a person — and, separately,
-   * how much of it could not be READ.
-   *
-   * The second number is the whole reason this exists next to
-   * `listReviewItems`. That reader deliberately drops a row that does not
-   * parse, so a ticket whose questions are corrupt answers "no open
-   * questions", byte-identical to a ticket that genuinely has none. That is
-   * fine for a renderer — better a short list than a thrown exception inside a
-   * card — and wrong for anything that ACTS on the answer, which the ready-work
-   * gate does: it would read an unreadable ticket as free work and wake
-   * somebody about a row that may well be blocked on Bryan.
-   *
-   * `open` counts the legacy `needs: 'decision'` row too, because
-   * `listReviewItems` derives one — so both spellings of "a question is
-   * outstanding" arrive here as one number and cannot drift apart.
-   *
-   * `undefined` for a task that does not exist. Not `{ open: 0, unreadable: 0 }`:
-   * "this ticket is clear" and "there is no such ticket" are the two answers
-   * this method exists to keep apart, so it must not merge them itself.
-   */
-  reviewState(taskId: string): { open: number; unreadable: number; held: number } | undefined {
-    const task = this.getTask(taskId);
-    if (!task) return undefined;
-    // A HELD item is open — nobody has answered it — and yet it is not an
-    // ask anyone can see: the quality gate kept it off the queue. So it is
-    // counted apart, and `open` excludes it: a row whose only question is
-    // held is not legitimately waiting on a person, and reading it as such
-    // would exonerate it from the stall clock on the strength of an ask the
-    // reader was never shown.
-    const items = this.listReviewItems(taskId);
-    const held = items.filter(isReviewItemHeld).length;
-    const open = items.filter((i) => isReviewItemOpen(i) && !isReviewItemGated(i)).length;
-    let unreadable = 0;
-    for (const raw of task.reviews ?? []) {
-      if (!readTaskReviewItem(raw)) unreadable++;
-    }
-    return { open, unreadable, held };
+  reviewState(taskId: string): ReviewStateCounts | undefined {
+    return this.reviewQueries.reviewState(taskId);
   }
 
-  /**
-   * Record the quality gate's verdict on an item's CURRENT words, and who
-   * filed them.
-   *
-   * Writes only the two store-side fields — `judge` (projected, so the card
-   * can say "Held: …") and `filedBy` (store-only, so the wake can be
-   * addressed). The words themselves are untouched: a hold is a verdict ON the
-   * item, never an edit OF it, and the filer's own `revise` is what changes
-   * the text. Overwrites the previous verdict in place because a verdict is
-   * about the current words, and those have a history of their own
-   * (`revisions`) that a superseded verdict adds nothing to.
-   *
-   * Refuses the derived legacy row and an answered item for the same reasons
-   * `reviseReviewItem` does: neither has words a verdict could hold.
-   */
   recordReviewJudgement(
     taskId: string,
     reviewItemId: string,
@@ -4226,56 +3777,10 @@ export class TaskStore {
        */
       forPendingAt?: number;
     },
-  ):
-    | { ok: true; task: Task; item: TaskReviewItem }
-    | { ok: false; error: 'not-found' | 'unknown-review-item' | 'answered' | 'stale' } {
-    const task = this.getTask(taskId);
-    if (!task) return { ok: false, error: 'not-found' };
-    if (reviewItemId === LEGACY_REVIEW_ITEM_ID) return { ok: false, error: 'unknown-review-item' };
-    const item = task.reviews?.find((r) => r.id === reviewItemId);
-    if (!item) return { ok: false, error: 'unknown-review-item' };
-    if (item.answer) return { ok: false, error: 'answered' };
-    if (opts.forVersion !== undefined && reviewItemVersion(item) !== opts.forVersion) {
-      return { ok: false, error: 'stale' };
-    }
-    if (
-      opts.forPendingAt !== undefined &&
-      (item.judge?.verdict !== 'pending' || item.judge.at !== opts.forPendingAt)
-    ) {
-      return { ok: false, error: 'stale' };
-    }
-    item.judge = { at: judgement.at, verdict: judgement.verdict, reason: judgement.reason };
-    item.filedBy = {
-      id: opts.actor.id,
-      name: opts.actor.name,
-      kind: classifyActor(opts.actor),
-    };
-    task.updatedAt = Math.max(task.updatedAt, judgement.at);
-    this.scheduleSave(task.workspaceId);
-    const read = readTaskReviewItem(item);
-    // Unreachable: the row was found by id and its review was readable a
-    // moment ago. Kept so a corrupt row is a refusal rather than an undefined.
-    if (!read) return { ok: false, error: 'unknown-review-item' };
-    return { ok: true, task, item: read };
+  ): RecordReviewJudgementResult {
+    return this.judgements.recordReviewJudgement(taskId, reviewItemId, judgement, opts);
   }
 
-  /**
-   * The same verdict write, for the ticket's OWN decision — the derived
-   * `r-legacy` row that `recordReviewJudgement` refuses by id.
-   *
-   * A separate method rather than a branch inside that one, because the two
-   * write to different places and guard on different versions: a ticket item
-   * stamps its own wrapper and counts `revisions`; the decision stamps the
-   * TASK and counts `wordsRevisionOf`, since its words are the row's words
-   * and every writer of those already moves that counter. Folding them
-   * together would mean one function whose every line asks which shape it is
-   * holding.
-   *
-   * The refusals are the same three facts, read off this shape: the ticket
-   * must still be a decision, an ANSWERED decision is closed (a verdict
-   * about words a person has already acted on changes nothing), and a
-   * verdict that outlived the words it read is dropped.
-   */
   recordDecisionJudgement(
     taskId: string,
     judgement: ReviewItemJudgement,
@@ -4286,285 +3791,89 @@ export class TaskStore {
       /** The `pending` stamp this caller placed — see `recordReviewJudgement`. */
       forPendingAt?: number;
     },
-  ):
-    | { ok: true; task: Task; item: TaskReviewItem }
-    | { ok: false; error: 'not-found' | 'not-a-decision' | 'answered' | 'stale' } {
-    const task = this.getTask(taskId);
-    if (!task) return { ok: false, error: 'not-found' };
-    if (task.needs !== 'decision') return { ok: false, error: 'not-a-decision' };
-    if (task.answer) return { ok: false, error: 'answered' };
-    if (opts.forVersion !== undefined && wordsRevisionOf(task) !== opts.forVersion) {
-      return { ok: false, error: 'stale' };
-    }
-    if (
-      opts.forPendingAt !== undefined &&
-      (task.decisionJudge?.verdict !== 'pending' || task.decisionJudge.at !== opts.forPendingAt)
-    ) {
-      return { ok: false, error: 'stale' };
-    }
-    task.decisionJudge = {
-      at: judgement.at,
-      verdict: judgement.verdict,
-      reason: judgement.reason,
-    };
-    task.decisionFiledBy = {
-      id: opts.actor.id,
-      name: opts.actor.name,
-      kind: classifyActor(opts.actor),
-    };
-    task.updatedAt = Math.max(task.updatedAt, judgement.at);
-    this.scheduleSave(task.workspaceId);
-    const item = this.legacyReviewItem(task);
-    // Unreachable: `needs === 'decision'` was checked above and is the whole
-    // condition `legacyReviewItem` derives on.
-    if (!item) return { ok: false, error: 'not-a-decision' };
-    return { ok: true, task, item };
+  ): RecordDecisionJudgementResult {
+    return this.judgements.recordDecisionJudgement(taskId, judgement, opts);
   }
 
-  /**
-   * Rewrite the words of a ticket's own decision — what
-   * `revise_review_item(taskId=…)` does, and the reason a hold on one is not
-   * a dead end.
-   *
-   * The decision has no stored row to patch: its headline IS the title, its
-   * detail IS the body, and its options are the task's. So this maps the
-   * patch onto those three and writes them through the SAME choke points
-   * every other words-writer uses — `applyTitle` (which stamps the rename
-   * marks and bumps `wordsRevision`) and the body stamp — rather than
-   * assigning the fields here. That is what keeps the audit trail, the
-   * preserved `quote` and the staleness counter identical whether the words
-   * moved through this door or through `rewrite_task`.
-   *
-   * Refused on an ANSWERED decision, for `reviseReviewItem`'s reason: the
-   * answer was given to the words that are there, and rewriting them under
-   * it would leave a recorded decision about text nobody can see.
-   */
   reviseTaskDecision(
     taskId: string,
     patch: { headline?: unknown; detail?: unknown; options?: unknown },
     opts: { actor: { id: string; name: string; kind?: string }; reason?: string },
-  ):
-    | { ok: true; task: Task; item: TaskReviewItem }
-    | {
-        ok: false;
-        error: 'not-found' | 'not-a-decision' | 'answered' | 'empty-patch' | 'bad-review';
-        message?: string;
-      } {
-    const task = this.getTask(taskId);
-    if (!task) return { ok: false, error: 'not-found' };
-    if (task.needs !== 'decision') {
-      return {
-        ok: false,
-        error: 'not-a-decision',
-        message: `task ${taskId} is not a decision, so it has no decision of its own to revise — pass reviewItemId to revise one of the items filed on it`,
-      };
-    }
-    if (task.answer) {
-      return {
-        ok: false,
-        error: 'answered',
-        message: `the decision on ${taskId} is already answered — the answer is to the words it has; file a new item instead of rewriting these`,
-      };
-    }
-    const { headline, detail, options } = patch;
-    if (headline === undefined && detail === undefined && options === undefined) {
-      return { ok: false, error: 'empty-patch' };
-    }
-    if (headline !== undefined && (typeof headline !== 'string' || headline.trim() === '')) {
-      return { ok: false, error: 'bad-review', message: 'headline must be a non-empty string' };
-    }
-    if (detail !== undefined && typeof detail !== 'string') {
-      return { ok: false, error: 'bad-review', message: 'detail must be a string' };
-    }
-    let nextOptions = task.options;
-    if (options !== undefined) {
-      if (!Array.isArray(options)) {
-        return { ok: false, error: 'bad-review', message: BAD_DECISION_OPTIONS_MESSAGE };
-      }
-      const parsed: DecisionOption[] = [];
-      for (const entry of options) {
-        if (typeof entry !== 'object' || entry === null) {
-          return { ok: false, error: 'bad-review', message: BAD_DECISION_OPTIONS_MESSAGE };
-        }
-        const o = entry as { id?: unknown; label?: unknown; detail?: unknown };
-        if (typeof o.label !== 'string' || o.label.trim() === '') {
-          return { ok: false, error: 'bad-review', message: BAD_DECISION_OPTIONS_MESSAGE };
-        }
-        if (o.detail !== undefined && typeof o.detail !== 'string') {
-          return { ok: false, error: 'bad-review', message: BAD_DECISION_OPTIONS_MESSAGE };
-        }
-        parsed.push({
-          // An id the caller kept is kept: an answer already recorded against
-          // one names it by id, and re-minting would orphan that provenance.
-          id: typeof o.id === 'string' && o.id.trim() !== '' ? o.id : cryptoId('o'),
-          label: o.label.trim(),
-          ...(typeof o.detail === 'string' ? { detail: o.detail } : {}),
-        });
-      }
-      nextOptions = parsed;
-    }
-    const nextTitle = typeof headline === 'string' ? headline.trim() : task.title;
-    const nextBody = typeof detail === 'string' ? detail : task.body;
-    // The same shape gate `createTask` runs, on the words as they WILL be —
-    // so a revision cannot leave the ticket in a state the create door would
-    // have refused, and the filer is told in the create door's own words.
-    const check = checkDecisionShape(nextBody, nextOptions);
-    if (!check.ok) {
-      return { ok: false, error: 'bad-review', message: decisionShapeMessage(check) };
-    }
-    // The superseded reading, filed the way `reviseReviewItem` files one on
-    // a stored item — stamped with the thread of the question it answers
-    // (the newest threaded one, as `latestThreadedQuestion` reads it) and
-    // with where in the new body the change landed. This record is what
-    // puts a decision the reader asked on BACK on their queue, marked
-    // Revised: `legacyDecisionItem` hangs it on the derived row and
-    // `reviewItemState` reads it. Kept before the words move, because the
-    // words are what it keeps.
-    const before = this.legacyReviewItem(task);
-    const asked = before ? latestThreadedQuestion(before) : undefined;
-    const revisedRange =
-      typeof detail === 'string' && detail !== (task.body ?? '')
-        ? changedRange(task.body ?? '', detail)
-        : undefined;
-    const previous: ReviewItemRevision = {
-      at: Date.now(),
-      by: opts.actor.name,
-      headline: task.title,
-      ...(typeof task.body === 'string' && task.body.trim() !== '' ? { detail: task.body } : {}),
-      ...(task.options && task.options.length > 0
-        ? {
-            options: task.options.map(
-              (o): ReviewOption => ({
-                id: o.id,
-                label: o.label,
-                ...(o.detail !== undefined ? { detail: o.detail } : {}),
-              }),
-            ),
-          }
-        : {}),
-      ...(asked?.threadId !== undefined ? { threadId: asked.threadId } : {}),
-      ...(revisedRange !== undefined ? { revisedRange } : {}),
-    };
-    task.decisionRevisions = [...(task.decisionRevisions ?? []), previous];
-    if (options !== undefined) task.options = nextOptions;
-    if (detail !== undefined) {
-      task.body = nextBody;
-      // The body door — it stamps `bodyWrittenAt`, bumps `wordsRevision`,
-      // applies the title in the same act, and emits ONE task.body_edited.
-      this.noteBodyEdited(taskId, {
-        actor: opts.actor,
-        ...(headline !== undefined ? { title: nextTitle } : {}),
-        ...(opts.reason !== undefined ? { reason: opts.reason } : {}),
-      });
-    } else if (headline !== undefined) {
-      this.renameTask(taskId, nextTitle, {
-        actor: opts.actor,
-        ...(opts.reason !== undefined ? { reason: opts.reason } : {}),
-      });
-    } else {
-      // Options alone moved. Nothing above bumped the counter, and it has to
-      // move: it is what makes the verdict about the old options stale.
-      this.bumpWordsRevision(task);
-      task.updatedAt = Date.now();
-      this.scheduleSave(task.workspaceId);
-    }
-    const item = this.legacyReviewItem(task);
-    if (!item) return { ok: false, error: 'not-a-decision' };
-    return { ok: true, task, item };
+  ): ReviseTaskDecisionResult {
+    return this.decisions.reviseTaskDecision(taskId, patch, opts);
   }
 
-  /**
-   * Every HELD item on a board, with what the stall monitor needs to name
-   * it and to find its filer. Read off the raw rows because `filedBy` is
-   * store-only. Done tickets are skipped — a held question on finished work
-   * is not a finding anyone should act on.
-   */
   heldReviewItems(workspaceId: string): HeldReviewItem[] {
-    const state = this.workspaces.get(workspaceId);
-    if (!state) return [];
-    const out: HeldReviewItem[] = [];
-    for (const task of state.tasks.values()) {
-      if (task.status === 'done' || isArchived(task)) continue;
-      // The ticket's OWN decision, when the gate is holding it. First,
-      // because it is the oldest question on the row — the same order
-      // `listReviewItems` puts it in. It is reported under the derived id,
-      // which is how its caller knows to address the nudge at the ticket
-      // (`revise_review_item(taskId=…)`) rather than at an item id that does
-      // not exist.
-      const decision = this.legacyReviewItem(task);
-      if (decision && isReviewItemHeld(decision) && decision.judge) {
-        out.push({
-          taskId: task.id,
-          title: task.title,
-          reviewItemId: decision.id,
-          headline: decision.review.headline,
-          reason: decision.judge.reason,
-          heldAt: decision.judge.at,
-          filedBy: decision.createdBy,
-          ...(task.decisionFiledBy?.id !== undefined
-            ? { filerAgentId: task.decisionFiledBy.id }
-            : {}),
-        });
-      }
-      for (const raw of task.reviews ?? []) {
-        const item = readTaskReviewItem(raw);
-        if (!item || !isReviewItemHeld(item) || !item.judge) continue;
-        out.push({
-          taskId: task.id,
-          title: task.title,
-          reviewItemId: item.id,
-          headline: item.review.headline,
-          reason: item.judge.reason,
-          heldAt: item.judge.at,
-          filedBy: item.createdBy,
-          ...(raw.filedBy?.id !== undefined ? { filerAgentId: raw.filedBy.id } : {}),
-        });
-      }
-    }
-    return out;
+    return this.reviewQueries.heldReviewItems(workspaceId);
   }
 
-  /**
-   * The criteria this board judges review items against: the owner's own
-   * text, or the default when nobody has written any. The ONE reader of
-   * `HubWorkspace.reviewItemCriteria`, so "what does default mean" is
-   * answered in exactly one place. `undefined` for a board that does not
-   * exist — distinct from a board on the default, which is the ordinary case.
-   */
-  reviewItemCriteria(workspaceId: string): { value: string; isDefault: boolean } | undefined {
-    const state = this.workspaces.get(workspaceId);
-    if (!state) return undefined;
-    const own = state.workspace.reviewItemCriteria;
-    return own !== undefined && own.trim() !== ''
-      ? { value: own, isDefault: false }
-      : { value: DEFAULT_REVIEW_ITEM_CRITERIA, isDefault: true };
+  reviewItemCriteria(workspaceId: string): ReviewItemCriteriaRead | undefined {
+    return this.reviewQueries.reviewItemCriteria(workspaceId);
   }
 
-  /**
-   * Set — or, with `undefined`/blank, clear back to the default — what this
-   * board judges review items against. A settings write, not a board event:
-   * nothing in §3.6's table describes it and no subscriber acts on it, the
-   * same contract as `setDependencies`. The next filing reads it.
-   */
   setReviewItemCriteria(
     workspaceId: string,
     criteria: string | undefined,
-    _opts: { actor: { id: string; name: string; kind?: string } },
-  ):
-    | { ok: true; workspace: HubWorkspace; criteria: { value: string; isDefault: boolean } }
-    | { ok: false; error: 'workspace-not-found' } {
-    const state = this.workspaces.get(workspaceId);
-    if (!state) return { ok: false, error: 'workspace-not-found' };
-    const next = criteria?.trim();
-    if (next === undefined || next === '') state.workspace.reviewItemCriteria = undefined;
-    else state.workspace.reviewItemCriteria = next;
-    this.scheduleSave(workspaceId);
-    const read = this.reviewItemCriteria(workspaceId);
-    return {
-      ok: true,
-      workspace: state.workspace,
-      criteria: read ?? { value: DEFAULT_REVIEW_ITEM_CRITERIA, isDefault: true },
-    };
+    opts: { actor: { id: string; name: string; kind?: string } },
+  ): SetReviewItemCriteriaResult {
+    return this.reviewQueries.setReviewItemCriteria(workspaceId, criteria, opts);
+  }
+
+  answerTaskReview(
+    taskId: string,
+    reviewItemId: string,
+    text: string,
+    opts: { actor: { id: string; name: string; kind?: string }; answeredWith?: string },
+  ): AnswerTaskReviewResult {
+    return this.reviewItems.answerTaskReview(taskId, reviewItemId, text, opts);
+  }
+
+  requestMoreInfoOnReview(
+    taskId: string,
+    reviewItemId: string,
+    question: string,
+    opts: {
+      actor: { id: string; name: string; kind?: string };
+      /**
+       * The thread the question was asked on, with the phrase it is about,
+       * when it was asked doc-style — by selecting words of the item and
+       * commenting. Same storage as the typed question, one field richer:
+       * that is what makes the item's state derivable from one list rather
+       * than reconciled across two.
+       */
+      threadId?: string;
+      range?: ReviewItemRange;
+    },
+  ): RequestInfoOnReviewResult {
+    return this.reviewItems.requestMoreInfoOnReview(taskId, reviewItemId, question, opts);
+  }
+
+  reviseReviewItem(
+    taskId: string,
+    reviewItemId: string,
+    patch: { headline?: unknown; detail?: unknown; options?: unknown },
+    opts: {
+      actor: { id: string; name: string; kind?: string };
+      revisedRange?: { start: number; end: number };
+    },
+  ): ReviseReviewItemResult {
+    return this.reviewItems.reviseReviewItem(taskId, reviewItemId, patch, opts);
+  }
+
+  withdrawReviewItem(
+    taskId: string,
+    reviewItemId: string,
+    opts: {
+      actor: { id: string; name: string; kind?: string };
+      reason?: string;
+      undo?: boolean;
+    },
+  ): WithdrawReviewItemResult {
+    return this.reviewItems.withdrawReviewItem(taskId, reviewItemId, opts);
+  }
+
+  findReviewItem(reviewItemId: string): { taskId: string; workspaceId: string } | undefined {
+    return this.reviewQueries.findReviewItem(reviewItemId);
   }
 
   /** This board's notes home, or undefined (board missing, or none set —
@@ -4751,384 +4060,6 @@ export class TaskStore {
   }
 
   /**
-   * The one legacy decision as a review item, or undefined when there is none.
-   *
-   * ONE rule, in ONE place, because three callers ask it — the reader above
-   * and both answer paths. If the answer paths resolved `r-legacy` under a
-   * different condition than the reader lists it under, a row nothing shows
-   * would still accept answers.
-   *
-   * The payload mapping is `reviewFromDecisionTask` in core (pure, mints
-   * nothing). What is added here is the ROW around it: the task's own clock,
-   * and — the part that matters — the legacy `answer` carried across, because
-   * an answered decision read as open is a queue that never empties.
-   *
-   * `createdBy` is `taskAskedBy` — who filed the ticket, and for a row older
-   * than that field whoever first moved it, which is what the Home card
-   * already named. It used to be deliberately empty ("no legacy decision
-   * recorded who raised it"), which was true of the row and false of the
-   * board: the same decision read "Asked by Harbor agent" on Home and
-   * "Asked 11 minutes ago" in the task panel and the REST queue. NOT the
-   * `assignee` — that is who has to answer, a different person.
-   */
-  private legacyReviewItem(task: Task): TaskReviewItem | undefined {
-    return legacyDecisionItem(task);
-  }
-
-  /**
-   * Answer ONE review item on a ticket, leaving its siblings open.
-   *
-   * `r-legacy` DELEGATES to `answerDecision`, untouched. That is the whole
-   * back-compat story in one line: `task.answer`, the `optionId` validation
-   * and the `decision.answered` payload stay byte-identical for every caller
-   * that never heard of review items, and there is no second implementation of
-   * "record a decision's answer" free to drift from the first.
-   */
-  answerTaskReview(
-    taskId: string,
-    reviewItemId: string,
-    text: string,
-    opts: { actor: { id: string; name: string; kind?: string }; answeredWith?: string },
-  ): AnswerTaskReviewResult {
-    const task = this.getTask(taskId);
-    if (!task) return { ok: false, error: 'not-found' };
-
-    if (reviewItemId === LEGACY_REVIEW_ITEM_ID && this.legacyReviewItem(task)) {
-      const res = this.answerDecision(taskId, text, {
-        actor: opts.actor,
-        ...(opts.answeredWith !== undefined ? { optionId: opts.answeredWith } : {}),
-      });
-      if (!res.ok) return res;
-      const item = this.legacyReviewItem(res.task);
-      // The row exists — it resolved a line above — so this only guards the
-      // type. An answer recorded is never reported as a failure.
-      if (!item) return { ok: false, error: 'unknown-review-item' };
-      return { ok: true, task: res.task, item };
-    }
-
-    const item = task.reviews?.find((r) => r.id === reviewItemId);
-    if (!item) return { ok: false, error: 'unknown-review-item' };
-    // An `answeredWith` that resolves to no option ON THIS ROW would record an
-    // answer whose provenance is a lie — and with several rows on one ticket,
-    // a neighbour's option id is the easy way to write that lie by accident.
-    if (
-      opts.answeredWith !== undefined &&
-      !item.review.options?.some((o) => o.id === opts.answeredWith)
-    ) {
-      return { ok: false, error: 'unknown-option' };
-    }
-
-    const ts = Date.now();
-    const actor: TaskActor = {
-      id: opts.actor.id,
-      name: opts.actor.name,
-      kind: classifyActor(opts.actor),
-    };
-    // Answering twice is legal — somebody changes their mind, a retry lands,
-    // two people reach for the same row — but the words already recorded are
-    // USER CONTENT and this project does not hard-delete user content. The
-    // superseded answer moves aside instead of being written over; nothing
-    // else anywhere would have reported that it was gone.
-    if (item.answer) item.priorAnswers = [...(item.priorAnswers ?? []), item.answer];
-    item.answer = {
-      text,
-      by: actor.name,
-      ts,
-      ...(opts.answeredWith !== undefined ? { answeredWith: opts.answeredWith } : {}),
-    };
-    task.updatedAt = ts;
-    this.scheduleSave(task.workspaceId);
-    this.emit({
-      type: 'decision.answered',
-      workspaceId: task.workspaceId,
-      taskId: task.id,
-      answer: text,
-      ...(opts.answeredWith !== undefined ? { optionId: opts.answeredWith } : {}),
-      reviewItemId,
-      actor,
-      links: task.links,
-      ts,
-    });
-    return { ok: true, task, item };
-  }
-
-  /**
-   * Ask ONE review item for more context instead of answering it.
-   *
-   * Carried over deliberately. "Tell me more" is a shipped first-class
-   * response with no counterpart in `ReviewPayload`, so unifying the two
-   * spellings without it would have quietly deleted a capability people use.
-   * The item stays open and stays counted — that is the point of it being its
-   * own thing rather than an answer carrying a flag.
-   *
-   * `r-legacy` delegates to the untouched `requestMoreInfo`, same as above.
-   */
-  requestMoreInfoOnReview(
-    taskId: string,
-    reviewItemId: string,
-    question: string,
-    opts: {
-      actor: { id: string; name: string; kind?: string };
-      /**
-       * The thread the question was asked on, with the phrase it is about,
-       * when it was asked doc-style — by selecting words of the item and
-       * commenting. Same storage as the typed question, one field richer:
-       * that is what makes the item's state derivable from one list rather
-       * than reconciled across two.
-       */
-      threadId?: string;
-      range?: ReviewItemRange;
-    },
-  ): RequestInfoOnReviewResult {
-    const task = this.getTask(taskId);
-    if (!task) return { ok: false, error: 'not-found' };
-
-    if (reviewItemId === LEGACY_REVIEW_ITEM_ID && this.legacyReviewItem(task)) {
-      // The thread and the phrase ride along: a threaded question is what
-      // takes the ticket's own decision off the reader's queue, exactly as
-      // it takes a stored item off it — same derivation, `reviewItemState`
-      // on the row `legacyReviewItem` builds from these.
-      const res = this.requestMoreInfo(taskId, question, {
-        actor: opts.actor,
-        ...(opts.threadId !== undefined ? { threadId: opts.threadId } : {}),
-        ...(opts.range !== undefined ? { range: opts.range } : {}),
-      });
-      if (!res.ok) return res;
-      const item = this.legacyReviewItem(res.task);
-      if (!item) return { ok: false, error: 'unknown-review-item' };
-      return { ok: true, task: res.task, item };
-    }
-
-    const item = task.reviews?.find((r) => r.id === reviewItemId);
-    if (!item) return { ok: false, error: 'unknown-review-item' };
-
-    const ts = Date.now();
-    const actor: TaskActor = {
-      id: opts.actor.id,
-      name: opts.actor.name,
-      kind: classifyActor(opts.actor),
-    };
-    item.infoRequests = [
-      ...(item.infoRequests ?? []),
-      {
-        text: question,
-        by: actor.name,
-        ts,
-        ...(opts.threadId !== undefined ? { threadId: opts.threadId } : {}),
-        ...(opts.range !== undefined ? { range: opts.range } : {}),
-      },
-    ];
-    task.updatedAt = ts;
-    this.scheduleSave(task.workspaceId);
-    this.emit({
-      type: 'decision.info_requested',
-      workspaceId: task.workspaceId,
-      taskId: task.id,
-      question,
-      reviewItemId,
-      actor,
-      links: task.links,
-      ts,
-    });
-    return { ok: true, task, item };
-  }
-
-  /**
-   * Rewrite ONE review item's words in place, keeping what they were.
-   *
-   * The owner's answer to a question asked on the item: not a reply that
-   * leaves the ask as confusing as it was, but the ask itself made clearer.
-   * `patch` names only the fields that change; the merged payload passes the
-   * SAME gate a new item does (`checkReviewPayload`), so a revision cannot
-   * smuggle in what a filing would have been refused.
-   *
-   * The previous text goes onto `revisions` — user content is never
-   * overwritten in place — stamped with the anchored thread it answers (the
-   * newest doc-style question) and with where the change landed in the new
-   * text: the caller's `revisedRange` if given, else the prefix/suffix diff
-   * of the detail. `reviewItemState` reads the item as `revised` from here,
-   * which is what puts it back on the queue.
-   *
-   * The derived legacy row (`r-legacy`) is refused: its words are the task's
-   * title and body, and rewriting those is `rewrite_task`'s job. So is an
-   * ANSWERED item: the answer was given to the words on it, and rewriting
-   * them under it would leave a decision on record about text nobody can see
-   * — and `reviewItemState` reads `answer` first, so the mismatch would never
-   * surface as a re-queue either. File a fresh item instead.
-   */
-  reviseReviewItem(
-    taskId: string,
-    reviewItemId: string,
-    patch: { headline?: unknown; detail?: unknown; options?: unknown },
-    opts: {
-      actor: { id: string; name: string; kind?: string };
-      revisedRange?: { start: number; end: number };
-    },
-  ): ReviseReviewItemResult {
-    const task = this.getTask(taskId);
-    if (!task) return { ok: false, error: 'not-found' };
-    if (reviewItemId === LEGACY_REVIEW_ITEM_ID) return { ok: false, error: 'not-revisable' };
-    const item = task.reviews?.find((r) => r.id === reviewItemId);
-    if (!item) return { ok: false, error: 'unknown-review-item' };
-    if (item.answer) {
-      return {
-        ok: false,
-        error: 'answered',
-        message: `review item ${reviewItemId} is already answered — the answer is to the words it has; add a new item instead of rewriting these`,
-      };
-    }
-
-    const ts = Date.now();
-    const actor: TaskActor = {
-      id: opts.actor.id,
-      name: opts.actor.name,
-      kind: classifyActor(opts.actor),
-    };
-    const question = latestThreadedQuestion(item);
-    // What a revision IS — which patches are legal, where the changed span
-    // fell, what the superseded reading was — is decided once, in core, and
-    // shared with the doc-thread route. Only WHERE the history is filed
-    // differs: a ticket item keeps it on the wrapper (below), a doc-thread
-    // item on the payload (`withRevision`). The `item.answer` refusal above
-    // STAYS: a ticket item records its answer on the wrapper, which the
-    // payload-level check inside cannot see.
-    const applied = applyReviewRevision(item.review, patch, {
-      by: actor.name,
-      at: ts,
-      ...(opts.revisedRange ? { revisedRange: opts.revisedRange } : {}),
-      ...(question?.threadId !== undefined ? { threadId: question.threadId } : {}),
-    });
-    if (!applied.ok) {
-      return applied.error === 'answered'
-        ? { ok: false, error: 'answered', message: applied.message ?? '' }
-        : applied.error === 'empty-patch'
-          ? { ok: false, error: 'empty-patch' }
-          : { ok: false, error: applied.error, message: applied.message ?? '' };
-    }
-    item.revisions = [...(item.revisions ?? []), applied.previous];
-    item.review = applied.next;
-    task.updatedAt = ts;
-    this.scheduleSave(task.workspaceId);
-    this.emit({
-      type: 'review_item.revised',
-      workspaceId: task.workspaceId,
-      taskId: task.id,
-      reviewItemId,
-      ...(question?.threadId !== undefined ? { threadId: question.threadId } : {}),
-      actor,
-      links: task.links,
-      ts,
-    });
-    const advice = reviewGapAdvice(applied.gaps);
-    return {
-      ok: true,
-      task,
-      item,
-      ...(question?.threadId !== undefined ? { threadId: question.threadId } : {}),
-      ...(advice !== undefined ? { advice } : {}),
-    };
-  }
-
-  /**
-   * Take back one review item on a ticket, or put it back (`undo`) — the
-   * asker's own exit from its own ask, which the doc-thread surface has had
-   * since 2026-08-29 and the ticket surface lacked. The measured cost of the
-   * gap: a duplicate ticket-form decision could only leave the reader's queue
-   * by being revised into something else, which is a lie about what was asked.
-   *
-   * What "withdrawn" MEANS — the stamps, the refusals, the words never being
-   * touched — is core's (`withdrawReview` / `reinstateReview`), shared with
-   * the doc route so the two surfaces cannot drift. This method only decides
-   * where the payload lives (the item wrapper) and what else must be true of
-   * the WRAPPER: an answer recorded there closes the item just as payload
-   * stamps do, and core cannot see it.
-   *
-   * The derived legacy row is refused: the ticket's own decision has no
-   * stored item to stamp — its words ARE the title, body and options — and
-   * its exits are answering it or archiving the ticket.
-   */
-  withdrawReviewItem(
-    taskId: string,
-    reviewItemId: string,
-    opts: {
-      actor: { id: string; name: string; kind?: string };
-      reason?: string;
-      undo?: boolean;
-    },
-  ): WithdrawReviewItemResult {
-    const task = this.getTask(taskId);
-    if (!task) return { ok: false, error: 'not-found' };
-    if (reviewItemId === LEGACY_REVIEW_ITEM_ID) {
-      return {
-        ok: false,
-        error: 'not-withdrawable',
-        message:
-          "the ticket's own decision has no item to withdraw — its words are the ticket; answer it, rewrite the ticket, or archive it",
-      };
-    }
-    const item = task.reviews?.find((r) => r.id === reviewItemId);
-    if (!item) return { ok: false, error: 'unknown-review-item' };
-    if (item.answer && opts.undo !== true) {
-      return {
-        ok: false,
-        error: 'answered',
-        message: `review item ${reviewItemId} is already answered — withdrawing it would retract an answer somebody gave; undo the answer first if it was a mistake`,
-      };
-    }
-
-    const ts = Date.now();
-    const actor: TaskActor = {
-      id: opts.actor.id,
-      name: opts.actor.name,
-      kind: classifyActor(opts.actor),
-    };
-    const applied =
-      opts.undo === true
-        ? reinstateReview(item.review, { by: actor.name, at: ts })
-        : withdrawReview(item.review, {
-            by: actor.name,
-            at: ts,
-            ...(opts.reason !== undefined ? { reason: opts.reason } : {}),
-          });
-    if (!applied.ok) return { ok: false, error: applied.error, message: applied.message };
-    item.review = applied.next;
-    task.updatedAt = ts;
-    this.scheduleSave(task.workspaceId);
-    const reason = opts.reason?.trim();
-    this.emit({
-      type: 'review_item.withdrawn',
-      workspaceId: task.workspaceId,
-      taskId: task.id,
-      reviewItemId,
-      ...(opts.undo === true ? { reinstated: true } : {}),
-      ...(reason !== undefined && reason !== '' && opts.undo !== true ? { reason } : {}),
-      actor,
-      links: task.links,
-      ts,
-    });
-    return { ok: true, task, item };
-  }
-
-  /**
-   * WHICH ticket holds this review item — the lookup behind addressing an
-   * item by bare `reviewItemId`. Minted ids are unique by construction
-   * (twelve random base64url chars), so the first hit is the only hit; the
-   * fixed LEGACY_REVIEW_ITEM_ID is on every legacy-decision ticket at once
-   * and is refused by the route before it gets here. In-memory over the
-   * sidecars the store already holds — no doc is hydrated for this.
-   */
-  findReviewItem(reviewItemId: string): { taskId: string; workspaceId: string } | undefined {
-    for (const [workspaceId, state] of this.workspaces) {
-      for (const task of state.tasks.values()) {
-        if (task.reviews?.some((r) => r.id === reviewItemId)) {
-          return { taskId: task.id, workspaceId };
-        }
-      }
-    }
-    return undefined;
-  }
-
-  /**
    * Replace a task's dependency edges after it was created.
    *
    * This did not exist, and its absence is what made urgency underivable:
@@ -5221,22 +4152,7 @@ export class TaskStore {
     task.title = title;
     task.titleWrittenAt = Date.now();
     task.titleHead = bodyHead(task.body);
-    this.bumpWordsRevision(task);
-  }
-
-  /**
-   * Advance the row's words-and-goal revision. Called from the four places a
-   * scoring run's inputs actually move — `applyTitle` (the one title
-   * writer), the two `bodyWrittenAt` stamps, and the two goal assignments —
-   * so the counter has exactly the reach the timestamps it replaces had, and
-   * no more.
-   *
-   * Every caller bumps BEFORE emitting the event that re-triggers scoring,
-   * which is what makes the fresh run capture the post-edit value and the
-   * overtaken run capture something strictly smaller.
-   */
-  private bumpWordsRevision(task: Task): void {
-    task.wordsRevision = wordsRevisionOf(task) + 1;
+    bumpWordsRevision(task);
   }
 
   /**
@@ -5337,7 +4253,7 @@ export class TaskStore {
     if (nextTitle && (nextTitle !== titleFrom || task.untitled)) this.applyTitle(task, nextTitle);
     task.updatedAt = ts;
     task.bodyWrittenAt = ts;
-    this.bumpWordsRevision(task);
+    bumpWordsRevision(task);
     this.scheduleSave(task.workspaceId);
     this.emit({
       type: 'task.body_edited',
@@ -5858,7 +4774,7 @@ export class TaskStore {
     // Only a MOVE, never a reorder: the goal's title is part of what the
     // scorer weighs, the order is not — the same `fromGoal !== toGoal` line
     // the re-score trigger in server.ts draws.
-    if (goal !== fromGoal) this.bumpWordsRevision(task);
+    if (goal !== fromGoal) bumpWordsRevision(task);
     task.order = order;
     if (renumbered) for (const [i, t] of renumbered.entries()) t.order = i + 1;
     task.triagedAgainst = { goalId: goal, ts };
@@ -6072,7 +4988,7 @@ export class TaskStore {
       moved.push({ task, fromGoal: task.goal });
       choresMax += 1;
       task.goal = CHORES_GOAL_ID;
-      this.bumpWordsRevision(task);
+      bumpWordsRevision(task);
       task.order = choresMax;
       // The band this was placed under is gone, so its placement is no longer
       // named — the bucket's other entrance. `triagedAgainst` deliberately
@@ -6483,7 +5399,7 @@ export class TaskStore {
       task.originDocRevision = task.possiblyStale.docRevision;
       task.possiblyStale = undefined;
     }
-    this.bumpWordsRevision(task);
+    bumpWordsRevision(task);
     this.scheduleSave(task.workspaceId);
     return true;
   }
