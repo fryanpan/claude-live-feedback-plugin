@@ -7,7 +7,11 @@
  * `/api/refs/backlinks`, and `.../review-items/:id/withdraw` before the
  * fields below it. Splitting the chain into files kept the sequence exactly,
  * and `route-order.test.ts` asserts it.
+ *
+ * Two entry points because the chain has two positions: the tasks proper,
+ * and — further down, after the agent routes — dispatches and notes.
  */
+import { handleDispatchAndNoteRoutes } from './dispatch-and-notes.ts';
 import { handleTaskAnswers } from './task-answers.ts';
 import { handleTaskFields } from './task-fields.ts';
 import { handleTaskReviewItems } from './task-review-items.ts';
@@ -17,6 +21,7 @@ import { handleTaskBatch } from './tasks-batch.ts';
 import { handleTaskListCreate } from './tasks-list-create.ts';
 
 export type { ReviewGate, TaskRouteRequest, TaskRoutesContext } from './task-routes-context.ts';
+export { handleDispatchAndNoteRoutes };
 
 /**
  * The task routes, tried in source order. `undefined` means none of them
