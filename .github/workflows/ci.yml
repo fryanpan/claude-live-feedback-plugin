@@ -32,6 +32,11 @@ jobs:
         run: bun run lint
       - name: Test
         run: bun run test
+      # Mechanical half of .claude/rules/testing-standards.md. Ratchets on
+      # scripts/test-audit.baseline.json, so the counts it tracks cannot grow
+      # back once they have been paid down.
+      - name: Testing standards audit
+        run: bun run test:audit
       - name: Leak gate can still see
         run: bun run check:scrub-gate
       - name: Build widget
