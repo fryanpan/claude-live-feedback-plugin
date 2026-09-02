@@ -19,7 +19,7 @@ find packages \( -name '*.ts' -o -name '*.css' \) \
 ```
 
 Audited 2026-09-02 at `3a39db67`, and re-audited after A1 and A2 landed.
-**162 files** over 500 lines: 67 source and 95 test.
+**161 files** over 500 lines: 66 source and 95 test.
 
 Test files are judged by a narrower rule, in their own table below: a long test
 file is an exception unless two *unrelated harnesses* share it. Many `describe`
@@ -51,7 +51,6 @@ blocks over one set of fixtures is one harness, however long the file gets.
 | `packages/server/src/task-projection.ts` | 743 | Exception | A2 took `projectTask` out to `task-row.ts`; what is left is the room lifecycle — `ensureWorkspace`, `refresh`, `scheduleSnapshot` and the debounced snapshot writer — which is one object's behaviour over one `Rooms`. The owner readers (`ownerKindReader`, `claimSessionReader`) still read as a separable pair and would move beside `task-owner.ts`; that is ~90 lines and does not justify a third file on its own. |
 | `packages/server/src/bin.ts` | 1013 | Split | Two thirds is env resolution plus the "the ONLY place a real X is constructed" seams for a dozen subsystems. Split into `server-config.ts` (env → one typed config, ~350) and `server-deps.ts` (config → the network-touching seams, ~350), leaving arg parsing, `acquirePort` and the startup banner ~300. **M** |
 | `packages/server/src/meeting-notes-doc.ts` | 986 | Split | Clean halves at line 586. Yjs section surgery (`replaceNotesSection`, `retagSpeakerInNotes`, `reattributeNotesSection`, `demoteBodyHeadings`) → `notes-section-write.ts` ~470; the server glue (`NotesLedger`, `applyNotesUpdate`, `withServerNotesSinks`) stays ~400. **S** |
-| `packages/server/src/binds.ts` | 986 | Split | The header claims folder and diff share one skeleton, but `bindFolder` is ~50 lines against `bindDiff`'s 285 with its own browse and working-tree modes → `bind-diff.ts` ~350. Post-bind maintenance (`refreshWorkspace`, `setWorkspaceGroups`, `refreshDiffMeta`, `writeMeta`) is a third job → `workspace-refresh.ts` ~350. **M** |
 | `packages/server/src/stall-nudge.ts` | 867 | Exception | One `StallNudger`: the tick, the arming stamps, and addressing. The held-item nudge (`nudgeFilers`) reuses the same tick, `reachable`, and stamp file, so lifting it out would duplicate all three. |
 | `packages/server/src/ready-nudge.ts` | 843 | Exception | One `ReadyWorkNudger`. Most of the file is the not-sending rules (`armed`, `NudgeTally`) that only make sense against the frame they suppress. |
 | `packages/server/src/review-queue.ts` | 831 | Split | Two jobs. `asksPerson` / `findAsk` / `extractAsk` with `sentenceQuestion`, `codeSpans` and `stripEmphasis` (~250) is a pure text predicate with no queue concept → `ask-detection.ts`; `reviewThreadItems` / `taskReviewItems` / `reviewItemRows` stay ~580. **S** |
@@ -272,17 +271,16 @@ months, so splitting it buys almost nothing.
 | 20 | `packages/server/src/voice.ts` | 2109 | 11 | S |
 | 21 | `packages/server/src/meeting-notes-doc.ts` | 986 | 11 | S |
 | 22 | `packages/server/src/activity.ts` | 582 | 11 | M |
-| 23 | `packages/server/src/binds.ts` | 986 | 9 | M |
-| 24 | `packages/markdown-app/src/redline/markup-margin.ts` | 996 | 9 | M |
-| 25 | `packages/server/src/meeting-task-capture.ts` | 1348 | 6 | M |
-| 26 | `packages/server/src/meeting-notes-merge.ts` | 1067 | 5 | M |
-| 27 | `packages/server/src/deploy.ts` | 1058 | 4 | S |
-| 28 | `packages/core/src/goal-effort.ts` | 1086 | 4 | S |
-| 29 | `packages/server/src/voice-resolve.ts` | 762 | 2 | S |
-| 30 | `packages/plugin/hooks/lib/agent-notes.ts` | 653 | 2 | S |
-| 31 | `packages/server/src/recall-calendar.ts` | 721 | 1 | S |
-| 32 | `packages/markdown-app/test/hub-render.test.ts` | 4078 | — | S |
-| 33 | `packages/server/test/voice-smooth.test.ts` | 729 | — | M |
+| 23 | `packages/markdown-app/src/redline/markup-margin.ts` | 996 | 9 | M |
+| 24 | `packages/server/src/meeting-task-capture.ts` | 1348 | 6 | M |
+| 25 | `packages/server/src/meeting-notes-merge.ts` | 1067 | 5 | M |
+| 26 | `packages/server/src/deploy.ts` | 1058 | 4 | S |
+| 27 | `packages/core/src/goal-effort.ts` | 1086 | 4 | S |
+| 28 | `packages/server/src/voice-resolve.ts` | 762 | 2 | S |
+| 29 | `packages/plugin/hooks/lib/agent-notes.ts` | 653 | 2 | S |
+| 30 | `packages/server/src/recall-calendar.ts` | 721 | 1 | S |
+| 31 | `packages/markdown-app/test/hub-render.test.ts` | 4078 | — | S |
+| 32 | `packages/server/test/voice-smooth.test.ts` | 729 | — | M |
 
 The top eight are where the pain is: they carry 991 of the 1350 commits in this
 queue. Rows 1 through 8 are worth filing as tickets now; below row 20 a split is
