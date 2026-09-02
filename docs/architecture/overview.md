@@ -55,7 +55,7 @@ and every layer below it, never one above.
 
 | Layer | Where it lives | May import | Rule in one line |
 |---|---|---|---|
-| **Entry / composition** | `bin.ts`, and after the split `server-config.ts` + `server-deps.ts` | everything | The only place environment variables are read and real network adapters are constructed. |
+| **Entry / composition** | `bin.ts` (argv, the port wait, the boot banner), `server-config.ts` (env → one typed config), `server-deps.ts` (config → the real adapters) | everything | The only place environment variables are read and real network adapters are constructed. |
 | **HTTP** | `server.ts`, `routes/**`, `shells.ts` | services, domain, infra types, core | Parse the request, call one service, format the response. Never reads env, never constructs an adapter. |
 | **Request policy** | `middleware/**` | domain, core | Answers "may this request proceed on this host, as this caller" — once, for every route. |
 | **Services / stores** | `rooms.ts` and the doc stores it delegates to (`doc-edit-ops.ts`, `doc-threads.ts`, `rooms-workspaces.ts`), `tasks.ts` and the board stores it delegates to (`workspace-store.ts`, `task-agents.ts`, `task-goals.ts`), `review-items/**`, `share/**`, `auth/**`, the `meeting-*` family, `sse.ts`, `activity.ts` | domain, infra, core | Owns durable state and orchestration. Must never import a route. |
