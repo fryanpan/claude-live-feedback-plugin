@@ -49,6 +49,16 @@ demos/*
 !demos/dev-server/
 !demos/mockup/
 
+# A meeting's raw record — `<docname>-raw-transcript.md`, its `-replay-`
+# reruns and the `.pcm` audio beside them — lives under the server data dir
+# and never in the repo (meeting ticket, 2026-09-02). Belt and braces with
+# the refusal in scripts/scrub-check.py: this repo is public, and a
+# transcript of what people said in a room is not something to push by
+# accident.
+*-raw-transcript.md
+*-raw-transcript-replay-*.md
+*.pcm
+
 # CI scratch: what the other open PRs declare, written by
 # scripts/collect-open-pr-versions.ts and read by the version gate.
 open-pr-versions.json
