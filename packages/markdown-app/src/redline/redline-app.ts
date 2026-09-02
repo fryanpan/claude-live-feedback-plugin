@@ -2,12 +2,12 @@ import { type FeedbackClient, connect, suggestOps } from '@feedback/core';
 import { mountCode } from '../code/code-app.ts';
 import { isEditableRedlineMember } from '../code/editable-policy.ts';
 import { renderDiffNav, wireDiffNavRefresh } from '../diff-nav.ts';
+import { el } from '../doc/chrome-dom.ts';
 import type { MountContext } from '../mount-context.ts';
 import type { MountScope } from '../mount-scope.ts';
 import { startReadingTracker } from '../reading-tracker.ts';
 import {
   type ChromeSelection,
-  el,
   mountReviewChrome,
   wireThreadRangeClicks,
 } from '../review-chrome.ts';

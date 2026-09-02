@@ -9,7 +9,7 @@
  * survive into the NEXT toast, and pressing it has to dismiss.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { showToast } from '../src/review-chrome.ts';
+import { showToast } from '../src/doc/chrome-dom.ts';
 
 function toast(): HTMLElement {
   const t = document.getElementById('toast');

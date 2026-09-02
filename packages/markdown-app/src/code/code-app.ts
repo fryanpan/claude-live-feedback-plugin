@@ -1,7 +1,8 @@
 import { renderDiffNav, wireDiffNavRefresh } from '../diff-nav.ts';
+import { el } from '../doc/chrome-dom.ts';
 import type { MountContext } from '../mount-context.ts';
 import { startReadingTracker } from '../reading-tracker.ts';
-import { el, mountReviewChrome } from '../review-chrome.ts';
+import { mountReviewChrome } from '../review-chrome.ts';
 import { lockDocToReading } from '../signin/write-gate.ts';
 import { renderWorkspaceTree, wireWorkspaceTreeRefresh } from '../workspace-tree.ts';
 import { createCodeEditor } from './code-editor.ts';
