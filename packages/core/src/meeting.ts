@@ -207,6 +207,14 @@ export type MeetingClientMessage =
        * allocates nothing and attaches nothing — see `meeting-timing.ts`.
        */
       timing?: boolean;
+      /**
+       * Who is on this socket — the signed-in person's name, when the client
+       * knows it. Not a speaker label: the engine labels voices, and a solo
+       * capture asks for none. This is what the raw transcript attributes an
+       * unlabelled turn to, in place of "Speaker 1". Never shown as a label
+       * on the strip.
+       */
+      participant?: string;
     }
   | { type: 'stop' }
   /**
@@ -357,6 +365,9 @@ export function parseMeetingClientMessage(raw: unknown): MeetingClientMessage | 
     const speakers = parseRoomSpeakers(m.speakers);
     const engine = parseEngineName(m.engine);
     const tuning = parseRawTuning(m.tuning);
+    // Same shape as a speaker name: trimmed, bounded, dropped when empty.
+    const participant =
+      typeof m.participant === 'string' ? m.participant.trim().slice(0, MAX_SPEAKER_NAME) : '';
     return {
       type: 'start',
       sampleRate: Math.round(rate),
@@ -380,6 +391,7 @@ export function parseMeetingClientMessage(raw: unknown): MeetingClientMessage | 
       // should read as a client that does not know about timing, not as one
       // asking for it.
       ...(m.timing === true ? { timing: true } : {}),
+      ...(participant ? { participant } : {}),
     };
   }
   return null;

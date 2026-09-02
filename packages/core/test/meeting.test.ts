@@ -3,6 +3,7 @@ import { parseMeetingTranscriptEvent } from '../src/meeting-bot.ts';
 import {
   DEFAULT_ROOM_SPEAKERS,
   MAX_ROOM_SPEAKERS,
+  MAX_SPEAKER_NAME,
   MEETING_AUDIO_ENCODING,
   MIN_ROOM_SPEAKERS,
   RECORDING_CONSENT_NOTE,
@@ -295,5 +296,21 @@ describe('parseMeetingTranscriptEvent — the bot path’s live turn on the doc 
     expect(parseMeetingTranscriptEvent({ turn: Number.NaN, text: 'x' })).toBeNull();
     expect(parseMeetingTranscriptEvent('not json')).toBeNull();
     expect(parseMeetingTranscriptEvent(null)).toBeNull();
+  });
+});
+
+describe('the participant on the start frame', () => {
+  const start = (extra: Record<string, unknown>) =>
+    parseMeetingClientMessage(
+      JSON.stringify({ type: 'start', sampleRate: 16_000, encoding: 'pcm_s16le', ...extra }),
+    );
+
+  it('carries the signed-in name, trimmed and bounded, and drops an empty one', () => {
+    expect(start({ participant: '  Devi Raman ' })).toMatchObject({ participant: 'Devi Raman' });
+    expect(start({ participant: '   ' })).not.toHaveProperty('participant');
+    expect(start({ participant: 42 })).not.toHaveProperty('participant');
+    expect(start({})).not.toHaveProperty('participant');
+    const long = start({ participant: 'x'.repeat(200) }) as { participant?: string } | null;
+    expect(long?.participant?.length).toBe(MAX_SPEAKER_NAME);
   });
 });
