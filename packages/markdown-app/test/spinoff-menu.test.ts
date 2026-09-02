@@ -16,6 +16,7 @@
 import type { User } from '@feedback/core';
 import { describe, expect, it } from 'vitest';
 import {
+  POINTER_PILL_ACTIONS,
   SPINOFF_ACTIONS,
   type SpinoffAnchor,
   type SpinoffDeps,
@@ -81,6 +82,20 @@ describe('the two actions', () => {
     expect(SPINOFF_ACTIONS.map((a) => a.id)).toEqual(['research', 'task']);
     expect(SPINOFF_ACTIONS.map((a) => a.label)).toEqual(['Research', 'Create Task']);
     for (const a of SPINOFF_ACTIONS) expect(Object.keys(a).sort()).toEqual(['id', 'label']);
+  });
+
+  it('the pointer pill offers Comment ahead of the two spin-offs, with Research in the accent', () => {
+    // Owner (2026-09-01): "keep a comment option available" — the first cut
+    // of the pill carried only the spin-offs.
+    expect(POINTER_PILL_ACTIONS.map((a) => a.id)).toEqual(['comment', 'research', 'task']);
+    expect(POINTER_PILL_ACTIONS.map((a) => a.label)).toEqual([
+      'Comment',
+      'Research',
+      'Create Task',
+    ]);
+    expect(POINTER_PILL_ACTIONS.filter((a) => a.primary === true).map((a) => a.id)).toEqual([
+      'research',
+    ]);
   });
 });
 

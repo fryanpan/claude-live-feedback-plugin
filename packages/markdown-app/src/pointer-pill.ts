@@ -1,26 +1,32 @@
 /**
- * The pointer pill — two actions, hung off the point where a selection was
- * released.
+ * The pointer pill — Comment, Research and Create Task, hung off the point
+ * where a selection was released.
  *
  * A selection on a huddle doc used to grow a round button at its far end
  * which opened a four-row menu, and the menu became a bottom sheet on a
  * phone. Bryan's round-4 call (2026-09-01) replaced all of that with one
- * thing: a pill of exactly two text buttons — "Research" and "Create Task" —
- * that sits just above wherever the finger or mouse LET GO. The actions are
- * already where the hand stopped, on every width, with no second tap to open
- * anything and no sheet to reach for at the bottom of the screen.
+ * thing: a pill of text buttons that sits just beside wherever the finger or
+ * mouse LET GO. The actions are already where the hand stopped, on every
+ * width, with no second tap to open anything and no sheet to reach for at
+ * the bottom of the screen. Comment is one of them — the first cut carried
+ * only the two spin-offs, and the owner expected the comment he can leave
+ * everywhere else to still be there ("keep a comment option available, just
+ * to the right of where I click", 2026-09-01).
  *
  * The placement is the whole component, so it is a pure function
  * (`placePointerPill`) over plain boxes, tested without a browser, and the
  * DOM half (`mountPointerPill`) only asks it where to go. In order:
  *
- *   1. ABOVE the anchor, clear of a fingertip (44px on touch, 12px for a
- *      mouse) and lifted further if it would touch any line of the
+ *   1. BESIDE the anchor to its RIGHT, at the same height, clear of a
+ *      fingertip (56px on touch, 20px for a mouse) — just to the right of
+ *      where the hand let go, which is where the owner asked for it;
+ *   2. else ABOVE the anchor, clear of the fingertip (44px on touch, 12px for
+ *      a mouse) and lifted further if it would touch any line of the
  *      selection — the selection is what the person is looking at, and a
  *      pill over it hides the words it is about;
- *   2. else BESIDE the anchor at the same height, right then left;
- *   3. else BELOW the selection's last line;
- *   4. else pinned to the bottom of the editor's visible box — still never
+ *   3. else BESIDE the anchor to its left;
+ *   4. else BELOW the selection's last line;
+ *   5. else pinned to the bottom of the editor's visible box — still never
  *      under the finger, because the anchor is by then above it.
  *
  * Every candidate is clamped inside the editor's visible box, which the
@@ -50,22 +56,21 @@ export type PillRule = 'above' | 'beside-right' | 'beside-left' | 'below' | 'pin
 export interface PillPlacement {
   rect: Box;
   rule: PillRule;
-  /** The vertical clearance the anchor was given — reported so a test (or
-   *  the debug readout) can check the number that was actually used. */
+  /** The clearance the anchor was given, sideways when beside it and
+   *  vertical when above — reported so a test (or the debug readout) can
+   *  check the number that was actually used. */
   gap: number;
   /** Where along the pill's width the arrow points, in pixels from its left
    *  edge; `null` when the pill is not above the anchor and shows no arrow. */
   arrowX: number | null;
 }
 
-/** Clearance between the anchor and the pill's bottom edge. */
+/** Clearance between the anchor and the pill's bottom edge, when above. */
 export const TOUCH_GAP = 44;
 export const MOUSE_GAP = 12;
-/** Beside the anchor, the same idea sideways: a finger is wider than a
- *  cursor, and a pill that starts under it is a pill that gets pressed by
- *  accident on release. */
-const TOUCH_SIDE_GAP = 56;
-const MOUSE_SIDE_GAP = 20;
+/** Clearance between the anchor and the pill's near edge, when beside. */
+export const TOUCH_SIDE_GAP = 56;
+export const MOUSE_SIDE_GAP = 20;
 /** Breathing room between the pill and any line of the selection. */
 const SELECTION_CLEAR = 8;
 /** The arrow never sits inside the pill's rounded end. */
@@ -106,7 +111,17 @@ export function placePointerPill(
   const mk = (left: number, top: number): Box => ({ left, top, right: left + w, bottom: top + h });
   const centred = clamp(anchor.x - w / 2, bounds.left, bounds.right - w);
 
-  // 1 · above the anchor, lifted clear of the selection's top line.
+  // 1 · beside the anchor, to its right, at the same height. A finger is
+  // wider than a cursor, and a pill that starts under it is a pill that gets
+  // pressed by accident on release.
+  const sideGap = anchor.touch ? TOUCH_SIDE_GAP : MOUSE_SIDE_GAP;
+  const sideTop = clamp(anchor.y - h / 2, bounds.top, bounds.bottom - h);
+  const right = mk(anchor.x + sideGap, sideTop);
+  if (right.right <= bounds.right && !intersectsAny(right, live)) {
+    return { rect: right, rule: 'beside-right', gap: sideGap, arrowX: null };
+  }
+
+  // 2 · above the anchor, lifted clear of the selection's top line.
   let bottom = anchor.y - gap;
   let above = mk(centred, bottom - h);
   if (intersectsAny(above, live)) {
@@ -122,32 +137,28 @@ export function placePointerPill(
     };
   }
 
-  // 2 · beside the anchor at the same height, right first — a right-handed
-  // thumb reaches right more easily, and the text usually runs out there.
-  const sideGap = anchor.touch ? TOUCH_SIDE_GAP : MOUSE_SIDE_GAP;
-  const sideTop = clamp(anchor.y - h / 2, bounds.top, bounds.bottom - h);
-  const right = mk(anchor.x + sideGap, sideTop);
-  if (right.right <= bounds.right && !intersectsAny(right, live)) {
-    return { rect: right, rule: 'beside-right', gap, arrowX: null };
-  }
+  // 3 · beside the anchor to its left.
   const left = mk(anchor.x - sideGap - w, sideTop);
   if (left.left >= bounds.left && !intersectsAny(left, live)) {
-    return { rect: left, rule: 'beside-left', gap, arrowX: null };
+    return { rect: left, rule: 'beside-left', gap: sideGap, arrowX: null };
   }
 
-  // 3 · below the selection's last line.
+  // 4 · below the selection's last line.
   const below = mk(centred, maxSelBottom + SELECTION_CLEAR);
   if (below.bottom <= bounds.bottom) {
     return { rect: below, rule: 'below', gap, arrowX: null };
   }
 
-  // 4 · pinned to the bottom of the visible box.
+  // 5 · pinned to the bottom of the visible box.
   return { rect: mk(centred, bounds.bottom - h), rule: 'pinned-bottom', gap, arrowX: null };
 }
 
 export interface PointerPillAction<Id extends string = string> {
   id: Id;
   label: string;
+  /** Drawn in the accent: the one action the pill is mostly for. The first
+   *  action is primary when none says so. */
+  primary?: boolean;
 }
 
 export interface PointerPillOpts<Id extends string> {
@@ -187,10 +198,12 @@ export function mountPointerPill<Id extends string>(opts: PointerPillOpts<Id>): 
   el.setAttribute('role', 'toolbar');
   el.setAttribute('aria-label', opts.ariaLabel ?? 'Turn this line into work');
 
+  const flagged = opts.actions.some((a) => a.primary === true);
   for (const [i, action] of opts.actions.entries()) {
     const btn = document.createElement('button');
     btn.type = 'button';
-    btn.className = i === 0 ? 'pointer-pill-btn primary' : 'pointer-pill-btn';
+    const primary = flagged ? action.primary === true : i === 0;
+    btn.className = primary ? 'pointer-pill-btn primary' : 'pointer-pill-btn';
     btn.dataset.action = action.id;
     // textContent, never innerHTML: the labels are ours today, and keeping
     // the builder markup-free is what keeps that true of whatever is added.

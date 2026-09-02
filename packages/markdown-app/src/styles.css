@@ -6792,9 +6792,9 @@ body.is-reading-width #editor > .ProseMirror {
 }
 
 /* ===== The pointer pill ===== */
-/* Two actions, hung off the point where a selection was released on a HUDDLE
-   doc (src/pointer-pill.ts). An ordinary review doc's selection still grows
-   the round comment pill and never renders this.
+/* Comment, Research and Create Task, hung off the point where a selection
+   was released on a HUDDLE doc (src/pointer-pill.ts). An ordinary review
+   doc's selection still grows the round comment pill and never renders this.
 
    `position: fixed`, at viewport coordinates the placement function worked
    out; NO bottom sheet at any width — the whole point is that the buttons
