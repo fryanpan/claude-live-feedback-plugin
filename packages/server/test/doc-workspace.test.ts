@@ -237,22 +237,35 @@ describe('a doc always lands in a workspace', () => {
     // A mockup doc auto-creates on the `/y/<id>` websocket connect — the
     // widget is a third creation path next to POST /api/docs and the MCP
     // tools, and it is the one no REST test would ever reach.
-    const docId = 'doc-widget-ws';
-    const ws = new WebSocket(
-      `ws://localhost:${handle.port}/y/${docId}?type=mockup`,
-      // The socket is refused without an allowed browser Origin.
-      { headers: { origin: `http://localhost:${handle.port}` } } as unknown as string[],
-    );
-    await new Promise<void>((resolve, reject) => {
-      ws.addEventListener('open', () => resolve());
-      ws.addEventListener('error', () => reject(new Error('ws failed to open')));
-    });
-    ws.close();
+    //
+    // On its OWN server with the sign-in write gate off, because creating a
+    // doc over this socket is now a write and a signed-out browser is
+    // refused it (`ws-create-signin.test.ts` is what pins that). This test
+    // is about where a conjured doc gets FILED, so it boots the state in
+    // which one gets conjured at all.
+    const wsDataDir = mkdtempSync(join(tmpdir(), 'doc-workspace-widget-'));
+    const open = createServer({ port: 0, dataDir: wsDataDir, requireSignInToWrite: false });
+    try {
+      const docId = 'doc-widget-ws';
+      const ws = new WebSocket(
+        `ws://localhost:${open.port}/y/${docId}?type=mockup`,
+        // The socket is refused without an allowed browser Origin.
+        { headers: { origin: `http://localhost:${open.port}` } } as unknown as string[],
+      );
+      await new Promise<void>((resolve, reject) => {
+        ws.addEventListener('open', () => resolve());
+        ws.addEventListener('error', () => reject(new Error('ws failed to open')));
+      });
+      ws.close();
 
-    // Positive control: the socket really did create the doc, so a claim
-    // about its workspace is a claim about something that exists.
-    expect(handle.rooms.get(docId)).toBeTruthy();
-    expect(handle.tasks.workspaceOfDoc(docId)).toBeTruthy();
+      // Positive control: the socket really did create the doc, so a claim
+      // about its workspace is a claim about something that exists.
+      expect(open.rooms.get(docId)).toBeTruthy();
+      expect(open.tasks.workspaceOfDoc(docId)).toBeTruthy();
+    } finally {
+      await open.stop();
+      rmSync(wsDataDir, { recursive: true, force: true });
+    }
   });
 });
 
