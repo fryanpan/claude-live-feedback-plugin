@@ -14146,6 +14146,21 @@ function frameKey(event, payload) {
 }
 
 // packages/mcp/src/nudge-line.ts
+function capClause(cap, now, style) {
+  if (cap === undefined || typeof cap.value !== "number")
+    return "";
+  const change = cap.lastChange;
+  const name = change?.actor?.name;
+  let setter = "";
+  if (change !== undefined && typeof name === "string" && name.length > 0) {
+    const at = typeof change.ts === "number" ? change.ts : undefined;
+    const clock = typeof now === "number" ? now : Date.now();
+    const ago = at === undefined ? "" : ` ${humanDuration2(Math.max(0, clock - at))} ago`;
+    const was = typeof change.from === "number" ? `, was ${change.from}` : "";
+    setter = `, set by ${name}${ago}${was}`;
+  }
+  return style === "ready" ? ` (cap ${cap.value}${setter})` : ` of ${cap.value}${setter ? `${setter.replace(/, was (\d+)$/, " (was $1)")},` : ""}`;
+}
 function truncate3(s, n) {
   return s.length > n ? `${s.slice(0, n - 1)}…` : s;
 }
@@ -14181,7 +14196,7 @@ function denominatorClause(p) {
   if (p.consideredCount === undefined)
     return "";
   const parts = [`${p.consideredCount} open ${p.consideredCount === 1 ? "row" : "rows"} checked`];
-  const held = Object.entries(p.held ?? {}).filter(([, n]) => typeof n === "number" && n > 0).sort(([a], [b]) => a.localeCompare(b)).map(([reason, n]) => `${n} ${reason}`);
+  const held = Object.entries(p.held ?? {}).filter(([, n]) => typeof n === "number" && n > 0).sort(([a], [b]) => a.localeCompare(b)).map(([reason, n]) => `${n} ${reason}${reason === "parallelism-cap" ? capClause(p.parallelismCap, p.ts, "ready") : ""}`);
   if (held.length > 0)
     parts.push(`held: ${held.join(", ")}`);
   const unread = undeterminedCount(p);
@@ -14225,7 +14240,7 @@ function stalledLine(p) {
   const parts = [];
   const rows = p.rows ?? [];
   const count = p.stalledCount ?? rows.length;
-  const beyond = p.beyondCapacity !== undefined && p.beyondCapacity > 0 ? `; ${p.beyondCapacity} beyond the parallelism cap and not judged` : "";
+  const beyond = p.beyondCapacity !== undefined && p.beyondCapacity > 0 ? `; ${p.beyondCapacity} beyond the parallelism cap${capClause(p.parallelismCap, p.ts, "stall")} and not judged` : "";
   const denominator = p.consideredCount === undefined ? "" : ` (of ${p.consideredCount} open row(s) checked${beyond})`;
   if (count > 0) {
     const subject = count === 1 ? "1 task has" : `${count} tasks have`;
@@ -14504,7 +14519,7 @@ var STATUS_TEXT_MAX = 4000;
 function suggestionAuthor() {
   return { id: AUTHOR.id, name: AUTHOR.name, color: AUTHOR.color };
 }
-var PLUGIN_VERSION = "0.1.143";
+var PLUGIN_VERSION = "0.1.144";
 var PROCESS_ID = randomUUID();
 var server = new Server({
   name: "claude-workspaces",
@@ -15732,7 +15747,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     },
     {
       name: "get_workspace",
-      description: "Read a board's goals in priority order, with per-goal task counts. First row is the highest band. Call it before deciding what to work on — list_tasks returns goal ids only, so without this the ordering is invisible. Cheap by design: pair it with next_tasks, which carries the tasks themselves.",
+      description: "Read a board's goals in priority order, with per-goal task counts, plus the parallelism cap — its value, slots in use and free, and who last moved it and when. First row is the highest band. Call it before deciding what to work on — list_tasks returns goal ids only, so without this the ordering is invisible. Cheap by design: pair it with next_tasks, which carries the tasks themselves.",
       inputSchema: {
         type: "object",
         properties: { workspaceId: { type: "string" } },
@@ -17001,6 +17016,7 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
         return ok({
           workspaceId: res.workspace.id,
           name: res.workspace.name,
+          ...res.parallelismCap !== undefined ? { parallelismCap: res.parallelismCap } : {},
           leadAgentId: res.workspace.leadAgentId,
           ...res.workspace.reviewItemCriteria !== undefined ? { reviewItemCriteria: res.workspace.reviewItemCriteria } : {},
           ...res.retired ? { retired: res.retired } : {},
