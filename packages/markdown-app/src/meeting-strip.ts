@@ -19,16 +19,32 @@
  * asserted in `meeting-strip-css.test.ts`, because no DOM test resolves
  * layout.
  *
+ * ONE TAP WHEN ALONE. A Record press on a doc with nobody else on it starts
+ * a solo recording at once — no chooser, the server's default engine — because
+ * every question the chooser asks (who will the microphone hear, should a bot
+ * go instead) has no answer when there is nobody else there, and a form that
+ * recurs unchanged is friction rather than a decision (Urgent-fixes ticket,
+ * 2026-09-02: "start recording in one tap when he is alone"). Whether anyone
+ * else is here is the doc's presence, asked at press time through
+ * `opts.alone` (`meeting-solo.ts`); with a collaborator on the doc the press
+ * opens the chooser as before. The chooser itself stays one tap away either
+ * way, behind the small options button beside Record — a conversation in a
+ * room nobody else has the doc open in still has to be asked for somewhere.
+ *
  * EVERY BILLED CHOICE HAPPENS AT START TIME. The chooser collects the source
- * (microphone, or a bot sent to a Zoom / Google Meet call), whether the room
- * has one voice or several, which engine listens, and who tells the room
- * about the recording — a streaming session's configuration IS its connect
- * URL, so switching any of those mid-meeting would mean a second session and
- * a second bill for the same conversation. The one exception is the Advanced
- * Options panel (meeting-advanced.ts), which stays reachable from the menu
- * while recording: AssemblyAI's protocol can change its turn-detection knobs
- * on the open socket, and everything it cannot change waits for the next
- * recording and says so under the control.
+ * (microphone, or a bot sent to a Zoom / Google Meet call) and whether the
+ * room has one voice or several — a streaming session's configuration IS its
+ * connect URL, so switching either mid-meeting would mean a second session
+ * and a second bill for the same conversation. Which engine listens is NOT a
+ * question it asks: the server's default runs unless the address names one
+ * (`?engine=soniox`, a preference read on every visit — see huddle-entry.ts),
+ * and the picker that used to sit above Speakers came out with the ticket
+ * above. The bot path transcribes the vendor's raw audio through the same
+ * engines, so the preference applies there too. The one exception to
+ * start-time is the Advanced Options panel (meeting-advanced.ts), which stays
+ * reachable from the menu while recording: AssemblyAI's protocol can change
+ * its turn-detection knobs on the open socket, and everything it cannot
+ * change waits for the next recording and says so under the control.
  *
  * IT NO LONGER ANNOUNCES ITSELF TO THE ROOM. A `conversation` capture used to
  * speak a fixed sentence into its own microphone, offer a second button that
@@ -303,19 +319,6 @@ export function meetingSocketUrl(docId: string): string {
   return `${scheme}://${location.host}${meetingSocketPath(docId)}`;
 }
 
-/**
- * A transcription engine the chooser could offer — the shape `/api/meeting-
- * engines` is turned into once fetched (see `mountMeetingStrip`'s `engines`
- * state and `engineLabel`).
- *
- * The Engine row renders only when there is more than one — a row with a
- * single answer is a fact wearing a control's clothes.
- */
-export interface MeetingEngineChoice {
-  id: string;
-  label: string;
-}
-
 export interface MeetingStripOpts {
   docId: string;
   /** The shell element the strip renders into — `#meeting-strip`. */
@@ -378,6 +381,14 @@ export interface MeetingStripOpts {
    */
   autoChoose?: boolean;
   /**
+   * Whether the person pressing Record is the only one on this doc, asked at
+   * the press. True means the press records at once — solo, no chooser;
+   * false (or absent: a mount that cannot say) means the press opens the
+   * chooser as it always did. `app.ts` answers it from the doc's presence via
+   * `othersOnDoc`; see the header.
+   */
+  alone?: () => boolean;
+  /**
    * What this capture expects to hear. `solo` opens a cheap session with no
    * diarization; `conversation` pays for speaker labels. The Board's "Record
    * a conversation" button carries it in on the address; the chooser's
@@ -395,16 +406,18 @@ export interface MeetingStripOpts {
   room?: RoomAudioProcessing;
   /**
    * Which transcription engine the next capture opens (`?engine=soniox` on
-   * the address). Absent means the server's default, which is also what a
-   * server built before the choice existed opens. Start-time only, like
-   * `mode` — an engine session's config is fixed once open.
+   * the address — the one place the engine is chosen). Absent means the
+   * server's default, which is also what a server built before the choice
+   * existed opens. Start-time only, like `mode` — an engine session's config
+   * is fixed once open.
    */
   engine?: TranscriptionEngineName;
   /**
-   * The engines this server can open, asked for once at mount — what decides
-   * whether the strip shows a chooser at all. Injectable so a test drives it
-   * without a server; absent, the strip asks `/api/meeting-engines`. Null
-   * (an old server, a failed fetch) hides the chooser and changes nothing.
+   * The engines this server can open, asked for once at mount — what names
+   * the default the start frame carries and the Advanced panel is keyed on.
+   * Injectable so a test drives it without a server; absent, the strip asks
+   * `/api/meeting-engines`. Null (an old server, a failed fetch) leaves the
+   * frame without an engine and the chooser without an Advanced panel.
    */
   listEngines?: () => Promise<{ engines: string[]; default: string | null } | null>;
   /**
@@ -498,14 +511,6 @@ function defaultPromptName(current: string): string | null {
   return window.prompt('Who is this?', current);
 }
 
-/** What the chooser calls an engine. The wire name for one it has no word for. */
-export function engineLabel(name: string): string {
-  if (name === 'assemblyai') return 'AssemblyAI';
-  if (name === 'assemblyai-pro') return 'AssemblyAI Pro';
-  if (name === 'soniox') return 'Soniox';
-  return name;
-}
-
 async function defaultListEngines(): Promise<{
   engines: string[];
   default: string | null;
@@ -539,14 +544,6 @@ export function mountMeetingStrip(opts: MeetingStripOpts): MeetingStripHandle {
   const startCapture = opts.startCapture ?? startMeetingCapture;
   const promptName = opts.promptName ?? defaultPromptName;
   const bot = opts.bot;
-  /**
-   * The engines the chooser may offer. Populated once, from `/api/meeting-
-   * engines` unless a test injects `listEngines` — the seam that lets the
-   * real engine integration slot its list in without reshaping the chooser
-   * (see `MeetingEngineChoice`). Fewer than two answers is not a choice, so
-   * the Engine row stays absent and the fetch changes nothing.
-   */
-  let engines: MeetingEngineChoice[] = [];
 
   // ---- the Record Audio button, docked in the top bar -----------------------
   const record = document.createElement('button');
@@ -565,6 +562,19 @@ export function mountMeetingStrip(opts: MeetingStripOpts): MeetingStripHandle {
   recordLabel.className = 'meeting-record-label';
   recordLabel.textContent = 'Record Audio';
   record.append(recordGlyph, recordDot, recordLabel);
+  /**
+   * The chooser's own door, beside Record: the source and speaker questions a
+   * one-tap start does not ask. Idle only — while recording, Record itself
+   * opens the menu, and the chooser has nothing to decide.
+   */
+  const options = document.createElement('button');
+  options.type = 'button';
+  options.className = 'meeting-record-options';
+  options.setAttribute('aria-label', 'Recording options');
+  options.setAttribute('aria-haspopup', 'dialog');
+  options.title = 'Recording options';
+  options.innerHTML =
+    '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4 6.5l4 4 4-4" stroke="currentColor" stroke-width="1.6" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>';
 
   // ---- the strip: blinker, clock, flowing feed ------------------------------
   const blinker = document.createElement('span');
@@ -607,7 +617,7 @@ export function mountMeetingStrip(opts: MeetingStripOpts): MeetingStripHandle {
   // under the toolbar instead costs nothing visually. After the strip
   // children are set: the no-toolbar fallback docks everything in `root`
   // itself, where the `replaceChildren` above would eat it.
-  (opts.toolbar ?? root).append(record, scrim, pop);
+  (opts.toolbar ?? root).append(record, options, scrim, pop);
 
   let state: StripState = { kind: 'idle' };
   let view: PopView = 'none';
@@ -699,20 +709,19 @@ export function mountMeetingStrip(opts: MeetingStripOpts): MeetingStripHandle {
    */
   let chooseMode: CaptureMode = opts.mode ?? 'conversation';
   /**
-   * The engine picked, only meaningful when more than one was offered.
-   * Starts as the address's ask (`?engine=soniox`), the same start-time-only
-   * fact `mode` is; refined once the fetch below answers, in case the
-   * address named an engine this server does not actually hold.
+   * The engine the next capture opens. Starts as the address's ask
+   * (`?engine=soniox`), the same start-time-only fact `mode` is; settled once
+   * the fetch below answers — the server's default, unless the address named
+   * one this server actually holds. Nothing in the chooser moves it.
    */
   let chooseEngine: string | undefined = opts.engine;
-  /** The server's default engine, for the chooser's "default" tag. */
-  let engineDefault: string | null = null;
   /**
-   * Advanced Options per engine, created on first look and KEPT when the
-   * person flips between engines — flipping back must not lose a tuned
-   * panel. Per mount only: settings are per-recording facts, like `mode`,
-   * and a knob remembered from yesterday would silently shape a session
-   * nobody tuned it for.
+   * Advanced Options per engine, created on first look. Keyed by engine
+   * because the panel is the engine's own — the address can name one and the
+   * fetch can settle on another — though nothing here flips between them any
+   * more. Per mount only: settings are per-recording facts, like `mode`, and
+   * a knob remembered from yesterday would silently shape a session nobody
+   * tuned it for.
    */
   const advStates = new Map<string, AdvancedState>();
   /** Whether the Advanced section is unfolded — one flag across engines. */
@@ -752,18 +761,13 @@ export function mountMeetingStrip(opts: MeetingStripOpts): MeetingStripHandle {
       // even unlisted, because the server is the authority on refusals.
       return;
     }
-    engineDefault = info.default ?? info.engines[0] ?? null;
-    // Fewer than two is not a choice, so the engine LIST stays absent — but
-    // the default is still known, which is what the Advanced panel keys on.
-    if (info.engines.length >= 2) {
-      engines = info.engines.map((id) => ({ id, label: engineLabel(id) }));
-    }
     chooseEngine =
       chooseEngine !== undefined && info.engines.includes(chooseEngine)
         ? chooseEngine
         : (info.default ?? info.engines[0]);
     // The chooser may already be open (a fast mount, a slow fetch); redraw it
-    // so the Engine row does not wait for a second open to appear.
+    // so the Advanced panel — keyed on the engine — does not wait for a
+    // second open to appear.
     if (view === 'chooser') renderPop();
   });
   let chooseBotUrl = '';
@@ -907,9 +911,12 @@ export function mountMeetingStrip(opts: MeetingStripOpts): MeetingStripHandle {
     // It is where the announcement used to go, and it is deliberately a
     // different kind of thing — addressed to the person recording rather than
     // to the room, gone the instant there are words to show instead, and
-    // never a control. See `RECORDING_CONSENT_NOTE`.
+    // never a control. See `RECORDING_CONSENT_NOTE`. A solo capture has no
+    // room to have asked, so it gets no line at all: a reminder with nobody
+    // to act on it is a question with no answer (Urgent-fixes ticket,
+    // 2026-09-02).
     if (turns.length === 0) {
-      showNote(RECORDING_CONSENT_NOTE, 'meeting-consent-note');
+      if (mode !== 'solo') showNote(RECORDING_CONSENT_NOTE, 'meeting-consent-note');
       return;
     }
     renderTurns(true);
@@ -1329,49 +1336,8 @@ export function mountMeetingStrip(opts: MeetingStripOpts): MeetingStripHandle {
     }
     pop.append(source.group);
 
-    // The engine list, only when there is a real choice to make. Layout and
-    // copy per the approved mock: a plain question above the rows, and each
-    // engine wearing its own tags (the server's default, Soniox's speed,
-    // the pro model's price and quality).
-    if (engines.length > 1) {
-      const engine = choiceGroup('Choose speech recognition engine:');
-      engine.group.classList.add('meeting-engines');
-      for (const e of engines) {
-        const card = choice({
-          group: 'meeting-engine',
-          title: e.label,
-          detail: '',
-          checked: chooseEngine === e.id,
-          onPick: () => {
-            chooseEngine = e.id;
-            // The option set below follows the engine, so this is a rebuild,
-            // not a re-mark.
-            renderPop();
-          },
-        });
-        const meta = document.createElement('span');
-        meta.className = 'meeting-engine-meta';
-        if (e.id === 'assemblyai-pro') {
-          const price = document.createElement('span');
-          price.textContent = '$0.45/hr';
-          meta.append(price);
-        }
-        const tags: string[] = [];
-        if (e.id === engineDefault) tags.push('default');
-        if (e.id === 'soniox') tags.push('fastest');
-        if (e.id === 'assemblyai-pro') tags.push('highest quality');
-        for (const tag of tags) {
-          const chip = document.createElement('span');
-          chip.className = 'meeting-engine-tag';
-          chip.textContent = tag;
-          meta.append(chip);
-        }
-        if (meta.childNodes.length > 0) card.el.append(meta);
-        engine.add(card.el);
-      }
-      pop.append(engine.group);
-    }
-
+    // No engine row: the engine is the server's default (or the address's
+    // preference), never a question asked here — see the header.
     const speakers = choiceGroup('Speakers');
     speakers.add(
       choice({
@@ -1407,9 +1373,9 @@ export function mountMeetingStrip(opts: MeetingStripOpts): MeetingStripHandle {
       pop.append(note);
     }
 
-    // Advanced Options, below the engine chooser: the selected engine's own
-    // knobs, collapsed until asked for. Absent entirely when the engine is
-    // unknown (an old server never answered the list).
+    // Advanced Options, below Speakers: the engine's own knobs, collapsed
+    // until asked for. Absent entirely when the engine is unknown (an old
+    // server never answered the list).
     if (chooseEngine !== undefined && advancedControls(chooseEngine).length > 0) {
       pop.append(buildAdvancedPanel(chooseEngine, false));
     }
@@ -1535,6 +1501,8 @@ export function mountMeetingStrip(opts: MeetingStripOpts): MeetingStripHandle {
 
   function render(): void {
     root.dataset.state = state.kind;
+    // The options door is for a start; a running meeting has Record's menu.
+    options.hidden = popForNow() !== 'chooser';
     const botLive = liveBot();
     const isRecording = state.kind === 'recording' || botLive?.state === 'recording';
     root.classList.toggle('is-live', isRecording);
@@ -1768,10 +1736,10 @@ export function mountMeetingStrip(opts: MeetingStripOpts): MeetingStripHandle {
           // Absent unless somebody said, so the server's default stays the
           // one place the room size is guessed.
           ...(opts.speakers !== undefined ? { speakers: opts.speakers } : {}),
-          // Absent unless the address named one or the chooser offered a real
-          // pick — a server that has never heard of engines never receives
-          // the field, and this frame is byte-for-byte what an older strip
-          // sent.
+          // The server's default, or the address's preference — never a pick
+          // made here. A server that has never heard of engines never
+          // receives the field, and this frame is byte-for-byte what an
+          // older strip sent.
           ...(chooseEngine !== undefined ? { engine: chooseEngine } : {}),
           // The Advanced Options — modified knobs only, and PRESENT even
           // when empty: sending the field is what hands the speaker cap to
@@ -1818,9 +1786,27 @@ export function mountMeetingStrip(opts: MeetingStripOpts): MeetingStripHandle {
       closePop();
       return;
     }
-    openPop(popForNow());
+    const want = popForNow();
+    // Alone on the doc and nothing running: the tap IS the start. Solo,
+    // because nobody else is here to label; the engine the server defaults
+    // to, because that is not this person's question. Everything the chooser
+    // would have asked stays one tap away behind the options button.
+    if (want === 'chooser' && opts.alone?.() === true) {
+      mode = 'solo';
+      void start(false);
+      return;
+    }
+    openPop(want);
   };
   record.addEventListener('click', onRecordClick);
+  const onOptionsClick = (): void => {
+    if (view !== 'none') {
+      closePop();
+      return;
+    }
+    openPop('chooser');
+  };
+  options.addEventListener('click', onOptionsClick);
   const onScrim = (): void => closePop();
   scrim.addEventListener('click', onScrim);
   const onKeydown = (ev: KeyboardEvent): void => {
@@ -1933,6 +1919,7 @@ export function mountMeetingStrip(opts: MeetingStripOpts): MeetingStripHandle {
       disposed = true;
       generation += 1;
       record.removeEventListener('click', onRecordClick);
+      options.removeEventListener('click', onOptionsClick);
       scrim.removeEventListener('click', onScrim);
       document.removeEventListener('keydown', onKeydown);
       offBot?.();
@@ -1945,6 +1932,7 @@ export function mountMeetingStrip(opts: MeetingStripOpts): MeetingStripHandle {
       clearTurnSpans();
       closePop();
       record.remove();
+      options.remove();
       scrim.remove();
       pop.remove();
       root.classList.remove('is-live', 'is-bot');

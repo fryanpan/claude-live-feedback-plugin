@@ -22,6 +22,7 @@ import { wireKeyboardInset } from './keyboard-inset.ts';
 import { type LeadBanner, mountLeadBanner } from './lead-banner.ts';
 import { createMeetingBotClient } from './meeting-bot-client.ts';
 import { type MeetingLiveZone, createMeetingLiveZone } from './meeting-live-zone.ts';
+import { othersOnDoc } from './meeting-solo.ts';
 import { mountMeetingStrip } from './meeting-strip.ts';
 import { wantsLatencyTiming } from './meeting-timing-client.ts';
 import type { MountContext } from './mount-context.ts';
@@ -478,6 +479,10 @@ async function mountMarkdown(ctx: MountContext): Promise<void> {
       // already sends is the whole difference between the two buttons.
       autoStart: huddleStart && huddleMode !== 'conversation',
       autoChoose: huddleStart && huddleMode === 'conversation',
+      // Alone on the doc, a Record press records at once — solo, default
+      // engine, no chooser. Presence is asked at the press, not here: who is
+      // on the doc changes, and the answer belongs to the moment of the tap.
+      alone: () => othersOnDoc(awareness, user).length === 0,
       // Read BEFORE the flag is stripped from the address above… it is, in
       // fact, read from `location.search` there too, so both come off the
       // same address; see `huddleCaptureMode`.
