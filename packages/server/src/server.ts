@@ -140,6 +140,7 @@ import {
   meetingDocTitle,
   parseHuddleKind,
   parseHuddleTopic,
+  spokenReviewComment,
 } from './huddle.ts';
 import { Identities, type IdentityRecord, userForIdentity } from './identities.ts';
 import { loadIdentityLinks } from './identity-links.ts';
@@ -150,6 +151,7 @@ import {
   type LandingWorkspaceRow,
   buildLandingModel,
 } from './landing.ts';
+import { createLeadPresenceMonitor } from './lead-presence.ts';
 import { linkTitlesFor } from './link-titles.ts';
 import { type LookupDoc, boardLookupDocs } from './meeting-lookup.ts';
 import { withServerNotesSinks } from './meeting-notes-doc.ts';
@@ -1462,17 +1464,25 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
               taskId: wake.taskId,
               taskTitle: wake.title,
             }),
-          // The two steps `addReviewItem` cannot take for itself, exactly as
-          // `proposeAllowRule` takes them: re-project so the board room
-          // carries the item, and announce so it reaches the reader's queue.
-          onReviewFiled: ({ task, item }) => {
-            taskProjection.ensureWorkspace(task.workspaceId);
-            announceTaskReview(task, item, {
-              id: MEETING_CAPTURE_ACTOR.id,
-              name: MEETING_CAPTURE_ACTOR.name,
-              kind: 'known',
-              color: ANONYMOUS_ACTOR.color,
-            });
+          // A huddle doc is HELD by a hub workspace rather than owned by one
+          // (no `setId`), which is where "create a task" said aloud used to
+          // go quiet: the capture had no board. The doc's back-target is the
+          // same answer the doc page's back arrow gives.
+          boardOf: (docId) => backTargetFor(docId)?.id,
+          // "Ask the team whether…" — filed exactly as the Review float's
+          // press is, with the question attached, by the meeting assistant.
+          onReviewAsk: async ({ docId, question, requester }) => {
+            const filed = await fileReviewRequest(
+              docId,
+              {
+                id: MEETING_CAPTURE_ACTOR.id,
+                name: MEETING_CAPTURE_ACTOR.name,
+                kind: 'known',
+                color: ANONYMOUS_ACTOR.color,
+              },
+              spokenReviewComment(question, requester),
+            );
+            if (!filed) console.error(`[meeting-tasks] review ask on ${docId}: doc not found`);
           },
         })
       : null,
@@ -2958,6 +2968,29 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
       lastActivityAt: tasks.reduce((max, t) => Math.max(max, t.updatedAt, t.createdAt), 0),
     };
   };
+  /**
+   * The meeting doc's "is anybody listening" — see lead-presence.ts. Reads
+   * the same seat health the board's presence strip reads, scoped to the
+   * board holding the doc, and pushes a change to the doc's open pages as a
+   * transient (no replay: a page that reconnects asks again).
+   */
+  const leadPresence = createLeadPresenceMonitor({
+    source: {
+      boardOf: (docId) => backTargetFor(docId)?.id,
+      seat: (workspaceId) => taskStore.leadSeatHealth(workspaceId),
+    },
+    broadcast: (docId, presence) => {
+      sse.broadcastTransient(docId, presence);
+    },
+    onEvent: (listener) => taskStore.onEvent(listener),
+    hasListeners: (docId) => sse.count(docId) > 0,
+  });
+  // The lead's own stream opening is what makes it deliverable, and it
+  // emits no store event — so the hub says so directly.
+  sse.onAgentStreams = (channel) => {
+    if (channel.startsWith('ws~')) leadPresence.notify(channel.slice('ws~'.length));
+  };
+
   const readyNudger = new ReadyWorkNudger({
     snapshot: () => taskStore.listWorkspaces().map(readyWorkSnapshot),
     lookup: (workspaceId) => {
@@ -4267,6 +4300,32 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
       return ws ? { id: ws.id, name: ws.name } : null;
     };
     return pick(hubWorkspacesHolding(docId)[0]) ?? pick(hubWorkspacesHolding(reviewId ?? '')[0]);
+  };
+
+  /**
+   * The Review ask, filed: a subject thread on the doc carrying `text` from
+   * `author`, and the doc stamped as review-requested naming that thread so
+   * the float can offer another ask once it is resolved. One function for
+   * both triggers — the float's press and the meeting assistant hearing
+   * "ask the team whether…" — so a spoken ask and a tapped one land as the
+   * same thing. Null when the doc does not exist.
+   */
+  const fileReviewRequest = async (
+    docId: string,
+    author: User,
+    text: string,
+  ): Promise<{ threadId: string; requestedAt?: number } | null> => {
+    const thread = await rooms.postComment(
+      docId,
+      null,
+      author,
+      text,
+      { kind: 'subject' },
+      { generate: false },
+    );
+    if (!thread) return null;
+    const stamped = rooms.setReviewRequested(docId, author.name, thread.id);
+    return { threadId: thread.id, ...(stamped.ok ? { requestedAt: stamped.requestedAt } : {}) };
   };
 
   /**
@@ -11065,6 +11124,12 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
               ...(stamped.ok ? { requestedAt: stamped.requestedAt } : {}),
             });
           }
+          // Whether this doc's asks have a live lead to land on. The page
+          // registers itself by asking; changes arrive on its event stream.
+          if (rest === 'lead-presence' && req.method === 'GET') {
+            if (visitor) return j(403, { error: 'not available to share visitors' });
+            return j(200, leadPresence.watch(docId));
+          }
           // The Review float's press — the meeting's other one-tap ask: the
           // presser asking this doc's agent to read the notes and transcript
           // and question what is thin. Same shape as plan-request: the ask is
@@ -11076,21 +11141,9 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
             const author = authorFor(body?.author);
             if (!author) return j(400, { error: 'author required' });
             if (isCategoryAuthor(author)) return refuseCategoryAuthor();
-            const thread = await rooms.postComment(
-              docId,
-              null,
-              author,
-              REVIEW_REQUEST_COMMENT,
-              { kind: 'subject' },
-              { generate: false },
-            );
-            if (!thread) return j(404, { error: 'doc not found' });
-            const stamped = rooms.setReviewRequested(docId, author.name, thread.id);
-            return j(200, {
-              docId,
-              threadId: thread.id,
-              ...(stamped.ok ? { requestedAt: stamped.requestedAt } : {}),
-            });
+            const filed = await fileReviewRequest(docId, author, REVIEW_REQUEST_COMMENT);
+            if (!filed) return j(404, { error: 'doc not found' });
+            return j(200, { docId, ...filed });
           }
           // --- The doc's repo home: pin, read, unpin. OWNER ONLY — a home is
           // host paths, which a share visitor must never see. The visitor
@@ -12679,6 +12732,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
       // server that is going away.
       readyNudger.stop();
       stallNudger.stop();
+      leadPresence.stop();
       // The boot re-scoring pass runs for as long as there are stale rows, so
       // a short-lived server (every test) can still be mid-loop here. Setting
       // the flag is enough: the loop checks it either side of each call, so
