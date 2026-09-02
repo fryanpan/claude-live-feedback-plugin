@@ -128,6 +128,15 @@ describe('POST /api/docs/:docId/plan-request', () => {
     expect(thread.comments?.[0]?.author?.name).toBe('Jordan');
   });
 
+  it('tells the agent to file each question on the sentence it is about', () => {
+    // The root-cause fix for "a plan came back as one comment holding twelve
+    // questions": the ask the agent reads names the anchored-thread tool and
+    // forbids the list. An agent already had the tools; it lacked the line.
+    expect(PLAN_REQUEST_COMMENT).toMatch(/create_thread/);
+    expect(PLAN_REQUEST_COMMENT).toMatch(/`find`/);
+    expect(PLAN_REQUEST_COMMENT).toMatch(/never a list of questions in one comment/);
+  });
+
   it('stamps planRequestedAt / planRequestedBy on the doc', async () => {
     const docId = await newPlanDoc(workspaceId);
     const before = await jj<DocResponse>(await local(`/api/docs/${docId}`));
