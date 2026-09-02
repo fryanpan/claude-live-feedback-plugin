@@ -32,12 +32,10 @@ import { useLayoutEffect, useRef, useState } from 'preact/hooks';
 import {
   type BoardSection,
   GENERIC_ASSIGNEE,
-  type HubPane,
   type HubTask,
   type ReorderTarget,
   TASK_STATUS_ORDER,
   type TaskStatus,
-  assigneeLabel,
   dropIndexFor,
   dropTarget,
   goalEffortLabel,
@@ -47,7 +45,8 @@ import {
   statusLabel,
   statusOptions,
   stepTarget,
-} from './hub-model.ts';
+} from './hub-board-model.ts';
+import { type HubPane, assigneeLabel } from './hub-presence-model.ts';
 import {
   type SelectionMark,
   caretOffsetIn,

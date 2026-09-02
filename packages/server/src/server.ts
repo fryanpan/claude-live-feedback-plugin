@@ -3398,7 +3398,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
    * queue that renders nothing.
    *
    * TICKET-borne rows (`kind: 'task-review'`) count too — Home places them
-   * now (`reviewQueue` in hub-model.ts), which closed the measured gap where
+   * now (`reviewQueue` in hub-review-model.ts), which closed the measured gap where
    * a review item filed with `create_tasks` / `add_review_item` was shipped
    * by the route and rendered by nothing. The one exception is the DERIVED
    * `r-legacy` row: its legacy decision is already counted from the tasks
@@ -6463,7 +6463,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
         // works — and 404s crisply — whether or not the app bundle has been
         // built; the page's behavior all lives in /app/hub.js.
         // Every nav suffix serves the same shell: which destination renders is
-        // the client's routing (`navFromPath` in hub-model), so all four are
+        // the client's routing (`navFromPath` in hub-presence-model), so all four are
         // deep-linkable — the board banner's "Go to Home", a phone bookmark
         // and a pasted link all land on the destination, not on the board with
         // a hint.

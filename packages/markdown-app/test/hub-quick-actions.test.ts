@@ -1,8 +1,9 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { CHORES_ID, type HubTask } from '../src/hub/hub-model.ts';
-import { type DetailHandlers, renderQuickActions } from '../src/hub/hub-render.ts';
+import { CHORES_ID, type HubTask } from '../src/hub/hub-board-model.ts';
+import { type DetailHandlers } from '../src/hub/hub-detail-render.ts';
+import { renderQuickActions } from '../src/hub/hub-render.ts';
 import { disposeTaskDetail, renderTaskDetail } from './support/task-detail.ts';
 
 /**
@@ -271,12 +272,20 @@ describe('the panel opens an untitled task with the title ready to type', () => 
  */
 describe('hub-app wires the two buttons to the two routes', () => {
   const HUB_APP = readFileSync(resolve(import.meta.dirname, '../src/hub/hub-app.ts'), 'utf8');
+  // The REST verbs themselves moved to `hub-actions.ts`; what stays in the
+  // entry is which button calls which verb, so the two reads are split.
+  const HUB_ACTIONS = readFileSync(
+    resolve(import.meta.dirname, '../src/hub/hub-actions.ts'),
+    'utf8',
+  );
   const SHORTCUTS = readFileSync(
     resolve(import.meta.dirname, '../src/hub/hub-shortcuts.ts'),
     'utf8',
   );
   const fn = (name: string): string => {
-    const m = HUB_APP.match(new RegExp(`async function ${name}\\([^)]*\\)[\\s\\S]*?\\n {2}\\}\\n`));
+    const m = HUB_ACTIONS.match(
+      new RegExp(`async function ${name}\\([^)]*\\)[\\s\\S]*?\\n {2}\\}\\n`),
+    );
     return m?.[0] ?? '';
   };
 

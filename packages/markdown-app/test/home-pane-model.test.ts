@@ -3,6 +3,7 @@
  * board banner line, and the generating-poll rule. All fixtures synthetic.
  */
 import { describe, expect, it } from 'vitest';
+import type { HubTask } from '../src/hub/hub-board-model.ts';
 import {
   HOME_POLL_CAP_MS,
   homeSinceLabel,
@@ -11,14 +12,13 @@ import {
   paneForNav,
   paneFromPath,
   panePath,
-  reviewBannerText,
-  reviewQueue,
-  reviewRowTitle,
   shouldPollHome,
   tabForNav,
   waitingLabel,
-} from '../src/hub/hub-model.ts';
-import type { HubNav, HubTask, ReviewItem, ReviewThreadItem } from '../src/hub/hub-model.ts';
+} from '../src/hub/hub-presence-model.ts';
+import type { HubNav } from '../src/hub/hub-presence-model.ts';
+import { reviewBannerText, reviewQueue, reviewRowTitle } from '../src/hub/hub-review-model.ts';
+import type { ReviewItem, ReviewThreadItem } from '../src/hub/hub-review-model.ts';
 
 const NOW = 1_700_000_000_000;
 
