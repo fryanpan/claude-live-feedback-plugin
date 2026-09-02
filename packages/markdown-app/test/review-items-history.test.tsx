@@ -12,12 +12,8 @@
  */
 import { options } from 'preact';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import {
-  CHORES_ID,
-  type HubReviewItem,
-  type HubTask,
-  describeEvent,
-} from '../src/hub/hub-model.ts';
+import { CHORES_ID, type HubReviewItem, type HubTask } from '../src/hub/hub-board-model.ts';
+import { describeEvent } from '../src/hub/hub-model.ts';
 import {
   type DetailHandlers,
   type TaskDiscussion,

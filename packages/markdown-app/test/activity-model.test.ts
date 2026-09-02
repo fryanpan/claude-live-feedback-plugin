@@ -11,13 +11,8 @@ import {
   firstLine,
   homeActivity,
 } from '../src/hub/activity-model.ts';
-import {
-  CHORES_ID,
-  type HubGoal,
-  type HubNote,
-  type HubTask,
-  type ReviewItem,
-} from '../src/hub/hub-model.ts';
+import { CHORES_ID, type HubGoal, type HubNote, type HubTask } from '../src/hub/hub-board-model.ts';
+import { type ReviewItem } from '../src/hub/hub-model.ts';
 
 /** All fixtures are synthetic — invented agents, short fake ids. */
 

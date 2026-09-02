@@ -24,9 +24,8 @@ import {
   homeReviewData,
   mountHomeReviewIsland,
 } from '../src/hub/home-review-island.tsx';
+import { CHORES_ID, type HubTask } from '../src/hub/hub-board-model.ts';
 import {
-  CHORES_ID,
-  type HubTask,
   type ReviewItem,
   type ReviewQueue,
   type ReviewThreadItem,

@@ -62,16 +62,18 @@ import { SPACE_HOLD_PAGE_ATTR } from '../voice-capture.ts';
 import { ageShort } from './activity-model.ts';
 import { ComposerForm, Discussion, useFill } from './detail-parts.tsx';
 import {
-  type ActivityEvent,
   type HubDecisionOption,
   type HubNote,
   type HubTask,
+  heldReviewItems,
+  isTaskArchived,
+} from './hub-board-model.ts';
+import {
+  type ActivityEvent,
   answeredByLine,
   askedMetaLine,
   blockedNoteLine,
   heldMetaLine,
-  heldReviewItems,
-  isTaskArchived,
   taskActivity,
 } from './hub-model.ts';
 import {

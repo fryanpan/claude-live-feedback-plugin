@@ -14,7 +14,7 @@
  */
 import { options } from 'preact';
 import { goalDetailData, mountGoalDetailIsland } from '../../src/hub/goal-detail-island.tsx';
-import type { BoardSection } from '../../src/hub/hub-model.ts';
+import type { BoardSection } from '../../src/hub/hub-board-model.ts';
 import type { GoalDetailHandlers, TaskDiscussion } from '../../src/hub/hub-render.ts';
 
 // A signal write re-renders on the next microtask — still before the next

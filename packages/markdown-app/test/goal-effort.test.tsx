@@ -41,7 +41,7 @@ import {
   boardSectionsWithEffort,
   goalBandIds,
   goalEffortLabel,
-} from '../src/hub/hub-model.ts';
+} from '../src/hub/hub-board-model.ts';
 import { effortComputationLines, effortFields } from '../src/hub/hub-render.ts';
 import { disposeBoards, renderBoard } from './support/board.ts';
 
