@@ -23,6 +23,7 @@ export * from './ws-link.ts';
 export * from './spinoff.ts';
 export * from './lead-presence.ts';
 export * from './task-wire.ts';
+export * from './word-count.ts';
 export * as anchors from './anchor/index.ts';
 export * as prose from './prose.ts';
 export * as suggestOps from './suggest-ops.ts';

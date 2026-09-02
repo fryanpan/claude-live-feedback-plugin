@@ -19,7 +19,8 @@
     "./effort-estimate-prompt": "./src/effort-estimate-prompt.ts",
     "./goal-summary": "./src/goal-summary.ts",
     "./goal-effort": "./src/goal-effort.ts",
-    "./task-wire": "./src/task-wire.ts"
+    "./task-wire": "./src/task-wire.ts",
+    "./word-count": "./src/word-count.ts"
   },
   "dependencies": {
     "lib0": "^0.2.117",
