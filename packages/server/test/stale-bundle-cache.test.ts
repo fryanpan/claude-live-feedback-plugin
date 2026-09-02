@@ -88,6 +88,7 @@ describe('a reload cannot return the old bundle', () => {
     'signin.js': `export const signin = ${n};\n`,
     'styles.css': `body{--v:${n}}\n`,
     'hub.css': `.hub-board{--v:${n}}\n`,
+    'signin.css': `.signin-card{--v:${n}}\n`,
     'tokens.css': `:root{--t:${n}}\n`,
   });
 
@@ -143,7 +144,13 @@ describe('a reload cannot return the old bundle', () => {
     const hashed = new Set(Object.values(manifest).map((n) => `/app/${n}`));
     for (const ref of refs) expect(hashed.has(ref)).toBe(true);
     // Said the other way round, against the exact urls that used to be here.
-    for (const permanent of ['/app/hub.js', '/app/styles.css', '/app/hub.css', '/app/tokens.css']) {
+    for (const permanent of [
+      '/app/hub.js',
+      '/app/styles.css',
+      '/app/hub.css',
+      '/app/signin.css',
+      '/app/tokens.css',
+    ]) {
       expect(refs).not.toContain(permanent);
     }
   });

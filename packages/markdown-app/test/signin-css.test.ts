@@ -13,16 +13,16 @@ import { describe, expect, it } from 'vitest';
  * 1180x820 and 430px is a browser check; see the PR report.
  */
 
-// The board's cascade is two files since the hub block moved to hub.css:
-// styles.css keeps the shared chrome, hub.css carries the board's own rules,
-// and the hub shell loads them in that order. A rule this suite pins may sit
-// in either, so read the pair the page actually loads. Two reads on purpose:
-// a one-line read is what `bun run test:audit` counts, and folding them into
-// a loop would hide a source-shape site rather than remove one.
-const CSS = [
-  readFileSync(resolve('packages/markdown-app/src/styles.css'), 'utf8'),
-  readFileSync(resolve('packages/markdown-app/src/hub.css'), 'utf8'),
-].join('\n');
+// Three files, because this suite pins rules on two different pages: the
+// sign-in card (signin.css), the hub's identity chip (hub.css), and the shared
+// chrome both sit on (styles.css). Reading them together is what the old
+// single-file read amounted to. Separate one-line reads on purpose — that is
+// the shape `bun run test:audit` counts, and a loop would hide the sites
+// rather than remove them.
+const STYLES = readFileSync(resolve('packages/markdown-app/src/styles.css'), 'utf8');
+const HUB = readFileSync(resolve('packages/markdown-app/src/hub.css'), 'utf8');
+const SIGNIN = readFileSync(resolve('packages/markdown-app/src/signin.css'), 'utf8');
+const CSS = [STYLES, HUB, SIGNIN].join('\n');
 
 function declarationsOnly(css: string): string {
   return css.replace(/\/\*[\s\S]*?\*\//g, '');
@@ -64,11 +64,18 @@ describe('sign-in page css', () => {
     );
   });
 
-  it('is filed in a banner section, not appended at EOF', () => {
-    const at = CSS.indexOf('SIGN-IN PAGE');
-    expect(at).toBeGreaterThan(0);
-    // Another section banner follows it — the section is not the file's tail.
-    expect(CSS.indexOf('=================', at + 40)).toBeGreaterThan(at);
+  it('lives in the sign-in page\u2019s own stylesheet, not at the tail of a shared one', () => {
+    // What this used to assert — "filed under a banner, not appended at EOF" —
+    // the split now settles by construction: these rules are a file the sign-in
+    // shell loads and no other page does. What can still go wrong is a rule
+    // added to the shared sheet instead, so assert the ownership both ways.
+    expect(SIGNIN).toContain('SIGN-IN PAGE');
+    expect(SIGNIN).toMatch(/\.signin-card\s*\{/);
+    expect(STYLES).not.toMatch(/\.signin-card\s*\{/);
+    // The identity prompt stayed behind, and that is deliberate: the board and
+    // the editor both raise it, and sign-in never does.
+    expect(STYLES).toContain('FIRST-ARRIVAL IDENTITY PROMPT');
+    expect(SIGNIN).not.toContain('FIRST-ARRIVAL IDENTITY PROMPT');
   });
 
   it('gives the hub identity chip a popover anchored like the settings panel', () => {

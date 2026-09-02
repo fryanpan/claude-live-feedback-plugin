@@ -34,6 +34,7 @@ const HASHED = [
   'sw.js',
   'styles.css',
   'hub.css',
+  'signin.css',
   'tokens.css',
   'index.html',
 ];
@@ -210,6 +211,7 @@ async function emit(buildId: string): Promise<boolean> {
   // Copied rather than bundled for the same reason styles.css is: a
   // stylesheet the shells name by URL has to exist under that name.
   cpSync(join(pkgRoot, 'src', 'hub.css'), join(dist, 'hub.css'));
+  cpSync(join(pkgRoot, 'src', 'signin.css'), join(dist, 'signin.css'));
   // The Open Props trial layer: the vendored subset (self-hosted — a strict
   // CSP and offline tailnet use forbid CDN hosts) concatenated with the
   // mapping in src/tokens.css, served as one file at /app/tokens.css so a

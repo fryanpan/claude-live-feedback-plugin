@@ -46,6 +46,7 @@ export const SHELL_ASSETS = [
   'sentry.js',
   'styles.css',
   'hub.css',
+  'signin.css',
   'tokens.css',
 ] as const;
 
