@@ -17,7 +17,7 @@ import { prose } from '@feedback/core';
 import { Rooms } from '../src/rooms.ts';
 import { SseHub } from '../src/sse.ts';
 import { createWebhookDispatcher } from '../src/webhooks.ts';
-import { waitFor, waitForFile } from './wait-for.ts';
+import { pastExternalRead, waitFor, waitForFile } from './wait-for.ts';
 
 /**
  * Doc homes through the real binding machinery: a pinned doc's file is "the
@@ -210,7 +210,7 @@ describe('doc homes through the binding', () => {
     writeExternal(join(wt, REL), '# Somebody else\n\nfeature-branch copy\n');
     // timed: the assertion is that the poll (500ms) plus read debounce never
     // pulls those bytes in, so the whole read window has to elapse first.
-    await sleep(1600);
+    await sleep(pastExternalRead());
     expect(docText(rooms, 'd1')).not.toContain('feature-branch copy');
     expect(docText(rooms, 'd1')).toContain('first pass');
   });

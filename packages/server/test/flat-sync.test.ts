@@ -15,7 +15,7 @@ import { Rooms } from '../src/rooms.ts';
 import { type ServerHandle, createServer } from '../src/server.ts';
 import { SseHub } from '../src/sse.ts';
 import { createWebhookDispatcher } from '../src/webhooks.ts';
-import { waitFor, waitForFile, waitForFileToBe } from './wait-for.ts';
+import { pastWriteBack, waitFor, waitForFile, waitForFileToBe } from './wait-for.ts';
 
 /**
  * Flat (code / working-tree diff) docs gain doc→disk write-back so the File
@@ -97,7 +97,7 @@ describe('flat write-back', () => {
     rooms.get('c1')?.ydoc.getText('content').insert(0, 'INJECTED ');
     // timed: the assertion is that NOTHING lands, so the full write-back
     // window (~800ms) has to elapse before the file can be believed.
-    await sleep(1100);
+    await sleep(pastWriteBack());
     expect(readFileSync(path, 'utf8')).toBe(SRC);
   });
 
@@ -114,7 +114,7 @@ describe('flat write-back', () => {
     // the file keeps the external bytes and mtime-driven loops don't spin.
     // timed: an echo would fire ~800ms after the apply, so the window has to
     // pass before "no echo" means anything.
-    await sleep(1000);
+    await sleep(pastWriteBack());
     expect(readFileSync(path, 'utf8')).toBe(changed);
   });
 
@@ -277,7 +277,7 @@ describe('flat write-back through bindDiff', () => {
     const ktId = res.files.find((f) => f.relPath === 'Main.kt')?.docId ?? '';
     rooms.get(ktId)?.ydoc.getText('content').insert(0, '// pinned edit\n');
     // timed: proving a write never happens needs the write window to pass.
-    await sleep(1100);
+    await sleep(pastWriteBack());
     expect(readFileSync(join(repo, 'Main.kt'), 'utf8')).not.toContain('// pinned edit');
   });
 

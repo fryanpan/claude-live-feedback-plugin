@@ -19,7 +19,7 @@ import * as Y from 'yjs';
 import { Rooms, maintainAwareness } from '../src/rooms.ts';
 import { SseHub } from '../src/sse.ts';
 import { createWebhookDispatcher } from '../src/webhooks.ts';
-import { waitFor } from './wait-for.ts';
+import { pastExternalRead, waitFor } from './wait-for.ts';
 
 function makeRooms(dataDir: string): Rooms {
   return new Rooms({
@@ -233,7 +233,7 @@ describe('per-room timers', () => {
     utimesSync(paths[0], t, t);
     // timed: the claim is that NOTHING polls a cold doc, so the window in
     // which a poll could have run has to pass before the counts mean anything.
-    await sleep(1500);
+    await sleep(pastExternalRead());
     // Nothing woke up: no poll ran, because there was no binding to run one.
     expect(rooms.stats().rooms).toBe(0);
 
@@ -258,7 +258,7 @@ describe('per-room timers', () => {
     // undrained write-back timer counts as active — so this waits out the
     // sweep, the 150ms read debounce and the 800ms write-back deliberately.
     // Polling for "drained" would assert the very thing under test.
-    await sleep(2500);
+    await sleep(pastExternalRead());
 
     // Control: the edit really landed. Without it, "nothing is active" could
     // just mean the poll never noticed anything at all.
