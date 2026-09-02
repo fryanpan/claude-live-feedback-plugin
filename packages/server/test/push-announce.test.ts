@@ -312,8 +312,8 @@ describe('withdrawing a doc-thread review item', () => {
       reason: 'Superseded — I measured it wrong.',
     });
     expect(gone.status).toBe(200);
-    // Long enough that a send would have landed: the control above arrives
-    // well inside this window.
+    // timed: the claim is that NO push is sent, and the control above proves
+    // a real send arrives well inside this window.
     await new Promise((r) => setTimeout(r, 500));
     expect(sent.length).toBe(afterRaise);
 

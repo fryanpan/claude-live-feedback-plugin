@@ -13,6 +13,7 @@ import { join } from 'node:path';
 import type { ElementAnchor, User } from '@feedback/core';
 import { decideReconcile } from '../src/rooms.ts';
 import { type ServerHandle, createServer } from '../src/server.ts';
+import { waitFor, waitForFile } from './wait-for.ts';
 
 const bryan: User = { id: 'known-bryan', name: 'Bryan', kind: 'known', color: '#2e7dd7' };
 // A NAMED agent: the shared `known-agent` category is refused as an author.
@@ -912,16 +913,24 @@ describe('doc owner + lastActivityAt', () => {
       body: JSON.stringify({ docId: 'act-1', type: 'markdown', sourceUrl: file }),
     }).then((r) => r.json())) as { docId: string };
     // let the create-time persist settle
-    await new Promise((r) => setTimeout(r, 250));
+    const ydoc = join(dataDir, `${actId}.ydoc`);
+    await waitForFile(ydoc, () => true);
+    // lastActivityAt is the .ydoc mtime, so the two stamps have to be far
+    // enough apart for "advanced" to be observable. This used to buy the gap
+    // by sleeping past the filesystem's granularity; back-dating the existing
+    // stamp buys the same gap for nothing, and is not a wall-clock claim.
+    const backdated = new Date(Date.now() - 5000);
+    utimesSync(ydoc, backdated, backdated);
     const before = (await getMeta(actId))!.lastActivityAt!;
-    await new Promise((r) => setTimeout(r, 1100));
-    await fetch(`${base}/api/docs/act-1/find_and_replace`, {
+    await fetch(`${base}/api/docs/${actId}/find_and_replace`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ find: 'before', replace: 'after' }),
     });
-    await new Promise((r) => setTimeout(r, 350)); // wait for the 200ms persist
-    const after = (await getMeta(actId))!.lastActivityAt!;
+    const after = await waitFor(async () => {
+      const t = (await getMeta(actId))!.lastActivityAt!;
+      return t > before ? t : null;
+    });
     expect(after).toBeGreaterThan(before);
   });
 });
