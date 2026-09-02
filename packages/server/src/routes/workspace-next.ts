@@ -31,38 +31,33 @@ export async function handleWorkspaceNext(
     // asks for it by name.
     const includeArchived = url.searchParams.get('includeArchived') === 'true';
     const wantedOwner = url.searchParams.get('assignee') || undefined;
-    const rows = buildQueue(
-      taskStore.listTasks(workspaceId, { includeArchived }),
-      workspace.goals,
-      {
-        ...(wantedOwner !== undefined ? { assignee: wantedOwner } : {}),
-        // By id as well as by name: the store's matcher finds every
-        // spelling the roster folds into one agent, and `idOf` puts
-        // that id on the row.
-        owner: {
-          ...(wantedOwner !== undefined ? { matches: taskStore.ownerMatcher(wantedOwner) } : {}),
-          idOf: (t) => taskStore.ownerIdOf(t),
-        },
-        ...(limitRaw !== null && Number.isFinite(Number(limitRaw))
-          ? { limit: Number(limitRaw) }
-          : {}),
-        includeBlocked: url.searchParams.get('includeBlocked') === 'true',
-        // So each row can say whether its BAND has been agreed to. The
-        // row is still listed either way — a lead reading the queue
-        // should see the band and be able to disagree with it.
-        goalRows: taskStore.listGoalRows(workspaceId),
-        // The discussion the queue has always dropped. Every one of the
-        // five known stale-premise pickups had a comment on the task
-        // saying the premise had moved, and none of them reached the
-        // next reader, because this route returned `body` and nothing
-        // else. Passed as a reader rather than a map so `buildQueue`
-        // stays pure and only the armed rows pay for their notes.
-        discussion: (taskId) => taskProjection.discussionNotes(taskId),
-        ...(opts.premiseStaleAfterMs !== undefined
-          ? { staleAfterMs: opts.premiseStaleAfterMs }
-          : {}),
+    const tasks = taskStore.listTasks(workspaceId, { includeArchived });
+    const rows = buildQueue(tasks, workspace.goals, {
+      ...(wantedOwner !== undefined ? { assignee: wantedOwner } : {}),
+      // By id as well as by name: the store's matcher finds every
+      // spelling the roster folds into one agent, and `idOf` puts
+      // that id on the row.
+      owner: {
+        ...(wantedOwner !== undefined ? { matches: taskStore.ownerMatcher(wantedOwner) } : {}),
+        idOf: (t) => taskStore.ownerIdOf(t),
       },
-    );
+      ...(limitRaw !== null && Number.isFinite(Number(limitRaw))
+        ? { limit: Number(limitRaw) }
+        : {}),
+      includeBlocked: url.searchParams.get('includeBlocked') === 'true',
+      // So each row can say whether its BAND has been agreed to. The
+      // row is still listed either way — a lead reading the queue
+      // should see the band and be able to disagree with it.
+      goalRows: taskStore.listGoalRows(workspaceId),
+      // The discussion the queue has always dropped. Every one of the
+      // five known stale-premise pickups had a comment on the task
+      // saying the premise had moved, and none of them reached the
+      // next reader, because this route returned `body` and nothing
+      // else. Passed as a reader rather than a map so `buildQueue`
+      // stays pure and only the armed rows pay for their notes.
+      discussion: (taskId) => taskProjection.discussionNotes(taskId),
+      ...(opts.premiseStaleAfterMs !== undefined ? { staleAfterMs: opts.premiseStaleAfterMs } : {}),
+    });
     // WHO IS ALREADY ON EACH ROW, on the surface where the pickup
     // decision is actually made. `list_tasks` has carried
     // `ownerSession` for a while and this route did not, so the read
@@ -85,9 +80,7 @@ export async function handleWorkspaceNext(
     // right.
     const ownerSessionOf = taskProjection.ownerSessionReader(workspaceId);
     const claimSessionOf = taskProjection.claimSessionReader(workspaceId);
-    const byId = new Map(
-      taskStore.listTasks(workspaceId, { includeArchived }).map((t) => [t.id, t]),
-    );
+    const byId = new Map(tasks.map((t) => [t.id, t]));
     const withPresence = rows.map((row) => {
       const task = byId.get(row.id);
       if (!task) return row;

@@ -56,8 +56,6 @@ export type VerifiedToken<Claims> =
  * dots. Splitting is each format's business; the MAC is not.
  */
 export interface TokenFormat<Claims> {
-  /** Names this protocol in logs and tests. Not part of the wire format. */
-  purpose: string;
   /**
    * The domain string mixed into the base key for this protocol, or null when
    * it signs with the base key itself. Null is a wire lock, never a default:

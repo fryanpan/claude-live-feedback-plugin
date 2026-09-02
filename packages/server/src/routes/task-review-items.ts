@@ -173,8 +173,6 @@ export async function handleTaskReviewItems(
     taskProjection.ensureWorkspace(res.task.workspaceId);
     return j(200, res);
   }
-  // revise_review_item: the owner's answer to a question asked ON the
-  // item — the words made clearer in place, the old words kept, and an
   /**
    * RELEASE a held review item — the reader overruling the gate.
    *
@@ -229,6 +227,8 @@ export async function handleTaskReviewItems(
     announceTaskReview(res.task, res.item, author);
     return j(200, { taskId, item: res.item, released: true });
   }
+  // revise_review_item: the owner's answer to a question asked ON the
+  // item — the words made clearer in place, the old words kept, and an
   // optional reply on the thread that asked. Refusals happen before
   // any write: a reply with no thread to land on is refused here rather
   // than dropped after the revision applied, because "revised, and the
