@@ -588,9 +588,17 @@ if (meetingBot) {
 }
 const meetingBotWebhookSecret = process.env.RECALL_WEBHOOK_SECRET?.trim() || undefined;
 if (meetingBot?.config.publicWsBase && !meetingBotWebhookSecret) {
+  // Says CLOSED, not "accepted unsigned". It said the latter until the
+  // pass-2 review, which was the pre-fix behaviour and the opposite of the
+  // meetings summary block twelve lines down. An operator reading it
+  // concluded either that an unauthenticated injection path was open or that
+  // events were arriving, when in fact every delivery 404s — and the symptom
+  // they will actually see, a bot whose status never updates, has no other
+  // line to point at.
   console.log(
-    '[meetings] RECALL_WEBHOOK_SECRET is unset; bot status webhooks are ' +
-      'accepted unsigned. Set it to the signing secret from the Recall dashboard.',
+    '[meetings] RECALL_WEBHOOK_SECRET is unset; the bot status webhook is ' +
+      'CLOSED — every delivery answers 404 and bot status will not update. ' +
+      'Set it to the signing secret from the Recall dashboard.',
   );
 }
 // Calendar auto-join — the ONLY place real calendar-side pieces are
