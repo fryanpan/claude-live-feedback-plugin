@@ -242,13 +242,6 @@ export function classifyActor(author: unknown): ActorKind {
   return 'person';
 }
 
-/** Whitespace-split word count for comment/reply text. */
-export function wordCount(text: string): number {
-  const trimmed = text.trim();
-  if (trimmed === '') return 0;
-  return trimmed.split(/\s+/).length;
-}
-
 /**
  * Ids that mean the fleet owner.
  *

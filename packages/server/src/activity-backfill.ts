@@ -2,6 +2,7 @@
 import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { type DocMeta, type Thread, listThreads, readDocMeta } from '@feedback/core';
+import { wordCount } from '@feedback/core/word-count';
 import * as Y from 'yjs';
 import {
   type Event,
@@ -13,7 +14,6 @@ import {
   isOwnerActor,
   payloadDigest,
   toUtcIso,
-  wordCount,
 } from './activity.ts';
 import { loadIdentityLinks } from './identity-links.ts';
 import { readPrivateMeta } from './private-meta.ts';

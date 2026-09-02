@@ -28,6 +28,8 @@
  */
 
 /** The budget from the task: a goal displays in twenty words or fewer. */
+import { wordCount } from './word-count.ts';
+
 export const GOAL_SUMMARY_MAX_WORDS = 20;
 
 /**
@@ -57,12 +59,6 @@ export interface GoalDisplay {
    *  summary IS the goal and a "show more" control would reveal nothing. */
   truncated: boolean;
   source: GoalDisplaySource;
-}
-
-/** Words as a reader counts them. */
-export function wordCount(s: string): number {
-  const t = s.trim();
-  return t === '' ? 0 : t.split(/\s+/).length;
 }
 
 /**

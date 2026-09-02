@@ -22,6 +22,7 @@
 
 import { anchorText, summaryHash } from './thread-summary.ts';
 import type { Thread } from './types.ts';
+import { wordCount } from './word-count.ts';
 
 /** Word budgets. The card gives each line one ellipsized row. */
 export const TOPIC_WORDS = 10;
@@ -354,12 +355,6 @@ function clean(s: string): string {
  * `thread-summary.ts`, where the input is a raw comment that really can be
  * 5,000 characters of prose poured into a one-line slot.
  */
-
-/** Words as the budget counts them: whitespace-separated tokens. */
-export function wordCount(s: string): number {
-  const t = s.trim();
-  return t === '' ? 0 : t.split(/\s+/).length;
-}
 
 /**
  * The corrective follow-up for an answer that does not fit the card, or null
