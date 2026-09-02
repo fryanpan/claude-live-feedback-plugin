@@ -48,14 +48,14 @@ Two questions are kept orthogonal on purpose, and the route layer reads both:
 **reachability** (may this caller talk to this server at all — the host gate,
 Cloudflare Access, a share session) and **identity** (who they are — a session
 cookie, an Access claim, a widget token). A local host bypasses the first and
-still owes the second (`packages/server/src/server.ts:5498`).
+still owes the second (`packages/server/src/server.ts:5537`).
 
 ## Who may read and write what
 
 | Caller | Reads | Writes | Gate |
 |---|---|---|---|
 | Loopback / tailnet / LAN agent (MCP, hooks, curl) | everything | everything except the binding-route browser refusal | `isTrustedLocalHost` (`middleware/host-guard.ts:188`) classifies `local`; no session required |
-| Browser on a local host | everything | only when signed in | `isGatedWrite` + `browserProvedNobody` (`server.ts:5552`) |
+| Browser on a local host | everything | only when signed in | `isGatedWrite` + `browserProvedNobody` (`server.ts:5591`) |
 | Share / link visitor | one board and its members | threads, suggestions, the reading tracker, **the prose of any in-scope doc** over the Yjs socket, and **new doc rooms** via `context-file` / `editable-file` — see the gap below | `shareScopeAllows` (`host-guard.ts:376`) — allowlist, closed by default; per-subroute rules in `docSubrouteAllowed` (`host-guard.ts:738`) |
 | Collab-host visitor | any board the path names, resolved per request | same | `isAccessTunnelHost` (`host-guard.ts:227`) → `collabScope` (`host-guard.ts:659`), which delegates to `shareScopeAllows` |
 | Operator's proxied host | everything `local` gets, after an Access token | same | `isProxiedTrustedHost` (`host-guard.ts:255`) |
@@ -96,7 +96,7 @@ back is the way in: flip it from the box or the tailnet.
 `CW_REQUIRE_SIGNIN_TO_WRITE` defaults **on** — `signInToWriteFromEnv`
 (`middleware/write-gate.ts:52`) treats unset and every misspelling as on, and
 only `0`/`false`/`no`/`off` turn it off. `bin.ts:241` reads it and
-`server.ts:4805` defaults it to `true` when the option is absent.
+`server.ts:4807` defaults it to `true` when the option is absent.
 
 The predicate is keyed on **method**, not on a route list
 (`isGatedWrite`, `write-gate.ts:195`): every mutating route is a non-GET, so
@@ -139,7 +139,7 @@ handshake. Anyone adding a third has to do the same; nothing will catch it.
 `POST /api/docs`, `POST /api/workspaces` with a `folderPath`, and
 `POST /api/workspaces/<id>/import-tasks` turn a host path into content this
 server reads and serves. All three answer `browser_cannot_bind` to any
-browser, on any origin, signed in or not (`server.ts:6370`, `:6629`, `:7592`;
+browser, on any origin, signed in or not (`server.ts:6446`, `:6705`, `:7676`;
 body from `browserCannotBindBody`, `write-gate.ts:225`). This closes the
 page-on-this-machine hole — a dev server on another local port passes the
 origin policy — not a determined agent.
@@ -185,7 +185,7 @@ set, and `/signin`, `/api/auth/session` and `/api/auth/start` all answer
 `403 out_of_share_scope` on the share host.
 
 An Access-fronted share or collab host is unaffected: `provenIdentityFor`
-(`server.ts:5149`) turns the verified Access email into an identity, so those
+(`server.ts:5168`) turns the verified Access email into an identity, so those
 visitors still write. This gap is link mode only, and it is a product
 decision — whether an invited reviewer must hold an account — not a bug with
 an obvious fix.
@@ -202,7 +202,7 @@ an obvious fix.
 | Postmark server token | Keychain `postmark-api-token` | `auth/postmark-code-sender.ts:142` |
 | Cloudflare API token | Keychain `cloudflare-api-token` | `bin.ts:445` |
 | Share URL-signing key | `<dataDir>/share-url.key`, mode 600 | `share/url-signing.ts:38` |
-| Session / share cookie key | `<dataDir>/share-cookie.key`, mode 600 | `share/link-session.ts:28` |
+| Session / share cookie key | `<dataDir>/share-cookie.key`, mode 600 | `share/link-session.ts:29` |
 | Recall webhook secret | `RECALL_WEBHOOK_SECRET` env | `bin.ts:589` |
 
 Keychain reads go through `readKeychainPassword` / `readKeychainAccountPassword`
@@ -233,17 +233,26 @@ the service log could complete a sign-in for any address they could start a
 challenge for, `CW_OWNER_EMAIL` included. The flag is a development
 convenience and the masked line names it.
 
-## The three signed-token schemes
+## The three signed-token schemes, one signing module
 
 All three are HMAC-SHA256 over a dotted payload with a timing-safe compare,
-and all three derive from the same key file under different domain strings so
-one format can never verify as another.
+and that construction lives once in `auth/signed-token.ts:114`. Each scheme
+contributes only a `TokenFormat` — its key domain, its version tags, how its
+claims become a payload and back, and when it expires — so no scheme owns a
+copy of the algorithm.
 
-| Scheme | Carries | Verifier |
+| Scheme | Carries | Format |
 |---|---|---|
-| Share link-session cookie `lf_share` | shareId only — no expiry, so revocation is immediate | `share/link-session.ts:51` |
-| Auth session cookie `cw_session` | identityId, sessionId, issuedAt; `v2` never expires, ends by revocation | `auth/session.ts:95` |
-| Widget popup token | identityId, sessionId, session issuedAt, own expiry, and the one page origin | `auth/widget-token.ts:95` |
+| Share link-session cookie `lf_share` | shareId only — no expiry, so revocation is immediate | `share/link-session.ts:54` |
+| Auth session cookie `cw_session` | identityId, sessionId, issuedAt; `v2` never expires, ends by revocation | `auth/session.ts:84` |
+| Widget popup token | identityId, sessionId, session issuedAt, own expiry, and the one page origin | `auth/widget-token.ts:69` |
+
+They share one key file and separate on the key derived from it
+(`auth/signed-token.ts:92`). The auth session and the widget token each
+derive under their own domain string. The **share cookie signs with the key
+file's own bytes** — it predates domain separation and its cookies are in
+browsers, so that is a wire lock rather than an omission, and what keeps it
+apart from the others is that neither of their keys is this one.
 
 The share **URL** signature is a fourth, different thing: an HMAC over
 `<id>.<exp>` verified independently by the edge Worker and by the server
@@ -253,15 +262,17 @@ The widget token is narrower than the cookie it borrows from: it only
 attributes, it expires on its own (`WIDGET_TOKEN_TTL_MS`, seven days), every
 use is re-checked against the live session's revocation state, and it is
 accepted only from a request whose `Origin` matches the origin signed into it
-(`server.ts:5517`).
+(`server.ts:5556`).
 
-The code-health audit's coupling row proposes folding these into one signing
-module. They already share a key file and a construction; what they do not
-share is a single place to change the algorithm.
+The wire format is frozen: cookies minted before the schemes were folded
+together are in browsers and share links are in the wild.
+`test/signed-token-compat.test.ts` keeps a verbatim copy of each old mint
+path and asserts both directions against the shipping code, so a change to
+any payload shape fails there rather than in the field.
 
 ## Deploy, refresh and webhook surfaces
 
-`POST /api/deploy` (`server.ts:10091`) is the narrowest route on the server.
+`POST /api/deploy` (`server.ts:10181`) is the narrowest route on the server.
 It refuses share visitors, refuses when no deployer is configured, requires a
 **loopback peer address** (checked on `server.requestIP`, not the
 client-controlled `Host` header), and then refuses any request carrying
@@ -269,7 +280,7 @@ client-controlled `Host` header), and then refuses any request carrying
 from 127.0.0.1. `GET /api/deploy` stays at trusted-local: reporting what
 already happened cannot restart anything.
 
-`POST /api/plugin/refresh` (`server.ts:9996`) is the same shape one notch
+`POST /api/plugin/refresh` (`server.ts:10080`) is the same shape one notch
 wider: trusted-local rather than loopback, because a refresh interrupts
 nobody, plus the same `cf-ray` refusal.
 
@@ -282,7 +293,7 @@ machine-local hostname on any port; a local dev origin is same-site with this
 server, so a session cookie rides along; and `cf-ray` is absent on a request
 that never went through the edge.
 
-`POST /recall/status` (`server.ts:6129`) answers `404 not_found` on every host
+`POST /recall/status` (`server.ts:6168`) answers `404 not_found` on every host
 unless `RECALL_WEBHOOK_SECRET` is set — the signature is the route's only
 credential, so without one there is no door to knock on. It then verifies a
 Svix signature over `${id}.${timestamp}.${body}` with a five-minute tolerance
