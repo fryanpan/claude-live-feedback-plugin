@@ -785,3 +785,27 @@ archive the section when the row is archived.
   shape. Pinned in a test beside the pill's shape rather than "fixed".
 - **Receipts explain a wait** — both floats read the lead banner's answer.
 
+## 2026-09-02 — Browser writes need a signed-in person by default; the widget carries its own sign-in
+
+Owner decision on the security row: *"flip on and add widget sign in"*.
+`requireSignInToWrite` defaults ON in `bin.ts` and `createServer`;
+`CW_REQUIRE_SIGNIN_TO_WRITE=0` is the off switch. Reads are untouched, agents
+are untouched (the gate keys on the headers only browsers send).
+
+- **The widget offers the popup-token handshake on every embed once the
+  workspace says it must** — asked with one `GET /api/auth/session` on load,
+  and again off a `sign_in_required` refusal. Chosen over "require
+  `auth-offer`" because the flag's whole reason for staying off was that a
+  plain embed had no way to sign in; over a link to `/signin` because a
+  cookie set on the workspace origin never reaches a dev server's origin.
+  `auth-offer` keeps its meaning: offer even on an open workspace.
+- **The refused draft is posted by the sign-in, not by a second click.** The
+  composer keeps the text, says why, and carries the Sign in control;
+  the token's arrival re-runs the post. A cancelled draft is not posted.
+- **The token stays in the host page's storage**, which is the exposure the
+  earlier "dev-only" note described. Not changed: a workspace that requires
+  sign-in has chosen "every comment names its author"; the embedding skill
+  says where not to embed.
+- **The bundle budget held at 40 KB gzipped** by removing no-op
+  `type="button"` attributes and try/catch wrappers rather than raising it.
+
