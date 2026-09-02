@@ -110,7 +110,7 @@ function suggestionAuthor(): { id: string; name: string; color: string } {
  * bundle than the deploy source would install. A second literal would be a
  * fourth version site, and this file's history is that version sites drift.
  */
-const PLUGIN_VERSION = '0.1.142';
+const PLUGIN_VERSION = '0.1.143';
 
 /**
  * One nonce per PROCESS, minted at module load and sent on every attach.
@@ -351,7 +351,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     {
       name: 'list_docs',
       description:
-        'List review docs currently registered on the server. Pass workspaceId to scope the list to one workspace (hub board or review id) — omit it to list every doc on the server.',
+        'List review docs registered on the server — ONE PAGE at a time. The default answer is the 50 most recently active docs as compact rows (docId, title, type, sourceUrl, relPath, setId, boardId, timestamps, thread counts, reviewUrl) plus `nextCursor`; pass it back as `cursor` for the next page, and stop when it is null. It is never the whole server: the unscoped dump ran to several megabytes. Narrow with `workspaceId`, `kind`, `query` (case-insensitive substring over title / docId / alias / relPath / sourceUrl — the cheap way to ask "is this file under review?"), or `sourcePrefix`. `full: true` swaps the compact row for the whole doc meta on that page; walk the cursor with `full: true` and `limit: 500` when you really need everything.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -359,6 +359,33 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
             type: 'string',
             description:
               'Only docs in this workspace. Matches hub-board membership and the reviewId folder binds / diff reviews stamp on their members. An unknown id returns an empty list.',
+          },
+          kind: {
+            type: 'string',
+            enum: ['markdown', 'mockup', 'code', 'diff', 'workspace'],
+            description: 'Only docs of this type.',
+          },
+          query: {
+            type: 'string',
+            description:
+              'Case-insensitive substring matched against title, docId, alias, relPath and sourceUrl. A file basename finds the doc bound to that file.',
+          },
+          sourcePrefix: {
+            type: 'string',
+            description: 'Only docs whose sourceUrl or relPath starts with this path.',
+          },
+          limit: {
+            type: 'number',
+            description: 'Rows per page, 1–500. Default 50.',
+          },
+          cursor: {
+            type: 'string',
+            description: 'The `nextCursor` from the previous page. Omit for the first page.',
+          },
+          full: {
+            type: 'boolean',
+            description:
+              'Return the whole doc meta for each row on this page (bind configuration, diff fields, owner, provenance) instead of the compact row. Default false.',
           },
         },
       },
@@ -2369,12 +2396,36 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
     await maybeAutoWatch(name, a);
     switch (name) {
       case 'list_docs': {
-        // The param has to reach the wire: this handler used to issue a bare
-        // GET, so a caller's workspaceId was accepted and silently dropped —
-        // a board-scoped question answered with the whole server.
-        const { workspaceId } = a as { workspaceId?: string };
-        const qs = workspaceId ? `?workspaceId=${encodeURIComponent(workspaceId)}` : '';
-        const res = await http('GET', `/api/docs${qs}`);
+        // Every param has to reach the wire: this handler used to issue a
+        // bare GET, so a caller's workspaceId was accepted and silently
+        // dropped — a board-scoped question answered with the whole server.
+        //
+        // `limit` is ALWAYS sent. Its presence is what puts the route into
+        // paged mode (compact rows, a cursor); without it the route answers
+        // the legacy whole-server dump for REST callers, and that dump —
+        // 7.4 MB on 2026-09-01, pretty-printed here on the way through — is
+        // exactly what a fresh session's first tool call must never be.
+        const { workspaceId, kind, query, sourcePrefix, limit, cursor, full } = a as {
+          workspaceId?: string;
+          kind?: string;
+          query?: string;
+          sourcePrefix?: string;
+          limit?: number;
+          cursor?: string;
+          full?: boolean;
+        };
+        const params = new URLSearchParams();
+        if (workspaceId) params.set('workspaceId', workspaceId);
+        if (kind) params.set('kind', kind);
+        if (query) params.set('query', query);
+        if (sourcePrefix) params.set('sourcePrefix', sourcePrefix);
+        params.set(
+          'limit',
+          String(typeof limit === 'number' && limit > 0 ? Math.min(Math.floor(limit), 500) : 50),
+        );
+        if (cursor) params.set('cursor', cursor);
+        if (full) params.set('full', '1');
+        const res = await http('GET', `/api/docs?${params.toString()}`);
         return ok(res);
       }
       case 'list_threads': {
