@@ -118,23 +118,49 @@ made the two files import each other.
 
 Layer: services, with `task-row.ts` in domain. Final directory: `board/`.
 
-## A3 · the doc stores
+## A3 · the doc stores — DONE
 
-| File | Becomes | Moves | Importers | Effort |
-|---|---|---|---|---|
-| `rooms.ts` (6,314) | `doc-edit-ops.ts` (~1000) | `setDocContent`, `findAndReplace`, `createSuggestion`, `deleteSection` | none — `Rooms` delegates | L |
-| | `doc-threads.ts` (~1200) | `postComment`, `resolve`, `reanchor`, `listThreads` | none | |
-| | `rooms-workspaces.ts` (~1100) | `buildWorkspaceTree`, `archiveReview`, `attachFile` | none | |
-| `binds.ts` (986) | `bind-diff.ts` (~350) | `bindDiff` and its browse and working-tree modes | `server.ts` import line only | M |
-| | `workspace-refresh.ts` (~350) | `refreshWorkspace`, `setWorkspaceGroups`, `refreshDiffMeta`, `writeMeta` | `server.ts` import line only | |
+| File | Became | Moved | Measured |
+|---|---|---|---|
+| `rooms.ts` (6,314) | `doc-edit-ops.ts` | `setDocContent`, `findAndReplace`, the suggestion verbs, the anchored inserts and deletes, `autoReanchor` | 463 (est. ~1000) |
+| | `doc-threads.ts` | `postComment`, `resolve`, `reopen`, `reanchor`, `listThreads`, and the review payload a thread carries | 755 (est. ~1200) |
+| | `rooms-workspaces.ts` | `buildWorkspaceTree`, the grouped diff and all-files views, `openContextFile`, `archiveReview`, `archiveDoc` | 1,040 (est. ~1100) |
+| `binds.ts` (986) | `bind-meta.ts` | `BindHost`, `memberDocId`, `writeMeta`, `setStaleFlag`, `setGroupMeta`, `refreshDiffMeta` | 225 (not planned) |
+| | `bind-diff.ts` | `bindDiff` and its browse and working-tree modes | 399 (est. ~350) |
+| | `workspace-refresh.ts` | `refreshWorkspace`, `setWorkspaceGroups` | 341 (est. ~350) |
 
-Five commits. The room lifecycle — `getOrCreate`, `evictIdleRooms`, `flush`
-and the file bindings — stays in `rooms.ts`; it is what the three extractions
-are operations on. `refreshWorkspace` must keep the explicit-wins precedence
-rule: a group-less refresh once overwrote agent-supplied groups because
-"refresh derived fields" treated them as derived.
+`rooms.ts` ends at **4,801** from 6,314 and `binds.ts` at **112**, which takes
+it off the over-limit list entirely. Six commits, one per file. Every
+importer's line is unchanged: `Rooms` keeps its public surface through
+forwarders, and `binds.ts` re-exports what moved under the names it published.
 
-Layer: services. Final directory: `docs/`.
+**`attachFile` did not move, and the plan was wrong to group it with the
+workspace surface.** It is the head of the file-binding machinery — the mtime
+poll, the debounced write-back, the conflict reconcile, the home guard — and
+every path in it reaches into the room's `ydoc` and its persist timers. That
+is the next seam in `rooms.ts` (`file-binding.ts`, ~900 lines), and it needs a
+room handle designed for it rather than a line range.
+
+**The plan's binds.ts split was not possible as written.** `bindDiff` and
+`refreshWorkspace` both call the same small meta writers, and `refreshWorkspace`
+calls `bindDiff` itself, so splitting them two ways would have made the two
+files import each other. `bind-meta.ts` is the leaf that makes the split legal:
+the writers and the `BindHost` slice moved there first, in their own commit, and
+both flows are written in its terms.
+
+Two things stayed with `rooms.ts` deliberately. The summary machinery
+(`backfillSummaries`, `applyThreadSummary`, `scheduleSummary`) reads the room
+map, the doc index and the eviction rules, which are the lifecycle's own
+concern. `bindFolder` stayed in `binds.ts` because it is now a translation of
+`bindDiff` in browse mode, and moving it would have left the file as nothing
+but re-exports.
+
+`isHubOwnedRoom` moved to `doc-ids.ts` rather than into any of the new files:
+it reads `HUB_ROOM_PREFIXES` and both `rooms.ts` and the workspace surface ask
+it, so the alternative was a value cycle. It sits one line from
+`isReservedDocId`, which answers the neighbouring question off the same list.
+
+Layer: services, unchanged.
 
 ## A4 · boot and composition
 
