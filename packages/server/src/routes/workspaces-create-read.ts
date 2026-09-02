@@ -254,6 +254,25 @@ export async function handleWorkspaceCreateRead(
     // each agent's head; the counts are what make the list answer
     // "where is the open work" without a second call per goal.
     const capView = parallelismCapView(workspaceId);
+    // Who moved the cap, given to a visitor the way every other visitor
+    // surface gives an actor: name and kind, no id. The SAME change over
+    // their SSE feed is already reduced by `displayActor`
+    // (redactHubEventForVisitor), and the transport and the surface have
+    // to agree about the same fact — an id here is one the neighbouring
+    // `retiredBy` redaction exists to strip. The local surface keeps the
+    // full actor.
+    const capLastChange =
+      capView?.lastChange === undefined
+        ? undefined
+        : visitor
+          ? {
+              ...capView.lastChange,
+              actor: {
+                name: capView.lastChange.actor.name,
+                kind: capView.lastChange.actor.kind,
+              },
+            }
+          : capView.lastChange;
     return j(200, {
       workspace,
       // How many builders the board may run and how many it is running,
@@ -268,7 +287,7 @@ export async function handleWorkspaceCreateRead(
               free: capView.free,
               // Who moved it last, when, from what — so a lowered cap
               // is a fact with an author, not a mystery.
-              ...(capView.lastChange !== undefined ? { lastChange: capView.lastChange } : {}),
+              ...(capLastChange !== undefined ? { lastChange: capLastChange } : {}),
             },
           }
         : {}),
