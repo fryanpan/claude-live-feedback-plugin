@@ -64,8 +64,17 @@ const PACKAGES: Record<string, Runner> = {
   server: 'bun',
 };
 
-/** Entrypoints and declaration files: a process's `main`, not a unit. */
-const EXCLUDED = /(?:\.test\.tsx?|\.d\.ts|\/bin\.ts|\/migrate-review-queue\.ts)$/;
+/**
+ * Entrypoints and declaration files: a process's `main`, not a unit.
+ *
+ * `server-deps.ts` is the other half of `bin.ts`'s main. Every line in it
+ * constructs a REAL adapter — the Keychain read, the metered transcription
+ * session, this machine's plugin cache, the launchd restart — which is the one
+ * thing no test may do; that seam is the reason the file exists. Its sibling
+ * `server-config.ts` is deliberately NOT here: it is a pure read of env and
+ * argv, so it is tested like anything else.
+ */
+const EXCLUDED = /(?:\.test\.tsx?|\.d\.ts|\/bin\.ts|\/server-deps\.ts|\/migrate-review-queue\.ts)$/;
 
 export type FileCoverage = { file: string; found: number; hit: number; neverImported: boolean };
 export type PackageCoverage = {
