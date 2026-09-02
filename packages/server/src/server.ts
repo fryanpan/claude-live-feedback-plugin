@@ -307,6 +307,7 @@ import {
   LEGACY_REVIEW_ITEM_ID,
   PARALLELISM_CAP_MAX,
   PARALLELISM_CAP_MIN,
+  type ParallelismCapChange,
   type Task,
   type TaskEffortEstimate,
   type TaskStatus,
@@ -1776,6 +1777,8 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
         inUse: number;
         free: number;
         holders: Array<{ taskId: string; title?: string; agentName?: string }>;
+        /** Who last moved the cap, when, from what — absent until somebody has. */
+        lastChange?: ParallelismCapChange;
       }
     | undefined => {
     const read = taskStore.parallelismCap(workspaceId);
@@ -1795,8 +1798,23 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
       inUse: holders.length,
       free: Math.max(0, read.value - holders.length),
       holders,
+      ...(read.lastChange !== undefined ? { lastChange: read.lastChange } : {}),
     };
   };
+  /**
+   * The cap as a wake names it: the number and, once somebody has moved it,
+   * who, when and from what. Both nudgers put this beside the rows they hold
+   * for the cap, so "held for the parallelism cap" and "set by X 2h ago" land
+   * in the same sentence rather than sending the lead to find out.
+   */
+  const capSummary = (read: {
+    cap?: number;
+    value?: number;
+    lastChange?: ParallelismCapChange;
+  }): { value: number; lastChange?: ParallelismCapChange } => ({
+    value: read.cap ?? read.value ?? DEFAULT_PARALLELISM_CAP,
+    ...(read.lastChange !== undefined ? { lastChange: read.lastChange } : {}),
+  });
 
   /** One sentence naming who holds the slots, for a refusal or a note. */
   const holdersClause = (
@@ -2970,7 +2988,8 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
     // module doc on `HoldReason` in ready-gate.ts). Priority order is
     // `verdict.ready`'s own, so trimming to `available` slots keeps exactly
     // the top-ranked rows a lead would actually be told to dispatch.
-    const available = parallelismCapView(workspace.id)?.free ?? DEFAULT_PARALLELISM_CAP;
+    const capView = parallelismCapView(workspace.id);
+    const available = capView?.free ?? DEFAULT_PARALLELISM_CAP;
     const ready = verdict.ready.slice(0, available);
     const capacityHeld = verdict.ready.length - ready.length;
     return {
@@ -2981,6 +3000,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
       considered: verdict.considered,
       held: verdict.held,
       ...(capacityHeld > 0 ? { capacityHeld } : {}),
+      ...(capView ? { parallelismCap: capSummary(capView) } : {}),
       undetermined: verdict.undetermined,
       // The store's durable half of the idle clock. Survives a restart, which
       // the in-process observations cannot — see ready-nudge.ts.
@@ -3330,6 +3350,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
   }
   const stallSnapshot = (workspace: HubWorkspace): StallSnapshot => {
     const verdict = stallVerdict(workspace);
+    const capRead = taskStore.parallelismCap(workspace.id);
     // Review items the quality gate is holding past the window — a fourth
     // finding beside the three the gate computes. Read off the store rather
     // than through the classifier, because a held item is not a row's state:
@@ -3368,6 +3389,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
       considered: verdict.considered,
       undetermined: verdict.undetermined,
       ...(verdict.beyondCapacity > 0 ? { beyondCapacity: verdict.beyondCapacity } : {}),
+      ...(capRead ? { parallelismCap: capSummary(capRead) } : {}),
       ...(held.length > 0 ? { held } : {}),
     };
   };
@@ -6814,6 +6836,9 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
                     isDefault: capView.isDefault,
                     inUse: capView.inUse,
                     free: capView.free,
+                    // Who moved it last, when, from what — so a lowered cap
+                    // is a fact with an author, not a mystery.
+                    ...(capView.lastChange !== undefined ? { lastChange: capView.lastChange } : {}),
                   },
                 }
               : {}),
@@ -7454,6 +7479,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
               value: capView.cap,
               isDefault: capView.isDefault,
               default: capView.default,
+              ...(capView.lastChange !== undefined ? { lastChange: capView.lastChange } : {}),
             },
             dispatchesInUse: capView.inUse,
             ...(notesHome ? { notesHome } : {}),

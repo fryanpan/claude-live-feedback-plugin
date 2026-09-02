@@ -281,10 +281,29 @@ export const PARALLELISM_CAP_MIN = 1;
  *  is starving other work, not a guess at anyone's real ceiling. */
 export const PARALLELISM_CAP_MAX = 50;
 
+/** What `parallelismCap()` answers: the effective number, whether it is the
+ *  shipped default, and — once somebody has moved it — who did, when, and
+ *  from what. */
+export interface ParallelismCapRead {
+  value: number;
+  isDefault: boolean;
+  lastChange?: ParallelismCapChange;
+}
+
 export interface WorkspaceGoal {
   id: string;
   title: string;
   dueAt?: number;
+}
+
+/** One move of a board's parallelism cap. `from` and `to` are the EFFECTIVE
+ *  numbers — a clear back to the default records the default as `to`, so a
+ *  reader never has to know what "unset" meant on the day. */
+export interface ParallelismCapChange {
+  actor: TaskActor;
+  ts: number;
+  from: number;
+  to: number;
 }
 
 /**
@@ -402,6 +421,15 @@ export interface HubWorkspace {
    * are the ordinary case.
    */
   parallelismCap?: number;
+  /**
+   * The LAST time the cap moved: who, when, from what, to what. The full
+   * history is the `workspace.parallelism_cap_changed` rows in the board's
+   * events log; this is the one row `get_workspace`, the settings panel and
+   * the two nudges read without scanning it. Absent on a board nobody has
+   * ever asked — a moved cap is never a mystery, an unmoved one needs no
+   * story.
+   */
+  parallelismCapLastChange?: ParallelismCapChange;
   /**
    * Where this board's planning/discussion notes get checked in: a repo +
    * branch + directory, from which `POST /api/docs` derives a file (and a
@@ -2196,6 +2224,18 @@ export interface WorkspaceRenamedEvent {
   ts: number;
 }
 
+/**
+ * The board's parallelism cap moved. Emitted from the one store method both
+ * REST routes (the cap's own address and the settings panel's) call, so the
+ * events log carries every change whichever door it came through — and
+ * carries it forever: the log is append-only, which is what makes "who moved
+ * it last week" answerable after the record on the workspace has moved on.
+ */
+export interface WorkspaceParallelismCapChangedEvent extends ParallelismCapChange {
+  type: 'workspace.parallelism_cap_changed';
+  workspaceId: string;
+}
+
 export interface WorkspaceGoalsChangedEvent {
   type: 'workspace.goals_changed';
   workspaceId: string;
@@ -2379,6 +2419,7 @@ export type TaskStoreEvent =
   | WorkspaceRetiredChangedEvent
   | WorkspaceRenamedEvent
   | WorkspaceGoalsChangedEvent
+  | WorkspaceParallelismCapChangedEvent
   | AgentAttachedEvent
   | AgentDetachedEvent
   | AgentHeartbeatEvent
@@ -5276,13 +5317,17 @@ export class TaskStore {
    * `reviewItemCriteria` above. `undefined` for a board that does not exist —
    * distinct from a board on the default.
    */
-  parallelismCap(workspaceId: string): { value: number; isDefault: boolean } | undefined {
+  parallelismCap(workspaceId: string): ParallelismCapRead | undefined {
     const state = this.workspaces.get(workspaceId);
     if (!state) return undefined;
     const own = state.workspace.parallelismCap;
-    return own !== undefined
-      ? { value: own, isDefault: false }
-      : { value: DEFAULT_PARALLELISM_CAP, isDefault: true };
+    const lastChange = state.workspace.parallelismCapLastChange;
+    return {
+      ...(own !== undefined
+        ? { value: own, isDefault: false }
+        : { value: DEFAULT_PARALLELISM_CAP, isDefault: true }),
+      ...(lastChange !== undefined ? { lastChange } : {}),
+    };
   }
 
   /**
@@ -5291,21 +5336,42 @@ export class TaskStore {
    * board event, the same contract as `setReviewItemCriteria`: the next
    * `register_dispatch` call reads it. The caller (the settings route)
    * validates the range; this stores it.
+   *
+   * Unlike the prompt settings it IS audited: when the effective number
+   * moves, the change is stamped on the workspace (`parallelismCapLastChange`)
+   * and emitted as `workspace.parallelism_cap_changed`, so the events log
+   * keeps every move. A write that leaves the effective cap where it was —
+   * setting the default's own number, clearing an unset cap — records
+   * nothing: `changed: false` says so, and no phantom "moved" row appears.
    */
   setParallelismCap(
     workspaceId: string,
     cap: number | undefined,
-    _opts: { actor: { id: string; name: string; kind?: string } },
+    opts: { actor: { id: string; name: string; kind?: string } },
   ):
-    | { ok: true; workspace: HubWorkspace; parallelismCap: { value: number; isDefault: boolean } }
+    | { ok: true; changed: boolean; workspace: HubWorkspace; parallelismCap: ParallelismCapRead }
     | { ok: false; error: 'workspace-not-found' } {
     const state = this.workspaces.get(workspaceId);
     if (!state) return { ok: false, error: 'workspace-not-found' };
+    const from = state.workspace.parallelismCap ?? DEFAULT_PARALLELISM_CAP;
+    const to = cap ?? DEFAULT_PARALLELISM_CAP;
     state.workspace.parallelismCap = cap;
+    const changed = from !== to;
+    if (changed) {
+      const change: ParallelismCapChange = {
+        actor: { id: opts.actor.id, name: opts.actor.name, kind: classifyActor(opts.actor) },
+        ts: Date.now(),
+        from,
+        to,
+      };
+      state.workspace.parallelismCapLastChange = change;
+      this.emit({ type: 'workspace.parallelism_cap_changed', workspaceId, ...change });
+    }
     this.scheduleSave(workspaceId);
     const read = this.parallelismCap(workspaceId);
     return {
       ok: true,
+      changed,
       workspace: state.workspace,
       parallelismCap: read ?? { value: DEFAULT_PARALLELISM_CAP, isDefault: true },
     };
