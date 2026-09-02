@@ -848,7 +848,10 @@ export interface TaskCaptureBoard {
    * without it an actionable request files to chores, owned by the
    * assistant, which is on the board but not in any goal.
    */
-  placeSpinoff?(workspaceId: string): { goal: string; leadAgentId?: string } | undefined;
+  placeSpinoff?(
+    workspaceId: string,
+    opts?: { docId?: string },
+  ): { goal: string; leadAgentId?: string } | undefined;
 }
 
 /**
@@ -1077,7 +1080,9 @@ function fileSpokenTask(
   // the lead as owner, so the row is dispatched rather than sitting in
   // chores under the assistant's name (Bryan, 2026-09-01: "created in
   // Backlog and not automatically started").
-  const placed = actionable ? deps.board.placeSpinoff?.(input.workspaceId) : undefined;
+  const placed = actionable
+    ? deps.board.placeSpinoff?.(input.workspaceId, { docId: input.docId })
+    : undefined;
   const parsed = parseTaskCreate(
     {
       title: item.title,
@@ -1161,7 +1166,9 @@ function fileResearchAsk(
   // Placed like every other spin-off (the board's top active band), not
   // left to the store's chores default — which the board draws as Backlog,
   // the very column Bryan found his rows in.
-  const placed = readyToWork(title) ? deps.board.placeSpinoff?.(input.workspaceId) : undefined;
+  const placed = readyToWork(title)
+    ? deps.board.placeSpinoff?.(input.workspaceId, { docId: input.docId })
+    : undefined;
   const parsed = parseTaskCreate(
     {
       title,

@@ -8,9 +8,9 @@
  * The pointer pill's Create Task filed rows into chores, owned by whoever
  * tapped, and the lead's dispatch never read them.
  *
- * The rule, in order: the originating task's goal (a huddle records no
- * task yet, so this step is documented and skipped), the board's top ACTIVE
- * goal, else chores. Owner: the lead when the seat is held, else the
+ * The rule, in order: the goal of the task the doc BELONGS TO (a huddle
+ * started for a task links the doc onto it), the board's top ACTIVE goal,
+ * else chores. Owner: the lead when the seat is held, else the
  * author keeps it — never "unowned at triage", which is the unplaced row
  * this exists to prevent. Status: todo. Fixtures synthetic; port 0.
  */
@@ -89,6 +89,95 @@ describe('TaskStore.placeSpinoff', () => {
 
   it('answers nothing for a board that does not exist', () => {
     expect(store.placeSpinoff('w-nope')).toBeUndefined();
+  });
+
+  it('the goal of the task the doc belongs to comes before the top band', () => {
+    const ws = store.createWorkspace('Owned', { leadAgentId: 'agent-helper' });
+    const G = seedGoals(
+      store,
+      ws.id,
+      [
+        { key: 'top', title: 'Ship the pill' },
+        { key: 'lower', title: 'Ship the strip' },
+      ],
+      PERSON,
+    );
+    const owner = store.createTask(ws.id, {
+      title: 'Plan the strip',
+      goal: G.lower,
+      actor: PERSON,
+    });
+    if (!owner.ok) throw new Error('create refused');
+    // The link the huddle route writes when started for a task.
+    expect(store.linkRef(owner.task.id, { kind: 'doc', docId: 'd-owned' }).ok).toBe(true);
+    expect(store.placeSpinoff(ws.id, { docId: 'd-owned' })).toEqual({
+      goal: G.lower,
+      rule: 'originating-task',
+      taskId: owner.task.id,
+      leadAgentId: 'agent-helper',
+    });
+    // Control: any other doc still takes the top band.
+    expect(store.placeSpinoff(ws.id, { docId: 'd-other' })?.goal).toBe(G.top);
+  });
+
+  it('a row spun off the doc is its child, not its owner — origin does not decide', () => {
+    const ws = store.createWorkspace('Children');
+    const G = seedGoals(
+      store,
+      ws.id,
+      [
+        { key: 'top', title: 'Ship the pill' },
+        { key: 'lower', title: 'Ship the strip' },
+      ],
+      PERSON,
+    );
+    const child = store.createTask(ws.id, {
+      title: 'Check the mockup route',
+      goal: G.lower,
+      origin: { kind: 'doc', docId: 'd-huddle' },
+      actor: PERSON,
+    });
+    if (!child.ok) throw new Error('create refused');
+    expect(store.placeSpinoff(ws.id, { docId: 'd-huddle' })).toEqual({
+      goal: G.top,
+      rule: 'top-active-goal',
+    });
+  });
+
+  it('a done owner, one at triage, or one in chores lends no band — the rule falls through', () => {
+    const ws = store.createWorkspace('Spent');
+    const G = seedGoals(
+      store,
+      ws.id,
+      [
+        { key: 'top', title: 'Ship the pill' },
+        { key: 'lower', title: 'Ship the strip' },
+      ],
+      PERSON,
+    );
+    const done = store.createTask(ws.id, { title: 'Shipped it', goal: G.lower, actor: PERSON });
+    if (!done.ok) throw new Error('create refused');
+    store.linkRef(done.task.id, { kind: 'doc', docId: 'd-spent' });
+    store.transition(done.task.id, 'in-progress', { actor: PERSON });
+    store.transition(done.task.id, 'done', { actor: PERSON });
+    expect(store.placeSpinoff(ws.id, { docId: 'd-spent' })?.rule).toBe('top-active-goal');
+    const proposed = store.createTask(ws.id, {
+      title: 'Someday',
+      fileToTriage: true,
+      actor: PERSON,
+    });
+    if (!proposed.ok) throw new Error('create refused');
+    store.linkRef(proposed.task.id, { kind: 'doc', docId: 'd-proposed' });
+    expect(store.placeSpinoff(ws.id, { docId: 'd-proposed' })?.rule).toBe('top-active-goal');
+    // Backlog is where the rule ends, never where it starts.
+    const chore = store.createTask(ws.id, {
+      title: 'Tidy up',
+      goal: CHORES_GOAL_ID,
+      actor: PERSON,
+    });
+    if (!chore.ok) throw new Error('create refused');
+    store.linkRef(chore.task.id, { kind: 'doc', docId: 'd-chore' });
+    expect(store.placeSpinoff(ws.id, { docId: 'd-chore' })?.goal).toBe(G.top);
   });
 });
 
@@ -195,6 +284,43 @@ describe('POST /api/workspaces/:id/tasks with spinoff: true', () => {
     expect(r.task.status).toBe('triage');
     expect(r.task.goal).toBe(G.top);
     expect(r.task.assignee).toBe('agent-helper');
+  });
+
+  it('a row spun off a huddle started FOR a task joins that task’s band', async () => {
+    const ws = await board('For a task', 'agent-helper');
+    const G = await seedGoalsOverHttp(
+      base,
+      ws,
+      [
+        { key: 'top', title: 'Ship the pill' },
+        { key: 'lower', title: 'Ship the strip' },
+      ],
+      PERSON,
+    );
+    const owner = await jj<CreateResponse>(
+      await post(`/api/workspaces/${ws}/tasks`, {
+        title: 'Plan the strip',
+        goal: G.lower,
+        author: PERSON,
+      }),
+    );
+    const huddle = await jj<{ docId: string; taskId?: string }>(
+      await post(`/api/workspaces/${ws}/huddles`, { kind: 'discussion', taskId: owner.task.id }),
+    );
+    expect(huddle.taskId).toBe(owner.task.id);
+    const r = await jj<CreateResponse & { placement: { spinoffTask?: string } }>(
+      await spinoff(ws, { origin: { kind: 'doc', docId: huddle.docId } }),
+    );
+    expect(r.task.goal).toBe(G.lower);
+    expect(r.task.status).toBe('todo');
+    expect(r.task.assignee).toBe('agent-helper');
+    expect(r.placement.spinoff).toBe('originating-task');
+    expect(r.placement.spinoffTask).toBe(owner.task.id);
+    // Control: a spin-off from some other doc on the same board takes the
+    // top band, so the join above is the link's doing.
+    const other = await jj<CreateResponse>(await spinoff(ws));
+    expect(other.task.goal).toBe(G.top);
+    expect(other.placement.spinoff).toBe('top-active-goal');
   });
 
   it('an explicit goal or assignee in the same body wins over the rule', async () => {
