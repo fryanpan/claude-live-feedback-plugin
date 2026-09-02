@@ -82,7 +82,6 @@ export interface SessionClaims {
  * does not have and which the caller checks.
  */
 export const emailSessionToken: TokenFormat<SessionClaims> = {
-  purpose: 'email-session',
   keyDomain: 'cw-email-session-v1',
   tags: [VERSION, 'v1'],
   encode(claims) {

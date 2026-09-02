@@ -112,6 +112,13 @@ describe('a share visitor reads a projected workspace, not the stored record', (
         })
       ).status,
     ).toBe(200);
+    // Who moved the cap. `lastChange.actor` is a full `{id, name, kind}`
+    // in the store, and this is the third host-describing value the read
+    // has to project — the SSE feed already reduces the same actor.
+    expect(
+      (await put(`/api/workspaces/${workspaceId}/parallelism-cap`, { cap: 2, author: OWNER }))
+        .status,
+    ).toBe(200);
     expect(
       (
         await put(`/api/workspaces/${workspaceId}/retired`, {
@@ -150,9 +157,15 @@ describe('a share visitor reads a projected workspace, not the stored record', (
     // If this ever stops containing the path, the visitor assertion below is
     // vacuous — it would be proving the absence of something nobody serves.
     expect(text).toContain(repoRoot);
-    const body = JSON.parse(text) as { workspace: { notesHome?: unknown; retiredBy?: unknown } };
+    const body = JSON.parse(text) as {
+      workspace: { notesHome?: unknown; retiredBy?: unknown };
+      parallelismCap?: { lastChange?: { actor?: unknown } };
+    };
     expect(body.workspace.notesHome).toEqual({ repoRoot, branch: 'main', dir: 'docs/notes' });
     expect(body.workspace.retiredBy).toBeTruthy();
+    // And the cap's actor keeps its id here — the same positive-control
+    // role: without this the visitor assertion below proves nothing.
+    expect(body.parallelismCap?.lastChange?.actor).toEqual(OWNER);
   });
 
   it('the visitor read carries no host path and no actor id', async () => {
@@ -162,9 +175,17 @@ describe('a share visitor reads a projected workspace, not the stored record', (
     expect(text).not.toContain(repoRoot);
     expect(text).not.toContain('notesHome');
     expect(text).not.toContain('retiredBy');
+    // The cap's `lastChange.actor` is the one actor left on this payload;
+    // a visitor gets the display half only, exactly as `displayActor`
+    // gives it to them over SSE.
+    expect(text).not.toContain(OWNER.id);
     const body = JSON.parse(text) as {
       workspace: { name: string; goals: unknown[]; id: string; retiredAt?: number };
+      parallelismCap?: { value?: number; lastChange?: { actor?: unknown; to?: number } };
     };
+    expect(body.parallelismCap?.lastChange?.actor).toEqual({ name: OWNER.name, kind: OWNER.kind });
+    // Still a fact with an author and a number — reduced, not blanked.
+    expect(body.parallelismCap?.lastChange?.to).toBe(2);
     // …and it still carries what the board client renders, so the projection
     // is a redaction rather than a blanking.
     expect(body.workspace.name).toBe('search-revamp');
