@@ -6,6 +6,7 @@ import {
   type CodeSendRequest,
   type CodeSender,
   createLogCodeSender,
+  loginCodeLoggingEnabled,
   loginCodeSubject,
   loginCodeText,
 } from '../src/auth/code-sender.ts';
@@ -37,17 +38,46 @@ async function start(base: string, email: string): Promise<Response> {
 }
 
 describe('the log sender', () => {
-  it('prints the code, the recipient, and how long it lasts', async () => {
+  const REQ: CodeSendRequest = {
+    to: 'alice@example.com',
+    code: '424242',
+    expiresInMinutes: 10,
+  };
+
+  // `printCode` is passed explicitly on both sides rather than read from the
+  // environment: `CW_LOG_LOGIN_CODES` is a process-wide variable other suites
+  // in this run set for themselves, so a test that read the default would
+  // pass or fail on which file ran first.
+  it('MASKS the code by default: the recipient and the expiry, never the digits', async () => {
+    // Whoever can read the service log could otherwise complete a sign-in for
+    // any address they can start a challenge for, including the owner's.
     const lines: string[] = [];
-    await createLogCodeSender((l) => lines.push(l)).send({
-      to: 'alice@example.com',
-      code: '424242',
-      expiresInMinutes: 10,
-    });
+    await createLogCodeSender((l) => lines.push(l), { printCode: false }).send(REQ);
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toContain('alice@example.com');
+    expect(lines[0]).toContain('10m');
+    expect(lines[0]).not.toContain('424242');
+    // …and names the flag, so a developer who needs it is one variable away.
+    expect(lines[0]).toContain('CW_LOG_LOGIN_CODES=1');
+  });
+
+  it('prints the code, the recipient, and how long it lasts when asked to', async () => {
+    const lines: string[] = [];
+    await createLogCodeSender((l) => lines.push(l), { printCode: true }).send(REQ);
     expect(lines).toHaveLength(1);
     expect(lines[0]).toContain('alice@example.com');
     expect(lines[0]).toContain('424242');
     expect(lines[0]).toContain('10m');
+  });
+
+  it('reads the flag off the environment when nothing is passed', async () => {
+    // The default's own wiring, exercised through an injected env so it does
+    // not depend on this process's.
+    expect(loginCodeLoggingEnabled({ CW_LOG_LOGIN_CODES: '1' })).toBe(true);
+    expect(loginCodeLoggingEnabled({ CW_LOG_LOGIN_CODES: 'yes' })).toBe(true);
+    expect(loginCodeLoggingEnabled({})).toBe(false);
+    expect(loginCodeLoggingEnabled({ CW_LOG_LOGIN_CODES: '0' })).toBe(false);
+    expect(loginCodeLoggingEnabled({ CW_LOG_LOGIN_CODES: 'maybe' })).toBe(false);
   });
 
   it('is what the server uses when nothing else is passed', async () => {

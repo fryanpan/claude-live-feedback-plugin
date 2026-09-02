@@ -190,6 +190,16 @@ Login codes are never stored in the clear: `auth/email-code.ts` keeps them
 hashed with a per-challenge salt, in memory only, behind per-challenge,
 per-email and per-address limits plus two hourly abuse ceilings.
 
+Nor are they logged. The fallback transport (`auth/code-sender.ts`) is the
+server's default when no sender is passed, and it engages silently on either
+half of a partial email config — `AUTH_EMAIL_FROM` unset, or the Postmark
+token missing from the Keychain — so it is live more often than it looks. It
+records that a code was issued, to whom and for how long, and **masks the code
+itself unless `CW_LOG_LOGIN_CODES=1`**. Without that mask, whoever could read
+the service log could complete a sign-in for any address they could start a
+challenge for, `CW_OWNER_EMAIL` included. The flag is a development
+convenience and the masked line names it.
+
 ## The three signed-token schemes
 
 All three are HMAC-SHA256 over a dotted payload with a timing-safe compare,
