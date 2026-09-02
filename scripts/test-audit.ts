@@ -33,9 +33,19 @@ function gitFiles(...globs: string[]): string[] {
 
 const read = (rel: string): string[] => readFileSync(join(repoRoot, rel), 'utf8').split('\n');
 
-/** A `// timed:` marker on the line or the line above exempts a wait. */
+const COMMENT_LINE = /^\s*(?:\/\/|\*|\/\*)/;
+
+/**
+ * A `// timed:` marker exempts a wait. It may sit on the line itself or
+ * anywhere in the contiguous comment block directly above it, so the marker
+ * can be written next to the sentence that explains the window.
+ */
 function isTimed(lines: string[], i: number): boolean {
-  return /\/\/\s*timed:/.test(lines[i] ?? '') || /\/\/\s*timed:/.test(lines[i - 1] ?? '');
+  if (/\/\/\s*timed:/.test(lines[i] ?? '')) return true;
+  for (let j = i - 1; j >= 0 && COMMENT_LINE.test(lines[j] ?? ''); j--) {
+    if (/timed:/.test(lines[j] ?? '')) return true;
+  }
+  return false;
 }
 
 // 1. Fixed sleeps of 500ms or more in the server suite.
@@ -46,6 +56,8 @@ function fixedSleeps(): Check {
   for (const file of gitFiles('packages/server/test/*.ts')) {
     const lines = read(file);
     lines.forEach((text, i) => {
+      // A sleep NAMED in a comment is prose, not a wait.
+      if (COMMENT_LINE.test(text)) return;
       for (const m of text.matchAll(SLEEP)) {
         const ms = Number(m[1] ?? m[2]);
         if (ms >= 500 && !isTimed(lines, i)) sites.push({ file, line: i + 1, text: text.trim() });
