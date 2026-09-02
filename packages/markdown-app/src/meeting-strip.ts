@@ -344,6 +344,12 @@ export interface MeetingStripOpts {
    * the field shows it as a placeholder-shaped fact rather than a value.
    */
   botNamePrefill?: string;
+  /**
+   * The signed-in person's name, sent on `start` as `participant`: what the
+   * raw transcript attributes an unlabelled turn to. Never a label on the
+   * strip — a solo capture asks the engine for none.
+   */
+  participantName?: string;
   now?: () => number;
   /** Run `fn` every `ms`; returns a canceller. Injectable so the clock is
    *  deterministic in tests. */
@@ -1736,6 +1742,9 @@ export function mountMeetingStrip(opts: MeetingStripOpts): MeetingStripHandle {
           // Absent unless somebody said, so the server's default stays the
           // one place the room size is guessed.
           ...(opts.speakers !== undefined ? { speakers: opts.speakers } : {}),
+          // Who is on this socket, for the raw transcript's attribution of
+          // turns the engine gives no label. Absent when nobody is signed in.
+          ...(opts.participantName ? { participant: opts.participantName } : {}),
           // The server's default, or the address's preference — never a pick
           // made here. A server that has never heard of engines never
           // receives the field, and this frame is byte-for-byte what an
