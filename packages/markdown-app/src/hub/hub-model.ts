@@ -14,13 +14,18 @@ import {
   formatGoalEffortSeconds,
   summarizeGoalEffort,
 } from '@feedback/core/goal-effort';
+import {
+  type DecisionOption,
+  TASK_STATUSES,
+  type TaskReadingTime,
+  type TaskStatus,
+  byBoardOrder,
+} from '@feedback/core/task-wire';
 import { tabTitle } from '../tab-title.ts';
 
-/** `triage` is what a row is before `todo`: an agent filed it and nobody has
- *  vetted it. It keeps its band and its order — the only thing it changes is
- *  that no dispatch read returns it. Goals never carry it (see
- *  `GOAL_STATUS_ORDER`). */
-export type TaskStatus = 'triage' | 'todo' | 'in-progress' | 'done';
+/** The status vocabulary is the server's, spelled once in core; re-exported
+ *  so the hub's own modules keep their one import. */
+export type { TaskStatus };
 
 export interface HubActor {
   name: string;
@@ -42,8 +47,8 @@ export type HubOwnerKind = 'person' | 'agent' | 'unknown';
 
 export interface HubTransition {
   ts: number;
-  from: string;
-  to: string;
+  from: TaskStatus;
+  to: TaskStatus;
   by: HubActor;
   note?: string;
   usage?: { inputTokens: number; outputTokens: number };
@@ -70,11 +75,9 @@ export interface HubNote {
   agent: string;
 }
 
-export interface HubDecisionOption {
-  id: string;
-  label: string;
-  detail?: string;
-}
+/** The same three fields the server stores (`DecisionOption`): an option is
+ *  projected verbatim, so the projection's type IS the wire type. */
+export type HubDecisionOption = DecisionOption;
 
 export interface HubInfoRequest {
   text: string;
@@ -214,7 +217,7 @@ export interface HubTask {
   };
   /** Folded-up human attention on this ticket's body room. Absent means not
    *  measured — never measured at zero. */
-  readingTime?: { totalSeconds: number; sessionCount: number; lastSessionAt: number };
+  readingTime?: TaskReadingTime;
 }
 
 /** A projected review item, as far as the hub reads it. */
@@ -552,10 +555,6 @@ export interface BoardSection {
    * above is filtered: see `boardEffort`.
    */
   effort?: GoalEffortSummary;
-}
-
-function byBoardOrder(a: HubTask, b: HubTask): number {
-  return a.order - b.order || a.createdAt - b.createdAt || a.id.localeCompare(b.id);
 }
 
 // The status trio and the owner ride from the decorated goal onto its section
@@ -2280,7 +2279,7 @@ export function walkNextUrl(chain: string[]): string | null {
  * work moves backwards and skips steps, so the control is a dropdown over all
  * statuses and this array only decides what sits above what.
  */
-export const TASK_STATUS_ORDER: readonly TaskStatus[] = ['triage', 'todo', 'in-progress', 'done'];
+export const TASK_STATUS_ORDER: readonly TaskStatus[] = TASK_STATUSES;
 
 /**
  * The statuses a GOAL may be declared to hold — every one a task may.
