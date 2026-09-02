@@ -256,8 +256,25 @@ throughout — no move needed.
 
 12,042 lines, 158 commits in 90 days. **Effort M.** One PR, two commits.
 
-Landed as planned: `hub.css` (5,347) and `signin.css` (256), leaving
-`styles.css` at 6,467. What differed, and what the work found:
+Landed as planned: `hub.css` (5,364) and `signin.css` (185), leaving
+`styles.css` at 6,545. What differed, and what the work found:
+
+- **Link order is load-bearing, and it is not the obvious one.** The hub
+  block sat about a twelfth of the way into styles.css, so nearly all of that
+  file followed it and won every tie between two rules of equal specificity.
+  The board shell therefore loads `hub.css` FIRST. Loading it last flips
+  about thirty of those ties — `.acti-pill` starts beating `.comment-pill` at
+  430px, a dozen composer surfaces take the board's padding instead of the
+  editor's. Loading it first flips exactly one, the back arrow's hover
+  colour, which a new `.hub-topbar .back-link:hover` rule now pins so no file
+  order decides it. `signin.css` was already at the end, so it loads last.
+- **The read-only bar is not sign-in UI.** `.signin-bar`,
+  `.signin-bar--floating` and `.signin-required-go` live under the sign-in
+  banner but are mounted by the board and the editor, and by no page less
+  than /signin. They went out with signin.css, the notice lost every rule it
+  had on both other pages, and the render comparison caught it — 1,007
+  differing elements. They are back in styles.css under a banner that says
+  what they are.
 
 - **`signin.css` stops at the sign-in block's end, not at EOF.** The
   first-arrival identity prompt sits below it and belongs to the board and

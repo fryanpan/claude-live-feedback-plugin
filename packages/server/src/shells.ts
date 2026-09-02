@@ -263,10 +263,13 @@ export function renderHubShell(
     <link rel="manifest" href="/manifest.webmanifest" />
     <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
     <meta name="theme-color" content="#2e7dd7" />${sentryMeta}
-    <link rel="stylesheet" href="${stylesCss}" />
-    <!-- The board's own rules. Between the two on purpose: this is where they
-         sat when styles.css carried them, so the cascade is unchanged. -->
+    <!-- The board's own rules load FIRST, and the order is load-bearing. The
+         hub block sat about a twelfth of the way into styles.css, so most of
+         that file came AFTER it and won every equal-specificity tie. Loading
+         hub.css last reverses ~30 of those; loading it first reverses one,
+         which a .hub-topbar .back-link:hover rule in hub.css now pins. -->
     <link rel="stylesheet" href="${hubCss}" />
+    <link rel="stylesheet" href="${stylesCss}" />
     <!-- Open Props trial layer — after styles.css on purpose; see
          packages/markdown-app/index.html. -->
     <link rel="stylesheet" href="${tokensCss}" />
