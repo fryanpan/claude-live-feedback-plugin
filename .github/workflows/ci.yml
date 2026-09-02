@@ -34,6 +34,12 @@ jobs:
         run: bun run test
       - name: Leak gate can still see
         run: bun run check:scrub-gate
+      # Every file over 500 lines must have a written verdict in
+      # docs/architecture/exceptions.md. The gate does not judge the verdict —
+      # a queued `Split` passes. What it stops is a NEW god file arriving with
+      # nobody having written down why it is one.
+      - name: Files over 500 lines are accounted for
+        run: bun run loc:audit
       - name: Build widget
         run: bun run build:widget
       - name: Widget bundle size
