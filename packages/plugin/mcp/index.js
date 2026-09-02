@@ -14296,6 +14296,18 @@ function reviewItemHeldLine(p) {
   return `[workspace.review_item_held] your review item ${ask}${on}${ids} was held off the queue by the quality gate${why}.${stood} ${fix}`;
 }
 
+// packages/mcp/src/parallelism-cap.ts
+function parseCapArg(raw) {
+  if (typeof raw === "number" && Number.isInteger(raw) && raw >= 1) {
+    return { ok: true, cap: raw };
+  }
+  const shown = typeof raw === "string" ? JSON.stringify(raw) : String(raw);
+  return {
+    ok: false,
+    error: `cap must be a positive integer — the most builders the board may have dispatched at once (got ${shown}). Pass a number of 1 or more, not a string.`
+  };
+}
+
 // packages/mcp/src/self-authored.ts
 var COMMENT_EVENTS = new Set(["thread.created", "thread.replied"]);
 var STATUS_EVENTS = new Set(["thread.resolved", "thread.reopened"]);
@@ -14519,7 +14531,7 @@ var STATUS_TEXT_MAX = 4000;
 function suggestionAuthor() {
   return { id: AUTHOR.id, name: AUTHOR.name, color: AUTHOR.color };
 }
-var PLUGIN_VERSION = "0.1.144";
+var PLUGIN_VERSION = "0.1.145";
 var PROCESS_ID = randomUUID();
 var server = new Server({
   name: "claude-workspaces",
@@ -16277,6 +16289,22 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
       }
     },
     {
+      name: "set_parallelism_cap",
+      description: "Set how many builders a board may have dispatched at once — the dispatch rule the lead skill describes. Every board starts on the default (4); lower it to keep this board from starving higher-priority projects, raise it when there is room. The change is recorded with you as the actor and takes effect on the next dispatch: nothing running is touched, register_dispatch simply refuses past the new number. Answers with the full view — the cap, the slots in use and who holds them, how many are free, and lastChange (who moved it, when, from what) — so you see in the same reply whether the board is already over it. The floor is one; pausing a board is retire_workspace, not a cap of zero.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          workspaceId: { type: "string" },
+          cap: {
+            type: "integer",
+            minimum: 1,
+            description: "The new cap: a positive integer. get_workspace shows the current one and the default."
+          }
+        },
+        required: ["workspaceId", "cap"]
+      }
+    },
+    {
       name: "request_plugin_refresh",
       description: "Ask this machine to fetch the newest plugin from the marketplace. Call it when a board's settings panel says sessions are running an older bundle. It requests rather than forces — the update rewrites a version-keyed cache, so nothing running is interrupted and each session picks it up at its next restart. changed: false with matching versions means the cache was already current.",
       inputSchema: { type: "object", properties: {} }
@@ -17513,6 +17541,23 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
       case "close_dispatch": {
         const { taskId } = a;
         return ok(await http("DELETE", `/api/dispatches/${encodeURIComponent(taskId)}`));
+      }
+      case "set_parallelism_cap": {
+        const { workspaceId, cap: rawCap } = a;
+        const parsed = parseCapArg(rawCap);
+        if (!parsed.ok)
+          return err(parsed.error);
+        const res = await http("PUT", `/api/workspaces/${encodeURIComponent(workspaceId)}/parallelism-cap`, { cap: parsed.cap, author: AUTHOR });
+        return ok({
+          workspaceId,
+          cap: res.cap,
+          isDefault: res.isDefault,
+          default: res.default,
+          inUse: res.inUse,
+          free: res.free,
+          holders: res.holders,
+          lastChange: res.lastChange
+        });
       }
       case "request_plugin_refresh": {
         return ok(await http("POST", "/api/plugin/refresh"));
