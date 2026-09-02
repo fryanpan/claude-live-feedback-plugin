@@ -247,6 +247,7 @@ import { redactHubEventForVisitor } from './share/redact-hub-events.ts';
 import {
   redactMetaForVisitor,
   redactWorkspaceFilesForVisitor,
+  redactWorkspaceGroupedForVisitor,
   redactWorkspaceTreeForVisitor,
   relativeReviewUrl,
 } from './share/redact-meta.ts';
@@ -7418,7 +7419,13 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           if (grouped.groups.length === 0) {
             return j(404, { error: 'no diff review found', setId, workspaceId: setId });
           }
-          return j(200, grouped);
+          // Every file node carries the same absolute `reviewUrl` /tree and
+          // /files build, and this route is on the same visitor allowlist
+          // line — see redactWorkspaceGroupedForVisitor.
+          return j(
+            200,
+            visitor ? redactWorkspaceGroupedForVisitor(grouped, visitor.workspaceId) : grouped,
+          );
         }
         // Re-reconcile a workspace against disk: pick up files that changed
         // since the bind, flag members whose file is gone. Never re-mints a
