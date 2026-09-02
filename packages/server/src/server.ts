@@ -5724,7 +5724,11 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
         }
 
         if (pathname === '/api/auth/session' && req.method === 'GET') {
-          const rec = sessionIdentityFor(req);
+          // The same three proofs the write gate resolves — Cloudflare
+          // Access first, then the cookie — or the me-menu tells a person
+          // whose Access login just succeeded that they are "not signed in"
+          // while every comment they post lands under their verified name.
+          const rec = provenIdentityFor();
           return j(200, {
             // Whether email identity is IN EFFECT, so a client can tell "not
             // signed in" from "signing in does not matter here yet".
