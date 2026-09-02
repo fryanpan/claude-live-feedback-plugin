@@ -74,27 +74,32 @@ export interface WidgetOpts {
    */
   identityScope?: 'widget' | 'host';
   /**
-   * Offer workspace sign-in on this embed (the popup-token handshake).
+   * Offer workspace sign-in on this embed EVEN WHEN the workspace does not
+   * require it — attribute form `auth-offer`.
    *
-   * Explicit opt-in for DEV SERVERS only — attribute form `auth-offer`.
-   * Deliberately not a heuristic: any rule that guesses "this looks like a
-   * dev server" misfires eventually, and the failure mode is a workspace
-   * sign-in offer rendered on a production site. An embed that does not
-   * ask for it never shows auth UI, never touches the auth endpoints, and
-   * behaves byte-for-byte as before. Mockup pages served by the workspace
-   * itself need none of this — there the session cookie already flows.
+   * Sign-in has two triggers, and this is the optional one. The other is
+   * the workspace itself: when it refuses unsigned writes (the server's
+   * `requireSignInToWrite`, on by default since the owner decision on the
+   * security row, 2026-09-02), EVERY embed offers the popup-token handshake
+   * — asked once on load via `GET /api/auth/session`, and again as the
+   * backstop when a write comes back `sign_in_required`. Without the
+   * offer, flipping that flag would have silently refused every comment
+   * from every mockup and dev page, with nothing on screen that could fix
+   * it. `auth-offer` keeps meaning what it meant: on an OPEN workspace a
+   * plain embed shows no auth UI and adopts no stored token, and this
+   * attribute is how a dev server asks for the offer anyway, so comments
+   * carry a real name rather than an anonymous one.
    *
-   * DEV-ONLY, and here is the boundary that makes it so. The token the
-   * handshake mints is kept in the HOST PAGE's localStorage (see
-   * AUTH_TOKEN_KEY), which every script on that origin can read: any
-   * third-party tag, any XSS, any browser extension scoped to the page. On
-   * a developer's own dev server that is the developer's own code and the
-   * exposure is theirs to accept. On any page whose scripts are not all
-   * yours it is a bearer credential handed to strangers — do not set
-   * `auth-offer` there. The right shape for a production embed is a
-   * session that never leaves the workspace origin (the mockup path above),
-   * and that is the reason this stays opt-in rather than automatic.
-   * (Urgent-fixes ticket, 2026-09-02: documented, not changed.)
+   * The boundary that has not moved: the token the handshake mints is kept
+   * in the HOST PAGE's localStorage (see AUTH_TOKEN_KEY), which every
+   * script on that origin can read — a third-party tag, an XSS, an
+   * extension scoped to the page. On a developer's own dev server and on a
+   * mockup the workspace serves itself, those scripts are the developer's
+   * own. On a page whose scripts are not all yours it is a bearer
+   * credential handed to strangers: do not embed there, with or without
+   * this attribute. A workspace that requires sign-in has chosen "every
+   * comment names its author" over "any page can post"; this is the cost
+   * of that choice, and it is documented in the embedding skill.
    */
   authOffer?: boolean;
 }
@@ -176,8 +181,12 @@ class FeedbackWidgetEl extends HTMLElement {
   private scrollHandler: (() => void) | null = null;
   private vvHandler: (() => void) | null = null;
   private showResolved = false;
-  /** The popup-token, when this embed opted into auth and a person signed in. */
+  /** The popup-token, when this embed offers auth and a person signed in. */
   private authToken: string | null = null;
+  /** The workspace refuses unsigned writes — learned on load or from a 401. */
+  private signInToWrite = false;
+  /** The post that sign-in interrupted, re-run once the token arrives. */
+  private retryAfterSignIn: (() => void) | null = null;
   private authUser: User | null = null;
   /** The identity the browser had before sign-in — restored on sign-out. */
   private anonUser: User | null = null;
@@ -233,6 +242,7 @@ class FeedbackWidgetEl extends HTMLElement {
     this.connect();
     this.startObserver();
     if (this.opts.authOffer) void this.validateStoredAuth();
+    void this.askIfSignInRequired();
   }
 
   // Auto-initialize from HTML attributes. Lets the canonical "drop in a tag +
@@ -340,39 +350,24 @@ class FeedbackWidgetEl extends HTMLElement {
     try {
       this.client?.close();
     } catch {}
-    try {
-      this.observer?.disconnect();
-    } catch {}
-    try {
-      this.overlay?.remove();
-    } catch {}
+    // None of these throw on a live window, so they run bare — every
+    // try/catch here shipped in the bundle, against a hard byte budget.
+    this.observer?.disconnect();
+    this.overlay?.remove();
     if (this.rafId != null) {
-      try {
-        cancelAnimationFrame(this.rafId);
-      } catch {}
+      cancelAnimationFrame(this.rafId);
       this.rafId = null;
     }
-    if (this.resizeHandler) {
-      try {
-        window.removeEventListener('resize', this.resizeHandler);
-      } catch {}
-    }
-    if (this.scrollHandler) {
-      try {
-        window.removeEventListener('scroll', this.scrollHandler);
-      } catch {}
-    }
+    if (this.resizeHandler) window.removeEventListener('resize', this.resizeHandler);
+    if (this.scrollHandler) window.removeEventListener('scroll', this.scrollHandler);
     if (this.authMsgHandler) {
-      try {
-        window.removeEventListener('message', this.authMsgHandler);
-      } catch {}
+      window.removeEventListener('message', this.authMsgHandler);
       this.authMsgHandler = null;
     }
-    if (this.vvHandler && window.visualViewport) {
-      try {
-        window.visualViewport.removeEventListener('resize', this.vvHandler);
-        window.visualViewport.removeEventListener('scroll', this.vvHandler);
-      } catch {}
+    const vv = window.visualViewport;
+    if (this.vvHandler && vv) {
+      vv.removeEventListener('resize', this.vvHandler);
+      vv.removeEventListener('scroll', this.vvHandler);
     }
   }
 
@@ -411,7 +406,6 @@ class FeedbackWidgetEl extends HTMLElement {
     // arms feedback mode instead of opening a panel.
     const listBtn = document.createElement('button');
     listBtn.className = 'fab-list';
-    listBtn.type = 'button';
     listBtn.title = 'Comment threads';
     listBtn.innerHTML =
       '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h10"/></svg>' +
@@ -421,7 +415,6 @@ class FeedbackWidgetEl extends HTMLElement {
 
     const fab = document.createElement('button');
     fab.className = 'fab';
-    fab.type = 'button';
     fab.title = 'Give feedback — click anything to comment';
     fab.setAttribute('aria-pressed', 'false');
     fab.innerHTML =
@@ -475,7 +468,7 @@ class FeedbackWidgetEl extends HTMLElement {
     panel.classList.toggle('open', open);
   }
 
-  // --- Workspace sign-in (popup-token handshake, auth-offer embeds only) ---
+  // --- Workspace sign-in (popup-token handshake) ---
 
   private httpBase(): string {
     return this.opts.serverUrl.replace(/^ws/, 'http');
@@ -483,11 +476,41 @@ class FeedbackWidgetEl extends HTMLElement {
 
   /** The one origin the message listener will take a token from. */
   private serverOrigin(): string {
+    return new URL(this.httpBase()).origin;
+  }
+
+  /**
+   * The cheap question on load: does this workspace refuse unsigned writes?
+   * One GET, no token, and a route that fails or is missing (an older
+   * server) reads as "open" — the 401 on the first write remains the
+   * backstop, so a wrong "open" costs one refused post, never a comment.
+   */
+  private async askIfSignInRequired(): Promise<void> {
     try {
-      return new URL(this.httpBase()).origin;
-    } catch {
-      return '';
+      const res = await fetch(`${this.httpBase()}/api/auth/session`);
+      // The route is never gated and always 200s; anything else here is a
+      // proxy page, which is not JSON and lands in the catch.
+      const body = (await res.json()) as { signInToWrite?: unknown };
+      if (body.signInToWrite === true) this.requireSignIn();
+    } catch {}
+  }
+
+  /**
+   * The workspace needs a signed-in writer. Adopt the token a previous visit
+   * left in storage (validated before it is trusted with a post — a dead one
+   * clears and the offer returns), and put the offer in the panel. A plain
+   * embed on an OPEN workspace never reaches here, so it still adopts
+   * nothing and shows nothing — see WidgetOpts.authOffer.
+   */
+  private requireSignIn(): void {
+    if (this.signInToWrite) return;
+    this.signInToWrite = true;
+    if (!this.opts.authOffer) {
+      this.loadStoredAuth();
+      void this.validateStoredAuth();
     }
+    this.updateAuthUi();
+    this.scheduleRender();
   }
 
   private loadStoredAuth(): void {
@@ -538,6 +561,11 @@ class FeedbackWidgetEl extends HTMLElement {
     } catch {}
     this.updateAuthUi();
     this.scheduleRender();
+    // The post this sign-in was for. Rebuilt from the composer, so it goes
+    // out under the identity the widget now holds, token and name both. A
+    // second refusal re-arms it only after an await, so clearing here is safe.
+    this.retryAfterSignIn?.();
+    this.retryAfterSignIn = null;
   }
 
   /** Local only — the workspace session lives on, sign-out there revokes. */
@@ -580,17 +608,16 @@ class FeedbackWidgetEl extends HTMLElement {
     if (this.user) {
       me.innerHTML = `<span class="swatch" style="background:${cssColor(this.user.color)}"></span>${escape(this.user.name)}`;
     }
-    if (!this.opts.authOffer) return;
+    // Sign-in UI exists when this embed opted in, or when it has to.
+    if (!this.opts.authOffer && !this.signInToWrite) return;
     if (this.authToken) {
       const out = document.createElement('button');
-      out.type = 'button';
       out.className = 'auth-signout';
       out.textContent = 'sign out';
       out.addEventListener('click', () => this.clearAuth());
       me.appendChild(out);
     } else {
       const btn = document.createElement('button');
-      btn.type = 'button';
       btn.className = 'auth-signin';
       btn.title = 'Sign in with your workspace session to comment as yourself';
       btn.textContent = 'Sign in';
@@ -633,7 +660,7 @@ class FeedbackWidgetEl extends HTMLElement {
     // every caller here ignores the response — so the comment simply
     // vanished, which is the exact failure the gate exists to replace.
     if (await isSignInRequired(res)) {
-      this.showSignInRequired();
+      this.requireSignIn();
       return res;
     }
     // Anything else with a token is the token being refused (revoked,
@@ -646,43 +673,42 @@ class FeedbackWidgetEl extends HTMLElement {
   }
 
   /**
-   * Say that this comment needs a signed-in person, and put the way to
-   * become one within reach.
+   * Say, inside the composer and beside the draft it blocks, that posting
+   * needs a signed-in person — and arm the retry, so signing in finishes the
+   * post rather than asking for a second click.
    *
    * ALWAYS a control the person clicks — never an automatic `window.open`.
-   * This runs after awaiting a failed request and parsing its body, by which
-   * point the submit click's transient activation has expired, so a popup
-   * opened here is exactly what a popup blocker exists to stop: the offer
-   * would look like it did nothing. The click on this control carries its
-   * own activation.
+   * After a refusal this runs past an awaited request and a parsed body, by
+   * which point the submit click's transient activation has expired, so a
+   * popup opened here is exactly what a popup blocker exists to stop. The
+   * click on this control carries its own activation.
    *
-   * On an embed with the popup handshake the control runs it; otherwise the
-   * widget is on a page the workspace serves itself, where the session
-   * cookie is what counts, so it is a link to the sign-in page on the
-   * workspace origin.
+   * The retry checks the composer is still on the page: a draft cancelled
+   * while the popup was open must not be posted by the token arriving.
    */
-  private showSignInRequired(): void {
-    const actions = this.shadow.querySelector('.panel-actions') as HTMLElement | null;
-    if (!actions || actions.querySelector('.auth-required')) return;
-    if (this.opts.authOffer) {
-      const btn = document.createElement('button');
-      btn.type = 'button';
-      btn.className = 'auth-required';
-      btn.textContent = 'Sign in to comment';
-      btn.addEventListener('click', () => {
-        btn.remove();
-        this.startSignIn();
-      });
-      actions.appendChild(btn);
-      return;
+  private composerSignIn(composer: HTMLElement, submit: HTMLButtonElement): void {
+    // No `type="button"` on any widget control: nothing in the shadow root
+    // is a form, so the default cannot submit — and each one shipped bytes.
+    const btn = document.createElement('button');
+    btn.className = 'auth-signin';
+    btn.textContent = 'Sign in';
+    btn.addEventListener('click', () => this.startSignIn());
+    this.composerNote(composer, 'Sign in to post. Your draft is kept. ').appendChild(btn);
+    this.retryAfterSignIn = () => {
+      if (composer.isConnected) submit.click();
+    };
+  }
+
+  /** The composer's one line of news, created on first use. */
+  private composerNote(composer: HTMLElement, text: string): HTMLElement {
+    let err = composer.querySelector('.composer-err') as HTMLElement | null;
+    if (!err) {
+      err = document.createElement('div');
+      err.className = 'composer-err';
+      composer.appendChild(err);
     }
-    const note = document.createElement('a');
-    note.className = 'auth-required';
-    note.textContent = 'Sign in to comment';
-    note.href = `${this.serverOrigin()}/signin`;
-    note.target = '_blank';
-    note.rel = 'noopener';
-    actions.appendChild(note);
+    err.textContent = text;
+    return err;
   }
 
   // --- Feedback mode ---
@@ -727,7 +753,7 @@ class FeedbackWidgetEl extends HTMLElement {
     banner.className = 'picker-banner';
     banner.innerHTML = `
       <span>Click anything to comment.</span>
-      <button type="button" class="picker-cancel">Done (Esc)</button>
+      <button class="picker-cancel">Done (Esc)</button>
     `;
     this.shadow.appendChild(banner);
 
@@ -834,8 +860,8 @@ class FeedbackWidgetEl extends HTMLElement {
       <div class="composer-snippet">${escape(anchor.snippet.text)}</div>
       <textarea placeholder="${replyTo ? 'Reply…' : 'Comment on this element…'}" rows="3"></textarea>
       <div class="composer-actions">
-        <button class="cancel" type="button">Cancel</button>
-        <button class="primary submit" type="button">Post</button>
+        <button class="cancel">Cancel</button>
+        <button class="primary submit">Post</button>
       </div>
     `;
     this.shadow.appendChild(composer);
@@ -843,6 +869,8 @@ class FeedbackWidgetEl extends HTMLElement {
     ta.focus();
     composer.querySelector('.cancel')?.addEventListener('click', () => composer.remove());
     const submit = composer.querySelector('.submit') as HTMLButtonElement;
+    // Say it before the first attempt when the widget already knows.
+    if (this.signInToWrite && !this.authToken) this.composerSignIn(composer, submit);
     submit.addEventListener('click', async () => {
       const text = ta.value.trim();
       if (!text || !this.user) return;
@@ -858,16 +886,11 @@ class FeedbackWidgetEl extends HTMLElement {
           : await this.postNewThread(anchor, text);
       } catch {}
       if (!posted) {
-        // Kept on failure, with the text still in it. `showSignInRequired`
-        // has already put the way forward in the panel when that's the cause.
+        // Kept on failure, with the text still in it.
         submit.disabled = false;
         submit.textContent = 'Post';
-        if (!composer.querySelector('.composer-err')) {
-          const err = document.createElement('div');
-          err.className = 'composer-err';
-          err.textContent = 'Couldn’t post — try again.';
-          composer.appendChild(err);
-        }
+        if (this.signInToWrite && !this.authToken) this.composerSignIn(composer, submit);
+        else this.composerNote(composer, 'Couldn’t post — try again.');
         return;
       }
       composer.remove();
@@ -1048,7 +1071,6 @@ class FeedbackWidgetEl extends HTMLElement {
     }
     if (groups.resolved.length) {
       const toggle = document.createElement('button');
-      toggle.type = 'button';
       toggle.className = 'resolved-toggle';
       toggle.textContent = this.showResolved
         ? `Hide resolved (${groups.resolved.length})`

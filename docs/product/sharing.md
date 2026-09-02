@@ -350,11 +350,18 @@ becomes useless.
 - Background sweeper for expired shares isn't running yet; expired
   shares clean up on the next server startup. Manual `unshare` works
   any time.
-- **The widget's popup-token sign-in is dev-only.** An embed that sets
-  `auth-offer` keeps the minted token in the HOST PAGE's localStorage, where
-  every script on that origin can read it — a third-party tag, an XSS, an
-  extension. Fine on a developer's own dev server; a bearer credential
-  handed to strangers on any page whose scripts are not all yours. Leave
-  `auth-offer` off there; mockup pages served by the workspace itself use
-  the session cookie and need none of this. Documented in
-  `packages/widget/src/widget.ts` (`authOffer`).
+- **Comments need a signed-in person, and the widget's token lives on the
+  host page.** The server refuses unsigned browser writes by default
+  (`requireSignInToWrite`, owner decision on the security row, 2026-09-02;
+  `CW_REQUIRE_SIGNIN_TO_WRITE=0` turns it off). Reading is never gated. The
+  widget asks `GET /api/auth/session` on load and, when the answer is
+  `signInToWrite:true`, offers the popup-token handshake on every embed —
+  a mockup the workspace serves, a dev server on another origin — with the
+  401 on a write as the backstop; `auth-offer` now only means "offer it
+  even on an open workspace". The minted token is kept in the HOST PAGE's
+  localStorage, where every script on that origin can read it — a
+  third-party tag, an XSS, an extension. Fine on a developer's own dev
+  server and on a mockup the workspace serves; a bearer credential handed
+  to strangers on any page whose scripts are not all yours, so do not embed
+  there. Documented in `packages/widget/src/widget.ts` (`authOffer`) and the
+  `embedding-widget` skill.
