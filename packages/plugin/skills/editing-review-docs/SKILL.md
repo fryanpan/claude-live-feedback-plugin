@@ -26,8 +26,11 @@ land surgically and the reviewer sees the change appear in place.
 
 ## Before editing a .md file
 
-1. Call `list_docs`. Look for a doc whose `sourceUrl` field equals (or
-   ends with) the path you're about to edit.
+1. Call `list_docs({ query: "<file basename>" })`. Look for a doc whose
+   `sourceUrl` field equals (or ends with) the path you're about to edit.
+   `list_docs` answers ONE PAGE (50 most recently active docs by default),
+   never the whole server — so name the file, or the doc you want can be on
+   a later page.
 2. If you find one — that file is under review. Edit through the MCP
    tools below.
 3. If you don't find one (or the claude-workspaces MCP isn't available),
@@ -160,8 +163,10 @@ Use a label like `"ux-finding"`, `"code-review"`, `"a11y"` in
 - The user said "review", "workspace", "live feedback", or "the editor" — the
   old name still reaches people, so it stays a trigger.
 - A message arrived as `<channel source="live-feedback" ...>`.
-- `list_docs` returns a doc whose `sourceUrl` matches your target
-  path. **Sole-authoritative check** — the others are just hints.
+- `list_docs({ query: "<file basename>" })` returns a doc whose
+  `sourceUrl` matches your target path. **Sole-authoritative check** — the
+  others are just hints. Pass the query: an unfiltered call is a page of the
+  50 most recent docs, and a silent miss on page two is not a "no".
 - The user sent you a `/review/<docId>?as=bryan` URL recently.
 
 When in doubt, check `list_docs` before touching a `.md` — one tool
