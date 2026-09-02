@@ -19,7 +19,7 @@ find packages \( -name '*.ts' -o -name '*.css' \) \
 ```
 
 Audited 2026-09-02 at `3a39db67`, and re-audited after A1 and A2 landed.
-**161 files** over 500 lines: 66 source and 95 test.
+**162 files** over 500 lines: 67 source and 95 test.
 
 Test files are judged by a narrower rule, in their own table below: a long test
 file is an exception unless two *unrelated harnesses* share it. Many `describe`
