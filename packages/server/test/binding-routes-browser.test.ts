@@ -34,7 +34,10 @@ describe('file-binding routes refuse browser callers', () => {
     scratch = mkdtempSync(join(tmpdir(), 'bind-browser-files-'));
     writeFileSync(join(scratch, 'doc.md'), '# fixture\n');
     writeFileSync(join(scratch, 'tasks.md'), '# Tasks\n\n- [ ] one\n');
-    handle = createServer({ port: 0, dataDir });
+    // The sign-in gate is ON by default and would refuse these browser
+    // writes first, with a different error. Off here, so what refuses a bind
+    // is the binding gate alone — the thing this file is about.
+    handle = createServer({ port: 0, dataDir, requireSignInToWrite: false });
     base = `http://localhost:${handle.port}`;
   });
 

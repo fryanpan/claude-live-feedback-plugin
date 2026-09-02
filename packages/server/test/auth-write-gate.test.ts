@@ -25,7 +25,7 @@ import * as encoding from 'lib0/encoding';
 import * as syncProtocol from 'y-protocols/sync';
 import * as Y from 'yjs';
 import { SESSION_COOKIE } from '../src/auth/session.ts';
-import { SIGN_IN_REQUIRED_ERROR } from '../src/middleware/write-gate.ts';
+import { SIGN_IN_REQUIRED_ERROR, signInToWriteFromEnv } from '../src/middleware/write-gate.ts';
 import { type ServerHandle, createServer } from '../src/server.ts';
 
 const MSG_SYNC = 0;
@@ -74,9 +74,13 @@ interface Booted {
   handle: ServerHandle;
 }
 
-function boot(requireSignInToWrite: boolean): Booted {
+function boot(requireSignInToWrite?: boolean): Booted {
   const dataDir = mkdtempSync(join(tmpdir(), 'write-gate-'));
-  const handle = createServer({ port: 0, dataDir, requireSignInToWrite });
+  const handle = createServer({
+    port: 0,
+    dataDir,
+    ...(requireSignInToWrite === undefined ? {} : { requireSignInToWrite }),
+  });
   cleanups.push(async () => {
     await handle.stop();
     rmSync(dataDir, { recursive: true, force: true });
@@ -181,6 +185,63 @@ const writes = {
 async function errorOf(res: Response): Promise<string | undefined> {
   return ((await res.json().catch(() => null)) as { error?: string } | null)?.error;
 }
+
+// =========================================================================
+// THE DEFAULT, AND THE SWITCH THAT TURNS IT OFF
+// =========================================================================
+
+describe('the gate is ON unless the environment says otherwise', () => {
+  it('a server booted with no flag at all refuses the unsigned browser comment', async () => {
+    // Owner decision on the security row, 2026-09-02. The control is the
+    // same request against a server told `false`, below.
+    const b = boot();
+    await bindDoc(b, 'default-doc');
+    const refused = await writes.comment(b, 'default-doc');
+    expect(refused.status).toBe(401);
+    expect(await errorOf(refused)).toBe(SIGN_IN_REQUIRED_ERROR);
+  });
+
+  it('…and still takes the agent write — no Origin, no session, landed', async () => {
+    // Every MCP tool and hook writes exactly like this. A default that
+    // refused it would take the fleet offline the day this merged.
+    const b = boot();
+    await bindDoc(b, 'default-agent-doc');
+    const res = await fetch(`${b.base}/api/docs/default-agent-doc/threads`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ author: reviewer, text: 'from an agent', anchor: fakeAnchor }),
+    });
+    expect(res.status).toBe(200);
+    const listed = await fetch(`${b.base}/api/docs/default-agent-doc/threads`);
+    const { threads } = (await listed.json()) as { threads: unknown[] };
+    expect(threads.length).toBe(1);
+  });
+
+  it('reads the environment: unset is on, the four off-spellings are off, junk is on', () => {
+    expect(signInToWriteFromEnv(undefined)).toBe(true);
+    expect(signInToWriteFromEnv('')).toBe(true);
+    expect(signInToWriteFromEnv('1')).toBe(true);
+    expect(signInToWriteFromEnv('true')).toBe(true);
+    for (const off of ['0', 'false', 'no', 'off', ' OFF ', 'False']) {
+      expect(signInToWriteFromEnv(off)).toBe(false);
+    }
+    // A misspelling must not silently open the gate.
+    expect(signInToWriteFromEnv('fasle')).toBe(true);
+  });
+
+  it('the override restores the old behaviour: the same unsigned comment is accepted', async () => {
+    // What a box with `CW_REQUIRE_SIGNIN_TO_WRITE=0` boots into, end to end:
+    // the parsed value, handed to the server, and the write that was refused
+    // above now lands.
+    const b = boot(signInToWriteFromEnv('0'));
+    await bindDoc(b, 'override-doc');
+    const accepted = await writes.comment(b, 'override-doc');
+    expect(accepted.status).toBe(200);
+    const listed = await fetch(`${b.base}/api/docs/override-doc/threads`);
+    const { threads } = (await listed.json()) as { threads: unknown[] };
+    expect(threads.length).toBe(1);
+  });
+});
 
 // =========================================================================
 // THE POSITIVE CONTROL

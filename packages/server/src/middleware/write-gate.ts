@@ -38,6 +38,21 @@
  *    post the email that mints one.
  */
 
+/**
+ * The switch, read from `CW_REQUIRE_SIGNIN_TO_WRITE`.
+ *
+ * ON unless the variable says off (owner decision on the security row,
+ * 2026-09-02: *"flip on and add widget sign in"*). Unset is on. The
+ * off-spellings are the usual four; anything else — including a typo — is
+ * on, because a gate that a misspelling could silently open is not a gate.
+ * Exported as a function of the raw value so the default and the override
+ * can be asserted without booting `bin.ts`, which reads its environment at
+ * import.
+ */
+export function signInToWriteFromEnv(raw: string | undefined): boolean {
+  return !['0', 'false', 'no', 'off'].includes((raw ?? '').trim().toLowerCase());
+}
+
 /** The error code a refused write answers with. The browser client keys its
  *  sign-in prompt off this exact string, so it is exported rather than
  *  spelled twice. */
