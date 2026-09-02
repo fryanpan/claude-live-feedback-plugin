@@ -52,7 +52,6 @@ export function loadCookieKey(dataDir: string): string {
  * file's own bytes, so `keyDomain` is a wire lock rather than an omission.
  */
 export const shareSessionToken: TokenFormat<string> = {
-  purpose: 'share-link-session',
   keyDomain: null,
   tags: null,
   encode: (shareId) => shareId,
