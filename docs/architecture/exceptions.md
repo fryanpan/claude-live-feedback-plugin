@@ -19,7 +19,7 @@ find packages \( -name '*.ts' -o -name '*.css' \) \
 ```
 
 Audited 2026-09-02 at `3a39db67`, and re-audited after A1 and A2 landed.
-**162 files** over 500 lines: 67 source and 95 test.
+**161 files** over 500 lines: 66 source and 95 test.
 
 Test files are judged by a narrower rule, in their own table below: a long test
 file is an exception unless two *unrelated harnesses* share it. Many `describe`
@@ -49,7 +49,6 @@ blocks over one set of fixtures is one harness, however long the file gets.
 | `packages/server/src/deploy.ts` | 1058 | Split | The durable trace already has its own banner at line 668: `writeDeployLog`, `readDeployLog`, `confirmDeployBoot`, `spawnDeployVerifier` touch only the filesystem and the clock, never git or launchd → `deploy-log.ts` ~250, leaving the decision (`decideDeploy`) and the executor (`runDeploy`, `launchctlRestart`) ~800. **S** |
 | `packages/server/src/meeting-notes.ts` | 1039 | Split | `createPauseTicker` with `TickScheduler` / `realTickScheduler` (lines 84–277) is a two-clock detector that knows nothing about notes → `pause-ticker.ts` ~190. `beginNotesSession` and the compose/correction contracts stay ~800. **S** |
 | `packages/server/src/task-projection.ts` | 743 | Exception | A2 took `projectTask` out to `task-row.ts`; what is left is the room lifecycle — `ensureWorkspace`, `refresh`, `scheduleSnapshot` and the debounced snapshot writer — which is one object's behaviour over one `Rooms`. The owner readers (`ownerKindReader`, `claimSessionReader`) still read as a separable pair and would move beside `task-owner.ts`; that is ~90 lines and does not justify a third file on its own. |
-| `packages/server/src/bin.ts` | 1013 | Split | Two thirds is env resolution plus the "the ONLY place a real X is constructed" seams for a dozen subsystems. Split into `server-config.ts` (env → one typed config, ~350) and `server-deps.ts` (config → the network-touching seams, ~350), leaving arg parsing, `acquirePort` and the startup banner ~300. **M** |
 | `packages/server/src/meeting-notes-doc.ts` | 986 | Split | Clean halves at line 586. Yjs section surgery (`replaceNotesSection`, `retagSpeakerInNotes`, `reattributeNotesSection`, `demoteBodyHeadings`) → `notes-section-write.ts` ~470; the server glue (`NotesLedger`, `applyNotesUpdate`, `withServerNotesSinks`) stays ~400. **S** |
 | `packages/server/src/stall-nudge.ts` | 867 | Exception | One `StallNudger`: the tick, the arming stamps, and addressing. The held-item nudge (`nudgeFilers`) reuses the same tick, `reachable`, and stamp file, so lifting it out would duplicate all three. |
 | `packages/server/src/ready-nudge.ts` | 843 | Exception | One `ReadyWorkNudger`. Most of the file is the not-sending rules (`armed`, `NudgeTally`) that only make sense against the frame they suppress. |
@@ -259,29 +258,28 @@ months, so splitting it buys almost nothing.
 | 7 | `packages/server/src/tasks.ts` | 4714 | 87 | M |
 | 8 | `packages/server/src/rooms.ts` | 4801 | 71 | M |
 | 9 | `packages/markdown-app/src/app.ts` | 1918 | 55 | M |
-| 10 | `packages/server/src/bin.ts` | 1013 | 50 | M |
-| 11 | `packages/server/src/task-projection.ts` | 743 | 43 | done |
-| 12 | `packages/markdown-app/src/review-chrome.ts` | 1492 | 24 | M |
-| 13 | `packages/markdown-app/src/threads.ts` | 1157 | 20 | M |
-| 14 | `packages/markdown-app/src/meeting-strip.ts` | 1953 | 18 | M |
-| 15 | `packages/core/src/review-item.ts` | 1769 | 18 | S |
-| 16 | `packages/core/src/prose.ts` | 2847 | 16 | M |
-| 17 | `packages/server/src/review-queue.ts` | 831 | 15 | S |
-| 18 | `packages/widget/src/widget.ts` | 1320 | 13 | M |
-| 19 | `packages/server/src/meeting-notes.ts` | 1039 | 12 | S |
-| 20 | `packages/server/src/voice.ts` | 2109 | 11 | S |
-| 21 | `packages/server/src/meeting-notes-doc.ts` | 986 | 11 | S |
-| 22 | `packages/server/src/activity.ts` | 582 | 11 | M |
-| 23 | `packages/markdown-app/src/redline/markup-margin.ts` | 996 | 9 | M |
-| 24 | `packages/server/src/meeting-task-capture.ts` | 1348 | 6 | M |
-| 25 | `packages/server/src/meeting-notes-merge.ts` | 1067 | 5 | M |
-| 26 | `packages/server/src/deploy.ts` | 1058 | 4 | S |
-| 27 | `packages/core/src/goal-effort.ts` | 1086 | 4 | S |
-| 28 | `packages/server/src/voice-resolve.ts` | 762 | 2 | S |
-| 29 | `packages/plugin/hooks/lib/agent-notes.ts` | 653 | 2 | S |
-| 30 | `packages/server/src/recall-calendar.ts` | 721 | 1 | S |
-| 31 | `packages/markdown-app/test/hub-render.test.ts` | 4078 | — | S |
-| 32 | `packages/server/test/voice-smooth.test.ts` | 729 | — | M |
+| 10 | `packages/server/src/task-projection.ts` | 743 | 43 | done |
+| 11 | `packages/markdown-app/src/review-chrome.ts` | 1492 | 24 | M |
+| 12 | `packages/markdown-app/src/threads.ts` | 1157 | 20 | M |
+| 13 | `packages/markdown-app/src/meeting-strip.ts` | 1953 | 18 | M |
+| 14 | `packages/core/src/review-item.ts` | 1769 | 18 | S |
+| 15 | `packages/core/src/prose.ts` | 2847 | 16 | M |
+| 16 | `packages/server/src/review-queue.ts` | 831 | 15 | S |
+| 17 | `packages/widget/src/widget.ts` | 1320 | 13 | M |
+| 18 | `packages/server/src/meeting-notes.ts` | 1039 | 12 | S |
+| 19 | `packages/server/src/voice.ts` | 2109 | 11 | S |
+| 20 | `packages/server/src/meeting-notes-doc.ts` | 986 | 11 | S |
+| 21 | `packages/server/src/activity.ts` | 582 | 11 | M |
+| 22 | `packages/markdown-app/src/redline/markup-margin.ts` | 996 | 9 | M |
+| 23 | `packages/server/src/meeting-task-capture.ts` | 1348 | 6 | M |
+| 24 | `packages/server/src/meeting-notes-merge.ts` | 1067 | 5 | M |
+| 25 | `packages/server/src/deploy.ts` | 1058 | 4 | S |
+| 26 | `packages/core/src/goal-effort.ts` | 1086 | 4 | S |
+| 27 | `packages/server/src/voice-resolve.ts` | 762 | 2 | S |
+| 28 | `packages/plugin/hooks/lib/agent-notes.ts` | 653 | 2 | S |
+| 29 | `packages/server/src/recall-calendar.ts` | 721 | 1 | S |
+| 30 | `packages/markdown-app/test/hub-render.test.ts` | 4078 | — | S |
+| 31 | `packages/server/test/voice-smooth.test.ts` | 729 | — | M |
 
 The top eight are where the pain is: they carry 991 of the 1350 commits in this
 queue. Rows 1 through 8 are worth filing as tickets now; below row 20 a split is
