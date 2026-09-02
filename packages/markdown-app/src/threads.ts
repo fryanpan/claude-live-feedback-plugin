@@ -23,6 +23,7 @@ import {
 import { askedMetaLine, decidedMetaLine } from './hub/hub-model.ts';
 import { decisionOutcome, threadDecision } from './long-thread.ts';
 import { attachMarkdownComposer } from './md-composer.ts';
+import { threadGlyph, threadKind } from './thread-kind.ts';
 import {
   isFoldingTap,
   morphThread,
@@ -88,6 +89,13 @@ export interface ThreadPanelOpts {
   onActiveChange?: (threadId: string | null) => void;
   /** "L293" / "L293–301" label for line-oriented surfaces; null hides it. */
   threadLineLabel?: (threadId: string) => string | null;
+  /**
+   * Has this thread changed since the reader last looked (`comment-seen.ts`)?
+   * Stamps `is-new` on the card — a red dot on its glyph. Cleared IN PLACE by
+   * the chrome once the thread has sat in view, never by a rebuild, so it is
+   * deliberately not part of the render key.
+   */
+  isNew?: (t: Thread) => boolean;
 }
 
 export class ThreadPanel {
@@ -432,6 +440,12 @@ export class ThreadPanel {
     el.className = `thread status-${status}`;
     if (status === 'resolved') el.classList.add('resolved');
     if (status === 'orphan') el.classList.add('orphan');
+    // What the thread IS — the term every surface's glyph and colour key off
+    // (`thread-kind.ts`): the highlight, this card wherever it renders, the
+    // top-bar chip and the off-screen hints all say the same thing.
+    const kind = threadKind(t);
+    el.classList.add(`thread-kind-${kind}`);
+    if (this.opts.isNew?.(t)) el.classList.add('is-new');
     // `expanded` is the class the two slots read; `active` is the drawer's
     // own selection styling. They coincide today (expanded == active), but
     // the slots key off `expanded` so the two can separate later without
@@ -459,8 +473,12 @@ export class ThreadPanel {
 
     const flagRow = this.decisionRow(t);
     if (flagRow) el.appendChild(flagRow);
-    el.appendChild(this.head(t, status));
-    el.appendChild(this.slotA(t, summary.topic, itemComment?.id));
+    el.appendChild(this.head(t, status, { kind, declared: itemComment?.review !== undefined }));
+    // A declared thread's folded line is the ASK, not the sentence it hangs
+    // off: the highlight in the prose already shows the sentence, and a card
+    // that repeated it said nothing about what was wanted.
+    const topic = itemComment?.review?.headline ?? summary.topic;
+    el.appendChild(this.slotA(t, topic, itemComment?.id));
     el.appendChild(this.slotB(t, summary, status, { pending, itemComment, pendingReply }));
     el.appendChild(this.foot(t, status));
     syncFaceVisibility(el, this.activeId === t.id && !shownElsewhere);
@@ -535,9 +553,20 @@ export class ThreadPanel {
 
   /** Row 1: identity. The attribution for the OPENING MESSAGE and nothing
    *  else — which is why the opening message never repeats the name. */
-  private head(t: Thread, status: 'open' | 'resolved' | 'orphan'): HTMLElement {
+  private head(
+    t: Thread,
+    status: 'open' | 'resolved' | 'orphan',
+    mark: { kind: ReturnType<typeof threadKind>; declared: boolean },
+  ): HTMLElement {
     const head = div('thread-head');
     head.appendChild(div('status-dot'));
+    // ONE glyph per state, everywhere it appears: blue bubble for a comment,
+    // amber question mark for an open review item (question or decision
+    // alike), green tick once answered or resolved. The same glyph sits on
+    // the highlighted sentence, the top-bar chip and the off-screen hints.
+    const glyph = span(`thread-glyph lf-ic lf-ic-${threadGlyph(mark.kind)}`);
+    glyph.setAttribute('aria-hidden', 'true');
+    head.appendChild(glyph);
 
     const author = t.comments[0]?.author ?? t.createdBy;
     const swatch = span('swatch');
@@ -567,6 +596,11 @@ export class ThreadPanel {
       chip.textContent = lineLabel;
       head.appendChild(chip);
     }
+    if (this.opts.isNew?.(t)) {
+      const tag = span('thread-new-tag');
+      tag.textContent = 'New';
+      head.appendChild(tag);
+    }
 
     // Top right, as far from ✓ Resolve as the card allows: the two were a
     // thumb-width apart, and the misfire that costs you resolves a thread.
@@ -592,7 +626,17 @@ export class ThreadPanel {
       decision === 'pending' ? ', decision needed' : decision === 'answered' ? ', decision' : '';
     caret.setAttribute('aria-label', `Comment from ${authorLabel(author)}${decisionSuffix}`);
     caret.setAttribute('aria-expanded', String(this.activeId === t.id));
-    caret.textContent = '›';
+    // A review item's card says in words what the fold reveals — "Details" —
+    // because its folded face already carries the ask and the ways to answer
+    // it, so the fold is not "open the comment" but "show the why". The words
+    // follow the fold in `syncFaceVisibility`, the same place the caret's
+    // announced state does.
+    if (mark.declared) {
+      caret.classList.add('thread-caret-words');
+      caret.textContent = this.activeId === t.id ? 'Less ▴' : 'Details ▾';
+    } else {
+      caret.textContent = '›';
+    }
     head.appendChild(caret);
     return head;
   }
@@ -647,6 +691,16 @@ export class ThreadPanel {
     if (summary.discussionKind === 'pending') discussion.classList.add('pending');
     discussion.textContent = summary.discussion;
     summaryFace.push(discussion);
+    // A review item answers from its FOLDED face (approved: comments mock 3).
+    // A decision offers its option labels right there; a question shows
+    // where to tap; an answered item keeps a compact record — who, when, and
+    // the words — so nothing has to be opened to see what a card is asking or
+    // what it was told. The full item card, with the detail and each option's
+    // reasoning, stays one fold away behind "Details".
+    if (itemComment?.review) {
+      const compact = this.compactItemLine(t, itemComment, itemComment.review, pending !== null);
+      if (compact) summaryFace.push(compact);
+    }
 
     const comments = div('comments');
     // Same suppression as slot A, one row further down: a reply that declared
@@ -732,6 +786,66 @@ export class ThreadPanel {
       detailFace.push(comments, reply);
     }
     return slot('slot-b', summaryFace, detailFace);
+  }
+
+  /**
+   * The folded face's answer row for a declared thread. Pending decision:
+   * the option labels as buttons, wired to the SAME reply route the full card
+   * uses. Pending question: an "Answer" cue — tapping it folds the card open
+   * onto the composer, so it is a span, not a control, and rides the card's
+   * own tap. Answered: the record, one line.
+   */
+  private compactItemLine(
+    t: Thread,
+    c: Comment,
+    review: ReviewPayload,
+    pending: boolean,
+  ): HTMLElement | null {
+    if (reviewAnswered(review)) {
+      const line = div('thread-answered-line');
+      const tick = span('thread-answered-tick');
+      tick.textContent = '✓ ';
+      line.appendChild(tick);
+      // A decision's outcome already rides the flag row above the head;
+      // repeating it here would say the same words twice on a folded card.
+      if (review.shape !== 'decision') {
+        const words = span('thread-answered-words');
+        // Plain text: an answer is a person's words.
+        words.textContent = (
+          review.answerText ??
+          review.options?.find((o) => o.id === review.answeredWith)?.label ??
+          ''
+        )
+          .replace(/\s+/g, ' ')
+          .trim();
+        line.appendChild(words);
+      }
+      const meta = span('thread-answered-who');
+      meta.textContent = decidedMetaLine(
+        review.answeredBy,
+        this.opts.currentUser.name,
+        review.answeredAt,
+        Date.now(),
+        review.shape === 'decision',
+      );
+      line.appendChild(meta);
+      return line;
+    }
+    if (!pending) return null;
+    if (review.shape === 'decision' && review.options && review.options.length > 0) {
+      const opts = div('thread-options-compact');
+      for (const o of review.options) {
+        const b = btn(o.label, 'thread-item-option thread-item-option-compact', () =>
+          this.opts.onReply(t.id, o.label, c.id, o.id),
+        );
+        if (o.detail) b.title = o.detail;
+        opts.appendChild(b);
+      }
+      return opts;
+    }
+    const cue = span('thread-answer-cta');
+    cue.textContent = 'Answer';
+    return cue;
   }
 
   /**

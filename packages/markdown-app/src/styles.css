@@ -335,6 +335,40 @@ body.view-mode #toggle-format {
   display: inline-block;
 }
 
+/* "N questions for you" — every open review item on the doc, behind the one
+   amber glyph the highlight and the card also carry (comments mock 3). A
+   pill, not an icon button: it is a sentence on a wide screen and a glyph
+   plus a count on a phone (`.w` is the wordy part; see INLINE THREAD CARDS
+   for the width rule). Hidden while nothing is waiting — a permanent
+   "nothing waiting on you" is metadata the reader cannot act on — except for
+   a few seconds after the last item is answered, when saying so is the
+   answer to "did that land?". */
+.doc-asks {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-height: 30px;
+  padding: 3px 10px;
+  border: 0;
+  border-radius: var(--radius-pill);
+  background: var(--warn-wash, #fff4e5);
+  color: var(--warn-fg, #b25e09);
+  font: 600 12px var(--sans);
+  white-space: nowrap;
+  cursor: pointer;
+}
+.doc-asks:hover {
+  filter: brightness(0.97);
+}
+.doc-asks[hidden] {
+  display: none;
+}
+.doc-asks.is-done {
+  background: var(--bg-hover);
+  color: var(--fg-muted);
+  cursor: default;
+}
+
 /* ‹ › comment nav. Shown wherever the comments are INLINE (≤1100px): the
    cards are spread through the document, so stepping between them is the
    only way to walk the conversation. Above that the balloon margin shows
@@ -7092,6 +7126,43 @@ body.is-reading-width #editor > .ProseMirror {
   background: rgba(46, 125, 215, 0.22);
   border-bottom-color: rgba(46, 125, 215, 0.8);
 }
+
+/* The highlight carries the SAME glyph as its card — comments mock 3. One
+   glyph per state, everywhere it appears: blue bubble for a comment, amber
+   question mark for an open review item (a question and a decision alike —
+   Bryan, 2026-09-01), green tick once answered or resolved. The open
+   question's amber wash is the one amber thing on the page; a plain comment
+   stays yellow, and a resolved thread fades to a green tint so it reads as
+   settled from across the room. */
+#editor > .ProseMirror .thread-range::before {
+  content: "";
+  display: inline-block;
+  width: 14px;
+  height: 14px;
+  margin-right: 4px;
+  vertical-align: -2px;
+  background: var(--ic-comment) center / contain no-repeat;
+}
+#editor > .ProseMirror .thread-range.question {
+  background: var(--warn-wash, #fff4e5);
+  border-bottom-color: var(--warn-fg, #b25e09);
+}
+#editor > .ProseMirror .thread-range.question::before {
+  background-image: var(--ic-question);
+}
+#editor > .ProseMirror .thread-range.answered {
+  background: rgba(45, 164, 78, 0.1);
+  border-bottom-color: rgba(45, 164, 78, 0.5);
+}
+#editor > .ProseMirror .thread-range.answered::before,
+#editor > .ProseMirror .thread-range.resolved::before {
+  background-image: var(--ic-done);
+}
+/* Arrived since the reader last looked: a red underline on the sentence,
+   cleared once the thread has sat in view (comment-seen.ts). */
+#editor > .ProseMirror .thread-range.is-new {
+  box-shadow: inset 0 -2px 0 var(--red);
+}
 #editor > .ProseMirror .thread-range.pulse {
   animation: thread-wink 650ms ease-out;
 }
@@ -8482,6 +8553,149 @@ body.threads-resizing {
 }
 .thread.orphan .status-dot {
   background: var(--yellow);
+}
+
+/* ---------- one glyph per state, everywhere a thread appears ----------
+   The three icons are CSS-only data URIs so the highlight in the prose (a
+   ::before with no DOM of its own) can carry the same picture as the card,
+   the top-bar chip and the off-screen hints. Blue bubble: comment. Amber
+   question mark: an open review item — question OR decision, one glyph
+   (Bryan, 2026-09-01). Green tick: answered or resolved. The status dot the
+   head used to lead with is superseded by the glyph and hidden. */
+:root {
+  --ic-comment: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M2.5 3.5h11v7h-6l-3 2.5v-2.5h-2z' fill='none' stroke='%232e7dd7' stroke-width='1.6' stroke-linejoin='round'/%3E%3C/svg%3E");
+  --ic-question: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Ccircle cx='8' cy='8' r='7.5' fill='%23b25e09'/%3E%3Ctext x='8' y='11.6' text-anchor='middle' font-family='-apple-system,Helvetica,Arial,sans-serif' font-weight='700' font-size='10.5' fill='%23fff'%3E?%3C/text%3E%3C/svg%3E");
+  --ic-done: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Ccircle cx='8' cy='8' r='7.5' fill='%232da44e'/%3E%3Cpath d='M4.6 8.3 7 10.6 11.4 5.8' fill='none' stroke='%23fff' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+}
+.lf-ic {
+  display: inline-block;
+  width: 15px;
+  height: 15px;
+  flex: 0 0 auto;
+  position: relative;
+  vertical-align: -3px;
+  background: center / contain no-repeat;
+}
+.lf-ic-comment {
+  background-image: var(--ic-comment);
+}
+.lf-ic-question {
+  background-image: var(--ic-question);
+}
+.lf-ic-done {
+  background-image: var(--ic-done);
+}
+/* The red dot: something here changed since the reader last looked. On the
+   glyph rather than beside it, so it costs no width in a 300px column. */
+.lf-ic.is-new::after,
+.thread.is-new .thread-glyph::after {
+  content: "";
+  position: absolute;
+  top: -3px;
+  right: -3px;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--red);
+  box-shadow: 0 0 0 1.5px var(--bg);
+}
+.thread-head .status-dot {
+  display: none;
+}
+.thread.is-new {
+  box-shadow: 0 0 0 2px rgba(215, 58, 73, 0.35);
+}
+.thread-new-tag {
+  flex: 0 0 auto;
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: #fff;
+  background: var(--red);
+  border-radius: var(--radius-sm);
+  padding: 1px 5px;
+}
+/* A review item's disclosure is words — "Details ▾" / "Less ▴" — because its
+   folded face already holds the ask and the ways to answer it; the fold
+   only adds the why and each option's reasoning. */
+.thread-caret-words {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--accent);
+  transform: none !important;
+  padding: 2px 0 2px 6px;
+}
+/* The folded face of a declared thread answers in place (comments mock 3). */
+.thread-answer-cta {
+  display: inline-block;
+  margin-top: 4px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--warn-fg, #b25e09);
+  border: 1px solid var(--warn-fg, #b25e09);
+  border-radius: var(--radius-sm);
+  padding: 3px 10px;
+  background: var(--bg);
+}
+.thread-options-compact {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 6px;
+}
+.thread-item-option-compact {
+  min-height: 30px;
+  padding: 4px 10px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--warn-fg, #b25e09);
+  border: 1px solid var(--warn-fg, #b25e09);
+  border-radius: var(--radius-sm);
+  background: var(--bg);
+  cursor: pointer;
+  font-family: var(--sans);
+}
+.thread-item-option-compact:hover {
+  background: var(--warn-wash, #fff4e5);
+}
+.thread-answered-line {
+  margin-top: 4px;
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--fg);
+  overflow-wrap: anywhere;
+}
+.thread-answered-tick {
+  color: var(--green);
+  font-weight: 700;
+}
+.thread-answered-words {
+  font-weight: 600;
+}
+.thread-answered-who {
+  display: block;
+  font-size: 11px;
+  color: var(--fg-muted);
+}
+/* A resolved thread folds to ONE faded line — the head and the topic — until
+   it is opened (comments mock 3). The slots keep their measured heights (the
+   morph needs them); clipping is what hides them, so opening still measures
+   real faces. */
+.thread.resolved:not(.expanded) {
+  opacity: 0.55;
+  padding-top: 5px;
+  padding-bottom: 5px;
+}
+.thread.resolved:not(.expanded) .slot-b,
+.thread.resolved:not(.expanded) .thread-foot {
+  max-height: 0;
+  overflow: hidden;
+  margin: 0;
+  padding: 0;
+}
+.thread.resolved:not(.expanded) .thread-topic {
+  font-size: 12px;
 }
 
 /* ---------- the card: head, two folding slots, foot ---------- */
@@ -10685,6 +10899,70 @@ body.redline-mode #toggle-suggest-mode {
   min-width: 0;
 }
 
+/* The column stretches the whole row so the off-screen hints
+   (comment-hints.ts) can stick to the scroller's top and bottom edges from
+   inside it. Balloons are absolutely positioned and take no part in the flex
+   flow, so this changes nothing about where they land. */
+#editor.redline-layout > .markup-margin {
+  align-self: stretch;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+}
+/* "4 comments & 1 question above" — a pill that hugs the edge of the scroller
+   and jumps to the nearest off-screen thread when tapped. Words on a wide
+   screen (`.w`); glyph + count + arrow (`.m`) on a phone — see the INLINE
+   THREAD CARDS block for that switch. */
+.lf-offscreen {
+  position: sticky;
+  z-index: 3;
+  align-self: flex-start;
+  margin: 0 4px;
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 5px;
+  row-gap: 2px;
+  font: 600 12px / 1.2 var(--sans);
+  color: var(--fg);
+  background: var(--bg);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-pill);
+  padding: 5px 10px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+  cursor: pointer;
+  user-select: none;
+  white-space: nowrap;
+}
+.lf-offscreen[hidden] {
+  display: none;
+}
+.lf-offscreen:hover {
+  background: var(--bg-hover);
+}
+.lf-offscreen-top {
+  top: 0;
+  border-top: 0;
+  border-radius: 0 0 var(--radius) var(--radius);
+}
+.lf-offscreen-bottom {
+  bottom: 0;
+  margin-top: auto;
+  border-bottom: 0;
+  border-radius: var(--radius) var(--radius) 0 0;
+}
+.lf-offscreen b {
+  font-weight: 700;
+}
+.lf-offscreen .m {
+  display: none;
+  font-size: 9px;
+  color: var(--fg-muted);
+}
+.lf-offscreen-new {
+  color: var(--red);
+}
+
 /* One overlay for every leader line; never intercepts clicks. */
 .lf-leader-overlay {
   position: absolute;
@@ -10764,6 +11042,17 @@ body.redline-mode #toggle-suggest-mode {
 .lf-balloon-comment {
   border-left-color: var(--accent);
   cursor: pointer;
+}
+
+/* The card's edge says what it is, in the same three colours as its glyph:
+   amber for an open review item, green once answered or resolved. */
+.lf-balloon-comment.thread-kind-question {
+  border-left-color: var(--warn-fg, #b25e09);
+  background: #fffaf3;
+}
+.lf-balloon-comment.thread-kind-answered,
+.lf-balloon-comment.thread-kind-resolved {
+  border-left-color: var(--green);
 }
 
 /* An OPEN balloon is capped against the screen and scrolls inside itself.
@@ -11172,6 +11461,58 @@ body.redline-mode #toggle-suggest-mode {
   background: var(--bg-panel);
   padding: 10px 12px;
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.06);
+}
+.lf-inline-card.thread-kind-question {
+  border-left-color: var(--warn-fg, #b25e09);
+  background: #fffaf3;
+}
+.lf-inline-card.thread-kind-answered,
+.lf-inline-card.thread-kind-resolved {
+  border-left-color: var(--green);
+}
+/* The off-screen hints at phone widths float over the prose — the margin
+   column that holds them on a wide screen is gone here. Top right under the
+   app bar; bottom left, ABOVE the action dock (Make Plan and friends): the
+   bottom offset is measured live against the dock by comment-hints.ts, so a
+   dock that grows a line can never cover it. Glyph + count + arrow only —
+   the words are the wide screen's. */
+@media (max-width: 1100px) {
+  .lf-offscreen-float {
+    position: fixed;
+    display: inline-flex;
+    gap: 6px;
+    padding: 6px 10px;
+    min-height: 34px;
+    border: 1px solid var(--border-strong);
+    border-radius: var(--radius-pill);
+    z-index: 25;
+  }
+  .lf-offscreen-float[hidden] {
+    display: none;
+  }
+  .lf-offscreen-float.lf-offscreen-top {
+    right: 12px;
+  }
+  .lf-offscreen-float.lf-offscreen-bottom {
+    left: 12px;
+    margin: 0;
+  }
+  .lf-offscreen .w,
+  .doc-asks .w {
+    display: none;
+  }
+  .lf-offscreen .m {
+    display: inline;
+  }
+  .doc-asks {
+    min-height: 34px;
+    padding: 3px 8px;
+  }
+}
+@media (min-width: 1101px) {
+  .lf-offscreen-float {
+    display: none;
+  }
 }
 /* Inside CodeMirror the card is a block widget in a monospace, pre-wrapped
    context — reset both, or the comment renders as code. */

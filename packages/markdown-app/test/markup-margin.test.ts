@@ -649,7 +649,7 @@ describe('mountMarkupMargin — comment balloons', () => {
     expect(parent.querySelector('.lf-balloon-comment .thread-answered')).toBeNull();
   });
 
-  it('does not render a balloon for a resolved thread', async () => {
+  it('renders a resolved thread as a folded, resolved balloon', async () => {
     const { parent, surface, ydoc, chrome, scope } = mountRedlineWithChrome(
       '',
       'Alpha bravo gamma.\n',
@@ -674,7 +674,10 @@ describe('mountMarkupMargin — comment balloons', () => {
     });
     margin.relayout();
 
-    expect(parent.querySelectorAll('.lf-balloon-comment')).toHaveLength(0);
+    const balloons = parent.querySelectorAll('.lf-balloon-comment');
+    expect(balloons).toHaveLength(1);
+    expect(balloons[0]?.classList.contains('resolved')).toBe(true);
+    expect(balloons[0]?.classList.contains('thread-kind-resolved')).toBe(true);
   });
 });
 
