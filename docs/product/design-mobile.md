@@ -108,18 +108,57 @@ Minimum 36×36px for any interactive element. The format-bar buttons drop to ico
 
 **Add a third check at ≥1921px whenever the change behaves differently per tier** (anything gated on the 4K boundary, like the doc-list sidebar's default). A tier with no verification step is a tier where the default is whatever the code happened to do.
 
+### The browser rule: not Bryan's window — never "no browser"
+
+Three agents in one day opened tabs in Bryan's live Chrome under briefs that
+only forbade *closing* tabs; two others over-corrected into verifying nothing
+in a browser at all. Both are wrong. The rule is that the browser you drive is
+**not the one a person is using**, and the repo ships the browser that
+satisfies it:
+
+```bash
+bun run ui:shot --url http://127.0.0.1:8787/ --preset ipad  --out /tmp/board-1180.png
+bun run ui:shot --url http://127.0.0.1:8787/ --preset phone --out /tmp/board-430.png \
+  --eval 'document.documentElement.scrollWidth > window.innerWidth'   # true = horizontal overflow
+```
+
+`scripts/ui-shot.ts` launches Chrome's own binary with `--headless=new` and a
+throwaway `--user-data-dir` under the OS temp dir — a separate browser
+instance with no shared profile, window or tab — sets the viewport through
+`Emulation.setDeviceMetricsOverride`, loads the URL, optionally waits for a
+selector (`--wait-for`), evaluates a JS expression (`--eval` / `--eval-file`)
+and writes a PNG (`--out`). It prints one JSON object: the viewport, what the
+page reported as `innerWidth`/`innerHeight`/`devicePixelRatio`, the `result` of
+the expression and the screenshot path. `--size WxH` reaches any viewport
+(1366×1024 for the 12.9" Pro, ≥1921 for the 4K tier); `--help` lists every
+flag. The Chrome binary comes from `--chrome`, then `CW_CHROME_BIN`, then the
+standard `/Applications` path.
+
+Why headless rather than resizing a window: Chrome will not make a window
+narrower than ~500px, so a phone viewport is unreachable that way, and every
+shared-window measurement moves with whatever zoom the window happens to be
+at (grep learnings.md "ZOOM"). The script pins `deviceScaleFactor` to 1 and
+reports it, and hides the classic scrollbar (`--hide-scrollbars`) because it
+otherwise eats ~15px of layout width that an iOS overlay scrollbar does not.
+`claude-in-chrome` tools open tabs in Bryan's running Chrome — they are the
+thing this rule exists to stop, not a fallback when the script is inconvenient.
+
+The `--eval` expression runs **before** the screenshot, and promises are
+awaited — so an async expression that clicks, waits, and returns a reading
+produces a mid-flow screenshot, not just a cold load.
+
 ### iPad landscape — 1180×820 (and 1366×1024 on a 12.9" Pro), the primary device
 
-Chrome cannot be resized to an exact viewport reliably, so load the page inside a same-origin **1180×820 iframe** and drive that. Check: nothing is fixed or sticky that did not need to be, the primary content starts within the first screen, and no row exists purely to label the row under it. Measure with `getBoundingClientRect()` rather than eyeballing a screenshot — 36px is invisible to the eye and is 5% of the usable height.
+`--preset ipad` (or `--size 1366x1024`). Check: nothing is fixed or sticky that did not need to be, the primary content starts within the first screen, and no row exists purely to label the row under it. Measure with `getBoundingClientRect()` through `--eval` rather than eyeballing a screenshot — 36px is invisible to the eye and is 5% of the usable height.
 
 ### Phone — 430px
 
-1. Resize the browser to 430px wide (matches iPhone 16 Pro Max viewport).
+1. `--preset phone` (430×932, the iPhone 16 Pro Max viewport, with touch emulation on). A page with no `<meta name="viewport">` lays out at 980px here exactly as it does on a real phone — that reading is a finding about the page, not a tool fault.
 2. Open a markdown doc with a `setId` (so the dropdown logic is exercised) and inline code or long file paths in the content (so wrap behavior is exercised). Currently `a partner project-2433-plan` works.
-3. Check: no horizontal overflow at any scroll position, dropdown opens by default, scrolling closes it, headings fit within viewport.
-4. Hard reload (Cmd+Shift+R) — the markdown-app bundle and CSS are cached aggressively.
+3. Check: no horizontal overflow at any scroll position, dropdown opens by default, scrolling closes it, headings fit within viewport. The summary's `page.innerWidth` is the overflow check: with touch emulation on, content wider than the viewport makes the visual viewport zoom out exactly as a phone does, so a reading above 430 (an 8px body margin plus a `100vw` box reads 438) means the page overflowed, and `page.scrollWidth` says by how much.
+4. Every run is a fresh profile, so there is no cached bundle to hard-reload past — but the SERVER may still be serving an old build (grep learnings.md "restart reloads server code but NOT the served app bundle").
 
-If you can't easily get to a real iPhone, using Chrome DevTools' device toolbar at iPhone 16 Pro Max preset is acceptable for a first pass; ship-then-confirm for the real-device case.
+A real iPhone is still the last word for touch feel and Safari-only behavior; ship-then-confirm for the real-device case.
 
 ## Why these rules exist
 
