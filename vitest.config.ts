@@ -25,8 +25,25 @@ export default defineConfig({
     coverage: {
       provider: 'v8',
       reporter: ['text', 'html'],
-      include: ['packages/*/src/**/*.ts'],
-      exclude: ['packages/*/src/**/*.test.ts', 'packages/*/src/bin.ts'],
+      // `all`, so a source file no test imports counts as 0% rather than
+      // vanishing from the denominator. A coverage number that only measures
+      // the files somebody already tested is the number that cannot fall.
+      all: true,
+      // `packages/server/src` is deliberately absent: vitest never runs the
+      // server suite (see `exclude` above), so instrumenting its sources here
+      // would report the whole package as untested. `bun test --coverage`
+      // measures it instead, and `scripts/coverage.ts` joins the two.
+      include: [
+        'packages/core/src/**/*.ts',
+        'packages/markdown-app/src/**/*.{ts,tsx}',
+        'packages/mcp/src/**/*.ts',
+        'packages/widget/src/**/*.ts',
+      ],
+      exclude: [
+        'packages/*/src/**/*.test.{ts,tsx}',
+        'packages/*/src/bin.ts',
+        'packages/*/src/**/*.d.ts',
+      ],
     },
   },
 });

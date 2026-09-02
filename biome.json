@@ -9,10 +9,13 @@
       "**/data",
       "**/data-staging",
       "**/.bun-cache",
-      "packages/plugin/mcp"
+      "packages/plugin/mcp",
+      "**/.coverage"
     ]
   },
-  "organizeImports": { "enabled": true },
+  "organizeImports": {
+    "enabled": true
+  },
   "linter": {
     "enabled": true,
     "rules": {
