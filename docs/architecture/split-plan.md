@@ -82,21 +82,39 @@ where the deploy's own verification verdict is read back.
 
 Layer: HTTP. Final directory: `routes/` and `server/src/` respectively.
 
-## A2 · the board stores
+## A2 · the board stores — DONE
 
-| File | Becomes | Moves | Importers | Effort |
-|---|---|---|---|---|
-| `tasks.ts` (6,915) | `task-agents.ts` (~1300) | `attachAgent`, `heartbeat`, `leadSeatHealth`, `queueComment` | none — `TaskStore` delegates | L |
-| | `task-goals.ts` (~1000) | `setGoalList`, `renameGoal`, `reorderGoals`, `setTaskGoal` | none | |
-| | `workspace-store.ts` (~700) | `createWorkspace`, `renameWorkspace`, `setLeadAgent` | none | |
-| `task-projection.ts` (1,035) | `task-row.ts` (~250) | `projectTask` | `review-queue.ts`, `share/redact-hub-events.ts`, `review-items/derive.ts`, plus four test files | S |
+| File | Became | Moved | Measured |
+|---|---|---|---|
+| `tasks.ts` (6,915) | `workspace-store.ts` | `createWorkspace`, `renameWorkspace`, `setWorkspaceRetired`, `deleteWorkspace`, `setLeadAgent`, `attachDoc` | 569 (est. ~700) |
+| | `task-agents.ts` | `attachAgent`, `heartbeat`, `leadSeatHealth`, `mergeAgent`, the voice and comment queues | 1,506 (est. ~1300) |
+| | `task-goals.ts` | `setGoalList`, `renameGoal`, `addGoal`, `reorderGoals`, `setTaskGoal` | 811 (est. ~1000) |
+| `task-projection.ts` (1,035) | `task-row.ts` | `projectTask`, `projectBody`, `taskBodyDocId` | 309 (est. ~250) |
 
-Three commits for `tasks.ts`, one for `task-projection.ts`. `tasks.ts` has 35
-importing files, so the class must keep its public surface: each extraction
-declares the narrow persistence interface it actually needs, the way
-`review-items/store.ts` declares its nine members, and `TaskStore` forwards.
-The owner readers `ownerKindReader` and `claimSessionReader` belong beside the
-existing `task-owner.ts` rather than in `task-row.ts`.
+`tasks.ts` ends at **4,714** from 6,915, and `task-projection.ts` at 743.
+Four commits, one per file. `TaskStore` keeps its public surface — 35 files
+import it — through forwarders, and each extraction declares the narrow
+persistence interface it needs the way `review-items/store.ts` does.
+
+**What the estimates missed, and it is the same thing three times.** A store
+verb is not separable from the pure helpers it reads: `isRetired`,
+`publicAttachment`, `sequenceAfter` and their neighbours had to move WITH the
+verbs, because an extracted file may not import a value from the file that
+imports it. That is why `task-agents.ts` came out 200 lines over and
+`task-goals.ts` 190 under — the helpers followed the verbs rather than the
+plan's method lists. `tasks.ts` imports them back and re-exports them, so no
+caller outside changed.
+
+Two things stayed behind deliberately. `goalIdExists` and `syncGoalRows` are
+read by task verbs that did not move, so the store keeps them and the goal
+bands ask through the interface. The sidecar writers (`persistAttachments`,
+`scheduleAttachmentsSave`, the `rmSync` paths) stayed with `persist()` — same
+layer — and are reached as named persistence members rather than imported.
+
+`mergeAgent` moved to `task-agents.ts` rather than `workspace-store.ts`
+despite walking every board: everything it touches is an attachment, a
+comment queue or the lead seat, and splitting it the other way would have
+made the two files import each other.
 
 Layer: services, with `task-row.ts` in domain. Final directory: `board/`.
 
