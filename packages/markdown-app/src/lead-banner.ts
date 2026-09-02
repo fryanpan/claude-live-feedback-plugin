@@ -33,7 +33,21 @@ export interface LeadBanner {
   ready: Promise<void>;
   /** The last answer seen; null until one arrives. */
   presence(): LeadPresence | null;
+  /**
+   * Hear every answer as it lands — the floats' receipts use this so a
+   * "Review requested" with nobody to answer it says so, off the same
+   * read and stream the banner already holds rather than a second pair.
+   * Called at once with the current answer when there is one.
+   */
+  watch(onChange: (presence: LeadPresence | null) => void): () => void;
   destroy(): void;
+}
+
+/** A float's receipt line — "Asked by X — …" — needs a second half that
+ *  tells the truth about the wait. Null while a lead is live or unknown. */
+export function leadReceiptSuffix(presence: LeadPresence | null): string | null {
+  if (!presence || presence.live) return null;
+  return 'no lead agent attached, it will be answered when one attaches';
 }
 
 async function defaultFetchJson(url: string): Promise<unknown> {
@@ -105,6 +119,7 @@ export function mountLeadBanner(opts: LeadBannerOpts): LeadBanner {
 
   let current: LeadPresence | null = null;
   let disposed = false;
+  const watchers = new Set<(presence: LeadPresence | null) => void>();
 
   const render = (): void => {
     const line = leadBannerText(current);
@@ -116,6 +131,7 @@ export function mountLeadBanner(opts: LeadBannerOpts): LeadBanner {
     if (disposed || presence.docId !== opts.docId) return;
     current = presence;
     render();
+    for (const fn of watchers) fn(current);
   };
 
   const unsubscribe = subscribe(opts.docId, apply);
@@ -132,8 +148,16 @@ export function mountLeadBanner(opts: LeadBannerOpts): LeadBanner {
     element,
     ready,
     presence: () => current,
+    watch(onChange) {
+      watchers.add(onChange);
+      if (current !== null) onChange(current);
+      return () => {
+        watchers.delete(onChange);
+      };
+    },
     destroy() {
       disposed = true;
+      watchers.clear();
       unsubscribe();
       element.remove();
     },

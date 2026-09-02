@@ -29,8 +29,9 @@
  * Make Plan and still wants this.
  */
 
-import type { User } from '@feedback/core';
+import type { LeadPresence, User } from '@feedback/core';
 import { floatDock } from './float-dock.ts';
+import { leadReceiptSuffix } from './lead-banner.ts';
 
 /** What the subtitle calls the agent when the board names no lead. */
 const FALLBACK_LEAD = 'your agent';
@@ -57,6 +58,15 @@ export interface ReviewFloatOpts {
   /** The threads map — a resolve is what turns the receipt back into an
    *  offer. Re-renders on any change; nothing is fetched. */
   watchThreads?: (onChange: () => void) => () => void;
+  /**
+   * Whether anybody is listening — the lead banner's own read and stream
+   * (`lead-banner.ts`), shared rather than duplicated. While the seat is
+   * empty the receipt says so in its second line: Bryan pressed Review on
+   * prod with the agent offline and the float read "waiting for your
+   * agent" as if one were coming (2026-09-01). Absent, the receipt reads
+   * as it always did.
+   */
+  watchLeadPresence?: (onChange: (presence: LeadPresence | null) => void) => () => void;
 }
 
 export type ReviewFloatFace = 'none' | 'ask' | 'requested';
@@ -122,6 +132,7 @@ export function mountReviewFloat(opts: ReviewFloatOpts): ReviewFloatHandle {
   let requestedBy: string | undefined;
   let threadId: string | undefined;
   let lead: string | undefined;
+  let presence: LeadPresence | null = null;
   let loaded = false;
   let busy = false;
   let disposed = false;
@@ -152,9 +163,13 @@ export function mountReviewFloat(opts: ReviewFloatOpts): ReviewFloatHandle {
       subEl.textContent = `Ask ${named} to review the notes`;
     } else if (face === 'requested') {
       labelEl.textContent = 'Review requested';
+      // The second half tells the truth about the wait: "waiting for X"
+      // while X is listening, and "no lead agent attached" while nobody
+      // is — an unanswered ask that explains itself.
+      const wait = leadReceiptSuffix(presence) ?? `waiting for ${named}`;
       subEl.textContent = requestedBy
-        ? `Asked by ${requestedBy} — waiting for ${named}`
-        : `Waiting for ${named}`;
+        ? `Asked by ${requestedBy} — ${wait}`
+        : `${wait[0]?.toUpperCase()}${wait.slice(1)}`;
     }
     subEl.hidden = subEl.textContent === '';
     if (face !== 'ask') error.hidden = true;
@@ -205,12 +220,17 @@ export function mountReviewFloat(opts: ReviewFloatOpts): ReviewFloatHandle {
   const stopThreadWatch = opts.watchThreads?.(() => {
     if (!disposed && loaded) render();
   });
+  const stopPresenceWatch = opts.watchLeadPresence?.((p) => {
+    presence = p;
+    if (!disposed && loaded) render();
+  });
 
   return {
     destroy(): void {
       disposed = true;
       stopMetaWatch?.();
       stopThreadWatch?.();
+      stopPresenceWatch?.();
       float.remove();
       error.remove();
     },

@@ -11,7 +11,7 @@
  * receipt's timer is injected too so nothing here sleeps. Fixtures are
  * synthetic (jordan@partner.example register).
  */
-import type { User } from '@feedback/core';
+import type { LeadPresence, User } from '@feedback/core';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { mountPlanGate } from '../src/plan-gate.ts';
 
@@ -571,6 +571,37 @@ describe('mountPlanGate', () => {
     expect(gate.planState()).toBe('approved');
     // …and an approved plan needs no stream any more.
     expect(stops).toEqual(['w-test']);
+    gate.destroy();
+  });
+  it('the Plan requested receipt says when no lead agent is attached', async () => {
+    // Same second line as the Review float's receipt, off the same feed.
+    const feed: { push: (p: LeadPresence | null) => void } = { push: () => {} };
+    const gate = mountPlanGate({
+      docId: 'd-ask',
+      root,
+      user: JORDAN,
+      canWrite: true,
+      fetchJson: stubFetch([
+        {
+          meta: { huddleKind: 'discussion', planRequestedAt: 1e12, planRequestedBy: 'Sam' },
+          tasks: [],
+          leadAgentId: 'Workspaces',
+        },
+      ]).fetchJson,
+      watchLeadPresence: (onChange) => {
+        feed.push = onChange;
+        return () => {};
+      },
+    });
+    await gate.ready;
+    expect(gate.face()).toBe('requested');
+    expect(sub()).toBe('Asked by Sam — waiting for Workspaces');
+    feed.push({ event: 'lead.presence', docId: 'd-ask', workspaceId: 'w-1', live: false });
+    expect(sub()).toBe(
+      'Asked by Sam — no lead agent attached, it will be answered when one attaches',
+    );
+    feed.push({ event: 'lead.presence', docId: 'd-ask', workspaceId: 'w-1', live: true });
+    expect(sub()).toBe('Asked by Sam — waiting for Workspaces');
     gate.destroy();
   });
 });

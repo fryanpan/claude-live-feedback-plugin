@@ -7,7 +7,7 @@
  *
  * Driven through the injected seams: no server, no Yjs. Fixtures synthetic.
  */
-import type { User } from '@feedback/core';
+import type { LeadPresence, User } from '@feedback/core';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { mountPlanGate } from '../src/plan-gate.ts';
 import { mountReviewFloat } from '../src/review-float.ts';
@@ -75,6 +75,28 @@ function sub(): string | undefined {
 }
 
 const HUDDLE: DocAnswer = { meta: { huddle: true, huddleKind: 'discussion' } };
+
+/** A hand-cranked lead-presence feed, the shape `lead-banner.ts` exposes. */
+function stubPresence() {
+  let fn: ((p: LeadPresence | null) => void) | null = null;
+  let stopped = 0;
+  return {
+    watch: (onChange: (p: LeadPresence | null) => void) => {
+      fn = onChange;
+      return () => {
+        stopped += 1;
+      };
+    },
+    push: (p: LeadPresence | null) => fn?.(p),
+    stopped: () => stopped,
+  };
+}
+const PRESENCE = (live: boolean): LeadPresence => ({
+  event: 'lead.presence',
+  docId: 'd-h',
+  workspaceId: 'w-1',
+  live,
+});
 
 describe('mountReviewFloat', () => {
   it('an ordinary doc gets no float, and neither does a reader on a huddle', async () => {
@@ -292,5 +314,96 @@ describe('mountReviewFloat', () => {
     review.destroy();
     // Both gone; the dock is a row with nothing in it, not a second row.
     expect(pane.querySelectorAll('.plan-float')).toHaveLength(0);
+  });
+  describe('the receipt says when nobody is listening', () => {
+    // Bryan pressed Review on prod with the agent offline: "Review requested
+    // and no agent answered". The float read "waiting for your agent" as if
+    // one were coming. The receipt now takes the lead banner's own answer
+    // and says so — an unanswered ask that explains itself.
+    const REQUESTED: DocAnswer = {
+      meta: {
+        huddle: true,
+        reviewRequestedAt: 1e12,
+        reviewRequestedBy: 'Sam',
+        reviewThreadId: 't',
+      },
+      leadAgentId: 'Workspaces',
+    };
+
+    it('reads "no lead agent attached" while the seat is empty, and flips back live', async () => {
+      const feed = stubPresence();
+      const float = mountReviewFloat({
+        docId: 'd-h',
+        root,
+        user: JORDAN,
+        canWrite: true,
+        fetchJson: stubFetch([REQUESTED]).fetchJson,
+        threadOpen: () => true,
+        watchLeadPresence: feed.watch,
+      });
+      await float.ready;
+      expect(float.face()).toBe('requested');
+      expect(sub()).toBe('Asked by Sam — waiting for Workspaces');
+      feed.push(PRESENCE(false));
+      expect(sub()).toBe(
+        'Asked by Sam — no lead agent attached, it will be answered when one attaches',
+      );
+      feed.push(PRESENCE(true));
+      expect(sub()).toBe('Asked by Sam — waiting for Workspaces');
+      float.destroy();
+      expect(feed.stopped()).toBe(1);
+    });
+
+    it('a presence that arrives BEFORE the doc loads is applied on load', async () => {
+      const feed = stubPresence();
+      let resolve: (v: unknown) => void = () => {};
+      const float = mountReviewFloat({
+        docId: 'd-h',
+        root,
+        user: JORDAN,
+        canWrite: true,
+        fetchJson: () => new Promise((r) => (resolve = r)),
+        threadOpen: () => true,
+        watchLeadPresence: feed.watch,
+      });
+      feed.push(PRESENCE(false));
+      resolve(REQUESTED);
+      await float.ready;
+      expect(sub()).toContain('no lead agent attached');
+      float.destroy();
+    });
+
+    it('with nobody named as the asker the line still starts as a sentence', async () => {
+      const feed = stubPresence();
+      const float = mountReviewFloat({
+        docId: 'd-h',
+        root,
+        user: JORDAN,
+        canWrite: true,
+        fetchJson: stubFetch([{ meta: { huddle: true, reviewRequestedAt: 1e12 } }]).fetchJson,
+        watchLeadPresence: feed.watch,
+      });
+      await float.ready;
+      feed.push(PRESENCE(false));
+      expect(sub()).toBe('No lead agent attached, it will be answered when one attaches');
+      float.destroy();
+    });
+
+    it('the offer face is untouched — only the receipt explains a wait', async () => {
+      const feed = stubPresence();
+      const float = mountReviewFloat({
+        docId: 'd-h',
+        root,
+        user: JORDAN,
+        canWrite: true,
+        fetchJson: stubFetch([{ ...HUDDLE, leadAgentId: 'Workspaces' }]).fetchJson,
+        watchLeadPresence: feed.watch,
+      });
+      await float.ready;
+      feed.push(PRESENCE(false));
+      expect(float.face()).toBe('ask');
+      expect(sub()).toBe('Ask Workspaces to review the notes');
+      float.destroy();
+    });
   });
 });
