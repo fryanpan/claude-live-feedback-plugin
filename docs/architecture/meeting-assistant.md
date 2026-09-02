@@ -908,32 +908,86 @@ Cost, measured on the capture model with `count_tokens` rather than estimated
 (`scripts/capture-overlap-cost.ts`): **+92 input tokens per tick** at a full
 window — 43 for the standing instruction, 49 for the speech.
 
-New rows are
-attributed to the `Meeting Assistant` agent actor and enter triage; a request
-judged clear-and-doable goes to the chores band at `todo` and wakes the
-board's lead through `ReadyWorkNudger.taskReady` — the composer never claims
-`in-progress` itself. The composer receives the resolved links and writes
+**A spoken request files what the same words tapped would file** (2026-09-01,
+the mid-meeting-help board task, criterion 3). The pointer pill's Create Task and the
+capture pass are one path with two triggers: both build the body with
+`spinoffBody` and read readiness with `readyToWork` (`packages/core/src/
+spinoff.ts`), and both go through `parseTaskCreate` — the parse every create
+route runs — with `origin: {kind: 'doc'}` and the transcript's own line as
+the row's quote. The first version hand-built its options and drifted from
+the pill (a different body, a different readiness rule), and "create a task"
+said aloud did nothing for a subtler reason: the pass scoped itself on the
+doc's `setId`, which a huddle doc never has — it is HELD by a hub workspace,
+not owned by one. `withServerNotesSinks` now takes `boardOf`, wired to the
+doc page's own back-target lookup, so the board a huddle's asks land on is
+the board its back arrow points at. New rows are attributed to the `Meeting
+Assistant` agent actor and enter triage; a request judged actionable by the
+model AND ready by the pill's rule is PLACED — `TaskStore.placeSpinoff`: the
+goal of the task the doc BELONGS TO (a huddle started with `taskId` links
+the doc onto that task, the ref `link_refs` writes; an open, worked owner
+holding a listed goal), else the board's top active band (first in priority
+order that is `todo` or `in-progress`, chores excluded), else chores — never
+triage — owned by the lead when the seat is held, moved to `todo`, and wakes
+the board's lead through `ReadyWorkNudger.taskReady`. The pill's Create Task
+asks for the same placement with `spinoff: true` on its create, its origin
+doc naming which huddle (Bryan, 2026-09-01: *"tasks were created in Backlog
+and not automatically started"*). Every such row's body quotes the whole
+line and links back to the doc (`spinoffDocHref`, core); the title is a
+trimmed reading of the same words.
+The composer never claims `in-progress` itself. A repeated mention links the row the board
+already has (find-or-create on a normalized title, then two shared
+significant words) rather than filing twice. The composer receives the resolved links and writes
 plain markdown links into the notes; the doc editor's `TaskLinkChips`
 decoration (markdown-app) renders title + live status chip beside them,
 refreshed on the board's `task.transitioned` SSE push, without ever touching
 stored content.
 
+**Make Plan shows on both huddle kinds** (2026-09-01: Bryan started a
+discussion, reached a plan, and had no button). The plan gate's face rule
+admitted only `huddleKind: 'plan'`; the plan-request route never refused a
+discussion. And both floats' receipts — "Plan requested", "Review requested"
+— read *no lead attached; answered when one joins* while
+the seat is empty, off the lead banner's own answer (`LeadBanner.watch`),
+because Bryan pressed Review with the agent offline and the receipt said
+"waiting for your agent" as if one were coming.
+
 ## Acting on speech, not only recording it
 
-Three more intents ride the SAME capture call — no router, no second pass, per
+Four more intents ride the SAME capture call — no router, no second pass, per
 the 2026-08-30 decision *"One call per tick carries every intent"*. One reply,
 one `items` array, a `kind` per intent, rows parsed independently so a
 malformed one never costs the others. The module is still called
 `meeting-task-capture.ts`; its name predates most of what it carries.
 
-**They are not symmetrical, and that is the design.** A LOOKUP only reads, so
-a wrong one costs a link nobody wanted. A RESEARCH ask SPENDS — an agent goes
-away and burns tokens on a report — so it is never acted on from speech
-alone. A CORRECTION does neither: it *changes something already written*, so
-it is the only intent whose guard cannot be finished in the capture pass at
-all.
+**Detection is the capture call, not a keyword pass** (the approach written
+down before criterion 4 was built): every ask is classified by the one Haiku
+call the tick already makes, on the new lines plus the previous tick's marked
+tail, so an ask that straddles a tick boundary ("ask the team whether we" /
+boundary / "still need the tunnel") is read whole, and every returned phrase
+is vouched against the transcript before anything files. A regex over the
+words would catch "can you research X" and miss "go look into that", which
+is most of how people ask.
 
-### "Go look into that" — research, confirmed before it is spent
+**They are not symmetrical, and that is the design.** A LOOKUP only reads, so
+a wrong one costs a link nobody wanted. A RESEARCH ask and a REVIEW ask each
+address somebody — the lead — so each lands where that person reads. A
+CORRECTION does neither: it *changes something already written*, so it is
+the only intent whose guard cannot be finished in the capture pass at all.
+
+### "Can you research that" — a placeholder in the notes, and the lead's errand
+
+**The pointer pill's Research is a section in the doc, not a task**
+(2026-09-01, after Bryan pressed it on prod: *"it just creates a task — does
+not follow the flow in the mockups"*). `POST /api/docs/:id/research-request`
+files an anchored thread on the selected line from the presser — the same
+comment channel Make Plan and Review ride — and inserts `## Research:
+<topic>` with a *Researching — in progress.* line as a top-level block after
+that line (`researchPlaceholderMarkdown`, huddle.ts). The thread names the
+section so the agent writes there and resolves the thread when it has.
+
+The SPOKEN ask below still files the lead's row as well as the section: a
+meeting has no selection to anchor on, and the row is what wakes the lead
+through the ready-nudge channel. Both leave the same section shape.
 
 The ask this catches almost never contains the word *research*: it is "go
 look into that", "dig into why it does that", "find out what it would take".
@@ -944,31 +998,39 @@ which is the `requestMatchesCandidate` threshold and holds for the same
 reason. A topic with no significant words at all — "that thing" — is dropped
 rather than let through on an empty match.
 
-What lands is **a row in triage plus a decision review item**, and the
-confirmation is enforced rather than promised:
+What lands is **what the pointer pill's Research files** (2026-09-01,
+superseding the 2026-08-31 "confirm before it is spent" gate — owner's plan:
+*"the agent writes a placeholder section immediately, then fills it"*):
 
-- **The row is never set moving.** Dispatch works `todo` rows; this one stays
-  at `triage`, unvetted until a person places it, the way every other
-  agent-filed row is. It is filed asking for no band — but note that the
-  store fills `chores` in anyway (`opts.goal ?? CHORES_GOAL_ID`), so the
-  absent band is *not* what protects it. An earlier draft of this section
-  claimed it was, and the integration test against the real store said
-  otherwise.
-- **An open review item holds the row.** `ready-gate.ts` reports
-  `awaiting-answer` for a row carrying an unanswered item, so it stays held
-  even once somebody triages it.
+- **A row titled `Research: <topic>`, the lead's errand.** Filed through
+  `parseTaskCreate` with `assignToLead: true`, exactly as the pill posts it:
+  the board's lead owns it and it is `todo`, woken through
+  `ReadyWorkNudger.taskReady`; with nobody in the seat it sits at `triage`
+  owned by nobody — never by the asker, and never by the assistant. The body
+  carries the question, who asked, the spoken line, and the name of the doc
+  section the findings are expected in.
+- **A placeholder section in the doc, at once.** `appendResearchPlaceholder`
+  (meeting-notes-doc.ts) adds `## Research: <topic>` with one line linking
+  the row, idempotent by heading, so the person who asked can see where the
+  answer will land before the lead has started.
 
-Answering it needs no new machinery: `decision.answered` already wakes the
-board's lead through `ReadyWorkNudger.reviewAnswered`. A second ask for the
-same topic — in the same tick or a later one — links the row rather than
-filing a second card, on the board's own find-or-create.
+A second ask for the same topic — in the same tick or a later one — links
+the row rather than filing a second one, on the board's own find-or-create,
+and leaves the one section.
 
-`addReviewItem` emits no store event by design, so the caller owes the item
-two steps this module cannot reach: `taskProjection.ensureWorkspace` and
-`announceTaskReview`. That is the `onReviewFiled` callback, and it is the
-contract `proposeAllowRule` (allow-rules.ts) already honours. Filing through
-the store rather than the HTTP route also means the item skips the LLM
-quality gate, exactly as an allow-rule proposal does.
+### "Ask the team whether…" — a review ask
+
+"Ask the team whether we still need the tunnel", "can somebody check these
+notes", "get the lead to review this": the same thing the Review float's press
+files (PR #571), with the question attached. `fileReviewRequest` in server.ts
+is one function for both triggers — a subject thread on the doc from the
+meeting assistant (`spokenReviewComment`, huddle.ts) and the doc stamped
+review-requested naming that thread, so the float shows the ask is open. The
+guard is the transcript again (`phraseSpokenOnTick` on the question), and
+"a question the room goes on to answer itself is not an ask" is in the
+prompt. Deduped twice: within a tick by normalized question, and per meeting
+in `withServerNotesSinks`, so a question repeated ten minutes later does not
+open a second thread; a new recording on the doc is a new meeting.
 
 ### "Pull in last week's notes" — lookup
 
@@ -1091,13 +1153,17 @@ whether this intent is useful or a nuisance.
 
 ### Cost
 
-The three intents are prompt text on a call that was already being made.
+The four intents are prompt text on a call that was already being made.
 Measured with `count_tokens` on the capture model
-(`scripts/intent-prompt-cost.ts`, on a fixture tick carrying all three), the
-prompt goes **501 → 649 → 735 → 888 input tokens**: **+148 for research, +86
-for lookup, +153 for correction — +387 per tick.** At ~200 ticks per
-meeting-hour and $1/MTok that is **≈ $0.077 per meeting-hour**, taking the
-measured $0.84 to about **$0.92**.
+(`scripts/intent-prompt-cost.ts`, on a fixture tick carrying all four), the
+prompt goes **530 → 699 → 785 → 938 → 1057 input tokens**: **+169 for
+research, +86 for lookup, +153 for correction, +119 for the review ask —
++527 per tick.** (The earlier figures — 501 → 888 — were on a three-line
+fixture tick; the fourth line adds ~30 tokens to every stage, and the
+research stage now carries the direct-ask examples criterion 4 added.) At
+~200 ticks per meeting-hour and $1/MTok the review ask is **≈ $0.024 per
+meeting-hour**, the four together ≈ $0.105, taking the measured $0.84 to
+about **$0.95**.
 
 Roughly two to three times the decision's ~58-tokens-per-intent figure,
 because each rule carries the example phrasings that teach an ask nobody
@@ -1105,6 +1171,28 @@ states explicitly — which is the feature. Correction is the priciest of the
 three for the same reason it is the most likely to misfire: most of its rule
 is the line separating a correction from somebody changing their mind. Output
 is unchanged on the ticks that carry none of them, which is most of them.
+
+## Is anybody listening — lead presence (`lead-presence.ts`)
+
+Every ask a meeting doc makes addresses the board's lead seat, and all of
+them file fine into an empty one; the person then waits on an answer that is
+not coming. So the doc says it (criterion 5, owner's call: a banner in the
+doc, recording starts anyway): a standing line at the top of the prose —
+*No lead agent is listening — asks made here will queue until one attaches*
+— shown on huddle docs while it is true and gone the moment it is not.
+Not dismissable: the state is the thing to fix.
+
+"Attached" is the store's word, not a new one: `leadSeatHealth` — the seat is
+held AND its holder is deliverable (a stream open on `ws~<id>`, or observed
+within the delivery window), the same read the board's presence strip and
+`hasLiveLeadAttachment` make. Merely connected is not enough, for the reason
+that predicate exists. The page asks once (`GET
+/api/docs/:docId/lead-presence`, which also registers the doc) and then
+hears changes on the doc's event stream as a `lead.presence` transient —
+change-only on the one bit the banner shows, pushed only to docs a page has
+asked about, on store attach/detach/heartbeat/seat events plus the hub's
+`onAgentStreams` hook (a stream opening emits no store event), with a 15s
+sweep for the window closing silently and for dropping docs nobody has open.
 
 ## Measuring the latency (`?timing=1`)
 

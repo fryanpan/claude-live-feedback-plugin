@@ -1,16 +1,11 @@
 /**
- * The research confirmation against the REAL board, not a recorder.
+ * The research row against the REAL board, not a recorder.
  *
- * The recorder in `meeting-task-capture.test.ts` proves the pipeline calls
- * `addReviewItem` with the shape this module means to send. It cannot prove
- * the store ACCEPTS that shape — `checkReviewPayload` refuses a payload on
- * half a dozen grounds, and a stub that says `ok` to anything would let a
- * research ask file a row with no confirmation on it and no test would
- * notice. So this drives `runTaskCapture` through a real `TaskStore`.
- *
- * The other half is the gate the confirmation leans on: an open review item
- * is what stops the row being dispatched, and `awaiting-answer` is asserted
- * here for the row this pass actually filed.
+ * The recorder in `meeting-task-capture.test.ts` proves the pipeline hands
+ * `createTask` the shape `parseTaskCreate` produced. It cannot prove the
+ * store PLACES that shape where the pill's Research lands — lead-addressed
+ * and `todo` when the board has a lead, unowned at triage when it has none.
+ * So this drives `runTaskCapture` through a real `TaskStore`.
  *
  * All fixtures are synthetic. The repo is public.
  */
@@ -18,14 +13,14 @@ import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { isReviewItemOpen } from '@feedback/core';
 import type { NotesTurn } from '../src/meeting-notes.ts';
 import { runTaskCapture } from '../src/meeting-task-capture.ts';
 import { TaskStore } from '../src/tasks.ts';
+import { seedGoals } from './goal-seed.ts';
 
 const turns: NotesTurn[] = [
   { turn: 4, speaker: 'Priya', text: 'The offline queue keeps replaying the same batch.' },
-  { turn: 5, speaker: 'Priya', text: 'Somebody go look into the offline queue replay, please.' },
+  { turn: 5, speaker: 'Priya', text: 'Can you research the offline queue replay for us, please.' },
 ];
 
 const extractorOf = (items: unknown) => ({
@@ -47,10 +42,33 @@ describe('a research ask on the real board', () => {
     rmSync(dataDir, { recursive: true, force: true });
   });
 
-  it('files a row the store accepts, carrying an OPEN decision item', async () => {
-    const ws = store.createWorkspace('Voice research');
-    const filed: string[] = [];
+  it('lands in the board’s top active band, not in chores/Backlog', async () => {
+    // Bryan found the spoken research row in Backlog (2026-09-01). Same
+    // placement as every spin-off: `placeSpinoff`, the first band being
+    // worked.
+    const ws = store.createWorkspace('Placed research', { leadAgentId: 'agent-helper' });
+    const G = seedGoals(store, ws.id, [{ key: 'top', title: 'Ship the meeting asks' }], {
+      id: 'known-bryan',
+      name: 'Bryan',
+      kind: 'known',
+    });
+    await runTaskCapture(
+      {
+        board: store,
+        extractor: extractorOf([{ kind: 'research', topic: 'offline queue replay' }]),
+      },
+      { workspaceId: ws.id, docId: 'doc-meeting', docTitle: 'Queue review', turns },
+    );
+    const row = store.listTasks(ws.id).find((t) => t.kind !== 'goal');
+    expect(row?.goal).toBe(G.top);
+    expect(row?.status).toBe('todo');
+    expect(row?.assignee).toBe('agent-helper');
+  });
+
+  it('with a lead seated, files the lead a todo the way the pill does', async () => {
+    const ws = store.createWorkspace('Voice research', { leadAgentId: 'agent-helper' });
     const errors: string[] = [];
+    const filed: string[] = [];
     const links = await runTaskCapture(
       {
         board: store,
@@ -62,7 +80,7 @@ describe('a research ask on the real board', () => {
             requester: 'Priya',
           },
         ]),
-        onReviewFiled: ({ item }) => filed.push(item.id),
+        onResearchFiled: ({ url }) => filed.push(url),
         onError: (m) => errors.push(m),
       },
       { workspaceId: ws.id, docId: 'doc-meeting', docTitle: 'Queue review', turns },
@@ -77,29 +95,23 @@ describe('a research ask on the real board', () => {
     const row = rows[0];
     if (!row) throw new Error('no row filed');
     expect(row.title).toBe('Research: offline queue replay');
-    // Never set moving: dispatch works `todo` rows, and this one is unvetted
-    // until a person triages it.
-    expect(row.status).toBe('triage');
-    // And NOT banded out of reach — the store fills in `chores` for a caller
-    // that names no goal (`tasks.ts`, `opts.goal ?? CHORES_GOAL_ID`). This
-    // assertion exists because an earlier version of this design claimed the
-    // absent band was what held the row. It is not; the two lines below are.
-    expect(row.goal).toBe('chores');
-
-    // The confirmation is really on the ticket, really a decision, and really
-    // open — the three things the gate below reads.
-    const items = store.listReviewItems(row.id);
-    expect(items).toHaveLength(1);
-    const item = items[0];
-    if (!item) throw new Error('no review item filed');
-    expect(filed).toEqual([item.id]);
-    expect(item.review.shape).toBe('decision');
-    expect(item.review.options?.map((o) => o.id)).toEqual(['go-ahead', 'not-now']);
-    expect(isReviewItemOpen(item)).toBe(true);
-    expect(item.createdBy).toBe('Meeting Assistant');
+    // The lead's errand, ready to pick up — the pill's own placement.
+    expect(row.assignee).toBe('agent-helper');
+    // Placed by the board's own rule: no active band here, so chores —
+    // and not left to the store's default, which reads the same today but
+    // would silently diverge the day the rule changes.
+    expect(row.goal).toBe(store.placeSpinoff(ws.id)?.goal ?? '');
+    expect(row.assigneeKind).toBe('agent');
+    expect(row.status).toBe('todo');
+    expect(row.body).toContain('why does the same batch repeat?');
+    expect(row.body).toContain('Priya');
+    expect(row.body).toContain('> Priya: Can you research the offline queue replay');
+    expect(row.origin).toEqual({ kind: 'doc', docId: 'doc-meeting' });
+    expect(filed).toEqual([`/workspaces/${ws.id}?task=${row.id}`]);
+    expect(links.tasks[0]?.status).toBe('todo');
   });
 
-  it('the open item is what holds the row, and answering releases it', async () => {
+  it('with no lead, files at triage owned by nobody rather than by the asker', async () => {
     const ws = store.createWorkspace('Voice research');
     await runTaskCapture(
       {
@@ -110,21 +122,9 @@ describe('a research ask on the real board', () => {
     );
     const row = store.listTasks(ws.id).find((t) => t.kind !== 'goal');
     if (!row) throw new Error('no row filed');
-    const item = store.listReviewItems(row.id)[0];
-    if (!item) throw new Error('no review item filed');
-
-    // Held while unanswered — this is the enforcement the design leans on,
-    // rather than a promise made in a prompt.
-    expect(store.reviewState(row.id)?.open).toBe(1);
-
-    const answered = store.answerTaskReview(row.id, item.id, 'Go ahead', {
-      actor: { id: 'user-reader', name: 'Reader', kind: 'human' },
-      answeredWith: 'go-ahead',
-    });
-    expect(answered.ok).toBe(true);
-    // Released. The row is still in triage — a person places it, the way
-    // every other agent-filed row is placed.
-    expect(store.reviewState(row.id)?.open).toBe(0);
-    expect(store.getTask(row.id)?.status).toBe('triage');
+    expect(row.status).toBe('triage');
+    // Not the meeting assistant's: research is an errand for whoever leads,
+    // and with nobody in the seat the row waits for a person to place it.
+    expect(row.assignee).not.toBe('Meeting Assistant');
   });
 });

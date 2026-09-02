@@ -6,8 +6,11 @@
  *   Make Plan       — a plan doc nobody has asked about yet. Pressing it
  *                     ASKS: it files an ordinary comment from the presser,
  *                     which is how the agent hears (see plan-request on the
- *                     server). Only on a `huddleKind: 'plan'` doc — an
- *                     ordinary doc has no agent waiting on a goal.
+ *                     server). On EITHER huddle kind — a discussion turns
+ *                     into a plan as often as a planning session does
+ *                     (Bryan, 2026-09-01: "there should be a plan button in
+ *                     discussions too"). An ordinary doc has no agent
+ *                     waiting on a goal, so it gets nothing.
  *   Plan requested  — somebody pressed and the agent has not answered yet.
  *                     Not a control, just the honest state: pressing again is
  *                     allowed, so the button stays live.
@@ -33,8 +36,9 @@
  * itself rather than offering a stale Approve.
  */
 
-import type { User } from '@feedback/core';
+import type { LeadPresence, User } from '@feedback/core';
 import { floatDock } from './float-dock.ts';
+import { leadReceiptSuffix } from './lead-banner.ts';
 
 /** How long "✓ Plan Approved" stays before the doc is just a doc again. It
  *  is a receipt for a press the person just made, not a state to live in. */
@@ -71,6 +75,9 @@ export interface PlanGateOpts {
    * surface. Injected rather than reached for so a test drives it without Yjs.
    */
   watchDocMeta?: (onChange: () => void) => () => void;
+  /** Whether anybody is listening — see `ReviewFloatOpts.watchLeadPresence`;
+   *  the "Plan requested" receipt says the same second line. */
+  watchLeadPresence?: (onChange: (presence: LeadPresence | null) => void) => () => void;
   /** Injected so a test can retire the approved notice without waiting on a
    *  real clock. Defaults to the real timers. */
   setTimer?: (fn: () => void, ms: number) => number;
@@ -172,6 +179,7 @@ export function mountPlanGate(opts: PlanGateOpts): PlanGateHandle {
 
   let state: string | undefined;
   let kind: string | undefined;
+  let presence: LeadPresence | null = null;
   let requestedAt: number | undefined;
   let requestedBy: string | undefined;
   let lead: string | undefined;
@@ -190,8 +198,10 @@ export function mountPlanGate(opts: PlanGateOpts): PlanGateHandle {
     if (approvedNotice !== null) return 'approved';
     if (state === 'pending') return 'approve';
     if (state !== undefined) return 'none';
-    // No plan state yet: only a "Make a plan" doc offers to start one.
-    if (kind !== 'plan') return 'none';
+    // No plan state yet: only a huddle doc offers to start one. Both kinds
+    // — this used to read `kind !== 'plan'`, and the discussion Bryan
+    // started had nowhere to ask for the plan it had arrived at.
+    if (kind !== 'plan' && kind !== 'discussion') return 'none';
     return requestedAt === undefined ? 'make' : 'requested';
   }
 
@@ -222,9 +232,10 @@ export function mountPlanGate(opts: PlanGateOpts): PlanGateHandle {
       // could equally mean "nothing happened". No clock: "asked by" is the
       // fact a second presser needs, and a relative time would go stale in
       // place with nothing to re-render it.
+      const wait = leadReceiptSuffix(presence) ?? `waiting for ${named}`;
       subEl.textContent = requestedBy
-        ? `Asked by ${requestedBy} — waiting for ${named}`
-        : `Waiting for ${named}`;
+        ? `Asked by ${requestedBy} — ${wait}`
+        : `${wait[0]?.toUpperCase()}${wait.slice(1)}`;
     } else if (face === 'approve') {
       labelEl.textContent = 'Approve Plan';
       subEl.textContent = 'Creates the goal and tickets, starts work';
@@ -339,6 +350,10 @@ export function mountPlanGate(opts: PlanGateOpts): PlanGateHandle {
   // The doc's own metadata, watched from mount — this is what carries the
   // plan's ARRIVAL (see `watchDocMeta`). Unconditional rather than gated on a
   // face: the gate that used to decide when to listen is the bug.
+  const stopPresenceWatch = opts.watchLeadPresence?.((p) => {
+    presence = p;
+    if (!disposed && loaded) render();
+  });
   const stopMetaWatch = opts.watchDocMeta?.(() => {
     if (!disposed) void load();
   });
@@ -347,6 +362,7 @@ export function mountPlanGate(opts: PlanGateOpts): PlanGateHandle {
     destroy(): void {
       disposed = true;
       stopMetaWatch?.();
+      stopPresenceWatch?.();
       if (noticeTimer !== undefined) clearTimer(noticeTimer);
       for (const stop of streams.values()) stop();
       streams.clear();

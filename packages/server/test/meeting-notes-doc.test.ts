@@ -635,13 +635,12 @@ describe('withServerNotesSinks task capture', () => {
         return { ok: false as const, error: 'workspace-retired' };
       },
       transition: () => ({ ok: false as const }),
-      addReviewItem: () => ({ ok: false, error: 'not-found' }) as never,
     };
     const extractor = {
       name: 'stub',
       extract: () => Promise.resolve([{ kind: 'reference' as const, taskId: 't-live' }]),
     };
-    return { rooms, board, created, wakes, extractor };
+    return { ydoc, rooms, board, created, wakes, extractor };
   };
 
   it('assembles a per-tick capture that resolves the doc board and links rows', async () => {
@@ -686,16 +685,13 @@ describe('withServerNotesSinks task capture', () => {
     expect(links).toEqual({ tasks: [], docs: [] });
   });
 
-  it('threads the lookup source and the review-filed callback through', async () => {
-    // The wiring, not the pipeline: the pass has no way to reach the board's
-    // docs or to announce a filed confirmation except through these two, and
-    // `createServer` is the only place either can be built.
+  it('threads the lookup source through, and writes the research placeholder', async () => {
     const w = captureWorld();
-    const asked: Array<[string, string]> = [];
+    const asked: Array<[string, string | undefined]> = [];
     const filed: string[] = [];
     const wired = withServerNotesSinks(
       {
-        composer: { name: 's', compose: async () => 'n' },
+        composer: { name: 'stub', compose: () => Promise.resolve('') },
         taskExtractor: {
           name: 'stub',
           extract: () =>
@@ -710,8 +706,7 @@ describe('withServerNotesSinks task capture', () => {
         tasks: () => ({ listTasks: () => [] }),
         captureBoard: () => ({
           ...w.board,
-          createTask: () => ({ ok: true as const, task: { id: 't-r1' } }),
-          addReviewItem: () => ({ ok: true, task: { id: 't-r1' }, item: { id: 'r-1' } }) as never,
+          createTask: () => ({ ok: true as const, task: { id: 't-r1', status: 'triage' } }),
         }),
         lookup: {
           docs: (ws, except) => {
@@ -719,7 +714,7 @@ describe('withServerNotesSinks task capture', () => {
             return [{ docId: 'd-des', title: 'Retention sweep design' }];
           },
         },
-        onReviewFiled: ({ item }) => filed.push(item.id),
+        onResearchFiled: ({ taskId }) => filed.push(taskId),
       },
     );
     const links = await wired.captureIntents?.({
@@ -735,11 +730,114 @@ describe('withServerNotesSinks task capture', () => {
     expect(links?.docs).toEqual([
       { title: 'Retention sweep design', url: '/workspaces/w-1/docs/d-des' },
     ]);
-    // And the filed confirmation reached the callback that owes it its
-    // projection and its announce.
-    expect(filed).toEqual(['r-1']);
+    // The research row landed, and the doc got its placeholder section —
+    // headed with the row's title, linking the row — before the observer
+    // heard about it.
+    expect(filed).toEqual(['t-r1']);
+    const md = markdownOf(w.ydoc);
+    expect(md).toContain('## Research: retention sweep');
+    expect(md).toContain('/workspaces/w-1?task=t-r1');
+    // Idempotent: a second landing of the same row leaves one section.
+    const before = md;
+    await wired.captureIntents?.({
+      docId: 'doc-a',
+      meetingId: 'm-1',
+      turns: [{ turn: 2, text: 'Yes, please go look into the retention sweep.' }],
+      priorTurns: [],
+    });
+    expect(markdownOf(w.ydoc)).toBe(before);
   });
 
+  it('scopes a huddle doc — held by a board, never owned — through boardOf', async () => {
+    // A huddle doc has no `setId`: it is held by a hub workspace, the way
+    // the doc page's back arrow finds it. Scoping on `setId` alone was why
+    // "create a task" said aloud on one used to do nothing.
+    const w = captureWorld();
+    const ydoc = docFrom('# Goal\n');
+    const rooms = {
+      get: (id: string) =>
+        id === 'doc-h'
+          ? { ydoc, meta: { type: 'markdown' as DocType, title: 'Huddle', huddle: true } }
+          : w.rooms.get(id),
+    };
+    const created: string[] = [];
+    const wired = withServerNotesSinks(
+      {
+        composer: { name: 'stub', compose: () => Promise.resolve('') },
+        taskExtractor: {
+          name: 'stub',
+          extract: () =>
+            Promise.resolve([
+              { kind: 'request' as const, title: 'Rotate the tunnel token', actionable: false },
+            ]),
+        },
+      },
+      {
+        rooms: () => rooms,
+        tasks: () => ({ listTasks: () => [] }),
+        captureBoard: () => ({
+          ...w.board,
+          createTask: (ws: string) => {
+            created.push(ws);
+            return { ok: true as const, task: { id: 't-h1', status: 'triage' } };
+          },
+        }),
+        boardOf: (docId) => (docId === 'doc-h' ? 'w-held' : undefined),
+      },
+    );
+    const links = await wired.captureIntents?.({
+      docId: 'doc-h',
+      meetingId: 'm-2',
+      turns: [{ turn: 1, text: 'Make that a task: rotate the tunnel token.' }],
+      priorTurns: [],
+    });
+    expect(created).toEqual(['w-held']);
+    expect(links?.tasks).toEqual([
+      { title: 'Rotate the tunnel token', url: '/workspaces/w-held?task=t-h1', status: 'triage' },
+    ]);
+    // And the context resolver reads the same board.
+    expect(wired.resolveContext?.('doc-h')?.workspaceId).toBe('w-held');
+  });
+
+  it('files a spoken review ask once per meeting, and again next meeting', async () => {
+    const w = captureWorld();
+    const asks: string[] = [];
+    const wired = withServerNotesSinks(
+      {
+        composer: { name: 'stub', compose: () => Promise.resolve('') },
+        taskExtractor: {
+          name: 'stub',
+          extract: () =>
+            Promise.resolve([
+              { kind: 'review' as const, question: 'whether we still need the tunnel' },
+            ]),
+        },
+      },
+      {
+        rooms: () => w.rooms,
+        tasks: () => ({ listTasks: () => [] }),
+        captureBoard: () => w.board,
+        onReviewAsk: ({ docId, question }) => {
+          asks.push(`${docId}:${question}`);
+        },
+      },
+    );
+    const tick = (turn: number) =>
+      wired.captureIntents?.({
+        docId: 'doc-a',
+        meetingId: 'm-1',
+        turns: [{ turn, text: 'Ask the team whether we still need the tunnel.' }],
+        priorTurns: [],
+      });
+    wired.onSessionStart?.({ docId: 'doc-a', meetingId: 'm-1' });
+    await tick(1);
+    await tick(2);
+    expect(asks).toEqual(['doc-a:whether we still need the tunnel']);
+    // A new recording on the doc is a new meeting: the question is open again.
+    wired.onSessionStart?.({ docId: 'doc-a', meetingId: 'm-2' });
+    await tick(3);
+    expect(asks).toHaveLength(2);
+  });
   it('no extractor means no capture hook at all', () => {
     const w = captureWorld();
     const wired = withServerNotesSinks(
