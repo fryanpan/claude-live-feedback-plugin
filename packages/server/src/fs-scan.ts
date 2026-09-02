@@ -9,6 +9,11 @@ import { join, relative, sep } from 'node:path';
  * honoring .gitignore) so node_modules/dist/etc are skipped for free; fall
  * back to a recursive readdir with a hardcoded skip set when the folder
  * isn't inside a git repo or git isn't available. Returns absolute paths.
+ *
+ * The two modes are not equally safe and the fallback knows it: there is no
+ * `.gitignore` to honour outside a repo, so it applies `isSecretShapedName`
+ * of its own. See `isListedFile` — this listing IS the rule for what a share
+ * visitor may open.
  */
 export function scanFolder(root: string): string[] {
   try {
@@ -40,6 +45,38 @@ export function scanFolderPaths(root: string): string[] {
 
 const SKIP_DIRS = new Set(['node_modules', 'dist', 'build', '.next', 'coverage']);
 
+/**
+ * Filenames the fallback refuses even though nothing ignored them.
+ *
+ * `isListedFile` is the rule that decides what a share visitor may open, and
+ * the guarantee behind it is `git ls-files --exclude-standard` — a gitignored
+ * `.env` never appears in the listing, so it can never be opened. Outside a
+ * git repo there is no ignore file to honour and no `git` answer to trust, so
+ * the fallback has to carry its own floor. It used to have none: the
+ * dot-prefix test applied to DIRECTORIES only, so a `bind_folder` on a
+ * non-repo directory listed `.env`, `.npmrc` and `.netrc` in the tree and
+ * `openContextFile` served them.
+ *
+ * Deliberately conservative rather than clever. A dotfile in a directory
+ * nobody has put under version control is far more likely to be configuration
+ * than something a reviewer wants to read, and a false refusal here shows up
+ * as one missing row in a tree — a visible, harmless failure — while a false
+ * admission is a credential leaving the box.
+ */
+function isSecretShapedName(name: string): boolean {
+  // Every dotfile. `.env`, `.env.local`, `.npmrc`, `.netrc`, `.pgpass`,
+  // `.aws/…` (its directory is skipped anyway) — one rule instead of a list
+  // that stops being complete.
+  if (name.startsWith('.')) return true;
+  const lower = name.toLowerCase();
+  // Key and certificate material, which carries no dot prefix.
+  if (lower.endsWith('.pem') || lower.endsWith('.key') || lower.endsWith('.p12')) return true;
+  if (lower.endsWith('.pfx') || lower.endsWith('.keystore')) return true;
+  // `id_rsa`, `id_ed25519`, and every other ssh private key's default name.
+  if (lower.startsWith('id_')) return true;
+  return false;
+}
+
 function readdirRecursive(dir: string): string[] {
   const out: string[] = [];
   let entries: import('node:fs').Dirent[];
@@ -56,6 +93,7 @@ function readdirRecursive(dir: string): string[] {
       if (name.startsWith('.') || SKIP_DIRS.has(name)) continue;
       out.push(...readdirRecursive(abs));
     } else if (entry.isFile()) {
+      if (isSecretShapedName(name)) continue;
       out.push(abs);
     }
   }
@@ -67,7 +105,9 @@ function readdirRecursive(dir: string): string[] {
  *
  * The all-files tree is `scanFolderPaths(root)` — `git ls-files --cached
  * --others --exclude-standard` in a repo — so an ignored file never appears
- * in it. `openContextFile` / `openEditableFile` used to accept any path that
+ * in it. OUTSIDE a repo the listing falls back to a recursive readdir, which
+ * has no ignore file to honour; there it carries its own floor instead and
+ * omits every dotfile and every key-shaped name (`isSecretShapedName`). `openContextFile` / `openEditableFile` used to accept any path that
  * merely existed under the root, which let a caller who knew the name open
  * `.env` or a credentials dump the tree had deliberately hidden; and a
  * review root is a whole repository, reachable by a share visitor.
