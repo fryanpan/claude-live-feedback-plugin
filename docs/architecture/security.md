@@ -239,8 +239,10 @@ machine-local hostname on any port; a local dev origin is same-site with this
 server, so a session cookie rides along; and `cf-ray` is absent on a request
 that never went through the edge.
 
-`POST /recall/status` (`server.ts:6129`) verifies a Svix signature over
-`${id}.${timestamp}.${body}` with a five-minute tolerance
+`POST /recall/status` (`server.ts:6129`) answers `404 not_found` on every host
+unless `RECALL_WEBHOOK_SECRET` is set — the signature is the route's only
+credential, so without one there is no door to knock on. It then verifies a
+Svix signature over `${id}.${timestamp}.${body}` with a five-minute tolerance
 (`recall-webhook-auth.ts:46`), then admits the delivery id through
 `WebhookReplayGuard` (`recall-webhook-auth.ts:120`) — a repeat inside the
 window answers 409. The guard is checked **after** the signature, so an
@@ -250,7 +252,12 @@ TTL (twice the tolerance) and by entry count.
 The Recall callback hostname serves those two routes and nothing else. Each is
 armed only while its own credential is configured, so a server that cannot
 mint a bot token never exposes an unauthenticated path
-(`recall-callback-gate.ts:89`).
+(`recall-callback-gate.ts:89`). **That arming is now the route's own, not only
+the hostname's.** The webhook is reachable on every admitting host class, and
+its signature-and-replay block used to sit inside `if (secret)`: with the
+secret unset — which is the default, and the boot warns rather than refuses —
+an unauthenticated non-browser caller on the LAN or the tailnet could inject
+bot-status and calendar-sync events, unsigned and outside the replay guard.
 
 ## Changing any of this
 
