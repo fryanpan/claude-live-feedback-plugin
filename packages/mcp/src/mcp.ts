@@ -3,12 +3,13 @@ import { randomUUID } from 'node:crypto';
 import { existsSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 
+import { readRenamedEnv } from '@feedback/core/env-names';
+import { discoveryCandidates, resolveDiscoveryFile } from '@feedback/core/machine-paths';
+import { parseThreadReviewItemId } from '@feedback/core/review-item-id';
+import { TASK_STATUSES } from '@feedback/core/task-wire';
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
-import { readRenamedEnv } from '../../core/src/env-names.ts';
-import { discoveryCandidates, resolveDiscoveryFile } from '../../core/src/machine-paths.ts';
-import { parseThreadReviewItemId } from '../../core/src/review-item-id.ts';
 import { type BacklogCommentRow, deliverAttachBacklog } from './attach-backlog.ts';
 import { createAttachmentKeepalive } from './attachment-keepalive.ts';
 import { resolveAgentAuthor } from './author.ts';
@@ -1576,7 +1577,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           goal: { type: 'string' },
           status: {
             type: 'string',
-            enum: ['triage', 'todo', 'in-progress', 'done'],
+            enum: [...TASK_STATUSES],
             description:
               'status:"triage" is the sweep for rows an agent filed that nobody has vetted. next_tasks never returns them, so this filter is the only way to enumerate what is waiting on a look.',
           },
@@ -1605,7 +1606,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
         type: 'object',
         properties: {
           taskId: { type: 'string' },
-          to: { type: 'string', enum: ['triage', 'todo', 'in-progress', 'done'] },
+          to: { type: 'string', enum: [...TASK_STATUSES] },
           note: { type: 'string' },
           usage: {
             type: 'object',

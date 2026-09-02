@@ -1,5 +1,5 @@
+import { agentIdCandidates, agentIdForName } from '@feedback/core/identity';
 import { describe, expect, it } from 'vitest';
-import { agentIdCandidates, agentIdForName } from '../../core/src/identity.ts';
 import { resolveAgentAuthor } from '../src/author.ts';
 
 describe('resolveAgentAuthor', () => {

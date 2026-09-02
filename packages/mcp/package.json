@@ -15,6 +15,9 @@
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.29.0"
   },
+  "devDependencies": {
+    "@feedback/core": "workspace:*"
+  },
   "publishConfig": {
     "access": "public"
   },
