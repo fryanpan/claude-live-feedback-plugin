@@ -42,6 +42,7 @@ import {
   withRevision,
   withdrawReview,
 } from '@feedback/core';
+import { wordCount } from '@feedback/core/word-count';
 import type { ServerWebSocket } from 'bun';
 import * as awarenessProtocol from 'y-protocols/awareness';
 import * as Y from 'yjs';
@@ -58,7 +59,6 @@ import {
   isOwnerActor,
   payloadDigest,
   toUtcIso,
-  wordCount,
 } from './activity.ts';
 import {
   type BindDiffOpts,

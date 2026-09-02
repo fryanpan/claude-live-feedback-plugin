@@ -1,5 +1,5 @@
-import { type EnvLike, readRenamedEnv } from '../../core/src/env-names.ts';
-import { agentIdForName, hashToColor, knownUserForName } from '../../core/src/identity.ts';
+import { type EnvLike, readRenamedEnv } from '@feedback/core/env-names';
+import { agentIdForName, hashToColor, knownUserForName } from '@feedback/core/identity';
 
 export interface AgentAuthor {
   name: string;

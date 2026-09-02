@@ -18,7 +18,11 @@
     "./review-judge-prompt": "./src/review-judge-prompt.ts",
     "./effort-estimate-prompt": "./src/effort-estimate-prompt.ts",
     "./goal-summary": "./src/goal-summary.ts",
-    "./goal-effort": "./src/goal-effort.ts"
+    "./goal-effort": "./src/goal-effort.ts",
+    "./identity": "./src/identity.ts",
+    "./review-item-id": "./src/review-item-id.ts",
+    "./task-wire": "./src/task-wire.ts",
+    "./word-count": "./src/word-count.ts"
   },
   "dependencies": {
     "lib0": "^0.2.117",
