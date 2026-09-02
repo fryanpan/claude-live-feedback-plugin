@@ -9,6 +9,7 @@ import {
   type HubNote,
   type HubTask,
   type HubTransition,
+  type TaskStatus,
 } from '../src/hub/hub-model.ts';
 import type { DetailHandlers, TaskDiscussion } from '../src/hub/hub-render.ts';
 import { mountTaskDetailIsland, taskDetailData } from '../src/hub/task-detail-island.tsx';
@@ -288,7 +289,7 @@ function note(agoMs: number, text: string, overrides: Partial<HubNote> = {}): Hu
   return { at: NOW - agoMs, kind: 'turn', text, agent: 'Beacon Bot', ...overrides };
 }
 
-function move(agoMs: number, from: string, to: string): HubTransition {
+function move(agoMs: number, from: TaskStatus, to: TaskStatus): HubTransition {
   return { ts: NOW - agoMs, from, to, by: { name: 'Beacon Bot', kind: 'agent' } };
 }
 
