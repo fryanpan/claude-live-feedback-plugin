@@ -45,6 +45,15 @@ export type ToolDecl = {
   };
 };
 
+/**
+ * The bundle asks the server for this identity's watch set as soon as the
+ * client finishes initializing, so a GET of it can land inside any call's
+ * window. It is the harness's own startup noise, not the tool's doing, so it
+ * is waited for and then kept out of `sent`.
+ */
+const RESTORE_GET = /^\/api\/agents\/[^/]+\/watches$/;
+const isRestore = (r: Recorded) => r.method === 'GET' && RESTORE_GET.test(r.path);
+
 export type BundleHarness = {
   /** Every request the bundle has made, oldest first. */
   requests: Recorded[];
@@ -168,7 +177,15 @@ export async function startBundle(
     clientInfo: { name: 'mcp-bundle-harness', version: '0' },
   });
   if (init.error) throw new Error(`initialize failed: ${JSON.stringify(init.error)}`);
-  child.stdin?.write(`${JSON.stringify({ jsonrpc: '2.0', method: 'notifications/initialized' })}\n`);
+  child.stdin?.write(
+    `${JSON.stringify({ jsonrpc: '2.0', method: 'notifications/initialized' })}\n`,
+  );
+
+  // Let the watch restore land before any test measures a call's requests.
+  // It is best-effort on the bundle's side, so a miss here is not fatal.
+  for (let i = 0; i < 100 && !requests.some(isRestore); i++) {
+    await new Promise((r) => setTimeout(r, 20));
+  }
 
   const listed = await rpc('tools/list', {});
   const tools = ((listed.result as { tools?: ToolDecl[] } | undefined)?.tools ?? []) as ToolDecl[];
@@ -185,7 +202,7 @@ export async function startBundle(
           isError: true,
           text: JSON.stringify(reply.error),
           json: undefined,
-          sent: requests.slice(before),
+          sent: requests.slice(before).filter((r) => !isRestore(r)),
         };
       }
       const result = reply.result as {
@@ -199,7 +216,12 @@ export async function startBundle(
       } catch {
         json = undefined;
       }
-      return { isError: result.isError === true, text, json, sent: requests.slice(before) };
+      return {
+        isError: result.isError === true,
+        text,
+        json,
+        sent: requests.slice(before).filter((r) => !isRestore(r)),
+      };
     },
     async stop() {
       child.kill();
