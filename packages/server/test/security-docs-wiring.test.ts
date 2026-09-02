@@ -1,0 +1,115 @@
+/**
+ * The security documentation is only useful if the three pieces point at each
+ * other: CLAUDE.md sends a reader to the architecture summary, the summary
+ * sends them to the per-release checklist, and `ship-it` actually runs the
+ * checklist instead of leaving it to be remembered.
+ *
+ * Each link is a plain string in a file nothing type-checks, so each one can
+ * be broken by a rename that compiles, passes every other suite, and shows up
+ * only as a checklist nobody ran. That is what this pins.
+ *
+ * The last case is the one that matters most: it does not assert that
+ * `ship-it` MENTIONS the rule, it extracts the file-matching regex the skill
+ * tells an agent to run and checks that the regex really selects the security
+ * surface — with a negative control, so a pattern that matched everything
+ * would fail here rather than pass vacuously.
+ */
+import { describe, expect, it } from 'bun:test';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
+
+const repoRoot = join(import.meta.dir, '..', '..', '..');
+const read = (rel: string): string => readFileSync(join(repoRoot, rel), 'utf8');
+
+const ARCHITECTURE_DOC = 'docs/architecture/security.md';
+const REVIEW_RULE = '.claude/rules/security-review.md';
+const SHIP_IT = '.claude/skills/ship-it/SKILL.md';
+
+/** The seven headings, in order. The PR-body template at the end of the rule
+ *  numbers the same seven, so a heading added without a template row — or the
+ *  reverse — leaves the checklist and the thing a lead reads out of step. */
+const CHECKLIST_HEADINGS = [
+  'New routes gated',
+  'New inputs validated',
+  'No secrets in any artifact',
+  'Share scope unchanged',
+  'Tokens through one signing module',
+  'Webhook replay protection intact',
+  'Deploy and refresh still loopback-only',
+];
+
+describe('security docs are wired together', () => {
+  it('CLAUDE.md links the architecture summary', () => {
+    const claudeMd = read('CLAUDE.md');
+    expect(claudeMd).toContain(`(${ARCHITECTURE_DOC})`);
+    // In the architecture-summaries list, not merely somewhere in the file —
+    // the list is what tells a reader the doc exists at all.
+    const list = claudeMd.slice(claudeMd.indexOf('## Architecture summaries'));
+    expect(list.slice(0, list.indexOf('\n## ', 3))).toContain(ARCHITECTURE_DOC);
+  });
+
+  it('the architecture summary exists and carries a boundary diagram', () => {
+    const doc = read(ARCHITECTURE_DOC);
+    expect(doc).toContain('```mermaid');
+    // Every gate the checklist asks about has to be findable from the map.
+    for (const gate of ['isGatedWrite', 'shareScopeAllows', 'isListedFile', 'classifyHost']) {
+      expect(doc).toContain(gate);
+    }
+    expect(doc).toContain(REVIEW_RULE.replace('.claude/rules/', ''));
+  });
+
+  it('the review rule lists all seven checklist headings in order', () => {
+    const rule = read(REVIEW_RULE);
+    const found = [...rule.matchAll(/^### \d+\. (.+)$/gm)].map((m) => m[1]);
+    expect(found).toEqual(CHECKLIST_HEADINGS);
+  });
+
+  it('the review rule ships a PR-body template with a row per heading', () => {
+    const rule = read(REVIEW_RULE);
+    const template = rule.slice(rule.indexOf('## Security review'));
+    for (let i = 1; i <= CHECKLIST_HEADINGS.length; i++) {
+      expect(template).toContain(`${i}.`);
+    }
+  });
+
+  it('ship-it names the review rule and puts the answers in the PR body', () => {
+    const skill = read(SHIP_IT);
+    expect(skill).toContain('.claude/rules/security-review.md');
+    expect(skill).toContain('## Security review');
+  });
+
+  it("ship-it's file-matching pattern really selects the security surface", () => {
+    const skill = read(SHIP_IT);
+    // Pull the pattern the skill tells an agent to run, rather than restating
+    // it here — a copy in this file would keep passing after the skill's
+    // pattern was edited.
+    const match = skill.match(/grep -E '([^']+)'/);
+    expect(match).not.toBeNull();
+    const pattern = new RegExp((match as RegExpMatchArray)[1]);
+
+    const security = [
+      'packages/server/src/middleware/write-gate.ts',
+      'packages/server/src/middleware/host-guard.ts',
+      'packages/server/src/auth/session.ts',
+      'packages/server/src/auth/widget-token.ts',
+      'packages/server/src/share/url-signing.ts',
+      'packages/server/src/recall-webhook-auth.ts',
+      'packages/server/src/fs-scan.ts',
+      'packages/server/src/server.ts',
+      'packages/server/src/bin.ts',
+    ];
+    for (const path of security) expect(pattern.test(path)).toBe(true);
+
+    // Negative control. Without these a pattern like `.` would satisfy every
+    // assertion above and the conditional step would fire on every PR, which
+    // is the same as not having a condition.
+    const unrelated = [
+      'docs/architecture/security.md',
+      'packages/widget/src/widget.ts',
+      'packages/markdown-app/src/styles.css',
+      'packages/server/src/summarize.ts',
+      'README.md',
+    ];
+    for (const path of unrelated) expect(pattern.test(path)).toBe(false);
+  });
+});
