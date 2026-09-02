@@ -463,3 +463,85 @@ describe('B. the opt-in fails closed', () => {
     expect(await r.json()).toEqual({ error: 'out_of_share_scope' });
   });
 });
+
+/**
+ * E. The sharing master switch covers this host too.
+ *
+ * `SharingGate` is the one thing an operator looks at to answer "is anything
+ * reachable from outside right now?", and its condition used to name three
+ * host kinds — share, link and collab. `proxied-local` is the fourth and the
+ * WIDEST: the operator's own public hostname through the tunnel, with the
+ * whole product behind it. Left out, an operator who flipped the switch
+ * during a security review, believing the one sentence that describes it, had
+ * not closed the widest external door.
+ *
+ * The refusal has to land ahead of authentication, the way it does for the
+ * other three: a valid Access token must get no further than none at all.
+ * Both halves are asserted, and the control is the same request while sharing
+ * is on.
+ */
+describe('E. sharing off closes the operator hostname too', () => {
+  let h: ServerHandle;
+  let jwt: string;
+
+  const setSharing = (enabled: boolean) =>
+    fetch(`http://localhost:${h.port}/api/share/enabled`, {
+      method: 'POST',
+      headers: { host: `localhost:${h.port}`, 'content-type': 'application/json' },
+      body: JSON.stringify({ enabled }),
+    });
+
+  beforeAll(async () => {
+    h = spinUp({
+      cfAccess: { teamDomain: TEAM_DOMAIN, audience: OPERATOR_AUD, jwks },
+      share: { config: { publicHostname: LINK_HOST } },
+      proxiedTrustedHosts: [PROXIED_HOST],
+      proxiedTrustedEmails: [OPERATOR_EMAIL.toLowerCase()],
+    });
+    jwt = await signJwt(OPERATOR_AUD);
+  });
+
+  it('CONTROL: the operator reaches the product while sharing is on', async () => {
+    const r = await get(h, '/api/docs', {
+      host: PROXIED_HOST,
+      ...CF_RAY,
+      'cf-access-jwt-assertion': jwt,
+    });
+    expect(r.status).toBe(200);
+  });
+
+  it('refuses the same token once sharing is off', async () => {
+    expect((await setSharing(false)).status).toBe(200);
+    const r = await get(h, '/api/docs', {
+      host: PROXIED_HOST,
+      ...CF_RAY,
+      'cf-access-jwt-assertion': jwt,
+    });
+    expect(r.status).toBe(403);
+    expect(await r.json()).toEqual({ error: 'sharing_disabled' });
+  });
+
+  it('gates BEFORE auth — no token looks the same as a good one', async () => {
+    // Otherwise the shape of the refusal tells an outsider whether this
+    // hostname is a real Access application.
+    const r = await get(h, '/api/docs', { host: PROXIED_HOST, ...CF_RAY });
+    expect(r.status).toBe(403);
+    expect(await r.json()).toEqual({ error: 'sharing_disabled' });
+  });
+
+  it('leaves the LOCAL surface working, so the switch can be flipped back', async () => {
+    // The way out is the way in: local, tailnet and LAN are untouched, which
+    // is what stops this from being a lockout.
+    const local = await fetch(`http://localhost:${h.port}/api/docs`, {
+      headers: { host: `localhost:${h.port}` },
+    });
+    expect(local.status).toBe(200);
+    expect((await setSharing(true)).status).toBe(200);
+    const back = await get(h, '/api/docs', {
+      host: PROXIED_HOST,
+      ...CF_RAY,
+      'cf-access-jwt-assertion': jwt,
+    });
+    expect(back.status).toBe(200);
+  });
+});
