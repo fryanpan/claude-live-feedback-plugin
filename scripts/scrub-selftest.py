@@ -617,6 +617,34 @@ def check_never_allow(registry: str, denylist: str, fixture) -> None:
         expect(f"never-allow: ...and scrub-allow cannot exempt it", r.returncode, 1, r.stderr)
 
 
+def check_never_push(registry: str, denylist: str, fixture) -> None:
+    """A meeting's raw record is refused by NAME, whatever it contains.
+
+    The positive half is a file with nothing a pattern would catch — a clean
+    transcript is still a transcript — and the control is the same clean
+    body under a name the rule does not cover, which must pass. The last
+    case runs with NO pattern sources: the refusal must not depend on them.
+    """
+    clean = "- [10:00:00Z] Speaker 1: nothing here trips a pattern\n"
+    cases = [
+        ("q3-plan-raw-transcript.md", clean, 1, "a raw transcript is refused by name"),
+        ("q3-plan-raw-transcript-replay-20260902T101500Z.md", clean, 1,
+         "a replay transcript is refused by name"),
+        ("segment-1-mic.pcm", "\x00\x01\x02\x03", 1, "raw audio is refused by type"),
+        ("room.wav", "RIFF....WAVE", 1, "a .wav is refused by type"),
+        ("q3-plan-transcript-notes.md", clean, 0,
+         "control: the same clean body under an uncovered name passes"),
+    ]
+    for name, body, want, label in cases:
+        r = run([fixture(name, body)], registry, denylist)
+        expect(f"never-push: {label}", r.returncode, want, r.stderr)
+    r = run([fixture("allowed-raw-transcript.md", clean.rstrip("\n") + " <!-- scrub-allow -->\n")],
+            registry, denylist)
+    expect("never-push: ...and scrub-allow cannot exempt it", r.returncode, 1, r.stderr)
+    r = run([fixture("sourceless-raw-transcript.md", clean)], None, None)
+    expect("never-push: refused even with no pattern sources on the machine", r.returncode, 1, r.stderr)
+
+
 def check_allow_token_position(registry: str, denylist: str, fixture) -> None:
     """`scrub-allow` exempts a line only as a trailing comment token."""
     cases = [
@@ -756,6 +784,7 @@ def main() -> int:
         check_push_range(registry, denylist)
         check_blob_source(registry, denylist)
         check_never_allow(registry, denylist, fixture)
+        check_never_push(registry, denylist, fixture)
         check_allow_token_position(registry, denylist, fixture)
 
     if failures:
