@@ -20,7 +20,7 @@ import {
   homeReviewData,
   mountHomeReviewIsland,
 } from '../src/hub/home-review-island.tsx';
-import type { ReviewItem, ReviewQueue } from '../src/hub/hub-model.ts';
+import type { ReviewItem, ReviewQueue } from '../src/hub/hub-review-model.ts';
 
 const NOW = 1_700_000_000_000;
 

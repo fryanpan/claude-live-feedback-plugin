@@ -31,7 +31,7 @@ import {
   type HubGoal,
   type HubTask,
   boardSections,
-} from '../src/hub/hub-model.ts';
+} from '../src/hub/hub-board-model.ts';
 import { type ShimHandlers as BoardHandlers, disposeBoards, renderBoard } from './support/board.ts';
 
 const HUB_APP = readFileSync(resolve(import.meta.dirname, '../src/hub/hub-app.ts'), 'utf8');

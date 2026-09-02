@@ -3,7 +3,7 @@ import { resolve } from 'node:path';
 import { getMeta } from '@feedback/core';
 import { describe, expect, it } from 'vitest';
 import * as Y from 'yjs';
-import { hubTabTitle } from '../src/hub/hub-model.ts';
+import { hubTabTitle } from '../src/hub/hub-presence-model.ts';
 import { MountScope } from '../src/mount-scope.ts';
 import { type ChromeOpts, mountReviewChrome } from '../src/review-chrome.ts';
 import type { ReviewSurface } from '../src/review-surface.ts';

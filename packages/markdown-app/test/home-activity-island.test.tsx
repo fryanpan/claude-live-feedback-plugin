@@ -26,7 +26,7 @@ import {
   homeActivityData,
   mountHomeActivityIsland,
 } from '../src/hub/home-activity-island.tsx';
-import { CHORES_ID, type HubGoal, type HubNote, type HubTask } from '../src/hub/hub-model.ts';
+import { CHORES_ID, type HubGoal, type HubNote, type HubTask } from '../src/hub/hub-board-model.ts';
 
 /** All fixtures are synthetic — invented agents, short fake ids. */
 
