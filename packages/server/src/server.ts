@@ -7739,8 +7739,24 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           if (isRetired(targetBoard)) {
             return j(409, { error: 'workspace-retired', message: retiredRefusal(targetBoard) });
           }
+          // A row SPUN OFF A DOC — the pointer pill's Create Task — asks to
+          // be placed: the board's top active goal, the lead as owner, and
+          // `todo` after the create, so the lead's dispatch sees it. See
+          // `TaskStore.placeSpinoff` for the rule and the report behind it.
+          // An explicit goal or assignee in the same body still wins.
+          const spinoff = body?.spinoff === true ? taskStore.placeSpinoff(workspaceId) : undefined;
+          const createBody =
+            spinoff === undefined
+              ? body
+              : {
+                  ...body,
+                  goal: typeof body?.goal === 'string' ? body.goal : spinoff.goal,
+                  ...(spinoff.leadAgentId !== undefined && body?.assignee === undefined
+                    ? { assignToLead: true }
+                    : {}),
+                };
           // One reading of a create body, shared with the batch route below.
-          const parsed = parseTaskCreate(body, authorFor(body?.author), targetBoard);
+          const parsed = parseTaskCreate(createBody, authorFor(body?.author), targetBoard);
           if (!parsed.ok) {
             return j(400, {
               error: parsed.error,
@@ -7749,6 +7765,18 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           }
           const res = taskStore.createTask(workspaceId, parsed.opts);
           if (!res.ok) return j(res.error === 'workspace-not-found' ? 404 : 400, res);
+          if (spinoff !== undefined && !parsed.opts.fileToTriage && res.task.status !== 'todo') {
+            const moved = taskStore.transition(res.task.id, 'todo', {
+              actor: authorFor(body?.author) ?? ANONYMOUS_ACTOR,
+              note: 'Spun off a doc line; placed on the board and queued for dispatch.',
+            });
+            if (moved.ok) res.task = moved.task as typeof res.task;
+          }
+          if (spinoff !== undefined && res.task.status === 'todo' && spinoff.leadAgentId) {
+            // The same immediate addressed wake an actionable spoken request
+            // gets — the row is the lead's now, and the lead should hear so.
+            readyNudger.taskReady({ workspaceId, taskId: res.task.id, taskTitle: res.task.title });
+          }
           // The review item the body filed WITH the ticket, now that the
           // ticket has an id. `parseTaskCreate` already put the payload
           // through the same `checkReviewPayload` the store runs, so a
@@ -7800,6 +7828,9 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
               ...(res.placement.placed
                 ? {}
                 : { goals: placeableGoals(taskStore.getWorkspace(workspaceId)?.goals ?? []) }),
+              // Which spin-off rule chose the band, for the caller's toast
+              // and the PR reader alike: `top-active-goal` or `chores`.
+              ...(spinoff !== undefined ? { spinoff: spinoff.rule } : {}),
             },
             ...(parsed.ignoredLinks.length > 0 ? { ignoredLinks: parsed.ignoredLinks } : {}),
             ...(res.shapeGaps !== undefined ? { shapeGaps: res.shapeGaps } : {}),

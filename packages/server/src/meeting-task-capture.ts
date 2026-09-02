@@ -842,6 +842,13 @@ export interface TaskCaptureBoard {
    * when the create route finds no lead.
    */
   getWorkspace?(workspaceId: string): { leadAgentId?: string } | undefined;
+  /**
+   * Where a spun-off row is PLACED — the top active goal and the lead —
+   * see `TaskStore.placeSpinoff`. Optional for the same reason as above;
+   * without it an actionable request files to chores, owned by the
+   * assistant, which is on the board but not in any goal.
+   */
+  placeSpinoff?(workspaceId: string): { goal: string; leadAgentId?: string } | undefined;
 }
 
 /**
@@ -1066,6 +1073,11 @@ function fileSpokenTask(
   // than by the model, so the row's body quotes what was actually said the
   // way a pill spin-off quotes the selection.
   const quote = spokenLineFor(input.turns, item.title);
+  // The pill's placement, by the board's own rule: the top active goal and
+  // the lead as owner, so the row is dispatched rather than sitting in
+  // chores under the assistant's name (Bryan, 2026-09-01: "created in
+  // Backlog and not automatically started").
+  const placed = actionable ? deps.board.placeSpinoff?.(input.workspaceId) : undefined;
   const parsed = parseTaskCreate(
     {
       title: item.title,
@@ -1083,10 +1095,14 @@ function fileSpokenTask(
       origin: { kind: 'doc', docId: input.docId },
       ...(quote !== undefined ? { quote } : {}),
       // Actionable work gets a real (re-rankable) band so dispatch can reach
-      // it; anything else goes through triage like other agent-filed rows.
-      ...(actionable ? { goal: CHORES_GOAL_ID } : { triage: true }),
+      // it — the placed one, else chores; anything else goes through triage
+      // like other agent-filed rows. Addressed to the lead when the seat is
+      // held; with no lead the assistant keeps it, on the board.
+      ...(actionable ? { goal: placed?.goal ?? CHORES_GOAL_ID } : { triage: true }),
+      ...(placed?.leadAgentId !== undefined ? { assignToLead: true } : {}),
     },
     MEETING_CAPTURE_ACTOR,
+    placed?.leadAgentId !== undefined ? { leadAgentId: placed.leadAgentId } : {},
   );
   if (!parsed.ok) {
     deps.onError?.(`task capture: create refused (${parsed.error})`);

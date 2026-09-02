@@ -353,6 +353,18 @@ describe('runSpinoff', () => {
     });
   });
 
+  it('asks the board to PLACE the row — top active goal, the lead, todo', async () => {
+    // Bryan (2026-09-01): "Tasks were created in Backlog and not
+    // automatically started". The rule is the server's; the pill asks.
+    const { deps: d, calls } = deps();
+    await runSpinoff('task', d);
+    expect(calls[0]?.body.spinoff).toBe(true);
+    // And names no goal or owner itself — an explicit one would override
+    // the rule, and the pill has no better information than the board.
+    expect(calls[0]?.body.goal).toBeUndefined();
+    expect(calls[0]?.body.assignee).toBeUndefined();
+  });
+
   it('asks for no placement of its own — where it lands is the row’s own doing', async () => {
     // "Start now" used to send `order: 0` and was otherwise identical to
     // "Create a task", which is why a reviewer could not tell them apart.
