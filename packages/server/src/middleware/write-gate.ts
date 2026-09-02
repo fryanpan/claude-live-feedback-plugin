@@ -228,3 +228,33 @@ export function browserCannotBindBody(): { error: string; message: string } {
     message: 'Binding a file or folder is an agent action — pages cannot name host paths.',
   };
 }
+
+/**
+ * The operator routes are not for browsers either.
+ *
+ * `POST /api/deploy` restarts this process out of its deploy source and
+ * `POST /api/plugin/refresh` spawns a plugin update. Both are operator
+ * actions with no browser flow: the board's own pages never call either, and
+ * every real caller is an agent, a hook or a curl from the box.
+ *
+ * They are the same page-on-this-machine class the binding routes closed.
+ * The loopback check on `/api/deploy` reads the PEER ADDRESS, which is
+ * loopback for a page served from this machine; the cross-origin write gate
+ * admits any machine-local hostname on any port; a session cookie is
+ * same-site with a local dev origin and rides along; and no `cf-ray` is
+ * present. None of those checks can tell a page from an agent — this one is
+ * the one that does.
+ *
+ * A SIBLING reason rather than `browser_cannot_bind`, because no host path
+ * is being named here and a client matching on the string should not have to
+ * read "bind" to mean "restart".
+ */
+export const BROWSER_CANNOT_OPERATE_ERROR = 'browser_cannot_operate';
+
+/** The JSON body a browser gets back from an operator route. */
+export function browserCannotOperateBody(): { error: string; message: string } {
+  return {
+    error: BROWSER_CANNOT_OPERATE_ERROR,
+    message: 'Deploying or refreshing the plugin is an agent action — pages cannot run it.',
+  };
+}
