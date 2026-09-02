@@ -17,6 +17,7 @@ import { prose } from '@feedback/core';
 import { Rooms } from '../src/rooms.ts';
 import { SseHub } from '../src/sse.ts';
 import { createWebhookDispatcher } from '../src/webhooks.ts';
+import { waitFor, waitForFile } from './wait-for.ts';
 
 /**
  * Doc homes through the real binding machinery: a pinned doc's file is "the
@@ -55,33 +56,9 @@ function makeRooms(dataDir: string): Rooms {
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-/**
- * Wait until the file at `path` contains `needle`, polling; the write-back
- * behind it is debounced (~1s) and CI boxes under load have missed a fixed
- * 1.4s sleep by a few hundred ms. A deadline well past the debounce keeps
- * the assertion honest: a write that never lands still fails, just later —
- * and says what the file DID hold, so a red run names the state instead of
- * a bare timeout. Any test that awaits this must carry its own timeout
- * above `deadlineMs` (bun's default is 5s) or the runner kills the test
- * before this message can be thrown.
- */
-async function waitForFileText(path: string, needle: string, deadlineMs = 8000): Promise<void> {
-  const until = Date.now() + deadlineMs;
-  for (;;) {
-    let text: string | null = null;
-    try {
-      text = readFileSync(path, 'utf8');
-    } catch {}
-    if (text?.includes(needle)) return;
-    if (Date.now() > until) {
-      const actual = text === null ? '<missing>' : JSON.stringify(text.slice(0, 200));
-      throw new Error(
-        `${path} never contained ${JSON.stringify(needle)} within ${deadlineMs}ms; it holds ${actual}`,
-      );
-    }
-    await sleep(100);
-  }
-}
+/** Wait until the file at `path` contains `needle`. */
+const waitForFileText = (path: string, needle: string, timeout = 8000): Promise<string> =>
+  waitForFile(path, (t) => t.includes(needle), { timeout });
 
 /** Replace the doc's prose with `md`, as an agent edit would. */
 function setProse(rooms: Rooms, docId: string, md: string): void {
@@ -145,8 +122,7 @@ describe('doc homes through the binding', () => {
     expect(readFileSync(join(wt, REL), 'utf8')).toContain('first pass');
 
     setProse(rooms, 'd1', '# Triage\n\nsecond pass\n');
-    await sleep(1100);
-    expect(readFileSync(join(wt, REL), 'utf8')).toContain('second pass');
+    await waitForFileText(join(wt, REL), 'second pass');
     // Nothing landed in the OTHER checkout of the repo.
     expect(existsSync(join(main, REL))).toBe(false);
   });
@@ -165,7 +141,9 @@ describe('doc homes through the binding', () => {
 
   it('a checkout that switches branches is never written again; the flush follows the branch', async () => {
     rooms.setDocHome('d1', { repoRoot: main, branch: 'plans', relPath: REL });
-    await sleep(1100);
+    // Drain the export's own write-back instead of outwaiting it: flush() is
+    // the shutdown path, so the file is on disk before git looks at it.
+    rooms.flush();
     git(wt, 'add', '-A');
     git(wt, 'commit', '-m', 'plan v1');
     // The worktree moves OFF the home branch (someone reuses it for feature
@@ -176,34 +154,38 @@ describe('doc homes through the binding', () => {
 
     const before = readFileSync(join(wt, REL), 'utf8');
     setProse(rooms, 'd1', '# Triage\n\nthird pass\n');
-    // Two debounce rounds: the first flush attempt retargets the binding,
-    // the flush it re-arms on the new binding carries the edit out.
-    await sleep(2400);
+    // Two debounce rounds have to happen on their own timers: the first flush
+    // attempt retargets the binding, the flush it re-arms carries the edit
+    // out. Wait for the edit to arrive at the new worktree, not for a clock.
+    await waitForFileText(join(wt2, REL), 'third pass');
 
     // The old checkout — now on somebody's feature branch — is untouched.
     expect(readFileSync(join(wt, REL), 'utf8')).toBe(before);
-    // The flush followed the branch to its new worktree.
-    expect(readFileSync(join(wt2, REL), 'utf8')).toContain('third pass');
     expect(rooms.docHomeStatus('d1')?.boundPath).toBe(join(wt2, REL));
   });
 
   it('no checkout on the branch parks writes, says why, and resumes when one appears', async () => {
     rooms.setDocHome('d1', { repoRoot: main, branch: 'plans', relPath: REL });
-    await sleep(1100);
+    // Drain the export's own write-back instead of outwaiting it: flush() is
+    // the shutdown path, so the file is on disk before git looks at it.
+    rooms.flush();
     git(wt, 'add', '-A');
     git(wt, 'commit', '-m', 'plan v1');
     git(wt, 'checkout', '--detach');
 
     const before = readFileSync(join(wt, REL), 'utf8');
     setProse(rooms, 'd1', '# Triage\n\nparked pass\n');
-    await sleep(1400);
-    expect(readFileSync(join(wt, REL), 'utf8')).toBe(before);
-    // The live doc kept the edit and the park is named.
-    expect(docText(rooms, 'd1')).toContain('parked pass');
     const bindings = (
       rooms as unknown as { fileBindings: Map<string, { lastSyncError?: { message: string } }> }
     ).fileBindings;
-    expect(bindings.get('d1')?.lastSyncError?.message ?? '').toContain('unplaced');
+    // The park announces itself — wait for the reason, then check that the
+    // detoured checkout really was left alone.
+    await waitFor(() => (bindings.get('d1')?.lastSyncError?.message ?? '').includes('unplaced'), {
+      describe: 'the write-back to park itself as unplaced',
+    });
+    expect(readFileSync(join(wt, REL), 'utf8')).toBe(before);
+    // The live doc kept the edit and the park is named.
+    expect(docText(rooms, 'd1')).toContain('parked pass');
     expect(rooms.docHomeStatus('d1')?.placement).toEqual({
       placed: false,
       reason: 'no-checkout-on-branch',
@@ -212,19 +194,22 @@ describe('doc homes through the binding', () => {
     // The branch comes back — the next flush lands home.
     git(wt, 'checkout', 'plans');
     setProse(rooms, 'd1', '# Triage\n\nresumed pass\n');
-    await sleep(1400);
-    expect(readFileSync(join(wt, REL), 'utf8')).toContain('resumed pass');
+    await waitForFileText(join(wt, REL), 'resumed pass');
   });
 
   it('a branch switch rewriting the bound file must not leak foreign content into the live doc', async () => {
     rooms.setDocHome('d1', { repoRoot: main, branch: 'plans', relPath: REL });
-    await sleep(1100);
+    // Drain the export's own write-back instead of outwaiting it: flush() is
+    // the shutdown path, so the file is on disk before git looks at it.
+    rooms.flush();
     git(wt, 'add', '-A');
     git(wt, 'commit', '-m', 'plan v1');
     // The checkout switches branches AND the file at the old path changes
     // (what a real `git checkout` does to tracked files).
     git(wt, 'checkout', '-b', 'feature-detour');
     writeExternal(join(wt, REL), '# Somebody else\n\nfeature-branch copy\n');
+    // timed: the assertion is that the poll (500ms) plus read debounce never
+    // pulls those bytes in, so the whole read window has to elapse first.
     await sleep(1600);
     expect(docText(rooms, 'd1')).not.toContain('feature-branch copy');
     expect(docText(rooms, 'd1')).toContain('first pass');
@@ -232,14 +217,15 @@ describe('doc homes through the binding', () => {
 
   it('a direct write at the home colliding with un-flushed live edits loses to the live copy', async () => {
     rooms.setDocHome('d1', { repoRoot: main, branch: 'plans', relPath: REL });
-    await sleep(1100);
+    // Settle the export's write-back so the edit below is the only un-flushed
+    // one when the external write collides with it.
+    rooms.flush();
     // Un-flushed live edit + immediate external write to the same file.
     setProse(rooms, 'd1', '# Triage\n\nlive edit wins\n');
     writeExternal(join(wt, REL), '# Clobber\n\ndirect write\n');
-    await sleep(1800);
+    await waitForFileText(join(wt, REL), 'live edit wins');
     expect(docText(rooms, 'd1')).toContain('live edit wins');
     expect(docText(rooms, 'd1')).not.toContain('direct write');
-    expect(readFileSync(join(wt, REL), 'utf8')).toContain('live edit wins');
   });
 
   /**
@@ -250,7 +236,9 @@ describe('doc homes through the binding', () => {
    */
   async function parkAtHydrate(): Promise<{ rooms2: Rooms; wt2: string }> {
     rooms.setDocHome('d1', { repoRoot: main, branch: 'plans', relPath: REL });
-    await sleep(1100);
+    // Drain the export's own write-back instead of outwaiting it: flush() is
+    // the shutdown path, so the file is on disk before git looks at it.
+    rooms.flush();
     git(wt, 'add', '-A');
     git(wt, 'commit', '-m', 'plan v1');
     await rooms.flush();
@@ -312,7 +300,9 @@ describe('doc homes through the binding', () => {
 
   it('a forced reparse must not pull a switched checkout’s branch copy into the doc', async () => {
     rooms.setDocHome('d1', { repoRoot: main, branch: 'plans', relPath: REL });
-    await sleep(1100);
+    // Drain the export's own write-back instead of outwaiting it: flush() is
+    // the shutdown path, so the file is on disk before git looks at it.
+    rooms.flush();
     git(wt, 'add', '-A');
     git(wt, 'commit', '-m', 'plan v1');
     // The checkout moves off the home branch and its copy of the file now
@@ -341,7 +331,7 @@ describe('doc homes through the binding', () => {
     const res = rooms.setDocHome('d1', { repoRoot: wt, branch: 'plans', relPath: REL });
     if (!res.ok) throw new Error(JSON.stringify(res));
     expect(rooms.docHomeStatus('d1')?.home.repoRoot).toBe(main);
-    await sleep(1100);
+    rooms.flush();
     git(wt, 'add', '-A');
     git(wt, 'commit', '-m', 'plan v1');
 
@@ -351,8 +341,7 @@ describe('doc homes through the binding', () => {
     git(main, 'worktree', 'add', wt2, 'plans');
 
     setProse(rooms, 'd1', '# Triage\n\noutlived the checkout\n');
-    await sleep(2400);
-    expect(readFileSync(join(wt2, REL), 'utf8')).toContain('outlived the checkout');
+    await waitForFileText(join(wt2, REL), 'outlived the checkout');
     expect(rooms.docHomeStatus('d1')?.placement).toEqual({
       placed: true,
       path: join(wt2, REL),
@@ -361,7 +350,9 @@ describe('doc homes through the binding', () => {
 
   it('a restart re-resolves the home, including a worktree that moved while the server was down', async () => {
     rooms.setDocHome('d1', { repoRoot: main, branch: 'plans', relPath: REL });
-    await sleep(1100);
+    // Drain the export's own write-back instead of outwaiting it: flush() is
+    // the shutdown path, so the file is on disk before git looks at it.
+    rooms.flush();
     git(wt, 'add', '-A');
     git(wt, 'commit', '-m', 'plan v1');
     await rooms.flush();
@@ -374,8 +365,7 @@ describe('doc homes through the binding', () => {
     const rooms2 = makeRooms(dataDir);
     expect(docText(rooms2, 'd1')).toContain('first pass');
     setProse(rooms2, 'd1', '# Triage\n\nafter restart\n');
-    await sleep(1100);
-    expect(readFileSync(join(wt2, REL), 'utf8')).toContain('after restart');
+    await waitForFileText(join(wt2, REL), 'after restart');
     await rooms2.flush();
   });
 });
