@@ -8,35 +8,16 @@
  *  - `doc_status` is the new cheap read for a doc (`get_doc` hit 320KB);
  *    the MCP tool must actually reach GET /api/docs/:id/status.
  *
- * The projection is behavioral (task-projection.ts exports it); the wiring
- * is source-read like tool-wiring.test.ts, because mcp.ts is a bundle entry
- * point and exports nothing. All fixtures are synthetic.
+ * The projection is a real unit (task-projection.ts exports it). The wiring
+ * used to be checked by slicing `mcp.ts` and then asserting the built bundle
+ * contains the strings `doc_status` and `projectTaskRows` — which is true of a
+ * bundle where nothing calls either. It is now driven through the committed
+ * bundle: the rows a caller receives are trimmed for real, and doc_status'
+ * request is the one the stub recorded. All fixtures are synthetic.
  */
-import { readFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
-import { fileURLToPath } from 'node:url';
-import { describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { projectTaskRows } from '../src/task-projection.ts';
-
-const HERE = dirname(fileURLToPath(import.meta.url));
-const SRC = readFileSync(join(HERE, '../src/mcp.ts'), 'utf8');
-const BUNDLE = readFileSync(join(HERE, '../../plugin/mcp/index.js'), 'utf8');
-
-/** The `case 'x': {` block for one tool, up to the next case. */
-function handlerFor(tool: string): string {
-  const start = SRC.indexOf(`case '${tool}': {`);
-  expect(start, `no handler for ${tool}`).toBeGreaterThan(-1);
-  const rest = SRC.slice(start + 1);
-  return rest.slice(0, rest.indexOf('case '));
-}
-
-/** The declaration block for one tool, up to the next tool entry. */
-function declarationFor(tool: string): string {
-  const start = SRC.indexOf(`name: '${tool}',\n      description:`);
-  expect(start, `no declaration for ${tool}`).toBeGreaterThan(-1);
-  const rest = SRC.slice(start);
-  return rest.slice(0, rest.indexOf('},\n    {'));
-}
+import { type BundleHarness, type Recorded, startBundle } from './harness/mcp-bundle.ts';
 
 const rows = [
   {
@@ -113,39 +94,73 @@ describe('projectTaskRows — fields picks exactly those keys, id always include
   });
 });
 
+let mcp: BundleHarness;
+
+beforeAll(async () => {
+  mcp = await startBundle((req: Recorded) =>
+    req.path.endsWith('/status') ? { docId: 'doc-1', blocks: 12, threads: 3 } : { tasks: rows },
+  );
+}, 60_000);
+afterAll(async () => {
+  await mcp?.stop();
+});
+
 describe('list_tasks wiring', () => {
-  it('declares the optional fields param and its description says what it drops', () => {
-    const decl = declarationFor('list_tasks');
-    expect(decl).toContain('fields: {');
-    expect(decl).toMatch(/reviews|infoRequests/);
+  it('POSITIVE CONTROL: the running bundle serves a known tool', () => {
+    expect(mcp.tool('list_attachments')).toBeDefined();
+    expect(mcp.tool('list_task_fields')).toBeUndefined();
   });
 
-  it('the handler routes rows through projectTaskRows with the fields arg', () => {
-    const h = handlerFor('list_tasks');
-    expect(h).toContain('projectTaskRows(');
-    expect(h).toContain('fields');
+  it('declares the optional fields param and its description says what it drops', () => {
+    const fields = mcp.tool('list_tasks')?.inputSchema?.properties?.fields;
+    expect(fields).toBeDefined();
+    expect(fields?.description ?? '').toMatch(/reviews|infoRequests/);
+    expect(mcp.tool('list_tasks')?.inputSchema?.required).not.toContain('fields');
+  });
+
+  it('trims the heavy keys off every row by default', async () => {
+    const res = await mcp.call('list_tasks', { workspaceId: 'w-1' });
+    expect(res.isError).toBe(false);
+    const out = res.json as { tasks: Array<Record<string, unknown>> };
+    expect(out.tasks.map((t) => t.id)).toEqual(['t-1', 't-2']);
+    for (const t of out.tasks) {
+      expect(t).not.toHaveProperty('body');
+      expect(t).not.toHaveProperty('transitions');
+    }
+    expect(out.tasks[0]).toHaveProperty('transitionCount', 2);
+  });
+
+  it('picks exactly the asked-for keys when fields is given', async () => {
+    const res = await mcp.call('list_tasks', { workspaceId: 'w-1', fields: ['title', 'status'] });
+    const out = res.json as { tasks: Array<Record<string, unknown>> };
+    expect(Object.keys(out.tasks[0] ?? {}).sort()).toEqual(['id', 'status', 'title']);
+  });
+
+  it('sends the workspace filters as query params, not as a body', async () => {
+    const res = await mcp.call('list_tasks', { workspaceId: 'w-1', status: 'todo' });
+    const get = res.sent.find((r) => r.method === 'GET');
+    expect(get?.path).toBe('/api/workspaces/w-1/tasks');
+    expect(get?.query.get('status')).toBe('todo');
+    // `fields` is a handler-side trim: the route never learns about it, which
+    // is what keeps an old bundle's call shape unchanged.
+    expect(get?.query.get('fields')).toBeNull();
   });
 });
 
 describe('doc_status wiring', () => {
   it('is declared, and the description says it is the cheap non-content read', () => {
-    const decl = declarationFor('doc_status');
-    expect(decl.toLowerCase()).toMatch(/without .*(body|content)|no (body|content)/);
+    const decl = mcp.tool('doc_status');
+    expect(decl).toBeDefined();
+    expect((decl?.description ?? '').toLowerCase()).toMatch(
+      /without .*(body|content)|no (body|content)/,
+    );
   });
 
-  it('the handler calls GET /api/docs/:id/status', () => {
-    const h = handlerFor('doc_status');
-    expect(h).toMatch(/'GET'/);
-    expect(h).toContain('/status');
-  });
-});
-
-describe('the committed bundle peers load carries all of it', () => {
-  it('has doc_status and the fields projection', () => {
-    // Positive control first: a long-shipped tool is present, so a useless
-    // bundle read fails here rather than passing the rest vacuously.
-    expect(BUNDLE).toContain('list_attachments');
-    expect(BUNDLE).toContain('doc_status');
-    expect(BUNDLE).toContain('projectTaskRows');
+  it('GETs /api/docs/:id/status and returns what it got', async () => {
+    const res = await mcp.call('doc_status', { docId: 'doc-1' });
+    const status = res.sent.find((r) => r.path.endsWith('/status'));
+    expect(status?.method).toBe('GET');
+    expect(status?.path).toBe('/api/docs/doc-1/status');
+    expect(res.json).toEqual({ docId: 'doc-1', blocks: 12, threads: 3 });
   });
 });
