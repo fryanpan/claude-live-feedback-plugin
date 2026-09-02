@@ -68,7 +68,7 @@ import {
   heldReviewItems,
   isTaskArchived,
 } from './hub-board-model.ts';
-import { type ActivityEvent, taskActivity } from './hub-model.ts';
+import { type ActivityEvent, taskActivity } from './hub-presence-model.ts';
 import {
   BODY_LIVE_CLASS,
   type DetailHandlers,

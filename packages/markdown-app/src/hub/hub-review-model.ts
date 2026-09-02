@@ -5,12 +5,12 @@
  * browser.
  *
  * Imports `hub-board-model.ts` for the row shape and the board's own ordering,
- * and the duration labels a queue row prints. Nothing imports back: the queue
- * is a reader of the board, not a peer of it.
+ * and `hub-presence-model.ts` for the two duration labels a queue row prints.
+ * Nothing imports back: the queue is a reader of the board, not a peer of it.
  */
 import type { ReviewPayload } from '@feedback/core';
 import { type HubGoal, type HubTask, goalRank, ownedByPerson } from './hub-board-model.ts';
-import { timeAgo, waitShort } from './hub-model.ts';
+import { timeAgo, waitShort } from './hub-presence-model.ts';
 
 // ── Decisions strip ────────────────────────────────────────────────────────
 

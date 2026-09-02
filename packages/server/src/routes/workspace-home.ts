@@ -33,7 +33,7 @@ export async function handleWorkspaceHome(
   // Decisions are NOT here — the board already holds every task, so
   // shipping them again would put the priority rule in two places;
   // the client merges the two halves and orders them (see
-  // `reviewQueue` in hub-model).
+  // `reviewQueue` in hub-review-model).
   //
   // One request rather than one per doc: a board with forty tasks is a
   // board with forty rooms, and the strip has to be right at first

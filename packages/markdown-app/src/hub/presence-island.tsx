@@ -17,7 +17,7 @@
  * (`p-<name>` / `a-<agentId>`), not the array index and not the Yjs
  * `clientId` — `clientId` is minted per connection, so it changes on every
  * reload and cannot name a person; it is only ever used to fold one person's
- * several tabs into one row (`foldTabs` in hub-model). An unchanged
+ * several tabs into one row (`foldTabs` in hub-presence-model). An unchanged
  * participant therefore keeps the IDENTICAL DOM node across a signal update,
  * and the press it is holding survives with it.
  *
@@ -29,7 +29,12 @@
 import { signal } from '@preact/signals';
 import { type ComponentChildren, Fragment, render } from 'preact';
 import { useEffect, useLayoutEffect, useRef } from 'preact/hooks';
-import { type DriftNotice, type PresenceChip, initialsOf, presenceHue } from './hub-model.ts';
+import {
+  type DriftNotice,
+  type PresenceChip,
+  initialsOf,
+  presenceHue,
+} from './hub-presence-model.ts';
 
 export interface PresenceHandlers {
   /** Tap a chip to jump to where they are. */

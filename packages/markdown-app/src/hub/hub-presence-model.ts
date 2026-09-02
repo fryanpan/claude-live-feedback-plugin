@@ -1,8 +1,13 @@
 /**
- * Pure view-model logic for the workspace hub (plan §3.9). Everything here is
- * computed from the ws:<workspaceId> ydoc projection + REST payloads — no DOM,
- * no fetch — so the board's grouping/filter/ordering rules are unit-testable
- * without a browser.
+ * Who is here, what has happened, and where the hub is standing: the presence
+ * strip, the plugin and client release drift notices, the activity trail's
+ * wording, and the Home pane's own nav and clock (plan §3.9). Computed from
+ * the ws:<workspaceId> ydoc projection + REST payloads — no DOM, no fetch — so
+ * every sentence the trail prints is unit-testable without a browser.
+ *
+ * The three are one file because they are one strip of chrome fed by one
+ * clock: `timeAgo` dates a presence chip, a release, and a trail row alike,
+ * and splitting them would put that clock behind an import in three places.
  */
 import { tabTitle } from '../tab-title.ts';
 import { type BoardTab, fmtDuration } from './hub-board-model.ts';

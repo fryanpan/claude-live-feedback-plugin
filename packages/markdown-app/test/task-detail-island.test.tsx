@@ -10,7 +10,7 @@ import {
   type HubTransition,
   type TaskStatus,
 } from '../src/hub/hub-board-model.ts';
-import { type ActivityEvent } from '../src/hub/hub-model.ts';
+import { type ActivityEvent } from '../src/hub/hub-presence-model.ts';
 import type { DetailHandlers, TaskDiscussion } from '../src/hub/hub-render.ts';
 import { mountTaskDetailIsland, taskDetailData } from '../src/hub/task-detail-island.tsx';
 import { frame, surfaceOf, typeInComposer } from './support/composer.ts';
