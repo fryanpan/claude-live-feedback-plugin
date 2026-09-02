@@ -94,6 +94,17 @@ the errors. The engine sits behind the `TranscriptionEngine` interface
 (`packages/server/src/transcribe.ts`) so a later switch is a new adapter,
 not a rework.
 
+**The engine is not asked for at start** (Urgent-fixes ticket, 2026-09-02).
+A `start` frame naming no engine opens the server's default (the first
+configured, `/api/meeting-engines` lists them default-first), and the
+start chooser no longer shows a picker for any source. The one place an
+engine is chosen is the address — `?engine=soniox`, a preference read on
+every visit and kept across the one-shot huddle flags (`huddle-entry.ts`) —
+which is how a side-by-side trial is still run. The bot path streams the
+vendor's raw audio into these same engines (see below), so the preference
+applies there too; it was never the vendor's transcript. Advanced Options
+stays, keyed on whichever engine will open.
+
 **Speaker labels** (added 2026-08-29): `speaker_labels=true` on the same
 streaming URL — supported on every streaming model, **+$0.12/hr** on top of
 the $0.15 base (docs: streaming/label-speakers-and-separate-channels for the
@@ -1374,6 +1385,33 @@ before the recording that nothing could show afterwards. The thing worth not
 repeating is the record: do not write down a claim about what a room heard
 that the client has no way to verify.
 
+## One tap when alone
+
+**Shipped 2026-09-02** (Urgent-fixes ticket: *"start recording in one tap
+when he is alone, so setup stops asking questions with no answer"*). A
+Record press on a doc with nobody else on it starts a solo recording at once
+— no chooser, no consent line, the server's default engine. Every question
+the chooser asked had no answer with nobody else there: who the microphone
+will hear, whether a bot should go instead, whom to have asked for consent.
+
+"Alone" is the doc's presence — `othersOnDoc` in
+`packages/markdown-app/src/meeting-solo.ts` counts the distinct other people
+in the Yjs awareness, ignoring nameless states and the same person in a
+second tab — asked at the press through the strip's `alone` option. It is a
+proxy for the room, and an honest one both ways: a doc nobody else has open
+is the working session the assistant was built for, and a collaborator on
+the doc is a second person the questions apply to again. With one there,
+the press opens the chooser exactly as before. The chooser is also one tap
+away on a solo doc, behind the small options button beside Record: a
+conversation in a room where nobody else has the doc open still has to be
+asked for somewhere, and that is where.
+
+The consent line (`RECORDING_CONSENT_NOTE`, above) is shown only for a
+`conversation` capture now. A solo capture — one-tap or "Just me" — has
+nobody to have asked. Nothing on the server changed: a `start` with no
+engine already opened the default, and the huddle routes never held a
+consent step.
+
 ## Where things live
 
 `packages/core/src/meeting.ts` (wire contract, incl. `CaptureMode` and
@@ -1392,7 +1430,8 @@ late correction) + `speaker-roster.ts` (the meeting's cast) ·
 `packages/markdown-app/src/speaker-reassign.ts` +
 `speaker-reassign-menu.ts` (correcting one mention) ·
 `packages/markdown-app/src/meeting-strip.ts`
-(UI) · `packages/markdown-app/src/meeting-audio.ts` (capture + the room's
+(UI) · `meeting-solo.ts` (who else is on the doc — the one-tap predicate) ·
+`packages/markdown-app/src/meeting-audio.ts` (capture + the room's
 microphone config) · `packages/server/src/recall.ts` (vendor
 client) · `recall-turns.ts` (frames → turns, naming) · `recall-status.ts` +
 `recall-webhook-auth.ts` (bot state, signatures) · `recall-meeting.ts` (the
