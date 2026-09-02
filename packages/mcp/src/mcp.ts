@@ -110,7 +110,7 @@ function suggestionAuthor(): { id: string; name: string; color: string } {
  * bundle than the deploy source would install. A second literal would be a
  * fourth version site, and this file's history is that version sites drift.
  */
-const PLUGIN_VERSION = '0.1.143';
+const PLUGIN_VERSION = '0.1.144';
 
 /**
  * One nonce per PROCESS, minted at module load and sent on every attach.
@@ -1534,7 +1534,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     {
       name: 'get_workspace',
       description:
-        "Read a board's goals in priority order, with per-goal task counts. First row is the highest band. Call it before deciding what to work on — list_tasks returns goal ids only, so without this the ordering is invisible. Cheap by design: pair it with next_tasks, which carries the tasks themselves.",
+        "Read a board's goals in priority order, with per-goal task counts, plus the parallelism cap — its value, slots in use and free, and who last moved it and when. First row is the highest band. Call it before deciding what to work on — list_tasks returns goal ids only, so without this the ordering is invisible. Cheap by design: pair it with next_tasks, which carries the tasks themselves.",
       inputSchema: {
         type: 'object',
         properties: { workspaceId: { type: 'string' } },
@@ -3404,11 +3404,28 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
             reviewItemCriteria?: string;
           };
           goalSummary: unknown[];
+          parallelismCap?: {
+            value: number;
+            isDefault: boolean;
+            inUse: number;
+            free: number;
+            lastChange?: {
+              actor: { id: string; name: string; kind?: string };
+              ts: number;
+              from: number;
+              to: number;
+            };
+          };
           retired?: { since: number; reason?: string; notice: string };
         };
         return ok({
           workspaceId: res.workspace.id,
           name: res.workspace.name,
+          // How many builders this board may run, how many it is running —
+          // and, once somebody has moved the cap, who, when, from what. A
+          // lowered cap with no author is a mystery the lead goes looking
+          // for; here it is a fact with a name on it.
+          ...(res.parallelismCap !== undefined ? { parallelismCap: res.parallelismCap } : {}),
           // Absent means nobody is responsible for this board — its asks
           // have no addressee until someone attaches or takes the seat.
           leadAgentId: res.workspace.leadAgentId,
