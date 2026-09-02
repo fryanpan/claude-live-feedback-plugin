@@ -56,7 +56,7 @@ and every layer below it, never one above.
 | Layer | Where it lives | May import | Rule in one line |
 |---|---|---|---|
 | **Entry / composition** | `bin.ts`, and after the split `server-config.ts` + `server-deps.ts` | everything | The only place environment variables are read and real network adapters are constructed. |
-| **HTTP** | `server.ts`, `routes/**`, and after the split `shells.ts` | services, domain, infra types, core | Parse the request, call one service, format the response. Never reads env, never constructs an adapter. |
+| **HTTP** | `server.ts`, `routes/**`, `shells.ts` | services, domain, infra types, core | Parse the request, call one service, format the response. Never reads env, never constructs an adapter. |
 | **Request policy** | `middleware/**` | domain, core | Answers "may this request proceed on this host, as this caller" — once, for every route. |
 | **Services / stores** | `rooms.ts`, `tasks.ts`, `review-items/**`, `share/**`, `auth/**`, the `meeting-*` family, `sse.ts`, `activity.ts` | domain, infra, core | Owns durable state and orchestration. Must never import a route. |
 | **Domain (pure)** | `task-owner.ts`, `decision-shape.ts`, `safe-path.ts`, `diff-groups.ts`, and most of what the split extracts | core | Functions over values. No clock, no filesystem, no socket, unless passed in. |

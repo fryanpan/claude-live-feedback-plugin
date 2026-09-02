@@ -166,7 +166,9 @@ describe('GET /api/metrics', () => {
 
     const before = await metrics();
     // Reading a doc over HTTP is a genuine access, and the route that serves
-    // it lives in server.ts — so that is the file the tag must name.
+    // it lives in routes/docs.ts — so that is the file the tag must name.
+    // (It read `server.ts` until the doc routes were extracted; the tag
+    // follows the route, which is the whole point of attributing by file.)
     expect((await local('/api/docs/metrics-attributed')).status).toBe(200);
     const after = await metrics();
 
@@ -177,7 +179,7 @@ describe('GET /api/metrics', () => {
     expect(after.activationsTotal).toBeGreaterThan(before.activationsTotal);
     const top = after.activations[0];
     expect(top).toBeDefined();
-    expect(top?.tag).toContain('packages/server/src/server.ts:');
+    expect(top?.tag).toContain('packages/server/src/routes/docs.ts:');
     expect(top?.count).toBeGreaterThan(0);
   });
 });
