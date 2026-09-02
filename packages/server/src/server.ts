@@ -247,6 +247,7 @@ import { redactHubEventForVisitor } from './share/redact-hub-events.ts';
 import {
   redactMetaForVisitor,
   redactWorkspaceFilesForVisitor,
+  redactWorkspaceGroupedForVisitor,
   redactWorkspaceTreeForVisitor,
   relativeReviewUrl,
 } from './share/redact-meta.ts';
@@ -854,9 +855,18 @@ export interface ServerOptions {
   meetingBot?: RecallClient;
   /**
    * Shared secret for verifying Recall's status webhooks (Svix format).
-   * When set, an unsigned or badly signed webhook is REFUSED; when unset the
-   * route falls back to the bot id being unguessable, which is weaker. The
-   * operator sets `RECALL_WEBHOOK_SECRET`.
+   *
+   * **The webhook route is armed only while this is set.** Unset, `POST
+   * /recall/status` answers 404 on every host — the signature is the route's
+   * only credential, so without one there is no door to knock on. There is
+   * no unsigned fallback: this comment used to describe one ("falls back to
+   * the bot id being unguessable"), and that path was removed because an
+   * unauthenticated caller on the LAN or the tailnet could inject bot-status
+   * and calendar-sync events outside the replay guard.
+   *
+   * So leaving it unset does not degrade the webhook, it turns it off, and
+   * the symptom is a bot whose status never updates. The operator sets
+   * `RECALL_WEBHOOK_SECRET` to the signing secret from the Recall dashboard.
    */
   meetingBotWebhookSecret?: string;
   /**
@@ -5784,6 +5794,23 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
         }
 
         // --- REST: shares ---
+        // Every share MUTATION is an operator action, refused to browsers on
+        // the same terms as /api/deploy — see browserCannotOperateBody.
+        // Minting publishes a board to the internet and `enabled` can re-open
+        // external access after the operator closed it; the routes' own
+        // "local-only" comments are about the HOST class, which does not tell
+        // a page on a local dev origin from the agent that is the only real
+        // caller. Keyed on METHOD rather than a route list, the same way
+        // `isGatedWrite` is: a share mutation added later is covered by
+        // construction, and the GET stays open because reading the share list
+        // is what the board's own settings pane does.
+        if (
+          (pathname === '/api/share' || pathname.startsWith('/api/share/')) &&
+          req.method !== 'GET' &&
+          isBrowserRequest(req.headers)
+        ) {
+          return j(403, browserCannotOperateBody());
+        }
         if (pathname === '/api/share' && req.method === 'GET') {
           if (!shares) return j(404, { error: 'sharing not enabled' });
           // `listWithUrls` recomputes every link share's signed URL, which is
@@ -7405,7 +7432,13 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           if (grouped.groups.length === 0) {
             return j(404, { error: 'no diff review found', setId, workspaceId: setId });
           }
-          return j(200, grouped);
+          // Every file node carries the same absolute `reviewUrl` /tree and
+          // /files build, and this route is on the same visitor allowlist
+          // line — see redactWorkspaceGroupedForVisitor.
+          return j(
+            200,
+            visitor ? redactWorkspaceGroupedForVisitor(grouped, visitor.workspaceId) : grouped,
+          );
         }
         // Re-reconcile a workspace against disk: pick up files that changed
         // since the bind, flag members whose file is gone. Never re-mints a

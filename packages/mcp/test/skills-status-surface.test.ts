@@ -17,13 +17,13 @@
 import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { type BundleHarness, startBundle } from './harness/mcp-bundle.ts';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const SKILLS = join(HERE, '../../plugin/skills');
 const GENERAL = readFileSync(join(SKILLS, 'working-in-a-workspace/SKILL.md'), 'utf8');
 const LEAD = readFileSync(join(SKILLS, 'leading-a-workspace/SKILL.md'), 'utf8');
-const BUNDLE = readFileSync(join(HERE, '../../plugin/mcp/index.js'), 'utf8');
 
 const SHIPPED: Array<[string, string]> = readdirSync(SKILLS, { withFileTypes: true })
   .filter((d) => d.isDirectory() && existsSync(join(SKILLS, d.name, 'SKILL.md')))
@@ -116,13 +116,37 @@ describe('the shipped bundle carries the verb the skills name', () => {
   // Peers load packages/plugin/mcp/index.js and never the source: a skill
   // naming a tool that the installed bundle does not declare tells the agent
   // to call something that does not exist.
-  it('declares post_status', () => {
-    expect(BUNDLE).toContain('name: "post_status"');
-    expect(BUNDLE).toContain('/notes');
+  //
+  // This used to be `BUNDLE.toContain('name: "post_status"')` — a string that
+  // is in the file whether or not a client can call the tool, and one that a
+  // change to how the bundle is built breaks while the tool works. The
+  // committed bundle is run instead, and asked.
+  let mcp: BundleHarness;
+
+  beforeAll(async () => {
+    mcp = await startBundle(() => ({ taskId: 't-1', workspaceId: 'w-1' }));
+  }, 60_000);
+  afterAll(async () => {
+    await mcp?.stop();
   });
+
+  it('declares post_status, and it posts a note on the named row', async () => {
+    expect(mcp.tool('post_status')).toBeDefined();
+    const res = await mcp.call('post_status', { taskId: 't-1', text: 'Gates green, PR open.' });
+    expect(res.isError).toBe(false);
+    const sent = res.sent.find((r) => r.path.endsWith('/notes'));
+    expect(sent?.method).toBe('POST');
+    expect(sent?.path).toBe('/api/tasks/t-1/notes');
+    // `kind: status` is what puts it on the Activity tab rather than in the
+    // comment feed — the whole point of the verb the skills now name.
+    expect((sent?.body as { kind?: string })?.kind).toBe('status');
+  });
+
   it('post_reply no longer offers itself for status notes', () => {
-    expect(BUNDLE).not.toContain('is right for status notes');
-    // POSITIVE CONTROL: the description that replaced it is in the bundle.
-    expect(BUNDLE).toContain('where the work stands goes through post_status');
+    const desc = mcp.tool('post_reply')?.description ?? '';
+    expect(desc).not.toContain('is right for status notes');
+    // POSITIVE CONTROL: the description that replaced it is the one a client
+    // is handed.
+    expect(desc).toContain('where the work stands goes through post_status');
   });
 });
