@@ -314,9 +314,56 @@ whose paths B2 breaks.
 Layers: models, renderers, controllers, in that order. Final directory: `hub/`
 throughout — no move needed.
 
-## B2 · `styles.css`
+## B2 · `styles.css` — **DONE**
 
 12,042 lines, 158 commits in 90 days. **Effort M.** One PR, two commits.
+
+Landed as planned: `hub.css` (5,364) and `signin.css` (185), leaving
+`styles.css` at 6,545. What differed, and what the work found:
+
+- **Link order is load-bearing, and it is not the obvious one.** The hub
+  block sat about a twelfth of the way into styles.css, so nearly all of that
+  file followed it and won every tie between two rules of equal specificity.
+  The board shell therefore loads `hub.css` FIRST. Loading it last flips
+  about thirty of those ties — `.acti-pill` starts beating `.comment-pill` at
+  430px, a dozen composer surfaces take the board's padding instead of the
+  editor's. Loading it first flips exactly one, the back arrow's hover
+  colour, which a new `.hub-topbar .back-link:hover` rule now pins so no file
+  order decides it. `signin.css` was already at the end, so it loads last.
+- **The read-only bar is not sign-in UI.** `.signin-bar`,
+  `.signin-bar--floating` and `.signin-required-go` live under the sign-in
+  banner but are mounted by the board and the editor, and by no page less
+  than /signin. They went out with signin.css, the notice lost every rule it
+  had on both other pages, and the render comparison caught it — 1,007
+  differing elements. They are back in styles.css under a banner that says
+  what they are.
+
+- **`signin.css` stops at the sign-in block's end, not at EOF.** The
+  first-arrival identity prompt sits below it and belongs to the board and
+  the editor — both bundles reference its four classes, sign-in's references
+  none — so it stayed in `styles.css`. That is why the file is 256 rather
+  than the estimated ~316.
+- **Only two pages get lighter, not three.** The plan's premise was that
+  splitting the hub block stops a hub visitor downloading the editor's CSS.
+  It does not: the hub block is hub-only, but the hub also reaches design
+  tokens, the top bar, voice, the comment pill, the markdown composer, the
+  toast, the connection banner, the identity prompt and the utilities — all
+  of which stay shared. The editor and sign-in stop downloading the board;
+  the board downloads what it always did, in two files.
+- **The next cut is measured and named.** Rendering four board views and the
+  editor in headless Chrome and asking, per rule, whether it matches anything
+  on the page — cross-checked against the class names in each entry bundle —
+  puts about **2,459 lines** in blocks the editor alone reaches: main layout,
+  the review-set sidebar, the file tree, the reassign menu, code blocks,
+  tables, meeting record chrome, the over-doc sheet, the full-screen thread
+  view, the code-review and diff-review surfaces, and the inline thread
+  cards. Moving those into a `doc.css` would leave a genuinely shared base
+  every page keeps loading. That is a third file and a design decision, so
+  B2 did not take it.
+- **The source-shape ratchet went UP by twelve**, to 79. Twelve suites pin
+  rules on both sides of the seam and now read both files. The alternative —
+  one loop over a list of filenames — would have hidden those reads from
+  `test:audit` rather than removed them.
 
 | Becomes | Moves | Importers to update |
 |---|---|---|
