@@ -656,6 +656,11 @@ meeting's transcription bill.
 
 ## 2026-08-31 — Research by voice confirms on the board, not in the terminal
 
+> **Superseded 2026-09-01** by the entry below: a spoken research ask now
+> files the pill's Research row and a doc placeholder at once; the decision
+> item gate is gone. The enforcement lesson in the middle of this entry
+> ("the absent band is not a safety property") still holds.
+
 Two intents were added to the capture call — a research ask ("go look into
 that") and a lookup ask ("pull in last week's notes"). The lookup only reads,
 so it needed nothing new. The research ask spends: an agent goes away and
@@ -701,3 +706,55 @@ triage for a person to archive. If declined research rows accumulate visibly,
 react to `decision.answered` and archive the row on the `not-now` option —
 deliberately not built now, because an auto-archive on a mis-read answer is
 the harder thing to undo.
+
+## 2026-09-01 — A spoken ask is the tapped ask; research leaves a placeholder; the doc says when nobody is listening
+
+**Context.** The board task ("Bryan can ask for help mid-meeting
+in one or two taps"), criteria 3–5. Bryan said "create a task" in a huddle
+and nothing happened; the meeting could ask for research only through a
+decision card; and no surface said whether a lead was there to answer.
+
+**Decisions.**
+
+1. **One path, two triggers.** A task the assistant hears goes through
+   exactly what the pointer pill's Create Task posts: `spinoffBody` +
+   `readyToWork` moved into core, and the capture pass calls
+   `parseTaskCreate` with the pill's payload. Chosen over keeping a
+   capture-side `CreateTaskOpts` builder because the two had already
+   drifted, and "lands on the board as a real row" must not depend on who
+   noticed the ask. The bug that made the spoken task vanish was scope, not
+   detection: capture keyed on `meta.setId`, which a huddle doc (held, not
+   owned) never has. `boardOf` is now the doc page's own back-target lookup.
+2. **Detection is the existing capture call.** Written down before building:
+   a fifth and sixth intent on the one Haiku call per tick with its marked
+   overlap window, not a keyword pass and not a second call. Keyword
+   matching catches "can you research X" and misses "go look into that"; a
+   second call doubles the per-tick spend for the same words.
+3. **Research files the pill's row and writes the placeholder now.** The
+   2026-08-31 confirm-first gate is withdrawn on the owner's plan ("writes a
+   placeholder section immediately, then fills it"): the row is
+   lead-addressed `todo` (or unowned `triage` with no lead), and
+   `appendResearchPlaceholder` adds the section the row's body names. The
+   store files an agent's create at `triage` regardless of assignee, so the
+   capture moves a lead-addressed row to `todo` itself — the same step an
+   actionable request takes — rather than pretending the create did.
+4. **A review ask is the Review float's press, with the question attached.**
+   One `fileReviewRequest` for the route and the spoken path; deduped per
+   meeting so a repeated question opens one thread.
+5. **Banner in the doc, keyed on `leadSeatHealth`.** Bryan chose the banner
+   over refusing to record. "Attached" is the store's deliverability read, so
+   the banner and the board's presence strip cannot disagree. Change-only
+   push to pages that asked, plus the hub's new `onAgentStreams` hook for
+   the one liveness change no store event names.
+
+**Cost.** `scripts/intent-prompt-cost.ts`, `count_tokens` on the capture
+model: **+119 input tokens per tick** for the review ask (the direct-ask
+examples ride in the research stage, 148 → 169). ≈ $0.024 per meeting-hour at
+~200 ticks; the four speech intents together ≈ $0.105, $0.84 → ~$0.95. Output
+is unchanged on ticks that carry no ask.
+
+**What would change it:** if spoken tasks land in triage more often than
+they should, the readiness rule (three words) is the knob, shared with the
+pill; if the placeholder section clutters docs whose research is declined,
+archive the section when the row is archived.
+
