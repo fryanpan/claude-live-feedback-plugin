@@ -5,51 +5,60 @@
  *
  *  - A tool declared in `mcp.ts` and never built into
  *    `packages/plugin/mcp/index.js` is invisible to every peer, because
- *    `.mcp.json` loads the committed BUNDLE, not the source. PR #69 shipped a
+ *    `.mcp.json` loads the committed bundle, not the source. PR #69 shipped a
  *    schema change exactly that way and nobody got it.
  *  - The server route is covered end to end (plugin-refresh-routes.test.ts),
  *    and the pure refresher is covered by unit tests — but nothing yet checks
  *    that the MCP handler calls the path those tests serve. A tool pointed at
  *    the wrong verb or path fails only in a peer's session.
  *
- * Source-reading, like tool-wiring.test.ts: mcp.ts is a bundle entry point
- * and exports nothing.
+ * This used to assert `BUNDLE.toContain('request_plugin_refresh')` over the
+ * built file. That string survives a deleted handler, so it was never evidence
+ * the tool worked. The harness runs the committed bundle as a real MCP server
+ * against a recording stub instead: the declaration is what `tools/list`
+ * returns, and the route is the request the handler actually made.
  */
-import { readFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
-import { fileURLToPath } from 'node:url';
-import { describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { type BundleHarness, startBundle } from './harness/mcp-bundle.ts';
 
-const HERE = dirname(fileURLToPath(import.meta.url));
-const SRC = readFileSync(join(HERE, '../src/mcp.ts'), 'utf8');
-const BUNDLE = readFileSync(join(HERE, '../../plugin/mcp/index.js'), 'utf8');
+let mcp: BundleHarness;
+
+beforeAll(async () => {
+  mcp = await startBundle(() => ({ refreshed: true, cacheDir: '/tmp/plugin-cache' }));
+}, 60_000);
+afterAll(async () => {
+  await mcp?.stop();
+});
 
 describe('request_plugin_refresh', () => {
-  it('is declared with no inputs at all', () => {
+  // Positive control: a tool that has shipped for months is reachable too, so
+  // a harness that somehow listed nothing would fail here rather than let the
+  // assertions below pass vacuously.
+  it('POSITIVE CONTROL: the running bundle serves a known tool', () => {
+    expect(mcp.tool('list_attachments')).toBeDefined();
+    expect(mcp.tool('a_tool_that_was_never_declared')).toBeUndefined();
+  });
+
+  it('is declared to a client, with no inputs at all', () => {
     // The server spawns a process. Keeping the schema empty is what makes
     // "nothing a caller sends reaches a process" checkable rather than a
-    // claim in a comment — the argv is fixed on the server side, and there
-    // is no parameter here that could ever want to reach it.
-    const decl = SRC.slice(SRC.indexOf("name: 'request_plugin_refresh',"));
-    const schema = decl.slice(0, decl.indexOf('},\n    {'));
-    expect(schema).toMatch(/inputSchema: \{ type: 'object', properties: \{\} \}/);
-    expect(schema).not.toMatch(/required:/);
+    // claim in a comment — the argv is fixed on the server side, and there is
+    // no parameter here that could ever want to reach it.
+    const decl = mcp.tool('request_plugin_refresh');
+    expect(decl).toBeDefined();
+    expect(decl?.inputSchema?.properties ?? {}).toEqual({});
+    expect(decl?.inputSchema?.required).toBeUndefined();
   });
 
-  it('POSTs the route the server actually serves', () => {
-    const start = SRC.indexOf("case 'request_plugin_refresh': {");
-    expect(start).toBeGreaterThan(-1); // the slice below is meaningless without this
-    const handler = SRC.slice(start + 1);
-    const body = handler.slice(0, handler.indexOf('case '));
-    expect(body).toMatch(/http\('POST', '\/api\/plugin\/refresh'\)/);
+  it('POSTs the route the server actually serves, with no body', async () => {
+    const res = await mcp.call('request_plugin_refresh', {});
+    expect(res.isError).toBe(false);
+    expect(res.sent.map((r) => `${r.method} ${r.path}`)).toEqual(['POST /api/plugin/refresh']);
+    expect(res.sent[0]?.body).toBeUndefined();
   });
 
-  it('is in the committed bundle peers actually load', () => {
-    // Positive control alongside it: a tool that has shipped for months is
-    // present too, so a bundle read that somehow returned nothing useful
-    // would fail here rather than pass this test vacuously.
-    expect(BUNDLE).toContain('list_attachments');
-    expect(BUNDLE).toContain('request_plugin_refresh');
-    expect(BUNDLE).toContain('/api/plugin/refresh');
+  it("returns the server's answer to the caller rather than a bare ack", async () => {
+    const res = await mcp.call('request_plugin_refresh', {});
+    expect(res.json).toEqual({ refreshed: true, cacheDir: '/tmp/plugin-cache' });
   });
 });

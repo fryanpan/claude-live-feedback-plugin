@@ -183,6 +183,32 @@ function redactNode(node: unknown, scopeWorkspaceId?: string): unknown {
 }
 
 /**
+ * Same treatment for `GET /api/workspaces/<id>/grouped`, the diff review's
+ * sidebar model, whose payload nests the file nodes one level down inside
+ * `groups`.
+ *
+ * This route sits on the same visitor allowlist line as `/tree` and `/files`
+ * (`docSubrouteAllowed`) and builds the identical `reviewUrl` on every node,
+ * but it was the one of the three that returned the model verbatim — so a
+ * share visitor on a diff review learned the tailnet hostname and port, plus
+ * the workspace id of whichever board holds the doc first, which need not be
+ * the board they were shared. There is no `root` in this payload; the URLs
+ * are the whole disclosure.
+ */
+export function redactWorkspaceGroupedForVisitor<
+  T extends { groups?: Array<{ files?: unknown[] }> },
+>(payload: T, scopeWorkspaceId?: string): T {
+  if (!payload.groups) return payload;
+  return {
+    ...payload,
+    groups: payload.groups.map((g) => ({
+      ...g,
+      ...(g.files ? { files: g.files.map((n) => redactNode(n, scopeWorkspaceId)) } : {}),
+    })),
+  };
+}
+
+/**
  * Same treatment for `GET /api/workspaces/<id>/files`, whose payload is a
  * flat `files` array rather than a tree.
  */

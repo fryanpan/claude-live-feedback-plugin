@@ -42,6 +42,8 @@
  * status: a sender cannot fail quietly by forgetting to check a flag.
  */
 
+import { stamped } from '../log-stamp.ts';
+
 export interface CodeSendRequest {
   /** Normalized recipient address. */
   to: string;
@@ -96,6 +98,9 @@ export interface LogCodeSenderOptions {
    * depend on an environment variable another file may have set.
    */
   printCode?: boolean;
+  /** Clock for the line's timestamp. Injectable so a test asserts a stamp it
+   *  chose rather than racing the wall clock. */
+  now?: () => number;
 }
 
 /**
@@ -104,6 +109,13 @@ export interface LogCodeSenderOptions {
  * The CODE is printed only when `printCode` says so — see the header. The
  * recipient and the expiry are always printed: they are what makes "the flow
  * ran" checkable, and neither of them completes a sign-in.
+ *
+ * BOTH LINES CARRY AN ISO TIMESTAMP (`stamped`, `log-stamp.ts`), and it is
+ * the point of the line rather than decoration. What anyone asks of this log
+ * is how many codes went out and WHEN — after a mail-bomb, or when somebody
+ * says a code never arrived — and an undated burst answers neither. Nothing
+ * else in the server's console output is stamped, so this is a deliberate
+ * exception for the lines whose whole subject is timing.
  *
  * `log` is injectable so a test can read what was sent without scraping
  * stdout, and so a future caller could route it somewhere else.
@@ -116,13 +128,22 @@ export function createLogCodeSender(
     name: 'log',
     async send(req: CodeSendRequest): Promise<void> {
       const printCode = opts.printCode ?? loginCodeLoggingEnabled();
+      const at = opts.now?.() ?? Date.now();
       if (printCode) {
-        log(`[auth] login code for ${req.to}: ${req.code} (expires in ${req.expiresInMinutes}m)`);
+        log(
+          stamped(
+            `[auth] login code for ${req.to}: ${req.code} (expires in ${req.expiresInMinutes}m)`,
+            at,
+          ),
+        );
         return;
       }
       log(
-        `[auth] login code issued for ${req.to} (expires in ${req.expiresInMinutes}m) — ` +
-          'not delivered anywhere; set CW_LOG_LOGIN_CODES=1 to print it',
+        stamped(
+          `[auth] login code issued for ${req.to} (expires in ${req.expiresInMinutes}m) — ` +
+            'not delivered anywhere; set CW_LOG_LOGIN_CODES=1 to print it',
+          at,
+        ),
       );
     },
   };
