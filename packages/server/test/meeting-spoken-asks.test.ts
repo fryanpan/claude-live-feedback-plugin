@@ -195,6 +195,7 @@ describe('spoken asks on a huddle doc', () => {
     expect(task.body).toContain('Asked for by Speaker A.');
     expect(task.body).toContain('> ');
     expect(task.body).toContain('Make that a task: rotate the tunnel token before Friday.');
+    expect(task.body).toContain(`/docs/${docId})`);
     expect(task.createdBy).toBe('Meeting Assistant');
 
     // Turn 2: "can you research X" — the lead's row, and the doc's section.

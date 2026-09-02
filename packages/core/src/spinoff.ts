@@ -36,15 +36,29 @@ export function readyToWork(title: string): boolean {
 }
 
 /**
+ * Where a spun-off row links BACK to: the doc, under the board that holds
+ * it — the same address the huddle route answers with, root-relative so it
+ * survives being read over the tailnet. A doc has no finer address than
+ * itself today (the doc route reads no anchor or thread parameter), so the
+ * quoted line in the body is what to look for once there.
+ */
+export function spinoffDocHref(workspaceId: string, docId: string): string {
+  return `/workspaces/${encodeURIComponent(workspaceId)}/docs/${encodeURIComponent(docId)}`;
+}
+
+/**
  * The body every spun-off row carries: where it came from, in words, since
  * the `origin` ref is machine-readable and a person reading the ticket a
  * week later is not. `heard` switches the first line from "a line of the
  * discussion" (a selection) to "heard in the meeting" (the transcript).
+ * The full quote follows, and `docHref` closes with a link back to the doc
+ * it was taken from — the title is a trimmed reading of the line; the body
+ * is where the whole line and the way back live.
  */
 export function spinoffBody(
   quote: string,
   docTitle: string | undefined,
-  opts: { heard?: boolean; extra?: readonly string[] } = {},
+  opts: { heard?: boolean; extra?: readonly string[]; docHref?: string } = {},
 ): string {
   const where = docTitle ? ` "${docTitle}"` : '';
   const lead = opts.heard
@@ -53,5 +67,8 @@ export function spinoffBody(
   const extra = (opts.extra ?? []).filter((line) => line.trim().length > 0);
   const head = extra.length > 0 ? `${lead} ${extra.join(' ')}` : lead;
   const said = quote.trim().replace(/\s+/g, ' ');
-  return said ? `${head}\n\n> ${said}` : head;
+  const parts = [head, ...(said ? [`> ${said}`] : [])];
+  if (opts.docHref)
+    parts.push(`In the doc: [${docTitle?.trim() || 'open the doc'}](${opts.docHref})`);
+  return parts.join('\n\n');
 }

@@ -268,6 +268,8 @@ describe('runTaskCapture', () => {
     // create parse the pill's route runs says nothing it was not told.
     expect(opts.assigneeKind).toBeUndefined();
     expect(opts.origin).toEqual({ kind: 'doc', docId: 'doc-m' });
+    // The pill's body shape: the quote, and a link back to the doc.
+    expect(opts.body).toContain('](/workspaces/w-board/docs/doc-m)');
     // The pill's body, with the transcript's own line quoted under it.
     expect(opts.body).toContain('Heard in the meeting "Demo prep"');
     expect(opts.body).toContain('> ');

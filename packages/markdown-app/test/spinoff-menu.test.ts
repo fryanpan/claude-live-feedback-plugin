@@ -240,6 +240,9 @@ describe('runSpinoff', () => {
     // the half the title is allowed to tidy because the body keeps it.
     expect(String(call.body.body)).toContain('Discussion — widget rollout');
     expect(String(call.body.body)).toContain(ANCHOR.snippet.text);
+    // …and the way back: the doc under its board, root-relative, so the
+    // row can be followed to the line it came from.
+    expect(String(call.body.body)).toContain('](/workspaces/w-board/docs/d-huddle)');
     expect(made).toEqual({
       action: 'task',
       taskId: 't-99',
