@@ -162,20 +162,38 @@ it, so the alternative was a value cycle. It sits one line from
 
 Layer: services, unchanged.
 
-## A4 · boot and composition
+## A4 · boot and composition — DONE
 
-| File | Becomes | Moves | Importers | Effort |
-|---|---|---|---|---|
-| `bin.ts` (1,013) | `server-config.ts` (~350) | environment resolution into one typed config | none — `bin.ts` is an entry point with no importers | M |
-| | `server-deps.ts` (~350) | the "the ONLY place a real X is constructed" seams | none | |
+| File | Became | Moved | Measured |
+|---|---|---|---|
+| `bin.ts` (1,025) | `server-config.ts` | env and argv → one typed config, with the misconfiguration refusals | 444 (est. ~350) |
+| | `server-deps.ts` | every "the ONLY place a real X is constructed" seam, with the log line that says whether it was | 371 (est. ~350) |
 
-Two commits. This is the composition root the layer rule depends on: after it,
-"reads env" and "constructs a real adapter" are two named files rather than
-two thirds of a script. Arg parsing, `acquirePort` and the startup banner stay
-in `bin.ts` (~300).
+`bin.ts` ends at **379**, which is argv parsing, the Sentry process handlers,
+the port wait, the `createServer` call, the boot banner and the shutdown hook —
+the things that are about running a process rather than about configuring one.
+Two commits, one per file.
 
-Layer: entry. Final directory: `config/` for `server-config.ts`;
-`server-deps.ts` and `bin.ts` stay at `server/src/`.
+The two halves are "what to build" and "build it". That is why the
+misconfiguration warnings went with the config rather than staying in the
+entry point: a `CF_ACCESS_TUNNEL_HOSTS` list without an Access application in
+front of it is not a value plus a warning, it is a value that was refused, and
+the refusal is part of resolving it. The log lines in `server-deps.ts` are the
+mirror image — each says which adapter was built, or the one command that
+would build it.
+
+**Verified by booting both.** The pre-split `bin.ts` and the post-split one
+were each started on a throwaway port and data dir; their boot output is
+identical line for line, and `/`, `/api/docs` and `/api/deploy` answer 200,
+200 and 501 on both. Worth doing because a boot script is the one file whose
+behaviour the suites mostly do not reach.
+
+One deliberate change beyond the move: `dataDir` comes out of the config as a
+`string` rather than `string | undefined`. It was optional only because the
+flag reader is, and two later readers repeated the whole resolver call to work
+around it.
+
+Layer: entry.
 
 ## A5 · the meeting family
 
@@ -296,9 +314,56 @@ whose paths B2 breaks.
 Layers: models, renderers, controllers, in that order. Final directory: `hub/`
 throughout — no move needed.
 
-## B2 · `styles.css`
+## B2 · `styles.css` — **DONE**
 
 12,042 lines, 158 commits in 90 days. **Effort M.** One PR, two commits.
+
+Landed as planned: `hub.css` (5,364) and `signin.css` (185), leaving
+`styles.css` at 6,545. What differed, and what the work found:
+
+- **Link order is load-bearing, and it is not the obvious one.** The hub
+  block sat about a twelfth of the way into styles.css, so nearly all of that
+  file followed it and won every tie between two rules of equal specificity.
+  The board shell therefore loads `hub.css` FIRST. Loading it last flips
+  about thirty of those ties — `.acti-pill` starts beating `.comment-pill` at
+  430px, a dozen composer surfaces take the board's padding instead of the
+  editor's. Loading it first flips exactly one, the back arrow's hover
+  colour, which a new `.hub-topbar .back-link:hover` rule now pins so no file
+  order decides it. `signin.css` was already at the end, so it loads last.
+- **The read-only bar is not sign-in UI.** `.signin-bar`,
+  `.signin-bar--floating` and `.signin-required-go` live under the sign-in
+  banner but are mounted by the board and the editor, and by no page less
+  than /signin. They went out with signin.css, the notice lost every rule it
+  had on both other pages, and the render comparison caught it — 1,007
+  differing elements. They are back in styles.css under a banner that says
+  what they are.
+
+- **`signin.css` stops at the sign-in block's end, not at EOF.** The
+  first-arrival identity prompt sits below it and belongs to the board and
+  the editor — both bundles reference its four classes, sign-in's references
+  none — so it stayed in `styles.css`. That is why the file is 256 rather
+  than the estimated ~316.
+- **Only two pages get lighter, not three.** The plan's premise was that
+  splitting the hub block stops a hub visitor downloading the editor's CSS.
+  It does not: the hub block is hub-only, but the hub also reaches design
+  tokens, the top bar, voice, the comment pill, the markdown composer, the
+  toast, the connection banner, the identity prompt and the utilities — all
+  of which stay shared. The editor and sign-in stop downloading the board;
+  the board downloads what it always did, in two files.
+- **The next cut is measured and named.** Rendering four board views and the
+  editor in headless Chrome and asking, per rule, whether it matches anything
+  on the page — cross-checked against the class names in each entry bundle —
+  puts about **2,459 lines** in blocks the editor alone reaches: main layout,
+  the review-set sidebar, the file tree, the reassign menu, code blocks,
+  tables, meeting record chrome, the over-doc sheet, the full-screen thread
+  view, the code-review and diff-review surfaces, and the inline thread
+  cards. Moving those into a `doc.css` would leave a genuinely shared base
+  every page keeps loading. That is a third file and a design decision, so
+  B2 did not take it.
+- **The source-shape ratchet went UP by twelve**, to 79. Twelve suites pin
+  rules on both sides of the seam and now read both files. The alternative —
+  one loop over a list of filenames — would have hidden those reads from
+  `test:audit` rather than removed them.
 
 | Becomes | Moves | Importers to update |
 |---|---|---|

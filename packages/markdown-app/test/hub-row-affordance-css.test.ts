@@ -20,7 +20,7 @@ import { describe, expect, it } from 'vitest';
  * an assertion about a rendered pixel here would be an assertion about
  * nothing.
  */
-const CSS = readFileSync(resolve('packages/markdown-app/src/styles.css'), 'utf8');
+const CSS = readFileSync(resolve('packages/markdown-app/src/hub.css'), 'utf8');
 
 /** The declarations of the first rule whose selector list contains `sel`. */
 function block(sel: string): string {

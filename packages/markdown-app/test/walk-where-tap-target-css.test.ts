@@ -15,7 +15,7 @@ import { describe, expect, it } from 'vitest';
  * the box atomic and give it a floor. The rendered height is measured in a
  * browser against a real build; that is what closes the criterion.
  */
-const CSS = readFileSync(resolve('packages/markdown-app/src/styles.css'), 'utf8');
+const CSS = readFileSync(resolve('packages/markdown-app/src/hub.css'), 'utf8');
 
 function declarationsOnly(css: string): string {
   return css.replace(/\/\*[\s\S]*?\*\//g, '');

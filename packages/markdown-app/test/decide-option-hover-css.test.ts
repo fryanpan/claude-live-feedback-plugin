@@ -15,7 +15,16 @@ import { describe, expect, it } from 'vitest';
  * sits, so a renamed selector fails loudly rather than passing empty.
  */
 
-const CSS = readFileSync(resolve(import.meta.dirname, '../src/styles.css'), 'utf8');
+// The board's cascade is two files since the hub block moved to hub.css:
+// styles.css keeps the shared chrome, hub.css carries the board's own rules,
+// and the hub shell loads them in that order. A rule this suite pins may sit
+// in either, so read the pair the page actually loads. Two reads on purpose:
+// a one-line read is what `bun run test:audit` counts, and folding them into
+// a loop would hide a source-shape site rather than remove one.
+const CSS = [
+  readFileSync(resolve(import.meta.dirname, '../src/styles.css'), 'utf8'),
+  readFileSync(resolve(import.meta.dirname, '../src/hub.css'), 'utf8'),
+].join('\n');
 
 /** Every `@media (hover: hover)…{ … }` block's inner text, brace-matched. */
 function hoverGuardedCss(): string {
