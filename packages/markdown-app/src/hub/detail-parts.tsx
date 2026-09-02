@@ -21,13 +21,8 @@ import { useLayoutEffect, useRef } from 'preact/hooks';
 import { attachMarkdownComposer, focusMarkdownComposer } from '../md-composer.ts';
 import type { HubReviewItem } from './hub-board-model.ts';
 import { type TaskDiscussion } from './hub-detail-render.ts';
-import {
-  commentRow,
-  composerTarget,
-  discussionStream,
-  requireText,
-  reviewItemRow,
-} from './hub-render.ts';
+import { commentRow, composerTarget, discussionStream } from './hub-discussion-render.ts';
+import { requireText, reviewItemRow } from './hub-render.ts';
 
 /**
  * Fill a Preact-owned element with nodes some imperative builder made, on
