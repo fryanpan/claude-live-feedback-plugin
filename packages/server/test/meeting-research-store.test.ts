@@ -16,6 +16,7 @@ import { join } from 'node:path';
 import type { NotesTurn } from '../src/meeting-notes.ts';
 import { runTaskCapture } from '../src/meeting-task-capture.ts';
 import { TaskStore } from '../src/tasks.ts';
+import { seedGoals } from './goal-seed.ts';
 
 const turns: NotesTurn[] = [
   { turn: 4, speaker: 'Priya', text: 'The offline queue keeps replaying the same batch.' },
@@ -39,6 +40,29 @@ describe('a research ask on the real board', () => {
   afterEach(() => {
     store.stop();
     rmSync(dataDir, { recursive: true, force: true });
+  });
+
+  it('lands in the board’s top active band, not in chores/Backlog', async () => {
+    // Bryan found the spoken research row in Backlog (2026-09-01). Same
+    // placement as every spin-off: `placeSpinoff`, the first band being
+    // worked.
+    const ws = store.createWorkspace('Placed research', { leadAgentId: 'agent-helper' });
+    const G = seedGoals(store, ws.id, [{ key: 'top', title: 'Ship the meeting asks' }], {
+      id: 'known-bryan',
+      name: 'Bryan',
+      kind: 'known',
+    });
+    await runTaskCapture(
+      {
+        board: store,
+        extractor: extractorOf([{ kind: 'research', topic: 'offline queue replay' }]),
+      },
+      { workspaceId: ws.id, docId: 'doc-meeting', docTitle: 'Queue review', turns },
+    );
+    const row = store.listTasks(ws.id).find((t) => t.kind !== 'goal');
+    expect(row?.goal).toBe(G.top);
+    expect(row?.status).toBe('todo');
+    expect(row?.assignee).toBe('agent-helper');
   });
 
   it('with a lead seated, files the lead a todo the way the pill does', async () => {
@@ -73,6 +97,10 @@ describe('a research ask on the real board', () => {
     expect(row.title).toBe('Research: offline queue replay');
     // The lead's errand, ready to pick up — the pill's own placement.
     expect(row.assignee).toBe('agent-helper');
+    // Placed by the board's own rule: no active band here, so chores —
+    // and not left to the store's default, which reads the same today but
+    // would silently diverge the day the rule changes.
+    expect(row.goal).toBe(store.placeSpinoff(ws.id)?.goal ?? '');
     expect(row.assigneeKind).toBe('agent');
     expect(row.status).toBe('todo');
     expect(row.body).toContain('why does the same batch repeat?');
