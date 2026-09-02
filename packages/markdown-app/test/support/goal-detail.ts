@@ -15,7 +15,8 @@
 import { options } from 'preact';
 import { goalDetailData, mountGoalDetailIsland } from '../../src/hub/goal-detail-island.tsx';
 import type { BoardSection } from '../../src/hub/hub-board-model.ts';
-import type { GoalDetailHandlers, TaskDiscussion } from '../../src/hub/hub-render.ts';
+import type { TaskDiscussion } from '../../src/hub/hub-detail-render.ts';
+import type { GoalDetailHandlers } from '../../src/hub/hub-render.ts';
 
 // A signal write re-renders on the next microtask — still before the next
 // paint, and still after the next line of a test. Flushed inline.

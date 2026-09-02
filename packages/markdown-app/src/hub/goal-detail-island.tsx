@@ -72,14 +72,13 @@ import {
 } from './hub-board-model.ts';
 import {
   BODY_LIVE_CLASS,
-  type GoalDetailHandlers,
   type TaskDiscussion,
   bodySlot,
   localDateInputValue,
   relatedDocLinks,
   renderRelatedLinks,
-  wireInPlaceTitle,
-} from './hub-render.ts';
+} from './hub-detail-render.ts';
+import { type GoalDetailHandlers, wireInPlaceTitle } from './hub-render.ts';
 
 export interface GoalDetailView {
   /** The band on screen, or null for "nothing is open". */

@@ -2,10 +2,9 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { CHORES_ID, type HubGoal, type HubTask, goalLabel } from '../src/hub/hub-board-model.ts';
+import { BODY_LIVE_CLASS, type TaskThread } from '../src/hub/hub-detail-render.ts';
 import { type UptimeReport } from '../src/hub/hub-presence-model.ts';
 import {
-  BODY_LIVE_CLASS,
-  type TaskThread,
   decisionBlurb,
   discussionIsBusy,
   flattenComments,

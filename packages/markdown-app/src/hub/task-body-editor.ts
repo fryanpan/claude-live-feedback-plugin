@@ -25,7 +25,7 @@
 import type { FeedbackClient } from '@feedback/core';
 import type { AnyExtension } from '@tiptap/core';
 import type { CreateEditorOpts, EditorHandle } from '../editor.ts';
-import { BODY_LIVE_CLASS } from './hub-render.ts';
+import { BODY_LIVE_CLASS } from './hub-detail-render.ts';
 
 export interface TaskBodyTarget {
   id: string;

@@ -68,22 +68,20 @@ import {
   heldReviewItems,
   isTaskArchived,
 } from './hub-board-model.ts';
-import { type ActivityEvent, taskActivity } from './hub-presence-model.ts';
+import { type PanelReviewItem, renderTaskLinks } from './hub-detail-render.ts';
 import {
   BODY_LIVE_CLASS,
   type DetailHandlers,
-  type PanelReviewItem,
   type TaskDiscussion,
   activityRow,
   bodySlot,
   detailFields,
-  panelReviewQueue,
   relatedDocLinks,
   renderRelatedLinks,
-  renderTaskLinks,
   renderTransitionRow,
-  wireInPlaceTitle,
-} from './hub-render.ts';
+} from './hub-detail-render.ts';
+import { type ActivityEvent, taskActivity } from './hub-presence-model.ts';
+import { panelReviewQueue, wireInPlaceTitle } from './hub-render.ts';
 import {
   answeredByLine,
   askedMetaLine,
