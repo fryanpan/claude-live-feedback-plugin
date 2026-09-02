@@ -1443,7 +1443,16 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
   const deployer = opts.deployer ?? null;
   // Same opt-in seam: no engine here means no socket can start a billed
   // streaming session. See ServerOptions.transcription.
-  const meetingStore = new MeetingStore(dataDir);
+  const meetingStore = new MeetingStore(dataDir, {
+    // The raw companion's tie back to the doc: bound path and title as they
+    // are at meeting start and stop. A thunk over `rooms`, which is
+    // constructed below; a meeting can only start long after it exists.
+    docInfo: (docId) => {
+      const path = rooms.boundPathOf(docId);
+      const title = rooms.peekMeta(docId)?.title;
+      return { ...(path ? { path } : {}), ...(title ? { title } : {}) };
+    },
+  });
   const meetingRelay = new MeetingRelay({
     store: meetingStore,
     engines: Array.isArray(opts.transcription)

@@ -461,6 +461,9 @@ async function mountMarkdown(ctx: MountContext): Promise<void> {
     liveZone = createMeetingLiveZone({ parent: editorMount, prose: editor.editor.view.dom });
     const zone = liveZone;
     scope.onCleanup(() => zone.destroy());
+    // Built outside the call: a source-shape test reads the mount up to its
+    // first `})`, and an inline conditional spread would end it early.
+    const participant = user.name ? { participantName: user.name } : {};
     const strip = mountMeetingStrip({
       docId,
       root: meetingStripEl,
@@ -471,6 +474,8 @@ async function mountMarkdown(ctx: MountContext): Promise<void> {
       // "<name>'s Claude Code Agent" — the bot walks into the call wearing
       // the name of the person who sent it, editable in the chooser.
       botNamePrefill: user.name ? `${user.name}'s Claude Code Agent` : 'Claude Code Agent',
+      // The same person, on the raw transcript's unlabelled turns.
+      ...participant,
       // Which of the two entries this press was, read off the mode it
       // carries: a solo huddle ("Make a plan") opens the microphone, and a
       // conversation ("Have a discussion") opens the chooser instead,
