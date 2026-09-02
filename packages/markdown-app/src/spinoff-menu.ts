@@ -60,14 +60,33 @@ export interface SpinoffAction {
  * row SAYS, not from which of two identical buttons was pressed. Then
  * "Answer a question" and "Leave a comment" went the same day, with the
  * menu they lived in: both only opened the composer, and a selection on a
- * huddle doc is now answered by a two-button pill at the pointer rather than
- * a four-row menu behind a button. Labels are text, no icons — the pill is
- * read, not decoded.
+ * huddle doc is now answered by a pill at the pointer rather than a four-row
+ * menu behind a button. Labels are text, no icons — the pill is read, not
+ * decoded.
  */
 export const SPINOFF_ACTIONS: readonly SpinoffAction[] = [
   { id: 'research', label: 'Research' },
   { id: 'task', label: 'Create Task' },
 ] as const;
+
+/**
+ * What the pointer pill offers: a plain comment first, then the two
+ * spin-offs. Dropping "Leave a comment" from the old menu took the comment
+ * itself away with it, and a huddle doc's selection is the one place a
+ * comment could not be left (owner, 2026-09-01: "keep a comment option
+ * available"). Comment opens the composer on the selection, and is not a
+ * spin-off: nothing is filed until the person sends it. Research keeps the
+ * accent — the agent's errand is what the pill is mostly for.
+ */
+export type PointerPillActionId = SpinoffTaskId | 'comment';
+export const POINTER_PILL_ACTIONS: readonly {
+  id: PointerPillActionId;
+  label: string;
+  primary?: boolean;
+}[] = [
+  { id: 'comment', label: 'Comment' },
+  ...SPINOFF_ACTIONS.map((a) => (a.id === 'research' ? { ...a, primary: true } : a)),
+];
 
 /** A task title is a line of a title, not a paragraph of one. */
 const TITLE_MAX = 80;

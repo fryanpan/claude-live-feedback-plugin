@@ -60,7 +60,13 @@ import {
 import { mountSpeakerReassign } from './speaker-reassign-menu.ts';
 import { loadDocSpeakers, loadDocVoices, postSpeakerName } from './speaker-voices.ts';
 import { linkSpinoffRange, unlinkSpinoffHref } from './spinoff-link.ts';
-import { SPINOFF_ACTIONS, type SpinoffTaskId, boardIdFor, runSpinoff } from './spinoff-menu.ts';
+import {
+  POINTER_PILL_ACTIONS,
+  type PointerPillActionId,
+  type SpinoffTaskId,
+  boardIdFor,
+  runSpinoff,
+} from './spinoff-menu.ts';
 import { installStaleClientNotice } from './stale-client.ts';
 import { readSuggestModePref, setSuggesting, writeSuggestModePref } from './suggest-input.ts';
 import { registerMarkdownMount } from './surface-registry.ts';
@@ -595,12 +601,13 @@ async function mountMarkdown(ctx: MountContext): Promise<void> {
 
   // =========================================================================
   // THE POINTER PILL (huddle docs only — src/pointer-pill.ts)
-  //   A range selection on a huddle doc grows two text buttons — Research,
-  //   Create Task — just above the point where the finger or mouse let go,
-  //   never over the selected words, clamped to the editor's visible box.
-  //   The round comment pill is hidden in range mode on these docs; in caret
-  //   mode it stays, and tapping it makes the sentence selection that brings
-  //   the pointer pill up. Everywhere else nothing here runs.
+  //   A range selection on a huddle doc grows three text buttons — Comment,
+  //   Research, Create Task — just to the right of the point where the
+  //   finger or mouse let go (above it when there is no room), never over
+  //   the selected words, clamped to the editor's visible box. The round
+  //   comment pill is hidden in range mode on these docs; in caret mode it
+  //   stays, and tapping it makes the sentence selection that brings the
+  //   pointer pill up. Everywhere else nothing here runs.
   // =========================================================================
 
   /** Where the last selection gesture let go, in viewport coordinates. A
@@ -643,12 +650,18 @@ async function mountMarkdown(ctx: MountContext): Promise<void> {
   } | null = null;
   const pointerPill =
     ctx.huddle === true
-      ? mountPointerPill<SpinoffTaskId>({
-          actions: SPINOFF_ACTIONS,
+      ? mountPointerPill<PointerPillActionId>({
+          actions: POINTER_PILL_ACTIONS,
           onPick: (action) => {
             const captured = pointerPillCtx;
             pointerPillCtx = null;
             hidePill();
+            if (action === 'comment') {
+              // The composer anchors to the selection that is standing, so
+              // it stays: the same path the round pill takes everywhere else.
+              reviewChrome.openComposer();
+              return;
+            }
             // The selection has done its job. Left standing, the next
             // `positionPill` — the release of this very tap, or the edit
             // that writes the link — would grow the pill straight back over
