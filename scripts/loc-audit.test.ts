@@ -1,3 +1,4 @@
+import { spawnSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -78,6 +79,30 @@ describe('audit', () => {
     const result = audit(root);
     expect(result.total).toBe(1);
     expect(result.unlisted).toEqual([]);
+  });
+
+  it('reports an oversized file that git has never heard of', () => {
+    // A regression guard, not a bug fix. `test-audit` enumerated with
+    // `git ls-files` and was therefore blind to the untracked test files it
+    // exists to judge; `loc-audit` walks the tree with readdir and is not, so
+    // it needed no change. This pins that difference: the fixture is a real
+    // git repo where the oversized file is untracked, so a future switch to
+    // any git-based enumeration turns this red instead of quietly shipping
+    // the same blind spot.
+    const root = fixture();
+    const git = (...args: string[]) => spawnSync('git', args, { cwd: root, encoding: 'utf8' });
+    git('init', '-q');
+    writeLines(root, 'packages/demo/src/committed.ts', 900);
+    git('add', '-A');
+    git('-c', 'user.email=t@example.invalid', '-c', 'user.name=T', 'commit', '-qm', 'fixture');
+    writeLines(root, 'packages/demo/src/never-staged.ts', 900);
+    writeDoc(root, 'nothing listed here');
+
+    // Positive control in the same run: the committed file is seen too, so a
+    // green result cannot come from the audit having found nothing at all.
+    const unlisted = audit(root).unlisted.map((o) => o.path);
+    expect(unlisted).toContain('packages/demo/src/committed.ts');
+    expect(unlisted).toContain('packages/demo/src/never-staged.ts');
   });
 
   it('reports an oversized file with no row', () => {

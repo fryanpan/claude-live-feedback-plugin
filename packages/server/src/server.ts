@@ -1,10 +1,8 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { basename, dirname, extname, join } from 'node:path';
+import { existsSync, readFileSync } from 'node:fs';
+import { basename, extname, join } from 'node:path';
 import {
-  type Anchor,
   type DocMeta,
   type DocType,
-  MAX_SPEAKER_NAME,
   type ReviewItemJudgement,
   type ReviewPayload,
   type TaskReviewItem,
@@ -13,10 +11,6 @@ import {
   type WebhookPayload,
   agentIdCandidates,
   agentIdForName,
-  anchors,
-  answerAsksBack,
-  answerFromReply,
-  checkReviewPayload,
   contentKind,
   emailIdentityId,
   isEmailLike,
@@ -28,30 +22,15 @@ import {
   locateReviewItemRange,
   normalizeEmail,
   pendingDeclaration,
-  readReviewPayload,
   readTaskReviewItem,
-  reviewGapAdvice,
   reviewIdOf,
   reviewItemState,
-  reviewPayloadMessage,
   reviewPayloadVersion,
-  speakerDisplayName,
-  suggestOps,
-  summaryHash,
 } from '@feedback/core';
-import {
-  ASSET_MANIFEST_FILE,
-  type AssetManifest,
-  assetHref,
-  isContentHashedAsset,
-  parseAssetManifest,
-} from '@feedback/core/asset-manifest';
 import { EFFORT_ESTIMATE_PROMPT_VERSION } from '@feedback/core/effort-estimate-prompt';
-import { needsCall } from '@feedback/core/summary-prompt';
 import type { Server as BunServer } from 'bun';
 import { acquireActivityLock, releaseActivityLock } from './activity-lock.ts';
 import {
-  classifyActor,
   identityLinks,
   ownerIdentityIds,
   registerOwnerIdentity,
@@ -70,42 +49,27 @@ import {
 import { AllowRuleProposals } from './allow-rules.ts';
 import { ARTIFACT_CHECK_ACTOR, ArtifactChecker } from './artifact-check.ts';
 import { type CodeSender, createLogCodeSender } from './auth/code-sender.ts';
-import { CODE_TTL_MS, EmailCodes } from './auth/email-code.ts';
+import { EmailCodes } from './auth/email-code.ts';
 import { SessionRevocations } from './auth/session-revocations.ts';
 import {
   SESSION_COOKIE,
-  clearedSessionCookieHeader,
   sessionKey as deriveSessionKey,
   sessionCookieHeader as emailSessionCookieHeader,
-  mintSession,
   refreshedSession,
   sessionNeedsRefresh,
   verifySession as verifyEmailSession,
 } from './auth/session.ts';
-import {
-  widgetTokenKey as deriveWidgetTokenKey,
-  mintWidgetToken,
-  verifyWidgetToken,
-} from './auth/widget-token.ts';
-import {
-  type BrowserSentryConfig,
-  type PageType,
-  injectSentryHead,
-  sentryHeadTags,
-} from './browser-sentry.ts';
+import { widgetTokenKey as deriveWidgetTokenKey, verifyWidgetToken } from './auth/widget-token.ts';
+import { type BrowserSentryConfig, type PageType, injectSentryHead } from './browser-sentry.ts';
 import { ChatAudit, isSharedAgentName, localDay } from './chat-audit.ts';
 import { maybeCompress, maybeNotModified } from './compress.ts';
 import type { Deployer } from './deploy.ts';
 import { DispatchRegistry, type WatchFactory } from './dispatch-registry.ts';
-import { normalizeDocHome, resolveHomeCheckout } from './doc-home.ts';
-import { RESERVED_DOC_PREFIXES } from './doc-ids.ts';
-import { compactDocRow, matchesDocFilters, pageDocs, parseListDocsQuery } from './doc-listing.ts';
 import {
   EFFORT_ESTIMATE_MODEL,
   type EffortEstimateVerdict,
   type EffortEstimator,
 } from './effort-estimator.ts';
-import { showFile } from './git-diff.ts';
 import {
   type BriefCoverage,
   type BriefInput,
@@ -121,27 +85,10 @@ import {
   readerKey,
   taskDeepLink,
 } from './home-brief.ts';
-import {
-  PLAN_REQUEST_COMMENT,
-  RESEARCH_TOPIC_MAX,
-  REVIEW_REQUEST_COMMENT,
-  meetingDocAlias,
-  meetingDocFilePath,
-  meetingDocTitle,
-  researchAskComment,
-  researchPlaceholderMarkdown,
-  researchSectionTitle,
-  spokenReviewComment,
-} from './huddle.ts';
+import { spokenReviewComment } from './huddle.ts';
 import { Identities, type IdentityRecord, userForIdentity } from './identities.ts';
 import { loadIdentityLinks } from './identity-links.ts';
-import {
-  type LandingModel,
-  type LandingProjectLink,
-  type LandingWorkspaceInput,
-  type LandingWorkspaceRow,
-  buildLandingModel,
-} from './landing.ts';
+import { buildLandingModel } from './landing.ts';
 import { createLeadPresenceMonitor } from './lead-presence.ts';
 import { type LookupDoc, boardLookupDocs } from './meeting-lookup.ts';
 import { withServerNotesSinks } from './meeting-notes-doc.ts';
@@ -166,16 +113,9 @@ import {
   shareScopeAllows,
 } from './middleware/host-guard.ts';
 import { RECALL_STATUS_PATH, recallCallbackAllows } from './middleware/recall-callback-gate.ts';
-import {
-  browserCannotBindBody,
-  browserCannotOperateBody,
-  isBrowserRequest,
-  isGatedWrite,
-  signInRequiredBody,
-} from './middleware/write-gate.ts';
+import { isBrowserRequest, isGatedWrite, signInRequiredBody } from './middleware/write-gate.ts';
 import {
   captureMockup,
-  checkMockupSource,
   isHtmlMockupSource,
   readMockupCapture,
   readMockupHtml,
@@ -205,9 +145,7 @@ import {
   CalendarSyncConsumer,
   type GoogleOauthApp,
   type RecallCalendarClient,
-  type RecallCalendarEvent,
   type RefreshTokenVault,
-  eligibleForBot,
   parseCalendarSyncWebhook,
 } from './recall-calendar.ts';
 import { RecallMeetingRelay } from './recall-meeting.ts';
@@ -219,7 +157,20 @@ import { listArchivedDocs, listArchivedReviews, readDocArchiveManifest } from '.
 import { backfillReviewFiling } from './review-backfill.ts';
 import { type ReviewJudge, type ReviewJudgeVerdict } from './review-judge.ts';
 import { type ReviewItemRow, type ReviewThreadItem, reviewItemRows } from './review-queue.ts';
-import { type FeedbackWs, Rooms, type WorkspaceDirNode, type WorkspaceFileNode } from './rooms.ts';
+import { type FeedbackWs, Rooms } from './rooms.ts';
+import { type AuthShareRoutesContext, handleAuthShareRoutes } from './routes/auth-share.ts';
+import {
+  type DocRoutesContext,
+  type ThreadReviewGate,
+  handleDocCreateListRoutes,
+  handleDocPromoteRoute,
+  handleDocResourceRoutes,
+} from './routes/docs.ts';
+import {
+  type MeetingCalendarRoutesContext,
+  handleMeetingCalendarRoutes,
+} from './routes/meetings-calendar.ts';
+import { type OpsRoutesContext, handleOpsMetricsRoute, handleOpsRoutes } from './routes/ops.ts';
 import {
   type ReviewGate,
   type TaskRoutesContext,
@@ -233,16 +184,9 @@ import {
   handleWorkspaceGoalRoutes,
   handleWorkspaceRoutes,
 } from './routes/workspaces.ts';
-import { isWithinRoot } from './safe-path.ts';
 import { captureServerError, routePatternForSpan, withRouteSpan } from './sentry.ts';
 import { CfApi } from './share/cf-api.ts';
-import {
-  SHARE_COOKIE,
-  loadCookieKey,
-  readCookie,
-  sessionCookieHeader,
-  verifySession,
-} from './share/link-session.ts';
+import { SHARE_COOKIE, loadCookieKey, readCookie, verifySession } from './share/link-session.ts';
 import { redactHubEventForVisitor } from './share/redact-hub-events.ts';
 import {
   redactMetaForVisitor,
@@ -253,7 +197,6 @@ import {
 } from './share/redact-meta.ts';
 import { Shares } from './share/shares.ts';
 import { SharingGate } from './share/sharing-gate.ts';
-import { resolveTtl } from './share/ttl.ts';
 import type { Share, ShareConfig } from './share/types.ts';
 import { sanitizeVisitorAuthor } from './share/visitor-identity.ts';
 import { claimReplayMarks, saveReplayMarks } from './sse-marks.ts';
@@ -272,29 +215,10 @@ import {
   StallNudger,
   type StallSnapshot,
 } from './stall-nudge.ts';
-import { KEYCHAIN_SERVICE, ThreadSummarizer } from './summarize.ts';
-import {
-  BAD_OPTIONS_ERROR,
-  BAD_REF_ERROR,
-  createdVisibility,
-  parseLinks,
-  parseNeeds,
-  parseOptions,
-} from './task-create.ts';
-import {
-  ASSIGNEE_REQUIRED_ERROR,
-  ASSIGNEE_REQUIRED_MESSAGE,
-  AUTHOR_REQUIRED_ERROR,
-  AUTHOR_REQUIRED_MESSAGE,
-  BAD_ASSIGNEE_KIND_ERROR,
-  BAD_ASSIGNEE_KIND_MESSAGE,
-  isCategoryAuthor,
-  parseAssigneeKind,
-  resolveAssignee,
-} from './task-owner.ts';
+import { ThreadSummarizer } from './summarize.ts';
+import { AUTHOR_REQUIRED_ERROR, AUTHOR_REQUIRED_MESSAGE } from './task-owner.ts';
 import { TaskProjection, taskBodyDocId, taskIdOfBodyDoc } from './task-projection.ts';
-import { buildQueue, placeableGoals } from './task-queue.ts';
-import { clipToWordBoundary } from './task-title.ts';
+import { buildQueue } from './task-queue.ts';
 import {
   DEFAULT_PARALLELISM_CAP,
   type HubWorkspace,
@@ -303,7 +227,6 @@ import {
   type Task,
   type TaskEffortEstimate,
   TaskStore,
-  isRetired,
   legacyDecisionItem,
   reviewItemVersion,
   taskChip,
@@ -314,127 +237,9 @@ import type { TranscriptionEngine } from './transcribe.ts';
 import { UptimeMonitor } from './uptime.ts';
 import { type VoiceComplete, VoiceRouter } from './voice.ts';
 import { type WebhookLogEntry, createWebhookDispatcher } from './webhooks.ts';
-import { widgetAuthPage } from './widget-auth-page.ts';
 import { onClose, onMessage, onOpen } from './yjs-protocol.ts';
 
 const DEFAULT_PORT = Number(process.env.PORT ?? 8787);
-
-/**
- * The one doc every hub's feedback widget writes to.
- *
- * Deliberately NOT per-workspace: a comment on the hub UI is about the
- * product, so it should reach the same agent from every hub rather than
- * whoever happens to own the workspace you were standing in. The anchor's
- * url carries which hub it came from.
- */
-export const HUB_FEEDBACK_DOC_ID = 'lf-hub-feedback';
-
-/**
- * The refusal a share route gives when handed a GROUPING id.
- *
- * A BOARD is the unit of sharing (Bryan, 2026-08-17: "Workspace only — a
- * review must be filed on a board before it can be shared"). A folder bind
- * and a diff review are reviews: they hold member docs, but they are not
- * boards, and until this they could each be shared on their own.
- *
- * 410 rather than 404 because the id is real and the caller is not wrong
- * about it — the capability is what went away. Older peers keep calling the
- * shared server with the payload THEIR bundle sends long after this one
- * stopped sending it, and a review id arrives in the same `workspaceId`
- * field a board id does, so a bare 404 would read as "your review vanished".
- * The hint has to name the replacement or the reply is just a wall.
- */
-const GROUPING_SHARING_REMOVED = {
-  error: 'grouping_sharing_removed',
-  hint: 'A board is the unit of sharing. A folder bind or diff review cannot be shared on its own — file it on a board and share the board instead. Use the hubWorkspaceId that create_diff_review / bind_folder returns, or make a fresh board with create_workspace.',
-} as const;
-
-/**
- * The refusal a share route gives when handed the UNFILED board.
- *
- * Decided on the board: refuse. The Unfiled board is where every review
- * created WITHOUT naming a board lands — one shared catch-all for every
- * agent's strays. Sharing it would hand a visitor every stray review from
- * everyone, so the mint routes refuse it outright.
- *
- * 403 rather than 410: nothing was removed — the board exists and the route
- * works — this share is simply never allowed. The hint has to name the fix,
- * because the caller usually got here by binding without a hubWorkspaceId
- * and then sharing whatever id came back.
- */
-const UNFILED_SHARING_REFUSED = {
-  error: 'unfiled_board_not_shareable',
-  hint: 'The Unfiled board collects every review bound without a board, from every agent — sharing it would share them all. So: file the review on a real board first, then share that board. Pass hubWorkspaceId when you bind (create_diff_review / bind_folder), or make a board with create_workspace and attach_doc the review to it.',
-} as const;
-
-/**
- * Every body key `POST /api/share/link` honours. A key outside this set is
- * refused by name (400 unsupported_argument) — `docId` and `entryDocId` are
- * checked before this set is consulted, each with its own reply.
- */
-const SHARE_LINK_ARGS: ReadonlySet<string> = new Set(['workspaceId', 'ttl', 'ttlSeconds', 'label']);
-
-/** The anchor's display snippet, whichever anchor kind carries it — an
- *  orphan keeps its original's snippet. */
-function anchorSnippetText(anchor: Anchor): string | undefined {
-  if (anchor.kind === 'subject') return undefined;
-  if (anchor.kind === 'orphan') {
-    return anchor.original.snippet?.text;
-  }
-  return anchor.snippet?.text;
-}
-
-/**
- * A comment's optional Review Item declaration, checked at the door.
- *
- * Every route that writes a comment calls this, because a payload that gets
- * past one of them is stored in the CRDT and renders on Bryan's Home queue
- * with a headline that does not fit two lines on a phone — which is the
- * defect the whole feature exists to remove, re-created by the feature.
- *
- * **Refuse rather than truncate.** Clipping a long headline is exactly what
- * produced the "titles are random detailed text" rows this replaces, and it
- * teaches the author nothing: the call returns 200, the row looks wrong, and
- * nobody connects the two. A 400 quoting every problem lands in a retrying
- * model's context, where it can be acted on.
- *
- * Returns `undefined` for an absent declaration — an ordinary comment is
- * still an ordinary comment, and the overwhelming majority are.
- *
- * `advice` is the non-refusing half: a payload that filed successfully but
- * left the card thin. It rides back on the 200 rather than being dropped
- * here, because an author who is never told writes the same thin item again.
- *
- * `text` is the comment the declaration arrived on. The checker needs it to
- * see a card whose links stayed behind in the comment — the reader acts from
- * the Home card, and the comment is not on it.
- */
-function reviewFromBody(
-  rawIn: unknown,
-  text?: string,
-): { ok: true; review?: ReviewPayload; advice?: string } | { ok: false; error: string } {
-  if (rawIn === undefined || rawIn === null) return { ok: true };
-  // The gate's own verdict is NEVER read off a caller's body. `judge` is
-  // written by `runReviewGate` and restored from the CRDT by
-  // `readReviewPayload`; accepting it here would let any filing clear the
-  // gate with one key — `judge: {verdict: "ok"}` — which is a hole the
-  // ticket form never had, because its verdict lives on a wrapper the
-  // caller cannot address. Dropped silently: a payload carrying it is
-  // almost certainly a peer echoing back an item it read, not an attack,
-  // and refusing would bounce an otherwise honest ask.
-  const raw =
-    typeof rawIn === 'object' && rawIn !== null && 'judge' in (rawIn as Record<string, unknown>)
-      ? (({ judge: _dropped, ...rest }) => rest)(rawIn as Record<string, unknown>)
-      : rawIn;
-  const check = checkReviewPayload(raw, { text });
-  if (!check.ok) return { ok: false, error: reviewPayloadMessage(check) };
-  const advice = reviewGapAdvice(check.gaps);
-  // Stored via the reader so the agent-facing spellings (`review_type`,
-  // 'question') land in the stored vocabulary and junk keys never persist.
-  const review = readReviewPayload(raw);
-  if (!review) return { ok: false, error: reviewPayloadMessage(check) };
-  return { ok: true, review, ...(advice ? { advice } : {}) };
-}
 
 /** Attribution for a write that arrived with no author at all. Deliberately
  *  NOT Bryan: an unattributed action must never gain his authority just
@@ -445,6 +250,42 @@ const ANONYMOUS_ACTOR: User = {
   name: 'Anonymous',
   kind: 'anon',
   color: '#8a8a8a',
+};
+
+import { HUB_FEEDBACK_DOC_ID } from './doc-ids.ts';
+import {
+  HTML_SHELL_HEADERS,
+  appCacheControl,
+  buildProjectArtifacts,
+  collectLandingProjects,
+  collectLandingWorkspaces,
+  readAppAssetManifest,
+  renderDeviceFrame,
+  renderHubNotFound,
+  renderHubShell,
+  renderLanding,
+  renderMockupNotFound,
+  renderProjectPage,
+  renderReviewNotFound,
+  renderSigninShell,
+  serveStatic,
+  serveStaticUnder,
+} from './shells.ts';
+
+/**
+ * Re-exported: these were declared in this file until the HTML shells moved
+ * to `shells.ts`, and the tests and `bin.ts` address them here. The
+ * definitions live there now; this keeps the public surface where callers
+ * already point.
+ */
+export {
+  HTML_SHELL_HEADERS,
+  HUB_FEEDBACK_DOC_ID,
+  appCacheControl,
+  readAppAssetManifest,
+  renderHubShell,
+  renderSigninShell,
+  serveStaticUnder,
 };
 
 export interface ServerOptions {
@@ -935,22 +776,6 @@ export interface ServerOptions {
    */
   slowRequestMs?: number;
 }
-
-const CT: Record<string, string> = {
-  '.html': 'text/html; charset=utf-8',
-  '.js': 'application/javascript; charset=utf-8',
-  '.mjs': 'application/javascript; charset=utf-8',
-  '.css': 'text/css; charset=utf-8',
-  '.json': 'application/json; charset=utf-8',
-  '.map': 'application/json; charset=utf-8',
-  '.svg': 'image/svg+xml',
-  '.png': 'image/png',
-  '.ico': 'image/x-icon',
-  // Without this the manifest ships as application/octet-stream and the
-  // browser declines to install it — which presents as "Add to Home Screen
-  // makes a bookmark, not an app", with nothing in the console about why.
-  '.webmanifest': 'application/manifest+json',
-};
 
 /** Files the markdown-app build emits that must ALSO answer at the root
  *  path. See the route for why each one is here rather than under /app/. */
@@ -2001,12 +1826,6 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
       'Every revision is judged again, and the item reaches the queue when it passes.'
     );
   }
-
-  /** The gate's answer for a COMMENT-borne item. Same three facts as
-   *  `ReviewGate`; a bare payload where that one carries the wrapper. */
-  type ThreadReviewGate =
-    | { held: false; review: ReviewPayload }
-    | { held: true; review: ReviewPayload; reason: string; message: string };
 
   /** Process-wide: a judge that throws is named once, not once per filing. */
   let warnedJudgeThrew = false;
@@ -4902,6 +4721,108 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
     });
   };
   /**
+   * What the operator routes read instead of this closure's scope. Built
+   * once — every collaborator in it is long-lived.
+   */
+  const opsRoutesCtx: OpsRoutesContext = {
+    rooms,
+    pluginRefresher,
+    deployer,
+    pushStore,
+    pushNotifier,
+    j,
+    safeJson,
+    requestAddress: (req) => server.requestIP(req)?.address,
+  };
+
+  /**
+   * What the meeting, transcript and calendar routes read instead of this
+   * closure's scope. Built once — every collaborator in it is long-lived.
+   */
+  const meetingCalendarRoutesCtx: MeetingCalendarRoutesContext = {
+    rooms,
+    taskStore,
+    meetingStore,
+    meetingRelay,
+    recallRelay,
+    calendarStore,
+    calendarSync,
+    calendarBot: opts.calendarBot,
+    calendarOauthStates,
+    dataDir,
+    j,
+    isValidDocId,
+    fileUnderHubWorkspace,
+  };
+
+  /**
+   * What the doc, thread and bind routes read instead of this closure's
+   * scope. Built once — every collaborator in it is long-lived.
+   */
+  const docRoutesCtx: DocRoutesContext = {
+    rooms,
+    taskStore,
+    taskProjection,
+    webhooks,
+    leadPresence,
+    readyNudger,
+    threadRequestDedup,
+    summarizer,
+    dataDir,
+    j,
+    safeJson,
+    ANONYMOUS_ACTOR,
+    isValidDocId,
+    canonicalDocId,
+    backTargetFor,
+    resolveWorkspaceForDoc,
+    withReviewUrl,
+    boardIndexForListing,
+    hubBoardsForDocIndexed,
+    homeForDocIndexed,
+    fileUnderHubWorkspace,
+    unlinkFromEveryHubWorkspace,
+    threadUrl,
+    fileReviewRequest,
+    judgeThreadReview,
+    announceThreadReview,
+    recordedThreadHold,
+    gateThreadDeclaration,
+    heldFields,
+    rewriteTaskBody,
+    parseRevisedRange,
+  };
+
+  /**
+   * What the sign-in, session and share routes read instead of this closure's
+   * scope. Built once — every collaborator in it is long-lived.
+   */
+  const authShareRoutesCtx: AuthShareRoutesContext = {
+    rooms,
+    sse,
+    taskStore,
+    shares,
+    sharingGate,
+    identities,
+    emailCodes,
+    sessionRevocations,
+    codeSender,
+    requireEmailAuth,
+    requireSignInToWrite,
+    defaultHubWorkspaceName: DEFAULT_HUB_WORKSPACE_NAME,
+    j,
+    safeJson,
+    boardShareTarget,
+    clientKeyFor,
+    cookieKey,
+    emailSessionKey,
+    widgetTokenKey,
+    isSecureRequest,
+    policyFor,
+    sessionIdentityFor,
+  };
+
+  /**
    * What the task routes read instead of this closure's scope. Built once —
    * every collaborator in it is long-lived — and handed to the handlers with
    * the per-request half (the URL, the visitor, the author) alongside.
@@ -5550,583 +5471,20 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           return j(401, signInRequiredBody());
         }
 
-        // --- The widget popup-token handshake ---
-        // The popup page itself. The handshake is popup-only: framed, it
-        // would mint with nothing visible on screen, so DENY.
-        if (pathname === '/widget-auth' && req.method === 'GET') {
-          return new Response(widgetAuthPage(), {
-            status: 200,
-            headers: {
-              'content-type': 'text/html; charset=utf-8',
-              'x-frame-options': 'DENY',
-              'cache-control': 'no-store',
-            },
+        // --- Sign-in, session and share links (routes/auth-share.ts) ---
+        // Extracted whole and called from the position the block occupied, so
+        // nothing above or below it overtakes anything. See that file's header
+        // for the two places the order inside it is load-bearing.
+        {
+          const handled = await handleAuthShareRoutes(authShareRoutesCtx, {
+            req,
+            url,
+            pathname,
+            widgetIdentity,
+            browserProvedNobody,
+            provenIdentityFor,
           });
-        }
-
-        // Exchange the session cookie for a widget token. Same-origin only:
-        // this is the popup page's route, and the cookie could not arrive
-        // cross-site anyway (SameSite=Lax, and CORS here never grants
-        // credentials) — the Origin check is the second, independent wall.
-        if (pathname === '/api/auth/widget-token' && req.method === 'POST') {
-          const callerOrigin = req.headers.get('origin');
-          if (callerOrigin !== null && callerOrigin !== policyFor(req).requestOrigin) {
-            return j(403, { error: 'same_origin_only' });
-          }
-          const rec = sessionIdentityFor(req);
-          if (!rec) return j(401, { error: 'not_signed_in' });
-          const body = await safeJson(req);
-          const target = typeof body?.origin === 'string' ? body.origin : '';
-          // The origin the popup will postMessage the token TO. Validated
-          // against the same policy that governs which pages may write —
-          // an origin that could not post a comment cannot receive a token
-          // — and refusing `null`/absent keeps the popup from ever being
-          // told to broadcast.
-          if (target === '' || !isAllowedBrowserOrigin(target, policyFor(req))) {
-            return j(403, { error: 'origin_not_allowed' });
-          }
-          const claims = verifyEmailSession(
-            readCookie(req.headers.get('cookie'), SESSION_COOKIE),
-            emailSessionKey(),
-          );
-          // Signed into the token: the gate will accept it from `target` alone.
-          const token = claims ? mintWidgetToken(claims, target, widgetTokenKey()) : null;
-          if (token === null) {
-            // A surviving v1 cookie: no session id, so a token tied to it
-            // could not die with a logout. The daily sliding refresh
-            // upgrades it; until then the popup says to sign in again.
-            return j(401, { error: 'session_needs_refresh' });
-          }
-          return j(200, { ok: true, token, user: userForIdentity(rec), origin: target });
-        }
-
-        // What the widget calls on load to learn whether its stored token
-        // still stands. An invalid token never reaches here — the gate
-        // above 401s it — so this only distinguishes "no token" from live.
-        if (pathname === '/api/auth/widget-session' && req.method === 'GET') {
-          return j(200, {
-            authenticated: widgetIdentity !== null,
-            ...(widgetIdentity ? { user: userForIdentity(widgetIdentity) } : {}),
-          });
-        }
-
-        if (pathname === '/api/auth/start' && req.method === 'POST') {
-          const body = await safeJson(req);
-          const email = typeof body?.email === 'string' ? body.email : '';
-          const peer = clientKeyFor(req);
-          const started = emailCodes.start(email, peer);
-          if (!started.ok) {
-            if (started.error === 'ceiling') {
-              // An abuse ceiling. On the wire this is EXACTLY a success —
-              // same status, same shape — because a 429 would hand a
-              // mail-bomber a progress meter and tell any client the
-              // server-wide traffic state. The refusal is loud here instead,
-              // which is where the person who can raise the ceiling reads.
-              console.error(
-                `[auth] login-start ceiling tripped (${started.scope}) — no code mailed to ` +
-                  `${started.email} for peer ${peer}. Raise CW_AUTH_GLOBAL_STARTS_PER_HOUR / ` +
-                  'CW_AUTH_PEER_STARTS_PER_HOUR if this is honest traffic.',
-              );
-              return j(200, {
-                ok: true,
-                email: started.email,
-                expiresInSeconds: Math.max(0, Math.floor((started.expiresAt - Date.now()) / 1000)),
-              });
-            }
-            if (started.error === 'rate_limited') {
-              return new Response(
-                JSON.stringify({
-                  error: 'rate_limited',
-                  retryAfterSeconds: started.retryAfterSeconds,
-                }),
-                {
-                  status: 429,
-                  headers: {
-                    'content-type': 'application/json',
-                    'retry-after': String(started.retryAfterSeconds),
-                  },
-                },
-              );
-            }
-            return j(400, { error: 'invalid_email' });
-          }
-          try {
-            await codeSender.send({
-              to: started.email,
-              code: started.code,
-              expiresInMinutes: Math.round(CODE_TTL_MS / 60_000),
-            });
-          } catch (err) {
-            // 502 and NOT a silent 200. Answering ok here would put the
-            // reviewer in front of a code box for a code that does not exist,
-            // and the only evidence anywhere would be a log line nobody
-            // reads. The challenge stays live — a retry re-sends rather than
-            // stranding them — and the rate limit still counted this attempt,
-            // which is what stops a broken provider becoming a retry loop.
-            console.error(
-              `[auth] could not send a login code via "${codeSender.name}": ${
-                err instanceof Error ? err.message : String(err)
-              }`,
-            );
-            return j(502, { error: 'code_send_failed' });
-          }
-          // NEVER the code. The response is read by whoever made the request,
-          // and the whole point of mailing a code is that those are different
-          // people until one proves otherwise.
-          return j(200, {
-            ok: true,
-            email: started.email,
-            expiresInSeconds: Math.max(0, Math.floor((started.expiresAt - Date.now()) / 1000)),
-          });
-        }
-
-        if (pathname === '/api/auth/verify' && req.method === 'POST') {
-          const body = await safeJson(req);
-          const email = typeof body?.email === 'string' ? body.email : '';
-          const code = typeof body?.code === 'string' ? body.code : '';
-          const peer = clientKeyFor(req);
-          const result = emailCodes.verify(email, code, peer);
-          if (!result.ok) {
-            if (result.error === 'rate_limited') {
-              return j(429, {
-                error: 'rate_limited',
-                retryAfterSeconds: result.retryAfterSeconds,
-              });
-            }
-            if (result.error === 'too_many_attempts') {
-              return j(429, { error: 'too_many_attempts' });
-            }
-            if (result.error === 'invalid_email') return j(400, { error: 'invalid_email' });
-            return j(401, { error: result.error });
-          }
-          // Read BEFORE the upsert creates the row: `firstSignIn` is what
-          // sends the client to the display-name screen, and a returning
-          // person who already chose a name must never be asked again.
-          const firstSignIn = identities.byEmail(result.email) === null;
-          const rec = identities.upsertByEmail(result.email);
-          if (rec.status !== 'active') {
-            // An archived identity proved control of its mailbox and still
-            // may not sign in. Un-archiving is somebody's decision.
-            return j(403, { error: 'identity_archived' });
-          }
-          return new Response(
-            JSON.stringify({ ok: true, user: userForIdentity(rec), firstSignIn }),
-            {
-              status: 200,
-              headers: {
-                'content-type': 'application/json',
-                'set-cookie': emailSessionCookieHeader(mintSession(rec.id), emailSessionKey(), {
-                  secure: isSecureRequest(req),
-                }),
-              },
-            },
-          );
-        }
-
-        if (pathname === '/api/auth/session' && req.method === 'GET') {
-          // The same three proofs the write gate resolves — Cloudflare
-          // Access first, then the cookie — or the me-menu tells a person
-          // whose Access login just succeeded that they are "not signed in"
-          // while every comment they post lands under their verified name.
-          const rec = provenIdentityFor();
-          return j(200, {
-            // Whether email identity is IN EFFECT, so a client can tell "not
-            // signed in" from "signing in does not matter here yet".
-            required: requireEmailAuth,
-            authenticated: rec !== null,
-            /**
-             * Whether this deployment refuses unsigned browser writes, and
-             * whether THIS browser may make one.
-             *
-             * The client needs both BEFORE it offers a surface, not only
-             * after a write is refused. A reader who is allowed to type into
-             * a doc whose every keystroke the server will drop has been told
-             * nothing — the text appears, syncs to nobody, and is gone on
-             * reload. So the review app asks here first and stays in view
-             * mode with a sign-in bar when the answer is no; the 401 below
-             * remains the backstop for a session that ends mid-visit.
-             *
-             * `canWrite` resolves the same three proofs the gate does, so a
-             * Cloudflare Access visitor and a widget token both read true
-             * even though neither is the session cookie `authenticated`
-             * reports on.
-             */
-            signInToWrite: requireSignInToWrite,
-            canWrite: !requireSignInToWrite || !browserProvedNobody(),
-            ...(rec ? { user: userForIdentity(rec) } : {}),
-          });
-        }
-
-        if (pathname === '/api/auth/logout' && req.method === 'POST') {
-          // THIS session only — ending a person's sessions everywhere is a
-          // roster operation (`revokeSessions`). Clearing the cookie is the
-          // browser half; revoking the session id is what kills any captured
-          // copy of the value, which otherwise validates forever. Only an id
-          // off a VERIFIED cookie reaches the store, so an attacker cannot
-          // grow the file with junk.
-          const claims = verifyEmailSession(
-            readCookie(req.headers.get('cookie'), SESSION_COOKIE),
-            emailSessionKey(),
-          );
-          if (claims?.sessionId) sessionRevocations.revoke(claims.sessionId);
-          return new Response(JSON.stringify({ ok: true }), {
-            status: 200,
-            headers: {
-              'content-type': 'application/json',
-              'set-cookie': clearedSessionCookieHeader({ secure: isSecureRequest(req) }),
-            },
-          });
-        }
-
-        if (pathname === '/api/auth/profile' && req.method === 'POST') {
-          // The one write the sign-in flow makes about a person: their chosen
-          // display name. Session-gated, and ONLY the session decides whose —
-          // the body names no identity, so nobody can rename somebody else by
-          // claiming to be them.
-          const rec = sessionIdentityFor(req);
-          if (!rec) return j(401, { error: 'not_signed_in' });
-          const body = await safeJson(req);
-          const displayName = typeof body?.displayName === 'string' ? body.displayName.trim() : '';
-          if (!displayName) return j(400, { error: 'invalid_display_name' });
-          const updated = identities.setDisplayName(rec.id, displayName);
-          if (!updated) return j(401, { error: 'not_signed_in' });
-          return j(200, { ok: true, user: userForIdentity(updated) });
-        }
-
-        // --- REST: shares ---
-        // Every share MUTATION is an operator action, refused to browsers on
-        // the same terms as /api/deploy — see browserCannotOperateBody.
-        // Minting publishes a board to the internet and `enabled` can re-open
-        // external access after the operator closed it; the routes' own
-        // "local-only" comments are about the HOST class, which does not tell
-        // a page on a local dev origin from the agent that is the only real
-        // caller. Keyed on METHOD rather than a route list, the same way
-        // `isGatedWrite` is: a share mutation added later is covered by
-        // construction, and the GET stays open because reading the share list
-        // is what the board's own settings pane does.
-        if (
-          (pathname === '/api/share' || pathname.startsWith('/api/share/')) &&
-          req.method !== 'GET' &&
-          isBrowserRequest(req.headers)
-        ) {
-          return j(403, browserCannotOperateBody());
-        }
-        if (pathname === '/api/share' && req.method === 'GET') {
-          if (!shares) return j(404, { error: 'sharing not enabled' });
-          // `listWithUrls` recomputes every link share's signed URL, which is
-          // how a record minted before signing serves a usable URL at all.
-          return j(200, { shares: await shares.listWithUrls(), sharing: sharingGate.status() });
-        }
-        // Flip the master switch. Local-only, like the rest of /api/share*.
-        // Turning it OFF also hangs up what is already connected: a websocket
-        // and an SSE stream are authorized ONCE at open, so a visitor mid-review
-        // would otherwise keep syncing and keep receiving comments on a doc
-        // that is no longer reachable. Same lesson as share revocation.
-        if (pathname === '/api/share/enabled' && req.method === 'POST') {
-          if (!shares) return j(404, { error: 'sharing not enabled' });
-          const body = await safeJson(req);
-          const enabled = body?.enabled;
-          if (typeof enabled !== 'boolean') {
-            return j(400, { error: 'enabled must be a boolean' });
-          }
-          const res = sharingGate.setEnabled(enabled);
-          if (!res.ok) {
-            return j(409, {
-              error: res.error,
-              hint: 'CW_SHARING_DISABLED is set in the environment. Remove it from the service definition and restart to allow runtime control.',
-            });
-          }
-          let closedSockets = 0;
-          let closedStreams = 0;
-          if (!enabled) {
-            for (const share of shares.list()) {
-              closedSockets += rooms.closeSocketsForShare(share.shareId);
-              closedStreams += sse.closeForShare(share.shareId);
-            }
-          }
-          return j(200, {
-            ok: true,
-            sharing: sharingGate.status(),
-            ...(closedSockets ? { closedSockets } : {}),
-            ...(closedStreams ? { closedStreams } : {}),
-          });
-        }
-        // `POST /api/share/doc` is GONE — a workspace is the unit of sharing.
-        // It is answered explicitly rather than left to the 404 fall-through
-        // because an older plugin bundle's `share_doc` still POSTs here with
-        // its own payload, and the useful reply names the replacement instead
-        // of reading as "your server is broken".
-        if (pathname === '/api/share/doc' && req.method === 'POST') {
-          return j(410, {
-            error: 'per_doc_sharing_removed',
-            hint: 'A workspace is the unit of sharing. File the doc on a workspace (attach_doc / bind_folder / create_diff_review) and call share_workspace or share_link with workspaceId.',
-          });
-        }
-        // --- Redeem a share link ---
-        // A SIGNED capability URL: `/share/<id>?exp=<unix-seconds>&sig=<hex>`,
-        // HMAC over `<id>.<exp>` (share/url-signing.ts). Exchange it for a
-        // signed session cookie, then redirect to the board. Validated here
-        // on every request as defense-in-depth — the edge Worker
-        // (infra/share-link-worker/) is the first gate, and the app never
-        // trusts that it ran. Deliberately gives nothing away on failure —
-        // tampered, expired, revoked, and never-existed all look alike.
-        const redeemMatch = pathname.match(/^\/share\/([^/]+)$/);
-        if (redeemMatch && req.method === 'GET') {
-          const shareId = decodeURIComponent(redeemMatch[1] ?? '');
-          const share = shares
-            ? await shares.verifySignedLink(
-                shareId,
-                url.searchParams.get('exp') ?? '',
-                url.searchParams.get('sig') ?? '',
-              )
-            : null;
-          if (!share) {
-            return new Response(renderLinkNotFound(), {
-              status: 404,
-              headers: {
-                'content-type': 'text/html; charset=utf-8',
-                // Even the failure page must not leak the (possibly almost-
-                // valid) signed URL into a Referer header.
-                'referrer-policy': 'no-referrer',
-              },
-            });
-          }
-          // A share lands IN the board — never a review URL, never a lobby
-          // (§2.5). Resolved at redemption like everything else, so a board
-          // deleted after minting falls through to the same not-found.
-          //
-          // A legacy GROUPING share lands here too, and gets that same 404
-          // rather than a named 410. The route's own rule is that an unknown,
-          // an expired and a tampered URL are indistinguishable — telling a
-          // stranger holding a leaked link that it was once real would give
-          // away more than the removal takes back. The named 410 is for the
-          // MINT routes, where the caller is a peer with a legitimate ask.
-          if (!boardShareTarget(share)) {
-            return new Response(renderLinkNotFound(), {
-              status: 404,
-              headers: {
-                'content-type': 'text/html; charset=utf-8',
-                'referrer-policy': 'no-referrer',
-              },
-            });
-          }
-          const maxAge = Math.floor((share.expiresAt - Date.now()) / 1000);
-          return new Response(null, {
-            status: 302,
-            headers: {
-              location: `/workspaces/${encodeURIComponent(share.workspaceId)}`,
-              'set-cookie': sessionCookieHeader(share.shareId, cookieKey(), maxAge),
-              // Keep the signed URL out of any downstream Referer header.
-              'referrer-policy': 'no-referrer',
-            },
-          });
-        }
-
-        // The RETIRED unsigned form. `/s/<slug>` stopped being accepted when
-        // links became signed URLs — the registry is never consulted, so a
-        // record that still carries a slug redeems nothing. The records
-        // themselves stay (soft behavior): list_shares serves each one a
-        // fresh signed URL computed on demand, which is the migration path
-        // for anything minted before signing.
-        if (req.method === 'GET' && /^\/s\/[^/]+$/.test(pathname)) {
-          return new Response(renderLinkNotFound(), {
-            status: 404,
-            headers: {
-              'content-type': 'text/html; charset=utf-8',
-              // An old slug is a retired credential — same Referer hygiene.
-              'referrer-policy': 'no-referrer',
-            },
-          });
-        }
-
-        // Mint a share link. Local-only: /api/share* is out of scope for a
-        // visitor, so this can only be called from the machine or the tailnet.
-        if (pathname === '/api/share/link' && req.method === 'POST') {
-          if (!shares) return j(404, { error: 'sharing not enabled' });
-          const body = await safeJson(req);
-          const workspaceId = body?.workspaceId as string | undefined;
-          // A `docId` in the body is an OLDER BUNDLE's share_link asking for a
-          // single-doc share. That grant is gone, and the dangerous reading of
-          // this payload is "ignore the field you don't know and mint
-          // something" — so it is refused by name, before anything is created.
-          // Every peer keeps calling the shared server with the payload ITS
-          // bundle sends, long after this one stopped sending it.
-          if (body?.docId !== undefined) {
-            return j(410, {
-              error: 'per_doc_sharing_removed',
-              hint: 'A workspace is the unit of sharing. Pass workspaceId (the doc must be filed on a workspace) — docId is no longer accepted.',
-            });
-          }
-          if (!workspaceId) return j(400, { error: 'workspaceId required' });
-
-          // Only a BOARD may be shared. A board is what `taskStore` answers
-          // for; a review is what only `rooms` knows about. They arrive in
-          // the SAME field — unlike the per-doc removal above, no shape of
-          // the payload separates them — so the lookup IS the discriminator.
-          const linkBoard = taskStore.getWorkspace(workspaceId);
-          if (!linkBoard) {
-            if (rooms.list().some((m) => m.workspaceId === workspaceId)) {
-              return j(410, GROUPING_SHARING_REMOVED);
-            }
-            // Neither. Kept distinct from the 410 so that reply keeps meaning
-            // "this exists and is no longer shareable" rather than becoming
-            // the answer to every unrecognised id.
-            return j(404, { error: 'workspace not found', workspaceId });
-          }
-          // And never the UNFILED board. Matched by NAME, because that is
-          // how `defaultHubWorkspaceId()` itself finds it on every call —
-          // the id is never cached, and any board answering that lookup can
-          // receive other agents' stray reviews.
-          if (linkBoard.name === DEFAULT_HUB_WORKSPACE_NAME) {
-            return j(403, UNFILED_SHARING_REFUSED);
-          }
-          // A board share opens the board. There is no entry doc to choose,
-          // and an older bundle sharing a board sends this key undefined,
-          // which JSON.stringify drops.
-          if (body?.entryDocId) {
-            return j(400, {
-              error: 'a board share opens the board — entryDocId is not supported',
-            });
-          }
-          // Everything else in the body is either honoured below or refused
-          // here BY NAME. The rule is accept-and-honour or refuse, never
-          // accept-and-widen: `share_link(docId, ttl: '15m')` once answered
-          // 200 with the whole board for two weeks because both fields fell
-          // through — the MCP handler forwards the call as sent now, so this
-          // is where a stray key is caught, and the reply says which.
-          for (const key of Object.keys(body ?? {})) {
-            if (!SHARE_LINK_ARGS.has(key)) {
-              return j(400, {
-                error: 'unsupported_argument',
-                argument: key,
-                hint: `share_link takes workspaceId, ttl (e.g. '15m'), ttlSeconds and label — ${JSON.stringify(key)} is not one of them and was not silently dropped.`,
-              });
-            }
-          }
-          if (body?.label !== undefined && typeof body.label !== 'string') {
-            return j(400, { error: 'bad_label', hint: 'label must be a string' });
-          }
-          const linkTtl = resolveTtl({
-            ttl: body?.ttl,
-            ttlSeconds: body?.ttlSeconds,
-            defaultSeconds: shares.defaultLinkTtlSeconds,
-            maxSeconds: shares.maxTtlSeconds,
-          });
-          if (!linkTtl.ok) return j(400, { error: linkTtl.error, hint: linkTtl.hint });
-          try {
-            const share = await shares.createShareLink({
-              workspaceId,
-              ttlSeconds: linkTtl.seconds,
-              label: typeof body?.label === 'string' ? body.label : undefined,
-            });
-            return j(200, {
-              share,
-              ...(linkTtl.clamped ? { ttlClamped: linkTtl.clamped } : {}),
-            });
-          } catch (err) {
-            const error = err instanceof Error ? err.message : 'create_share_failed';
-            return j(400, { error });
-          }
-        }
-
-        // Extend or shorten a live share. Local-only, same as creation.
-        const ttlMatch = pathname.match(/^\/api\/share\/([^/]+)\/ttl$/);
-        if (ttlMatch && req.method === 'POST') {
-          if (!shares) return j(404, { error: 'sharing not enabled' });
-          const shareId = decodeURIComponent(ttlMatch[1] ?? '');
-          const body = await safeJson(req);
-          if (body?.ttlSeconds === undefined && body?.ttl === undefined) {
-            return j(400, { error: 'ttlSeconds required' });
-          }
-          // Same resolver as the mint, so the ceiling holds on extension too.
-          const newTtl = resolveTtl({
-            ttl: body?.ttl,
-            ttlSeconds: body?.ttlSeconds,
-            defaultSeconds: shares.defaultLinkTtlSeconds,
-            maxSeconds: shares.maxTtlSeconds,
-          });
-          if (!newTtl.ok) return j(400, { error: newTtl.error, hint: newTtl.hint });
-          try {
-            const share = await shares.setTtl(shareId, newTtl.seconds);
-            return share
-              ? j(200, { share, ...(newTtl.clamped ? { ttlClamped: newTtl.clamped } : {}) })
-              : j(404, { error: 'share not found' });
-          } catch (err) {
-            return j(400, { error: err instanceof Error ? err.message : 'bad ttl' });
-          }
-        }
-
-        // Share a whole workspace (folder bind / diff review) rather than one
-        // doc: the visitor gets the file tree and every member, so the set
-        // browses as a set. Scope is enforced in middleware/host-guard.ts.
-        if (pathname === '/api/share/workspace' && req.method === 'POST') {
-          if (!shares) return j(404, { error: 'sharing not enabled' });
-          const body = await safeJson(req);
-          const workspaceId = (body?.workspaceId as string) ?? '';
-          const allowDomains = (body?.allowDomains as string[]) ?? [];
-          if (!workspaceId) return j(400, { error: 'workspaceId required' });
-          if (!Array.isArray(allowDomains) || allowDomains.length === 0) {
-            return j(400, { error: 'allowDomains must be a non-empty array' });
-          }
-          // Same board-only rule as the link route, and for the same reason:
-          // the two modes differ only in how a visitor is authorized, never
-          // in what may be shared.
-          const accessBoard = taskStore.getWorkspace(workspaceId);
-          if (!accessBoard) {
-            if (rooms.list().some((m) => m.workspaceId === workspaceId)) {
-              return j(410, GROUPING_SHARING_REMOVED);
-            }
-            return j(404, { error: 'workspace not found', workspaceId });
-          }
-          // Same Unfiled refusal as the link route — see there for why the
-          // predicate is the board's name.
-          if (accessBoard.name === DEFAULT_HUB_WORKSPACE_NAME) {
-            return j(403, UNFILED_SHARING_REFUSED);
-          }
-          if (body?.entryDocId) {
-            return j(400, {
-              error: 'a board share opens the board — entryDocId is not supported',
-            });
-          }
-          try {
-            const share = await shares.createShareWorkspace({
-              workspaceId,
-              allowDomains,
-              ttlSeconds: typeof body?.ttlSeconds === 'number' ? body.ttlSeconds : undefined,
-              name: typeof body?.name === 'string' ? body.name : undefined,
-            });
-            return j(200, { share });
-          } catch (err) {
-            const error = err instanceof Error ? err.message : 'create_share_failed';
-            return j(502, { error });
-          }
-        }
-        const shareIdMatch = pathname.match(/^\/api\/share\/([^/]+)$/);
-        if (shareIdMatch && req.method === 'DELETE') {
-          if (!shares) return j(404, { error: 'sharing not enabled' });
-          const shareId = decodeURIComponent(shareIdMatch[1] ?? '');
-          try {
-            const result = await shares.deleteShare(shareId);
-            // Authorization is checked per HTTP request, but a websocket is
-            // authorized once at its upgrade — so without this, a visitor who
-            // already had the doc open kept reading and writing it after the
-            // share was revoked.
-            const closed = result.ok ? rooms.closeSocketsForShare(shareId) : 0;
-            // The SSE stream has the same "authorized once, then long-lived"
-            // shape: a visitor with the review page still open would otherwise
-            // keep receiving every new comment on a doc they can no longer load.
-            const closedStreams = result.ok ? sse.closeForShare(shareId) : 0;
-            return result.ok
-              ? j(200, {
-                  ok: true,
-                  ...(closed ? { closedSockets: closed } : {}),
-                  ...(closedStreams ? { closedStreams } : {}),
-                })
-              : j(404, { error: 'share not found' });
-          } catch (err) {
-            const error = err instanceof Error ? err.message : 'delete_share_failed';
-            return j(502, { error });
-          }
+          if (handled) return handled;
         }
 
         // --- Recall's bot status-change webhook ---
@@ -6412,261 +5770,29 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           return j(200, { ok: true, queued, open, resolved, windowMs });
         }
 
-        if (pathname === '/api/metrics' && req.method === 'GET') {
-          if (visitor) return j(403, { error: 'not available to share visitors' });
-          const stats = rooms.stats();
-          return j(200, { ...stats, uptimeSec: Math.round(process.uptime()) });
+        {
+          const handled = handleOpsMetricsRoute(opsRoutesCtx, {
+            req,
+            pathname,
+            visitor,
+            authorFor,
+          });
+          if (handled) return handled;
         }
 
-        // --- REST: docs ---
-        if (pathname === '/api/docs' && req.method === 'POST') {
-          // A file bind names a host path. Agents only — see
-          // browserCannotBindBody for why a page, on any origin, is refused.
-          if (isBrowserRequest(req.headers)) return j(403, browserCannotBindBody());
-          const body = await safeJson(req);
-          const docId = (body?.docId as string) ?? '';
-          if (!isValidDocId(docId)) return j(400, { error: 'bad docId' });
-          const type = (body?.type as DocType) ?? 'markdown';
-          let sourceUrl = body?.sourceUrl as string | undefined;
-          // A markdown doc created WITHOUT a path can be placed by its
-          // workspace's configured notes home: the file is derived as
-          // `<dir>/<docId>.md` on the home branch and the doc is pinned
-          // there (see rooms.setDocHome), which is what gets planning notes
-          // checked in instead of scattered wherever a session's checkout
-          // happens to sit. Opt-in twice over — the workspace set a
-          // notesHome, and the caller named the workspace.
-          let derivedHome: { repoRoot: string; branch: string; relPath: string } | null = null;
-          if (type === 'markdown' && !sourceUrl) {
-            const wsForNotes =
-              typeof body?.hubWorkspaceId === 'string' ? body.hubWorkspaceId : undefined;
-            const notes = wsForNotes ? taskStore.notesHome(wsForNotes) : undefined;
-            if (notes) {
-              const fileName = `${docId.replace(/[^a-zA-Z0-9._-]/g, '-')}.md`;
-              const norm = normalizeDocHome({
-                repoRoot: notes.repoRoot,
-                branch: notes.branch,
-                relPath: `${notes.dir}/${fileName}`,
-              });
-              if (!norm.ok) return j(400, { error: 'bad_notes_home', hint: norm.error });
-              const placed = resolveHomeCheckout(norm.home);
-              if (!placed.placed) {
-                return j(409, {
-                  error: 'notes_home_unplaced',
-                  reason: placed.reason,
-                  hint: `The workspace notes home is ${notes.repoRoot} branch "${notes.branch}", but ${
-                    placed.reason === 'repo-missing'
-                      ? 'that path is not a git checkout any more'
-                      : placed.reason === 'path-escapes-checkout'
-                        ? 'the notes dir passes through a symlink that leaves the checkout'
-                        : 'no worktree has that branch checked out right now'
-                  }. Check the branch out (git worktree add <path> "${notes.branch}") and retry, or pass an explicit sourceUrl.`,
-                });
-              }
-              derivedHome = norm.home;
-              sourceUrl = placed.absPath;
-            }
-          }
-          // Every markdown doc is file-backed. POST /api/docs is the sole
-          // creation path for markdown — sourceUrl is required, and the
-          // server attaches the file (loads content + sets up bidirectional
-          // disk sync) before returning. Mockup/dev docs are about
-          // commenting on running surfaces, not about a markdown buffer,
-          // so they don't need a file.
-          // Diff docs are created only via POST /api/diffs, which resolves the
-          // range and seeds content from git — a bare create can't do that.
-          if (type === 'diff') {
-            return j(400, {
-              error: 'use /api/diffs',
-              hint: 'Diff review docs are created per changed file by POST /api/diffs {repo, base, target}.',
-            });
-          }
-          if ((type === 'markdown' || type === 'code') && !sourceUrl) {
-            return j(400, {
-              error: 'sourceUrl required',
-              hint: 'Markdown and code review docs are backed by a file on disk. Pass sourceUrl: "/abs/path/to/file" in the POST body.',
-            });
-          }
-          // A mockup binds to a file OUTSIDE the repo, so this route was the
-          // one bind that took a path on faith: an unreachable one bound
-          // happily, and the 404 arrived weeks later in front of whoever
-          // opened the link. Markdown and code already fail their attach
-          // loudly; this is the same courtesy.
-          //
-          // Both the check AND the read happen here, before the room exists,
-          // for two reasons: a failed bind leaves nothing behind, and the
-          // content held from this read is what the capture below stores — so
-          // a source that goes away between the two steps is still a refusal
-          // rather than a doc bound to a copy nobody took.
-          let mockupHtml: string | null = null;
-          if (type === 'mockup' && sourceUrl) {
-            const unreadable = (reason: string) =>
-              j(400, {
-                error: 'mockup_source_unreadable',
-                path: sourceUrl,
-                reason,
-                hint: `Cannot read the mockup HTML at ${sourceUrl} (${reason}). Pass an absolute path to a readable file — the server captures its content at bind time so the link keeps working after the file is cleaned up, and it cannot capture a file it cannot read.`,
-              });
-            const check = checkMockupSource(sourceUrl);
-            if (!check.ok) return unreadable(check.reason);
-            if (isHtmlMockupSource(sourceUrl)) {
-              mockupHtml = readMockupHtml(sourceUrl);
-              if (mockupHtml === null) return unreadable('became unreadable while binding');
-            }
-          }
-          // The caller NAMES the doc; the server decides its id. `docId` in
-          // the body is therefore a readable alias from here on — which is
-          // also what closes the write-anywhere hole this route was: a
-          // `task:<realTaskId>` body used to land on that task's live
-          // description and file-bind it, 200 and no audit row. A caller
-          // cannot address a server-owned namespace by a name it invents.
-          const created = rooms.createForCaller(docId, {
-            type,
-            sourceUrl,
-            title: body?.title as string | undefined,
-            setId: body?.setId as string | undefined,
-            webhookUrl: body?.webhookUrl as string | undefined,
-            owner: body?.owner as string | undefined,
-            workspaceId: body?.workspaceId as string | undefined,
-            relPath: body?.relPath as string | undefined,
-            workspaceRoot: body?.workspaceRoot as string | undefined,
-            producedBy: body?.producedBy as { agentId?: string; sessionId?: string } | undefined,
+        // --- REST: docs, created and listed — ./routes/docs.ts ---
+        {
+          const handled = await handleDocCreateListRoutes(docRoutesCtx, {
+            req,
+            url,
+            pathname,
+            visitor,
+            authorFor,
+            refuseCategoryAuthor,
+            metaFor,
+            withTaskChips,
           });
-          if (!created.ok) {
-            return j(400, {
-              error: created.error,
-              hint: `"${docId}" is in a namespace the server owns (${RESERVED_DOC_PREFIXES.join(', ')}). Pick a docId that isn't.`,
-            });
-          }
-          const room = created.room;
-          // Canonical from here down. Everything below keys on the doc's own
-          // id, never the name the request arrived under — two callers using
-          // the two spellings of one doc must not end up with two of anything.
-          const canonicalId = room.docId;
-          // Before the file attach, not after: the room already exists at this
-          // point, and the 409 below returns early — filing afterwards would
-          // leave a failed bind as the one doc this route can still strand
-          // outside a workspace.
-          const hubWorkspaceId = fileUnderHubWorkspace(
-            canonicalId,
-            body?.hubWorkspaceId as string | undefined,
-          );
-          let attached: ReturnType<typeof rooms.attachFile> | undefined;
-          if (type === 'markdown' && sourceUrl) {
-            attached = rooms.attachFile(canonicalId, sourceUrl);
-            if (!attached.ok) return j(409, { error: 'attach_failed', attached });
-            // Notes-home creation: pin the doc to the derived home. The pin
-            // exports the (possibly still missing) file and takes over the
-            // binding, so branch churn from here on follows the branch.
-            if (derivedHome) rooms.setDocHome(canonicalId, derivedHome);
-          } else if (type === 'code' && sourceUrl) {
-            attached = rooms.attachReadonlyFile(canonicalId, sourceUrl);
-            if (!attached.ok) return j(409, { error: 'attach_failed', attached });
-          }
-          // Capture at bind, not merely on first serve: a mock that is bound
-          // and then never opened until after its scratch dir is cleaned is
-          // exactly the case that produced this. Keyed on the CANONICAL id,
-          // so a rebind under the same readable name replaces the same copy.
-          if (mockupHtml !== null) {
-            // `allowEmpty`: a bind REPLACES, including with nothing. The
-            // serve-time refusal protects a capture from its own source being
-            // caught mid-write; a rebind names a different file, and holding
-            // the old copy there would leave the link resolving to a mockup
-            // nobody pointed it at.
-            const captured = captureMockup(dataDir, canonicalId, mockupHtml, { allowEmpty: true });
-            if (captured === 'failed') {
-              // The bind READ fine — this is the data dir refusing the write,
-              // so it is the box's problem, not the caller's, and it gets a
-              // 5xx. It still fails: durability is part of what bind_mock now
-              // promises, and a 200 here would hand back a link that reads as
-              // durable and is not. That is the shape of the incident.
-              //
-              // DELIBERATELY not rolled back. The binding itself is in place
-              // and works — the doc is exactly as durable as every mockup was
-              // before this change — so the response says that rather than
-              // claiming nothing happened. Undoing it would mean purging a
-              // room, or restoring a previous sourceUrl, on the one path that
-              // only fires when the disk is already refusing writes; that is
-              // destructive machinery guarding a condition an operator has to
-              // fix anyway, and the capture write is atomic, so a failure here
-              // cannot have damaged an existing copy.
-              return j(500, {
-                error: 'mockup_capture_failed',
-                docId: canonicalId,
-                path: sourceUrl,
-                bound: true,
-                hint: `Bound ${canonicalId} to ${sourceUrl}, but could not store its captured copy under the data dir — see the server log for the write error. The binding works and serves from the file; it is NOT durable, so it will 404 once that file is gone. Fix the data dir and bind again.`,
-              });
-            }
-          }
-          return j(200, {
-            docId: room.docId,
-            meta: withReviewUrl(room.meta),
-            // Where the doc landed, in the same call that created it — a
-            // caller who supplied no workspace still learns which one it got.
-            hubWorkspaceId,
-            ...(attached ? { attached } : {}),
-          });
-        }
-        if (pathname === '/api/docs' && req.method === 'GET') {
-          // `?workspaceId=` scopes the listing. Without honouring it here,
-          // list_docs accepted the param and silently answered a board-scoped
-          // question with every doc on the server. It matches either kind of
-          // id a caller holds under the name "workspace": the review tag in
-          // meta (folder binds, diff reviews) or a hub board the doc is filed
-          // under — resolved via hubBoardsForDoc so the answer is the same
-          // set the event fan-out and coverage readout already use.
-          //
-          // `?setId=` scopes it to one REVIEW instead. It exists because the
-          // sidebar's legacy flat-set path had no way to ask: it fetched every
-          // doc on the server — 4,205,683 bytes for 4,062 rows, measured
-          // 2026-08-21 — and kept the 6 that shared its setId. Matching goes
-          // through `reviewIdOf` so this route cannot answer differently from
-          // the other set queries beside it (grouped diff, repo files, tree),
-          // which means a doc restored from an archive carrying only the
-          // deprecated `workspaceId` spelling is still found by its set.
-          //
-          // `?limit=` (or a `?cursor=`) switches the route into PAGED mode:
-          // compact rows sorted by most recent activity, `limit` per page,
-          // `nextCursor` to continue, `?full=1` for whole meta on that page.
-          // Measured 2026-09-01: the unscoped dump was 7,420,585 bytes for
-          // 5,919 rows, and a fresh session's first tool call was all of it.
-          // Without `limit` the answer is the old one — every row, full meta —
-          // because REST callers exist that cannot be restarted. The doc-level
-          // filters (`kind`, `query`, `sourcePrefix`) apply in both modes.
-          // See doc-listing.ts.
-          const q = parseListDocsQuery(url.searchParams);
-          const { workspaceId, setId } = q;
-          const all = rooms.list();
-          // ONE pass over the workspaces for the whole listing. Both the
-          // board filter and the reviewUrl below used to run their own scan
-          // per row, which is what made an unscoped listing quadratic — and
-          // on Bun's single JS thread a quadratic listing stops the server
-          // answering anything else while it runs. See `boardIndexForListing`.
-          const boardIndex = boardIndexForListing();
-          const byWorkspace = workspaceId
-            ? all.filter(
-                (m) =>
-                  m.workspaceId === workspaceId ||
-                  hubBoardsForDocIndexed(boardIndex, m).has(workspaceId),
-              )
-            : all;
-          const bySet = setId ? byWorkspace.filter((m) => reviewIdOf(m) === setId) : byWorkspace;
-          const docs = bySet.filter((m) => matchesDocFilters(m, q));
-          const decorate = (m: DocMeta) => withReviewUrl(m, homeForDocIndexed(boardIndex, m));
-          if (q.limit === undefined) {
-            return j(200, { docs: docs.map(decorate) });
-          }
-          const project = q.full
-            ? decorate
-            : (m: DocMeta) =>
-                compactDocRow(decorate(m), {
-                  boardId: homeForDocIndexed(boardIndex, m),
-                  threads: rooms.threadCounts(m.docId),
-                });
-          return j(200, {
-            ...pageDocs(docs, { limit: q.limit, cursor: q.cursor }, project),
-            full: q.full,
-          });
+          if (handled) return handled;
         }
 
         // --- REST: workspaces (the board's own routes) — ./routes/ ---
@@ -6717,120 +5843,19 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           });
           if (handled) return handled;
         }
-        // promote_to_task (§3.10): thread → task. Captures the origin ref,
-        // the latest HUMAN comment as the verbatim quote (an agent's closing
-        // note must never become the quote), and drafts a title + body the
-        // caller didn't supply. classifyActor draws the person/agent line —
-        // the same one replies and transitions use.
-        const promoteMatch = pathname.match(/^\/api\/docs\/([^/]+)\/threads\/([^/]+)\/promote$/);
-        if (promoteMatch && req.method === 'POST') {
-          const docId = canonicalDocId(decodeURIComponent(promoteMatch[1] ?? ''));
-          const threadId = decodeURIComponent(promoteMatch[2] ?? '');
-          const body = await safeJson(req);
-          const workspaceId = body?.workspaceId;
-          if (typeof workspaceId !== 'string' || workspaceId.length === 0) {
-            return j(400, { error: 'workspaceId required' });
-          }
-          if (!taskStore.getWorkspace(workspaceId)) {
-            return j(404, { error: 'workspace not found' });
-          }
-          const thread = rooms.getThread(docId, threadId);
-          if (!thread) return j(404, { error: 'thread not found' });
-          const humanComment = [...thread.comments]
-            .reverse()
-            .find((c) => classifyActor(c.author) === 'person');
-          const quote =
-            typeof body?.quote === 'string' && body.quote.length > 0
-              ? body.quote
-              : humanComment?.text;
-          const snippet = anchorSnippetText(thread.anchor);
-          const titleSource = (quote ?? snippet ?? 'Promoted thread').split('\n')[0] ?? '';
-          const title =
-            typeof body?.title === 'string' && body.title.trim().length > 0
-              ? body.title.trim()
-              : // A word boundary, not a character count. This clip used to be
-                // `slice(0, 79)`, which is where the board's *"For tasks, I get
-                // dumped o…"* came from — the GENERATOR produced that, not
-                // whoever spoke it. The replacement is a prefix of the same
-                // prefix, so it can only ever read better.
-                clipToWordBoundary(titleSource, 80);
-          const draftBody =
-            typeof body?.body === 'string'
-              ? body.body
-              : [
-                  `Promoted from a comment thread${snippet ? ` on "${snippet}"` : ''}.`,
-                  ...(quote ? ['', `> ${quote}`] : []),
-                ].join('\n');
-          const promoteNeeds = parseNeeds(body?.needs);
-          if (!promoteNeeds.ok) return j(400, { error: "needs must be 'action' | 'decision'" });
-          const promoteOptions = parseOptions(body?.options);
-          if (!promoteOptions.ok) return j(400, { error: BAD_OPTIONS_ERROR });
-          const promoteLinks = parseLinks(body?.links);
-          if (!promoteLinks.ok) return j(400, { error: BAD_REF_ERROR });
-          // Same rule as a plain create: a promoted thread lands owned by
-          // whoever promoted it unless the call names someone else.
-          const promotedBy = authorFor(body?.author);
-          const promoteKind = parseAssigneeKind(body?.assigneeKind);
-          if (!promoteKind.ok) {
-            return j(400, {
-              error: BAD_ASSIGNEE_KIND_ERROR,
-              message: BAD_ASSIGNEE_KIND_MESSAGE,
-            });
-          }
-          const promoteOwner = resolveAssignee(body?.assignee, promotedBy);
-          if (!promoteOwner) {
-            return j(400, {
-              error: ASSIGNEE_REQUIRED_ERROR,
-              message: ASSIGNEE_REQUIRED_MESSAGE,
-            });
-          }
-          // A thread on a PENDING plan doc is part of the plan: its promoted
-          // rows are drafts like the batch-filed ones, held until the same
-          // approval. A doc with no plan gate (or an approved one) promotes
-          // exactly as before.
-          const promoteRoom = rooms.get(docId);
-          const promoteHold =
-            promoteRoom?.meta.planState === 'pending' ? { docId: promoteRoom.docId } : undefined;
-          const res = taskStore.createTask(workspaceId, {
-            title,
-            body: draftBody,
-            assignee: promoteOwner,
-            assigneeKind: promoteKind.assigneeKind,
-            needs: promoteNeeds.needs,
-            options: promoteOptions.options,
-            // Forward undefined untouched: an omitted goal is what routes the
-            // task through triage (an explicit 'chores' would skip it).
-            goal: body?.goal as string | undefined,
-            order: typeof body?.order === 'number' ? Number(body.order) : undefined,
-            dueAt: typeof body?.dueAt === 'number' ? Number(body.dueAt) : undefined,
-            links: promoteLinks.links,
-            origin: { kind: 'thread', docId, threadId },
-            ...(promoteHold !== undefined ? { planHold: promoteHold } : {}),
-            ...(quote !== undefined ? { quote } : {}),
-            actor: promotedBy ?? undefined,
+        // --- REST: promote a thread to a task — ./routes/docs.ts ---
+        {
+          const handled = await handleDocPromoteRoute(docRoutesCtx, {
+            req,
+            url,
+            pathname,
+            visitor,
+            authorFor,
+            refuseCategoryAuthor,
+            metaFor,
+            withTaskChips,
           });
-          if (!res.ok) return j(res.error === 'workspace-not-found' ? 404 : 400, res);
-          const promoteVisibility = createdVisibility(
-            res.task.status,
-            false,
-            res.task.planHold !== undefined,
-          );
-          return j(200, {
-            task: res.task,
-            ...(promoteVisibility !== undefined ? { visibility: promoteVisibility } : {}),
-            // Third create path, same report. Promoting a thread has exactly
-            // the same goal semantics as a create, so an agent that learns to
-            // read `placement` on one and finds it missing on another is being
-            // taught the field is unreliable.
-            placement: {
-              ...res.placement,
-              ...(res.placement.placed
-                ? {}
-                : { goals: placeableGoals(taskStore.getWorkspace(workspaceId)?.goals ?? []) }),
-            },
-            ...(promoteLinks.ignored.length > 0 ? { ignoredLinks: promoteLinks.ignored } : {}),
-            ...(res.shapeGaps !== undefined ? { shapeGaps: res.shapeGaps } : {}),
-          });
+          if (handled) return handled;
         }
         // --- REST: durable agent watches ---
         // The MCP child's watch set, remembered here per agent identity so a
@@ -7032,184 +6057,17 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           const day = localDay(Date.now());
           return j(200, { agent, day, ...chatAudit.readFor(agent, day) });
         }
-        // --- REST: plugin refresh ---
-        // The other half of the drift signal: any peer that can read who is
-        // behind can also ask the machine to fetch the new bundle. Safe to
-        // expose to everyone in the workspace because it cannot interrupt
-        // anyone — it rewrites a version-keyed cache, and a running session
-        // keeps loading the path it resolved at launch. Peers take the new
-        // version at their own next restart.
-        if (pathname === '/api/plugin/refresh') {
-          // Unreachable today — `shareScopeAllows` is an allowlist and this
-          // path is not on it, so a share host is refused before any route
-          // runs (host-guard.test.ts pins that). Kept, and kept AHEAD of the
-          // capability check, so that allowlisting this path later cannot
-          // silently open a deploy step to external reviewers, and so an
-          // unconfigured deployment never answers a visitor with what it
-          // would have done.
-          if (visitor) return j(403, { error: 'not available to share visitors' });
-          if (!pluginRefresher) {
-            return j(501, {
-              error:
-                'plugin refresh not enabled on this server (dev and staging deliberately cannot spawn an update)',
-            });
-          }
-          if (req.method === 'GET') return j(200, { refresh: pluginRefresher.last() });
-          if (req.method === 'POST') {
-            // Never through the edge. The host guard admits the operator's
-            // own proxied hostname with an Access token, and cloudflared
-            // runs on this box, so a tunnelled request has a loopback peer
-            // address — neither the host class nor the address says "not
-            // from here". `cf-ray` does: Cloudflare stamps it on everything
-            // it proxies and strips any the client sent, which is the test
-            // the host guard already trusts. (Urgent-fixes ticket,
-            // 2026-09-02.)
-            if (req.headers.has('cf-ray')) {
-              return j(403, {
-                error:
-                  'plugin refresh cannot be triggered through the edge (proxied request) — run it from the box or the tailnet',
-              });
-            }
-            // And not from a PAGE on this machine either — see
-            // browserCannotOperateBody. Nothing above distinguishes a page
-            // from an agent: the origin policy admits any machine-local
-            // hostname on any port, and a local dev origin is same-site with
-            // this server, so a session cookie rides along.
-            if (isBrowserRequest(req.headers)) return j(403, browserCannotOperateBody());
-            return j(200, { refresh: await pluginRefresher.refresh() });
-          }
-          return j(405, { error: 'method not allowed' });
-        }
-        // --- REST: deploy this server ---
-        // Pull the deploy source and restart, as one operation. There is no
-        // "just restart" verb here or anywhere below it: a restart re-runs
-        // the supervisor out of the deploy source, so over an unpulled
-        // checkout it rebuilds the same bundles, republishes the same client,
-        // and prints a successful deploy. See deploy.ts.
-        //
-        // --- Push notifications ---
-        //
-        // Three verbs: what key to subscribe against, enrol a device, retire
-        // one. Enrolment is per browser-per-device, so the hub calls these
-        // from a settings toggle rather than at page load.
-        if (pathname === '/api/push/key' && req.method === 'GET') {
-          const notifier = await pushNotifier();
-          return notifier
-            ? j(200, { available: true, publicKey: notifier.publicKey() })
-            : // Named rather than a bare false, because "why is the toggle
-              // greyed out" has exactly one answer worth giving: this origin
-              // is not one a service worker can register on.
-              j(200, { available: false, reason: 'insecure-origin' });
-        }
-        if (pathname === '/api/push/subscriptions' && req.method === 'POST') {
-          const body = await safeJson(req);
-          const user = authorFor(body?.author);
-          if (!user) return j(400, { error: 'author required' });
-          const subscription = body?.subscription as
-            | { endpoint?: string; keys?: { p256dh?: string; auth?: string } }
-            | undefined;
-          if (!subscription?.endpoint || !subscription.keys?.p256dh || !subscription.keys.auth) {
-            return j(400, {
-              error: 'subscription with endpoint + keys.p256dh + keys.auth required',
-            });
-          }
-          try {
-            pushStore.save(
-              {
-                endpoint: subscription.endpoint,
-                keys: { p256dh: subscription.keys.p256dh, auth: subscription.keys.auth },
-              },
-              { userId: user.id, userName: user.name },
-            );
-          } catch (err) {
-            return j(400, { error: (err as Error).message });
-          }
-          return j(200, { ok: true });
-        }
-        if (pathname === '/api/push/subscriptions' && req.method === 'DELETE') {
-          const body = await safeJson(req);
-          const endpoint = body?.endpoint as string | undefined;
-          if (!endpoint) return j(400, { error: 'endpoint required' });
-          // Soft, per the project rule — the row stays with `disabledAt` set,
-          // and re-enabling on this device revives it rather than duplicating.
-          pushStore.disable(endpoint, 'unsubscribed');
-          return j(200, { ok: true });
-        }
-
-        // Unlike the refresh above, this one DOES interrupt: it ends this
-        // process a moment after answering. That is why the response is sent
-        // before the restart fires and why the result is written to disk —
-        // the reporter does not survive to be asked again.
-        if (pathname === '/api/deploy') {
-          // Same shape and same reasoning as the refresh route's check: a
-          // share host never reaches here (`shareScopeAllows` is a
-          // closed-by-default allowlist that runs first, pinned by
-          // host-guard.test.ts), so this is defense in depth against a later
-          // allowlisting rather than the gate that stops a visitor today.
-          if (visitor) return j(403, { error: 'not available to share visitors' });
-          if (!deployer) {
-            return j(501, {
-              error:
-                'deploy not enabled on this server (dev and staging deliberately cannot pull or restart the deploy source)',
-            });
-          }
-          // Reading is not deploying: a board surface that shows deploy state
-          // is served over the tailnet, and reporting what already happened
-          // cannot restart anything. So the read stays at trusted-local, the
-          // same level as every other operator read on this server.
-          if (req.method === 'GET') return j(200, { deploy: deployer.last() });
-          if (req.method === 'POST') {
-            // Triggering one is different, and this is the narrow default.
-            //
-            // `local` in the host guard means "the Host header names one of
-            // our own names", which covers every client on the tailnet and
-            // the LAN — measured, not assumed. The refresh route next door is
-            // safe at that width because it cannot interrupt anybody; a
-            // deploy ends this process and drops every live editor socket on
-            // the box, so it does not inherit that argument.
-            //
-            // Checked on the PEER ADDRESS rather than the Host header,
-            // because the Host header is client-controlled: a LAN and a
-            // tailnet client both reached this server sending
-            // `Host: localhost` in the same measurement. See
-            // `isLoopbackAddress`.
-            //
-            // TO LOOSEN (Bryan's call): drop this block and the route is
-            // reachable by any trusted-local caller again. That is one
-            // deletion, which is why the default is the narrow one — the
-            // mistake it can make is refusing a caller who can retry from
-            // the box, not restarting prod for somebody who should not have
-            // been able to.
-            if (!isLoopbackAddress(server.requestIP(req)?.address)) {
-              return j(403, {
-                error:
-                  'deploy must be triggered from this machine (loopback only) — a deploy restarts the server and drops every live editor',
-              });
-            }
-            // Loopback is necessary, not sufficient: cloudflared runs on
-            // this box, so a request through the tunnel — the operator's
-            // proxied hostname, Access token and all — arrives from
-            // 127.0.0.1 and passes the address test. `cf-ray` is the hop's
-            // own signature (see the refresh route above for why it is the
-            // right test). (Urgent-fixes ticket, 2026-09-02.)
-            if (req.headers.has('cf-ray')) {
-              return j(403, {
-                error:
-                  'deploy cannot be triggered through the edge (proxied request) — run it from the box',
-              });
-            }
-            // Loopback is the PEER ADDRESS, which a page served from this
-            // machine also has, so it says nothing about whether a page or an
-            // agent asked. This does — see browserCannotOperateBody.
-            if (isBrowserRequest(req.headers)) return j(403, browserCannotOperateBody());
-            const body = (await safeJson(req)) ?? {};
-            const force = body.force === true;
-            const requestedBy = typeof body.requestedBy === 'string' ? body.requestedBy : undefined;
-            return j(200, {
-              deploy: await deployer.deploy({ force, ...(requestedBy ? { requestedBy } : {}) }),
-            });
-          }
-          return j(405, { error: 'method not allowed' });
+        // --- Operator routes: plugin refresh, push and deploy — ./routes/ops.ts ---
+        // Same chain position as before the split: after the chat-audit
+        // routes, before the agent attachments.
+        {
+          const handled = await handleOpsRoutes(opsRoutesCtx, {
+            req,
+            pathname,
+            visitor,
+            authorFor,
+          });
+          if (handled) return handled;
         }
         // --- REST: agent attachments (§4) --- see
         // ./routes/workspace-attachments.ts. Same chain position as before
@@ -7519,1671 +6377,32 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           // Same redaction as /files — see redactWorkspaceTreeForVisitor.
           return j(200, visitor ? redactWorkspaceTreeForVisitor(tree, visitor.workspaceId) : tree);
         }
-        // --- A doc's meetings (read-only) ---
-        //
-        // Ahead of the `/api/docs/<id>/...` catch-all below, which would
-        // otherwise swallow both. Deliberately NOT gated on the doc's room
-        // existing: a transcript outlives the meeting and the notes agent
-        // that reads it arrives afterwards, sometimes after the room has been
-        // evicted. There is no write and no delete here — a transcript is the
-        // least reconstructible thing this server holds, because the audio is
-        // already gone.
-        const meetingsMatch = pathname.match(/^\/api\/docs\/([^/]+)\/meetings$/);
-        if (meetingsMatch && req.method === 'GET') {
-          const addressed = decodeURIComponent(meetingsMatch[1] ?? '');
-          if (!isValidDocId(addressed)) return j(400, { error: 'bad docId' });
-          // Same canonicalization the `/audio/` upgrade does, and for the same
-          // reason: a doc is reachable by a readable alias, and the meetings
-          // are filed under its own id. Reading by alias must find them.
-          const docId = rooms.get(addressed)?.docId ?? addressed;
-          const meetings = meetingStore.list(docId);
-          const live = meetingStore.active(docId);
-          return j(200, {
-            docId,
-            meetings,
-            ...(live ? { recording: live.meetingId } : {}),
+        // --- Meetings, transcripts and the calendar — ./routes/meetings-calendar.ts ---
+        // Called from the position the block occupied: every
+        // `/api/docs/<id>/meetings...` pattern has to be tried before the
+        // doc catch-all below, which would otherwise swallow all of them.
+        {
+          const handled = await handleMeetingCalendarRoutes(meetingCalendarRoutesCtx, {
+            req,
+            url,
+            pathname,
+            visitor,
           });
+          if (handled) return handled;
         }
-        const meetingMatch = pathname.match(/^\/api\/docs\/([^/]+)\/meetings\/([^/]+)$/);
-        if (meetingMatch && req.method === 'GET') {
-          const addressed = decodeURIComponent(meetingMatch[1] ?? '');
-          const meetingId = decodeURIComponent(meetingMatch[2] ?? '');
-          if (!isValidDocId(addressed)) return j(400, { error: 'bad docId' });
-          const docId = rooms.get(addressed)?.docId ?? addressed;
-          const record = meetingStore.list(docId).find((m) => m.meetingId === meetingId);
-          if (!record) return j(404, { error: 'meeting not found' });
-          // `turns` stays the COUNT the index recorded; the settled lines are
-          // their own field, so a caller reading one is never reading the
-          // other by accident.
-          return j(200, { ...record, transcript: meetingStore.transcript(docId, meetingId) });
-        }
-        // --- Naming a voice AFTER the meeting ---
-        //
-        // During a meeting the audio socket carries `name_speaker`; this is
-        // the same verb for a meeting whose socket is gone — which is exactly
-        // when a person on the recording device gets around to the names. It
-        // writes the same index line and routes the same backwards rewrite
-        // into notes already written. A LIVE meeting is refused (409): its
-        // rename must also rewrite the composer's memory of what it wrote,
-        // which only the session on the socket can do.
-        const lateNameMatch = pathname.match(/^\/api\/docs\/([^/]+)\/meetings\/([^/]+)\/speakers$/);
-        if (lateNameMatch && req.method === 'POST') {
-          // A durable write to the meeting record plus a rewrite of the doc's
-          // notes: owner-side only, like every other mutating route here.
-          if (visitor) return j(403, { error: 'not available to share visitors' });
-          const addressed = decodeURIComponent(lateNameMatch[1] ?? '');
-          const meetingId = decodeURIComponent(lateNameMatch[2] ?? '');
-          if (!isValidDocId(addressed)) return j(400, { error: 'bad docId' });
-          const docId = rooms.get(addressed)?.docId ?? addressed;
-          const body = (await req.json().catch(() => null)) as {
-            speaker?: unknown;
-            name?: unknown;
-          } | null;
-          const speaker = typeof body?.speaker === 'string' ? body.speaker : '';
-          const name = typeof body?.name === 'string' ? body.name.trim() : '';
-          // The caps the socket's parser enforces by dropping the frame;
-          // refused out loud here, because HTTP can.
-          if (!speaker || speaker.length > 16 || !name || name.length > MAX_SPEAKER_NAME) {
-            return j(400, {
-              error: `speaker and name required; name at most ${MAX_SPEAKER_NAME} chars`,
-            });
-          }
-          const result = meetingStore.nameSpeakerLater({ docId, meetingId, speaker, name });
-          if (!result.ok) {
-            if (result.reason === 'unknown_meeting') return j(404, { error: 'meeting not found' });
-            if (result.reason === 'recording') {
-              return j(409, { error: 'meeting is live — rename it over the audio socket' });
-            }
-            return j(400, { error: 'that speaker is not in this meeting' });
-          }
-          // The rename reaches backwards, exactly as a live one does — same
-          // relabel, same sink. `from` is what the composer actually wrote
-          // (the prior name, or the placeholder), read BEFORE the map moved.
-          const names = result.speakers;
-          const from = speakerDisplayName(speaker, result.priorNames);
-          const to = speakerDisplayName(speaker, names);
-          const notes = meetingRelay.notesDeps;
-          if (from !== to && notes?.onRelabel) {
-            // Two voices can collide on one name; then the words in the notes
-            // do not say which voice they were, and only tagged mentions —
-            // which carry the label — are rewritten. Same narrowing, same
-            // reason as the live session's.
-            const labels = new Set([
-              ...meetingStore
-                .transcript(docId, meetingId)
-                .flatMap((t) => (t.speaker ? [t.speaker] : [])),
-              ...Object.keys(names),
-            ]);
-            const ambiguous = [...labels].some(
-              (label) => label !== speaker && speakerDisplayName(label, names) === from,
-            );
-            notes.onRelabel({
-              docId,
-              meetingId,
-              label: speaker,
-              from,
-              to,
-              rewriteUntagged: !ambiguous,
-            });
-          }
-          return j(200, { docId, meetingId, speakers: names });
-        }
-
-        // --- Calendar: connect a Google Calendar, join meetings one click ---
-        //
-        // No bot joins anything by default — the connection tracks upcoming
-        // meetings so an explicit per-event join is one click instead of a
-        // pasted URL. Taking the join does three things at once: hands back
-        // the meeting URL to open, sends the bot into the call, and opens a
-        // discussion doc the transcript lands in.
-        //
-        // Where a calendar meeting's doc opens: the board it was filed on
-        // when the join minted it, or the bare review route for one that
-        // somehow is not filed. Board-relative like the huddle route's URL.
-        const docUrlFor = (docId: string): string => {
-          const ws = taskStore.workspaceOfDoc(docId);
-          return ws
-            ? `/workspaces/${encodeURIComponent(ws)}/docs/${encodeURIComponent(docId)}`
-            : `/review/${encodeURIComponent(docId)}`;
-        };
-        //
-        // All on the operator's surface — these are a PERSON's verbs, so they
-        // go through the same host/Access gating as every other /api route.
-        // The vendor's inbound half (`calendar.sync_events`) arrives on the
-        // Svix-signed status webhook above, on the callback hostname.
-        if (pathname === '/api/calendar' && req.method === 'GET') {
-          const google = opts.calendarBot?.google ?? null;
-          const connection = calendarStore?.connection() ?? null;
-          return j(200, {
-            configured: calendarSync !== null,
-            googleConfigured: google !== null,
-            connection: connection
-              ? { email: connection.email, connectedAt: connection.connectedAt }
-              : null,
+        // --- REST: one doc and its threads — ./routes/docs.ts ---
+        {
+          const handled = await handleDocResourceRoutes(docRoutesCtx, {
+            req,
+            url,
+            pathname,
+            visitor,
+            authorFor,
+            refuseCategoryAuthor,
+            metaFor,
+            withTaskChips,
           });
-        }
-        if (pathname === '/api/calendar/google/connect' && req.method === 'GET') {
-          const google = opts.calendarBot?.google;
-          if (!google) {
-            return j(503, {
-              error: 'not_configured',
-              message:
-                'Google Calendar connect needs the OAuth app credentials (Keychain ' +
-                'service claude-workspaces-google-oauth, accounts client-id and ' +
-                'client-secret) and a Recall API key.',
-            });
-          }
-          // One-shot CSRF state, spent (or expired) at the callback. Expired
-          // entries are swept here rather than on a timer: this map only
-          // grows when somebody clicks Connect.
-          const now = Date.now();
-          for (const [state, expires] of calendarOauthStates) {
-            if (expires < now) calendarOauthStates.delete(state);
-          }
-          const stateBytes = new Uint8Array(16);
-          crypto.getRandomValues(stateBytes);
-          const state = [...stateBytes].map((b) => b.toString(16).padStart(2, '0')).join('');
-          calendarOauthStates.set(state, now + 10 * 60_000);
-          return new Response(null, {
-            status: 302,
-            headers: { location: google.consentUrl(state) },
-          });
-        }
-        if (pathname === '/api/calendar/google/callback' && req.method === 'GET') {
-          const google = opts.calendarBot?.google;
-          if (!google || !calendarStore) return j(503, { error: 'not_configured' });
-          // Google reports a refused consent screen as ?error=access_denied.
-          const denied = url.searchParams.get('error');
-          if (denied) return j(400, { error: 'consent_refused', message: denied });
-          const code = url.searchParams.get('code') ?? '';
-          const state = url.searchParams.get('state') ?? '';
-          const expires = calendarOauthStates.get(state);
-          calendarOauthStates.delete(state);
-          if (!code || expires === undefined || expires < Date.now()) {
-            return j(400, { error: 'bad_state', message: 'Start again from Connect.' });
-          }
-          try {
-            const { refreshToken } = await google.exchange(code);
-            // Recall owns the sync from here: it holds the app credentials
-            // and the refresh token and refreshes on its own schedule.
-            const calendar = await opts.calendarBot?.client.createCalendar({
-              refreshToken,
-              clientId: google.clientId,
-              clientSecret: google.clientSecret,
-            });
-            if (!calendar) return j(503, { error: 'not_configured' });
-            // Vaulted ONLY so disconnect can revoke the grant at Google; see
-            // RefreshTokenVault. Saved after the vendor accepted it, so a
-            // failed connect leaves no credential behind.
-            opts.calendarBot?.vault?.save(refreshToken);
-            calendarStore.setConnection({
-              calendarId: calendar.id,
-              email: calendar.email,
-              connectedAt: Date.now(),
-            });
-            return new Response(
-              '<!doctype html><meta charset="utf-8"><title>Connected</title>' +
-                '<p>Google Calendar connected. No bot joins anything on its own — ' +
-                'upcoming meetings can now be given a bot with one click. ' +
-                'You can close this tab.</p>',
-              { status: 200, headers: { 'content-type': 'text/html; charset=utf-8' } },
-            );
-          } catch (err) {
-            const error = err instanceof Error ? err.message : 'connect_failed';
-            return j(502, { error });
-          }
-        }
-        if (pathname === '/api/calendar/google' && req.method === 'DELETE') {
-          if (!calendarStore || !opts.calendarBot) return j(503, { error: 'not_configured' });
-          const connection = calendarStore.connection();
-          if (!connection) return j(404, { error: 'not_connected' });
-          // Order matters: the vendor's copy of the grant dies first (the
-          // calendar delete), then the grant itself (the revoke), then our
-          // record. A failure mid-way leaves MORE revoked than the record
-          // says, which is the safe direction.
-          await opts.calendarBot.client.deleteCalendar(connection.calendarId);
-          let revoked = false;
-          const token = opts.calendarBot.vault?.load() ?? null;
-          if (token) {
-            try {
-              await opts.calendarBot.google?.revoke(token);
-              revoked = true;
-            } catch (err) {
-              console.error('[calendar] google revoke failed:', err);
-            }
-            opts.calendarBot.vault?.clear();
-          }
-          calendarStore.setConnection(null);
-          return j(200, { ok: true, revoked });
-        }
-        if (pathname === '/api/calendar/events' && req.method === 'GET') {
-          if (!calendarSync || !calendarStore || !opts.calendarBot) {
-            return j(503, { error: 'not_configured' });
-          }
-          const connection = calendarStore.connection();
-          if (!connection) return j(404, { error: 'not_connected' });
-          try {
-            const events = await opts.calendarBot.client.listUpcoming(
-              connection.calendarId,
-              new Date().toISOString(),
-            );
-            // The shape a join surface (the coming workspace banner) needs:
-            // which meeting, when it starts AND when it ends (the offer
-            // lives from 15 minutes before start until the end), whether a
-            // bot COULD join it, whether one was asked to, and — for a taken
-            // join — where its discussion doc is. The meeting URL itself
-            // stays server-side: presence is what the offer needs, and the
-            // join RESPONSE hands the URL to the click that earned it.
-            return j(200, {
-              events: events.map((event) => {
-                const joinRec = calendarStore.joinRecord(event.id);
-                return {
-                  id: event.id,
-                  title: event.title,
-                  startTime: event.startTime,
-                  endTime: event.endTime,
-                  hasMeetingLink: event.meetingUrl !== null,
-                  joinable: eligibleForBot(event),
-                  joined: joinRec !== null,
-                  ...(joinRec ? { docId: joinRec.docId, docUrl: docUrlFor(joinRec.docId) } : {}),
-                };
-              }),
-            });
-          } catch (err) {
-            return j(502, { error: err instanceof Error ? err.message : 'list_failed' });
-          }
-        }
-        const calendarJoin = pathname.match(/^\/api\/calendar\/events\/([^/]+)\/join$/);
-        if (calendarJoin) {
-          if (req.method !== 'POST') return j(405, { error: 'method not allowed' });
-          if (!calendarSync || !calendarStore || !opts.calendarBot) {
-            return j(503, { error: 'not_configured' });
-          }
-          if (!calendarStore.connection()) return j(404, { error: 'not_connected' });
-          const eventId = decodeURIComponent(calendarJoin[1] ?? '');
-          const body = (await req.json().catch(() => null)) as {
-            join?: unknown;
-            workspaceId?: unknown;
-          } | null;
-          // Absent means "join" — the button this backs is the explicit
-          // opt-IN (bots join nothing by default), and withdrawing it is the
-          // explicit `join: false`.
-          const join = body?.join !== false;
-
-          if (!join) {
-            const joinRec = calendarStore.joinRecord(eventId);
-            if (!joinRec) return j(200, { join, action: 'skipped', reason: 'not_joined' });
-            // The bot goes home; the doc and whatever it heard stay.
-            await recallRelay.leave(joinRec.docId);
-            calendarStore.setJoinRecord(eventId, null);
-            return j(200, { join, action: 'left', eventId, docId: joinRec.docId });
-          }
-
-          // The join does three things at once: answers the meeting URL so
-          // the client can open it, sends the bot into the call, and opens a
-          // discussion doc with the transcript pipeline already listening —
-          // the invite below is the SAME path a pasted URL takes, realtime
-          // socket and notes included.
-          let event: RecallCalendarEvent | null;
-          try {
-            event = await opts.calendarBot.client.getEvent(eventId);
-          } catch (err) {
-            return j(502, { error: err instanceof Error ? err.message : 'join_failed' });
-          }
-          if (!event) return j(404, { error: 'unknown_event' });
-          if (!eligibleForBot(event) || !event.meetingUrl) {
-            return j(400, {
-              error: 'no_supported_link',
-              message: 'That event has no Zoom, Google Meet or Teams link to join.',
-            });
-          }
-
-          // A repeat join answers the SAME doc — the click is idempotent,
-          // not a doc factory. The doc is only minted on the first take.
-          const existing = calendarStore.joinRecord(eventId);
-          let docId: string;
-          if (existing) {
-            docId = existing.docId;
-          } else {
-            const now = Date.now();
-            const title = meetingDocTitle(event.title, now);
-            let created = rooms.createForCaller(meetingDocAlias(now), {
-              type: 'markdown',
-              title,
-            });
-            if (created.ok && !created.minted) {
-              created = rooms.createForCaller(meetingDocAlias(now), {
-                type: 'markdown',
-                title,
-              });
-            }
-            if (!created.ok || !created.minted) return j(500, { error: 'doc-not-minted' });
-            docId = created.room.docId;
-            // The file first, then the bind — same order and reason as the
-            // huddle route: the doc is a record on disk before the first word.
-            const file = meetingDocFilePath(dataDir, docId);
-            try {
-              mkdirSync(dirname(file), { recursive: true });
-              if (!existsSync(file)) writeFileSync(file, `# ${title}\n`);
-            } catch (err) {
-              console.error(`[calendar] could not write ${file}:`, err);
-              return j(500, { error: 'doc-file-failed' });
-            }
-            const attached = rooms.attachFile(docId, file);
-            if (!attached.ok) return j(409, { error: 'attach_failed', attached });
-            const requestedWs =
-              typeof body?.workspaceId === 'string' ? body.workspaceId : undefined;
-            fileUnderHubWorkspace(docId, requestedWs);
-          }
-
-          const invited = await recallRelay.invite({
-            docId,
-            meetingUrl: event.meetingUrl,
-            ...(event.title ? { botName: `Meeting Assistant (${event.title.slice(0, 60)})` } : {}),
-          });
-          if (!invited.ok && invited.reason !== 'already_recording') {
-            // The join is only a join once the bot is actually going: no
-            // record is written on a refusal, so the offer stays takeable.
-            // A doc minted just above stays — it is empty, harmless, and
-            // deleting user-visible content on an error path is how records
-            // get eaten.
-            const status =
-              invited.reason === 'not_configured'
-                ? 503
-                : invited.reason === 'vendor_error'
-                  ? 502
-                  : 400;
-            return j(status, { error: invited.reason, message: invited.message });
-          }
-          // `already_recording` on the SAME doc is a repeat click while the
-          // bot is live — the state the click wanted.
-          calendarStore.setJoinRecord(eventId, { docId, joinedAt: Date.now() });
-          return j(200, {
-            join,
-            action: 'joined',
-            eventId,
-            // What the client opens for the person...
-            meetingUrl: event.meetingUrl,
-            // ...and where the meeting's words are landing.
-            docId,
-            docUrl: docUrlFor(docId),
-            ...(invited.ok ? { bot: invited.status } : {}),
-          });
-        }
-
-        // --- A doc's meeting bot: invite one, read its state, send it home ---
-        if (pathname === '/api/meeting-engines') {
-          if (req.method !== 'GET') return j(405, { error: 'method not allowed' });
-          // Which engines a `start` frame may name on THIS server, default
-          // first — server-global, because keys are. It is why a chooser can
-          // hide an engine whose key is absent instead of offering a button
-          // that answers `unavailable`. Names only; nothing about keys
-          // beyond their existence leaves the machine.
-          const engines = meetingRelay.engineNames();
-          return j(200, { engines, default: engines[0] ?? null });
-        }
-
-        const botMatch = pathname.match(/^\/api\/docs\/([^/]+)\/meeting-bot$/);
-        if (botMatch) {
-          const addressed = decodeURIComponent(botMatch[1] ?? '');
-          if (!isValidDocId(addressed)) return j(400, { error: 'bad docId' });
-          const docId = rooms.get(addressed)?.docId ?? addressed;
-          if (req.method === 'GET') {
-            // `configured` is why the UI can say "meeting bots are not set up
-            // on this server" instead of offering a button that always fails.
-            return j(200, {
-              docId,
-              configured: recallRelay.configured(),
-              bot: recallRelay.status(docId),
-            });
-          }
-          if (req.method === 'POST') {
-            // A bot costs money the moment it is created, so unlike the
-            // read above this one insists the doc actually exists.
-            if (!rooms.get(docId)) return j(404, { error: 'doc not found' });
-            const body = (await req.json().catch(() => null)) as {
-              meetingUrl?: unknown;
-              botName?: unknown;
-            } | null;
-            const meetingUrl = typeof body?.meetingUrl === 'string' ? body.meetingUrl : '';
-            if (!meetingUrl) return j(400, { error: 'meetingUrl required' });
-            // Optional — the old payload stays accepted. Clipped rather than
-            // refused: a long name is a preference, not an error, and the
-            // vendor truncates what its UI cannot show anyway.
-            const rawBotName = typeof body?.botName === 'string' ? body.botName.trim() : '';
-            const botName = rawBotName ? rawBotName.slice(0, 100) : undefined;
-            const result = await recallRelay.invite({
-              docId,
-              meetingUrl,
-              ...(botName !== undefined ? { botName } : {}),
-            });
-            if (result.ok) return j(200, { bot: result.status });
-            const status =
-              result.reason === 'not_configured'
-                ? 503
-                : result.reason === 'already_recording'
-                  ? 409
-                  : result.reason === 'vendor_error'
-                    ? 502
-                    : 400;
-            return j(status, { error: result.reason, message: result.message });
-          }
-          if (req.method === 'DELETE') {
-            const left = await recallRelay.leave(docId);
-            return left ? j(200, { ok: true }) : j(404, { error: 'no bot on this doc' });
-          }
-          return j(405, { error: 'method not allowed' });
-        }
-
-        const docMatch = pathname.match(/^\/api\/docs\/([^/]+)(?:\/(.*))?$/);
-        if (docMatch) {
-          const addressed = decodeURIComponent(docMatch[1] ?? '');
-          const rest = docMatch[2] ?? '';
-          if (!isValidDocId(addressed)) return j(400, { error: 'bad docId' });
-          const room = rooms.get(addressed);
-          if (!room) return j(404, { error: 'doc not found' });
-          // Canonicalize ONCE, here, and the ~30 subroutes below inherit both
-          // halves of the alias contract: a readable name resolves, and
-          // everything they key on (SSE channels, activity rows, thread ids,
-          // filenames) uses the doc's own id. Rebinding the name `docId` is
-          // deliberate — it is what makes the subroutes correct by default
-          // rather than each one having to remember.
-          const docId = room.docId;
-          // Tasks referencing this doc under EITHER of its names: origin and
-          // link refs routinely hold the caller-chosen alias rather than the
-          // minted id, and an exact-match query under only the canonical id
-          // silently drops those rows from the doc's own surface.
-          const docTaskRows = (): Task[] => {
-            const rows = taskStore.tasksReferencingDoc(docId);
-            const alias = room.meta.alias;
-            if (alias === undefined || alias === docId) return rows;
-            const seen = new Set(rows.map((t) => t.id));
-            return [
-              ...rows,
-              ...taskStore.tasksReferencingDoc(alias).filter((t) => !seen.has(t.id)),
-            ];
-          };
-          // The chip a MEMBER sees carries what the doc page's derived-work
-          // strip draws: where the row lives (a board id is an unguessable
-          // URL capability, so it never reaches a visitor), and the two
-          // plan-linkage marks. A visitor keeps the bare §3.3 chip.
-          const docTaskEntries = (): Array<Record<string, unknown>> =>
-            docTaskRows().map((t) =>
-              visitor
-                ? { ...taskChip(t) }
-                : {
-                    ...taskChip(t),
-                    workspaceId: t.workspaceId,
-                    ...(t.planHold !== undefined ? { planHeld: true } : {}),
-                    ...(t.possiblyStale !== undefined ? { possiblyStale: true } : {}),
-                  },
-            );
-          if (rest === '' && req.method === 'GET') {
-            // Doc→task surfacing (§3.12 commit 4): chips for the tasks that
-            // reference this doc — directly or via one of its threads.
-            // Visitor-safe by construction (§3.3 rule 2); omitted when empty.
-            const taskRefs = docTaskEntries();
-            // Which hub workspace this doc is attached to, so the doc surface
-            // can route voice utterances (§3.8: voice is not board-only).
-            // OWNER ONLY: a workspace id is an unguessable URL capability, and
-            // a doc-scoped visitor must not learn it from a member doc.
-            const hubWs = visitor ? null : taskStore.workspaceOfDoc(docId);
-            // Where the review app's `←` should go: the board that links this
-            // doc, rather than the machine-wide landing page. OWNER ONLY for
-            // the same reason `hubWorkspaceId` is — a board id is an
-            // unguessable URL capability, and a share visitor must not learn
-            // one from a member doc. Resolved through the review when the
-            // doc is a member of a review, which is where `hubWorkspaceId`
-            // deliberately stops.
-            const backTo = visitor ? null : backTargetFor(docId, room.meta.workspaceId);
-            // Who the Make Plan float names ("Ask <lead> to create a plan").
-            // Owner-only like the board id it comes from; a lead id is
-            // already a display name everywhere the hub shows one.
-            const lead = hubWs ? taskStore.getWorkspace(hubWs)?.leadAgentId : undefined;
-            return j(200, {
-              meta: metaFor(room.meta),
-              ...(taskRefs.length > 0 ? { tasks: taskRefs } : {}),
-              ...(hubWs ? { hubWorkspaceId: hubWs } : {}),
-              ...(lead !== undefined ? { leadAgentId: lead } : {}),
-              ...(backTo ? { backTo: { workspaceId: backTo.id, name: backTo.name } } : {}),
-            });
-          }
-          if (rest === '' && req.method === 'DELETE') {
-            const force = url.searchParams.get('force') === 'true';
-            const res = rooms.deleteDoc(docId, { force });
-            if (res.ok) {
-              unlinkFromEveryHubWorkspace(docId);
-              return j(200, res);
-            }
-            return j(res.error === 'has-open-threads' ? 409 : 404, res);
-          }
-          if (rest === 'threads' && req.method === 'GET') {
-            const status = url.searchParams.get('status') as 'open' | 'resolved' | null;
-            const filter = status ? { status } : undefined;
-            const threads: Array<Thread & { docId?: string }> = rooms
-              .listThreads(docId, filter)
-              .map((t) => withTaskChips(docId, t));
-            // A `.md` diff member's companion editor doc holds the threads
-            // the reviewer left in the File view. The agent asked about the
-            // member because that is the id it was handed; answer for the
-            // file, and tag each companion thread with the doc it lives on
-            // so a reply lands there. Member threads keep their shape.
-            const companionId = rooms.companionOf(docId);
-            if (companionId) {
-              for (const t of rooms.listThreads(companionId, filter)) {
-                threads.push({ ...withTaskChips(companionId, t), docId: companionId });
-              }
-              threads.sort((a, b) => b.lastActivity - a.lastActivity);
-            }
-            return j(200, { threads });
-          }
-          // Task-chip resolution (§3.3 rule 2): how a chip inside a doc
-          // resolves for a DOC-scoped invite, which never gets the workspace
-          // board room. The chip is the visitor-safe shape (id, title,
-          // status, assignee) — adding a field to it is a sharing decision.
-          if (rest === 'tasks' && req.method === 'GET') {
-            return j(200, { docId, tasks: docTaskEntries() });
-          }
-          // The plan gate's one control: a doc becomes a pending plan, or a
-          // pending plan is approved — which clears every draft hold pointing
-          // at it and releases the held rows to todo, attributed to the
-          // approver. Owner-only: approval is a decision about the board, and
-          // a share visitor does not hold that seat.
-          if (rest === 'plan' && req.method === 'POST') {
-            if (visitor) return j(403, { error: 'not available to share visitors' });
-            const body = await safeJson(req);
-            const state = body?.state;
-            if (state !== 'pending' && state !== 'approved') {
-              return j(400, { error: "state must be 'pending' or 'approved'" });
-            }
-            const author = authorFor(body?.author);
-            if (!author) return j(400, { error: 'author required' });
-            const set = rooms.setPlanState(docId, state, author.name);
-            if (!set.ok) return j(404, { error: 'doc not found' });
-            let released: string[] = [];
-            if (state === 'approved') {
-              const ids = room.meta.alias ? [docId, room.meta.alias] : [docId];
-              const rel = taskStore.releasePlanHolds(ids, author);
-              released = rel.released;
-              // Holds cleared WITHOUT a transition (archived rows, rows
-              // already moved) emit nothing — refresh those boards by hand,
-              // the linkRef pattern.
-              for (const wsId of rel.workspaceIds) taskProjection.ensureWorkspace(wsId);
-            }
-            return j(200, { docId, planState: state, released });
-          }
-          // The Make Plan float's press: the person asking this doc's agent
-          // for a plan. The ask IS a comment — a subject-anchored thread
-          // from the presser, riding the existing thread.created channel to
-          // whoever watches — plus a server-written stamp so a reopened doc
-          // renders "plan requested" rather than offering a first ask.
-          // Owner-only for the same reason `plan` is: asking for board work
-          // is a member's seat.
-          if (rest === 'plan-request' && req.method === 'POST') {
-            if (visitor) return j(403, { error: 'not available to share visitors' });
-            const body = await safeJson(req);
-            const author = authorFor(body?.author);
-            if (!author) return j(400, { error: 'author required' });
-            // The same door every other comment route holds: the ask names a
-            // person for the agent to answer, and the bare category "agent"
-            // names nobody.
-            if (isCategoryAuthor(author)) return refuseCategoryAuthor();
-            const thread = await rooms.postComment(
-              docId,
-              null,
-              author,
-              PLAN_REQUEST_COMMENT,
-              { kind: 'subject' },
-              { generate: false },
-            );
-            if (!thread) return j(404, { error: 'doc not found' });
-            const stamped = rooms.setPlanRequested(docId, author.name);
-            return j(200, {
-              docId,
-              threadId: thread.id,
-              ...(stamped.ok ? { requestedAt: stamped.requestedAt } : {}),
-            });
-          }
-          // Whether this doc's asks have a live lead to land on. The page
-          // registers itself by asking; changes arrive on its event stream.
-          if (rest === 'lead-presence' && req.method === 'GET') {
-            if (visitor) return j(403, { error: 'not available to share visitors' });
-            return j(200, leadPresence.watch(docId));
-          }
-          // The Review float's press — the meeting's other one-tap ask: the
-          // presser asking this doc's agent to read the notes and transcript
-          // and question what is thin. Same shape as plan-request: the ask is
-          // a subject thread from the presser, and the stamp names that
-          // thread so the float can offer another ask once it is resolved.
-          if (rest === 'review-request' && req.method === 'POST') {
-            if (visitor) return j(403, { error: 'not available to share visitors' });
-            const body = await safeJson(req);
-            const author = authorFor(body?.author);
-            if (!author) return j(400, { error: 'author required' });
-            if (isCategoryAuthor(author)) return refuseCategoryAuthor();
-            const filed = await fileReviewRequest(docId, author, REVIEW_REQUEST_COMMENT);
-            if (!filed) return j(404, { error: 'doc not found' });
-            return j(200, { docId, ...filed });
-          }
-          // The pointer pill's Research press. NOT a task (it was, and Bryan
-          // found a board row where the mock had a section in the notes):
-          // an anchored thread on the selected line, from the presser, plus
-          // a placeholder section inserted right after that line for the
-          // agent to fill. Same channel as the two floats — a comment every
-          // watching agent already hears — and the thread names the section
-          // so the answer lands where the person will look.
-          if (rest === 'research-request' && req.method === 'POST') {
-            if (visitor) return j(403, { error: 'not available to share visitors' });
-            const body = await safeJson(req);
-            const author = authorFor(body?.author);
-            if (!author) return j(400, { error: 'author required' });
-            if (isCategoryAuthor(author)) return refuseCategoryAuthor();
-            const topicRaw = typeof body?.topic === 'string' ? body.topic.trim() : '';
-            if (!topicRaw) return j(400, { error: 'topic required' });
-            const topic = clipToWordBoundary(topicRaw, RESEARCH_TOPIC_MAX);
-            const anchor = body?.anchor as Anchor | undefined;
-            if (!anchor || anchor.kind !== 'text-range') {
-              return j(400, { error: 'a text-range anchor is required' });
-            }
-            const anchorCheck = anchors.validateAnchor(anchor);
-            if (!anchorCheck.ok) return j(400, { error: anchorCheck.error });
-            const thread = await rooms.postComment(
-              docId,
-              null,
-              author,
-              researchAskComment(topic),
-              anchor,
-              { generate: false },
-            );
-            if (!thread) return j(404, { error: 'doc not found' });
-            // After the thread, so the section follows the selection — the
-            // same insertion an agent's insert_blocks_after_thread makes.
-            // Top-level: a selection inside a bullet must not nest a
-            // heading inside that bullet; the section goes after the list.
-            const placed = rooms.insertBlocksAfterThread(
-              docId,
-              thread.id,
-              researchPlaceholderMarkdown(topic),
-              { placement: 'top-level' },
-            );
-            if (!placed.ok) {
-              console.error(`[research-request] placeholder on ${docId}: ${placed.error}`);
-            }
-            return j(200, {
-              docId,
-              threadId: thread.id,
-              section: researchSectionTitle(topic),
-              placeholder: placed.ok,
-            });
-          }
-          // --- The doc's repo home: pin, read, unpin. OWNER ONLY — a home is
-          // host paths, which a share visitor must never see. The visitor
-          // allowlist in host-guard already refuses unknown doc subroutes;
-          // this is the local stop for the collab-host path.
-          if (rest === 'home') {
-            if (visitor) return j(403, { error: 'not available on a share' });
-            if (req.method === 'GET') {
-              const status = rooms.docHomeStatus(docId);
-              return status ? j(200, { docId, ...status }) : j(404, { error: 'no home pinned' });
-            }
-            if (req.method === 'PUT') {
-              const body = await safeJson(req);
-              // Accept `{ home: {...} }` or the three fields at top level.
-              const res = rooms.setDocHome(docId, body?.home ?? body);
-              if (!res.ok) return j(res.error === 'not-found' ? 404 : 400, res);
-              return j(200, { docId, home: res.home, placement: res.placement });
-            }
-            if (req.method === 'DELETE') {
-              const res = rooms.clearDocHome(docId);
-              return res.ok ? j(200, { docId, ok: true }) : j(404, { error: 'no home pinned' });
-            }
-            return j(405, { error: 'method not allowed' });
-          }
-          const threadIdMatch = rest.match(/^threads\/([^/]+)(\/.*)?$/);
-          if (threadIdMatch) {
-            const threadId = decodeURIComponent(threadIdMatch[1] ?? '');
-            const threadRest = threadIdMatch[2] ?? '';
-            if (threadRest === '' && req.method === 'GET') {
-              const t = rooms.getThread(docId, threadId);
-              return t
-                ? j(200, { thread: withTaskChips(docId, t) })
-                : j(404, { error: 'thread not found' });
-            }
-            if (threadRest === '/comments' && req.method === 'POST') {
-              const body = await safeJson(req);
-              const user = authorFor(body?.author);
-              const text = body?.text as string | undefined;
-              if (!user || !text) return j(400, { error: 'author + text required' });
-              if (isCategoryAuthor(user)) return refuseCategoryAuthor();
-              const declared = reviewFromBody(body?.review, text);
-              if (!declared.ok) return j(400, { error: declared.error });
-              // A person's plain reply IS the answer to the ask it lands on.
-              //
-              // Three surfaces render an Answer composer and post at
-              // `/answer`; every other door a reply comes through — a task
-              // panel's discussion composer, the widget, MCP `post_reply`, an
-              // older bundle — arrives here. Measured across this project's
-              // stored docs, that gap left 12 declarations unanswered with a
-              // person's reply sitting under each one, which is what made the
-              // queue read as ignored while the reader had in fact answered.
-              //
-              // `pendingDeclaration` and `answerFromReply` are core's, shared
-              // with the queue and the doc panel, so what counts as pending
-              // and what counts as an answer are decided in one place. A
-              // reply that DECLARES its own ask is skipped: that is a new
-              // question, not an answer to the old one.
-              const priorThread = declared.review ? null : rooms.getThread(docId, threadId);
-              const pending = priorThread ? pendingDeclaration(priorThread) : null;
-              const folded =
-                pending?.review && classifyActor(user) === 'person'
-                  ? answerFromReply(pending.review, text)
-                  : null;
-              let t: Thread | null = null;
-              if (pending && folded) {
-                // The whole answer path, exactly as the explicit route uses
-                // it — the stamps, the displaced-answer history, the reply,
-                // the events. A second writer here is how the two spellings
-                // of "answered" would drift.
-                const res = await rooms.answerReviewItem(
-                  docId,
-                  threadId,
-                  pending.id,
-                  user,
-                  text,
-                  folded.optionId,
-                  // Conditional on the item STILL being pending, re-checked
-                  // inside the same synchronous stretch as the stamp. The read
-                  // above is a claim about a moment already past; an
-                  // unconditional write here would let a reply folded on that
-                  // stale claim displace an answer somebody had meanwhile
-                  // given, and displace it into history where nobody looks.
-                  { generate: !visitor, onlyIfUnanswered: true },
-                );
-                if (res.ok) {
-                  t = res.thread;
-                  // Same nudge the explicit answer fires: an answer on a
-                  // COMMENT moves no task row, so `decision.answered` never
-                  // fires for it and the lead would otherwise not hear that
-                  // the thing it was blocked on came back.
-                  const foldedHome = resolveWorkspaceForDoc(docId);
-                  if (foldedHome) {
-                    readyNudger.reviewAnswered({ workspaceId: foldedHome, actorId: user.id });
-                  }
-                }
-                // A refusal here is the loser of that race, never a reason to
-                // drop the words: fall through and post the reply as the
-                // ordinary comment it always was.
-              }
-              if (!t) {
-                t = await rooms.postComment(docId, threadId, user, text, undefined, {
-                  // A share visitor must not be able to spend the API key.
-                  generate: !visitor,
-                  ...(declared.review ? { review: declared.review } : {}),
-                });
-              }
-              // The quality gate, on the same terms the ticket form gets: the
-              // reply that DECLARES an ask is judged before anything says the
-              // reader can see it. This is the path `.claude/rules` tells the
-              // whole fleet to file asks on, so leaving it ungated meant the
-              // gate covered the road nobody drives.
-              const replyGate =
-                t && declared.review
-                  ? await gateThreadDeclaration(docId, t, declared.review, user)
-                  : undefined;
-              const handoff = threadUrl(docId, Boolean(visitor));
-              return t
-                ? j(200, {
-                    thread: rooms.getThread(docId, t.id) ?? t,
-                    ...(declared.advice ? { reviewAdvice: declared.advice } : {}),
-                    ...(handoff ? { threadUrl: handoff } : {}),
-                    ...heldFields(replyGate),
-                  })
-                : j(404, { error: 'thread not found' });
-            }
-            // Answering a Review Item. Deliberately a thin wrapper over the
-            // reply above rather than a second write path: `text` is always
-            // the verbatim answer, and `optionId` only records which offered
-            // option those words came from. A person who types their own
-            // answer sends no id and is not answering any less.
-            if (threadRest === '/answer' && req.method === 'POST') {
-              const body = await safeJson(req);
-              const user = authorFor(body?.author);
-              const text = body?.text as string | undefined;
-              const commentId = body?.commentId as string | undefined;
-              if (!user || !text || !commentId) {
-                return j(400, { error: 'author + text + commentId required' });
-              }
-              // A person's question is not the answer, here either — same
-              // conversion as the task review-item route. It posts as an
-              // ordinary reply on the declaring thread: no answer stamp, so
-              // the item stays open, and the owner hears the question the way
-              // it hears every comment. `answerFromReply` refuses the same
-              // reading on the plain-comment door, so the two doors agree. A
-              // tapped option answers whatever its label reads.
-              if (
-                typeof body?.optionId !== 'string' &&
-                classifyActor(user) === 'person' &&
-                answerAsksBack(text)
-              ) {
-                const asked = await rooms.postComment(docId, threadId, user, text, undefined, {
-                  generate: !visitor,
-                });
-                if (!asked) return j(404, { error: 'thread not found' });
-                return j(200, { asked: true, thread: rooms.getThread(docId, asked.id) ?? asked });
-              }
-              const res = await rooms.answerReviewItem(
-                docId,
-                threadId,
-                commentId,
-                user,
-                text,
-                typeof body?.optionId === 'string' ? body.optionId : undefined,
-                { generate: !visitor },
-              );
-              if (!res.ok) {
-                return j(res.error === 'no-doc' ? 404 : 400, { error: res.error });
-              }
-              // A review item on a COMMENT is the same ask as one on a
-              // ticket, and its answer is the same thing to act on — but it
-              // moves no task row, so `decision.answered` never fires for it
-              // and the store-event bridge cannot see it. Wired here, at the
-              // one route that records such an answer.
-              const answerHome = resolveWorkspaceForDoc(docId);
-              if (answerHome) {
-                readyNudger.reviewAnswered({ workspaceId: answerHome, actorId: user.id });
-              }
-              return j(200, { thread: res.thread });
-            }
-            // Correcting a review item raised on a doc thread — the verb
-            // that did not exist, and whose absence forced an agent that
-            // found its own advice wrong to file a SECOND item, leaving the
-            // reader two rows about one question with the older, wronger one
-            // still reading as live.
-            //
-            // Addressed by commentId, like /answer directly above: that is
-            // the identity `review-queue.ts` already keys a doc-thread row on
-            // and the one `setCommentReview` already mutates by. Nothing was
-            // minted for this route.
-            if (threadRest === '/revise' && req.method === 'POST') {
-              const body = await safeJson(req);
-              const user = authorFor(body?.author);
-              const commentId = body?.commentId as string | undefined;
-              if (!user || !commentId) return j(400, { error: 'author + commentId required' });
-              if (isCategoryAuthor(user)) return refuseCategoryAuthor();
-              const parsed = parseRevisedRange(body?.revisedRange);
-              if (!parsed.ok) return j(400, { error: parsed.error });
-              const res = rooms.reviseCommentReview(
-                docId,
-                threadId,
-                commentId,
-                {
-                  ...(body?.headline !== undefined ? { headline: body.headline } : {}),
-                  ...(body?.detail !== undefined ? { detail: body.detail } : {}),
-                  ...(body?.options !== undefined ? { options: body.options } : {}),
-                },
-                {
-                  actor: user,
-                  ...(parsed.range ? { revisedRange: parsed.range } : {}),
-                },
-              );
-              if (!res.ok) {
-                return j(res.error === 'no-doc' || res.error === 'not-a-review-item' ? 404 : 400, {
-                  error: res.error,
-                  ...(res.message !== undefined ? { message: res.message } : {}),
-                });
-              }
-              // Re-judged on every revision, exactly as the ticket form is:
-              // the verdict was about the old words. Without this a hold on
-              // this surface would be a dead end — the filer's one remedy
-              // would leave the item held for words the judge never read.
-              const gate = await judgeThreadReview(docId, threadId, commentId, res.review, user);
-              // Watchers hear a revision the same way they hear the original
-              // ask: the item changed, and anyone holding the old words is
-              // holding words the reader can no longer see. Not while it is
-              // held, though — a held item is on nobody's queue, so nothing
-              // may buzz a phone claiming it is.
-              if (!gate.held) announceThreadReview(docId, threadId, gate.review, user);
-              return j(200, {
-                thread: rooms.getThread(docId, threadId) ?? res.thread,
-                review: gate.review,
-                ...heldFields(gate),
-              });
-            }
-            // Taking the ASK back — the asker's exit, as opposed to /answer
-            // (the reader's) and /revise (a correction that keeps asking).
-            //
-            // Scoped to one comment on purpose. `/resolve` retires the whole
-            // thread, so an agent that had filed a correction as a second
-            // item on a shared thread could only clean up by taking its live
-            // ask down alongside the stale one. This leaves the thread open
-            // and its siblings answerable.
-            //
-            // Agents only. A withdrawal is a statement about what its author
-            // meant to ask, and a share visitor is a reader — the person a
-            // review item is FOR — so the door they get is /answer.
-            if (
-              (threadRest === '/withdraw' || threadRest === '/withdraw/undo') &&
-              req.method === 'POST'
-            ) {
-              if (visitor) return j(403, { error: 'not available to share visitors' });
-              const body = await safeJson(req);
-              const user = authorFor(body?.author);
-              const commentId = body?.commentId as string | undefined;
-              if (!user || !commentId) return j(400, { error: 'author + commentId required' });
-              if (isCategoryAuthor(user)) return refuseCategoryAuthor();
-              const reason = body?.reason;
-              if (reason !== undefined && typeof reason !== 'string') {
-                return j(400, { error: 'reason must be a string' });
-              }
-              const res = rooms.withdrawCommentReview(docId, threadId, commentId, {
-                actor: user,
-                ...(reason !== undefined ? { reason } : {}),
-                ...(threadRest === '/withdraw/undo' ? { undo: true } : {}),
-              });
-              if (!res.ok) {
-                return j(res.error === 'no-doc' || res.error === 'not-a-review-item' ? 404 : 400, {
-                  error: res.error,
-                  ...(res.message !== undefined ? { message: res.message } : {}),
-                });
-              }
-              // Announced on the way BACK only. `announceThreadReview` sends
-              // the reader a push whose title is the item's headline — "here
-              // is something to review" — so announcing a withdrawal would
-              // buzz their phone with the exact ask that was just taken off
-              // their queue. Reinstating does put an ask in front of them
-              // again, and that is worth telling them about.
-              // …unless the gate is still holding it. Reinstating restores an
-              // item's standing, not its verdict: the words never changed, so
-              // the hold placed on them stands and the queue still omits it.
-              if (threadRest === '/withdraw/undo' && !isReviewPayloadHeld(res.review)) {
-                announceThreadReview(docId, threadId, res.review, user);
-              }
-              return j(200, { thread: res.thread, review: res.review });
-            }
-            // Taking an answer back. The stamps move into the declaration's
-            // `answerHistory` (soft delete — the words are user content) and
-            // the reply comment stays in the thread. Un-stamping is what
-            // re-offers the item on every surface: each queue derives
-            // "waiting on you" from the stamps, so there is no second state
-            // to sync. Same visitor gating as /answer — a share visitor's
-            // click must not spend the API key.
-            if (threadRest === '/answer/undo' && req.method === 'POST') {
-              const body = await safeJson(req);
-              const user = authorFor(body?.author);
-              const commentId = body?.commentId as string | undefined;
-              if (!user || !commentId) return j(400, { error: 'author + commentId required' });
-              const res = rooms.undoReviewItemAnswer(docId, threadId, commentId, user, {
-                generate: !visitor,
-              });
-              if (!res.ok) {
-                return j(res.error === 'no-doc' ? 404 : 400, { error: res.error });
-              }
-              return j(200, { thread: res.thread });
-            }
-            if (threadRest === '/summary' && req.method === 'POST') {
-              // On-demand generation. The scheduled path is debounced and
-              // fire-and-forget; this one blocks and reports what happened,
-              // because an agent asked for it and is waiting.
-              if (visitor) return j(403, { error: 'not available to share visitors' });
-              const t = rooms.getThread(docId, threadId);
-              if (!t) return j(404, { error: 'thread not found' });
-              if (!summarizer?.enabled) {
-                return j(503, {
-                  error: 'summaries disabled',
-                  detail: `set CW_SUMMARIES=1 and add a key: security add-generic-password -a "$USER" -s ${KEYCHAIN_SERVICE} -w`,
-                });
-              }
-              // Already summarized as it stands: answer with what is stored
-              // rather than paying to regenerate the same two lines. The
-              // scheduled path and the backfill both ask this question through
-              // `needsCall`; an agent that polls this route was the one caller
-              // that could bill on every retry. `force` is the deliberate
-              // "that line is wrong, do it again" escape hatch.
-              const force = (await safeJson(req))?.force === true;
-              if (!force && !needsCall(t, t.summary)) {
-                return j(200, { thread: t, summary: t.summary, cached: true });
-              }
-              const summary = await summarizer.generate(t);
-              if (!summary) return j(503, { error: 'generation failed' });
-              // Re-read before storing, exactly as the scheduled path does.
-              // A reply that landed during the call moves `summaryHash`, so
-              // storing this one would (a) report success for a summary
-              // `threadLines` will ignore forever, and (b) overwrite a valid
-              // summary the scheduled path may have just landed for the NEW
-              // state — leaving nothing scheduled to repair it.
-              const now = rooms.getThread(docId, threadId);
-              if (!now) return j(404, { error: 'thread not found' });
-              if (summaryHash(now) !== summary.hash) {
-                return j(409, { error: 'thread changed during generation' });
-              }
-              const updated = rooms.applyThreadSummary(docId, threadId, summary);
-              return updated
-                ? j(200, { thread: updated, summary })
-                : j(404, { error: 'thread not found' });
-            }
-            if (threadRest === '/resolve' && req.method === 'POST') {
-              const body = await safeJson(req);
-              const author = authorFor(body?.author);
-              if (isCategoryAuthor(author)) return refuseCategoryAuthor();
-              // Resolve is a thread change, so it schedules a summary — and a
-              // visitor must not be able to spend the API key by clicking it.
-              const t = rooms.resolve(docId, threadId, author, { generate: !visitor });
-              return t ? j(200, { thread: t }) : j(404, { error: 'thread not found' });
-            }
-            if (threadRest === '/reopen' && req.method === 'POST') {
-              const body = await safeJson(req);
-              const author = authorFor(body?.author);
-              if (isCategoryAuthor(author)) return refuseCategoryAuthor();
-              const t = rooms.reopen(docId, threadId, author, { generate: !visitor });
-              return t ? j(200, { thread: t }) : j(404, { error: 'thread not found' });
-            }
-            if (threadRest === '/reanchor' && req.method === 'POST') {
-              const body = await safeJson(req);
-              const anchor = body?.anchor as Anchor | undefined;
-              if (!anchor) return j(400, { error: 'anchor required' });
-              // Same gate as thread creation: this route can plant a
-              // malformed anchor on an EXISTING thread just as easily.
-              const reanchorCheck = anchors.validateAnchor(anchor);
-              if (!reanchorCheck.ok) return j(400, { error: reanchorCheck.error });
-              const t = rooms.reanchor(docId, threadId, anchor);
-              return t ? j(200, { thread: t }) : j(404, { error: 'thread not found' });
-            }
-            if (threadRest === '/rewrite_region' && req.method === 'POST') {
-              const body = await safeJson(req);
-              const replacement = String(body?.replacement ?? '');
-              const parseInlineMarks = body?.parseInlineMarks === true;
-              if (body?.suggest === true) {
-                const author = parseSuggestionAuthor(
-                  visitor ? { author: authorFor(body?.author) } : body,
-                );
-                if (!author) return j(400, { error: 'author required when suggest is true' });
-                const res = rooms.createSuggestionForThread(docId, threadId, {
-                  replacement,
-                  parseInlineMarks,
-                  author,
-                });
-                return res.ok ? j(200, res) : j(409, res);
-              }
-              const res = rooms.rewriteThreadRegion(docId, threadId, replacement, {
-                parseInlineMarks,
-              });
-              return res.ok ? j(200, withSyncError(rooms, docId, res)) : j(409, res);
-            }
-            if (threadRest === '/insert_after' && req.method === 'POST') {
-              const body = await safeJson(req);
-              const text = String(body?.text ?? '');
-              const res = rooms.insertAfterThread(docId, threadId, text);
-              return res.ok ? j(200, withSyncError(rooms, docId, res)) : j(409, res);
-            }
-            if (threadRest === '/insert_blocks_after' && req.method === 'POST') {
-              const body = await safeJson(req);
-              const markdown = String(body?.markdown ?? '');
-              const placement = parsePlacement(body?.placement);
-              if (placement === PLACEMENT_INVALID) {
-                return j(400, { error: "placement must be 'after-block' or 'top-level'" });
-              }
-              const res = rooms.insertBlocksAfterThread(docId, threadId, markdown, { placement });
-              return res.ok ? j(200, withSyncError(rooms, docId, res)) : j(409, res);
-            }
-          }
-          if (rest === 'threads' && req.method === 'POST') {
-            const body = await safeJson(req);
-            const user = authorFor(body?.author);
-            const text = body?.text as string | undefined;
-            let anchor = body?.anchor as Anchor | undefined;
-            if (!user || !text || !anchor) {
-              return j(400, { error: 'author + text + anchor required' });
-            }
-            if (isCategoryAuthor(user)) return refuseCategoryAuthor();
-            // Validate BEFORE the write. An anchor whose startRel/endRel
-            // don't decode is accepted silently by the CRDT and then kills
-            // the re-anchor sweep from inside a Yjs observer, i.e. on
-            // whatever request happens to be in flight minutes later. The
-            // caller that wrote it has to be the one that hears about it.
-            const anchorCheck = anchors.validateAnchor(anchor);
-            if (!anchorCheck.ok) return j(400, { error: anchorCheck.error });
-            // Computed early (not just before the write, where it used to
-            // live) so both the dedup escape hatch below and the normal
-            // return can build the SAME response shape — a retry must get
-            // its reviewAdvice back too, not just its thread.
-            const requestId = typeof body?.requestId === 'string' ? body.requestId : undefined;
-            const declared = reviewFromBody(body?.review, text);
-            if (!declared.ok) return j(400, { error: declared.error });
-            // Identity for the dedup below — computed from the RAW anchor
-            // (so a duplicate call matches regardless of how the
-            // review-item branch below rewrites `anchor` for the eventual
-            // write), the declared review, AND the author. Codex review
-            // caught both gaps in turn: anchor alone let a requestId reuse
-            // with a CORRECTED review payload silently return the stale
-            // thread, and anchor+review alone let two DIFFERENT people who
-            // (client-controlled, not globally unique) happened to mint the
-            // same requestId collide — the second author's comment would
-            // come back attributed to the first.
-            const identityKey = JSON.stringify({
-              anchor,
-              review: declared.review ?? null,
-              authorId: user.id,
-            });
-            // A retry of an already-handled request has to be caught HERE,
-            // before the review-item validation below: that block refuses a
-            // second ask while the item is `waiting`, a state the FIRST
-            // request's own side effect sets — so a retry would otherwise
-            // never reach the dedupe() call at the bottom and would get a
-            // stale-state 409 instead of the thread it already made.
-            const priorThreadCreate = threadRequestDedup.lookup(
-              docId,
-              requestId,
-              text,
-              identityKey,
-            );
-            if (priorThreadCreate) {
-              const t = await priorThreadCreate;
-              const handoff = threadUrl(docId, Boolean(visitor));
-              // Re-read, because the FIRST request's judge wrote to the
-              // comment after the thread this promise resolved to was built.
-              // A retry told nothing about the hold would treat its filing as
-              // accepted and wait on a reader who cannot see the item (codex
-              // review) — so the verdict is read back off the stored payload.
-              const settledPrior = t ? (rooms.getThread(docId, t.id) ?? t) : null;
-              return t && settledPrior
-                ? j(200, {
-                    thread: settledPrior,
-                    ...(declared.advice ? { reviewAdvice: declared.advice } : {}),
-                    ...(handoff ? { threadUrl: handoff } : {}),
-                    ...heldFields(recordedThreadHold(docId, settledPrior, declared.review)),
-                  })
-                : j(500, { error: 'could not create thread' });
-            }
-            // A thread on a PHRASE of a review item — the doc-style question
-            // asked back at an ask. The anchor names an item this task must
-            // carry, and its offsets must spell its snippet in the item's
-            // current detail (or be absent, in which case the phrase is
-            // located here). The write below is two writes: the thread, and
-            // the question recorded on the item — which is what takes the
-            // item off the reader's queue while the owner revises it.
-            let itemAsk:
-              | {
-                  taskId: string;
-                  reviewItemId: string;
-                  range: ReturnType<typeof locateReviewItemRange>;
-                }
-              | undefined;
-            if (anchor.kind === 'review-item') {
-              if (!docId.startsWith('task:')) {
-                return j(400, {
-                  error: 'a review-item anchor belongs on a task doc (task:<taskId>)',
-                });
-              }
-              const taskId = docId.slice('task:'.length);
-              if (!taskStore.getTask(taskId)) return j(404, { error: 'task not found' });
-              // The derived `r-legacy` row is admitted like any other — it
-              // used to be refused here ("anchor a text-range there
-              // instead"), which left a `needs: 'decision'` ticket's card
-              // with no way to ask: an identical-looking card whose only
-              // exit was Skip. `listReviewItems` derives the row, the
-              // question is recorded on the task WITH its thread
-              // (`requestMoreInfoOnReview` → `requestMoreInfo`), and the
-              // decision leaves the reader's queue by the same derivation a
-              // stored item does. Its `detail` is the task body, so a phrase
-              // of the body anchors with offsets and the headline (the
-              // title) anchors snippet-only.
-              const wanted = anchor.reviewItemId;
-              const item = taskStore.listReviewItems(taskId).find((r) => r.id === wanted);
-              if (!item) return j(404, { error: 'unknown-review-item' });
-              // One open question at a time. A second anchored ask while the
-              // item is already `waiting` would orphan the first — `revise`
-              // only reads the NEWEST threaded question (`latestThreadedQuestion`),
-              // so a buried one could never be answered. Refused before the
-              // thread is created (not just before the info-request stamp),
-              // so a refusal never leaves an orphan thread with nothing
-              // recorded against it.
-              if (reviewItemState(item) === 'waiting') {
-                const openThreadId = latestThreadedQuestion(item)?.threadId;
-                const owner = item.createdBy.trim() || 'the owner';
-                return j(409, {
-                  error: 'waiting',
-                  message: `Already waiting on ${owner} — add to the open thread instead`,
-                  ...(openThreadId !== undefined ? { threadId: openThreadId } : {}),
-                });
-              }
-              const range = locateReviewItemRange(item.review.detail, {
-                text: anchor.snippet.text,
-                ...(anchor.start !== undefined ? { start: anchor.start } : {}),
-                ...(anchor.end !== undefined ? { end: anchor.end } : {}),
-              });
-              if (!range) {
-                return j(400, {
-                  error:
-                    "anchor.start/end do not spell anchor.snippet.text in the item's current detail",
-                });
-              }
-              // Store the LOCATED anchor, so a snippet-only ask still renders
-              // at its offsets.
-              anchor = {
-                kind: 'review-item',
-                reviewItemId: item.id,
-                snippet: { text: range.text },
-                ...(range.start !== undefined && range.end !== undefined
-                  ? { start: range.start, end: range.end }
-                  : {}),
-              };
-              itemAsk = { taskId, reviewItemId: item.id, range };
-            }
-            // `dedupe` reserves (docId, requestId) synchronously and runs
-            // this closure at most once for however many duplicate requests
-            // arrive while it is in flight — the write AND the review-item
-            // side effects it triggers, so a concurrent repeat never fires
-            // `requestMoreInfoOnReview` a second time either.
-            let gate: ThreadReviewGate | undefined;
-            const { value: t } = await threadRequestDedup.dedupe(
-              docId,
-              requestId,
-              text,
-              identityKey,
-              async () => {
-                const created = await rooms.postComment(docId, null, user, text, anchor, {
-                  generate: !visitor,
-                  ...(declared.review ? { review: declared.review } : {}),
-                });
-                if (created && itemAsk?.range) {
-                  const asked = taskStore.requestMoreInfoOnReview(
-                    itemAsk.taskId,
-                    itemAsk.reviewItemId,
-                    text,
-                    { actor: user, threadId: created.id, range: itemAsk.range },
-                  );
-                  if (asked.ok) taskProjection.ensureWorkspace(asked.task.workspaceId);
-                }
-                if (created && declared.review) {
-                  // Judged before it is announced, and before this route
-                  // answers — see `gateThreadDeclaration`. Inside the dedupe
-                  // closure so a duplicated request cannot spend a second
-                  // judge call on one filing.
-                  gate = await gateThreadDeclaration(docId, created, declared.review, user);
-                }
-                return created;
-              },
-            );
-            const handoff = threadUrl(docId, Boolean(visitor));
-            const settled = t ? (rooms.getThread(docId, t.id) ?? t) : null;
-            return t && settled
-              ? j(200, {
-                  thread: settled,
-                  ...(declared.advice ? { reviewAdvice: declared.advice } : {}),
-                  ...(handoff ? { threadUrl: handoff } : {}),
-                  // `gate` is undefined on a DEDUPLICATED request — it never
-                  // ran the closure — so the hold is read back off the stored
-                  // payload rather than dropped. See `recordedThreadHold`.
-                  ...heldFields(gate ?? recordedThreadHold(docId, settled, declared.review)),
-                })
-              : j(500, { error: 'could not create thread' });
-          }
-          if (rest === 'threads/by_find' && req.method === 'POST') {
-            const body = await safeJson(req);
-            const author = authorFor(body?.author);
-            const text = body?.text as string | undefined;
-            const find = body?.find ? String(body.find) : '';
-            if (!author || !text || find.length === 0) {
-              return j(400, { error: 'author + text + find required' });
-            }
-            const declared = reviewFromBody(body?.review, text);
-            if (!declared.ok) return j(400, { error: declared.error });
-            const res = await rooms.createThreadByFind(
-              docId,
-              {
-                find,
-                contextBefore: body?.contextBefore ? String(body.contextBefore) : undefined,
-                contextAfter: body?.contextAfter ? String(body.contextAfter) : undefined,
-                occurrence:
-                  typeof body?.occurrence === 'number' ? Number(body.occurrence) : undefined,
-              },
-              author,
-              text,
-              // Visitor-authored text becomes the entire prompt on this route.
-              { generate: !visitor, ...(declared.review ? { review: declared.review } : {}) },
-            );
-            const findGate =
-              res.ok && declared.review
-                ? await gateThreadDeclaration(docId, res.thread, declared.review, author)
-                : undefined;
-            const findHandoff = threadUrl(docId, Boolean(visitor));
-            return res.ok
-              ? j(200, {
-                  thread: rooms.getThread(docId, res.thread.id) ?? res.thread,
-                  ...(declared.advice ? { reviewAdvice: declared.advice } : {}),
-                  ...(findHandoff ? { threadUrl: findHandoff } : {}),
-                  ...heldFields(findGate),
-                })
-              : j(409, res);
-          }
-          if (rest === 'content' && req.method === 'GET') {
-            const doc = rooms.getDoc(docId);
-            if (!doc) return j(404, { error: 'doc not found' });
-            // `reader` marks this caller's copy of the doc as current-as-of-
-            // now, which is what lets the stale-write guard below judge their
-            // next whole-doc rewrite by order instead of the blunt time
-            // window. Sent by get_doc since 0.1.113; older bundles omit it.
-            const reader = url.searchParams.get('reader');
-            if (reader) rooms.noteAgentRead(docId, reader);
-            return j(200, doc);
-          }
-          // Cheap doc health check — metadata + counts, never the body.
-          // Exists because get_doc has returned 320KB for one doc: an agent
-          // that only needs "bound? wedged? how big?" must not have to pay
-          // for (or overflow on) the content to find out.
-          if (rest === 'status' && req.method === 'GET') {
-            const status = rooms.getDocStatus(docId);
-            if (!status) return j(404, { error: 'doc not found' });
-            if (visitor) {
-              // Same rule as `sourceUrl` in PRIVATE_META_KEYS: host-machine
-              // paths are not workspace content. syncError goes with it —
-              // its message can embed the bound path (backup locations,
-              // parse errors naming the file).
-              const { path: _path, syncError: _syncError, ...visitorSafe } = status;
-              return j(200, visitorSafe);
-            }
-            return j(200, status);
-          }
-          // Whole-doc rewrite through the live doc — the safe replacement for
-          // Write-the-bound-file + reparse_from_disk, which raced the
-          // write-back and clobbered (see docs/research/2026-08-03 review).
-          if (rest === 'content' && req.method === 'POST') {
-            const body = await safeJson(req);
-            const markdown = String(body?.markdown ?? '');
-            if (markdown.length === 0) return j(400, { error: 'markdown is required' });
-            // Stale-write guard (2026-08-26 incident): a whole-doc rewrite
-            // built from a copy that predates a human's live edits destroys
-            // those edits with a 200. The DEFAULT path is the protected one —
-            // an old bundle that omits every new field still gets refused
-            // when a human edited recently; only the explicit confirm field
-            // opens the gate, and even then the backup below has already run.
-            if (body?.confirmOverwriteHumanEdits !== true) {
-              const reader = authorFor(body?.author)?.id;
-              const stale = rooms.staleWriteCheck(docId, reader);
-              if (stale) {
-                return j(409, {
-                  error: 'stale-write',
-                  humanEditedAt: stale.humanEditedAt,
-                  ...(stale.lastReadAt !== undefined ? { lastReadAt: stale.lastReadAt } : {}),
-                  message:
-                    `REFUSED: a human edited this doc at ${new Date(stale.humanEditedAt).toISOString()}` +
-                    (stale.lastReadAt !== undefined
-                      ? `, AFTER your last read at ${new Date(stale.lastReadAt).toISOString()}`
-                      : ', within the last 10 minutes') +
-                    ' — a full rewrite from your in-context copy would destroy their work.' +
-                    ' Re-read the doc with get_doc, re-apply your change onto the CURRENT' +
-                    ' content (prefer a scoped tool: find_and_replace, rewrite_thread_region,' +
-                    ' edit_at_anchor), and only if a whole-doc rewrite is truly needed retry' +
-                    ' set_doc_content with confirmOverwriteHumanEdits: true.',
-                });
-              }
-            }
-            // A `task:<id>` doc is a task's DESCRIPTION, not a free-standing
-            // document, and rewriting one is an act the board has a name for.
-            // Reachable here by anyone who knows the docId convention, so this
-            // route runs the same ceremony `/api/tasks/:id/body` does rather
-            // than writing the room and walking away. It is not refused: that
-            // would take away the only body-rewrite a bundle older than
-            // `update_task_body` (0.1.24) has, to buy a guarantee this branch
-            // can simply provide.
-            const bodyTaskId = taskIdOfBodyDoc(docId);
-            const bodyTask = bodyTaskId ? taskStore.getTask(bodyTaskId) : undefined;
-            if (bodyTask) {
-              const author = authorFor(body?.author);
-              const res = rewriteTaskBody(bodyTask, markdown, {
-                ...(author ? { actor: author } : {}),
-              });
-              return res.ok ? j(200, { ok: true }) : j(409, res);
-            }
-            const res = rooms.setDocContent(docId, markdown);
-            return res.ok ? j(200, withSyncError(rooms, docId, res)) : j(409, res);
-          }
-          if (rest === 'reparse_from_disk' && req.method === 'POST') {
-            const res = rooms.reparseFromDisk(docId);
-            return res.ok ? j(200, res) : j(409, res);
-          }
-          // Diff-review rendering data: the file's text at the BASE commit
-          // (the target text is the doc's own content, streamed over Yjs).
-          // Computed on demand from the repo; if the worktree has since been
-          // cleaned up, baseText comes back null and the client falls back to
-          // the full-file view, which needs nothing beyond the ydoc.
-          if (rest === 'diff' && req.method === 'GET') {
-            const meta = room.meta;
-            if (meta.type !== 'diff') return j(400, { error: 'not a diff doc' });
-            const { workspaceRoot, diffBase, diffTarget, relPath } = meta;
-            const basePath = meta.diffOldPath ?? relPath;
-            let baseText: string | null = null;
-            let error: string | undefined;
-            if (meta.diffStatus === 'added') {
-              baseText = '';
-            } else if (workspaceRoot && diffBase && basePath) {
-              baseText = showFile(workspaceRoot, diffBase, basePath);
-              if (baseText === null) error = 'base content unavailable (repo moved or pruned?)';
-            } else {
-              error = 'diff metadata incomplete';
-            }
-            return j(200, {
-              baseText,
-              status: meta.diffStatus,
-              oldPath: meta.diffOldPath,
-              base: diffBase,
-              target: diffTarget,
-              additions: meta.diffAdditions,
-              deletions: meta.diffDeletions,
-              ...(error ? { error } : {}),
-            });
-          }
-          // Browser-originated reading activity (read_session / doc_open). The
-          // markdown/code review surfaces POST interaction-bounded reading
-          // sessions here; the server resolves doc/repo/producedBy and stamps
-          // actor=person. Unknown types are ignored (400). See activity.ts.
-          if (rest === 'activity' && req.method === 'POST') {
-            const body = await safeJson(req);
-            const type = body?.type as 'read_session' | 'doc_open' | undefined;
-            if (type !== 'read_session' && type !== 'doc_open') {
-              return j(400, { error: 'type must be read_session or doc_open' });
-            }
-            const payload = (body?.payload as Record<string, unknown> | undefined) ?? {};
-            // Never DEFAULT to Bryan. This endpoint is in a share visitor's
-            // scope, so an omitted author used to record their reading
-            // activity as his — the one identity on the server that carries
-            // any weight. An unattributed read is now unattributed.
-            const author = authorFor(body?.author) ?? ANONYMOUS_ACTOR;
-            const res = rooms.recordReadEvent(docId, type, payload, author);
-            // Fold a successful task read_session onto the task record's
-            // cumulative reading time. `recordReadEvent` clamps `payload`
-            // in place (see `clampReadPayload`), so `durationMs` here is
-            // already the server-trusted value, not whatever the browser
-            // sent. Quiet on the task (no event, no `updatedAt`) — see
-            // `TaskStore.recordReadingTime`.
-            if (res.ok && type === 'read_session') {
-              const taskId = taskIdOfBodyDoc(docId);
-              const durationMs = payload.durationMs;
-              if (taskId && typeof durationMs === 'number' && durationMs > 0) {
-                taskStore.recordReadingTime(taskId, Math.round(durationMs / 1000));
-              }
-            }
-            return res.ok ? j(200, { ok: true }) : j(404, res);
-          }
-          if (rest === 'agent_anchors' && req.method === 'POST') {
-            const body = await safeJson(req);
-            const find = String(body?.find ?? '');
-            if (find.length === 0) return j(400, { error: 'find is required' });
-            const res = rooms.createAgentAnchor(docId, {
-              find,
-              contextBefore: body?.contextBefore ? String(body.contextBefore) : undefined,
-              contextAfter: body?.contextAfter ? String(body.contextAfter) : undefined,
-              occurrence: typeof body?.occurrence === 'number' ? body.occurrence : undefined,
-              label: body?.label ? String(body.label) : undefined,
-            });
-            return res.ok ? j(200, res) : j(409, res);
-          }
-          const anchorMatch = rest.match(/^agent_anchors\/([^/]+)(\/.*)?$/);
-          if (anchorMatch) {
-            const anchorId = decodeURIComponent(anchorMatch[1] ?? '');
-            const anchorRest = anchorMatch[2] ?? '';
-            if (anchorRest === '/edit' && req.method === 'POST') {
-              const body = await safeJson(req);
-              const kind = body?.kind as 'replace' | 'insert_after' | undefined;
-              const text = String(body?.text ?? '');
-              if (kind !== 'replace' && kind !== 'insert_after') {
-                return j(400, { error: 'kind must be replace or insert_after' });
-              }
-              const res = rooms.editAtAgentAnchor(docId, anchorId, { kind, text });
-              return res.ok ? j(200, withSyncError(rooms, docId, res)) : j(409, res);
-            }
-            if (anchorRest === '/insert_blocks' && req.method === 'POST') {
-              const body = await safeJson(req);
-              const markdown = String(body?.markdown ?? '');
-              if (markdown.length === 0) return j(400, { error: 'markdown is required' });
-              const placement = parsePlacement(body?.placement);
-              if (placement === PLACEMENT_INVALID) {
-                return j(400, { error: "placement must be 'after-block' or 'top-level'" });
-              }
-              const res = rooms.insertBlocksAtAnchor(docId, anchorId, markdown, { placement });
-              return res.ok ? j(200, withSyncError(rooms, docId, res)) : j(409, res);
-            }
-            if (anchorRest === '' && req.method === 'DELETE') {
-              const removed = rooms.deleteAgentAnchor(docId, anchorId);
-              return removed ? j(200, { ok: true }) : j(404, { error: 'anchor not found' });
-            }
-          }
-          if (rest === 'find_and_replace' && req.method === 'POST') {
-            const body = await safeJson(req);
-            const find = String(body?.find ?? '');
-            const replace = String(body?.replace ?? '');
-            if (find.length === 0) return j(400, { error: 'find is required' });
-            const contextBefore = body?.contextBefore ? String(body.contextBefore) : undefined;
-            const contextAfter = body?.contextAfter ? String(body.contextAfter) : undefined;
-            const occurrence =
-              typeof body?.occurrence === 'number' ? Number(body.occurrence) : undefined;
-            const replaceAll = body?.replaceAll === true;
-            if (body?.suggest === true) {
-              if (replaceAll) {
-                // Bulk suggestions are out of scope: the suggestion model is
-                // one proposal per span, each individually acceptable.
-                return j(400, {
-                  error: 'replaceAll cannot be combined with suggest — propose spans one at a time',
-                });
-              }
-              const author = parseSuggestionAuthor(
-                visitor ? { author: authorFor(body?.author) } : body,
-              );
-              if (!author) return j(400, { error: 'author required when suggest is true' });
-              const res = rooms.createSuggestion(docId, {
-                find,
-                replace,
-                contextBefore,
-                contextAfter,
-                occurrence,
-                parseInlineMarks: body?.parseInlineMarks === true,
-                author,
-              });
-              return res.ok ? j(200, res) : j(409, res);
-            }
-            const res = rooms.findAndReplace(docId, {
-              find,
-              replace,
-              contextBefore,
-              contextAfter,
-              occurrence,
-              replaceAll,
-              parseInlineMarks: body?.parseInlineMarks === true,
-            });
-            // Piggy-back any pending sync trouble on the response: agents act
-            // on edit results, not on get_doc, so this is where a conflict
-            // actually gets seen.
-            return res.ok ? j(200, withSyncError(rooms, docId, res)) : j(409, res);
-          }
-          // Suggested edits (redline-suggestions phase 2, commit 3): list/
-          // accept/reject/resolve-all over the doc's pending proposals. See
-          // `suggest: true` on find_and_replace / rewrite_region above for
-          // creation.
-          if (rest === 'suggestions' && req.method === 'GET') {
-            return j(200, { suggestions: rooms.listSuggestions(docId) });
-          }
-          if (rest === 'suggestions/resolve_all' && req.method === 'POST') {
-            const body = await safeJson(req);
-            const action = body?.action as 'accept' | 'reject' | undefined;
-            if (action !== 'accept' && action !== 'reject') {
-              return j(400, { error: 'action must be accept or reject' });
-            }
-            const authorId = body?.authorId ? String(body.authorId) : undefined;
-            const res = rooms.resolveAllSuggestions(docId, { action, authorId });
-            return res.ok ? j(200, withSyncError(rooms, docId, res)) : j(404, res);
-          }
-          const suggestionMatch = rest.match(/^suggestions\/([^/]+)\/(accept|reject)$/);
-          if (suggestionMatch && req.method === 'POST') {
-            const sid = decodeURIComponent(suggestionMatch[1] ?? '');
-            const action = suggestionMatch[2];
-            const res =
-              action === 'accept'
-                ? rooms.acceptSuggestion(docId, sid)
-                : rooms.rejectSuggestion(docId, sid);
-            return res.ok ? j(200, withSyncError(rooms, docId, res)) : j(404, res);
-          }
-          if (rest === 'delete_block_at_anchor' && req.method === 'POST') {
-            const body = await safeJson(req);
-            const threadId = body?.threadId ? String(body.threadId) : undefined;
-            const anchorId = body?.anchorId ? String(body.anchorId) : undefined;
-            if ((threadId && anchorId) || (!threadId && !anchorId)) {
-              return j(400, { error: 'exactly one of threadId or anchorId required' });
-            }
-            const res = threadId
-              ? rooms.deleteBlockAtThread(docId, threadId)
-              : rooms.deleteBlockAtAgentAnchor(docId, anchorId!);
-            return res.ok ? j(200, res) : j(409, res);
-          }
-          if (rest === 'delete_blocks_in_range' && req.method === 'POST') {
-            const body = await safeJson(req);
-            const startFind = String(body?.startFind ?? '');
-            const endFind = String(body?.endFind ?? '');
-            if (startFind.length === 0 || endFind.length === 0) {
-              return j(400, { error: 'startFind and endFind are required' });
-            }
-            const res = rooms.deleteBlocksInRange(docId, {
-              startFind,
-              endFind,
-              contextBefore: body?.contextBefore ? String(body.contextBefore) : undefined,
-              contextAfter: body?.contextAfter ? String(body.contextAfter) : undefined,
-              startOccurrence:
-                typeof body?.startOccurrence === 'number'
-                  ? Number(body.startOccurrence)
-                  : undefined,
-              endOccurrence:
-                typeof body?.endOccurrence === 'number' ? Number(body.endOccurrence) : undefined,
-            });
-            return res.ok ? j(200, res) : j(409, res);
-          }
-          if (rest === 'delete_section' && req.method === 'POST') {
-            const body = await safeJson(req);
-            const heading = String(body?.heading ?? '');
-            if (heading.length === 0) return j(400, { error: 'heading is required' });
-            const res = rooms.deleteSection(docId, {
-              heading,
-              level: typeof body?.level === 'number' ? Number(body.level) : undefined,
-              occurrence:
-                typeof body?.occurrence === 'number' ? Number(body.occurrence) : undefined,
-            });
-            return res.ok ? j(200, res) : j(409, res);
-          }
-          if (rest === 'hooks/fire' && req.method === 'POST') {
-            // debug-fires the last thread update again
-            const ts = rooms.listThreads(docId);
-            if (ts.length === 0) return j(404, { error: 'no threads' });
-            const last = ts[ts.length - 1]!;
-            if (room.webhookUrl) {
-              await webhooks.send(room.webhookUrl, {
-                event: 'thread.replied',
-                docId,
-                threadId: last.id,
-                thread: last,
-                doc: withReviewUrl(room.meta),
-                seq: ++room.seq,
-              });
-            }
-            return j(200, { fired: !!room.webhookUrl });
-          }
+          if (handled) return handled;
         }
 
         // --- Web log ---
@@ -9898,43 +7117,6 @@ function j(status: number, body: unknown): Response {
   });
 }
 
-/** Attach the doc's pending syncError (if any) to a successful edit-tool
- *  response. Agents read edit results, not get_doc — so this is the surface
- *  where a disk↔doc conflict actually reaches whoever can fix it. */
-function withSyncError(rooms: Rooms, docId: string, body: object): object {
-  const syncError = rooms.getSyncError(docId);
-  return syncError ? { ...body, syncError } : body;
-}
-
-/** Sentinel for a `placement` body value that is present but not one of the
- *  two known values — the route answers 400 rather than silently splicing at
- *  the default position (an insert in the wrong place is a structure edit
- *  the caller then has to hunt down and undo). */
-const PLACEMENT_INVALID = Symbol('placement-invalid');
-
-/** Parse an insert_blocks body's optional `placement`. Absent → undefined
- *  (core defaults to 'after-block', the historical behavior). */
-function parsePlacement(
-  value: unknown,
-): 'after-block' | 'top-level' | undefined | typeof PLACEMENT_INVALID {
-  if (value === undefined || value === null) return undefined;
-  if (value === 'after-block' || value === 'top-level') return value;
-  return PLACEMENT_INVALID;
-}
-
-/** Parse a `suggest: true` request body's `author` field into a
- *  SuggestionAuthor. Requires `id` + `name`; `color` defaults so a caller
- *  that omits it (unlikely — MCP always sends the full identity) still
- *  produces an attributable proposal instead of a 400. */
-function parseSuggestionAuthor(
-  body: Record<string, unknown> | null,
-): suggestOps.SuggestionAuthor | null {
-  const a = body?.author as { id?: unknown; name?: unknown; color?: unknown } | undefined;
-  if (!a || typeof a.id !== 'string' || a.id.length === 0) return null;
-  if (typeof a.name !== 'string' || a.name.length === 0) return null;
-  return { id: a.id, name: a.name, color: typeof a.color === 'string' ? a.color : '#888888' };
-}
-
 // The canonical embed loads the widget bundle from this server but runs the
 // host page on a different origin (e.g. an Astro dev server on a different
 // port). Every REST call from the widget is therefore cross-origin and needs
@@ -9947,885 +7129,4 @@ async function safeJson(req: Request): Promise<Record<string, unknown> | null> {
   } catch {
     return null;
   }
-}
-
-/**
- * Serve a file only if it really sits under `root`.
- *
- * `/app/*` and `/demos/*` build their path out of the request URL. Today
- * that is safe by accident rather than by design — `new URL()` collapses
- * `..` segments before we ever see the pathname — but nothing in this file
- * says so, and one future caller that decodes or rewrites a path would turn
- * a static route into an arbitrary-file read on a host that is now publicly
- * reachable. Assert the containment where the read happens.
- */
-/**
- * What an HTML shell must be sent with.
- *
- * `no-store`, not `no-cache`. Every shell here names the asset URLs the page
- * will load, so it is the one document whose staleness cannot be recovered
- * from: a browser holding a shell from two deploys ago loads the bundles that
- * shell names and there is no later request in which to notice. `no-cache`
- * asks a browser to revalidate; `no-store` tells it there is nothing to
- * revalidate. The bug this replaced was a shell served with no cache
- * directives AT ALL, which makes it heuristically cacheable — the browser
- * picks its own lifetime.
- *
- * The cost is the shell itself on every navigation: about 1 KB gzipped, and
- * the assets it names still cache forever because they are content-addressed.
- */
-export const HTML_SHELL_HEADERS: Record<string, string> = {
-  'content-type': 'text/html; charset=utf-8',
-  'cache-control': 'no-store',
-};
-
-/**
- * The caching policy for one file under `/app/`.
- *
- * Three answers, and the middle one is the fix:
- *
- *   • `BUILD_INFO.txt` — `no-store`. The whole stale check reads this to learn
- *     the truth; a cached copy of it is the check lying to itself.
- *   • a content-addressed name — a year, `immutable`. Safe by construction:
- *     the name is a hash of the bytes, so these bytes at this URL can never
- *     become something else. This is what lets the shell stop depending on a
- *     browser's willingness to revalidate.
- *   • everything else — `no-cache`, as before. That is the plain-named copies
- *     kept for shells cached before the hashing landed, and it is exactly the
- *     policy whose weakness this change routes around rather than trusts.
- */
-export function appCacheControl(fileName: string): string {
-  if (fileName === 'BUILD_INFO.txt') return 'no-store';
-  if (isContentHashedAsset(fileName)) return 'public, max-age=31536000, immutable';
-  return 'no-cache';
-}
-
-/**
- * The built asset manifest, read fresh on every shell render.
- *
- * Deliberately NOT cached, and not read once at startup. `bun run dev`
- * rebuilds the client under a running server, and a deploy republishes the
- * release directory beneath it — a remembered manifest would name hashes that
- * no longer exist, which is a 404 on the bundle rather than merely a stale
- * one. Caching it on mtime is the obvious repair and the wrong one: two
- * rebuilds inside a millisecond report the same mtime. This is a few hundred
- * bytes read on page NAVIGATIONS only, never on an asset request.
- *
- * Absent or unreadable answers `{}`, and every caller then falls back to the
- * permanent names, which the build still emits.
- */
-export function readAppAssetManifest(dist: string | null): AssetManifest {
-  if (!dist) return {};
-  try {
-    return parseAssetManifest(readFileSync(join(dist, ASSET_MANIFEST_FILE), 'utf8'));
-  } catch {
-    return {};
-  }
-}
-
-export function serveStaticUnder(root: string, p: string, cacheControl?: string): Response | null {
-  // isWithinRoot realpaths both sides: `path.resolve` is purely LEXICAL, so a
-  // symlink inside the root pointing anywhere on disk sails straight through a
-  // string-prefix check. `demos/` in particular is a directory of Bryan's own
-  // files, where a convenience symlink is entirely plausible. It answers
-  // closed for a missing file or a dangling link — nothing to serve either way.
-  if (!isWithinRoot(root, p)) return null;
-  return serveStatic(p, cacheControl);
-}
-
-function serveStatic(p: string, cacheControl?: string): Response | null {
-  if (!existsSync(p)) return null;
-  const buf = readFileSync(p);
-  const ct = CT[extname(p).toLowerCase()] ?? 'application/octet-stream';
-  return new Response(buf, {
-    headers: {
-      'content-type': ct,
-      // `no-cache` is kept: this fleet redeploys often and a browser quietly
-      // running last week's bundle is the worse failure. What it means is
-      // "revalidate before use", NOT "do not store" — but a revalidation needs
-      // a validator, and there was none here, so the only answer the server
-      // could give was the whole file again. Every board load re-sent every
-      // byte of its CSS, its app bundle and the widget. The etag below is what
-      // turns that into a 304.
-      //
-      // A caller may override it — `/app/` does, because a content-addressed
-      // name earns a year and `BUILD_INFO.txt` earns none. `no-cache` stays
-      // the default for every root that is NOT content-addressed.
-      'cache-control': cacheControl ?? 'no-cache',
-      // Hashed from the CONTENT rather than from mtime+size. A redeploy writes
-      // these files fresh, so mtime moves on every deploy whether or not the
-      // bytes did — which would throw away the cache precisely when nothing
-      // changed. Content-derived, an unchanged bundle keeps its tag across
-      // deploys and a changed one cannot keep it. Bun's hash is not
-      // cryptographic and does not need to be: this answers "same bytes?",
-      // and nothing downstream trusts it for anything else.
-      etag: `"${Bun.hash(buf).toString(16)}"`,
-    },
-  });
-}
-
-function renderMockupNotFound(docId: string): string {
-  const safe = escape(docId);
-  return `<!doctype html><meta charset="utf-8"><title>Mockup not found · Workspaces</title>
-<style>body{font:15px/1.55 system-ui, sans-serif;margin:60px auto;max-width:560px;color:#222;padding:0 20px}
-h1{font-size:22px}code{background:#f3f3f3;padding:1px 5px;border-radius:3px;font-size:90%}
-small{color:#777}</style>
-<h1>Mockup not found</h1>
-<p>No mockup is bound to <code>${safe}</code>, or its source file isn't readable.
-Mockups are bound by an agent calling <code>bind_mock</code> with an absolute path
-to an HTML file. Once bound, the file is served here without any symlink dance.</p>
-<p>Ask the agent who shared this URL to call <code>bind_mock(docId, sourceHtmlPath)</code>, then refresh.</p>`;
-}
-
-/**
- * Shown when a share link doesn't resolve. Says nothing about WHY — unknown,
- * expired, and malformed all render the same page, so the endpoint can't be
- * used to probe which slugs exist.
- */
-function renderLinkNotFound(): string {
-  return `<!doctype html><meta charset="utf-8"><title>Link not available · Workspaces</title>
-<style>body{font:16px/1.5 system-ui,sans-serif;max-width:32rem;margin:12vh auto;padding:0 1.5rem;color:#222}
-h1{font-size:1.25rem;margin:0 0 .5rem}p{color:#555;margin:0}
-@media(prefers-color-scheme:dark){body{background:#111;color:#eee}p{color:#aaa}}</style>
-<h1>This link isn't available</h1>
-<p>It may have expired or been revoked. Ask whoever shared it for a new one.</p>`;
-}
-
-/**
- * The hub page shell (§3.9). Tab title is `<workspace> · Workspaces` — the
- * browser tab is a workspace switcher, so the WORKSPACE leads and the product
- * name trails, where truncation can take it. (`hub-app.ts` extends the same
- * title with the open pane once the bundle runs.) Everything dynamic renders
- * client-side from the ws:<id> ydoc projection + REST; the shell only names
- * the workspace and loads the bundle.
- *
- * `feedback` embeds the comment widget, pointed at ONE well-known doc
- * (`HUB_FEEDBACK_DOC_ID`) rather than at a per-workspace one — feedback about
- * the hub UI is about the product, not about the workspace you happened to be
- * standing in, so it should reach the same place from every hub. The widget
- * auto-captures `location` as the anchor url, so the comment already says
- * which hub it came from; `view` adds the workspace NAME so the thread reads
- * without anyone resolving an id.
- *
- * `identity-scope="host"` is what makes the feedback ATTRIBUTED. The widget
- * normally keeps its identity under a `cfw:` prefix so it cannot touch a
- * third-party host page's storage — but this page is ours, and the hub has
- * already asked the reader their name (`ensureUserIdentity`, unprefixed keys).
- * Without this attribute the same page holds two identities for one human: the
- * presence strip greets the reader by the name they gave, while every comment
- * the widget posts from that same page is signed "Anonymous <animal>".
- * Observed in a browser on 2026-08-17.
- *
- * Declarative `<claude-feedback-widget>` rather than `FeedbackWidget.init` on
- * purpose: a module script is deferred, so a plain inline script calling
- * `init` would run before the module that defines it. The element upgrades on
- * parse and reads its own attributes.
- */
-export function renderHubShell(
-  workspaceId: string,
-  name: string,
-  opts: { feedback: boolean; sentry?: BrowserSentryConfig | null; assets?: AssetManifest } = {
-    feedback: false,
-  },
-): string {
-  // Content-addressed URLs for the three files this shell names. Without a
-  // manifest (an unbuilt dist, or one from before hashing landed) these fall
-  // back to the plain names, which is exactly what the shell said before.
-  const assets = opts.assets ?? {};
-  const hubJs = assetHref(assets, 'hub.js');
-  const stylesCss = assetHref(assets, 'styles.css');
-  const tokensCss = assetHref(assets, 'tokens.css');
-  const safeName = escape(name);
-  const safeId = escape(workspaceId);
-  const sentryTags = sentryHeadTags(opts.sentry ?? null, 'board', assets);
-  const sentryMeta = sentryTags ? `\n    ${sentryTags}` : '';
-  // Deliberately NOT rendered for a share visitor. Every peer on a Yjs doc
-  // syncs the whole doc, so one shared feedback doc would hand every hub
-  // visitor every other workspace's feedback threads — including the hub
-  // paths and quoted UI text they were anchored to. Same lesson as the
-  // DocMeta sidecar: a field that must not reach a visitor cannot live in a
-  // CRDT they sync. Keeping the widget off their page keeps them off the doc.
-  const widget = opts.feedback
-    ? `
-    <script type="module" src="/widget.esm.js"></script>
-    <claude-feedback-widget doc-id="${escape(HUB_FEEDBACK_DOC_ID)}" view="${safeName}" identity-scope="host"></claude-feedback-widget>`
-    : '';
-  return `<!doctype html>
-<html lang="en">
-  <head>
-    <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=1" />
-    <title>${safeName} · Workspaces</title>
-    <!-- Two shells, two copies. Kept in step with packages/markdown-app/index.html
-         on purpose: an install started from the board and one started from a
-         review doc have to produce the same web app, and on iOS the Home
-         Screen install is what makes push available at all. -->
-    <link rel="manifest" href="/manifest.webmanifest" />
-    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
-    <meta name="theme-color" content="#2e7dd7" />${sentryMeta}
-    <link rel="stylesheet" href="${stylesCss}" />
-    <!-- Open Props trial layer — after styles.css on purpose; see
-         packages/markdown-app/index.html. -->
-    <link rel="stylesheet" href="${tokensCss}" />
-  </head>
-  <body class="hub-body">
-    <div id="hub-root" data-workspace-id="${safeId}"></div>
-    <script type="module" src="${hubJs}"></script>${widget}
-  </body>
-</html>`;
-}
-
-/**
- * The sign-in page shell. Same pattern as the hub shell — server-rendered so
- * the route answers whether or not the app bundle is built, all behavior in
- * the bundle (`/app/signin.js`), the app's own stylesheet so the page looks
- * like the product it signs you into.
- */
-export function renderSigninShell(
-  sentry: BrowserSentryConfig | null,
-  assets: AssetManifest = {},
-): string {
-  const sentryTags = sentryHeadTags(sentry, 'signin', assets);
-  const sentryMeta = sentryTags ? `\n    ${sentryTags}` : '';
-  const signinJs = assetHref(assets, 'signin.js');
-  const stylesCss = assetHref(assets, 'styles.css');
-  const tokensCss = assetHref(assets, 'tokens.css');
-  return `<!doctype html>
-<html lang="en">
-  <head>
-    <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=1" />
-    <title>Sign in · Fryanpan Workspaces</title>
-    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
-    <meta name="theme-color" content="#2e7dd7" />${sentryMeta}
-    <link rel="stylesheet" href="${stylesCss}" />
-    <link rel="stylesheet" href="${tokensCss}" />
-  </head>
-  <body class="signin-body">
-    <div id="signin-root"></div>
-    <script type="module" src="${signinJs}"></script>
-  </body>
-</html>`;
-}
-
-function renderHubNotFound(workspaceId: string): string {
-  const safe = escape(workspaceId);
-  return `<!doctype html><meta charset="utf-8"><title>Workspace not found · Workspaces</title>
-<style>body{font:15px/1.55 system-ui, sans-serif;margin:60px auto;max-width:560px;color:#222;padding:0 20px}
-h1{font-size:22px}code{background:#f3f3f3;padding:1px 5px;border-radius:3px;font-size:90%}
-small{color:#777}</style>
-<h1>Workspace not found</h1>
-<p>No hub workspace exists for <code>${safe}</code>. Hub workspaces are
-created by an agent calling <code>create_workspace</code> (or
-<code>POST /api/workspaces</code> with a name).</p>
-<p><small><a href="/">all docs</a></small></p>`;
-}
-
-function renderReviewNotFound(docId: string): string {
-  const safe = escape(docId);
-  return `<!doctype html><meta charset="utf-8"><title>Doc not found · Workspaces</title>
-<style>body{font:15px/1.55 system-ui, sans-serif;margin:60px auto;max-width:560px;color:#222;padding:0 20px}
-h1{font-size:22px}code{background:#f3f3f3;padding:1px 5px;border-radius:3px;font-size:90%}
-small{color:#777}</style>
-<h1>Doc not found</h1>
-<p>No review doc exists for <code>${safe}</code>. Markdown review docs are
-created by an agent calling <code>POST /api/docs</code> with a
-<code>sourceUrl</code> pointing at a markdown file on disk.</p>
-<p>Ask the agent who shared this URL to create the doc, then refresh this page.</p>
-<p><small><a href="/">all docs</a></small></p>`;
-}
-
-// --- Landing page: active workspaces; per-project artifact pages on demand ---
-//
-// `/` is a list of active workspaces to open up — see the header of
-// `landing.ts` for what that sentence is quoting and what it deliberately
-// leaves out. The project → artifacts model below serves `/projects/<owner>`,
-// the on-demand index of review docs. It groups by PROJECT (the creating
-// agent's cwd = doc.owner; 'ungrouped' when absent), and within a project
-// lists ARTIFACTS. An artifact is one of:
-//   - a workspace (bound folder/worktree; docs sharing a workspaceId) →
-//     one expandable row with a rolled-up open-count badge and a nested file
-//     list, each file linking to its reviewUrl
-//   - a single markdown file, a code file, a mockup, or a dev server
-// Each artifact carries its open-comment count and a kind glyph/label.
-
-type ArtifactKind = 'workspace' | 'markdown' | 'code' | 'diff' | 'mockup';
-
-interface LandingFile {
-  name: string;
-  reviewUrl?: string;
-  openCount: number;
-}
-
-interface LandingArtifact {
-  kind: ArtifactKind;
-  /** Display name (file basename, workspace title, or docId fallback). */
-  name: string;
-  /** docId for standalone artifacts; workspaceId for workspaces. */
-  id: string;
-  reviewUrl?: string;
-  openCount: number;
-  threadCount: number;
-  lastActivity: number;
-  /** Nested file list (workspace artifacts only). */
-  files?: LandingFile[];
-}
-
-// Glyph + human label per artifact kind. The glyph keeps the kinds visually
-// distinct at a glance; the label disambiguates for screen readers / clarity.
-const ARTIFACT_KIND: Record<ArtifactKind, { glyph: string; label: string }> = {
-  workspace: { glyph: '📁', label: 'folder' },
-  markdown: { glyph: '📄', label: 'markdown' },
-  code: { glyph: '⟨⟩', label: 'code' },
-  diff: { glyph: '±', label: 'diff' },
-  mockup: { glyph: '🖼', label: 'mockup' },
-};
-
-function flattenTreeFileNodes(node: WorkspaceDirNode | WorkspaceFileNode): WorkspaceFileNode[] {
-  if (node.type === 'file') return [node];
-  return node.children.flatMap(flattenTreeFileNodes);
-}
-
-/** Flatten a workspace tree into a sorted file list for the landing nesting. */
-function flattenWorkspaceFiles(node: WorkspaceDirNode | WorkspaceFileNode): LandingFile[] {
-  if (node.type === 'file') {
-    return [{ name: node.relPath, reviewUrl: node.reviewUrl, openCount: node.openCount }];
-  }
-  return node.children.flatMap(flattenWorkspaceFiles);
-}
-
-/**
- * The `/` model's inputs, computed from the live stores.
- *
- * `lastActivity` is the newest REAL event on the board: a task mutation
- * (`task.updatedAt` — bumped by every transition, assignment, evidence and
- * body rewrite), a comment on a task's discussion (`thread.lastActivity` on
- * the `task:<id>` room), or the board's creation. Deliberately
- * NOT `meta.lastActivityAt`, which is the `.ydoc` mtime wearing an activity
- * label — see rule 1 in the header of `landing.ts`.
- */
-function collectLandingWorkspaces(
-  rooms: Rooms,
-  taskStore: TaskStore,
-  // The landing route passes Home's own counter here (`reviewItemsFor` +
-  // `homeQueueTotal`, both closure-bound in createServer), so the chip and
-  // the queue it opens are one computation, not two that can drift.
-  waitingOf?: (ws: HubWorkspace) => number,
-): LandingWorkspaceInput[] {
-  return taskStore.listWorkspaces().map((ws) => {
-    let last = ws.createdAt;
-    // Archived rows included: archiving IS activity on this board, and a
-    // reading that dropped the row afterwards would step the timestamp
-    // backwards the moment somebody tidied up.
-    for (const task of taskStore.listTasks(ws.id, { includeArchived: true })) {
-      if (task.updatedAt > last) last = task.updatedAt;
-      for (const thread of rooms.listThreads(`task:${task.id}`)) {
-        if (thread.lastActivity > last) last = thread.lastActivity;
-      }
-    }
-    // A retired board contributes NO review items to this page — no chip on
-    // its row, nothing into the bar or the Review-all chain. Retiring is the
-    // owner saying "get this out of my way", and every one of those surfaces
-    // steering the reader back in contradicts the act. Filtered here at the
-    // source, not in the renderer: the count is simply never computed, so no
-    // later consumer of this model can reintroduce it. Un-retiring brings
-    // the items straight back — nothing about them was touched.
-    const waiting = !isRetired(ws) && waitingOf ? waitingOf(ws) : 0;
-    return {
-      id: ws.id,
-      name: ws.name,
-      lastActivity: last,
-      ...(isRetired(ws) ? { retired: true } : {}),
-      ...(waiting > 0 ? { waiting } : {}),
-    };
-  });
-}
-
-/** Every project owner that has at least one review doc — the links behind
- *  the review-docs fold. Names only; the artifacts stay on the project page. */
-function collectLandingProjects(rooms: Rooms): Array<{ owner: string; label: string }> {
-  const owners = new Set<string>();
-  for (const meta of rooms.list()) {
-    // Infrastructure, not review content: the shared hub-feedback doc exists
-    // on every install from startup, and `ws:`/`task:` rooms are surfaces the
-    // server owns for the boards the page already lists.
-    if (meta.docId === HUB_FEEDBACK_DOC_ID) continue;
-    if (meta.docId.startsWith('ws:') || meta.docId.startsWith('task:')) continue;
-    owners.add(meta.owner || 'ungrouped');
-  }
-  return Array.from(owners, (owner) => ({ owner, label: projectLabel(owner) }));
-}
-
-/**
- * One project's artifacts, built only when somebody opens that project.
- *
- * This is the old whole-server index, narrowed to a single owner: the same
- * rollup of workspace members into one expandable row, the same per-artifact
- * open counts. What changed is WHEN it runs — `buildWorkspaceTree` per
- * workspace and a nested file list per artifact was the bulk of both the 910
- * KB and the per-request work on a page that mostly nobody scrolled.
- */
-function buildProjectArtifacts(
-  rooms: Rooms,
-  decorate: <T extends { docId: string; type: DocType; sourceUrl?: string }>(
-    meta: T,
-  ) => T & { reviewUrl?: string },
-  owner: string,
-): LandingArtifact[] {
-  const workspaceArtifacts = new Map<string, LandingArtifact>();
-  const artifacts: LandingArtifact[] = [];
-
-  for (const meta of rooms.list()) {
-    if (meta.docId === HUB_FEEDBACK_DOC_ID) continue;
-    if (meta.docId.startsWith('ws:') || meta.docId.startsWith('task:')) continue;
-    if ((meta.owner || 'ungrouped') !== owner) continue;
-
-    // Both from the doc's index row rather than its thread map — same
-    // numbers, without decoding every doc this owner has on every render.
-    const openCount = rooms.threadCounts(meta.docId).open;
-    // Thread activity, never `meta.lastActivityAt` — see the header note in
-    // landing.ts. That field is the `.ydoc` mtime and a snapshot rewrite
-    // refreshes it, so it ranks by persistence noise.
-    const lastActivity = rooms.lastThreadActivity(meta.docId);
-
-    if (meta.workspaceId) {
-      let art = workspaceArtifacts.get(meta.workspaceId);
-      if (!art) {
-        const tree = rooms.buildWorkspaceTree(meta.workspaceId);
-        const files = flattenWorkspaceFiles(tree.tree);
-        // Clicking the workspace opens its entry file directly (the biggest
-        // change for a diff review, first file otherwise); expansion is a
-        // separate affordance in the renderer.
-        const treeFiles = flattenTreeFileNodes(tree.tree);
-        const entry = treeFiles.reduce(
-          (best, f) =>
-            (f.diffAdditions ?? 0) + (f.diffDeletions ?? 0) >
-            (best?.diffAdditions ?? 0) + (best?.diffDeletions ?? 0)
-              ? f
-              : best,
-          treeFiles[0],
-        );
-        art = {
-          kind: 'workspace',
-          name: meta.workspaceId,
-          id: meta.workspaceId,
-          reviewUrl: entry?.reviewUrl,
-          openCount: tree.totalOpen,
-          threadCount: 0,
-          lastActivity: 0,
-          files,
-        };
-        workspaceArtifacts.set(meta.workspaceId, art);
-        artifacts.push(art);
-      }
-      // A diff member marks the whole workspace as a diff review (members can
-      // also include plain 'code' context docs — any diff doc wins).
-      if (meta.type === 'diff') art.kind = 'diff';
-      art.threadCount += rooms.threadCounts(meta.docId).total;
-      if (lastActivity > art.lastActivity) art.lastActivity = lastActivity;
-      continue;
-    }
-
-    const decorated = decorate(meta);
-    artifacts.push({
-      kind: (meta.type as ArtifactKind) ?? 'markdown',
-      name: meta.sourceUrl ? basenameOf(meta.sourceUrl) : meta.title || meta.docId,
-      id: meta.docId,
-      reviewUrl: decorated.reviewUrl,
-      openCount,
-      threadCount: rooms.threadCounts(meta.docId).total,
-      lastActivity,
-    });
-  }
-
-  artifacts.sort((a, b) => {
-    if (a.openCount !== b.openCount) return b.openCount - a.openCount;
-    if (a.lastActivity !== b.lastActivity) return b.lastActivity - a.lastActivity;
-    return a.name.localeCompare(b.name);
-  });
-  return artifacts;
-}
-
-function basenameOf(p: string): string {
-  let s = p;
-  try {
-    if (/^https?:\/\//.test(s)) s = new URL(s).pathname;
-  } catch {}
-  const m = s.match(/[^/\\]+$/);
-  return m ? m[0] : s;
-}
-
-/** Display label for a project owner (cwd) — its basename, or the raw key. */
-function projectLabel(owner: string): string {
-  if (owner === 'ungrouped') return 'Ungrouped';
-  return basenameOf(owner) || owner;
-}
-
-function renderLandingFile(f: LandingFile): string {
-  const link = f.reviewUrl
-    ? `<a href="${escape(f.reviewUrl)}">${escape(f.name)}</a>`
-    : escape(f.name);
-  const badge = f.openCount > 0 ? `<span class="badge badge-open">${f.openCount} open</span>` : '';
-  return `<li class="ws-file"><span class="ws-file-name">${link}</span>${badge}</li>`;
-}
-
-function renderLandingArtifact(a: LandingArtifact): string {
-  const kind = ARTIFACT_KIND[a.kind];
-  const openBadge =
-    a.openCount > 0
-      ? `<span class="badge badge-open">${a.openCount} open</span>`
-      : a.threadCount > 0
-        ? `<span class="badge badge-resolved">all resolved</span>`
-        : '';
-  const kindBadge = `<span class="badge badge-kind">${kind.glyph} ${escape(kind.label)}</span>`;
-  const activityLine =
-    a.lastActivity > 0
-      ? `<div class="meta">last activity ${escape(formatRelative(a.lastActivity))}</div>`
-      : '';
-
-  if (a.files) {
-    const fileCount = a.files.length;
-    const files = a.files.map(renderLandingFile).join('');
-    const nameLink = a.reviewUrl
-      ? `<a href="${escape(a.reviewUrl)}">${escape(a.name)}</a>`
-      : escape(a.name);
-    // Clicking the NAME opens the review's entry file; the caret + file
-    // count is the (separate) expansion affordance for the nested list.
-    return `<li class="artifact ${a.openCount > 0 ? 'has-open' : ''}">
-      <div class="row">
-        <span class="art-glyph">${kind.glyph}</span>
-        <span class="art-name">${nameLink}</span>
-        <span class="badges">${openBadge}<span class="badge badge-kind">${escape(kind.label)}</span></span>
-      </div>
-      <details class="ws-details">
-        <summary><span class="art-sub">${fileCount} file${fileCount === 1 ? '' : 's'}</span></summary>
-        <ul class="ws-files">${files || '<li class="ws-file empty">(no files)</li>'}</ul>
-      </details>
-      ${activityLine}
-    </li>`;
-  }
-
-  const link = a.reviewUrl
-    ? `<a href="${escape(a.reviewUrl)}">${escape(a.name)}</a>`
-    : escape(a.name);
-  return `<li class="artifact ${a.openCount > 0 ? 'has-open' : ''}">
-    <div class="row">
-      <span class="art-glyph">${kind.glyph}</span>
-      <span class="art-name">${link}</span>
-      <span class="badges">${openBadge}${kindBadge}</span>
-    </div>
-    ${activityLine}
-  </li>`;
-}
-
-/**
- * Shared chrome for the two server-rendered pages (`/` and `/projects/<owner>`).
- *
- * Mobile is load-bearing here — this is the page Bryan lands on from his
- * phone. Every rule is authored for a 430px viewport first: single column, no
- * fixed widths, and `min-width: 0` on every flex child that holds prose, which
- * is the flex twin of the `minmax(0, 1fr)` grid footgun in
- * docs/product/design-mobile.md. Nothing here reaches into styles.css: the
- * landing page is server-rendered and owns its own styles, so the client
- * bundle's cascade cannot move it.
- */
-const LANDING_CSS = `
-*{box-sizing:border-box}
-body{font:15px/1.55 system-ui,-apple-system,sans-serif;margin:0 auto;max-width:760px;padding:20px 14px 40px;color:#1b1f23;overflow-wrap:anywhere}
-h1{font-size:20px;margin:0 0 2px}
-h2{font-size:12px;font-weight:600;letter-spacing:.04em;text-transform:uppercase;color:#57606a;margin:26px 0 8px;display:flex;flex-wrap:wrap;align-items:baseline;gap:8px}
-.count{font-size:11px;font-weight:500;letter-spacing:0;text-transform:none;color:#8b95a1}
-.summary{color:#6e7781;font-size:12px;margin:0 0 4px}
-ul{padding:0;list-style:none;margin:0}
-a{color:#2e7dd7;text-decoration:none}
-a:hover{text-decoration:underline}
-.grp{border-bottom:1px solid #f0f2f4}
-.grp-link{display:block;padding:10px 4px;color:inherit;min-height:44px}
-.grp-link:hover{text-decoration:none;background:#f8f9fb}
-.grp-row{display:flex;align-items:baseline;gap:8px}
-.grp-name{flex:1;min-width:0;font-weight:600;font-size:15px;color:#2e7dd7;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.grp-meta{color:#8b95a1;font-size:12px;margin-top:2px}
-.grp-flex{display:flex;align-items:center;gap:8px}
-.grp-flex .grp-link{flex:1;min-width:0}
-.needs{flex-shrink:0;display:inline-flex;align-items:center;gap:5px;font-size:12px;font-weight:600;color:#bf5b16;background:#fff1e6;border-radius:99px;padding:6px 12px;min-height:32px}
-.needs:hover{text-decoration:none;background:#ffe7d1}
-.needs .n{background:#e36f1e;color:#fff;border-radius:99px;font-size:11px;min-width:18px;height:18px;display:inline-flex;align-items:center;justify-content:center;padding:0 5px}
-.allbar{display:flex;align-items:center;gap:10px;background:#fff8f2;border:1px solid #f5d9c2;border-radius:10px;padding:10px 14px;margin:10px 0 14px}
-.allsum{flex:1;min-width:0;font-size:13px;font-weight:600;color:#8a4a12}
-.allgo{flex-shrink:0;font-size:13px;font-weight:600;padding:7px 4px}
-.badge{font-size:10.5px;padding:1.5px 7px;border-radius:99px;background:#f6f8fa;color:#6e7781;font-weight:500;flex-shrink:0}
-.badge-open{background:#fff1e6;color:#bf5b16}
-.badge-resolved{background:#e8f5ed;color:#2da44e}
-.badge-kind{background:#f6f8fa;color:#8b95a1}
-.badges{display:flex;gap:4px;flex-shrink:0;flex-wrap:wrap;justify-content:flex-end}
-li.artifact{padding:9px 0;border-bottom:1px solid #f3f4f6}
-li.artifact.has-open{border-left:3px solid #e36f1e;padding-left:10px;margin-left:-13px}
-.row{display:flex;align-items:baseline;gap:8px}
-.art-glyph{flex-shrink:0;font-size:13px;width:1.4em;text-align:center}
-.art-name{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-/* 36px minimum tap target (design-mobile.md). An inline link is ~23px tall,
-   so every link a thumb aims at gets vertical padding rather than a bigger
-   font — this page is read on a phone. */
-.art-name a{font-weight:600;display:inline-block;padding:7px 0}
-.art-sub{color:#8b95a1;font-size:11px;flex-shrink:0}
-.meta{color:#8b95a1;font-size:11px;margin-top:3px;padding-left:1.4em}
-details > summary{display:flex;align-items:baseline;gap:8px;cursor:pointer;list-style:none;min-height:36px;align-items:center}
-details > summary::-webkit-details-marker{display:none}
-details > summary::before{content:'\\25B8';color:#8b95a1;font-size:11px;flex-shrink:0}
-details[open] > summary::before{content:'\\25BE'}
-/* The landing page's folded sections (inactive workspaces, review docs).
-   Styled like the h2s so a fold reads as a section heading you can open —
-   quiet on purpose: the page is the active list, the folds are the archive. */
-.fold{margin-top:26px}
-.fold > summary{font-size:12px;font-weight:600;letter-spacing:.04em;text-transform:uppercase;color:#57606a}
-.ws-files{margin:6px 0 0 1.8em;border-left:1px solid #eef0f2;padding-left:10px}
-.ws-file{display:flex;align-items:baseline;gap:8px;padding:3px 0}
-.ws-file-name{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px}
-.ws-file-name a{display:inline-block;padding:9px 0}
-.ws-file.empty{color:#8b95a1;font-style:italic}
-.empty{color:#6e7781;padding:18px 0;font-style:italic;font-size:13px}
-.back{font-size:13px;display:inline-block;padding:8px 0;margin-bottom:4px}
-footer{margin-top:28px;color:#8b95a1;font-size:11px}
-`;
-
-function landingShell(
-  title: string,
-  body: string,
-  sentry: BrowserSentryConfig | null,
-  assets: AssetManifest = {},
-): string {
-  const sentryTags = sentryHeadTags(sentry, 'landing', assets);
-  const sentryMeta = sentryTags ? `\n${sentryTags}` : '';
-  // The manifest belongs here most of all: `/` is the manifest's own
-  // `start_url`, so this is the page a Home Screen install lands on and the
-  // most likely page somebody installs FROM.
-  return `<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>${escape(title)}</title>
-<link rel="manifest" href="/manifest.webmanifest">
-<link rel="apple-touch-icon" href="/apple-touch-icon.png">
-<meta name="theme-color" content="#2e7dd7">${sentryMeta}
-<style>${LANDING_CSS}</style>
-${body}
-<footer>POST /api/docs · /widget.iife.js · /demos/mockup</footer>`;
-}
-
-function renderLandingWorkspaceRow(w: LandingWorkspaceRow): string {
-  // Thread/task activity, never `meta.lastActivityAt` — the collector's
-  // header says why. The whole row is the tap target, not the name inside
-  // it: an inline text link is ~21px tall, under the 36px floor in
-  // docs/product/design-mobile.md, and this is the page Bryan opens on a
-  // phone.
-  const activity =
-    w.lastActivity > 0 ? `active ${formatRelative(w.lastActivity)}` : 'no activity yet';
-  // The chip is a SIBLING anchor, not a child — a nested <a> is invalid HTML
-  // and browsers split it unpredictably. The row opens Home; the chip opens
-  // the same Home with the walkthrough already running (?walk=1), so
-  // answering never needs a second tap to find the queue.
-  const chip =
-    (w.waiting ?? 0) > 0
-      ? `<a class="needs" href="${escape(`${w.href}?walk=1`)}"><span class="n">${w.waiting}</span> for you</a>`
-      : '';
-  return `<li class="grp grp-flex"><a class="grp-link" href="${escape(w.href)}">
-    <div class="grp-row"><span class="grp-name">${escape(w.name)}</span></div>
-    <div class="grp-meta">${escape(activity)}</div>
-  </a>${chip}</li>`;
-}
-
-function renderLandingProjectLink(p: LandingProjectLink): string {
-  return `<li class="grp"><a class="grp-link" href="${escape(p.href)}">
-    <div class="grp-row"><span class="grp-name">${escape(p.label)}</span></div>
-  </a></li>`;
-}
-
-function renderLanding(
-  model: LandingModel,
-  sentry: BrowserSentryConfig | null,
-  notesWorkspaceName: string,
-  assets: AssetManifest = {},
-): string {
-  const days = Math.round(model.windowMs / 86_400_000);
-  // Retired boards are NOT in this denominator. "Nothing active, 3 inactive
-  // below" has to mean three rows a reader can go and look at; counting
-  // deliberately stood-down boards in it would make the empty state overstate
-  // what is still live.
-  const total = model.active.length + model.inactive.length;
-  // A cut list states what it cut: the empty state names the denominator,
-  // and the inactive fold carries its count — "An empty list is a clearance
-  // only if you also render the denominator" (docs/process/learnings.md).
-  const active =
-    model.active.length === 0
-      ? total === 0
-        ? '<div class="empty">No workspaces yet.</div>'
-        : `<div class="empty">Nothing active in the last ${days} days (${total} inactive below).</div>`
-      : `<ul>${model.active.map(renderLandingWorkspaceRow).join('')}</ul>`;
-  const inactive =
-    model.inactive.length === 0
-      ? ''
-      : `<details class="fold"><summary>Inactive workspaces <span class="count">${model.inactive.length}</span></summary>
-<ul>${model.inactive.map(renderLandingWorkspaceRow).join('')}</ul></details>`;
-  // Folded, not hidden — a retired board is still readable, which is the
-  // whole difference between retiring one and deleting it. The count is the
-  // denominator the empty state above deliberately leaves out.
-  const retired =
-    model.retired.length === 0
-      ? ''
-      : `<details class="fold"><summary>Retired workspaces <span class="count">${model.retired.length}</span></summary>
-<ul>${model.retired.map(renderLandingWorkspaceRow).join('')}</ul></details>`;
-  // The review-doc index stays reachable — one fold of per-project links,
-  // not a browser. The "hundreds of bound review items" live behind
-  // /projects/<owner>, fetched only when somebody opens one.
-  const projects =
-    model.projects.length === 0
-      ? ''
-      : `<details class="fold"><summary>Review docs by project <span class="count">${model.projects.length}</span></summary>
-<ul>${model.projects.map(renderLandingProjectLink).join('')}</ul></details>`;
-  // Every row with a waiting count, page order (active first, then the
-  // quiet fold — an item on a quiet board still waits). The bar totals them
-  // and "Review all" starts the walkthrough in the most recently active one,
-  // handing the rest over via ?then= so the client chains the queues
-  // without coming back here between boards. Retired boards are OUT — the
-  // collector never computes a waiting count for one, so they can carry no
-  // chip, no share of the total, and no place in the chain; this filter is
-  // the belt to that suspender.
-  const waitingRows = [...model.active, ...model.inactive].filter((w) => (w.waiting ?? 0) > 0);
-  const waitingTotal = waitingRows.reduce((sum, w) => sum + (w.waiting ?? 0), 0);
-  const firstWaiting = waitingRows[0];
-  const allHref = firstWaiting
-    ? `${firstWaiting.href}?walk=1${
-        waitingRows.length > 1
-          ? `&then=${waitingRows
-              .slice(1)
-              .map((w) => encodeURIComponent(w.id))
-              .join(',')}`
-          : ''
-      }`
-    : '';
-  const allbar = firstWaiting
-    ? `<div class="allbar"><span class="allsum">${waitingTotal} waiting on you${
-        waitingRows.length > 1 ? ` across ${waitingRows.length} workspaces` : ''
-      }</span><a class="allgo" href="${escape(allHref)}">Review all ›</a></div>`
-    : '';
-  return landingShell(
-    'Workspaces',
-    `<h1>Workspaces</h1>
-<div class="summary">Active in the last ${days} days, most recent first</div>
-<meeting-banner workspace-name="${escape(notesWorkspaceName)}"></meeting-banner>
-<script type="module" src="${assetHref(assets, 'landing.js')}"></script>
-${allbar}
-${active}
-${inactive}
-${retired}
-${projects}`,
-    sentry,
-    assets,
-  );
-}
-
-/** The "artifacts on demand" half: one project's contents, fetched only when
- *  somebody asks for that project. Keeping this off `/` is what took the
- *  landing response from ~910 KB to a few KB — the nested per-file lists were
- *  most of the bytes and none of the reason anyone opened the page. */
-function renderProjectPage(
-  owner: string,
-  artifacts: LandingArtifact[],
-  sentry: BrowserSentryConfig | null,
-  assets: AssetManifest = {},
-): string {
-  const body =
-    artifacts.length === 0
-      ? '<div class="empty">No artifacts in this project.</div>'
-      : `<ul>${artifacts.map(renderLandingArtifact).join('')}</ul>`;
-  const open = artifacts.reduce((sum, a) => sum + a.openCount, 0);
-  return landingShell(
-    `${projectLabel(owner)} · Workspaces`,
-    `<a class="back" href="/">← all workspaces</a>
-<h1>${escape(projectLabel(owner))}</h1>
-<div class="summary">${escape(owner)}</div>
-<div class="summary">${artifacts.length} artifact${artifacts.length === 1 ? '' : 's'} · ${open} open thread${open === 1 ? '' : 's'}</div>
-${body}`,
-    sentry,
-    assets,
-  );
-}
-
-function formatRelative(ts: number): string {
-  const diff = Date.now() - ts;
-  if (diff < 60_000) return 'just now';
-  if (diff < 3_600_000) return `${Math.round(diff / 60_000)}m ago`;
-  if (diff < 86_400_000) return `${Math.round(diff / 3_600_000)}h ago`;
-  if (diff < 7 * 86_400_000) return `${Math.round(diff / 86_400_000)}d ago`;
-  const d = new Date(ts);
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
-}
-
-// Viewport presets for ?mobile=<preset>. CSS px sizes (logical).
-const DEVICE_PRESETS: Record<string, { w: number; h: number; label: string }> = {
-  iphone16pm: { w: 440, h: 956, label: 'iPhone 16 Pro Max' },
-  iphone16: { w: 393, h: 852, label: 'iPhone 16' },
-  iphone15: { w: 393, h: 852, label: 'iPhone 15' },
-  iphonese: { w: 375, h: 667, label: 'iPhone SE' },
-  pixel8: { w: 412, h: 915, label: 'Pixel 8' },
-};
-
-function renderDeviceFrame(presetName: string, url: URL): string {
-  const preset = DEVICE_PRESETS[presetName] ?? DEVICE_PRESETS.iphone16pm!;
-  // Build the inner URL with the mobile param stripped to avoid recursion
-  const innerParams = new URLSearchParams(url.searchParams);
-  innerParams.delete('mobile');
-  const innerQs = innerParams.toString();
-  const innerUrl = `${url.pathname}${innerQs ? `?${innerQs}` : ''}`;
-  const asParam = url.searchParams.get('as') ?? 'bryan';
-  return `<!doctype html>
-<html lang="en"><head>
-<meta charset="utf-8" />
-<title>${escape(preset.label)} · ${escape(url.pathname)}</title>
-<style>
-  html, body { margin: 0; height: 100%; background: #1e2228; font-family: -apple-system, BlinkMacSystemFont, system-ui, sans-serif; color: #eee; }
-  body { display: flex; flex-direction: column; align-items: flex-start; gap: 8px; padding: 8px; box-sizing: border-box; overflow: auto; }
-  .bar { display: flex; flex-wrap: wrap; gap: 6px; font-size: 11px; color: #cfd3d9; }
-  .bar .label { background: rgba(0,0,0,0.5); padding: 3px 9px; border-radius: 99px; }
-  .bar a { color: #8fbfff; text-decoration: none; background: rgba(0,0,0,0.5); padding: 3px 9px; border-radius: 99px; }
-  .bar a:hover { background: rgba(0,0,0,0.75); }
-  .bar a.current { background: #8fbfff; color: #1e2228; }
-  .device {
-    width: ${preset.w}px;
-    height: ${preset.h}px;
-    background: #fff;
-    border: 1px solid #3a3e45;
-    border-radius: 18px;
-    box-shadow: 0 14px 40px rgba(0,0,0,0.45);
-    overflow: hidden;
-    flex: 0 0 auto;
-  }
-  .device iframe {
-    width: 100%;
-    height: 100%;
-    border: 0;
-    display: block;
-    background: #fff;
-  }
-</style>
-</head><body>
-<div class="bar">
-  <span class="label">${escape(preset.label)} · ${preset.w}×${preset.h}</span>
-  <a href="?as=${escape(asParam)}">← exit</a>
-  <a class="${presetName === 'iphone16pm' ? 'current' : ''}" href="?mobile=iphone16pm&as=${escape(asParam)}">16 Pro Max</a>
-  <a class="${presetName === 'iphone16' ? 'current' : ''}" href="?mobile=iphone16&as=${escape(asParam)}">16</a>
-  <a class="${presetName === 'iphonese' ? 'current' : ''}" href="?mobile=iphonese&as=${escape(asParam)}">SE</a>
-  <a class="${presetName === 'pixel8' ? 'current' : ''}" href="?mobile=pixel8&as=${escape(asParam)}">Pixel 8</a>
-</div>
-<div class="device"><iframe src="${escape(innerUrl)}" allow="clipboard-write"></iframe></div>
-</body></html>`;
-}
-
-function escape(s: string): string {
-  return s.replace(/[&<>"']/g, (c) => {
-    const map: Record<string, string> = {
-      '&': '&amp;',
-      '<': '&lt;',
-      '>': '&gt;',
-      '"': '&quot;',
-      "'": '&#39;',
-    };
-    return map[c] ?? c;
-  });
 }
