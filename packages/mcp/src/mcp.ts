@@ -25,6 +25,7 @@ import {
   stalledLine,
 } from './nudge-line.ts';
 import type { HeldRowPayload, StalledRowPayload } from './nudge-line.ts';
+import { parseCapArg } from './parallelism-cap.ts';
 import { isSelfAuthoredEvent } from './self-authored.ts';
 import { type SseCursor, deliverThenCommit } from './sse-cursor.ts';
 import { projectTaskRows } from './task-projection.ts';
@@ -110,7 +111,7 @@ function suggestionAuthor(): { id: string; name: string; color: string } {
  * bundle than the deploy source would install. A second literal would be a
  * fourth version site, and this file's history is that version sites drift.
  */
-const PLUGIN_VERSION = '0.1.144';
+const PLUGIN_VERSION = '0.1.145';
 
 /**
  * One nonce per PROCESS, minted at module load and sent on every attach.
@@ -2127,6 +2128,24 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           taskId: { type: 'string', description: 'The task whose dispatch to close.' },
         },
         required: ['taskId'],
+      },
+    },
+    {
+      name: 'set_parallelism_cap',
+      description:
+        'Set how many builders a board may have dispatched at once — the dispatch rule the lead skill describes. Every board starts on the default (4); lower it to keep this board from starving higher-priority projects, raise it when there is room. The change is recorded with you as the actor and takes effect on the next dispatch: nothing running is touched, register_dispatch simply refuses past the new number. Answers with the full view — the cap, the slots in use and who holds them, how many are free, and lastChange (who moved it, when, from what) — so you see in the same reply whether the board is already over it. The floor is one; pausing a board is retire_workspace, not a cap of zero.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          workspaceId: { type: 'string' },
+          cap: {
+            type: 'integer',
+            minimum: 1,
+            description:
+              'The new cap: a positive integer. get_workspace shows the current one and the default.',
+          },
+        },
+        required: ['workspaceId', 'cap'],
       },
     },
     {
@@ -4364,6 +4383,40 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
       case 'close_dispatch': {
         const { taskId } = a as { taskId: string };
         return ok(await http('DELETE', `/api/dispatches/${encodeURIComponent(taskId)}`));
+      }
+      case 'set_parallelism_cap': {
+        const { workspaceId, cap: rawCap } = a as { workspaceId: string; cap: unknown };
+        // Refuse a bad cap here, with a sentence, rather than relaying the
+        // route's 400 as a thrown status. Nothing is sent for a value that
+        // could never land.
+        const parsed = parseCapArg(rawCap);
+        if (!parsed.ok) return err(parsed.error);
+        // The same PUT the board's panel and Team Lead's REST calls use, so
+        // the change is recorded through the one store method with THIS
+        // agent as the actor — `author: AUTHOR`, as every write tool sends.
+        const res = (await http(
+          'PUT',
+          `/api/workspaces/${encodeURIComponent(workspaceId)}/parallelism-cap`,
+          { cap: parsed.cap, author: AUTHOR },
+        )) as {
+          cap: number;
+          isDefault: boolean;
+          default: number;
+          inUse: number;
+          free: number;
+          holders: Array<{ taskId: string; title?: string; agentName?: string }>;
+          lastChange?: { actor: unknown; ts: number; from: number; to: number };
+        };
+        return ok({
+          workspaceId,
+          cap: res.cap,
+          isDefault: res.isDefault,
+          default: res.default,
+          inUse: res.inUse,
+          free: res.free,
+          holders: res.holders,
+          lastChange: res.lastChange,
+        });
       }
       case 'request_plugin_refresh': {
         // No arguments reach the process this runs — the server's argv is
