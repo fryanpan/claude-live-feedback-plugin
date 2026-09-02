@@ -20,6 +20,8 @@ export * from './ui-shared.ts';
 export * from './ws-client.ts';
 export * from './md-links.ts';
 export * from './ws-link.ts';
+export * from './spinoff.ts';
+export * from './lead-presence.ts';
 export * as anchors from './anchor/index.ts';
 export * as prose from './prose.ts';
 export * as suggestOps from './suggest-ops.ts';

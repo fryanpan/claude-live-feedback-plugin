@@ -150,6 +150,14 @@ export class SseHub {
     return Object.fromEntries(this.lastEver);
   }
 
+  /**
+   * Told when an AGENT's stream opens or closes on a channel — the one
+   * liveness change that emits no store event (`agentsOn` is a probe, read
+   * on demand). The lead-presence monitor listens so a doc page learns the
+   * seat is live the moment the lead's stream is up, not on the next sweep.
+   */
+  onAgentStreams: ((docId: string, agentId: string) => void) | null = null;
+
   add(docId: string, sink: Sink, shareId?: string, agentId?: string): () => void {
     let set = this.byDoc.get(docId);
     if (!set) {
@@ -160,14 +168,17 @@ export class SseHub {
       ...(shareId !== undefined ? { shareId } : {}),
       ...(agentId !== undefined ? { agentId } : {}),
     });
+    if (agentId !== undefined) this.onAgentStreams?.(docId, agentId);
     return () => this.remove(docId, sink);
   }
 
   remove(docId: string, sink: Sink): void {
     const set = this.byDoc.get(docId);
     if (!set) return;
+    const agentId = set.get(sink)?.agentId;
     set.delete(sink);
     if (set.size === 0) this.byDoc.delete(docId);
+    if (agentId !== undefined) this.onAgentStreams?.(docId, agentId);
   }
 
   /**

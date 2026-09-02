@@ -7160,6 +7160,63 @@ body.is-reading-width #editor > .ProseMirror {
    controls but the speaker tags — the controls live behind the button the
    strip grows out of. */
 
+/* The lead banner (src/lead-banner.ts): a meeting doc's one standing line
+   while nobody is listening. Sticky at the top of the scrolling editor so
+   it is there whichever line the person is on, and gone — not dimmed — the
+   moment a lead attaches. Same secondary register as the strip: panel
+   background, sans at 13px, one row. It must never take a click meant for
+   the prose under it, and it is not dismissable: the state it names is the
+   thing to fix, and hiding the line would hide the queue. */
+.lead-banner {
+  position: sticky;
+  top: 0;
+  z-index: 3;
+  /* #editor is a two-column grid on wide screens (prose + the markup
+     margin, `.redline-layout`); the line spans both, or the prose would be
+     pushed into the margin column beside it. */
+  grid-column: 1 / -1;
+  align-self: start;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: -12px 0 20px;
+  padding: 8px 14px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--panel-bg, var(--bg));
+  color: var(--fg-muted);
+  font-family: var(--font-sans, system-ui, sans-serif);
+  font-size: 13px;
+  line-height: 1.35;
+  box-shadow: var(--shadow-sm, 0 1px 2px rgba(0, 0, 0, 0.08));
+  user-select: none;
+}
+.lead-banner[hidden] {
+  display: none;
+}
+.lead-banner__dot {
+  flex: 0 0 auto;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #d98b1f;
+}
+.lead-banner__text {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.lead-banner__text strong {
+  color: var(--fg);
+  font-weight: 600;
+}
+@media (max-width: 1100px) {
+  .lead-banner {
+    margin: -8px 0 16px;
+    padding: 7px 12px;
+    font-size: 12px;
+  }
+}
+
 .meeting-record {
   flex: none;
   display: inline-flex;
