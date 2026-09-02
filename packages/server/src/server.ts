@@ -855,9 +855,18 @@ export interface ServerOptions {
   meetingBot?: RecallClient;
   /**
    * Shared secret for verifying Recall's status webhooks (Svix format).
-   * When set, an unsigned or badly signed webhook is REFUSED; when unset the
-   * route falls back to the bot id being unguessable, which is weaker. The
-   * operator sets `RECALL_WEBHOOK_SECRET`.
+   *
+   * **The webhook route is armed only while this is set.** Unset, `POST
+   * /recall/status` answers 404 on every host — the signature is the route's
+   * only credential, so without one there is no door to knock on. There is
+   * no unsigned fallback: this comment used to describe one ("falls back to
+   * the bot id being unguessable"), and that path was removed because an
+   * unauthenticated caller on the LAN or the tailnet could inject bot-status
+   * and calendar-sync events outside the replay guard.
+   *
+   * So leaving it unset does not degrade the webhook, it turns it off, and
+   * the symptom is a bot whose status never updates. The operator sets
+   * `RECALL_WEBHOOK_SECRET` to the signing secret from the Recall dashboard.
    */
   meetingBotWebhookSecret?: string;
   /**
