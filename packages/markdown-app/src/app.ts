@@ -70,6 +70,7 @@ import { readSuggestModePref, setSuggesting, writeSuggestModePref } from './sugg
 import { registerMarkdownMount } from './surface-registry.ts';
 import { type TableMenuItem, tableMenuItems } from './table-menu.ts';
 import { watchTaskLinkStatuses } from './task-link-chips.ts';
+import { threadCards } from './thread-morph.ts';
 import { renderWorkspaceTree } from './workspace-tree.ts';
 
 const DEFAULT_WS_PATH = (docId: string, type: string) =>
@@ -333,12 +334,26 @@ async function mountMarkdown(ctx: MountContext): Promise<void> {
   // information scent for what the reader cannot see (comment-hints.ts).
   // Jumping goes the same route a tap on the highlight takes: scroll, pulse,
   // and open the card where it lives (balloon above 1100px, inline below).
+  const spanFor = (id: string): HTMLElement | null =>
+    editor.editor.view.dom.querySelector<HTMLElement>(
+      `.thread-range[data-thread-id="${CSS.escape(id)}"]`,
+    );
   const jumpToThread = (id: string): void => {
     reviewChrome.refreshThreadDecorations(id);
     const range = reviewChrome.resolveThreadRange(id);
     if (range) {
       editor.scrollToPos(range.from);
       editor.pulseRange(range.from, range.to);
+    }
+    // A jump from an off-screen hint lands the SENTENCE a third of the way
+    // down, not merely inside the edge: the editor's own scrollIntoView is
+    // minimal, and a sentence a few pixels above the fold stays hidden
+    // behind the hint that was tapped to reach it.
+    const span = spanFor(id);
+    if (span) {
+      const r = span.getBoundingClientRect();
+      const s = editorMount.getBoundingClientRect();
+      editorMount.scrollTop += r.top - s.top - s.height * 0.35;
     }
     if (reviewChrome.openInModal(id)) return;
     if (margin.revealThreadBalloon(id)) return;
@@ -357,8 +372,8 @@ async function mountMarkdown(ctx: MountContext): Promise<void> {
       document.body,
     chipEl: document.getElementById('doc-asks'),
     threads: () => reviewChrome.collectThreads(),
-    spanFor: (id) =>
-      editor.editor.view.dom.querySelector(`.thread-range[data-thread-id="${CSS.escape(id)}"]`),
+    spanFor,
+    cardsFor: (id) => threadCards(id),
     isNew: (t) => reviewChrome.seen.isNew(t),
     markSeen: (t) => reviewChrome.markSeen(t.id),
     onSeen: () => margin.scheduleRelayout(),

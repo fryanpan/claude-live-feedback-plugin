@@ -162,16 +162,23 @@ export function threadHintItem(
 export interface CommentHintsOpts {
   /** The doc's scroll container — the viewport the counts are against. */
   scroller: HTMLElement;
-  /** The balloon column; the wide hints are placed inside it. Null when the
-   *  surface has no margin (the hints then float at every width). */
+  /** The balloon column; on a wide screen the hints line up over it. Null
+   *  when the surface has no margin (the hints then sit at the pane's edges
+   *  at every width). */
   marginEl: HTMLElement | null;
-  /** Where the phone-width floating hints attach — the editor pane. */
+  /** Where the hints attach — the editor pane (`position: relative`), which
+   *  does not scroll; the doc scrolls inside it. */
   floatParent: HTMLElement;
   /** The top-bar "N questions for you" chip, if the page has one. */
   chipEl: HTMLElement | null;
   threads: () => Thread[];
   /** The thread's rendered highlight, or null when it has none. */
   spanFor: (id: string) => Element | null;
+  /** The thread's cards (balloon, inline card, panel row). A card in view
+   *  counts as having SEEN the thread even when its sentence has scrolled
+   *  off — on a phone the card sits under the sentence, and the reader is
+   *  looking at the card. Counts stay keyed to the sentence. */
+  cardsFor?: (id: string) => Element[];
   isNew: (t: Thread) => boolean;
   /** Record as seen; returns true when the thread stops being new. */
   markSeen: (t: Thread) => boolean;
@@ -182,7 +189,8 @@ export interface CommentHintsOpts {
   dockEl?: () => HTMLElement | null;
   scope: MountScope;
   dwellMs?: number;
-  /** Is the balloon margin showing at this width? Decides which pair renders. */
+  /** Is the balloon margin showing at this width? Decides where the pair
+   *  sits: over the margin column, or at the pane's corners. */
   marginVisible: () => boolean;
 }
 
@@ -243,10 +251,10 @@ function renderHint(el: HTMLElement, t: Tally, dir: 'above' | 'below'): void {
   el.appendChild(arrow);
 }
 
-function makeHint(dir: 'above' | 'below', float: boolean): HTMLButtonElement {
+function makeHint(dir: 'above' | 'below'): HTMLButtonElement {
   const b = document.createElement('button');
   b.type = 'button';
-  b.className = `lf-offscreen lf-offscreen-${dir === 'above' ? 'top' : 'bottom'}${float ? ' lf-offscreen-float' : ''}`;
+  b.className = `lf-offscreen lf-offscreen-${dir === 'above' ? 'top' : 'bottom'}`;
   b.dataset.n = '0';
   b.hidden = true;
   return b;
@@ -256,19 +264,17 @@ export function mountCommentHints(opts: CommentHintsOpts): CommentHintsHandle {
   const { scroller, scope } = opts;
   const dwell = opts.dwellMs ?? SEEN_DWELL_MS;
 
-  // The wide pair sits inside the margin as its first and last flex children;
-  // balloons are absolutely positioned and never displace them.
-  const marginTop = opts.marginEl ? makeHint('above', false) : null;
-  const marginBot = opts.marginEl ? makeHint('below', false) : null;
-  if (opts.marginEl && marginTop && marginBot) {
-    opts.marginEl.prepend(marginTop);
-    opts.marginEl.append(marginBot);
-  }
-  const floatTop = makeHint('above', true);
-  const floatBot = makeHint('below', true);
+  // One pair, absolutely positioned in the pane (which does not scroll), so
+  // a balloon — itself absolutely positioned inside the scrolling margin —
+  // can never sit on top of a hint, and a hint never joins the balloon flow.
+  // A sticky hint inside the margin was tried first: it stuck to the wrong
+  // edge and the balloons overlapped it.
+  const floatTop = makeHint('above');
+  const floatBot = makeHint('below');
   opts.floatParent.append(floatTop, floatBot);
 
   let last: OffscreenSplit | null = null;
+  let lastVisible = new Set<string>();
   let lastQuestions = -1;
   let doneTimer: ReturnType<typeof setTimeout> | null = null;
   const dwellTimers = new Map<string, ReturnType<typeof setTimeout>>();
@@ -295,15 +301,28 @@ export function mountCommentHints(opts: CommentHintsOpts): CommentHintsHandle {
     return { list: withPos.map((x) => x.item), byId };
   }
 
-  function placeFloats(): void {
+  function placeFloats(wide: boolean): void {
+    const pane = opts.floatParent.getBoundingClientRect();
     const r = scroller.getBoundingClientRect();
-    floatTop.style.top = `${Math.max(0, r.top) + 8}px`;
+    floatTop.style.top = `${Math.max(0, r.top - pane.top) + 8}px`;
     // Clear of the action dock (Make Plan and friends) when it is showing;
     // otherwise sit just above the scroller's bottom edge.
     const dock = opts.dockEl?.() ?? null;
     const dockRect = dock && !dock.hidden ? dock.getBoundingClientRect() : null;
     const clearFrom = dockRect && dockRect.height > 0 ? dockRect.top - 8 : r.bottom - 12;
-    floatBot.style.bottom = `${Math.max(0, window.innerHeight - clearFrom)}px`;
+    floatBot.style.bottom = `${Math.max(0, pane.bottom - clearFrom)}px`;
+    // Over the balloon column on a wide screen; at the pane's corners (the
+    // stylesheet's insets) on a phone, where there is no column.
+    const m = wide && opts.marginEl ? opts.marginEl.getBoundingClientRect() : null;
+    for (const el of [floatTop, floatBot]) {
+      if (m && m.width > 0) {
+        el.style.left = `${m.left - pane.left + 6}px`;
+        el.style.right = `${pane.right - m.right + 6}px`;
+      } else {
+        el.style.left = '';
+        el.style.right = '';
+      }
+    }
   }
 
   function armDwell(id: string, t: Thread): void {
@@ -314,8 +333,7 @@ export function mountCommentHints(opts: CommentHintsOpts): CommentHintsHandle {
         dwellTimers.delete(id);
         if (scope.disposed) return;
         // Still on screen? A flick past a comment must not mark it seen.
-        const split = last;
-        if (!split || !split.inView.includes(id)) return;
+        if (!lastVisible.has(id)) return;
         if (opts.markSeen(t)) opts.onSeen(id);
         refresh();
       }, dwell),
@@ -378,27 +396,26 @@ export function mountCommentHints(opts: CommentHintsOpts): CommentHintsHandle {
     const { list, byId } = items();
     const split = splitOffscreen(list, { top: 4, bottom: scroller.clientHeight - 4 });
     last = split;
-    const wide = opts.marginVisible();
-    if (marginTop && marginBot) {
-      renderHint(marginTop, split.above, 'above');
-      renderHint(marginBot, split.below, 'below');
-      if (!wide) {
-        marginTop.hidden = true;
-        marginBot.hidden = true;
-      }
-    }
-    // The float pair only where the margin is not: one hint per direction.
-    const floatActive = !wide || !opts.marginEl;
     renderHint(floatTop, split.above, 'above');
     renderHint(floatBot, split.below, 'below');
-    if (!floatActive) {
-      floatTop.hidden = true;
-      floatBot.hidden = true;
-    } else {
-      placeFloats();
-    }
-    // New threads in view start their dwell; ones that left it stop.
+    placeFloats(opts.marginVisible());
+    // New threads in view start their dwell; ones that left it stop. A card
+    // in view is as good as the sentence in view.
     const visible = new Set(split.inView);
+    if (opts.cardsFor) {
+      const v = scroller.getBoundingClientRect();
+      for (const it of list) {
+        if (visible.has(it.id) || !it.isNew) continue;
+        for (const card of opts.cardsFor(it.id)) {
+          const r = card.getBoundingClientRect();
+          if (r.height > 0 && r.top < v.bottom && r.bottom > v.top) {
+            visible.add(it.id);
+            break;
+          }
+        }
+      }
+    }
+    lastVisible = visible;
     for (const id of Array.from(dwellTimers.keys())) if (!visible.has(id)) disarm(id);
     for (const it of list) {
       if (!it.isNew) continue;
@@ -431,8 +448,8 @@ export function mountCommentHints(opts: CommentHintsOpts): CommentHintsHandle {
     if (any) opts.onJump(any.id);
   }
 
-  for (const el of [marginTop, floatTop]) if (el) scope.listen(el, 'click', () => jump('above'));
-  for (const el of [marginBot, floatBot]) if (el) scope.listen(el, 'click', () => jump('below'));
+  scope.listen(floatTop, 'click', () => jump('above'));
+  scope.listen(floatBot, 'click', () => jump('below'));
   if (opts.chipEl) scope.listen(opts.chipEl, 'click', jumpToFirstAsk);
 
   // Scroll is the hot path: one measurement per frame at most, and a settle
@@ -453,8 +470,6 @@ export function mountCommentHints(opts: CommentHintsOpts): CommentHintsHandle {
     if (doneTimer) clearTimeout(doneTimer);
     doneTimer = null;
     for (const id of Array.from(dwellTimers.keys())) disarm(id);
-    marginTop?.remove();
-    marginBot?.remove();
     floatTop.remove();
     floatBot.remove();
     if (opts.chipEl) opts.chipEl.hidden = true;

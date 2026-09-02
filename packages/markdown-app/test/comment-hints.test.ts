@@ -123,9 +123,20 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-function harness(threads: Thread[], tops: Record<string, number>, opts: { margin?: boolean } = {}) {
+function harness(
+  threads: Thread[],
+  tops: Record<string, number>,
+  opts: { margin?: boolean; dock?: number; cards?: Record<string, Element[]> } = {},
+) {
   const pane = document.createElement('section');
   pane.id = 'editor-pane';
+  pane.getBoundingClientRect = () =>
+    ({ top: 0, bottom: 820, left: 0, right: 800, width: 800, height: 820 }) as DOMRect;
+  const dock = document.createElement('div');
+  dock.className = 'plan-float';
+  dock.getBoundingClientRect = () =>
+    ({ top: opts.dock ?? 0, bottom: (opts.dock ?? 0) + 60, height: opts.dock ? 60 : 0 }) as DOMRect;
+  pane.appendChild(dock);
   const scroller = document.createElement('div');
   scroller.id = 'editor';
   pane.appendChild(scroller);
@@ -142,6 +153,8 @@ function harness(threads: Thread[], tops: Record<string, number>, opts: { margin
   });
   Object.defineProperty(scroller, 'clientHeight', { configurable: true, value: 600 });
   scroller.getBoundingClientRect = () => ({ top: 0, bottom: 600, left: 0, right: 800 }) as DOMRect;
+  marginEl.getBoundingClientRect = () =>
+    ({ top: 0, bottom: 600, left: 540, right: 800, width: 260 }) as DOMRect;
   const spans = new Map<string, HTMLElement>();
   for (const [id, top] of Object.entries(tops)) {
     const span = document.createElement('span');
@@ -168,6 +181,8 @@ function harness(threads: Thread[], tops: Record<string, number>, opts: { margin
     },
     onSeen: () => {},
     onJump: (id) => jumps.push(id),
+    dockEl: () => (opts.dock ? dock : null),
+    cardsFor: (id) => opts.cards?.[id] ?? [],
     scope,
     dwellMs: 50,
     marginVisible: () => opts.margin !== false,
@@ -178,19 +193,31 @@ function harness(threads: Thread[], tops: Record<string, number>, opts: { margin
 const q = (): ReviewPayload => ({ shape: 'review', headline: 'Why?' });
 
 describe('mountCommentHints', () => {
-  it('renders one hint per direction inside the margin, hidden when empty', () => {
+  it('renders one hint per direction in the pane, hidden when empty', () => {
     const h = harness([thread('a', [comment('x')]), thread('b', [comment('y')])], {
       a: -200,
       b: 300,
     });
-    const top = h.marginEl.querySelector<HTMLElement>('.lf-offscreen-top');
-    const bot = h.marginEl.querySelector<HTMLElement>('.lf-offscreen-bottom');
+    const top = h.pane.querySelector<HTMLElement>('.lf-offscreen-top');
+    const bot = h.pane.querySelector<HTMLElement>('.lf-offscreen-bottom');
     expect(top?.hidden).toBe(false);
     expect(top?.dataset.n).toBe('1');
     expect(top?.title).toBe('1 comment above');
     expect(bot?.hidden).toBe(true);
-    // The hint sits first in the column; balloons are appended after it.
-    expect(h.marginEl.firstElementChild).toBe(top);
+    // Never inside the margin: a balloon there could land on top of it.
+    expect(h.marginEl.querySelector('.lf-offscreen')).toBe(null);
+  });
+
+  it('lines the pair up over the balloon column on a wide screen, and lets go on a phone', () => {
+    const wide = harness([thread('a', [comment('x')])], { a: -200 });
+    const top = wide.pane.querySelector<HTMLElement>('.lf-offscreen-top');
+    // margin spans x 540..800 inside a pane at x 0..800 → 6px in from each edge.
+    expect(top?.style.left).toBe('546px');
+    expect(top?.style.right).toBe('6px');
+    const phone = harness([thread('a', [comment('x')])], { a: -200 }, { margin: false });
+    const ptop = phone.pane.querySelector<HTMLElement>('.lf-offscreen-top');
+    expect(ptop?.style.left).toBe('');
+    expect(ptop?.style.right).toBe('');
   });
 
   it('a tap jumps to the nearest off-screen thread in that direction', () => {
@@ -198,8 +225,8 @@ describe('mountCommentHints', () => {
       [thread('a', [comment('x')]), thread('b', [comment('y')]), thread('c', [comment('z')])],
       { a: -400, b: -100, c: 900 },
     );
-    h.marginEl.querySelector<HTMLElement>('.lf-offscreen-top')?.click();
-    h.marginEl.querySelector<HTMLElement>('.lf-offscreen-bottom')?.click();
+    h.pane.querySelector<HTMLElement>('.lf-offscreen-top')?.click();
+    h.pane.querySelector<HTMLElement>('.lf-offscreen-bottom')?.click();
     expect(h.jumps).toEqual(['b', 'c']);
   });
 
@@ -231,7 +258,7 @@ describe('mountCommentHints', () => {
       new1: 100,
       new2: 900,
     });
-    const bot = h.marginEl.querySelector<HTMLElement>('.lf-offscreen-bottom');
+    const bot = h.pane.querySelector<HTMLElement>('.lf-offscreen-bottom');
     expect(bot?.dataset.new).toBe('1');
     // Not yet — the dwell has not elapsed.
     expect(h.seen).toEqual([]);
@@ -241,10 +268,28 @@ describe('mountCommentHints', () => {
     expect(bot?.dataset.new).toBe('1');
   });
 
-  it('falls back to the floating pair when the margin is hidden', () => {
-    const h = harness([thread('a', [comment('x')])], { a: -200 }, { margin: false });
-    const float = h.pane.querySelector<HTMLElement>('.lf-offscreen-float.lf-offscreen-top');
-    expect(float?.hidden).toBe(false);
-    expect(float?.dataset.n).toBe('1');
+  it('a card in view counts as seen even when its sentence scrolled off (the phone)', () => {
+    vi.useFakeTimers();
+    const card = document.createElement('div');
+    card.getBoundingClientRect = () => ({ top: 40, bottom: 200, height: 160 }) as DOMRect;
+    const h = harness(
+      [thread('new1', [comment('x')])],
+      { new1: -300 },
+      { cards: { new1: [card] } },
+    );
+    const top = h.pane.querySelector<HTMLElement>('.lf-offscreen-top');
+    // The COUNT still says the sentence is above…
+    expect(top?.dataset.new).toBe('1');
+    vi.advanceTimersByTime(60);
+    // …but the reader has been looking at the card, so it is seen.
+    expect(h.seen).toEqual(['new1']);
+    expect(top?.dataset.new).toBe('0');
+  });
+
+  it('the bottom hint clears the action dock when one is showing', () => {
+    const h = harness([thread('a', [comment('x')])], { a: 900 }, { dock: 700 });
+    const bot = h.pane.querySelector<HTMLElement>('.lf-offscreen-bottom');
+    // pane bottom 820 − (dock top 700 − 8) = 128px up from the pane's edge.
+    expect(bot?.style.bottom).toBe('128px');
   });
 });
