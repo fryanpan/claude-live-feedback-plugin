@@ -18,8 +18,9 @@ find packages \( -name '*.ts' -o -name '*.css' \) \
   | xargs wc -l | awk '$1>500' | sort -rn
 ```
 
-Audited 2026-09-02 at `3a39db67`, and re-audited after A1 landed. **153 files**
-over 500 lines: 58 source and 95 test. **34 Split**, **119 Exception**.
+Audited 2026-09-02 at `3a39db67`, and re-audited after A1 and A2 landed.
+**154 files** over 500 lines: 59 source and 95 test. **34 Split**,
+**120 Exception**.
 
 Test files are judged by a narrower rule, in their own table below: a long test
 file is an exception unless two *unrelated harnesses* share it. Many `describe`
@@ -36,7 +37,8 @@ blocks over one set of fixtures is one harness, however long the file gets.
 | `packages/server/src/shells.ts` | 930 | Exception | One job: the HTML this server renders before any bundle runs. Every shell is a complete document with its own `<style>`, which is the point — nothing here may depend on an asset that has not loaded. Splitting per page would separate each shell from the `escape` / `landingShell` / `HTML_SHELL_HEADERS` trio all five share, and the file has no logic to test apart from the strings. |
 | `packages/server/src/routes/auth-share.ts` | 781 | Exception | Two families that look separable and are not: the share routes' refusals are stated in terms of the session the auth routes mint, and the order between them is behaviour (the browser-write refusal sits above every share route so a mint added later is covered by construction). A split would need the boundary written down in two headers instead of one, and the chain position asserted twice. |
 | `packages/server/src/routes/meetings-calendar.ts` | 562 | Exception | Just over the line, and one chain position: every `/api/docs/<id>/meetings...` pattern must be tried before the doc catch-all. Splitting meetings from calendar would make that one ordering constraint span two files for 62 lines of relief. |
-| `packages/server/src/tasks.ts` | 6880 | Split | `class TaskStore` runs 2255–6880 over four responsibilities; `review-items/` is the in-file precedent that extraction works. Agent presence and delivery queues (`attachAgent`, `heartbeat`, `leadSeatHealth`, `queueComment`) → `task-agents.ts` ~1300; goal-list machinery (`setGoalList`, `renameGoal`, `reorderGoals`, `setTaskGoal`) → `task-goals.ts` ~1000; the workspace registry (`createWorkspace`, `renameWorkspace`, `setLeadAgent`) → `workspace-store.ts` ~700. **L** |
+| `packages/server/src/workspace-store.ts` | 569 | Exception | The board registry, moved whole out of `tasks.ts` in A2 — create, rename, retire, delete, the lead seat and doc links, plus the pure `isRetired` / `retiredNotice` / `normalizeWorkspaceName` helpers that live here so `task-agents.ts` can import them without importing the file that imports it. Just over the line, and every verb reads or writes the same `WorkspaceState`; a split would put the retire refusal in one file and the delete that must honour it in another. |
+| `packages/server/src/tasks.ts` | 6560 | Split | `class TaskStore` still runs over three responsibilities; `review-items/` and now `workspace-store.ts` are the in-file precedent that extraction works. A2 took the workspace registry out. Still queued: agent presence and delivery queues (`attachAgent`, `heartbeat`, `leadSeatHealth`, `queueComment`) → `task-agents.ts`; goal-list machinery (`setGoalList`, `renameGoal`, `reorderGoals`, `setTaskGoal`) → `task-goals.ts`. **L** |
 | `packages/server/src/rooms.ts` | 6301 | Split | `class Rooms` is 641–6227 and mixes three jobs behind one `this`. Document mutation (`setDocContent`, `findAndReplace`, `createSuggestion`, `deleteSection`) → `doc-edit-ops.ts` ~1000; comments and threads (`postComment`, `resolve`, `reanchor`, `listThreads`) → `doc-threads.ts` ~1200; the workspace/bind/archive surface (`buildWorkspaceTree`, `archiveReview`, `attachFile`) → `rooms-workspaces.ts` ~1100. The room lifecycle (`getOrCreate`, `evictIdleRooms`, `flush`) stays. **L** |
 | `packages/server/src/voice.ts` | 2109 | Split | Two free-function groups sit above `VoiceRouter` with explicit args and no shared state: prompt building and reply parsing (`buildVoicePrompt`, `parseVoiceReply`, `renderResourceBlock`) → `voice-prompt.ts` ~450, and the write guardrail (`VOICE_ACTIONS`, `resolveVoiceAction`) → `voice-action.ts` ~350. **S** |
 | `packages/server/src/meeting-task-capture.ts` | 1348 | Split | Three responsibilities. The LLM contract (`buildTaskCapturePrompt`, `parseTaskCaptureReply`, the `*_PROMPT_RULE` constants) → `meeting-capture-prompt.ts` ~380; the transcript guards (`tickMentionsCandidate`, `phraseSpokenOnTick`, `captureWindow`) → `meeting-capture-guards.ts` ~200; `runTaskCapture` and the extractor stay ~600. **M** |
@@ -247,7 +249,7 @@ months, so splitting it buys almost nothing.
 | 4 | `packages/markdown-app/src/hub/hub-app.ts` | 3594 | 102 | L |
 | 5 | `packages/markdown-app/src/hub/hub-render.ts` | 2707 | 95 | M |
 | 6 | `packages/markdown-app/src/hub/hub-model.ts` | 3645 | 89 | M |
-| 7 | `packages/server/src/tasks.ts` | 6880 | 87 | L |
+| 7 | `packages/server/src/tasks.ts` | 6560 | 87 | L |
 | 8 | `packages/server/src/rooms.ts` | 6301 | 71 | L |
 | 9 | `packages/markdown-app/src/app.ts` | 1918 | 55 | M |
 | 10 | `packages/server/src/bin.ts` | 1013 | 50 | M |
