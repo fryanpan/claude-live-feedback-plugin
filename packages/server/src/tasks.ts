@@ -1077,8 +1077,30 @@ export type DescribedAttachment = AgentAttachment & {
 };
 
 /** The §4 record WITHOUT `endpoint`, plus derived state — what agent.*
- *  events carry and what a share visitor's REST read gets. */
-export type PublicAttachment = Omit<DescribedAttachment, 'endpoint'>;
+ *  events carry and what a share visitor's REST read gets.
+ *
+ *  ALLOWLIST, NOT DENYLIST, and named field by field on purpose. This
+ *  projection used to be `Omit<…, 'endpoint'>` over a spread, so a field
+ *  added to `AgentAttachment` later shipped to share and collab visitors
+ *  by default and stayed there until somebody noticed. `endpoint` is a
+ *  host-machine fact and was the one that had to go; the next one nobody
+ *  has written yet is the one this shape is for. Every neighbouring visitor
+ *  projection — `redactMetaForVisitor`, `redactHubWorkspaceForVisitor` —
+ *  was rewritten this way after a leak, and this was the last one that
+ *  had not been. */
+export type PublicAttachment = Pick<
+  DescribedAttachment,
+  | 'workspaceId'
+  | 'agentId'
+  | 'runtime'
+  | 'lastHeartbeat'
+  | 'lastToolCallAt'
+  | 'capabilities'
+  | 'pluginVersion'
+  | 'processId'
+  | 'state'
+  | 'stateLabel'
+>;
 
 export function publicAttachment(
   att: AgentAttachment,
@@ -1086,8 +1108,21 @@ export function publicAttachment(
   thresholds?: AttachmentThresholds,
 ): PublicAttachment {
   const state = attachmentState(att, now, thresholds);
-  const { endpoint: _endpoint, ...rest } = att;
-  return { ...rest, state, stateLabel: attachmentStateLabel(state) };
+  return {
+    workspaceId: att.workspaceId,
+    agentId: att.agentId,
+    runtime: att.runtime,
+    lastHeartbeat: att.lastHeartbeat,
+    lastToolCallAt: att.lastToolCallAt,
+    capabilities: att.capabilities,
+    // Absent stays absent rather than becoming an explicit null: silence on
+    // `pluginVersion` is what a reader takes as "older than the release that
+    // added it", and the wire shape is what says so.
+    ...(att.pluginVersion !== undefined ? { pluginVersion: att.pluginVersion } : {}),
+    ...(att.processId !== undefined ? { processId: att.processId } : {}),
+    state,
+    stateLabel: attachmentStateLabel(state),
+  };
 }
 
 /** The one-line "a fresh context learns the gates exist" summary returned on

@@ -237,13 +237,22 @@ export function browserCannotBindBody(): { error: string; message: string } {
  * actions with no browser flow: the board's own pages never call either, and
  * every real caller is an agent, a hook or a curl from the box.
  *
+ * **Every `/api/share*` mutation is the same class**, and was open until the
+ * pass-2 review. Minting a link (`POST /api/share/link`) or an Access share
+ * (`POST /api/share/workspace`) publishes a whole board to the internet;
+ * `POST /api/share/enabled` is the master switch and can RE-OPEN external
+ * access after the operator closed it; the TTL and revoke routes move a live
+ * credential's lifetime. No browser app in this repo calls any of them —
+ * every caller is the MCP tool layer or `scripts/share.ts`.
+ *
  * They are the same page-on-this-machine class the binding routes closed.
  * The loopback check on `/api/deploy` reads the PEER ADDRESS, which is
  * loopback for a page served from this machine; the cross-origin write gate
  * admits any machine-local hostname on any port; a session cookie is
  * same-site with a local dev origin and rides along; and no `cf-ray` is
  * present. None of those checks can tell a page from an agent — this one is
- * the one that does.
+ * the one that does. `/api/share*`'s own "local-only" comments describe the
+ * HOST class, which is a different question and does not answer this one.
  *
  * A SIBLING reason rather than `browser_cannot_bind`, because no host path
  * is being named here and a client matching on the string should not have to
@@ -255,6 +264,7 @@ export const BROWSER_CANNOT_OPERATE_ERROR = 'browser_cannot_operate';
 export function browserCannotOperateBody(): { error: string; message: string } {
   return {
     error: BROWSER_CANNOT_OPERATE_ERROR,
-    message: 'Deploying or refreshing the plugin is an agent action — pages cannot run it.',
+    message:
+      'Deploying, refreshing the plugin and changing sharing are agent actions — pages cannot run them.',
   };
 }

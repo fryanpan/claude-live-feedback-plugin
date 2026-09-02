@@ -10,10 +10,23 @@ import { join, relative, sep } from 'node:path';
  * back to a recursive readdir with a hardcoded skip set when the folder
  * isn't inside a git repo or git isn't available. Returns absolute paths.
  *
- * The two modes are not equally safe and the fallback knows it: there is no
- * `.gitignore` to honour outside a repo, so it applies `isSecretShapedName`
- * of its own. See `isListedFile` — this listing IS the rule for what a share
- * visitor may open.
+ * Both modes carry a floor, and they are not the same floor. See
+ * `isListedFile` — this listing IS the rule for what a share visitor may
+ * open, so a name that gets past here is a name a visitor can read.
+ *
+ * The GIT mode filters `isCredentialShapedName`: `--exclude-standard` honours
+ * the ignore files, but `--others` lists UNTRACKED files, so an `.env`,
+ * `.npmrc` or `id_rsa` sitting in a checkout that simply never ignored it is
+ * listed and served. That is the same credential-leaving-the-box failure the
+ * fallback's floor was added for, on the mode the doc called the safe one.
+ *
+ * The FALLBACK filters the wider `isSecretShapedName` — every dotfile on top
+ * of the credential names — because out there no ignore file was ever
+ * consulted. That wider rule is deliberately NOT applied to the git mode: a
+ * repo's dotfiles are tracked content somebody chose to commit and a reviewer
+ * has to be able to read (`.github/workflows`, `.claude/rules`, `.gitignore`
+ * itself), and hiding them would break the diff review rather than protect
+ * anything.
  */
 export function scanFolder(root: string): string[] {
   try {
@@ -26,7 +39,10 @@ export function scanFolder(root: string): string[] {
       const out: string[] = [];
       for (const line of res.stdout.split('\n')) {
         const rel = line.trim();
-        if (rel) out.push(join(root, rel));
+        if (!rel) continue;
+        const name = rel.split('/').pop() ?? rel;
+        if (isCredentialShapedName(name)) continue;
+        out.push(join(root, rel));
       }
       return out;
     }
@@ -46,16 +62,46 @@ export function scanFolderPaths(root: string): string[] {
 const SKIP_DIRS = new Set(['node_modules', 'dist', 'build', '.next', 'coverage']);
 
 /**
+ * Names that hold a credential often enough that neither listing mode may
+ * show them — the floor BOTH modes share.
+ *
+ * The git mode's guarantee is `--exclude-standard`, and it covers exactly the
+ * files somebody remembered to ignore. `--others` lists untracked files, so a
+ * `.env` written into a checkout that never had a rule for it is listed like
+ * any other new file, and `isListedFile` then lets a share visitor open it.
+ * The names below are the ones whose contents are a credential by convention
+ * rather than by accident, so refusing them costs a reviewer nothing they
+ * came for.
+ *
+ * Kept to NAMES, never contents: a scanner that reads files to guess would
+ * open every file in the repo on every rescan, and a miss would still be a
+ * credential leaving the box.
+ */
+function isCredentialShapedName(name: string): boolean {
+  const lower = name.toLowerCase();
+  // Environment and tool credential files, including their `.env.local` /
+  // `.env.production` suffixed forms.
+  if (lower === '.env' || lower.startsWith('.env.')) return true;
+  if (lower === '.npmrc' || lower === '.netrc' || lower === '.pgpass') return true;
+  if (lower === '.htpasswd' || lower === '.pypirc') return true;
+  // Key and certificate material, which carries no dot prefix.
+  if (lower.endsWith('.pem') || lower.endsWith('.key') || lower.endsWith('.p12')) return true;
+  if (lower.endsWith('.pfx') || lower.endsWith('.keystore')) return true;
+  // `id_rsa`, `id_ed25519`, and every other ssh private key's default name.
+  if (lower.startsWith('id_')) return true;
+  return false;
+}
+
+/**
  * Filenames the fallback refuses even though nothing ignored them.
  *
  * `isListedFile` is the rule that decides what a share visitor may open, and
- * the guarantee behind it is `git ls-files --exclude-standard` — a gitignored
- * `.env` never appears in the listing, so it can never be opened. Outside a
- * git repo there is no ignore file to honour and no `git` answer to trust, so
- * the fallback has to carry its own floor. It used to have none: the
- * dot-prefix test applied to DIRECTORIES only, so a `bind_folder` on a
- * non-repo directory listed `.env`, `.npmrc` and `.netrc` in the tree and
- * `openContextFile` served them.
+ * inside a repo the guarantee behind it is `git ls-files --exclude-standard`
+ * plus the credential floor above. Outside a git repo there is no ignore file
+ * to honour and no `git` answer to trust, so the fallback widens that floor
+ * to every dotfile. It used to have none at all: the dot-prefix test applied
+ * to DIRECTORIES only, so a `bind_folder` on a non-repo directory listed
+ * `.env`, `.npmrc` and `.netrc` in the tree and `openContextFile` served them.
  *
  * Deliberately conservative rather than clever. A dotfile in a directory
  * nobody has put under version control is far more likely to be configuration
@@ -68,13 +114,7 @@ function isSecretShapedName(name: string): boolean {
   // `.aws/…` (its directory is skipped anyway) — one rule instead of a list
   // that stops being complete.
   if (name.startsWith('.')) return true;
-  const lower = name.toLowerCase();
-  // Key and certificate material, which carries no dot prefix.
-  if (lower.endsWith('.pem') || lower.endsWith('.key') || lower.endsWith('.p12')) return true;
-  if (lower.endsWith('.pfx') || lower.endsWith('.keystore')) return true;
-  // `id_rsa`, `id_ed25519`, and every other ssh private key's default name.
-  if (lower.startsWith('id_')) return true;
-  return false;
+  return isCredentialShapedName(name);
 }
 
 function readdirRecursive(dir: string): string[] {
@@ -105,9 +145,12 @@ function readdirRecursive(dir: string): string[] {
  *
  * The all-files tree is `scanFolderPaths(root)` — `git ls-files --cached
  * --others --exclude-standard` in a repo — so an ignored file never appears
- * in it. OUTSIDE a repo the listing falls back to a recursive readdir, which
- * has no ignore file to honour; there it carries its own floor instead and
- * omits every dotfile and every key-shaped name (`isSecretShapedName`). `openContextFile` / `openEditableFile` used to accept any path that
+ * in it, and on top of that the credential names never do either
+ * (`isCredentialShapedName`), because `--others` lists untracked files and an
+ * un-ignored `.env` is one. OUTSIDE a repo the listing falls back to a
+ * recursive readdir, which has no ignore file to honour; there the floor
+ * widens to every dotfile as well (`isSecretShapedName`).
+ * `openContextFile` / `openEditableFile` used to accept any path that
  * merely existed under the root, which let a caller who knew the name open
  * `.env` or a credentials dump the tree had deliberately hidden; and a
  * review root is a whole repository, reachable by a share visitor.
