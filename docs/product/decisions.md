@@ -758,3 +758,25 @@ they should, the readiness rule (three words) is the knob, shared with the
 pill; if the placeholder section clutters docs whose research is declined,
 archive the section when the row is archived.
 
+**Follow-ups from Bryan's prod pass the same day** (same PR):
+
+- **The pill's Research is a section, not a task** — decision 3 above holds
+  for the SPOKEN ask, whose row is what wakes the lead; the tapped one now
+  files an anchored thread from the presser plus a `Research: <topic>`
+  placeholder after the selected line (`POST /research-request`), the mock's
+  flow. Bryan: *"it just creates a task — does not follow the flow in the
+  mockups."*
+- **Make Plan on discussions.** The face rule read `huddleKind !== 'plan'` as
+  "no button"; a discussion reaches plans too.
+- **Spin-offs are placed** — `TaskStore.placeSpinoff`: originating task's goal
+  (unavailable: a huddle records no task; documented, skipped), else the top
+  active band, else chores; owner the lead when seated, else the author;
+  `todo`. The pill sends `spinoff: true`; the spoken capture asks the board.
+  Chosen over a client-side goal pick because the board holds the order and
+  the seat, and over triage-with-a-note because "unowned at triage" is the
+  unplaced row the report was about.
+- **"Untitled task" was not the pill.** The two such rows carry no origin,
+  no body, `untitled: true`, a person as creator — the Board's New-task
+  shape. Pinned in a test beside the pill's shape rather than "fixed".
+- **Receipts explain a wait** — both floats read the lead banner's answer.
+
