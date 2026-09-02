@@ -227,7 +227,7 @@ import {
 } from './recall-calendar.ts';
 import { RecallMeetingRelay } from './recall-meeting.ts';
 import { parseBotStatusWebhook } from './recall-status.ts';
-import { svixHeadersFrom, verifySvixSignature } from './recall-webhook-auth.ts';
+import { WebhookReplayGuard, svixHeadersFrom, verifySvixSignature } from './recall-webhook-auth.ts';
 import { type RecallClient, unreachableCallbackReason } from './recall.ts';
 import { runRefsBackfill, scanSettledDocRefs } from './refs-backfill.ts';
 import { listArchivedDocs, listArchivedReviews, readDocArchiveManifest } from './review-archive.ts';
@@ -4769,6 +4769,8 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
   const codeSender = opts.codeSender ?? createLogCodeSender();
   const requireEmailAuth = opts.requireEmailAuth ?? false;
   const requireSignInToWrite = opts.requireSignInToWrite ?? false;
+  /** Which signed Recall webhook ids have already been accepted. */
+  const webhookReplayGuard = new WebhookReplayGuard();
   // Teach the owner check the owner's email identity. Without this the check
   // keeps matching only `known-bryan` / "Bryan", and the day the owner's
   // identity becomes `user-<hash>` the owner-activity view quietly reads
@@ -6094,12 +6096,20 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           const raw = await req.text();
           const secret = opts.meetingBotWebhookSecret;
           if (secret) {
-            const signed = await verifySvixSignature({
-              secret,
-              body: raw,
-              headers: svixHeadersFrom(req.headers),
-            });
+            const svix = svixHeadersFrom(req.headers);
+            const signed = await verifySvixSignature({ secret, body: raw, headers: svix });
             if (!signed) return j(401, { error: 'bad signature' });
+            // Signed, so the id is the vendor's — and a repeat of it inside
+            // the window is a captured request played back, not a delivery.
+            // 409 rather than a quiet 200: the ticket asks that a replay be
+            // REJECTED, and a rejection is what an operator reading the log
+            // can act on. The cost is that a genuine at-least-once duplicate
+            // from the vendor is retried against this 409 for a while; that
+            // is noise, and it is the rarer of the two cases by far.
+            // (Urgent-fixes ticket, 2026-09-02.)
+            if (!webhookReplayGuard.admit(svix.id ?? '')) {
+              return j(409, { error: 'replayed webhook', id: svix.id });
+            }
           }
           let parsed: unknown;
           try {
