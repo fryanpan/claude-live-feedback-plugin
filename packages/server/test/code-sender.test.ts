@@ -10,6 +10,7 @@ import {
   loginCodeSubject,
   loginCodeText,
 } from '../src/auth/code-sender.ts';
+import { STAMP_PATTERN } from '../src/log-stamp.ts';
 import { type ServerHandle, createServer } from '../src/server.ts';
 
 const cleanups: Array<() => void | Promise<void>> = [];
@@ -59,6 +60,31 @@ describe('the log sender', () => {
     expect(lines[0]).not.toContain('424242');
     // …and names the flag, so a developer who needs it is one variable away.
     expect(lines[0]).toContain('CW_LOG_LOGIN_CODES=1');
+  });
+
+  it('stamps the masked line with an ISO timestamp, so a burst can be dated', async () => {
+    // The question anyone asks of these lines is how many codes went out and
+    // WHEN — after a mail-bomb, or when somebody says a code never arrived.
+    // The clock is injected rather than read, so this asserts a stamp the
+    // test chose instead of racing the wall clock.
+    const lines: string[] = [];
+    const at = Date.parse('2026-09-02T15:04:05.678Z');
+    await createLogCodeSender((l) => lines.push(l), { printCode: false, now: () => at }).send(REQ);
+    expect(lines[0]).toStartWith('2026-09-02T15:04:05.678Z [auth] login code issued');
+    // The stamp does not cost the masking: the digits are still absent.
+    expect(lines[0]).not.toContain('424242');
+    // POSITIVE CONTROL for the shape the assertion above matches by hand —
+    // an unstamped line must NOT satisfy it, or the pattern proves nothing.
+    expect(STAMP_PATTERN.test(lines[0] ?? '')).toBe(true);
+    expect(STAMP_PATTERN.test('[auth] login code issued for alice@example.com')).toBe(false);
+  });
+
+  it('stamps the printed-code line too — same clock, same shape', async () => {
+    const lines: string[] = [];
+    const at = Date.parse('2026-09-02T15:04:05.678Z');
+    await createLogCodeSender((l) => lines.push(l), { printCode: true, now: () => at }).send(REQ);
+    expect(lines[0]).toStartWith('2026-09-02T15:04:05.678Z [auth] login code for');
+    expect(lines[0]).toContain('424242');
   });
 
   it('prints the code, the recipient, and how long it lasts when asked to', async () => {
