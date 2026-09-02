@@ -11,6 +11,7 @@ import {
 } from '@feedback/core';
 import type * as Y from 'yjs';
 import { type SeenTracker, createSeenTracker } from './comment-seen.ts';
+import { el, makeBtn, showToast } from './doc/chrome-dom.ts';
 import { threadNeedsModal } from './long-thread.ts';
 import { attachMarkdownComposer, focusMarkdownComposer } from './md-composer.ts';
 import { type MobileReview, mountMobileReview } from './mobile-review.ts';
@@ -1383,63 +1384,6 @@ function wireResizeHandle(opts: ResizeOpts): void {
       // ignore
     }
   });
-}
-
-// --- tiny DOM helpers shared by the boots -------------------------------------
-
-export function el<T extends HTMLElement>(id: string): T {
-  const e = document.getElementById(id);
-  if (!e) throw new Error(`missing element #${id}`);
-  return e as T;
-}
-
-/** One thing a toast can offer to do — in practice, Undo. */
-export interface ToastAction {
-  label: string;
-  onAction: () => void;
-}
-
-let toastTimer: ReturnType<typeof setTimeout> | null = null;
-/**
- * A toast, optionally carrying one button.
- *
- * The button exists so that an action which wrote to somebody else's board
- * can be taken back from where it was taken: spinning a line off creates a
- * row, and the only way to un-create it used to be to go and find it. An
- * offer nobody can reach in time is not an offer, so a toast with an action
- * stays up appreciably longer than a bare one.
- */
-export function showToast(msg: string, action?: ToastAction): void {
-  const t = document.getElementById('toast');
-  if (!t) return;
-  // Wholesale, never "update the words in place": whatever the last toast
-  // left here goes, button included. A surviving Undo is an offer to
-  // archive a row the person has since stopped looking at.
-  t.replaceChildren(msg);
-  if (action) {
-    const btn = document.createElement('button');
-    btn.type = 'button';
-    btn.className = 'toast-action';
-    btn.textContent = action.label;
-    btn.addEventListener('click', () => {
-      if (toastTimer) clearTimeout(toastTimer);
-      t.classList.add('hidden');
-      action.onAction();
-    });
-    t.append(btn);
-  }
-  t.classList.remove('hidden');
-  if (toastTimer) clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => t.classList.add('hidden'), action ? 7000 : 2400);
-}
-
-export function makeBtn(label: string, onClick: () => void, primary = false): HTMLButtonElement {
-  const b = document.createElement('button');
-  b.type = 'button';
-  if (primary) b.className = 'primary';
-  b.textContent = label;
-  b.addEventListener('click', onClick);
-  return b;
 }
 
 /**

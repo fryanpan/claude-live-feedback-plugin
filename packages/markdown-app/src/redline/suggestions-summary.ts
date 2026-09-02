@@ -1,7 +1,7 @@
 import { suggestOps } from '@feedback/core';
 import type * as Y from 'yjs';
+import { el, showToast } from '../doc/chrome-dom.ts';
 import type { MountScope } from '../mount-scope.ts';
-import { el, showToast } from '../review-chrome.ts';
 
 /**
  * The doc-level "N pending suggestions" affordance (redline-suggestions

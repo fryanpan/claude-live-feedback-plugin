@@ -1,9 +1,10 @@
 import { type Thread, formatTime, suggestOps, threadRenderKey } from '@feedback/core';
 import type { EditorView } from '@tiptap/pm/view';
 import { keptComposerFocus, restoreComposerFocus } from '../composer-keep.ts';
+import { showToast } from '../doc/chrome-dom.ts';
 import { COMPOSER_MOUNTED_EVENT } from '../md-composer.ts';
 import type { MountScope } from '../mount-scope.ts';
-import { type ReviewChrome, showToast } from '../review-chrome.ts';
+import type { ReviewChrome } from '../review-chrome.ts';
 import { MORPH_MS, isFoldingTap, sizeThreadSlots } from '../thread-morph.ts';
 import { layoutBalloons } from './balloon-layout.ts';
 import {
