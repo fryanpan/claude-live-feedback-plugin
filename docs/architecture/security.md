@@ -13,6 +13,33 @@ own file explaining what it is for; read that before changing the behaviour.
 
 ## Trust zones
 
+```mermaid
+flowchart LR
+  visitor[Invited collaborator]
+  bot[Meeting-bot backend]
+  world[Everyone else]
+  tunnel[Cloudflare tunnel]
+  agents[Owner's agents and shell]
+  browser[Owner's signed-in browser]
+  gate{classifyHost}
+  routes[Routes, boards and documents]
+  secrets[(Keychain and key files)]
+  refused[Refused]
+
+  visitor --> tunnel
+  bot --> tunnel
+  world --> tunnel
+  tunnel --> gate
+  agents --> gate
+  browser --> gate
+  gate -->|recognized zone| routes
+  gate -->|unknown host| refused
+  routes --> secrets
+```
+
+The tunnel is the only way in from outside the owner's machine, and everything
+that arrives through it is classified before any route runs.
+
 | Zone | Who is in it | How the server recognizes them |
 |---|---|---|
 | The box | The owner's agents, hooks and shell — MCP tools, `curl`, the CLI | The `Host` header names one of this machine's own names, and the request did not come through the tunnel |
@@ -63,7 +90,8 @@ credential is configured.
 ## Writes from a browser need a sign-in
 
 `CW_REQUIRE_SIGNIN_TO_WRITE` defaults **on**, and only an explicit
-`0`/`false`/`no`/`off` turns it off. The gate is keyed on HTTP method rather
+`0`/`false`/`no`/`off` turns it off. The gate (`isGatedWrite` in
+`middleware/write-gate.ts`) is keyed on HTTP method rather
 than a list of routes, so a mutating route written later is covered without
 anyone remembering to add it. The exemptions run the other way — reads to let
 through, not writes to catch — so a mistake surfaces as a refused read rather
@@ -92,9 +120,9 @@ reason.
 ## What a visitor may open from a bound folder
 
 Binding a folder or rooting a diff review exposes a whole checkout to a
-reviewer, so one rule decides what opens: the file must appear in the tree
-listing, and the listing is `git ls-files --cached --others --exclude-standard`
-(`fs-scan.ts`). An ignored file never appears, and anything under `.git/` is
+reviewer, so one rule decides what opens (`isListedFile` in `fs-scan.ts`): the
+file must appear in the tree listing, and the listing is
+`git ls-files --cached --others --exclude-standard`. An ignored file never appears, and anything under `.git/` is
 refused before the listing is consulted.
 
 Ignoring is not the whole guarantee, because `--others` lists untracked files
