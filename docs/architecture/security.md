@@ -72,7 +72,12 @@ visitor sending `Host: localhost` is not local.
 
 `SharingGate` (`share/sharing-gate.ts`) is the master switch above all of
 this: off means every non-local host is refused before authentication runs,
-and it fails closed on an unparseable `sharing.json`.
+and it fails closed on an unparseable `sharing.json`. **Non-local means all
+four external kinds** — `share`, `link`, `collab` and `proxied-local`. The
+last one is the operator's own hostname through the tunnel and is the widest
+of them, so leaving it out would have meant flipping the switch during a
+review without closing the widest door. Nothing local is touched, so the way
+back is the way in: flip it from the box or the tailnet.
 
 ### Writes from a browser
 
@@ -224,6 +229,15 @@ already happened cannot restart anything.
 `POST /api/plugin/refresh` (`server.ts:9996`) is the same shape one notch
 wider: trusted-local rather than loopback, because a refresh interrupts
 nobody, plus the same `cf-ray` refusal.
+
+Both also answer `browser_cannot_operate` to any browser
+(`browserCannotOperateBody`, `write-gate.ts`) — the sibling of the binding
+routes' refusal, and for the same hole. None of the checks above can tell a
+page from an agent: the loopback test reads the peer address, which is
+loopback for a page served from this machine; the origin policy admits any
+machine-local hostname on any port; a local dev origin is same-site with this
+server, so a session cookie rides along; and `cf-ray` is absent on a request
+that never went through the edge.
 
 `POST /recall/status` (`server.ts:6129`) verifies a Svix signature over
 `${id}.${timestamp}.${body}` with a five-minute tolerance
