@@ -19,8 +19,8 @@ find packages \( -name '*.ts' -o -name '*.css' \) \
 ```
 
 Audited 2026-09-02 at `3a39db67`, and re-audited after A1 and A2 landed.
-**156 files** over 500 lines: 61 source and 95 test. **35 Split**,
-**121 Exception**.
+**156 files** over 500 lines: 61 source and 95 test. **34 Split**,
+**122 Exception**.
 
 Test files are judged by a narrower rule, in their own table below: a long test
 file is an exception unless two *unrelated harnesses* share it. Many `describe`
@@ -47,7 +47,7 @@ blocks over one set of fixtures is one harness, however long the file gets.
 | `packages/server/src/meeting-notes-merge.ts` | 1067 | Split | Ownership (`createNotesOwnership`, `classifyOwnership`, `reclaimAfterInPlaceEdit`) → `notes-ownership.ts` ~250 and section reading (`findNotesSection`, `itemsOfMarkdown`, `readNotesSection`) → `notes-section.ts` ~250 are each answerable without the merge; `planNotesMerge` / `mergeNotesSection` stay ~550. **M** |
 | `packages/server/src/deploy.ts` | 1058 | Split | The durable trace already has its own banner at line 668: `writeDeployLog`, `readDeployLog`, `confirmDeployBoot`, `spawnDeployVerifier` touch only the filesystem and the clock, never git or launchd → `deploy-log.ts` ~250, leaving the decision (`decideDeploy`) and the executor (`runDeploy`, `launchctlRestart`) ~800. **S** |
 | `packages/server/src/meeting-notes.ts` | 1039 | Split | `createPauseTicker` with `TickScheduler` / `realTickScheduler` (lines 84–277) is a two-clock detector that knows nothing about notes → `pause-ticker.ts` ~190. `beginNotesSession` and the compose/correction contracts stay ~800. **S** |
-| `packages/server/src/task-projection.ts` | 1035 | Split | `projectTask` (265–417) is the pure Task→board-row projection with no `Rooms` dependency, and the owner readers (`ownerKindReader`, `claimSessionReader`) belong beside the existing `task-owner.ts`. Extract `task-row.ts` ~250, leaving the room lifecycle (`ensureWorkspace`, `refresh`, `scheduleSnapshot`) ~650. **S** |
+| `packages/server/src/task-projection.ts` | 743 | Exception | A2 took `projectTask` out to `task-row.ts`; what is left is the room lifecycle — `ensureWorkspace`, `refresh`, `scheduleSnapshot` and the debounced snapshot writer — which is one object's behaviour over one `Rooms`. The owner readers (`ownerKindReader`, `claimSessionReader`) still read as a separable pair and would move beside `task-owner.ts`; that is ~90 lines and does not justify a third file on its own. |
 | `packages/server/src/bin.ts` | 1013 | Split | Two thirds is env resolution plus the "the ONLY place a real X is constructed" seams for a dozen subsystems. Split into `server-config.ts` (env → one typed config, ~350) and `server-deps.ts` (config → the network-touching seams, ~350), leaving arg parsing, `acquirePort` and the startup banner ~300. **M** |
 | `packages/server/src/meeting-notes-doc.ts` | 986 | Split | Clean halves at line 586. Yjs section surgery (`replaceNotesSection`, `retagSpeakerInNotes`, `reattributeNotesSection`, `demoteBodyHeadings`) → `notes-section-write.ts` ~470; the server glue (`NotesLedger`, `applyNotesUpdate`, `withServerNotesSinks`) stays ~400. **S** |
 | `packages/server/src/binds.ts` | 986 | Split | The header claims folder and diff share one skeleton, but `bindFolder` is ~50 lines against `bindDiff`'s 285 with its own browse and working-tree modes → `bind-diff.ts` ~350. Post-bind maintenance (`refreshWorkspace`, `setWorkspaceGroups`, `refreshDiffMeta`, `writeMeta`) is a third job → `workspace-refresh.ts` ~350. **M** |
@@ -255,7 +255,7 @@ months, so splitting it buys almost nothing.
 | 8 | `packages/server/src/rooms.ts` | 6301 | 71 | L |
 | 9 | `packages/markdown-app/src/app.ts` | 1918 | 55 | M |
 | 10 | `packages/server/src/bin.ts` | 1013 | 50 | M |
-| 11 | `packages/server/src/task-projection.ts` | 1035 | 43 | S |
+| 11 | `packages/server/src/task-projection.ts` | 743 | 43 | done |
 | 12 | `packages/markdown-app/src/review-chrome.ts` | 1492 | 24 | M |
 | 13 | `packages/markdown-app/src/threads.ts` | 1157 | 20 | M |
 | 14 | `packages/markdown-app/src/meeting-strip.ts` | 1953 | 18 | M |
