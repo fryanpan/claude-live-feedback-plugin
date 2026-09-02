@@ -354,7 +354,7 @@ async function mountMarkdown(ctx: MountContext): Promise<void> {
   // later, by which time `location.search` no longer says anything.
   const startedHuddleHere = wantsHuddleStart(location.search);
   // The lead banner's read and stream, handed to the floats below so their
-  // receipts can say "no lead agent attached" off the same answer. Set only
+  // receipts can say "no lead attached" off the same answer. Set only
   // on a huddle doc; the floats read as before without it.
   let watchLeadPresence: LeadBanner['watch'] | undefined;
   const meetingStripEl = document.getElementById('meeting-strip');

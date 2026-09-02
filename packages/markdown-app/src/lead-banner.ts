@@ -44,10 +44,13 @@ export interface LeadBanner {
 }
 
 /** A float's receipt line — "Asked by X — …" — needs a second half that
- *  tells the truth about the wait. Null while a lead is live or unknown. */
+ *  tells the truth about the wait. Null while a lead is live or unknown.
+ *  Short on purpose: at phone width the receipt shares the row with Make
+ *  Plan, and the first wording ("no lead agent attached, it will be
+ *  answered when one attaches") ran to four lines and out of the pill. */
 export function leadReceiptSuffix(presence: LeadPresence | null): string | null {
   if (!presence || presence.live) return null;
-  return 'no lead agent attached, it will be answered when one attaches';
+  return 'no lead attached; answered when one joins';
 }
 
 async function defaultFetchJson(url: string): Promise<unknown> {

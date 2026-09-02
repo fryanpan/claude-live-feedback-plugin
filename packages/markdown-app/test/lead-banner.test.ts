@@ -111,7 +111,7 @@ describe('lead banner', () => {
     expect(seen).toEqual([false, true]);
     // And the receipt copy is one function, so both floats say one thing.
     expect(leadReceiptSuffix(presence({ live: false }))).toBe(
-      'no lead agent attached, it will be answered when one attaches',
+      'no lead attached; answered when one joins',
     );
     expect(leadReceiptSuffix(presence({ live: true }))).toBeNull();
     expect(leadReceiptSuffix(null)).toBeNull();
