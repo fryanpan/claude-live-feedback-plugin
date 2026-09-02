@@ -450,6 +450,13 @@ sitting in the call billing.
 (`claude-workspaces-recall-api-key`) — the same order and the same reasoning
 as the AssemblyAI key. `RECALL_REGION` picks the API host and a key is only
 valid in its own region (a mismatch is a 401, which the client's error names).
+The key is region-bound and answers 401 everywhere else, and an unset
+`RECALL_REGION` means `us-east-1`. It lives in the launchd plist's
+`EnvironmentVariables`, which the 2026-09-01 boot-disk move dropped: every Meet
+join answered 502 until it was put back. The server now checks the key against
+its region at boot and logs `[meetings] Recall key REJECTED by <region>` when
+they disagree, and a refused invite logs the vendor's message.
+
 **Recall dials this server**, and this server binds to localhost behind a
 Cloudflare Tunnel, so it has to be told the address something in front of it
 answers on. That is `CW_RECALL_CALLBACK_HOST` — a hostname, and everything the

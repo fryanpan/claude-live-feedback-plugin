@@ -266,6 +266,13 @@ export class RecallMeetingRelay {
       rec.botId = bot.id;
     } catch (err) {
       this.forget(rec);
+      // The message reaches the browser as the 502 body; without this line
+      // it never reaches the log, and the next operator reads "502" alone.
+      // `send` never puts the key in what it throws.
+      console.error(
+        `[recall] bot invite refused for doc ${args.docId}:`,
+        err instanceof Error ? err.message : err,
+      );
       return {
         ok: false,
         reason: 'vendor_error',
