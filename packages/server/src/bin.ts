@@ -9,6 +9,7 @@ import { resolveDataDir } from './data-dir.ts';
 import { confirmDeployBoot, createDeployer, deployLogPath } from './deploy.ts';
 import { effortEstimateEnabled, haikuEffortEstimator } from './effort-estimator.ts';
 import { installLogSquelch } from './log-squelch.ts';
+import { stamped } from './log-stamp.ts';
 import { createHaikuNotesComposer } from './meeting-notes-composer.ts';
 import { createHaikuTaskCaptureExtractor } from './meeting-task-capture.ts';
 import { signInToWriteFromEnv } from './middleware/write-gate.ts';
@@ -460,8 +461,11 @@ const summarizer = new ThreadSummarizer();
 // log sender and says which piece is missing, because during setup that is
 // the normal state rather than an error.
 const codeSenderChoice = resolvePostmarkCodeSender(process.env, readKeychainPassword);
-if (codeSenderChoice.reason) console.log(`[auth] ${codeSenderChoice.reason}`);
-else console.log('[auth] login codes send via Postmark');
+// Stamped, like the code-delivery lines themselves: this line says which
+// sender the codes that follow went through, so reading a burst means
+// pairing it with the notice that was in force at the time.
+if (codeSenderChoice.reason) console.log(stamped(`[auth] ${codeSenderChoice.reason}`));
+else console.log(stamped('[auth] login codes send via Postmark'));
 
 // Hourly abuse ceilings on the login-code mailer. Unset or not a positive
 // number → the defaults in auth/email-code.ts; there is deliberately no
