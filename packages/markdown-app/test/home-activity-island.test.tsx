@@ -636,7 +636,7 @@ describe('commenting on a note like a doc', () => {
 
 /* ---------------------------------------------------------------------- */
 
-const CSS = readFileSync(resolve('packages/markdown-app/src/styles.css'), 'utf8');
+const CSS = readFileSync(resolve('packages/markdown-app/src/hub.css'), 'utf8');
 
 function declarationsOnly(css: string): string {
   return css.replace(/\/\*[\s\S]*?\*\//g, '');

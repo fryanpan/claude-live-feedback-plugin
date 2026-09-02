@@ -25,7 +25,7 @@ import { describe, expect, it } from 'vitest';
  * browser has to confirm is the button's rect at 1180x820 with the keyboard up.
  */
 const SRC = resolve(import.meta.dirname, '../src');
-const CSS = readFileSync(resolve(SRC, 'styles.css'), 'utf8');
+const CSS = readFileSync(resolve(SRC, 'hub.css'), 'utf8');
 const HUB = readFileSync(resolve(SRC, 'hub/hub-app.ts'), 'utf8');
 
 function declarationsOnly(css: string): string {

@@ -151,7 +151,7 @@ describe('the task detail island’s mount contract', () => {
     // `display: contents` the wrapper — not the panel — becomes the flex item,
     // so the panel stretches to fill it and the `min(var(--hub-detail-w), …)`
     // width above stops describing anything on screen.
-    const css = readFileSync(resolve('packages/markdown-app/src/styles.css'), 'utf8');
+    const css = readFileSync(resolve('packages/markdown-app/src/hub.css'), 'utf8');
     const rule = css.match(/\.hub-detail\s*>\s*\[data-preact-island\]\s*\{([^}]*)\}/)?.[1] ?? '';
     expect(rule).toContain('display'); // positive control: found the rule
     expect(rule).toMatch(/display:\s*contents/);

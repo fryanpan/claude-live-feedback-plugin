@@ -24,7 +24,7 @@ import { describe, expect, it } from 'vitest';
  * confirm is in the commit body: the tap at 430px.
  */
 const SRC = resolve(import.meta.dirname, '../src');
-const CSS = readFileSync(resolve(SRC, 'styles.css'), 'utf8');
+const CSS = readFileSync(resolve(SRC, 'hub.css'), 'utf8');
 const WIDGET_STYLES = readFileSync(
   resolve(import.meta.dirname, '../../widget/src/styles.ts'),
   'utf8',
