@@ -35,7 +35,7 @@ import {
   reviewQueue,
   revisedPhrase,
   wholeItemPhrase,
-} from '../src/hub/hub-model.ts';
+} from '../src/hub/hub-review-model.ts';
 import {
   type WalkthroughHandlers,
   type WalkthroughView,

@@ -31,7 +31,7 @@ import {
   type ReviewQueue,
   askedMeta,
   reviewRowTitle,
-} from './hub-model.ts';
+} from './hub-review-model.ts';
 
 export interface ReviewStripHandlers {
   /** Open this one in the queue itself — the card that carries the ask and the

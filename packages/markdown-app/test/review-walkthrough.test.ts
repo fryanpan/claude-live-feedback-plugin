@@ -12,7 +12,7 @@ import {
   decisionRows,
   reviewQueue,
   walkPosition,
-} from '../src/hub/hub-model.ts';
+} from '../src/hub/hub-review-model.ts';
 import {
   type WalkProgress,
   type WalkthroughHandlers,

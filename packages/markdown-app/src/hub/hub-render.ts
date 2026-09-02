@@ -48,25 +48,27 @@ import {
 import {
   type ActivityEvent,
   type ActivityFilter,
-  type BlockerRow,
   type HomePayload,
-  LEGACY_REVIEW_ITEM_ID,
   type LeadSeatView,
-  type ReviewQueue,
-  type ReviewThreadItem,
   type UptimeReport,
   activityRows,
-  answeredByLine,
   assigneeLabel,
-  decisionAskedBy,
   describeEvent,
   homeSinceLabel,
   leadSeatLabel,
-  reviewBannerText,
-  reviewItemThreadRequest,
   timeAgo,
   uptimeSummary,
 } from './hub-model.ts';
+import {
+  type BlockerRow,
+  LEGACY_REVIEW_ITEM_ID,
+  type ReviewQueue,
+  type ReviewThreadItem,
+  answeredByLine,
+  decisionAskedBy,
+  reviewBannerText,
+  reviewItemThreadRequest,
+} from './hub-review-model.ts';
 import { caretOffsetIn } from './inline-rename.ts';
 
 /**

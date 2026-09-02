@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { applyRefresh, refreshReviewItems } from '../src/hub/hub-model.ts';
+import { applyRefresh, refreshReviewItems } from '../src/hub/hub-review-model.ts';
 
 /**
  * What these cover: during a server restart the board's REST-backed regions

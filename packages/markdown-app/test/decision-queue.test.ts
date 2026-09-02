@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { CHORES_ID, type HubTask } from '../src/hub/hub-board-model.ts';
-import { decisionQueue } from '../src/hub/hub-model.ts';
+import { decisionQueue } from '../src/hub/hub-review-model.ts';
 
 /**
  * Urgency is DERIVED. "This decision is blocking work now" is the same fact

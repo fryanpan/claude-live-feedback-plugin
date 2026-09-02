@@ -23,7 +23,7 @@ import {
   ownerKind,
   taskVisible,
 } from '../src/hub/hub-board-model.ts';
-import { humanBlockerRows, reviewQueue } from '../src/hub/hub-model.ts';
+import { humanBlockerRows, reviewQueue } from '../src/hub/hub-review-model.ts';
 import { type ShimHandlers as BoardHandlers, disposeBoards, renderBoard } from './support/board.ts';
 
 const NOW = 1_700_000_000_000;

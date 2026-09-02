@@ -24,7 +24,7 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { CHORES_ID, type HubTask } from '../src/hub/hub-board-model.ts';
-import { CLOSED_WALK, reviewQueue, walkPosition } from '../src/hub/hub-model.ts';
+import { CLOSED_WALK, reviewQueue, walkPosition } from '../src/hub/hub-review-model.ts';
 
 const HUB_APP = readFileSync(resolve(import.meta.dirname, '../src/hub/hub-app.ts'), 'utf8');
 
