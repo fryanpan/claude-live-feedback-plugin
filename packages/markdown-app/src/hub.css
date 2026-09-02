@@ -3,10 +3,18 @@
    does. Lifted out of styles.css whole, in source order, so the cascade a
    rule lands in is the one it landed in before.
 
-   The board shell loads this AFTER styles.css and BEFORE tokens.css, which
-   is exactly where these rules used to sit: styles.css still carries the
-   design tokens, the toast, the connection banner and the rest of the chrome
-   every page shares, and tokens.css still remaps the palette last.
+   The board shell loads this BEFORE styles.css, and that is not cosmetic.
+   These rules sat about a twelfth of the way into the file they came from, so
+   almost all of styles.css followed them and won every tie between two rules
+   of equal specificity. Load this last and ~30 of those ties change hands —
+   measured, not guessed: `.acti-pill` would start beating `.comment-pill` on
+   the phone, and a dozen composer surfaces would take the board's padding
+   instead of the editor's. Load it first and exactly one tie changes, which
+   `.hub-topbar .back-link:hover` below pins so no order decides it.
+
+   styles.css still carries the design tokens, the toast, the connection
+   banner, the read-only bar and the rest of the chrome every page shares;
+   tokens.css still remaps the palette last.
 
    The other half of why this file exists is conflicts. Board work and editor
    work used to append to the end of one 12,000-line file and collide over a
@@ -80,6 +88,15 @@ body.hub-body {
   text-decoration: none;
   color: var(--fg-muted);
   font-size: 18px;
+}
+/* Stays muted on hover. `.back-link:hover` in styles.css sets `color` at the
+   same specificity as the rule above, so which one won used to be decided by
+   which line came later in the one file — and the board's did. Now that the
+   board's rules are their own file loaded BEFORE styles.css, the tie would go
+   the other way, and the arrow would light up on hover for the first time.
+   One class more specific than the tie, so no file order decides it. */
+.hub-topbar .back-link:hover {
+  color: var(--fg-muted);
 }
 /* The name and, when the board has been stood down, the badge that says so.
    A flex row rather than a bare span so the badge can sit beside the name
