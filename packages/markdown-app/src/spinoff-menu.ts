@@ -34,7 +34,7 @@
  * the verbs behind them.
  */
 
-import { type User, readyToWork, spinoffBody } from '@feedback/core';
+import { type User, readyToWork, spinoffBody, spinoffDocHref } from '@feedback/core';
 
 /** Re-exported: the readiness rule now lives in core, shared with the meeting
  *  assistant's capture pass, which files a spoken ask by the same rule. */
@@ -237,7 +237,11 @@ export async function runSpinoff(
   const title = deriveTaskTitle(deps.quote, TITLE_MAX);
   const res = (await post(deps, `/api/workspaces/${encodeURIComponent(deps.workspaceId)}/tasks`, {
     title,
-    body: spinoffBody(deps.quote, deps.docTitle),
+    // The whole selection and the way back to the doc; the title above is
+    // only a trimmed reading of the same words.
+    body: spinoffBody(deps.quote, deps.docTitle, {
+      docHref: spinoffDocHref(deps.workspaceId, deps.docId),
+    }),
     author: deps.user,
     // Where it came from, the way the meeting assistant's captured tasks
     // say it — one origin kind for "a doc line became this".

@@ -61,7 +61,7 @@
  * can finish the job: the notes are in the doc, not here.
  */
 
-import { readyToWork, spinoffBody } from '@feedback/core';
+import { readyToWork, spinoffBody, spinoffDocHref } from '@feedback/core';
 import { readRenamedEnv } from '@feedback/core/env-names';
 import {
   type LookupDoc,
@@ -1092,6 +1092,8 @@ function fileSpokenTask(
         // a week later, once the strip is gone. Only ever a voice the tick
         // carried, so this names a real speaker or nothing at all.
         extra: item.requester ? [`Asked for by ${item.requester}.`] : [],
+        // The way back to the words, the same link the pill's row carries.
+        docHref: spinoffDocHref(input.workspaceId, input.docId),
       }),
       author: MEETING_CAPTURE_ACTOR,
       // The doc is where the words live; the origin ref is what lets the
@@ -1179,6 +1181,7 @@ function fileResearchAsk(
           ...(item.requester ? [`Asked for by ${item.requester}.`] : []),
           `Write what you find under the "${title}" section of the doc; a placeholder is there.`,
         ],
+        docHref: spinoffDocHref(input.workspaceId, input.docId),
       }),
       author: MEETING_CAPTURE_ACTOR,
       origin: { kind: 'doc', docId: input.docId },
