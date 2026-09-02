@@ -590,6 +590,13 @@ export function shareScopeAllows(
   // Files" surface you see locally. Share a folder bind when you want the
   // visitor confined to a directory.
   //
+  // "Any of them" means any file the TREE shows. Both open verbs are bound
+  // by `git ls-files --cached --others --exclude-standard` in
+  // rooms.openContextFile / openEditableFile — an ignored `.env` under the
+  // root, or anything under `.git/`, answers 404 by path however the caller
+  // spells it (Urgent-fixes ticket, 2026-09-02). This allowlist admits the
+  // route; the listing decides the file.
+  //
   // TWO PREFIXES, ONE RULE. `/api/reviews/<setId>/…` is what these endpoints
   // are called now — a review is not a workspace, and the old name is the
   // vocabulary this change exists to remove. `/api/workspaces/<id>/…` still

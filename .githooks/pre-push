@@ -66,6 +66,10 @@ while read -r local_ref local_sha remote_ref remote_sha; do
   # all-zeroes "no such ref there yet" form is dropped on the other side.
   scan_args="--push-tip $local_sha --remote $remote_name --already-public $remote_sha"
 
+  # Both layers read the BLOBS those commits carry (`git show <tip>:<path>`),
+  # never the working tree — an uncommitted edit can neither hide a leak the
+  # push publishes nor block a push over one it does not carry.
+  #
   # Regex pass first (fast, deterministic, free).
   # shellcheck disable=SC2086
   if ! python3 "$regex_script" $scan_args; then

@@ -100,7 +100,7 @@ import {
   writeDocIndex,
 } from './doc-index.ts';
 import { newEventId } from './event-id.ts';
-import { scanFolderPaths } from './fs-scan.ts';
+import { isListedFile, scanFolderPaths } from './fs-scan.ts';
 import { showFile } from './git-diff.ts';
 import { gitConflictHint } from './git-provenance.ts';
 import { deleteMockupCapture } from './mockup-capture.ts';
@@ -2913,11 +2913,11 @@ export class Rooms {
     relPath: string,
   ):
     | { ok: true; docId: string; meta: DocMeta }
-    | { ok: false; error: 'not-found' | 'bad-path' | 'attach-failed' } {
+    | { ok: false; error: 'not-found' | 'bad-path' | 'not-listed' | 'attach-failed' } {
     const members = this.list().filter((m) => reviewIdOf(m) === setId);
     const root = members.find((m) => m.workspaceRoot)?.workspaceRoot;
     if (!root) return { ok: false, error: 'not-found' };
-    const clean = relPath.replace(/^\/+/, '');
+    const clean = normalizeRel(relPath);
     const abs = join(root, clean);
     // Traversal guard: the resolved path must stay under the root.
     if (clean.split('/').includes('..') || !`${abs}/`.startsWith(`${root}/`)) {
@@ -2929,6 +2929,15 @@ export class Rooms {
     if (isExcludedPath(clean, workspaceExcludes(members))) {
       return { ok: false, error: 'bad-path' };
     }
+    // The tree's rule, not the filesystem's: a path opens only if
+    // `git ls-files --cached --others --exclude-standard` lists it, and
+    // nothing under `.git/` ever does. Before this, an ignored `.env` under a
+    // diff review's root — a whole repository — opened for anyone who could
+    // reach the review, share visitors included, because "it exists" was the
+    // only question asked. Answered `not-listed` rather than `bad-path` so the
+    // route can say 404: whether the hidden file exists is itself the leak.
+    // (Urgent-fixes ticket, 2026-09-02.)
+    if (!isListedFile(root, clean)) return { ok: false, error: 'not-listed' };
     if (!existsSync(abs)) return { ok: false, error: 'not-found' };
     // The guard above is lexical, so a symlink INSIDE the root that points
     // outside it passes: `join` never touches the filesystem. Resolve what
@@ -2977,12 +2986,18 @@ export class Rooms {
     | { ok: true; docId: string; meta: DocMeta }
     | {
         ok: false;
-        error: 'not-found' | 'bad-path' | 'pinned' | 'not-markdown' | 'attach-failed';
+        error:
+          | 'not-found'
+          | 'bad-path'
+          | 'not-listed'
+          | 'pinned'
+          | 'not-markdown'
+          | 'attach-failed';
       } {
     const members = this.list().filter((m) => reviewIdOf(m) === setId);
     const root = members.find((m) => m.workspaceRoot)?.workspaceRoot;
     if (!root) return { ok: false, error: 'not-found' };
-    const clean = relPath.replace(/^\/+/, '');
+    const clean = normalizeRel(relPath);
     const abs = join(root, clean);
     if (clean.split('/').includes('..') || !`${abs}/`.startsWith(`${root}/`)) {
       return { ok: false, error: 'bad-path' };
@@ -2991,6 +3006,11 @@ export class Rooms {
       return { ok: false, error: 'bad-path' };
     }
     if (!clean.toLowerCase().endsWith('.md')) return { ok: false, error: 'not-markdown' };
+    // Same rule as openContextFile, and checked here too rather than only on
+    // the delegation below: a member's relPath is git-derived, but the tree
+    // is the one source of "may this open", and two doors with one lock is
+    // the shape that drifts. (Urgent-fixes ticket, 2026-09-02.)
+    if (!isListedFile(root, clean)) return { ok: false, error: 'not-listed' };
     const member = members.find((m) => m.relPath === clean);
     if (!member) return this.openContextFile(setId, clean);
     if (member.type !== 'diff') return { ok: true, docId: member.docId, meta: member };
@@ -6230,6 +6250,22 @@ function displacedAnswer(prior: ReviewPayload, ts: number, by: string): ReviewAn
     undoneAt: ts,
     undoneBy: by,
   };
+}
+
+/**
+ * A caller-supplied relPath in the tree's own spelling: no leading slashes,
+ * no `.` segments, no empty segments. `./.git/config` and `.git//config` must
+ * be judged as `.git/config` — the listing is compared by string, so a
+ * spelling the listing would never use has to be folded before the compare
+ * rather than trusted to fail it. `..` is left in place for the traversal
+ * guard to refuse.
+ */
+function normalizeRel(relPath: string): string {
+  return relPath
+    .replace(/^\/+/, '')
+    .split('/')
+    .filter((seg) => seg !== '' && seg !== '.')
+    .join('/');
 }
 
 /** The workspace's stored exclude prefixes, normalized. Replicated on every
