@@ -39,6 +39,7 @@ import {
   showToast,
   wireThreadRangeClicks,
 } from './review-chrome.ts';
+import { mountReviewFloat } from './review-float.ts';
 import { navigateTo, startRouter } from './router.ts';
 import { type SetDoc, selectSetSiblings, setDocsUrl } from './set-nav.ts';
 import {
@@ -453,6 +454,34 @@ async function mountMarkdown(ctx: MountContext): Promise<void> {
       },
     });
     scope.onCleanup(() => planGate.destroy());
+
+    // The Review float docks beside Make Plan (mounted AFTER it, so the row
+    // reads plan, then review). Its receipt clears when the ask thread is
+    // resolved, and threads live in this doc's own Yjs map — so the map is
+    // what it watches, and a resolve from anywhere flips the face with no
+    // fetch.
+    const reviewFloat = mountReviewFloat({
+      docId,
+      root: editorMount,
+      user,
+      canWrite,
+      watchDocMeta: (onChange) => {
+        const meta = ydoc.getMap('meta');
+        meta.observe(onChange);
+        return () => meta.unobserve(onChange);
+      },
+      threadOpen: (threadId) => {
+        const t = ydoc.getMap('threads').get(threadId) as { get(key: string): unknown } | undefined;
+        if (!t) return undefined;
+        return t.get('status') !== 'resolved';
+      },
+      watchThreads: (onChange) => {
+        const threads = ydoc.getMap('threads');
+        threads.observeDeep(onChange);
+        return () => threads.unobserveDeep(onChange);
+      },
+    });
+    scope.onCleanup(() => reviewFloat.destroy());
   }
 
   // Tapping a speaker tag in the notes offers the voices this doc's meetings

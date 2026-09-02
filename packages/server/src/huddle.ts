@@ -84,6 +84,15 @@ export const PLAN_REQUEST_COMMENT =
   'Please make a plan from this goal. Append it to this doc as a "Plan" section, and file the first tickets from it.';
 
 /**
+ * What the Review press says — the meeting's second float, beside Make Plan.
+ * Same channel: a subject thread from the presser. The agent reads the notes
+ * AND the transcript, and answers on the lines it has questions about, as
+ * review or decision items where an answer is a choice rather than prose.
+ */
+export const REVIEW_REQUEST_COMMENT =
+  'Please review these notes against the transcript so far. Where a point is thin, ambiguous, or missing a decision, ask a clarifying question as a comment on that line — as a review or decision item where one would help.';
+
+/**
  * The file's first bytes. A plan doc always opens under a `# Goal` heading —
  * that heading is what the placeholder copy and the Make Plan float hang off
  * — with a topic, when one was given, filed under it as the first line of

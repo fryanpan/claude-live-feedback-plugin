@@ -34,6 +34,7 @@
  */
 
 import type { User } from '@feedback/core';
+import { floatDock } from './float-dock.ts';
 
 /** How long "✓ Plan Approved" stays before the doc is just a doc again. It
  *  is a receipt for a press the person just made, not a state to live in. */
@@ -163,7 +164,11 @@ export function mountPlanGate(opts: PlanGateOpts): PlanGateHandle {
   // visible pane whatever the scroll position; a bare root (a test) anchors
   // it to itself instead.
   const anchor = root.closest('#editor-pane') ?? root;
-  anchor.append(float, error);
+  // Into the pane's shared float dock, beside the Review float
+  // (review-float.ts): one row at the bottom of the pane, whichever of the
+  // two mounted first. The error stays on the pane itself.
+  floatDock(anchor).append(float);
+  anchor.append(error);
 
   let state: string | undefined;
   let kind: string | undefined;
