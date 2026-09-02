@@ -350,3 +350,11 @@ becomes useless.
 - Background sweeper for expired shares isn't running yet; expired
   shares clean up on the next server startup. Manual `unshare` works
   any time.
+- **The widget's popup-token sign-in is dev-only.** An embed that sets
+  `auth-offer` keeps the minted token in the HOST PAGE's localStorage, where
+  every script on that origin can read it — a third-party tag, an XSS, an
+  extension. Fine on a developer's own dev server; a bearer credential
+  handed to strangers on any page whose scripts are not all yours. Leave
+  `auth-offer` off there; mockup pages served by the workspace itself use
+  the session cookie and need none of this. Documented in
+  `packages/widget/src/widget.ts` (`authOffer`).

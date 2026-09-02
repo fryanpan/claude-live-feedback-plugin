@@ -181,7 +181,12 @@ import {
   shareScopeAllows,
 } from './middleware/host-guard.ts';
 import { RECALL_STATUS_PATH, recallCallbackAllows } from './middleware/recall-callback-gate.ts';
-import { isBrowserRequest, isGatedWrite, signInRequiredBody } from './middleware/write-gate.ts';
+import {
+  browserCannotBindBody,
+  isBrowserRequest,
+  isGatedWrite,
+  signInRequiredBody,
+} from './middleware/write-gate.ts';
 import {
   captureMockup,
   checkMockupSource,
@@ -222,7 +227,7 @@ import {
 } from './recall-calendar.ts';
 import { RecallMeetingRelay } from './recall-meeting.ts';
 import { parseBotStatusWebhook } from './recall-status.ts';
-import { svixHeadersFrom, verifySvixSignature } from './recall-webhook-auth.ts';
+import { WebhookReplayGuard, svixHeadersFrom, verifySvixSignature } from './recall-webhook-auth.ts';
 import { type RecallClient, unreachableCallbackReason } from './recall.ts';
 import { runRefsBackfill, scanSettledDocRefs } from './refs-backfill.ts';
 import { listArchivedDocs, listArchivedReviews, readDocArchiveManifest } from './review-archive.ts';
@@ -4764,6 +4769,8 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
   const codeSender = opts.codeSender ?? createLogCodeSender();
   const requireEmailAuth = opts.requireEmailAuth ?? false;
   const requireSignInToWrite = opts.requireSignInToWrite ?? false;
+  /** Which signed Recall webhook ids have already been accepted. */
+  const webhookReplayGuard = new WebhookReplayGuard();
   // Teach the owner check the owner's email identity. Without this the check
   // keeps matching only `known-bryan` / "Bryan", and the day the owner's
   // identity becomes `user-<hash>` the owner-activity view quietly reads
@@ -6089,12 +6096,20 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           const raw = await req.text();
           const secret = opts.meetingBotWebhookSecret;
           if (secret) {
-            const signed = await verifySvixSignature({
-              secret,
-              body: raw,
-              headers: svixHeadersFrom(req.headers),
-            });
+            const svix = svixHeadersFrom(req.headers);
+            const signed = await verifySvixSignature({ secret, body: raw, headers: svix });
             if (!signed) return j(401, { error: 'bad signature' });
+            // Signed, so the id is the vendor's — and a repeat of it inside
+            // the window is a captured request played back, not a delivery.
+            // 409 rather than a quiet 200: the ticket asks that a replay be
+            // REJECTED, and a rejection is what an operator reading the log
+            // can act on. The cost is that a genuine at-least-once duplicate
+            // from the vendor is retried against this 409 for a while; that
+            // is noise, and it is the rarer of the two cases by far.
+            // (Urgent-fixes ticket, 2026-09-02.)
+            if (!webhookReplayGuard.admit(svix.id ?? '')) {
+              return j(409, { error: 'replayed webhook', id: svix.id });
+            }
           }
           let parsed: unknown;
           try {
@@ -6316,6 +6331,9 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
 
         // --- REST: docs ---
         if (pathname === '/api/docs' && req.method === 'POST') {
+          // A file bind names a host path. Agents only — see
+          // browserCannotBindBody for why a page, on any origin, is refused.
+          if (isBrowserRequest(req.headers)) return j(403, browserCannotBindBody());
           const body = await safeJson(req);
           const docId = (body?.docId as string) ?? '';
           if (!isValidDocId(docId)) return j(400, { error: 'bad docId' });
@@ -6571,6 +6589,12 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
         if (pathname === '/api/workspaces' && req.method === 'POST') {
           const body = await safeJson(req);
           const folderPath = body?.folderPath as string | undefined;
+          // Creating a board by name involves no file and stays open to the
+          // app; binding a FOLDER names a host path, and that is agents only
+          // — see browserCannotBindBody.
+          if (folderPath && isBrowserRequest(req.headers)) {
+            return j(403, browserCannotBindBody());
+          }
           if (!folderPath && typeof body?.name === 'string' && body.name.trim().length > 0) {
             // `body.goal` is the removed workspace-level text goal. Read
             // deliberately nowhere: bundles built before the removal still
@@ -7525,6 +7549,9 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
         // second source of truth (a stamped file refuses re-import).
         const wsImportMatch = pathname.match(/^\/api\/workspaces\/([^/]+)\/import-tasks$/);
         if (wsImportMatch && req.method === 'POST') {
+          // Reads a markdown file off disk by path. Agents only — see
+          // browserCannotBindBody.
+          if (isBrowserRequest(req.headers)) return j(403, browserCannotBindBody());
           const workspaceId = decodeURIComponent(wsImportMatch[1] ?? '');
           const body = await safeJson(req);
           const path = body?.path;
@@ -9944,7 +9971,23 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
             });
           }
           if (req.method === 'GET') return j(200, { refresh: pluginRefresher.last() });
-          if (req.method === 'POST') return j(200, { refresh: await pluginRefresher.refresh() });
+          if (req.method === 'POST') {
+            // Never through the edge. The host guard admits the operator's
+            // own proxied hostname with an Access token, and cloudflared
+            // runs on this box, so a tunnelled request has a loopback peer
+            // address — neither the host class nor the address says "not
+            // from here". `cf-ray` does: Cloudflare stamps it on everything
+            // it proxies and strips any the client sent, which is the test
+            // the host guard already trusts. (Urgent-fixes ticket,
+            // 2026-09-02.)
+            if (req.headers.has('cf-ray')) {
+              return j(403, {
+                error:
+                  'plugin refresh cannot be triggered through the edge (proxied request) — run it from the box or the tailnet',
+              });
+            }
+            return j(200, { refresh: await pluginRefresher.refresh() });
+          }
           return j(405, { error: 'method not allowed' });
         }
         // --- REST: deploy this server ---
@@ -10051,6 +10094,18 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
               return j(403, {
                 error:
                   'deploy must be triggered from this machine (loopback only) — a deploy restarts the server and drops every live editor',
+              });
+            }
+            // Loopback is necessary, not sufficient: cloudflared runs on
+            // this box, so a request through the tunnel — the operator's
+            // proxied hostname, Access token and all — arrives from
+            // 127.0.0.1 and passes the address test. `cf-ray` is the hop's
+            // own signature (see the refresh route above for why it is the
+            // right test). (Urgent-fixes ticket, 2026-09-02.)
+            if (req.headers.has('cf-ray')) {
+              return j(403, {
+                error:
+                  'deploy cannot be triggered through the edge (proxied request) — run it from the box',
               });
             }
             const body = (await safeJson(req)) ?? {};
@@ -10564,6 +10619,8 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           const relPath = body?.relPath as string | undefined;
           if (!relPath) return j(400, { error: 'relPath required' });
           const res = rooms.openContextFile(setId, relPath);
+          // `not-listed` is a 404 on purpose: the tree does not show the
+          // file, and whether it exists is exactly what must not be told.
           if (!res.ok) return j(res.error === 'bad-path' ? 400 : 404, res);
           return j(200, { docId: res.docId, meta: metaFor(res.meta) });
         }

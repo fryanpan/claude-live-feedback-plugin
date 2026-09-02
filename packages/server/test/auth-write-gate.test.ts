@@ -216,14 +216,21 @@ describe('the gate can refuse, and the probe can see a success', () => {
     expect(accepted.status).toBe(200);
   });
 
-  it('refuses an unsigned browser doc bind with the flag ON and accepts it with it OFF', async () => {
+  it('refuses an unsigned browser doc bind with the flag ON — and with it OFF, by a different gate', async () => {
+    // This used to be a 401/200 pair like the others. A browser doc bind is
+    // now refused whatever the flag says (binding-routes-browser.test.ts), so
+    // the OFF half can no longer succeed; what it proves instead is WHICH
+    // gate answered. Flag on: the sign-in gate runs first and says 401. Flag
+    // off: the binding gate says 403 — a different error, so a server that
+    // refused everything with one code would fail here.
     const on = boot(true);
     const off = boot(false);
     const refused = await writes.bindDocFromBrowser(on, 'bound-by-browser');
-    const accepted = await writes.bindDocFromBrowser(off, 'bound-by-browser');
+    const refusedOff = await writes.bindDocFromBrowser(off, 'bound-by-browser');
     expect(refused.status).toBe(401);
     expect(await errorOf(refused)).toBe(SIGN_IN_REQUIRED_ERROR);
-    expect(accepted.status).toBe(200);
+    expect(refusedOff.status).toBe(403);
+    expect(await errorOf(refusedOff)).toBe('browser_cannot_bind');
   });
 });
 

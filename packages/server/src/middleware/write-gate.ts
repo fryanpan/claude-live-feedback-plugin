@@ -74,12 +74,22 @@ export function signInRequiredBody(): {
  * `Origin` is the one this server already trusts to tell a browser from an
  * agent — the cross-origin write gate and the websocket origin check are
  * both built on it, and `isAllowedBrowserOrigin` documents a null Origin as
- * "curl, the MCP child, or an agent". The `Sec-Fetch-*` family is belt and
- * braces: every browser since 2020 sends it on every request including
- * same-origin ones, so a browser that somehow omitted `Origin` is still
- * recognised, and nothing that is not a browser gains a header by accident.
+ * "curl, the MCP child, or an agent". `Sec-Fetch-Site` and `Sec-Fetch-Dest`
+ * are belt and braces: every browser since 2020 sends them on every request
+ * including same-origin ones, so a browser that somehow omitted `Origin` is
+ * still recognised.
+ *
+ * `Sec-Fetch-Mode` is deliberately NOT in the list. Node's fetch (undici)
+ * sends `sec-fetch-mode: cors` on every request — and nothing else of the
+ * family, and no `Origin` — measured on Node 24 on 2026-09-02. The plugin's
+ * MCP child runs under node, so a predicate that counted it read every MCP
+ * tool call as a browser: with the sign-in flag on that would have refused
+ * every agent write, and the binding routes (which refuse browsers
+ * unconditionally) refused the MCP bundle's own `create_review_doc` the day
+ * they were closed. The list is "what browsers send that clients don't",
+ * and this header failed the second half.
  */
-const BROWSER_HEADERS = ['origin', 'sec-fetch-site', 'sec-fetch-mode', 'sec-fetch-dest'] as const;
+const BROWSER_HEADERS = ['origin', 'sec-fetch-site', 'sec-fetch-dest'] as const;
 
 /**
  * `true` when this request came from a browser.
@@ -172,4 +182,34 @@ export function isGatedWrite(method: string, pathname: string): boolean {
   if (m === 'GET' || m === 'HEAD' || m === 'OPTIONS') return false;
   if (isReadShapedPost(pathname)) return false;
   return !isSignInFlowPath(pathname);
+}
+
+/**
+ * The file-binding routes are not for browsers at all.
+ *
+ * `POST /api/docs` (bind a file), `POST /api/workspaces` with a `folderPath`
+ * (bind a folder) and `POST /api/workspaces/<id>/import-tasks` (read a
+ * markdown file) each turn a host path into content this server will read
+ * and serve. Every caller is an agent — an MCP tool, a hook, a curl — and
+ * none of the browser apps call them. The cross-origin write gate refuses a
+ * page the origin policy does not know; what it ADMITS is the gap: on the
+ * local surface any page on a machine-local hostname passes, so a dev server
+ * on another port could bind and read any file the server can.
+ * (Urgent-fixes ticket, 2026-09-02.)
+ *
+ * So these routes refuse `isBrowserRequest` outright, whatever origin it
+ * claims and whether or not it is signed in. Unlike the sign-in gate this
+ * is not a flag: there is no browser flow to preserve. The sign-in gate's
+ * boundary caveat applies here too — a non-browser client can decline to
+ * look like one, and that client already sits inside the host gate — so this
+ * closes the page-on-this-machine hole, not a determined agent.
+ */
+export const BROWSER_CANNOT_BIND_ERROR = 'browser_cannot_bind';
+
+/** The JSON body a browser gets back from a binding route. */
+export function browserCannotBindBody(): { error: string; message: string } {
+  return {
+    error: BROWSER_CANNOT_BIND_ERROR,
+    message: 'Binding a file or folder is an agent action — pages cannot name host paths.',
+  };
 }
