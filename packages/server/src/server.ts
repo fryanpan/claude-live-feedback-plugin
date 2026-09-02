@@ -10564,6 +10564,8 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           const relPath = body?.relPath as string | undefined;
           if (!relPath) return j(400, { error: 'relPath required' });
           const res = rooms.openContextFile(setId, relPath);
+          // `not-listed` is a 404 on purpose: the tree does not show the
+          // file, and whether it exists is exactly what must not be told.
           if (!res.ok) return j(res.error === 'bad-path' ? 400 : 404, res);
           return j(200, { docId: res.docId, meta: metaFor(res.meta) });
         }
