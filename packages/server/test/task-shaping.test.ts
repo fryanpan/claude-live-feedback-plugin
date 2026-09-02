@@ -28,6 +28,7 @@ import type { User } from '@feedback/core';
 import { type ServerHandle, createServer } from '../src/server.ts';
 import { workspaceRoomId } from '../src/task-projection.ts';
 import type { Task, TaskStoreEvent } from '../src/tasks.ts';
+import { waitFor } from './wait-for.ts';
 
 const AGENT: User = {
   id: 'agent-shelf-planner',
@@ -325,10 +326,15 @@ describe('triage shaping', () => {
           replace: 'The place indicator is lost on shelf change.',
         }),
       );
-      // The snapshot is debounced on this path — there is no flush to ride.
-      await Bun.sleep(1200);
-
-      const edited = await readTask(wsId, task.id);
+      // The snapshot is debounced on this path — there is no flush to ride, so
+      // poll the row until the rewrite shows up in it.
+      const edited = await waitFor(
+        async () => {
+          const row = await readTask(wsId, task.id);
+          return row.body?.includes('The place indicator is lost') ? row : false;
+        },
+        { describe: 'the debounced snapshot to reach the task row' },
+      );
       expect(edited.body).toContain('The place indicator is lost');
       expect(edited.quote).toBe(CAPTURE.body);
     });
@@ -341,6 +347,8 @@ describe('triage shaping', () => {
       const wsId = await seedWorkspace();
       const { task } = await capture(wsId);
       await jj<{ plainText: string }>(await fetch(`${base}${docContent(task.id)}`));
+      // timed: the assertion is that the snapshot never fills `quote`, so the
+      // debounce window has to pass before "still undefined" means anything.
       await Bun.sleep(1200);
       const untouched = await readTask(wsId, task.id);
       expect(untouched.body).toBe(CAPTURE.body);

@@ -1,8 +1,9 @@
 import { afterAll, beforeAll, describe, expect, it } from 'bun:test';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { type ServerHandle, createServer } from '../src/server.ts';
+import { waitFor } from './wait-for.ts';
 
 // bind_mock(docId, newPath) is documented as REPOINTING an existing mockup
 // doc, but POST /api/docs routes through Rooms.getOrCreate, whose
@@ -65,10 +66,15 @@ describe('bind_mock rebind (POST /api/docs on an existing mockup doc)', () => {
     // The sidecar is what a restart rehydrates sourceUrl from — a rebind that
     // only touched memory would silently revert at the next supervisor
     // restart. saveToDisk debounces ~200ms; give it room.
-    await new Promise((r) => setTimeout(r, 600));
-    const sidecar = JSON.parse(readFileSync(join(dataDir, `${mintedId}.private.json`), 'utf8')) as {
-      sourceUrl?: string;
-    };
+    const sidecar = await waitFor(
+      () => {
+        const file = join(dataDir, `${mintedId}.private.json`);
+        if (!existsSync(file)) return false;
+        const parsed = JSON.parse(readFileSync(file, 'utf8')) as { sourceUrl?: string };
+        return parsed.sourceUrl === second ? parsed : false;
+      },
+      { describe: 'the sidecar to record the rebound sourceUrl' },
+    );
     expect(sidecar.sourceUrl).toBe(second);
   });
 

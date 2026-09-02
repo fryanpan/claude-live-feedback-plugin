@@ -16,10 +16,12 @@
  * All fixtures are synthetic. The repo is public.
  */
 import { afterAll, beforeAll, describe, expect, it } from 'bun:test';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { ROOM_TIMINGS } from '../src/room-timings.ts';
 import { type ServerHandle, createServer } from '../src/server.ts';
+import { waitFor } from './wait-for.ts';
 
 const N = 120;
 const PAGE = 50;
@@ -80,6 +82,52 @@ describe('GET /api/docs pages', () => {
   };
   const getPage = async (qs: string): Promise<Page> => JSON.parse(await getText(qs)) as Page;
 
+  /**
+   * Wait until the corpus stops moving under the recency sort.
+   *
+   * Every test below that compares two listings assumes a still corpus, and
+   * seeding N docs does not leave one: `lastActivityAt` is the `.ydoc`
+   * mtime, that file is written by the persist debounce the server schedules
+   * per change, and N creations therefore leave N persist timers in flight.
+   * Each one that lands lifts its row to the front. Two listings read while
+   * the backlog drains disagree about the order — which is the one thing a
+   * keyset cursor is defined not to survive, and why the cursor walk lost a
+   * row and the garbage-cursor comparison found one had jumped.
+   *
+   * The observable is the data dir itself: this server owns it alone, every
+   * persist lands there as `<docId>.ydoc`, and the mtime it writes IS the
+   * sort key. So the corpus is still exactly when no new file appears and no
+   * existing one is rewritten.
+   *
+   * The gap is taken INSIDE the probe, before the snapshot, and derived from
+   * the persist cadence rather than written as a literal. Both details are
+   * load-bearing. Comparing two snapshots taken microseconds apart reports
+   * quiet before the backlog has begun to land — a check that passes on a
+   * zero — and a literal gap that clears a 200ms debounce clears nothing at
+   * the 20ms one the suite actually runs.
+   */
+  const settle = async (): Promise<void> => {
+    const snapshot = (): string[] =>
+      readdirSync(dataDir)
+        .filter((f) => f.endsWith('.ydoc'))
+        .map((f) => `${f}@${statSync(join(dataDir, f)).mtimeMs}`)
+        .sort();
+    let previous = snapshot();
+    await waitFor(
+      async () => {
+        await new Promise((r) => setTimeout(r, ROOM_TIMINGS.persistMs * 3));
+        const current = snapshot();
+        const same =
+          current.length === previous.length && current.every((v, i) => v === previous[i]);
+        previous = current;
+        // The length floor is the positive control: an empty or half-written
+        // dir must never read as settled just because two probes agreed.
+        return (same && current.length >= N) || false;
+      },
+      { interval: 0, describe: `every seeded .ydoc in ${dataDir} to stop being rewritten` },
+    );
+  };
+
   beforeAll(async () => {
     dataDir = mkdtempSync(join(tmpdir(), 'list-docs-paging-'));
     handle = createServer({ port: 0, dataDir });
@@ -103,6 +151,7 @@ describe('GET /api/docs pages', () => {
       expect(r.status).toBe(200);
       mintedId[docId] = ((await r.json()) as { docId: string }).docId;
     }
+    await settle();
     const all = (JSON.parse(await getText('')) as { docs: Row[] }).docs;
     builtin = all.map((d) => d.docId).filter((id) => !minted().includes(id));
   }, 60_000);

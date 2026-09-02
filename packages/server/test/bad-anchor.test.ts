@@ -34,6 +34,7 @@ import { join } from 'node:path';
 import { type Anchor, type Thread, type User, createThread } from '@feedback/core';
 import type * as Y from 'yjs';
 import { type ServerHandle, createServer } from '../src/server.ts';
+import { pastReanchor, waitFor } from './wait-for.ts';
 
 const reviewer: User = { id: 'known-reviewer', name: 'Reviewer', kind: 'known', color: '#2e7dd7' };
 
@@ -116,13 +117,20 @@ function plantLegacyAnchor(docId: string, anchor: unknown): string {
 /** Touch the doc so the debounced re-anchor sweep fires (250ms), then wait
  *  past it. Returns the edit's own status — the edit SUCCEEDS either way;
  *  the crash is deferred, which is the whole problem. */
-async function editAndLetSweepRun(docId: string): Promise<number> {
+async function editAndLetSweepRun(docId: string, until?: () => boolean): Promise<number> {
   const res = await fetch(`${base}/api/docs/${docId}/find_and_replace`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ find: 'jumps', replace: 'leaps' }),
   });
-  await new Promise((r) => setTimeout(r, 500));
+  if (until) {
+    await waitFor(until, { describe: 'the re-anchor sweep to reach the thread' });
+  } else {
+    // timed: callers with no predicate are asserting that the sweep changed
+    // NOTHING (or crashed nothing), so the whole 250ms debounce plus its pass
+    // has to have happened before the claim means anything.
+    await new Promise((r) => setTimeout(r, pastReanchor()));
+  }
   return res.status;
 }
 
@@ -270,7 +278,12 @@ describe('a malformed text-range anchor', () => {
       // satisfied by a fixture that was never broken.
       expect(storedAnchor(docId, threadId)?.startRel).toBeUndefined();
 
-      expect(await editAndLetSweepRun(docId)).toBe(200);
+      expect(
+        await editAndLetSweepRun(
+          docId,
+          () => storedAnchor(docId, threadId)?.startRel !== undefined,
+        ),
+      ).toBe(200);
 
       const after = storedAnchor(docId, threadId) as { startRel?: number[] } | undefined;
       expect(after?.startRel).toBeDefined();
@@ -321,7 +334,7 @@ describe('a malformed text-range anchor', () => {
       // a cold process. Room load sweeps synchronously, so a throw there is
       // a 500 on the first request that opens the doc — not a deferred
       // orphan. This is the "cannot be opened" half.
-      await new Promise((r) => setTimeout(r, 500));
+      handle.rooms.flush();
       const restarted = createServer({ port: 0, dataDir });
       try {
         const restartedBase = `http://localhost:${restarted.port}`;

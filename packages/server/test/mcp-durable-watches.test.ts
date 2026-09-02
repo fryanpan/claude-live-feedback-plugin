@@ -26,6 +26,7 @@ import { connect as netConnect } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { type ServerHandle, createServer } from '../src/server.ts';
+import { waitFor } from './wait-for.ts';
 
 const BUNDLE = resolve(import.meta.dir, '../../plugin/mcp/index.js');
 
@@ -571,10 +572,12 @@ describe('a declared lead comes back live after a respawn', () => {
     first.kill();
 
     // The respawn gap, which a real one produces simply by taking a moment.
-    await new Promise((r) => setTimeout(r, 1_200));
     // The precondition, asserted rather than assumed: the session really is
-    // away here, so what follows is a repair and not a no-op.
-    expect(await stateOf(workspaceId)).toBe('away');
+    // away here, so what follows is a repair and not a no-op. Waiting for the
+    // state itself makes the gap exactly as long as it needs to be.
+    expect(
+      await waitFor(async () => ((await stateOf(workspaceId)) === 'away' ? 'away' : null)),
+    ).toBe('away');
     // …and the ask below really can come back queued, so the delivered answer
     // after the respawn is about liveness rather than about a route that
     // always says the same thing.
