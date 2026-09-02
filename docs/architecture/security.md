@@ -48,14 +48,14 @@ Two questions are kept orthogonal on purpose, and the route layer reads both:
 **reachability** (may this caller talk to this server at all — the host gate,
 Cloudflare Access, a share session) and **identity** (who they are — a session
 cookie, an Access claim, a widget token). A local host bypasses the first and
-still owes the second (`packages/server/src/server.ts:5498`).
+still owes the second (`packages/server/src/server.ts:5491`).
 
 ## Who may read and write what
 
 | Caller | Reads | Writes | Gate |
 |---|---|---|---|
 | Loopback / tailnet / LAN agent (MCP, hooks, curl) | everything | everything except the binding-route browser refusal | `isTrustedLocalHost` (`middleware/host-guard.ts:188`) classifies `local`; no session required |
-| Browser on a local host | everything | only when signed in | `isGatedWrite` + `browserProvedNobody` (`server.ts:5552`) |
+| Browser on a local host | everything | only when signed in | `isGatedWrite` + `browserProvedNobody` (`server.ts:5545`) |
 | Share / link visitor | one board and its members | threads, suggestions and the reading tracker — see the gap below | `shareScopeAllows` (`host-guard.ts:376`) — allowlist, closed by default; per-subroute rules in `docSubrouteAllowed` (`host-guard.ts:738`) |
 | Collab-host visitor | any board the path names, resolved per request | same | `isAccessTunnelHost` (`host-guard.ts:227`) → `collabScope` (`host-guard.ts:659`), which delegates to `shareScopeAllows` |
 | Operator's proxied host | everything `local` gets, after an Access token | same | `isProxiedTrustedHost` (`host-guard.ts:255`) |
@@ -74,12 +74,24 @@ visitor sending `Host: localhost` is not local.
 this: off means every non-local host is refused before authentication runs,
 and it fails closed on an unparseable `sharing.json`.
 
+The `server.ts` line numbers throughout this doc point at gates that still
+live in that file. The task REST block no longer does: it moved to
+`packages/server/src/routes/` and reads what it needs off
+`TaskRoutesContext` (`routes/task-routes-context.ts`). Nothing about who may
+call it moved with it — the host gate, the write gate and the browser
+binding refusal all still run in `server.ts` ahead of the chain. What did
+move is the block's own defence-in-depth refusal of share visitors: six
+`if (visitor)` checks, five in `routes/dispatch-and-notes.ts` (dispatches,
+their close, both note routes, the ring read) and one in
+`routes/task-review-items.ts` (withdraw). Change one of those and you are
+changing this map.
+
 ### Writes from a browser
 
 `CW_REQUIRE_SIGNIN_TO_WRITE` defaults **on** — `signInToWriteFromEnv`
 (`middleware/write-gate.ts:52`) treats unset and every misspelling as on, and
 only `0`/`false`/`no`/`off` turn it off. `bin.ts:241` reads it and
-`server.ts:4805` defaults it to `true` when the option is absent.
+`server.ts:4768` defaults it to `true` when the option is absent.
 
 The predicate is keyed on **method**, not on a route list
 (`isGatedWrite`, `write-gate.ts:195`): every mutating route is a non-GET, so
@@ -101,7 +113,7 @@ keeps that caller out is the host gate and Access above it.
 `POST /api/docs`, `POST /api/workspaces` with a `folderPath`, and
 `POST /api/workspaces/<id>/import-tasks` turn a host path into content this
 server reads and serves. All three answer `browser_cannot_bind` to any
-browser, on any origin, signed in or not (`server.ts:6370`, `:6629`, `:7592`;
+browser, on any origin, signed in or not (`server.ts:6363`, `:6622`, `:7585`;
 body from `browserCannotBindBody`, `write-gate.ts:225`). This closes the
 page-on-this-machine hole — a dev server on another local port passes the
 origin policy — not a determined agent.
@@ -136,7 +148,7 @@ set, and `/signin`, `/api/auth/session` and `/api/auth/start` all answer
 `403 out_of_share_scope` on the share host.
 
 An Access-fronted share or collab host is unaffected: `provenIdentityFor`
-(`server.ts:5149`) turns the verified Access email into an identity, so those
+(`server.ts:5142`) turns the verified Access email into an identity, so those
 visitors still write. This gap is link mode only, and it is a product
 decision — whether an invited reviewer must hold an account — not a bug with
 an obvious fix.
@@ -203,7 +215,7 @@ The widget token is narrower than the cookie it borrows from: it only
 attributes, it expires on its own (`WIDGET_TOKEN_TTL_MS`, seven days), every
 use is re-checked against the live session's revocation state, and it is
 accepted only from a request whose `Origin` matches the origin signed into it
-(`server.ts:5517`).
+(`server.ts:5510`).
 
 The wire format is frozen: cookies minted before the schemes were folded
 together are in browsers and share links are in the wild.
@@ -213,7 +225,7 @@ any payload shape fails there rather than in the field.
 
 ## Deploy, refresh and webhook surfaces
 
-`POST /api/deploy` (`server.ts:10091`) is the narrowest route on the server.
+`POST /api/deploy` (`server.ts:8458`) is the narrowest route on the server.
 It refuses share visitors, refuses when no deployer is configured, requires a
 **loopback peer address** (checked on `server.requestIP`, not the
 client-controlled `Host` header), and then refuses any request carrying
@@ -221,11 +233,11 @@ client-controlled `Host` header), and then refuses any request carrying
 from 127.0.0.1. `GET /api/deploy` stays at trusted-local: reporting what
 already happened cannot restart anything.
 
-`POST /api/plugin/refresh` (`server.ts:9996`) is the same shape one notch
+`POST /api/plugin/refresh` (`server.ts:8363`) is the same shape one notch
 wider: trusted-local rather than loopback, because a refresh interrupts
 nobody, plus the same `cf-ray` refusal.
 
-`POST /recall/status` (`server.ts:6129`) verifies a Svix signature over
+`POST /recall/status` (`server.ts:6122`) verifies a Svix signature over
 `${id}.${timestamp}.${body}` with a five-minute tolerance
 (`recall-webhook-auth.ts:46`), then admits the delivery id through
 `WebhookReplayGuard` (`recall-webhook-auth.ts:120`) — a repeat inside the
