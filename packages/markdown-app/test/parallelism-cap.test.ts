@@ -70,6 +70,37 @@ describe('the parallelism cap field', () => {
     expect(f.note.textContent).toBe('3 of 5 in use. Edited for this board.');
   });
 
+  it('says who set the cap and when, once somebody has', async () => {
+    const now = Date.now();
+    const f = mount({
+      read: async () => ({
+        value: 5,
+        isDefault: false,
+        inUse: 3,
+        lastChange: { actorName: 'Jordan', ts: now - 2 * 60 * 60_000, from: 4, to: 5 },
+      }),
+    });
+    await f.handle.refresh();
+    expect(f.note.textContent).toBe('3 of 5 in use. Cap 5, set by Jordan 2h ago.');
+  });
+
+  it('a board put back on the default says who did that, and a board never asked says nothing', async () => {
+    const now = Date.now();
+    const reset = mount({
+      read: async () => ({
+        value: 4,
+        isDefault: true,
+        inUse: 0,
+        lastChange: { actorName: 'Cartographer', ts: now - 5 * 60_000, from: 2, to: 4 },
+      }),
+    });
+    await reset.handle.refresh();
+    expect(reset.note.textContent).toContain('Back on the default, set by Cartographer 5m ago.');
+    const never = mount({ read: async () => ({ value: 4, isDefault: true, inUse: 0 }) });
+    await never.handle.refresh();
+    expect(never.note.textContent).not.toContain('set by');
+  });
+
   it('omits the in-use count rather than claiming zero when the read carried none', async () => {
     const f = mount({ read: async () => ({ value: 2, isDefault: true }) });
     await f.handle.refresh();

@@ -81,6 +81,7 @@
  * one duplicate wake, which is much the cheaper failure.
  */
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import type { ParallelismCapSummary } from './ready-nudge.ts';
 import type { HeldItemRow, StallUndeterminedRow, StalledRow } from './stall-gate.ts';
 
 /**
@@ -138,6 +139,9 @@ export interface StallSnapshot {
   /** Runnable rows past the board's parallelism cap, which the gate did not
    *  judge (`stall-gate.ts`). Absent when none — the same as zero. */
   beyondCapacity?: number;
+  /** The cap itself and its last move, for the wake to name beside
+   *  `beyondCapacity`. Absent from a caller that does not read it. */
+  parallelismCap?: ParallelismCapSummary;
   /** Review items the quality gate is holding past the window — asks that
    *  exist on a ticket and on nobody's queue. Absent on a snapshot from a
    *  caller that does not read them, which is the same as none. */
@@ -224,6 +228,12 @@ export interface StallNudgeFrame {
    * healthy.
    */
   beyondCapacity?: number;
+  /**
+   * The cap that kept those rows out, with who moved it and when. Sent ONLY
+   * beside `beyondCapacity`, so a wake that never mentions the cap does not
+   * grow a field about it; the line names the setter in the same sentence.
+   */
+  parallelismCap?: ParallelismCapSummary;
   /**
    * Review items held by the quality gate past the window, oldest first.
    * Absent when there are none. A frame carrying ONLY this is a real wake:
@@ -484,7 +494,10 @@ export class StallNudger {
       ...(board.stalled.length > 0 ? { rows: board.stalled } : {}),
       ...(board.unfiled.length > 0 ? { unfiled: board.unfiled } : {}),
       ...(board.beyondCapacity !== undefined && board.beyondCapacity > 0
-        ? { beyondCapacity: board.beyondCapacity }
+        ? {
+            beyondCapacity: board.beyondCapacity,
+            ...(board.parallelismCap ? { parallelismCap: board.parallelismCap } : {}),
+          }
         : {}),
       // `heldItems`, not `held`: the ready_idle frame already spends `held` on
       // its withheld-row counts, and the plugin reads both frames into one type.
