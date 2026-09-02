@@ -846,9 +846,15 @@ body.has-set .doc-switcher-caret {
   cursor: default;
 }
 .plan-float--make:disabled,
-.plan-float--approve:disabled,
-.plan-float--requested:disabled {
+.plan-float--approve:disabled {
   opacity: 0.7;
+}
+/* The receipt is disabled too, but NOT faded: `opacity` on the whole pill
+   let the prose scrolling beneath show through its white face, and at
+   phone width the three-line receipt read as text over text. Its muted
+   colours above already say "a state, not a control". */
+.plan-float--requested:disabled {
+  opacity: 1;
 }
 /* The Review float's own face. Secondary to Make Plan's filled accent, per
    the approved mock: white, accent border and text — the second of two
