@@ -300,7 +300,20 @@ describe('when the editor’s chunk never arrives', () => {
  * emitted with nothing styling them is a state no DOM test can see.
  */
 describe('the markdown composer is styled', () => {
-  const CSS = readFileSync(resolve('packages/markdown-app/src/styles.css'), 'utf8');
+  // The board's cascade is two files since the hub block moved to hub.css:
+  // styles.css keeps the shared chrome, hub.css carries the board's own
+  // rules, and the hub shell loads them in that order. A rule this suite
+  // pins may sit in either, so read the pair the page actually loads.
+  // The board's cascade is two files since the hub block moved to hub.css:
+  // styles.css keeps the shared chrome, hub.css carries the board's own rules,
+  // and the hub shell loads them in that order. A rule this suite pins may sit
+  // in either, so read the pair the page actually loads. Two reads on purpose:
+  // a one-line read is what `bun run test:audit` counts, and folding them into
+  // a loop would hide a source-shape site rather than remove one.
+  const CSS = [
+    readFileSync(resolve('packages/markdown-app/src/styles.css'), 'utf8'),
+    readFileSync(resolve('packages/markdown-app/src/hub.css'), 'utf8'),
+  ].join('\n');
   const stripped = CSS.replace(/\/\*[\s\S]*?\*\//g, '');
 
   /** The body of one top-level rule, comments stripped. */

@@ -13,7 +13,7 @@ import { describe, expect, it } from 'vitest';
  * design-mobile.md — the Undo especially, since it is the only thing standing
  * in for the confirm dialog this design deliberately does not ask for.
  */
-const CSS = readFileSync(resolve('packages/markdown-app/src/styles.css'), 'utf8');
+const CSS = readFileSync(resolve('packages/markdown-app/src/hub.css'), 'utf8');
 
 function declarationsOnly(css: string): string {
   return css.replace(/\/\*[\s\S]*?\*\//g, '');
