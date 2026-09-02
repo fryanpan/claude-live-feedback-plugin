@@ -22,7 +22,6 @@ interface Ticket {
 
 /** A tagged, expiring format — the shape session and widget tokens share. */
 const tagged: TokenFormat<Ticket> = {
-  purpose: 'test-tagged',
   keyDomain: 'test-tagged-v1',
   tags: ['tk1'],
   encode: (t) => `tk1.${t.holder}.${t.expiresAt ?? 0}`,
@@ -40,7 +39,6 @@ const tagged: TokenFormat<Ticket> = {
 
 /** An untagged, never-expiring format — the shape the share cookie has. */
 const untagged: TokenFormat<string> = {
-  purpose: 'test-untagged',
   keyDomain: null,
   tags: null,
   encode: (id) => id,
