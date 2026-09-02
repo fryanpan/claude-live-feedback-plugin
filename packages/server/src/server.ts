@@ -181,6 +181,7 @@ import {
 import { RECALL_STATUS_PATH, recallCallbackAllows } from './middleware/recall-callback-gate.ts';
 import {
   browserCannotBindBody,
+  browserCannotOperateBody,
   isBrowserRequest,
   isGatedWrite,
   signInRequiredBody,
@@ -256,6 +257,7 @@ import {
   redactWorkspaceTreeForVisitor,
   relativeReviewUrl,
 } from './share/redact-meta.ts';
+import { redactHubWorkspaceForVisitor } from './share/redact-workspace.ts';
 import { Shares } from './share/shares.ts';
 import { SharingGate } from './share/sharing-gate.ts';
 import { resolveTtl } from './share/ttl.ts';
@@ -4994,12 +4996,29 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
     rewriteTaskBody,
   };
 
-  // `kind` is what the ONE websocket handler below branches on: Bun routes
-  // every upgraded path into the same `open`/`message`/`close`, so the audio
-  // socket and the editing socket are told apart by what the upgrade
-  // attached. Absent means the editing socket, which is every upgrade that
-  // predates meetings.
-  const server = Bun.serve<{ docId: string; kind?: 'yjs' | 'audio' | 'recall'; token?: string }>({
+  /**
+   * What an upgrade attaches to a socket, for every socket this server opens.
+   *
+   * `kind` is what the ONE websocket handler below branches on: Bun routes
+   * every upgraded path into the same `open`/`message`/`close`, so the audio
+   * socket and the editing socket are told apart by what the upgrade
+   * attached. Absent means the editing socket, which is every upgrade that
+   * predates meetings.
+   *
+   * `shareId` and `readOnly` are named here rather than passed as excess
+   * properties, so the two upgrades that set them are type-checked against
+   * the fields the handlers read (`WsCtx` in rooms.ts, `MeetingClient` in
+   * meeting-protocol.ts).
+   */
+  type UpgradeData = {
+    docId: string;
+    kind?: 'yjs' | 'audio' | 'recall';
+    token?: string;
+    shareId?: string;
+    readOnly?: boolean;
+  };
+
+  const server = Bun.serve<UpgradeData>({
     port,
     // Explicit because the DEFAULT is what broke the event streams: Bun's is
     // 10 seconds, the SSE keepalive ran on 20, and so every stream idled out
@@ -5057,7 +5076,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
       // table lives in here unchanged.
       async function route(
         req: Request,
-        server: BunServer<{ docId: string; kind?: 'yjs' | 'audio' | 'recall'; token?: string }>,
+        server: BunServer<UpgradeData>,
       ): Promise<Response | undefined> {
         const url = new URL(req.url);
         const { pathname } = url;
@@ -5335,8 +5354,28 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           // cannot find its live sockets. Flipping the switch closes the door
           // to new requests immediately; an already-open collab websocket
           // survives until the process restarts.
+          //
+          // `proxied-local` is in here too, and it is the WIDEST of the four:
+          // the operator's own public hostname through the tunnel, with the
+          // whole product behind it. It arrives from outside the machine by
+          // exactly the definition the other three do, and leaving it out
+          // meant an operator who flipped this switch during a security
+          // review — believing the one sentence that describes it — had not
+          // closed the widest external door. Being the operator's own door is
+          // not an argument for exempting it; it is the argument for the
+          // Access token and the email allowlist below, which stay.
+          //
+          // Nothing local is affected, so the way back is the way in: flip it
+          // from the box or the tailnet (`POST /api/share/enabled`, or the
+          // `set_sharing_enabled` MCP tool). `CW_SHARING_DISABLED=1` is off
+          // AND LOCKED, and it now locks remote operator access with it —
+          // which is what "the outside door is shut" was always supposed to
+          // mean.
           if (
-            (decision.kind === 'share' || decision.kind === 'link' || decision.kind === 'collab') &&
+            (decision.kind === 'share' ||
+              decision.kind === 'link' ||
+              decision.kind === 'collab' ||
+              decision.kind === 'proxied-local') &&
             !sharingGate.isEnabled()
           ) {
             return j(403, { error: 'sharing_disabled' });
@@ -6120,9 +6159,26 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
         // first would be answered `404 unknown endpoint` by the token
         // lookup. Order is load-bearing — keep these two adjacent.
         if (pathname === RECALL_STATUS_PATH && req.method === 'POST') {
-          const raw = await req.text();
           const secret = opts.meetingBotWebhookSecret;
-          if (secret) {
+          // ARMED ONLY WHILE ITS CREDENTIAL IS CONFIGURED — on every host,
+          // not just the dedicated callback one.
+          //
+          // `recallCallbackAllows` already closes this path on the callback
+          // hostname when `RECALL_WEBHOOK_SECRET` is unset, precisely because
+          // an unset secret used to mean "accept unsigned bodies". But the
+          // route is reachable on every other admitting host class too, and
+          // there the whole signature-and-replay block sat inside `if
+          // (secret)`: an unauthenticated non-browser caller on the LAN or the
+          // tailnet could inject arbitrary bot-status and calendar-sync
+          // events, unsigned and unbounded by the replay guard. Unset is the
+          // DEFAULT (`bin.ts` warns rather than refuses), so that was the
+          // shipped state.
+          //
+          // 404 rather than 401: without a secret there is no credential this
+          // route could check, so it is not a door that can be knocked on.
+          if (!secret) return j(404, { error: 'not_found' });
+          const raw = await req.text();
+          {
             const svix = svixHeadersFrom(req.headers);
             const signed = await verifySvixSignature({ secret, body: raw, headers: svix });
             if (!signed) return j(401, { error: 'bad signature' });
@@ -6202,7 +6258,18 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           // doc that already exists, and auto-creating one here would let a
           // typo start a billed session against a doc nobody can find.
           if (!rooms.get(docId)) return j(404, { error: 'doc not found' });
-          const upgraded = server.upgrade(req, { data: { docId, kind: 'audio' as const } });
+          // The SAME sign-in decision `/y/` makes two branches down, for a
+          // surface that is write-only: a meeting opens a billed engine
+          // session and writes transcript and notes into the doc, and the
+          // method-keyed write gate cannot see it because a websocket
+          // upgrade is a GET. Carried rather than refused at the handshake
+          // so the strip can render the reason (meeting-protocol.ts refuses
+          // the `start` frame); an upgrade refused here reaches the page as
+          // a bare error event with no body to show.
+          const audioReadOnly = requireSignInToWrite && browserProvedNobody();
+          const upgraded = server.upgrade(req, {
+            data: { docId, kind: 'audio' as const, ...(audioReadOnly ? { readOnly: true } : {}) },
+          });
           if (!upgraded) return new Response('upgrade required', { status: 426 });
           return undefined;
         }
@@ -6231,8 +6298,18 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           // created upfront via POST /api/docs (which auto-attaches a file).
           // The browser navigating to /review/<docId> before the agent has
           // created the doc gets a clean 404 from /review's own handler.
+          // Decided BEFORE the creation below, not after it. Creating a room
+          // and filing a workspace row is a write like any other, and it used
+          // to run above this line: a browser that had proven nobody could
+          // open `/y/<any-new-id>?type=mockup` and make the server create a
+          // doc and file it under the hub workspace, with the read-only carry
+          // only stopping the ydoc edits that came afterwards.
+          const readOnly = requireSignInToWrite && browserProvedNobody();
           if (!rooms.get(docId)) {
             if (type === 'mockup') {
+              // Nothing to read yet, so refusing here gates no read: the doc
+              // this socket would have created does not exist for anybody.
+              if (readOnly) return j(401, signInRequiredBody());
               rooms.getOrCreate(docId, { type, sourceUrl });
               // The widget is the third creation path (next to POST /api/docs
               // and the MCP tools that front it), so it files its doc too —
@@ -6251,7 +6328,6 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           // (see yjs-protocol.ts). Decided once here, at the handshake, and
           // then carried for the life of the connection: the same shape the
           // share authorization uses two lines up.
-          const readOnly = requireSignInToWrite && browserProvedNobody();
           const upgraded = server.upgrade(req, {
             data: {
               docId,
@@ -6813,8 +6889,16 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
         const hubWsMatch = pathname.match(/^\/api\/workspaces\/([^/]+)$/);
         if (hubWsMatch && req.method === 'GET') {
           const workspaceId = decodeURIComponent(hubWsMatch[1] ?? '');
-          const workspace = taskStore.getWorkspace(workspaceId);
-          if (!workspace) return j(404, { error: 'workspace not found' });
+          const stored = taskStore.getWorkspace(workspaceId);
+          if (!stored) return j(404, { error: 'workspace not found' });
+          // A visitor gets a PROJECTION, never the stored record. This route
+          // is on the visitor allowlist as "workspace name + goal text"
+          // (host-guard.ts), and the record it used to answer with verbatim
+          // carries `notesHome.repoRoot` — an absolute path on this machine —
+          // and `retiredBy`, an actor id every neighbouring visitor surface
+          // strips. See redactHubWorkspaceForVisitor. The local surface keeps
+          // the whole record: `notesHome` is what the settings panel edits.
+          const workspace = visitor ? redactHubWorkspaceForVisitor(stored) : stored;
           // Goals with their counts, in priority order. The goals were always
           // in this payload and no MCP tool read it, so ordering lived in
           // each agent's head; the counts are what make the list answer
@@ -6843,14 +6927,14 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
             // the status says what somebody declared about the band itself.
             goalSummary: summarizeGoals(
               taskStore.listTasks(workspaceId),
-              workspace.goals,
+              stored.goals,
               taskStore.listGoalRows(workspaceId),
             ),
             // The board has been stood down. Present only when it has, and
             // carrying prose rather than a flag, because the reader is
             // usually an agent deciding whether to work here and a boolean
             // gives it nothing to act on.
-            ...(isRetired(workspace) ? { retired: retiredNotice(workspace) } : {}),
+            ...(isRetired(stored) ? { retired: retiredNotice(stored) } : {}),
           });
         }
         // The human's queue, to the board's agent-side `next` below: every
@@ -8391,6 +8475,12 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
                   'plugin refresh cannot be triggered through the edge (proxied request) — run it from the box or the tailnet',
               });
             }
+            // And not from a PAGE on this machine either — see
+            // browserCannotOperateBody. Nothing above distinguishes a page
+            // from an agent: the origin policy admits any machine-local
+            // hostname on any port, and a local dev origin is same-site with
+            // this server, so a session cookie rides along.
+            if (isBrowserRequest(req.headers)) return j(403, browserCannotOperateBody());
             return j(200, { refresh: await pluginRefresher.refresh() });
           }
           return j(405, { error: 'method not allowed' });
@@ -8513,6 +8603,10 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
                   'deploy cannot be triggered through the edge (proxied request) — run it from the box',
               });
             }
+            // Loopback is the PEER ADDRESS, which a page served from this
+            // machine also has, so it says nothing about whether a page or an
+            // agent asked. This does — see browserCannotOperateBody.
+            if (isBrowserRequest(req.headers)) return j(403, browserCannotOperateBody());
             const body = (await safeJson(req)) ?? {};
             const force = body.force === true;
             const requestedBy = typeof body.requestedBy === 'string' ? body.requestedBy : undefined;

@@ -7,6 +7,12 @@ import { MAX_ATTEMPTS, MAX_STARTS_PER_EMAIL } from '../src/auth/email-code.ts';
 import { SESSION_COOKIE } from '../src/auth/session.ts';
 import { type ServerHandle, createServer } from '../src/server.ts';
 
+// The log sender masks the code unless this is set — see
+// `auth/code-sender.ts`. This suite drives a real sign-in, so it needs the
+// code the way a developer does, and it says so rather than depending on a
+// default. Set before any server boots: the flag is read per send.
+process.env.CW_LOG_LOGIN_CODES = '1';
+
 let handle: ServerHandle;
 let dataDir: string;
 let base: string;
