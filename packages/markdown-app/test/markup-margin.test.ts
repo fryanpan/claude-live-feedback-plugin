@@ -10,6 +10,7 @@ import type { EditorView } from '@tiptap/pm/view';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { Awareness } from 'y-protocols/awareness';
 import * as Y from 'yjs';
+import { wireThreadRangeClicks } from '../src/doc/chrome-panels.ts';
 import { type EditorHandle, createEditor } from '../src/editor.ts';
 import { type ComposerEditorModule, setComposerEditorLoader } from '../src/md-composer.ts';
 import { MountScope } from '../src/mount-scope.ts';
@@ -19,7 +20,7 @@ import {
   createLiveRedlineEditor,
 } from '../src/redline/live-redline-editor.ts';
 import { groupDeletions, mountMarkupMargin } from '../src/redline/markup-margin.ts';
-import { mountReviewChrome, wireThreadRangeClicks } from '../src/review-chrome.ts';
+import { mountReviewChrome } from '../src/review-chrome.ts';
 import { MORPH_MS } from '../src/thread-morph.ts';
 
 /**
