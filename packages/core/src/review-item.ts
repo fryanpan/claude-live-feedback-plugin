@@ -40,6 +40,8 @@
  * reachable" in docs/process/learnings.md). If a mockup later needs its own
  * embed, that is an additive field on `review`, not a third shape.
  */
+import { wordCount } from './word-count.ts';
+
 export type ReviewShape = 'decision' | 'review';
 
 export interface ReviewOption {
@@ -1090,11 +1092,6 @@ export interface ReviewCheck {
   gaps: ReviewGap[];
 }
 
-function words(s: string): number {
-  const t = s.trim();
-  return t === '' ? 0 : t.split(/\s+/).length;
-}
-
 function isPlainObject(v: unknown): v is Record<string, unknown> {
   return typeof v === 'object' && v !== null && !Array.isArray(v);
 }
@@ -1284,7 +1281,7 @@ export function checkReviewPayload(input: unknown, context?: { text?: string }):
     // context in the thread, a compressed copy here — and the card showed the
     // weaker half. The card renders everything, so the honest move is to
     // accept the detail the author actually has.
-    const n = words(detail);
+    const n = wordCount(detail);
     if (n > REVIEW_LIMITS.detailMaxWords) {
       fail(
         `review.detail is ${n} words; past ${REVIEW_LIMITS.detailMaxWords} it is a document, not a card. Keep the ask's real context here — the card renders all of it — and link out to anything book-length instead of pasting it.`,
@@ -1356,7 +1353,7 @@ export function checkReviewPayload(input: unknown, context?: { text?: string }):
           `review.options[${i}].label is ${label.trim().length} characters; past ${REVIEW_LIMITS.lineMaxChars} it is not a button face. Put the reasoning in the option's detail.`,
         );
       } else if (
-        words(label) > REVIEW_LIMITS.optionLabelWords ||
+        wordCount(label) > REVIEW_LIMITS.optionLabelWords ||
         label.trim().length > REVIEW_LIMITS.optionLabelChars
       ) {
         // Advisory for the same reason the row budgets are: a fourth word
@@ -1367,11 +1364,11 @@ export function checkReviewPayload(input: unknown, context?: { text?: string }):
       if (d !== undefined) {
         if (typeof d !== 'string') {
           fail(`review.options[${i}].detail must be a markdown string.`);
-        } else if (words(d) > REVIEW_LIMITS.detailMaxWords) {
+        } else if (wordCount(d) > REVIEW_LIMITS.detailMaxWords) {
           fail(
-            `review.options[${i}].detail is ${words(d)} words; past ${REVIEW_LIMITS.detailMaxWords} it is a document, not a note under a button.`,
+            `review.options[${i}].detail is ${wordCount(d)} words; past ${REVIEW_LIMITS.detailMaxWords} it is a document, not a note under a button.`,
           );
-        } else if (words(d) > REVIEW_LIMITS.optionDetailWords) {
+        } else if (wordCount(d) > REVIEW_LIMITS.optionDetailWords) {
           gaps.push('optionDetailLength');
         }
       }
