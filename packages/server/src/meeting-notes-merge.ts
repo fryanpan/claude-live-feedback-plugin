@@ -111,9 +111,9 @@ function headingText(el: Y.XmlElement): string {
  *
  * The LAST matching heading, not the first. A doc can carry more than one
  * "Meeting notes" heading once a meeting has started a fresh section at the
- * end (see `mergeNotesSection`'s trailing rule) — the live meeting writes
- * into the newest one, and an earlier meeting's section becomes ordinary
- * content the note-taker no longer reaches.
+ * end (see `mergeNotesSection`'s end-of-doc rule) — the live meeting writes
+ * into the newest one, and an earlier section becomes ordinary content the
+ * note-taker no longer reaches.
  */
 export function findNotesSection(
   fragment: Y.XmlFragment,
@@ -522,6 +522,56 @@ function takeSimilar(pool: string[], md: string): string | null {
   return pool.splice(best, 1)[0] ?? null;
 }
 
+/**
+ * Every notes section that is NOT the one being written into — a previous
+ * meeting's, or this meeting's own earlier section once a person's heading
+ * pushed it off the end of the doc. Their lines are written; they are not
+ * re-added.
+ */
+function dropEchoesOfEarlierSections(
+  incoming: readonly IncomingItem[],
+  fragment: Y.XmlFragment,
+  heading: string,
+  target: NotesSectionSpan | null,
+): IncomingItem[] {
+  const top = fragment.toArray() as Y.XmlElement[];
+  const keys: string[] = [];
+  for (let i = 0; i < top.length; i++) {
+    const el = top[i]!;
+    if (el.nodeName !== 'heading' || headingText(el) !== heading) continue;
+    if (target && i === target.start) continue;
+    const level = prose.headingLevelOf(el);
+    let endExclusive = top.length;
+    for (let j = i + 1; j < top.length; j++) {
+      const h = top[j]!;
+      if (h.nodeName === 'heading' && prose.headingLevelOf(h) <= level) {
+        endExclusive = j;
+        break;
+      }
+    }
+    for (const item of itemsInSection(fragment, { start: i, endExclusive, heading: el })) {
+      keys.push(itemKey(item));
+    }
+  }
+  if (keys.length === 0) return [...incoming];
+  const written = consumable(keys);
+  return incoming.filter((item) => !written(itemKey(item)));
+}
+
+/** Entries back to markdown: items keep their markers and run as one tight
+ *  list where they are consecutive; blocks stand apart. */
+function markdownOfItems(items: readonly IncomingItem[]): string {
+  const out: string[] = [];
+  let prev: IncomingItem | null = null;
+  for (const item of items) {
+    const md = item.kind === 'item' ? marker(item.ordered) + item.md : item.md;
+    const tight = prev?.kind === 'item' && item.kind === 'item' && prev.ordered === item.ordered;
+    out.push((tight ? '\n' : out.length ? '\n\n' : '') + md);
+    prev = item;
+  }
+  return out.join('');
+}
+
 function consumable(mds: readonly string[]): (md: string) => boolean {
   const left = new Map<string, number>();
   for (const md of mds) left.set(md, (left.get(md) ?? 0) + 1);
@@ -812,32 +862,46 @@ export function mergeNotesSection(
   });
   if (!notesMarkdown.trim()) return empty('empty');
   const body = stripSectionHeading(notesMarkdown, heading);
-  const incoming = itemsOfMarkdown(body);
-  if (incoming === null) return empty('parse-failed');
-  if (incoming.length === 0) return empty('empty');
+  const parsed = itemsOfMarkdown(body);
+  if (parsed === null) return empty('parse-failed');
+  if (parsed.length === 0) return empty('empty');
 
   const fragment = prose.getProseFragment(ydoc);
   const found = findNotesSection(fragment, heading);
-  // A section that is NOT at the end of the doc, and in which the ledger
-  // claims nothing, is a PREVIOUS meeting's notes — content a person has
-  // since written past. Notes go at the end of the doc (owner's call,
-  // 2026-08-31: "notetaker always inserts at the end of the doc"), so this
-  // meeting starts a fresh section there rather than growing one mid-doc.
-  // The claims half matters: a section THIS meeting is writing stays its
-  // target even when somebody types a heading below it mid-meeting — the
-  // section a meeting writes into is chosen once, not per tick.
-  const span =
-    found &&
-    found.endExclusive < fragment.length &&
-    !itemsInSection(fragment, found).some((item) => opts.ownership.claims(item.el, item.md))
-      ? null
-      : found;
+  // Notes always land at the END of the doc (owner's call, 2026-09-01: "note
+  // always at the end of doc for now"). A section is this meeting's target
+  // only while it IS the doc's tail: the moment a person types a same-level
+  // heading below it, the next tick starts a fresh section at the end rather
+  // than writing above their words — whether or not the ledger still claims
+  // items in the section they wrote past. The claims half used to keep a
+  // claimed section as the target ("chosen once, not per tick"), and that
+  // put live notes above the text a person had typed below them.
+  const span = found && found.endExclusive === fragment.length ? found : null;
+  // Whatever an earlier section already holds is written. The composer's
+  // `previous` is only the LAST section, so once a fresh one starts it
+  // re-lists the points it no longer sees; appending those would say them
+  // twice, so an entry that reads the same as a line of an earlier section
+  // is dropped here.
+  const incoming = dropEchoesOfEarlierSections(parsed, fragment, heading, span);
+  if (incoming.length === 0) {
+    return {
+      ok: true,
+      mode: span ? 'merged' : 'appended',
+      deleted: 0,
+      inserted: 0,
+      suggested: 0,
+      dropped: parsed.length,
+    };
+  }
   if (!span) {
     // First write of this meeting's section: nothing of anybody's to
     // protect in it. Append it whole, at the end of the doc.
+    // The composer's own markdown when every entry is new — its shape is
+    // the shape wanted — and the entries re-listed otherwise.
+    const fresh = incoming.length === parsed.length ? body : markdownOfItems(incoming);
     let blocks: Y.XmlElement[];
     try {
-      blocks = prose.parseMarkdownBlocks(`## ${heading}\n\n${body}`);
+      blocks = prose.parseMarkdownBlocks(`## ${heading}\n\n${fresh}`);
     } catch {
       return empty('parse-failed');
     }
