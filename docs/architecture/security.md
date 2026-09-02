@@ -323,6 +323,15 @@ the service log could complete a sign-in for any address they could start a
 challenge for, `CW_OWNER_EMAIL` included. The flag is a development
 convenience and the masked line names it.
 
+Those lines, and the boot notice naming which sender is in force, carry an
+ISO timestamp (`stamped`, `log-stamp.ts`). What anyone asks of them is how
+many codes went out and WHEN — after a mail-bomb, or when somebody reports a
+code that never arrived — and an undated burst answers neither half. It is a
+deliberate exception: nothing else in the server's console output is stamped,
+and the two `[auth]` lines that can fire in a hot loop stay bare on purpose,
+because `installLogSquelch` bounds a loop by collapsing IDENTICAL lines and a
+per-call stamp would make every repeat distinct.
+
 ## The three signed-token schemes, one signing module
 
 All three are HMAC-SHA256 over a dotted payload with a timing-safe compare,
