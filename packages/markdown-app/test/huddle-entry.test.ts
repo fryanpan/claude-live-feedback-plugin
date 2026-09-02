@@ -133,22 +133,30 @@ describe('applyHuddleCrumb', () => {
 /**
  * app.ts runs main() on import, so the mount that reads the flag is pinned by
  * source text (the same shape meeting-strip-css.test.ts uses for it).
+ *
+ * Two files since the meeting surface moved out: app.ts still decides that a
+ * huddle started here, and doc/doc-meeting-mount.ts is what acts on it. Read
+ * separately rather than concatenated, so each assertion below still names
+ * the file that has to keep its half of the bargain.
  */
 describe('the markdown mount honours the flag once', () => {
   const APP = readFileSync(resolve(import.meta.dirname, '../src/app.ts'), 'utf8');
+  const DIR = import.meta.dirname;
+  const MOUNT = readFileSync(resolve(DIR, '../src/doc/doc-meeting-mount.ts'), 'utf8');
 
   it('hands the strip an autoStart read from the address, then clears the flag', () => {
-    const at = APP.indexOf('mountMeetingStrip({');
+    const at = MOUNT.indexOf('mountMeetingStrip({');
     expect(at, 'the strip mount went missing').toBeGreaterThan(0);
-    const call = APP.slice(at, APP.indexOf('})', at));
+    const call = MOUNT.slice(at, MOUNT.indexOf('})', at));
     expect(call).toContain('autoStart:');
     // And what it listens for, from the same address.
     expect(call).toContain('mode:');
+    // The flag is read where the mount is decided, and acted on where it runs.
     expect(APP).toContain('wantsHuddleStart(location.search)');
-    expect(APP).toContain('huddleCaptureMode(location.search)');
+    expect(MOUNT).toContain('huddleCaptureMode(location.search)');
     // A reload, or Back into this entry later, must not restart the mic.
-    expect(APP).toContain('withoutHuddleStart(');
-    expect(APP).toMatch(/history\.replaceState\([^)]*withoutHuddleStart/);
+    expect(MOUNT).toContain('withoutHuddleStart(');
+    expect(MOUNT).toMatch(/history\.replaceState\([^)]*withoutHuddleStart/);
   });
 });
 
