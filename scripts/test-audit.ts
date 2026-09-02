@@ -77,7 +77,12 @@ function fixedSleeps(): Check {
       if (COMMENT_LINE.test(text)) return;
       for (const m of text.matchAll(SLEEP)) {
         const raw = m[1] ?? m[2] ?? '';
-        const ms = /^\d/.test(raw) ? Number(raw) : (consts.get(raw) ?? Number.NaN);
+        // `.replace` matters: `setTimeout(r, 15_000)` is a legal literal, and
+        // `Number('15_000')` is NaN — which read as "below the threshold" and
+        // hid the single slowest wait in the suite for a whole conversion pass.
+        const ms = /^\d/.test(raw)
+          ? Number(raw.replace(/_/g, ''))
+          : (consts.get(raw) ?? Number.NaN);
         if (ms >= 500 && !isTimed(lines, i)) sites.push({ file, line: i + 1, text: text.trim() });
       }
     });
