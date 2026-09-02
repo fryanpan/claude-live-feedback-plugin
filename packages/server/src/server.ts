@@ -9961,7 +9961,23 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
             });
           }
           if (req.method === 'GET') return j(200, { refresh: pluginRefresher.last() });
-          if (req.method === 'POST') return j(200, { refresh: await pluginRefresher.refresh() });
+          if (req.method === 'POST') {
+            // Never through the edge. The host guard admits the operator's
+            // own proxied hostname with an Access token, and cloudflared
+            // runs on this box, so a tunnelled request has a loopback peer
+            // address — neither the host class nor the address says "not
+            // from here". `cf-ray` does: Cloudflare stamps it on everything
+            // it proxies and strips any the client sent, which is the test
+            // the host guard already trusts. (Urgent-fixes ticket,
+            // 2026-09-02.)
+            if (req.headers.has('cf-ray')) {
+              return j(403, {
+                error:
+                  'plugin refresh cannot be triggered through the edge (proxied request) — run it from the box or the tailnet',
+              });
+            }
+            return j(200, { refresh: await pluginRefresher.refresh() });
+          }
           return j(405, { error: 'method not allowed' });
         }
         // --- REST: deploy this server ---
@@ -10068,6 +10084,18 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
               return j(403, {
                 error:
                   'deploy must be triggered from this machine (loopback only) — a deploy restarts the server and drops every live editor',
+              });
+            }
+            // Loopback is necessary, not sufficient: cloudflared runs on
+            // this box, so a request through the tunnel — the operator's
+            // proxied hostname, Access token and all — arrives from
+            // 127.0.0.1 and passes the address test. `cf-ray` is the hop's
+            // own signature (see the refresh route above for why it is the
+            // right test). (Urgent-fixes ticket, 2026-09-02.)
+            if (req.headers.has('cf-ray')) {
+              return j(403, {
+                error:
+                  'deploy cannot be triggered through the edge (proxied request) — run it from the box',
               });
             }
             const body = (await safeJson(req)) ?? {};
