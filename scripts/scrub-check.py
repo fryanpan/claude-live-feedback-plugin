@@ -35,6 +35,28 @@ name is ADDED to the registry, the next branch to merge `main` is blocked on
 content that has been public for weeks. Both layers now ask scrub_git.py the
 same question about the same push.
 
+WHAT IS READ. In every git-addressed mode the scanner reads the BLOB that
+would become public, never the working tree: `--push-tip SHA` and
+`--diff-range A..B` read `git show <tip>:<path>` (the tip is SHA, or B), and
+`--staged` reads the index. Before this (Urgent-fixes ticket, 2026-09-02) the
+file list came from git and the bytes came from disk, so an uncommitted edit
+could hide a leak the push carried — or flag one it did not. Only bare paths
+read the working tree. A leak in an intermediate commit that the tip no
+longer carries is still published as history; the Haiku layer scans the full
+patch of every becoming-public commit and is the layer that sees it.
+
+NEVER-ALLOW TYPES. Some file types are always scanned and can never be
+allowlisted — not by `scrub-allow`, not by SKIP_PATHS: `.ydoc` (a whole
+document corpus), `.jsonl` / `.csv` (data dumps), `.svg` / `.xml` (markup
+that is text but reads as an asset), image types, and extension-less files.
+These were SKIPPED before, as "binaries", which made them the one place a
+leak could travel unread. See NEVER_ALLOW_EXTS.
+
+SCRUB-ALLOW is honoured only as a TRAILING COMMENT TOKEN — `# scrub-allow`,
+`// scrub-allow`, `<!-- scrub-allow ... -->`, `/* scrub-allow */` at the end
+of the line. The word appearing anywhere in a line used to exempt the line,
+which let a string literal or a URL fragment exempt itself.
+
 This tool does NOT read stdin; piping a diff at it is an error, not a scan.
 
 Exit codes: 0 = clean, 1 = leaks found, 2 = setup error.
@@ -48,7 +70,7 @@ import os
 import re
 import subprocess
 import sys
-from typing import Dict, List, NamedTuple, Optional, Set, Tuple
+from typing import Callable, Dict, List, NamedTuple, Optional, Set, Tuple
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import scrub_git  # noqa: E402
@@ -120,16 +142,45 @@ SCAN_EXTS = {
     ".toml", ".env", ".envrc",
 }
 
+# File types that are ALWAYS scanned and can NEVER be allowlisted — not by an
+# inline `scrub-allow`, not by SKIP_PATHS. Each is a shape in which content
+# arrives without anyone having read it line by line: a `.ydoc` is a whole
+# document corpus, `.jsonl` and `.csv` are dumps, `.svg`/`.xml` are assets
+# that happen to be text, images are opaque, and an extension-less file is
+# whatever it is. Before this they were skipped as "binaries", which made
+# them the one channel a leak could travel through unread.
+# (Urgent-fixes ticket, 2026-09-02.)
+NEVER_ALLOW_EXTS = {
+    ".ydoc", ".jsonl", ".csv", ".svg", ".xml",
+    ".png", ".jpg", ".jpeg", ".gif", ".webp", ".ico", ".bmp", ".tif", ".tiff",
+    ".heic", ".heif", ".avif",
+}
+
 # Specific paths to never scan. The scanner's own files (scrub-check.py,
 # scrub-haiku.py) must be skipped because they intentionally mention denylist
 # keywords as examples of what to flag — scanning them would block their own
-# propagation. Likewise the gitignored docs.
+# propagation. Likewise the gitignored docs. A NEVER_ALLOW type listed here
+# would still be scanned: that set wins.
 SKIP_PATHS = {
     "docs/process/aggregation-log.md",
     "registry.yaml",
     "scripts/scrub-check.py",
     "scripts/scrub-haiku.py",
 }
+
+# `scrub-allow` counts only as a TRAILING comment token. A line comment
+# (`#`, `//`, `--` for SQL/Lua, `;` for ini/asm) runs to end of line by
+# definition; a block comment (`<!-- -->`, `/* */`) must CLOSE at end of
+# line, so `/* scrub-allow */ secret` is not exempt. The opener must start
+# the line or follow whitespace, so a `#scrub-allow` URL fragment is not an
+# opener. Anywhere else in the line the word is just a word.
+ALLOW_RX = re.compile(
+    r"(?:^|\s)(?:"
+    r"(?:#|//|--|;)\s*scrub-allow\b[^\n]*"
+    r"|<!--\s*scrub-allow\b[^\n]*?-->\s*"
+    r"|/\*\s*scrub-allow\b[^\n]*?\*/\s*"
+    r")$"
+)
 
 
 def repo_root() -> Optional[str]:
@@ -342,38 +393,85 @@ def build_patterns(names: Set[str], denylist: List[Tuple[str, bool]]) -> List[Tu
     return patterns
 
 
+def is_never_allow(path: str) -> bool:
+    """A type that is always scanned and cannot be allowlisted."""
+    ext = os.path.splitext(os.path.basename(path))[1].lower()
+    return ext in NEVER_ALLOW_EXTS or ext == ""
+
+
 def should_scan(path: str) -> bool:
+    # Checked FIRST: a never-allow type is scanned even if a path rule below
+    # would skip it. The set exists so that no rule can quietly widen.
+    if is_never_allow(path):
+        return True
     if path in SKIP_PATHS:
         return False
-    base = os.path.basename(path)
-    # Allow extensionless files only if their name suggests text (e.g., .githooks/pre-push)
-    ext = os.path.splitext(base)[1].lower()
-    if ext in SCAN_EXTS:
-        return True
-    # Files with no extension that live in .githooks/ or scripts/ are typically text
-    if not ext and ("/.githooks/" in "/" + path + "/" or path.startswith("scripts/")):
-        return True
-    return False
+    ext = os.path.splitext(os.path.basename(path))[1].lower()
+    return ext in SCAN_EXTS
 
 
-def scan_file(path: str, patterns: List[Tuple[str, re.Pattern]]) -> List[Tuple[int, str, str]]:
-    """Return [(line_no, label, line_text)] of matches."""
+def scan_content(
+    path: str, data: bytes, patterns: List[Tuple[str, re.Pattern]]
+) -> List[Tuple[int, str, str]]:
+    """Return [(line_no, label, line_text)] of matches in `data`.
+
+    `path` decides only whether an inline `scrub-allow` may exempt a line:
+    never in a NEVER_ALLOW type, and elsewhere only as a trailing comment
+    token (ALLOW_RX). The bytes come from whichever source the mode named —
+    a commit, the index, or disk — and this function does not care which.
+    """
     findings: List[Tuple[int, str, str]] = []
-    try:
-        with open(path, "rb") as f:
-            data = f.read()
-        text = data.decode("utf-8", errors="replace")
-    except (OSError, IOError):
-        return findings
+    text = data.decode("utf-8", errors="replace")
+    allow_ok = not is_never_allow(path)
     for line_no, line in enumerate(text.split("\n"), 1):
-        # Skip lines that are intentional examples documenting the gate itself.
-        if "scrub-allow" in line:
+        # A line documenting the gate itself may exempt itself — with a
+        # trailing comment, in a type where a comment means something.
+        if allow_ok and ALLOW_RX.search(line):
             continue
         for label, rx in patterns:
             if rx.search(line):
                 findings.append((line_no, label, line))
                 break  # one finding per line is enough
     return findings
+
+
+def scan_file(path: str, patterns: List[Tuple[str, re.Pattern]]) -> List[Tuple[int, str, str]]:
+    """Scan a file on disk. Kept for callers that pass bare paths."""
+    data = read_worktree(path)
+    return [] if data is None else scan_content(path, data, patterns)
+
+
+def read_worktree(path: str) -> Optional[bytes]:
+    try:
+        with open(path, "rb") as f:
+            return f.read()
+    except (OSError, IOError):
+        return None
+
+
+def read_blob(rev: str, path: str) -> Optional[bytes]:
+    """The bytes of `path` at `rev` (`""` for the index), or None if absent.
+
+    This is what the push publishes. A file the working tree has since
+    edited, or that the tip no longer carries, is read as the tip has it —
+    the only version anyone else will ever see.
+    """
+    try:
+        return subprocess.run(
+            ["git", "show", f"{rev}:{path}"],
+            capture_output=True, check=True,
+        ).stdout
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        return None
+
+
+def tip_of_range(range_spec: str) -> Optional[str]:
+    """The publishing side of `A..B` / `A...B` — B. None for a bare rev."""
+    for sep in ("...", ".."):
+        if sep in range_spec:
+            tip = range_spec.rsplit(sep, 1)[1].strip()
+            return tip or None
+    return None
 
 
 def files_in_range(range_spec: str) -> List[str]:
@@ -426,16 +524,32 @@ def main() -> int:
         print(f"[scrub-check] {e}", file=sys.stderr)
         return 2
 
+    # Where the BYTES come from. Every git-addressed mode reads the blob the
+    # push would publish; only bare paths read the working tree.
+    read: "Callable[[str], Optional[bytes]]" = read_worktree
     if rev_args is not None:
         files = scrub_git.push_files(rev_args)
+        tip = rev_args[0]
+        read = lambda path, _rev=tip: read_blob(_rev, path)
     elif "--diff-range" in args:
         idx = args.index("--diff-range")
         if idx + 1 >= len(args):
             print("[scrub-check] --diff-range needs an argument", file=sys.stderr)
             return 2
-        files = files_in_range(args[idx + 1])
+        range_spec = args[idx + 1]
+        files = files_in_range(range_spec)
+        tip = tip_of_range(range_spec)
+        if tip is None:
+            print(
+                f"[scrub-check] --diff-range wants A..B (got {range_spec!r}); "
+                "the right-hand side is the tip whose blobs are scanned.",
+                file=sys.stderr,
+            )
+            return 2
+        read = lambda path, _rev=tip: read_blob(_rev, path)
     elif "--staged" in args:
         files = files_staged()
+        read = lambda path: read_blob("", path)
     elif "--scan-all-tracked" in args:
         files = all_tracked_files()
     else:
@@ -452,10 +566,20 @@ def main() -> int:
             )
             return 2
 
-    # Filter: keep only files we'd scan and that exist on disk.
-    files = [f for f in files if should_scan(f) and os.path.isfile(f)]
+    # Filter: keep only files we'd scan and that the source can produce — a
+    # path git named that the tip no longer carries (deleted in the push) has
+    # no blob to read, and a bare path that is not a file has no bytes.
+    contents: List[Tuple[str, bytes]] = []
+    for f in files:
+        if not should_scan(f):
+            continue
+        if read is read_worktree and not os.path.isfile(f):
+            continue
+        data = read(f)
+        if data is not None:
+            contents.append((f, data))
 
-    if not files:
+    if not contents:
         return 0
 
     registry = find_registry()
@@ -502,8 +626,8 @@ def main() -> int:
 
     total = 0
     files_with_findings = set()
-    for f in files:
-        for line_no, label, line in scan_file(f, patterns):
+    for f, data in contents:
+        for line_no, label, line in scan_content(f, data, patterns):
             if total == 0:
                 print(f"[scrub-check] leaks detected:", file=sys.stderr)
             files_with_findings.add(f)
