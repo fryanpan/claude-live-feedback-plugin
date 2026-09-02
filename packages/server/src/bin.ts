@@ -549,6 +549,30 @@ if (meetingBot && !meetingBot.config.publicWsBase) {
           'bots stay disabled until it names the https origin this server is reached on.',
   );
 }
+if (meetingBot) {
+  // Say which region the key is being sent to and whether it answers there.
+  // A key from another region fails every invite with a 502 and nothing
+  // else in the boot log hints at it; this line is the hint.
+  const regionSource = process.env.RECALL_REGION?.trim()
+    ? `RECALL_REGION=${meetingBot.config.region}`
+    : `RECALL_REGION unset, defaulting to ${meetingBot.config.region}`;
+  void meetingBot.checkKeyRegion().then((check) => {
+    if (check.ok) {
+      console.log(`[meetings] Recall key accepted by ${check.region} (${regionSource}).`);
+    } else if (check.status === 401) {
+      console.error(
+        `[meetings] Recall key REJECTED by ${check.region} (401; ${regionSource}). ` +
+          'The key belongs to another region, so every bot invite will answer 502. ' +
+          'Set RECALL_REGION in the launchd plist EnvironmentVariables to the region ' +
+          'the key was issued in and re-bootstrap the service.',
+      );
+    } else {
+      console.error(
+        `[meetings] Recall key check against ${check.region} failed (status ${check.status}; ${regionSource}); bots may not work.`,
+      );
+    }
+  });
+}
 const meetingBotWebhookSecret = process.env.RECALL_WEBHOOK_SECRET?.trim() || undefined;
 if (meetingBot?.config.publicWsBase && !meetingBotWebhookSecret) {
   console.log(
