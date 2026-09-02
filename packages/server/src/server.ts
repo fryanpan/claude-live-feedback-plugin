@@ -5361,8 +5361,28 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           // cannot find its live sockets. Flipping the switch closes the door
           // to new requests immediately; an already-open collab websocket
           // survives until the process restarts.
+          //
+          // `proxied-local` is in here too, and it is the WIDEST of the four:
+          // the operator's own public hostname through the tunnel, with the
+          // whole product behind it. It arrives from outside the machine by
+          // exactly the definition the other three do, and leaving it out
+          // meant an operator who flipped this switch during a security
+          // review — believing the one sentence that describes it — had not
+          // closed the widest external door. Being the operator's own door is
+          // not an argument for exempting it; it is the argument for the
+          // Access token and the email allowlist below, which stay.
+          //
+          // Nothing local is affected, so the way back is the way in: flip it
+          // from the box or the tailnet (`POST /api/share/enabled`, or the
+          // `set_sharing_enabled` MCP tool). `CW_SHARING_DISABLED=1` is off
+          // AND LOCKED, and it now locks remote operator access with it —
+          // which is what "the outside door is shut" was always supposed to
+          // mean.
           if (
-            (decision.kind === 'share' || decision.kind === 'link' || decision.kind === 'collab') &&
+            (decision.kind === 'share' ||
+              decision.kind === 'link' ||
+              decision.kind === 'collab' ||
+              decision.kind === 'proxied-local') &&
             !sharingGate.isEnabled()
           ) {
             return j(403, { error: 'sharing_disabled' });
