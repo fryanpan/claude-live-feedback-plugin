@@ -71,10 +71,10 @@ itself is up (launchd service installed 2026-08-04, ingress fixed).
 
 **Blocked on two things:**
 
-1. **Security hardening (engineering, MUST land first).** A security
-   review on 2026-08-04 found two authorization gaps in the public-URL
-   path — see [public-url-threat-model.md](public-url-threat-model.md).
-   No external share should be minted until those are fixed.
+1. **Security hardening (engineering, MUST land first).** The public-URL
+   path went through a security review on 2026-08-04 and the results were
+   applied before any external share was minted. The boundaries are
+   described in [docs/architecture/security.md](../../architecture/security.md).
 2. **Operator setup + a TLS decision.** See the Cloudflare plan: a
    second-level wildcard can't use Universal SSL, so either Advanced
    Certificate Manager (~$10/mo, zero code) or single-level hostnames

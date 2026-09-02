@@ -37,8 +37,9 @@ See docs/product/sharing.md for the design + runbook.
 
 ## Before any real share
 
-A 2026-08-04 security review found two authorization gaps in the
-public-URL path — see [public-url-threat-model.md](public-url-threat-model.md).
-**Both must be fixed before the first external share is minted.** Allowed
+The public-URL path went through a security review on 2026-08-04 and the
+results were applied before the first external share was minted. The
+boundaries it settled are described in
+[docs/architecture/security.md](../../architecture/security.md). Allowed
 email domains are supplied by the operator per share; none are recorded
 in this repo.
