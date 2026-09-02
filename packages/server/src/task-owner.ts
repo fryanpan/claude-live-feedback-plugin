@@ -17,6 +17,7 @@
  * agent roster as the standing evidence (`resolveOwnerKind`).
  */
 import { agentIdCandidates } from '@feedback/core';
+import type { DeclaredOwnerKind } from '@feedback/core/task-wire';
 import { classifyActor } from './activity.ts';
 import { SHARED_AGENT_IDS } from './agent-watches.ts';
 
@@ -108,7 +109,7 @@ export type OwnerKind = 'person' | 'agent' | 'unknown';
 /** The two values a caller may DECLARE. `unknown` is never declarable: it is
  *  what the absence of a declaration reads as, so accepting it as input would
  *  give one state two spellings. */
-export type DeclaredOwnerKind = 'person' | 'agent';
+export type { DeclaredOwnerKind };
 
 /** A caller-supplied kind, case-folded, or nothing. Same forgiveness
  *  `classifyActor` applies to `kind` — a hand-populated `'Person'` matching
