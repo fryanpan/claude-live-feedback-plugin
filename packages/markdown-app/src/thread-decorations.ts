@@ -18,6 +18,15 @@ export interface ThreadRange {
   from: number;
   to: number;
   status: 'open' | 'resolved';
+  /**
+   * What the thread is (`thread-kind.ts`), so the highlight can carry the
+   * same glyph as the card: `question` for an open review item, `answered`
+   * once it has been, `resolved` for a closed thread. Absent means a plain
+   * comment.
+   */
+  kind?: 'comment' | 'question' | 'answered' | 'resolved';
+  /** Changed since the reader last looked — a red dot on the glyph. */
+  isNew?: boolean;
 }
 
 /**
@@ -92,14 +101,17 @@ function buildDecos(
   const docSize = doc.content.size;
   const cardFor = new Map(inlineCards.map((c) => [c.id, c.el]));
   for (const r of ranges) {
-    // Resolved threads disappear from the doc — the conversation is
-    // still reachable via the Resolved tab in the drawer, but the
-    // highlight no longer competes for the reader's attention.
-    if (r.status === 'resolved') continue;
     const from = Math.max(0, Math.min(r.from, docSize));
     const to = Math.max(0, Math.min(r.to, docSize));
     if (from >= to) continue;
     const classes = ['thread-range'];
+    // A resolved thread stays on the page as a faint green tick rather than
+    // vanishing (approved: comments mock 3) — the reader can see a question
+    // WAS asked here and settled, without the highlight competing for
+    // attention the way an open one does.
+    const kind = r.kind ?? (r.status === 'resolved' ? 'resolved' : 'comment');
+    if (kind !== 'comment') classes.push(kind);
+    if (r.isNew) classes.push('is-new');
     if (activeId === r.id) classes.push('active');
     if (pulseId === r.id) classes.push('pulse');
     decos.push(Decoration.inline(from, to, { class: classes.join(' '), 'data-thread-id': r.id }));

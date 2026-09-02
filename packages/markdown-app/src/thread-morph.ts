@@ -146,7 +146,13 @@ export function syncFaceVisibility(card: HTMLElement, expanded: boolean): void {
   // to SAY which way the card is folded. The rotation conveys it visually and
   // to nobody else; without this the announced content changes from the topic
   // line to the whole conversation with no state change announced at all.
-  card.querySelector('.thread-caret')?.setAttribute('aria-expanded', String(expanded));
+  const caret = card.querySelector('.thread-caret');
+  caret?.setAttribute('aria-expanded', String(expanded));
+  // A review item's caret is words, and the words have to say which way the
+  // card is folded — "Details" to open, "Less" to close.
+  if (caret?.classList.contains('thread-caret-words')) {
+    caret.textContent = expanded ? 'Less ▴' : 'Details ▾';
+  }
   const showing = expanded ? 'face-detail' : 'face-summary';
   for (const face of Array.from(card.querySelectorAll<HTMLElement>('.thread-face'))) {
     if (face.classList.contains(showing)) {
