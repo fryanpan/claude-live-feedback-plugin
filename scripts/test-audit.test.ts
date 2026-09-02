@@ -20,7 +20,7 @@
  * runner trying to collect it as a suite.
  */
 import { spawnSync } from 'node:child_process';
-import { existsSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -28,6 +28,19 @@ import { afterEach, describe, expect, it } from 'vitest';
 const REPO = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const PROBE_REL = join('packages', 'server', 'test', 'zz-audit-untracked-probe.ts');
 const PROBE_ABS = join(REPO, PROBE_REL);
+
+/**
+ * The ignored twin of the probe. `.gitignore` carries a bare `dist/`, so this
+ * path is ignored while still matching the sleep check's
+ * `packages/server/test/*.ts` pathspec — a git glob crosses slashes. It is the
+ * one place where "the audit stopped listing it" can only mean the ignore
+ * rules were honoured, rather than that the pathspec never matched.
+ */
+const IGNORED_REL = join('packages', 'server', 'test', 'dist', 'zz-audit-ignored-probe.ts');
+const IGNORED_ABS = join(REPO, IGNORED_REL);
+
+/** A site the audit already counts, committed and tracked. */
+const TRACKED_SITE = join('packages', 'markdown-app', 'test', 'back-link-tap-target-css.test.ts');
 
 /** A file the sleep check must object to: one fixed wait, well over the bar. */
 const PROBE_SOURCE = `import { sleep } from 'bun';\n\nexport async function wait(): Promise<void> {\n  await sleep(2500);\n}\n`;
@@ -46,6 +59,7 @@ function runAudit(...args: string[]): Run {
 
 afterEach(() => {
   rmSync(PROBE_ABS, { force: true });
+  rmSync(dirname(IGNORED_ABS), { force: true, recursive: true });
 });
 
 describe('the audit enumerates untracked files', () => {
@@ -73,12 +87,26 @@ describe('the audit enumerates untracked files', () => {
     expect(runAudit().code).toBe(0);
   });
 
-  it('still ignores what .gitignore ignores', () => {
-    // `--others` without `--exclude-standard` would drag in node_modules and
-    // build output. The audit reads every file it lists, so that is a hang and
-    // a pile of false sites, not just noise.
-    const listed = runAudit('--list').stdout;
-    expect(listed).not.toContain('node_modules/');
-    expect(listed).not.toContain('/dist/');
+  it('still names tracked files', () => {
+    // The positive control for the negative control below. Adding `--others`
+    // could in principle have replaced the tracked list rather than extended
+    // it, and every "the audit did not name it" assertion would still pass.
+    expect(runAudit('--list').stdout).toContain(TRACKED_SITE);
+  });
+
+  it('does not name a file .gitignore ignores', () => {
+    // `--others` without `--exclude-standard` drags in node_modules and build
+    // output. The audit reads every file it lists, so that is a hang and a pile
+    // of false sites, not just noise.
+    //
+    // The probe is the same offending source as above at an ignored path, so
+    // the only difference between "named and red" and "unnamed and green" is
+    // the ignore rules.
+    mkdirSync(dirname(IGNORED_ABS), { recursive: true });
+    writeFileSync(IGNORED_ABS, PROBE_SOURCE);
+
+    const run = runAudit('--list');
+    expect(run.stdout).not.toContain(IGNORED_REL);
+    expect(run.code, `audit went red on an ignored file:\n${run.stderr}`).toBe(0);
   });
 });
