@@ -8294,14 +8294,19 @@ body.is-reading-width #editor > .live-zone {
   letter-spacing: 0.02em;
   color: var(--fg-muted);
 }
-/* Each transcript line leads with its own meeting time — a line's own time
-   is the thing you want when you read it back. */
-.lz-ts {
-  font-size: 0.76em;
-  font-variant-numeric: tabular-nums;
-  color: var(--fg-muted);
-  margin-right: 0.45em;
-  white-space: nowrap;
+/* The stream is ONE run of text: a turn is the engine's unit, not the
+   reader's (owner, 2026-09-01), so turns are inline spans and the only
+   line breaks are the <br>s the engine's own text carried. */
+.lz-lines,
+.lz-chunk-lines {
+  font-size: 15.5px;
+  line-height: 1.55;
+  color: #4b535c;
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+.lz-turn {
+  display: inline;
 }
 .lz-speaker {
   font-size: 0.78em;
@@ -8314,16 +8319,7 @@ body.is-reading-width #editor > .live-zone {
   color: var(--fg-muted);
   white-space: nowrap;
 }
-.lz-line {
-  font-size: 15.5px;
-  line-height: 1.55;
-  color: #4b535c;
-  margin: 0;
-}
-.lz-line + .lz-line {
-  margin-top: 0.5em;
-}
-.lz-partial > .lz-text::after {
+.lz-partial::after {
   content: "";
   display: inline-block;
   width: 2px;
@@ -8355,7 +8351,7 @@ body.is-reading-width #editor > .live-zone {
   padding: 8px 11px 10px;
   margin: -2px -8px 12px -12px;
 }
-.lz-chunk-lines .lz-line {
+.lz-chunk-lines {
   color: var(--fg);
 }
 .lz-chunk-note {
@@ -8401,7 +8397,7 @@ body.is-reading-width #editor > .live-zone {
   }
 }
 @media (prefers-reduced-motion: reduce) {
-  .lz-partial > .lz-text::after,
+  .lz-partial::after,
   .lz-spinner,
   #editor > .ProseMirror .settle-wash {
     animation: none;
