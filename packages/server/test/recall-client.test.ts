@@ -94,6 +94,42 @@ describe('recall key resolution', () => {
   });
 });
 
+describe('recall key region check', () => {
+  const client = (status: number) =>
+    createRecallClient({
+      apiKey: 'k-test',
+      env: { RECALL_REGION: 'us-east-1' },
+      fetch: async (url, init) => {
+        expect(String(url)).toBe('https://us-east-1.recall.ai/api/v1/bot/?limit=1');
+        expect((init?.headers as Record<string, string>).Authorization).toBe('k-test');
+        return new Response('{}', { status });
+      },
+    });
+
+  it('reports a key another region rejects, with the status and the region it tried', async () => {
+    expect(await client(401)!.checkKeyRegion()).toEqual({
+      ok: false,
+      region: 'us-east-1',
+      status: 401,
+    });
+  });
+
+  it('accepts a key the configured region answers', async () => {
+    expect(await client(200)!.checkKeyRegion()).toEqual({ ok: true, region: 'us-east-1' });
+  });
+
+  it('never throws: a network failure is status 0', async () => {
+    const c = createRecallClient({
+      apiKey: 'k-test',
+      env: {},
+      fetch: async () => {
+        throw new Error('ECONNRESET');
+      },
+    });
+    expect(await c!.checkKeyRegion()).toEqual({ ok: false, region: 'us-east-1', status: 0 });
+  });
+});
+
 describe('recall config', () => {
   it('defaults the region and rejects one that is not a real host', () => {
     expect(recallConfigFromEnv({ RECALL_REGION: 'moon-base-1' }).region).toBe('us-east-1');
