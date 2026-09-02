@@ -17,10 +17,12 @@ Per-subsystem summaries live in [docs/architecture/](docs/architecture/):
 [meeting-assistant](docs/architecture/meeting-assistant.md) (live
 transcription + notes on a pause-or-cadence clock),
 [stall-detection](docs/architecture/stall-detection.md) (board wakes and
-their economics) and
+their economics),
 [goal-projection](docs/architecture/goal-projection.md) (the goal bar, the
-remainder, and when a goal lands). Read the relevant one before touching its
-subsystem.
+remainder, and when a goal lands) and
+[security](docs/architecture/security.md) (trust boundaries, the gates that
+enforce them, where secrets live, the deploy and webhook surfaces). Read the
+relevant one before touching its subsystem.
 Deliberately not `@`-imported — they cost no context until needed; keep it
 that way and add new subsystem docs to the list here.
 
