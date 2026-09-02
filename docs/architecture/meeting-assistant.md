@@ -20,6 +20,8 @@ flowchart LR
   Engine -->|turns| Relay
   Relay -->|transcript frames| WS
   Relay -->|settled turns| Store[MeetingStore<br/>append-only JSONL]
+  Relay -->|audio, teed| Raw["Raw record<br/>&lt;docname&gt;-raw-transcript.md<br/>segment-N-mic.pcm · meeting.json"]
+  Store -->|at stop| Raw
   Relay -->|every turn| Notes[MeetingNotesSession<br/>pause + cadence composer]
   Notes -->|Yjs write| Doc[Doc "Meeting notes" section]
   Relay -.->|started/stopped only| SSE[Doc SSE channel]
@@ -582,6 +584,77 @@ them — `bun run scripts/assemblyai-retention-sweep.ts` is how you re-check
 what is actually stored, and deletes anything found (`--delete`); the
 mechanics it has to get right are in
 `packages/server/src/assemblyai-retention.ts`.
+
+### The raw record: transcript and audio, replayable (meeting ticket, 2026-09-02)
+
+A meeting's only record used to be the polished doc and the pipeline's
+JSONL. Now every meeting also leaves what a person needs to trace a bad
+note back to what was said, in the same folder as the JSONL —
+**`<dataDir>/meetings/<safeDocId>/`**:
+
+| file | what | written |
+|---|---|---|
+| `<docname>-raw-transcript.md` | every settled turn, `## Segment N — <ISO start>` per recording, `- [HH:MM:SSZ] Speaker: words` per turn | at each meeting's stop, appended |
+| `segment-<N>-<stream>.pcm` | the audio exactly as it reached the server: 16 kHz PCM16LE, no container, no transcode | frame by frame while live |
+| `meeting.json` | the tie back to the doc — doc id, bound path and title as of the last meeting, per-segment engine/mode/audio | at start (the tie) and stop (the segment) |
+| `<docname>-raw-transcript-replay-<stamp>.md` | a re-run of the audio through a chosen engine, same grammar | by `bun run meeting:replay` |
+
+`<docname>` is the bound file's own name (`q3-plan.md` → `q3-plan-raw-transcript.md`),
+else a slug of the title, else the doc id; `meeting.json` is what makes the
+tie survive the doc moving, being renamed, or being committed, because the
+folder is keyed by the doc id and the id never moves. A segment's number is
+the meeting's ordinal on the doc; a stop-and-restart appends `## Segment 2`
+rather than replacing anything. Each bullet's speaker is the engine's label
+(shown as the name the person gave it, else "Speaker A"), failing that the
+signed-in person on the microphone socket (`participant` on the `start`
+frame), failing that "Speaker 1". The grammar is deliberately two plain
+markdown forms so a viewer later is a rendering choice, not a parser.
+
+**Written at stop, from the JSONL, never live.** The live record revises
+turns in place — the bot path's rough-then-punctuated double final, the
+end-of-session speaker pass — and a markdown file appended live would carry
+every draft. So a segment is composed once from the folded transcript. A
+server that dies mid-meeting leaves the JSONL and audio but no segment; the
+next meeting on the same doc writes the missing segment first (its header
+says `no recorded end`), so every meeting keeps one and they stay in order.
+
+**Audio: one stream per source, and the bot has none.** The microphone is
+one stream, `mic`. Recall runs the transcription engine on its own side and
+sends this server words, not audio (see "What streams, and why not the
+audio" above), so a bot meeting's segment carries names and turns but no
+`Audio:` line; the file naming (`segment-<N>-<stream>.pcm`) and `meeting.json`
+already hold one entry per stream for the day a source delivers several.
+Play a segment with `ffplay -f s16le -ar 16000 -ac 1 segment-1-mic.pcm`.
+
+**Replay.** `bun run meeting:replay <folder | segment-N-mic.pcm> --engine
+<mock|soniox|assemblyai|assemblyai-pro> [--segment N] [--mode
+solo|conversation] [--realtime]` drives the retained audio through the same
+`TranscriptionEngine` seam the live relay uses, in browser-sized chunks, and
+writes `<docname>-raw-transcript-replay-<stamp>.md` beside the original for a
+line-by-line diff. A live engine bills for the audio's length; the mock is
+free and is what `scripts/replay-meeting-lib.test.ts` runs.
+
+**Never pushed — and what enforces it.** Prod's data dir is outside any
+checkout (`CW_DATA_DIR`, "Where prod lives" in CLAUDE.md), and a dev
+server's `data/` is gitignored. Belt and braces: `*-raw-transcript.md`,
+`*-raw-transcript-replay-*.md` and `*.pcm` are in `.gitignore`, and
+`scripts/scrub-check.py` refuses them by NAME and audio/video by extension
+(`NEVER_PUSH_NAMES` / `NEVER_PUSH_EXTS`) before it consults any pattern
+source — a clean transcript is still a transcript, and `scrub-allow` cannot
+exempt one. `scripts/scrub-selftest.py` proves both halves on every push.
+
+**Retention and cleanup.** Nothing removes any of it; soft delete is
+project-wide and a transcript is the least reconstructible thing this server
+holds. The transcript files are small. The audio is not — 16 kHz PCM16 is
+**~115 MB per meeting-hour** — and it lives on prod's boot disk. No sweep is
+implemented (a policy on what to keep is an owner's call, not a default):
+the manual path is to remove `.pcm` files older than the window you choose,
+which leaves the transcripts, the JSONL and `meeting.json` intact and the
+replay script reporting `no segment-N-<stream>.pcm audio` for what is gone:
+
+```bash
+find "$CW_DATA_DIR/meetings" -name 'segment-*.pcm' -mtime +90 -print   # then -delete
+```
 
 ## Notes composition
 
@@ -1418,7 +1491,9 @@ consent step.
 `RECORDING_CONSENT_NOTE`) ·
 `packages/server/src/meeting-protocol.ts` (lifecycle) ·
 `packages/server/src/transcribe-assemblyai.ts` (engine) ·
-`packages/server/src/meetings.ts` (store) ·
+`packages/server/src/meetings.ts` (store) · `meeting-raw.ts` (the raw
+transcript, audio tee and `meeting.json`) + `scripts/replay-meeting-audio.ts`
+(replaying that audio) ·
 `packages/server/src/meeting-lookup.ts` (what a "pull that in" ask points
 at) · `packages/server/src/meeting-notes.ts` + `meeting-notes-doc.ts` (composer +
 doc sink; the two clocks live in `createPauseTicker`) · `packages/server/src/meeting-notes-merge.ts` (the merge that

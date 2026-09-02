@@ -23,6 +23,15 @@
 import { appendFileSync, existsSync, mkdirSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { type CaptureMode, parseCaptureMode } from '@feedback/core';
+import {
+  AudioSink,
+  type DocInfoResolver,
+  type MeetingJsonAudio,
+  type MeetingSource,
+  ensureMeetingJson,
+  flushRawSegments,
+  segmentAudioFileName,
+} from './meeting-raw.ts';
 
 /** One settled turn, as stored. */
 export interface TranscriptTurn {
@@ -56,6 +65,20 @@ export interface MeetingRecord {
   turns?: number;
   /** Engine label → the name a person gave it, for THIS meeting only. */
   speakers?: Record<string, string>;
+  /**
+   * Which recording of this doc it was — the `## Segment N` its raw
+   * transcript is written under and the number its audio files carry.
+   * Absent on records written before the raw companion existed, which read
+   * as their position in the index.
+   */
+  segment?: number;
+  /** How the words arrived. Absent reads as the microphone. */
+  source?: MeetingSource;
+  /**
+   * Who was on the microphone socket, when the client said. What an
+   * unlabelled turn is attributed to in the raw transcript.
+   */
+  participant?: string;
 }
 
 /**
@@ -134,6 +157,9 @@ export function listMeetings(dataDir: string, docId: string): MeetingRecord[] {
         // carrying labels, and nothing downstream reads this to decide
         // whether to trust one.
         mode: parseCaptureMode(row.mode),
+        ...(typeof row.segment === 'number' ? { segment: row.segment } : {}),
+        ...(row.source === 'mic' || row.source === 'bot' ? { source: row.source } : {}),
+        ...(typeof row.participant === 'string' ? { participant: row.participant } : {}),
       });
       continue;
     }
@@ -214,6 +240,12 @@ export interface ActiveMeeting {
   recordTurn(turn: number, text: string, speaker?: string): void;
   /** "Label `speaker` is `name`" — appended to the index, last word wins. */
   nameSpeaker(speaker: string, name: string): void;
+  /**
+   * Tee one audio frame to this meeting's retained audio, exactly as it
+   * arrived. `stream` separates sources that carry more than one (a bot's
+   * per-participant tracks); the microphone is the one stream `mic`.
+   */
+  recordAudio(chunk: Uint8Array, stream?: string): void;
   /** End the meeting. Idempotent; returns the folded record either way. */
   stop(): MeetingRecord;
 }
@@ -228,8 +260,30 @@ export interface ActiveMeeting {
  */
 export class MeetingStore {
   private readonly live = new Map<string, ActiveMeeting>();
+  private readonly docInfo: DocInfoResolver;
 
-  constructor(private readonly dataDir: string) {}
+  /**
+   * `docInfo` is how the raw companion learns the doc's bound path and
+   * title — resolved at meeting start and stop, never cached, so a doc that
+   * moved between two meetings is tied to where it is now. Absent (a test,
+   * a bare store) the companion is named after the doc id.
+   */
+  constructor(
+    private readonly dataDir: string,
+    opts: { docInfo?: DocInfoResolver } = {},
+  ) {
+    this.docInfo = opts.docInfo ?? (() => undefined);
+  }
+
+  /** The doc's path and title as best the server knows, never throwing. */
+  private infoFor(docId: string) {
+    try {
+      return this.docInfo(docId);
+    } catch (err) {
+      console.error(`[meeting] doc info for ${docId} failed; raw transcript named by id:`, err);
+      return undefined;
+    }
+  }
 
   /** The meeting currently recording this doc, if any. */
   active(docId: string): ActiveMeeting | undefined {
@@ -247,12 +301,22 @@ export class MeetingStore {
     engine: string;
     sampleRate: number;
     mode: CaptureMode;
+    /** How the audio arrives. Absent is the microphone. */
+    source?: MeetingSource;
+    /** Who is on the socket, when the client said. */
+    participant?: string;
     now?: number;
   }): ActiveMeeting | null {
     const { docId, engine, sampleRate, mode } = args;
     if (this.live.has(docId)) return null;
     const startedAt = args.now ?? Date.now();
     const dataDir = this.dataDir;
+    const source: MeetingSource = args.source ?? 'mic';
+    const participant = args.participant;
+    // This recording's ordinal on the doc: the `## Segment N` it will be
+    // written under and the number its audio files carry. Counted before
+    // this meeting's own index line lands.
+    const segment = listMeetings(dataDir, docId).length + 1;
     // Two meetings on one doc cannot overlap, but they CAN be a millisecond
     // apart — stop, then start again — and the id is derived from that
     // millisecond. Without this the second meeting APPENDS to the first
@@ -271,16 +335,30 @@ export class MeetingStore {
       engine,
       sampleRate,
       mode,
+      segment,
+      source,
+      ...(participant !== undefined ? { participant } : {}),
     });
     // Create the file at start so a meeting nobody spoke in still reads back
     // as an empty transcript rather than a missing one.
     mkdirSync(dirname(transcriptPath), { recursive: true });
     appendFileSync(transcriptPath, '');
+    // The tie back to the doc, written before a word arrives: a folder whose
+    // meeting never reaches stop still says which doc it belongs to.
+    const info = this.infoFor(docId);
+    try {
+      ensureMeetingJson(dataDir, docId, info);
+    } catch (err) {
+      console.error(`[meeting] meeting.json for ${docId} not written:`, err);
+    }
+    /** One open audio file per stream, opened on the first frame of each. */
+    const sinks = new Map<string, AudioSink>();
     /** Turn → the words and label it was last written with. */
     const written = new Map<number, { text: string; speaker: string | undefined }>();
     const speakers: Record<string, string> = {};
     let stopped = false;
     const live = this.live;
+    const store = this;
 
     const meeting: ActiveMeeting = {
       meetingId,
@@ -319,6 +397,19 @@ export class MeetingStore {
         speakers[speaker] = name;
         appendLine(meetingIndexPath(dataDir, docId), { meetingId, speakers: { [speaker]: name } });
       },
+      recordAudio(chunk: Uint8Array, stream = 'mic'): void {
+        if (stopped || chunk.byteLength === 0) return;
+        let sink = sinks.get(stream);
+        if (!sink) {
+          sink = new AudioSink(
+            join(meetingDirPath(dataDir, docId), segmentAudioFileName(segment, stream)),
+            stream,
+            sampleRate,
+          );
+          sinks.set(stream, sink);
+        }
+        sink.write(chunk);
+      },
       stop(): MeetingRecord {
         const record: MeetingRecord = {
           meetingId,
@@ -330,6 +421,9 @@ export class MeetingStore {
           mode,
           turns: written.size,
           ...(Object.keys(speakers).length > 0 ? { speakers: { ...speakers } } : {}),
+          segment,
+          source,
+          ...(participant !== undefined ? { participant } : {}),
         };
         if (stopped) return record;
         stopped = true;
@@ -339,6 +433,27 @@ export class MeetingStore {
           endedAt: record.endedAt,
           turns: written.size,
         });
+        // The audio files close first so their byte counts are final, then
+        // the raw companion gets this meeting's segment (and any earlier one
+        // still missing). Neither can fail the stop: the JSONL above is the
+        // record; this is the copy a person reads.
+        const audio: MeetingJsonAudio[] = [];
+        for (const sink of sinks.values()) {
+          const entry = sink.close();
+          if (entry) audio.push(entry);
+        }
+        sinks.clear();
+        try {
+          flushRawSegments({
+            dataDir,
+            docId,
+            info: store.infoFor(docId),
+            liveMeetingIds: new Set([...live.values()].map((m) => m.meetingId)),
+            ended: { meetingId, audio },
+          });
+        } catch (err) {
+          console.error(`[meeting] raw transcript for ${docId} not written:`, err);
+        }
         return record;
       },
     };

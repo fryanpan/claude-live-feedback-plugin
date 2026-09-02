@@ -426,6 +426,9 @@ export class RecallMeetingRelay {
       docId: rec.docId,
       engine: BOT_ENGINE_NAME,
       sampleRate: BOT_SAMPLE_RATE,
+      // The vendor transcribes on its side; no audio reaches this server, so
+      // the raw companion carries words and names but no audio for a bot.
+      source: 'bot',
       // Always a conversation: a bot is in a call with other people, which is
       // the whole reason it exists. The mode's OTHER job — deciding whether
       // to pay AssemblyAI's speaker-label surcharge — does not arise here,
