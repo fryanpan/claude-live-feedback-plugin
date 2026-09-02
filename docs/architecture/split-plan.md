@@ -162,20 +162,38 @@ it, so the alternative was a value cycle. It sits one line from
 
 Layer: services, unchanged.
 
-## A4 · boot and composition
+## A4 · boot and composition — DONE
 
-| File | Becomes | Moves | Importers | Effort |
-|---|---|---|---|---|
-| `bin.ts` (1,013) | `server-config.ts` (~350) | environment resolution into one typed config | none — `bin.ts` is an entry point with no importers | M |
-| | `server-deps.ts` (~350) | the "the ONLY place a real X is constructed" seams | none | |
+| File | Became | Moved | Measured |
+|---|---|---|---|
+| `bin.ts` (1,025) | `server-config.ts` | env and argv → one typed config, with the misconfiguration refusals | 444 (est. ~350) |
+| | `server-deps.ts` | every "the ONLY place a real X is constructed" seam, with the log line that says whether it was | 371 (est. ~350) |
 
-Two commits. This is the composition root the layer rule depends on: after it,
-"reads env" and "constructs a real adapter" are two named files rather than
-two thirds of a script. Arg parsing, `acquirePort` and the startup banner stay
-in `bin.ts` (~300).
+`bin.ts` ends at **379**, which is argv parsing, the Sentry process handlers,
+the port wait, the `createServer` call, the boot banner and the shutdown hook —
+the things that are about running a process rather than about configuring one.
+Two commits, one per file.
 
-Layer: entry. Final directory: `config/` for `server-config.ts`;
-`server-deps.ts` and `bin.ts` stay at `server/src/`.
+The two halves are "what to build" and "build it". That is why the
+misconfiguration warnings went with the config rather than staying in the
+entry point: a `CF_ACCESS_TUNNEL_HOSTS` list without an Access application in
+front of it is not a value plus a warning, it is a value that was refused, and
+the refusal is part of resolving it. The log lines in `server-deps.ts` are the
+mirror image — each says which adapter was built, or the one command that
+would build it.
+
+**Verified by booting both.** The pre-split `bin.ts` and the post-split one
+were each started on a throwaway port and data dir; their boot output is
+identical line for line, and `/`, `/api/docs` and `/api/deploy` answer 200,
+200 and 501 on both. Worth doing because a boot script is the one file whose
+behaviour the suites mostly do not reach.
+
+One deliberate change beyond the move: `dataDir` comes out of the config as a
+`string` rather than `string | undefined`. It was optional only because the
+flag reader is, and two later readers repeated the whole resolver call to work
+around it.
+
+Layer: entry.
 
 ## A5 · the meeting family
 
