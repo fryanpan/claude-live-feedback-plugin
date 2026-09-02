@@ -74,12 +74,22 @@ export function signInRequiredBody(): {
  * `Origin` is the one this server already trusts to tell a browser from an
  * agent — the cross-origin write gate and the websocket origin check are
  * both built on it, and `isAllowedBrowserOrigin` documents a null Origin as
- * "curl, the MCP child, or an agent". The `Sec-Fetch-*` family is belt and
- * braces: every browser since 2020 sends it on every request including
- * same-origin ones, so a browser that somehow omitted `Origin` is still
- * recognised, and nothing that is not a browser gains a header by accident.
+ * "curl, the MCP child, or an agent". `Sec-Fetch-Site` and `Sec-Fetch-Dest`
+ * are belt and braces: every browser since 2020 sends them on every request
+ * including same-origin ones, so a browser that somehow omitted `Origin` is
+ * still recognised.
+ *
+ * `Sec-Fetch-Mode` is deliberately NOT in the list. Node's fetch (undici)
+ * sends `sec-fetch-mode: cors` on every request — and nothing else of the
+ * family, and no `Origin` — measured on Node 24 on 2026-09-02. The plugin's
+ * MCP child runs under node, so a predicate that counted it read every MCP
+ * tool call as a browser: with the sign-in flag on that would have refused
+ * every agent write, and the binding routes (which refuse browsers
+ * unconditionally) refused the MCP bundle's own `create_review_doc` the day
+ * they were closed. The list is "what browsers send that clients don't",
+ * and this header failed the second half.
  */
-const BROWSER_HEADERS = ['origin', 'sec-fetch-site', 'sec-fetch-mode', 'sec-fetch-dest'] as const;
+const BROWSER_HEADERS = ['origin', 'sec-fetch-site', 'sec-fetch-dest'] as const;
 
 /**
  * `true` when this request came from a browser.
