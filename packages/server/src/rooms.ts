@@ -124,6 +124,7 @@ import {
   writeArchiveManifest,
   writeDocArchiveManifest,
 } from './review-archive.ts';
+import { ROOM_TIMINGS } from './room-timings.ts';
 import { isWithinRoot } from './safe-path.ts';
 import type { SseHub } from './sse.ts';
 import type { ScheduleArgs, ThreadSummarizer } from './summarize.ts';
@@ -463,7 +464,7 @@ const CONTENT_REVISION_ORIGIN = 'content-revision';
 /** How long a doc must go quiet before an authoring burst commits one
  *  `contentRevision` bump. Same order as the ~1s write-back flush: a burst
  *  is a person or agent mid-thought, not N revisions. */
-const REVISION_SETTLE_MS = 1000;
+const REVISION_SETTLE_MS = ROOM_TIMINGS.revisionSettleMs;
 
 /**
  * Meta keys ONLY the server may write, though they live in the synced CRDT
@@ -543,7 +544,19 @@ export function isHubOwnedRoom(docId: string): boolean {
 /** How often the shared mtime sweep runs — the cadence the old per-binding
  *  interval ran at, kept so external-edit latency is unchanged for a doc
  *  anyone is actually looking at. */
-const FILE_POLL_MS = 500;
+const FILE_POLL_MS = ROOM_TIMINGS.filePollMs;
+
+/** Settle time before a changed file is read, so no half-written save is parsed. */
+const READ_DEBOUNCE_MS = ROOM_TIMINGS.readDebounceMs;
+
+/** Doc → disk: how long a prose change waits before the serialize+write. */
+const WRITE_BACK_MS = ROOM_TIMINGS.writeBackMs;
+
+/** Doc → `.ydoc`: how long a change waits before the CRDT snapshot is persisted. */
+const PERSIST_MS = ROOM_TIMINGS.persistMs;
+
+/** How long after a content change the thread re-anchor sweep runs. */
+const REANCHOR_MS = ROOM_TIMINGS.reanchorMs;
 
 /** How long after an access a bound doc counts as ACTIVE — stat'd on every
  *  tick. Long enough that a person reading, thinking and typing never falls
@@ -4333,7 +4346,7 @@ export class Rooms {
       // itself here for the same reason.
       binding.readTimer = null;
       this.reconcileFromDisk(room, binding);
-    }, 150);
+    }, READ_DEBOUNCE_MS);
   }
 
   /**
@@ -4701,7 +4714,7 @@ export class Rooms {
     binding.writeTimer = setTimeout(() => {
       binding.writeTimer = null;
       this.writeBoundFileNow(room, binding);
-    }, 800);
+    }, WRITE_BACK_MS);
   }
 
   /** The write-back body: what the ~800ms debounce runs when it fires, and
@@ -6038,7 +6051,7 @@ export class Rooms {
               `[rooms] ${room.docId}: code re-anchor — ${res.reanchored} fixed, ${res.stillOrphan} orphaned`,
             );
           }
-        }, 250);
+        }, REANCHOR_MS);
       });
       const initialCode = prose.autoReanchorCodeDoc(room.ydoc);
       if (initialCode.reanchored > 0) {
@@ -6079,7 +6092,7 @@ export class Rooms {
         if (res.reanchored > 0) {
           console.log(`[rooms] ${room.docId}: auto-reanchored ${res.reanchored} thread(s)`);
         }
-      }, 250);
+      }, REANCHOR_MS);
     });
     // Docs seeded from disk before the heading-level fix persisted `level` as
     // a string, which makes Tiptap render every heading as <h1>. Repair them
@@ -6122,7 +6135,7 @@ export class Rooms {
       setTimeout(() => {
         this.saveTimers.delete(room.docId);
         this.persistRoomNow(room);
-      }, 200),
+      }, PERSIST_MS),
     );
   }
 

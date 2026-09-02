@@ -1,11 +1,12 @@
 import { afterEach, describe, expect, it } from 'bun:test';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Rooms } from '../src/rooms.ts';
 import { type ServerHandle, createServer } from '../src/server.ts';
 import { SseHub } from '../src/sse.ts';
 import { createWebhookDispatcher } from '../src/webhooks.ts';
+import { waitFor } from './wait-for.ts';
 
 /**
  * Graceful shutdown must flush the debounced persistence timers — the 200ms
@@ -28,8 +29,6 @@ function makeRooms(dataDir: string): Rooms {
     webhooks: createWebhookDispatcher({ onLog: () => {} }),
   });
 }
-
-const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 const dirs: string[] = [];
 function tempDir(): string {
@@ -99,8 +98,13 @@ describe('shutdown flush of room save timers', () => {
       .ydoc.getText('content')
       .insert(0, 'settled-content');
     // Let the 200ms debounce fire on its own — the idle path must not depend
-    // on the shutdown flush at all.
-    await sleep(2000);
+    // on the shutdown flush at all. Waiting for both .ydoc files rather than
+    // for a duration keeps that independence under test.
+    await waitFor(
+      () =>
+        existsSync(join(killDir, 'idle-doc.ydoc')) && existsSync(join(termDir, 'idle-doc.ydoc')),
+      { describe: 'the idle 200ms persist to write both .ydoc files' },
+    );
     const afterKill = makeRooms(killDir).getOrCreate('idle-doc', { type: 'code' });
     expect(afterKill.ydoc.getText('content').toString()).toContain('settled-content');
     await handle.stop();

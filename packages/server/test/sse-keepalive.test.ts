@@ -103,7 +103,12 @@ describe('an idle SSE stream survives past the old death window', () => {
 
   it('is still open after 15s of silence — past the ~10s it used to die at', async () => {
     const w = await open();
-    await new Promise((r) => setTimeout(r, 15_000));
+    // timed: the duration IS the claim. The stream has to outlive both the
+    // ~10s it used to die at and a full SSE_KEEPALIVE_MS (15s) cycle, so
+    // there is no earlier observable to poll for — the absence of a close is
+    // only meaningful once that much silence has actually elapsed. Scaling it
+    // would mean making the keepalive interval injectable in src/sse.ts.
+    await new Promise((r) => setTimeout(r, SSE_KEEPALIVE_MS));
     expect(w.state.closed).toBe(false);
     // It also actually received the preamble, so "not closed" is a live
     // stream rather than a response whose body never started.
@@ -138,6 +143,9 @@ describe('an idle SSE stream survives past the old death window', () => {
     try {
       const res = await fetch(`http://localhost:${doomed.port}/events`);
       const w = watch(res);
+      // timed: a deadline, not a wait. The doomed server's 1s idle timeout
+      // resolves this in about a second; the 8s only gets paid if the control
+      // is broken, which is exactly when the suite should be slow and red.
       await Promise.race([w.pump, new Promise((r) => setTimeout(r, 8_000))]);
       expect(w.state.closed).toBe(true);
     } finally {

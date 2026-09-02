@@ -23,6 +23,7 @@
     "check:widget-size": "bun run scripts/check-widget-size.ts",
     "check:plugin-version": "bun run scripts/check-plugin-version.ts",
     "check:scrub-gate": "python3 scripts/scrub-selftest.py",
+    "test:audit": "bun run scripts/test-audit.ts",
     "loc:audit": "bun run scripts/loc-audit.ts",
     "ui:shot": "bun run scripts/ui-shot.ts",
     "staging": "bun run scripts/staging.ts",
