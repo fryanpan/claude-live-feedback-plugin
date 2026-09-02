@@ -45,7 +45,24 @@ import type { TranscriptionEngine, TranscriptionSession } from './transcribe.ts'
 
 /** The slice of a Bun `ServerWebSocket` this module needs. */
 export interface MeetingClient {
-  readonly data: { docId: string };
+  readonly data: {
+    docId: string;
+    /**
+     * This socket may not START a meeting.
+     *
+     * Set at the upgrade when `CW_REQUIRE_SIGNIN_TO_WRITE` is on and the
+     * browser opening it has proven nobody (server.ts), the same decision
+     * and the same carry as `WsCtx.readOnly` on the editing socket. Absent
+     * — every socket that predates the flag, and every socket while it is
+     * off — means fully writable, so nothing had to be touched to keep
+     * meaning what it meant.
+     *
+     * Enforced on `start` below rather than at the handshake, because the
+     * refusal has to be something the strip can render: a websocket that is
+     * refused an upgrade reaches the page as a bare error event with no body.
+     */
+    readOnly?: boolean;
+  };
   send(payload: string): void;
 }
 
@@ -221,6 +238,18 @@ export class MeetingRelay {
       return;
     }
     if (msg.type === 'start') {
+      // A meeting is a WRITE and a SPEND: it opens a billed engine session
+      // and its notes pipeline writes into the doc. So the sign-in decision
+      // the upgrade carried is enforced here, before either happens — the
+      // socket stays open so the strip can say why, which is the same shape
+      // `unavailable` uses.
+      if (ws.data.readOnly) {
+        this.send(ws, {
+          type: 'error',
+          message: 'Sign in to record a meeting — recording writes notes into this doc.',
+        });
+        return;
+      }
       // Synchronously, before the handshake is awaited: audio may arrive
       // during it, and those chunks belong in the ledger too.
       conn.wantsTiming = msg.timing === true;
