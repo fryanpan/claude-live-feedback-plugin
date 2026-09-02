@@ -107,6 +107,7 @@ const makeFakes = (): Fakes => {
         calls.botsLeft.push(botId);
       },
       requestRecordingPermission: async () => false,
+      checkKeyRegion: async () => ({ ok: true as const, region: 'us-east-1' as const }),
     } as RecallClient,
     vault: {
       value: null,
