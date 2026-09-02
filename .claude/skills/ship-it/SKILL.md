@@ -1,6 +1,6 @@
 ---
 name: ship-it
-description: Post-implementation pipeline — code review, PR creation, CI monitoring, Copilot review. Invoke automatically when all implementation tasks are complete and tests pass, before handing control back to the user.
+description: Use when all implementation tasks for a change are complete and the tests pass, before handing control back to the user — the point where the work is ready to leave the working tree.
 ---
 
 # Ship It
@@ -36,7 +36,25 @@ Dispatch **both** as background agents simultaneously:
 
 Wait for both to complete. Merge findings. Fix **blocking** issues. Re-run reviewers only if fixes were non-trivial (>10 lines changed).
 
-### 2. Definition of Done
+### 2. Security review (conditional)
+
+Decide from the changed-file list, not from memory:
+
+```bash
+git diff --name-only <base-branch>...HEAD |
+  grep -E 'packages/server/src/(server|bin)\.ts|packages/server/src/middleware/|packages/server/src/auth/|packages/server/src/share/|packages/server/src/(webhooks|recall-webhook-auth|recall|fs-scan)\.ts'
+```
+
+**No match** → skip to step 3 and say "no security-surface files touched" in
+the PR body.
+
+**Any match** → read `.claude/rules/security-review.md` and answer all seven
+headings. Put the answers in the PR body under `## Security review`, one line
+each, using the template at the end of that file. Fix anything the checklist
+turns up before creating the PR — an unanswered heading blocks the merge, and
+the merging lead is the one who reads it.
+
+### 3. Definition of Done
 
 If `.claude/definition-of-done.md` exists, verify every item:
 - All existing tests pass
@@ -49,7 +67,7 @@ If `.claude/definition-of-done.md` exists, verify every item:
 
 **If all pass:** continue.
 
-### 3. Create PR
+### 4. Create PR
 
 ```bash
 git push -u origin <branch>
@@ -64,6 +82,9 @@ gh pr create --title "<concise title>" --body "$(cat <<'PREOF'
 - [x] No secrets in code
 - [x] Changes match request
 
+## Security review
+<the seven answers from .claude/rules/security-review.md, or "no security-surface files touched">
+
 ## Test Plan
 - [ ] <how to verify this works>
 
@@ -74,32 +95,32 @@ PREOF
 
 Capture the PR URL.
 
-### 4. Monitor CI (channel-driven, no polling)
+### 5. Monitor CI (channel-driven, no polling)
 
 The `github-claude-channel` plugin pushes GitHub events to your session as `<channel source="github" ...>` notifications. **Do NOT poll `gh pr checks` in a loop** — wait for the channel event instead.
 
 If `watch_repo("auto")` hasn't been called for this repo yet, call it once now. (Idempotent — safe to re-call.)
 
 Then await channel events for this PR:
-- **✅ CI pass event** → proceed to step 5
+- **✅ CI pass event** → proceed to step 6
 - **❌ CI fail event** → read failure output via one `gh pr checks <pr-url>` call (not a loop), diagnose, fix, push, await the next CI event
 - After 3 fix attempts: report to user, stop
 
 **Timeout fallback:** if no CI event arrives after 30 minutes, fall back to a single `gh pr checks <pr-url>` to confirm state (channel could miss occasionally; one explicit check is cheap).
 
-**No CI configured** (no event ever arrives, no checks configured) → proceed to step 5 after the timeout fallback confirms there are no checks.
+**No CI configured** (no event ever arrives, no checks configured) → proceed to step 6 after the timeout fallback confirms there are no checks.
 
-### 5. Monitor Copilot Review (channel-driven, no polling)
+### 6. Monitor Copilot Review (channel-driven, no polling)
 
 Same channel — wait for **👀 Review-requested events** on this PR. Copilot / github-advanced-security reviews surface as channel events from `github-claude-channel`.
 
 - 👀 Review event from copilot/github-advanced-security → read via `gh pr view <pr-url> --json reviews --jq '.reviews[]'`
-- If approved → proceed to step 6
+- If approved → proceed to step 7
 - If changes requested → address comments, push, await the next review event (1 retry max)
 
-**Timeout fallback:** if no review event arrives after 5 minutes, treat as "no Copilot review configured for this repo" and proceed to step 6.
+**Timeout fallback:** if no review event arrives after 5 minutes, treat as "no Copilot review configured for this repo" and proceed to step 7.
 
-### 6. Report & Merge Decision
+### 7. Report & Merge Decision
 
 Tell the user the PR is ready. Include the PR URL and status.
 
