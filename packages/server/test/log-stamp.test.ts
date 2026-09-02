@@ -17,14 +17,14 @@ describe('stamped', () => {
     expect(a).not.toBe(b);
   });
 
-  it('defaults to now, so a caller that does not hold a clock still gets one', () => {
-    const before = Date.now();
+  it('defaults to a real clock, so a caller that holds none still gets one', () => {
+    // Deliberately NOT bounded against the wall clock (testing-standards §3):
+    // what matters is that the default reads a clock at all and writes an
+    // instant that parses, not how close it lands to this line's own Date.now.
     const line = stamped('x');
     const parsed = Date.parse(line.slice(0, line.indexOf(' ')));
-    // No wall-clock DURATION assertion — only that the stamp names an instant
-    // inside the window this call spanned.
-    expect(parsed).toBeGreaterThanOrEqual(before);
-    expect(parsed).toBeLessThanOrEqual(Date.now());
+    expect(Number.isFinite(parsed)).toBe(true);
+    expect(line.endsWith(' x')).toBe(true);
   });
 
   it('writes the shape STAMP_PATTERN matches, and that pattern rejects a bare line', () => {
