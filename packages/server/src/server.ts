@@ -5001,12 +5001,29 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
     });
   };
 
-  // `kind` is what the ONE websocket handler below branches on: Bun routes
-  // every upgraded path into the same `open`/`message`/`close`, so the audio
-  // socket and the editing socket are told apart by what the upgrade
-  // attached. Absent means the editing socket, which is every upgrade that
-  // predates meetings.
-  const server = Bun.serve<{ docId: string; kind?: 'yjs' | 'audio' | 'recall'; token?: string }>({
+  /**
+   * What an upgrade attaches to a socket, for every socket this server opens.
+   *
+   * `kind` is what the ONE websocket handler below branches on: Bun routes
+   * every upgraded path into the same `open`/`message`/`close`, so the audio
+   * socket and the editing socket are told apart by what the upgrade
+   * attached. Absent means the editing socket, which is every upgrade that
+   * predates meetings.
+   *
+   * `shareId` and `readOnly` are named here rather than passed as excess
+   * properties, so the two upgrades that set them are type-checked against
+   * the fields the handlers read (`WsCtx` in rooms.ts, `MeetingClient` in
+   * meeting-protocol.ts).
+   */
+  type UpgradeData = {
+    docId: string;
+    kind?: 'yjs' | 'audio' | 'recall';
+    token?: string;
+    shareId?: string;
+    readOnly?: boolean;
+  };
+
+  const server = Bun.serve<UpgradeData>({
     port,
     // Explicit because the DEFAULT is what broke the event streams: Bun's is
     // 10 seconds, the SSE keepalive ran on 20, and so every stream idled out
@@ -5064,7 +5081,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
       // table lives in here unchanged.
       async function route(
         req: Request,
-        server: BunServer<{ docId: string; kind?: 'yjs' | 'audio' | 'recall'; token?: string }>,
+        server: BunServer<UpgradeData>,
       ): Promise<Response | undefined> {
         const url = new URL(req.url);
         const { pathname } = url;
@@ -6209,7 +6226,18 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           // doc that already exists, and auto-creating one here would let a
           // typo start a billed session against a doc nobody can find.
           if (!rooms.get(docId)) return j(404, { error: 'doc not found' });
-          const upgraded = server.upgrade(req, { data: { docId, kind: 'audio' as const } });
+          // The SAME sign-in decision `/y/` makes two branches down, for a
+          // surface that is write-only: a meeting opens a billed engine
+          // session and writes transcript and notes into the doc, and the
+          // method-keyed write gate cannot see it because a websocket
+          // upgrade is a GET. Carried rather than refused at the handshake
+          // so the strip can render the reason (meeting-protocol.ts refuses
+          // the `start` frame); an upgrade refused here reaches the page as
+          // a bare error event with no body to show.
+          const audioReadOnly = requireSignInToWrite && browserProvedNobody();
+          const upgraded = server.upgrade(req, {
+            data: { docId, kind: 'audio' as const, ...(audioReadOnly ? { readOnly: true } : {}) },
+          });
           if (!upgraded) return new Response('upgrade required', { status: 426 });
           return undefined;
         }
