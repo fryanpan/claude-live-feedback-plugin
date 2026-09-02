@@ -128,6 +128,34 @@ describe('POST /api/workspaces/:id/huddles and the empty task', () => {
       expect(doc.plainText.trim()).toBe('');
     });
 
+    it('started for a task, links the doc onto that task — and refuses a task from elsewhere', async () => {
+      const ws = await newBoard('for-a-task');
+      const owner = await jj<{ task: TaskRow & { links?: unknown[] } }>(
+        await post(`/api/workspaces/${ws}/tasks`, { title: 'Plan the strip', author: PERSON }),
+      );
+      const r = await jj<HuddleResponse & { taskId?: string }>(
+        await startHuddle(ws, { kind: 'discussion', taskId: owner.task.id }),
+      );
+      expect(r.taskId).toBe(owner.task.id);
+      const row = (
+        await jj<{ tasks: Array<TaskRow & { links?: unknown[] }> }>(
+          await local(`/api/workspaces/${ws}/tasks`),
+        )
+      ).tasks.find((t) => t.id === owner.task.id);
+      expect(row?.links).toEqual([{ kind: 'doc', docId: r.docId }]);
+
+      // A task on another board is not this board's to huddle for, and a
+      // malformed id is refused before any doc is minted: the board's doc
+      // list is unchanged by either.
+      const before = (await boardDocs(ws)).length;
+      const stranger = await jj<{ task: TaskRow }>(
+        await post(`/api/workspaces/${workspaceId}/tasks`, { title: 'Elsewhere', author: PERSON }),
+      );
+      expect((await startHuddle(ws, { taskId: stranger.task.id })).status).toBe(404);
+      expect((await startHuddle(ws, { taskId: 42 })).status).toBe(400);
+      expect((await boardDocs(ws)).length).toBe(before);
+    });
+
     it('is listed among the board docs with the flag — and an ordinary doc is not flagged', async () => {
       const ws = await newBoard('listing-board');
       // Positive control on the LISTING: an ordinary doc filed the usual way

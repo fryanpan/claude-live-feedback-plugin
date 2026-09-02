@@ -170,6 +170,9 @@ describe('taskCaptureUrl', () => {
 function boardStub(over: { failCreate?: boolean; leadAgentId?: string; topGoal?: string } = {}) {
   const created: Array<import('../src/tasks.ts').CreateTaskOpts> = [];
   const transitions: Array<{ taskId: string; to: string; actor: unknown }> = [];
+  /** What the capture asked the board's placement rule — the doc it names
+   *  is what lets the rule find the task the huddle belongs to. */
+  const placements: Array<{ workspaceId: string; docId?: string }> = [];
   // Rows this stub has filed. A real board remembers them, and the pass that
   // runs a tick later has to see them or it would twin what it just created.
   const filedRows: TaskCaptureCandidate[] = [];
@@ -177,6 +180,7 @@ function boardStub(over: { failCreate?: boolean; leadAgentId?: string; topGoal?:
   return {
     created,
     transitions,
+    placements,
     board: {
       listTasks: () => [...candidates, ...filedRows].map((c) => ({ ...c })),
       createTask: (_ws: string, opts: import('../src/tasks.ts').CreateTaskOpts) => {
@@ -200,10 +204,13 @@ function boardStub(over: { failCreate?: boolean; leadAgentId?: string; topGoal?:
       getWorkspace: () => (over.leadAgentId !== undefined ? { leadAgentId: over.leadAgentId } : {}),
       ...(over.topGoal !== undefined
         ? {
-            placeSpinoff: () => ({
-              goal: over.topGoal as string,
-              ...(over.leadAgentId !== undefined ? { leadAgentId: over.leadAgentId } : {}),
-            }),
+            placeSpinoff: (workspaceId: string, opts?: { docId?: string }) => {
+              placements.push({ workspaceId, ...(opts?.docId ? { docId: opts.docId } : {}) });
+              return {
+                goal: over.topGoal as string,
+                ...(over.leadAgentId !== undefined ? { leadAgentId: over.leadAgentId } : {}),
+              };
+            },
           }
         : {}),
     },
@@ -283,7 +290,7 @@ describe('runTaskCapture', () => {
     // Bryan (2026-09-01): "Tasks were created in Backlog and not
     // automatically started". The board's own placement rule decides the
     // band and the owner; the capture only asks for it.
-    const { board, created, transitions } = boardStub({
+    const { board, created, transitions, placements } = boardStub({
       leadAgentId: 'agent-helper',
       topGoal: 'g-pill',
     });
@@ -296,6 +303,9 @@ describe('runTaskCapture', () => {
       },
       tickInput,
     );
+    // The rule is asked about THIS doc, so a huddle started for a task
+    // lands its rows in that task's band.
+    expect(placements).toEqual([{ workspaceId: 'w-board', docId: 'doc-m' }]);
     expect(created[0]?.goal).toBe('g-pill');
     expect(created[0]?.assignee).toBe('agent-helper');
     expect(created[0]?.assigneeKind).toBe('agent');

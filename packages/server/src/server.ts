@@ -7621,6 +7621,24 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
               hint: 'kind is optional: "plan" or "discussion".',
             });
           }
+          // The task this huddle is FOR, when there is one. Judged before
+          // the doc is minted so a bad id costs nothing; recorded after, as
+          // a link on the task (`links`, the same ref `link_refs` writes),
+          // which is what lets a row spun off the huddle join the task's
+          // band (`TaskStore.placeSpinoff`, rule 1). Optional: the Board's
+          // two buttons start a huddle with no task at all.
+          const huddleTaskId = body?.taskId;
+          if (huddleTaskId !== undefined) {
+            if (typeof huddleTaskId !== 'string' || huddleTaskId.trim().length === 0) {
+              return j(400, {
+                error: 'bad taskId',
+                hint: 'taskId is an optional task id on this board.',
+              });
+            }
+            if (taskStore.getTask(huddleTaskId)?.workspaceId !== workspaceId) {
+              return j(404, { error: 'task-not-found' });
+            }
+          }
           const startedAt = Date.now();
           // Minted, never re-used: `createForCaller` answers an existing doc
           // for a name that already resolves, and a huddle is always new.
@@ -7659,9 +7677,16 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           }
           const attached = rooms.attachFile(docId, file);
           if (!attached.ok) return j(409, { error: 'attach_failed', attached });
+          if (typeof huddleTaskId === 'string') {
+            const linked = taskStore.linkRef(huddleTaskId, { kind: 'doc', docId });
+            // Link changes emit no store event; refresh by hand, as the
+            // link-refs route does.
+            if (linked.ok) taskProjection.ensureWorkspace(linked.task.workspaceId);
+          }
           const meta = withReviewUrl(room.meta, hubWorkspaceId);
           return j(200, {
             docId,
+            ...(typeof huddleTaskId === 'string' ? { taskId: huddleTaskId } : {}),
             // Where the Board opens it — the SPA doc route under THIS board,
             // relative so the client navigates within its own origin.
             url: `/workspaces/${encodeURIComponent(hubWorkspaceId)}/docs/${encodeURIComponent(docId)}`,
@@ -7743,8 +7768,19 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           // be placed: the board's top active goal, the lead as owner, and
           // `todo` after the create, so the lead's dispatch sees it. See
           // `TaskStore.placeSpinoff` for the rule and the report behind it.
-          // An explicit goal or assignee in the same body still wins.
-          const spinoff = body?.spinoff === true ? taskStore.placeSpinoff(workspaceId) : undefined;
+          // An explicit goal or assignee in the same body still wins. The
+          // origin doc is what lets the rule find the task the doc belongs
+          // to — a row spun off a huddle started FOR a task joins that task's
+          // band.
+          const originRef = body?.origin as { kind?: unknown; docId?: unknown } | undefined;
+          const spinoffDocId =
+            originRef?.kind === 'doc' && typeof originRef.docId === 'string'
+              ? originRef.docId
+              : undefined;
+          const spinoff =
+            body?.spinoff === true
+              ? taskStore.placeSpinoff(workspaceId, { docId: spinoffDocId })
+              : undefined;
           const createBody =
             spinoff === undefined
               ? body
@@ -7831,6 +7867,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
               // Which spin-off rule chose the band, for the caller's toast
               // and the PR reader alike: `top-active-goal` or `chores`.
               ...(spinoff !== undefined ? { spinoff: spinoff.rule } : {}),
+              ...(spinoff?.taskId !== undefined ? { spinoffTask: spinoff.taskId } : {}),
             },
             ...(parsed.ignoredLinks.length > 0 ? { ignoredLinks: parsed.ignoredLinks } : {}),
             ...(res.shapeGaps !== undefined ? { shapeGaps: res.shapeGaps } : {}),

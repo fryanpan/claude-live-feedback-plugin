@@ -1186,7 +1186,9 @@ export function wordsRevisionOf(task: { wordsRevision?: number }): number {
  *  address the row to when the seat is held. */
 export interface SpinoffPlacement {
   goal: string;
-  rule: 'top-active-goal' | 'chores';
+  rule: 'originating-task' | 'top-active-goal' | 'chores';
+  /** The task the doc belongs to, when its goal is what decided the band. */
+  taskId?: string;
   leadAgentId?: string;
 }
 
@@ -4148,9 +4150,10 @@ export class TaskStore {
    * chores, owned by whoever tapped, and the lead's dispatch never saw
    * them. The rule, in order:
    *
-   *  1. The goal of the meeting's originating task — NOT AVAILABLE: a huddle
-   *     is started from the board with a kind and a topic, and records no
-   *     task. When a huddle learns its task, this is where that goal goes.
+   *  1. The goal of the task the doc BELONGS TO (`docId`): a huddle started
+   *     for a task links the doc onto that task (`POST /huddles` with
+   *     `taskId`, or `link_refs` by hand), and its rows join the task's
+   *     band. See `taskHoldingDoc` for what counts as belonging.
    *  2. The board's top ACTIVE goal: the first band in priority order that
    *     is being worked (`todo` / `in-progress` — a `triage` band is a
    *     proposal, a `done` band is history), chores excluded.
@@ -4162,21 +4165,62 @@ export class TaskStore {
    * author, because "unowned at triage" is exactly the unplaced row this
    * exists to prevent. Callers move the row to `todo` after the create.
    */
-  placeSpinoff(workspaceId: string): SpinoffPlacement | undefined {
+  placeSpinoff(workspaceId: string, opts: { docId?: string } = {}): SpinoffPlacement | undefined {
     const state = this.workspaces.get(workspaceId);
     if (!state) return undefined;
+    const lead = state.workspace.leadAgentId;
+    const leadPart = lead !== undefined ? { leadAgentId: lead } : {};
+    const owner =
+      opts.docId !== undefined ? this.taskHoldingDoc(workspaceId, opts.docId) : undefined;
+    if (owner?.goal !== undefined) {
+      return { goal: owner.goal, rule: 'originating-task', taskId: owner.id, ...leadPart };
+    }
     const top = this.listGoalRows(workspaceId).find(
       (row) =>
         row.id !== CHORES_GOAL_ID &&
         !isArchived(row) &&
         (row.status === 'todo' || row.status === 'in-progress'),
     );
-    const lead = state.workspace.leadAgentId;
     return {
       goal: top?.id ?? CHORES_GOAL_ID,
       rule: top ? 'top-active-goal' : 'chores',
-      ...(lead !== undefined ? { leadAgentId: lead } : {}),
+      ...leadPart,
     };
+  }
+
+  /**
+   * The task a doc BELONGS TO, for placement: the first row on this board
+   * (creation order) being worked (`todo` / `in-progress`) whose `links`
+   * cite the doc or a thread in it, holding a goal the board still lists.
+   * The huddle route writes that link when it is started for a task;
+   * `link_refs` writes it by hand.
+   *
+   * `links` only, not `origin` — a row spun off a line of the doc is the
+   * doc's child, not its owner, and reading it as the owner would let the
+   * first tap's placement decide every later one. A done or archived row
+   * has stopped holding anything; a row at triage is a proposal; a row in
+   * chores has no band to lend — Backlog is where the rule ends, never
+   * where it starts (Bryan, 2026-09-01).
+   */
+  private taskHoldingDoc(workspaceId: string, docId: string): Task | undefined {
+    const state = this.workspaces.get(workspaceId);
+    if (!state) return undefined;
+    const cites = (r: Ref): boolean =>
+      (r.kind === 'doc' || r.kind === 'thread') && r.docId === docId;
+    const rows = [...state.tasks.values()]
+      .filter(
+        (t) =>
+          !isArchived(t) &&
+          (t.status === 'todo' || t.status === 'in-progress') &&
+          t.goal !== undefined &&
+          t.goal !== CHORES_GOAL_ID &&
+          t.links.some((r) => isValidRef(r) && cites(r)),
+      )
+      .sort((a, b) => a.createdAt - b.createdAt || a.id.localeCompare(b.id));
+    return rows.find((t) => {
+      const goal = this.getGoalRow(t.goal ?? '');
+      return goal !== undefined && !isArchived(goal) && goal.workspaceId === workspaceId;
+    });
   }
 
   /**
