@@ -117,7 +117,7 @@ function editableMode(): 'plaintext-only' | 'true' {
 
 /**
  * Rename the words WHERE THEY ARE, by making the element that already holds
- * them editable. Enter commits, Escape or blur cancels.
+ * them editable. Enter or blur commits a changed title, Escape cancels.
  *
  * This exists rather than reusing `wireInPlaceTitle` because of one
  * requirement that an `<input>` cannot satisfy structurally (Bryan,
@@ -181,8 +181,15 @@ export function wireWordsInPlace(
     else end(original, false);
   });
 
-  // Blur cancels: an accidental click away must never rewrite a title.
-  el.addEventListener('blur', () => end(original, false));
+  // Blur saves a changed title, the same as Enter (Bryan, 2026-09-01: a
+  // click away while editing reverted the edit). The click that opens the
+  // editor never changes the text, so an unchanged or emptied value still
+  // restores; Escape is the deliberate cancel.
+  el.addEventListener('blur', () => {
+    const v = (el.textContent ?? '').trim();
+    if (v && v !== original) end(v, true);
+    else end(original, false);
+  });
 
   // There is deliberately no paste handler. `plaintext-only` flattens the
   // clipboard where it applies, and where it does not, both endings read
