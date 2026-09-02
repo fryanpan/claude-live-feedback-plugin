@@ -5,7 +5,12 @@
  */
 import type { LeadPresence } from '@feedback/core';
 import { describe, expect, it } from 'vitest';
-import { leadBannerText, mountLeadBanner, parseLeadPresence } from '../src/lead-banner.ts';
+import {
+  leadBannerText,
+  leadReceiptSuffix,
+  mountLeadBanner,
+  parseLeadPresence,
+} from '../src/lead-banner.ts';
 
 const presence = (over: Partial<LeadPresence>): LeadPresence => ({
   event: 'lead.presence',
@@ -92,5 +97,34 @@ describe('lead banner', () => {
     m.banner.destroy();
     expect(m.unsubscribed()).toBe(1);
     expect(m.parent.querySelector('.lead-banner')).toBeNull();
+  });
+  it('lets the floats watch the same answer: current at once, then every change', async () => {
+    const m = mounted(Promise.resolve(presence({ live: false })));
+    await m.banner.ready;
+    const seen: Array<boolean | null> = [];
+    const stop = m.banner.watch((p) => seen.push(p ? p.live : null));
+    expect(seen).toEqual([false]);
+    m.push(presence({ live: true, leadAgentId: 'agent-lead' }));
+    expect(seen).toEqual([false, true]);
+    stop();
+    m.push(presence({ live: false }));
+    expect(seen).toEqual([false, true]);
+    // And the receipt copy is one function, so both floats say one thing.
+    expect(leadReceiptSuffix(presence({ live: false }))).toBe(
+      'no lead agent attached, it will be answered when one attaches',
+    );
+    expect(leadReceiptSuffix(presence({ live: true }))).toBeNull();
+    expect(leadReceiptSuffix(null)).toBeNull();
+  });
+
+  it('a watcher registered before the first answer hears nothing until it lands', async () => {
+    let resolve: (v: unknown) => void = () => {};
+    const m = mounted(new Promise((r) => (resolve = r)));
+    const seen: unknown[] = [];
+    m.banner.watch((p) => seen.push(p));
+    expect(seen).toEqual([]);
+    resolve(presence({ live: false }));
+    await m.banner.ready;
+    expect(seen).toHaveLength(1);
   });
 });

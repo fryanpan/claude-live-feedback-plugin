@@ -18,7 +18,7 @@ import {
 } from './huddle-entry.ts';
 import { ensureUserIdentity } from './identity-prompt.ts';
 import { wireKeyboardInset } from './keyboard-inset.ts';
-import { mountLeadBanner } from './lead-banner.ts';
+import { type LeadBanner, mountLeadBanner } from './lead-banner.ts';
 import { createMeetingBotClient } from './meeting-bot-client.ts';
 import { type MeetingLiveZone, createMeetingLiveZone } from './meeting-live-zone.ts';
 import { mountMeetingStrip } from './meeting-strip.ts';
@@ -353,6 +353,10 @@ async function mountMarkdown(ctx: MountContext): Promise<void> {
   // the address — and the edit-mode decision that also needs it runs much
   // later, by which time `location.search` no longer says anything.
   const startedHuddleHere = wantsHuddleStart(location.search);
+  // The lead banner's read and stream, handed to the floats below so their
+  // receipts can say "no lead agent attached" off the same answer. Set only
+  // on a huddle doc; the floats read as before without it.
+  let watchLeadPresence: LeadBanner['watch'] | undefined;
   const meetingStripEl = document.getElementById('meeting-strip');
   if (meetingStripEl && ctx.docType === 'markdown' && ctx.navDocId === undefined) {
     const huddleStart = startedHuddleHere;
@@ -437,6 +441,7 @@ async function mountMarkdown(ctx: MountContext): Promise<void> {
     // scrolling prose; see lead-banner.ts for what "listening" means.
     if (ctx.huddle === true) {
       const banner = mountLeadBanner({ docId, parent: editorMount });
+      watchLeadPresence = (onChange) => banner.watch(onChange);
       scope.onCleanup(() => banner.destroy());
     }
   }
@@ -461,6 +466,7 @@ async function mountMarkdown(ctx: MountContext): Promise<void> {
         meta.observe(onChange);
         return () => meta.unobserve(onChange);
       },
+      ...(watchLeadPresence ? { watchLeadPresence } : {}),
     });
     scope.onCleanup(() => planGate.destroy());
 
@@ -489,6 +495,7 @@ async function mountMarkdown(ctx: MountContext): Promise<void> {
         threads.observeDeep(onChange);
         return () => threads.unobserveDeep(onChange);
       },
+      ...(watchLeadPresence ? { watchLeadPresence } : {}),
     });
     scope.onCleanup(() => reviewFloat.destroy());
   }
