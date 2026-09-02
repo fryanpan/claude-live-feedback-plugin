@@ -222,3 +222,81 @@ describe('POST /api/workspaces/:id/tasks with spinoff: true', () => {
     expect(r.task.goal).not.toBe(undefined);
   });
 });
+
+/**
+ * The title a pill-made row carries — and where "Untitled task" actually
+ * comes from.
+ *
+ * Bryan's report (2026-09-01) said a task made with Create Task landed as
+ * "Untitled task" in chores. The two such rows on the board carry no
+ * origin, no body, `untitled: true` and a person as creator — the shape
+ * of the Board's own "New task" button, not the pill's: the pill always
+ * sends the selected words as the title and the doc as `origin`, and the
+ * parser only ever stores the placeholder for a create that DECLARES
+ * itself untitled. Both shapes are pinned here so the two cannot be
+ * confused again.
+ */
+describe('a pill-made row is titled by its words and points at its doc', () => {
+  let handle: ServerHandle;
+  let dataDir: string;
+  let base: string;
+  let ws: string;
+
+  const post = (path: string, body: unknown) =>
+    fetch(`${base}${path}`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', host: `localhost:${handle.port}` },
+      body: JSON.stringify(body),
+    });
+  const jj = async <T>(res: Response): Promise<T> => {
+    expect(res.ok, `${res.status} ${await res.clone().text()}`).toBe(true);
+    return res.json() as Promise<T>;
+  };
+
+  beforeAll(async () => {
+    dataDir = mkdtempSync(join(tmpdir(), 'spinoff-title-'));
+    handle = createServer({ port: 0, dataDir });
+    base = `http://localhost:${handle.port}`;
+    ws = (
+      await jj<{ workspace: { id: string } }>(await post('/api/workspaces', { name: 'Titles' }))
+    ).workspace.id;
+  });
+  afterAll(async () => {
+    await handle.stop();
+    rmSync(dataDir, { recursive: true, force: true });
+  });
+
+  it('the pill shape: the selected words are the title, the doc is the origin', async () => {
+    const r = await jj<{ task: TaskRow & { untitled?: boolean; origin?: unknown } }>(
+      await post(`/api/workspaces/${ws}/tasks`, {
+        title: 'Check whether Access covers the mockup route',
+        body: 'Spun off from a line of the discussion "Widget rollout".\n\n> Check whether…',
+        author: PERSON,
+        origin: { kind: 'doc', docId: 'd-huddle' },
+        spinoff: true,
+      }),
+    );
+    expect(r.task.title).toBe('Check whether Access covers the mockup route');
+    expect(r.task.untitled).toBeUndefined();
+    expect(r.task.origin).toEqual({ kind: 'doc', docId: 'd-huddle' });
+  });
+
+  it('the Board’s New-task shape is the one that stores "Untitled task" — the control', async () => {
+    const r = await jj<{ task: TaskRow & { untitled?: boolean; origin?: unknown } }>(
+      await post(`/api/workspaces/${ws}/tasks`, { untitled: true, author: PERSON }),
+    );
+    expect(r.task.title).toBe('Untitled task');
+    expect(r.task.untitled).toBe(true);
+    expect(r.task.origin).toBeUndefined();
+  });
+
+  it('a pill create with words that reduce to nothing is refused, never filed untitled', async () => {
+    const res = await post(`/api/workspaces/${ws}/tasks`, {
+      title: '   ',
+      author: PERSON,
+      origin: { kind: 'doc', docId: 'd-huddle' },
+      spinoff: true,
+    });
+    expect(res.status).toBe(400);
+  });
+});
