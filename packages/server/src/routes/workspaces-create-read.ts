@@ -128,6 +128,12 @@ export async function handleWorkspaceCreateRead(
   // review pinned to a commit. Returns per-file reviewUrls plus an
   // entryUrl (first changed file) the agent can hand to a human.
   if (pathname === '/api/diffs' && req.method === 'POST') {
+    // `repo` is a host path this server will read and serve — the same
+    // class as the folder bind above, and refused on the same terms.
+    // See browserCannotBindBody. Omitting `base` scans the WHOLE folder
+    // and makes every file in it lazily openable, so this is the wider
+    // of the two, not the narrower.
+    if (isBrowserRequest(req.headers)) return j(403, browserCannotBindBody());
     const body = await safeJson(req);
     const repoPath = body?.repo as string | undefined;
     const base = body?.base as string | undefined;
