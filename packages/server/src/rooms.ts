@@ -15,37 +15,32 @@ import {
   type DocHome,
   type DocMeta,
   type DocType,
-  type ReviewAnswerUndone,
   type ReviewItemJudgement,
   type ReviewPayload,
   type Thread,
   type User,
   type WebhookPayload,
-  applyReviewRevision,
   contentKind,
-  createThread,
   initDocMeta,
-  isReviewMember,
   listThreads,
   prose,
   readDocMeta,
-  reinstateReview,
-  reviewAnswered,
   reviewIdOf,
-  reviewPayloadVersion,
-  postReply as schemaPostReply,
-  replaceAnchor as schemaReplaceAnchor,
-  setStatus as schemaSetStatus,
-  setCommentReview,
   setThreadSummary,
   suggestOps,
-  withRevision,
-  withdrawReview,
 } from '@feedback/core';
 import { wordCount } from '@feedback/core/word-count';
 import type { ServerWebSocket } from 'bun';
 import * as awarenessProtocol from 'y-protocols/awareness';
 import * as Y from 'yjs';
+import { DocEditOps, type DocEditPersistence } from './doc-edit-ops.ts';
+import { type DocThreadPersistence, DocThreads } from './doc-threads.ts';
+import { type RoomsWorkspacePersistence, RoomsWorkspaces } from './rooms-workspaces.ts';
+
+export { randomId } from './doc-threads.ts';
+/** Moved to `doc-ids.ts`, one line from the prefix list it reads — re-exported
+ *  under the name it was first published as. */
+export { isHubOwnedRoom } from './doc-ids.ts';
 
 import { type StoredSummary, needsCall } from '@feedback/core/summary-prompt';
 import {
@@ -69,7 +64,6 @@ import {
   type SetWorkspaceGroupsResult,
   bindDiff as bindDiffImpl,
   bindFolder as bindFolderImpl,
-  memberDocId,
   refreshWorkspace as refreshWorkspaceImpl,
   setWorkspaceGroups as setWorkspaceGroupsImpl,
 } from './binds.ts';
@@ -81,8 +75,8 @@ import {
 } from './doc-home.ts';
 import {
   type DocIdAuthority,
-  HUB_ROOM_PREFIXES,
   ReservedDocIdError,
+  isHubOwnedRoom,
   isReservedDocId,
   newDocId,
 } from './doc-ids.ts';
@@ -90,9 +84,7 @@ import {
   DOC_INDEX_VERSION,
   type DocIndexEntry,
   deleteDocIndex,
-  docIndexPath,
   dropStagedDocIndex,
-  moveDocIndex,
   readAllDocIndexes,
   readDocIndex,
   stageDocIndex,
@@ -100,7 +92,6 @@ import {
   writeDocIndex,
 } from './doc-index.ts';
 import { newEventId } from './event-id.ts';
-import { isListedFile, scanFolderPaths } from './fs-scan.ts';
 import { showFile } from './git-diff.ts';
 import { gitConflictHint } from './git-provenance.ts';
 import { deleteMockupCapture } from './mockup-capture.ts';
@@ -108,22 +99,10 @@ import {
   deletePrivateMeta,
   isPrivateMetaKey,
   liftPrivateMetaFromYdoc,
-  privateMetaPath,
   readPrivateMeta,
   writePrivateMeta,
 } from './private-meta.ts';
-import {
-  type ArchivedDoc,
-  type ArchivedReview,
-  archiveDirPath,
-  ensureArchiveDir,
-  readArchiveManifest,
-  readDocArchiveManifest,
-  removeArchiveManifest,
-  removeDocArchiveManifest,
-  writeArchiveManifest,
-  writeDocArchiveManifest,
-} from './review-archive.ts';
+import { type ArchivedDoc, type ArchivedReview } from './review-archive.ts';
 import { ROOM_TIMINGS } from './room-timings.ts';
 import { isWithinRoot } from './safe-path.ts';
 import type { SseHub } from './sse.ts';
@@ -522,25 +501,6 @@ const IDLE_EVICT_MS = 2 * 24 * 60 * 60 * 1000;
  *  happens. */
 const EVICT_SWEEP_MS = 10 * 60_000;
 
-/** Backups kept per doc by `backupReplacedContent` before rotation. */
-const REPLACE_BACKUP_CAP = 20;
-
-/**
- * Rooms the HUB owns rather than the filesystem: the `ws:<workspaceId>`
- * board room and every `task:<taskId>` body room (§3.3). They are never
- * bound to a file, so a `sourceUrl` on one is by construction not ours —
- * and unlike a bound doc they have no private-meta sidecar to outvote a
- * forged value.
- *
- * This answers "is this room's content server-owned". `isReservedDocId`
- * (doc-ids.ts) answers the different question "may a caller occupy this
- * address", and is a superset — both read the same prefix list so the two can
- * never disagree about `ws:` and `task:`.
- */
-export function isHubOwnedRoom(docId: string): boolean {
-  return HUB_ROOM_PREFIXES.some((p) => docId.startsWith(p));
-}
-
 /** How often the shared mtime sweep runs — the cadence the old per-binding
  *  interval ran at, kept so external-edit latency is unchanged for a doc
  *  anyone is actually looking at. */
@@ -664,9 +624,6 @@ export class Rooms {
    * is holding a stale copy. In-memory, like the marker it is compared to.
    */
   private agentReads = new Map<string, Map<string, number>>();
-  /** Monotonic suffix so two backups in the same millisecond keep distinct,
-   *  lexicographically ordered names. */
-  private backupSeq = 0;
   /**
    * Readable alias → the doc id it was minted alongside.
    *
@@ -737,6 +694,61 @@ export class Rooms {
   private failedFileWrites = new Set<string>();
 
   /** The eviction policy's clock. See `RoomsConfig.now`. */
+  /** The thread verbs, and this store seen through the contract they need. */
+  private readonly docThreads = new DocThreads(this.docThreadPersistence());
+
+  private docThreadPersistence(): DocThreadPersistence {
+    return {
+      room: (docId) => this.resolveRoom(docId),
+      residentRoom: (docId) => this.rooms.get(docId),
+      fireThreadEvent: (room, event, thread, comment, opts, actor) =>
+        this.fireEvent(room, event, thread, comment, opts, actor),
+      recordActivity: (room, type, author, threadId, opts) =>
+        this.recordActivity(room, type, author, threadId, opts),
+    };
+  }
+
+  /** The editing verbs, and this store seen through the contract they need. */
+  private readonly docEdits = new DocEditOps(this.docEditPersistence());
+
+  private docEditPersistence(): DocEditPersistence {
+    return {
+      dataDir: () => this.cfg.dataDir,
+      room: (docId) => this.resolveRoom(docId),
+      thread: (docId, threadId) => this.getThread(docId, threadId),
+      announceSuggestion: (room, event, sid, summary) =>
+        this.fireSuggestionEvent(room, event, sid, summary),
+    };
+  }
+
+  private readonly workspaces = new RoomsWorkspaces(this.workspacePersistence());
+
+  private workspacePersistence(): RoomsWorkspacePersistence {
+    return {
+      dataDir: () => this.cfg.dataDir,
+      decorate: (meta) => this.cfg.decorateDocMeta?.(meta) ?? meta,
+      list: () => this.list(),
+      threadCounts: (docId) => this.threadCounts(docId),
+      listThreads: (docId, filter) => this.listThreads(docId, filter),
+      peekMeta: (docId) => this.peekMeta(docId),
+      docExists: (docId) => this.docExists(docId),
+      room: (docId) => this.resolveRoom(docId),
+      residentRoom: (docId) => this.rooms.get(docId),
+      getOrCreate: (docId, init) => this.getOrCreate(docId, init),
+      attachFile: (docId, filePath) => this.attachFile(docId, filePath),
+      attachReadonlyFile: (docId, filePath) => this.attachReadonlyFile(docId, filePath),
+      deleteDoc: (docId, opts) => this.deleteDoc(docId, opts),
+      hydrateDoc: (docId) => this.hydrateDoc(docId),
+      persistRoomNow: (room) => this.persistRoomNow(room),
+      teardownRoom: (room, closeReason) => this.teardownRoom(room, closeReason),
+      releaseAliases: (docId) => this.releaseAliases(docId),
+      pathFor: (docId) => this.pathFor(docId),
+      forgetActivityMtime: (docId) => this.activityMtime.delete(docId),
+      setIndexEntry: (docId, entry) => this.docIndex.set(docId, entry),
+      deleteIndexEntry: (docId) => this.docIndex.delete(docId),
+    };
+  }
+
   private now(): number {
     return this.cfg.now?.() ?? Date.now();
   }
@@ -1963,6 +1975,11 @@ export class Rooms {
     if (room) this.saveToDisk(room);
   }
 
+  // ── Comment threads ──────────────────────────────────────────────────────
+  //
+  // The verbs live in `doc-threads.ts`; what follows is the store's public
+  // surface forwarding onto them, signatures unchanged.
+
   async postComment(
     docId: string,
     threadId: string | null,
@@ -1993,102 +2010,9 @@ export class Rooms {
       review?: ReviewPayload;
     },
   ): Promise<Thread | null> {
-    const room = this.resolveRoom(docId);
-    if (!room) return null;
-    if (threadId == null) {
-      if (!anchor) return null;
-      const id = randomId();
-      const t = createThread(room.ydoc, {
-        threadId: id,
-        anchor,
-        createdBy: author,
-        firstComment: { id: randomId(), text, ...(opts?.review ? { review: opts.review } : {}) },
-      });
-      this.fireEvent(room, 'thread.created', t, undefined, opts);
-      // Hash the activity event with the comment's PERSISTED ts (not a fresh
-      // Date.now()), so a later backfill — which reconstructs this event from
-      // the same stored ts — produces an IDENTICAL eventId and dedupes
-      // instead of double-counting.
-      this.recordActivity(room, 'comment', author, t.id, {
-        text,
-        tsMs: t.comments[0]?.ts ?? Date.now(),
-      });
-      return t;
-    }
-    const comment = schemaPostReply(room.ydoc, threadId, {
-      id: randomId(),
-      author,
-      text,
-      ...(opts?.review ? { review: opts.review } : {}),
-    });
-    if (!comment) return null;
-    // A PERSON replying to a resolved thread is continuing the conversation,
-    // so the thread reopens. It has to: the drawer's default "Open" tab drops
-    // resolved threads entirely, so a reply that leaves the status alone is a
-    // reply the reviewer can never see — reported, accurately from where he
-    // sat, as "comments are going missing".
-    //
-    // An AGENT reply deliberately does NOT reopen. Agents post closing notes
-    // ("done, removed it in <sha>") after a human resolves, and resurrecting
-    // a thread the human just closed is its own bug. Same actor split the
-    // activity log uses.
-    const replied = this.getThread(docId, threadId);
-    const reopened =
-      replied?.status === 'resolved' && classifyActor(author) === 'person'
-        ? schemaSetStatus(room.ydoc, threadId, 'open')
-        : null;
-    const thread = reopened ?? replied;
-    if (thread) this.fireEvent(room, 'thread.replied', thread, comment, opts);
-    // Watchers that track open/resolved from the event stream would otherwise
-    // hold 'resolved' for a thread that is open again. No separate activity
-    // record: the reply below already logs this person's action, and a
-    // synthetic 'reopen' would double-count it.
-    if (reopened && thread) {
-      // The replier's continuation is what reopened the thread, so the
-      // reopen frame names them — same attribution the reply frame carries.
-      this.fireEvent(room, 'thread.reopened', thread, undefined, opts, author);
-    }
-    this.recordActivity(room, 'reply', author, threadId, { text, tsMs: comment.ts });
-    return thread;
+    return this.docThreads.postComment(docId, threadId, author, text, anchor, opts);
   }
 
-  /**
-   * Answer a Review Item: post the person's words as a reply, and record
-   * which option they came from.
-   *
-   * **The answer IS the reply** — the words a person answered with are a
-   * comment, there is no second answer store, and this still reopens a
-   * resolved thread and still emits the events watching agents receive.
-   *
-   * What this no longer leans on is "a person spoke" as the RECORD that it
-   * happened. That reading held only while every person's comment in the
-   * thread was an answer, and the task panel's single composer made that
-   * false: it aims an ordinary remark at the newest comment's thread, so a
-   * line of small talk retired an unanswered decision and took its card with
-   * it. So the answer is stamped onto the declaration (`answeredAt`, plus
-   * `answeredWith` when the words came from an option) and the queue reads
-   * that. One field, written in one place, so the two spellings this comment
-   * used to warn about still cannot disagree.
-   *
-   * `optionId` is provenance only, mirroring `answer_decision`'s split: `text`
-   * is always the verbatim answer, and the id merely records which candidate
-   * the words came from. A typed answer carries no id and is not a lesser
-   * answer.
-   *
-   * Refuses an unknown option rather than recording a dangling id — the card
-   * renders the label by looking the id up, so a stale one would render as a
-   * blank choice on a decision that reads as answered.
-   *
-   * `onlyIfUnanswered` makes the write CONDITIONAL on the item still being
-   * pending, re-checked here rather than by the caller. Answering twice is
-   * legitimate for a person who changed their mind — that is the unconditional
-   * default, and the displaced answer becomes history. It is not legitimate for
-   * a reply that was folded into an answer only because the item looked open
-   * when the request was read: that caller's whole claim is "nobody has
-   * answered this", and it must lose the race rather than overwrite the winner.
-   * The caller then posts the words as an ordinary comment, which is what they
-   * were.
-   */
   async answerReviewItem(
     docId: string,
     threadId: string,
@@ -2098,83 +2022,17 @@ export class Rooms {
     optionId?: string,
     opts?: { generate?: boolean; onlyIfUnanswered?: boolean },
   ): Promise<{ ok: true; thread: Thread } | { ok: false; error: string }> {
-    const room = this.resolveRoom(docId);
-    if (!room) return { ok: false, error: 'no-doc' };
-    const thread = this.getThread(docId, threadId);
-    const target = thread?.comments.find((c) => c.id === commentId);
-    if (!target?.review) return { ok: false, error: 'not-a-review-item' };
-    if (optionId !== undefined && !target.review.options?.some((o) => o.id === optionId)) {
-      return { ok: false, error: `unknown option '${optionId}'` };
-    }
-    // Read in the same synchronous stretch as the write below, so nothing can
-    // land between the check and the stamp. The caller's own read is not enough
-    // — it is one `await` away from being stale, and this is the layer that
-    // knows what is stored.
-    if (opts?.onlyIfUnanswered && reviewAnswered(target.review)) {
-      return { ok: false, error: 'already-answered' };
-    }
-    // Stamped BEFORE the reply so the payload is already current when
-    // `thread.replied` reaches a watching agent — otherwise the event that
-    // says "answered" carries a card that still says "unanswered".
-    const prior = target.review;
-    const ts = Date.now();
-    // A second answer landing over a standing one is a race, not a rewrite
-    // request — two browsers both showing the same card, the slower tap
-    // arriving after the faster one recorded. Last write stands, but the
-    // displaced record moves to `answerHistory` exactly as an undo would move
-    // it: overwriting IS a withdrawal, performed by the overwriting actor,
-    // and a hard delete is the loss that field exists to prevent. Mirrors
-    // `answerDecision` in tasks.ts.
-    const history: ReviewAnswerUndone[] | undefined = reviewAnswered(prior)
-      ? [...(prior.answerHistory ?? []), displacedAnswer(prior, ts, author.name)]
-      : prior.answerHistory;
-    // Rest-destructured rather than deleted: the payload is stored as a plain
-    // value in the ydoc, and an absent key is the only honest spelling of
-    // "unanswered" there.
-    const {
-      answeredAt: _at,
-      answeredWith: _with,
-      answeredBy: _by,
-      answerText: _txt,
-      ...cleared
-    } = prior;
-    setCommentReview(room.ydoc, threadId, commentId, {
-      ...cleared,
-      ...(history && history.length > 0 ? { answerHistory: history } : {}),
-      // Every answer, tapped or typed. `answeredWith` cannot carry this on its
-      // own — it is absent on a typed answer — and an item with no stamp at
-      // all is one the queue would go on offering after it was answered.
-      answeredAt: ts,
-      // The record's face: "Answered by <who>: <words>" is rendered from the
-      // declaration, not from re-deriving which reply was the answer, so it
-      // has to survive a reload on the payload itself.
-      answeredBy: author.name,
-      answerText: text,
-      ...(optionId !== undefined ? { answeredWith: optionId } : {}),
-    });
-    const replied = await this.postComment(docId, threadId, author, text, undefined, opts);
-    return replied ? { ok: true, thread: replied } : { ok: false, error: 'reply-failed' };
+    return this.docThreads.answerReviewItem(
+      docId,
+      threadId,
+      commentId,
+      author,
+      text,
+      optionId,
+      opts,
+    );
   }
 
-  /**
-   * Rewrite a review item raised on a DOC THREAD, keeping what it said before.
-   *
-   * The doc-side twin of `TaskStore.reviseReviewItem`, and deliberately thin:
-   * `applyReviewRevision` in core decides what a revision is, so the two
-   * surfaces cannot come to disagree about which patches are legal or where
-   * the changed span fell. What differs is only where the history is filed —
-   * a ticket item keeps it on its wrapper, and a doc-thread item has no
-   * wrapper, so `withRevision` puts it on the payload.
-   *
-   * Before this existed the only way to correct a doc-thread ask was to raise
-   * a second one, which left the reader's queue carrying two items about one
-   * question with the older, wronger one still reading as live. That is the
-   * failure this method removes.
-   *
-   * Addressed by `(docId, threadId, commentId)` — the identity the queue
-   * already uses for a doc-thread row, and the one `setCommentReview` already
-   * mutates by. Nothing new had to be minted.
-   */
   reviseCommentReview(
     docId: string,
     threadId: string,
@@ -2184,62 +2042,9 @@ export class Rooms {
   ):
     | { ok: true; review: ReviewPayload; thread: Thread }
     | { ok: false; error: string; message?: string } {
-    const room = this.rooms.get(docId);
-    if (!room) return { ok: false, error: 'no-doc' };
-    const thread = this.getThread(docId, threadId);
-    const target = thread?.comments.find((c) => c.id === commentId);
-    if (!target?.review) return { ok: false, error: 'not-a-review-item' };
-    // Read and write in one synchronous stretch, the reason `answerReview`
-    // gives: the caller's read is an await away from being stale, and this is
-    // the layer that knows what is stored.
-    const applied = applyReviewRevision(target.review, patch, {
-      by: opts.actor.name,
-      at: Date.now(),
-      ...(opts.revisedRange ? { revisedRange: opts.revisedRange } : {}),
-      // No `threadId` stamp: on a task the field names the thread that ASKED,
-      // somewhere other than the item. Here the item IS on the thread, so
-      // recording it would say nothing and read as a cross-reference.
-    });
-    if (!applied.ok) {
-      return {
-        ok: false,
-        error: applied.error,
-        ...(applied.message !== undefined ? { message: applied.message } : {}),
-      };
-    }
-    const review = withRevision(applied.next, applied.previous);
-    if (!setCommentReview(room.ydoc, threadId, commentId, review)) {
-      // The comment went between the read and the write — a race, not an
-      // error the caller did anything to cause.
-      return { ok: false, error: 'not-a-review-item' };
-    }
-    const after = this.getThread(docId, threadId);
-    return after ? { ok: true, review, thread: after } : { ok: false, error: 'not-a-review-item' };
+    return this.docThreads.reviseCommentReview(docId, threadId, commentId, patch, opts);
   }
 
-  /**
-   * Record the quality gate's verdict on a review item raised on a COMMENT.
-   *
-   * The doc-side twin of `TaskStore.recordReviewJudgement`, with the same two
-   * conditional writes and for the same reasons — a judge call is an await,
-   * and the words it was about can move underneath it:
-   *
-   *  - `forVersion` is the payload's revision count as it stood when the
-   *    judge was asked. A revision that landed meanwhile makes this verdict
-   *    stale; the revision's own call is the one that stands.
-   *  - `forPendingAt` is the `pending` stamp this caller placed before it
-   *    asked. Only its own stamp may be replaced — otherwise a slow verdict
-   *    could re-hold an item somebody had already released, which changes no
-   *    words and so slips past `forVersion` alone.
-   *
-   * An ANSWERED item is refused outright: a person has acted on those words,
-   * and a hold placed after the fact would take an answered question off a
-   * queue it has already left.
-   *
-   * Read and written in one synchronous stretch, the reason `answerReview`
-   * gives — the caller's read is an await away from being stale, and this is
-   * the layer that knows what is stored.
-   */
   judgeCommentReview(
     docId: string,
     threadId: string,
@@ -2249,61 +2054,9 @@ export class Rooms {
   ):
     | { ok: true; review: ReviewPayload; thread: Thread }
     | { ok: false; error: 'no-doc' | 'not-a-review-item' | 'answered' | 'stale' } {
-    const room = this.rooms.get(docId);
-    if (!room) return { ok: false, error: 'no-doc' };
-    const thread = this.getThread(docId, threadId);
-    const target = thread?.comments.find((c) => c.id === commentId);
-    if (!target?.review) return { ok: false, error: 'not-a-review-item' };
-    const current = target.review;
-    if (reviewAnswered(current)) return { ok: false, error: 'answered' };
-    if (opts.forVersion !== undefined && reviewPayloadVersion(current) !== opts.forVersion) {
-      return { ok: false, error: 'stale' };
-    }
-    if (
-      opts.forPendingAt !== undefined &&
-      (current.judge?.verdict !== 'pending' || current.judge.at !== opts.forPendingAt)
-    ) {
-      return { ok: false, error: 'stale' };
-    }
-    const review: ReviewPayload = {
-      ...current,
-      judge: { at: judgement.at, verdict: judgement.verdict, reason: judgement.reason },
-    };
-    if (!setCommentReview(room.ydoc, threadId, commentId, review)) {
-      // The comment went between the read and the write — a race, not an
-      // error the caller did anything to cause.
-      return { ok: false, error: 'not-a-review-item' };
-    }
-    const after = this.getThread(docId, threadId);
-    return after ? { ok: true, review, thread: after } : { ok: false, error: 'not-a-review-item' };
+    return this.docThreads.judgeCommentReview(docId, threadId, commentId, judgement, opts);
   }
 
-  /**
-   * Take back a review item raised on a doc thread — the asker's own exit.
-   *
-   * Thin for the reason `reviseCommentReview` is thin: what a withdrawal IS,
-   * and which ones are refused, is core's (`withdrawReview`). This layer only
-   * knows where the payload lives and how to write it back inside one
-   * synchronous stretch.
-   *
-   * It deliberately does NOT touch the thread. That is the whole point of the
-   * verb: `resolve_thread` is thread-scoped, so retiring one ask by resolving
-   * its thread takes every sibling ask down with it. Here the thread stays
-   * open and its other declarations stay answerable — `pendingDeclaration`
-   * steps over the withdrawn one and falls through to whichever ask is still
-   * standing.
-   *
-   * ANY agent in the workspace may withdraw an item, not only the one whose
-   * name is on it, and `withdrawnBy` records who did. Two reasons, and the
-   * first is the stronger: a workspace is a shared view, so its resources are
-   * everyone's, and the sibling verb one step from here (`reviseCommentReview`)
-   * already lets an agent REWRITE another's ask — a narrower rule on the
-   * gentler of the two operations would be a fence with no field behind it.
-   * The second is the case that produced this verb: the agent left holding a
-   * stale ask is often not the one that filed it (a peer that has since
-   * exited, or a lead cleaning up by hand), and an ownership check would lock
-   * exactly that agent out of the cleanup.
-   */
   withdrawCommentReview(
     docId: string,
     threadId: string,
@@ -2312,50 +2065,9 @@ export class Rooms {
   ):
     | { ok: true; review: ReviewPayload; thread: Thread }
     | { ok: false; error: string; message?: string } {
-    const room = this.rooms.get(docId);
-    if (!room) return { ok: false, error: 'no-doc' };
-    const thread = this.getThread(docId, threadId);
-    const target = thread?.comments.find((c) => c.id === commentId);
-    if (!target?.review) return { ok: false, error: 'not-a-review-item' };
-    const at = Date.now();
-    const applied = opts.undo
-      ? reinstateReview(target.review, { by: opts.actor.name, at })
-      : withdrawReview(target.review, {
-          by: opts.actor.name,
-          at,
-          ...(opts.reason !== undefined ? { reason: opts.reason } : {}),
-        });
-    if (!applied.ok) return { ok: false, error: applied.error, message: applied.message };
-    if (!setCommentReview(room.ydoc, threadId, commentId, applied.next)) {
-      // The comment went between the read and the write — a race, not an
-      // error the caller did anything to cause.
-      return { ok: false, error: 'not-a-review-item' };
-    }
-    const after = this.getThread(docId, threadId);
-    return after
-      ? { ok: true, review: applied.next, thread: after }
-      : { ok: false, error: 'not-a-review-item' };
+    return this.docThreads.withdrawCommentReview(docId, threadId, commentId, opts);
   }
 
-  /**
-   * Take a thread answer back — the way back from a one-tap act that used to
-   * be permanent, mirroring `withdrawAnswer` on the legacy decision task.
-   *
-   * SOFT delete, per the project rule: the four answer stamps move into the
-   * payload's `answerHistory` with who undid them and when, rather than being
-   * dropped. The reply comment stays in the thread — undo takes back the
-   * STAMP, not the conversation; the words a person posted are user content
-   * either way.
-   *
-   * Un-stamping is the whole mechanism of "Undo reopens it everywhere": every
-   * queue (Home, the task panel, the doc surface) derives "waiting on you"
-   * from `reviewAnswered` on the declaration, so clearing the stamps re-offers
-   * the item on every surface with no second state to sync.
-   *
-   * Refuses when there is nothing to take back rather than succeeding
-   * vacuously: two readers racing the same undo must not both be told they
-   * took something back.
-   */
   undoReviewItemAnswer(
     docId: string,
     threadId: string,
@@ -2363,53 +2075,9 @@ export class Rooms {
     author: User,
     opts?: { generate?: boolean },
   ): { ok: true; thread: Thread } | { ok: false; error: string } {
-    const room = this.resolveRoom(docId);
-    if (!room) return { ok: false, error: 'no-doc' };
-    const thread = this.getThread(docId, threadId);
-    const target = thread?.comments.find((c) => c.id === commentId);
-    if (!target?.review) return { ok: false, error: 'not-a-review-item' };
-    const prior = target.review;
-    if (!reviewAnswered(prior)) return { ok: false, error: 'not-answered' };
-    // Rest-destructured for the same reason as in `answerReviewItem`: an
-    // absent key, not an undefined value, is what "unanswered" looks like in
-    // the stored payload.
-    const {
-      answeredAt: _at,
-      answeredWith: _with,
-      answeredBy: _by,
-      answerText: _txt,
-      ...cleared
-    } = prior;
-    setCommentReview(room.ydoc, threadId, commentId, {
-      ...cleared,
-      answerHistory: [
-        ...(prior.answerHistory ?? []),
-        displacedAnswer(prior, Date.now(), author.name),
-      ],
-    });
-    const updated = this.getThread(docId, threadId);
-    if (!updated) return { ok: false, error: 'no-doc' };
-    // The same funnel every thread change goes through, so watching agents
-    // and open browsers learn the card is unanswered again. `thread.replied`
-    // rather than a new event name on purpose: the four existing names are
-    // the entire vocabulary every deployed client repaints on, and an undo
-    // announced under a fifth would reach nobody until every session
-    // restarted. No comment payload — nothing was said, a stamp was removed;
-    // the updated thread carries the truth.
-    this.fireEvent(room, 'thread.replied', updated, undefined, opts);
-    return { ok: true, thread: updated };
+    return this.docThreads.undoReviewItemAnswer(docId, threadId, commentId, author, opts);
   }
 
-  /**
-   * Agent-side thread creation. Mirrors the user-side editor flow
-   * (editor → POST /api/docs/<id>/threads with a pre-built Anchor) but
-   * accepts `find`+context the same way `find_and_replace` does — the
-   * agent doesn't have a cursor to anchor against, so it specifies the
-   * text range by its visible content. Once the anchor is built, the
-   * write path is identical: `postComment(docId, null, ...)` fires
-   * `thread.created` on the same channel the editor uses, so widgets
-   * see the new thread instantly.
-   */
   async createThreadByFind(
     docId: string,
     opts: {
@@ -2435,146 +2103,37 @@ export class Rooms {
         candidates?: Array<{ docOffset: number; preview: string }>;
       }
   > {
-    const room = this.resolveRoom(docId);
-    if (!room) return { ok: false, error: 'no-doc' };
-    // Code/diff docs are flat text in the `content` Y.Text — the prose
-    // resolver below would walk an empty fragment and always miss. Find the
-    // text directly and snap the anchor to whole lines, matching the code
-    // surface's own selection convention.
-    if (contentKind(room.meta.type) === 'flat') {
-      const content = room.ydoc.getText('content');
-      const hay = content.toString();
-      const before = opts.contextBefore ?? '';
-      const after = opts.contextAfter ?? '';
-      const needle = before + opts.find + after;
-      const hits: number[] = [];
-      for (let i = hay.indexOf(needle); i !== -1; i = hay.indexOf(needle, i + 1)) hits.push(i);
-      if (hits.length === 0) return { ok: false, error: 'no-match' };
-      let hit: number | undefined;
-      if (opts.occurrence != null) {
-        hit = hits[opts.occurrence - 1];
-        if (hit === undefined) return { ok: false, error: 'no-match' };
-      } else if (hits.length > 1) {
-        return {
-          ok: false,
-          error: 'ambiguous',
-          candidates: hits.slice(0, 5).map((docOffset) => ({
-            docOffset,
-            preview: hay.slice(Math.max(0, docOffset - 30), docOffset + needle.length + 30),
-          })),
-        };
-      } else {
-        hit = hits[0] as number;
-      }
-      const from = hit + before.length;
-      const to = from + opts.find.length;
-      const lineStart = hay.lastIndexOf('\n', Math.max(0, from - 1)) + 1;
-      const nl = hay.indexOf('\n', Math.max(to - 1, lineStart));
-      const lineEnd = nl === -1 ? hay.length : nl + 1;
-      const enc = (offset: number) =>
-        Array.from(
-          Y.encodeRelativePosition(Y.createRelativePositionFromTypeIndex(content, offset)),
-        ) as unknown as Uint8Array;
-      const anchor: Anchor = {
-        kind: 'text-range',
-        startRel: enc(lineStart),
-        endRel: enc(lineEnd),
-        snippet: { text: hay.slice(lineStart, lineEnd).slice(0, 120) },
-      };
-      const thread = await this.postComment(docId, null, author, text, anchor, writeOpts);
-      if (!thread) return { ok: false, error: 'no-doc' };
-      return { ok: true, thread };
-    }
-    const resolved = prose.resolveTextRangeFromFind(room.ydoc, opts);
-    if (!resolved.ok) {
-      if (resolved.error === 'ambiguous') {
-        return { ok: false, error: 'ambiguous', candidates: resolved.candidates };
-      }
-      return { ok: false, error: resolved.error };
-    }
-    // Yjs's encodeAny silently JSON-stringifies a Uint8Array inside a plain
-    // object — it becomes { "0": ..., "1": ... } on the way out, with no
-    // .length and no iteration, so `new Uint8Array(anchor.startRel)` on the
-    // client produces an empty array. Anchor resolution then returns null,
-    // the editor renders no decoration, and clicks miss entirely. The editor
-    // serializes the same way it sends over JSON: as a number[]. Match it.
-    // See packages/markdown-app/src/app.ts:976 (`Array.from(selection.start)`).
-    // `Anchor.startRel`/`endRel` is typed as Uint8Array, but the editor's
-    // own thread-create path (`packages/markdown-app/src/app.ts:976`)
-    // sends a number[] — and that's what survives Yjs's encoder cleanly
-    // inside a plain object. A Uint8Array nested in a plain object gets
-    // JSON-stringified to `{"0":2,"1":251,...}` on the way out, with no
-    // .length and no iteration, so `new Uint8Array(anchor.startRel)` on
-    // the client produces an empty array and decorations stop rendering.
-    // Match the editor's wire shape. The `unknown` double-cast is the
-    // accepted way to thread a number[] through a Uint8Array-typed slot
-    // without `as any`.
-    const startRelArr = Array.from(resolved.startRel) as unknown as Uint8Array;
-    const endRelArr = Array.from(resolved.endRel) as unknown as Uint8Array;
-    const anchor: Anchor = {
-      kind: 'text-range',
-      startRel: startRelArr,
-      endRel: endRelArr,
-      snippet: { text: resolved.snippetText },
-    };
-    const thread = await this.postComment(docId, null, author, text, anchor, writeOpts);
-    if (!thread) return { ok: false, error: 'no-doc' };
-    return { ok: true, thread };
+    return this.docThreads.createThreadByFind(docId, opts, author, text, writeOpts);
   }
 
-  /**
-   * `opts.generate` is the same visitor gate `postComment` carries, and it is
-   * here for the same reason: a resolve is a thread CHANGE, so it schedules a
-   * summary, so a share visitor clicking Resolve would otherwise spend the
-   * host's API key on a prompt containing their own comment text. Gating only
-   * the comment routes gated nothing — every visitor comment moves
-   * `summaryHash`, and the next Resolve click cashes it in.
-   */
   resolve(
     docId: string,
     threadId: string,
     author?: User,
     opts?: { generate?: boolean },
   ): Thread | null {
-    const room = this.resolveRoom(docId);
-    if (!room) return null;
-    const t = schemaSetStatus(room.ydoc, threadId, 'resolved');
-    if (t) {
-      // The frame names WHO resolved. Without it, 17 resolves in the field
-      // were each attributed to the thread's creator by the channel
-      // renderer's comments[0] fallback. Same default recordActivity uses.
-      this.fireEvent(room, 'thread.resolved', t, undefined, opts, author ?? DEFAULT_REVIEWER);
-      this.recordActivity(room, 'resolve', author ?? DEFAULT_REVIEWER, threadId, {
-        tsMs: Date.now(),
-      });
-    }
-    return t;
+    return this.docThreads.resolve(docId, threadId, author, opts);
   }
 
-  /** See `resolve` — `opts.generate` is the same visitor gate. */
   reopen(
     docId: string,
     threadId: string,
     author?: User,
     opts?: { generate?: boolean },
   ): Thread | null {
-    const room = this.resolveRoom(docId);
-    if (!room) return null;
-    const t = schemaSetStatus(room.ydoc, threadId, 'open');
-    if (t) {
-      // See resolve above — the reopen frame names who reopened.
-      this.fireEvent(room, 'thread.reopened', t, undefined, opts, author ?? DEFAULT_REVIEWER);
-      this.recordActivity(room, 'reopen', author ?? DEFAULT_REVIEWER, threadId, {
-        tsMs: Date.now(),
-      });
-    }
-    return t;
+    return this.docThreads.reopen(docId, threadId, author, opts);
   }
 
   reanchor(docId: string, threadId: string, anchor: Anchor): Thread | null {
-    const room = this.resolveRoom(docId);
-    if (!room) return null;
-    return schemaReplaceAnchor(room.ydoc, threadId, anchor);
+    return this.docThreads.reanchor(docId, threadId, anchor);
+  }
+
+  listThreads(docId: string, filter?: { status?: 'open' | 'resolved' }): Thread[] {
+    return this.docThreads.listThreads(docId, filter);
+  }
+
+  getThread(docId: string, threadId: string): Thread | null {
+    return this.docThreads.getThread(docId, threadId);
   }
 
   /**
@@ -2740,51 +2299,13 @@ export class Rooms {
     };
   }
 
-  /**
-   * Build the file-tree view for a workspace: every doc tagged with
-   * review, arranged into a nested directory tree by its `relPath`,
-   * with per-file unresolved-comment counts and folder roll-ups.
-   *
-   * Each FILE node carries `{docId, name, relPath, fileType, openCount,
-   * threadCount, reviewUrl?, lastActivityAt}`. Each DIR node carries a
-   * rolled-up `openCount` = sum of every descendant file's openCount.
-   *
-   * Sort within each level: directories first, then open-count desc, then
-   * name asc — so the folders/files that need attention float up, matching
-   * the landing page's "what needs my review?" ordering.
-   *
-   * `reviewUrl` is filled in by the caller via the rooms decorator
-   * (`decorateDocMeta`) so the URL machinery stays in the server layer.
-   */
-  /**
-   * All threads across a workspace's member docs in one call — so an agent
-   * watching a folder or diff review can poll ONE endpoint instead of one
-   * per file (a 64-file diff review would otherwise mean 64 polls). Each
-   * thread is tagged with its docId + relPath so replies/resolves know
-   * where to go. Sorted most-recent-activity first.
-   */
   listWorkspaceThreads(
     setId: string,
     opts?: { status?: 'open' | 'resolved' },
   ): Array<Thread & { docId: string; relPath?: string }> {
-    const out: Array<Thread & { docId: string; relPath?: string }> = [];
-    for (const meta of this.list()) {
-      if (reviewIdOf(meta) !== setId) continue;
-      for (const t of this.listThreads(meta.docId, opts)) {
-        out.push({ ...t, docId: meta.docId, relPath: meta.relPath });
-      }
-    }
-    out.sort((a, b) => b.lastActivity - a.lastActivity);
-    return out;
+    return this.workspaces.listWorkspaceThreads(setId, opts);
   }
 
-  /**
-   * The grouped-diff sidebar model: a diff review's CHANGED files organized
-   * into their logical groups (agent-supplied at bind time or heuristic),
-   * ordered by group rank then churn. Context files opened from the
-   * all-files view (type 'code') are deliberately excluded — this view is
-   * "what changed", not "what's open".
-   */
   listGroupedDiff(setId: string): {
     setId: string;
     /** Same value as `setId`, deprecated for one release: this payload goes
@@ -2799,82 +2320,9 @@ export class Rooms {
       files: WorkspaceFileNode[];
     }>;
   } {
-    const decorate = this.cfg.decorateDocMeta;
-    const byGroup = new Map<
-      string,
-      { rank: number; details?: string; files: WorkspaceFileNode[] }
-    >();
-    // Companion editor docs (openEditableFile) are type 'markdown' but hold
-    // threads left in the .md File view — those must count toward the diff
-    // member's badge even though only diff members get rows here. Context
-    // files never share a relPath with a member (openContextFile
-    // short-circuits when one exists), so summing by relPath is safe.
-    const companionThreads = new Map<string, { open: number; total: number }>();
-    for (const meta of this.list()) {
-      if (reviewIdOf(meta) !== setId || meta.type === 'diff' || !meta.relPath) continue;
-      const { open, total } = this.threadCounts(meta.docId);
-      if (open === 0 && total === 0) continue;
-      const prev = companionThreads.get(meta.relPath) ?? { open: 0, total: 0 };
-      companionThreads.set(meta.relPath, { open: prev.open + open, total: prev.total + total });
-    }
-    let totalOpen = 0;
-    for (const meta of this.list()) {
-      if (reviewIdOf(meta) !== setId || meta.type !== 'diff') continue;
-      const relPath = meta.relPath ?? meta.docId;
-      const extra = companionThreads.get(relPath) ?? { open: 0, total: 0 };
-      const counts = this.threadCounts(meta.docId);
-      const openCount = counts.open + extra.open;
-      const threadCount = counts.total + extra.total;
-      totalOpen += openCount;
-      const decorated = decorate ? decorate(meta) : meta;
-      const node: WorkspaceFileNode = {
-        type: 'file',
-        docId: meta.docId,
-        name: relPath.split('/').pop() ?? relPath,
-        relPath,
-        fileType: meta.type,
-        openCount,
-        threadCount,
-        reviewUrl: (decorated as { reviewUrl?: string }).reviewUrl,
-        lastActivityAt: meta.lastActivityAt,
-        ...(meta.stale ? { stale: true } : {}),
-        ...(meta.diffStatus !== undefined ? { diffStatus: meta.diffStatus } : {}),
-        ...(meta.diffAdditions !== undefined ? { diffAdditions: meta.diffAdditions } : {}),
-        ...(meta.diffDeletions !== undefined ? { diffDeletions: meta.diffDeletions } : {}),
-      };
-      const title = meta.diffGroup ?? 'Files';
-      let g = byGroup.get(title);
-      if (!g) {
-        g = { rank: meta.diffGroupRank ?? Number.MAX_SAFE_INTEGER, files: [] };
-        byGroup.set(title, g);
-      }
-      g.rank = Math.min(g.rank, meta.diffGroupRank ?? Number.MAX_SAFE_INTEGER);
-      // Every member of a group shares the same details; take the first
-      // non-empty one so a member bound before the details were set can't
-      // blank it out.
-      if (g.details === undefined && meta.diffGroupDetails) g.details = meta.diffGroupDetails;
-      g.files.push(node);
-    }
-    const groups = Array.from(byGroup.entries())
-      .sort((a, b) => a[1].rank - b[1].rank || a[0].localeCompare(b[0]))
-      .map(([title, g]) => {
-        g.files.sort((a, b) => a.name.localeCompare(b.name) || a.relPath.localeCompare(b.relPath));
-        return {
-          title,
-          openCount: g.files.reduce((s, f) => s + f.openCount, 0),
-          ...(g.details !== undefined ? { details: g.details } : {}),
-          files: g.files,
-        };
-      });
-    return { setId, workspaceId: setId, totalOpen, groups };
+    return this.workspaces.listGroupedDiff(setId);
   }
 
-  /**
-   * Every reviewable file in the workspace's repo folder (gitignore-aware
-   * scan), with changed files marked — powers the "Show All Files" context
-   * view. Files that are already docs carry their reviewUrl; anything else
-   * can be opened on demand via `openContextFile`.
-   */
   listRepoFiles(setId: string): {
     ok: boolean;
     root?: string;
@@ -2889,119 +2337,18 @@ export class Rooms {
     }>;
     error?: 'not-found';
   } {
-    const members = this.list().filter((m) => reviewIdOf(m) === setId);
-    const root = members.find((m) => m.workspaceRoot)?.workspaceRoot;
-    if (!root || !existsSync(root)) return { ok: false, error: 'not-found' };
-    const decorate = this.cfg.decorateDocMeta;
-    // A changed file can carry BOTH its diff member and its companion
-    // editable markdown doc on the same relPath — the diff member is the
-    // reviewable surface this list must point at.
-    const byRel = new Map<string, DocMeta>();
-    for (const m of members) {
-      const key = m.relPath ?? '';
-      const prev = byRel.get(key);
-      if (!prev || (prev.type !== 'diff' && m.type === 'diff')) byRel.set(key, m);
-    }
-    const MAX_FILES = 10_000;
-    const excluded = workspaceExcludes(members);
-    const scanned = scanFolderPaths(root).filter((rel) => !isExcludedPath(rel, excluded));
-    const truncated = scanned.length > MAX_FILES;
-    const files = scanned.slice(0, MAX_FILES).map((relPath) => {
-      const member = byRel.get(relPath);
-      if (!member) return { relPath, changed: false };
-      const decorated = decorate ? decorate(member) : member;
-      return {
-        relPath,
-        // A STALE diff member is no longer changed — its change was reverted
-        // or the file left the review. Still reporting it as changed here
-        // would contradict the grouped view, which already dims it.
-        changed: member.type === 'diff' && !member.stale,
-        docId: member.docId,
-        reviewUrl: (decorated as { reviewUrl?: string }).reviewUrl,
-        ...(member.stale ? { stale: true } : {}),
-        ...(member.diffStatus !== undefined ? { status: member.diffStatus } : {}),
-      };
-    });
-    return { ok: true, root, truncated, files };
+    return this.workspaces.listRepoFiles(setId);
   }
 
-  /**
-   * Open an UNCHANGED repo file for context from the all-files view: bind it
-   * lazily as a read-only code doc in the same workspace (deterministic
-   * docId, so repeat opens reuse the doc and any comments on it survive).
-   * relPath is validated against the workspace root — no traversal.
-   */
   openContextFile(
     setId: string,
     relPath: string,
   ):
     | { ok: true; docId: string; meta: DocMeta }
     | { ok: false; error: 'not-found' | 'bad-path' | 'not-listed' | 'attach-failed' } {
-    const members = this.list().filter((m) => reviewIdOf(m) === setId);
-    const root = members.find((m) => m.workspaceRoot)?.workspaceRoot;
-    if (!root) return { ok: false, error: 'not-found' };
-    const clean = normalizeRel(relPath);
-    const abs = join(root, clean);
-    // Traversal guard: the resolved path must stay under the root.
-    if (clean.split('/').includes('..') || !`${abs}/`.startsWith(`${root}/`)) {
-      return { ok: false, error: 'bad-path' };
-    }
-    // The workspace's exclude is a scope, not a display filter: a path the
-    // caller kept out must not be bindable on demand either, or "excluded"
-    // would only mean "not listed by default".
-    if (isExcludedPath(clean, workspaceExcludes(members))) {
-      return { ok: false, error: 'bad-path' };
-    }
-    // The tree's rule, not the filesystem's: a path opens only if
-    // `git ls-files --cached --others --exclude-standard` lists it, and
-    // nothing under `.git/` ever does. Before this, an ignored `.env` under a
-    // diff review's root — a whole repository — opened for anyone who could
-    // reach the review, share visitors included, because "it exists" was the
-    // only question asked. Answered `not-listed` rather than `bad-path` so the
-    // route can say 404: whether the hidden file exists is itself the leak.
-    // (Urgent-fixes ticket, 2026-09-02.)
-    if (!isListedFile(root, clean)) return { ok: false, error: 'not-listed' };
-    if (!existsSync(abs)) return { ok: false, error: 'not-found' };
-    // The guard above is lexical, so a symlink INSIDE the root that points
-    // outside it passes: `join` never touches the filesystem. Resolve what
-    // the path really points at before reading it — this endpoint is
-    // reachable by a share visitor, and a diff review's root is a whole repo.
-    // Ordered after existsSync so a missing file still reads 'not-found'.
-    if (!isWithinRoot(root, abs)) return { ok: false, error: 'bad-path' };
-    const existing = members.find((m) => m.relPath === clean);
-    if (existing) return { ok: true, docId: existing.docId, meta: existing };
-    const owner = members.find((m) => m.owner)?.owner;
-    const docId = memberDocId(setId, clean);
-    // Markdown opens as the full WYSIWYG editable doc (same as bind_folder
-    // always did); everything else is read-only highlighted source.
-    const isMd = clean.toLowerCase().endsWith('.md');
-    const room = this.getOrCreate(docId, {
-      type: isMd ? 'markdown' : 'code',
-      sourceUrl: abs,
-      setId,
-      owner,
-      // The persisted DocMeta field keeps its name: it is on disk in every
-      // .ydoc already, and `reviewIdOf` reads it as the fallback.
-      workspaceId: setId,
-      workspaceRoot: root,
-      relPath: clean,
-      title: clean,
-    });
-    const attached = isMd ? this.attachFile(docId, abs) : this.attachReadonlyFile(docId, abs);
-    if (!attached.ok) return { ok: false, error: 'attach-failed' };
-    return { ok: true, docId: room.docId, meta: room.meta };
+    return this.workspaces.openContextFile(setId, relPath);
   }
 
-  /**
-   * Open (or reuse) the companion EDITABLE markdown doc for a `.md` member
-   * of a LIVE working-tree diff review. The member stays the flat
-   * diff/redline surface; the companion is a full prose doc bound to the
-   * same working-tree file via attachFile, so File-view edits flow
-   * prose → disk (debounced write-back) → the member's mtime poll →
-   * redline/diff re-render. Unchanged `.md` files delegate to
-   * openContextFile (already a full markdown doc); pinned reviews refuse —
-   * their content is a commit, not a file.
-   */
   openEditableFile(
     setId: string,
     relPath: string,
@@ -3017,150 +2364,87 @@ export class Rooms {
           | 'not-markdown'
           | 'attach-failed';
       } {
-    const members = this.list().filter((m) => reviewIdOf(m) === setId);
-    const root = members.find((m) => m.workspaceRoot)?.workspaceRoot;
-    if (!root) return { ok: false, error: 'not-found' };
-    const clean = normalizeRel(relPath);
-    const abs = join(root, clean);
-    if (clean.split('/').includes('..') || !`${abs}/`.startsWith(`${root}/`)) {
-      return { ok: false, error: 'bad-path' };
-    }
-    if (isExcludedPath(clean, workspaceExcludes(members))) {
-      return { ok: false, error: 'bad-path' };
-    }
-    if (!clean.toLowerCase().endsWith('.md')) return { ok: false, error: 'not-markdown' };
-    // Same rule as openContextFile, and checked here too rather than only on
-    // the delegation below: a member's relPath is git-derived, but the tree
-    // is the one source of "may this open", and two doors with one lock is
-    // the shape that drifts. (Urgent-fixes ticket, 2026-09-02.)
-    if (!isListedFile(root, clean)) return { ok: false, error: 'not-listed' };
-    const member = members.find((m) => m.relPath === clean);
-    if (!member) return this.openContextFile(setId, clean);
-    if (member.type !== 'diff') return { ok: true, docId: member.docId, meta: member };
-    if (member.diffTarget) return { ok: false, error: 'pinned' };
-    if (!existsSync(abs)) return { ok: false, error: 'not-found' };
-    // Same symlink escape as openContextFile — see the note there. A member's
-    // relPath is git-derived rather than caller-supplied, but git tracks
-    // symlinks, so the member path is not self-evidently safe either.
-    if (!isWithinRoot(root, abs)) return { ok: false, error: 'bad-path' };
-    const owner = members.find((m) => m.owner)?.owner;
-    const companionId = memberDocId(`${setId}:edit`, clean);
-    const room = this.getOrCreate(companionId, {
-      type: 'markdown',
-      sourceUrl: abs,
-      setId,
-      owner,
-      // The persisted DocMeta field keeps its name: it is on disk in every
-      // .ydoc already, and `reviewIdOf` reads it as the fallback.
-      workspaceId: setId,
-      workspaceRoot: root,
-      relPath: clean,
-      title: clean,
-    });
-    const attached = this.attachFile(companionId, abs);
-    if (!attached.ok) return { ok: false, error: 'attach-failed' };
-    return { ok: true, docId: room.docId, meta: room.meta };
+    return this.workspaces.openEditableFile(setId, relPath);
   }
 
-  /**
-   * The companion editor doc of a `.md` diff member, if one has been opened
-   * (`openEditableFile`), or undefined. The ids are deterministic — member
-   * `<setId>:<relPath>`, companion `<setId>:edit:<relPath>` — so this is a
-   * lookup, not a search.
-   */
   companionOf(docId: string): string | undefined {
-    // Metadata and existence, not residency: after a lazy boot neither doc is
-    // loaded, and equating "not in memory" with "no companion" dropped the
-    // companion's comments out of `GET /api/docs/:id/threads` and out of the
-    // member's event fan-out until somebody happened to open both.
-    const meta = this.peekMeta(docId);
-    if (!meta || meta.type !== 'diff' || !meta.relPath) return undefined;
-    const reviewId = reviewIdOf(meta);
-    if (!reviewId) return undefined;
-    const companionId = memberDocId(`${reviewId}:edit`, meta.relPath);
-    return this.docExists(companionId) ? companionId : undefined;
+    return this.workspaces.companionOf(docId);
   }
 
-  /**
-   * The diff member a companion editor doc belongs to, or undefined when
-   * `docId` is not a companion. Inverse of `companionOf`.
-   */
   memberOfCompanion(docId: string): string | undefined {
-    const meta = this.peekMeta(docId);
-    if (!meta || meta.type !== 'markdown' || !meta.relPath) return undefined;
-    const reviewId = reviewIdOf(meta);
-    if (!reviewId || docId !== memberDocId(`${reviewId}:edit`, meta.relPath)) return undefined;
-    const memberId = memberDocId(reviewId, meta.relPath);
-    return this.peekMeta(memberId)?.type === 'diff' ? memberId : undefined;
+    return this.workspaces.memberOfCompanion(docId);
   }
 
   buildWorkspaceTree(setId: string): WorkspaceTree {
-    const decorate = this.cfg.decorateDocMeta;
-    const root: WorkspaceDirNode = { type: 'dir', name: '', openCount: 0, children: [] };
-    let totalOpen = 0;
-    let workspaceRoot: string | undefined;
+    return this.workspaces.buildWorkspaceTree(setId);
+  }
 
-    // One node per relPath: an editable .md gives the workspace TWO docs for
-    // the same file (the diff member + its companion editor doc, see
-    // openEditableFile). The diff member stays the face of the file — its
-    // docId is what the diff-nav and reviewUrl point at — but threads land on
-    // whichever doc the reviewer commented in, so badges merge across both.
-    const byRel = new Map<string, { meta: DocMeta; openCount: number; threadCount: number }>();
-    for (const meta of this.list()) {
-      if (reviewIdOf(meta) !== setId) continue;
-      if (!workspaceRoot && meta.workspaceRoot) workspaceRoot = meta.workspaceRoot;
-      const key = meta.relPath ?? meta.docId;
-      const { open, total } = this.threadCounts(meta.docId);
-      const prev = byRel.get(key);
-      if (!prev) {
-        byRel.set(key, { meta, openCount: open, threadCount: total });
-      } else {
-        prev.openCount += open;
-        prev.threadCount += total;
-        if (prev.meta.type !== 'diff' && meta.type === 'diff') prev.meta = meta;
-      }
-    }
+  listWorkspaces(now: number = Date.now()): Array<{
+    setId: string;
+    /** Same value as `setId`, deprecated for one release. */
+    workspaceId: string;
+    root?: string;
+    title?: string;
+    owner?: string;
+    fileCount: number;
+    openThreads: number;
+    allIdle: boolean;
+    lastActivityAt?: number;
+  }> {
+    return this.workspaces.listWorkspaces(now);
+  }
 
-    for (const { meta, openCount, threadCount } of byRel.values()) {
-      const relPath = meta.relPath ?? meta.docId;
-      totalOpen += openCount;
-      const decorated = decorate ? decorate(meta) : meta;
-      const fileNode: WorkspaceFileNode = {
-        type: 'file',
-        docId: meta.docId,
-        name: relPath.split('/').pop() ?? relPath,
-        relPath,
-        fileType: meta.type,
-        openCount,
-        threadCount,
-        reviewUrl: (decorated as { reviewUrl?: string }).reviewUrl,
-        lastActivityAt: meta.lastActivityAt,
-        ...(meta.stale ? { stale: true } : {}),
-        ...(meta.diffStatus !== undefined ? { diffStatus: meta.diffStatus } : {}),
-        ...(meta.diffAdditions !== undefined ? { diffAdditions: meta.diffAdditions } : {}),
-        ...(meta.diffDeletions !== undefined ? { diffDeletions: meta.diffDeletions } : {}),
-      };
-      // Walk/create the directory chain, accumulating openCount as we go.
-      const parts = relPath.split('/');
-      const dirs = parts.slice(0, -1);
-      let cursor = root;
-      cursor.openCount += openCount;
-      for (const part of dirs) {
-        let next = cursor.children.find(
-          (c): c is WorkspaceDirNode => c.type === 'dir' && c.name === part,
-        );
-        if (!next) {
-          next = { type: 'dir', name: part, openCount: 0, children: [] };
-          cursor.children.push(next);
-        }
-        next.openCount += openCount;
-        cursor = next;
-      }
-      cursor.children.push(fileNode);
-    }
+  deleteWorkspace(
+    setId: string,
+    opts?: { force?: boolean },
+  ):
+    | { ok: true; deleted: number }
+    | { ok: false; error: 'not-found' }
+    | {
+        ok: false;
+        error: 'has-open-threads';
+        files: Array<{ docId: string; openThreads: number }>;
+      } {
+    return this.workspaces.deleteWorkspace(setId, opts);
+  }
 
-    sortTreeChildren(root);
-    return { setId, workspaceId: setId, root: workspaceRoot, totalOpen, tree: root };
+  archiveReview(
+    setId: string,
+    opts: { archivedBy: string; reason?: string; linkedWorkspaces?: string[] },
+  ):
+    | { ok: true; archived: number; docIds: string[]; manifest: ArchivedReview }
+    | { ok: false; error: 'not-found' }
+    | { ok: false; error: 'archive-collision' | 'move-failed'; docIds: string[] } {
+    return this.workspaces.archiveReview(setId, opts);
+  }
+
+  unarchiveReview(
+    setId: string,
+    opts: { archivedBy: string },
+  ):
+    | { ok: true; restored: number; docIds: string[]; manifest: ArchivedReview }
+    | { ok: false; error: 'not-found' }
+    | { ok: false; error: 'restore-collision' | 'move-failed'; docIds: string[] } {
+    return this.workspaces.unarchiveReview(setId, opts);
+  }
+
+  archiveDoc(
+    docId: string,
+    opts: { archivedBy: string; reason?: string; linkedWorkspaces?: string[] },
+  ):
+    | { ok: true; docId: string; manifest: ArchivedDoc }
+    | { ok: false; error: 'not-found' | 'hub-owned' | 'archive-collision' | 'move-failed' }
+    | { ok: false; error: 'review-member'; setId: string } {
+    return this.workspaces.archiveDoc(docId, opts);
+  }
+
+  unarchiveDoc(
+    docId: string,
+    opts: { archivedBy: string },
+  ):
+    | { ok: true; docId: string; manifest: ArchivedDoc }
+    | { ok: false; error: 'not-found' | 'restore-collision' | 'move-failed' } {
+    return this.workspaces.unarchiveDoc(docId, opts);
   }
 
   /**
@@ -3269,481 +2553,6 @@ export class Rooms {
     groups: Array<{ title: string; paths: string[]; details?: string }>,
   ): SetWorkspaceGroupsResult {
     return setWorkspaceGroupsImpl(this, setId, groups);
-  }
-
-  /**
-   * List the bound workspaces with rolled-up triage signals — so the daily
-   * cleanup can treat a folder bind as ONE unit instead of nagging per file.
-   * Each entry aggregates its member docs (`reviewIdOf(meta) === id`):
-   *   - `fileCount`     number of member docs
-   *   - `openThreads`   sum of every member's open-thread count
-   *   - `allIdle`       true iff EVERY member is idle (lastActivityAt older
-   *                     than 24h) — a workspace is only idle when nothing in
-   *                     it has moved recently
-   *   - `owner`         the creating agent's cwd (first member that has one)
-   *   - `lastActivityAt` max member lastActivityAt (most recent touch)
-   */
-  listWorkspaces(now: number = Date.now()): Array<{
-    setId: string;
-    /** Same value as `setId`, deprecated for one release. */
-    workspaceId: string;
-    root?: string;
-    title?: string;
-    owner?: string;
-    fileCount: number;
-    openThreads: number;
-    allIdle: boolean;
-    lastActivityAt?: number;
-  }> {
-    const IDLE_MS = 24 * 60 * 60 * 1000;
-    const byId = new Map<
-      string,
-      {
-        setId: string;
-        workspaceId: string;
-        root?: string;
-        title?: string;
-        owner?: string;
-        fileCount: number;
-        openThreads: number;
-        allIdle: boolean;
-        lastActivityAt?: number;
-      }
-    >();
-    for (const meta of this.list()) {
-      // `isReviewMember`, not just "has a review id": `setId` predates binds
-      // as a batch-registration tag, so 129 docs in the live data dir share a
-      // set without belonging to any folder or diff. Listing those would
-      // invent reviews nobody made, each with no root and nothing to refresh.
-      if (!isReviewMember(meta)) continue;
-      const id = reviewIdOf(meta) as string;
-      let entry = byId.get(id);
-      if (!entry) {
-        entry = {
-          setId: id,
-          workspaceId: id,
-          root: meta.workspaceRoot,
-          title: meta.title,
-          owner: meta.owner,
-          fileCount: 0,
-          openThreads: 0,
-          allIdle: true,
-          lastActivityAt: undefined,
-        };
-        byId.set(id, entry);
-      }
-      if (!entry.root && meta.workspaceRoot) entry.root = meta.workspaceRoot;
-      if (!entry.owner && meta.owner) entry.owner = meta.owner;
-      entry.fileCount += 1;
-      entry.openThreads += this.threadCounts(meta.docId).open;
-      const last = meta.lastActivityAt ?? meta.createdAt;
-      if (entry.lastActivityAt === undefined || last > entry.lastActivityAt) {
-        entry.lastActivityAt = last;
-      }
-      // A member is idle if its last activity is older than 24h. The
-      // workspace is idle only when every member is — so a single recently
-      // touched file keeps the whole workspace out of the cleanup queue.
-      if (now - last < IDLE_MS) entry.allIdle = false;
-    }
-    return Array.from(byId.values()).sort((a, b) => {
-      if (a.openThreads !== b.openThreads) return b.openThreads - a.openThreads;
-      return a.workspaceId.localeCompare(b.workspaceId);
-    });
-  }
-
-  /**
-   * Delete a whole workspace (a bound folder) as one unit: loop its member
-   * docs and `deleteDoc` each, applying the per-file open-thread guardrail.
-   *
-   * Semantics are ALL-OR-NOTHING:
-   *   - WITHOUT `force`: if ANY member still has open threads, abort the
-   *     entire delete (nothing is removed) and return the offending files.
-   *   - WITH `force`: delete every member regardless of open threads.
-   *
-   * The bound SOURCE files on disk are left untouched (same as deleteDoc).
-   */
-  deleteWorkspace(
-    setId: string,
-    opts?: { force?: boolean },
-  ):
-    | { ok: true; deleted: number }
-    | { ok: false; error: 'not-found' }
-    | {
-        ok: false;
-        error: 'has-open-threads';
-        files: Array<{ docId: string; openThreads: number }>;
-      } {
-    const members = this.list().filter((m) => reviewIdOf(m) === setId);
-    if (members.length === 0) return { ok: false, error: 'not-found' };
-    if (!opts?.force) {
-      // Pre-flight the guardrail across ALL members before deleting any, so a
-      // workspace with even one open thread is left fully intact.
-      const blocked: Array<{ docId: string; openThreads: number }> = [];
-      for (const m of members) {
-        const openThreads = this.listThreads(m.docId, { status: 'open' }).length;
-        if (openThreads > 0) blocked.push({ docId: m.docId, openThreads });
-      }
-      if (blocked.length > 0) return { ok: false, error: 'has-open-threads', files: blocked };
-    }
-    let deleted = 0;
-    for (const m of members) {
-      const res = this.deleteDoc(m.docId, { force: true });
-      if (res.ok) deleted += 1;
-    }
-    return { ok: true, deleted };
-  }
-
-  /**
-   * RETIRE a review without destroying it: move every member's persisted
-   * state into `data/_archive/` and unbind the live rooms.
-   *
-   * This is the soft counterpart to `deleteWorkspace`, and it is the one to
-   * reach for when a review is finished — a merged diff review that keeps
-   * presenting its unresolved threads forever is the problem it exists to
-   * solve. What archiving buys, mechanically:
-   *
-   *   - `hydrateFromDisk` reads only the TOP LEVEL of the data dir, so an
-   *     archived member stops loading at every restart and stops costing a
-   *     file poll and a room's worth of memory.
-   *   - `activity-backfill` scans `_archive` explicitly, so the `.ydoc` keeps
-   *     feeding the Weekly Review analyses. The stream over an archived doc is
-   *     byte-identical to the stream before it was archived; that is the
-   *     property the suite pins, because it is the whole reason this verb is
-   *     not a delete.
-   *   - `unarchiveReview` puts it back, so nothing here needs to be right the
-   *     first time.
-   *
-   * Open threads do NOT block it. The guardrail on `deleteWorkspace` exists
-   * because deleting strands someone's unread feedback; archiving strands
-   * nothing, and a review is usually retired precisely because its remaining
-   * threads have stopped mattering.
-   *
-   * ALL-OR-NOTHING on a docId that is already in `_archive`: rather than write
-   * over an older snapshot of the same id — the state a handful of ids on the
-   * production box are in, from a hand-move that predates this verb — the
-   * whole archive is refused and the colliding ids are named. Unarchive the
-   * older copy first, or purge it deliberately; nothing here decides for you
-   * which of two snapshots is worth less.
-   */
-  archiveReview(
-    setId: string,
-    opts: { archivedBy: string; reason?: string; linkedWorkspaces?: string[] },
-  ):
-    | { ok: true; archived: number; docIds: string[]; manifest: ArchivedReview }
-    | { ok: false; error: 'not-found' }
-    | { ok: false; error: 'archive-collision' | 'move-failed'; docIds: string[] } {
-    const members = this.list().filter((m) => reviewIdOf(m) === setId);
-    if (members.length === 0) return { ok: false, error: 'not-found' };
-    const dir = ensureArchiveDir(this.cfg.dataDir);
-
-    // Pre-flight the collision check across ALL members before moving any.
-    const collisions = members
-      .map((m) => m.docId)
-      .filter((docId) => existsSync(join(dir, `${docId}.ydoc`)));
-    if (collisions.length > 0) return { ok: false, error: 'archive-collision', docIds: collisions };
-
-    const moved: string[] = [];
-    for (const m of members) {
-      const room = this.rooms.get(m.docId);
-      // Flush BEFORE tearing down: the pending debounced write is cancelled by
-      // teardown, so without this the archived snapshot is up to 200ms stale —
-      // and for a doc edited right up to the moment it was retired, that is
-      // the edit the reviewer just made.
-      if (room) this.persistRoomNow(room);
-      if (!this.moveDocFiles(m.docId, this.cfg.dataDir, dir)) {
-        // Undo every move so a failed archive costs nothing — not even to a
-        // restart that lands right after it. Nothing has been torn down yet,
-        // so the live rooms are still exactly as they were.
-        for (const done of moved) this.moveDocFiles(done, dir, this.cfg.dataDir);
-        return { ok: false, error: 'move-failed', docIds: [m.docId] };
-      }
-      moved.push(m.docId);
-    }
-    // Commit point passed: every file is parked. Now unbind the rooms.
-    for (const m of members) {
-      const room = this.rooms.get(m.docId);
-      if (room) {
-        this.teardownRoom(room, 'review archived');
-        continue;
-      }
-      // A member nobody had opened has no room to tear down, but its alias
-      // was claimed from the index at boot and would outlive its file:
-      // `claimAlias` then refuses to give that name to a NEW doc, so a reused
-      // review name resolves for ever to something archived. `teardownRoom`
-      // released these back when every doc was resident.
-      this.releaseAliases(m.docId);
-    }
-
-    const entry = members.find((m) => reviewIdOf(m) === setId);
-    const manifest: ArchivedReview = {
-      setId,
-      archivedAt: toUtcIso(Date.now()),
-      archivedBy: opts.archivedBy,
-      ...(opts.reason !== undefined ? { reason: opts.reason } : {}),
-      ...(entry?.title !== undefined ? { title: entry.title } : {}),
-      ...(entry?.workspaceRoot !== undefined ? { root: entry.workspaceRoot } : {}),
-      docIds: moved,
-      linkedWorkspaces: opts.linkedWorkspaces ?? [],
-    };
-    writeArchiveManifest(this.cfg.dataDir, manifest);
-    this.recordReviewLifecycle('archive', setId, moved, opts);
-    return { ok: true, archived: moved.length, docIds: moved, manifest };
-  }
-
-  /**
-   * Put an archived review back exactly where it was: move each member's
-   * persisted state up out of `_archive`, hydrate the rooms, re-arm the file
-   * bindings, and drop the manifest.
-   *
-   * Refuses, all-or-nothing, if any member id has been re-minted at the top
-   * level while the review was away — restoring over a live doc would destroy
-   * the newer one, which is the failure this whole feature exists to avoid.
-   */
-  unarchiveReview(
-    setId: string,
-    opts: { archivedBy: string },
-  ):
-    | { ok: true; restored: number; docIds: string[]; manifest: ArchivedReview }
-    | { ok: false; error: 'not-found' }
-    | { ok: false; error: 'restore-collision' | 'move-failed'; docIds: string[] } {
-    const manifest = readArchiveManifest(this.cfg.dataDir, setId);
-    if (!manifest) return { ok: false, error: 'not-found' };
-    const dir = archiveDirPath(this.cfg.dataDir);
-
-    const collisions = manifest.docIds.filter((docId) => existsSync(this.pathFor(docId)));
-    if (collisions.length > 0) return { ok: false, error: 'restore-collision', docIds: collisions };
-
-    const moved: string[] = [];
-    for (const docId of manifest.docIds) {
-      if (!this.moveDocFiles(docId, dir, this.cfg.dataDir)) {
-        for (const done of moved) this.moveDocFiles(done, this.cfg.dataDir, dir);
-        return { ok: false, error: 'move-failed', docIds: [docId] };
-      }
-      moved.push(docId);
-    }
-    for (const docId of moved) this.hydrateDoc(docId);
-    removeArchiveManifest(this.cfg.dataDir, setId);
-    this.recordReviewLifecycle('unarchive', setId, moved, opts);
-    return { ok: true, restored: moved.length, docIds: moved, manifest };
-  }
-
-  /**
-   * RETIRE ONE free-standing doc: flush it, move its persisted state into
-   * `data/_archive/`, and unbind the room.
-   *
-   * `archiveReview` is the same act over a member list, and it is the verb for
-   * anything that HAS a member list. This one exists for what that cannot
-   * express — a markdown doc from `create_review_doc`, a mockup from
-   * `bind_mock`: a few hundred docs on the production box whose only removal
-   * path was `delete_doc`, which purges the `.ydoc` the activity analyses are
-   * rebuilt from. Everything mechanical is shared with the review path
-   * (`moveDocFiles`, `teardownRoom`, `hydrateDoc`), so the two cannot drift
-   * about what archiving means.
-   *
-   * Three refusals, each because the right verb is a different one:
-   *
-   *   - `review-member` — the doc carries a review id, so `archiveReview` would
-   *     sweep it up with its siblings. The test is deliberately the broad
-   *     `reviewIdOf` rather than `isReviewMember`: the question is not "is this
-   *     a proper review" but "would `archiveReview` move this file", and that
-   *     selector is `reviewIdOf`. Answering the narrower question would let two
-   *     verbs both claim the same doc.
-   *   - `hub-owned` — a `task:` body or a `ws:` board room is live furniture
-   *     the hub re-creates, not a document anyone archives.
-   *   - `archive-collision` — an older snapshot of this id is already parked.
-   *     Nothing here decides which of two snapshots is worth less.
-   *
-   * Open threads do not block it, for the same reason they do not block
-   * `archiveReview`: archiving strands nothing, and `unarchiveDoc` puts it
-   * back with its threads intact.
-   */
-  archiveDoc(
-    docId: string,
-    opts: { archivedBy: string; reason?: string; linkedWorkspaces?: string[] },
-  ):
-    | { ok: true; docId: string; manifest: ArchivedDoc }
-    | { ok: false; error: 'not-found' | 'hub-owned' | 'archive-collision' | 'move-failed' }
-    | { ok: false; error: 'review-member'; setId: string } {
-    if (isHubOwnedRoom(docId)) return { ok: false, error: 'hub-owned' };
-    const room = this.resolveRoom(docId);
-    if (!room) return { ok: false, error: 'not-found' };
-    // From here on the CANONICAL id: everything below names files, writes a
-    // manifest and reports back, and an alias names none of them.
-    const id = room.docId;
-    const setId = reviewIdOf(room.meta);
-    if (setId !== undefined) return { ok: false, error: 'review-member', setId };
-
-    const dir = ensureArchiveDir(this.cfg.dataDir);
-    if (existsSync(join(dir, `${id}.ydoc`))) return { ok: false, error: 'archive-collision' };
-
-    // Flush BEFORE tearing down: teardown cancels the pending debounced write,
-    // so without this the archived snapshot is up to 200ms stale — and for a
-    // doc edited right up to the moment it was retired, that is the edit the
-    // reviewer just made.
-    this.persistRoomNow(room);
-    if (!this.moveDocFiles(id, this.cfg.dataDir, dir)) return { ok: false, error: 'move-failed' };
-    // Commit point passed: the files are parked. Now unbind the room.
-    this.teardownRoom(room, 'doc archived');
-
-    const manifest: ArchivedDoc = {
-      docId: id,
-      archivedAt: toUtcIso(Date.now()),
-      archivedBy: opts.archivedBy,
-      ...(opts.reason !== undefined ? { reason: opts.reason } : {}),
-      ...(room.meta.title !== undefined ? { title: room.meta.title } : {}),
-      linkedWorkspaces: opts.linkedWorkspaces ?? [],
-    };
-    writeDocArchiveManifest(this.cfg.dataDir, manifest);
-    this.recordArchiveLifecycle('archive', id, {}, opts);
-    return { ok: true, docId: id, manifest };
-  }
-
-  /**
-   * Put an archived doc back where it was: move its persisted state up out of
-   * `_archive`, hydrate the room, re-arm the file binding, drop the manifest.
-   *
-   * Refuses if the id has been re-minted at the top level while the doc was
-   * away — restoring over a live doc would destroy the newer one, which is the
-   * failure this whole feature exists to avoid.
-   */
-  unarchiveDoc(
-    docId: string,
-    opts: { archivedBy: string },
-  ):
-    | { ok: true; docId: string; manifest: ArchivedDoc }
-    | { ok: false; error: 'not-found' | 'restore-collision' | 'move-failed' } {
-    const manifest = readDocArchiveManifest(this.cfg.dataDir, docId);
-    if (!manifest) return { ok: false, error: 'not-found' };
-    if (existsSync(this.pathFor(docId))) return { ok: false, error: 'restore-collision' };
-
-    const dir = archiveDirPath(this.cfg.dataDir);
-    if (!this.moveDocFiles(docId, dir, this.cfg.dataDir))
-      return { ok: false, error: 'move-failed' };
-    this.hydrateDoc(docId);
-    removeDocArchiveManifest(this.cfg.dataDir, docId);
-    this.recordArchiveLifecycle('unarchive', docId, {}, opts);
-    return { ok: true, docId, manifest };
-  }
-
-  /**
-   * Move a doc's `.ydoc` and its private-meta sidecar between the data dir and
-   * `_archive`. Rename, not copy: it is atomic within the volume and it is
-   * undoable by calling this with the directories swapped.
-   *
-   * A missing sidecar is fine — plenty of docs never had one, and it is a
-   * cache of host-side facts rather than content. A missing `.ydoc` is also
-   * fine, and is what a doc that has never been persisted looks like.
-   */
-  private moveDocFiles(docId: string, fromDir: string, toDir: string): boolean {
-    this.activityMtime.delete(docId);
-    const ydocFrom = join(fromDir, `${docId}.ydoc`);
-    const ydocTo = join(toDir, `${docId}.ydoc`);
-    try {
-      if (existsSync(ydocFrom)) renameSync(ydocFrom, ydocTo);
-    } catch (err) {
-      console.error(`[rooms] failed to move ${docId}.ydoc to ${toDir}:`, err);
-      return false;
-    }
-    const sidecarFrom = privateMetaPath(fromDir, docId);
-    const sidecarTo = privateMetaPath(toDir, docId);
-    try {
-      if (existsSync(sidecarFrom)) renameSync(sidecarFrom, sidecarTo);
-    } catch (err) {
-      // The sidecar is recoverable state, so a failure here is logged and the
-      // move stands — but put the .ydoc back first so the pair never splits.
-      console.error(`[rooms] failed to move sidecar for ${docId} to ${toDir}:`, err);
-      try {
-        if (existsSync(ydocTo)) renameSync(ydocTo, ydocFrom);
-      } catch {}
-      return false;
-    }
-    // Membership of the resident index map follows the FILE, in the one place
-    // that knows the direction. Without this, archiving moved the .ydoc out
-    // and dropped the room while the row stayed behind — and `list()` went on
-    // reporting a doc that had just been archived, which is the whole failure
-    // an archive is supposed to produce the opposite of.
-    const carried = moveDocIndex(fromDir, toDir, docId);
-    if (toDir === this.cfg.dataDir) {
-      // Coming back. A failure here really is harmless: the doc is resident
-      // again, so `list()` sees it either way, and the next persist writes
-      // the row.
-      const restored = readDocIndex(this.cfg.dataDir, docId);
-      if (restored) this.docIndex.set(docId, restored);
-    } else {
-      this.docIndex.delete(docId);
-      // Leaving. A row left behind in the LIVE directory outlives the archive
-      // and comes back as a doc on the next restart, so it does not get to
-      // fail quietly. Deleting it destroys nothing — it is derived state, and
-      // the .ydoc it describes is safe in `toDir`.
-      if (!carried) {
-        console.error(`[rooms] could not move index for ${docId} to ${toDir}; dropping it`);
-        deleteDocIndex(fromDir, docId);
-        if (existsSync(docIndexPath(fromDir, docId))) {
-          console.error(
-            `[rooms] index for ${docId} is STILL in ${fromDir} — a restart will list it as live`,
-          );
-        }
-      }
-    }
-    return true;
-  }
-
-  /**
-   * Record an `archive` / `unarchive` row in the activity log: who retired the
-   * review, when, and why.
-   *
-   * Live-capture only, like `read_session` and `doc_open` — a backfill cannot
-   * reconstruct it, because nothing about a moved file says who moved it. That
-   * is exactly why it is written at the moment it happens.
-   */
-  private recordReviewLifecycle(
-    type: 'archive' | 'unarchive',
-    setId: string,
-    docIds: string[],
-    opts: { archivedBy: string; reason?: string },
-  ): void {
-    this.recordArchiveLifecycle(type, setId, { reviewId: setId, memberCount: docIds.length }, opts);
-  }
-
-  /**
-   * Write the row itself. Shared by the review and single-doc paths so a log
-   * that mixes them cannot disagree with itself about the shape of an
-   * `archive`. The subject id is the docId on the event either way — a review's
-   * id, or the doc's own — and `reviewId` in the payload is what tells a reader
-   * which kind of thing was retired.
-   */
-  private recordArchiveLifecycle(
-    type: 'archive' | 'unarchive',
-    subjectId: string,
-    extra: Event['payload'],
-    opts: { archivedBy: string; reason?: string },
-  ): void {
-    try {
-      const ts = toUtcIso(Date.now());
-      const payload: Event['payload'] = {
-        ...extra,
-        ...(opts.reason !== undefined ? { reason: opts.reason } : {}),
-      };
-      const event: Event = {
-        eventId: eventId({
-          ts,
-          actor: 'agent',
-          docId: subjectId,
-          type,
-          payloadDigest: payloadDigest(opts.reason),
-        }),
-        ts,
-        type,
-        actor: 'agent',
-        actorName: opts.archivedBy,
-        isOwner: false,
-        doc: buildEventDoc({ docId: subjectId } as DocMeta),
-        payload,
-      };
-      appendActivity(this.cfg.dataDir, event);
-    } catch (err) {
-      console.error('[rooms] recordArchiveLifecycle failed:', err);
-    }
   }
 
   /**
@@ -5190,70 +3999,18 @@ export class Rooms {
     return now - humanEditedAt < STALE_WRITE_WINDOW_MS ? { humanEditedAt } : null;
   }
 
-  /**
-   * Snapshot the markdown a whole-doc rewrite is about to replace into
-   * `<dataDir>/backups/<docId>/<ts>-<seq>.md`, rotating to a cap. Runs on
-   * EVERY accepted set_doc_content — including a confirmed overwrite — so
-   * "the guard was bypassed" is never the same event as "the words are
-   * gone". Backups are transient files: rotation hard-deletes the oldest.
-   * Never throws; the rewrite proceeds either way.
-   */
-  private backupReplacedContent(docId: string, content: string): string | null {
-    try {
-      const safeId = docId.replace(/[^A-Za-z0-9._-]/g, '_');
-      const dir = join(this.cfg.dataDir, 'backups', safeId);
-      if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
-      const seq = String(this.backupSeq++).padStart(6, '0');
-      const file = join(dir, `${Date.now()}-${seq}.md`);
-      writeFileSync(file, content);
-      const entries = readdirSync(dir)
-        .filter((f) => f.endsWith('.md'))
-        .sort();
-      for (const stale of entries.slice(0, Math.max(0, entries.length - REPLACE_BACKUP_CAP))) {
-        rmSync(join(dir, stale), { force: true });
-      }
-      return file;
-    } catch (err) {
-      console.error(`[rooms] set_doc_content backup failed for ${docId}:`, err);
-      return null;
-    }
-  }
+  // ── Editing the words ────────────────────────────────────────────────────
+  //
+  // The verbs live in `doc-edit-ops.ts`; what follows is the store's public
+  // surface forwarding onto them, signatures unchanged.
 
   setDocContent(
     docId: string,
     markdown: string,
   ): { ok: true } | { ok: false; error: 'not-found' | 'unsupported' | 'empty' | 'parse-failed' } {
-    const room = this.resolveRoom(docId);
-    if (!room) return { ok: false, error: 'not-found' };
-    // Flat docs (code / diff) are read-only review surfaces; their content
-    // comes from disk or a pinned commit, never from an agent payload.
-    if (contentKind(room.meta.type) !== 'prose') return { ok: false, error: 'unsupported' };
-    if (!markdown.trim()) return { ok: false, error: 'empty' };
-    let blocks: Y.XmlElement[];
-    try {
-      blocks = prose.parseMarkdownBlocks(markdown);
-    } catch {
-      return { ok: false, error: 'parse-failed' };
-    }
-    if (blocks.length === 0) return { ok: false, error: 'empty' };
-    const fragment = prose.getProseFragment(room.ydoc);
-    // Backup-on-replace: whatever the doc holds right now survives this
-    // rewrite on disk, whoever wrote it and whatever the caller believed.
-    this.backupReplacedContent(docId, prose.serializeFragmentToMarkdown(fragment));
-    // A doc-side edit origin (NOT 'file-watch'): the write-back observer must
-    // see this and flush it to disk like any other agent edit.
-    room.ydoc.transact(() => {
-      prose.applyMarkdownToFragment(fragment, markdown);
-    }, 'agent-set-content');
-    prose.normalizeHeadingLevels(room.ydoc);
-    return { ok: true };
+    return this.docEdits.setDocContent(docId, markdown);
   }
 
-  /**
-   * Replace `find` with `replace` inside the doc. Optional context
-   * string around the match disambiguates repeated phrases; pass
-   * `occurrence` to pick by index when you know the match count.
-   */
   findAndReplace(
     docId: string,
     opts: {
@@ -5267,41 +4024,18 @@ export class Rooms {
       parseInlineMarks?: boolean;
     },
   ): prose.ReplaceResult {
-    const room = this.resolveRoom(docId);
-    if (!room) return { ok: false, error: 'no-match' };
-    return prose.findAndReplace(room.ydoc, opts);
+    return this.docEdits.findAndReplace(docId, opts);
   }
 
-  /**
-   * Rewrite the range a text-range thread is anchored to. The thread
-   * anchor is authoritative — we never recompute offsets on the
-   * client. When the anchor is orphaned (user deleted the text) the
-   * caller gets `anchor-orphaned` back and should either re-anchor or
-   * fall back to `findAndReplace`.
-   */
   rewriteThreadRegion(
     docId: string,
     threadId: string,
     replacement: string,
     opts?: { parseInlineMarks?: boolean },
   ): prose.AnchoredEditResult {
-    const room = this.resolveRoom(docId);
-    if (!room) return { ok: false, error: 'anchor-not-found' };
-    const thread = this.getThread(docId, threadId);
-    if (!thread) return { ok: false, error: 'anchor-not-found' };
-    if (thread.anchor.kind !== 'text-range') return { ok: false, error: 'anchor-orphaned' };
-    return prose.rewriteRange(room.ydoc, {
-      startRel: thread.anchor.startRel,
-      endRel: thread.anchor.endRel,
-      replacement,
-      parseInlineMarks: opts?.parseInlineMarks === true,
-    });
+    return this.docEdits.rewriteThreadRegion(docId, threadId, replacement, opts);
   }
 
-  /**
-   * Agent anchors — the agent can mint its own named pointers into the
-   * doc for batch edits. Stored separately from comment threads.
-   */
   createAgentAnchor(
     docId: string,
     opts: {
@@ -5312,9 +4046,7 @@ export class Rooms {
       label?: string;
     },
   ): prose.CreateAnchorResult {
-    const room = this.resolveRoom(docId);
-    if (!room) return { ok: false, error: 'no-match' };
-    return prose.createAgentAnchor(room.ydoc, opts);
+    return this.docEdits.createAgentAnchor(docId, opts);
   }
 
   editAtAgentAnchor(
@@ -5322,51 +4054,17 @@ export class Rooms {
     anchorId: string,
     op: { kind: 'replace'; text: string } | { kind: 'insert_after'; text: string },
   ): prose.AnchoredEditResult {
-    const room = this.resolveRoom(docId);
-    if (!room) return { ok: false, error: 'anchor-not-found' };
-    const anchor = prose.readAgentAnchor(room.ydoc, anchorId);
-    if (!anchor) return { ok: false, error: 'anchor-not-found' };
-    if (op.kind === 'replace') {
-      return prose.rewriteRange(room.ydoc, {
-        startRel: anchor.startRel,
-        endRel: anchor.endRel,
-        replacement: op.text,
-      });
-    }
-    return prose.insertAfterRange(room.ydoc, { endRel: anchor.endRel, text: op.text });
+    return this.docEdits.editAtAgentAnchor(docId, anchorId, op);
   }
 
   deleteAgentAnchor(docId: string, anchorId: string): boolean {
-    const room = this.resolveRoom(docId);
-    if (!room) return false;
-    return prose.deleteAgentAnchor(room.ydoc, anchorId);
+    return this.docEdits.deleteAgentAnchor(docId, anchorId);
   }
 
-  // =========================================================================
-  // Suggested edits (redline-suggestions phase 2). Thin wrappers over the
-  // core suggest-ops: suggestions ARE marks in the prose fragment, so every
-  // operation rescans at execution time — no registry to keep in sync, and a
-  // sid that raced away (double-accept, external rewrite) reports not-found.
-  // All mutations run under the same 'agent' transaction origin the other
-  // agent edit tools use: the write-back observer flushes results to disk;
-  // a browser UndoManager never tracks them.
-  // =========================================================================
-
-  /** All pending proposals on the doc, in doc order. Empty for unknown docs
-   *  and for flat (code/diff) docs, whose prose fragment has no content. */
   listSuggestions(docId: string): suggestOps.SuggestionSummary[] {
-    const room = this.resolveRoom(docId);
-    if (!room) return [];
-    return suggestOps.listSuggestions(room.ydoc);
+    return this.docEdits.listSuggestions(docId);
   }
 
-  /**
-   * The suggestion-creation primitive: same find/context/occurrence matching
-   * as findAndReplace, but the replacement is written AS A PROPOSAL — the
-   * matched text marked suggestDelete, the new text inserted with
-   * suggestInsert, one shared sid, author from the caller. The doc's
-   * accepted state (and therefore disk) is unchanged until accepted.
-   */
   createSuggestion(
     docId: string,
     opts: {
@@ -5388,27 +4086,9 @@ export class Rooms {
         error: 'not-found' | 'no-match' | 'ambiguous' | 'match-in-pending-suggestion';
         candidates?: Array<{ docOffset: number; preview: string }>;
       } {
-    const room = this.resolveRoom(docId);
-    if (!room) return { ok: false, error: 'not-found' };
-    const res = suggestOps.suggestReplace(room.ydoc, opts);
-    if (!res.ok) return res;
-    this.fireSuggestionEvent(
-      room,
-      'suggestion.created',
-      res.sid,
-      suggestOps.listSuggestions(room.ydoc).find((s) => s.sid === res.sid),
-    );
-    return { ok: true, suggestionId: res.sid };
+    return this.docEdits.createSuggestion(docId, opts);
   }
 
-  /**
-   * The `rewrite_thread_region` twin of `createSuggestion`: propose the
-   * rewrite of a thread's anchored range instead of applying it directly.
-   * Same anchor resolution as `rewriteThreadRegion` — `anchor-orphaned` if
-   * the user deleted the anchored text, `cross-block` if the range somehow
-   * spans two blocks (shouldn't happen for a single-thread anchor, but
-   * mirrors `rewriteRange`'s own restriction).
-   */
   createSuggestionForThread(
     docId: string,
     threadId: string,
@@ -5421,152 +4101,54 @@ export class Rooms {
   ):
     | { ok: true; suggestionId: string }
     | { ok: false; error: 'anchor-not-found' | 'anchor-orphaned' | 'cross-block' } {
-    const room = this.resolveRoom(docId);
-    if (!room) return { ok: false, error: 'anchor-not-found' };
-    const thread = this.getThread(docId, threadId);
-    if (!thread) return { ok: false, error: 'anchor-not-found' };
-    if (thread.anchor.kind !== 'text-range') return { ok: false, error: 'anchor-orphaned' };
-    const res = suggestOps.suggestRewriteRange(room.ydoc, {
-      startRel: thread.anchor.startRel,
-      endRel: thread.anchor.endRel,
-      replacement: opts.replacement,
-      parseInlineMarks: opts.parseInlineMarks === true,
-      author: opts.author,
-      ts: opts.ts,
-    });
-    if (!res.ok) return res;
-    this.fireSuggestionEvent(
-      room,
-      'suggestion.created',
-      res.sid,
-      suggestOps.listSuggestions(room.ydoc).find((s) => s.sid === res.sid),
-    );
-    return { ok: true, suggestionId: res.sid };
+    return this.docEdits.createSuggestionForThread(docId, threadId, opts);
   }
 
-  /** Accept a proposal: it becomes real content and flows to disk via the
-   *  normal debounced write-back. Missing sid (or doc) → not-found — also
-   *  the correct answer to the double-accept race. */
   acceptSuggestion(docId: string, sid: string): suggestOps.SuggestionOpResult {
-    const room = this.resolveRoom(docId);
-    if (!room) return { ok: false, error: 'not-found' };
-    const before = suggestOps.listSuggestions(room.ydoc).find((s) => s.sid === sid);
-    const res = suggestOps.acceptSuggestion(room.ydoc, sid);
-    if (res.ok) this.fireSuggestionEvent(room, 'suggestion.accepted', sid, before);
-    return res;
+    return this.docEdits.acceptSuggestion(docId, sid);
   }
 
-  /** Reject a proposal: restores exactly the pre-suggestion text. */
   rejectSuggestion(docId: string, sid: string): suggestOps.SuggestionOpResult {
-    const room = this.resolveRoom(docId);
-    if (!room) return { ok: false, error: 'not-found' };
-    const before = suggestOps.listSuggestions(room.ydoc).find((s) => s.sid === sid);
-    const res = suggestOps.rejectSuggestion(room.ydoc, sid);
-    if (res.ok) this.fireSuggestionEvent(room, 'suggestion.rejected', sid, before);
-    return res;
+    return this.docEdits.rejectSuggestion(docId, sid);
   }
 
-  /** Accept or reject every pending proposal (optionally one author's). */
   resolveAllSuggestions(
     docId: string,
     opts: { action: 'accept' | 'reject'; authorId?: string },
   ): { ok: true; resolved: number; sids: string[] } | { ok: false; error: 'not-found' } {
-    const room = this.resolveRoom(docId);
-    if (!room) return { ok: false, error: 'not-found' };
-    const before = new Map(suggestOps.listSuggestions(room.ydoc).map((s) => [s.sid, s]));
-    const res = suggestOps.resolveAllSuggestions(room.ydoc, opts);
-    const event = opts.action === 'accept' ? 'suggestion.accepted' : 'suggestion.rejected';
-    for (const sid of res.sids) {
-      this.fireSuggestionEvent(room, event, sid, before.get(sid));
-    }
-    return res;
+    return this.docEdits.resolveAllSuggestions(docId, opts);
   }
 
-  /**
-   * Parse markdown into block elements and insert them as siblings
-   * immediately after the block that contains the agent anchor.
-   * Use this for adding new headings / paragraphs / lists / tables —
-   * `edit_at_anchor` with `insert_after` does a character-stream
-   * insert which keeps the new text inside the anchor's block,
-   * producing literal `## Heading` text instead of a heading element.
-   */
   insertBlocksAtAnchor(
     docId: string,
     anchorId: string,
     markdown: string,
     opts?: { placement?: prose.BlockPlacement },
   ): prose.AnchoredEditResult {
-    const room = this.resolveRoom(docId);
-    if (!room) return { ok: false, error: 'anchor-not-found' };
-    const anchor = prose.readAgentAnchor(room.ydoc, anchorId);
-    if (!anchor) return { ok: false, error: 'anchor-not-found' };
-    return prose.insertBlocksAfterAnchor(room.ydoc, {
-      anchorRel: anchor.endRel,
-      markdown,
-      placement: opts?.placement,
-    });
+    return this.docEdits.insertBlocksAtAnchor(docId, anchorId, markdown, opts);
   }
 
-  /** Append text at the END position of a thread's anchored range. */
   insertAfterThread(docId: string, threadId: string, text: string): prose.AnchoredEditResult {
-    const room = this.resolveRoom(docId);
-    if (!room) return { ok: false, error: 'anchor-not-found' };
-    const thread = this.getThread(docId, threadId);
-    if (!thread) return { ok: false, error: 'anchor-not-found' };
-    if (thread.anchor.kind !== 'text-range') return { ok: false, error: 'anchor-orphaned' };
-    return prose.insertAfterRange(room.ydoc, { endRel: thread.anchor.endRel, text });
+    return this.docEdits.insertAfterThread(docId, threadId, text);
   }
 
-  /**
-   * Parse markdown into block elements and insert them immediately
-   * after the block that contains the thread's anchor. Use this for
-   * "add a section below this comment" — the anchor picks the
-   * location, the markdown describes the new blocks.
-   */
   insertBlocksAfterThread(
     docId: string,
     threadId: string,
     markdown: string,
     opts?: { placement?: prose.BlockPlacement },
   ): prose.AnchoredEditResult {
-    const room = this.resolveRoom(docId);
-    if (!room) return { ok: false, error: 'anchor-not-found' };
-    const thread = this.getThread(docId, threadId);
-    if (!thread) return { ok: false, error: 'anchor-not-found' };
-    if (thread.anchor.kind !== 'text-range') return { ok: false, error: 'anchor-orphaned' };
-    return prose.insertBlocksAfterAnchor(room.ydoc, {
-      anchorRel: thread.anchor.endRel,
-      markdown,
-      placement: opts?.placement,
-    });
+    return this.docEdits.insertBlocksAfterThread(docId, threadId, markdown, opts);
   }
 
-  /**
-   * Delete the single block containing a thread's anchored range. Use
-   * for "remove the paragraph this comment points at." Empty-string
-   * find_and_replace cannot do this — it removes text but leaves the
-   * empty block element behind.
-   */
   deleteBlockAtThread(docId: string, threadId: string): prose.DeleteBlockResult {
-    const room = this.resolveRoom(docId);
-    if (!room) return { ok: false, error: 'anchor-orphaned' };
-    const thread = this.getThread(docId, threadId);
-    if (!thread) return { ok: false, error: 'anchor-orphaned' };
-    if (thread.anchor.kind !== 'text-range') return { ok: false, error: 'anchor-orphaned' };
-    return prose.deleteBlockAtAnchor(room.ydoc, { anchorRel: thread.anchor.startRel });
+    return this.docEdits.deleteBlockAtThread(docId, threadId);
   }
 
-  /** Same, keyed on an agent anchor. */
   deleteBlockAtAgentAnchor(docId: string, anchorId: string): prose.DeleteBlockResult {
-    const room = this.resolveRoom(docId);
-    if (!room) return { ok: false, error: 'anchor-orphaned' };
-    const anchor = prose.readAgentAnchor(room.ydoc, anchorId);
-    if (!anchor) return { ok: false, error: 'anchor-orphaned' };
-    return prose.deleteBlockAtAnchor(room.ydoc, { anchorRel: anchor.startRel });
+    return this.docEdits.deleteBlockAtAgentAnchor(docId, anchorId);
   }
 
-  /** Delete every top-level block from start match through end match.
-   *  Block-inclusive — partial match still deletes the whole block. */
   deleteBlocksInRange(
     docId: string,
     opts: {
@@ -5578,43 +4160,18 @@ export class Rooms {
       endOccurrence?: number;
     },
   ): prose.DeleteBlocksInRangeResult {
-    const room = this.resolveRoom(docId);
-    if (!room) return { ok: false, error: 'no-match' };
-    return prose.deleteBlocksInRange(room.ydoc, opts);
+    return this.docEdits.deleteBlocksInRange(docId, opts);
   }
 
-  /** Delete a heading block + everything until the next heading at ≤ level. */
   deleteSection(
     docId: string,
     opts: { heading: string; level?: number; occurrence?: number },
   ): prose.DeleteSectionResult {
-    const room = this.resolveRoom(docId);
-    if (!room) return { ok: false, error: 'no-match' };
-    return prose.deleteSection(room.ydoc, opts);
+    return this.docEdits.deleteSection(docId, opts);
   }
 
-  /**
-   * Sweep every text-range thread in a doc and best-effort re-anchor
-   * the ones whose Y.RelativePosition no longer resolves. Idempotent —
-   * safe to call on every significant doc change.
-   */
   autoReanchor(docId: string): { checked: number; reanchored: number; stillOrphan: number } | null {
-    const room = this.resolveRoom(docId);
-    if (!room) return null;
-    return prose.autoReanchorDoc(room.ydoc);
-  }
-
-  listThreads(docId: string, filter?: { status?: 'open' | 'resolved' }): Thread[] {
-    const room = this.resolveRoom(docId);
-    if (!room) return [];
-    const all = listThreads(room.ydoc);
-    return filter?.status ? all.filter((t) => t.status === filter.status) : all;
-  }
-
-  getThread(docId: string, threadId: string): Thread | null {
-    const room = this.resolveRoom(docId);
-    if (!room) return null;
-    return listThreads(room.ydoc).find((t) => t.id === threadId) ?? null;
+    return this.docEdits.autoReanchor(docId);
   }
 
   /**
@@ -6234,81 +4791,5 @@ export class Rooms {
         if (room) this.writeBoundFileNow(room, binding);
       }
     }
-  }
-}
-
-export function randomId(): string {
-  return Math.random().toString(36).slice(2, 10) + Date.now().toString(36).slice(-4);
-}
-
-/** Resolve / reopen actions come from the reviewer surface, which doesn't
- *  send an author in the body. Default to the known reviewer (Bryan, the
- *  doc owner) so the activity stream attributes them to a person. The route
- *  may override by passing an explicit author. */
-const DEFAULT_REVIEWER: User = {
-  id: 'known-bryan',
-  name: 'Bryan',
-  kind: 'known',
-  color: '#2e7dd7',
-};
-
-/**
- * Sort a workspace dir node's children in place, recursively: directories
- * first, then by open-count descending (attention floats up), then by name
- * ascending. Mirrors the landing page's "what needs my review?" ordering.
- */
-/**
- * The standing answer on a declaration, packaged as the history entry an undo
- * (or a displacing re-answer) appends. ONE builder for both callers, so a
- * displaced answer can never be recorded differently from an undone one.
- * `answeredAt` falls back to 0 for a legacy option tap that predates the
- * stamp — the entry still records the words and the option.
- */
-function displacedAnswer(prior: ReviewPayload, ts: number, by: string): ReviewAnswerUndone {
-  return {
-    answeredAt: prior.answeredAt ?? 0,
-    ...(prior.answeredBy !== undefined ? { answeredBy: prior.answeredBy } : {}),
-    ...(prior.answerText !== undefined ? { answerText: prior.answerText } : {}),
-    ...(prior.answeredWith !== undefined ? { answeredWith: prior.answeredWith } : {}),
-    undoneAt: ts,
-    undoneBy: by,
-  };
-}
-
-/**
- * A caller-supplied relPath in the tree's own spelling: no leading slashes,
- * no `.` segments, no empty segments. `./.git/config` and `.git//config` must
- * be judged as `.git/config` — the listing is compared by string, so a
- * spelling the listing would never use has to be folded before the compare
- * rather than trusted to fail it. `..` is left in place for the traversal
- * guard to refuse.
- */
-function normalizeRel(relPath: string): string {
-  return relPath
-    .replace(/^\/+/, '')
-    .split('/')
-    .filter((seg) => seg !== '' && seg !== '.')
-    .join('/');
-}
-
-/** The workspace's stored exclude prefixes, normalized. Replicated on every
- *  member (there is no workspace registry), so any member answers. */
-function workspaceExcludes(members: DocMeta[]): string[] {
-  const raw = members.find((m) => m.workspaceExclude)?.workspaceExclude ?? [];
-  return raw.map((p) => p.replace(/^\/+/, '').replace(/\/+$/, '')).filter(Boolean);
-}
-
-function isExcludedPath(relPath: string, excludes: string[]): boolean {
-  return excludes.some((p) => relPath === p || relPath.startsWith(`${p}/`));
-}
-
-function sortTreeChildren(node: WorkspaceDirNode): void {
-  node.children.sort((a, b) => {
-    if (a.type !== b.type) return a.type === 'dir' ? -1 : 1;
-    if (a.openCount !== b.openCount) return b.openCount - a.openCount;
-    return a.name.localeCompare(b.name);
-  });
-  for (const child of node.children) {
-    if (child.type === 'dir') sortTreeChildren(child);
   }
 }
