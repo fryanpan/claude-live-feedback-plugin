@@ -34,7 +34,7 @@ import { join } from 'node:path';
 import { type Anchor, type Thread, type User, createThread } from '@feedback/core';
 import type * as Y from 'yjs';
 import { type ServerHandle, createServer } from '../src/server.ts';
-import { waitFor } from './wait-for.ts';
+import { pastReanchor, waitFor } from './wait-for.ts';
 
 const reviewer: User = { id: 'known-reviewer', name: 'Reviewer', kind: 'known', color: '#2e7dd7' };
 
@@ -129,7 +129,7 @@ async function editAndLetSweepRun(docId: string, until?: () => boolean): Promise
     // timed: callers with no predicate are asserting that the sweep changed
     // NOTHING (or crashed nothing), so the whole 250ms debounce plus its pass
     // has to have happened before the claim means anything.
-    await new Promise((r) => setTimeout(r, 500));
+    await new Promise((r) => setTimeout(r, pastReanchor()));
   }
   return res.status;
 }

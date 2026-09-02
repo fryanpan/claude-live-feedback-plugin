@@ -7,6 +7,7 @@ import { getProseFragment, serializeFragmentToMarkdown, walkProse } from '../../
 import { Rooms } from '../src/rooms.ts';
 import { SseHub } from '../src/sse.ts';
 import { createWebhookDispatcher } from '../src/webhooks.ts';
+import { pastWriteBack } from './wait-for.ts';
 
 /**
  * Rooms-level suggestion operations (redline-suggestions phase 2, commit 2):
@@ -66,7 +67,7 @@ describe('rooms suggestion operations', () => {
     // The proposal is pending: the write-back window passes and the FILE is
     // byte-identical (proposal isolation, outcome 1 of the plan).
     // timed: only an elapsed window can prove the proposal never landed.
-    await sleep(1300);
+    await sleep(pastWriteBack());
     expect(readFileSync(path, 'utf8')).toBe(MD);
 
     const list = rooms.listSuggestions('sg1');
@@ -99,7 +100,7 @@ describe('rooms suggestion operations', () => {
     expect(walkProse(getProseFragment(ydoc)).plainText).not.toContain('delta');
     // timed: same negative — the rejected text must still be absent after the
     // window in which a write-back could have carried it out.
-    await sleep(1300);
+    await sleep(pastWriteBack());
     expect(readFileSync(path, 'utf8')).toBe(MD);
     expect(rooms.listSuggestions('sg1')).toHaveLength(0);
   });

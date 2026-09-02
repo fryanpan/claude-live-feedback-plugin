@@ -10,6 +10,8 @@
  * See .claude/rules/testing-standards.md, standard 2.
  */
 
+import { ROOM_TIMINGS } from '../src/room-timings.ts';
+
 export type WaitOptions = {
   /** Give up after this long. Default 5000ms — generous, since it is only paid on failure. */
   timeout?: number;
@@ -84,3 +86,42 @@ export async function waitForFileToBe(
     ...options,
   });
 }
+
+/**
+ * Windows derived from the server's own cadences, for the waits that cannot
+ * become a poll: the ones asserting that something NEVER happens, and the one
+ * that has to land a write INSIDE a debounce window.
+ *
+ * They are derived rather than written as literals because the suite scales
+ * every cadence down (see packages/server/test/timing.preload.ts). A literal
+ * 1100 would be a 14x overshoot under the scale, and a literal 700 meant to
+ * sit inside an 800ms window would sit far outside an 80ms one — turning the
+ * race the test builds into no race at all.
+ *
+ * The multipliers are set so that at the DEFAULT cadences every one of these
+ * returns at least the literal it replaced. Nothing lost margin in the
+ * conversion; the scale is what makes them fast.
+ */
+
+/** Long enough that a doc → disk write-back would have fired. */
+export const pastWriteBack = (): number => Math.ceil(ROOM_TIMINGS.writeBackMs * 1.625);
+
+/** Long enough that an external edit would have been polled, read and applied. */
+export const pastExternalRead = (): number =>
+  Math.ceil(
+    (ROOM_TIMINGS.filePollMs + ROOM_TIMINGS.readDebounceMs + ROOM_TIMINGS.writeBackMs) * 1.75,
+  );
+
+/**
+ * After the `.ydoc` persist has run but before the `.md` write-back does —
+ * the gap a test needs to build "the server died with an edit still unflushed".
+ * Midway between the two so neither side is close.
+ */
+export const afterPersist = (): number =>
+  Math.round((ROOM_TIMINGS.persistMs + ROOM_TIMINGS.writeBackMs) / 2);
+
+/** Late in the write-back window but before it fires — where a racing write must land. */
+export const insideWriteBack = (): number => Math.round(ROOM_TIMINGS.writeBackMs * 0.875);
+
+/** Long enough that the thread re-anchor sweep would have run. */
+export const pastReanchor = (): number => Math.ceil(ROOM_TIMINGS.reanchorMs * 2);

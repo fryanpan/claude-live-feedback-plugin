@@ -6,7 +6,7 @@ import { Rooms } from '../src/rooms.ts';
 import { type ServerHandle, createServer } from '../src/server.ts';
 import { SseHub } from '../src/sse.ts';
 import { createWebhookDispatcher } from '../src/webhooks.ts';
-import { waitFor } from './wait-for.ts';
+import { insideWriteBack, waitFor } from './wait-for.ts';
 
 /**
  * A lost write into a bound doc must tell SOMEBODY — the syncError needs an
@@ -127,7 +127,7 @@ describe('doc.sync_error broadcast (in-process Rooms)', () => {
     // stat-before-write guard routes this through the conflict arm.
     // timed: the write has to land INSIDE the 800ms window; the delay is the
     // setup for the race, not a wait for a result.
-    await sleep(700);
+    await sleep(insideWriteBack());
     writeExternal(path, EXT_ONE);
 
     const events = await waitFor(

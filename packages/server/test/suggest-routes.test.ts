@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { User } from '@feedback/core';
 import { type ServerHandle, createServer } from '../src/server.ts';
-import { waitForFileToBe } from './wait-for.ts';
+import { pastWriteBack, waitForFileToBe } from './wait-for.ts';
 
 /**
  * HTTP-level tests for the suggested-edits route layer (redline-suggestions
@@ -72,7 +72,7 @@ describe('suggested edits — HTTP routes', () => {
     // just at rooms.ts.
     // timed: the assertion is that the pending proposal NEVER reaches disk,
     // so the whole debounced write-back window has to elapse first.
-    await sleep(1300);
+    await sleep(pastWriteBack());
     expect(readFileSync(file, 'utf8')).toBe('Alpha beta gamma.\n');
 
     const list = await j<{ suggestions: Array<{ sid: string; kind: string; author: User }> }>(
@@ -127,7 +127,7 @@ describe('suggested edits — HTTP routes', () => {
     expect(list.suggestions).toHaveLength(0);
     // timed: the assertion is that the pending proposal NEVER reaches disk,
     // so the whole debounced write-back window has to elapse first.
-    await sleep(1300);
+    await sleep(pastWriteBack());
     expect(readFileSync(file, 'utf8')).toBe('Alpha beta gamma.\n');
   });
 
@@ -212,7 +212,7 @@ describe('suggested edits — HTTP routes', () => {
 
     // timed: the assertion is that the pending proposal NEVER reaches disk,
     // so the whole debounced write-back window has to elapse first.
-    await sleep(1300);
+    await sleep(pastWriteBack());
     expect(readFileSync(file, 'utf8')).toBe('The quick brown fox jumped.\n');
 
     const accepted = await j<{ ok: boolean }>(
@@ -328,7 +328,7 @@ describe('suggested edits — HTTP routes', () => {
     expect(created.ok).toBe(true);
     // timed: the assertion is that the pending proposal NEVER reaches disk,
     // so the whole debounced write-back window has to elapse first.
-    await sleep(1300);
+    await sleep(pastWriteBack());
     expect(readFileSync(file, 'utf8')).toBe('See the docs here.\n');
 
     // The proposal's inserted TEXT is the discriminator: a real link mark
