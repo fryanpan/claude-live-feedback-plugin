@@ -58,9 +58,10 @@ function deps(over: Partial<SpinoffDeps> = {}): { deps: SpinoffDeps; calls: Call
       // No path makes a GET any more (the research path's lead lookup moved
       // to the server); answering one keeps the helper honest if that changes.
       if (init?.method !== 'POST') return Promise.resolve({ leadAgentId: 'Workspaces' });
-      return Promise.resolve(
-        url.endsWith('/threads') ? { thread: { id: 'th-1' } } : { task: { id: 't-99' } },
-      );
+      if (url.endsWith('/research-request')) {
+        return Promise.resolve({ threadId: 'th-1', section: 'Research: …', placeholder: true });
+      }
+      return Promise.resolve({ task: { id: 't-99' } });
     },
     ...over,
   };
@@ -252,7 +253,8 @@ describe('runSpinoff', () => {
     // which row, or whether the title had come out sane, without leaving the
     // doc for the board.
     const { deps: d } = deps({ quote: '## Cloudflare Access' });
-    expect((await runSpinoff('task', d))?.title).toBe('Cloudflare Access');
+    const made = await runSpinoff('task', d);
+    expect(made?.action === 'task' ? made.title : undefined).toBe('Cloudflare Access');
   });
 
   /**
@@ -283,35 +285,63 @@ describe('runSpinoff', () => {
       const { deps: d } = deps({
         fetchJson: () => Promise.resolve({ task: { id: 't-99', status: 'triage' } }),
       });
-      expect((await runSpinoff('task', d))?.status).toBe('triage');
+      const made = await runSpinoff('task', d);
+      expect(made?.action === 'task' ? made.status : undefined).toBe('triage');
     });
   });
 
-  describe('Research and come back', () => {
-    it('is addressed to the board, not to whoever tapped it', async () => {
-      // Left unsaid, the create route falls the assignee back to the author —
-      // which put "go and find out about this" on the plate of the person who
-      // asked the question (Bryan, 2026-09-01). The first fix looked the lead
-      // up here and sent it as `assignee`; on a board with no lead that sent
-      // nothing, and the fallback handed the row to the tapper anyway. Now the
-      // row says whose it is — the lead's, or nobody's — and the server holds
-      // that line (task-owner.test.ts).
-      const { deps: d, calls } = deps();
-      await runSpinoff('research', d);
-      const create = created(calls);
-      expect(create?.body.assignToLead).toBe(true);
-      expect(create?.body.assignee).toBeUndefined();
-      expect(create?.body.assigneeKind).toBeUndefined();
-      // A research errand is not thin for lacking a name; only the selection
-      // decides triage, the same as every other spin-off.
-      expect(create?.body.triage).toBeUndefined();
+  describe('Research', () => {
+    // It used to file a lead-addressed task. Bryan pressed it on prod and
+    // found a board row where the approved mock had a section in the notes
+    // (2026-09-01: "it just creates a task — does not follow the flow in
+    // the mockups"). Now the ask goes to the DOC: an anchored thread on the
+    // selected line plus a placeholder section under it, both the server's
+    // doing over one route.
+    it('asks the doc, on the selected line, and files no task', async () => {
+      const { deps: d, calls } = deps({ quote: 'Does Cloudflare Access cover the mockup route?' });
+      const made = await runSpinoff('research', d);
+      expect(made).toEqual({
+        action: 'research',
+        threadId: 'th-1',
+        section: 'Research: …',
+        placeholder: true,
+      });
+      // ONE round trip, to the doc — no create anywhere.
+      expect(calls.map((c) => c.url)).toEqual(['/api/docs/d-huddle/research-request']);
     });
 
-    it('is ONE round trip — the lead is the server’s to resolve', async () => {
-      const { deps: d, calls } = deps();
+    it('sends the presser, the selection as the anchor, and the topic as a title', async () => {
+      const { deps: d, calls } = deps({ quote: 'Does Cloudflare Access cover the mockup route?' });
       await runSpinoff('research', d);
-      expect(calls).toHaveLength(1);
-      expect(calls[0]?.method).toBe('POST');
+      const ask = created(calls);
+      expect(ask?.url).toBe('/api/docs/d-huddle/research-request');
+      expect(ask?.body.author).toEqual(JORDAN);
+      expect(ask?.body.anchor).toEqual(ANCHOR);
+      // The topic is the selection read as a title — marker and trailing
+      // seam gone — and NOT prefixed here: the server owns the heading.
+      expect(ask?.body.topic).toBe('Does Cloudflare Access cover the mockup route?');
+      expect(ask?.body.title).toBeUndefined();
+      expect(ask?.body.assignToLead).toBeUndefined();
+    });
+
+    it('keeps the topic short enough for a heading once the prefix is on it', async () => {
+      const { deps: d, calls } = deps({ quote: 'x'.repeat(200) });
+      await runSpinoff('research', d);
+      expect(String(created(calls)?.body.topic).length).toBeLessThanOrEqual(70);
+    });
+
+    it('falls back to its own heading when the server names none', async () => {
+      const { deps: d } = deps({
+        quote: 'Check the mockup route',
+        fetchJson: () => Promise.resolve({ threadId: 'th-8' }),
+      });
+      const made = await runSpinoff('research', d);
+      expect(made).toEqual({
+        action: 'research',
+        threadId: 'th-8',
+        section: 'Research: Check the mockup route',
+        placeholder: false,
+      });
     });
 
     it('does not address the ordinary create to the board', async () => {
@@ -337,26 +367,14 @@ describe('runSpinoff', () => {
     expect(calls[0]?.body.status).toBeUndefined();
   });
 
-  it('Research and come back names itself as research in the title', async () => {
-    const { deps: d, calls } = deps({ quote: 'Does Cloudflare Access cover the mockup route?' });
-    await runSpinoff('research', d);
-    expect(String(created(calls)?.body.title)).toBe(
-      'Research: Does Cloudflare Access cover the mockup route?',
-    );
-  });
-
-  it('keeps a research title inside the cap once the prefix is on it', async () => {
-    const { deps: d, calls } = deps({ quote: 'x'.repeat(200) });
-    await runSpinoff('research', d);
-    expect(String(created(calls)?.body.title).length).toBeLessThanOrEqual(80);
-    expect(String(created(calls)?.body.title).startsWith('Research: ')).toBe(true);
-  });
-
   it('reports a server that answered without an id rather than inventing one', async () => {
     for (const action of ['task', 'research'] as const) {
       const { deps: d } = deps({ fetchJson: () => Promise.resolve({}) });
       expect(await runSpinoff(action, d)).toBeNull();
     }
+    // And a research answer with a thread id but the wrong type is no id.
+    const { deps: d } = deps({ fetchJson: () => Promise.resolve({ threadId: 7 }) });
+    expect(await runSpinoff('research', d)).toBeNull();
   });
 
   it('lets a refusal through to the caller instead of swallowing it', async () => {
