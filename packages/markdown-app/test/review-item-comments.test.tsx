@@ -621,6 +621,12 @@ describe('the walkthrough card: "I have a question" — asking without selecting
 // the toast — was verified headlessly against a built client; see the PR.
 describe('hub-app wires both asks to one POST and holds nothing back', () => {
   const src = readFileSync(join(__dirname, '..', 'src', 'hub', 'hub-app.ts'), 'utf8');
+  // The asking verbs themselves live in the review controller; the entry keeps
+  // the wiring that says which surface calls which.
+  const controller = readFileSync(
+    join(__dirname, '..', 'src', 'hub', 'hub-review-controller.ts'),
+    'utf8',
+  );
 
   it('the link and the pill share askOnReviewItem, which re-reads the queue after a landed write', () => {
     expect(src).toMatch(
@@ -629,22 +635,24 @@ describe('hub-app wires both asks to one POST and holds nothing back', () => {
     expect(src).toMatch(
       /onQuestionOnItem: \(item, question\) => askOnReviewItem\(item, null, question\)/,
     );
-    expect(src).toMatch(
+    expect(controller).toMatch(
       /async function sendReviewItemQuestion[\s\S]{0,1800}showToast\(askedToast\('Asked', askedBy\)\);[\s\S]{0,400}await loadReviewItems\(\);\s*return true;/,
     );
     // The panel's card goes through the same POST.
     expect(src).toMatch(
       /onAskOnPanelItem: \(t, item, question\) => askOnPanelItem\(t, item, question\)/,
     );
-    expect(src).toMatch(
+    expect(controller).toMatch(
       /async function askOnPanelItem[\s\S]{0,600}sendReviewItemQuestion\(reqSpec/,
     );
   });
 
   it('the hold is gone: no walkHold, no holdWaitingItem, no waiting copy of the item', () => {
-    expect(src).not.toMatch(/walkHold/);
-    expect(src).not.toMatch(/holdWaitingItem/);
-    expect(src).not.toMatch(/waiting: \{ question/);
+    for (const text of [src, controller]) {
+      expect(text).not.toMatch(/walkHold/);
+      expect(text).not.toMatch(/holdWaitingItem/);
+      expect(text).not.toMatch(/waiting: \{ question/);
+    }
   });
 });
 
