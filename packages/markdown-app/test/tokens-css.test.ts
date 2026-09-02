@@ -5,7 +5,7 @@ import { describe, expect, it } from 'vitest';
 import { OPEN_PROPS_FILES } from '../src/tokens-manifest.ts';
 
 /**
- * The Open Props trial layer (board task t-9Ujf8EcjSpbR).
+ * The Open Props trial layer.
  *
  * `/app/tokens.css` is built by concatenating the vendored Open Props subset
  * (tokens-manifest.ts) with the mapping layer in `src/tokens.css`. These
