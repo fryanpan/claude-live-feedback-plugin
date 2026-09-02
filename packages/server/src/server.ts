@@ -107,6 +107,7 @@ import type { Deployer } from './deploy.ts';
 import { DispatchRegistry, type WatchFactory, isValidDispatchTaskId } from './dispatch-registry.ts';
 import { canonicalRepoRoot, normalizeDocHome, resolveHomeCheckout } from './doc-home.ts';
 import { RESERVED_DOC_PREFIXES } from './doc-ids.ts';
+import { compactDocRow, matchesDocFilters, pageDocs, parseListDocsQuery } from './doc-listing.ts';
 import {
   EFFORT_ESTIMATE_MODEL,
   type EffortEstimateVerdict,
@@ -6453,8 +6454,18 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           // the other set queries beside it (grouped diff, repo files, tree),
           // which means a doc restored from an archive carrying only the
           // deprecated `workspaceId` spelling is still found by its set.
-          const workspaceId = url.searchParams.get('workspaceId');
-          const setId = url.searchParams.get('setId');
+          //
+          // `?limit=` (or a `?cursor=`) switches the route into PAGED mode:
+          // compact rows sorted by most recent activity, `limit` per page,
+          // `nextCursor` to continue, `?full=1` for whole meta on that page.
+          // Measured 2026-09-01: the unscoped dump was 7,420,585 bytes for
+          // 5,919 rows, and a fresh session's first tool call was all of it.
+          // Without `limit` the answer is the old one — every row, full meta —
+          // because REST callers exist that cannot be restarted. The doc-level
+          // filters (`kind`, `query`, `sourcePrefix`) apply in both modes.
+          // See doc-listing.ts.
+          const q = parseListDocsQuery(url.searchParams);
+          const { workspaceId, setId } = q;
           const all = rooms.list();
           // ONE pass over the workspaces for the whole listing. Both the
           // board filter and the reviewUrl below used to run their own scan
@@ -6469,9 +6480,22 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
                   hubBoardsForDocIndexed(boardIndex, m).has(workspaceId),
               )
             : all;
-          const docs = setId ? byWorkspace.filter((m) => reviewIdOf(m) === setId) : byWorkspace;
+          const bySet = setId ? byWorkspace.filter((m) => reviewIdOf(m) === setId) : byWorkspace;
+          const docs = bySet.filter((m) => matchesDocFilters(m, q));
+          const decorate = (m: DocMeta) => withReviewUrl(m, homeForDocIndexed(boardIndex, m));
+          if (q.limit === undefined) {
+            return j(200, { docs: docs.map(decorate) });
+          }
+          const project = q.full
+            ? decorate
+            : (m: DocMeta) =>
+                compactDocRow(decorate(m), {
+                  boardId: homeForDocIndexed(boardIndex, m),
+                  threads: rooms.threadCounts(m.docId),
+                });
           return j(200, {
-            docs: docs.map((m) => withReviewUrl(m, homeForDocIndexed(boardIndex, m))),
+            ...pageDocs(docs, { limit: q.limit, cursor: q.cursor }, project),
+            full: q.full,
           });
         }
 
