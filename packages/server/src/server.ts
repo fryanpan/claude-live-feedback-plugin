@@ -183,6 +183,7 @@ import {
 import { RECALL_STATUS_PATH, recallCallbackAllows } from './middleware/recall-callback-gate.ts';
 import {
   browserCannotBindBody,
+  browserCannotOperateBody,
   isBrowserRequest,
   isGatedWrite,
   signInRequiredBody,
@@ -10061,6 +10062,12 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
                   'plugin refresh cannot be triggered through the edge (proxied request) — run it from the box or the tailnet',
               });
             }
+            // And not from a PAGE on this machine either — see
+            // browserCannotOperateBody. Nothing above distinguishes a page
+            // from an agent: the origin policy admits any machine-local
+            // hostname on any port, and a local dev origin is same-site with
+            // this server, so a session cookie rides along.
+            if (isBrowserRequest(req.headers)) return j(403, browserCannotOperateBody());
             return j(200, { refresh: await pluginRefresher.refresh() });
           }
           return j(405, { error: 'method not allowed' });
@@ -10183,6 +10190,10 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
                   'deploy cannot be triggered through the edge (proxied request) — run it from the box',
               });
             }
+            // Loopback is the PEER ADDRESS, which a page served from this
+            // machine also has, so it says nothing about whether a page or an
+            // agent asked. This does — see browserCannotOperateBody.
+            if (isBrowserRequest(req.headers)) return j(403, browserCannotOperateBody());
             const body = (await safeJson(req)) ?? {};
             const force = body.force === true;
             const requestedBy = typeof body.requestedBy === 'string' ? body.requestedBy : undefined;
