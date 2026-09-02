@@ -78,8 +78,8 @@ models are DOM-free, so `hub-model.test.ts` runs without a document.
 | Layer | Where it lives | Rule in one line |
 |---|---|---|
 | **Entries** | `app.ts`, `hub/hub-app.ts`, `signin/signin-app.ts`, `landing-app.ts`, `sentry-boot.ts` | One per bundle. The only files that call `main()` and own the top-level state object. |
-| **Controllers / mounts** | `review-chrome.ts`, `meeting-strip.ts`, `redline/markup-margin.ts`, `threads.ts` | Owns a DOM subtree and, sometimes, a socket. Takes its dependencies as arguments. |
-| **Renderers** | `hub/hub-render.ts`, `editor.ts`, `redline/redline-html.ts` | Data in, elements out. No fetch, no socket, no timers. |
+| **Controllers / mounts** | `review-chrome.ts`, `meeting-strip.ts`, `redline/markup-margin.ts`, `threads.ts`, `hub/hub-actions.ts`, `hub/hub-review-controller.ts`, `hub/hub-live-wiring.ts` | Owns a DOM subtree and, sometimes, a socket. Takes its dependencies as arguments. The three hub files are the worked example: each declares a deps interface naming exactly what it used to capture from `main()`'s closure. |
+| **Renderers** | `hub/hub-render.ts`, `hub/hub-detail-render.ts`, `hub/hub-discussion-render.ts`, `hub/hub-review-render.ts`, `editor.ts`, `redline/redline-html.ts` | Data in, elements out. No fetch, no socket, no timers. |
 | **Models** | `hub/hub-board-model.ts`, `hub/hub-review-model.ts`, `hub/hub-presence-model.ts`, `meeting-banner-model.ts`, `hub/activity-model.ts` | Pure functions over wire types. Import `core` and nothing else in this package — except each other, board ← presence ← review, which is the one downward chain inside the layer. |
 | **Transport** | `push-client.ts`, `core`'s `ws-client.ts`, the parsers above `mountMeetingStrip` | Speaks a protocol. Returns values; never touches the DOM. |
 

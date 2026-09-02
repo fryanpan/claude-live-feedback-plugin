@@ -129,7 +129,7 @@ real HTTP route — sharing the same fixture builders. That is one harness.
 
 | File | Lines | Verdict | Reason / seam |
 |---|---|---|---|
-| `packages/markdown-app/test/hub-render.test.ts` | 4078 | Split | 18 describes share the `task()` factory and the `root` beforeEach and assert rendered DOM, but the last six (3897–4078) `readFileSync` `styles.css` and `hub-app.ts` and assert source text, touching neither `root` nor any render function. Move those six to `hub-source-contract.test.ts`. **S** |
+| `packages/markdown-app/test/hub-render.test.ts` | 3882 | Exception | Twelve describes over one harness: the module-scope `task()` factory and the `root` beforeEach, asserting rendered DOM. The six that `readFileSync` `styles.css` and hub source and assert on text moved to `hub-source-contract.test.ts` in B1 — they were the second harness this row named. |
 | `packages/server/test/voice-smooth.test.ts` | 729 | Split | Lines 55–293 are eight describes of pure helpers (`navigationAsk`, `resolveByTitle`, `parseOrdinal`, `composeStatus`) with no server at all, while `voice, smoothly (route)` stands up `createServer` in its own `beforeAll`. Move the eight helper describes to `voice-smooth-model.test.ts`. **M** |
 
 The remaining 93 are exceptions. Each row names the one harness its cases share.
