@@ -1,493 +1,169 @@
-# Security boundaries
+# Security model
 
-**Goal:** the product is open to everyone who can reach it and closed to
-everyone who cannot, and which of those a caller is must be decided by one
-gate rather than by whichever route they happened to hit. Reading is cheap
-and ungated; writing carries a name; naming a host path is an agent action;
-restarting the box is a loopback action.
+Claude Workspaces is a self-hosted server. One owner runs it on their own
+machine, their Claude Code agents talk to it over loopback or a private
+network, and anyone else reaches it only through a Cloudflare tunnel the owner
+opened on purpose. There is no multi-tenant service and no shared database:
+the trust boundary is the owner's machine.
 
-This is the map. Each claim names the file that enforces it — read the file
-before changing the behaviour, because every gate here has a header comment
-explaining the hole it closed.
+This document is the map of that boundary — the zones, what each caller may
+read and write, and where secrets live. It is a description of the design, not
+a claim of completeness. Every gate named below has a header comment in its
+own file explaining what it is for; read that before changing the behaviour.
 
-## The boundaries
+## Trust zones
 
-```mermaid
-flowchart TB
-  subgraph outside[Outside the machine]
-    visitor[Share / collab visitor]
-    recall[Recall.ai backend]
-  end
-  subgraph edge[Cloudflare tunnel]
-    cf[cloudflared — stamps cf-ray]
-  end
-  subgraph box[The box]
-    agent[MCP tools, hooks, curl]
-    browser[Signed-in browser]
-    subgraph server[Server process]
-      hg[host-guard classifyHost]
-      wg[write-gate isGatedWrite]
-      scope[shareScopeAllows / collabScope]
-      routes[Routes]
-    end
-    secrets[(Keychain + data-dir key files)]
-  end
+| Zone | Who is in it | How the server recognizes them |
+|---|---|---|
+| The box | The owner's agents, hooks and shell — MCP tools, `curl`, the CLI | The `Host` header names one of this machine's own names, and the request did not come through the tunnel |
+| The owner's browser | A signed-in browser on the box, the tailnet or the LAN | Same host classification, plus a session cookie |
+| Invited collaborator | Someone the owner shared a board with | A dedicated hostname through the tunnel, plus either a Cloudflare Access identity or a signed share cookie |
+| Meeting-bot backend | Recall.ai, delivering transcription callbacks | A dedicated hostname, plus a signed webhook |
+| Everyone else | The rest of the internet | Not recognized — refused before any route runs |
 
-  visitor --> cf --> hg
-  recall --> cf --> hg
-  agent --> hg
-  browser --> hg
-  hg -->|share, collab, link| scope --> routes
-  hg -->|local, proxied-local| wg --> routes
-  hg -->|recall-callback| routes
-  hg -->|deny: unknown_host| stop[403]
-  routes --> secrets
-```
+One function decides which zone a request is in — `classifyHost` in
+`packages/server/src/middleware/host-guard.ts`. Every route sits behind it, so
+the answer cannot differ by which URL a caller happened to hit. Four separate
+host lists feed it, one per external zone, and none can leak into another. The
+presence of a `cf-ray` header vetoes the local classification outright, so a
+tunnel visitor sending `Host: localhost` is not on the box.
 
-Two questions are kept orthogonal on purpose, and the route layer reads both:
-**reachability** (may this caller talk to this server at all — the host gate,
-Cloudflare Access, a share session) and **identity** (who they are — a session
-cookie, an Access claim, a widget token). A local host bypasses the first and
-still owes the second (`packages/server/src/server.ts:5485`).
+Reachability and identity are kept as separate questions. Being in a zone says
+a caller may talk to the server at all; a session cookie, an Access claim or a
+widget token says who they are. A caller on the box skips the first and still
+owes the second before it may write.
+
+**Direction of travel:** the owner has decided that every browser-facing
+hostname will sit behind Cloudflare Access, with no internal exemption. That
+work is not built yet, so what follows describes today's boundaries.
 
 ## Who may read and write what
 
-| Caller | Reads | Writes | Gate |
+| Caller | Reads | Writes | Enforced by |
 |---|---|---|---|
-| Loopback / tailnet / LAN agent (MCP, hooks, curl) | everything | everything except the binding-route browser refusal | `isTrustedLocalHost` (`middleware/host-guard.ts:188`) classifies `local`; no session required |
-| Browser on a local host | everything | only when signed in | `isGatedWrite` + `browserProvedNobody` (`server.ts:5530`) |
-| Share / link visitor | one board and its members | threads, suggestions, the reading tracker, **the prose of any in-scope doc** over the Yjs socket, and **new doc rooms** via `context-file` / `editable-file` — see the gap below | `shareScopeAllows` (`host-guard.ts:376`) — allowlist, closed by default; per-subroute rules in `docSubrouteAllowed` (`host-guard.ts:738`) |
-| Collab-host visitor | any board the path names, resolved per request | same | `isAccessTunnelHost` (`host-guard.ts:227`) → `collabScope` (`host-guard.ts:659`), which delegates to `shareScopeAllows` |
-| Operator's proxied host | everything `local` gets, after an Access token | same | `isProxiedTrustedHost` (`host-guard.ts:255`) |
-| Recall.ai backend | two routes | one webhook | `recallCallbackAllows` (`middleware/recall-callback-gate.ts:89`) |
-| Any other Host | nothing | nothing | `classifyHost` returns `deny: unknown_host` (`host-guard.ts:346`) |
+| Agent on the box, tailnet or LAN | Everything | Everything except binding a host path from a browser | `isTrustedLocalHost` — no session needed |
+| Browser on one of those hosts | Everything | Only when signed in | The sign-in write gate, `middleware/write-gate.ts` |
+| Share or collaboration visitor | One board and its members | Comment threads, suggestions, the reading tracker, and document prose over the editing socket | `shareScopeAllows` / `collabScope` — an allowlist, closed by default |
+| Owner's proxied hostname | Everything the box gets, after an Access token | Same | `isProxiedTrustedHost` |
+| Meeting-bot backend | Two routes | One webhook | `middleware/recall-callback-gate.ts` |
+| Any other host | Nothing | Nothing | `classifyHost` returns a refusal |
 
-Four separate host lists feed `classifyHost`, and their separation is the
-security property: `extraHosts` classifies `local` and is vetoed through the
-proxy, `proxiedAccessHosts` classifies `collab`, `proxiedTrustedHosts`
-classifies `proxied-local`, and `CW_RECALL_CALLBACK_HOST` classifies
-`recall-callback`. None can leak into another (`host-guard.ts:45-160`).
-`viaProxy` — the presence of `cf-ray` — vetoes `local` outright, so a tunnel
-visitor sending `Host: localhost` is not local.
+A visitor's ability to edit document prose is deliberate: that is what a live
+review is. It runs over the Yjs websocket rather than over REST, and only for
+a visitor whose Cloudflare Access identity the server verified.
 
-The `server.ts` line numbers throughout this doc point at gates that still
-live in that file. The task REST block no longer does: it moved to
-`packages/server/src/routes/` and reads what it needs off `TaskRoutesContext`
-(`routes/task-routes-context.ts`). Nothing about who may call it moved with
-it — the host gate, the write gate and the browser binding refusal all still
-run in `server.ts` ahead of the chain. What did move is the block's own
-defence-in-depth refusal of share visitors: six `if (visitor)` checks, five
-in `routes/dispatch-and-notes.ts` (dispatches, their close, both note routes,
-the ring read) and one in `routes/task-review-items.ts` (withdraw). Change one
-of those and you are changing this map.
+`SharingGate` (`share/sharing-gate.ts`) is the switch above all of this. Turned
+off, every external host is refused before authentication runs, and an
+unparseable config fails closed. It covers the share, link, collaboration and
+proxied-operator zones. The meeting-bot callback hostname is deliberately
+outside it, because closing that mid-call would drop a live meeting's
+callbacks; that hostname serves two routes, each armed only while its own
+credential is configured.
 
-The workspace REST block followed it, on the same terms and off
-`WorkspaceRoutesContext` (`routes/workspace-routes-context.ts`). The gates
-above it did not move: the host gate, the write gate and `POST /api/docs`'s
-browser refusal all still run in `server.ts` ahead of the four call sites.
-Two things did travel with their handlers. The block's own six `if (visitor)`
-checks are now in `routes/workspace-home.ts` (the review-item address) and
-`routes/workspace-attachments.ts` (the attach, the heartbeat, the detach and
-both queue receipts). And three of the four binding-route browser refusals
-went with them, which is why the section below names two module paths — the
-routes are the same routes, and they still refuse the same callers.
+## Writes from a browser need a sign-in
 
-Two of a visitor's writes are easy to miss because neither is an ordinary
-POST, and both are deliberate. **Document prose** is edited over the Yjs
-websocket, not over REST: an Access-authenticated share or collab visitor
-gets a read-WRITE upgrade, because `provenIdentityFor` turns their verified
-Access email into an identity and `browserProvedNobody()` is therefore false
-for them. That is the point of a live review, and `docSubrouteAllowed`'s own
-header says so. **New doc rooms** are materialized by `POST .../context-file`
-and `.../editable-file`, which are on the visitor allowlist as reads (see
-`OPEN_FOR_READING_POST` below): each opens a derived view of a file the
-visitor may already read, at a deterministic id, and creates no content of
-anybody's. A link-mode visitor gets neither, for the reason in the gap below.
+`CW_REQUIRE_SIGNIN_TO_WRITE` defaults **on**, and only an explicit
+`0`/`false`/`no`/`off` turns it off. The gate is keyed on HTTP method rather
+than a list of routes, so a mutating route written later is covered without
+anyone remembering to add it. The exemptions run the other way — reads to let
+through, not writes to catch — so a mistake surfaces as a refused read rather
+than a silent hole. The sign-in flow itself is exempt, because gating it would
+deadlock the thing that lifts the gate.
 
-`SharingGate` (`share/sharing-gate.ts`) is the master switch above all of
-this: off means every non-local host is refused before authentication runs,
-and it fails closed on an unparseable `sharing.json`. **The switch covers
-four of the five external kinds** — `share`, `link`, `collab` and
-`proxied-local`. The last one is the operator's own hostname through the
-tunnel and is the widest of them, so leaving it out would have meant flipping
-the switch during a review without closing the widest door. Nothing local is
-touched, so the way back is the way in: flip it from the box or the tailnet.
+Two surfaces the method key cannot reach, because a websocket upgrade is a GET:
+the document editing socket and the meeting audio socket. Each carries the
+sign-in decision by hand at its own handshake and holds it for the life of the
+connection. Anyone adding a third websocket has to do the same; nothing will
+catch it for them.
 
-**The fifth kind, `recall-callback`, is deliberately outside the switch**, and
-an operator flipping sharing off should know it stays reachable. It is the
-dedicated Recall hostname, it serves two routes and nothing else, and each of
-those is armed only while its own credential is configured — so what remains
-open is credential-gated rather than merely obscure, and closing it with the
-share switch would silently drop a meeting bot's callbacks mid-call. The
-exemption is stated at the branch that grants it, not only here.
+Agents are unaffected, because the gate keys on browser-only headers
+(`Origin`, `Sec-Fetch-*`) that no client in this repo sends. That is an
+attribution boundary, not an authorization one — what actually keeps a stranger
+out is the host classification above it.
 
-### Writes from a browser
+Four routes turn a path on the host machine into content this server reads and
+serves: binding a file, binding a folder, importing a task list, and rooting a
+diff review. All four refuse any browser outright, signed in or not. The hole
+that closes is a page on this machine — a dev server on another local port
+passes the origin policy and would otherwise ride the owner's cookie. The
+deploy, plugin-refresh and share-mutation routes refuse browsers for the same
+reason.
 
-`CW_REQUIRE_SIGNIN_TO_WRITE` defaults **on** — `signInToWriteFromEnv`
-(`middleware/write-gate.ts:52`) treats unset and every misspelling as on, and
-only `0`/`false`/`no`/`off` turn it off. `bin.ts:241` reads it and
-`server.ts:4706` defaults it to `true` when the option is absent.
+## What a visitor may open from a bound folder
 
-The predicate is keyed on **method**, not on a route list
-(`isGatedWrite`, `write-gate.ts:195`): every mutating route is a non-GET, so
-routes written later are covered by construction. Two exemption lists run the
-other way — reads to let through rather than writes to catch — so a forgotten
-entry surfaces as a refused read, not a silent hole: `READ_SHAPED_POSTS`
-(`write-gate.ts:146`) and `OPEN_FOR_READING_POST` (`write-gate.ts:174`).
-`/api/auth/*` is exempt because gating it would deadlock the flow that lifts
-the gate (`isSignInFlowPath`, `write-gate.ts:127`).
+Binding a folder or rooting a diff review exposes a whole checkout to a
+reviewer, so one rule decides what opens: the file must appear in the tree
+listing, and the listing is `git ls-files --cached --others --exclude-standard`
+(`fs-scan.ts`). An ignored file never appears, and anything under `.git/` is
+refused before the listing is consulted.
 
-Agents are untouched because `isBrowserRequest` (`write-gate.ts:116`) keys on
-`Origin` / `Sec-Fetch-Site` / `Sec-Fetch-Dest`, which no client in this repo
-sends. That is an **attribution** boundary, not an authorization one — a
-determined non-browser caller can decline to look like a browser, and what
-keeps that caller out is the host gate and Access above it.
+Ignoring is not the whole guarantee, because `--others` lists untracked files
+and a checkout may simply never have had a rule for one. So the listing also
+applies a name floor, refusing credential-shaped filenames — `.env` and its
+variants, `.npmrc`, `.netrc`, `.pgpass`, `.htpasswd`, `.pypirc`, `*.pem`,
+`*.key`, `*.p12`, `*.pfx`, `*.keystore` and `id_*`.
 
-**The method key covers HTTP routes, and websockets are not among them.** A
-websocket upgrade is a GET, so `isGatedWrite` cannot see one by construction,
-and "routes written later are covered" is a claim about REST alone. There are
-two such surfaces, and each carries the sign-in decision by hand at its own
-handshake. Anyone adding a third has to do the same; nothing will catch it.
+Outside a git checkout the scan falls back to a recursive directory read. There
+is no ignore file to honour there, so the fallback additionally hides every
+dotfile. That wider rule is deliberately not applied inside a repo, where
+dotfiles are committed content a reviewer has to read.
 
-- **`/y/<docId>`** — the editing socket, which is also the READING socket, so
-  a refusal here would gate a read. It computes
-  `requireSignInToWrite && browserProvedNobody()` and carries the answer as
-  `WsCtx.readOnly` for the life of the connection: sync step 1 is answered,
-  and anything that would change the doc is dropped (`yjs-protocol.ts`).
-  Awareness still flows both ways — presence is not content. The mockup
-  auto-create sits BEHIND that decision, because creating a room and filing a
-  hub row is a write like any other.
-- **`/audio/<docId>`** — the meeting socket, which is write-and-spend: a
-  `start` frame opens a billed transcription session and a notes pipeline that
-  writes into the doc. It carries the same decision, and the relay refuses the
-  `start` frame with an error the strip can render rather than refusing the
-  upgrade — a refused upgrade reaches the page as a bare error event with no
-  body to show.
+Visitor-facing responses are filtered by allowlist rather than denylist:
+`share/redact-meta.ts` rewrites review URLs to the visitor's own board and
+drops host paths, and agent presence records name the fields a visitor gets, so
+a field added later is withheld until somebody decides otherwise.
 
-### Binding routes refuse browsers outright
+## Where secrets live
 
-**Four** routes turn a host path into content this server reads and serves:
-`POST /api/docs` (bind a file), `POST /api/workspaces` with a `folderPath`
-(bind a folder), `POST /api/workspaces/<id>/import-tasks` (read a markdown
-file) and `POST /api/diffs` (root a whole repository). All four answer
-`browser_cannot_bind` to any browser, on any origin, signed in or not — one in
-`server.ts:6421` and the other three in the modules their routes moved to,
-`routes/workspaces-create-read.ts:43` and `:136` and
-`routes/workspace-content.ts:84` (body from `browserCannotBindBody`,
-`write-gate.ts:225`). This closes the page-on-this-machine hole — a dev server
-on another local port passes the origin policy — not a determined agent.
+Values are never in this repo, in the launchd configuration, or in logs. What
+follows is only where the server looks for each one.
 
-`/api/diffs` is the widest of the four and was the last to get the refusal:
-omitting `base` scans the WHOLE named folder and makes every file in it
-lazily openable, and this section said "all three" while it stood open. Count
-the routes against the code when you change either.
+| Secret | Home |
+|---|---|
+| LLM API key (summaries, notes, judging) | macOS Keychain, service `claude-workspaces-summary-api-key` |
+| AssemblyAI key | Keychain, service `assemblyai-api-key` |
+| Soniox key | Keychain, service `claude-workspaces-soniox-api-key` |
+| Recall.ai key | Keychain, service `claude-workspaces-recall-api-key` |
+| Google OAuth client and refresh token | Keychain, service `claude-workspaces-google-oauth`, three accounts |
+| Postmark server token | Keychain, service `postmark-api-token` |
+| Cloudflare API token | Keychain, service `cloudflare-api-token` |
+| Share URL signing key | `<dataDir>/share-url.key`, mode 600 |
+| Session and share cookie key | `<dataDir>/share-cookie.key`, mode 600 |
+| Web Push VAPID private key | `<dataDir>/push-vapid.json`, mode 600 |
+| Meeting webhook signing secret | `RECALL_WEBHOOK_SECRET` in the environment |
 
-### What a share visitor may open
+The three key files are generated by the server on first use at mode 600, and
+re-`chmod`ed if they already exist. The URL signing key is deliberately not the
+cookie key: it leaves the box as the edge Worker's secret and must not carry
+the power to mint sessions. The launchd configuration sets hostnames and
+feature flags only; no API key is set there.
 
-A folder bind or diff review roots a whole repository, and a visitor reaches
-it. `isListedFile` (`fs-scan.ts`) is the rule: a path opens only if the
-tree listing contains it, and the listing is
-`git ls-files --cached --others --exclude-standard` via `scanFolderPaths`,
-so a gitignored `.env` never appears. Anything under
-`.git/` is refused before the listing is consulted. Call sites:
-`rooms.ts:2963` and `rooms.ts:3036`.
+Login codes are never stored in the clear. They are held hashed with a
+per-challenge salt, in memory only, behind per-challenge, per-email and
+per-address rate limits. The fallback console transport masks the code unless a
+development flag is set.
 
-**Ignoring is not the whole guarantee, so the git listing carries a name floor
-too.** `--exclude-standard` covers exactly the files somebody remembered to
-ignore, and `--others` lists UNTRACKED files — so an `.env`, `.npmrc` or
-`id_rsa` in a checkout that never had a rule for it was listed and served,
-which is the same credential-leaving-the-box failure the fallback's floor was
-added for, on the mode this section used to call the safe one. Both modes now
-filter `isCredentialShapedName`: `.env` and its suffixed forms, `.npmrc`,
-`.netrc`, `.pgpass`, `.htpasswd`, `.pypirc`, `*.pem`, `*.key`, `*.p12`,
-`*.pfx`, `*.keystore` and `id_*`.
+Signed tokens — the share cookie, the session cookie and the widget popup token
+— all go through one module, `auth/signed-token.ts`: HMAC-SHA256 over a dotted
+payload with a timing-safe compare. Each scheme contributes only its key domain,
+its claims and its expiry, so none owns a copy of the algorithm. The share URL
+signature is a separate thing, verified independently by the edge Worker and by
+the server, so the app never has to trust that the Worker ran.
 
-**The fallback mode is not the same guarantee, and its floor is wider.**
-`scanFolder` drops to a recursive `readdir` whenever `git ls-files` exits
-non-zero — a folder bound outside any checkout — or git is missing. There is
-no ignore file to honour out there, so the fallback adds every dotfile on top
-of the credential names (`isSecretShapedName`). Before that floor existed the
-dot-prefix test applied to directories only, so a bind on a non-repo directory
-listed `.env` and `.npmrc` in the tree and served them. That wider rule is
-deliberately NOT applied inside a repo: a repo's dotfiles are tracked content
-somebody chose to commit and a reviewer has to read — `.github/workflows`,
-`.claude/rules`, `.gitignore` itself — so hiding them would break the diff
-review rather than protect anything. A false refusal here is one missing row
-in a tree; a false admission is a credential leaving the box.
+## Reporting a vulnerability
 
-### What a share visitor's reads are redacted to
-
-Three review-nav routes are on the visitor allowlist and build the same file
-nodes: `/tree`, `/files` and `/grouped` (`docSubrouteAllowed`,
-`host-guard.ts:738`). Each node carries a `reviewUrl` minted from
-`externalBaseUrl()` — an absolute URL on the tailnet or LAN hostname, under
-whichever board holds the doc first, which need not be the board the visitor
-was shared. All three now pass through `share/redact-meta.ts`, which drops
-`root` and rewrites every `reviewUrl` to a path relative to the visitor's own
-board. `/grouped` was the one that did not, and it nests its nodes a level
-down inside `groups`, which is why it needed a redactor of its own rather than
-the one beside it.
-
-Agent presence is the other visitor projection: `publicAttachment`
-(`tasks.ts`) drops the runtime `endpoint`, a host-machine fact. Like the
-redactors it is an **allowlist** — it names the fields a visitor gets, so a
-field added to the record later is withheld until somebody decides otherwise.
-
-Browser origins are handled separately: `isAllowedBrowserOrigin`
-(`middleware/browser-origin.ts:68`) reflects one known origin or sends no CORS
-headers at all, matching hostnames exactly rather than by suffix.
-
-### Known gap: a link-mode visitor in a browser cannot write at all
-
-The sign-in write gate runs above route dispatch and has no share-visitor
-exemption, and a link-mode visitor proves no identity — they hold `lf_share`,
-not `cw_session`, and no Access claim. So `browserProvedNobody()` is true for
-them and every write is refused `401 sign_in_required`. The refusal points at
-`/signin`, which `shareScopeAllows` does not admit, so the remedy it names is
-itself out of scope.
-
-Measured on 2026-09-02 against a link share through the real route table,
-with a positive control: the same visitor's `POST .../threads/by_find`
-answers 200 without browser headers and 401 with `Origin` and `Sec-Fetch-*`
-set, and `/signin`, `/api/auth/session` and `/api/auth/start` all answer
-`403 out_of_share_scope` on the share host.
-
-An Access-fronted share or collab host is unaffected: `provenIdentityFor`
-(`server.ts:5126`) turns the verified Access email into an identity, so those
-visitors still write. This gap is link mode only, and it is a product
-decision — whether an invited reviewer must hold an account — not a bug with
-an obvious fix.
-
-## Secrets — where they live, never what they are
-
-| Secret | Home | Reached by |
-|---|---|---|
-| Summary / judge / notes LLM key | Keychain `claude-workspaces-summary-api-key` (legacy `live-feedback-summary-api-key`) | `summarize.ts:41`, `:54` |
-| AssemblyAI key | Keychain `assemblyai-api-key` | `transcribe-assemblyai.ts:61` |
-| Soniox key | Keychain `claude-workspaces-soniox-api-key` | `transcribe-soniox.ts:63` |
-| Recall.ai key | Keychain `claude-workspaces-recall-api-key` | `recall.ts:48` |
-| Google OAuth app | Keychain `claude-workspaces-google-oauth`, accounts `client-id` and `client-secret` | `recall-calendar.ts:72` |
-| Google Calendar refresh token | Keychain `claude-workspaces-google-oauth`, account `refresh-token` — a third account under the same service | `recall-calendar.ts:217` |
-| Postmark server token | Keychain `postmark-api-token` | `auth/postmark-code-sender.ts:142` |
-| Cloudflare API token | Keychain `cloudflare-api-token` | `bin.ts:445` |
-| Share URL-signing key | `<dataDir>/share-url.key`, mode 600 | `share/url-signing.ts:38` |
-| Session / share cookie key | `<dataDir>/share-cookie.key`, mode 600 | `share/link-session.ts:29` |
-| Web Push VAPID private key | `<dataDir>/push-vapid.json`, mode 600 — minted by the server on first use | `push-store.ts:23` |
-| Recall webhook secret | `RECALL_WEBHOOK_SECRET` env | `bin.ts:589` |
-
-Two of those are easy to miss when auditing, and both were absent from this
-table until the pass-2 review. The **refresh token** is a long-lived user
-credential the server writes into the Keychain itself, and it is a THIRD
-account under a service this table used to describe as holding two. The
-**VAPID private key** is a secret file the server CREATES in the data dir
-rather than one an operator provisions, which is exactly the case the
-per-release checklist's "new secret files are mode 600 and gitignored"
-question is asking about.
-
-Keychain reads go through two readers, and they do not behave alike.
-`readKeychainPassword` (`share/keychain.ts:20`) looks a secret up by SERVICE
-and accepts an uppercased-service env override for tests
-(`cloudflare-api-token` → `CLOUDFLARE_API_TOKEN`).
-`readKeychainAccountPassword` (`share/keychain.ts:50`) addresses a service AND
-account, and accepts **no env override and no any-account fallback** — the
-account is the selector, so a fallback would hand a caller asking for the
-client id the client secret. The Google values are therefore not overridable
-through the uppercased-service convention at all; the calendar module reads
-two purpose-named variables of its own, `GOOGLE_OAUTH_CLIENT_ID` and
-`GOOGLE_OAUTH_CLIENT_SECRET` (`recall-calendar.ts:75`). The refresh token has
-no env override of any kind.
-
-The three key files generate themselves on first use at mode 600 and are
-`chmod`ed again if they already existed. The URL key is deliberately **not**
-the cookie key: it leaves the box as the edge Worker's secret and must not
-carry the power to mint sessions.
-
-The launchd plist sets the non-secret configuration —
-`CW_REQUIRE_EMAIL_AUTH`, `CW_OWNER_EMAIL`, `CF_SHARE_PUBLIC_HOSTNAME`,
-`CF_ACCESS_TUNNEL_HOSTS`, `CW_PROXIED_TRUSTED_HOSTS`,
-`CW_PROXIED_TRUSTED_EMAILS`, `CF_ACCESS_TEAM_DOMAIN`, `CF_ACCESS_AUD`
-(`scripts/launchd/com.fryanpan.claude-workspaces.plist.template`). No API key
-is set there; every key comes from the Keychain at read time.
-
-Login codes are never stored in the clear: `auth/email-code.ts` keeps them
-hashed with a per-challenge salt, in memory only, behind per-challenge,
-per-email and per-address limits plus two hourly abuse ceilings.
-
-Nor are they logged. The fallback transport (`auth/code-sender.ts`) is the
-server's default when no sender is passed, and it engages silently on either
-half of a partial email config — `AUTH_EMAIL_FROM` unset, or the Postmark
-token missing from the Keychain — so it is live more often than it looks. It
-records that a code was issued, to whom and for how long, and **masks the code
-itself unless `CW_LOG_LOGIN_CODES=1`**. Without that mask, whoever could read
-the service log could complete a sign-in for any address they could start a
-challenge for, `CW_OWNER_EMAIL` included. The flag is a development
-convenience and the masked line names it.
-
-Those lines, and the boot notice naming which sender is in force, carry an
-ISO timestamp (`stamped`, `log-stamp.ts`). What anyone asks of them is how
-many codes went out and WHEN — after a mail-bomb, or when somebody reports a
-code that never arrived — and an undated burst answers neither half. It is a
-deliberate exception: nothing else in the server's console output is stamped,
-and the two `[auth]` lines that can fire in a hot loop stay bare on purpose,
-because `installLogSquelch` bounds a loop by collapsing IDENTICAL lines and a
-per-call stamp would make every repeat distinct.
-
-## The three signed-token schemes, one signing module
-
-All three are HMAC-SHA256 over a dotted payload with a timing-safe compare,
-and that construction lives once in `auth/signed-token.ts:114`. Each scheme
-contributes only a `TokenFormat` — its key domain, its version tags, how its
-claims become a payload and back, and when it expires — so no scheme owns a
-copy of the algorithm.
-
-| Scheme | Carries | Format |
-|---|---|---|
-| Share link-session cookie `lf_share` | shareId only — no expiry, so revocation is immediate | `share/link-session.ts:54` |
-| Auth session cookie `cw_session` | identityId, sessionId, issuedAt; `v2` never expires, ends by revocation | `auth/session.ts:84` |
-| Widget popup token | identityId, sessionId, session issuedAt, own expiry, and the one page origin | `auth/widget-token.ts:69` |
-
-They share one key file and separate on the key derived from it
-(`auth/signed-token.ts:92`). The auth session and the widget token each
-derive under their own domain string. The **share cookie signs with the key
-file's own bytes** — it predates domain separation and its cookies are in
-browsers, so that is a wire lock rather than an omission, and what keeps it
-apart from the others is that neither of their keys is this one.
-
-The share **URL** signature is a fourth, different thing: an HMAC over
-`<id>.<exp>` verified independently by the edge Worker and by the server
-(`share/url-signing.ts:71`), so the app never trusts that the Worker ran.
-
-The widget token is narrower than the cookie it borrows from: it only
-attributes, it expires on its own (`WIDGET_TOKEN_TTL_MS`, seven days), every
-use is re-checked against the live session's revocation state, and it is
-accepted only from a request whose `Origin` matches the origin signed into it
-(`server.ts:5504`).
-
-The wire format is frozen: cookies minted before the schemes were folded
-together are in browsers and share links are in the wild.
-`test/signed-token-compat.test.ts` keeps a verbatim copy of each old mint
-path and asserts both directions against the shipping code, so a change to
-any payload shape fails there rather than in the field.
-
-## Deploy, refresh and webhook surfaces
-
-`POST /api/deploy` (`server.ts:7139`) is the narrowest route on the server.
-It refuses share visitors, refuses when no deployer is configured, requires a
-**loopback peer address** (checked on `server.requestIP`, not the
-client-controlled `Host` header), and then refuses any request carrying
-`cf-ray` — cloudflared runs on this box, so a tunnelled request also arrives
-from 127.0.0.1. `GET /api/deploy` stays at trusted-local: reporting what
-already happened cannot restart anything.
-
-`POST /api/plugin/refresh` (`server.ts:7038`) is the same shape one notch
-wider: trusted-local rather than loopback, because a refresh interrupts
-nobody, plus the same `cf-ray` refusal.
-
-Both also answer `browser_cannot_operate` to any browser
-(`browserCannotOperateBody`, `write-gate.ts:264`) — the sibling of the binding
-routes' refusal, and for the same hole. None of the checks above can tell a
-page from an agent: the loopback test reads the peer address, which is
-loopback for a page served from this machine; the origin policy admits any
-machine-local hostname on any port; a local dev origin is same-site with this
-server, so a session cookie rides along; and `cf-ray` is absent on a request
-that never went through the edge.
-
-**Every `/api/share*` MUTATION answers the same refusal**, and for the same
-reason. Minting publishes a whole board to the internet; `POST
-/api/share/enabled` is the master switch and can re-open external access after
-the operator closed it; the TTL and revoke routes move a live credential's
-lifetime. No page in this repo calls any of them — the callers are the MCP
-tool layer and `scripts/share.ts` — and the routes' own "local-only" comments
-describe the HOST class, which does not answer the page-versus-agent question.
-The check is keyed on METHOD rather than a route list, the way `isGatedWrite`
-is, so a share mutation added later is covered by construction; `GET
-/api/share` stays open, because reading the share list is a read.
-
-`POST /recall/status` (`server.ts:6143`) answers `404 not_found` on every host
-unless `RECALL_WEBHOOK_SECRET` is set — the signature is the route's only
-credential, so without one there is no door to knock on. It then verifies a
-Svix signature over `${id}.${timestamp}.${body}` with a five-minute tolerance
-(`recall-webhook-auth.ts:46`), then admits the delivery id through
-`WebhookReplayGuard` (`recall-webhook-auth.ts:120`) — a repeat inside the
-window answers 409. The guard is checked **after** the signature, so an
-unsigned caller cannot learn which ids the server has seen; it is bounded by
-TTL (twice the tolerance) and by entry count.
-
-The Recall callback hostname serves those two routes and nothing else. Each is
-armed only while its own credential is configured, so a server that cannot
-mint a bot token never exposes an unauthenticated path
-(`recall-callback-gate.ts:89`). **That arming is now the route's own, not only
-the hostname's.** The webhook is reachable on every admitting host class, and
-its signature-and-replay block used to sit inside `if (secret)`: with the
-secret unset — which is the default, and the boot warns rather than refuses —
-an unauthenticated non-browser caller on the LAN or the tailnet could inject
-bot-status and calendar-sync events, unsigned and outside the replay guard.
+Please do not open a public issue. Report privately through GitHub's
+[private vulnerability reporting](https://github.com/fryanpan/claude-workspaces-plugin/security/advisories/new)
+on this repository. Include what you did, what you observed, and the version or
+commit you tested. This is a personal project with no bug bounty and no
+response-time commitment, but reports are read and acted on.
 
 ## Changing any of this
 
-Run the per-release checklist in `.claude/rules/security-review.md` before
-opening a PR that adds or changes a route, a token, a share surface, a
-webhook, or an auth default. The `ship-it` skill runs it automatically when
-the changed-file list touches those areas.
-
-## Review log
-
-An adversarial review reads this document against the code and reports where
-the two disagree. Each pass is recorded here so the next one starts from what
-the last one already looked at, and so a claim that was checked and left alone
-is distinguishable from one nobody has read.
-
-### 2026-09-02 — commit `a644afdd`, 10 confirmed findings
-
-Read the whole document against the route table, the host guard, the write
-gate, the share redactions and the secret transports. All ten were reproduced
-at the cited lines before anything was changed.
-
-| # | Severity | Finding | Verdict |
-|---|---|---|---|
-| 1 | high | `/audio/` upgrade is a GET, so the write gate never saw it, and unlike `/y/` it never consulted `browserProvedNobody()` — a signed-out browser could open a billed engine session and write notes into a doc | **Fixed.** The upgrade carries the same decision; the relay refuses `start` with an error the strip can render |
-| 2 | medium | The `/y/` mockup auto-create ran above the read-only decision, so an unproven browser could create a room and file a hub-workspace row | **Fixed.** The decision moved above the creation; refusing gates no read, because the doc does not exist yet |
-| 3 | medium | `POST /api/deploy` and `/api/plugin/refresh` had no browser refusal — the same page-on-this-machine class the binding routes close | **Fixed.** Both answer `browser_cannot_operate`, a sibling of `browser_cannot_bind` |
-| 4 | low | This document's write-gate section claimed method-keyed completeness and never mentioned either websocket surface | **Fixed.** "Writes from a browser" now names both and says the method key does not reach them |
-| 5 | high | `GET /api/workspaces/<id>` answered share and collab visitors with the stored record, including `notesHome.repoRoot` and `retiredBy` | **Fixed.** Visitors get an allowlist projection; the local surface keeps the whole record |
-| 6 | medium | `scanFolder`'s non-git fallback applied its dot-prefix test to directories only, so a bind outside a repo listed and served `.env` | **Fixed.** The fallback carries its own floor, and "What a share visitor may open" says the git listing has a fallback mode |
-| 7 | medium | `SharingGate` did not cover `proxied-local`, contradicting "every non-local host is refused" | **Fixed.** The operator's proxied hostname is in the condition; local, tailnet and LAN are untouched, so the switch can be flipped back |
-| 8 | low | The visitor Writes column omitted Yjs prose editing and lazy doc materialization | **Fixed.** Both are in the table and explained under it |
-| 9 | low | `POST /recall/status` accepted unsigned bodies and skipped the replay guard whenever the secret was unset, on every host but the callback one | **Fixed.** The route answers 404 without a secret, whichever host asked |
-| 10 | low | The fallback login-code transport printed the live code and the recipient to the server log | **Fixed.** Masked unless `CW_LOG_LOGIN_CODES=1`, and the doc's "never in the clear" claim is qualified |
-
-Nothing was declined. The "Known gap" section above was deliberately left as
-it stands — it is a product decision awaiting an answer, not a defect.
-
-### 2026-09-02 — commit `8a7bd902`, 10 confirmed findings (pass 2)
-
-A second adversarial read, run after the route table split into
-`packages/server/src/routes/`. Every finding was reproduced before anything
-was changed, and every one was re-located by SYMBOL when applied — the cited
-lines were taken before the split and most had moved.
-
-The shape of this pass is different from the first. One high finding, and it
-was already fixed in flight; the rest are a gate class that had one member
-left open, two visitor projections built the old way, and four places where
-the prose — in this file, in an option's own contract, in a boot log — still
-described behaviour a previous fix had removed. That last group is the one
-worth naming: a comment that survives its code is read as current by whoever
-changes that code next.
-
-| # | Severity | Finding | Verdict |
-|---|---|---|---|
-| 1 | high | `POST /api/diffs` binds an arbitrary host path with no browser refusal — a fourth route of the class this document said had exactly three | **Already fixed in code**, in the change that split the workspace routes out: the refusal sits in `routes/workspaces-create-read.ts` beside the folder bind's. This document had NOT caught up and still said "all three", so the count was corrected here as part of this pass |
-| 2 | medium | The share-minting and sharing-switch routes accepted browser requests — the same page-on-this-machine class as the operator routes, and no page calls them | **Fixed.** Every `/api/share*` non-GET answers `browser_cannot_operate`, keyed on method so a later mutation is covered |
-| 3 | low | `SharingGate` was described as covering "all four external kinds"; `classifyHost` returns five, and `recall-callback` is exempt by design | **Fixed.** The switch covers four OF FIVE, and the exemption is stated with its reason |
-| 4 | medium | The secret-shaped-name floor guarded only the readdir fallback, so an un-ignored `.env` inside a repo was listed by `--others` and served to a share visitor | **Fixed.** Both modes filter the credential names; the fallback keeps its wider every-dotfile rule, which a repo must not have |
-| 5 | medium | `/grouped` is on the visitor allowlist but was the one review nav route that never redacted — it handed out the tailnet hostname and another board's id | **Fixed.** It passes through a redactor of its own; its nodes nest inside `groups`, so the sibling redactors did not fit |
-| 6 | low | Visitor attachment redaction was a denylist in a file whose neighbours are all allowlists — no field leaked, but the next one would | **Fixed.** `publicAttachment` names the fields a visitor gets |
-| 7 | medium | The secrets inventory omitted the Web Push VAPID private key and the Google Calendar refresh token, and called a three-account Keychain service two | **Fixed.** Both are in the table, with a note on why each is easy to miss |
-| 8 | low | `meetingBotWebhookSecret`'s own contract still documented the unsigned fallback finding #9 removed | **Fixed.** It says the route is armed only while the secret is set, and that unset means off rather than weaker |
-| 9 | low | The boot log said unsigned webhooks are accepted, contradicting the same boot's meetings summary twelve lines later | **Fixed.** It says CLOSED, and names the symptom an operator will actually see |
-| 10 | low | "Both Keychain readers accept an env override" is true of one of them; the account-scoped reader deliberately accepts none | **Fixed.** The two readers are described separately, with the Google-specific variable names |
-
-Nothing was declined. Findings 3, 7, 8, 9 and 10 changed prose only — this
-document, an option's contract comment, a boot log. The four behaviour changes
-(2, 4, 5, 6) each landed with a test that fails without the fix and a positive
-control on the same surface, because every one of them asserts an absence.
+Run the per-release checklist in
+[`.claude/rules/security-review.md`](../../.claude/rules/security-review.md)
+before opening a PR that adds or changes a route, a token, a share surface, a
+webhook, or an auth default. The `ship-it` skill runs it automatically when the
+changed-file list touches those areas. Adversarial reviews of this document
+against the code are run periodically and their fixes land in the normal PR
+flow.
