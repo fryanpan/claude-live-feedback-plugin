@@ -894,14 +894,17 @@ doc page's own back-target lookup, so the board a huddle's asks land on is
 the board its back arrow points at. New rows are attributed to the `Meeting
 Assistant` agent actor and enter triage; a request judged actionable by the
 model AND ready by the pill's rule is PLACED — `TaskStore.placeSpinoff`: the
-board's top active band (first in priority order that is `todo` or
-`in-progress`, chores excluded; else chores, never triage), owned by the lead
-when the seat is held — moved to `todo`, and wakes the board's lead through
-`ReadyWorkNudger.taskReady`. The pill's Create Task asks for the same
-placement with `spinoff: true` on its create (Bryan, 2026-09-01: *"tasks
-were created in Backlog and not automatically started"*). The rule's first
-step — the goal of the meeting's originating task — is written down and
-skipped: a huddle is started with a kind and a topic and records no task.
+goal of the task the doc BELONGS TO (a huddle started with `taskId` links
+the doc onto that task, the ref `link_refs` writes; an open, worked owner
+holding a listed goal), else the board's top active band (first in priority
+order that is `todo` or `in-progress`, chores excluded), else chores — never
+triage — owned by the lead when the seat is held, moved to `todo`, and wakes
+the board's lead through `ReadyWorkNudger.taskReady`. The pill's Create Task
+asks for the same placement with `spinoff: true` on its create, its origin
+doc naming which huddle (Bryan, 2026-09-01: *"tasks were created in Backlog
+and not automatically started"*). Every such row's body quotes the whole
+line and links back to the doc (`spinoffDocHref`, core); the title is a
+trimmed reading of the same words.
 The composer never claims `in-progress` itself. A repeated mention links the row the board
 already has (find-or-create on a normalized title, then two shared
 significant words) rather than filing twice. The composer receives the resolved links and writes

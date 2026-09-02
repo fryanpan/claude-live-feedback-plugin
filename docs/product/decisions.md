@@ -768,13 +768,18 @@ archive the section when the row is archived.
   mockups."*
 - **Make Plan on discussions.** The face rule read `huddleKind !== 'plan'` as
   "no button"; a discussion reaches plans too.
-- **Spin-offs are placed** — `TaskStore.placeSpinoff`: originating task's goal
-  (unavailable: a huddle records no task; documented, skipped), else the top
-  active band, else chores; owner the lead when seated, else the author;
-  `todo`. The pill sends `spinoff: true`; the spoken capture asks the board.
-  Chosen over a client-side goal pick because the board holds the order and
-  the seat, and over triage-with-a-note because "unowned at triage" is the
-  unplaced row the report was about.
+- **Spin-offs are placed** — `TaskStore.placeSpinoff`: the goal of the task
+  the doc belongs to (`POST /huddles` takes a `taskId` and links the doc onto
+  it; a chores or triage owner lends nothing — Backlog is where the rule
+  ends, never where it starts), else the top active band, else chores; owner
+  the lead when seated, else the author; `todo`. The pill sends `spinoff:
+  true` with its origin doc; the spoken capture asks the board with the
+  meeting doc. Chosen over a client-side goal pick because the board holds
+  the order and the seat, and over triage-with-a-note because "unowned at
+  triage" is the unplaced row the report was about.
+- **Spun-off bodies link back** — `spinoffDocHref` (core) closes every such
+  body with the doc's board-relative address; the doc route reads no anchor
+  parameter, so the quoted line is the pointer within it.
 - **"Untitled task" was not the pill.** The two such rows carry no origin,
   no body, `untitled: true`, a person as creator — the Board's New-task
   shape. Pinned in a test beside the pill's shape rather than "fixed".
