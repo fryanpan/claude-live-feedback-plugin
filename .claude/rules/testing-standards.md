@@ -36,6 +36,32 @@ with the window it is proving, which exempts it from the audit.
 *Check:* `test:audit` counts `sleep(N)` and `setTimeout(fn, N)` with N >= 500
 in `packages/server/test`, minus the `// timed:` ones.
 
+### The cadences are scaled, so never write one as a literal
+
+Polling cannot shorten a debounce the server itself schedules, and the suite
+crosses that chain hundreds of times. So `CW_TEST_TIMING_SCALE` multiplies
+every room cadence in `packages/server/src/room-timings.ts` by one factor.
+`packages/server/test/timing.preload.ts` sets it to `0.1` for every `bun test`
+run, which is why the documented gate needs no extra flag.
+
+One factor, not one knob per cadence: the ORDER of these debounces is
+load-bearing — the `.ydoc` persists before the `.md` write-back, which is what
+makes "a crash inside the flush window" a state a test can build. A uniform
+scale preserves every ratio. Unset, malformed, or above 1 gives the
+production defaults unchanged, asserted by
+`packages/server/test/room-timings.test.ts` in a subprocess with the variable
+removed from the environment.
+
+The consequence for tests: a `// timed:` wait must DERIVE its window from
+those constants. `packages/server/test/wait-for.ts` exports the four —
+`pastWriteBack`, `pastExternalRead`, `insideWriteBack`, `pastReanchor`, plus
+`afterPersist` for the gap between the two debounces. A literal `700` meant to
+sit inside an 800ms window sits far outside an 80ms one, which silently turns
+the race a test builds into no race at all.
+
+*Check:* no check yet. The audit cannot tell a literal that rides a scaled
+cadence from one that rides an unscaled timer elsewhere in the server.
+
 ## 3. No wall-clock assertions
 
 `expect(Date.now() - t0).toBeLessThan(2000)` fails on a loaded CI runner and
