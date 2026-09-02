@@ -109,12 +109,23 @@ origin policy — not a determined agent.
 ### What a share visitor may open
 
 A folder bind or diff review roots a whole repository, and a visitor reaches
-it. `isListedFile` (`fs-scan.ts:90`) is the rule: a path opens only if the
+it. `isListedFile` (`fs-scan.ts`) is the rule: a path opens only if the
 tree listing contains it, and the listing is
-`git ls-files --cached --others --exclude-standard` via `scanFolderPaths`
-(`fs-scan.ts:35`), so a gitignored `.env` never appears. Anything under
+`git ls-files --cached --others --exclude-standard` via `scanFolderPaths`,
+so a gitignored `.env` never appears. Anything under
 `.git/` is refused before the listing is consulted. Call sites:
 `rooms.ts:2950` and `rooms.ts:3023`.
+
+**The git listing has a fallback mode, and it is not the same guarantee.**
+`scanFolder` drops to a recursive `readdir` whenever `git ls-files` exits
+non-zero — a folder bound outside any checkout — or git is missing. There is
+no ignore file to honour out there, so the fallback carries a floor of its
+own (`isSecretShapedName`): it omits every dotfile and every key-shaped name
+(`*.pem`, `*.key`, `*.p12`, `*.pfx`, `*.keystore`, `id_*`). Before that floor
+existed the dot-prefix test applied to directories only, so a bind on a
+non-repo directory listed `.env` and `.npmrc` in the tree and served them.
+A false refusal here is one missing row in a tree; a false admission is a
+credential leaving the box.
 
 Browser origins are handled separately: `isAllowedBrowserOrigin`
 (`middleware/browser-origin.ts:68`) reflects one known origin or sends no CORS
