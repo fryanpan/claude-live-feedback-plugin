@@ -1616,17 +1616,27 @@ describe('inline title editing', () => {
     expect(title.textContent).toBe('Keep me');
   });
 
-  // Blur is the third ending and the easiest one to reach by accident — a
-  // click anywhere else on the board. It must cancel, never save: an editor
-  // that commits on blur rewrites a title the reader was in the middle of
-  // rethinking. (An input got this for free by being removed; an element that
-  // stays in the DOM has to say so.)
-  it('blur cancels without writing', () => {
+  // Blur saves, the same as Enter (Bryan, 2026-09-01: "Click outside while
+  // editing. Expect that the title saves, but it reverts instead"). This used
+  // to assert the opposite — that a click away discards — and the discard was
+  // the bug he filed. The click that opens the editor never changes the
+  // text, so an unchanged title still restores and Escape stays the cancel.
+  it('blur saves a changed title', () => {
+    const h = handlers();
+    const t = task({ goal: 'g-pr', title: 'Keep me' });
+    renderBoard(root, boardSections(GOALS, [t], filters), h);
+    clickAt(words());
+    words().textContent = 'Save me';
+    words().dispatchEvent(new FocusEvent('blur'));
+    expect(h.onTitleCommit).toHaveBeenCalledWith(expect.objectContaining({ id: t.id }), 'Save me');
+    expect(editing()).toBe(false);
+  });
+
+  it('blur with an unchanged title restores without writing', () => {
     const h = handlers();
     renderBoard(root, boardSections(GOALS, [task({ goal: 'g-pr', title: 'Keep me' })], filters), h);
     const title = root.querySelector('.hub-task-title') as HTMLElement;
     clickAt(words());
-    words().textContent = 'Discard me';
     words().dispatchEvent(new FocusEvent('blur'));
     expect(h.onTitleCommit).not.toHaveBeenCalled();
     expect(editing()).toBe(false);
