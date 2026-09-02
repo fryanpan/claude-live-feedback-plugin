@@ -123,11 +123,11 @@ describe('humanBlockerRows', () => {
   it('bands a named person’s blocker and not a named agent’s, on one pass', () => {
     const person = task({ id: 't-person', assignee: 'Ada Fenwick', ownerKind: 'person' });
     const agent = task({ id: 't-agent', assignee: 'Cartographer', ownerKind: 'agent' });
-    const undeclared = task({ id: 't-undeclared', assignee: 'Rowan Iles' });
+    const undeclared = task({ id: 't-nokind', assignee: 'Rowan Iles' });
     const waiters = [
       task({ after: ['t-person'] }),
       task({ after: ['t-agent'] }),
-      task({ after: ['t-undeclared'] }),
+      task({ after: ['t-nokind'] }),
     ];
     const rows = humanBlockerRows([person, agent, undeclared, ...waiters]);
     const ids = rows.map((r) => r.task.id);
@@ -136,7 +136,7 @@ describe('humanBlockerRows', () => {
     // …and the two absences are read on the same list, so "contains nothing"
     // cannot be what makes them pass.
     expect(ids).not.toContain('t-agent');
-    expect(ids).not.toContain('t-undeclared');
+    expect(ids).not.toContain('t-nokind');
   });
 
   it('does not sweep in an agent whose display name is also the viewer’s', () => {
