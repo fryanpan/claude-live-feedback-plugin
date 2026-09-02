@@ -158,13 +158,27 @@ describe('cross-origin access to the trusted host', () => {
 
     it('still allows writes from an allowed origin — POSITIVE CONTROL', async () => {
       // Otherwise the two assertions above would pass on a server that refuses
-      // every write from everyone.
+      // every write from everyone. A board create, not a doc bind: binding a
+      // file names a host path and is refused to EVERY browser origin now
+      // (binding-routes-browser.test.ts), so it can no longer stand as the
+      // origin gate's success case.
+      const r = await req('/api/workspaces', 'http://localhost:3000', {
+        method: 'POST',
+        body: JSON.stringify({ name: 'made from an allowed origin' }),
+      });
+      expect(r.status).toBe(200);
+    });
+
+    it('an allowed origin is still not allowed to BIND a file', async () => {
+      // The origin gate admits this page; the binding gate behind it does
+      // not. Pinned here so the two never get read as one rule.
       const r = await req('/api/docs', 'http://localhost:3000', {
         method: 'POST',
         body: JSON.stringify({ docId: 'widget-made-this', type: 'markdown', sourceUrl: docPath }),
       });
-      expect(r.status).toBe(200);
-      expect((await req('/api/docs/widget-made-this', null)).status).toBe(200);
+      expect(r.status).toBe(403);
+      expect(((await r.json()) as { error: string }).error).toBe('browser_cannot_bind');
+      expect((await req('/api/docs/widget-made-this', null)).status).toBe(404);
     });
 
     it('still allows writes from a non-browser caller — agents and MCP', async () => {

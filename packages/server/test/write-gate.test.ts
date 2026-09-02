@@ -35,12 +35,20 @@ describe('telling a browser from an agent', () => {
     expect(isBrowserRequest(headers({ origin: 'null' }))).toBe(true);
   });
 
-  it('calls a request carrying only Sec-Fetch-* a browser', () => {
+  it('calls a request carrying only Sec-Fetch-Site or -Dest a browser', () => {
     // The belt to Origin's braces: a browser that somehow omitted Origin is
-    // still a browser, and no HTTP client in this repo sends these.
+    // still a browser, and no HTTP client in this repo sends these two.
     expect(isBrowserRequest(headers({ 'sec-fetch-site': 'same-origin' }))).toBe(true);
-    expect(isBrowserRequest(headers({ 'sec-fetch-mode': 'cors' }))).toBe(true);
     expect(isBrowserRequest(headers({ 'sec-fetch-dest': 'empty' }))).toBe(true);
+  });
+
+  it('does NOT call a bare Sec-Fetch-Mode a browser — that is what node fetch sends', () => {
+    // Measured, not assumed: Node 24's undici stamps `sec-fetch-mode: cors`
+    // on every request and nothing else of the family. The plugin's MCP
+    // child runs under node, so counting this header read every MCP tool
+    // call as a browser (mcp-doc-workspace.test.ts caught it the day the
+    // binding routes started refusing browsers).
+    expect(isBrowserRequest(headers({ 'sec-fetch-mode': 'cors' }))).toBe(false);
   });
 
   it('reads the header name case-insensitively, as HTTP does', () => {

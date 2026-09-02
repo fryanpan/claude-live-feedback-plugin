@@ -20,6 +20,7 @@
  * layer is the part nothing type-checks.
  */
 import { afterAll, beforeAll, describe, expect, it } from 'bun:test';
+import { execFileSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -28,6 +29,19 @@ import { SHARE_COOKIE } from '../src/share/link-session.ts';
 
 const PUBLIC_HOST = 'feedback.example.com';
 const SECRET = 'SECRET-PRIVATE-KEY-MATERIAL';
+
+function git(repo: string, ...args: string[]): string {
+  return execFileSync('git', ['-C', repo, ...args], {
+    encoding: 'utf8',
+    env: {
+      ...process.env,
+      GIT_AUTHOR_NAME: 't',
+      GIT_AUTHOR_EMAIL: 't@t',
+      GIT_COMMITTER_NAME: 't',
+      GIT_COMMITTER_EMAIL: 't@t',
+    },
+  }).trim();
+}
 
 describe('symlink escape from a shared workspace', () => {
   let handle: ServerHandle;
@@ -81,6 +95,16 @@ describe('symlink escape from a shared workspace', () => {
     // The two shapes that occur in real repos.
     symlinkSync(join(outside, 'id_rsa'), join(repo, 'notes.txt')); // symlinked file
     symlinkSync(outside, join(repo, 'linkdir')); // symlinked directory
+    // A git repo with the symlinks COMMITTED. Since the tree gate (a path
+    // opens only if `git ls-files` lists it) the symlink guard sits behind
+    // it, and in a bare directory the readdir fallback never lists a
+    // symlink at all — every escape below would then be refused as
+    // `not-listed` without the symlink guard ever running, and this suite
+    // would stop proving what it exists to prove. Git tracks symlinks as
+    // entries, so a committed one IS listed and reaches the guard.
+    git(repo, 'init', '-q');
+    git(repo, 'add', '-A');
+    git(repo, 'commit', '-q', '-m', 'fixture with symlinks');
 
     handle = createServer({
       port: 0,
@@ -164,9 +188,14 @@ describe('symlink escape from a shared workspace', () => {
   });
 
   it('refuses a path THROUGH a symlinked directory', async () => {
+    // Git lists `linkdir` as one entry and never anything beneath it, so
+    // this is refused by the tree gate as not-listed (404) — one layer
+    // before the symlink guard, which would have said bad-path. Either
+    // refusal keeps the bytes in; the byte-level assertion below is the one
+    // that holds whichever layer answers.
     const res = await openContext('linkdir/id_rsa');
-    expect(res.status).toBe(400);
-    expect((await res.json()).error).toBe('bad-path');
+    expect(res.status).toBe(404);
+    expect((await res.json()).error).toBe('not-listed');
   });
 
   it('never lets the outside file’s bytes reach the visitor', async () => {
@@ -186,7 +215,12 @@ describe('symlink escape from a shared workspace', () => {
 
   it('refuses the same escape through editable-file', async () => {
     // .md so it gets past the not-markdown check and reaches the path guard.
+    // Untracked is fine: `ls-files --others` lists an untracked symlink, so
+    // it is listed and the symlink guard is the layer that refuses. Created
+    // after the listing was cached by the tests above, so wait out the
+    // miss-rescan window (250ms) or the tree gate answers not-listed first.
     symlinkSync(join(outside, 'id_rsa'), join(repo, 'escape.md'));
+    await new Promise((r) => setTimeout(r, 400));
     const res = await visitor(`/api/workspaces/${workspaceId}/editable-file`, {
       method: 'POST',
       body: JSON.stringify({ relPath: 'escape.md' }),

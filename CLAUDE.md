@@ -182,7 +182,10 @@ on every push, and a Haiku scanner only on pushes to fryanpan-owned remotes
 without the other FAILS the push (exit 2 — broken install); neither resolving
 skips cleanly (`SCRUB_REQUIRE_SOURCES=1` makes even that hard). The scanner
 takes paths / `--diff-range` / `--staged` and ignores stdin (piping scans
-nothing, exits 0). Setup once: `git config core.hooksPath .githooks`. Bypass
+nothing, exits 0). Git-addressed modes scan the PUSHED BLOB, not the working
+tree; `.ydoc`/`.jsonl`/`.csv`/`.svg`/`.xml`/images/extension-less files are
+always scanned and cannot be allowlisted; `scrub-allow` counts only as a
+trailing comment. Setup once: `git config core.hooksPath .githooks`. Bypass
 sparingly: `SCRUB_SKIP=1`, or `SCRUB_SKIP_HAIKU=1` for Haiku alone.
 
 **Linear:** Team Bryan Chan (BRY), team ID

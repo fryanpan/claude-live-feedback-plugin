@@ -222,6 +222,19 @@ const requireEmailAuth = ['1', 'true', 'yes'].includes(
  * unsigned browser writes exactly as it does today. Independent of
  * `CW_REQUIRE_EMAIL_AUTH`, which governs what a session MEANS rather than
  * whether one is needed — see ServerOptions and middleware/write-gate.ts.
+ *
+ * Still default OFF after the Urgent-fixes ticket (2026-09-02), which asked
+ * for on-by-default unless a real unsigned flow would break. Two would:
+ * prod runs with no sign-in at all (`GET /api/auth/session` reports
+ * `signInToWrite:false`, `required:false`), so the owner's own comments from
+ * the board are unsigned browser writes today; and a widget embed that has
+ * not opted into `auth-offer` has NO way to sign in — its writes carry
+ * `Origin` like any page's, so the gate would refuse every comment from every
+ * existing host page with no prompt that could fix it. Flip it per box with
+ * `CW_REQUIRE_SIGNIN_TO_WRITE=1` once a code sender is configured and the
+ * embeds that matter opt into the popup handshake. The binding routes are
+ * closed to browsers regardless of this flag — see write-gate.ts,
+ * `browserCannotBindBody`.
  */
 const requireSignInToWrite = ['1', 'true', 'yes'].includes(
   (process.env.CW_REQUIRE_SIGNIN_TO_WRITE ?? '').trim().toLowerCase(),
