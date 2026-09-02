@@ -55,6 +55,46 @@ function fakeFetch(reply?: unknown) {
   return { impl, calls };
 }
 
+/**
+ * A wait factory the test drives, so a paced drain is a sequence of events
+ * rather than a duration.
+ *
+ * `log` is shared with the fetch below so the ORDER of calls and gaps is
+ * observable — which is the property pacing actually has. `mode: 'resolve'`
+ * ends each gap immediately (the drain runs at full speed and still records
+ * every gap it asked for); `mode: 'hang'` never ends a gap on its own, so a
+ * drain that finishes at all proves `cancel()` was what ended it.
+ */
+function fakeWaits(log: string[], mode: 'resolve' | 'hang' = 'resolve') {
+  const cancels: Array<() => void> = [];
+  const impl = (ms: number) => {
+    log.push(`gap:${ms}`);
+    if (mode === 'resolve') return { done: Promise.resolve(), cancel: () => {} };
+    let cancel = () => {};
+    const done = new Promise<void>((resolve) => {
+      cancel = () => {
+        log.push('gap:cancelled');
+        resolve();
+      };
+    });
+    cancels.push(cancel);
+    return { done, cancel };
+  };
+  return { impl, cancels };
+}
+
+/** A fetch that appends to the shared event log, so calls and gaps interleave. */
+function loggingFetch(log: string[]) {
+  const impl = (async () => {
+    log.push('call');
+    return new Response(JSON.stringify({ content: [{ text: '{"topic":"T","discussion":"D"}' }] }), {
+      status: 200,
+      headers: { 'content-type': 'application/json' },
+    });
+  }) as unknown as typeof fetch;
+  return impl;
+}
+
 const hadFlag = 'LF_SUMMARIES' in process.env;
 const original = process.env.LF_SUMMARIES;
 afterEach(() => {
@@ -572,21 +612,31 @@ describe('ThreadSummarizer.backfill', () => {
   });
 
   it('paces itself across the window it was given', async () => {
-    const { impl, calls } = fakeFetch();
-    s = new ThreadSummarizer({ apiKey: 'k', fetchImpl: impl });
-    const start = Date.now();
+    // Asserted as an event sequence, not a duration. The old version timed the
+    // drain and required 120ms <= elapsed < 200ms, which fails on a loaded
+    // runner and cannot distinguish a trailing gap from one slow call.
+    const log: string[] = [];
+    const { impl: waitImpl } = fakeWaits(log);
+    s = new ThreadSummarizer({ apiKey: 'k', fetchImpl: loggingFetch(log), waitImpl });
     // 4 tasks over 200ms → a 50ms gap BETWEEN calls, three of them.
     await s.backfill(tasks(4), { windowMs: 200, minIntervalMs: 0 });
-    const elapsed = Date.now() - start;
-    expect(calls).toHaveLength(4);
-    // Positive control on the clock: an unpaced drain of the same 4 tasks
-    // finishes in single-digit ms, so this bound really is measuring pacing.
-    expect(elapsed).toBeGreaterThanOrEqual(120);
-    // And it does NOT wait after the last call. A trailing gap would delay
-    // the result — and the "backfill done" line — by a whole interval, which
-    // at the real 15-minute window is minutes of silence that looks like a
-    // drain still running.
-    expect(elapsed).toBeLessThan(200);
+    // One gap between each consecutive pair, of the interval the window works
+    // out to — and, because the last entry is a call, NO gap after the final
+    // one. A trailing gap would delay the result, and the "backfill done"
+    // line, by a whole interval: at the real 15-minute window that is minutes
+    // of silence that reads as a drain still running.
+    expect(log).toEqual(['call', 'gap:50', 'call', 'gap:50', 'call', 'gap:50', 'call']);
+  });
+
+  it('honours minIntervalMs when the window would pace faster than it', async () => {
+    // The floor exists so a small window over many threads cannot become the
+    // burst the pacing is there to prevent. 4 tasks over 20ms works out to a
+    // 5ms gap; the floor lifts every gap to 40ms.
+    const log: string[] = [];
+    const { impl: waitImpl } = fakeWaits(log);
+    s = new ThreadSummarizer({ apiKey: 'k', fetchImpl: loggingFetch(log), waitImpl });
+    await s.backfill(tasks(4), { windowMs: 20, minIntervalMs: 40 });
+    expect(log.filter((e) => e.startsWith('gap:'))).toEqual(['gap:40', 'gap:40', 'gap:40']);
   });
 
   it('ignores a second drain while one is running', async () => {
@@ -709,16 +759,22 @@ describe('ThreadSummarizer.backfill', () => {
     // A 10-minute window over 3 threads is a 200s gap between calls. If
     // dispose only flipped a flag, shutdown would block for one whole gap
     // before the loop noticed — so the wait itself has to be cancellable.
-    const { impl, calls } = fakeFetch();
-    s = new ThreadSummarizer({ apiKey: 'k', fetchImpl: impl });
+    //
+    // The gap here NEVER ends on its own, which is what turns this from a
+    // stopwatch into a proof: the drain can only resolve because `dispose()`
+    // cancelled the pending wait. The old `Date.now() - t0 < 1_000` would
+    // have passed just as happily against a wait that simply expired quickly.
+    const log: string[] = [];
+    const { impl: waitImpl } = fakeWaits(log, 'hang');
+    s = new ThreadSummarizer({ apiKey: 'k', fetchImpl: loggingFetch(log), waitImpl });
     const drain = s.backfill(tasks(3), { windowMs: 10 * 60_000 });
-    await new Promise((r) => setTimeout(r, 20));
-    expect(calls).toHaveLength(1); // first call went out
-    const t0 = Date.now();
+    // Yield until the first call is out and the drain is parked in its gap.
+    while (log.length < 2) await new Promise((r) => setTimeout(r, 1));
+    expect(log).toEqual(['call', 'gap:200000']);
     s.dispose();
     expect(await drain).toEqual({ attempted: 1, stored: 1 });
-    expect(Date.now() - t0).toBeLessThan(1_000);
-    expect(calls).toHaveLength(1); // and no more went out after it
+    // Cancelled, not expired — and no second call went out after it.
+    expect(log).toEqual(['call', 'gap:200000', 'gap:cancelled']);
   });
 });
 
