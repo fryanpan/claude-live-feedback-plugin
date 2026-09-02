@@ -252,9 +252,39 @@ whose paths B2 breaks.
 Layers: models, renderers, controllers, in that order. Final directory: `hub/`
 throughout — no move needed.
 
-## B2 · `styles.css`
+## B2 · `styles.css` — **DONE**
 
 12,042 lines, 158 commits in 90 days. **Effort M.** One PR, two commits.
+
+Landed as planned: `hub.css` (5,347) and `signin.css` (256), leaving
+`styles.css` at 6,467. What differed, and what the work found:
+
+- **`signin.css` stops at the sign-in block's end, not at EOF.** The
+  first-arrival identity prompt sits below it and belongs to the board and
+  the editor — both bundles reference its four classes, sign-in's references
+  none — so it stayed in `styles.css`. That is why the file is 256 rather
+  than the estimated ~316.
+- **Only two pages get lighter, not three.** The plan's premise was that
+  splitting the hub block stops a hub visitor downloading the editor's CSS.
+  It does not: the hub block is hub-only, but the hub also reaches design
+  tokens, the top bar, voice, the comment pill, the markdown composer, the
+  toast, the connection banner, the identity prompt and the utilities — all
+  of which stay shared. The editor and sign-in stop downloading the board;
+  the board downloads what it always did, in two files.
+- **The next cut is measured and named.** Rendering four board views and the
+  editor in headless Chrome and asking, per rule, whether it matches anything
+  on the page — cross-checked against the class names in each entry bundle —
+  puts about **2,459 lines** in blocks the editor alone reaches: main layout,
+  the review-set sidebar, the file tree, the reassign menu, code blocks,
+  tables, meeting record chrome, the over-doc sheet, the full-screen thread
+  view, the code-review and diff-review surfaces, and the inline thread
+  cards. Moving those into a `doc.css` would leave a genuinely shared base
+  every page keeps loading. That is a third file and a design decision, so
+  B2 did not take it.
+- **The source-shape ratchet went UP by twelve**, to 79. Twelve suites pin
+  rules on both sides of the seam and now read both files. The alternative —
+  one loop over a list of filenames — would have hidden those reads from
+  `test:audit` rather than removed them.
 
 | Becomes | Moves | Importers to update |
 |---|---|---|
