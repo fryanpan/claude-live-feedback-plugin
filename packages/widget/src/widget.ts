@@ -83,12 +83,26 @@ export interface WidgetOpts {
    * ask for it never shows auth UI, never touches the auth endpoints, and
    * behaves byte-for-byte as before. Mockup pages served by the workspace
    * itself need none of this — there the session cookie already flows.
+   *
+   * DEV-ONLY, and here is the boundary that makes it so. The token the
+   * handshake mints is kept in the HOST PAGE's localStorage (see
+   * AUTH_TOKEN_KEY), which every script on that origin can read: any
+   * third-party tag, any XSS, any browser extension scoped to the page. On
+   * a developer's own dev server that is the developer's own code and the
+   * exposure is theirs to accept. On any page whose scripts are not all
+   * yours it is a bearer credential handed to strangers — do not set
+   * `auth-offer` there. The right shape for a production embed is a
+   * session that never leaves the workspace origin (the mockup path above),
+   * and that is the reason this stays opt-in rather than automatic.
+   * (Urgent-fixes ticket, 2026-09-02: documented, not changed.)
    */
   authOffer?: boolean;
 }
 
 /** localStorage keys for the popup-token handshake. Always under `cfw:` —
- *  the token belongs to the widget even when identityScope is 'host'. */
+ *  the token belongs to the widget even when identityScope is 'host'.
+ *  Host-page storage is readable by every script on that origin, which is
+ *  why the handshake is a dev-server-only opt-in — see `authOffer`. */
 const AUTH_TOKEN_KEY = 'cfw:authToken';
 const AUTH_USER_KEY = 'cfw:authUser';
 

@@ -93,3 +93,72 @@ function timingSafeEqual(a: string, b: string): boolean {
   for (let i = 0; i < a.length; i++) diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
   return diff === 0;
 }
+
+/**
+ * Remembers which `webhook-id`s have been accepted, so a captured request
+ * cannot be played back inside the signature's tolerance window.
+ *
+ * The signature covers `${id}.${timestamp}.${body}` and `TOLERANCE_SEC`
+ * bounds how old a timestamp may be — which bounded a replay to ten minutes
+ * and did nothing inside them: every replay re-ran the handler (Urgent-fixes
+ * ticket, 2026-09-02). Svix ids are unique per delivery, so a second arrival
+ * of one inside the window is by definition not a delivery.
+ *
+ * Checked only AFTER the signature verifies: an unsigned caller must not be
+ * able to learn which ids the server has seen, and an attacker who can sign
+ * can mint fresh ids anyway — this guard is about captured traffic, not
+ * forged traffic.
+ *
+ * Bounded two ways. By time: an entry is forgotten after `ttlSec`, which
+ * defaults to twice the tolerance so it outlives every timestamp the
+ * verifier would still accept. By count: past `maxEntries` the OLDEST entry
+ * goes, and an evicted id is admitted again — the bound is a bound, not a
+ * promise. At the vendor's real delivery rate (a handful per meeting) the
+ * count bound never engages; it exists so a flood of signed traffic cannot
+ * grow this without limit.
+ */
+export class WebhookReplayGuard {
+  private readonly seen = new Map<string, number>();
+  private readonly ttlSec: number;
+  private readonly maxEntries: number;
+
+  constructor(opts: { ttlSec?: number; maxEntries?: number } = {}) {
+    this.ttlSec = opts.ttlSec ?? TOLERANCE_SEC * 2;
+    this.maxEntries = opts.maxEntries ?? 10_000;
+  }
+
+  /** How many ids are remembered right now (after expiry sweep). Tests. */
+  get size(): number {
+    return this.seen.size;
+  }
+
+  /**
+   * `true` the first time `id` is presented inside the window; `false` for
+   * every repeat until the window passes. Records the id as a side effect
+   * of a `true` answer, so "admit then handle" is the only call pattern.
+   */
+  admit(id: string, nowSec: number = Math.floor(Date.now() / 1000)): boolean {
+    this.sweep(nowSec);
+    const at = this.seen.get(id);
+    if (at !== undefined && nowSec - at <= this.ttlSec) return false;
+    // Delete-then-set keeps Map insertion order as recency, so eviction
+    // below always takes the entry least recently accepted.
+    this.seen.delete(id);
+    this.seen.set(id, nowSec);
+    while (this.seen.size > this.maxEntries) {
+      const oldest = this.seen.keys().next().value;
+      if (oldest === undefined) break;
+      this.seen.delete(oldest);
+    }
+    return true;
+  }
+
+  /** Drop expired entries. Insertion order is time order, so stop at the
+   *  first live one. */
+  private sweep(nowSec: number): void {
+    for (const [id, at] of this.seen) {
+      if (nowSec - at <= this.ttlSec) break;
+      this.seen.delete(id);
+    }
+  }
+}

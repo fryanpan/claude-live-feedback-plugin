@@ -420,6 +420,27 @@ Every count that went wrong had one.
   stop: round 4 would restate the inherent limitation, which is now
   handled where it actually bites and documented where it doesn't.
 
+## Node's fetch sends `sec-fetch-mode: cors` on every request, so it is not a browser tell
+
+Measured on Node 24 (2026-09-02): undici's `fetch` stamps `sec-fetch-mode:
+cors` on every request — and nothing else of the `Sec-Fetch-*` family, and no
+`Origin`. The plugin's MCP child runs under `node`, so a "is this a browser"
+predicate that counted ANY `Sec-Fetch-*` header read every MCP tool call as a
+browser. It sat unnoticed behind the sign-in-to-write flag (default off) and
+surfaced the day the file-binding routes started refusing browsers
+unconditionally: `mcp-doc-workspace.test.ts`, which drives the real bundle
+under `node`, was the only test that could see it, because every other
+"agent" fixture is a bare Bun `fetch` that sends none of these headers.
+
+- A browser tell is "what browsers send that clients don't" — and the second
+  half has to be MEASURED against the clients this repo actually runs (bun
+  fetch, node fetch, curl), not asserted. `Origin`, `Sec-Fetch-Site` and
+  `Sec-Fetch-Dest` pass; `Sec-Fetch-Mode` does not.
+- When a gate keys on request shape, keep one integration test that goes
+  through the real MCP bundle under `node`. A unit test with hand-built
+  headers proves the predicate, not the caller — see "A unit test can be
+  true and still prove nothing about the caller" above.
+
 ## Suppressing a diff chunk silently breaks anything that counts chunks
 
 - **`oldLineForPos` reconstructs base line numbers by accumulating the size

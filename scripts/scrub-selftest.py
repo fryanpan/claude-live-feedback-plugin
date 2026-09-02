@@ -515,6 +515,131 @@ def check_push_range(registry: str, denylist: str) -> None:
                "the metadata identity leaked back in alongside the content email")
 
 
+def check_blob_source(registry: str, denylist: str) -> None:
+    """The scanner reads what the push PUBLISHES, not what is on disk.
+
+    Until the Urgent-fixes ticket (2026-09-02) the file LIST came from git and
+    the BYTES came from the working tree. Two ways that lies, each pinned
+    here with its mirror image: a leak committed and then removed from the
+    working tree (uncommitted) — the push carries it, the old scanner read a
+    clean file and passed; and a leak typed into the working tree but never
+    committed — the push does not carry it, the old scanner blocked a clean
+    push. `--diff-range` and `--push-tip` must both read the tip blob.
+    """
+    clean = clean_git_env()
+
+    def repo_with(committed: str, on_disk: str) -> tuple[str, str, str]:
+        root = tempfile.mkdtemp(prefix="scrub-blob-")
+
+        def g(*args: str) -> str:
+            return subprocess.run(
+                ["git", *IDENT, *args], cwd=root, check=True,
+                capture_output=True, text=True, env=clean,
+            ).stdout.strip()
+
+        g("init", "-q")
+        with open(os.path.join(root, "notes.md"), "w") as f:
+            f.write("seed\n")
+        g("add", "-A")
+        g("commit", "-qm", "seed")
+        base = g("rev-parse", "HEAD")
+        with open(os.path.join(root, "notes.md"), "w") as f:
+            f.write(committed)
+        g("add", "-A")
+        g("commit", "-qm", "the pushed commit")
+        tip = g("rev-parse", "HEAD")
+        # The working tree diverges from the tip WITHOUT a commit.
+        with open(os.path.join(root, "notes.md"), "w") as f:
+            f.write(on_disk)
+        g("update-ref", "refs/remotes/origin/main", base)
+        return root, base, tip
+
+    # 1. committed leak, disk cleaned: the push carries it.
+    root, base, tip = repo_with(f"a line naming {NEW_TOKEN}\n", "a clean line\n")
+    r = run(["--diff-range", f"{base}..{tip}"], registry, denylist, cwd=root)
+    expect("blob source: --diff-range sees a committed leak the working tree no longer has",
+           r.returncode, 1, r.stderr)
+    r = run(["--push-tip", tip, "--already-public", base], registry, denylist, cwd=root)
+    expect("blob source: --push-tip sees it too", r.returncode, 1, r.stderr)
+
+    # 2. committed clean, disk leaks: the push does NOT carry it.
+    root, base, tip = repo_with("a clean line\n", f"typed but not committed: {NEW_TOKEN}\n")
+    r = run(["--diff-range", f"{base}..{tip}"], registry, denylist, cwd=root)
+    expect("blob source: --diff-range ignores an uncommitted leak on disk",
+           r.returncode, 0, r.stderr)
+    r = run(["--push-tip", tip, "--already-public", base], registry, denylist, cwd=root)
+    expect("blob source: --push-tip ignores it too", r.returncode, 0, r.stderr)
+
+    # 3. --staged reads the index, not the file: stage a leak, then edit the
+    # file clean on disk. A working-tree read passes; an index read blocks.
+    root, base, tip = repo_with("a clean line\n", "a clean line\n")
+    with open(os.path.join(root, "notes.md"), "w") as f:
+        f.write(f"staged leak {NEW_TOKEN}\n")
+    subprocess.run(["git", *IDENT, "add", "-A"], cwd=root, check=True,
+                   capture_output=True, env=clean)
+    with open(os.path.join(root, "notes.md"), "w") as f:
+        f.write("cleaned on disk after staging\n")
+    r = run(["--staged"], registry, denylist, cwd=root)
+    expect("blob source: --staged reads the index, not the file", r.returncode, 1, r.stderr)
+
+    # 4. a bare A..B with no right-hand side is a setup error, not a scan of
+    # nothing — the third costume of "exit 0 having looked at nothing".
+    r = run(["--diff-range", base], registry, denylist, cwd=root)
+    expect("blob source: a bare rev is refused as a range", r.returncode, 2, r.stderr)
+
+
+def check_never_allow(registry: str, denylist: str, fixture) -> None:
+    """Types that are always scanned and can never be allowlisted.
+
+    Each was SKIPPED before — the extension filter read them as binaries —
+    so the positive half of every pair below is new coverage, and the
+    `scrub-allow` half proves the exemption is refused in these types even in
+    the trailing-comment spelling that works everywhere else.
+    """
+    cases = [
+        ("data.csv", f"id,note\n1,{DENY_TOKEN}\n", "a .csv is scanned"),
+        ("events.jsonl", f'{{"note": "{DENY_TOKEN}"}}\n', "a .jsonl is scanned"),
+        ("corpus.ydoc", f"binary-ish header\x00{DENY_TOKEN}\n", "a .ydoc is scanned"),
+        ("logo.svg", f"<svg><title>{DENY_TOKEN}</title></svg>\n", "an .svg is scanned"),
+        ("config.xml", f"<c><note>{DENY_TOKEN}</note></c>\n", "an .xml is scanned"),
+        ("NOTES", f"an extension-less file mentioning {DENY_TOKEN}\n",
+         "an extension-less file is scanned outside scripts/ and .githooks/"),
+        ("pixel.png", f"\x89PNG\r\n\x1a\n{DENY_TOKEN}".encode("latin-1").decode("latin-1"),
+         "an image is scanned"),
+    ]
+    for name, body, label in cases:
+        r = run([fixture(name, body)], registry, denylist)
+        expect(f"never-allow: {label}", r.returncode, 1, r.stderr)
+        # The same content with a trailing allow comment — the spelling that
+        # exempts a .md line — must NOT exempt it here.
+        allowed = fixture(f"allowed-{name}", body.rstrip("\n") + " <!-- scrub-allow --> # scrub-allow\n")
+        r = run([allowed], registry, denylist)
+        expect(f"never-allow: ...and scrub-allow cannot exempt it", r.returncode, 1, r.stderr)
+
+
+def check_allow_token_position(registry: str, denylist: str, fixture) -> None:
+    """`scrub-allow` exempts a line only as a trailing comment token."""
+    cases = [
+        (f"{PRIVATE_PROJECT} <!-- scrub-allow: documenting the gate -->\n", 0,
+         "a trailing HTML comment exempts"),
+        (f"ref = '{PRIVATE_PROJECT}'  # scrub-allow\n", 0, "a trailing # comment exempts"),
+        (f"ref = '{PRIVATE_PROJECT}'; // scrub-allow — fixture\n", 0, "a trailing // comment exempts"),
+        (f"/* scrub-allow */ {PRIVATE_PROJECT}\n", 1,
+         "a LEADING comment does not — the token must trail the content"),
+        (f"{PRIVATE_PROJECT} scrub-allow is just a word here\n", 1,
+         "the bare word mid-line does not"),
+        (f"url = 'https://x.example/{PRIVATE_PROJECT}?scrub-allow=1'\n", 1,
+         "the word inside a string or URL does not"),
+        (f"url = 'https://x.example/{PRIVATE_PROJECT}#scrub-allow'\n", 1,
+         "a #-fragment glued to a URL is not a comment opener"),
+        (f"ref = '{PRIVATE_PROJECT}' /* scrub-allow */\n", 0,
+         "a trailing block comment that closes at end of line exempts"),
+    ]
+    for body, want, label in cases:
+        r = run([fixture(f"allow-{abs(hash(label))}.md", body)], registry, denylist)
+        expect(f"allow token: {label}", r.returncode, want, r.stderr)
+
+
 def main() -> int:
     check_git_env_isolation()
     check_decision_table()
@@ -629,6 +754,9 @@ def main() -> int:
         expect("a clone with no fleet config still pushes (local registry present)", r.returncode, 0, r.stderr)
 
         check_push_range(registry, denylist)
+        check_blob_source(registry, denylist)
+        check_never_allow(registry, denylist, fixture)
+        check_allow_token_position(registry, denylist, fixture)
 
     if failures:
         print(f"\n{len(failures)} self-test failure(s): {', '.join(failures)}")
