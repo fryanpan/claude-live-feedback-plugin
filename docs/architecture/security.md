@@ -56,7 +56,7 @@ still owes the second (`packages/server/src/server.ts:5498`).
 |---|---|---|---|
 | Loopback / tailnet / LAN agent (MCP, hooks, curl) | everything | everything except the binding-route browser refusal | `isTrustedLocalHost` (`middleware/host-guard.ts:188`) classifies `local`; no session required |
 | Browser on a local host | everything | only when signed in | `isGatedWrite` + `browserProvedNobody` (`server.ts:5552`) |
-| Share / link visitor | one board and its members | threads, suggestions and the reading tracker — see the gap below | `shareScopeAllows` (`host-guard.ts:376`) — allowlist, closed by default; per-subroute rules in `docSubrouteAllowed` (`host-guard.ts:738`) |
+| Share / link visitor | one board and its members | threads, suggestions, the reading tracker, **the prose of any in-scope doc** over the Yjs socket, and **new doc rooms** via `context-file` / `editable-file` — see the gap below | `shareScopeAllows` (`host-guard.ts:376`) — allowlist, closed by default; per-subroute rules in `docSubrouteAllowed` (`host-guard.ts:738`) |
 | Collab-host visitor | any board the path names, resolved per request | same | `isAccessTunnelHost` (`host-guard.ts:227`) → `collabScope` (`host-guard.ts:659`), which delegates to `shareScopeAllows` |
 | Operator's proxied host | everything `local` gets, after an Access token | same | `isProxiedTrustedHost` (`host-guard.ts:255`) |
 | Recall.ai backend | two routes | one webhook | `recallCallbackAllows` (`middleware/recall-callback-gate.ts:89`) |
@@ -69,6 +69,18 @@ classifies `proxied-local`, and `CW_RECALL_CALLBACK_HOST` classifies
 `recall-callback`. None can leak into another (`host-guard.ts:45-160`).
 `viaProxy` — the presence of `cf-ray` — vetoes `local` outright, so a tunnel
 visitor sending `Host: localhost` is not local.
+
+Two of a visitor's writes are easy to miss because neither is an ordinary
+POST, and both are deliberate. **Document prose** is edited over the Yjs
+websocket, not over REST: an Access-authenticated share or collab visitor
+gets a read-WRITE upgrade, because `provenIdentityFor` turns their verified
+Access email into an identity and `browserProvedNobody()` is therefore false
+for them. That is the point of a live review, and `docSubrouteAllowed`'s own
+header says so. **New doc rooms** are materialized by `POST .../context-file`
+and `.../editable-file`, which are on the visitor allowlist as reads (see
+`OPEN_FOR_READING_POST` below): each opens a derived view of a file the
+visitor may already read, at a deterministic id, and creates no content of
+anybody's. A link-mode visitor gets neither, for the reason in the gap below.
 
 `SharingGate` (`share/sharing-gate.ts`) is the master switch above all of
 this: off means every non-local host is refused before authentication runs,
@@ -100,6 +112,27 @@ Agents are untouched because `isBrowserRequest` (`write-gate.ts:116`) keys on
 sends. That is an **attribution** boundary, not an authorization one — a
 determined non-browser caller can decline to look like a browser, and what
 keeps that caller out is the host gate and Access above it.
+
+**The method key covers HTTP routes, and websockets are not among them.** A
+websocket upgrade is a GET, so `isGatedWrite` cannot see one by construction,
+and "routes written later are covered" is a claim about REST alone. There are
+two such surfaces, and each carries the sign-in decision by hand at its own
+handshake. Anyone adding a third has to do the same; nothing will catch it.
+
+- **`/y/<docId>`** — the editing socket, which is also the READING socket, so
+  a refusal here would gate a read. It computes
+  `requireSignInToWrite && browserProvedNobody()` and carries the answer as
+  `WsCtx.readOnly` for the life of the connection: sync step 1 is answered,
+  and anything that would change the doc is dropped (`yjs-protocol.ts`).
+  Awareness still flows both ways — presence is not content. The mockup
+  auto-create sits BEHIND that decision, because creating a room and filing a
+  hub row is a write like any other.
+- **`/audio/<docId>`** — the meeting socket, which is write-and-spend: a
+  `start` frame opens a billed transcription session and a notes pipeline that
+  writes into the doc. It carries the same decision, and the relay refuses the
+  `start` frame with an error the strip can render rather than refusing the
+  upgrade — a refused upgrade reaches the page as a bare error event with no
+  body to show.
 
 ### Binding routes refuse browsers outright
 
@@ -275,3 +308,32 @@ Run the per-release checklist in `.claude/rules/security-review.md` before
 opening a PR that adds or changes a route, a token, a share surface, a
 webhook, or an auth default. The `ship-it` skill runs it automatically when
 the changed-file list touches those areas.
+
+## Review log
+
+An adversarial review reads this document against the code and reports where
+the two disagree. Each pass is recorded here so the next one starts from what
+the last one already looked at, and so a claim that was checked and left alone
+is distinguishable from one nobody has read.
+
+### 2026-09-02 — commit `a644afdd`, 10 confirmed findings
+
+Read the whole document against the route table, the host guard, the write
+gate, the share redactions and the secret transports. All ten were reproduced
+at the cited lines before anything was changed.
+
+| # | Severity | Finding | Verdict |
+|---|---|---|---|
+| 1 | high | `/audio/` upgrade is a GET, so the write gate never saw it, and unlike `/y/` it never consulted `browserProvedNobody()` — a signed-out browser could open a billed engine session and write notes into a doc | **Fixed.** The upgrade carries the same decision; the relay refuses `start` with an error the strip can render |
+| 2 | medium | The `/y/` mockup auto-create ran above the read-only decision, so an unproven browser could create a room and file a hub-workspace row | **Fixed.** The decision moved above the creation; refusing gates no read, because the doc does not exist yet |
+| 3 | medium | `POST /api/deploy` and `/api/plugin/refresh` had no browser refusal — the same page-on-this-machine class the binding routes close | **Fixed.** Both answer `browser_cannot_operate`, a sibling of `browser_cannot_bind` |
+| 4 | low | This document's write-gate section claimed method-keyed completeness and never mentioned either websocket surface | **Fixed.** "Writes from a browser" now names both and says the method key does not reach them |
+| 5 | high | `GET /api/workspaces/<id>` answered share and collab visitors with the stored record, including `notesHome.repoRoot` and `retiredBy` | **Fixed.** Visitors get an allowlist projection; the local surface keeps the whole record |
+| 6 | medium | `scanFolder`'s non-git fallback applied its dot-prefix test to directories only, so a bind outside a repo listed and served `.env` | **Fixed.** The fallback carries its own floor, and "What a share visitor may open" says the git listing has a fallback mode |
+| 7 | medium | `SharingGate` did not cover `proxied-local`, contradicting "every non-local host is refused" | **Fixed.** The operator's proxied hostname is in the condition; local, tailnet and LAN are untouched, so the switch can be flipped back |
+| 8 | low | The visitor Writes column omitted Yjs prose editing and lazy doc materialization | **Fixed.** Both are in the table and explained under it |
+| 9 | low | `POST /recall/status` accepted unsigned bodies and skipped the replay guard whenever the secret was unset, on every host but the callback one | **Fixed.** The route answers 404 without a secret, whichever host asked |
+| 10 | low | The fallback login-code transport printed the live code and the recipient to the server log | **Fixed.** Masked unless `CW_LOG_LOGIN_CODES=1`, and the doc's "never in the clear" claim is qualified |
+
+Nothing was declined. The "Known gap" section above was deliberately left as
+it stands — it is a product decision awaiting an answer, not a defect.
