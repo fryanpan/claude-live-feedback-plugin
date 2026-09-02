@@ -85,6 +85,14 @@ describe('file-binding routes refuse browser callers', () => {
       expect(r.status).toBe(200);
     });
 
+    it('positive control: the MCP child under node binds the file', async () => {
+      // Node's fetch sends `sec-fetch-mode: cors` and nothing else — the
+      // exact header set the plugin's MCP bundle arrives with. It is an
+      // agent, and the gate must read it as one.
+      const r = await post('/api/docs', body('node-bind'), { 'sec-fetch-mode': 'cors' });
+      expect(r.status).toBe(200);
+    });
+
     it('a page on another local port cannot bind a path', async () => {
       await expectRefused(await post('/api/docs', body('dev-bind'), devServerPage()));
     });
