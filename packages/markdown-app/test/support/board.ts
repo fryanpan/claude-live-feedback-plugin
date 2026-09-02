@@ -16,7 +16,7 @@
  */
 import { type BoardHandlers, boardData, mountBoardIsland } from '../../src/hub/board-island.tsx';
 import type { BoardSection } from '../../src/hub/hub-board-model.ts';
-import type { HubPane } from '../../src/hub/hub-model.ts';
+import type { HubPane } from '../../src/hub/hub-presence-model.ts';
 
 /** The two per-paint values that used to ride inside the handlers object and
  *  now ride the signal. Accepted here so ported cases read as they did. */

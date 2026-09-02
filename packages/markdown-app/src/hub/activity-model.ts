@@ -12,14 +12,14 @@ import {
  * moved lately, what their agents said, and the one flag a group may wear.
  * Computed from the board projection alone — no DOM, no fetch — so the
  * grouping, ordering, caps and flag rules are unit-testable without a
- * browser. Sits beside `hub-model.ts` rather than in it because that file is
+ * browser. Sits beside `hub-presence-model.ts` rather than in it because that file is
  * already the size of a small country.
  *
  * Grouped BY TASK, never by agent (Bryan, 2026-08-29, on the mock): the
  * question the pane answers is "what is happening to the work", and an
  * agent's name is a detail on each line, not a heading.
  */
-import { timeAgo } from './hub-model.ts';
+import { timeAgo } from './hub-presence-model.ts';
 import { type ReviewItem, reviewRowTitle } from './hub-review-model.ts';
 
 /** Only movement inside this window is activity; a task quiet for longer

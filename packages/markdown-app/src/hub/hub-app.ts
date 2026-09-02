@@ -103,7 +103,7 @@ import {
   shouldPollHome,
   tabForNav,
   voiceHubContext,
-} from './hub-model.ts';
+} from './hub-presence-model.ts';
 import {
   type PanelReviewItem,
   type TaskDiscussion,
@@ -2306,7 +2306,7 @@ async function main(): Promise<void> {
    * one placement and the server prefers `after`, so sending both would just
    * be a number nobody reads — and a number the drop cannot compute correctly
    * anyway, which is the bug this replaced (see the reordering section of
-   * hub-model.ts).
+   * hub-board-model.ts).
    */
   async function placeTask(task: HubTask, target: ReorderTarget): Promise<void> {
     const res = await send(`/api/tasks/${encodeURIComponent(task.id)}/goal`, 'POST', {
@@ -3132,7 +3132,7 @@ async function main(): Promise<void> {
   for (const name of ['agent.attached', 'agent.detached', 'agent.heartbeat']) {
     es.addEventListener(name, () => void loadAgents());
   }
-  // The list lives beside `describeEvent` in hub-model, because the two must
+  // The list lives beside `describeEvent` in hub-presence-model, because the two must
   // move together — an event the trail renders but this loop never hears is
   // an Activity tab that silently misses it, on the writer's own screen as
   // much as a peer's (the server echoes local writes back over SSE, which is

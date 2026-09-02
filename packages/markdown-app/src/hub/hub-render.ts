@@ -58,7 +58,7 @@ import {
   leadSeatLabel,
   timeAgo,
   uptimeSummary,
-} from './hub-model.ts';
+} from './hub-presence-model.ts';
 import {
   type BlockerRow,
   LEGACY_REVIEW_ITEM_ID,
@@ -1061,7 +1061,7 @@ export interface DetailHandlers {
   /** The agents currently attached to this workspace — see `BoardHandlers`. */
   knownAgentIds?: string[];
   /** Names the goal the way the board's own section header does — pass
-   *  `hub-model`'s `goalLabel`, which resolves Backlog too. The panel
+   *  `hub-board-model`'s `goalLabel`, which resolves Backlog too. The panel
    *  is where a reader goes to find out what a task is FOR, so an id is a
    *  fact about the store rather than an answer. Optional, and without it the
    *  row falls back to the id — a missing lookup must not blank it. */

@@ -37,7 +37,7 @@ import {
   timeAgo,
   uptimeSummary,
   waitShort,
-} from '../src/hub/hub-model.ts';
+} from '../src/hub/hub-presence-model.ts';
 import {
   type BlockerRow,
   type ReviewItem,

@@ -46,7 +46,7 @@ import {
   statusOptions,
   stepTarget,
 } from './hub-board-model.ts';
-import { type HubPane, assigneeLabel } from './hub-model.ts';
+import { type HubPane, assigneeLabel } from './hub-presence-model.ts';
 import {
   type SelectionMark,
   caretOffsetIn,
