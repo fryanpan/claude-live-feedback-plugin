@@ -87,6 +87,12 @@ export interface SummarizerOpts {
    * wants the disabled state must ask for it rather than assume it.
    */
   apiKey?: string | null;
+  /**
+   * How a paced backfill waits between calls. Injected in tests so the gaps
+   * are observable events rather than elapsed time. Defaults to a real,
+   * unref'd timer.
+   */
+  waitImpl?: WaitFactory;
 }
 
 export interface ScheduleArgs {
@@ -144,14 +150,27 @@ let announcedOn = false;
 /** How a paced backfill waits between calls. Returned so `dispose()` can end
  *  the wait early — otherwise "stop" means "stop in up to `intervalMs`", and
  *  on a 15-minute drain that is a shutdown that hangs for minutes. */
-interface Wait {
+export interface Wait {
   done: Promise<void>;
   cancel: () => void;
 }
 
+/**
+ * The seam that makes pacing testable without a clock.
+ *
+ * The behaviour worth holding is the SHAPE of the drain — one gap between
+ * consecutive calls, of the interval the window works out to, and no gap after
+ * the last one — plus the fact that `dispose()` ends a pending gap rather than
+ * waiting it out. A test that measures elapsed milliseconds proves none of
+ * that: it passes on a machine fast enough and fails on a loaded runner, and
+ * it cannot tell a trailing gap from a slow call. Inject this instead and the
+ * gaps become observable events.
+ */
+export type WaitFactory = (ms: number) => Wait;
+
 /** A timer that never holds the process open, so a paced backfill cannot keep
  *  a server (or a test runner) alive waiting for its next tick. */
-function wait(ms: number): Wait {
+const realWait: WaitFactory = (ms) => {
   let cancel = () => {};
   const done = new Promise<void>((resolve) => {
     const t = setTimeout(() => resolve(), ms);
@@ -162,12 +181,13 @@ function wait(ms: number): Wait {
     };
   });
   return { done, cancel };
-}
+};
 
 export class ThreadSummarizer {
   private readonly key: string | null;
   private readonly fetchImpl: typeof fetch;
   private readonly debounceMs: number;
+  private readonly waitImpl: WaitFactory;
   /** Pending debounce timer per doc+thread. */
   private readonly timers = new Map<string, ReturnType<typeof setTimeout>>();
   /** In-flight call per doc+thread — the dedup that makes N browsers cost 1. */
@@ -183,6 +203,7 @@ export class ThreadSummarizer {
     this.key = resolveKey(opts.apiKey);
     this.fetchImpl = opts.fetchImpl ?? globalThis.fetch;
     this.debounceMs = opts.debounceMs ?? DEBOUNCE_MS;
+    this.waitImpl = opts.waitImpl ?? realWait;
   }
 
   /** Is generation switched on at all? `CW_SUMMARIES=0` is the kill switch. */
@@ -527,7 +548,7 @@ export class ThreadSummarizer {
       // the result and the "backfill done" line — by a whole interval, which
       // at the default window is minutes of apparently-still-running silence.
       if (!this.backfilling || i === tasks.length - 1) break;
-      const w = wait(intervalMs);
+      const w = this.waitImpl(intervalMs);
       this.cancelWait = w.cancel;
       await w.done;
       this.cancelWait = null;

@@ -37,6 +37,15 @@ jobs:
       # back once they have been paid down.
       - name: Testing standards audit
         run: bun run test:audit
+      # Per-package line coverage, ratcheted on scripts/coverage.baseline.json.
+      # It re-runs both suites under instrumentation rather than reusing the
+      # Test step's run: coverage changes what the runners do, and a number
+      # measured from a different execution is not this commit's number.
+      # The floors are today's measured values, NOT the 80% bar — a threshold
+      # nothing meets is a build that is always red, which is a build nobody
+      # reads. `--list` prints the per-file gap so it can be worked down.
+      - name: Coverage
+        run: bun run coverage --list
       - name: Leak gate can still see
         run: bun run check:scrub-gate
       # Every file over 500 lines must have a written verdict in
