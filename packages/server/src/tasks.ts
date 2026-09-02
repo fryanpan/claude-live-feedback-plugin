@@ -31,7 +31,6 @@ import {
   type TaskReadingTime,
   type TaskStatus,
   type TaskTransition,
-  byBoardOrder,
   isTaskStatus,
 } from '@feedback/core/task-wire';
 import { classifyActor } from './activity.ts';
@@ -64,12 +63,10 @@ import type {
 } from './review-items/types.ts';
 import { bumpWordsRevision, cryptoId, isArchived, wordsRevisionOf } from './task-fields.ts';
 import {
-  AUTHOR_REQUIRED_MESSAGE,
   type DeclaredOwnerKind,
   GENERIC_ASSIGNEE,
   HUMAN_ASSIGNEE,
   declaredAssigneeKind,
-  isCategoryAuthor,
 } from './task-owner.ts';
 import { bodyHead } from './task-title.ts';
 
@@ -156,6 +153,83 @@ export type {
   WithdrawAnswerResult,
   WithdrawReviewItemResult,
 } from './review-items/types.ts';
+
+import {
+  CHORES_GOAL_ID,
+  GoalStore,
+  type GoalStorePersistence,
+  isReservedGoalId,
+} from './task-goals.ts';
+
+export {
+  CHORES_GOAL_ID,
+  RESERVED_GOAL_IDS,
+  isReservedGoalId,
+  newGoalId,
+  sequenceAfter,
+} from './task-goals.ts';
+
+import {
+  AgentStore,
+  type AgentStorePersistence,
+  type AgentStreamProbe,
+  type AttachAgentResult,
+  type AttachmentThresholds,
+  COMMENT_ACK_GRACE_MS,
+  type DeliveryProbe,
+  type DescribedAttachment,
+  type HeartbeatResult,
+  type LeadSeatHealth,
+  type PublicAttachment,
+  type QueuedComment,
+  type QueuedVoiceRequest,
+  VOICE_ACK_GRACE_MS,
+  attachmentsSidecarPath,
+  commentQueuePath,
+  voiceQueuePath,
+} from './task-agents.ts';
+
+export type {
+  AgentStreamProbe,
+  AttachAgentResult,
+  AttachmentState,
+  AttachmentThresholds,
+  DeliveryProbe,
+  DescribedAttachment,
+  GatingSummary,
+  HeartbeatResult,
+  LeadNameConflicts,
+  LeadSeatHealth,
+  PublicAttachment,
+  QueuedComment,
+  QueuedVoiceRequest,
+} from './task-agents.ts';
+export {
+  COMMENT_ACK_GRACE_MS,
+  HEARTBEAT_FRESH_MS,
+  LEAD_SEAT_STALE_MS,
+  MAX_QUEUED_COMMENTS,
+  OBSERVED_LIVE_MS,
+  TOOL_CALL_STALE_MS,
+  VOICE_ACK_GRACE_MS,
+  attachmentState,
+  attachmentStateLabel,
+  attachmentsSidecarPath,
+  commentQueuePath,
+  publicAttachment,
+  voiceQueuePath,
+} from './task-agents.ts';
+
+import {
+  WorkspaceStore,
+  type WorkspaceStorePersistence,
+  isRetired,
+  normalizeWorkspaceName,
+  retiredNotice,
+  retiredRefusal,
+} from './workspace-store.ts';
+
+export { isRetired, normalizeWorkspaceName, retiredNotice, retiredRefusal };
 
 /* Pure per-row facts, lifted to a leaf module so the review-item store can
    share them without importing this file. */
@@ -420,60 +494,6 @@ export interface WorkspaceNotesHome {
 }
 
 /**
- * Is this board stood down? The single reader of `retiredAt`, so the
- * absent/false/0 question is answered in one place rather than at each of the
- * dozen enumeration sites that now ask it.
- */
-export function isRetired(workspace: HubWorkspace): boolean {
-  return workspace.retiredAt !== undefined;
-}
-
-/** The reason clause, or empty — factored out so the refusal and the notice
- *  can never disagree about whether there was one. */
-function retiredBecause(workspace: HubWorkspace): string {
-  return workspace.retiredReason ? ` Reason given: ${workspace.retiredReason}.` : '';
-}
-
-/**
- * Why a write to a retired board was refused, written to land verbatim in an
- * agent's context. It names the board, replays the operator's reason, and
- * states the two ways forward — because a refusal an agent cannot act on
- * produces a retry loop or a giving-up, and both look like the tool is broken.
- */
-export function retiredRefusal(workspace: HubWorkspace): string {
-  return (
-    `"${workspace.name}" (${workspace.id}) is RETIRED and is not taking new work.` +
-    `${retiredBecause(workspace)} Nothing on it was deleted — every task, doc and thread ` +
-    'is still there to read. File this on the board that replaced it, or un-retire this ' +
-    'one first if it is the live board after all.'
-  );
-}
-
-/** What an agent reading or attaching to a retired board is told. */
-export function retiredNotice(workspace: HubWorkspace): RetiredNotice {
-  return {
-    since: workspace.retiredAt ?? 0,
-    ...(workspace.retiredReason ? { reason: workspace.retiredReason } : {}),
-    notice:
-      `This board is RETIRED — it is not ranked and takes no new work.${retiredBecause(workspace)} ` +
-      'Everything on it survives and is readable; if this is the board you meant to work, ' +
-      'un-retire it before filing anything.',
-  };
-}
-
-/**
- * The key two board names are THE SAME under.
- *
- * Case and surrounding whitespace are not how a person tells two boards
- * apart, so a warning that only fired on an exact byte match would miss
- * `Harbor-Relay` beside `harbor-relay` — which is the same lost night with a
- * shift key involved.
- */
-export function normalizeWorkspaceName(name: string): string {
-  return name.trim().toLowerCase();
-}
-
-/**
  * The two fields a row carried while `parked` was a state of its own.
  *
  * Nothing writes them any more: parking a task moves it to `triage` and posts
@@ -536,32 +556,6 @@ export function initialTaskStatus(
  * in place; the literal itself is never compared against to decide that.
  */
 export const UNTITLED_TASK_TITLE = 'Untitled task';
-
-/** Reserved catch-all section id for no-goal work. Never in `goals[]`. */
-export const CHORES_GOAL_ID = 'chores';
-
-/**
- * Goal ids the SERVER owns. Every other goal id is generated (`newGoalId`)
- * and opaque; these are literals on purpose, and the distinction is stated
- * here rather than implied so that the next reserved bucket is added to a
- * list instead of to a chain of `=== CHORES_GOAL_ID` comparisons.
- *
- * A reserved id is one that code and agents must be able to SAY without a
- * lookup — `chores` is referenced across this store, named in the shipped
- * skills, and is the answer to "where does unplaced work go". A generated id
- * could not carry that meaning. Reserved ids are therefore exempt from the
- * generation rule, not an oversight in it, and they stay reachable by their
- * literal from every read and every `setTaskGoal`.
- *
- * They are still refused by every WRITE that would create, rename, remove or
- * reorder a goal — a reserved bucket exists, it is not authored.
- */
-export const RESERVED_GOAL_IDS: ReadonlySet<string> = new Set([CHORES_GOAL_ID]);
-
-/** Whether `id` is a server-owned bucket rather than an authored goal. */
-export function isReservedGoalId(id: string): boolean {
-  return RESERVED_GOAL_IDS.has(id);
-}
 
 /* `flattenGoals` lived here. It existed to walk a two-level list as one, and
    the list has one level now — `workspace.goals` IS the flat list, so its
@@ -914,331 +908,6 @@ export interface AgentAttachment {
   processId?: string;
 }
 
-/** How recent a heartbeat must be for the process to count as up. */
-export const HEARTBEAT_FRESH_MS = 5 * 60_000;
-/** §4: "no lastToolCallAt movement in 30+ minutes" is the outage signature. */
-export const TOOL_CALL_STALE_MS = 30 * 60_000;
-
-/**
- * How recently the server must have OBSERVED an agent for a delivery to count
- * as reaching it.
- *
- * Separate from `HEARTBEAT_FRESH_MS` because it answers a different question.
- * That one asks "how recently did this agent SAY it was alive" and feeds the
- * displayed state; this one asks "how recently did we SEE it do something",
- * and it decides whether a request is handed over or parked.
- *
- * The distinction is the whole bug. `lastHeartbeat` moves only when a session
- * calls the `heartbeat` tool, and nothing makes that happen — no timer, no
- * hook, one line of prose in one skill. Measured on the live board
- * 2026-08-19: 13 liveness events in 5.43 days against 215 task transitions,
- * so the old gate could read live for **0.77%** of the time an agent was
- * attached and plainly working. Voice paid for it directly — 6 of 10 recorded
- * utterances routed to `agent-queued`, one of them "voice is not working".
- *
- * 15 minutes is measured rather than picked. On the same board the median gap
- * between consecutive observable agent writes is 0.3 min and p90 is 11.2 min:
- * a window at the old 5-minute figure would still read away across ~18% of
- * ordinary working gaps, where 15 minutes sits just above p90. It is
- * deliberately not hours — a false "live" is broadcast to nobody and lost,
- * where a false "away" is merely deferred to the next attach.
- */
-export const OBSERVED_LIVE_MS = 15 * 60_000;
-
-/**
- * How long a seat's holder must be BOTH off the wire and unobserved before
- * the board calls the seat stale.
- *
- * Deliberately three times `OBSERVED_LIVE_MS`, and the reason is the cost
- * asymmetry rather than a second measurement. Reading stale drives two
- * consequential acts — handing the seat to whoever attaches next, and telling
- * a person the board's owner is gone — where reading live merely defers both
- * to the next attach. So this window sits far enough past the delivery gate
- * that a lead cannot lose its seat to an ordinary quiet stretch.
- *
- * It is NOT elapsed silence on its own, and must never be used as such: a
- * measured 40% of provably-active minutes read as silent, and the incident
- * this exists for (2026-08-29/30, 4.5 hours) was a session that had exited,
- * not one that was quiet. The clock only gets a vote once the socket is
- * already gone — see `leadSeatHealth`.
- */
-export const LEAD_SEAT_STALE_MS = 3 * OBSERVED_LIVE_MS;
-
-/** "4h", "35m" — coarse on purpose. This lands in a sentence a person reads
- *  while deciding whether a board has an owner, and minutes of precision
- *  there would suggest the reading is finer than the window behind it. */
-function describeGap(ms: number): string {
-  const minutes = Math.floor(ms / 60_000);
-  if (minutes < 60) return `${Math.max(1, minutes)}m`;
-  const hours = Math.floor(minutes / 60);
-  if (hours < 48) return `${hours}h`;
-  return `${Math.floor(hours / 24)}d`;
-}
-
-/**
- * How long an emitted utterance is left alone before the queue offers it again.
- *
- * The floor is "how long can a busy agent reasonably take to acknowledge a
- * channel frame" — a frame lands at a turn boundary, so it waits out whatever
- * tool call is in progress. The ceiling is Bryan noticing nothing happened. 90
- * seconds sits between: past it, an unacked entry is far more likely lost than
- * pending, and re-offering costs at worst one duplicated instruction where NOT
- * re-offering costs the whole request.
- */
-export const VOICE_ACK_GRACE_MS = 90_000;
-
-export type AttachmentState = 'active' | 'unresponsive' | 'away';
-
-export interface AttachmentThresholds {
-  heartbeatFreshMs?: number;
-  toolCallStaleMs?: number;
-  observedWorkFreshMs?: number;
-  /** How long a seat's holder must be off the wire AND unobserved before the
-   *  seat reads stale. Its own knob rather than a multiple of the window
-   *  above, because a test that wants a takeable seat must not have to make
-   *  the delivery gate unrealistically tight to get one. */
-  leadSeatStaleMs?: number;
-}
-
-/**
- * Is anyone actually subscribed to the channel a request is about to ride?
- *
- * The half a time window cannot cover: a session that died since its last
- * write is still inside the window and still gone. Wired to the SSE hub in
- * `server.ts`; unwired it answers yes, so a store with no transport behaves
- * exactly as it did before.
- *
- * It takes a workspaceId and not an agentId on purpose, and that is its
- * honest limit: the channel is per-BOARD, so this can answer "is anyone
- * there" and never "is THAT agent there". Which agent is live stays a
- * question for the observed clock, and the gate is the AND of the two. So a
- * browser tab open on a board makes the probe true while contributing no
- * liveness of its own — which is why the probe may only ever narrow the
- * answer, never widen it. Reading it as sufficient would let an open tab
- * impersonate a working agent and lose the request it was handed.
- */
-export type DeliveryProbe = (workspaceId: string) => boolean;
-
-/**
- * Is THIS agent's own event stream open right now?
- *
- * The delivery channel is an SSE connection the agent's MCP child holds for
- * the life of the session. That socket is the strongest evidence this server
- * can have that a frame will arrive — better than any clock, because it is
- * the actual wire and it is observed rather than self-reported.
- *
- * It is a separate type from `DeliveryProbe` because it answers a stronger
- * question and therefore earns a stronger permission. `DeliveryProbe` counts
- * subscribers and cannot tell an agent from a browser tab, so it may only
- * narrow a delivery decision; this one is keyed by agentId and only the
- * agent's own child sends one, so it may widen it.
- *
- * What it deliberately does NOT do is move the DISPLAYED attachment state. An
- * open socket promises the frame lands in the process, not that the model is
- * working — `attachmentState` keeps deriving "process up, agent unresponsive"
- * from the heartbeat and tool-call clocks, which is the distinction
- * `attachment-keepalive.ts` refuses a timer in order to protect.
- */
-export type AgentStreamProbe = (workspaceId: string, agentId: string) => boolean;
-
-/**
- * Derive the hub's attachment state (§4). "Active 2m ago" is shown because a
- * heartbeat actually arrived — we never guess from the absence of activity —
- * and fresh-heartbeat-but-stale-tool-calls is rendered as "process up, agent
- * unresponsive", never as active.
- */
-export function attachmentState(
-  att: Pick<AgentAttachment, 'lastHeartbeat' | 'lastToolCallAt'>,
-  now: number,
-  thresholds?: AttachmentThresholds,
-): AttachmentState {
-  const freshMs = thresholds?.heartbeatFreshMs ?? HEARTBEAT_FRESH_MS;
-  const staleMs = thresholds?.toolCallStaleMs ?? TOOL_CALL_STALE_MS;
-  if (now - att.lastHeartbeat >= freshMs) return 'away';
-  if (now - att.lastToolCallAt >= staleMs) return 'unresponsive';
-  return 'active';
-}
-
-export function attachmentStateLabel(state: AttachmentState): string {
-  switch (state) {
-    case 'active':
-      return 'active';
-    case 'unresponsive':
-      return 'process up, agent unresponsive';
-    case 'away':
-      return 'away — requests queue';
-  }
-}
-
-/** An attachment plus its derived state, computed at read time. */
-export type DescribedAttachment = AgentAttachment & {
-  state: AttachmentState;
-  stateLabel: string;
-};
-
-/** The §4 record WITHOUT `endpoint`, plus derived state — what agent.*
- *  events carry and what a share visitor's REST read gets.
- *
- *  ALLOWLIST, NOT DENYLIST, and named field by field on purpose. This
- *  projection used to be `Omit<…, 'endpoint'>` over a spread, so a field
- *  added to `AgentAttachment` later shipped to share and collab visitors
- *  by default and stayed there until somebody noticed. `endpoint` is a
- *  host-machine fact and was the one that had to go; the next one nobody
- *  has written yet is the one this shape is for. Every neighbouring visitor
- *  projection — `redactMetaForVisitor`, `redactHubWorkspaceForVisitor` —
- *  was rewritten this way after a leak, and this was the last one that
- *  had not been. */
-export type PublicAttachment = Pick<
-  DescribedAttachment,
-  | 'workspaceId'
-  | 'agentId'
-  | 'runtime'
-  | 'lastHeartbeat'
-  | 'lastToolCallAt'
-  | 'capabilities'
-  | 'pluginVersion'
-  | 'processId'
-  | 'state'
-  | 'stateLabel'
->;
-
-export function publicAttachment(
-  att: AgentAttachment,
-  now: number,
-  thresholds?: AttachmentThresholds,
-): PublicAttachment {
-  const state = attachmentState(att, now, thresholds);
-  return {
-    workspaceId: att.workspaceId,
-    agentId: att.agentId,
-    runtime: att.runtime,
-    lastHeartbeat: att.lastHeartbeat,
-    lastToolCallAt: att.lastToolCallAt,
-    capabilities: att.capabilities,
-    // Absent stays absent rather than becoming an explicit null: silence on
-    // `pluginVersion` is what a reader takes as "older than the release that
-    // added it", and the wire shape is what says so.
-    ...(att.pluginVersion !== undefined ? { pluginVersion: att.pluginVersion } : {}),
-    ...(att.processId !== undefined ? { processId: att.processId } : {}),
-    state,
-    stateLabel: attachmentStateLabel(state),
-  };
-}
-
-/** The one-line "a fresh context learns the gates exist" summary returned on
- *  attach (§3.3): open decision tasks that gate open tasks via `after`. */
-export interface GatingSummary {
-  openDecisions: number;
-  gatedTasks: number;
-  summary: string;
-}
-
-/**
- * The state of a board's lead seat, as something a surface can render and a
- * session can read about itself.
- *
- * Exists because "who leads this board" was answerable and "is that lead
- * still there" was not. A seat held by a session that exited renders
- * identically to a healthy one, so a rename could take the board's only
- * addressee offline and every surface kept reporting business as usual.
- */
-export interface LeadSeatHealth {
-  /** Who holds the seat. Absent means the seat is empty. */
-  leadAgentId?: string;
-  /** Is the holder reachable right now? Always false for an empty seat —
-   *  there is nobody to reach. */
-  live: boolean;
-  /** The seat is HELD, and there is EVIDENCE its holder is not coming back:
-   *  it attached once, and has since been off the wire past the window. This
-   *  is the fault the board could not see — an empty seat is loud already and
-   *  a live lead is fine; this is the third state that looked like the second.
-   *
-   *  Evidence is required because this drives a seat handover. A seat whose
-   *  holder has never been observed is `unattached`, not stale — see below. */
-  stale: boolean;
-  /** The seat names an id this board has no attachment record for: a lead set
-   *  when the workspace was created and not yet arrived, or one whose record
-   *  was detached. Worth REPORTING — nothing is draining that queue — but
-   *  never a reason to take the seat, because "has not arrived yet" and "is
-   *  never coming" are the same absence, and guessing wrong hands one agent's
-   *  seat to another before it has finished starting up. */
-  unattached?: boolean;
-  /** The newest moment the server observed the holder — a heartbeat it sent
-   *  or a write it made. Absent when the seat is held by an id that never
-   *  attached at all. */
-  lastObservedAt?: number;
-  /** How long the holder has been unobserved, for saying so in words. */
-  staleForMs?: number;
-  /** The sentence a person or a session reads. Present only when stale. */
-  notice?: string;
-}
-
-export type AttachAgentResult =
-  | {
-      ok: true;
-      attachment: AgentAttachment;
-      gating: GatingSummary;
-      /** Open Backlog tasks nobody has placed under a goal — what the lead
-       *  looks over after attaching. */
-      untriaged: string[];
-      /** Voice change-requests that arrived while no agent was live (§2.4
-       *  "agent away — queued"). Delivered HERE — in the attach result, the
-       *  one payload a fresh attachment is guaranteed to read — and drained:
-       *  a second attach gets an empty list. Only ever handed to the LEAD;
-       *  a bystander attaching leaves the queue intact (and this field
-       *  absent) for the lead's next attach. */
-      queuedVoice?: QueuedVoiceRequest[];
-      /** Comments addressed to THIS agent that it has not yet receipted.
-       *  Handed over here (a fresh process holds nothing in flight) but NOT
-       *  drained: unlike `queuedVoice`, a row leaves the queue only on the
-       *  receiving process's ack, so a handover the session never read is
-       *  re-offered after the grace window rather than lost. Addressed by
-       *  agentId rather than gated on the lead seat, so a bystander is
-       *  handed its OWN rows and nobody else's. */
-      queuedComments: QueuedComment[];
-      /** Is THIS attachment the workspace's lead agent — either because it
-       *  already held the seat, or because it just claimed an empty one? The
-       *  lead is the addressee for anything that needs one, so a fresh
-       *  context needs to know which it is without a second call. */
-      lead: boolean;
-      /** The lead seat as this attach left it. `lead` says whether the seat is
-       *  MINE; this says whether it is anybody's — an occupied seat whose
-       *  holder has gone is the state that used to be indistinguishable from a
-       *  healthy one. */
-      seat: LeadSeatHealth;
-      /** This attach took the seat from a holder that was gone. Present only
-       *  then, and never silent: the handover persists and announces like any
-       *  other, so the board repaints and the audit log carries it. */
-      seatTakenFrom?: string;
-      /** This board has been stood down. Present iff retired, and carried in
-       *  the attach result for the same reason the queues are: it is the one
-       *  payload a fresh session is guaranteed to read. `notice` is written
-       *  to land verbatim in an agent's context. */
-      retired?: RetiredNotice;
-      /**
-       * This agent leads ANOTHER live board with the same name.
-       *
-       * The whole of the 2026-08-19 incident in one field: two boards, one
-       * name, one lead agent, different goal lists, and nothing anywhere that
-       * said so. Lead-only — a bystander attaching is not the one who will
-       * pick the wrong board — and computed over live boards only, so
-       * retiring one of the pair clears it.
-       */
-      leadNameConflicts?: LeadNameConflicts;
-    }
-  | { ok: false; error: 'workspace-not-found' }
-  /** The id was folded into another by a merge; `into` is the one to use.
-   *  Attaching under the old id would recreate the duplicate the merge
-   *  removed and route this session's deliveries to a key nothing reads. */
-  | { ok: false; error: 'merged-away'; into: string; message: string }
-  | {
-      ok: false;
-      /** The shared "agent" identity tried to attach. A category cannot hold
-       *  a seat or be owed a delivery — see `isCategoryAuthor`. */
-      error: 'author-required';
-      message: string;
-    };
-
 /** What an agent is told when it reads a board that has been stood down. */
 export interface RetiredNotice {
   /** When it was retired. */
@@ -1247,33 +916,6 @@ export interface RetiredNotice {
   /** Prose, because the reader is a language model with no schema for this
    *  and one sentence it can act on beats a flag it has to interpret. */
   notice: string;
-}
-
-export interface LeadNameConflicts {
-  /** The other live boards this agent leads under the same name. */
-  boards: SameNamedWorkspace[];
-  /** Prose naming the boards, for the same reason as `RetiredNotice`. */
-  notice: string;
-}
-
-export type HeartbeatResult =
-  | {
-      ok: true;
-      attachment: AgentAttachment;
-      queuedVoice?: QueuedVoiceRequest[];
-      /** Comments addressed to this agent whose grace has lapsed (or that
-       *  were never emitted). Marked emitted by this handover; the caller
-       *  (server route) re-sends each as an addressed frame carrying the row
-       *  id, and the row clears on the ack. */
-      queuedComments?: QueuedComment[];
-    }
-  | { ok: false; error: 'not-found' };
-
-/** Where a workspace's attachment records persist — their own sidecar, so
- *  heartbeat churn never rewrites the task data (§4.1: "state sidecars —
- *  tasks, invites, attachments"). */
-export function attachmentsSidecarPath(dataDir: string, workspaceId: string): string {
-  return join(dataDir, 'workspaces', `${workspaceId}.attachments.json`);
 }
 
 /**
@@ -1841,102 +1483,6 @@ export type TaskStoreEvent =
   | AgentHeartbeatEvent
   | VoiceRequestEvent;
 
-/** One change-utterance waiting for an agent to attach (§2.4: "agent away —
- *  queued"). Persisted synchronously — "queued" is a promise, and a promise
- *  that lives only in memory dies with the process (grounded-pending). */
-export interface QueuedVoiceRequest {
-  /** Names this entry so a receipt can clear exactly one. Absent on rows
-   *  written before the queue became the record rather than the fallback —
-   *  those still drain, they just cannot be acked individually. */
-  id?: string;
-  /**
-   * When the server last put this on the wire, or absent if it never has.
-   *
-   * An emitted-and-unacked entry and a lost one look identical from here, so
-   * this is what the grace window is measured from: long enough that a working
-   * agent has had its chance to acknowledge, short enough that a genuinely
-   * lost utterance comes back quickly.
-   */
-  emittedAt?: number;
-  transcript: string;
-  context?: unknown;
-  actor: TaskActor;
-  /**
-   * What the voice fast path ALREADY applied to the board for this utterance,
-   * as the speaker was told it — present only when it applied something.
-   *
-   * An utterance can carry more than the one verb voice handles ("mark this
-   * done and then draft the migration notes"), and with no agent live the
-   * queue is the only durable channel for the rest of it. Delivering the
-   * transcript alone would ask the agent to redo the half that already
-   * happened; this field is how the same row says "that part is done".
-   */
-  applied?: string;
-  ts: number;
-}
-
-/** Where a workspace's queued voice requests persist. Exported so tests
- *  assert the real contract path. */
-export function voiceQueuePath(dataDir: string, workspaceId: string): string {
-  return join(dataDir, 'workspaces', `${workspaceId}.voice-queue.json`);
-}
-
-/**
- * One comment waiting for the agent it is addressed to.
- *
- * Same durable-queue contract as `QueuedVoiceRequest` — the queue is the
- * record, live delivery is the fast path, and the row clears on a receipt
- * from the receiving process — with the one divergence voice got wrong and
- * this queue must not copy: the row is ADDRESSED. `agentId` names who it is
- * for at queue time, and every drain filters on it, so a bystander attaching
- * first cannot walk off with the lead's comments.
- */
-export interface QueuedComment {
-  /** Names this row so a receipt can clear exactly one. */
-  id: string;
-  /** The agent this row is FOR. It drains only to this agent. */
-  agentId: string;
-  docId: string;
-  threadId?: string;
-  /** The broadcast this row stands in for: thread.created | thread.replied. */
-  event: string;
-  /** Who wrote the comment — never the addressee; the queue site excludes
-   *  an agent's own comments before a row is written. */
-  author: { id: string; name: string };
-  text: string;
-  /**
-   * The broadcast payload verbatim, replayed on redelivery so the frame an
-   * agent gets late is the same frame it would have gotten live — plus the
-   * `commentQueueId` the redelivery stamps on top.
-   */
-  payload?: unknown;
-  /** When the server last put this row on the wire (see QueuedVoiceRequest —
-   *  emitted is not delivered; the grace window is measured from here). */
-  emittedAt?: number;
-  ts: number;
-}
-
-/** Where a workspace's queued comments persist. Exported so tests assert the
- *  real contract path. */
-export function commentQueuePath(dataDir: string, workspaceId: string): string {
-  return join(dataDir, 'workspaces', `${workspaceId}.comment-queue.json`);
-}
-
-/**
- * The queue is DELIVERY state, not the record — the comment itself lives in
- * its thread's ydoc. An addressee that never sends receipts (a session on an
- * old bundle) must not grow the file without bound, so past this many rows
- * the oldest are dropped. Capping delivery bookkeeping is not a soft-delete
- * concern (CLAUDE.md: "the rule is about user content and history").
- */
-export const MAX_QUEUED_COMMENTS = 200;
-
-/** Same reasoning as VOICE_ACK_GRACE_MS, same number: past it an unacked row
- *  is far more likely lost than pending, and re-offering costs at worst one
- *  duplicate frame (which the MCP's eid dedup collapses) where NOT
- *  re-offering costs the comment. */
-export const COMMENT_ACK_GRACE_MS = VOICE_ACK_GRACE_MS;
-
 /**
  * Sidecars the REMOVED triage-request flow used to queue undelivered asks in:
  * the workspace-level north-star re-triage (`.retriage.json`), the "a band
@@ -2050,33 +1596,6 @@ export type SetTaskGoalResult =
       changed: boolean;
     }
   | { ok: false; error: 'not-found' | 'unknown-goal' | 'unknown-after' };
-
-/**
- * The sequence a goal should hold once `moving` is placed directly behind the
- * row `after` names — `null` meaning the top of the goal.
- *
- * `siblings` is the goal's other rows ALREADY in board order. Returns null
- * when `after` names none of them, which is the caller's cue to refuse rather
- * than to guess: a placement relative to a row that is not there is a request
- * whose meaning we do not know, and dropping the row at the bottom (the
- * tempting fallback) is indistinguishable to the person who dragged it from
- * the bug this whole path exists to fix.
- */
-export function sequenceAfter<T extends { id: string }>(
-  siblings: readonly T[],
-  moving: T,
-  after: string | null,
-): T[] | null {
-  let index: number;
-  if (after === null) {
-    index = 0;
-  } else {
-    const at = siblings.findIndex((t) => t.id === after);
-    if (at === -1) return null;
-    index = at + 1;
-  }
-  return [...siblings.slice(0, index), moving, ...siblings.slice(index)];
-}
 
 export type SetGoalListResult =
   | {
@@ -2233,7 +1752,7 @@ export interface ListTasksFilter {
   includeArchived?: boolean;
 }
 
-interface WorkspaceState {
+export interface WorkspaceState {
   workspace: HubWorkspace;
   tasks: Map<string, Task>;
   /**
@@ -2265,26 +1784,6 @@ export function tasksSidecarPath(dataDir: string, workspaceId: string): string {
  *  event log is the audit trail"). Exported so tests assert the real path. */
 export function eventsLogPath(dataDir: string, workspaceId: string): string {
   return join(dataDir, 'workspaces', `${workspaceId}.events.jsonl`);
-}
-
-/**
- * The id of a NEWLY CREATED goal. Opaque and server-generated, exactly like a
- * task id, and for the same reason: an identifier is the one thing that must
- * never move, so nothing about it may encode something that does.
- *
- * The scheme this replaces was caller-supplied slugs (`g1-loop`, `g2-reach`),
- * which put PRIORITY — the fastest-moving property a board has — inside the
- * identity. Renaming a band then meant re-keying it, and re-keying it through
- * the full-replace `setGoalList` reads as one goal removed and a different one
- * added: the band's open tasks swept to Backlog, its done tasks orphaned. The
- * `would-strand-tasks` refusal defends against that; generated ids make it
- * unexpressible, which is the stronger move.
- *
- * Existing slug ids keep working forever — they are just ids. This generates
- * the ones created from here on; nothing renumbers what a board already has.
- */
-export function newGoalId(): string {
-  return cryptoId('g');
 }
 
 export class TaskStore {
@@ -2343,6 +1842,118 @@ export class TaskStore {
       now: () => Date.now(),
       noteBodyEdited: (taskId, opts) => this.noteBodyEdited(taskId, opts),
       renameTask: (taskId, title, opts) => this.renameTask(taskId, title, opts),
+    };
+  }
+
+  /** The goal bands, and this store seen through the contract they need. */
+  private readonly goals = new GoalStore(this.goalPersistence());
+
+  private goalPersistence(): GoalStorePersistence {
+    return {
+      state: (workspaceId) => this.workspaces.get(workspaceId),
+      states: () => this.workspaces.values(),
+      getTask: (taskId) => this.getTask(taskId),
+      goalIdExists: (workspace, goalId) => this.goalIdExists(workspace, goalId),
+      syncGoalRows: (state, mintStatus) => this.syncGoalRows(state, mintStatus),
+      scheduleSave: (workspaceId) => this.scheduleSave(workspaceId),
+      emit: (event) => this.emit(event),
+    };
+  }
+
+  /** Attachments and delivery queues, and this store seen through the
+   *  contract they need. The probes' defaults are folded in here so
+   *  `task-agents.ts` never restates them. */
+  private readonly agents = new AgentStore(this.agentPersistence());
+
+  private agentPersistence(): AgentStorePersistence {
+    const store = this;
+    return {
+      dataDir: () => this.dataDir,
+      state: (workspaceId) => this.workspaces.get(workspaceId),
+      states: () => this.workspaces.values(),
+      hasWorkspace: (workspaceId) => this.workspaces.has(workspaceId),
+      get thresholds() {
+        return store.attachmentThresholds;
+      },
+      get voiceAckGraceMs() {
+        return store.voiceAckGraceMs;
+      },
+      get commentAckGraceMs() {
+        return store.commentAckGraceMs;
+      },
+      roster: () => this.roster,
+      agentStreamProbe: (workspaceId, agentId) =>
+        this.agentStreamProbe?.(workspaceId, agentId) ?? false,
+      deliveryProbe: (workspaceId) => this.deliveryProbe?.(workspaceId) ?? true,
+      saveAttachments: (workspaceId) => this.scheduleAttachmentsSave(workspaceId),
+      listUntriaged: (workspaceId) => this.listUntriaged(workspaceId),
+      assignLead: (state, leadAgentId, actor, ts) =>
+        this.workspaceStore.assignLead(state, leadAgentId, actor, ts),
+      emit: (event) => this.emit(event),
+    };
+  }
+
+  /** The board registry, and this store seen through the contract it needs.
+   *  Same shape as the review-item seam above: a named list of rows and
+   *  writers, not a `this` that reaches the whole store. */
+  private readonly workspaceStore = new WorkspaceStore(this.workspacePersistence());
+
+  private workspacePersistence(): WorkspaceStorePersistence {
+    return {
+      state: (workspaceId) => this.workspaces.get(workspaceId),
+      states: () => this.workspaces.values(),
+      register: (workspaceId, state) => {
+        this.workspaces.set(workspaceId, state);
+      },
+      forget: (workspaceId) => {
+        this.workspaces.delete(workspaceId);
+      },
+      forgetRows: (taskIds, goalIds) => {
+        for (const taskId of taskIds) this.taskIndex.delete(taskId);
+        for (const goalId of goalIds) this.goalIndex.delete(goalId);
+      },
+      scheduleSave: (workspaceId) => this.scheduleSave(workspaceId),
+      scheduleAttachmentsSave: (workspaceId) => this.scheduleAttachmentsSave(workspaceId),
+      cancelPendingSaves: (workspaceId) => {
+        const pending = this.saveTimers.get(workspaceId);
+        if (pending) clearTimeout(pending);
+        this.saveTimers.delete(workspaceId);
+        const pendingAttachments = this.attachmentSaveTimers.get(workspaceId);
+        if (pendingAttachments) clearTimeout(pendingAttachments);
+        this.attachmentSaveTimers.delete(workspaceId);
+        return { tasks: pending !== undefined, attachments: pendingAttachments !== undefined };
+      },
+      removeTasksSidecar: (workspaceId) => {
+        try {
+          rmSync(tasksSidecarPath(this.dataDir, workspaceId), { force: true });
+          return true;
+        } catch (err) {
+          console.error(`[tasks] failed to remove the tasks sidecar for ${workspaceId}:`, err);
+          return false;
+        }
+      },
+      removeSidecars: (workspaceId) => {
+        // The list is every OTHER per-workspace path this file exports; a new
+        // sidecar belongs here the day it is added, or it becomes a file
+        // nothing can reach.
+        for (const path of [
+          attachmentsSidecarPath(this.dataDir, workspaceId),
+          eventsLogPath(this.dataDir, workspaceId),
+          voiceQueuePath(this.dataDir, workspaceId),
+          commentQueuePath(this.dataDir, workspaceId),
+          ...legacyTriageSidecarPaths(this.dataDir, workspaceId),
+        ]) {
+          try {
+            rmSync(path, { force: true });
+          } catch (err) {
+            console.error(`[tasks] failed to remove ${path}:`, err);
+          }
+        }
+      },
+      getTask: (taskId) => this.getTask(taskId),
+      getGoalRow: (goalId) => this.getGoalRow(goalId),
+      hasLiveLeadAttachment: (workspaceId) => this.hasLiveLeadAttachment(workspaceId),
+      emit: (event) => this.emit(event),
     };
   }
 
@@ -2542,64 +2153,24 @@ export class TaskStore {
   }
 
   // ── Workspaces ───────────────────────────────────────────────────────────
+  //
+  // The board registry itself lives in `workspace-store.ts`; what follows is
+  // the store's public surface forwarding onto it. The methods keep their
+  // signatures because 35 files import this class and none of them should
+  // have to learn that a delete now crosses a file boundary.
 
   createWorkspace(name: string, opts?: { leadAgentId?: string }): HubWorkspace {
-    const now = Date.now();
-    const lead = opts?.leadAgentId?.trim();
-    const workspace: HubWorkspace = {
-      id: cryptoId('w'),
-      name,
-      goals: [],
-      docIds: [],
-      // The creating agent is the lead by default. No event: nothing is
-      // subscribed to a workspace that did not exist a line ago.
-      ...(lead ? { leadAgentId: lead, leadAgentSince: now } : {}),
-      createdAt: now,
-    };
-    this.workspaces.set(workspace.id, {
-      workspace,
-      tasks: new Map(),
-      goalRows: new Map(),
-      attachments: new Map(),
-    });
-    this.scheduleSave(workspace.id);
-    return workspace;
+    return this.workspaceStore.createWorkspace(name, opts);
   }
 
   getWorkspace(id: string): HubWorkspace | undefined {
-    return this.workspaces.get(id)?.workspace;
+    return this.workspaceStore.getWorkspace(id);
   }
 
-  /**
-   * How many of a board's tasks are still open — the guard `deleteWorkspace`
-   * applies, exposed so a caller can check it BEFORE doing work the refusal
-   * would waste (the route tears down rooms first). `null` when there is no
-   * such board, which is a different answer from zero.
-   */
   openTaskCount(workspaceId: string): number | null {
-    const state = this.workspaces.get(workspaceId);
-    if (!state) return null;
-    return Array.from(state.tasks.values()).filter((t) => t.status !== 'done').length;
+    return this.workspaceStore.openTaskCount(workspaceId);
   }
 
-  /**
-   * Remove a hub workspace and everything this store holds for it.
-   *
-   * Guarded by open tasks the way `Rooms.deleteWorkspace` is guarded by open
-   * threads: the mistake to make hard is discarding a board somebody is
-   * working, and a bare id with no confirmation is exactly the call an agent
-   * makes by accident. `force` is the deliberate override, and the refusal
-   * carries the count so the caller does not have to go and look.
-   *
-   * Deletion has to reach DISK, not just the map: the sidecar is
-   * authoritative on hydrate, so an in-memory-only delete looks completely
-   * successful until the next restart brings the board back. The events log
-   * goes with it — an audit trail for a board nobody can see is a file that
-   * only grows.
-   *
-   * Returns the task ids so the caller can tear down each one's body room;
-   * this store owns no rooms and deliberately does not reach into them.
-   */
   deleteWorkspace(
     workspaceId: string,
     opts?: { force?: boolean },
@@ -2608,500 +2179,53 @@ export class TaskStore {
     | { ok: false; error: 'not-found' }
     | { ok: false; error: 'has-open-tasks'; openTasks: number }
     | { ok: false; error: 'persist-failed' } {
-    const state = this.workspaces.get(workspaceId);
-    if (!state) return { ok: false, error: 'not-found' };
-
-    const taskIds = Array.from(state.tasks.keys());
-    if (!opts?.force) {
-      const openTasks = this.openTaskCount(workspaceId) ?? 0;
-      if (openTasks > 0) return { ok: false, error: 'has-open-tasks', openTasks };
-    }
-
-    // Cancel pending writes BEFORE removing the files, or a debounced save
-    // still in flight recreates the sidecar milliseconds after the delete
-    // reports success.
-    const pending = this.saveTimers.get(workspaceId);
-    if (pending) clearTimeout(pending);
-    this.saveTimers.delete(workspaceId);
-    const pendingAttachments = this.attachmentSaveTimers.get(workspaceId);
-    if (pendingAttachments) clearTimeout(pendingAttachments);
-    this.attachmentSaveTimers.delete(workspaceId);
-    // If the delete goes on to refuse, the workspace stays live and those
-    // writes are still owed. Nothing else would re-arm them until the next
-    // mutation, so the edits inside the debounce window would be lost at the
-    // next restart — a cancelled save is only free when the delete succeeds.
-    const restorePendingWrites = () => {
-      if (pending) this.scheduleSave(workspaceId);
-      if (pendingAttachments) this.scheduleAttachmentsSave(workspaceId);
-    };
-
-    // The tasks sidecar is the resurrection source, so it comes off FIRST and
-    // its failure is the whole operation's failure. Reporting success with
-    // that file intact would promise a deletion the next restart undoes —
-    // silently, and hours later. Nothing in memory has changed yet at this
-    // point, so refusing here leaves a coherent board rather than a half-
-    // deleted one. (The cancelled save is the cost: at most one debounce
-    // window of unwritten changes, which the next mutation reschedules.)
-    try {
-      rmSync(tasksSidecarPath(this.dataDir, workspaceId), { force: true });
-    } catch (err) {
-      console.error(`[tasks] failed to remove the tasks sidecar for ${workspaceId}:`, err);
-      restorePendingWrites();
-      return { ok: false, error: 'persist-failed' };
-    }
-
-    for (const taskId of taskIds) this.taskIndex.delete(taskId);
-    // Leak hygiene, and deliberately NOT load-bearing: `getGoalRow` re-reads
-    // the workspace map, so a stale entry here already resolves to undefined
-    // and no caller can observe the difference. What it prevents is the index
-    // growing without bound across a server's lifetime of board deletes. Said
-    // plainly because a test cannot tell this line from its absence — the one
-    // below pins the lookup CONTRACT, not this sweep.
-    for (const goalId of state.goalRows.keys()) this.goalIndex.delete(goalId);
-    this.workspaces.delete(workspaceId);
-
-    // None of these can resurrect the board, so a failure here is litter
-    // rather than a lie — log it and let the delete stand. The list is every
-    // OTHER per-workspace path this file exports; a new sidecar belongs here
-    // the day it is added, or it becomes a file nothing can reach.
-    for (const path of [
-      attachmentsSidecarPath(this.dataDir, workspaceId),
-      eventsLogPath(this.dataDir, workspaceId),
-      voiceQueuePath(this.dataDir, workspaceId),
-      commentQueuePath(this.dataDir, workspaceId),
-      ...legacyTriageSidecarPaths(this.dataDir, workspaceId),
-    ]) {
-      try {
-        rmSync(path, { force: true });
-      } catch (err) {
-        console.error(`[tasks] failed to remove ${path}:`, err);
-      }
-    }
-    return { ok: true, deletedTasks: taskIds.length, taskIds };
+    return this.workspaceStore.deleteWorkspace(workspaceId, opts);
   }
 
   listWorkspaces(): HubWorkspace[] {
-    return Array.from(this.workspaces.values()).map((s) => s.workspace);
+    return this.workspaceStore.listWorkspaces();
   }
 
-  /**
-   * Stand a board down, or bring it back. The REVERSIBLE middle between a
-   * live board and `deleteWorkspace`.
-   *
-   * Nothing is written but this one field, and that is the design rather than
-   * an economy: the tasks sidecar is serialized wholesale, so the retirement
-   * rides along with everything it holds and un-retiring is a second write of
-   * the same field. There is no staging directory, no rename, no file to
-   * restore from — which means there is nothing that can half-fail and leave
-   * a board neither retired nor live.
-   *
-   * What retirement CHANGES is small and enumerable: the board stops ranking
-   * on the workspace list (it folds into a labelled, counted `Retired`
-   * section rather than vanishing — a cut list states what it cut), it
-   * refuses new tasks, and it says so on read and on attach. Everything
-   * already on it stays readable and its in-flight tasks stay transitionable,
-   * because freezing those would strand whatever was running when somebody
-   * retired the board and the only exit would be un-retiring it — which is
-   * the ambiguity the feature exists to remove.
-   */
   setWorkspaceRetired(
     workspaceId: string,
     retired: boolean,
     opts: { actor: { id: string; name: string; kind?: string }; reason?: string },
   ): SetWorkspaceRetiredResult {
-    const state = this.workspaces.get(workspaceId);
-    if (!state) return { ok: false, error: 'workspace-not-found' };
-    const workspace = state.workspace;
-    // Already in the requested state: report it and stamp nothing. Restamping
-    // `retiredAt` would move the "since" every surface reports, so a second
-    // retire — which an agent re-running a cleanup makes by accident — would
-    // rewrite the board's history to say it was stood down just now.
-    if (isRetired(workspace) === retired) return { ok: true, workspace, changed: false };
-
-    const actor: TaskActor = {
-      id: opts.actor.id,
-      name: opts.actor.name,
-      kind: classifyActor(opts.actor),
-    };
-    const ts = Date.now();
-    // Cleared to `undefined` rather than deleted, which is the same thing to
-    // every reader here: `isRetired` and the projection both test `!==
-    // undefined`, and `JSON.stringify` drops an undefined-valued key entirely,
-    // so the sidecar holds no `retiredAt` at all and hydrate reads it as live.
-    // What must NOT happen is writing `null` — that is a present value and
-    // would read as retired forever.
-    const reason = retired ? opts.reason?.trim() : undefined;
-    workspace.retiredAt = retired ? ts : undefined;
-    workspace.retiredBy = retired ? actor : undefined;
-    workspace.retiredReason = reason ? reason : undefined;
-    this.scheduleSave(workspaceId);
-    this.emit({
-      type: 'workspace.retired_changed',
-      workspaceId,
-      retired,
-      ...(retired && workspace.retiredReason ? { reason: workspace.retiredReason } : {}),
-      actor,
-      ts,
-    });
-    return { ok: true, workspace, changed: true };
+    return this.workspaceStore.setWorkspaceRetired(workspaceId, retired, opts);
   }
 
-  /**
-   * Rename a board.
-   *
-   * `createWorkspace` set the name once and nothing changed it, so two boards
-   * could carry one name forever — and a name is how an agent picks. This is
-   * the other half of the fix: retiring stands the stale one down, renaming
-   * tells the two apart while both are live.
-   *
-   * The rename is not gated on uniqueness. Refusing a duplicate would block
-   * the legitimate middle of a cleanup (rename A, then rename B) and would
-   * not undo the duplicates already on disk. Instead the result NAMES the
-   * boards that now share the name, so a caller that collided finds out from
-   * the call rather than from a lost night.
-   */
   renameWorkspace(
     workspaceId: string,
     name: string,
     opts: { actor: { id: string; name: string; kind?: string } },
   ): RenameWorkspaceResult {
-    const state = this.workspaces.get(workspaceId);
-    if (!state) return { ok: false, error: 'workspace-not-found' };
-    const workspace = state.workspace;
-    const next = name.trim();
-    if (next.length === 0) return { ok: false, error: 'empty-name' };
-
-    const sameName = this.liveWorkspacesNamed(next, { exclude: workspaceId });
-    if (next === workspace.name) {
-      return { ok: true, workspace, changed: false, ...(sameName.length > 0 ? { sameName } : {}) };
-    }
-    const oldName = workspace.name;
-    workspace.name = next;
-    this.scheduleSave(workspaceId);
-    this.emit({
-      type: 'workspace.renamed',
-      workspaceId,
-      oldName,
-      name: next,
-      actor: {
-        id: opts.actor.id,
-        name: opts.actor.name,
-        kind: classifyActor(opts.actor),
-      },
-      ts: Date.now(),
-    });
-    return { ok: true, workspace, changed: true, ...(sameName.length > 0 ? { sameName } : {}) };
+    return this.workspaceStore.renameWorkspace(workspaceId, name, opts);
   }
 
-  /**
-   * Every LIVE board carrying this name, minus one. Retired boards are
-   * deliberately not counted: standing a duplicate down is exactly the fix,
-   * so counting it would leave the operator doing the right thing and being
-   * told nothing changed.
-   */
-  private liveWorkspacesNamed(name: string, opts: { exclude: string }): SameNamedWorkspace[] {
-    const key = normalizeWorkspaceName(name);
-    const out: SameNamedWorkspace[] = [];
-    for (const state of this.workspaces.values()) {
-      const ws = state.workspace;
-      if (ws.id === opts.exclude || isRetired(ws)) continue;
-      if (normalizeWorkspaceName(ws.name) === key) out.push({ workspaceId: ws.id, name: ws.name });
-    }
-    return out;
-  }
-
-  /**
-   * Hand the board's lead-agent seat to `leadAgentId`. Reassignment is a
-   * first-class operation rather than a side effect of attaching, because
-   * "who is responsible" outlives any one session: the agent that holds it
-   * may be away, and the next goal edit still has an addressee.
-   */
   setLeadAgent(
     workspaceId: string,
     leadAgentId: string,
     opts: { actor: { id: string; name: string; kind?: string }; takeover?: boolean },
   ): SetLeadAgentResult {
-    const state = this.workspaces.get(workspaceId);
-    if (!state) return { ok: false, error: 'workspace-not-found' };
-    const workspace = state.workspace;
-    const next = leadAgentId.trim();
-    // The seat must route somewhere REAL — this method is the addressing
-    // authority for every lead-addressed delivery (queued voice notes, goal
-    // re-triage, bucket and task reviews), and it used to accept ANY trimmed
-    // string. A typo'd or fabricated id took the seat and the queue silently
-    // stopped draining: nothing anywhere reported that the addressee did not
-    // exist. Checked FIRST, before the same-id no-op, so '' can never equal
-    // anything — it used to trim to '' and be assigned.
-    if (next.length === 0) {
-      return {
-        ok: false,
-        error: 'empty-lead-agent-id',
-        message: 'leadAgentId is empty — the lead seat needs a real agent id.',
-      };
-    }
-    // The seat routes deliveries to SOMEBODY. The shared category — as the
-    // proposed holder or as the caller — is nobody in particular, and a seat
-    // held by it is exactly the state this refusal was written against
-    // (one live board, lead seat "known-agent", 1,031 unattributed rows).
-    if (isCategoryAuthor({ id: next }) || isCategoryAuthor(opts.actor)) {
-      return { ok: false, error: 'author-required', message: AUTHOR_REQUIRED_MESSAGE };
-    }
-    if (next === workspace.leadAgentId) return { ok: true, workspace, changed: false };
-    // Naming a THIRD PARTY is a deliberate handover, and a handover needs an
-    // addressee this workspace has a record of. The record is the attachments
-    // map: an agent that attached and went AWAY is still in it (recovering a
-    // dead session's seat is a supported flow — dead sessions do not detach),
-    // while an id nobody ever attached is not. SELF-declaration is exempt by
-    // definition — `next === actor.id` is a real, live caller, and the
-    // bootstrap order must not matter (older bundles declare before they
-    // attach; the store cannot assume attach came first).
-    if (next !== opts.actor.id && !state.attachments.has(next)) {
-      return {
-        ok: false,
-        error: 'unknown-lead-agent',
-        message:
-          `no agent "${next}" has ever attached to this workspace — a lead the board has ` +
-          'no record of would receive none of the deliveries addressed to the seat. ' +
-          'Name an agent that has attached here, or have that agent declare itself lead.',
-      };
-    }
-    const previousLeadAgentId = workspace.leadAgentId;
-    /**
-     * DO NOT let an agent quietly take a seat somebody LIVE is sitting in.
-     *
-     * `attachAgent` refuses this on purpose — "an occupied seat is a standing
-     * decision and a second agent attaching is not a reassignment" — and
-     * `set_workspace_lead` had no such guard, which was survivable while it
-     * meant "hand the board to a named peer" and became a hazard the moment
-     * the skills started telling every session to declare itself at startup.
-     * The displaced lead keeps its watch and its attachment, is told nothing
-     * it acts on, and simply never receives the re-triage it was waiting for;
-     * the declaring agent cannot tell a takeover from an empty seat, because
-     * `changed: true` is the same answer for both.
-     *
-     * Narrow on purpose. It fires only when an agent is claiming the seat FOR
-     * ITSELF (a declaration) — naming a third party is a deliberate handover
-     * and keeps its old meaning exactly. And only against a LIVE incumbent: a
-     * dead session's seat is exactly what a new lead should be able to
-     * recover, which is most of why declaring works at all.
-     */
-    if (
-      previousLeadAgentId !== undefined &&
-      previousLeadAgentId !== next &&
-      next === opts.actor.id &&
-      opts.takeover !== true &&
-      this.hasLiveLeadAttachment(workspaceId)
-    ) {
-      return { ok: true, workspace, changed: false, previousLeadAgentId, declined: 'lead-held' };
-    }
-    const actor: TaskActor = {
-      id: opts.actor.id,
-      name: opts.actor.name,
-      kind: classifyActor(opts.actor),
-    };
-    // Its own operation, so its own moment — nothing else in this call is
-    // stamped, and there is no sibling clock for it to disagree with.
-    this.assignLead(state, next, actor, Date.now());
-    return {
-      ok: true,
-      workspace,
-      changed: true,
-      ...(previousLeadAgentId !== undefined ? { previousLeadAgentId } : {}),
-    };
+    return this.workspaceStore.setLeadAgent(workspaceId, leadAgentId, opts);
   }
 
-  /**
-   * Fold agent id `from` into `into` on EVERY board: the seat moves where
-   * `from` held it, and `from`'s attachment record is re-keyed (the fresher
-   * clocks win where `into` already had one). This is the board half of a
-   * rename — the roster half is `Identities.mergeAgent`, the durable-watch
-   * half `AgentWatches.rekey` — and the three are composed by the merge
-   * route so one verb does all of it.
-   *
-   * Nothing here bypasses `assignLead`: the seat change persists and
-   * announces exactly like a handover, so the board repaints and the audit
-   * log carries who did it. `dryRun` computes the same answer and touches
-   * nothing, which is what an operator runs first against prod's data.
-   */
-  mergeAgent(
-    from: string,
-    into: string,
-    opts: { actor: { id: string; name: string; kind?: string }; dryRun?: boolean },
-  ): { seats: string[]; seatsSkipped: string[]; attachments: string[]; comments: string[] } {
-    const seats: string[] = [];
-    const seatsSkipped: string[] = [];
-    const attachments: string[] = [];
-    const comments: string[] = [];
-    const result = () => ({
-      seats: seats.sort(),
-      seatsSkipped: seatsSkipped.sort(),
-      attachments: attachments.sort(),
-      comments: comments.sort(),
-    });
-    if (from.trim() === '' || into.trim() === '' || from === into) return result();
-    const actor: TaskActor = {
-      id: opts.actor.id,
-      name: opts.actor.name,
-      kind: classifyActor(opts.actor),
-    };
-    for (const state of this.workspaces.values()) {
-      const workspaceId = state.workspace.id;
-      const old = state.attachments.get(from);
-      if (old) {
-        attachments.push(workspaceId);
-        if (!opts.dryRun) {
-          const existing = state.attachments.get(into);
-          const fresher = existing && existing.lastHeartbeat >= old.lastHeartbeat ? existing : old;
-          state.attachments.delete(from);
-          state.attachments.set(into, { ...fresher, agentId: into });
-          this.scheduleAttachmentsSave(workspaceId);
-        }
-      }
-      if (state.workspace.leadAgentId === from) {
-        // The same rule as a hand-over (`setLeadAgent`): the seat routes
-        // deliveries to somebody this board has a record of. After the
-        // re-key above that is the target itself whenever the old id was
-        // attached; when it was NOT — a seat held by an id nothing ever
-        // attached under, `known-agent` included — moving it would hand the
-        // seat to an id the queue cannot reach, which is exactly the state
-        // the unknown-lead check exists to refuse. Reported, not silent.
-        // On a dry run nothing was re-keyed yet, so "the old id was
-        // attached" is what "the target will be attached" looks like.
-        const targetAttached =
-          state.attachments.has(into) || (opts.dryRun === true && old !== undefined);
-        if (targetAttached) {
-          seats.push(workspaceId);
-          if (!opts.dryRun) this.assignLead(state, into, actor, Date.now());
-        } else {
-          seatsSkipped.push(workspaceId);
-        }
-      }
-      // The un-acked backlog is delivery bookkeeping keyed by addressee, and
-      // an addressee that no longer exists never acks: without this re-key
-      // every comment queued for the old id sat under it until the per-agent
-      // cap dropped it, while the new id attached to an empty list.
-      const backlog = this.listQueuedComments(workspaceId);
-      if (backlog.some((q) => q.agentId === from)) {
-        comments.push(workspaceId);
-        if (!opts.dryRun) {
-          this.writeCommentQueue(
-            workspaceId,
-            backlog.map((q) => (q.agentId === from ? { ...q, agentId: into } : q)),
-          );
-        }
-      }
-      // A re-key is an attachment change, and the board projects off store
-      // events: without this the rows owned under the old id keep drawing
-      // it until something unrelated touches a task. Emitted for the
-      // SURVIVING id, after every change above, like `attachAgent` does.
-      const survivor = !opts.dryRun && old ? state.attachments.get(into) : undefined;
-      if (survivor) {
-        const now = Date.now();
-        this.emit({
-          type: 'agent.attached',
-          workspaceId,
-          agentId: into,
-          attachment: publicAttachment(survivor, now, this.attachmentThresholds),
-          ts: now,
-        });
-      }
-    }
-    return result();
-  }
-
-  /** The seat change itself, shared by `setLeadAgent` and the attach-time
-   *  claim so both persist and announce it identically.
-   *
-   *  `ts` is the CALLER's, and passing it is not a style choice. A seat claim
-   *  emits `workspace.lead_changed`, which is a non-`agent.*` row, so
-   *  `noteObservedWork` observes it and stamps the actor's work clock with
-   *  this exact `ts`. When the caller is `attachAgent`, that work clock and
-   *  the attachment's `lastHeartbeat` are the SAME fact — one operation, one
-   *  moment — and a `Date.now()` taken here instead landed a millisecond
-   *  later, pushing `lastToolCallAt` past `lastHeartbeat` and breaking the
-   *  "a new attachment's two clocks are equal" contract on ~1 run in 37.
-   *
-   *  So the parameter is required rather than defaulted: a future third
-   *  caller has to say which moment this seat change belongs to, and cannot
-   *  re-read the wall clock by omission. */
-  private assignLead(
-    state: WorkspaceState,
-    leadAgentId: string,
-    actor: TaskActor,
-    ts: number,
-  ): void {
-    const workspace = state.workspace;
-    const oldLeadAgentId = workspace.leadAgentId;
-    workspace.leadAgentId = leadAgentId;
-    workspace.leadAgentSince = ts;
-    this.scheduleSave(workspace.id);
-    this.emit({
-      type: 'workspace.lead_changed',
-      workspaceId: workspace.id,
-      ...(oldLeadAgentId !== undefined ? { oldLeadAgentId } : {}),
-      leadAgentId,
-      actor,
-      ts,
-    });
-  }
-
-  /** Link an existing doc or review to a hub workspace. A link only — the
-   *  doc's own metadata and URLs are untouched (nothing is migrated). */
   attachDoc(
     workspaceId: string,
     docId: string,
   ): { ok: true } | { ok: false; error: 'workspace-not-found' } {
-    const state = this.workspaces.get(workspaceId);
-    if (!state) return { ok: false, error: 'workspace-not-found' };
-    if (!state.workspace.docIds.includes(docId)) {
-      state.workspace.docIds.push(docId);
-      this.scheduleSave(workspaceId);
-    }
-    return { ok: true };
+    return this.workspaceStore.attachDoc(workspaceId, docId);
   }
 
-  /** Unlink a doc from a hub workspace. `removed` distinguishes "it was
-   *  linked and now isn't" from "it was never linked" — the caller filing a
-   *  doc out of the holding-pen workspace needs to know whether anything
-   *  actually moved before it refreshes a projection. */
   detachDoc(
     workspaceId: string,
     docId: string,
   ): { ok: true; removed: boolean } | { ok: false; error: 'workspace-not-found' } {
-    const state = this.workspaces.get(workspaceId);
-    if (!state) return { ok: false, error: 'workspace-not-found' };
-    const i = state.workspace.docIds.indexOf(docId);
-    if (i === -1) return { ok: true, removed: false };
-    state.workspace.docIds.splice(i, 1);
-    this.scheduleSave(workspaceId);
-    return { ok: true, removed: true };
+    return this.workspaceStore.detachDoc(workspaceId, docId);
   }
 
-  /**
-   * The hub workspace this docId belongs to for SHARE-SCOPE purposes, or
-   * null (§3.12 commit 8): a doc linked via attachDoc, or a task's own body
-   * room (`task:<taskId>`). Deliberately NOT the `ws:<id>` board room — its
-   * share allowance is explicit in host-guard, so granting the board stays
-   * a decision rather than a resolver side effect. Also deliberately not
-   * transitive: attachDoc can link a whole review (diff review) by
-   * its review id, and this resolver does not widen to that review's
-   * member docs.
-   */
   workspaceOfDoc(docId: string): string | null {
-    if (docId.startsWith('task:')) {
-      // A `task:` room is a TASK's body or a GOAL's — one prefix, two kinds of
-      // row (see `ensureGoalBody` in task-projection.ts). Asking only
-      // `getTask` answered null for every goal, and null here is not a
-      // harmless miss: it is what the back-link, the review URL and SHARE
-      // SCOPING resolve against, so a goal's description opened with no way
-      // back to its board and a share visitor was refused it outright.
-      const rowId = docId.slice('task:'.length);
-      return (this.getTask(rowId) ?? this.getGoalRow(rowId))?.workspaceId ?? null;
-    }
-    for (const state of this.workspaces.values()) {
-      if (state.workspace.docIds.includes(docId)) return state.workspace.id;
-    }
-    return null;
+    return this.workspaceStore.workspaceOfDoc(docId);
   }
 
   // ── Tasks ────────────────────────────────────────────────────────────────
@@ -4712,18 +3836,11 @@ export class TaskStore {
     return { ok: true, goal, changed: true, taskIds };
   }
 
-  /**
-   * Place a task under a goal at an exact position — the write
-   * half of triage (§3.4: the agent picks the exact spot, not just the
-   * bucket) and the board's regroup/rerank gesture (§3.3: open to everyone,
-   * Bryan AND agents; every move recorded).
-   *
-   * Placement IS triage, so every call — moved or confirmed in place —
-   * stamps `triagedAgainst` with the band it was judged against and clears
-   * the triage-pending marker. A goal or position change emits
-   * `task.regrouped`; a pure confirm emits nothing — §3.6 has no
-   * task.triaged row, and a no-move event would be noise in every feed.
-   */
+  // ── Goal bands ───────────────────────────────────────────────────────────
+  //
+  // The bands themselves live in `task-goals.ts`; what follows is the store's
+  // public surface forwarding onto them, signatures unchanged.
+
   setTaskGoal(
     taskId: string,
     goal: string,
@@ -4757,119 +3874,9 @@ export class TaskStore {
       batchId?: string;
     },
   ): SetTaskGoalResult {
-    const task = this.getTask(taskId);
-    if (!task) return { ok: false, error: 'not-found' };
-    const state = this.workspaces.get(task.workspaceId);
-    if (!state) return { ok: false, error: 'not-found' };
-    if (!this.goalIdExists(state.workspace, goal)) {
-      return { ok: false, error: 'unknown-goal' };
-    }
-
-    const ts = Date.now();
-    const actor: TaskActor = {
-      id: opts.actor.id,
-      name: opts.actor.name,
-      kind: classifyActor(opts.actor),
-    };
-    const fromGoal = task.goal;
-
-    // Placement by neighbour renumbers the goal 1..N rather than searching for
-    // a float between two rows, because between two rows that share an order
-    // there is no such float — and a goal that keeps its ties needs the same
-    // step-around on every future drag. So the drop that had to work around a
-    // tie is also the drop that removes it. `updatedAt` is deliberately left
-    // alone on the rows this shifts: their position relative to each other did
-    // not change, and the staleness sweep and the activity feed both read that
-    // field as "somebody touched this task".
-    let renumbered: Task[] | null = null;
-    let order: number;
-    if (opts.after !== undefined) {
-      const siblings = Array.from(state.tasks.values())
-        .filter((t) => t.goal === goal && t.id !== taskId)
-        .sort(byBoardOrder);
-      const sequence = sequenceAfter(siblings, task, opts.after);
-      if (!sequence) return { ok: false, error: 'unknown-after' };
-      renumbered = sequence;
-      order = sequence.indexOf(task) + 1;
-    } else {
-      order =
-        opts.position ??
-        (goal === fromGoal
-          ? task.order
-          : Math.max(
-              0,
-              ...Array.from(state.tasks.values())
-                .filter((t) => t.goal === goal && t.id !== taskId)
-                .map((t) => t.order),
-            ) + 1);
-    }
-    const changed = goal !== fromGoal || order !== task.order;
-
-    task.goal = goal;
-    // Only a MOVE, never a reorder: the goal's title is part of what the
-    // scorer weighs, the order is not — the same `fromGoal !== toGoal` line
-    // the re-score trigger in server.ts draws.
-    if (goal !== fromGoal) bumpWordsRevision(task);
-    task.order = order;
-    if (renumbered) for (const [i, t] of renumbered.entries()) t.order = i + 1;
-    task.triagedAgainst = { goalId: goal, ts };
-    // Somebody has now named this task's band — including a confirm-in-place
-    // into Backlog, which is a judgement rather than a fallback. The owed
-    // review is answered, so it must not be asked again.
-    task.unplacedSince = undefined;
-    task.updatedAt = ts;
-    this.scheduleSave(task.workspaceId);
-
-    if (changed) {
-      this.emit({
-        type: 'task.regrouped',
-        workspaceId: task.workspaceId,
-        taskId: task.id,
-        fromGoal,
-        toGoal: goal,
-        order,
-        actor,
-        ...(opts.batchId !== undefined ? { partOf: opts.batchId } : {}),
-        ts,
-      });
-    }
-    return { ok: true, task, changed };
+    return this.goals.setTaskGoal(taskId, goal, opts);
   }
 
-  /**
-   * Replace the workspace's ordered goal list (§3.2 goal-list edit contract).
-   *
-   * WHAT SUBMITTING A LIST MEANS, now that ids are generated: "these are my
-   * bands, in this order". An entry that names an `id` is a band the board
-   * already has — an id it does not have is REFUSED (`unknown-goal-id`),
-   * never created under the caller's name. An entry with no `id` is new, and
-   * the server mints an opaque one (`newGoalId`) and reports it in `created`.
-   * A caller therefore cannot choose an id, and cannot change one: the two
-   * gestures that used to strand a band's work are no longer expressible,
-   * where before they were merely refused after the fact. Everything the call
-   * always did — reorder, retitle, remove — is untouched, and none
-   * of it moves an id.
-   *
-   * 'chores' is reserved and never present in goals[]; open tasks whose goal
-   * id disappears are moved to Backlog, each emitting a
-   * `task.regrouped` batched (via `partOf`) under the one
-   * `workspace.goals_changed` event, and the result reports the moved ids so
-   * the caller can re-place them. Deliberately NO re-triage request fires —
-   * a reorder changes no placement's accuracy, and a removal already lands
-   * every affected task where the caller is told to look.
-   *
-   * A DROP THAT WOULD STRAND WORK IS REFUSED unless `drop` names the id.
-   * This is a full replace keyed by id, so the natural way to rename a band —
-   * submit the list with a new id and the new title — reads here as one goal
-   * removed and a different one added: the old band's open tasks swept to
-   * Backlog, its done tasks left pointing at an id that is gone, and a
-   * successful-looking result. The damage is proportional to how much the
-   * band held, and it surfaces days later as "why is my top band empty".
-   * `renameGoal` is the non-destructive way to change a title; this guard is
-   * what makes the destructive path stop being the DEFAULT one. It fires
-   * only for ids that actually hold tasks, so it can never refuse a call
-   * that was about to lose nothing.
-   */
   setGoalList(
     workspaceId: string,
     entries: GoalListEntry[],
@@ -4881,250 +3888,9 @@ export class TaskStore {
       drop?: string[];
     },
   ): SetGoalListResult {
-    const state = this.workspaces.get(workspaceId);
-    if (!state) return { ok: false, error: 'workspace-not-found' };
-    const workspace = state.workspace;
-
-    // Resolve every entry to an id BEFORE anything is compared or written:
-    // an id the caller named must already exist, and an id the caller omitted
-    // is generated here and nowhere else. Both refusals are computed over the
-    // whole list first, so a rejected call names every offending id at once
-    // rather than making the caller fix them one round trip at a time.
-    const existingIds = new Set(workspace.goals.map((g) => g.id));
-    const submittedIds: string[] = [];
-    const unknownIds: string[] = [];
-    const reserved: string[] = [];
-    const noteId = (id: string | undefined): void => {
-      if (id === undefined) return;
-      submittedIds.push(id);
-      if (isReservedGoalId(id)) {
-        if (!reserved.includes(id)) reserved.push(id);
-        return;
-      }
-      if (!existingIds.has(id) && !unknownIds.includes(id)) unknownIds.push(id);
-    };
-    for (const g of entries) {
-      noteId(g.id);
-      for (const s of g.subgoals ?? []) noteId(s.id);
-    }
-    if (reserved.length > 0) return { ok: false, error: 'reserved-goal-id' };
-    if (new Set(submittedIds).size !== submittedIds.length) {
-      return { ok: false, error: 'duplicate-goal-id' };
-    }
-    if (unknownIds.length > 0) return { ok: false, error: 'unknown-goal-id', unknownIds };
-
-    // Materialise the list the board will hold. An entry with no id becomes a
-    // new band with a generated one; nothing else about an entry can change
-    // an id, because an id is never read from the entry again after this.
-    const created: Array<{ id: string; title: string; parent?: string }> = [];
-    const goals: WorkspaceGoal[] = entries.flatMap((g) => {
-      const id = g.id ?? newGoalId();
-      if (g.id === undefined) created.push({ id, title: g.title });
-      // A submitted `subgoals` array is still ACCEPTED — the REST route has
-      // callers this server cannot restart — but it is never stored. Each
-      // entry becomes a band of its own, directly after the one that carried
-      // it, which is the position the board already drew it in.
-      const nested = (g.subgoals ?? []).map((sub) => {
-        const subId = sub.id ?? newGoalId();
-        if (sub.id === undefined) created.push({ id: subId, title: sub.title });
-        return {
-          id: subId,
-          title: sub.title,
-          ...(sub.dueAt !== undefined ? { dueAt: sub.dueAt } : {}),
-        };
-      });
-      return [
-        {
-          id,
-          title: g.title,
-          ...(g.dueAt !== undefined ? { dueAt: g.dueAt } : {}),
-        },
-        ...nested,
-      ];
-    });
-    const ids: string[] = goals.map((g) => g.id);
-
-    const oldGoals = workspace.goals;
-    if (JSON.stringify(oldGoals) === JSON.stringify(goals)) {
-      return {
-        ok: true,
-        workspace,
-        changed: false,
-        created: [],
-        movedToChores: [],
-        strandedDone: [],
-      };
-    }
-
-    // What this replace would REMOVE, and what each removal holds. Computed
-    // before a single byte is written, because a refusal has to leave the
-    // board exactly as the caller found it.
-    const keptIds = new Set(ids);
-    const acknowledged = new Set(opts.drop ?? []);
-    const stranding: Array<{ id: string; title: string; openTasks: number; doneTasks: number }> =
-      [];
-    for (const removed of oldGoals) {
-      if (keptIds.has(removed.id) || acknowledged.has(removed.id)) continue;
-      let openTasks = 0;
-      let doneTasks = 0;
-      for (const task of state.tasks.values()) {
-        if (task.goal !== removed.id) continue;
-        if (task.status === 'done') doneTasks += 1;
-        else openTasks += 1;
-      }
-      // Both halves count. The open one is swept to Backlog (loud-ish, it is
-      // reported); the done one silently orphans, and is the half nothing
-      // used to mention.
-      if (openTasks + doneTasks > 0) {
-        stranding.push({ id: removed.id, title: removed.title, openTasks, doneTasks });
-      }
-    }
-    if (stranding.length > 0) return { ok: false, error: 'would-strand-tasks', stranding };
-
-    // Same members in a different order = the priority gesture; anything
-    // else (add / remove / retitle / dueAt) = an edit. Sorting by id makes
-    // the comparison order-blind.
-    const sortById = (gs: WorkspaceGoal[]) =>
-      JSON.stringify([...gs].sort((a, b) => a.id.localeCompare(b.id)));
-    const kind: 'reorder' | 'edit' = sortById(oldGoals) === sortById(goals) ? 'reorder' : 'edit';
-
-    const ts = Date.now();
-    const actor: TaskActor = {
-      id: opts.actor.id,
-      name: opts.actor.name,
-      kind: classifyActor(opts.actor),
-    };
-    workspace.goals = goals;
-    // A goal the caller just ADDED is a proposal: it mints in triage, and
-    // its band dispatches nothing until somebody agrees to it.
-    this.syncGoalRows(state, 'triage');
-
-    // Open tasks whose goal id disappeared land at the bottom of Backlog.
-    // Done tasks stay put — same rule as re-triage (§3.4), their placement
-    // is history, not a claim about current priorities.
-    const newIds = new Set([...ids, CHORES_GOAL_ID]);
-    const moved: Array<{ task: Task; fromGoal: string }> = [];
-    const strandedDone: string[] = [];
-    let choresMax = Math.max(
-      0,
-      ...Array.from(state.tasks.values())
-        .filter((t) => t.goal === CHORES_GOAL_ID)
-        .map((t) => t.order),
-    );
-    for (const task of state.tasks.values()) {
-      if (newIds.has(task.goal)) continue;
-      // Done tasks stay put, but they are now NAMED: this is the half that
-      // used to leave a bare row in the read with nothing in the write's
-      // answer pointing at it.
-      if (task.status === 'done') {
-        strandedDone.push(task.id);
-        continue;
-      }
-      moved.push({ task, fromGoal: task.goal });
-      choresMax += 1;
-      task.goal = CHORES_GOAL_ID;
-      bumpWordsRevision(task);
-      task.order = choresMax;
-      // The band this was placed under is gone, so its placement is no longer
-      // named — the bucket's other entrance. `triagedAgainst` deliberately
-      // stays: it records what the placement was judged against at the time,
-      // which is history. It is not a claim that the task is placed NOW, and
-      // reading it as one is what hid these tasks from the sweep.
-      task.unplacedSince = ts;
-      task.updatedAt = ts;
-    }
-    this.scheduleSave(workspaceId);
-
-    const batchId = cryptoId('gc');
-    // Ask the lead to re-look at the bucket. Computed HERE — after the sweep
-    // but BEFORE the emits — and both halves are load-bearing.
-    //
-    // After the sweep, because a task THIS edit un-placed (its band was
-    // removed) belongs to the bucket the new band is being offered to;
-    // "replace band A with band B" is where that matters most.
-    //
-    this.emit({
-      type: 'workspace.goals_changed',
-      workspaceId,
-      batchId,
-      kind,
-      oldGoals,
-      newGoals: goals,
-      actor,
-      movedToChores: moved.map((m) => m.task.id),
-      ts,
-    });
-    for (const { task, fromGoal } of moved) {
-      this.emit({
-        type: 'task.regrouped',
-        workspaceId,
-        taskId: task.id,
-        fromGoal,
-        toGoal: CHORES_GOAL_ID,
-        order: task.order,
-        actor,
-        partOf: batchId,
-        ts,
-      });
-    }
-    return {
-      ok: true,
-      workspace,
-      changed: true,
-      created,
-      movedToChores: moved.map((m) => m.task.id),
-      strandedDone,
-    };
+    return this.goals.setGoalList(workspaceId, entries, opts);
   }
 
-  /**
-   * Change a goal's TITLE (and optionally its dueAt) in place, at either
-   * scope, without touching its id — the common half of what `set_goal_list`
-   * was being used for, separated from the destructive half.
-   *
-   * The whole contract is that nothing can move. A task's band is its goal
-   * ID, and no reachable input here changes an id, so a rename cannot sweep
-   * open work to Backlog and cannot orphan a done task. That is the point:
-   * before this existed, the natural gesture for "rename this band" was to
-   * submit the full list with a new id, which the store reads as a removal
-   * plus an addition and which strands everything the band held.
-   *
-   * `chores` is refused as RESERVED rather than not-found — it is a real row
-   * a caller genuinely saw in the read, and its label is fixed, so "no such
-   * goal" would send them hunting for a typo. Same split `reorderGoals`
-   * draws for the same reason.
-   *
-   * Deliberately asks for NO bucket re-look, even though a retitle can change
-   * what a band means ("TBD" → "Payments" arguably makes a goal apparent).
-   * The trigger is keyed on a band becoming a DESTINATION, and a rename adds
-   * none: every place a task could go, it could already go. Keying it on
-   * meaning instead would fire on every wording fix, and nothing in the call
-   * distinguishes the two — which is how an ask that matters gets ignored
-   * along with the twenty that did not. If this turns out to be worth having,
-   * it wants an explicit signal from the caller, not a heuristic here.
-   *
-   * Emits the existing `workspace.goals_changed` with kind 'edit' (a retitle
-   * IS an edit under that taxonomy), so nothing downstream needs a new case.
-   *
-   * DELIBERATELY NOT A RE-KEY. This verb changes the title and never the id,
-   * and the obvious next proposal — "let it take a NEW id and carry the
-   * band's tasks across" — is the one to resist. Read this before adding it:
-   *
-   *  - The demand for re-keying was never a demand for re-keying. It was
-   *    people renaming, and reaching for the only verb that could restate a
-   *    title. With a retitle that works, "give this band a different id" has
-   *    no caller left that isn't already better served here.
-   *  - It would be a SECOND bulk task-mover living beside `setTaskGoal`, on
-   *    the path that has already produced this file's worst bug. Every band
-   *    it moved would be moved implicitly, as a side effect of an edit that
-   *    reads like a label change — which is precisely the shape of the
-   *    silent stranding the `would-strand-tasks` refusal exists to end.
-   *  - The honest way to genuinely retire an id is already reachable and is
-   *    two explicit steps: `setGoalList` with the old id named in `drop`,
-   *    then `setTaskGoal` per task. The refusal message names both, so the
-   *    caller who really wanted a re-key is told where to go rather than
-   *    handed a verb that moves work on their behalf.
-   */
   renameGoal(
     workspaceId: string,
     goalId: string,
@@ -5135,98 +3901,9 @@ export class TaskStore {
     },
     opts: { actor: { id: string; name: string; kind?: string } },
   ): RenameGoalResult {
-    const state = this.workspaces.get(workspaceId);
-    if (!state) return { ok: false, error: 'workspace-not-found' };
-    const workspace = state.workspace;
-    if (isReservedGoalId(goalId)) return { ok: false, error: 'reserved-goal-id' };
-
-    const oldGoals = workspace.goals;
-    const current = oldGoals.find((g) => g.id === goalId);
-    if (!current) return { ok: false, error: 'goal-not-found' };
-
-    const nextDueAt =
-      patch.dueAt === undefined ? current.dueAt : patch.dueAt === null ? undefined : patch.dueAt;
-    if (current.title === patch.title && current.dueAt === nextDueAt) {
-      return {
-        ok: true,
-        workspace,
-        changed: false,
-        goal: {
-          id: goalId,
-          title: current.title,
-          ...(current.dueAt !== undefined ? { dueAt: current.dueAt } : {}),
-        },
-      };
-    }
-
-    /** Rebuild the row with dueAt present only when it has a value — an
-     *  explicit `dueAt: undefined` key would survive JSON.stringify
-     *  comparisons differently from an absent one. */
-    const retitled = <T extends { id: string; title: string; dueAt?: number }>(row: T): T => ({
-      ...row,
-      title: patch.title,
-      ...(nextDueAt !== undefined ? { dueAt: nextDueAt } : { dueAt: undefined }),
-    });
-    const strip = <T extends object>(row: T): T =>
-      Object.fromEntries(Object.entries(row).filter(([, v]) => v !== undefined)) as T;
-
-    // A NEW array either way: `oldGoals` rides on the event, so mutating in
-    // place would make both sides report the new title and the audit row
-    // would say nothing (the same trap `reorderGoals` documents).
-    const newGoals: WorkspaceGoal[] = oldGoals.map((g) =>
-      g.id === goalId ? strip(retitled(g)) : g,
-    );
-    workspace.goals = newGoals;
-    // A rename never adds an id, so nothing mints here — see `syncGoalRows`.
-    this.syncGoalRows(state, 'todo');
-    this.scheduleSave(workspaceId);
-
-    this.emit({
-      type: 'workspace.goals_changed',
-      workspaceId,
-      batchId: cryptoId('gc'),
-      kind: 'edit',
-      oldGoals,
-      newGoals,
-      actor: {
-        id: opts.actor.id,
-        name: opts.actor.name,
-        kind: classifyActor(opts.actor),
-      },
-      movedToChores: [],
-      ts: Date.now(),
-    });
-    return {
-      ok: true,
-      workspace,
-      changed: true,
-      goal: {
-        id: goalId,
-        title: patch.title,
-        ...(nextDueAt !== undefined ? { dueAt: nextDueAt } : {}),
-      },
-    };
+    return this.goals.renameGoal(workspaceId, goalId, patch, opts);
   }
 
-  /**
-   * Append ONE new top-level band, and nothing else. The other half of what
-   * inline goal editing on the board needs, beside `renameGoal`.
-   *
-   * The reason this is a verb rather than a client-side `setGoalList` call is
-   * the whole hazard `renameGoal`'s header describes, one gesture over. A
-   * board that adds a band by submitting the full list submits the list IT
-   * last read — and any band added by someone else in between is absent from
-   * that list, which the store reads as a removal and which sweeps that
-   * band's open tasks into Backlog. Here the list is rebuilt from the LIVE
-   * `workspace.goals` at call time, so the only difference between what goes
-   * in and what was already there is the one entry being added. A concurrent
-   * writer can be raced on ORDER; it cannot be raced out of existence.
-   *
-   * The new entry carries no `id`, which is what tells `setGoalList` to mint
-   * one — so id generation and the `workspace.goals_changed` emit are both
-   * inherited rather than re-implemented.
-   *
-   */
   addGoal(
     workspaceId: string,
     patch: {
@@ -5237,159 +3914,16 @@ export class TaskStore {
     },
     opts: { actor: { id: string; name: string; kind?: string } },
   ): AddGoalResult {
-    const state = this.workspaces.get(workspaceId);
-    if (!state) return { ok: false, error: 'workspace-not-found' };
-
-    // Rebuilt from the live list, not from anything a caller sent: every id
-    // here necessarily exists, so the delegated replace can only add.
-    const entries: GoalListEntry[] = state.workspace.goals.map((g) => ({
-      id: g.id,
-      title: g.title,
-      ...(g.dueAt !== undefined ? { dueAt: g.dueAt } : {}),
-    }));
-    const fresh: GoalListEntry = {
-      title: patch.title,
-      ...(patch.dueAt !== undefined ? { dueAt: patch.dueAt } : {}),
-    };
-    if (patch.after === undefined) {
-      entries.push(fresh);
-    } else {
-      const at = entries.findIndex((g) => g.id === patch.after);
-      // A band that has since gone lands here. Refused
-      // rather than silently appended: the caller asked for a POSITION, and
-      // quietly ignoring it is how a board's order stops matching what the
-      // person just did.
-      if (at < 0) return { ok: false, error: 'after-not-found' };
-      entries.splice(at + 1, 0, fresh);
-    }
-
-    const res = this.setGoalList(workspaceId, entries, { actor: opts.actor });
-    if (!res.ok) return { ok: false, error: 'rejected', cause: res.error };
-    const created = res.created[0];
-    if (created === undefined) return { ok: false, error: 'rejected', cause: 'no-goal-created' };
-    return {
-      ok: true,
-      workspace: res.workspace,
-      goal: {
-        id: created.id,
-        title: patch.title,
-        ...(patch.dueAt !== undefined ? { dueAt: patch.dueAt } : {}),
-      },
-    };
+    return this.goals.addGoal(workspaceId, patch, opts);
   }
 
-  /**
-   * Reorder the goal list — the priority gesture, separated from the edit.
-   *
-   * PERMUTATION ONLY, and that constraint is the entire point. `setGoalList`
-   * is a full replace, so reordering through it means restating every id and
-   * title, and any id a stale caller omits sends that goal's open tasks to
-   * the bottom of Backlog — the most ordinary gesture on a board carrying the
-   * most destructive edge in the API. Here an `order` that is not exactly
-   * the current id set (same ids, same count) is REFUSED with the unknown /
-   * missing / duplicated ids named, rather than merged best-effort. So a
-   * caller working from a list another writer has since changed gets an
-   * error it can re-read and retry — never a silent goal loss. Whether that
-   * refusal is well-formed is checked over HTTP too, because the route layer
-   * is where a param quietly disappears.
-   *
-   * Titles and dueAt ride along untouched, and no task can move: there is no
-   * reachable input to this method that regroups anything.
-   *
-   * `parent` is still accepted, and now always refused. It scoped the reorder
-   * to one band's subgoals; subgoals are gone, so no id can name a sublist to
-   * order. Refusing beats ignoring it — a caller who meant "order these
-   * children" must not silently reorder the whole board instead — and beats
-   * dropping the field, because the REST route has callers this server cannot
-   * restart.
-   * Emits the existing `workspace.goals_changed` with kind 'reorder' — the
-   * event the board projection and the activity feed already render — so
-   * nothing downstream needs a new case.
-   */
   reorderGoals(
     workspaceId: string,
     order: string[],
     opts: { parent?: string; actor: { id: string; name: string; kind?: string } },
   ): ReorderGoalsResult {
-    const state = this.workspaces.get(workspaceId);
-    if (!state) return { ok: false, error: 'workspace-not-found' };
-    const workspace = state.workspace;
-
-    // There is one scope now. A `parent` names a sublist that no longer
-    // exists, whether or not the id itself is a live goal, so it is refused
-    // rather than quietly widened to the whole list.
-    if (opts.parent !== undefined) return { ok: false, error: 'parent-not-found' };
-    const current: WorkspaceGoal[] = workspace.goals;
-
-    const currentIds = current.map((g) => g.id);
-    const currentSet = new Set(currentIds);
-    const seen = new Set<string>();
-    const unknownIds: string[] = [];
-    const reservedIds: string[] = [];
-    const duplicateIds: string[] = [];
-    for (const id of order) {
-      // 'chores' is never in goals[], so it is refused — but it is refused as
-      // RESERVED, not unknown. It is a row the caller genuinely saw in the
-      // read, and it always renders last, so a caller who put it first cannot
-      // be obeyed and a caller who put it last must not be silently trimmed:
-      // accepting either would be a position nobody honours.
-      if (!currentSet.has(id)) {
-        const bucket = isReservedGoalId(id) ? reservedIds : unknownIds;
-        if (!bucket.includes(id)) bucket.push(id);
-      }
-      if (seen.has(id) && !duplicateIds.includes(id)) duplicateIds.push(id);
-      seen.add(id);
-    }
-    const missingIds = currentIds.filter((id) => !seen.has(id));
-    if (
-      unknownIds.length > 0 ||
-      reservedIds.length > 0 ||
-      duplicateIds.length > 0 ||
-      missingIds.length > 0
-    ) {
-      return {
-        ok: false,
-        error: 'order-mismatch',
-        unknownIds,
-        reservedIds,
-        missingIds,
-        duplicateIds,
-      };
-    }
-
-    if (currentIds.every((id, i) => order[i] === id)) {
-      return { ok: true, workspace, changed: false, order: currentIds };
-    }
-
-    // Build a NEW top-level array either way. `oldGoals` on the event aliases
-    // the array we are replacing, so mutating in place would make the event
-    // report the new order on both sides and the audit row would say nothing.
-    const oldGoals = workspace.goals;
-    const byId = new Map(oldGoals.map((g) => [g.id, g]));
-    const newGoals: WorkspaceGoal[] = order.map((id) => byId.get(id) as WorkspaceGoal);
-    workspace.goals = newGoals;
-    // A reorder never adds an id, so nothing mints here — see `syncGoalRows`.
-    this.syncGoalRows(state, 'todo');
-    this.scheduleSave(workspaceId);
-
-    this.emit({
-      type: 'workspace.goals_changed',
-      workspaceId,
-      batchId: cryptoId('gc'),
-      kind: 'reorder',
-      oldGoals,
-      newGoals,
-      actor: {
-        id: opts.actor.id,
-        name: opts.actor.name,
-        kind: classifyActor(opts.actor),
-      },
-      movedToChores: [],
-      ts: Date.now(),
-    });
-    return { ok: true, workspace, changed: true, order: [...order] };
+    return this.goals.reorderGoals(workspaceId, order, opts);
   }
-
   /**
    * Refresh a task's markdown body snapshot from its live `task:<taskId>`
    * doc room (the projection's debounced flush). The snapshot is for search
@@ -5802,20 +4336,18 @@ export class TaskStore {
 
   // ── Agent attachments (§4) ───────────────────────────────────────────────
   //
-  // The registry behind the triage-delivery bridge and the hub's attachment
-  // state. Records live in their own per-workspace sidecar; agent.* events
-  // ride the SAME emit choke point as every other §3.6 row (SSE + audit),
-  // carrying the PUBLIC shape — `endpoint` never leaves REST/sidecar.
+  // Attachments, the lead seat and the two delivery queues live in
+  // `task-agents.ts`; what follows is the store's public surface forwarding
+  // onto it, signatures unchanged.
 
-  /**
-   * Attach (or re-attach) an agent to a workspace — an upsert on
-   * (workspaceId, agentId). Attach is itself a tool call, so both liveness
-   * clocks start at now: a freshly attached agent reads as active, never as
-   * unresponsive-from-birth. The result carries the §3.3 one-line summary of
-   * open gating decisions and the untriaged Backlog tasks to sweep (§3.4) —
-   * a fresh context learns the gates exist without thinking to read the
-   * board.
-   */
+  mergeAgent(
+    from: string,
+    into: string,
+    opts: { actor: { id: string; name: string; kind?: string }; dryRun?: boolean },
+  ): { seats: string[]; seatsSkipped: string[]; attachments: string[]; comments: string[] } {
+    return this.agents.mergeAgent(from, into, opts);
+  }
+
   attachAgent(
     workspaceId: string,
     opts: {
@@ -5831,181 +4363,9 @@ export class TaskStore {
       processId?: string;
     },
   ): AttachAgentResult {
-    const state = this.workspaces.get(workspaceId);
-    if (!state) return { ok: false, error: 'workspace-not-found' };
-    // Same rule as the seat: a category cannot attach, because an attachment
-    // is what makes an id an addressee (and would claim an empty seat).
-    if (isCategoryAuthor({ id: opts.agentId })) {
-      return { ok: false, error: 'author-required', message: AUTHOR_REQUIRED_MESSAGE };
-    }
-    const survivor = this.roster?.mergedAwayInto(opts.agentId) ?? null;
-    if (survivor !== null) {
-      return {
-        ok: false,
-        error: 'merged-away',
-        into: survivor,
-        message:
-          `${opts.agentId} was merged into ${survivor}. Relaunch with CW_AGENT_NAME set to ` +
-          `that agent's name (or merge back first); attaching under the old id would ` +
-          'recreate the duplicate the merge removed.',
-      };
-    }
-    const now = Date.now();
-    // Is this attach a NEW process, or the same live one re-attaching (a
-    // lead declaration, a retry after `subscribed: false`, a defensive
-    // re-call)? The distinction decides whether the drains below may bypass
-    // the ack grace window. A caller that sends no nonce — an older bundle —
-    // is treated as fresh, which is exactly the behavior it was built
-    // against; a same-nonce re-attach must NOT re-hand rows whose frames are
-    // still in flight to this very process, or the agent reads the same
-    // comment twice (once off the wire, once off this response).
-    const priorProcessId = state.attachments.get(opts.agentId)?.processId;
-    const freshProcess = opts.processId === undefined || opts.processId !== priorProcessId;
-    const attachment: AgentAttachment = {
-      workspaceId,
-      agentId: opts.agentId,
-      runtime: opts.runtime,
-      ...(opts.endpoint !== undefined ? { endpoint: opts.endpoint } : {}),
-      ...(opts.pluginVersion !== undefined ? { pluginVersion: opts.pluginVersion } : {}),
-      ...(opts.processId !== undefined ? { processId: opts.processId } : {}),
-      lastHeartbeat: now,
-      lastToolCallAt: now,
-      capabilities: opts.capabilities ?? [],
-    };
-    state.attachments.set(opts.agentId, attachment);
-    this.scheduleAttachmentsSave(workspaceId);
-    // The attach is where an agent first says who it is, so the roster row
-    // is written here — one address book, not a per-board one.
-    this.roster?.upsertAgent(opts.agentId, opts.agentName);
-    // Claim an empty seat, or one whose holder is gone.
-    //
-    // The rule used to be EMPTY ONLY, and the reason it gave is still right:
-    // an occupied seat is a standing decision, and a second agent attaching
-    // is not a reassignment. What it could not see is that "occupied" and
-    // "occupied by somebody who is coming back" are different states. A
-    // session that respawned under a new name left the seat pointing at an id
-    // that had exited, and this branch — correctly, by its own rule — refused
-    // to touch it, so the board kept every lead-addressed delivery for a
-    // holder that no longer existed.
-    //
-    // So the guard is narrowed by exactly one case, and no further: a seat is
-    // takeable when its holder is STALE, which asks the socket before it asks
-    // any clock (see `leadSeatHealth`). A lead that is merely quiet still owns
-    // its seat. This is the carry-over the rename ticket asked us to pick one
-    // of: refuse to leave the seat with a dead holder, rather than guess which
-    // dead identity a new name used to be. Guessing is the option not taken —
-    // nothing in an attach identifies a session's previous id, and a wrong
-    // guess hands one agent's seat to another.
-    const seatBefore = this.leadSeatHealth(workspaceId, now);
-    const seatTakenFrom = seatBefore.stale ? seatBefore.leadAgentId : undefined;
-    if (state.workspace.leadAgentId === undefined || seatBefore.stale) {
-      // `now`, not a fresh read: the seat claim is part of THIS attach, and
-      // the `workspace.lead_changed` it emits is observed as this agent's
-      // work. Re-reading here would stamp the work clock a millisecond past
-      // the `lastHeartbeat` set four lines up.
-      this.assignLead(
-        state,
-        opts.agentId,
-        {
-          id: opts.agentId,
-          name: this.roster?.displayNameFor(opts.agentId) ?? opts.agentName ?? opts.agentId,
-          kind: 'agent',
-        },
-        now,
-      );
-    }
-    const lead = state.workspace.leadAgentId === opts.agentId;
-    // Only the lead drains the voice queue. A bystander attaching leaves the notes where they are for
-    // the lead's next attach — otherwise they are "delivered" into a payload
-    // that has no contract to act on them.
-    const queuedVoice = lead ? this.drainVoiceQueue(workspaceId, { freshProcess }) : undefined;
-    // Computed after the seat claim above: an agent that just took an empty
-    // seat holds it now, and the conflict is exactly as real for it.
-    const leadNameConflicts = lead
-      ? this.leadNameConflictsFor(workspaceId, opts.agentId)
-      : undefined;
-    // Emitted LAST, after every state change above: the projection refreshes
-    // off this event, so an earlier emit would repaint the board with a
-    // queued note this very call just drained.
-    this.emit({
-      type: 'agent.attached',
-      workspaceId,
-      agentId: opts.agentId,
-      attachment: publicAttachment(attachment, now, this.attachmentThresholds),
-      ts: now,
-    });
-    return {
-      ok: true,
-      attachment,
-      gating: this.gatingSummary(workspaceId),
-      untriaged: this.listUntriaged(workspaceId).map((t) => t.id),
-      ...(queuedVoice !== undefined ? { queuedVoice } : {}),
-      // Addressed, unlike queuedVoice: only rows FOR this agent, and they
-      // stay queued until its receipt — see takeDeliverableComments.
-      queuedComments: this.takeDeliverableComments(workspaceId, opts.agentId, {
-        freshProcess,
-      }),
-      lead,
-      // The seat as this attach LEFT it, so a session that reads its own
-      // response can tell which of the three states it is in without a second
-      // call. `lead: false` used to be the only signal here, and it reads the
-      // same whether a working peer holds the seat or a dead id does.
-      seat: this.leadSeatHealth(workspaceId, now),
-      ...(seatTakenFrom !== undefined ? { seatTakenFrom } : {}),
-      ...(isRetired(state.workspace) ? { retired: retiredNotice(state.workspace) } : {}),
-      ...(leadNameConflicts ? { leadNameConflicts } : {}),
-    };
+    return this.agents.attachAgent(workspaceId, opts);
   }
 
-  /**
-   * Other LIVE boards this agent leads under the same name as this one.
-   *
-   * The 2026-08-19 incident is detectable here and was reported nowhere: two
-   * boards named the same, led by the same agent, with different goal lists.
-   * The session read whichever it asked for and lost a night.
-   *
-   * Lead-gated on purpose. A bystander attaching to one of a pair is not the
-   * one who will pick wrong — the lead is, because the lead is the addressee
-   * for everything that says what to work on next. And computed over live
-   * boards only, so retiring one of the pair clears the warning: the fix has
-   * to visibly fix it, or the operator does the right thing and is told
-   * nothing changed.
-   */
-  private leadNameConflictsFor(
-    workspaceId: string,
-    agentId: string,
-  ): LeadNameConflicts | undefined {
-    const ws = this.workspaces.get(workspaceId)?.workspace;
-    if (!ws || ws.leadAgentId !== agentId || isRetired(ws)) return undefined;
-    const key = normalizeWorkspaceName(ws.name);
-    const boards: SameNamedWorkspace[] = [];
-    for (const state of this.workspaces.values()) {
-      const other = state.workspace;
-      if (other.id === workspaceId || isRetired(other)) continue;
-      if (other.leadAgentId !== agentId) continue;
-      if (normalizeWorkspaceName(other.name) !== key) continue;
-      boards.push({ workspaceId: other.id, name: other.name });
-    }
-    if (boards.length === 0) return undefined;
-    const ids = boards.map((b) => b.workspaceId).join(', ');
-    return {
-      boards,
-      notice:
-        `You lead ${boards.length + 1} live boards named "${ws.name}". You are attached to ` +
-        `${workspaceId}; the other${boards.length === 1 ? '' : 's'}: ${ids}. Two boards with ` +
-        'one name is how a session works the stale one for a night — read the goal lists, ' +
-        'then rename or retire whichever is not the live board.',
-    };
-  }
-
-  // ── Voice (§2.4 / §3.8) ──────────────────────────────────────────────────
-
-  /**
-   * Record a voice utterance + its routing outcome. This is the §3.6
-   * `voice.request` row: it reaches the audit log and every subscriber via
-   * the emit choke point, so "voice always answers" has a checkable
-   * artifact. Returns false (and emits nothing) for an unknown workspace.
-   */
   recordVoiceRequest(
     workspaceId: string,
     req: {
@@ -6019,32 +4379,9 @@ export class TaskStore {
       actor: { id: string; name: string; kind?: string };
     },
   ): boolean {
-    if (!this.workspaces.has(workspaceId)) return false;
-    this.emit({
-      type: 'voice.request',
-      workspaceId,
-      transcript: req.transcript,
-      route: req.route,
-      ack: req.ack,
-      ...(req.queueId !== undefined ? { queueId: req.queueId } : {}),
-      ...(req.context !== undefined ? { context: req.context } : {}),
-      actor: {
-        id: req.actor.id,
-        name: req.actor.name,
-        kind: classifyActor(req.actor),
-      },
-      ts: Date.now(),
-    });
-    return true;
+    return this.agents.recordVoiceRequest(workspaceId, req);
   }
 
-  /**
-   * Queue a change-utterance for the next agent attach. SYNCHRONOUS write,
-   * unlike every other sidecar: the caller is about to tell the speaker
-   * "queued", and an ack grounded in a debounce that a crash can drop would
-   * be the summaries-incident lie. Queue writes are rare (only while no
-   * agent is live), so the sync cost is nothing.
-   */
   queueVoiceRequest(
     workspaceId: string,
     item: {
@@ -6054,129 +4391,21 @@ export class TaskStore {
       applied?: string;
     },
   ): string | false {
-    if (!this.workspaces.has(workspaceId)) return false;
-    const id = cryptoId('vq');
-    const queued: QueuedVoiceRequest = {
-      id,
-      transcript: item.transcript,
-      ...(item.context !== undefined ? { context: item.context } : {}),
-      actor: { id: item.actor.id, name: item.actor.name, kind: classifyActor(item.actor) },
-      ...(item.applied !== undefined ? { applied: item.applied } : {}),
-      ts: Date.now(),
-    };
-    const path = voiceQueuePath(this.dataDir, workspaceId);
-    try {
-      const dir = join(this.dataDir, 'workspaces');
-      if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
-      const existing = this.listQueuedVoice(workspaceId);
-      writeFileSync(path, `${JSON.stringify({ queue: [...existing, queued] }, null, 2)}\n`);
-      return id;
-    } catch (err) {
-      console.error(`[tasks] failed to queue voice request for ${workspaceId}:`, err);
-      return false;
-    }
+    return this.agents.queueVoiceRequest(workspaceId, item);
   }
 
-  /** Read the queue without draining it (the hub could render a badge). */
   listQueuedVoice(workspaceId: string): QueuedVoiceRequest[] {
-    const path = voiceQueuePath(this.dataDir, workspaceId);
-    if (!existsSync(path)) return [];
-    try {
-      const parsed = JSON.parse(readFileSync(path, 'utf8')) as {
-        queue?: QueuedVoiceRequest[];
-      };
-      return (parsed.queue ?? []).filter((q) => typeof q?.transcript === 'string');
-    } catch (err) {
-      console.error(`[tasks] unreadable voice queue for ${workspaceId} — skipped:`, err);
-      return [];
-    }
+    return this.agents.listQueuedVoice(workspaceId);
   }
 
-  /** Replace the queue file, removing it when nothing is left — same
-   *  synchronous write as `queueVoiceRequest`, and for the same reason. */
-  private writeVoiceQueue(workspaceId: string, queue: QueuedVoiceRequest[]): void {
-    const path = voiceQueuePath(this.dataDir, workspaceId);
-    try {
-      if (queue.length === 0) {
-        rmSync(path, { force: true });
-        return;
-      }
-      writeFileSync(path, `${JSON.stringify({ queue }, null, 2)}\n`);
-    } catch (err) {
-      console.error(`[tasks] failed to rewrite voice queue for ${workspaceId}:`, err);
-    }
-  }
-
-  /**
-   * Record that this entry has gone out on the wire.
-   *
-   * Not the same as delivered, and the difference is the whole point: the
-   * server knows what it wrote to a socket and nothing more. Until an ack
-   * comes back the entry stays on the books.
-   */
   markVoiceEmitted(workspaceId: string, id: string): boolean {
-    const queue = this.listQueuedVoice(workspaceId);
-    const entry = queue.find((q) => q.id === id);
-    if (!entry) return false;
-    entry.emittedAt = Date.now();
-    this.writeVoiceQueue(workspaceId, queue);
-    return true;
+    return this.agents.markVoiceEmitted(workspaceId, id);
   }
 
-  /**
-   * The receiving process confirms it has the utterance. THIS is what makes a
-   * live delivery durable — before it, the route's only record that a message
-   * had been sent was a socket write that nothing checked.
-   *
-   * Returns false for an id that is not on the queue, rather than treating a
-   * stale or replayed receipt as licence to clear anything.
-   */
   ackVoiceRequest(workspaceId: string, id: string): boolean {
-    const queue = this.listQueuedVoice(workspaceId);
-    const next = queue.filter((q) => q.id !== id);
-    if (next.length === queue.length) return false;
-    this.writeVoiceQueue(workspaceId, next);
-    return true;
+    return this.agents.ackVoiceRequest(workspaceId, id);
   }
 
-  /**
-   * Hand over what this agent should act on, and keep what might still be in
-   * flight.
-   *
-   * `freshProcess` is the attach case. A session that just attached cannot be
-   * holding anything: whatever was emitted went to the process that is gone,
-   * so the grace window protects nobody and only delays the redelivery.
-   */
-  private drainVoiceQueue(
-    workspaceId: string,
-    opts?: { freshProcess?: boolean },
-  ): QueuedVoiceRequest[] {
-    const queue = this.listQueuedVoice(workspaceId);
-    if (queue.length === 0) return [];
-    const now = Date.now();
-    const inFlight = (q: QueuedVoiceRequest): boolean =>
-      !opts?.freshProcess && q.emittedAt !== undefined && now - q.emittedAt < this.voiceAckGraceMs;
-    const handOver = queue.filter((q) => !inFlight(q));
-    this.writeVoiceQueue(
-      workspaceId,
-      queue.filter((q) => inFlight(q)),
-    );
-    return handOver;
-  }
-
-  // ── Comment queue ────────────────────────────────────────────────────────
-  // The voice queue's shape (the queue is the record; live delivery is the
-  // fast path; the row clears on a receipt) with two deliberate differences:
-  // rows are ADDRESSED to one agent and drain only for it, and a drain never
-  // removes anything — only `ackComment` does, so a handover the session
-  // never read comes back after the grace window instead of dying with the
-  // response body that carried it.
-
-  /**
-   * Queue one comment for one agent. SYNCHRONOUS write, like
-   * `queueVoiceRequest` and for the same reason: "queued" is a promise, and
-   * a promise living in a debounce dies with the process.
-   */
   queueComment(
     workspaceId: string,
     item: {
@@ -6189,489 +4418,59 @@ export class TaskStore {
       payload?: unknown;
     },
   ): string | false {
-    if (!this.workspaces.has(workspaceId)) return false;
-    const id = cryptoId('cq');
-    const queued: QueuedComment = {
-      id,
-      agentId: item.agentId,
-      docId: item.docId,
-      ...(item.threadId !== undefined ? { threadId: item.threadId } : {}),
-      event: item.event,
-      author: { id: item.author.id, name: item.author.name },
-      text: item.text,
-      ...(item.payload !== undefined ? { payload: item.payload } : {}),
-      ts: Date.now(),
-    };
-    try {
-      const dir = join(this.dataDir, 'workspaces');
-      if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
-      // Oldest dropped past the cap — PER ADDRESSEE, not across the file.
-      // This file is delivery bookkeeping and the comment itself lives in
-      // its thread, so an addressee that never acks (an old bundle, an
-      // orphaned durable watch) must not grow it forever. But the cap it
-      // hits must be its own: a shared cap would let one dead addressee's
-      // backlog silently evict a LIVE agent's still-pending row, with no
-      // signal anywhere that it happened.
-      const existing = this.listQueuedComments(workspaceId);
-      const mine = existing.filter((q) => q.agentId === item.agentId);
-      const overflow = mine.length + 1 - MAX_QUEUED_COMMENTS;
-      let next = [...existing, queued];
-      if (overflow > 0) {
-        const drop = new Set(mine.slice(0, overflow).map((q) => q.id));
-        next = next.filter((q) => !drop.has(q.id));
-      }
-      writeFileSync(
-        commentQueuePath(this.dataDir, workspaceId),
-        `${JSON.stringify({ queue: next }, null, 2)}\n`,
-      );
-      return id;
-    } catch (err) {
-      console.error(`[tasks] failed to queue comment for ${workspaceId}:`, err);
-      return false;
-    }
+    return this.agents.queueComment(workspaceId, item);
   }
 
-  /** Read the whole queue without touching it (badges, tests, coverage). */
   listQueuedComments(workspaceId: string): QueuedComment[] {
-    const path = commentQueuePath(this.dataDir, workspaceId);
-    if (!existsSync(path)) return [];
-    try {
-      const parsed = JSON.parse(readFileSync(path, 'utf8')) as { queue?: QueuedComment[] };
-      return (parsed.queue ?? []).filter(
-        (q) => typeof q?.id === 'string' && typeof q?.agentId === 'string',
-      );
-    } catch (err) {
-      console.error(`[tasks] unreadable comment queue for ${workspaceId} — skipped:`, err);
-      return [];
-    }
+    return this.agents.listQueuedComments(workspaceId);
   }
 
-  /** Replace the queue file, removing it when nothing is left — same
-   *  synchronous write as `queueComment`, and for the same reason. */
-  private writeCommentQueue(workspaceId: string, queue: QueuedComment[]): void {
-    const path = commentQueuePath(this.dataDir, workspaceId);
-    try {
-      if (queue.length === 0) {
-        rmSync(path, { force: true });
-        return;
-      }
-      writeFileSync(path, `${JSON.stringify({ queue }, null, 2)}\n`);
-    } catch (err) {
-      console.error(`[tasks] failed to rewrite comment queue for ${workspaceId}:`, err);
-    }
-  }
-
-  /** Record that this row went out on the wire. Not the same as delivered —
-   *  the row stays on the books until the ack. */
   markCommentEmitted(workspaceId: string, id: string): boolean {
-    const queue = this.listQueuedComments(workspaceId);
-    const entry = queue.find((q) => q.id === id);
-    if (!entry) return false;
-    entry.emittedAt = Date.now();
-    this.writeCommentQueue(workspaceId, queue);
-    return true;
+    return this.agents.markCommentEmitted(workspaceId, id);
   }
 
-  /**
-   * Roll back an emitted mark for a row whose send reached NO socket. The
-   * heartbeat route marks a row emitted when it hands it over, then attempts
-   * the addressed frame — but `sse.sendToAgent` returning 0 is a real answer
-   * ("the agent holds no stream"), and a row left marked against a send that
-   * never happened waits out a full grace window before anything re-offers
-   * it. Worse, if the agent's stream stays down while its heartbeats keep
-   * landing, the cycle repeats forever: mark → silent 0-sink send → grace →
-   * mark again. Clearing the mark makes the very next heartbeat a fresh
-   * delivery attempt instead. No-op (false) for unknown or un-emitted rows.
-   */
   clearCommentEmitted(workspaceId: string, id: string): boolean {
-    const queue = this.listQueuedComments(workspaceId);
-    const entry = queue.find((q) => q.id === id);
-    if (!entry || entry.emittedAt === undefined) return false;
-    // JSON.stringify drops an undefined property, so the persisted row
-    // comes back with no emittedAt at all — indistinguishable from never
-    // having been sent, which is the point.
-    entry.emittedAt = undefined;
-    this.writeCommentQueue(workspaceId, queue);
-    return true;
+    return this.agents.clearCommentEmitted(workspaceId, id);
   }
 
-  /**
-   * The receiving process confirms it has the comment — the ONLY thing that
-   * removes a row. False for an unknown id, so a stale or replayed receipt
-   * is never licence to clear anything else.
-   */
   ackComment(workspaceId: string, id: string): boolean {
-    const queue = this.listQueuedComments(workspaceId);
-    const next = queue.filter((q) => q.id !== id);
-    if (next.length === queue.length) return false;
-    this.writeCommentQueue(workspaceId, next);
-    return true;
+    return this.agents.ackComment(workspaceId, id);
   }
 
-  /**
-   * Hand over what THIS agent should hear now, marking each row emitted but
-   * removing nothing. `freshProcess` is the attach case, exactly as for
-   * voice: whatever was in flight went to a process that is gone, so the
-   * grace window protects nobody there.
-   */
-  private takeDeliverableComments(
-    workspaceId: string,
-    agentId: string,
-    opts?: { freshProcess?: boolean },
-  ): QueuedComment[] {
-    const queue = this.listQueuedComments(workspaceId);
-    if (queue.length === 0) return [];
-    const now = Date.now();
-    const inFlight = (q: QueuedComment): boolean =>
-      !opts?.freshProcess &&
-      q.emittedAt !== undefined &&
-      now - q.emittedAt < this.commentAckGraceMs;
-    const handOver = queue.filter((q) => q.agentId === agentId && !inFlight(q));
-    if (handOver.length === 0) return [];
-    for (const q of handOver) q.emittedAt = now;
-    this.writeCommentQueue(workspaceId, queue);
-    return handOver;
-  }
-
-  /**
-   * Record a heartbeat. A plain heartbeat proves only that the process is
-   * alive; `toolCallAt` lets the runtime report when it last did WORK — the
-   * two clocks are deliberately separate (§4: a session at its usage limit
-   * heartbeats normally for hours). `toolCallAt` is monotonic and clamped to
-   * now: it can neither backdate nor forward-date activity.
-   */
   heartbeat(workspaceId: string, agentId: string, opts?: { toolCallAt?: number }): HeartbeatResult {
-    const attachment = this.workspaces.get(workspaceId)?.attachments.get(agentId);
-    if (!attachment) return { ok: false, error: 'not-found' };
-    const now = Date.now();
-    attachment.lastHeartbeat = now;
-    if (opts?.toolCallAt !== undefined) {
-      const claimed = Math.min(opts.toolCallAt, now);
-      if (claimed > attachment.lastToolCallAt) attachment.lastToolCallAt = claimed;
-    }
-    this.scheduleAttachmentsSave(workspaceId);
-    this.emit({
-      type: 'agent.heartbeat',
-      workspaceId,
-      agentId,
-      attachment: publicAttachment(attachment, now, this.attachmentThresholds),
-      ts: now,
-    });
-    // A heartbeat is an observation, and every observation is a chance to hand
-    // back what was parked. Before this the queue drained ONLY from
-    // `attachAgent`, which a long-running session calls once at startup — so a
-    // request queued at 16:41 waited for a process restart, and the ack that
-    // said "queued for its next attach" was describing a wait with no end in
-    // sight rather than a short one.
-    const queuedVoice = this.drainVoiceQueue(workspaceId);
-    // The emit IS the delivery, exactly as it is on the live `agent` route:
-    // the event rides `ws~<workspaceId>`, which this agent's MCP watch turns
-    // into a channel frame. Returning it in the response would not do — the
-    // heartbeat that carries most of these is sent by the keepalive, which
-    // piggybacks a real tool call and discards the body, so a queued
-    // utterance handed back only in the result would be handed to nobody.
-    for (const q of queuedVoice) {
-      this.recordVoiceRequest(workspaceId, {
-        transcript: q.transcript,
-        route: 'agent',
-        ack: q.applied
-          ? `Delivered from the queue. Already applied: ${q.applied}`
-          : 'Delivered from the queue.',
-        ...(q.context !== undefined ? { context: q.context } : {}),
-        actor: q.actor,
-      });
-    }
-    // The comment queue rides the same observation, addressed to exactly this
-    // agent. Handed over (and marked emitted) but never removed here — the
-    // caller re-sends each row as an addressed frame carrying its id, and the
-    // row clears on the receiving process's ack.
-    const queuedComments = this.takeDeliverableComments(workspaceId, agentId);
-    return {
-      ok: true,
-      attachment,
-      ...(queuedVoice.length > 0 ? { queuedVoice } : {}),
-      ...(queuedComments.length > 0 ? { queuedComments } : {}),
-    };
+    return this.agents.heartbeat(workspaceId, agentId, opts);
   }
 
-  /**
-   * Bump lastToolCallAt. No event — tool calls are not a §3.6 row; the next
-   * heartbeat event carries the moved clock.
-   *
-   * `at` is when the work was observed, defaulting to now. Callers that are
-   * recording a specific event should pass that event's `ts` rather than
-   * re-reading the clock: attaching emits `workspace.lead_changed` when it
-   * claims an empty seat, and a fresh `Date.now()` there lands a millisecond
-   * past the attach's own timestamp, breaking the "a new attachment's two
-   * clocks are equal" contract about 1 run in 3.
-   *
-   * Passing the event's `ts` is only half of that, and the half this comment
-   * used to describe as the whole. It buys nothing unless the EVENT's `ts` is
-   * the operation's own — `assignLead` went on taking a `Date.now()` of its
-   * own for the row it emits, so the same millisecond still split the same
-   * two clocks, just one call deeper. Measured at 8 failures in 300 runs
-   * before `assignLead` was made to take its caller's `ts`. The rule the two
-   * fixes add up to: one operation, one clock read, threaded all the way
-   * down.
-   *
-   * Clamped to now and monotonic, the same guards `heartbeat` applies to a
-   * claimed `toolCallAt`: a clock may not run ahead of the server's, and
-   * observing older work than we already knew about is not news.
-   */
   noteAgentToolCall(workspaceId: string, agentId: string, at?: number): boolean {
-    const attachment = this.workspaces.get(workspaceId)?.attachments.get(agentId);
-    if (!attachment) return false;
-    const observed = Math.min(at ?? Date.now(), Date.now());
-    if (observed <= attachment.lastToolCallAt) return true;
-    attachment.lastToolCallAt = observed;
-    this.scheduleAttachmentsSave(workspaceId);
-    return true;
+    return this.agents.noteAgentToolCall(workspaceId, agentId, at);
   }
 
-  /** Remove an attachment. Emits agent.detached once; a second detach has
-   *  nothing left to announce. */
   detachAgent(workspaceId: string, agentId: string): boolean {
-    const state = this.workspaces.get(workspaceId);
-    const attachment = state?.attachments.get(agentId);
-    if (!state || !attachment) return false;
-    const now = Date.now();
-    state.attachments.delete(agentId);
-    this.scheduleAttachmentsSave(workspaceId);
-    this.emit({
-      type: 'agent.detached',
-      workspaceId,
-      agentId,
-      attachment: publicAttachment(attachment, now, this.attachmentThresholds),
-      ts: now,
-    });
-    return true;
+    return this.agents.detachAgent(workspaceId, agentId);
   }
 
-  /** Full records + derived state — the OWNER surface (endpoint included).
-   *  Visitors get `listPublicAttachments` instead. */
   listAttachments(workspaceId: string): DescribedAttachment[] {
-    const state = this.workspaces.get(workspaceId);
-    if (!state) return [];
-    const now = Date.now();
-    return Array.from(state.attachments.values())
-      .sort((a, b) => a.agentId.localeCompare(b.agentId))
-      .map((att) => {
-        const s = attachmentState(att, now, this.attachmentThresholds);
-        return { ...att, state: s, stateLabel: attachmentStateLabel(s) };
-      });
+    return this.agents.listAttachments(workspaceId);
   }
 
-  /** The visitor-redacted read: same list, endpoint stripped. */
   listPublicAttachments(workspaceId: string): PublicAttachment[] {
-    const state = this.workspaces.get(workspaceId);
-    if (!state) return [];
-    const now = Date.now();
-    return Array.from(state.attachments.values())
-      .sort((a, b) => a.agentId.localeCompare(b.agentId))
-      .map((att) => publicAttachment(att, now, this.attachmentThresholds));
+    return this.agents.listPublicAttachments(workspaceId);
   }
 
-  /**
-   * The newest moment the server OBSERVED this agent: a heartbeat it sent, or
-   * a write it made. Whichever is later — the two are independent evidence and
-   * taking the max means adding the observed clock never makes an agent look
-   * *less* alive than it did before.
-   */
-  private lastObserved(att: Pick<AgentAttachment, 'lastHeartbeat' | 'lastToolCallAt'>): number {
-    return Math.max(att.lastHeartbeat, att.lastToolCallAt);
-  }
-
-  /** Recent enough to hand work to, AND with the channel open to carry it. */
-  private isDeliverable(
-    workspaceId: string,
-    att: Pick<AgentAttachment, 'lastHeartbeat' | 'lastToolCallAt'> & { agentId?: string },
-  ): boolean {
-    // The socket outranks the clock. An agent doing local work — grep, file
-    // reads, a test run — makes no call this server can see, so the observed
-    // window expires under a session that never went anywhere. Measured
-    // 2026-08-19: a 19.1-minute working gap against a 15-minute window, with
-    // the agent's stream open for every second of it. Asked first because
-    // when it says yes there is nothing the clock could add.
-    if (att.agentId && this.agentStreamProbe?.(workspaceId, att.agentId)) return true;
-    const freshMs = this.attachmentThresholds.observedWorkFreshMs ?? OBSERVED_LIVE_MS;
-    if (Date.now() - this.lastObserved(att) >= freshMs) return false;
-    // Asked last and separately: the clock says the agent was here recently,
-    // this says somebody is on the wire to receive what we are about to send.
-    return this.deliveryProbe?.(workspaceId) ?? true;
-  }
-
-  /**
-   * Is any attached agent live enough to hand a request to? This is what
-   * grounds the triage pending marker (§3.4): "emitted to a live attachment"
-   * means someone is there to act — existence alone proves nothing, and
-   * promising work to a runtime that died an hour ago would be the
-   * summaries-incident lie again.
-   *
-   * Liveness is OBSERVED, never self-reported. It used to read `lastHeartbeat`
-   * alone, which measured whether a model remembered to announce itself — see
-   * `OBSERVED_LIVE_MS` for the measurement and what it cost.
-   */
   hasLiveAttachment(workspaceId: string): boolean {
-    const state = this.workspaces.get(workspaceId);
-    if (!state) return false;
-    for (const att of state.attachments.values()) {
-      if (this.isDeliverable(workspaceId, att)) return true;
-    }
-    return false;
+    return this.agents.hasLiveAttachment(workspaceId);
   }
 
-  /**
-   * Is the workspace's LEAD agent live right now?
-   *
-   * Stricter than `hasLiveAttachment` on purpose, and only goal-edit
-   * re-triage uses it: that request asks someone to re-place the whole
-   * board against a new north star, which is the lead's job. A bystander
-   * agent being connected is not a reason to call it delivered — it is
-   * exactly how a goal edit ended up "delivered" to nobody accountable.
-   * False also covers the empty seat, where there is no addressee at all.
-   */
   hasLiveLeadAttachment(workspaceId: string): boolean {
-    const state = this.workspaces.get(workspaceId);
-    const leadAgentId = state?.workspace.leadAgentId;
-    if (!state || leadAgentId === undefined) return false;
-    const att = state.attachments.get(leadAgentId);
-    if (!att) return false;
-    // Same observed clock as `hasLiveAttachment` — fixing one and not the
-    // other would leave board-wide requests queueing while ordinary ones flow.
-    return this.isDeliverable(workspaceId, att);
+    return this.agents.hasLiveLeadAttachment(workspaceId);
   }
 
-  /**
-   * Is this board's lead seat held by somebody who is still there?
-   *
-   * WHAT IT IS KEYED ON, because the choice is the whole design. The socket
-   * first: an open stream is positive evidence of a live process and it
-   * outranks every clock, so a lead that spent 19 minutes grepping is live
-   * and stays live. Only once the stream is gone does the clock get a vote,
-   * and then at `LEAD_SEAT_STALE_MS` rather than the delivery gate's window.
-   *
-   * It is deliberately NOT keyed on how long the board has been quiet.
-   * Elapsed silence was measured at 40% false positives against provably
-   * active sessions, and it cannot tell a busy lead from an exited one —
-   * which is the single distinction this whole read exists to make.
-   *
-   * A seat held by an id that never attached (`known-agent`, a hand-set
-   * lead) is stale too, and with no `lastObservedAt`: nothing was ever
-   * observed, so there is no moment to report and no reason to believe
-   * anybody is listening.
-   */
   leadSeatHealth(workspaceId: string, now = Date.now()): LeadSeatHealth {
-    const state = this.workspaces.get(workspaceId);
-    const leadAgentId = state?.workspace.leadAgentId;
-    // An empty seat is not stale — it is empty, which every surface already
-    // says loudly. Reporting it as stale would bury the one new signal in a
-    // state people have been reading correctly all along.
-    if (!state || leadAgentId === undefined) return { live: false, stale: false };
-    const att = state.attachments.get(leadAgentId);
-    if (att && this.isDeliverable(workspaceId, att)) {
-      return { leadAgentId, live: true, stale: false, lastObservedAt: this.lastObserved(att) };
-    }
-    // The stream is what makes a quiet lead safe, so ask it on its own rather
-    // than inheriting `isDeliverable`'s answer: that predicate also returns
-    // false for a lead whose stream is open when the BOARD has no delivery
-    // channel, and a board-wide outage is not evidence about this agent.
-    if (this.agentStreamProbe?.(workspaceId, leadAgentId)) {
-      return {
-        leadAgentId,
-        live: true,
-        stale: false,
-        ...(att ? { lastObservedAt: this.lastObserved(att) } : {}),
-      };
-    }
-    // No record at all: report it, never act on it. A board created with a
-    // lead named in advance sits here for the seconds before that session
-    // attaches, and treating the gap as death let the next arrival take a seat
-    // its owner was walking towards.
-    if (!att) {
-      return {
-        leadAgentId,
-        live: false,
-        stale: false,
-        unattached: true,
-        notice:
-          `The lead seat is held by ${leadAgentId}, which this board has no attachment ` +
-          'record for — it has never been observed here, or its record was detached. ' +
-          'Nothing is draining what queues for it. If that session is not coming, hand ' +
-          'the seat to one that is.',
-      };
-    }
-    const lastObservedAt = this.lastObserved(att);
-    const staleForMs = Math.max(0, now - lastObservedAt);
-    // Off the wire, but not for long enough to conclude anything. This is the
-    // reconnect blip, and calling it stale here is how a working lead loses
-    // its seat to the next session that attaches.
-    const staleAfterMs = this.attachmentThresholds.leadSeatStaleMs ?? LEAD_SEAT_STALE_MS;
-    if (staleForMs < staleAfterMs) {
-      return { leadAgentId, live: false, stale: false, lastObservedAt };
-    }
-    return {
-      leadAgentId,
-      live: false,
-      stale: true,
-      lastObservedAt,
-      staleForMs,
-      notice:
-        `The lead seat is held by ${leadAgentId}, which is off the wire and was last ` +
-        `observed ${describeGap(staleForMs)} ago. Every lead-addressed delivery on this ` +
-        'board — comments, review answers, stall nudges — is waiting on a session that ' +
-        'is not there.',
-    };
+    return this.agents.leadSeatHealth(workspaceId, now);
   }
 
-  /**
-   * Is THIS named agent live on this board — the per-agent form of
-   * `hasLiveAttachment`.
-   *
-   * Exists because the coverage read ("which boards am I missing work on?")
-   * asks about one specific agent, and answering it from `attachmentState`
-   * measures the wrong thing. That state is heartbeat-only and feeds the
-   * displayed active/away label; delivery rides the observed clock. Between
-   * the two windows sits a real gap where an agent is shown `away` and is
-   * nonetheless handed every request — so a coverage row built on the label
-   * reports a problem the agent does not have, and prescribes a remedy
-   * (claiming a seat) whose whole hazard is that it can evict a working peer.
-   */
   hasLiveAttachmentFor(workspaceId: string, agentId: string): boolean {
-    const state = this.workspaces.get(workspaceId);
-    if (!state) return false;
-    const att = state.attachments.get(agentId);
-    if (!att) return false;
-    return this.isDeliverable(workspaceId, att);
-  }
-
-  /** Open decision tasks that gate open tasks via `after` edges, rolled into
-   *  the §3.3 one-liner: "2 open decisions gating 3 tasks". */
-  private gatingSummary(workspaceId: string): GatingSummary {
-    const state = this.workspaces.get(workspaceId);
-    const decisions = new Set<string>();
-    const gated = new Set<string>();
-    if (state) {
-      for (const task of state.tasks.values()) {
-        if (task.status === 'done') continue;
-        for (const depId of task.after) {
-          const dep = state.tasks.get(depId);
-          if (dep && dep.status !== 'done' && dep.needs === 'decision') {
-            decisions.add(dep.id);
-            gated.add(task.id);
-          }
-        }
-      }
-    }
-    const d = decisions.size;
-    const g = gated.size;
-    return {
-      openDecisions: d,
-      gatedTasks: g,
-      summary:
-        d === 0
-          ? 'no open gating decisions'
-          : `${d} open decision${d === 1 ? '' : 's'} gating ${g} task${g === 1 ? '' : 's'}`,
-    };
+    return this.agents.hasLiveAttachmentFor(workspaceId, agentId);
   }
 
   // ── Persistence ──────────────────────────────────────────────────────────
