@@ -4,7 +4,7 @@ import {
   DEFAULT_DONE_WINDOW,
   type HubTask,
   boardSections,
-} from '../src/hub/hub-model.ts';
+} from '../src/hub/hub-board-model.ts';
 import type { GoalDetailHandlers } from '../src/hub/hub-render.ts';
 import { disposeGoalDetail, renderGoalDetail } from './support/goal-detail.ts';
 

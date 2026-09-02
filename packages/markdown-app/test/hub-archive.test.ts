@@ -3,10 +3,10 @@ import {
   type HubTask,
   archivedTasks,
   boardSections,
-  describeEvent,
   isTaskArchived,
   taskVisible,
-} from '../src/hub/hub-model.ts';
+} from '../src/hub/hub-board-model.ts';
+import { describeEvent } from '../src/hub/hub-model.ts';
 import {
   type ArchivedViewHandlers,
   type DetailHandlers,

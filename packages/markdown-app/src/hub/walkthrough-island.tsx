@@ -49,9 +49,8 @@ import {
   focusMarkdownComposer,
   refreshMarkdownComposer,
 } from '../md-composer.ts';
+import { type HubDecisionOption, type HubTask } from './hub-board-model.ts';
 import {
-  type HubDecisionOption,
-  type HubTask,
   type ReviewItem,
   type ReviewKind,
   type ReviewQueue,

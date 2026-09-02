@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { CHORES_ID, type HubTask } from '../src/hub/hub-model.ts';
+import { CHORES_ID, type HubTask } from '../src/hub/hub-board-model.ts';
 import { type DetailHandlers, renderQuickActions } from '../src/hub/hub-render.ts';
 import { disposeTaskDetail, renderTaskDetail } from './support/task-detail.ts';
 

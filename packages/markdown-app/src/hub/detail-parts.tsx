@@ -19,7 +19,7 @@
 import type { RefObject } from 'preact';
 import { useLayoutEffect, useRef } from 'preact/hooks';
 import { attachMarkdownComposer, focusMarkdownComposer } from '../md-composer.ts';
-import type { HubReviewItem } from './hub-model.ts';
+import type { HubReviewItem } from './hub-board-model.ts';
 import {
   type TaskDiscussion,
   commentRow,

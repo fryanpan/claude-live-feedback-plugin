@@ -3,7 +3,11 @@ import { resolve } from 'node:path';
 import { options } from 'preact';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { goalDetailData, mountGoalDetailIsland } from '../src/hub/goal-detail-island.tsx';
-import { type BoardSection, DEFAULT_DONE_WINDOW, boardSections } from '../src/hub/hub-model.ts';
+import {
+  type BoardSection,
+  DEFAULT_DONE_WINDOW,
+  boardSections,
+} from '../src/hub/hub-board-model.ts';
 import type { GoalDetailHandlers, TaskDiscussion } from '../src/hub/hub-render.ts';
 
 /**

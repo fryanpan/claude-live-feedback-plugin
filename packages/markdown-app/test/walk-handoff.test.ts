@@ -1,9 +1,8 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
+import { CHORES_ID, type HubTask } from '../src/hub/hub-board-model';
 import {
-  CHORES_ID,
-  type HubTask,
   type ReviewQueue,
   type ReviewThreadItem,
   reviewQueue,

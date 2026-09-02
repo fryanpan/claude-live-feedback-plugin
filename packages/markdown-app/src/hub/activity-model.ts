@@ -1,3 +1,12 @@
+import {
+  CHORES_ID,
+  type HubGoal,
+  type HubNote,
+  type HubTask,
+  type TaskStatus,
+  goalRank,
+  isTaskArchived,
+} from './hub-board-model.ts';
 /**
  * The Home page's "Recent activity" pane, as a pure view model: which tasks
  * moved lately, what their agents said, and the one flag a group may wear.
@@ -10,18 +19,7 @@
  * question the pane answers is "what is happening to the work", and an
  * agent's name is a detail on each line, not a heading.
  */
-import {
-  CHORES_ID,
-  type HubGoal,
-  type HubNote,
-  type HubTask,
-  type ReviewItem,
-  type TaskStatus,
-  goalRank,
-  isTaskArchived,
-  reviewRowTitle,
-  timeAgo,
-} from './hub-model.ts';
+import { type ReviewItem, reviewRowTitle, timeAgo } from './hub-model.ts';
 
 /** Only movement inside this window is activity; a task quiet for longer
  *  than a day is not "recent" whatever it did before. */
