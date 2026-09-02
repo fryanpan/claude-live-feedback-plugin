@@ -3,9 +3,11 @@ import { FOLLOW_SLACK_PX, WASH_GRACE_MS, createMeetingLiveZone } from '../src/me
 
 /**
  * The provisional zone (meeting-notes UX plan, AC 3/4): the live transcript
- * at the end of the doc, per-line meeting timestamps, speaker pills only
- * once a second voice is heard, the splitting-off card while a tick
- * composes, and lines leaving the zone the moment their note is written.
+ * at the end of the doc as ONE run of text — no per-turn stamps or blocks
+ * (owner, 2026-09-01: "engine turns have no meaning or value to the
+ * viewer") — speaker pills only once a second voice is heard, the
+ * splitting-off card while a tick composes, and words leaving the zone the
+ * moment their note is written.
  */
 
 let parent: HTMLElement;
@@ -24,8 +26,9 @@ const zoneEl = (): HTMLElement => {
   if (!el) throw new Error('no .live-zone rendered');
   return el;
 };
-const lines = (): string[] =>
-  [...zoneEl().querySelectorAll<HTMLElement>('.lz-lines .lz-line')].map((l) => l.textContent ?? '');
+const turns = (): string[] =>
+  [...zoneEl().querySelectorAll<HTMLElement>('.lz-lines .lz-turn')].map((l) => l.textContent ?? '');
+const stream = (): string => zoneEl().querySelector('.lz-lines')?.textContent ?? '';
 
 describe('the provisional live zone', () => {
   it('is hidden until a live meeting has words, and renders after the editor content', () => {
@@ -46,17 +49,48 @@ describe('the provisional live zone', () => {
     expect(zoneEl().hidden).toBe(true);
   });
 
-  it('each line leads with its own meeting time, kept across revisions', () => {
+  it('renders N finals as one run of text: no stamps, no blocks, a space between turns', () => {
     const zone = createMeetingLiveZone({ parent, now });
     zone.begin(now());
-    clock += 258_000; // 04:18 into the meeting
+    clock += 258_000;
     zone.onTurn({ turn: 0, text: 'the first ver', final: false });
     clock += 12_000;
-    zone.onTurn({ turn: 0, text: 'the first version, corrected.', final: true });
-    const ts = zoneEl().querySelector('.lz-ts')?.textContent;
-    // The moment the turn was FIRST heard — not when it settled.
-    expect(ts).toBe('04:18');
-    expect(lines()).toEqual(['04:18the first version, corrected.']);
+    zone.onTurn({ turn: 0, text: 'The first version, corrected.', final: true });
+    zone.onTurn({ turn: 1, text: 'Then a few more words', final: true });
+    zone.onTurn({ turn: 2, text: 'and the rest of the sentence.', final: true });
+    const lines = zoneEl().querySelector<HTMLElement>('.lz-lines');
+    if (!lines) throw new Error('no .lz-lines');
+    // No mm:ss anywhere in the stream — a turn's arrival time is the
+    // engine's business, not the reader's.
+    expect(lines.textContent).not.toMatch(/\b\d\d:\d\d\b/);
+    expect(lines.querySelector('.lz-ts')).toBeNull();
+    // Every child is inline: a span per turn, a text node between, nothing
+    // block-level, so the words wrap as one paragraph.
+    for (const child of [...lines.childNodes]) {
+      if (child.nodeType === Node.TEXT_NODE) {
+        expect(child.textContent).toBe(' ');
+        continue;
+      }
+      expect((child as Element).tagName).toBe('SPAN');
+      expect((child as Element).classList.contains('lz-turn')).toBe(true);
+    }
+    expect(lines.querySelector('div, p, li')).toBeNull();
+    expect(stream()).toBe(
+      'The first version, corrected. Then a few more words and the rest of the sentence.',
+    );
+  });
+
+  it('keeps a line break the engine put in a turn, and adds none of its own', () => {
+    const zone = createMeetingLiveZone({ parent, now });
+    zone.begin(now());
+    zone.onTurn({ turn: 0, text: 'First paragraph.\nSecond paragraph.', final: true });
+    zone.onTurn({ turn: 1, text: 'No break before this.', final: true });
+    const lines = zoneEl().querySelector<HTMLElement>('.lz-lines');
+    if (!lines) throw new Error('no .lz-lines');
+    expect(lines.querySelectorAll('br')).toHaveLength(1);
+    const first = lines.querySelector('.lz-turn');
+    expect(first?.querySelector('br')).not.toBeNull();
+    expect(turns()).toEqual(['First paragraph.Second paragraph.', 'No break before this.']);
   });
 
   it('only the line still being spoken carries the caret', () => {
@@ -64,16 +98,20 @@ describe('the provisional live zone', () => {
     zone.begin(now());
     zone.onTurn({ turn: 0, text: 'done.', final: true });
     zone.onTurn({ turn: 1, text: 'still going', final: false });
-    const rendered = [...zoneEl().querySelectorAll<HTMLElement>('.lz-line')];
+    const rendered = [...zoneEl().querySelectorAll<HTMLElement>('.lz-turn')];
     expect(rendered.map((l) => l.classList.contains('lz-partial'))).toEqual([false, true]);
   });
 
-  it('speaker pills appear only once a second voice has been heard', () => {
+  it('speaker pills appear only once a second voice has been heard, and only where the voice changes', () => {
     const zone = createMeetingLiveZone({ parent, now });
     zone.begin(now());
     zone.onTurn({ turn: 0, text: 'just me so far.', final: true, speaker: 'A' });
+    zone.onTurn({ turn: 1, text: 'still me.', final: true, speaker: 'A' });
     expect(zoneEl().querySelector('.lz-speaker')).toBeNull();
-    zone.onTurn({ turn: 1, text: 'a second voice.', final: false, speaker: 'B' });
+    zone.onTurn({ turn: 2, text: 'a second voice.', final: true, speaker: 'B' });
+    zone.onTurn({ turn: 3, text: 'the same voice, going on', final: false, speaker: 'B' });
+    // One pill per run of a voice — the engine's turn boundaries inside a
+    // run are not the reader's.
     const pills = [...zoneEl().querySelectorAll<HTMLElement>('.lz-speaker')];
     expect(pills.map((p) => p.textContent)).toEqual(['Speaker A', 'Speaker B']);
     zone.setNames({ A: 'Dana' });
@@ -98,11 +136,11 @@ describe('the provisional live zone', () => {
       'Writing this into the notes above…',
     );
     // The remainder keeps streaming below the card.
-    expect(lines()).toEqual(['00:00the next one, mid-air']);
+    expect(turns()).toEqual(['the next one, mid-air']);
 
     zone.onProgress({ tick: 1, phase: 'written', turns: [0] });
     expect(chunk.hidden).toBe(true);
-    expect(lines()).toEqual(['00:00the next one, mid-air']);
+    expect(turns()).toEqual(['the next one, mid-air']);
   });
 
   it('a failed tick returns its lines to the stream — they are still provisional', () => {
@@ -112,7 +150,7 @@ describe('the provisional live zone', () => {
     zone.onProgress({ tick: 1, phase: 'composing', turns: [0] });
     zone.onProgress({ tick: 1, phase: 'failed', turns: [0] });
     expect(zoneEl().querySelector<HTMLElement>('.lz-chunk')?.hidden).toBe(true);
-    expect(lines()).toEqual(['00:00carried words.']);
+    expect(turns()).toEqual(['carried words.']);
   });
 
   it('clearSettled drops final lines and keeps the one being spoken (bot fallback)', () => {
@@ -121,7 +159,7 @@ describe('the provisional live zone', () => {
     zone.onTurn({ turn: 0, text: 'written by the bot path.', final: true });
     zone.onTurn({ turn: 1, text: 'still talking', final: false });
     zone.clearSettled();
-    expect(lines()).toEqual(['00:00still talking']);
+    expect(turns()).toEqual(['still talking']);
   });
 
   it('end() hides and forgets; the wash stays armed for the grace window only', () => {

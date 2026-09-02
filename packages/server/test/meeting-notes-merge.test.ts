@@ -690,7 +690,11 @@ describe('a stop-and-restart never replaces what is already written', () => {
     expect(md.indexOf('His plan.')).toBeLessThan(md.indexOf('new meeting note'));
   });
 
-  it('the section this meeting is writing stays its target when a person types below it', () => {
+  it('a heading a person types below the section sends the next notes to the END of the doc', () => {
+    // Owner's call (2026-09-01): "note always at the end of doc for now".
+    // The section this meeting was writing is no longer the doc's tail once
+    // a person writes below it; the next tick starts a fresh section after
+    // their words instead of growing the old one above them.
     const ydoc = docFrom('# Doc');
     const ownership = createNotesOwnership();
     mergeNotesSection(ydoc, '- first note', HEADING, { ownership });
@@ -701,17 +705,64 @@ describe('a stop-and-restart never replaces what is already written', () => {
       fragment.insert(fragment.length, prose.parseMarkdownBlocks('## Aside\n\nTyped below.'));
     }, 'browser');
 
-    // The next tick still merges into the claimed section — no third heading.
     const read = readNotesSection(ydoc, HEADING, ownership);
     const res = mergeNotesSection(ydoc, '- first note\n- second note', HEADING, {
       ownership,
       basedOn: read?.items ?? [],
     });
     expect(res.ok).toBe(true);
+    expect(res.mode).toBe('appended');
+    const md = markdownOf(ydoc);
+    // A second section, after the person's text…
+    expect(md.split('## Meeting notes').length).toBe(3);
+    expect(md.indexOf('Typed below.')).toBeLessThan(md.indexOf('second note'));
+    // …holding only what is NEW: the first note is already written above,
+    // and the fresh section does not say it again.
+    expect(md.match(/first note/g)).toHaveLength(1);
+    expect(md.indexOf('first note')).toBeLessThan(md.indexOf('Typed below.'));
+  });
+
+  it('once the fresh section is the tail, later ticks append into it and still skip the old lines', () => {
+    const ydoc = docFrom('# Doc');
+    const ownership = createNotesOwnership();
+    mergeNotesSection(ydoc, '- first note', HEADING, { ownership });
+    const fragment = prose.getProseFragment(ydoc);
+    ydoc.transact(() => {
+      fragment.insert(fragment.length, prose.parseMarkdownBlocks('## Aside\n\nTyped below.'));
+    }, 'browser');
+    mergeNotesSection(ydoc, '- first note\n- second note', HEADING, { ownership, basedOn: [] });
+
+    // The composer's `previous` is the last section only, so it re-lists
+    // the first note every tick. It lands nowhere new.
+    const read = readNotesSection(ydoc, HEADING, ownership);
+    expect(read?.items).toEqual(['item second note']);
+    const res = mergeNotesSection(ydoc, '- first note\n- second note\n- third note', HEADING, {
+      ownership,
+      basedOn: read?.items ?? [],
+    });
+    expect(res.ok).toBe(true);
     expect(res.mode).toBe('merged');
     const md = markdownOf(ydoc);
-    expect(md.split('## Meeting notes').length).toBe(2);
-    expect(md.indexOf('second note')).toBeLessThan(md.indexOf('Typed below.'));
+    expect(md.split('## Meeting notes').length).toBe(3);
+    expect(md.match(/first note/g)).toHaveLength(1);
+    expect(md.indexOf('second note')).toBeLessThan(md.indexOf('third note'));
+    expect(md.indexOf('Typed below.')).toBeLessThan(md.indexOf('third note'));
+  });
+
+  it('a tick that only re-lists written lines changes nothing and is not a failure', () => {
+    const ydoc = docFrom('# Doc');
+    const ownership = createNotesOwnership();
+    mergeNotesSection(ydoc, '- first note', HEADING, { ownership });
+    const fragment = prose.getProseFragment(ydoc);
+    ydoc.transact(() => {
+      fragment.insert(fragment.length, prose.parseMarkdownBlocks('## Aside\n\nTyped below.'));
+    }, 'browser');
+    const before = markdownOf(ydoc);
+    const res = mergeNotesSection(ydoc, '- first note', HEADING, { ownership, basedOn: [] });
+    expect(res.ok).toBe(true);
+    expect(res.inserted).toBe(0);
+    expect(res.dropped).toBe(1);
+    expect(markdownOf(ydoc)).toBe(before);
   });
 
   it('a trailing section from a finished meeting is joined, not duplicated', () => {

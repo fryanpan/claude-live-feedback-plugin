@@ -9,19 +9,25 @@
  * editor's content element: plain DOM, no Yjs, gone without trace when the
  * meeting ends. Nothing here can leak a provisional word into the record.
  *
- * WHAT IT SHOWS (approved mock, provisional-text-mock-1): a dashed block
- * labelled "Live transcript", one line per turn, each led by its own meeting
- * time (04:18) — the moment that turn was first heard. When a tick fires,
- * the settled lines SPLIT OFF into a card above the stream ("Writing this
- * into the notes above…", with a spinner) while the remainder keeps
- * streaming; when the note lands, the card's lines leave the zone — the
- * settle wash on the freshly written note (settle-wash.ts) is what carries
- * the eye upward. No status lights, no blinking dots; the one animated thing
- * in the stream is the caret on the line still being spoken.
+ * WHAT IT SHOWS: a dashed block labelled "Live transcript" holding ONE
+ * flowing run of text. The engine hands words over in turns of a few words
+ * every few seconds, and a turn is the engine's unit, not the reader's
+ * (owner, 2026-09-01: "engine turns have no meaning or value to the viewer,
+ * I expect a stream of text"). So turns are inline spans joined by a space
+ * — no per-turn time stamp, no per-turn block — and the only line breaks are
+ * the ones the engine itself put in a turn's text. When a tick fires, the
+ * settled words SPLIT OFF into a card above the stream ("Writing this into
+ * the notes above…", with a spinner) while the remainder keeps streaming;
+ * when the note lands, the card's words leave the zone — the settle wash on
+ * the freshly written note (settle-wash.ts) is what carries the eye upward.
+ * No status lights, no blinking dots; the one animated thing in the stream
+ * is the caret on the words still being spoken.
  *
  * Speaker pills follow the notes rule, not the strip's: only once a second
- * voice has actually been heard. A solo huddle's own name on every line is
- * noise (owner's call, 2026-08-31).
+ * voice has actually been heard, and then only where the voice CHANGES — a
+ * pill on every few words of one speaker is the engine's turn boundary
+ * showing through again. A solo huddle's own name is noise (owner's call,
+ * 2026-08-31).
  */
 
 /** One transcript turn as the zone tracks it. */
@@ -41,7 +47,9 @@ export interface LiveZoneProgress {
 }
 
 export interface MeetingLiveZone {
-  /** A meeting is live; `startedAtMs` anchors the per-line timestamps. */
+  /** A meeting is live. `startedAtMs` is the meeting clock's anchor; the
+   *  zone no longer stamps turns with it, and takes it so a caller that has
+   *  it need not change. */
   begin(startedAtMs: number): void;
   onTurn(t: LiveZoneTurn): void;
   onProgress(e: LiveZoneProgress): void;
@@ -69,21 +77,11 @@ export interface MeetingLiveZone {
 /** How long after a meeting ends its last note may still earn the wash. */
 export const WASH_GRACE_MS = 30_000;
 
-/** mm:ss into the meeting; the anchor is `begin`'s startedAt. */
-function stamp(elapsedMs: number): string {
-  const total = Math.max(0, Math.floor(elapsedMs / 1000));
-  const mm = Math.floor(total / 60);
-  const ss = total % 60;
-  return `${String(mm).padStart(2, '0')}:${String(ss).padStart(2, '0')}`;
-}
-
 interface ZoneTurn {
   turn: number;
   text: string;
   final: boolean;
   speaker?: string;
-  /** Meeting time this turn was FIRST heard — revisions keep the moment. */
-  atMs: number;
   /** Set while a tick that carries this turn is composing. */
   composing: boolean;
 }
@@ -144,7 +142,6 @@ export function createMeetingLiveZone(opts: {
 
   let live = false;
   let endedAt = 0;
-  let startedAt = 0;
   let names: Readonly<Record<string, string>> = {};
   const turns = new Map<number, ZoneTurn>();
   /** Voices actually heard — two of them is what turns the pills on. */
@@ -196,24 +193,35 @@ export function createMeetingLiveZone(opts: {
         });
   if (opts.prose) resize?.observe(opts.prose);
 
-  function lineFor(t: ZoneTurn): HTMLElement {
-    const line = document.createElement('div');
-    line.className = t.final ? 'lz-line' : 'lz-line lz-partial';
-    const ts = document.createElement('span');
-    ts.className = 'lz-ts';
-    ts.textContent = stamp(t.atMs);
-    line.append(ts);
-    if (t.speaker !== undefined && voices.size >= 2) {
+  /**
+   * One turn as an inline span. The text's own newlines — the only breaks
+   * the engine ever emits — become <br>s; nothing else in a turn is a line.
+   */
+  function spanFor(t: ZoneTurn, prev: ZoneTurn | null): HTMLElement {
+    const span = document.createElement('span');
+    span.className = t.final ? 'lz-turn' : 'lz-turn lz-partial';
+    if (t.speaker !== undefined && voices.size >= 2 && t.speaker !== prev?.speaker) {
       const pill = document.createElement('span');
       pill.className = 'lz-speaker';
       pill.textContent = names[t.speaker] ?? `Speaker ${t.speaker}`;
-      line.append(pill);
+      span.append(pill);
     }
-    const text = document.createElement('span');
-    text.className = 'lz-text';
-    text.textContent = t.text;
-    line.append(text);
-    return line;
+    const parts = t.text.split('\n');
+    for (const [i, part] of parts.entries()) {
+      if (i > 0) span.append(document.createElement('br'));
+      if (part) span.append(part);
+    }
+    return span;
+  }
+
+  /** The turns as one run: spans with a single space between them. */
+  function runOf(ts: readonly ZoneTurn[]): Node[] {
+    const out: Node[] = [];
+    ts.forEach((t, i) => {
+      if (i > 0) out.push(document.createTextNode(' '));
+      out.push(spanFor(t, ts[i - 1] ?? null));
+    });
+    return out;
   }
 
   function render(): void {
@@ -226,17 +234,16 @@ export function createMeetingLiveZone(opts: {
     const streaming = all.filter((t) => !t.composing);
     root.hidden = all.length === 0;
     chunk.hidden = splitting.length === 0;
-    chunkLines.replaceChildren(...splitting.map(lineFor));
-    lines.replaceChildren(...streaming.map(lineFor));
+    chunkLines.replaceChildren(...runOf(splitting));
+    lines.replaceChildren(...runOf(streaming));
     matchProseWidth();
     keepInView();
   }
 
   return {
-    begin(startedAtMs) {
+    begin() {
       live = true;
       follow = true;
-      startedAt = startedAtMs;
       turns.clear();
       voices.clear();
       render();
@@ -250,7 +257,6 @@ export function createMeetingLiveZone(opts: {
         text: t.text,
         final: t.final,
         ...(t.speaker !== undefined ? { speaker: t.speaker } : {}),
-        atMs: known ? known.atMs : now() - startedAt,
         composing: known?.composing ?? false,
       });
       render();
