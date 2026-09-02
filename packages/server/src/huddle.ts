@@ -93,6 +93,18 @@ export const REVIEW_REQUEST_COMMENT =
   'Please review these notes against the transcript so far. Where a point is thin, ambiguous, or missing a decision, ask a clarifying question as a comment on that line — as a review or decision item where one would help.';
 
 /**
+ * What a review ask heard in the transcript says — the Review float's press
+ * with the person's own question attached, so the agent answers what was
+ * asked rather than reviewing everything. Same channel, same shape: a
+ * subject thread on the doc, stamped so the float shows the ask is open.
+ */
+export function spokenReviewComment(question: string, requester?: string): string {
+  const who = requester ? `${requester} asked` : 'Someone asked';
+  const q = question.trim().replace(/\s+/g, ' ');
+  return `${who} in the meeting: "${q}"\n\nPlease answer against the notes and the transcript so far, as a comment on the line it concerns — as a review or decision item where a choice is needed.`;
+}
+
+/**
  * The file's first bytes. A plan doc always opens under a `# Goal` heading —
  * that heading is what the placeholder copy and the Make Plan float hang off
  * — with a topic, when one was given, filed under it as the first line of
