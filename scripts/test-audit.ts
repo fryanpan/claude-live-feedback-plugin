@@ -11,11 +11,15 @@
  * each check is allowed to reach; exceeding it fails. Lower a baseline in the
  * same commit that lowers the count, never on its own.
  *
+ * Files are enumerated tracked AND untracked-but-not-ignored, so a test file
+ * you have written but not staged is judged here exactly as CI will judge it
+ * once it is committed. See `gitFiles` for what went wrong when it was not.
+ *
  *   bun run test:audit            print the table, exit non-zero over baseline
  *   bun run test:audit --list     also print every matching site
  *   bun run test:audit --write    rewrite the baseline to today's counts
  */
-import { readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -25,10 +29,37 @@ const baselinePath = join(repoRoot, 'scripts', 'test-audit.baseline.json');
 type Site = { file: string; line: number; text: string };
 type Check = { id: string; title: string; pattern: string; sites: Site[] };
 
-function gitFiles(...globs: string[]): string[] {
-  const out = Bun.spawnSync(['git', 'ls-files', ...globs], { cwd: repoRoot });
+function lsFiles(args: string[], globs: string[]): string[] {
+  const out = Bun.spawnSync(['git', 'ls-files', ...args, ...globs], { cwd: repoRoot });
   if (out.exitCode !== 0) throw new Error(`git ls-files failed: ${out.stderr.toString()}`);
   return out.stdout.toString().split('\n').filter(Boolean);
+}
+
+/**
+ * Every file matching the globs that this audit should judge: tracked, plus
+ * untracked-and-not-ignored.
+ *
+ * The second half is the whole point. A brand-new test file is untracked until
+ * somebody stages it, and `git ls-files` alone cannot see it — so the audit
+ * whose entire subject is NEW tests was blind to exactly the files being added.
+ * A builder ran it locally, got a clean table, pushed, and CI failed on the
+ * sleep in the file they had just written: CI checks out the commit, where the
+ * file IS tracked. The gate was reporting on a different set of files than the
+ * one it was defending.
+ *
+ * `--exclude-standard` keeps .gitignore honoured, so build output and local
+ * scratch files stay out.
+ *
+ * Files are then filtered to those that exist on disk: `git ls-files` still
+ * lists a tracked file that has been deleted in the working tree, and reading
+ * one throws ENOENT and takes down the whole audit.
+ */
+function gitFiles(...globs: string[]): string[] {
+  const tracked = lsFiles([], globs);
+  const untracked = lsFiles(['--others', '--exclude-standard'], globs);
+  return [...new Set([...tracked, ...untracked])]
+    .filter((rel) => existsSync(join(repoRoot, rel)))
+    .sort();
 }
 
 const read = (rel: string): string[] => readFileSync(join(repoRoot, rel), 'utf8').split('\n');
