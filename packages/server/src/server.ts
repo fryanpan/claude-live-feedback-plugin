@@ -4799,7 +4799,10 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
   }
   const codeSender = opts.codeSender ?? createLogCodeSender();
   const requireEmailAuth = opts.requireEmailAuth ?? false;
-  const requireSignInToWrite = opts.requireSignInToWrite ?? false;
+  // ON by default (owner decision on the security row, 2026-09-02). Tests of
+  // OTHER gates that write from a browser pass `false` explicitly; the
+  // deployment switch is `CW_REQUIRE_SIGNIN_TO_WRITE` in bin.ts.
+  const requireSignInToWrite = opts.requireSignInToWrite ?? true;
   /** Which signed Recall webhook ids have already been accepted. */
   const webhookReplayGuard = new WebhookReplayGuard();
   // Teach the owner check the owner's email identity. Without this the check

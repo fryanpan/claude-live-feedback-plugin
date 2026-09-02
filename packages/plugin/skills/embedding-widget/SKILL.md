@@ -82,6 +82,31 @@ One element + one script tag, in a file git does not track:
   location.hash` as each new comment's `context.url` — no manual
   per-page config needed.
 
+## Comments need a signed-in reviewer
+
+The workspace refuses a comment from a browser that has not signed in
+(owner decision on the security row, 2026-09-02). Reading is never gated: a
+viewer who declines still sees every pin and thread. The widget handles the
+sign-in itself — you do not add anything to the embed for it:
+
+- On load it asks the workspace once (`GET /api/auth/session`). When writes
+  need a session, the panel shows **Sign in**, and a composer opened before
+  signing in says so beside the draft.
+- **Sign in** opens a small popup on the workspace origin, which exchanges
+  the workspace session for a widget token and hands it back. A draft that
+  was refused is posted automatically once the token arrives; a cancelled
+  draft is not.
+- The token persists in the host page's `localStorage`, so a reload stays
+  signed in. It is readable by every script on that page — fine for a dev
+  server you run and for a mockup the workspace serves; **do not embed on a
+  page whose scripts are not all yours.**
+- `auth-offer` on the element offers sign-in even when the workspace does
+  not require it (so dev-server comments carry a real name). It is not
+  needed for the required case.
+- Agents are unaffected: the gate reads the `Origin` and `Sec-Fetch-*`
+  headers only browsers send, so MCP tools, hooks and `curl` write as before.
+  The operator switch is `CW_REQUIRE_SIGNIN_TO_WRITE=0` on the server.
+
 ## The page must render without the widget
 
 Whatever you build, removing the widget must leave a working page. A generator
@@ -117,6 +142,7 @@ If you need to derive `docId` at runtime — e.g. from a query parameter — cal
 | `server-url` | `serverUrl` | optional; defaults to bundle origin |
 | `view` | `context.view` | optional; SPA modal/tab state |
 | `user` | `user` | **omit.** It seeds an identity into a fresh browser rather than reading one, so it is right only for a throwaway local page you are driving yourself — and never in a file anything commits. |
+| `auth-offer` | `authOffer` | optional; offer workspace sign-in even when the workspace does not require it. See "Comments need a signed-in reviewer". |
 
 ## Multi-page sites — same docId, let context do the filtering
 

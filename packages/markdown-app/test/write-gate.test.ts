@@ -371,6 +371,28 @@ describe('the fetch wrapper', () => {
     expect(await res.json()).toEqual({ error: 'sign_in_required' });
   });
 
+  it("a refused board write — the board's own request shape — raises the prompt", async () => {
+    // `send()` in hub-app.ts: fetch(path, { method, headers, body }), then
+    // `res.json()` on whatever came back. The wrapper must leave that body
+    // readable AND raise the prompt, or the board's toast says "Couldn't
+    // save" over a person who was never told to sign in.
+    document.querySelector('.signin-required')?.remove();
+    hubShell();
+    next = jsonResponse(401, { error: 'sign_in_required', signInUrl: '/signin' });
+    const res = await fetch('/api/workspaces/w-1/tasks', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ title: 'a task' }),
+    });
+    const data = (await res.json().catch(() => null)) as { error?: string } | null;
+    expect(res.ok).toBe(false);
+    expect(data?.error).toBe('sign_in_required');
+    const prompt = document.querySelector('.signin-required');
+    expect(prompt).not.toBeNull();
+    const go = prompt?.querySelector('a.signin-required-go') as HTMLAnchorElement;
+    expect(go.getAttribute('href')?.startsWith('/signin?next=')).toBe(true);
+  });
+
   it("does NOT interrupt a reader when the refused write was the app's own", async () => {
     // The reading tracker POSTs on load and on leave. Measured on a real
     // gated doc, it raised the modal over a document the reader had not
@@ -449,5 +471,33 @@ describe('the fetch wrapper', () => {
     expect(document.querySelector('.signin-required')).toBeNull();
     expect(document.querySelector('.signin-bar')).not.toBeNull();
     document.querySelector('.signin-bar')?.remove();
+  });
+});
+
+describe('the board and the doc surface actually go through this gate', () => {
+  // Neither entry point has a boot harness (they run `main()` at import,
+  // against a live DOM and server), so the wiring is pinned on the source —
+  // the same shape load-beacon.test.ts uses for hub-app. The behaviour each
+  // call produces is covered above; what this pins is that both surfaces
+  // make the calls, in the order that makes them true: the wrapper before
+  // the first write, and the bar off the answer to "may I write".
+  const hub = readFileSync(join(__dirname, '..', 'src', 'hub', 'hub-app.ts'), 'utf8');
+  const app = readFileSync(join(__dirname, '..', 'src', 'app.ts'), 'utf8');
+
+  it.each([
+    ['the board', hub],
+    ['the doc surface', app],
+  ])('%s installs the notice as the first thing main() does', (_name, src) => {
+    const main = src.slice(src.indexOf('async function main(): Promise<void> {'));
+    const firstCall = main.match(/\n\s+(\w[\w.]*)\(/)?.[1];
+    expect(firstCall).toBe('installWriteGateNotice');
+  });
+
+  it.each([
+    ['the board', hub],
+    ['the doc surface', app],
+  ])('%s asks whether it may write, and raises the bar when it may not', (_name, src) => {
+    expect(src).toMatch(/const writeAccess = await fetchWriteAccess\(\);/);
+    expect(src).toMatch(/if \(!writeAccess\.canWrite\) showSignInBar\(\);/);
   });
 });

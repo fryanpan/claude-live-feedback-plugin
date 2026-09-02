@@ -51,6 +51,9 @@ describe('cross-origin access to the trusted host', () => {
       // from one of these names.
       trustedHosts: ['mac-mini.example.ts.net'],
       allowedOrigins: ['https://mockups.example.com'],
+      // Sign-in is ON by default; off here so the origin policy is the only
+      // gate an allowed origin's write meets.
+      requireSignInToWrite: false,
     });
     base = `http://localhost:${handle.port}`;
     host = `localhost:${handle.port}`;
@@ -292,6 +295,7 @@ describe('the public share host is same-origin only', () => {
       dataDir,
       allowedOrigins: ['https://mockups.example.com'],
       share: { config: { publicHostname: PUBLIC_HOST } },
+      requireSignInToWrite: false,
     });
     base = `http://localhost:${handle.port}`;
     const local = (p: string, i: RequestInit = {}) =>

@@ -14,8 +14,8 @@ import { STATUS_COLORS } from '@feedback/core';
  *   equal-specificity rule later in this file. A floor that only ever grows
  *   a target is safe to state once, for every pointer. Asserted by
  *   tap-targets.test.ts.
- * - .auth-required: shown when the workspace refuses an unsigned comment.
- *   Same 44px target as the sign-in button — same action, after the fact.
+ * - .auth-signin: the panel's offer, and the same control inside a composer
+ *   whose draft the workspace refused — same action, same 44px target.
  * - .thread .last: full summary line even on a narrow panel — wrap instead
  *   of ellipsizing, same rule as the markdown-app card lines; length is
  *   bounded upstream.
@@ -161,18 +161,6 @@ export const widgetStyles = `
   align-items: center;
 }
 .auth-signin:hover { border-color: #2e7dd7; color: #2e7dd7; }
-.auth-required {
-  font-size: 12px;
-  color: #2e7dd7;
-  min-height: 44px;
-  display: inline-flex;
-  align-items: center;
-  background: none;
-  border: 0;
-  padding: 0;
-  cursor: pointer;
-  text-decoration: underline;
-}
 .auth-signout {
   background: none;
   border: none;

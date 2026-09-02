@@ -11,6 +11,7 @@ import { effortEstimateEnabled, haikuEffortEstimator } from './effort-estimator.
 import { installLogSquelch } from './log-squelch.ts';
 import { createHaikuNotesComposer } from './meeting-notes-composer.ts';
 import { createHaikuTaskCaptureExtractor } from './meeting-task-capture.ts';
+import { signInToWriteFromEnv } from './middleware/write-gate.ts';
 import { createPluginRefresher } from './plugin-refresh.ts';
 import { acquirePort, classifyBindError, probeLocalPort, shouldWalkPorts } from './port-bind.ts';
 import { lanHostnames, normalizePublicBaseUrl, tailscaleHost } from './public-host.ts';
@@ -218,27 +219,26 @@ const requireEmailAuth = ['1', 'true', 'yes'].includes(
 );
 
 /**
- * A browser must be SIGNED IN to write. Default off, and off means an
- * unsigned browser writes exactly as it does today. Independent of
+ * A browser must be SIGNED IN to write. Default ON (owner decision on the
+ * security row, 2026-09-02: *"flip on and add widget sign in"*);
+ * `CW_REQUIRE_SIGNIN_TO_WRITE=0` turns it off, and off means an unsigned
+ * browser writes as it did before the gate existed. Independent of
  * `CW_REQUIRE_EMAIL_AUTH`, which governs what a session MEANS rather than
  * whether one is needed — see ServerOptions and middleware/write-gate.ts.
  *
- * Still default OFF after the Urgent-fixes ticket (2026-09-02), which asked
- * for on-by-default unless a real unsigned flow would break. Two would:
- * prod runs with no sign-in at all (`GET /api/auth/session` reports
- * `signInToWrite:false`, `required:false`), so the owner's own comments from
- * the board are unsigned browser writes today; and a widget embed that has
- * not opted into `auth-offer` has NO way to sign in — its writes carry
- * `Origin` like any page's, so the gate would refuse every comment from every
- * existing host page with no prompt that could fix it. Flip it per box with
- * `CW_REQUIRE_SIGNIN_TO_WRITE=1` once a code sender is configured and the
- * embeds that matter opt into the popup handshake. The binding routes are
- * closed to browsers regardless of this flag — see write-gate.ts,
- * `browserCannotBindBody`.
+ * It was default OFF for one reason: a widget embed without `auth-offer` had
+ * no way to sign in, so flipping the gate would have refused every comment
+ * from every mockup and dev page with nothing on screen that could fix it.
+ * The widget now asks `GET /api/auth/session` on load and offers the
+ * popup-token handshake whenever the answer is `signInToWrite:true` — and
+ * again as the backstop when a write comes back `sign_in_required` — so the
+ * refusal always arrives with the control that lifts it. The board app has
+ * carried its own prompt since the gate shipped. Agents are untouched: the
+ * gate reads `Origin` and `Sec-Fetch-*`, which no MCP tool, hook, curl or
+ * webhook sends. The binding routes are closed to browsers regardless of
+ * this flag — see write-gate.ts, `browserCannotBindBody`.
  */
-const requireSignInToWrite = ['1', 'true', 'yes'].includes(
-  (process.env.CW_REQUIRE_SIGNIN_TO_WRITE ?? '').trim().toLowerCase(),
-);
+const requireSignInToWrite = signInToWriteFromEnv(process.env.CW_REQUIRE_SIGNIN_TO_WRITE);
 
 /**
  * The address whose email identity is the fleet owner. Without it,
