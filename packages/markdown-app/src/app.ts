@@ -953,6 +953,18 @@ async function mountMarkdown(ctx: MountContext): Promise<void> {
         showToast("That didn't go through — try again.");
         return;
       }
+      if (made.action === 'research') {
+        // The doc is the receipt: a "Research: …" section now sits under
+        // the line, and the ask thread on the line is what the lead
+        // answers. Nothing to link and nothing to undo from here — the
+        // section is prose, and deleting prose is the editor's own verb.
+        showToast(
+          made.placeholder
+            ? `“${made.section}” added below — the lead fills it in.`
+            : 'Research asked for — the lead answers on the thread.',
+        );
+        return;
+      }
       // The selected words BECOME the task's link — nothing is written into
       // the doc. `task-link-chips.ts` hangs the row's live status beside
       // them, so the line reads as itself with a status on the end.

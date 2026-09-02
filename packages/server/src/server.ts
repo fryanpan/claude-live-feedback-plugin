@@ -130,6 +130,7 @@ import {
 } from './home-brief.ts';
 import {
   PLAN_REQUEST_COMMENT,
+  RESEARCH_TOPIC_MAX,
   REVIEW_REQUEST_COMMENT,
   huddleAlias,
   huddleFilePath,
@@ -140,6 +141,9 @@ import {
   meetingDocTitle,
   parseHuddleKind,
   parseHuddleTopic,
+  researchAskComment,
+  researchPlaceholderMarkdown,
+  researchSectionTitle,
   spokenReviewComment,
 } from './huddle.ts';
 import { Identities, type IdentityRecord, userForIdentity } from './identities.ts';
@@ -11144,6 +11148,57 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
             const filed = await fileReviewRequest(docId, author, REVIEW_REQUEST_COMMENT);
             if (!filed) return j(404, { error: 'doc not found' });
             return j(200, { docId, ...filed });
+          }
+          // The pointer pill's Research press. NOT a task (it was, and Bryan
+          // found a board row where the mock had a section in the notes):
+          // an anchored thread on the selected line, from the presser, plus
+          // a placeholder section inserted right after that line for the
+          // agent to fill. Same channel as the two floats — a comment every
+          // watching agent already hears — and the thread names the section
+          // so the answer lands where the person will look.
+          if (rest === 'research-request' && req.method === 'POST') {
+            if (visitor) return j(403, { error: 'not available to share visitors' });
+            const body = await safeJson(req);
+            const author = authorFor(body?.author);
+            if (!author) return j(400, { error: 'author required' });
+            if (isCategoryAuthor(author)) return refuseCategoryAuthor();
+            const topicRaw = typeof body?.topic === 'string' ? body.topic.trim() : '';
+            if (!topicRaw) return j(400, { error: 'topic required' });
+            const topic = clipToWordBoundary(topicRaw, RESEARCH_TOPIC_MAX);
+            const anchor = body?.anchor as Anchor | undefined;
+            if (!anchor || anchor.kind !== 'text-range') {
+              return j(400, { error: 'a text-range anchor is required' });
+            }
+            const anchorCheck = anchors.validateAnchor(anchor);
+            if (!anchorCheck.ok) return j(400, { error: anchorCheck.error });
+            const thread = await rooms.postComment(
+              docId,
+              null,
+              author,
+              researchAskComment(topic),
+              anchor,
+              { generate: false },
+            );
+            if (!thread) return j(404, { error: 'doc not found' });
+            // After the thread, so the section follows the selection — the
+            // same insertion an agent's insert_blocks_after_thread makes.
+            // Top-level: a selection inside a bullet must not nest a
+            // heading inside that bullet; the section goes after the list.
+            const placed = rooms.insertBlocksAfterThread(
+              docId,
+              thread.id,
+              researchPlaceholderMarkdown(topic),
+              { placement: 'top-level' },
+            );
+            if (!placed.ok) {
+              console.error(`[research-request] placeholder on ${docId}: ${placed.error}`);
+            }
+            return j(200, {
+              docId,
+              threadId: thread.id,
+              section: researchSectionTitle(topic),
+              placeholder: placed.ok,
+            });
           }
           // --- The doc's repo home: pin, read, unpin. OWNER ONLY — a home is
           // host paths, which a share visitor must never see. The visitor

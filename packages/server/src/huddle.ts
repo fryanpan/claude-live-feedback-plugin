@@ -104,6 +104,41 @@ export function spokenReviewComment(question: string, requester?: string): strin
   return `${who} in the meeting: "${q}"\n\nPlease answer against the notes and the transcript so far, as a comment on the line it concerns — as a review or decision item where a choice is needed.`;
 }
 
+/** The pill's Research topic, as a heading: a line, not a paragraph. */
+export const RESEARCH_TOPIC_MAX = 120;
+
+/** The section heading a Research press writes — the same words the ask
+ *  thread names, so the agent can find where to write. */
+export function researchSectionTitle(topic: string): string {
+  return `Research: ${topic.trim().replace(/\s+/g, ' ')}`;
+}
+
+/**
+ * What the pointer pill's Research press leaves IN THE NOTES, right after
+ * the line it was pressed on — the approved mock's flow (pointer-actions
+ * mock, 2026-09-01): a section headed with the topic and a one-line
+ * placeholder the agent replaces with what it finds. Not a task: Bryan
+ * pressed Research on prod, got a board row and nothing in the doc, and
+ * said so ("does not follow the flow in the mockups"). The row was the
+ * errand's bookkeeping; the section is the errand's answer, where the
+ * person who asked will look for it.
+ */
+export function researchPlaceholderMarkdown(topic: string): string {
+  return `## ${researchSectionTitle(topic)}\n\nResearching — in progress.`;
+}
+
+/**
+ * What the Research press SAYS — an anchored thread on the selected line,
+ * from the presser. Same channel as Make Plan and Review: an ordinary
+ * comment, which every watching agent already hears. It names the section
+ * the placeholder opened, so the agent writes there rather than replying
+ * in prose the person would have to move.
+ */
+export function researchAskComment(topic: string): string {
+  const title = researchSectionTitle(topic);
+  return `Research: ${topic.trim().replace(/\s+/g, ' ')}\n\nPlease look into this and write what you find under the "${title}" section just below this line, replacing its placeholder. Resolve this thread when the section is filled.`;
+}
+
 /**
  * The file's first bytes. A plan doc always opens under a `# Goal` heading —
  * that heading is what the placeholder copy and the Make Plan float hang off
