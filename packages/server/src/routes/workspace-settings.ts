@@ -80,9 +80,6 @@ export async function handleWorkspaceSettings(
     taskProjection.ensureWorkspace(workspaceId);
     return j(200, res);
   }
-  // rename_workspace. The name was set once at creation and nothing
-  // changed it, which is how two live boards ended up sharing one — and
-  // a name is how an agent picks which to work.
   // The board's parallelism cap on its own address (Bryan, 2026-08-31:
   // "Bryan and Team Lead can set a parallelism limit on the workspace").
   // GET reads it; PUT `{cap}` sets it, `{cap: null}` restores the
@@ -303,6 +300,9 @@ export async function handleWorkspaceSettings(
       ...(notesHome ? { notesHome } : {}),
     });
   }
+  // rename_workspace. The name was set once at creation and nothing
+  // changed it, which is how two live boards ended up sharing one — and
+  // a name is how an agent picks which to work.
   const wsBoardRenameMatch = pathname.match(/^\/api\/workspaces\/([^/]+)\/rename$/);
   if (wsBoardRenameMatch && req.method === 'POST') {
     const workspaceId = decodeURIComponent(wsBoardRenameMatch[1] ?? '');
