@@ -181,7 +181,12 @@ import {
   shareScopeAllows,
 } from './middleware/host-guard.ts';
 import { RECALL_STATUS_PATH, recallCallbackAllows } from './middleware/recall-callback-gate.ts';
-import { isBrowserRequest, isGatedWrite, signInRequiredBody } from './middleware/write-gate.ts';
+import {
+  browserCannotBindBody,
+  isBrowserRequest,
+  isGatedWrite,
+  signInRequiredBody,
+} from './middleware/write-gate.ts';
 import {
   captureMockup,
   checkMockupSource,
@@ -6316,6 +6321,9 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
 
         // --- REST: docs ---
         if (pathname === '/api/docs' && req.method === 'POST') {
+          // A file bind names a host path. Agents only — see
+          // browserCannotBindBody for why a page, on any origin, is refused.
+          if (isBrowserRequest(req.headers)) return j(403, browserCannotBindBody());
           const body = await safeJson(req);
           const docId = (body?.docId as string) ?? '';
           if (!isValidDocId(docId)) return j(400, { error: 'bad docId' });
@@ -6571,6 +6579,12 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
         if (pathname === '/api/workspaces' && req.method === 'POST') {
           const body = await safeJson(req);
           const folderPath = body?.folderPath as string | undefined;
+          // Creating a board by name involves no file and stays open to the
+          // app; binding a FOLDER names a host path, and that is agents only
+          // — see browserCannotBindBody.
+          if (folderPath && isBrowserRequest(req.headers)) {
+            return j(403, browserCannotBindBody());
+          }
           if (!folderPath && typeof body?.name === 'string' && body.name.trim().length > 0) {
             // `body.goal` is the removed workspace-level text goal. Read
             // deliberately nowhere: bundles built before the removal still
@@ -7525,6 +7539,9 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
         // second source of truth (a stamped file refuses re-import).
         const wsImportMatch = pathname.match(/^\/api\/workspaces\/([^/]+)\/import-tasks$/);
         if (wsImportMatch && req.method === 'POST') {
+          // Reads a markdown file off disk by path. Agents only — see
+          // browserCannotBindBody.
+          if (isBrowserRequest(req.headers)) return j(403, browserCannotBindBody());
           const workspaceId = decodeURIComponent(wsImportMatch[1] ?? '');
           const body = await safeJson(req);
           const path = body?.path;
