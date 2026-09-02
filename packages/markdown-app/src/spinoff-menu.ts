@@ -242,6 +242,12 @@ export async function runSpinoff(
     // Where it came from, the way the meeting assistant's captured tasks
     // say it — one origin kind for "a doc line became this".
     origin: { kind: 'doc', docId: deps.docId },
+    // PLACE it: the board's top active goal, the lead as owner, `todo`.
+    // Without this the row landed in chores owned by the tapper, and the
+    // lead's dispatch never saw it (Bryan, 2026-09-01: "created in Backlog
+    // and not automatically started"). The rule is the server's
+    // (`TaskStore.placeSpinoff`); this only asks for it.
+    spinoff: true,
     // Where the row lands, decided from what the row SAYS. A thin selection
     // makes a row nobody can pick up, and triage is where a row goes to be
     // given enough to act on — see `readyToWork`.

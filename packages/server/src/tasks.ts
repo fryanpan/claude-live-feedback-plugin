@@ -1182,6 +1182,14 @@ export function wordsRevisionOf(task: { wordsRevision?: number }): number {
  * (`TaskStore.transition`), so there is no second status machine to keep
  * honest.
  */
+/** `placeSpinoff`'s answer: the band, which rule chose it, and the lead to
+ *  address the row to when the seat is held. */
+export interface SpinoffPlacement {
+  goal: string;
+  rule: 'top-active-goal' | 'chores';
+  leadAgentId?: string;
+}
+
 export interface GoalRow {
   /** The goal's own id, never re-minted — `task.goal`, done-task history and
    *  `triagedAgainst.goalId` all join on it. */
@@ -4127,6 +4135,48 @@ export class TaskStore {
     return Array.from(state.goalRows.values())
       .filter((row) => live.has(row.id))
       .sort((a, b) => a.order - b.order);
+  }
+
+  /**
+   * Where a row SPUN OFF A DOC lands — the pointer pill's Create Task and
+   * the meeting assistant's captured request — so it is never an unplaced
+   * row nobody dispatches.
+   *
+   * Bryan's report (2026-09-01): "Tasks were created in Backlog and not
+   * automatically started — does the lead agent have a chance to
+   * automatically assign tickets into the proper goal?" The rows landed in
+   * chores, owned by whoever tapped, and the lead's dispatch never saw
+   * them. The rule, in order:
+   *
+   *  1. The goal of the meeting's originating task — NOT AVAILABLE: a huddle
+   *     is started from the board with a kind and a topic, and records no
+   *     task. When a huddle learns its task, this is where that goal goes.
+   *  2. The board's top ACTIVE goal: the first band in priority order that
+   *     is being worked (`todo` / `in-progress` — a `triage` band is a
+   *     proposal, a `done` band is history), chores excluded.
+   *  3. Chores, when the board has no active band. Placed, still — a row in
+   *     chores is on the board and dispatchable; a row in triage is not.
+   *
+   * The assignee is the board's lead when the seat is held (`leadAgentId`,
+   * so the caller sends `assignToLead`); with no lead the row keeps the
+   * author, because "unowned at triage" is exactly the unplaced row this
+   * exists to prevent. Callers move the row to `todo` after the create.
+   */
+  placeSpinoff(workspaceId: string): SpinoffPlacement | undefined {
+    const state = this.workspaces.get(workspaceId);
+    if (!state) return undefined;
+    const top = this.listGoalRows(workspaceId).find(
+      (row) =>
+        row.id !== CHORES_GOAL_ID &&
+        !isArchived(row) &&
+        (row.status === 'todo' || row.status === 'in-progress'),
+    );
+    const lead = state.workspace.leadAgentId;
+    return {
+      goal: top?.id ?? CHORES_GOAL_ID,
+      rule: top ? 'top-active-goal' : 'chores',
+      ...(lead !== undefined ? { leadAgentId: lead } : {}),
+    };
   }
 
   /**

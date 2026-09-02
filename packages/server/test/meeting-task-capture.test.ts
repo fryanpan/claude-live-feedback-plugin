@@ -167,7 +167,7 @@ describe('taskCaptureUrl', () => {
 });
 
 /** A board stub that records every write. */
-function boardStub(over: { failCreate?: boolean; leadAgentId?: string } = {}) {
+function boardStub(over: { failCreate?: boolean; leadAgentId?: string; topGoal?: string } = {}) {
   const created: Array<import('../src/tasks.ts').CreateTaskOpts> = [];
   const transitions: Array<{ taskId: string; to: string; actor: unknown }> = [];
   // Rows this stub has filed. A real board remembers them, and the pass that
@@ -198,6 +198,14 @@ function boardStub(over: { failCreate?: boolean; leadAgentId?: string } = {}) {
         return { ok: true as const };
       },
       getWorkspace: () => (over.leadAgentId !== undefined ? { leadAgentId: over.leadAgentId } : {}),
+      ...(over.topGoal !== undefined
+        ? {
+            placeSpinoff: () => ({
+              goal: over.topGoal as string,
+              ...(over.leadAgentId !== undefined ? { leadAgentId: over.leadAgentId } : {}),
+            }),
+          }
+        : {}),
     },
   };
 }
@@ -269,6 +277,46 @@ describe('runTaskCapture', () => {
         status: 'triage',
       },
     ]);
+  });
+
+  it('places an actionable request in the top active goal, addressed to the lead', async () => {
+    // Bryan (2026-09-01): "Tasks were created in Backlog and not
+    // automatically started". The board's own placement rule decides the
+    // band and the owner; the capture only asks for it.
+    const { board, created, transitions } = boardStub({
+      leadAgentId: 'agent-helper',
+      topGoal: 'g-pill',
+    });
+    await runTaskCapture(
+      {
+        board,
+        extractor: extractorOf([
+          { kind: 'request', title: 'Strip overlaps navbar on short screens', actionable: true },
+        ]),
+      },
+      tickInput,
+    );
+    expect(created[0]?.goal).toBe('g-pill');
+    expect(created[0]?.assignee).toBe('agent-helper');
+    expect(created[0]?.assigneeKind).toBe('agent');
+    expect(created[0]?.fileToTriage).toBeUndefined();
+    expect(transitions).toEqual([{ taskId: 't-new1', to: 'todo', actor: MEETING_CAPTURE_ACTOR }]);
+  });
+
+  it('an unactionable request is NOT placed — triage is the point of it', async () => {
+    const { board, created } = boardStub({ leadAgentId: 'agent-helper', topGoal: 'g-pill' });
+    await runTaskCapture(
+      {
+        board,
+        extractor: extractorOf([
+          { kind: 'request', title: 'Strip overlaps navbar on short screens', actionable: false },
+        ]),
+      },
+      tickInput,
+    );
+    expect(created[0]?.goal).toBeUndefined();
+    expect(created[0]?.fileToTriage).toBe(true);
+    expect(created[0]?.assignee).toBe(MEETING_CAPTURE_ACTOR.name);
   });
 
   it('sets an actionable request moving: chores band, todo, and a lead wake', async () => {
