@@ -66,6 +66,7 @@ Bypass entirely with `SCRUB_SKIP=1` (logged; use sparingly).
 
 from __future__ import annotations
 
+import fnmatch
 import os
 import re
 import subprocess
@@ -154,6 +155,22 @@ NEVER_ALLOW_EXTS = {
     ".ydoc", ".jsonl", ".csv", ".svg", ".xml",
     ".png", ".jpg", ".jpeg", ".gif", ".webp", ".ico", ".bmp", ".tif", ".tiff",
     ".heic", ".heif", ".avif",
+}
+
+# Files that are refused OUTRIGHT, whatever they contain: a meeting's raw
+# record. `<docname>-raw-transcript.md` (and its `-replay-` reruns) is what
+# people said in a room, and the audio beside it is the room itself; both
+# live under the server data dir and are gitignored, and this is the second
+# lock. No content scan could clear one — a clean transcript is still a
+# transcript — so a match here is a finding by itself and `scrub-allow`
+# cannot exempt it. (Meeting ticket, 2026-09-02.)
+NEVER_PUSH_NAMES = (
+    "*-raw-transcript.md",
+    "*-raw-transcript-replay-*.md",
+)
+NEVER_PUSH_EXTS = {
+    ".pcm", ".wav", ".mp3", ".m4a", ".aac", ".ogg", ".oga", ".opus", ".flac",
+    ".wma", ".aiff", ".aif", ".webm", ".mp4", ".m4v", ".mov", ".mkv",
 }
 
 # Specific paths to never scan. The scanner's own files (scrub-check.py,
@@ -393,6 +410,18 @@ def build_patterns(names: Set[str], denylist: List[Tuple[str, bool]]) -> List[Tu
     return patterns
 
 
+def never_push_reason(path: str) -> Optional[str]:
+    """Why this file can never be pushed, or None when it can be scanned."""
+    name = os.path.basename(path)
+    for pat in NEVER_PUSH_NAMES:
+        if fnmatch.fnmatch(name, pat):
+            return f"meeting transcript ({pat}) — never pushed, whatever it says"
+    ext = os.path.splitext(name)[1].lower()
+    if ext in NEVER_PUSH_EXTS:
+        return f"audio/video ({ext}) — never pushed"
+    return None
+
+
 def is_never_allow(path: str) -> bool:
     """A type that is always scanned and cannot be allowlisted."""
     ext = os.path.splitext(os.path.basename(path))[1].lower()
@@ -400,8 +429,11 @@ def is_never_allow(path: str) -> bool:
 
 
 def should_scan(path: str) -> bool:
-    # Checked FIRST: a never-allow type is scanned even if a path rule below
-    # would skip it. The set exists so that no rule can quietly widen.
+    # Checked FIRST: a never-push file is looked at whatever else says skip,
+    # and a never-allow type is scanned even if a path rule below would skip
+    # it. Both sets exist so that no rule can quietly widen.
+    if never_push_reason(path) is not None:
+        return True
     if is_never_allow(path):
         return True
     if path in SKIP_PATHS:
@@ -581,6 +613,22 @@ def main() -> int:
 
     if not contents:
         return 0
+
+    # Before any pattern source is consulted: a file that can never be pushed
+    # is refused even on a machine with no patterns at all. Only files the
+    # source can still produce — a deleted one is the fix, not the leak.
+    refused = [(f, never_push_reason(f)) for f, _ in contents if never_push_reason(f)]
+    if refused:
+        print("[scrub-check] files that are never pushed:", file=sys.stderr)
+        for f, why in refused:
+            print(f"  {f}  ({why})", file=sys.stderr)
+        print(
+            f"\n[scrub-check] {len(refused)} refused file(s). Push blocked.\n"
+            "[scrub-check] Fix: these belong under the server data dir, not the repo — "
+            "remove them from the commit. No allowlist applies.",
+            file=sys.stderr,
+        )
+        return 1
 
     registry = find_registry()
     decision = decide_sources(

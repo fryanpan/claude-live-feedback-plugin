@@ -225,7 +225,16 @@ export class MeetingRelay {
       // during it, and those chunks belong in the ledger too.
       conn.wantsTiming = msg.timing === true;
       this.track(
-        this.start(ws, conn, msg.sampleRate, msg.mode, msg.speakers, msg.engine, msg.tuning),
+        this.start(
+          ws,
+          conn,
+          msg.sampleRate,
+          msg.mode,
+          msg.speakers,
+          msg.engine,
+          msg.tuning,
+          msg.participant,
+        ),
       );
       return;
     }
@@ -283,6 +292,9 @@ export class MeetingRelay {
       return;
     }
     if (conn.state !== 'live') return;
+    // Teed to the meeting's retained audio before the engine sees it — the
+    // same bytes, so a replay hears exactly what the engine heard.
+    conn.meeting?.recordAudio(chunk);
     if (!conn.ledger) {
       conn.session?.send(chunk);
       return;
@@ -357,6 +369,7 @@ export class MeetingRelay {
     speakers?: number,
     engineName?: string,
     rawTuning?: Record<string, unknown>,
+    participant?: string,
   ): Promise<void> {
     if (conn.state !== 'idle') return;
     const docId = ws.data.docId;
@@ -394,7 +407,14 @@ export class MeetingRelay {
         : maxSpeakersFor(mode, speakers);
     // Claim the doc BEFORE the handshake: two sockets starting at once would
     // otherwise both pass the check and both open a billed session.
-    const meeting = this.deps.store.start({ docId, engine: engine.name, sampleRate, mode });
+    const meeting = this.deps.store.start({
+      docId,
+      engine: engine.name,
+      sampleRate,
+      mode,
+      source: 'mic',
+      ...(participant !== undefined ? { participant } : {}),
+    });
     if (!meeting) {
       this.send(ws, {
         type: 'unavailable',
@@ -516,6 +536,7 @@ export class MeetingRelay {
       // handshake reads as the server holding it — which is what happened —
       // instead of disappearing into the engine's leg.
       ledger?.record(chunk.byteLength, conn.pendingRecv[i] ?? Date.now(), Date.now());
+      meeting.recordAudio(chunk);
       session.send(chunk);
     }
     conn.pending = [];
