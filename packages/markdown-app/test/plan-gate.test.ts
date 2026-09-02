@@ -160,7 +160,7 @@ describe('mountPlanGate', () => {
       fetchJson: stubFetch([{ meta: { planState: 'pending' }, tasks: [] }]).fetchJson,
     });
     await gate.ready;
-    expect(approveBtn()?.parentElement).toBe(pane);
+    expect(approveBtn()?.closest('#editor-pane')).toBe(pane);
     gate.destroy();
   });
 

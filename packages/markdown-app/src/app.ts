@@ -25,6 +25,7 @@ import { wantsLatencyTiming } from './meeting-timing-client.ts';
 import type { MountContext } from './mount-context.ts';
 import type { MountScope } from './mount-scope.ts';
 import { mountPlanGate } from './plan-gate.ts';
+import { mountPointerPill } from './pointer-pill.ts';
 import { startReadingTracker } from './reading-tracker.ts';
 import { mountMarkupMargin } from './redline/markup-margin.ts';
 import { mountRedline } from './redline/redline-app.ts';
@@ -38,6 +39,7 @@ import {
   showToast,
   wireThreadRangeClicks,
 } from './review-chrome.ts';
+import { mountReviewFloat } from './review-float.ts';
 import { navigateTo, startRouter } from './router.ts';
 import { type SetDoc, selectSetSiblings, setDocsUrl } from './set-nav.ts';
 import {
@@ -57,13 +59,7 @@ import {
 import { mountSpeakerReassign } from './speaker-reassign-menu.ts';
 import { loadDocSpeakers, loadDocVoices, postSpeakerName } from './speaker-voices.ts';
 import { linkSpinoffRange, unlinkSpinoffHref } from './spinoff-link.ts';
-import {
-  SPINOFF_QUESTION_PREFILL,
-  type SpinoffTaskId,
-  boardIdFor,
-  mountSpinoffMenu,
-  runSpinoff,
-} from './spinoff-menu.ts';
+import { SPINOFF_ACTIONS, type SpinoffTaskId, boardIdFor, runSpinoff } from './spinoff-menu.ts';
 import { installStaleClientNotice } from './stale-client.ts';
 import { readSuggestModePref, setSuggesting, writeSuggestModePref } from './suggest-input.ts';
 import { registerMarkdownMount } from './surface-registry.ts';
@@ -195,9 +191,9 @@ async function mountMarkdown(ctx: MountContext): Promise<void> {
   const composer = el<HTMLElement>('composer');
   const commentPill = el<HTMLButtonElement>('comment-pill');
   // The pill's markup says "Add comment" because that is all it ever did. On
-  // a huddle doc it now opens four actions, only one of which is a comment,
-  // so the label would send a screen-reader user somewhere the menu doesn't
-  // go. Named for what it opens, not for the row it used to be.
+  // a huddle doc a RANGE selection grows the pointer pill instead (below),
+  // and the round pill only survives in caret mode, where its job is to make
+  // the selection the pointer pill then hangs off. Named for where it leads.
   if (ctx.huddle === true) {
     commentPill.setAttribute('aria-label', 'Turn this line into work');
     commentPill.title = 'Turn this line into work';
@@ -458,6 +454,34 @@ async function mountMarkdown(ctx: MountContext): Promise<void> {
       },
     });
     scope.onCleanup(() => planGate.destroy());
+
+    // The Review float docks beside Make Plan (mounted AFTER it, so the row
+    // reads plan, then review). Its receipt clears when the ask thread is
+    // resolved, and threads live in this doc's own Yjs map — so the map is
+    // what it watches, and a resolve from anywhere flips the face with no
+    // fetch.
+    const reviewFloat = mountReviewFloat({
+      docId,
+      root: editorMount,
+      user,
+      canWrite,
+      watchDocMeta: (onChange) => {
+        const meta = ydoc.getMap('meta');
+        meta.observe(onChange);
+        return () => meta.unobserve(onChange);
+      },
+      threadOpen: (threadId) => {
+        const t = ydoc.getMap('threads').get(threadId) as { get(key: string): unknown } | undefined;
+        if (!t) return undefined;
+        return t.get('status') !== 'resolved';
+      },
+      watchThreads: (onChange) => {
+        const threads = ydoc.getMap('threads');
+        threads.observeDeep(onChange);
+        return () => threads.unobserveDeep(onChange);
+      },
+    });
+    scope.onCleanup(() => reviewFloat.destroy());
   }
 
   // Tapping a speaker tag in the notes offers the voices this doc's meetings
@@ -513,6 +537,160 @@ async function mountMarkdown(ctx: MountContext): Promise<void> {
 
   let selection: Selection | null = null;
   let selectionSettled = false;
+
+  // =========================================================================
+  // THE POINTER PILL (huddle docs only — src/pointer-pill.ts)
+  //   A range selection on a huddle doc grows two text buttons — Research,
+  //   Create Task — just above the point where the finger or mouse let go,
+  //   never over the selected words, clamped to the editor's visible box.
+  //   The round comment pill is hidden in range mode on these docs; in caret
+  //   mode it stays, and tapping it makes the sentence selection that brings
+  //   the pointer pill up. Everywhere else nothing here runs.
+  // =========================================================================
+
+  /** Where the last selection gesture let go, in viewport coordinates. A
+   *  release ON the pill is not recorded: it would walk the anchor up by one
+   *  gap every tap. Touch is remembered too, because a fingertip needs 44px
+   *  of clearance where a mouse cursor needs 12. */
+  let lastRelease: { x: number; y: number; touch: boolean; at: number } | null = null;
+  function recordRelease(x: number, y: number, touch: boolean, target: EventTarget | null): void {
+    if (pointerPill && target instanceof Node && pointerPill.el.contains(target)) return;
+    lastRelease = { x, y, touch, at: Date.now() };
+  }
+  scope.listen(
+    window,
+    'pointerup',
+    (ev) => {
+      const e = ev as PointerEvent;
+      recordRelease(e.clientX, e.clientY, e.pointerType !== 'mouse', e.target);
+    },
+    { capture: true, passive: true },
+  );
+  // iOS hands a long-press to its own selection UI and delivers a
+  // `pointercancel`, never a `pointerup`, so the release point has to come
+  // from the touch event underneath.
+  scope.listen(
+    window,
+    'touchend',
+    (ev) => {
+      const t = (ev as TouchEvent).changedTouches[0];
+      if (t) recordRelease(t.clientX, t.clientY, true, ev.target);
+    },
+    { capture: true, passive: true },
+  );
+
+  /** The selection the pill was shown for, captured when it appeared: on iOS
+   *  the tap on a button blurs the editor before the click lands, and by
+   *  then there is nothing left to write the task's link beside. */
+  let pointerPillCtx: {
+    sel: ChromeSelection;
+    range: { from: number; to: number } | null;
+  } | null = null;
+  const pointerPill =
+    ctx.huddle === true
+      ? mountPointerPill<SpinoffTaskId>({
+          actions: SPINOFF_ACTIONS,
+          onPick: (action) => {
+            const captured = pointerPillCtx;
+            pointerPillCtx = null;
+            hidePill();
+            // The selection has done its job. Left standing, the next
+            // `positionPill` — the release of this very tap, or the edit
+            // that writes the link — would grow the pill straight back over
+            // words that have already become a row.
+            window.getSelection()?.removeAllRanges();
+            editor.editor.commands.blur();
+            if (captured) void takeSpinoff(action, captured.sel, captured.range);
+          },
+          onDismiss: () => hidePill(),
+        })
+      : null;
+  scope.onCleanup(() => pointerPill?.destroy());
+
+  /** The anchor as an OFFSET from the selection's box rather than a fixed
+   *  viewport point, so a scroll carries the pill along with the words it is
+   *  about instead of leaving it where the finger was. Re-derived whenever
+   *  the selection or the release changes, held steady otherwise. */
+  let pillAnchorKey = '';
+  let pillAnchorOffset = { dx: 0, dy: 0, touch: false };
+
+  function showPointerPill(from: number, to: number): void {
+    if (!pointerPill) return;
+    const winSel = window.getSelection();
+    const rects: { left: number; top: number; right: number; bottom: number }[] = [];
+    if (winSel && winSel.rangeCount > 0 && !winSel.isCollapsed) {
+      for (const r of Array.from(winSel.getRangeAt(0).getClientRects())) {
+        if (r.width > 0 && r.height > 0) {
+          rects.push({ left: r.left, top: r.top, right: r.right, bottom: r.bottom });
+        }
+      }
+    }
+    if (rects.length === 0) {
+      const c = editor.editor.view.coordsAtPos(to);
+      rects.push({ left: c.left, top: c.top, right: c.right + 1, bottom: c.bottom });
+    }
+    const box = {
+      left: Math.min(...rects.map((r) => r.left)),
+      top: Math.min(...rects.map((r) => r.top)),
+      right: Math.max(...rects.map((r) => r.right)),
+      bottom: Math.max(...rects.map((r) => r.bottom)),
+    };
+    const key = `${from}:${to}:${lastRelease?.at ?? 0}`;
+    if (key !== pillAnchorKey) {
+      pillAnchorKey = key;
+      // A release counts only when it is NEAR the selection. A keyboard
+      // selection (shift+arrow) has no release of its own, and the last one
+      // may be a click seconds ago somewhere else on the page; anchoring on
+      // that would put the pill over nothing.
+      const slack = 80;
+      const near =
+        lastRelease !== null &&
+        Date.now() - lastRelease.at < 10_000 &&
+        lastRelease.x >= box.left - slack &&
+        lastRelease.x <= box.right + slack &&
+        lastRelease.y >= box.top - slack &&
+        lastRelease.y <= box.bottom + slack;
+      if (near && lastRelease) {
+        pillAnchorOffset = {
+          dx: lastRelease.x - box.left,
+          dy: lastRelease.y - box.top,
+          touch: lastRelease.touch,
+        };
+      } else {
+        // No usable release: the end of the selection's last line stands in.
+        const last = rects[rects.length - 1] ?? box;
+        pillAnchorOffset = {
+          dx: last.right - box.left,
+          dy: last.bottom - box.top,
+          touch: window.matchMedia?.('(pointer: coarse)').matches ?? false,
+        };
+      }
+    }
+    const anchor = {
+      x: box.left + pillAnchorOffset.dx,
+      y: box.top + pillAnchorOffset.dy,
+      touch: pillAnchorOffset.touch,
+    };
+    // The editor's visible box, cut down by the on-screen keyboard the same
+    // way the comment pill's clamp is (see `positionPill`).
+    const er = editorMount.getBoundingClientRect();
+    const vv = window.visualViewport;
+    const vvTop = vv?.offsetTop ?? 0;
+    const vvHeight = vv?.height ?? window.innerHeight;
+    const bounds = {
+      left: Math.max(er.left, 0) + 6,
+      right: Math.min(er.right, window.innerWidth) - 6,
+      top: Math.max(er.top, vvTop) + 6,
+      bottom: Math.min(er.bottom, vvTop + vvHeight) - 6,
+    };
+    const sel = editor.getSelectionRel() ?? selection;
+    if (!sel) {
+      pointerPill.hide();
+      return;
+    }
+    pointerPillCtx = { sel, range: from < to ? { from, to } : null };
+    pointerPill.show(anchor, rects, bounds);
+  }
   /** What the pill represents if clicked: a range selection, or expand
    *  to the paragraph containing the caret. */
   let pillMode: 'range' | 'caret' = 'range';
@@ -622,6 +800,11 @@ async function mountMarkdown(ctx: MountContext): Promise<void> {
         pillMode = 'range';
         caretParaRange = null;
         commentPill.classList.remove('caret');
+        if (ctx.huddle === true) {
+          commentPill.classList.add('hidden');
+          showPointerPill(from, to);
+          return;
+        }
         // Prefer the DOM selection's LAST client rect — that's what the
         // user actually sees highlighted on iOS (where native selection
         // handles don't always stay in lockstep with ProseMirror's `to`).
@@ -682,6 +865,7 @@ async function mountMarkdown(ctx: MountContext): Promise<void> {
 
   function hidePill(): void {
     commentPill.classList.add('hidden');
+    pointerPill?.hide();
     caretParaRange = null;
   }
 
@@ -706,54 +890,17 @@ async function mountMarkdown(ctx: MountContext): Promise<void> {
       const sel = editor.getSelectionRel();
       if (sel) selection = sel;
     }
-    // On a HUDDLE doc the pill opens the four ways a line can leave the doc
-    // as work; everywhere else it is the comment affordance it has always
-    // been, and opens the composer directly.
+    // On a HUDDLE doc the round pill only ever appears in caret mode, and its
+    // job ends with the sentence selection it just made: `positionPill` sees
+    // a range and brings up the pointer pill over it. Everywhere else it is
+    // the comment affordance it has always been, and opens the composer.
     if (ctx.huddle === true) {
-      openSpinoffMenu();
+      selectionSettled = true;
+      positionPill();
       return;
     }
     reviewChrome.openComposer();
   });
-
-  /**
-   * The spin-off menu over the current selection.
-   *
-   * The PM range is captured HERE rather than read again when a row is
-   * tapped: opening the menu moves focus into it, and on iOS the tap that
-   * opened the pill has already blurred the editor. Without a captured range
-   * there is nothing left to write the task's link beside.
-   */
-  let spinoff: { destroy(): void } | null = null;
-  function openSpinoffMenu(): void {
-    const sel = editor.getSelectionRel() ?? selection;
-    if (!sel) {
-      showToast('Select a line first.');
-      return;
-    }
-    const { from, to } = editor.editor.state.selection;
-    const range = from < to ? { from, to } : caretParaRange;
-    spinoff?.destroy();
-    spinoff = mountSpinoffMenu({
-      anchorEl: commentPill,
-      onDismiss: () => hidePill(),
-      onPick: (action) => {
-        spinoff = null;
-        hidePill();
-        // Both of these are the person's own words, so both open the
-        // composer and post nothing until they send it.
-        if (action === 'comment') {
-          reviewChrome.openComposer();
-          return;
-        }
-        if (action === 'question') {
-          reviewChrome.openComposer(SPINOFF_QUESTION_PREFILL);
-          return;
-        }
-        void takeSpinoff(action, sel, range);
-      },
-    });
-  }
 
   async function takeSpinoff(
     action: SpinoffTaskId,
@@ -844,7 +991,6 @@ async function mountMarkdown(ctx: MountContext): Promise<void> {
     if (href !== undefined) unlinkSpinoffHref(editor.editor, href);
     showToast('Undone.');
   }
-  scope.onCleanup(() => spinoff?.destroy());
 
   // This lives on the editor's own DOM, which is removed by editor.destroy()
   // on teardown, so its listener dies with it — no scope binding needed.

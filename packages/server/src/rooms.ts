@@ -481,6 +481,9 @@ const SERVER_META_KEYS = [
   'planApprovedAt',
   'planRequestedAt',
   'planRequestedBy',
+  'reviewRequestedAt',
+  'reviewRequestedBy',
+  'reviewThreadId',
   'contentRevision',
 ] as const;
 
@@ -5032,6 +5035,32 @@ export class Rooms {
     }, CONTENT_REVISION_ORIGIN);
     room.meta.planRequestedAt = requestedAt;
     room.meta.planRequestedBy = by;
+    return { ok: true, docId: room.docId, requestedAt };
+  }
+
+  /**
+   * Stamp "somebody pressed Review" on the doc, naming the thread the press
+   * filed. The thread is the ask; the stamp is what a reopened doc renders
+   * while that thread is open, and the id is how the float sees it close
+   * and offers the next ask.
+   */
+  setReviewRequested(
+    docId: string,
+    by: string,
+    threadId: string,
+  ): { ok: true; docId: string; requestedAt: number } | { ok: false; error: 'not-found' } {
+    const room = this.get(docId);
+    if (!room) return { ok: false, error: 'not-found' };
+    const requestedAt = Date.now();
+    const m = room.ydoc.getMap('meta');
+    room.ydoc.transact(() => {
+      m.set('reviewRequestedAt', requestedAt);
+      m.set('reviewRequestedBy', by);
+      m.set('reviewThreadId', threadId);
+    }, CONTENT_REVISION_ORIGIN);
+    room.meta.reviewRequestedAt = requestedAt;
+    room.meta.reviewRequestedBy = by;
+    room.meta.reviewThreadId = threadId;
     return { ok: true, docId: room.docId, requestedAt };
   }
 
