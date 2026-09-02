@@ -47,6 +47,7 @@ import {
   tasksSidecarPath,
   voiceQueuePath,
 } from '../src/tasks.ts';
+import { waitForFile } from './wait-for.ts';
 
 const AGENT: User = {
   id: 'agent-search-revamp',
@@ -168,6 +169,11 @@ describe('DELETE /api/workspaces/:id — hub workspace', () => {
     const done = await mk('already closed');
     const t = await post(`/api/tasks/${done.id}/transition`, { to: 'done', author: AGENT });
     expect(t.status).toBe(200);
+    // The sidecar is written on the task store's own debounce, and several
+    // tests below assert on whether a failed delete LEFT it there — a claim
+    // that means nothing until it has been written once. Waiting here rather
+    // than in each test keeps the assertion honest at any suite speed.
+    await waitForFile(tasksSidecarPath(dataDir, wsId), () => true);
     return { wsId, open, done };
   }
 

@@ -68,10 +68,14 @@ bun run lint                    # biome; nothing else formats
 ```
 
 Four separate gates; each catches what the others cannot — read this list,
-don't recite it from memory. `bunx biome check --write` fixes formatting;
-pre-existing `noExplicitAny` warnings stay. Per diff: `packages/mcp/src/**`
-→ `bun run build:mcp` + commit the bundle; `packages/plugin/**` → version
-bump (below); touching neither adds nothing.
+don't recite it from memory. What a test has to do to be worth its runtime —
+behaviour not source shape, poll-until not sleep, no wall-clock assertions —
+is [.claude/rules/testing-standards.md](.claude/rules/testing-standards.md),
+whose mechanical half is `bun run test:audit` (ratcheted, runs in CI).
+`bunx biome check --write` fixes formatting; pre-existing `noExplicitAny`
+warnings stay. Per diff: `packages/mcp/src/**` → `bun run build:mcp` + commit
+the bundle; `packages/plugin/**` → version bump (below); touching neither
+adds nothing.
 
 ## Releasing the plugin
 

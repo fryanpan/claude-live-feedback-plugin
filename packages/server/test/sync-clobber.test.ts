@@ -18,6 +18,7 @@ import { Rooms } from '../src/rooms.ts';
 import { type ServerHandle, createServer } from '../src/server.ts';
 import { SseHub } from '../src/sse.ts';
 import { createWebhookDispatcher } from '../src/webhooks.ts';
+import { afterPersist, insideWriteBack, pastWriteBack, waitFor, waitForFile } from './wait-for.ts';
 
 /**
  * Regression suite for the disk-clobber incident class (2026-07-15 and
@@ -126,7 +127,9 @@ describe('sync-clobber regressions', () => {
       expect(rooms.getDoc('d1')?.plainText).toContain('second external edit');
 
       // And nothing may flush a stale copy back over it.
-      await sleep(1100);
+      // timed: the write-back fires at ~800ms, so only a fully elapsed
+      // window can say a stale copy never landed.
+      await sleep(pastWriteBack());
       expect(readFileSync(path, 'utf8')).toContain('second external edit');
     });
 
@@ -146,7 +149,9 @@ describe('sync-clobber regressions', () => {
       // later the server rewrites the file (this is the "stale in-memory copy
       // flushed to disk" step of the 2026-08-03 incident).
       expect(rooms.reparseFromDisk('d1').ok).toBe(true);
-      await sleep(1100);
+      // timed: the cancelled reassert would have fired at ~800ms; the file can
+      // only be believed byte-identical once that moment has passed.
+      await sleep(pastWriteBack());
       // Byte-identical: no post-reparse write-back may renormalize the file.
       expect(readFileSync(path, 'utf8')).toBe(EXT_ONE);
     });
@@ -162,10 +167,9 @@ describe('sync-clobber regressions', () => {
       ).toBe(true);
       writeExternal(path, EXT_ONE);
       expect(rooms.reconcileNow('d1')).toBe('conflict');
-      await sleep(1100);
 
       // Policy: live wins on disk...
-      expect(readFileSync(path, 'utf8')).toContain('Live edit, not yet flushed.');
+      await waitForFile(path, (t) => t.includes('Live edit, not yet flushed.'));
       // ...but the external version must survive somewhere, or "recoverable
       // with reparse_from_disk" is a lie (disk was already overwritten).
       const backupDir = join(dataDir, 'clobber-backups');
@@ -189,13 +193,20 @@ describe('sync-clobber regressions', () => {
       // Land the external write just before the 800ms write-back fires, in
       // the window after the poll's last tick. Pre-fix the writer overwrites
       // it with zero trace.
-      await sleep(700);
+      // timed: the write has to land INSIDE the 800ms window, after the
+      // poll's last tick — the delay is the thing being set up, not a wait.
+      await sleep(insideWriteBack());
       writeExternal(path, EXT_ONE);
-      await sleep(600);
 
       const backupDir = join(dataDir, 'clobber-backups');
-      const backups = existsSync(backupDir) ? readdirSync(backupDir) : [];
-      const backedUp = backups.map((f) => readFileSync(join(backupDir, f), 'utf8'));
+      const backedUp = await waitFor(
+        () => {
+          if (!existsSync(backupDir)) return false;
+          const found = readdirSync(backupDir).map((f) => readFileSync(join(backupDir, f), 'utf8'));
+          return found.some((c) => c.includes('first external edit')) ? found : false;
+        },
+        { describe: 'the racing external write to be backed up' },
+      );
       expect(backedUp.some((c) => c.includes('first external edit'))).toBe(true);
       expect(rooms.getSyncError('d1')).toBeDefined();
     });
@@ -207,8 +218,7 @@ describe('sync-clobber regressions', () => {
       expect(
         rooms.findAndReplace('d1', { find: 'Intro paragraph.', replace: 'Flushed edit.' }).ok,
       ).toBe(true);
-      await sleep(1100);
-      expect(readFileSync(path, 'utf8')).toContain('Flushed edit.');
+      await waitForFile(path, (t) => t.includes('Flushed edit.'));
 
       // "Server goes down"; the file is edited while it's away.
       writeExternal(path, EXT_ONE.replace('first external edit', 'edited while server was down'));
@@ -231,12 +241,13 @@ describe('sync-clobber regressions', () => {
           replace: 'Edit persisted to ydoc only.',
         }).ok,
       ).toBe(true);
-      await sleep(350); // .ydoc saved (200ms debounce); .md write-back (800ms) has NOT run
+      // timed: the whole case is a crash BETWEEN the two debounces, so this has
+      // to land after the .ydoc persist and before the .md write-back.
+      await sleep(afterPersist());
       const rooms2 = makeRooms(dataDir);
       expect(rooms2.getDoc('d1')?.plainText).toContain('Edit persisted to ydoc only.');
       // And the reassert flushes the live edit to disk.
-      await sleep(1100);
-      expect(readFileSync(path, 'utf8')).toContain('Edit persisted to ydoc only.');
+      await waitForFile(path, (t) => t.includes('Edit persisted to ydoc only.'));
     });
 
     it('write-back preserves a symlinked bound path', async () => {
@@ -253,9 +264,8 @@ describe('sync-clobber regressions', () => {
         expect(
           rooms.findAndReplace('s1', { find: 'Intro paragraph.', replace: 'Through the link.' }).ok,
         ).toBe(true);
-        await sleep(1100);
+        await waitForFile(realPath, (t) => t.includes('Through the link.'));
         expect(lstatSync(linkPath).isSymbolicLink()).toBe(true);
-        expect(readFileSync(realPath, 'utf8')).toContain('Through the link.');
       } finally {
         rmSync(realDir, { recursive: true, force: true });
       }
@@ -273,12 +283,15 @@ describe('sync-clobber regressions', () => {
       writeFileSync(p2, EXT_ONE); // extra blank lines = pure normalization drift
       rooms.getOrCreate('n1', { type: 'markdown', sourceUrl: p2 });
       expect(rooms.attachFile('n1', p2).ok).toBe(true);
-      await sleep(350); // .ydoc persists → the never-edited mtime skew is now real
+      // timed: the .ydoc has to persist for the restart to see a real mtime skew.
+      await sleep(afterPersist());
       const bytesBefore = readFileSync(p2, 'utf8');
       const mtimeBefore = statSync(p2).mtimeMs;
 
       makeRooms(dataDir); // restart
-      await sleep(1100); // a wrongly-scheduled reassert would flush at ~800ms
+      // timed: a wrongly-scheduled reassert would flush at ~800ms, so the
+      // "no write happened" claim needs that window to have passed.
+      await sleep(pastWriteBack());
 
       expect(readFileSync(p2, 'utf8')).toBe(bytesBefore);
       expect(statSync(p2).mtimeMs).toBe(mtimeBefore);
@@ -292,13 +305,13 @@ describe('sync-clobber regressions', () => {
       expect(
         rooms.findAndReplace('d1', { find: 'Intro paragraph.', replace: 'Unflushed edit.' }).ok,
       ).toBe(true);
-      await sleep(350); // .ydoc saved; .md write-back (800ms) has NOT run
+      // timed: the restart below must happen inside the write-back window, with
+      // the .ydoc already saved — that is what makes the reassert fire.
+      await sleep(afterPersist());
       const diskBefore = readFileSync(path, 'utf8');
 
       makeRooms(dataDir); // restart inside the write-back window
-      await sleep(1100);
-
-      expect(readFileSync(path, 'utf8')).toContain('Unflushed edit.');
+      await waitForFile(path, (t) => t.includes('Unflushed edit.'));
       const backupDir = join(dataDir, 'clobber-backups');
       const backups = readdirSync(backupDir);
       const snapshot = backups.find((f) => readFileSync(join(backupDir, f), 'utf8') === diskBefore);
@@ -315,7 +328,8 @@ describe('sync-clobber regressions', () => {
       writeFileSync(p2, EXT_ONE);
       rooms.getOrCreate('r1', { type: 'markdown', sourceUrl: p2 });
       expect(rooms.attachFile('r1', p2).ok).toBe(true);
-      await sleep(350); // .ydoc persists → restart hydrate will see ydoc newer
+      // timed: the .ydoc has to persist so the restart hydrate sees it as newer.
+      await sleep(afterPersist());
       const rooms2 = makeRooms(dataDir); // suppression fires on hydrate
       expect(
         rooms2.findAndReplace('r1', { find: 'first external edit', replace: 'edited live' }).ok,
@@ -323,8 +337,7 @@ describe('sync-clobber regressions', () => {
       expect(rooms2.attachFile('r1', p2).ok).toBe(true); // inside the 800ms window
       expect(rooms2.getSyncError('r1')).toBeUndefined();
       expect(existsSync(join(dataDir, 'clobber-backups'))).toBe(false);
-      await sleep(1100);
-      expect(readFileSync(p2, 'utf8')).toContain('edited live');
+      await waitForFile(p2, (t) => t.includes('edited live'));
     });
 
     it('a normalization-only external save while edits are un-flushed is not a conflict', async () => {
@@ -339,8 +352,7 @@ describe('sync-clobber regressions', () => {
       expect(rooms.reconcileNow('d1')).toBe('catch-up');
       expect(rooms.getSyncError('d1')).toBeUndefined();
       expect(existsSync(join(dataDir, 'clobber-backups'))).toBe(false);
-      await sleep(1100);
-      expect(readFileSync(path, 'utf8')).toContain('Live edit pending.');
+      await waitForFile(path, (t) => t.includes('Live edit pending.'));
     });
 
     it('a normalization-only external save with no live edits does not rewrite blocks', () => {
@@ -406,8 +418,7 @@ With new body text.
       }
 
       // Unlike reparse, this is a doc-side edit: it must flush to disk.
-      await sleep(1100);
-      expect(readFileSync(path, 'utf8')).toContain('Brand new section');
+      await waitForFile(path, (t) => t.includes('Brand new section'));
     });
 
     it('rejects flat (code/diff) docs', () => {

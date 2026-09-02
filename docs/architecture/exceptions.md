@@ -18,8 +18,8 @@ find packages \( -name '*.ts' -o -name '*.css' \) \
   | xargs wc -l | awk '$1>500' | sort -rn
 ```
 
-Audited 2026-09-02 at `3a39db67`. **148 files** over 500 lines: 54 source and 94
-test. **33 Split**, **115 Exception**.
+Audited 2026-09-02 at `3a39db67`. **149 files** over 500 lines: 54 source and 95
+test. **33 Split**, **116 Exception**.
 
 Test files are judged by a narrower rule, in their own table below: a long test
 file is an exception unless two *unrelated harnesses* share it. Many `describe`
@@ -118,7 +118,7 @@ the shipped bundle is unchanged.
 
 ## Test files
 
-94 test files exceed 500 lines. Two hold two unrelated harnesses; the other 92
+95 test files exceed 500 lines. Two hold two unrelated harnesses; the other 93
 are exceptions, listed after them. The recurring shape across the exceptions is
 one feature tested at two or three *layers* — pure predicate, then store, then
 real HTTP route — sharing the same fixture builders. That is one harness.
@@ -128,7 +128,7 @@ real HTTP route — sharing the same fixture builders. That is one harness.
 | `packages/markdown-app/test/hub-render.test.ts` | 4078 | Split | 18 describes share the `task()` factory and the `root` beforeEach and assert rendered DOM, but the last six (3897–4078) `readFileSync` `styles.css` and `hub-app.ts` and assert source text, touching neither `root` nor any render function. Move those six to `hub-source-contract.test.ts`. **S** |
 | `packages/server/test/voice-smooth.test.ts` | 729 | Split | Lines 55–293 are eight describes of pure helpers (`navigationAsk`, `resolveByTitle`, `parseOrdinal`, `composeStatus`) with no server at all, while `voice, smoothly (route)` stands up `createServer` in its own `beforeAll`. Move the eight helper describes to `voice-smooth-model.test.ts`. **M** |
 
-The remaining 92 are exceptions. Each row names the one harness its cases share.
+The remaining 93 are exceptions. Each row names the one harness its cases share.
 
 | File | Lines | Reason |
 |---|---|---|
@@ -219,6 +219,7 @@ The remaining 92 are exceptions. Each row names the one harness its cases share.
 | `packages/server/test/git-ops-vs-bound.test.ts` | 521 | Both describes build a real git repo with the shared `git()` / `cleanEnv()` helpers; `classifyExternalContent` is the bound-doc path's own classifier, not a foreign subsystem. |
 | `packages/server/test/tasks.test.ts` | 519 | `TaskStore` and the small `Ref` describe share the one store and dataDir fixture. |
 | `packages/server/test/effort-estimate-gate.test.ts` | 519 | A single describe with one stub-estimator server fixture. |
+| `packages/server/test/cross-origin-routes.test.ts` | 517 | Both describes stand up a real server and probe it from the module-scope `EVIL` origin for the `CANARY` body; the trusted host and the public share host are two modes of one guard, not two harnesses. |
 | `packages/server/test/sync-clobber.test.ts` | 517 | Both describes exercise the same write-back clobber path over the shared `makeRooms()` / `writeExternal()` fixtures, one directly and one over HTTP. |
 | `packages/markdown-app/test/mobile-review.test.ts` | 512 | Every describe uses the shared `harness()` mount plus `comment()` / `thread()` / `orphanThread()`. |
 | `packages/server/test/home-routes.test.ts` | 506 | All four describes construct their server via the one `makeHarness(summarizer?)` factory. |
