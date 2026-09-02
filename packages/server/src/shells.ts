@@ -233,6 +233,7 @@ export function renderHubShell(
   const assets = opts.assets ?? {};
   const hubJs = assetHref(assets, 'hub.js');
   const stylesCss = assetHref(assets, 'styles.css');
+  const hubCss = assetHref(assets, 'hub.css');
   const tokensCss = assetHref(assets, 'tokens.css');
   const safeName = escape(name);
   const safeId = escape(workspaceId);
@@ -262,6 +263,12 @@ export function renderHubShell(
     <link rel="manifest" href="/manifest.webmanifest" />
     <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
     <meta name="theme-color" content="#2e7dd7" />${sentryMeta}
+    <!-- The board's own rules load FIRST, and the order is load-bearing. The
+         hub block sat about a twelfth of the way into styles.css, so most of
+         that file came AFTER it and won every equal-specificity tie. Loading
+         hub.css last reverses ~30 of those; loading it first reverses one,
+         which a .hub-topbar .back-link:hover rule in hub.css now pins. -->
+    <link rel="stylesheet" href="${hubCss}" />
     <link rel="stylesheet" href="${stylesCss}" />
     <!-- Open Props trial layer — after styles.css on purpose; see
          packages/markdown-app/index.html. -->
@@ -288,6 +295,7 @@ export function renderSigninShell(
   const sentryMeta = sentryTags ? `\n    ${sentryTags}` : '';
   const signinJs = assetHref(assets, 'signin.js');
   const stylesCss = assetHref(assets, 'styles.css');
+  const signinCss = assetHref(assets, 'signin.css');
   const tokensCss = assetHref(assets, 'tokens.css');
   return `<!doctype html>
 <html lang="en">
@@ -298,6 +306,9 @@ export function renderSigninShell(
     <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
     <meta name="theme-color" content="#2e7dd7" />${sentryMeta}
     <link rel="stylesheet" href="${stylesCss}" />
+    <!-- The page's own rules, between the two for the same reason the board's
+         are: this is where they sat inside styles.css. -->
+    <link rel="stylesheet" href="${signinCss}" />
     <link rel="stylesheet" href="${tokensCss}" />
   </head>
   <body class="signin-body">

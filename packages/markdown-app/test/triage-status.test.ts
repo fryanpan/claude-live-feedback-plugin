@@ -29,7 +29,7 @@ import {
 } from '../src/hub/hub-board-model.ts';
 import { type ShimHandlers as BoardHandlers, disposeBoards, renderBoard } from './support/board.ts';
 
-const CSS = readFileSync(resolve(import.meta.dirname, '../src/styles.css'), 'utf8');
+const CSS = readFileSync(resolve(import.meta.dirname, '../src/hub.css'), 'utf8');
 
 /** The body of the `selector { … }` rule, asserted to exist so a renamed
  *  selector fails loudly rather than passing against an empty string. */
