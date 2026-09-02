@@ -27,8 +27,9 @@ The purpose of a workspace is to provide a significantly better agent and human 
          2. `review_type: "question"` asks for a look and an answer in their own words
       3. Where the ask goes
          1. A question that arose mid-work belongs on the task that raised it — `add_review_item(taskId, review)`
-         2. A decision that stands alone as a unit of work may be its own row
-         3. Either way the ask carries the context of the work it came from. Ten decisions filed as ten fresh rows, each severed from the work behind it, read as a quiz instead of a plan
+         2. A question ABOUT A DOC goes on the sentence it is about — one `create_thread(docId, { find: "<that sentence>", review })` per question, so the reader meets each one where it applies and answers it there. Never a list of questions in one comment: a plan request that came back as one comment holding twelve questions left the reader answering four, losing the thread, and never finding the other eight (Bryan, 2026-09-01). Twelve questions are twelve anchored threads, each carrying its own `review` payload.
+         3. A decision that stands alone as a unit of work may be its own row
+         4. Either way the ask carries the context of the work it came from. Ten decisions filed as ten fresh rows, each severed from the work behind it, read as a quiz instead of a plan
       4. Writing the ask
          1. The option label is the contract — the reviewer answers the label, not the reasoning under it. Plain words, phone-readable.
          2. The item has to be actionable on its own. The Home card renders the payload and nothing around it, so every link the reviewer needs goes in the payload's `detail` as an inline markdown link (`[the diff](/review/d-xxxx)`) — a link that lives only in the surrounding comment text never reaches the card, and the reviewer is left scrolling the comments for it.

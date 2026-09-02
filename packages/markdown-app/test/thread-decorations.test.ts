@@ -181,14 +181,33 @@ describe('inline comment cards', () => {
     editor.destroy();
   });
 
-  it('renders no card for a resolved thread — it has no highlight to sit under', () => {
+  it('a resolved thread keeps a faint highlight and its card — folded, not gone', () => {
     const editor = mount(CONTENT);
     const el = card('t1');
     setThreadDecorations(editor.view, {
       ranges: [{ id: 't1', from: 7, to: 12, status: 'resolved' }],
       inlineCards: [{ id: 't1', el }],
     });
-    expect(el.isConnected).toBe(false);
+    const span = editor.view.dom.querySelector('.thread-range[data-thread-id="t1"]');
+    expect(span?.classList.contains('resolved')).toBe(true);
+    expect(el.isConnected).toBe(true);
+    editor.destroy();
+  });
+
+  it('carries the thread kind and the new mark as classes on the highlight', () => {
+    const editor = mount(CONTENT);
+    setThreadDecorations(editor.view, {
+      ranges: [
+        { id: 'q', from: 1, to: 5, status: 'open', kind: 'question', isNew: true },
+        { id: 'a', from: 7, to: 12, status: 'open', kind: 'answered' },
+        { id: 'c', from: 14, to: 18, status: 'open', kind: 'comment' },
+      ],
+    });
+    const cls = (id: string) =>
+      editor.view.dom.querySelector(`.thread-range[data-thread-id="${id}"]`)?.className ?? '';
+    expect(cls('q')).toBe('thread-range question is-new');
+    expect(cls('a')).toBe('thread-range answered');
+    expect(cls('c')).toBe('thread-range');
     editor.destroy();
   });
 });

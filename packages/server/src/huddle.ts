@@ -81,7 +81,8 @@ export function parseHuddleKind(raw: unknown): { ok: true; kind?: HuddleKind } |
  * one tap, and the goal it points at is the doc itself.
  */
 export const PLAN_REQUEST_COMMENT =
-  'Please make a plan from this goal. Append it to this doc as a "Plan" section, and file the first tickets from it.';
+  'Please make a plan from this goal. Append it to this doc as a "Plan" section, and file the first tickets from it. ' +
+  'Ask each question you have as its own thread on the sentence it is about (create_thread with `find` and a `review` payload) — never a list of questions in one comment.';
 
 /**
  * What the Review press says — the meeting's second float, beside Make Plan.

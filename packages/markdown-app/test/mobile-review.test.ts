@@ -217,15 +217,21 @@ describe('inline placement', () => {
     expect(h.placed().map((c) => c.id)).toEqual(['t1', 't2']);
   });
 
-  it('gives orphaned and resolved threads NO inline card — the sheet is their only home', () => {
+  it('gives an orphaned thread NO inline card — the sheet is its only home; a resolved one keeps its card', () => {
     const h = harness([
       thread('open1'),
       orphanThread('orph1'),
       thread('done1', { status: 'resolved' }),
     ]);
-    // Positive control first: the surface really does receive cards.
-    expect(h.placed().map((c) => c.id)).toEqual(['open1']);
-    // …and the two that have nowhere to sit are reachable in the sheet.
+    // Positive control first: the surface really does receive cards. The
+    // resolved thread keeps a faint highlight and so keeps a (folded) card.
+    expect(
+      h
+        .placed()
+        .map((c) => c.id)
+        .sort(),
+    ).toEqual(['done1', 'open1']);
+    // …and the orphan, which has nowhere to sit, is reachable in the sheet.
     const ids = (): string[] =>
       Array.from(h.sheetList.querySelectorAll('.thread'))
         .map((e) => e.getAttribute('data-thread-id') ?? '')
@@ -374,19 +380,15 @@ describe('prev/next comment nav', () => {
     expect(h.panel.getActive()).toBe('c');
   });
 
-  it('skips orphaned and resolved threads — they cannot be walked to', () => {
-    const h = harness(
-      [thread('a'), orphanThread('o'), thread('done', { status: 'resolved' }), thread('b')],
-      {},
-      { a: 1, b: 4 },
-    );
+  it('skips orphaned threads — they cannot be walked to', () => {
+    const h = harness([thread('a'), orphanThread('o'), thread('b')], {}, { a: 1, b: 4 });
     h.mountPlaced();
     stubScroller(h);
     h.mobile.step(1);
     h.mobile.step(1);
     h.mobile.step(1);
     // Three steps over a two-item list wraps back to the first — it never
-    // lands on the orphan or the resolved thread.
+    // lands on the orphan.
     expect(h.panel.getActive()).toBe('a');
   });
 
@@ -410,7 +412,7 @@ describe('prev/next comment nav', () => {
   });
 
   it('disables the buttons when nothing is inline, and says why', () => {
-    const h = harness([orphanThread('o'), thread('done', { status: 'resolved' })]);
+    const h = harness([orphanThread('o')]);
     const prev = document.getElementById('prev-comment') as HTMLButtonElement;
     const next = document.getElementById('next-comment') as HTMLButtonElement;
     expect(h.placed()).toEqual([]);

@@ -145,9 +145,9 @@ export function mountMobileReview(opts: MobileReviewOpts): MobileReview {
   function inlineThreads(): Thread[] {
     const withPos: Array<{ t: Thread; from: number }> = [];
     for (const t of opts.threads()) {
-      // A resolved thread has no highlight to sit under, and an orphaned one
-      // has no anchor at all. Both live in the sheet and only there.
-      if (t.status !== 'open') continue;
+      // An orphaned thread has no anchor at all — it lives in the sheet and
+      // only there. A resolved one keeps its highlight (a faint tick) and so
+      // keeps a card, folded to one faded line (approved: comments mock 3).
       if (t.anchor.kind !== 'text-range') continue;
       const r = opts.resolveRange(t.id);
       if (!r) continue;
