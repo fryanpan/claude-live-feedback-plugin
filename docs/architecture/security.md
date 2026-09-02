@@ -153,7 +153,7 @@ an obvious fix.
 | Postmark server token | Keychain `postmark-api-token` | `auth/postmark-code-sender.ts:142` |
 | Cloudflare API token | Keychain `cloudflare-api-token` | `bin.ts:445` |
 | Share URL-signing key | `<dataDir>/share-url.key`, mode 600 | `share/url-signing.ts:38` |
-| Session / share cookie key | `<dataDir>/share-cookie.key`, mode 600 | `share/link-session.ts:28` |
+| Session / share cookie key | `<dataDir>/share-cookie.key`, mode 600 | `share/link-session.ts:29` |
 | Recall webhook secret | `RECALL_WEBHOOK_SECRET` env | `bin.ts:589` |
 
 Keychain reads go through `readKeychainPassword` / `readKeychainAccountPassword`
@@ -174,17 +174,26 @@ Login codes are never stored in the clear: `auth/email-code.ts` keeps them
 hashed with a per-challenge salt, in memory only, behind per-challenge,
 per-email and per-address limits plus two hourly abuse ceilings.
 
-## The three signed-token schemes
+## The three signed-token schemes, one signing module
 
 All three are HMAC-SHA256 over a dotted payload with a timing-safe compare,
-and all three derive from the same key file under different domain strings so
-one format can never verify as another.
+and that construction lives once in `auth/signed-token.ts:114`. Each scheme
+contributes only a `TokenFormat` — its key domain, its version tags, how its
+claims become a payload and back, and when it expires — so no scheme owns a
+copy of the algorithm.
 
-| Scheme | Carries | Verifier |
+| Scheme | Carries | Format |
 |---|---|---|
-| Share link-session cookie `lf_share` | shareId only — no expiry, so revocation is immediate | `share/link-session.ts:51` |
-| Auth session cookie `cw_session` | identityId, sessionId, issuedAt; `v2` never expires, ends by revocation | `auth/session.ts:95` |
-| Widget popup token | identityId, sessionId, session issuedAt, own expiry, and the one page origin | `auth/widget-token.ts:95` |
+| Share link-session cookie `lf_share` | shareId only — no expiry, so revocation is immediate | `share/link-session.ts:54` |
+| Auth session cookie `cw_session` | identityId, sessionId, issuedAt; `v2` never expires, ends by revocation | `auth/session.ts:84` |
+| Widget popup token | identityId, sessionId, session issuedAt, own expiry, and the one page origin | `auth/widget-token.ts:69` |
+
+They share one key file and separate on the key derived from it
+(`auth/signed-token.ts:92`). The auth session and the widget token each
+derive under their own domain string. The **share cookie signs with the key
+file's own bytes** — it predates domain separation and its cookies are in
+browsers, so that is a wire lock rather than an omission, and what keeps it
+apart from the others is that neither of their keys is this one.
 
 The share **URL** signature is a fourth, different thing: an HMAC over
 `<id>.<exp>` verified independently by the edge Worker and by the server
@@ -196,9 +205,11 @@ use is re-checked against the live session's revocation state, and it is
 accepted only from a request whose `Origin` matches the origin signed into it
 (`server.ts:5517`).
 
-The code-health audit's coupling row proposes folding these into one signing
-module. They already share a key file and a construction; what they do not
-share is a single place to change the algorithm.
+The wire format is frozen: cookies minted before the schemes were folded
+together are in browsers and share links are in the wild.
+`test/signed-token-compat.test.ts` keeps a verbatim copy of each old mint
+path and asserts both directions against the shipping code, so a change to
+any payload shape fails there rather than in the field.
 
 ## Deploy, refresh and webhook surfaces
 

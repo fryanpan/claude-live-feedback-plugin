@@ -14,9 +14,10 @@
  * every request, so revoking or expiring a share takes effect immediately
  * rather than whenever a browser's cookie happens to lapse.
  */
-import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
+import { randomBytes } from 'node:crypto';
 import { chmodSync, existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { type TokenFormat, mintToken, tokenClaims } from '../auth/signed-token.ts';
 
 export const SHARE_COOKIE = 'lf_share';
 const KEY_FILENAME = 'share-cookie.key';
@@ -39,9 +40,29 @@ export function loadCookieKey(dataDir: string): string {
   return key;
 }
 
-/** `<shareId>.<hmac>` — opaque to the client, unforgeable without the key. */
+/**
+ * `<shareId>.<hmac>` — the whole payload is the share id.
+ *
+ * Three things this format does NOT have, each on purpose. No version tag:
+ * the payload is data, so a share id containing dots stays whole (which is
+ * why the shared module signs a payload string rather than a field list). No
+ * expiry in the value: the share's own `expiresAt` is re-checked per request,
+ * so revocation is immediate. And no derived key — this cookie predates
+ * domain separation and the ones already in browsers are signed with the key
+ * file's own bytes, so `keyDomain` is a wire lock rather than an omission.
+ */
+export const shareSessionToken: TokenFormat<string> = {
+  purpose: 'share-link-session',
+  keyDomain: null,
+  tags: null,
+  encode: (shareId) => shareId,
+  decode: (payload) => payload,
+  expiresAt: () => null,
+};
+
+/** Opaque to the client, unforgeable without the key. */
 export function signSession(shareId: string, key: string): string {
-  return `${shareId}.${mac(shareId, key)}`;
+  return mintToken(shareSessionToken, shareId, key);
 }
 
 /**
@@ -49,16 +70,7 @@ export function signSession(shareId: string, key: string): string {
  * Comparison is timing-safe so a caller can't grind out a valid MAC.
  */
 export function verifySession(value: string | undefined | null, key: string): string | null {
-  if (!value) return null;
-  const dot = value.lastIndexOf('.');
-  if (dot <= 0) return null;
-  const shareId = value.slice(0, dot);
-  const provided = value.slice(dot + 1);
-  const expected = mac(shareId, key);
-  const a = Buffer.from(provided);
-  const b = Buffer.from(expected);
-  if (a.length !== b.length) return null;
-  return timingSafeEqual(a, b) ? shareId : null;
+  return tokenClaims(shareSessionToken, value, key);
 }
 
 /** Pull one cookie out of a Cookie header. */
@@ -87,8 +99,4 @@ export function sessionCookieHeader(shareId: string, key: string, maxAgeSeconds:
     'SameSite=Lax',
     `Max-Age=${maxAge}`,
   ].join('; ');
-}
-
-function mac(shareId: string, key: string): string {
-  return createHmac('sha256', key).update(shareId).digest('base64url');
 }
