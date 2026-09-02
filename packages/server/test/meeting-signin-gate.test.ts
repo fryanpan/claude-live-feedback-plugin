@@ -79,10 +79,13 @@ async function openAudio(
   docId: string,
   opts: { asBrowser: boolean },
 ): Promise<{ frames: ServerFrame[]; ws: WebSocket }> {
-  const ws = new WebSocket(
-    `${b.wsBase}${meetingSocketPath(docId)}`,
-    opts.asBrowser ? { headers: { origin: b.base } } : undefined,
-  );
+  // Bun's WebSocket accepts request headers as its second argument; the DOM
+  // lib types that slot as subprotocols, hence the cast. Sending `Origin` is
+  // the whole point — it is what the server reads as "a browser".
+  const init = opts.asBrowser
+    ? ({ headers: { origin: b.base } } as unknown as string[])
+    : undefined;
+  const ws = new WebSocket(`${b.wsBase}${meetingSocketPath(docId)}`, init);
   const frames: ServerFrame[] = [];
   ws.addEventListener('message', (ev) => {
     frames.push(JSON.parse(ev.data as string) as ServerFrame);
