@@ -902,6 +902,12 @@ describe('the board wakes its lead over the wire', () => {
         // Beside the gate's own hold on the busy row (`claimed`: somebody is
         // already on it), never instead of it — the two are separate facts.
         expect(got[0]?.data?.held).toEqual({ claimed: 1, 'parallelism-cap': 1 });
+        // A wake that holds a row for the cap names who set the cap and when
+        // — the lead must not have to go and find out.
+        expect(got[0]?.data?.parallelismCap).toMatchObject({
+          value: 1,
+          lastChange: { actor: { id: LEAD.id, name: LEAD.name }, from: 4, to: 1 },
+        });
 
         // Closing the dispatch frees the slot; the SAME row the cap was
         // holding is what the very next pass names.

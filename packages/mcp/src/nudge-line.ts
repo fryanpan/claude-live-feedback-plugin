@@ -20,6 +20,50 @@
  * decision, and inline in a 3,000-line switch it cannot be asserted.
  */
 
+/**
+ * The board's parallelism cap as a wake carries it: the number and, once
+ * somebody has moved it, who, when and from what. Every field loose, like
+ * the rest of the payload — the server stamps it, an older one does not.
+ */
+export interface ParallelismCapPayload {
+  value?: number;
+  lastChange?: {
+    actor?: { id?: string; name?: string; kind?: string };
+    ts?: number;
+    from?: number;
+    to?: number;
+  };
+}
+
+/**
+ * "cap 1, set by Jordan 2h ago, was 4" — the cap named WITH its author in
+ * one clause, so wherever a line holds rows for the cap the reader learns who
+ * moved it in the same sentence (a moved cap is never a mystery). A cap nobody
+ * has moved is stated bare: inventing a setter would be the lie the clause
+ * exists to prevent. Empty when the frame carries no cap at all, which is
+ * what an older server sends.
+ */
+function capClause(
+  cap: ParallelismCapPayload | undefined,
+  now: number | undefined,
+  style: 'ready' | 'stall',
+): string {
+  if (cap === undefined || typeof cap.value !== 'number') return '';
+  const change = cap.lastChange;
+  const name = change?.actor?.name;
+  let setter = '';
+  if (change !== undefined && typeof name === 'string' && name.length > 0) {
+    const at = typeof change.ts === 'number' ? change.ts : undefined;
+    const clock = typeof now === 'number' ? now : Date.now();
+    const ago = at === undefined ? '' : ` ${humanDuration(Math.max(0, clock - at))} ago`;
+    const was = typeof change.from === 'number' ? `, was ${change.from}` : '';
+    setter = `, set by ${name}${ago}${was}`;
+  }
+  return style === 'ready'
+    ? ` (cap ${cap.value}${setter})`
+    : ` of ${cap.value}${setter ? `${setter.replace(/, was (\d+)$/, ' (was $1)')},` : ''}`;
+}
+
 export interface NudgePayload {
   /** The row to start with (idle) or the row the answer was about
    *  (answered). Absent on an answer recorded against a comment rather than
@@ -51,6 +95,12 @@ export interface NudgePayload {
   undetermined?: { count?: number; reasons?: string[] };
   /** How long the board had stood still. Idle nudges only. */
   idleMs?: number;
+  /** The cap that held rows, with who moved it and when. Sent only beside a
+   *  `parallelism-cap` hold; see `capClause`. */
+  parallelismCap?: ParallelismCapPayload;
+  /** When the frame was sent — the clock "set by X 2h ago" is read against.
+   *  Absent from an older server; the renderer's own clock stands in. */
+  ts?: number;
   /** The answered row's own links. Answer nudges only, and routinely EMPTY —
    *  most rows annotate nothing. Absent from a server older than the field,
    *  and absent by construction on an answer recorded against a comment,
@@ -98,6 +148,11 @@ export interface StallPayload {
   /** Runnable rows past the board's parallelism cap, which the pass did not
    *  judge — idle by rule, not healthy. Absent when none. */
   beyondCapacity?: number;
+  /** The cap that kept them out, with who moved it and when. Sent only
+   *  beside `beyondCapacity`; see `capClause`. */
+  parallelismCap?: ParallelismCapPayload;
+  /** When the frame was sent — see `NudgePayload.ts`. */
+  ts?: number;
   /** The lead this wake was addressed to, when it could not be reached and
    *  came here instead. Absent on the ordinary wake — its presence is the
    *  whole signal, and without it the reader has no way to tell why it was
@@ -188,7 +243,10 @@ function denominatorClause(p: NudgePayload): string {
   const held = Object.entries(p.held ?? {})
     .filter(([, n]) => typeof n === 'number' && n > 0)
     .sort(([a], [b]) => a.localeCompare(b))
-    .map(([reason, n]) => `${n} ${reason}`);
+    .map(
+      ([reason, n]) =>
+        `${n} ${reason}${reason === 'parallelism-cap' ? capClause(p.parallelismCap, p.ts, 'ready') : ''}`,
+    );
   if (held.length > 0) parts.push(`held: ${held.join(', ')}`);
   const unread = undeterminedCount(p);
   // Spelled loudly, and with which way the uncertainty falls. A row nobody
@@ -312,7 +370,7 @@ export function stalledLine(p: StallPayload): string {
   // open rows checked" cannot read as nine judged when five were.
   const beyond =
     p.beyondCapacity !== undefined && p.beyondCapacity > 0
-      ? `; ${p.beyondCapacity} beyond the parallelism cap and not judged`
+      ? `; ${p.beyondCapacity} beyond the parallelism cap${capClause(p.parallelismCap, p.ts, 'stall')} and not judged`
       : '';
   const denominator =
     p.consideredCount === undefined
