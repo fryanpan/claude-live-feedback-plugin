@@ -18,8 +18,8 @@
  * All fixtures are synthetic.
  */
 import { describe, expect, it } from 'bun:test';
-import type { HubTask } from '../../markdown-app/src/hub/hub-model.ts';
-import { reviewQueue, reviewRowTitle } from '../../markdown-app/src/hub/hub-model.ts';
+import type { HubTask } from '../../markdown-app/src/hub/hub-board-model.ts';
+import { reviewQueue, reviewRowTitle } from '../../markdown-app/src/hub/hub-review-model.ts';
 import { projectTask } from '../src/task-projection.ts';
 import type { Task } from '../src/tasks.ts';
 

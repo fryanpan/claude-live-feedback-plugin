@@ -20,7 +20,7 @@ import {
   restoreComposerFocus,
   restoreScrollTops,
 } from './composer-keep.ts';
-import { askedMetaLine, decidedMetaLine } from './hub/hub-model.ts';
+import { askedMetaLine, decidedMetaLine } from './hub/hub-review-model.ts';
 import { decisionOutcome, threadDecision } from './long-thread.ts';
 import { attachMarkdownComposer } from './md-composer.ts';
 import { threadGlyph, threadKind } from './thread-kind.ts';

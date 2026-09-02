@@ -13,7 +13,7 @@
  * outside `hub-app`'s `main()`.
  */
 
-import { timeAgo } from './hub-model.ts';
+import { timeAgo } from './hub-presence-model.ts';
 
 export interface ParallelismCap {
   value: number;

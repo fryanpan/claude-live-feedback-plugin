@@ -9,7 +9,7 @@
  * so the guardrail correctly refused, and the highlighted row never moved.
  */
 import { describe, expect, it } from 'vitest';
-import { voiceHubContext } from '../src/hub/hub-model.ts';
+import { voiceHubContext } from '../src/hub/hub-presence-model.ts';
 
 describe('voiceHubContext', () => {
   it('reports the open detail panel’s task', () => {

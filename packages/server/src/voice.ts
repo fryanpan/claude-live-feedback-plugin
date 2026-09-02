@@ -1798,7 +1798,7 @@ export class VoiceRouter {
 
   /**
    * One of the hub's own places. The paths are `navPath` in the client
-   * (`hub-model.ts`) spelled out: Tasks is the bare board, the other three
+   * (`hub-presence-model.ts`) spelled out: Tasks is the bare board, the other three
    * are suffixes. The ack names the place the way the nav labels it.
    */
   private openHubDestination(

@@ -7,10 +7,10 @@ import {
   archivedGoals,
   boardSections,
   cascadePhrase,
-  describeEvent,
   goalSection,
   isGoalArchived,
-} from '../src/hub/hub-model.ts';
+} from '../src/hub/hub-board-model.ts';
+import { describeEvent } from '../src/hub/hub-presence-model.ts';
 import { type GoalDetailHandlers, renderArchivedList } from '../src/hub/hub-render.ts';
 import { GOAL_PLACEHOLDER_TEXT, PLACEHOLDER_TEXT } from '../src/hub/task-body-editor.ts';
 import { disposeGoalDetail, renderGoalDetail } from './support/goal-detail.ts';

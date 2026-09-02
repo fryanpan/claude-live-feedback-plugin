@@ -26,7 +26,7 @@ import {
   type HubTask,
   TASK_STATUS_ORDER,
   boardSections,
-} from '../src/hub/hub-model.ts';
+} from '../src/hub/hub-board-model.ts';
 import { type ShimHandlers as BoardHandlers, disposeBoards, renderBoard } from './support/board.ts';
 
 const CSS = readFileSync(resolve(import.meta.dirname, '../src/styles.css'), 'utf8');
