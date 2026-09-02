@@ -65,6 +65,7 @@ describe('rooms suggestion operations', () => {
 
     // The proposal is pending: the write-back window passes and the FILE is
     // byte-identical (proposal isolation, outcome 1 of the plan).
+    // timed: only an elapsed window can prove the proposal never landed.
     await sleep(1300);
     expect(readFileSync(path, 'utf8')).toBe(MD);
 
@@ -96,6 +97,8 @@ describe('rooms suggestion operations', () => {
     expect(serializeFragmentToMarkdown(getProseFragment(ydoc))).toBe(MD);
     // No residual marks in the live doc either.
     expect(walkProse(getProseFragment(ydoc)).plainText).not.toContain('delta');
+    // timed: same negative — the rejected text must still be absent after the
+    // window in which a write-back could have carried it out.
     await sleep(1300);
     expect(readFileSync(path, 'utf8')).toBe(MD);
     expect(rooms.listSuggestions('sg1')).toHaveLength(0);
@@ -202,7 +205,9 @@ describe('rooms suggestion operations', () => {
     const created = rooms.createSuggestion('sg1', { find: 'beta', replace: 'delta', author });
     expect(created.ok).toBe(true);
     if (!created.ok) return;
-    await sleep(1300); // let the .ydoc snapshot flush
+    // Drain the .ydoc persist debounce rather than outwaiting it, so the
+    // restart below is reading a snapshot that definitely exists.
+    rooms.flush();
 
     const rooms2 = makeRooms(dataDir);
     const list = rooms2.listSuggestions('sg1');
@@ -231,7 +236,7 @@ describe('rooms suggestion operations', () => {
     if (!dropped.ok || !survivor.ok) return;
     // Let the write-back settle (it writes the accepted state — identical
     // bytes — and advances lastWritten bookkeeping).
-    await sleep(1300);
+    rooms.flush();
     expect(readFileSync(path, 'utf8')).toBe(MD);
 
     // External tool rewrites ONLY the first paragraph.

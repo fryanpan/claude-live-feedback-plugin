@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { User } from '@feedback/core';
 import { type ServerHandle, createServer } from '../src/server.ts';
+import { waitForFileToBe } from './wait-for.ts';
 
 /**
  * HTTP-level tests for the suggested-edits route layer (redline-suggestions
@@ -69,6 +70,8 @@ describe('suggested edits — HTTP routes', () => {
     // The normal debounced write-back window passes and disk is untouched —
     // proposal isolation (outcome 1 of the plan), proven at the ROUTE, not
     // just at rooms.ts.
+    // timed: the assertion is that the pending proposal NEVER reaches disk,
+    // so the whole debounced write-back window has to elapse first.
     await sleep(1300);
     expect(readFileSync(file, 'utf8')).toBe('Alpha beta gamma.\n');
 
@@ -86,8 +89,7 @@ describe('suggested edits — HTTP routes', () => {
       }),
     );
     expect(accepted.ok).toBe(true);
-    await sleep(1300);
-    expect(readFileSync(file, 'utf8')).toBe('Alpha delta gamma.\n');
+    await waitForFileToBe(file, 'Alpha delta gamma.\n');
   });
 
   it('suggest:true on find_and_replace without an author is rejected — 400, no proposal created', async () => {
@@ -123,6 +125,8 @@ describe('suggested edits — HTTP routes', () => {
       await fetch(`${base}/api/docs/sug-reject/suggestions`),
     );
     expect(list.suggestions).toHaveLength(0);
+    // timed: the assertion is that the pending proposal NEVER reaches disk,
+    // so the whole debounced write-back window has to elapse first.
     await sleep(1300);
     expect(readFileSync(file, 'utf8')).toBe('Alpha beta gamma.\n');
   });
@@ -170,8 +174,7 @@ describe('suggested edits — HTTP routes', () => {
       await fetch(`${base}/api/docs/sug-resolve-all/suggestions`),
     );
     expect(list.suggestions).toHaveLength(1);
-    await sleep(1300);
-    expect(readFileSync(file, 'utf8')).toBe('Alpha delta gamma.\n\nSecond paragraph here.\n');
+    await waitForFileToBe(file, 'Alpha delta gamma.\n\nSecond paragraph here.\n');
   });
 
   it('resolve_all requires a valid action', async () => {
@@ -207,6 +210,8 @@ describe('suggested edits — HTTP routes', () => {
     expect(created.ok).toBe(true);
     expect(typeof created.suggestionId).toBe('string');
 
+    // timed: the assertion is that the pending proposal NEVER reaches disk,
+    // so the whole debounced write-back window has to elapse first.
     await sleep(1300);
     expect(readFileSync(file, 'utf8')).toBe('The quick brown fox jumped.\n');
 
@@ -217,8 +222,7 @@ describe('suggested edits — HTTP routes', () => {
       ),
     );
     expect(accepted.ok).toBe(true);
-    await sleep(1300);
-    expect(readFileSync(file, 'utf8')).toBe('The lazy blue fox jumped.\n');
+    await waitForFileToBe(file, 'The lazy blue fox jumped.\n');
   });
 
   it('suggest:true on rewrite_region without an author is rejected — 400', async () => {
@@ -322,6 +326,8 @@ describe('suggested edits — HTTP routes', () => {
       }),
     );
     expect(created.ok).toBe(true);
+    // timed: the assertion is that the pending proposal NEVER reaches disk,
+    // so the whole debounced write-back window has to elapse first.
     await sleep(1300);
     expect(readFileSync(file, 'utf8')).toBe('See the docs here.\n');
 
@@ -339,8 +345,7 @@ describe('suggested edits — HTTP routes', () => {
         method: 'POST',
       }),
     );
-    await sleep(1300);
-    expect(readFileSync(file, 'utf8')).toBe('See [the docs](https://example.com) here.\n');
+    await waitForFileToBe(file, 'See [the docs](https://example.com) here.\n');
   });
 
   it('parseInlineMarks + suggest:true on rewrite_region survives the route too', async () => {
@@ -374,8 +379,7 @@ describe('suggested edits — HTTP routes', () => {
         method: 'POST',
       }),
     );
-    await sleep(1300);
-    expect(readFileSync(file, 'utf8')).toBe('See [the docs](https://example.com) here.\n');
+    await waitForFileToBe(file, 'See [the docs](https://example.com) here.\n');
   });
 
   it('a suggestion inside a bold span keeps the bold through accept', async () => {
@@ -397,8 +401,7 @@ describe('suggested edits — HTTP routes', () => {
         method: 'POST',
       }),
     );
-    await sleep(1300);
-    expect(readFileSync(file, 'utf8')).toBe('This is **strong text** here.\n');
+    await waitForFileToBe(file, 'This is **strong text** here.\n');
   });
 
   it('a find that only matches inside a pending proposal is refused — 409 match-in-pending-suggestion', async () => {

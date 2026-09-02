@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import * as Y from 'yjs';
@@ -13,6 +13,7 @@ import {
 import { Rooms } from '../src/rooms.ts';
 import { SseHub } from '../src/sse.ts';
 import { createWebhookDispatcher } from '../src/webhooks.ts';
+import { waitForFile } from './wait-for.ts';
 
 /**
  * Proposal isolation, end to end through the real write-back: a suggestion
@@ -31,7 +32,6 @@ function makeRooms(dataDir: string): Rooms {
   });
 }
 
-const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 const sattrs = (sid: string): SuggestionAttrs => ({
   sid,
@@ -77,9 +77,9 @@ describe('suggestions vs disk and hydration', () => {
     }, 'agent');
     // An accepted edit alongside, so the write-back definitely fires.
     expect(rooms.findAndReplace('s1', { find: 'gamma', replace: 'omega' }).ok).toBe(true);
-    await sleep(1300); // debounced writer (~1s)
-
-    const onDisk = readFileSync(path, 'utf8');
+    // The accepted edit is the positive observable; once it is on disk, the
+    // same write either carried the proposal out or never will.
+    const onDisk = await waitForFile(path, (t) => t.includes('omega'));
     expect(onDisk).toContain('omega'); // accepted edit landed
     expect(onDisk).not.toContain('delta'); // proposal did not
     expect(onDisk).toContain('beta'); // proposed deletion still on disk
