@@ -11,7 +11,7 @@
 import type { FeedbackClient } from '@feedback/core';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import * as Y from 'yjs';
-import { BODY_LIVE_CLASS } from '../src/hub/hub-render.ts';
+import { BODY_LIVE_CLASS } from '../src/hub/hub-detail-render.ts';
 import {
   type EditorModule,
   LOAD_FAILED_TEXT,

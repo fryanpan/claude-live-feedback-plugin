@@ -3,8 +3,13 @@ import { resolve } from 'node:path';
 import { options } from 'preact';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { goalDetailData, mountGoalDetailIsland } from '../src/hub/goal-detail-island.tsx';
-import { type BoardSection, DEFAULT_DONE_WINDOW, boardSections } from '../src/hub/hub-model.ts';
-import type { GoalDetailHandlers, TaskDiscussion } from '../src/hub/hub-render.ts';
+import {
+  type BoardSection,
+  DEFAULT_DONE_WINDOW,
+  boardSections,
+} from '../src/hub/hub-board-model.ts';
+import type { TaskDiscussion } from '../src/hub/hub-detail-render.ts';
+import type { GoalDetailHandlers } from '../src/hub/hub-render.ts';
 
 /**
  * The goal panel's ISLAND contract, as opposed to what the panel shows — that

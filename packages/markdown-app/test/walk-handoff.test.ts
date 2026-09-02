@@ -1,9 +1,8 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
+import { CHORES_ID, type HubTask } from '../src/hub/hub-board-model';
 import {
-  CHORES_ID,
-  type HubTask,
   type ReviewQueue,
   type ReviewThreadItem,
   reviewQueue,
@@ -11,7 +10,7 @@ import {
   walkHandoffReady,
   walkNextUrl,
   walkPosition,
-} from '../src/hub/hub-model';
+} from '../src/hub/hub-review-model';
 
 // The landing page's review chip and "Review all" bar (the walkthrough
 // handoff ticket) hand
@@ -57,6 +56,9 @@ describe('walkNextUrl', () => {
 // chains to the next workspace instead of dead-ending on a cleared card.
 describe('hub-app wires the handoff', () => {
   const src = readFileSync(join(__dirname, '..', 'src', 'hub', 'hub-app.ts'), 'utf8');
+  // The ydoc observers moved to `hub-live-wiring.ts`; the entry is what hands
+  // them the tick, so the retry contract is asserted across both halves.
+  const wiring = readFileSync(join(__dirname, '..', 'src', 'hub', 'hub-live-wiring.ts'), 'utf8');
 
   it('reads walkHandoff from the boot URL', () => {
     expect(src).toContain('walkHandoff(location.search)');
@@ -79,7 +81,10 @@ describe('hub-app wires the handoff', () => {
   // when the projection lands, and only a deadline concludes the board is
   // genuinely clear (hopping the chain instead of opening on nothing).
   it('retries the auto-walk when the task projection arrives', () => {
-    expect(src).toMatch(/tasksMap\.observeDeep\([\s\S]{0,500}autoWalkTick\?\.\(\)/);
+    // The entry passes its own armed tick down as a thunk...
+    expect(src).toMatch(/autoWalkTick: \(\) => autoWalkTick\?\.\(\)/);
+    // ...and the projection observer is what calls it.
+    expect(wiring).toMatch(/tasksMap\.observeDeep\([\s\S]{0,500}autoWalkTick\(\)/);
   });
 
   it('an empty queue leaves the flag armed until the deadline', () => {
