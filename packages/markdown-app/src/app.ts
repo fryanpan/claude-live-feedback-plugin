@@ -19,6 +19,7 @@ import {
 } from './huddle-entry.ts';
 import { ensureUserIdentity } from './identity-prompt.ts';
 import { wireKeyboardInset } from './keyboard-inset.ts';
+import { type LeadBanner, mountLeadBanner } from './lead-banner.ts';
 import { createMeetingBotClient } from './meeting-bot-client.ts';
 import { type MeetingLiveZone, createMeetingLiveZone } from './meeting-live-zone.ts';
 import { mountMeetingStrip } from './meeting-strip.ts';
@@ -413,6 +414,10 @@ async function mountMarkdown(ctx: MountContext): Promise<void> {
   // the address — and the edit-mode decision that also needs it runs much
   // later, by which time `location.search` no longer says anything.
   const startedHuddleHere = wantsHuddleStart(location.search);
+  // The lead banner's read and stream, handed to the floats below so their
+  // receipts can say "no lead attached" off the same answer. Set only
+  // on a huddle doc; the floats read as before without it.
+  let watchLeadPresence: LeadBanner['watch'] | undefined;
   const meetingStripEl = document.getElementById('meeting-strip');
   if (meetingStripEl && ctx.docType === 'markdown' && ctx.navDocId === undefined) {
     const huddleStart = startedHuddleHere;
@@ -491,6 +496,15 @@ async function mountMarkdown(ctx: MountContext): Promise<void> {
       liveZone: zone,
     });
     scope.onCleanup(() => strip.destroy());
+    // The standing line for an empty lead seat — huddle docs only, because
+    // a huddle is the doc whose every ask addresses that seat (the floats
+    // above, the assistant's spoken captures). Sits at the top of the
+    // scrolling prose; see lead-banner.ts for what "listening" means.
+    if (ctx.huddle === true) {
+      const banner = mountLeadBanner({ docId, parent: editorMount });
+      watchLeadPresence = (onChange) => banner.watch(onChange);
+      scope.onCleanup(() => banner.destroy());
+    }
   }
 
   // The plan gate's floating Approve button — rendered only while this doc
@@ -513,6 +527,7 @@ async function mountMarkdown(ctx: MountContext): Promise<void> {
         meta.observe(onChange);
         return () => meta.unobserve(onChange);
       },
+      ...(watchLeadPresence ? { watchLeadPresence } : {}),
     });
     scope.onCleanup(() => planGate.destroy());
 
@@ -541,6 +556,7 @@ async function mountMarkdown(ctx: MountContext): Promise<void> {
         threads.observeDeep(onChange);
         return () => threads.unobserveDeep(onChange);
       },
+      ...(watchLeadPresence ? { watchLeadPresence } : {}),
     });
     scope.onCleanup(() => reviewFloat.destroy());
   }
@@ -1010,6 +1026,18 @@ async function mountMarkdown(ctx: MountContext): Promise<void> {
       });
       if (!made) {
         showToast("That didn't go through — try again.");
+        return;
+      }
+      if (made.action === 'research') {
+        // The doc is the receipt: a "Research: …" section now sits under
+        // the line, and the ask thread on the line is what the lead
+        // answers. Nothing to link and nothing to undo from here — the
+        // section is prose, and deleting prose is the editor's own verb.
+        showToast(
+          made.placeholder
+            ? `“${made.section}” added below — the lead fills it in.`
+            : 'Research asked for — the lead answers on the thread.',
+        );
         return;
       }
       // The selected words BECOME the task's link — nothing is written into

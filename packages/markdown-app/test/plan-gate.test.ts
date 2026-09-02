@@ -11,7 +11,7 @@
  * receipt's timer is injected too so nothing here sleeps. Fixtures are
  * synthetic (jordan@partner.example register).
  */
-import type { User } from '@feedback/core';
+import type { LeadPresence, User } from '@feedback/core';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { mountPlanGate } from '../src/plan-gate.ts';
 
@@ -267,14 +267,34 @@ describe('mountPlanGate', () => {
     gate.destroy();
   });
 
-  it('a discussion huddle offers no Make Plan — only a plan doc does', async () => {
-    // The narrowing control for the test above: same shape, different kind.
+  it('a discussion huddle offers Make Plan too — a discussion arrives at plans', async () => {
+    // This used to assert the opposite. Bryan started a discussion, reached
+    // a plan, and had no button to ask for it (2026-09-01): "there should be
+    // a plan button in discussions too, not just planning sessions".
     const gate = mountPlanGate({
       docId: 'd-disc',
       root,
       user: JORDAN,
       canWrite: true,
-      fetchJson: stubFetch([{ meta: { huddleKind: 'discussion' }, tasks: [] }]).fetchJson,
+      fetchJson: stubFetch([{ meta: { huddleKind: 'discussion' }, tasks: [], leadAgentId: 'Ada' }])
+        .fetchJson,
+    });
+    await gate.ready;
+    expect(gate.face()).toBe('make');
+    expect(approveBtn()?.hidden).toBe(false);
+    expect(sub()).toBe('Ask Ada to create a plan');
+    gate.destroy();
+  });
+
+  it('an ordinary doc with no huddle kind still offers no Make Plan', async () => {
+    // The narrowing control: widening to discussions must not reach a doc
+    // that is not a huddle at all — nothing is waiting on a goal there.
+    const gate = mountPlanGate({
+      docId: 'd-plain',
+      root,
+      user: JORDAN,
+      canWrite: true,
+      fetchJson: stubFetch([{ meta: {}, tasks: [] }]).fetchJson,
     });
     await gate.ready;
     expect(gate.face()).toBe('none');
@@ -551,6 +571,35 @@ describe('mountPlanGate', () => {
     expect(gate.planState()).toBe('approved');
     // …and an approved plan needs no stream any more.
     expect(stops).toEqual(['w-test']);
+    gate.destroy();
+  });
+  it('the Plan requested receipt says when no lead agent is attached', async () => {
+    // Same second line as the Review float's receipt, off the same feed.
+    const feed: { push: (p: LeadPresence | null) => void } = { push: () => {} };
+    const gate = mountPlanGate({
+      docId: 'd-ask',
+      root,
+      user: JORDAN,
+      canWrite: true,
+      fetchJson: stubFetch([
+        {
+          meta: { huddleKind: 'discussion', planRequestedAt: 1e12, planRequestedBy: 'Sam' },
+          tasks: [],
+          leadAgentId: 'Workspaces',
+        },
+      ]).fetchJson,
+      watchLeadPresence: (onChange) => {
+        feed.push = onChange;
+        return () => {};
+      },
+    });
+    await gate.ready;
+    expect(gate.face()).toBe('requested');
+    expect(sub()).toBe('Asked by Sam — waiting for Workspaces');
+    feed.push({ event: 'lead.presence', docId: 'd-ask', workspaceId: 'w-1', live: false });
+    expect(sub()).toBe('Asked by Sam — no lead attached; answered when one joins');
+    feed.push({ event: 'lead.presence', docId: 'd-ask', workspaceId: 'w-1', live: true });
+    expect(sub()).toBe('Asked by Sam — waiting for Workspaces');
     gate.destroy();
   });
 });

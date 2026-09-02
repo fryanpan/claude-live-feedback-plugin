@@ -1182,6 +1182,16 @@ export function wordsRevisionOf(task: { wordsRevision?: number }): number {
  * (`TaskStore.transition`), so there is no second status machine to keep
  * honest.
  */
+/** `placeSpinoff`'s answer: the band, which rule chose it, and the lead to
+ *  address the row to when the seat is held. */
+export interface SpinoffPlacement {
+  goal: string;
+  rule: 'originating-task' | 'top-active-goal' | 'chores';
+  /** The task the doc belongs to, when its goal is what decided the band. */
+  taskId?: string;
+  leadAgentId?: string;
+}
+
 export interface GoalRow {
   /** The goal's own id, never re-minted — `task.goal`, done-task history and
    *  `triagedAgainst.goalId` all join on it. */
@@ -4127,6 +4137,90 @@ export class TaskStore {
     return Array.from(state.goalRows.values())
       .filter((row) => live.has(row.id))
       .sort((a, b) => a.order - b.order);
+  }
+
+  /**
+   * Where a row SPUN OFF A DOC lands — the pointer pill's Create Task and
+   * the meeting assistant's captured request — so it is never an unplaced
+   * row nobody dispatches.
+   *
+   * Bryan's report (2026-09-01): "Tasks were created in Backlog and not
+   * automatically started — does the lead agent have a chance to
+   * automatically assign tickets into the proper goal?" The rows landed in
+   * chores, owned by whoever tapped, and the lead's dispatch never saw
+   * them. The rule, in order:
+   *
+   *  1. The goal of the task the doc BELONGS TO (`docId`): a huddle started
+   *     for a task links the doc onto that task (`POST /huddles` with
+   *     `taskId`, or `link_refs` by hand), and its rows join the task's
+   *     band. See `taskHoldingDoc` for what counts as belonging.
+   *  2. The board's top ACTIVE goal: the first band in priority order that
+   *     is being worked (`todo` / `in-progress` — a `triage` band is a
+   *     proposal, a `done` band is history), chores excluded.
+   *  3. Chores, when the board has no active band. Placed, still — a row in
+   *     chores is on the board and dispatchable; a row in triage is not.
+   *
+   * The assignee is the board's lead when the seat is held (`leadAgentId`,
+   * so the caller sends `assignToLead`); with no lead the row keeps the
+   * author, because "unowned at triage" is exactly the unplaced row this
+   * exists to prevent. Callers move the row to `todo` after the create.
+   */
+  placeSpinoff(workspaceId: string, opts: { docId?: string } = {}): SpinoffPlacement | undefined {
+    const state = this.workspaces.get(workspaceId);
+    if (!state) return undefined;
+    const lead = state.workspace.leadAgentId;
+    const leadPart = lead !== undefined ? { leadAgentId: lead } : {};
+    const owner =
+      opts.docId !== undefined ? this.taskHoldingDoc(workspaceId, opts.docId) : undefined;
+    if (owner?.goal !== undefined) {
+      return { goal: owner.goal, rule: 'originating-task', taskId: owner.id, ...leadPart };
+    }
+    const top = this.listGoalRows(workspaceId).find(
+      (row) =>
+        row.id !== CHORES_GOAL_ID &&
+        !isArchived(row) &&
+        (row.status === 'todo' || row.status === 'in-progress'),
+    );
+    return {
+      goal: top?.id ?? CHORES_GOAL_ID,
+      rule: top ? 'top-active-goal' : 'chores',
+      ...leadPart,
+    };
+  }
+
+  /**
+   * The task a doc BELONGS TO, for placement: the first row on this board
+   * (creation order) being worked (`todo` / `in-progress`) whose `links`
+   * cite the doc or a thread in it, holding a goal the board still lists.
+   * The huddle route writes that link when it is started for a task;
+   * `link_refs` writes it by hand.
+   *
+   * `links` only, not `origin` — a row spun off a line of the doc is the
+   * doc's child, not its owner, and reading it as the owner would let the
+   * first tap's placement decide every later one. A done or archived row
+   * has stopped holding anything; a row at triage is a proposal; a row in
+   * chores has no band to lend — Backlog is where the rule ends, never
+   * where it starts (Bryan, 2026-09-01).
+   */
+  private taskHoldingDoc(workspaceId: string, docId: string): Task | undefined {
+    const state = this.workspaces.get(workspaceId);
+    if (!state) return undefined;
+    const cites = (r: Ref): boolean =>
+      (r.kind === 'doc' || r.kind === 'thread') && r.docId === docId;
+    const rows = [...state.tasks.values()]
+      .filter(
+        (t) =>
+          !isArchived(t) &&
+          (t.status === 'todo' || t.status === 'in-progress') &&
+          t.goal !== undefined &&
+          t.goal !== CHORES_GOAL_ID &&
+          t.links.some((r) => isValidRef(r) && cites(r)),
+      )
+      .sort((a, b) => a.createdAt - b.createdAt || a.id.localeCompare(b.id));
+    return rows.find((t) => {
+      const goal = this.getGoalRow(t.goal ?? '');
+      return goal !== undefined && !isArchived(goal) && goal.workspaceId === workspaceId;
+    });
   }
 
   /**

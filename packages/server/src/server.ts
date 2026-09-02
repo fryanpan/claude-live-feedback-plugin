@@ -130,6 +130,7 @@ import {
 } from './home-brief.ts';
 import {
   PLAN_REQUEST_COMMENT,
+  RESEARCH_TOPIC_MAX,
   REVIEW_REQUEST_COMMENT,
   huddleAlias,
   huddleFilePath,
@@ -140,6 +141,10 @@ import {
   meetingDocTitle,
   parseHuddleKind,
   parseHuddleTopic,
+  researchAskComment,
+  researchPlaceholderMarkdown,
+  researchSectionTitle,
+  spokenReviewComment,
 } from './huddle.ts';
 import { Identities, type IdentityRecord, userForIdentity } from './identities.ts';
 import { loadIdentityLinks } from './identity-links.ts';
@@ -150,6 +155,7 @@ import {
   type LandingWorkspaceRow,
   buildLandingModel,
 } from './landing.ts';
+import { createLeadPresenceMonitor } from './lead-presence.ts';
 import { linkTitlesFor } from './link-titles.ts';
 import { type LookupDoc, boardLookupDocs } from './meeting-lookup.ts';
 import { withServerNotesSinks } from './meeting-notes-doc.ts';
@@ -1462,17 +1468,25 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
               taskId: wake.taskId,
               taskTitle: wake.title,
             }),
-          // The two steps `addReviewItem` cannot take for itself, exactly as
-          // `proposeAllowRule` takes them: re-project so the board room
-          // carries the item, and announce so it reaches the reader's queue.
-          onReviewFiled: ({ task, item }) => {
-            taskProjection.ensureWorkspace(task.workspaceId);
-            announceTaskReview(task, item, {
-              id: MEETING_CAPTURE_ACTOR.id,
-              name: MEETING_CAPTURE_ACTOR.name,
-              kind: 'known',
-              color: ANONYMOUS_ACTOR.color,
-            });
+          // A huddle doc is HELD by a hub workspace rather than owned by one
+          // (no `setId`), which is where "create a task" said aloud used to
+          // go quiet: the capture had no board. The doc's back-target is the
+          // same answer the doc page's back arrow gives.
+          boardOf: (docId) => backTargetFor(docId)?.id,
+          // "Ask the team whether…" — filed exactly as the Review float's
+          // press is, with the question attached, by the meeting assistant.
+          onReviewAsk: async ({ docId, question, requester }) => {
+            const filed = await fileReviewRequest(
+              docId,
+              {
+                id: MEETING_CAPTURE_ACTOR.id,
+                name: MEETING_CAPTURE_ACTOR.name,
+                kind: 'known',
+                color: ANONYMOUS_ACTOR.color,
+              },
+              spokenReviewComment(question, requester),
+            );
+            if (!filed) console.error(`[meeting-tasks] review ask on ${docId}: doc not found`);
           },
         })
       : null,
@@ -2958,6 +2972,29 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
       lastActivityAt: tasks.reduce((max, t) => Math.max(max, t.updatedAt, t.createdAt), 0),
     };
   };
+  /**
+   * The meeting doc's "is anybody listening" — see lead-presence.ts. Reads
+   * the same seat health the board's presence strip reads, scoped to the
+   * board holding the doc, and pushes a change to the doc's open pages as a
+   * transient (no replay: a page that reconnects asks again).
+   */
+  const leadPresence = createLeadPresenceMonitor({
+    source: {
+      boardOf: (docId) => backTargetFor(docId)?.id,
+      seat: (workspaceId) => taskStore.leadSeatHealth(workspaceId),
+    },
+    broadcast: (docId, presence) => {
+      sse.broadcastTransient(docId, presence);
+    },
+    onEvent: (listener) => taskStore.onEvent(listener),
+    hasListeners: (docId) => sse.count(docId) > 0,
+  });
+  // The lead's own stream opening is what makes it deliverable, and it
+  // emits no store event — so the hub says so directly.
+  sse.onAgentStreams = (channel) => {
+    if (channel.startsWith('ws~')) leadPresence.notify(channel.slice('ws~'.length));
+  };
+
   const readyNudger = new ReadyWorkNudger({
     snapshot: () => taskStore.listWorkspaces().map(readyWorkSnapshot),
     lookup: (workspaceId) => {
@@ -4267,6 +4304,32 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
       return ws ? { id: ws.id, name: ws.name } : null;
     };
     return pick(hubWorkspacesHolding(docId)[0]) ?? pick(hubWorkspacesHolding(reviewId ?? '')[0]);
+  };
+
+  /**
+   * The Review ask, filed: a subject thread on the doc carrying `text` from
+   * `author`, and the doc stamped as review-requested naming that thread so
+   * the float can offer another ask once it is resolved. One function for
+   * both triggers — the float's press and the meeting assistant hearing
+   * "ask the team whether…" — so a spoken ask and a tapped one land as the
+   * same thing. Null when the doc does not exist.
+   */
+  const fileReviewRequest = async (
+    docId: string,
+    author: User,
+    text: string,
+  ): Promise<{ threadId: string; requestedAt?: number } | null> => {
+    const thread = await rooms.postComment(
+      docId,
+      null,
+      author,
+      text,
+      { kind: 'subject' },
+      { generate: false },
+    );
+    if (!thread) return null;
+    const stamped = rooms.setReviewRequested(docId, author.name, thread.id);
+    return { threadId: thread.id, ...(stamped.ok ? { requestedAt: stamped.requestedAt } : {}) };
   };
 
   /**
@@ -7558,6 +7621,24 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
               hint: 'kind is optional: "plan" or "discussion".',
             });
           }
+          // The task this huddle is FOR, when there is one. Judged before
+          // the doc is minted so a bad id costs nothing; recorded after, as
+          // a link on the task (`links`, the same ref `link_refs` writes),
+          // which is what lets a row spun off the huddle join the task's
+          // band (`TaskStore.placeSpinoff`, rule 1). Optional: the Board's
+          // two buttons start a huddle with no task at all.
+          const huddleTaskId = body?.taskId;
+          if (huddleTaskId !== undefined) {
+            if (typeof huddleTaskId !== 'string' || huddleTaskId.trim().length === 0) {
+              return j(400, {
+                error: 'bad taskId',
+                hint: 'taskId is an optional task id on this board.',
+              });
+            }
+            if (taskStore.getTask(huddleTaskId)?.workspaceId !== workspaceId) {
+              return j(404, { error: 'task-not-found' });
+            }
+          }
           const startedAt = Date.now();
           // Minted, never re-used: `createForCaller` answers an existing doc
           // for a name that already resolves, and a huddle is always new.
@@ -7596,9 +7677,16 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           }
           const attached = rooms.attachFile(docId, file);
           if (!attached.ok) return j(409, { error: 'attach_failed', attached });
+          if (typeof huddleTaskId === 'string') {
+            const linked = taskStore.linkRef(huddleTaskId, { kind: 'doc', docId });
+            // Link changes emit no store event; refresh by hand, as the
+            // link-refs route does.
+            if (linked.ok) taskProjection.ensureWorkspace(linked.task.workspaceId);
+          }
           const meta = withReviewUrl(room.meta, hubWorkspaceId);
           return j(200, {
             docId,
+            ...(typeof huddleTaskId === 'string' ? { taskId: huddleTaskId } : {}),
             // Where the Board opens it — the SPA doc route under THIS board,
             // relative so the client navigates within its own origin.
             url: `/workspaces/${encodeURIComponent(hubWorkspaceId)}/docs/${encodeURIComponent(docId)}`,
@@ -7676,8 +7764,35 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           if (isRetired(targetBoard)) {
             return j(409, { error: 'workspace-retired', message: retiredRefusal(targetBoard) });
           }
+          // A row SPUN OFF A DOC — the pointer pill's Create Task — asks to
+          // be placed: the board's top active goal, the lead as owner, and
+          // `todo` after the create, so the lead's dispatch sees it. See
+          // `TaskStore.placeSpinoff` for the rule and the report behind it.
+          // An explicit goal or assignee in the same body still wins. The
+          // origin doc is what lets the rule find the task the doc belongs
+          // to — a row spun off a huddle started FOR a task joins that task's
+          // band.
+          const originRef = body?.origin as { kind?: unknown; docId?: unknown } | undefined;
+          const spinoffDocId =
+            originRef?.kind === 'doc' && typeof originRef.docId === 'string'
+              ? originRef.docId
+              : undefined;
+          const spinoff =
+            body?.spinoff === true
+              ? taskStore.placeSpinoff(workspaceId, { docId: spinoffDocId })
+              : undefined;
+          const createBody =
+            spinoff === undefined
+              ? body
+              : {
+                  ...body,
+                  goal: typeof body?.goal === 'string' ? body.goal : spinoff.goal,
+                  ...(spinoff.leadAgentId !== undefined && body?.assignee === undefined
+                    ? { assignToLead: true }
+                    : {}),
+                };
           // One reading of a create body, shared with the batch route below.
-          const parsed = parseTaskCreate(body, authorFor(body?.author), targetBoard);
+          const parsed = parseTaskCreate(createBody, authorFor(body?.author), targetBoard);
           if (!parsed.ok) {
             return j(400, {
               error: parsed.error,
@@ -7686,6 +7801,18 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           }
           const res = taskStore.createTask(workspaceId, parsed.opts);
           if (!res.ok) return j(res.error === 'workspace-not-found' ? 404 : 400, res);
+          if (spinoff !== undefined && !parsed.opts.fileToTriage && res.task.status !== 'todo') {
+            const moved = taskStore.transition(res.task.id, 'todo', {
+              actor: authorFor(body?.author) ?? ANONYMOUS_ACTOR,
+              note: 'Spun off a doc line; placed on the board and queued for dispatch.',
+            });
+            if (moved.ok) res.task = moved.task as typeof res.task;
+          }
+          if (spinoff !== undefined && res.task.status === 'todo' && spinoff.leadAgentId) {
+            // The same immediate addressed wake an actionable spoken request
+            // gets — the row is the lead's now, and the lead should hear so.
+            readyNudger.taskReady({ workspaceId, taskId: res.task.id, taskTitle: res.task.title });
+          }
           // The review item the body filed WITH the ticket, now that the
           // ticket has an id. `parseTaskCreate` already put the payload
           // through the same `checkReviewPayload` the store runs, so a
@@ -7737,6 +7864,10 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
               ...(res.placement.placed
                 ? {}
                 : { goals: placeableGoals(taskStore.getWorkspace(workspaceId)?.goals ?? []) }),
+              // Which spin-off rule chose the band, for the caller's toast
+              // and the PR reader alike: `top-active-goal` or `chores`.
+              ...(spinoff !== undefined ? { spinoff: spinoff.rule } : {}),
+              ...(spinoff?.taskId !== undefined ? { spinoffTask: spinoff.taskId } : {}),
             },
             ...(parsed.ignoredLinks.length > 0 ? { ignoredLinks: parsed.ignoredLinks } : {}),
             ...(res.shapeGaps !== undefined ? { shapeGaps: res.shapeGaps } : {}),
@@ -11065,6 +11196,12 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
               ...(stamped.ok ? { requestedAt: stamped.requestedAt } : {}),
             });
           }
+          // Whether this doc's asks have a live lead to land on. The page
+          // registers itself by asking; changes arrive on its event stream.
+          if (rest === 'lead-presence' && req.method === 'GET') {
+            if (visitor) return j(403, { error: 'not available to share visitors' });
+            return j(200, leadPresence.watch(docId));
+          }
           // The Review float's press — the meeting's other one-tap ask: the
           // presser asking this doc's agent to read the notes and transcript
           // and question what is thin. Same shape as plan-request: the ask is
@@ -11076,20 +11213,59 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
             const author = authorFor(body?.author);
             if (!author) return j(400, { error: 'author required' });
             if (isCategoryAuthor(author)) return refuseCategoryAuthor();
+            const filed = await fileReviewRequest(docId, author, REVIEW_REQUEST_COMMENT);
+            if (!filed) return j(404, { error: 'doc not found' });
+            return j(200, { docId, ...filed });
+          }
+          // The pointer pill's Research press. NOT a task (it was, and Bryan
+          // found a board row where the mock had a section in the notes):
+          // an anchored thread on the selected line, from the presser, plus
+          // a placeholder section inserted right after that line for the
+          // agent to fill. Same channel as the two floats — a comment every
+          // watching agent already hears — and the thread names the section
+          // so the answer lands where the person will look.
+          if (rest === 'research-request' && req.method === 'POST') {
+            if (visitor) return j(403, { error: 'not available to share visitors' });
+            const body = await safeJson(req);
+            const author = authorFor(body?.author);
+            if (!author) return j(400, { error: 'author required' });
+            if (isCategoryAuthor(author)) return refuseCategoryAuthor();
+            const topicRaw = typeof body?.topic === 'string' ? body.topic.trim() : '';
+            if (!topicRaw) return j(400, { error: 'topic required' });
+            const topic = clipToWordBoundary(topicRaw, RESEARCH_TOPIC_MAX);
+            const anchor = body?.anchor as Anchor | undefined;
+            if (!anchor || anchor.kind !== 'text-range') {
+              return j(400, { error: 'a text-range anchor is required' });
+            }
+            const anchorCheck = anchors.validateAnchor(anchor);
+            if (!anchorCheck.ok) return j(400, { error: anchorCheck.error });
             const thread = await rooms.postComment(
               docId,
               null,
               author,
-              REVIEW_REQUEST_COMMENT,
-              { kind: 'subject' },
+              researchAskComment(topic),
+              anchor,
               { generate: false },
             );
             if (!thread) return j(404, { error: 'doc not found' });
-            const stamped = rooms.setReviewRequested(docId, author.name, thread.id);
+            // After the thread, so the section follows the selection — the
+            // same insertion an agent's insert_blocks_after_thread makes.
+            // Top-level: a selection inside a bullet must not nest a
+            // heading inside that bullet; the section goes after the list.
+            const placed = rooms.insertBlocksAfterThread(
+              docId,
+              thread.id,
+              researchPlaceholderMarkdown(topic),
+              { placement: 'top-level' },
+            );
+            if (!placed.ok) {
+              console.error(`[research-request] placeholder on ${docId}: ${placed.error}`);
+            }
             return j(200, {
               docId,
               threadId: thread.id,
-              ...(stamped.ok ? { requestedAt: stamped.requestedAt } : {}),
+              section: researchSectionTitle(topic),
+              placeholder: placed.ok,
             });
           }
           // --- The doc's repo home: pin, read, unpin. OWNER ONLY — a home is
@@ -12679,6 +12855,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
       // server that is going away.
       readyNudger.stop();
       stallNudger.stop();
+      leadPresence.stop();
       // The boot re-scoring pass runs for as long as there are stale rows, so
       // a short-lived server (every test) can still be mid-loop here. Setting
       // the flag is enough: the loop checks it either side of each call, so

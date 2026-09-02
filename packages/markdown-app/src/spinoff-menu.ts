@@ -13,22 +13,32 @@
  * is generated from, and a work menu over a proofreading selection is the
  * wrong answer twice.
  *
- * Everything here rides verbs that already exist: a task create with a `doc`
- * origin (the same one the meeting assistant files its captured tasks
- * through), an anchored thread, and the comment composer. Nothing new on the
- * server, no new webhook, no plugin version.
- *
- * The created task is linked back INTO the prose at the selection, which is
+ * Two verbs, two shapes. Create Task is a task create with a `doc` origin
+ * (the same one the meeting assistant files its captured tasks through);
+ * the created row is linked back INTO the prose at the selection, which is
  * the whole point of anchoring on the line: `task-link-chips.ts` sees a
  * same-origin `/workspaces/<ws>?task=<id>` link and decorates it with the
  * row's live status, so the doc shows what became of the line without this
  * module knowing anything about status.
  *
+ * Research is NOT a task any more. It was, and Bryan pressed it on prod and
+ * found a board row where the approved mock had a section in the notes
+ * ("it just creates a task — does not follow the flow in the mockups",
+ * 2026-09-01). Now it is `POST /research-request`: the server files an
+ * anchored ask thread on the selected line, from the presser, and inserts
+ * a "Research: <topic>" placeholder section right after that line for the
+ * lead to fill — the mock's flow, and the same comment channel Make Plan
+ * and Review ride.
+ *
  * Where the two buttons sit is `pointer-pill.ts`'s problem; this module is
  * the verbs behind them.
  */
 
-import type { User } from '@feedback/core';
+import { type User, readyToWork, spinoffBody, spinoffDocHref } from '@feedback/core';
+
+/** Re-exported: the readiness rule now lives in core, shared with the meeting
+ *  assistant's capture pass, which files a spoken ask by the same rule. */
+export { readyToWork };
 
 /** A text-range anchor as it goes over the wire — `anchorBody`'s output. */
 export interface SpinoffAnchor {
@@ -39,9 +49,9 @@ export interface SpinoffAnchor {
   deletedSnippet?: string;
 }
 
-/** The two that put a ROW on the board — which is now all of them. The
- *  alias survives because the caller that writes the link back into the
- *  prose is typed against it, and the name says what the id is FOR. */
+/** The two the pill offers. `SpinoffTaskId` survives as the name the pill
+ *  and its caller are typed against; only `task` puts a row on the board
+ *  now, and `research` puts a section in the doc. */
 export type SpinoffTaskId = 'task' | 'research';
 export type SpinoffId = SpinoffTaskId;
 
@@ -141,26 +151,6 @@ export function deriveTaskTitle(quote: string, limit = TITLE_MAX): string {
 }
 
 /**
- * Whether a row's own words are enough to pick it up — To do if so, Triage
- * if not.
- *
- * A person's create normally lands in To do, and that is right when the
- * person WROTE the row. A spin-off is not written, it is selected: the words
- * are a fragment of somebody's sentence, and a reviewer's pass filed rows
- * called "Cloudflare" and "Access" this way. Nobody can act on those, and a
- * row nobody can act on sitting in To do is worse than the same row in
- * Triage, because To do is the list people work from.
- *
- * Three words is the line, and it is deliberately crude: it separates a
- * noun somebody happened to double-click from a phrase with something to do
- * in it, which is the whole distinction being drawn. The cost of getting it
- * wrong is one drag between two columns, in either direction.
- */
-export function readyToWork(title: string): boolean {
-  return title.trim().split(/\s+/).filter(Boolean).length >= 3;
-}
-
-/**
  * The link a spun-off task is written back into the prose as.
  *
  * Root-relative on purpose, and byte-identical to the server's
@@ -214,8 +204,20 @@ export interface SpinoffDeps {
   fetchJson: (url: string, init?: RequestInit) => Promise<unknown>;
 }
 
-export interface SpinoffResult {
-  action: SpinoffId;
+/** What a Research press made: the ask thread, and the section it opened
+ *  in the doc for the answer. No row, no link — the doc IS the receipt. */
+export interface ResearchSpinoffResult {
+  action: 'research';
+  threadId: string;
+  /** The section heading the placeholder went in under — "Research: …". */
+  section: string;
+  /** Whether the placeholder section actually landed; the thread files
+   *  either way, so a false here is a doc to look at, not a lost ask. */
+  placeholder: boolean;
+}
+
+export interface TaskSpinoffResult {
+  action: 'task';
   /** The created row's id. */
   taskId: string;
   /** Where the board actually put it — `todo` or `triage`. Read back from
@@ -230,13 +232,7 @@ export interface SpinoffResult {
   href: string;
 }
 
-/** The body every spun-off row carries: where it came from, in words, since
- *  the `origin` ref is machine-readable and a person reading the ticket a
- *  week later is not. */
-function spinoffBody(quote: string, docTitle: string | undefined): string {
-  const where = docTitle ? ` "${docTitle}"` : '';
-  return `Spun off from a line of the discussion${where}.\n\n> ${quote.trim().replace(/\s+/g, ' ')}`;
-}
+export type SpinoffResult = TaskSpinoffResult | ResearchSpinoffResult;
 
 function post(deps: SpinoffDeps, url: string, body: unknown): Promise<unknown> {
   return deps.fetchJson(url, {
@@ -248,43 +244,69 @@ function post(deps: SpinoffDeps, url: string, body: unknown): Promise<unknown> {
 
 /**
  * Run one spin-off. Returns what it made, so the caller can write the link
- * over the selection and say so; `null` when the server answered without a
- * row id, which the caller reports rather than inventing one.
+ * over the selection (a task) or say where to look (research); `null` when
+ * the server answered without an id, which the caller reports rather than
+ * inventing one.
  */
 export async function runSpinoff(
   action: SpinoffId,
   deps: SpinoffDeps,
 ): Promise<SpinoffResult | null> {
-  const said = deriveTaskTitle(deps.quote, action === 'research' ? TITLE_MAX - 10 : TITLE_MAX);
-  const title = action === 'research' ? `Research: ${said}` : said;
+  if (action === 'research') return runResearch(deps);
+  const title = deriveTaskTitle(deps.quote, TITLE_MAX);
   const res = (await post(deps, `/api/workspaces/${encodeURIComponent(deps.workspaceId)}/tasks`, {
     title,
-    body: spinoffBody(deps.quote, deps.docTitle),
+    // The whole selection and the way back to the doc; the title above is
+    // only a trimmed reading of the same words.
+    body: spinoffBody(deps.quote, deps.docTitle, {
+      docHref: spinoffDocHref(deps.workspaceId, deps.docId),
+    }),
     author: deps.user,
     // Where it came from, the way the meeting assistant's captured tasks
     // say it — one origin kind for "a doc line became this".
     origin: { kind: 'doc', docId: deps.docId },
-    // Research is the agent's errand, not the tapper's. Left unsaid, the
-    // create route falls the assignee back to the author, which put "go and
-    // find out about this" on the plate of the person who asked the question
-    // — and a client-side lead lookup that came back empty left that
-    // fallback in place. So the row is ADDRESSED to the board: the server
-    // hands it to the lead, or files it at triage owned by nobody when
-    // there is no lead, and never to whoever tapped.
-    ...(action === 'research' ? { assignToLead: true } : {}),
+    // PLACE it: the board's top active goal, the lead as owner, `todo`.
+    // Without this the row landed in chores owned by the tapper, and the
+    // lead's dispatch never saw it (Bryan, 2026-09-01: "created in Backlog
+    // and not automatically started"). The rule is the server's
+    // (`TaskStore.placeSpinoff`); this only asks for it.
+    spinoff: true,
     // Where the row lands, decided from what the row SAYS. A thin selection
     // makes a row nobody can pick up, and triage is where a row goes to be
     // given enough to act on — see `readyToWork`.
-    ...(!readyToWork(said) ? { triage: true } : {}),
+    ...(!readyToWork(title) ? { triage: true } : {}),
   })) as { task?: { id?: string; status?: string } };
   const taskId = res?.task?.id;
   if (taskId === undefined) return null;
   const status = typeof res.task?.status === 'string' ? res.task.status : undefined;
   return {
-    action,
+    action: 'task',
     taskId,
     title,
     ...(status !== undefined ? { status } : {}),
     href: taskLinkHref(deps.workspaceId, taskId),
+  };
+}
+
+/**
+ * Research: the ask goes to the DOC, not the board. The topic is the
+ * selection read as a title (the same derivation a task gets, a little
+ * shorter so "Research: " fits on a heading line); the anchor is the
+ * selection itself, so the thread sits on the line that asked and the
+ * placeholder section follows that line.
+ */
+async function runResearch(deps: SpinoffDeps): Promise<ResearchSpinoffResult | null> {
+  const topic = deriveTaskTitle(deps.quote, TITLE_MAX - 10);
+  const res = (await post(deps, `/api/docs/${encodeURIComponent(deps.docId)}/research-request`, {
+    author: deps.user,
+    topic,
+    anchor: deps.anchor,
+  })) as { threadId?: string; section?: string; placeholder?: boolean };
+  if (typeof res?.threadId !== 'string') return null;
+  return {
+    action: 'research',
+    threadId: res.threadId,
+    section: typeof res.section === 'string' ? res.section : `Research: ${topic}`,
+    placeholder: res.placeholder === true,
   };
 }
