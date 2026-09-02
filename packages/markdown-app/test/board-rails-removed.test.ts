@@ -27,7 +27,7 @@ import * as taskDetailIsland from '../src/hub/task-detail-island.tsx';
 
 const SRC = resolve(import.meta.dirname, '../src');
 const hubApp = readFileSync(resolve(SRC, 'hub/hub-app.ts'), 'utf8');
-const css = readFileSync(resolve(SRC, 'styles.css'), 'utf8');
+const css = readFileSync(resolve(SRC, 'hub.css'), 'utf8');
 
 describe('the board no longer carries the docs and open-threads rails', () => {
   it('exports neither renderer, and still exports the board renderers', () => {

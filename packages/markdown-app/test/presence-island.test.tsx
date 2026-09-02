@@ -184,7 +184,7 @@ describe('presence island contract', () => {
     // happy-dom does no layout, so this is pinned at the rule level: without
     // `display: contents` the whole strip becomes ONE flex item and the
     // 430px fit, the gap and `.hub-drift`'s own-line rule all stop applying.
-    const css = readFileSync(resolve('packages/markdown-app/src/styles.css'), 'utf8');
+    const css = readFileSync(resolve('packages/markdown-app/src/hub.css'), 'utf8');
     const rule = css.match(/\.hub-presence\s*>\s*\[data-preact-island\]\s*\{([^}]*)\}/)?.[1] ?? '';
     expect(rule).toContain('display'); // positive control: found the rule
     expect(rule).toMatch(/display:\s*contents/);

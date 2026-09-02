@@ -233,6 +233,7 @@ export function renderHubShell(
   const assets = opts.assets ?? {};
   const hubJs = assetHref(assets, 'hub.js');
   const stylesCss = assetHref(assets, 'styles.css');
+  const hubCss = assetHref(assets, 'hub.css');
   const tokensCss = assetHref(assets, 'tokens.css');
   const safeName = escape(name);
   const safeId = escape(workspaceId);
@@ -263,6 +264,9 @@ export function renderHubShell(
     <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
     <meta name="theme-color" content="#2e7dd7" />${sentryMeta}
     <link rel="stylesheet" href="${stylesCss}" />
+    <!-- The board's own rules. Between the two on purpose: this is where they
+         sat when styles.css carried them, so the cascade is unchanged. -->
+    <link rel="stylesheet" href="${hubCss}" />
     <!-- Open Props trial layer — after styles.css on purpose; see
          packages/markdown-app/index.html. -->
     <link rel="stylesheet" href="${tokensCss}" />

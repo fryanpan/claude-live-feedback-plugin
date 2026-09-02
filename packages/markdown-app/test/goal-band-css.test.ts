@@ -5,14 +5,14 @@ import { describe, expect, it } from 'vitest';
 /**
  * The goal band's stylesheet half (Bryan's live mockup review, 2026-08-23).
  *
- * These read `styles.css` as text because none of what they pin is reachable
+ * These read `hub.css` as text because none of what they pin is reachable
  * from a DOM assertion in a layout-free test runner: what hides a folded
  * band's tasks, which numbers keep the avatar columns aligned, and what the
  * ≤1100 block does to the row. Each parse asserts it FOUND something before
  * judging it, so a renamed selector fails loudly rather than passing empty.
  */
 
-const CSS = readFileSync(resolve(import.meta.dirname, '../src/styles.css'), 'utf8');
+const CSS = readFileSync(resolve(import.meta.dirname, '../src/hub.css'), 'utf8');
 
 /** The body of the first `selector { … }` rule whose declarations match `has`. */
 function ruleBody(selector: string): string {
