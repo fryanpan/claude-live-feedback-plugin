@@ -6,8 +6,11 @@
  *   Make Plan       — a plan doc nobody has asked about yet. Pressing it
  *                     ASKS: it files an ordinary comment from the presser,
  *                     which is how the agent hears (see plan-request on the
- *                     server). Only on a `huddleKind: 'plan'` doc — an
- *                     ordinary doc has no agent waiting on a goal.
+ *                     server). On EITHER huddle kind — a discussion turns
+ *                     into a plan as often as a planning session does
+ *                     (Bryan, 2026-09-01: "there should be a plan button in
+ *                     discussions too"). An ordinary doc has no agent
+ *                     waiting on a goal, so it gets nothing.
  *   Plan requested  — somebody pressed and the agent has not answered yet.
  *                     Not a control, just the honest state: pressing again is
  *                     allowed, so the button stays live.
@@ -190,8 +193,10 @@ export function mountPlanGate(opts: PlanGateOpts): PlanGateHandle {
     if (approvedNotice !== null) return 'approved';
     if (state === 'pending') return 'approve';
     if (state !== undefined) return 'none';
-    // No plan state yet: only a "Make a plan" doc offers to start one.
-    if (kind !== 'plan') return 'none';
+    // No plan state yet: only a huddle doc offers to start one. Both kinds
+    // — this used to read `kind !== 'plan'`, and the discussion Bryan
+    // started had nowhere to ask for the plan it had arrived at.
+    if (kind !== 'plan' && kind !== 'discussion') return 'none';
     return requestedAt === undefined ? 'make' : 'requested';
   }
 

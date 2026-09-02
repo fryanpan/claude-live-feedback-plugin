@@ -267,14 +267,34 @@ describe('mountPlanGate', () => {
     gate.destroy();
   });
 
-  it('a discussion huddle offers no Make Plan — only a plan doc does', async () => {
-    // The narrowing control for the test above: same shape, different kind.
+  it('a discussion huddle offers Make Plan too — a discussion arrives at plans', async () => {
+    // This used to assert the opposite. Bryan started a discussion, reached
+    // a plan, and had no button to ask for it (2026-09-01): "there should be
+    // a plan button in discussions too, not just planning sessions".
     const gate = mountPlanGate({
       docId: 'd-disc',
       root,
       user: JORDAN,
       canWrite: true,
-      fetchJson: stubFetch([{ meta: { huddleKind: 'discussion' }, tasks: [] }]).fetchJson,
+      fetchJson: stubFetch([{ meta: { huddleKind: 'discussion' }, tasks: [], leadAgentId: 'Ada' }])
+        .fetchJson,
+    });
+    await gate.ready;
+    expect(gate.face()).toBe('make');
+    expect(approveBtn()?.hidden).toBe(false);
+    expect(sub()).toBe('Ask Ada to create a plan');
+    gate.destroy();
+  });
+
+  it('an ordinary doc with no huddle kind still offers no Make Plan', async () => {
+    // The narrowing control: widening to discussions must not reach a doc
+    // that is not a huddle at all — nothing is waiting on a goal there.
+    const gate = mountPlanGate({
+      docId: 'd-plain',
+      root,
+      user: JORDAN,
+      canWrite: true,
+      fetchJson: stubFetch([{ meta: {}, tasks: [] }]).fetchJson,
     });
     await gate.ready;
     expect(gate.face()).toBe('none');
