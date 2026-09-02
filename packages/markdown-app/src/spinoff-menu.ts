@@ -28,7 +28,11 @@
  * the verbs behind them.
  */
 
-import type { User } from '@feedback/core';
+import { type User, readyToWork, spinoffBody } from '@feedback/core';
+
+/** Re-exported: the readiness rule now lives in core, shared with the meeting
+ *  assistant's capture pass, which files a spoken ask by the same rule. */
+export { readyToWork };
 
 /** A text-range anchor as it goes over the wire — `anchorBody`'s output. */
 export interface SpinoffAnchor {
@@ -122,26 +126,6 @@ export function deriveTaskTitle(quote: string, limit = TITLE_MAX): string {
 }
 
 /**
- * Whether a row's own words are enough to pick it up — To do if so, Triage
- * if not.
- *
- * A person's create normally lands in To do, and that is right when the
- * person WROTE the row. A spin-off is not written, it is selected: the words
- * are a fragment of somebody's sentence, and a reviewer's pass filed rows
- * called "Cloudflare" and "Access" this way. Nobody can act on those, and a
- * row nobody can act on sitting in To do is worse than the same row in
- * Triage, because To do is the list people work from.
- *
- * Three words is the line, and it is deliberately crude: it separates a
- * noun somebody happened to double-click from a phrase with something to do
- * in it, which is the whole distinction being drawn. The cost of getting it
- * wrong is one drag between two columns, in either direction.
- */
-export function readyToWork(title: string): boolean {
-  return title.trim().split(/\s+/).filter(Boolean).length >= 3;
-}
-
-/**
  * The link a spun-off task is written back into the prose as.
  *
  * Root-relative on purpose, and byte-identical to the server's
@@ -209,14 +193,6 @@ export interface SpinoffResult {
   title?: string;
   /** The href to write over the selection. */
   href: string;
-}
-
-/** The body every spun-off row carries: where it came from, in words, since
- *  the `origin` ref is machine-readable and a person reading the ticket a
- *  week later is not. */
-function spinoffBody(quote: string, docTitle: string | undefined): string {
-  const where = docTitle ? ` "${docTitle}"` : '';
-  return `Spun off from a line of the discussion${where}.\n\n> ${quote.trim().replace(/\s+/g, ' ')}`;
 }
 
 function post(deps: SpinoffDeps, url: string, body: unknown): Promise<unknown> {

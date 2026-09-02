@@ -25,24 +25,30 @@
  * itself. The chip in the notes shows live status, so it flips only when the
  * lead's dispatch actually happens, and it stays honest if that never does.
  *
- * THE FILE IS NAMED FOR ITS FIRST TWO INTENTS AND NOW CARRIES FIVE. Requests
- * and references were the whole of it; research and lookup asks arrived in
- * the same reply rather than in calls of their own, because a tick's prompt
- * is ~95% shared context and what scales with intents is how many times that
- * context is re-sent (decisions.md, 2026-08-30: "One call per tick carries
- * every intent"). An intent added here costs ~58 input tokens; the same
- * intent as its own always-on pass costs seven to twenty-seven times that.
- * So: one call, one items array, a `kind` per intent, and rows that parse
- * independently so one malformed intent never costs the others.
+ * THE FILE IS NAMED FOR ITS FIRST TWO INTENTS AND NOW CARRIES SIX. Requests
+ * and references were the whole of it; research, lookup and review asks
+ * arrived in the same reply rather than in calls of their own, because a
+ * tick's prompt is ~95% shared context and what scales with intents is how
+ * many times that context is re-sent (decisions.md, 2026-08-30: "One call
+ * per tick carries every intent"). An intent added here costs ~58 input
+ * tokens; the same intent as its own always-on pass costs seven to
+ * twenty-seven times that. So: one call, one items array, a `kind` per
+ * intent, and rows that parse independently so one malformed intent never
+ * costs the others.
  *
- * THE TWO NEW INTENTS ARE NOT SYMMETRICAL, AND THE ASYMMETRY IS THE POINT.
- * A LOOKUP only reads — a wrong one is a link nobody wanted, dropped by the
- * same guards the reference path uses. A RESEARCH ask SPENDS: an agent goes
- * away and burns tokens on a report. So a research ask never acts on speech
- * alone. It files a row at `triage` carrying a decision review item, and an
- * open review item already holds a row off dispatch (`ready-gate.ts`,
- * `awaiting-answer`) — the confirmation is enforced by the board rather than
- * promised by a prompt.
+ * A SPOKEN ASK FILES WHAT THE SAME ASK TAPPED WOULD FILE. The pointer pill's
+ * Create Task and Research, and the Review float, are the one-or-two-tap
+ * forms of three of these intents; the capture pass is the no-tap form, and
+ * it goes through the same doors: `parseTaskCreate` with the pill's own body
+ * (`spinoffBody`, core) and readiness rule (`readyToWork`, core) for a task;
+ * a lead-addressed row plus a placeholder section for research; the Review
+ * press's thread for a review ask. What is asked out loud must not land
+ * somewhere different from what is asked with a finger — the first version
+ * had its own create options and its own gates, and a spoken task that "did
+ * nothing" was this path silently scoped to a board a huddle doc never has.
+ *
+ * A LOOKUP is still the odd one: it only reads, so a wrong one is a link
+ * nobody wanted, dropped by the same guards the reference path uses.
  *
  * THE FIFTH INTENT DOES NOT BELONG TO THIS FILE'S SUBJECT AT ALL, AND RIDES
  * HERE ANYWAY. A CORRECTION — "no, I said Thursday" — touches no board row;
@@ -55,7 +61,7 @@
  * can finish the job: the notes are in the doc, not here.
  */
 
-import type { TaskReviewItem } from '@feedback/core';
+import { readyToWork, spinoffBody } from '@feedback/core';
 import { readRenamedEnv } from '@feedback/core/env-names';
 import {
   type LookupDoc,
@@ -72,14 +78,9 @@ import {
 import type { NoteDocLink, NoteTaskLink, NotesTurn, SpokenCorrection } from './meeting-notes.ts';
 import { readKeychainPassword } from './share/keychain.ts';
 import { resolveKeyFrom } from './summarize.ts';
+import { parseTaskCreate } from './task-create.ts';
 import { clipToWordBoundary } from './task-title.ts';
-import {
-  type AddReviewItemResult,
-  CHORES_GOAL_ID,
-  type CreateTaskOpts,
-  type Task,
-  type TaskStatus,
-} from './tasks.ts';
+import { CHORES_GOAL_ID, type CreateTaskOpts, type TaskStatus } from './tasks.ts';
 
 /** One open (or recently closed) board row, as the extractor may see it. */
 export interface TaskCaptureCandidate {
@@ -111,12 +112,15 @@ export interface CapturedReference {
 
 /**
  * Speech that asked for something to be FOUND OUT rather than built — "go
- * look into that", "dig into why it does that", "find out what it would take".
+ * look into that", "dig into why it does that", "can you research what it
+ * would take".
  *
- * Never acted on as heard. It becomes a row plus a decision item asking
- * whether to spend the pass, because the failure modes are not the same size:
- * a wrong task is a row to delete, a wrong research spawn is tokens spent on
- * a report nobody wanted.
+ * Acted on the way the pointer pill's Research is: a row addressed to the
+ * board's lead, and a placeholder section in the doc for the findings to
+ * land in. It used to file a decision item asking whether to spend the pass;
+ * the owner's plan (workstream B, 2026-09-01) asks for the placeholder
+ * immediately, and a gate nobody could see was what made a spoken research
+ * ask feel like it "did nothing".
  */
 export interface CapturedResearch {
   kind: 'research';
@@ -124,6 +128,22 @@ export interface CapturedResearch {
   topic: string;
   /** What the research should answer, when the speech said. */
   question?: string;
+  /** The voice that asked — same law as {@link CapturedRequest.requester}. */
+  requester?: string;
+}
+
+/**
+ * Speech that asked the doc's agent to REVIEW — to look at the notes and put
+ * questions on them, or to take one question to the team: "ask the team
+ * whether we still need the tunnel", "can somebody check these notes",
+ * "get the lead to look at this". The Review float's press, heard instead
+ * of tapped, and it files exactly what the press files: a subject thread on
+ * the doc, which every watching agent already receives.
+ */
+export interface CapturedReview {
+  kind: 'review';
+  /** What to ask, in the words spoken. */
+  question: string;
   /** The voice that asked — same law as {@link CapturedRequest.requester}. */
   requester?: string;
 }
@@ -166,7 +186,8 @@ export type CapturedItem =
   | CapturedReference
   | CapturedResearch
   | CapturedLookup
-  | CapturedCorrection;
+  | CapturedCorrection
+  | CapturedReview;
 
 export interface TaskCaptureInput {
   turns: readonly NotesTurn[];
@@ -200,6 +221,14 @@ export const MEETING_CAPTURE_ACTOR = {
 
 /** Longest title a captured request may carry — the board's own title cap. */
 const TITLE_MAX = 80;
+
+/** Longest spoken line a row's body quotes — one sentence of talk, not a
+ *  tick's worth; the transcript is the record for the rest. */
+const QUOTE_MAX = 240;
+
+/** Longest review question carried into a thread — a question, not a
+ *  speech; the thread's own text says where it was heard. */
+const QUESTION_MAX = 240;
 
 /** Longest lookup query the resolver is asked to work with. Not a title —
  *  it is a spoken phrase, and past the first few words it stops narrowing
@@ -423,7 +452,43 @@ export function tickMentionsCandidate(turns: readonly NotesTurn[], title: string
  * a duplicate is visible and mergeable, a mislink is neither.
  */
 export function requestMatchesCandidate(title: string, candidateTitle: string): boolean {
+  // Word for word the same title is the same row whatever its words weigh:
+  // "count to ten" has one significant word to share, so the two-word rule
+  // alone would file it twice when it is asked for twice — the repeated
+  // mention that must not become a second card.
+  if (normalizedTitle(title) === normalizedTitle(candidateTitle)) return true;
   return sharedWordCount(significantWords(title), significantWords(candidateTitle)) >= 2;
+}
+
+export function normalizedTitle(title: string): string {
+  return title
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, ' ')
+    .trim();
+}
+
+/**
+ * Which spoken line an ask came from — the row's quote, chosen here rather
+ * than asked of the model, so what the body quotes was said. The new line
+ * sharing the most significant words with the ask; the last new line when
+ * none shares any (a deictic "make that a task" points at the line before
+ * it, which is the marked overlap, so the pointer itself is what is quoted).
+ */
+export function spokenLineFor(turns: readonly NotesTurn[], phrase: string): string | undefined {
+  const want = significantWords(phrase);
+  let best: NotesTurn | undefined;
+  let bestShared = 0;
+  for (const turn of turns) {
+    const shared = sharedWordCount(significantWords(turn.text), want);
+    if (shared > bestShared) {
+      best = turn;
+      bestShared = shared;
+    }
+  }
+  const line = best ?? turns[turns.length - 1];
+  if (!line) return undefined;
+  const text = line.speaker ? `${line.speaker}: ${line.text}` : line.text;
+  return clipToWordBoundary(text, QUOTE_MAX);
 }
 
 /**
@@ -491,11 +556,27 @@ export function taskCaptureUrl(workspaceId: string, taskId: string): string {
 export const RESEARCH_PROMPT_RULE = [
   'A RESEARCH ask when a speaker wants something FOUND OUT before it can be',
   'decided or built — "go look into that", "dig into why it does that",',
-  '"find out what it would take". They will rarely say the word "research".',
-  'Wondering aloud is not an ask; somebody has to want it done. "topic":',
-  'what to look into, in the words spoken; "question": what it should',
-  'answer, omitted if unsaid. Prefer "request" when they asked for the WORK',
-  'rather than for findings.',
+  '"find out what it would take", or asked of the assistant directly: "can',
+  'you research X", "look that up for us". They will rarely say the word',
+  '"research". Wondering aloud is not an ask; somebody has to want it done.',
+  '"topic": what to look into, in the words spoken; "question": what it',
+  'should answer, omitted if unsaid. Prefer "request" when they asked for',
+  'the WORK rather than for findings.',
+] as const;
+
+/**
+ * What a review ask sounds like — the Review float's press, spoken. The
+ * shape is "somebody should look at this / answer this", addressed to the
+ * agent or the team rather than to the room; the load-bearing line is the
+ * one separating it from a question the room is answering for itself.
+ */
+export const REVIEW_PROMPT_RULE = [
+  'A REVIEW ask when a speaker wants the agent or the team to LOOK AT the',
+  'notes or ANSWER a question they cannot settle in the room — "ask the',
+  'team whether we still need the tunnel", "can somebody check these',
+  'notes", "get the lead to review this". "question": what to ask, in the',
+  'words spoken. A question the room goes on to answer itself is not an',
+  'ask.',
 ] as const;
 
 /**
@@ -544,22 +625,24 @@ export const OVERLAP_PROMPT_RULE = [
  */
 export function buildTaskCapturePrompt(input: TaskCaptureInput): { system: string; user: string } {
   const system = [
-    'You listen to a live working meeting and extract five things: task',
-    'REQUESTS, task REFERENCES, RESEARCH asks, LOOKUP asks and CORRECTIONS.',
-    'Answer with JSON only, this shape:',
+    'You listen to a live working meeting and extract six things: task',
+    'REQUESTS, task REFERENCES, RESEARCH asks, LOOKUP asks, CORRECTIONS and',
+    'REVIEW asks. Answer with JSON only, this shape:',
     '{"items":[{"kind":"request","title":"...","actionable":true|false,',
     '           "requester":"who asked, omitted if unclear"}',
     '         |{"kind":"reference","match":<candidate number>}',
     '         |{"kind":"research","topic":"...","question":"...",',
     '           "requester":"who asked, omitted if unclear"}',
     '         |{"kind":"lookup","query":"..."}',
-    '         |{"kind":"correction","wrong":"...","right":"..."}]}',
+    '         |{"kind":"correction","wrong":"...","right":"..."}',
+    '         |{"kind":"review","question":"...",',
+    '           "requester":"who asked, omitted if unclear"}]}',
     '',
     'A REQUEST only when a speaker explicitly asks for work to be tracked or',
     'filed — "file a ticket", "let\'s track that", "add it to the board",',
-    '"can you create a task". Discussing a problem, complaining about a bug,',
-    'or agreeing something is broken is NOT a request. Title: short,',
-    'specific, in the words spoken.',
+    '"can you create a task", "make that a task", "add a todo to…".',
+    'Discussing a problem, complaining about a bug, or agreeing something is',
+    'broken is NOT a request. Title: short, specific, in the words spoken.',
     'Mark a request "actionable": true only when it is clear enough to start',
     'without asking anything back — what to do and where — and nobody said',
     'to wait. When in doubt, false.',
@@ -579,6 +662,8 @@ export function buildTaskCapturePrompt(input: TaskCaptureInput): { system: strin
     ...LOOKUP_PROMPT_RULE,
     '',
     ...CORRECTION_PROMPT_RULE,
+    '',
+    ...REVIEW_PROMPT_RULE,
     '',
     ...OVERLAP_PROMPT_RULE,
     '',
@@ -710,6 +795,23 @@ export function parseTaskCaptureReply(
       if (seenTitles.has(key)) continue;
       seenTitles.add(key);
       out.push({ kind: 'correction', wrong, right });
+    } else if (row.kind === 'review') {
+      if (typeof row.question !== 'string') continue;
+      const question = row.question.trim().slice(0, QUESTION_MAX);
+      if (question.length === 0) continue;
+      // Same vouching as research: a question nobody asked is not an ask,
+      // and this one files a thread a person will be paged about.
+      if (!phraseSpokenOnTick(window, question)) continue;
+      const key = `review:${normalizedTitle(question)}`;
+      if (seenTitles.has(key)) continue;
+      seenTitles.add(key);
+      const requester =
+        typeof row.requester === 'string' ? speakerOnTick(window, row.requester) : undefined;
+      out.push({
+        kind: 'review',
+        question,
+        ...(requester !== undefined ? { requester } : {}),
+      });
     }
   }
   return out;
@@ -727,22 +829,19 @@ export interface TaskCaptureBoard {
   createTask(
     workspaceId: string,
     opts: CreateTaskOpts,
-  ): { ok: true; task: { id: string } } | { ok: false; error: string };
+  ): { ok: true; task: { id: string; status?: string } } | { ok: false; error: string };
   transition(
     taskId: string,
     to: TaskStatus,
     opts: { actor: { id: string; name: string; kind?: string }; note?: string },
   ): { ok: boolean };
   /**
-   * Required, not optional, and that is deliberate: a board that could not
-   * file the confirmation would file research rows with nothing gating
-   * them. There is no wiring in which the ask is skipped.
+   * Who leads the board — what a research row is addressed to. Optional
+   * because the recorder in the tests has no seat; a board that cannot say
+   * files the row unowned at triage, exactly as the pill's Research does
+   * when the create route finds no lead.
    */
-  addReviewItem(
-    taskId: string,
-    review: unknown,
-    opts: { actor: { id: string; name: string; kind?: string } },
-  ): AddReviewItemResult;
+  getWorkspace?(workspaceId: string): { leadAgentId?: string } | undefined;
 }
 
 /**
@@ -770,6 +869,27 @@ export interface CaptureLinks {
   corrections: SpokenCorrection[];
 }
 
+/** A research row filed from speech, for the doc to grow its placeholder. */
+export interface ResearchFiled {
+  workspaceId: string;
+  docId: string;
+  taskId: string;
+  /** The row's title — "Research: <topic>". */
+  title: string;
+  topic: string;
+  question?: string;
+  /** The board deep link, the same one the notes carry. */
+  url: string;
+}
+
+/** A review ask heard in the meeting, for the doc to file as a thread. */
+export interface ReviewAsk {
+  workspaceId: string;
+  docId: string;
+  question: string;
+  requester?: string;
+}
+
 export interface RunTaskCaptureDeps {
   board: TaskCaptureBoard;
   extractor: TaskCaptureExtractor;
@@ -780,12 +900,18 @@ export interface RunTaskCaptureDeps {
    *  extractor judged actionable, after its row is `todo`. */
   onTaskReady?: (wake: { workspaceId: string; taskId: string; title: string }) => void;
   /**
-   * A filed confirmation. `addReviewItem` emits no store event (by design),
-   * so the caller owes the item two things this module cannot reach: a
-   * re-projection of the board room, and the announce that puts it on the
-   * reader's queue. Same contract `proposeAllowRule` honours in server.ts.
+   * A research row landed: the doc owes it a placeholder section for the
+   * findings, which only the caller holding the doc can write. Absent, the
+   * row still files — the placeholder is the pill's second half, not a
+   * condition of the first.
    */
-  onReviewFiled?: (filed: { task: Task; item: TaskReviewItem }) => void;
+  onResearchFiled?: (filed: ResearchFiled) => void;
+  /**
+   * A review ask heard: the caller files it the way the Review float's press
+   * is filed (a subject thread on the doc plus the stamp). Absent, the ask is
+   * extracted and dropped — a session with no doc has nothing to review.
+   */
+  onReviewAsk?: (ask: ReviewAsk) => void;
   /** Tests: the clock a recency phrase is read against. */
   now?: () => number;
   onError?: (message: string) => void;
@@ -874,10 +1000,22 @@ export async function runTaskCapture(
       handleLookup(deps, input, item, candidates, pushCandidate, docLinks, linkedDocs);
       continue;
     }
+    if (item.kind === 'review') {
+      // No row: the Review press files a thread, and so does its spoken
+      // twin. Dedupe across ticks is the caller's (it holds the meeting);
+      // within a tick the parser already folded repeats.
+      deps.onReviewAsk?.({
+        workspaceId: input.workspaceId,
+        docId: input.docId,
+        question: item.question,
+        ...(item.requester !== undefined ? { requester: item.requester } : {}),
+      });
+      continue;
+    }
     if (item.kind === 'research') {
       // Asked for twice, or already tracked: link the row rather than file a
-      // second confirmation of the same pass. Same threshold and the same
-      // reasoning as a duplicated request.
+      // second one. Same threshold and the same reasoning as a duplicated
+      // request.
       const tracked = candidates.find(
         (c) => c.status !== 'done' && requestMatchesCandidate(item.topic, c.title),
       );
@@ -886,7 +1024,7 @@ export async function runTaskCapture(
         continue;
       }
       const filed = fileResearchAsk(deps, input, item);
-      if (filed) pushMade(filed.taskId, filed.title, 'triage');
+      if (filed) pushMade(filed.taskId, filed.title, filed.status);
       continue;
     }
     // Find before create: a request that names tracked OPEN work links the
@@ -899,137 +1037,170 @@ export async function runTaskCapture(
       pushCandidate(existing);
       continue;
     }
-    const actionable = item.actionable;
-    const created = deps.board.createTask(input.workspaceId, {
-      title: item.title,
-      body: [
-        `Filed live from the meeting${input.docTitle ? ` "${input.docTitle}"` : ''} by the`,
-        "meeting assistant — the doc's transcript is the source record.",
-        // Who asked is the half of "who said what" a task can still answer a
-        // week later, once the strip is gone. Only ever a voice the tick
-        // carried, so this line names a real speaker or nothing at all.
-        ...(item.requester ? [`Asked for by ${item.requester}.`] : []),
-      ].join(' '),
-      assignee: MEETING_CAPTURE_ACTOR.name,
-      assigneeKind: 'agent',
-      // The doc is where the words live; the origin ref is what lets the
-      // task answer "where did this come from".
-      origin: { kind: 'doc', docId: input.docId },
-      // Actionable work gets a real (re-rankable) band so dispatch can reach
-      // it; anything else goes through triage like other agent-filed rows.
-      ...(actionable ? { goal: CHORES_GOAL_ID } : {}),
-      actor: MEETING_CAPTURE_ACTOR,
-    });
-    if (!created.ok) {
-      deps.onError?.(`task capture: create refused (${created.error})`);
-      continue;
-    }
-    let status: TaskStatus = 'triage';
-    if (actionable) {
-      const moved = deps.board.transition(created.task.id, 'todo', {
-        actor: MEETING_CAPTURE_ACTOR,
-        note: 'Asked for in the meeting and clear enough to start; queued for dispatch.',
-      });
-      if (moved.ok) {
-        status = 'todo';
-        deps.onTaskReady?.({
-          workspaceId: input.workspaceId,
-          taskId: created.task.id,
-          title: item.title,
-        });
-      }
-    }
-    pushMade(created.task.id, item.title, status);
+    const filed = fileSpokenTask(deps, input, item);
+    if (filed) pushMade(filed.taskId, item.title, filed.status);
   }
   return { tasks: links, docs: docLinks, corrections };
 }
 
 /**
- * A research ask becomes a row at `triage` plus a decision item asking
- * whether to spend the pass. Two things gate it, and neither is a promise a
- * prompt makes:
+ * A spoken request becomes a row THE WAY A TAPPED ONE DOES: the same body
+ * the pointer pill posts, read by the same `parseTaskCreate` every create
+ * route runs, filed under the same readiness rule. The pill's author is the
+ * person who tapped; here it is the meeting assistant, so the row says who
+ * filed it and (when the tick carried a voice) who asked.
  *
- * - **The row is never set moving.** It stays at `triage` — no transition to
- *   `todo`, which is the status dispatch works — so it goes through triage
- *   like every other unvetted agent-filed row. (It still lands in the chores
- *   band: `createTask` defaults `goal` when a caller names none. The band is
- *   not what holds it; the status is. An earlier version of this comment
- *   claimed otherwise and the store disagreed.)
- * - **An open review item holds it further.** `ready-gate.ts` reports
- *   `awaiting-answer` for a row carrying an unanswered item, so even after
- *   somebody triages it, it is held until the ask is answered.
+ * Where it lands is decided twice over, and both have to agree for To do:
+ * the model's "actionable" (clear enough to start, nobody said to wait) AND
+ * the pill's `readyToWork` (enough words to be a title). A row that fails
+ * either goes to triage — visible on the board, in no dispatch read — which
+ * is the pill's own rule for a thin selection.
+ */
+function fileSpokenTask(
+  deps: RunTaskCaptureDeps,
+  input: RunTaskCaptureInput,
+  item: CapturedRequest,
+): { taskId: string; status: TaskStatus } | null {
+  const actionable = item.actionable && readyToWork(item.title);
+  // Quoted from the NEW lines — the transcript's words, chosen here rather
+  // than by the model, so the row's body quotes what was actually said the
+  // way a pill spin-off quotes the selection.
+  const quote = spokenLineFor(input.turns, item.title);
+  const parsed = parseTaskCreate(
+    {
+      title: item.title,
+      body: spinoffBody(quote ?? '', input.docTitle, {
+        heard: true,
+        // Who asked is the half of "who said what" a task can still answer
+        // a week later, once the strip is gone. Only ever a voice the tick
+        // carried, so this names a real speaker or nothing at all.
+        extra: item.requester ? [`Asked for by ${item.requester}.`] : [],
+      }),
+      author: MEETING_CAPTURE_ACTOR,
+      // The doc is where the words live; the origin ref is what lets the
+      // task answer "where did this come from". One origin kind for "a doc
+      // line became this", shared with the pill.
+      origin: { kind: 'doc', docId: input.docId },
+      ...(quote !== undefined ? { quote } : {}),
+      // Actionable work gets a real (re-rankable) band so dispatch can reach
+      // it; anything else goes through triage like other agent-filed rows.
+      ...(actionable ? { goal: CHORES_GOAL_ID } : { triage: true }),
+    },
+    MEETING_CAPTURE_ACTOR,
+  );
+  if (!parsed.ok) {
+    deps.onError?.(`task capture: create refused (${parsed.error})`);
+    return null;
+  }
+  const created = deps.board.createTask(input.workspaceId, parsed.opts);
+  if (!created.ok) {
+    deps.onError?.(`task capture: create refused (${created.error})`);
+    return null;
+  }
+  let status: TaskStatus = 'triage';
+  if (actionable) {
+    const moved = deps.board.transition(created.task.id, 'todo', {
+      actor: MEETING_CAPTURE_ACTOR,
+      note: 'Asked for in the meeting and clear enough to start; queued for dispatch.',
+    });
+    if (moved.ok) {
+      status = 'todo';
+      deps.onTaskReady?.({
+        workspaceId: input.workspaceId,
+        taskId: created.task.id,
+        title: item.title,
+      });
+    }
+  }
+  return { taskId: created.task.id, status };
+}
+
+/** The pill's own research title, and its cap — `Research: ` plus what was
+ *  said, inside the board's title limit. */
+export function researchTitle(topic: string): string {
+  return clipToWordBoundary(`Research: ${topic}`, TITLE_MAX);
+}
+
+/**
+ * A research ask becomes the pill's Research: a row ADDRESSED TO THE BOARD
+ * (`assignToLead`), so it goes to the lead when there is one and to nobody —
+ * unowned, at triage — when there is not, and never to the person who asked;
+ * plus, through `onResearchFiled`, a placeholder section in the doc that the
+ * findings land in.
  *
- * The item filing can fail — a board that refuses the payload, a store
- * error. That costs the row its card, not its safety: the row is still at
- * `triage` and still unmoved, which is where an unconfirmed research ask
- * belongs. The failure is reported, never swallowed.
+ * It used to file a decision item first, so nothing was spent on a
+ * mishearing. That gate is gone (owner's plan, 2026-09-01: "the agent writes
+ * a placeholder section immediately, then fills it"): a research row is a
+ * `todo` for the lead like any other, and the row's body names the doc
+ * section it is expected to fill, so the lead can find where to write.
  */
 function fileResearchAsk(
   deps: RunTaskCaptureDeps,
   input: RunTaskCaptureInput,
   item: CapturedResearch,
-): { taskId: string; title: string } | null {
-  const title = clipToWordBoundary(`Research: ${item.topic}`, TITLE_MAX);
-  const created = deps.board.createTask(input.workspaceId, {
-    title,
-    body: [
-      `Heard live in the meeting${input.docTitle ? ` "${input.docTitle}"` : ''} by the meeting`,
-      "assistant — the doc's transcript is the source record.",
-      ...(item.question ? [`The question asked: ${item.question}`] : []),
-      ...(item.requester ? [`Asked for by ${item.requester}.`] : []),
-      "Nobody called this research out loud; it is the assistant's reading of the ask,",
-      'so it waits on the review item below before anything is spent on it.',
-    ].join(' '),
-    assignee: MEETING_CAPTURE_ACTOR.name,
-    assigneeKind: 'agent',
-    // No band asked for, the same as an unactionable request: placing it is
-    // a person's call at triage. The store fills in `chores` regardless.
-    origin: { kind: 'doc', docId: input.docId },
-    actor: MEETING_CAPTURE_ACTOR,
-  });
+): { taskId: string; title: string; status: TaskStatus } | null {
+  const title = researchTitle(item.topic);
+  const board = deps.board.getWorkspace?.(input.workspaceId);
+  const quote = spokenLineFor(input.turns, item.topic);
+  const parsed = parseTaskCreate(
+    {
+      title,
+      body: spinoffBody(quote ?? '', input.docTitle, {
+        heard: true,
+        extra: [
+          ...(item.question ? [`The question asked: ${item.question}`] : []),
+          ...(item.requester ? [`Asked for by ${item.requester}.`] : []),
+          `Write what you find under the "${title}" section of the doc; a placeholder is there.`,
+        ],
+      }),
+      author: MEETING_CAPTURE_ACTOR,
+      origin: { kind: 'doc', docId: input.docId },
+      ...(quote !== undefined ? { quote } : {}),
+      assignToLead: true,
+      // The pill's own readiness read, on the same title it reads it on —
+      // "Research: <topic>", prefix included.
+      ...(readyToWork(title) ? {} : { triage: true }),
+    },
+    MEETING_CAPTURE_ACTOR,
+    board ? { ...(board.leadAgentId !== undefined ? { leadAgentId: board.leadAgentId } : {}) } : {},
+  );
+  if (!parsed.ok) {
+    deps.onError?.(`research capture: create refused (${parsed.error})`);
+    return null;
+  }
+  const created = deps.board.createTask(input.workspaceId, parsed.opts);
   if (!created.ok) {
     deps.onError?.(`research capture: create refused (${created.error})`);
     return null;
   }
   const taskId = created.task.id;
-  const url = taskCaptureUrl(input.workspaceId, taskId);
-  const filed = deps.board.addReviewItem(
-    taskId,
-    {
-      review_type: 'decision',
-      headline: `Look into ${clipToWordBoundary(item.topic, 52)}?`,
-      detail: [
-        `Heard in the meeting${input.docTitle ? ` "${input.docTitle}"` : ''}:`,
-        item.question ? `${item.question}` : `somebody wanted ${item.topic} looked into`,
-        item.requester ? `(${item.requester} asked).` : '.',
-        'Nobody said the word "research" — this is the meeting assistant reading an ask',
-        'out of the conversation, which is exactly the kind of reading worth a glance',
-        'before an agent spends a pass on it.',
-        `The row is [${title}](${url}), sitting in triage and going nowhere until you answer.`,
-      ].join(' '),
-      options: [
-        {
-          id: 'go-ahead',
-          label: 'Go ahead',
-          detail:
-            'Releases the row for triage; an agent then does the reading and reports back on the ticket.',
-        },
-        {
-          id: 'not-now',
-          label: 'Not now',
-          detail:
-            'Nothing is spent. The row stays in triage, where you can archive it if the assistant misheard.',
-        },
-      ],
-    },
-    { actor: MEETING_CAPTURE_ACTOR },
-  );
-  if (!filed.ok) {
-    deps.onError?.(`research capture: confirmation refused (${filed.error})`);
-    return { taskId, title };
+  // A row for the lead is a todo like the pill's; one nobody owns stays at
+  // triage, where a person places it. The store files an AGENT's create at
+  // triage regardless (the pill's author is a person, so its row is placed
+  // by the person rule), so a lead-addressed row is moved to todo here and
+  // the lead woken — the same step an actionable request takes.
+  let status: TaskStatus = parsed.opts.fileToTriage ? 'triage' : 'todo';
+  if (!parsed.opts.fileToTriage && created.task.status !== 'todo') {
+    const moved = deps.board.transition(taskId, 'todo', {
+      actor: MEETING_CAPTURE_ACTOR,
+      note: "Research asked for in the meeting — the lead's errand, ready to pick up.",
+    });
+    if (!moved.ok) {
+      deps.onError?.(`research capture: could not set ${taskId} todo`);
+      status = 'triage';
+    }
   }
-  deps.onReviewFiled?.({ task: filed.task, item: filed.item });
-  return { taskId, title };
+  if (status === 'todo') deps.onTaskReady?.({ workspaceId: input.workspaceId, taskId, title });
+  deps.onResearchFiled?.({
+    workspaceId: input.workspaceId,
+    docId: input.docId,
+    taskId,
+    title,
+    topic: item.topic,
+    ...(item.question !== undefined ? { question: item.question } : {}),
+    url: taskCaptureUrl(input.workspaceId, taskId),
+  });
+  return { taskId, title, status };
 }
 
 /**

@@ -98,9 +98,11 @@ import {
   extendsWord,
 } from './meeting-notes.ts';
 import {
-  type RunTaskCaptureDeps,
+  type ResearchFiled,
+  type ReviewAsk,
   type TaskCaptureBoard,
   type TaskCaptureLookup,
+  normalizedTitle,
   runTaskCapture,
 } from './meeting-task-capture.ts';
 
@@ -162,6 +164,35 @@ export function replaceNotesSection(
     fragment.insert(span.start, blocks);
   }, 'agent');
   return { ok: true, mode: 'replaced' };
+}
+
+/**
+ * The placeholder a spoken "can you research X" leaves in the doc: a section
+ * headed with the row's title, holding one line that links the row and says
+ * the findings land here. It is the pill's second half made visible — the
+ * row is where the errand is tracked, the section is where the person who
+ * asked will look for the answer. Idempotent by heading: the same ask heard
+ * twice files one row (the capture dedupes) and leaves one section.
+ */
+export function appendResearchPlaceholder(
+  ydoc: Y.Doc,
+  title: string,
+  url: string,
+): { ok: boolean; mode?: 'appended' | 'present'; error?: 'parse-failed' } {
+  const fragment = prose.getProseFragment(ydoc);
+  if (findNotesSectionSpan(fragment, title)) return { ok: true, mode: 'present' };
+  let blocks: Y.XmlElement[];
+  try {
+    blocks = prose.parseMarkdownBlocks(
+      `## ${title}\n\nFiled as [${title}](${url}) — the lead writes what it finds here.`,
+    );
+  } catch {
+    return { ok: false, error: 'parse-failed' };
+  }
+  ydoc.transact(() => {
+    fragment.insert(fragment.length, blocks);
+  }, 'agent');
+  return { ok: true, mode: 'appended' };
 }
 
 /** Where the notes section sits in the top-level fragment — the LAST heading
@@ -773,9 +804,19 @@ export function withServerNotesSinks(
     /** The lead wake for a captured task judged clear enough to start —
      *  wired to the ready-nudge channel by the server. */
     onTaskReady?: (wake: { workspaceId: string; taskId: string; title: string }) => void;
-    /** The projection + announce a filed research confirmation owes; only
-     *  `createServer` can reach either. See `RunTaskCaptureDeps`. */
-    onReviewFiled?: RunTaskCaptureDeps['onReviewFiled'];
+    /**
+     * The board a doc's meeting files onto. A huddle doc has no `setId` —
+     * it is HELD by a hub workspace, not owned by one — so scoping capture
+     * on `meta.setId` alone silently returned nothing for exactly the docs
+     * meetings run on. Absent, `meta.setId` is the whole answer.
+     */
+    boardOf?: (docId: string) => string | undefined;
+    /** Observes a research row after the doc's placeholder is written. */
+    onResearchFiled?: (filed: ResearchFiled) => void;
+    /** Files a spoken review ask the way the Review float's press is filed —
+     *  only `createServer` holds the comment + stamp path. Deduped here per
+     *  meeting so a question repeated across ticks opens one thread. */
+    onReviewAsk?: (ask: ReviewAsk) => void | Promise<void>;
     /** Tests: an ownership ledger they can seed or read back. */
     ledger?: NotesLedger;
   },
@@ -785,22 +826,54 @@ export function withServerNotesSinks(
   // One ledger per wiring, i.e. per server: it is keyed by doc and meeting,
   // and a meeting is the life of one notes section.
   const ledger = deps.ledger ?? createNotesLedger();
+  const boardOf = (docId: string): string | undefined => {
+    const room = deps.rooms().get(docId);
+    return room?.meta.setId ?? deps.boardOf?.(docId);
+  };
+  // Review asks already filed this meeting, by normalized question. The
+  // capture's own dedupe covers a request seen twice in one tick's window;
+  // this covers "ask the team whether X" said again ten minutes later.
+  const reviewAsked = new Map<string, Set<string>>();
   const captureIntents: MeetingNotesDeps['captureIntents'] =
     options.captureIntents ??
     (extractor && captureBoard
       ? async ({ docId, turns, priorTurns }) => {
           // The doc's board is the capture's scope: a meeting on a doc no
-          // workspace owns has no board to find or create on.
+          // workspace owns or holds has no board to find or create on.
           const room = deps.rooms().get(docId);
-          const workspaceId = room?.meta.setId;
-          if (!workspaceId) return { tasks: [], docs: [] };
+          const workspaceId = boardOf(docId);
+          if (!room || !workspaceId) return { tasks: [], docs: [] };
           return runTaskCapture(
             {
               board: captureBoard(),
               extractor,
               ...(deps.lookup ? { lookup: deps.lookup } : {}),
               ...(deps.onTaskReady ? { onTaskReady: deps.onTaskReady } : {}),
-              ...(deps.onReviewFiled ? { onReviewFiled: deps.onReviewFiled } : {}),
+              onResearchFiled: (filed) => {
+                const target = deps.rooms().get(filed.docId);
+                if (target) {
+                  const wrote = appendResearchPlaceholder(target.ydoc, filed.title, filed.url);
+                  if (!wrote.ok) {
+                    console.error(`[meeting-tasks] research placeholder failed: ${wrote.error}`);
+                  }
+                }
+                deps.onResearchFiled?.(filed);
+              },
+              ...(deps.onReviewAsk
+                ? {
+                    onReviewAsk: async (ask: ReviewAsk) => {
+                      const key = normalizedTitle(ask.question);
+                      let seen = reviewAsked.get(ask.docId);
+                      if (!seen) {
+                        seen = new Set();
+                        reviewAsked.set(ask.docId, seen);
+                      }
+                      if (seen.has(key)) return;
+                      seen.add(key);
+                      await deps.onReviewAsk?.(ask);
+                    },
+                  }
+                : {}),
               onError: (message) => console.error(`[meeting-tasks] ${message}`),
             },
             {
@@ -821,6 +894,7 @@ export function withServerNotesSinks(
       // finished writing. Releasing the claims is what makes stop-and-restart
       // append instead of replace — the reported data-loss bug.
       ledger.beginMeeting(ids.docId);
+      reviewAsked.delete(ids.docId);
       options.onSessionStart?.(ids);
     },
     resolveContext: (docId: string): NotesProjectContext | undefined => {
@@ -828,7 +902,7 @@ export function withServerNotesSinks(
       try {
         const room = deps.rooms().get(docId);
         if (room?.meta.title) gathered.docTitle = room.meta.title;
-        const workspaceId = room?.meta.setId;
+        const workspaceId = boardOf(docId);
         if (workspaceId) {
           gathered.workspaceId = workspaceId;
           const titles = deps

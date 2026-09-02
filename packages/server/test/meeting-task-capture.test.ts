@@ -28,7 +28,6 @@ import {
   taskCaptureUrl,
   tickMentionsCandidate,
 } from '../src/meeting-task-capture.ts';
-import type { AddReviewItemResult } from '../src/tasks.ts';
 
 const candidates: TaskCaptureCandidate[] = [
   { id: 't-pop', title: 'Popover loses anchor while scrolling', status: 'in-progress' },
@@ -168,10 +167,9 @@ describe('taskCaptureUrl', () => {
 });
 
 /** A board stub that records every write. */
-function boardStub(over: { failCreate?: boolean; failReview?: boolean } = {}) {
+function boardStub(over: { failCreate?: boolean; leadAgentId?: string } = {}) {
   const created: Array<import('../src/tasks.ts').CreateTaskOpts> = [];
   const transitions: Array<{ taskId: string; to: string; actor: unknown }> = [];
-  const reviews: Array<{ taskId: string; review: ReviewRecord; actor: unknown }> = [];
   // Rows this stub has filed. A real board remembers them, and the pass that
   // runs a tick later has to see them or it would twin what it just created.
   const filedRows: TaskCaptureCandidate[] = [];
@@ -179,7 +177,6 @@ function boardStub(over: { failCreate?: boolean; failReview?: boolean } = {}) {
   return {
     created,
     transitions,
-    reviews,
     board: {
       listTasks: () => [...candidates, ...filedRows].map((c) => ({ ...c })),
       createTask: (_ws: string, opts: import('../src/tasks.ts').CreateTaskOpts) => {
@@ -187,37 +184,22 @@ function boardStub(over: { failCreate?: boolean; failReview?: boolean } = {}) {
         created.push(opts);
         nextId++;
         const id = `t-new${nextId}`;
-        filedRows.push({ id, title: opts.title, status: 'triage' });
+        // The store's own placement rule, in miniature: a create that asks
+        // for triage lands there, anything else is a todo.
+        const status = opts.fileToTriage ? 'triage' : 'todo';
+        filedRows.push({ id, title: opts.title, status });
         return {
           ok: true as const,
-          task: { id, title: opts.title, status: 'triage' },
+          task: { id, title: opts.title, status },
         };
       },
       transition: (taskId: string, to: string, opts: { actor: unknown }) => {
         transitions.push({ taskId, to, actor: opts.actor });
         return { ok: true as const };
       },
-      addReviewItem: (taskId: string, review: unknown, opts: { actor: unknown }) => {
-        if (over.failReview) {
-          return { ok: false, error: 'bad-review' } as unknown as AddReviewItemResult;
-        }
-        reviews.push({ taskId, review: review as ReviewRecord, actor: opts.actor });
-        return {
-          ok: true,
-          task: { id: taskId, workspaceId: 'w-board', title: 'filed row' },
-          item: { id: `r-${reviews.length}`, review },
-        } as unknown as AddReviewItemResult;
-      },
+      getWorkspace: () => (over.leadAgentId !== undefined ? { leadAgentId: over.leadAgentId } : {}),
     },
   };
-}
-
-/** The decision payload the research path files, as the stub records it. */
-interface ReviewRecord {
-  review_type?: string;
-  headline?: string;
-  detail?: string;
-  options?: Array<{ id: string; label: string; detail?: string }>;
 }
 
 function extractorOf(items: unknown) {
@@ -267,8 +249,15 @@ describe('runTaskCapture', () => {
     expect(opts.actor).toEqual(MEETING_CAPTURE_ACTOR);
     expect(opts.actor?.id.startsWith('user-')).toBe(false);
     expect(opts.assignee).not.toBe('agent');
-    expect(opts.assigneeKind).toBe('agent');
+    // The kind is left for the store to derive from the actor — the same
+    // create parse the pill's route runs says nothing it was not told.
+    expect(opts.assigneeKind).toBeUndefined();
     expect(opts.origin).toEqual({ kind: 'doc', docId: 'doc-m' });
+    // The pill's body, with the transcript's own line quoted under it.
+    expect(opts.body).toContain('Heard in the meeting "Demo prep"');
+    expect(opts.body).toContain('> ');
+    expect(opts.quote).toBeDefined();
+    expect(opts.fileToTriage).toBe(true);
     // Unvetted work goes through triage: no goal, no transition, no wake.
     expect(opts.goal).toBeUndefined();
     expect(transitions).toHaveLength(0);
@@ -757,7 +746,7 @@ describe('the research and lookup prompt', () => {
     const { system } = buildTaskCapturePrompt({ turns: researchTurns, candidates });
     expect(system).toContain('"kind":"research"');
     expect(system).toContain('"kind":"lookup"');
-    expect(system).toContain('rarely say the word "research"');
+    expect(system).toContain('rarely say the word');
     // The "when" clause is what makes a past meeting reachable at all.
     expect(system).toContain('KEEPING any "when"');
   });
@@ -821,11 +810,11 @@ const researchInput = {
   turns: researchTurns,
 };
 
-describe('runTaskCapture — a research ask confirms before it spends', () => {
-  it('files a triage row and a decision item, and sets nothing moving', async () => {
-    const { board, created, transitions, reviews } = boardStub();
+describe("runTaskCapture — a research ask files the pill's Research row", () => {
+  it('files a lead-addressed todo and hands the doc its placeholder', async () => {
+    const { board, created, transitions } = boardStub({ leadAgentId: 'Board Lead' });
     const wakes: unknown[] = [];
-    const filed: Array<{ taskId: string }> = [];
+    const filed: unknown[] = [];
     const links = await runTaskCapture(
       {
         board,
@@ -833,44 +822,65 @@ describe('runTaskCapture — a research ask confirms before it spends', () => {
           { kind: 'research', topic: 'offline queue replay', question: 'why does it repeat?' },
         ]),
         onTaskReady: (w) => wakes.push(w),
-        onReviewFiled: ({ task }) => filed.push({ taskId: task.id }),
+        onResearchFiled: (f) => filed.push(f),
       },
       researchInput,
     );
 
-    // The row exists and asks for no band — the same as an unactionable
-    // request, because placing it is a person's call at triage. (The STORE
-    // fills one in regardless; what keeps the row from being worked is the
-    // triage status and the open item, asserted below and in
-    // `meeting-research-store.test.ts` against the real store.)
+    // The pill's row: "Research: <topic>", the lead's errand, the doc as its
+    // origin, the meeting assistant as its author, the question in its body
+    // beside where the findings are expected to land.
     expect(created).toHaveLength(1);
-    expect(created[0]?.title).toBe('Research: offline queue replay');
-    expect(created[0]?.goal).toBeUndefined();
-    expect(created[0]?.actor).toEqual(MEETING_CAPTURE_ACTOR);
-    expect(created[0]?.origin).toEqual({ kind: 'doc', docId: 'doc-m' });
-    // Nothing is spent: no transition out of triage, no lead wake.
+    const opts = created[0];
+    if (!opts) throw new Error('no create recorded');
+    expect(opts.title).toBe('Research: offline queue replay');
+    expect(opts.assignee).toBe('Board Lead');
+    expect(opts.assigneeKind).toBe('agent');
+    expect(opts.actor).toEqual(MEETING_CAPTURE_ACTOR);
+    expect(opts.origin).toEqual({ kind: 'doc', docId: 'doc-m' });
+    expect(opts.body).toContain('why does it repeat?');
+    expect(opts.body).toContain('"Research: offline queue replay" section');
+    expect(opts.fileToTriage).toBeUndefined();
+    // The recorder placed it todo itself, so no transition; the lead is
+    // woken the way an actionable request wakes it.
     expect(transitions).toHaveLength(0);
-    expect(wakes).toHaveLength(0);
+    expect(wakes).toEqual([
+      { workspaceId: 'w-board', taskId: 't-new1', title: 'Research: offline queue replay' },
+    ]);
 
-    // And the ask itself: a decision with two options, on that row.
-    expect(reviews).toHaveLength(1);
-    expect(reviews[0]?.taskId).toBe('t-new1');
-    expect(reviews[0]?.review.review_type).toBe('decision');
-    expect(reviews[0]?.review.headline).toContain('offline queue replay');
-    expect(reviews[0]?.review.options?.map((o) => o.id)).toEqual(['go-ahead', 'not-now']);
-    // The card has to say where to look — an inline link to the row.
-    expect(reviews[0]?.review.detail).toContain('/workspaces/w-board?task=t-new1');
-    expect(reviews[0]?.review.detail).toContain('why does it repeat?');
-    // The caller owes the item its projection and announce.
-    expect(filed).toEqual([{ taskId: 't-new1' }]);
-
+    // The doc's half: the caller holding the doc is told what to write.
+    expect(filed).toEqual([
+      {
+        workspaceId: 'w-board',
+        docId: 'doc-m',
+        taskId: 't-new1',
+        title: 'Research: offline queue replay',
+        topic: 'offline queue replay',
+        question: 'why does it repeat?',
+        url: '/workspaces/w-board?task=t-new1',
+      },
+    ]);
     expect(links.tasks).toEqual([
       {
         title: 'Research: offline queue replay',
         url: '/workspaces/w-board?task=t-new1',
-        status: 'triage',
+        status: 'todo',
       },
     ]);
+  });
+
+  it('with no lead to address, files at triage owned by nobody', async () => {
+    const { board, created } = boardStub();
+    const links = await runTaskCapture(
+      {
+        board,
+        extractor: extractorOf([{ kind: 'research', topic: 'offline queue replay' }]),
+      },
+      researchInput,
+    );
+    expect(created[0]?.fileToTriage).toBe(true);
+    expect(created[0]?.assignee).not.toBe(MEETING_CAPTURE_ACTOR.name);
+    expect(links.tasks[0]?.status).toBe('triage');
   });
 
   it('records who asked, when the tick carried them', async () => {
@@ -887,11 +897,12 @@ describe('runTaskCapture — a research ask confirms before it spends', () => {
     expect(created[0]?.body).toContain('Priya');
   });
 
-  it('links the row it already filed rather than asking a second time', async () => {
+  it('links the row it already filed rather than filing a second time', async () => {
     // The same ask twice: once in this tick's reply, and once a whole tick
     // later, when the row from the first pass is a candidate the board
-    // returns. Neither may produce a second confirmation to answer.
-    const { board, created, reviews } = boardStub();
+    // returns. Neither may produce a second row or a second placeholder.
+    const { board, created } = boardStub();
+    const filed: unknown[] = [];
     const first = await runTaskCapture(
       {
         board,
@@ -899,17 +910,22 @@ describe('runTaskCapture — a research ask confirms before it spends', () => {
           { kind: 'research', topic: 'offline queue replay' },
           { kind: 'research', topic: 'offline queue replay problem' },
         ]),
+        onResearchFiled: (f) => filed.push(f),
       },
       researchInput,
     );
     expect(first.tasks).toHaveLength(1);
 
     const later = await runTaskCapture(
-      { board, extractor: extractorOf([{ kind: 'research', topic: 'offline queue replay' }]) },
+      {
+        board,
+        extractor: extractorOf([{ kind: 'research', topic: 'offline queue replay' }]),
+        onResearchFiled: (f) => filed.push(f),
+      },
       researchInput,
     );
     expect(created).toHaveLength(1);
-    expect(reviews).toHaveLength(1);
+    expect(filed).toHaveLength(1);
     expect(later.tasks).toEqual([
       {
         title: 'Research: offline queue replay',
@@ -918,24 +934,92 @@ describe('runTaskCapture — a research ask confirms before it spends', () => {
       },
     ]);
   });
+});
 
-  it('a refused confirmation leaves the row in triage and says so', async () => {
-    const { board, created, transitions } = boardStub({ failReview: true });
-    const errors: string[] = [];
+describe('parsing a review ask', () => {
+  const spoken: NotesTurn[] = [
+    { turn: 7, speaker: 'Priya', text: 'Ask the team whether we still need the tunnel at all.' },
+  ];
+
+  it('keeps a review ask whose question was spoken, with who asked', () => {
+    const raw = JSON.stringify({
+      items: [{ kind: 'review', question: 'whether we still need the tunnel', requester: 'Priya' }],
+    });
+    expect(parseTaskCaptureReply(raw, candidates, spoken)).toEqual([
+      { kind: 'review', question: 'whether we still need the tunnel', requester: 'Priya' },
+    ]);
+  });
+
+  it('drops a question the tick never carried, and a voice it never heard', () => {
+    const invented = JSON.stringify({
+      items: [{ kind: 'review', question: 'whether the export dialog is done' }],
+    });
+    expect(parseTaskCaptureReply(invented, candidates, spoken)).toEqual([]);
+    const misattributed = JSON.stringify({
+      items: [
+        { kind: 'review', question: 'whether we still need the tunnel', requester: 'Marcus' },
+      ],
+    });
+    expect(parseTaskCaptureReply(misattributed, candidates, spoken)).toEqual([
+      { kind: 'review', question: 'whether we still need the tunnel' },
+    ]);
+  });
+
+  it('files one ask when the reply says it twice', () => {
+    const raw = JSON.stringify({
+      items: [
+        { kind: 'review', question: 'whether we still need the tunnel' },
+        { kind: 'review', question: 'Whether we still need the tunnel?' },
+      ],
+    });
+    expect(parseTaskCaptureReply(raw, candidates, spoken)).toHaveLength(1);
+  });
+
+  it('an ask that began last tick and ended this one is still spoken', () => {
+    // "Ask the team whether" landed on the previous tick; the subject
+    // arrives on this one. The overlap is what makes the phrase findable.
+    const prior: NotesTurn[] = [{ turn: 7, speaker: 'Priya', text: 'Ask the team whether we' }];
+    const now: NotesTurn[] = [{ turn: 8, speaker: 'Priya', text: 'still need the tunnel at all.' }];
+    const raw = JSON.stringify({
+      items: [{ kind: 'review', question: 'whether we still need the tunnel', requester: 'Priya' }],
+    });
+    expect(parseTaskCaptureReply(raw, candidates, now, prior)).toEqual([
+      { kind: 'review', question: 'whether we still need the tunnel', requester: 'Priya' },
+    ]);
+    // Without the prior tick the same reply is an invention.
+    expect(parseTaskCaptureReply(raw, candidates, now)).toEqual([]);
+  });
+
+  it('runTaskCapture hands a review ask to the caller and files no row', async () => {
+    const { board, created } = boardStub();
+    const asks: unknown[] = [];
     const links = await runTaskCapture(
       {
         board,
-        extractor: extractorOf([{ kind: 'research', topic: 'offline queue replay' }]),
-        onError: (m) => errors.push(m),
+        extractor: extractorOf([
+          { kind: 'review', question: 'whether we still need the tunnel', requester: 'Priya' },
+        ]),
+        onReviewAsk: (ask) => asks.push(ask),
       },
-      researchInput,
+      { workspaceId: 'w-board', docId: 'doc-m', turns: spoken },
     );
-    expect(created).toHaveLength(1);
-    // Triage and unbanded is where an unconfirmed ask belongs; the missing
-    // card costs it its visibility, never its safety.
-    expect(transitions).toHaveLength(0);
-    expect(links.tasks[0]?.status).toBe('triage');
-    expect(errors[0]).toContain('confirmation refused');
+    expect(created).toHaveLength(0);
+    expect(links.tasks).toEqual([]);
+    expect(asks).toEqual([
+      {
+        workspaceId: 'w-board',
+        docId: 'doc-m',
+        question: 'whether we still need the tunnel',
+        requester: 'Priya',
+      },
+    ]);
+  });
+
+  it('the prompt names the intent and its shape', () => {
+    const { system } = buildTaskCapturePrompt({ turns: spoken, candidates: [] });
+    expect(system).toContain('"kind":"review"');
+    expect(system).toContain('ask the');
+    expect(system).toContain('answer itself is not an');
   });
 });
 
@@ -1071,7 +1155,7 @@ describe('runTaskCapture — a lookup reaches docs and past meetings', () => {
     // replay", then a plain "somebody should fix the queue replay". The
     // candidate list was read before either existed, so without carrying the
     // new row forward the second item files a second card for one ask.
-    const { board, created, reviews } = boardStub();
+    const { board, created } = boardStub();
     const links = await runTaskCapture(
       {
         board,
@@ -1083,7 +1167,6 @@ describe('runTaskCapture — a lookup reaches docs and past meetings', () => {
       researchInput,
     );
     expect(created).toHaveLength(1);
-    expect(reviews).toHaveLength(1);
     expect(links.tasks).toHaveLength(1);
     expect(links.tasks[0]?.title).toBe('Research: offline queue replay');
   });
