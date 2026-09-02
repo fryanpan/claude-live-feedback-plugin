@@ -20,7 +20,7 @@
  *   bun run test:audit --write    rewrite the baseline to today's counts
  */
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { join, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const repoRoot = join(fileURLToPath(new URL('.', import.meta.url)), '..');
@@ -50,14 +50,24 @@ function lsFiles(args: string[], globs: string[]): string[] {
  * `--exclude-standard` keeps .gitignore honoured, so build output and local
  * scratch files stay out.
  *
+ * Linked worktrees are dropped by name rather than left to the ignore rules.
+ * This repo's worktrees live at `.claude/worktrees/<branch>`, INSIDE the
+ * primary checkout, so `--others` would otherwise walk into every branch in
+ * progress and count its test files as this one's. They are excluded today
+ * only by a line in `.git/info/exclude`, which is local and uncommitted — a
+ * clone without it would fail the ratchet on somebody else's work in progress.
+ *
  * Files are then filtered to those that exist on disk: `git ls-files` still
  * lists a tracked file that has been deleted in the working tree, and reading
  * one throws ENOENT and takes down the whole audit.
  */
+const WORKTREES = `.claude${sep}worktrees${sep}`;
+
 function gitFiles(...globs: string[]): string[] {
   const tracked = lsFiles([], globs);
   const untracked = lsFiles(['--others', '--exclude-standard'], globs);
   return [...new Set([...tracked, ...untracked])]
+    .filter((rel) => !rel.includes(WORKTREES))
     .filter((rel) => existsSync(join(repoRoot, rel)))
     .sort();
 }
