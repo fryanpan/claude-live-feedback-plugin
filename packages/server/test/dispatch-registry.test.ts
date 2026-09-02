@@ -276,6 +276,24 @@ describe('dispatch registry', () => {
   // server runs on macOS, while CI's Bun-on-Linux has measurably dropped
   // recursive-watch events — there the design degrades to no-signal, which
   // is exactly what makes an event-arrival assertion unrunnable on Linux.
+  //
+  // It is NOT replaced by a fake-watcher case, and it is NOT moved behind a
+  // CI-only gate. A fake factory replaces the only thing this test exercises
+  // — the default `fs.watch(path, {recursive: true})` wiring — so a fake
+  // version of it would assert the fake. And "CI only" would mean never:
+  // CI is Bun-on-Linux, which this test skips. Either choice deletes the
+  // coverage rather than stabilising it.
+  //
+  // What was actually wrong was the trigger, not the bound. The old shape
+  // wrote ONE file and then waited up to 20s for FSEvents to deliver that one
+  // event — and FSEvents is a shared system service that drops events under
+  // churn, so a single dropped notification meant a 20s stall and a red test
+  // on a healthy watcher (it failed exactly this way during a `--coverage`
+  // run of the full suite on 2026-09-02, while passing without coverage).
+  // Re-touching the file on every poll turns "this one event must survive a
+  // starved queue" into "any one of ~40 must", which no longer flakes and
+  // still fails hard for the regression it guards: a factory that has stopped
+  // watching delivers nothing however many times the file is written.
   it.skipIf(process.platform !== 'darwin')(
     'the real fs.watch factory sees a file landing in the worktree',
     async () => {
@@ -297,22 +315,15 @@ describe('dispatch registry', () => {
                   'spare — the watcher is broken; this is not suite contention',
           );
         }
-        writeFileSync(join(worktree, 'src', 'index.ts'), 'export {};\n');
-        // FSEvents is a shared system service with no latency guarantee, and
-        // its delivery degrades with the number of live watchers and the
-        // amount of churn on the machine — under the full suite that is
-        // thousands of temp files across 252 files. The old 3s bound was
-        // tight enough that adding four tests to an unrelated file tipped it
-        // twice in a row, while this test passed 10/10 in isolation on the
-        // same commit. What is asserted here is that the real factory
-        // DELIVERS the event, never that it delivers inside a particular
-        // window, so the bound is generous and the failure says how long it
-        // actually waited — a factory that has stopped seeing files still
-        // fails, which is the regression this guards.
+        // What is asserted is that the real factory DELIVERS, never that it
+        // delivers inside a particular window — so every poll writes the file
+        // again rather than waiting on the first notification to survive.
         const startedAt = Date.now();
-        const deadline = startedAt + 20_000;
+        const deadline = startedAt + 8_000;
+        let writes = 0;
         while (reg.activityFor('t-alpha') === undefined && Date.now() < deadline) {
-          await new Promise((r) => setTimeout(r, 25));
+          writeFileSync(join(worktree, 'src', 'index.ts'), `export const n = ${writes++};\n`);
+          await new Promise((r) => setTimeout(r, 200));
         }
         const activity = reg.activityFor('t-alpha');
         if (activity === undefined) {
@@ -323,22 +334,22 @@ describe('dispatch registry', () => {
           // looking exactly like a broken watcher (reproduced 2026-08-31:
           // three concurrent runs, one hit this timeout with zero events).
           const waited = Date.now() - startedAt;
+          const seen = `no watch event after ${waited}ms and ${writes} writes`;
           const fdErr = fdContentionError();
-          if (fdErr) throw new Error(`no watch event after ${waited}ms — ${fdErr.message}`);
+          if (fdErr) throw new Error(`${seen} — ${fdErr.message}`);
           const rivals = otherTestRunnerCount();
           if (rivals > 0) {
             throw new Error(
-              'SUITE CONTENTION, most likely not your diff: no FSEvents delivery after ' +
-                `${waited}ms while ${rivals} other test-runner process(es) share this ` +
-                'machine, and FSEvents starves under concurrent suite churn. Re-run ' +
-                '`bun test packages/server/test` alone; only a failure in a solo run ' +
-                'indicts the watcher.',
+              `${seen}. ${rivals} other test-runner process(es) share this machine, and ` +
+                'FSEvents starves under concurrent suite churn — but every one of those ' +
+                'writes was a fresh chance to deliver, so starvation would have to have ' +
+                'swallowed all of them. Read this as a broken watcher first; re-run ' +
+                '`bun test packages/server/test` alone to rule the machine out.',
             );
           }
           throw new Error(
-            `no watch event after ${waited}ms with no rival test runs and fd headroom to ` +
-              'spare — the real factory has stopped seeing files; investigate the watcher, ' +
-              'not the machine',
+            `${seen}, with no rival test runs and fd headroom to spare — the real ` +
+              'factory has stopped seeing files; investigate the watcher, not the machine',
           );
         }
         expect(activity).toBeGreaterThan(0);
@@ -348,6 +359,6 @@ describe('dispatch registry', () => {
         rmSync(worktree, { recursive: true, force: true });
       }
     },
-    30_000,
+    20_000,
   );
 });
