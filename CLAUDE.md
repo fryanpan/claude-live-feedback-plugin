@@ -13,6 +13,10 @@ on every PR that touches widget code.
 
 ## Architecture summaries — linked, never inlined
 
+Start at [overview](docs/architecture/overview.md) — the packages, the layers
+inside each and which way imports may point, plus the main data flows. Read it
+before non-trivial work.
+
 Per-subsystem summaries live in [docs/architecture/](docs/architecture/):
 [meeting-assistant](docs/architecture/meeting-assistant.md) (live
 transcription + notes on a pause-or-cadence clock),
