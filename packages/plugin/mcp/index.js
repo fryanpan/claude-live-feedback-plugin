@@ -6521,6 +6521,109 @@ import { randomUUID } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 
+// packages/core/src/env-names.ts
+var ENV_RENAMES = [
+  ["FEEDBACK_BASE_URL", "CW_BASE_URL"],
+  ["FEEDBACK_AGENT_NAME", "CW_AGENT_NAME"],
+  ["FEEDBACK_AUTHOR", "CW_AUTHOR"],
+  ["LF_CLIENT_ROOT", "CW_CLIENT_ROOT"],
+  ["LF_PUBLIC_BASE_URL", "CW_PUBLIC_BASE_URL"],
+  ["LF_PROXIED_TRUSTED_HOSTS", "CW_PROXIED_TRUSTED_HOSTS"],
+  ["LF_WIDGET_DIST", "CW_WIDGET_DIST"],
+  ["LF_MARKDOWN_APP_DIST", "CW_MARKDOWN_APP_DIST"],
+  ["LF_SHARING_DISABLED", "CW_SHARING_DISABLED"],
+  ["LF_SUMMARIES", "CW_SUMMARIES"],
+  ["LF_SUMMARY_BACKFILL", "CW_SUMMARY_BACKFILL"],
+  ["LF_SUMMARY_BACKFILL_MINUTES", "CW_SUMMARY_BACKFILL_MINUTES"],
+  ["LF_PLUGIN_REFRESH_MINUTES", "CW_PLUGIN_REFRESH_MINUTES"],
+  ["LF_CLAUDE_BIN", "CW_CLAUDE_BIN"],
+  ["LF_MCP_PRINT_NODE", "CW_MCP_PRINT_NODE"],
+  ["LIVE_FEEDBACK_SUMMARY_API_KEY", "CW_SUMMARY_API_KEY"]
+];
+var LEGACY_OF = new Map(ENV_RENAMES.map(([legacy, current]) => [current, legacy]));
+function present(v) {
+  return v !== undefined && v.trim() !== "";
+}
+function readRenamedEnv(env, current) {
+  const direct = env[current];
+  if (present(direct))
+    return direct;
+  const legacy = LEGACY_OF.get(current);
+  if (legacy !== undefined) {
+    const old = env[legacy];
+    if (present(old))
+      return old;
+  }
+  return direct;
+}
+
+// packages/core/src/machine-paths.ts
+import { join } from "node:path";
+var PRODUCT_SLUG = "claude-workspaces";
+var PRODUCT_SLUG_LEGACY = "live-feedback";
+var DISCOVERY_DIR_CURRENT = PRODUCT_SLUG;
+var DISCOVERY_DIR_LEGACY = PRODUCT_SLUG_LEGACY;
+var DISCOVERY_FILE = "server.json";
+function discoveryCandidates(home) {
+  return [DISCOVERY_DIR_CURRENT, DISCOVERY_DIR_LEGACY].map((dir) => join(home, ".claude", dir, DISCOVERY_FILE));
+}
+function resolveDiscoveryFile(home, exists) {
+  return discoveryCandidates(home).find(exists);
+}
+
+// packages/core/src/review-item-id.ts
+var B64URL = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+function decodeBase64Url(s) {
+  if (s.length === 0 || s.length % 4 === 1)
+    return;
+  const bytes = [];
+  let buffer = 0;
+  let bits = 0;
+  for (const ch of s) {
+    const v = B64URL.indexOf(ch);
+    if (v < 0)
+      return;
+    buffer = buffer << 6 | v;
+    bits += 6;
+    if (bits >= 8) {
+      bits -= 8;
+      bytes.push(buffer >> bits & 255);
+    }
+  }
+  return Uint8Array.from(bytes);
+}
+var THREAD_ID_PREFIX = "rt-";
+function parseThreadReviewItemId(id) {
+  if (!id.startsWith(THREAD_ID_PREFIX))
+    return;
+  const bytes = decodeBase64Url(id.slice(THREAD_ID_PREFIX.length));
+  if (!bytes)
+    return;
+  let payload;
+  try {
+    payload = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+  } catch {
+    return;
+  }
+  const commentAt = payload.lastIndexOf(`
+`);
+  if (commentAt < 0)
+    return;
+  const threadAt = payload.lastIndexOf(`
+`, commentAt - 1);
+  if (threadAt < 0)
+    return;
+  const docId = payload.slice(0, threadAt);
+  const threadId = payload.slice(threadAt + 1, commentAt);
+  const commentId = payload.slice(commentAt + 1);
+  if (docId === "" || threadId === "" || commentId === "")
+    return;
+  return { docId, threadId, commentId };
+}
+
+// packages/core/src/task-wire.ts
+var TASK_STATUSES = ["triage", "todo", "in-progress", "done"];
+
 // node_modules/.bun/zod@4.3.6/node_modules/zod/v4/core/core.js
 var NEVER = Object.freeze({
   status: "aborted"
@@ -13669,106 +13772,6 @@ class StdioServerTransport {
   }
 }
 
-// packages/core/src/env-names.ts
-var ENV_RENAMES = [
-  ["FEEDBACK_BASE_URL", "CW_BASE_URL"],
-  ["FEEDBACK_AGENT_NAME", "CW_AGENT_NAME"],
-  ["FEEDBACK_AUTHOR", "CW_AUTHOR"],
-  ["LF_CLIENT_ROOT", "CW_CLIENT_ROOT"],
-  ["LF_PUBLIC_BASE_URL", "CW_PUBLIC_BASE_URL"],
-  ["LF_PROXIED_TRUSTED_HOSTS", "CW_PROXIED_TRUSTED_HOSTS"],
-  ["LF_WIDGET_DIST", "CW_WIDGET_DIST"],
-  ["LF_MARKDOWN_APP_DIST", "CW_MARKDOWN_APP_DIST"],
-  ["LF_SHARING_DISABLED", "CW_SHARING_DISABLED"],
-  ["LF_SUMMARIES", "CW_SUMMARIES"],
-  ["LF_SUMMARY_BACKFILL", "CW_SUMMARY_BACKFILL"],
-  ["LF_SUMMARY_BACKFILL_MINUTES", "CW_SUMMARY_BACKFILL_MINUTES"],
-  ["LF_PLUGIN_REFRESH_MINUTES", "CW_PLUGIN_REFRESH_MINUTES"],
-  ["LF_CLAUDE_BIN", "CW_CLAUDE_BIN"],
-  ["LF_MCP_PRINT_NODE", "CW_MCP_PRINT_NODE"],
-  ["LIVE_FEEDBACK_SUMMARY_API_KEY", "CW_SUMMARY_API_KEY"]
-];
-var LEGACY_OF = new Map(ENV_RENAMES.map(([legacy, current]) => [current, legacy]));
-function present(v) {
-  return v !== undefined && v.trim() !== "";
-}
-function readRenamedEnv(env, current) {
-  const direct = env[current];
-  if (present(direct))
-    return direct;
-  const legacy = LEGACY_OF.get(current);
-  if (legacy !== undefined) {
-    const old = env[legacy];
-    if (present(old))
-      return old;
-  }
-  return direct;
-}
-
-// packages/core/src/machine-paths.ts
-import { join } from "node:path";
-var PRODUCT_SLUG = "claude-workspaces";
-var PRODUCT_SLUG_LEGACY = "live-feedback";
-var DISCOVERY_DIR_CURRENT = PRODUCT_SLUG;
-var DISCOVERY_DIR_LEGACY = PRODUCT_SLUG_LEGACY;
-var DISCOVERY_FILE = "server.json";
-function discoveryCandidates(home) {
-  return [DISCOVERY_DIR_CURRENT, DISCOVERY_DIR_LEGACY].map((dir) => join(home, ".claude", dir, DISCOVERY_FILE));
-}
-function resolveDiscoveryFile(home, exists) {
-  return discoveryCandidates(home).find(exists);
-}
-
-// packages/core/src/review-item-id.ts
-var B64URL = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
-function decodeBase64Url(s) {
-  if (s.length === 0 || s.length % 4 === 1)
-    return;
-  const bytes = [];
-  let buffer = 0;
-  let bits = 0;
-  for (const ch of s) {
-    const v = B64URL.indexOf(ch);
-    if (v < 0)
-      return;
-    buffer = buffer << 6 | v;
-    bits += 6;
-    if (bits >= 8) {
-      bits -= 8;
-      bytes.push(buffer >> bits & 255);
-    }
-  }
-  return Uint8Array.from(bytes);
-}
-var THREAD_ID_PREFIX = "rt-";
-function parseThreadReviewItemId(id) {
-  if (!id.startsWith(THREAD_ID_PREFIX))
-    return;
-  const bytes = decodeBase64Url(id.slice(THREAD_ID_PREFIX.length));
-  if (!bytes)
-    return;
-  let payload;
-  try {
-    payload = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
-  } catch {
-    return;
-  }
-  const commentAt = payload.lastIndexOf(`
-`);
-  if (commentAt < 0)
-    return;
-  const threadAt = payload.lastIndexOf(`
-`, commentAt - 1);
-  if (threadAt < 0)
-    return;
-  const docId = payload.slice(0, threadAt);
-  const threadId = payload.slice(threadAt + 1, commentAt);
-  const commentId = payload.slice(commentAt + 1);
-  if (docId === "" || threadId === "" || commentId === "")
-    return;
-  return { docId, threadId, commentId };
-}
-
 // packages/mcp/src/attach-backlog.ts
 async function deliverAttachBacklog(workspaceId, backlog, deps) {
   let comments = 0;
@@ -14296,6 +14299,18 @@ function reviewItemHeldLine(p) {
   return `[workspace.review_item_held] your review item ${ask}${on}${ids} was held off the queue by the quality gate${why}.${stood} ${fix}`;
 }
 
+// packages/mcp/src/parallelism-cap.ts
+function parseCapArg(raw) {
+  if (typeof raw === "number" && Number.isInteger(raw) && raw >= 1) {
+    return { ok: true, cap: raw };
+  }
+  const shown = typeof raw === "string" ? JSON.stringify(raw) : String(raw);
+  return {
+    ok: false,
+    error: `cap must be a positive integer — the most builders the board may have dispatched at once (got ${shown}). Pass a number of 1 or more, not a string.`
+  };
+}
+
 // packages/mcp/src/self-authored.ts
 var COMMENT_EVENTS = new Set(["thread.created", "thread.replied"]);
 var STATUS_EVENTS = new Set(["thread.resolved", "thread.reopened"]);
@@ -14519,7 +14534,7 @@ var STATUS_TEXT_MAX = 4000;
 function suggestionAuthor() {
   return { id: AUTHOR.id, name: AUTHOR.name, color: AUTHOR.color };
 }
-var PLUGIN_VERSION = "0.1.147";
+var PLUGIN_VERSION = "0.1.146";
 var PROCESS_ID = randomUUID();
 var server = new Server({
   name: "claude-workspaces",
@@ -15785,7 +15800,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           goal: { type: "string" },
           status: {
             type: "string",
-            enum: ["triage", "todo", "in-progress", "done"],
+            enum: [...TASK_STATUSES],
             description: 'status:"triage" is the sweep for rows an agent filed that nobody has vetted. next_tasks never returns them, so this filter is the only way to enumerate what is waiting on a look.'
           },
           assignee: { type: "string" },
@@ -15810,7 +15825,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
         type: "object",
         properties: {
           taskId: { type: "string" },
-          to: { type: "string", enum: ["triage", "todo", "in-progress", "done"] },
+          to: { type: "string", enum: [...TASK_STATUSES] },
           note: { type: "string" },
           usage: {
             type: "object",
@@ -16274,6 +16289,22 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           taskId: { type: "string", description: "The task whose dispatch to close." }
         },
         required: ["taskId"]
+      }
+    },
+    {
+      name: "set_parallelism_cap",
+      description: "Set how many builders a board may have dispatched at once — the dispatch rule the lead skill describes. Every board starts on the default (4); lower it to keep this board from starving higher-priority projects, raise it when there is room. The change is recorded with you as the actor and takes effect on the next dispatch: nothing running is touched, register_dispatch simply refuses past the new number. Answers with the full view — the cap, the slots in use and who holds them, how many are free, and lastChange (who moved it, when, from what) — so you see in the same reply whether the board is already over it. The floor is one; pausing a board is retire_workspace, not a cap of zero.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          workspaceId: { type: "string" },
+          cap: {
+            type: "integer",
+            minimum: 1,
+            description: "The new cap: a positive integer. get_workspace shows the current one and the default."
+          }
+        },
+        required: ["workspaceId", "cap"]
       }
     },
     {
@@ -17513,6 +17544,23 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
       case "close_dispatch": {
         const { taskId } = a;
         return ok(await http("DELETE", `/api/dispatches/${encodeURIComponent(taskId)}`));
+      }
+      case "set_parallelism_cap": {
+        const { workspaceId, cap: rawCap } = a;
+        const parsed = parseCapArg(rawCap);
+        if (!parsed.ok)
+          return err(parsed.error);
+        const res = await http("PUT", `/api/workspaces/${encodeURIComponent(workspaceId)}/parallelism-cap`, { cap: parsed.cap, author: AUTHOR });
+        return ok({
+          workspaceId,
+          cap: res.cap,
+          isDefault: res.isDefault,
+          default: res.default,
+          inUse: res.inUse,
+          free: res.free,
+          holders: res.holders,
+          lastChange: res.lastChange
+        });
       }
       case "request_plugin_refresh": {
         return ok(await http("POST", "/api/plugin/refresh"));
