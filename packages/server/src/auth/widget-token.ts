@@ -67,7 +67,6 @@ export interface WidgetTokenClaims {
  * answers a number and the shared verifier enforces the TTL.
  */
 export const widgetToken: TokenFormat<WidgetTokenClaims> = {
-  purpose: 'widget-token',
   keyDomain: 'cw-widget-token-v1',
   tags: [VERSION],
   encode: (claims) =>

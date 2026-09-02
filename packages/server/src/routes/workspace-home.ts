@@ -69,7 +69,11 @@ export async function handleWorkspaceHome(
         docId,
         threadId,
         commentId,
-        ...(workspaceId !== undefined ? { workspaceId } : {}),
+        // `resolveWorkspaceForDoc` answers `null`, never `undefined`, so
+        // the test has to be against `null` — otherwise a doc no board
+        // holds ships `workspaceId: null` and `set_review_item_criteria`
+        // reads the key as present and PUTs `/api/workspaces/null/...`.
+        ...(workspaceId !== null ? { workspaceId } : {}),
       });
     }
     const found = taskStore.findReviewItem(reviewItemId);

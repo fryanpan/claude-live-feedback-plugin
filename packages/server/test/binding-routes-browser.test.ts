@@ -2,9 +2,10 @@
  * The file-binding routes are for agents, not pages.
  *
  * `POST /api/docs` (bind a file as a doc), `POST /api/workspaces` with a
- * `folderPath` (bind a folder), and `POST /api/workspaces/<id>/import-tasks`
- * (read a markdown file off disk) each turn a host path into server-readable
- * content. Nothing in the browser apps calls them — every caller is an MCP
+ * `folderPath` (bind a folder), `POST /api/workspaces/<id>/import-tasks`
+ * (read a markdown file off disk) and `POST /api/diffs` (`repo` — a diff, or
+ * with no `base` a browse of the whole folder) each turn a host path into
+ * server-readable content. Nothing in the browser apps calls them — every caller is an MCP
  * tool, a hook, or a curl over loopback, none of which send `Origin`.
  *
  * The cross-origin write gate already refuses a page the origin policy does
@@ -118,6 +119,28 @@ describe('file-binding routes refuse browser callers', () => {
     it('but a page may still create a board by name — no file is involved', async () => {
       const r = await post('/api/workspaces', { name: 'Browser board' }, samePage());
       expect(r.status).toBe(200);
+    });
+  });
+
+  describe('POST /api/diffs', () => {
+    // `repo` is the same kind of value as `folderPath`, and WIDER when
+    // `base` is omitted: browse mode scans the whole folder and makes
+    // every file in it lazily openable through `context-file`.
+    it('positive control: an agent browses a folder', async () => {
+      const r = await post('/api/diffs', { repo: scratch, reviewId: 'agent-browse' });
+      expect(r.status).toBe(200);
+    });
+
+    it('a page on another local port cannot name a repo path', async () => {
+      await expectRefused(
+        await post('/api/diffs', { repo: scratch, reviewId: 'dev-browse' }, devServerPage()),
+      );
+    });
+
+    it('nor can a same-origin page — no browser client calls this route', async () => {
+      await expectRefused(
+        await post('/api/diffs', { repo: scratch, reviewId: 'same-browse' }, samePage()),
+      );
     });
   });
 
