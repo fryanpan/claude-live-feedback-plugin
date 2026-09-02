@@ -6,10 +6,6 @@ import { BODY_LIVE_CLASS, type TaskThread } from '../src/hub/hub-detail-render.t
 import { discussionIsBusy, flattenComments } from '../src/hub/hub-discussion-render.ts';
 import { type UptimeReport } from '../src/hub/hub-presence-model.ts';
 import {
-  decisionBlurb,
-  panelAnswerRequest,
-  panelQuestionRequest,
-  panelReviewQueue,
   renderActivity,
   renderHomeBrief,
   renderLeadStrip,
@@ -20,6 +16,12 @@ import {
   humanBlockerRows,
   reviewQueue,
 } from '../src/hub/hub-review-model.ts';
+import {
+  decisionBlurb,
+  panelAnswerRequest,
+  panelQuestionRequest,
+  panelReviewQueue,
+} from '../src/hub/hub-review-render.ts';
 import { _resetLinkTitlesForTest, primeLinkTitle } from '../src/link-titles.ts';
 import {
   composerSelection,

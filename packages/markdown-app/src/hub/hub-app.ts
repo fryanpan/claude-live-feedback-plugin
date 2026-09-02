@@ -108,8 +108,6 @@ import {
   voiceHubContext,
 } from './hub-presence-model.ts';
 import {
-  panelAnswerRequest,
-  panelQuestionRequest,
   renderActivity,
   renderArchivedList,
   renderHomeBrief,
@@ -141,6 +139,7 @@ import {
   walkNextUrl,
   walkPosition,
 } from './hub-review-model.ts';
+import { panelAnswerRequest, panelQuestionRequest } from './hub-review-render.ts';
 import { hubShortcutKeydown } from './hub-shortcuts.ts';
 import { mountIslandProbe } from './island-probe.tsx';
 import { wireMeMenu } from './me-menu.ts';
