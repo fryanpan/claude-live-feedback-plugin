@@ -49,25 +49,36 @@ week it waits is another week of merge conflicts against it.
 
 # Lane A — `packages/server`
 
-## A1 · `server.ts` — the route chain and the HTML shells
+## A1 · `server.ts` — the route chain and the HTML shells — DONE
 
-10,827 lines. One PR, alone, five commits — one per extracted family, in the
-order they appear in the chain. **Effort L.**
+10,827 lines before, **7,131 after**. One PR, five commits — one per
+extracted family, in the order they appear in the chain. **Effort L.**
+
+The estimates below were wrong in two rows and the errors cancelled:
+`routes/docs.ts` is 1,972 lines rather than ~570 (the `/api/docs/:id/...`
+resource block alone is ~1,200) and `routes/meetings-calendar.ts` is 562
+rather than ~1,300. The total moved is what the plan predicted.
 
 | Commit | Becomes | Moves | Importers |
 |---|---|---|---|
-| 1 | `routes/auth-share.ts` (~640) | the sign-in, session and share-link routes | none — chained by `??` from `createServer` |
-| 2 | `routes/docs.ts` (~570) | the doc, thread and bind routes | none |
-| 3 | `routes/meetings-calendar.ts` (~1300) | the meeting, transcript and calendar routes | none |
-| 4 | `routes/ops.ts` (~260) | deploy, plugin-refresh, uptime and release routes | none |
-| 5 | `shells.ts` (~1640) | `renderHubShell`, `renderSigninShell`, `renderLanding`, `renderProjectPage`, `serveStatic` | `renderHubShell` and `renderSigninShell` are already exported and used by the tests |
+| 1 | `routes/auth-share.ts` (781) | the sign-in, session and share-link routes | none — chained by `??` from `createServer` |
+| 2 | `routes/docs.ts` (1972) | the doc, thread and bind routes | none |
+| 3 | `routes/meetings-calendar.ts` (562) | the meeting, transcript and calendar routes | none |
+| 4 | `routes/ops.ts` (281) | metrics, plugin-refresh, push and deploy routes | none |
+| 5 | `shells.ts` (930) | `renderHubShell`, `renderSigninShell`, `renderLanding`, `renderProjectPage`, `serveStatic` | none — `server.ts` re-exports the four names the tests and `bin.ts` address it by |
 
 Each handler takes an explicit context object, following
 `routes/task-routes-context.ts` — do not capture the `createServer` closure.
 Preserve the matching order exactly; the chain is walked top to bottom and a
 route that moves can start answering a path that reached a different one.
-`routes/workspaces.ts` documents why it needs four entry points, and the same
-will be true here.
+`routes/workspaces.ts` documents why it needs four entry points, and that
+turned out to be true here too: `routes/docs.ts` needs three and
+`routes/ops.ts` two, because each family sits in more than one chain
+position.
+
+There are no uptime or release routes to move. Uptime is a field on the
+metrics reply and the release is a field on `GET /api/deploy`, which is also
+where the deploy's own verification verdict is read back.
 
 Layer: HTTP. Final directory: `routes/` and `server/src/` respectively.
 
