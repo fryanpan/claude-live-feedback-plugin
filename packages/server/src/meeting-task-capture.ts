@@ -1158,6 +1158,10 @@ function fileResearchAsk(
   const title = researchTitle(item.topic);
   const board = deps.board.getWorkspace?.(input.workspaceId);
   const quote = spokenLineFor(input.turns, item.topic);
+  // Placed like every other spin-off (the board's top active band), not
+  // left to the store's chores default — which the board draws as Backlog,
+  // the very column Bryan found his rows in.
+  const placed = readyToWork(title) ? deps.board.placeSpinoff?.(input.workspaceId) : undefined;
   const parsed = parseTaskCreate(
     {
       title,
@@ -1176,6 +1180,7 @@ function fileResearchAsk(
       // The pill's own readiness read, on the same title it reads it on —
       // "Research: <topic>", prefix included.
       ...(readyToWork(title) ? {} : { triage: true }),
+      ...(placed !== undefined ? { goal: placed.goal } : {}),
     },
     MEETING_CAPTURE_ACTOR,
     board ? { ...(board.leadAgentId !== undefined ? { leadAgentId: board.leadAgentId } : {}) } : {},
