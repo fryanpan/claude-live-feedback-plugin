@@ -3321,15 +3321,28 @@ async function main(): Promise<void> {
     useDefault: el('hub-parallelism-cap-default') as HTMLButtonElement,
     read: async () => {
       const data = await fetchJson<{
-        parallelismCap?: { value?: number; isDefault?: boolean };
+        parallelismCap?: {
+          value?: number;
+          isDefault?: boolean;
+          lastChange?: { actor?: { name?: string }; ts?: number; from?: number; to?: number };
+        };
         dispatchesInUse?: number;
       }>(`/api/workspaces/${encodeURIComponent(workspaceId)}/settings`);
       const cap = data?.parallelismCap;
+      const change = cap?.lastChange;
+      const lastChange =
+        typeof change?.actor?.name === 'string' &&
+        typeof change.ts === 'number' &&
+        typeof change.from === 'number' &&
+        typeof change.to === 'number'
+          ? { actorName: change.actor.name, ts: change.ts, from: change.from, to: change.to }
+          : undefined;
       return typeof cap?.value === 'number'
         ? {
             value: cap.value,
             isDefault: cap.isDefault === true,
             ...(typeof data?.dispatchesInUse === 'number' ? { inUse: data.dispatchesInUse } : {}),
+            ...(lastChange ? { lastChange } : {}),
           }
         : null;
     },

@@ -13,6 +13,8 @@
  * outside `hub-app`'s `main()`.
  */
 
+import { timeAgo } from './hub-model.ts';
+
 export interface ParallelismCap {
   value: number;
   /** True while this board has never set its own — the field is showing the
@@ -22,6 +24,9 @@ export interface ParallelismCap {
    *  the read did not carry one (an older server) — the note omits the "in
    *  use" half rather than claiming zero. */
   inUse?: number;
+  /** Who last moved the cap and when. Absent until somebody has — and then
+   *  the note says nothing about it, because an unmoved cap has no story. */
+  lastChange?: { actorName: string; ts: number; from: number; to: number };
 }
 
 export interface ParallelismCapDeps {
@@ -49,11 +54,19 @@ export interface ParallelismCapHandle {
 /** What the note under the field says. States the in-use count whenever the
  *  read carried one, because "2 of 2" is the fact a lead is about to hit a
  *  refusal over — silence here is the same silence the nudge exists to end. */
-export function parallelismCapNote(cap: ParallelismCap): string {
+export function parallelismCapNote(cap: ParallelismCap, now = Date.now()): string {
   const spent = cap.inUse !== undefined ? `${cap.inUse} of ${cap.value} in use. ` : '';
-  return cap.isDefault
-    ? `${spent}The default — how many builders your dispatches may run at once. Edit it to change the limit.`
-    : `${spent}Edited for this board.`;
+  // Who moved it and when — essential, and only once it has moved (Bryan:
+  // "a moved cap is never a mystery"; no chip for one nobody touched).
+  const by = cap.lastChange
+    ? `set by ${cap.lastChange.actorName} ${timeAgo(cap.lastChange.ts, now)}`
+    : '';
+  if (cap.isDefault) {
+    return by
+      ? `${spent}Back on the default, ${by}.`
+      : `${spent}The default — how many builders your dispatches may run at once. Edit it to change the limit.`;
+  }
+  return by ? `${spent}Cap ${cap.value}, ${by}.` : `${spent}Edited for this board.`;
 }
 
 export function mountParallelismCap(deps: ParallelismCapDeps): ParallelismCapHandle {
