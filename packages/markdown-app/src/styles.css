@@ -759,12 +759,24 @@ body.has-set .doc-switcher-caret {
    is what makes a press predictable ("Creates the goal and tickets, starts
    work") rather than a leap. The shadow is what separates it from the prose
    that scrolls beneath. */
-.plan-float {
+/* The dock (src/float-dock.ts) is what pins to the pane: one flex row at
+   the bottom, holding Make Plan and — on a huddle doc — the Review float
+   beside it (src/review-float.ts). Each float used to centre ITSELF, which
+   two buttons cannot both do; the row centres and they sit in it. */
+.doc-floats {
   position: absolute;
   left: 50%;
   bottom: 22px;
   transform: translateX(-50%);
   z-index: 30;
+  display: flex;
+  align-items: stretch;
+  justify-content: center;
+  gap: 10px;
+  max-width: calc(100% - 24px);
+}
+.plan-float {
+  position: relative;
   display: inline-flex;
   flex-direction: column;
   align-items: center;
@@ -838,14 +850,39 @@ body.has-set .doc-switcher-caret {
 .plan-float--requested:disabled {
   opacity: 0.7;
 }
+/* The Review float's own face. Secondary to Make Plan's filled accent, per
+   the approved mock: white, accent border and text — the second of two
+   asks, not a rival to the first. Its receipt reuses `.plan-float--requested`. */
+.review-float--ask {
+  background: var(--bg);
+  color: var(--accent);
+  border: 1px solid color-mix(in srgb, var(--accent) 55%, transparent);
+  box-shadow: 0 8px 28px rgba(27, 31, 35, 0.16);
+}
+.review-float--ask:hover {
+  background: color-mix(in srgb, var(--accent) 8%, var(--bg));
+  filter: none;
+}
+.review-float--ask:disabled {
+  opacity: 0.7;
+}
 @media (max-width: 640px) {
   /* Edge-to-edge above the home indicator: a centred pill at phone width is
-     a small target over the one control the doc is waiting on. */
-  .plan-float {
+     a small target over the one control the doc is waiting on. Two floats
+     share the width; a lone one takes it all. */
+  .doc-floats {
     left: 12px;
     right: 12px;
     transform: none;
+    max-width: none;
     bottom: calc(14px + var(--safe-bottom));
+    gap: 8px;
+  }
+  .plan-float {
+    flex: 1 1 0;
+    min-width: 0;
+    padding-left: 12px;
+    padding-right: 12px;
   }
 }
 /* The refusal reason for a failed Approve press — only ever appears in
