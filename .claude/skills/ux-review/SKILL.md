@@ -1,6 +1,6 @@
 ---
 name: ux-review
-description: Walk a UI feature as a real user before shipping it. Identifies the cognitive friction the user will hit — confusion, dead-ends, wrong-target clicks — and reports it with severity. Use this BEFORE calling a UI feature done. Breaks the rework loop where the user reviews in prod and sends it back.
+description: Use when about to call a UI feature done, before opening or merging a PR that changes what a person sees on screen, or when anyone says "the UI is ready".
 user-invocable: true
 ---
 
@@ -19,9 +19,32 @@ The biggest source of rework on UI work is shipping something that the agent has
 
 - The UI running locally (a dev server URL) OR a deployed URL
 - The user goal(s) the page is supposed to enable
-- `claude-in-chrome` MCP tools (the skill assumes they're available)
+- A browser that is **not Bryan's window** — `bun run ui:shot` (`scripts/ui-shot.ts`), which launches Chrome's own binary headless with a throwaway profile and drives it over CDP at an exact viewport
 
-If `claude-in-chrome` isn't connected, stop and ask the user to start Chrome with the extension. Don't try to "review from the code" — that defeats the purpose.
+### The browser rule: not Bryan's window — never "no browser"
+
+The rule is stated exactly this way because both halves have been broken. Three
+agents in one day opened tabs in Bryan's live Chrome under briefs that only
+forbade *closing* tabs; two others over-corrected into no browser at all and
+reviewed from the code. `claude-in-chrome` tools open tabs in Bryan's running
+Chrome — do not use them for this review, and do not ask him to start Chrome
+with the extension. Do not "review from the code" either — that defeats the
+purpose. The script satisfies both halves: it is a real Chrome, and it is a
+separate instance nobody is looking at.
+
+```bash
+bun run ui:shot --url <url> --preset ipad  --out shots/initial-1180.png
+bun run ui:shot --url <url> --preset phone --out shots/initial-430.png \
+  --eval 'document.documentElement.scrollWidth > window.innerWidth'
+bun run ui:shot --url <url> --wait-for '.thread' --eval-file probe.js --out shots/midflow.png
+```
+
+It prints one JSON object (viewport, the page's own `innerWidth` /
+`devicePixelRatio`, the `result` of `--eval`, the screenshot path). `--eval`
+runs **before** the screenshot and promises are awaited, so an async
+expression that clicks, waits, and returns a reading gives you a mid-flow
+screenshot. `--size WxH` reaches any viewport; `--help` lists every flag; the
+verification contract per tier is in `docs/product/design-mobile.md`.
 
 ## The walkthrough
 
@@ -40,9 +63,11 @@ Walk each user goal as if you've never seen the page before. For each goal:
 
 4. **Try to mess it up.** Submit empty fields. Click the wrong thing first. Use keyboard only. What breaks?
 
-5. **Try to do it on mobile.** Chrome will not make a window narrower than ~500px, so resizing the browser cannot reach a phone viewport at all — load the page inside a **same-origin 430×932 iframe** and drive that instead. 430px is the width this repo verifies at (`docs/product/design-mobile.md`). Targets too small? Layout broken? Important content below the fold?
+5. **Try to do it on mobile.** Chrome will not make a window narrower than ~500px, so resizing a browser cannot reach a phone viewport at all — run `bun run ui:shot --preset phone` (430×932 with touch emulation, the width this repo verifies at per `docs/product/design-mobile.md`). A `page.innerWidth` above 430 in its output means the page overflowed and the phone zoomed out to fit it. Targets too small? Layout broken? Important content below the fold?
 
-Take screenshots at the key states — initial load, mid-flow, completion, error states.
+Take screenshots at the key states — initial load, mid-flow, completion, error states — at 1180×820 AND 430px; they fail differently and neither substitutes for the other.
+
+The three subsections below describe measurement traps in a **windowed** browser. The headless script sidesteps them — a headless page is never backgrounded, and it is launched with timer throttling disabled — but a `--eval` probe still needs the page to have reached the state it measures (`--wait-for`, and `--settle` for anything deferred a frame), and truncation is a property of whatever you read, not of the tool.
 
 ### Reading the page: absence needs a query, not a snapshot
 
@@ -225,6 +250,7 @@ Produce a single markdown report with:
 ## Anti-patterns
 
 - **Don't review from the code.** The whole point is to see what the user sees. If you can't run it, say so and stop.
+- **Don't review in Bryan's browser.** "Not his window" is the rule, and "no browser" is the other way to break it. The headless script is the browser.
 - **Don't grade your own homework.** If the agent that built the feature is doing the review, dispatch a fresh subagent without context to walk it cold. Familiarity hides friction.
 - **Don't over-engineer the heuristics.** The point is to catch obvious problems quickly, not write a 10-page evaluation.
 - **Don't skip the goal-completion test.** Heuristic violations can be wrong; failure to complete a goal can't.
