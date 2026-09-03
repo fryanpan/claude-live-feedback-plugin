@@ -95,7 +95,7 @@ async function emit(buildId: string): Promise<boolean> {
   // chunk's name carries a content hash and the entry imports it BY NAME —
   // so the hashed entry bytes change with it.
   const hubResult = await Bun.build({
-    entrypoints: [join(pkgRoot, 'src', 'hub', 'hub-app.ts')],
+    entrypoints: [join(pkgRoot, 'src', 'hub', 'hub-entry.ts')],
     outdir: dist,
     target: 'browser',
     format: 'esm',
