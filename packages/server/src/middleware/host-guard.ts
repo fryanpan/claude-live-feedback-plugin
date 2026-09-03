@@ -743,6 +743,15 @@ export interface CollabScopeOpts {
  * asked about the same workspace the scope verdict was made about — one
  * derivation, so the two halves cannot answer about different boards.
  *
+ * A path can name MORE THAN ONE workspace, and both conditions are asked of
+ * each in turn. A doc filed on two boards belongs to both; taking only the
+ * first — whichever the store happened to iterate first — asked membership
+ * about a board the visitor was never given and refused them a doc their own
+ * board shows them. So the candidates are walked in order and the answer is
+ * the first that satisfies BOTH, which is also the workspace the request is
+ * then served as: redaction and scoping run against a board this visitor
+ * really holds, never against one they merely reached through.
+ *
  * A path that names NO workspace — the app shell, the widget bundle, the
  * favicon — is not membership-checked, because there is nothing to be a
  * member of. That is the whole of what an admitted non-member reaches.
@@ -765,33 +774,44 @@ export function collabScope(
   opts: CollabScopeOpts,
 ): { allowed: false } | { allowed: true; target: ShareTarget } {
   const { workspacesOf, isMember } = opts;
-  const workspaceId = pathWorkspace(pathname, workspacesOf);
-  const allowed = shareScopeAllows(
-    pathname,
-    method,
-    { workspaceId: workspaceId ?? NO_WORKSPACE },
-    workspacesOf,
-  );
-  if (!allowed) return { allowed: false };
-  // A shell path names no workspace, so the visitor it creates is scoped to
-  // none — `{}` rather than the sentinel, which must never escape this file.
-  if (!workspaceId) return { allowed: true, target: {} };
-  if (!isMember(workspaceId)) return { allowed: false };
-  return { allowed: true, target: { workspaceId } };
+  const candidates = pathWorkspaces(pathname, workspacesOf);
+  // A shell path names no workspace, so there is nothing to be a member of.
+  // It is judged against the sentinel — leaving exactly the static
+  // allowances — and the visitor it creates is scoped to no workspace: `{}`
+  // rather than the sentinel, which must never escape this file.
+  if (candidates.length === 0) {
+    const shell = shareScopeAllows(pathname, method, { workspaceId: NO_WORKSPACE }, workspacesOf);
+    return shell ? { allowed: true, target: {} } : { allowed: false };
+  }
+  for (const workspaceId of candidates) {
+    if (!isMember(workspaceId)) continue;
+    if (!shareScopeAllows(pathname, method, { workspaceId }, workspacesOf)) continue;
+    return { allowed: true, target: { workspaceId } };
+  }
+  return { allowed: false };
 }
 
 /**
- * Which workspace does this path address — directly, or through the doc it
- * names? Null when it names neither, which is every static asset and every
+ * Which workspaces does this path address — directly, or through the doc it
+ * names? Empty when it names none, which is every static asset and every
  * enumerate-the-server route.
  *
- * Deliberately permissive: it only proposes a candidate, and
+ * A LIST rather than one answer, because a doc belongs to more than one
+ * workspace at once: its review, and every hub board that review or doc is
+ * filed on. Answering with the first of them asked the membership question
+ * about whichever board the store iterated first, so a doc filed on two
+ * boards was refused to a visitor who holds the second — while that board's
+ * own share hostname served them the same doc. Membership is a set on the
+ * share side; it has to be a set here too.
+ *
+ * Deliberately permissive: it only proposes candidates, and
  * `shareScopeAllows` then decides whether the path is reachable AT ALL and
  * whether the id really belongs to that workspace. Proposing the wrong
- * workspace cannot open anything — the membership check refuses it — so the
- * failure mode of a parsing mistake here is a 403, not a leak.
+ * workspace cannot open anything — the scope check and the membership check
+ * both still run against it — so the failure mode of a parsing mistake here
+ * is a 403, not a leak.
  */
-function pathWorkspace(pathname: string, workspacesOf?: (id: string) => string[]): string | null {
+function pathWorkspaces(pathname: string, workspacesOf?: (id: string) => string[]): string[] {
   /** The first path segment after `prefix`, or null when it doesn't match. */
   const seg = (prefix: string): string | null => {
     if (!pathname.startsWith(prefix)) return null;
@@ -802,21 +822,27 @@ function pathWorkspace(pathname: string, workspacesOf?: (id: string) => string[]
   };
 
   // Paths whose segment IS a workspace (or a review filed on one — the guard
-  // accepts either through `inWorkspaceScope`).
+  // accepts either through `inWorkspaceScope`). One candidate: the path spells
+  // the workspace out, so there is nothing to resolve.
   const named = seg('/events/workspace/') ?? seg('/workspaces/') ?? seg('/api/reviews/');
-  if (named) return named;
+  if (named) return [named];
   // `/api/workspaces/` splits: `<id>/tree` names a workspace, and so does the
-  // bare `<id>`; the LIST route has no segment and falls through to null.
+  // bare `<id>`; the LIST route has no segment and falls through to none.
   const wsApi = seg('/api/workspaces/');
-  if (wsApi) return wsApi;
+  if (wsApi) return [wsApi];
   // The board room socket is `/y/ws:<id>`; every other `/y/<id>` is a doc.
   const room = seg('/y/');
-  if (room?.startsWith('ws:')) return room.slice('ws:'.length);
+  if (room?.startsWith('ws:')) return [room.slice('ws:'.length)];
 
-  // Paths that name a DOC — its own workspace, most specific first.
+  // Paths that name a DOC — every workspace it belongs to, most specific
+  // first, which is the order `collabScope` then prefers between them.
   const doc = seg('/review/') ?? room ?? seg('/events/') ?? seg('/api/docs/');
-  if (!doc) return null;
-  return workspacesOf?.(doc)?.[0] ?? null;
+  if (!doc) return [];
+  const owners = workspacesOf?.(doc);
+  // `Array.isArray` for the reason `shareScopeAllows` gives at its own use of
+  // this parameter: a caller still handing back a bare string would otherwise
+  // be spread into one candidate per CHARACTER.
+  return Array.isArray(owners) ? owners : [];
 }
 
 /**

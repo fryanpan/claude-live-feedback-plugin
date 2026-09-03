@@ -1164,6 +1164,9 @@ describe('collabScope', () => {
   const workspacesOf = (id: string): string[] => {
     if (id === 'design-doc') return ['ws-a'];
     if (id === 'other-doc') return ['ws-b'];
+    // Filed on two boards at once — the shape a review filed on a hub has,
+    // and the one a single-answer lookup got wrong.
+    if (id === 'two-board-doc') return ['ws-a', 'ws-b'];
     return [];
   };
   /** Path scope only: everybody is a member, so a `false` here is the path. */
@@ -1321,6 +1324,29 @@ describe('collabScope', () => {
     expect(allowsFor(['ws-a'], '/api/docs/other-doc')).toBe(false);
     expect(allowsFor(['ws-b'], '/api/docs/other-doc')).toBe(true);
     expect(allowsFor(['ws-a', 'ws-b'], '/api/docs/other-doc')).toBe(true);
+  });
+
+  it('reaches a doc filed on two workspaces through EITHER of them', () => {
+    // Membership of either board admits, and neither order is privileged:
+    // taking the first candidate alone refused the holder of the second.
+    expect(allowsFor(['ws-a'], '/api/docs/two-board-doc')).toBe(true);
+    expect(allowsFor(['ws-b'], '/api/docs/two-board-doc')).toBe(true);
+    expect(allowsFor(['ws-c'], '/api/docs/two-board-doc')).toBe(false);
+  });
+
+  it('serves a multi-workspace doc as a board the visitor actually holds', () => {
+    // The target is what redaction and scoping then run against, so it must
+    // never be a board they only reached THROUGH.
+    const scoped = (member: string[]) =>
+      collabScope('/api/docs/two-board-doc', 'GET', {
+        workspacesOf,
+        isMember: (id) => member.includes(id),
+      });
+    expect(scoped(['ws-b'])).toEqual({ allowed: true, target: { workspaceId: 'ws-b' } });
+    expect(scoped(['ws-a'])).toEqual({ allowed: true, target: { workspaceId: 'ws-a' } });
+    // Holding both, the most specific candidate wins — the order
+    // `workspacesOf` answers in.
+    expect(scoped(['ws-a', 'ws-b'])).toEqual({ allowed: true, target: { workspaceId: 'ws-a' } });
   });
 
   it('never asks about a workspace when the path names none', () => {

@@ -100,6 +100,19 @@ describe('the collaboration hostname over HTTP', () => {
   let otherBoard: string;
   /** A third, shared with ONE named address rather than a domain. */
   let exactBoard: string;
+
+  /**
+   * A board with one file-backed doc filed on it; answers the board id and
+   * the id the server minted for the doc. Assigned in `beforeAll` and used by
+   * the tests too, which is why it is declared out here.
+   */
+  let boardWith: (
+    name: string,
+    requestedDocId: string,
+  ) => Promise<{ boardId: string; mintedDocId: string }>;
+  /** Write an allow list down against a board — which is what a share IS, and
+   *  therefore the only way anybody becomes a member of one. */
+  let shareBoard: (boardId: string, allowDomains: string[]) => Promise<void>;
   /** The readable names the caller asks for… */
   const DOC = 'design-doc';
   const OTHER_DOC = 'private-doc';
@@ -173,9 +186,7 @@ describe('the collaboration hostname over HTTP', () => {
     base = `http://localhost:${handle.port}`;
     jwt = await signJwt(COLLAB_AUD);
 
-    /** A board with one file-backed doc filed on it; returns the board id and
-     *  the id the server minted for the doc. */
-    const boardWith = async (
+    boardWith = async (
       name: string,
       requestedDocId: string,
     ): Promise<{ boardId: string; mintedDocId: string }> => {
@@ -205,9 +216,7 @@ describe('the collaboration hostname over HTTP', () => {
       expect(filed.status).toBe(200);
       return { boardId: id, mintedDocId };
     };
-    /** Write an allow list down against a board — which is what a share IS,
-     *  and therefore the only way anybody becomes a member of one. */
-    const shareBoard = async (boardId: string, allowDomains: string[]): Promise<void> => {
+    shareBoard = async (boardId: string, allowDomains: string[]): Promise<void> => {
       const res = await asOwner('/api/share/link', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
@@ -532,6 +541,42 @@ describe('the collaboration hostname over HTTP', () => {
       const listed = await asOwner(`/api/docs/${otherDocId}/threads`);
       const { threads } = (await listed.json()) as { threads: unknown[] };
       expect(threads).toHaveLength(0);
+    });
+
+    it('reaches a doc filed on TWO boards through EITHER board it holds', async () => {
+      // A doc belongs to every board it is filed on. Asking membership about
+      // only the first — whichever the store iterates first — refused a
+      // visitor the doc their own board shows them, while that board's own
+      // share hostname served it. Both orders are asserted, because the bug
+      // was invisible in one of them.
+      const first = await boardWith('Filed first', 'two-board-doc');
+      const second = await asOwner('/api/workspaces', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ name: 'Filed second' }),
+      });
+      expect(second.status).toBe(200);
+      const secondId = ((await second.json()) as { workspace: { id: string } }).workspace.id;
+      const filed = await asOwner(`/api/workspaces/${encodeURIComponent(secondId)}/docs`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ docId: 'two-board-doc' }),
+      });
+      expect(filed.status).toBe(200);
+
+      // Shared on the SECOND board only — the one that is not first in the
+      // store's order.
+      await shareBoard(secondId, [NAMED_EMAIL]);
+      expect((await asEmail(NAMED_EMAIL, `/api/docs/${first.mintedDocId}`)).status).toBe(200);
+
+      // POSITIVE CONTROL, the reverse: share the FIRST board with a different
+      // address, and that address reaches the same doc too.
+      await shareBoard(first.boardId, ['@partner.example']);
+      expect((await asCollaborator(`/api/docs/${first.mintedDocId}`)).status).toBe(200);
+
+      // …and a member of NEITHER board is still refused it, so the two 200s
+      // above are membership rather than a doc that answers anybody.
+      expect((await asEmail(NEIGHBOUR_EMAIL, `/api/docs/${first.mintedDocId}`)).status).toBe(403);
     });
 
     it('still loads the app shell — an admitted non-member sees the page', async () => {
