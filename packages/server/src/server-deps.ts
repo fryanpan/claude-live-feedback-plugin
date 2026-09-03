@@ -26,6 +26,7 @@ import {
 import { stamped } from './log-stamp.ts';
 import { createHaikuNotesComposer } from './meeting-notes-composer.ts';
 import { createHaikuTaskCaptureExtractor } from './meeting-task-capture.ts';
+import { createNotesPromptStore } from './notes-prompt-store.ts';
 import { createPluginRefresher } from './plugin-refresh.ts';
 import { createRecallCalendarClient } from './recall-calendar.ts';
 import { createRecallClient, recallStatusWebhookUrl } from './recall.ts';
@@ -288,7 +289,11 @@ export function createServerDeps(
   // would either duplicate it or cry wolf at every deployment whose public
   // hostname is not Access-gated at all.
 
-  const notesComposer = createHaikuNotesComposer();
+  // The instructions the note-taker runs on come from the data dir, re-read
+  // per tick, so retuning how the notes read is an edit to a file rather than
+  // a deploy (`notes-prompt-store.ts`).
+  const notesPrompt = createNotesPromptStore({ dataDir: cfg.dataDir });
+  const notesComposer = createHaikuNotesComposer({ instructions: notesPrompt.read });
   if (transcription && !notesComposer) {
     console.log(
       '[meeting-notes] no summary API key; meetings record transcripts, notes stay off. ' +

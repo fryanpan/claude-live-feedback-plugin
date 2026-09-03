@@ -43,6 +43,50 @@ export interface NotesSectionSpan {
   heading: Y.XmlElement;
 }
 
+/**
+ * The heading this meeting's notes are WRITTEN under. Finding it again is the
+ * whole contract, so this string changing would orphan every live doc's
+ * section mid-meeting — which is why the finder matches the list below rather
+ * than this one constant.
+ */
+export const MEETING_NOTES_HEADING = 'Meeting notes';
+
+/**
+ * Every heading a notes section has been written under, canonical first.
+ *
+ * A tick FINDS its section under any of these and WRITES a new one under
+ * `[0]`. Today the list has one entry, because the heading has never been
+ * anything else — but "which heading does the section have" is exactly the
+ * question a rename gets wrong, and the failure mode is silent: the finder
+ * misses the section a previous release wrote and the tick appends a second
+ * one below it. Renaming the section means unshifting the new spelling here,
+ * never editing the old one out.
+ */
+export const MEETING_NOTES_HEADINGS: readonly string[] = [MEETING_NOTES_HEADING];
+
+/**
+ * The section holding the meeting's own words, verbatim. It is the doc's TAIL
+ * — everything the meeting writes goes above it — so it is named here beside
+ * the notes heading rather than in the module that writes it: every writer
+ * that appends a section to a meeting doc has to know to stop short of it.
+ */
+export const TRANSCRIPT_HEADING = 'Raw transcript';
+
+/**
+ * Where a new top-level section belongs in a meeting doc: above the raw
+ * transcript when the doc has one, at the end when it does not.
+ *
+ * The transcript is machine text nobody reads top to bottom, so it sits under
+ * everything a person might. Every append into a meeting doc goes through
+ * here — the notes' first write, the research placeholder — because a section
+ * appended past the transcript is both in the wrong place and, until this
+ * existed, the thing that pushed the notes section off the doc's tail.
+ */
+export function sectionInsertIndex(fragment: Y.XmlFragment): number {
+  const transcript = findNotesSection(fragment, TRANSCRIPT_HEADING);
+  return transcript ? transcript.start : fragment.length;
+}
+
 /** The heading's text, read the same way the serializer would render it. */
 export function headingText(el: Y.XmlElement): string {
   const line = prose.serializeBlockToMarkdown(el).split('\n', 1)[0] ?? '';
@@ -55,23 +99,28 @@ export function headingText(el: Y.XmlElement): string {
  * Null when the heading is absent — the "never written yet" state, not a
  * failure.
  *
- * The LAST matching heading, not the first. A doc can carry more than one
- * "Meeting notes" heading once a meeting has started a fresh section at the
- * end (see `mergeNotesSection`'s end-of-doc rule) — the live meeting writes
- * into the newest one, and an earlier section becomes ordinary content the
- * note-taker no longer reaches.
+ * `heading` may be one string or a list of them, in which case any of them
+ * identifies the section — that is how a section written under an older
+ * spelling is still the section this meeting extends rather than a second one
+ * it appends below.
+ *
+ * The LAST matching heading, not the first. A doc that already carries two
+ * (every doc a research placeholder split before this was fixed) gets its
+ * NEWEST section extended, which is the one the reader is watching; the older
+ * one keeps its lines and is never written into again.
  */
 export function findNotesSection(
   fragment: Y.XmlFragment,
-  heading: string,
+  heading: string | readonly string[],
 ): NotesSectionSpan | null {
+  const wanted = typeof heading === 'string' ? [heading] : heading;
   const top = fragment.toArray() as Y.XmlElement[];
   let start = -1;
   let level = 0;
   for (let i = 0; i < top.length; i++) {
     const el = top[i]!;
     if (el.nodeName !== 'heading') continue;
-    if (headingText(el) !== heading) continue;
+    if (!wanted.includes(headingText(el))) continue;
     start = i;
     level = prose.headingLevelOf(el);
   }
@@ -184,34 +233,42 @@ export function itemsOfMarkdown(markdown: string): IncomingItem[] | null {
 }
 
 /**
- * Drop the composer's own copy of the section heading, and demote any level
+ * Drop the composer's own copies of the section heading, and demote any level
  * 1-2 heading left in the body — a body heading at the section's own level
  * would end the section span and orphan everything under it.
+ *
+ * EVERY copy, not just the leading one. A model asked to "start with the
+ * exact heading" sometimes says it twice, and the demotion below turned the
+ * second one into `### Meeting notes` — a heading the finder reads as the
+ * section, at a level that ends nothing, so the doc came out with two
+ * headings reading "Meeting notes" and the tick wrote into the lower one. A
+ * repeated section heading carries no information the first one did not, so
+ * the line goes and whatever it introduced stays where it was.
  */
-export function stripSectionHeading(markdown: string, heading: string): string {
+export function stripSectionHeading(markdown: string, heading: string | readonly string[]): string {
+  const wanted = typeof heading === 'string' ? [heading] : heading;
   const lines = markdown.split('\n');
-  let start = 0;
-  while (start < lines.length && lines[start]!.trim() === '') start++;
-  const first = lines[start] ?? '';
-  const m = first.match(/^#{1,6}\s+(.*)$/);
-  if (m?.[1]?.trim() === heading) start++;
   let fenced = false;
   const out: string[] = [];
-  for (let i = start; i < lines.length; i++) {
-    const line = lines[i]!;
+  for (const line of lines) {
     if (/^\s*(```|~~~)/.test(line)) {
       fenced = !fenced;
       out.push(line);
       continue;
     }
-    const h = fenced ? null : line.match(/^#{1,2}\s+(.*)$/);
-    out.push(h ? `### ${h[1]}` : line);
+    const h = fenced ? null : line.match(/^(#{1,6})\s+(.*)$/);
+    if (!h) {
+      out.push(line);
+      continue;
+    }
+    if (wanted.includes(h[2]!.trim())) continue;
+    out.push(h[1]!.length <= 2 ? `### ${h[2]}` : line);
   }
   return out.join('\n').trim();
 }
 
 /** The section's items, or none when the section is not there. */
-export function sectionItems(ydoc: Y.Doc, heading: string): NoteItem[] {
+export function sectionItems(ydoc: Y.Doc, heading: string | readonly string[]): NoteItem[] {
   const fragment = prose.getProseFragment(ydoc);
   const span = findNotesSection(fragment, heading);
   return span ? itemsInSection(fragment, span) : [];

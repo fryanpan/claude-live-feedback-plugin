@@ -25,11 +25,16 @@ import {
 import * as Y from 'yjs';
 import { findNotesSection } from './meeting-notes-merge.ts';
 import { type NotesReattribution, extendsWord } from './meeting-notes.ts';
+import {
+  MEETING_NOTES_HEADING,
+  MEETING_NOTES_HEADINGS,
+  sectionInsertIndex,
+} from './notes-section.ts';
 
-/** The section the notes agent owns, verbatim — finding it again is the
- *  replace contract, so this string changing would orphan every live doc's
- *  section mid-meeting. */
-export const MEETING_NOTES_HEADING = 'Meeting notes';
+/** The section the notes agent owns, and every spelling it has been written
+ *  under. Declared in `notes-section.ts` beside the finder that matches them;
+ *  re-exported here because this is where every caller already looks. */
+export { MEETING_NOTES_HEADING, MEETING_NOTES_HEADINGS };
 
 export interface ReplaceNotesResult {
   ok: boolean;
@@ -48,15 +53,17 @@ export interface ReplaceNotesResult {
 export function replaceNotesSection(
   ydoc: Y.Doc,
   notesMarkdown: string,
-  heading: string = MEETING_NOTES_HEADING,
+  heading: string | readonly string[] = MEETING_NOTES_HEADINGS,
 ): ReplaceNotesResult {
   if (!notesMarkdown.trim()) return { ok: false, error: 'empty' };
+  const headings = typeof heading === 'string' ? [heading] : heading;
+  const canonical = headings[0] ?? MEETING_NOTES_HEADING;
   // The heading is the replace contract: a payload without it would land
   // once and then be unfindable, so the NEXT write would append a second
   // section. Enforced here — the one place every notes write passes through.
-  const withHeading = startsWithHeading(notesMarkdown, heading)
+  const withHeading = startsWithHeading(notesMarkdown, headings)
     ? notesMarkdown
-    : `## ${heading}\n\n${notesMarkdown}`;
+    : `## ${canonical}\n\n${notesMarkdown}`;
   let blocks: Y.XmlElement[];
   try {
     blocks = prose.parseMarkdownBlocks(demoteBodyHeadings(withHeading));
@@ -69,8 +76,10 @@ export function replaceNotesSection(
   const span = findNotesSectionSpan(fragment, heading);
 
   if (!span) {
+    // Above the raw transcript, which owns the doc's tail; at the end when
+    // the doc has none.
     ydoc.transact(() => {
-      fragment.insert(fragment.length, blocks);
+      fragment.insert(sectionInsertIndex(fragment), blocks);
     }, 'agent');
     return { ok: true, mode: 'appended' };
   }
@@ -105,19 +114,22 @@ export function appendResearchPlaceholder(
   } catch {
     return { ok: false, error: 'parse-failed' };
   }
+  // Above the raw transcript for the same reason the notes are: a placeholder
+  // appended past it would leave the meeting's own words in the middle of the
+  // doc — and appending past the NOTES is what used to split them in two.
   ydoc.transact(() => {
-    fragment.insert(fragment.length, blocks);
+    fragment.insert(sectionInsertIndex(fragment), blocks);
   }, 'agent');
   return { ok: true, mode: 'appended' };
 }
 
 /** Where the notes section sits in the top-level fragment — the LAST heading
- *  match, shared with the merge so every notes path targets the same section
- *  once a meeting has started a fresh one at the end of the doc. Null when
- *  the heading is absent — the "never written yet" state, not a failure. */
+ *  match, shared with the merge so every notes path targets the same section.
+ *  Null when the heading is absent — the "never written yet" state, not a
+ *  failure. */
 function findNotesSectionSpan(
   fragment: Y.XmlFragment,
-  heading: string,
+  heading: string | readonly string[],
 ): { start: number; endExclusive: number } | null {
   return findNotesSection(fragment, heading);
 }
@@ -144,7 +156,7 @@ export function retagSpeakerInNotes(
   ydoc: Y.Doc,
   label: string,
   displayName: string,
-  heading: string = MEETING_NOTES_HEADING,
+  heading: string | readonly string[] = MEETING_NOTES_HEADINGS,
 ): { replaced: number } {
   const want = speakerTagText(label, { [label]: displayName });
   return rewriteSpeakerTagRuns(ydoc, heading, (tag) =>
@@ -193,7 +205,7 @@ interface SpeakerTagRewrite {
  */
 function rewriteSpeakerTagRuns(
   ydoc: Y.Doc,
-  heading: string,
+  heading: string | readonly string[],
   decide: (tag: SpeakerTagRun) => SpeakerTagRewrite | null,
   within?: ReadonlySet<Y.XmlElement>,
 ): { replaced: number } {
@@ -359,7 +371,7 @@ export function reattributeNotesSection(
   ydoc: Y.Doc,
   reattribution: Pick<NotesReattribution, 'revisions' | 'names'>,
   owned: ReadonlySet<Y.XmlElement>,
-  heading: string = MEETING_NOTES_HEADING,
+  heading: string | readonly string[] = MEETING_NOTES_HEADINGS,
 ): { replaced: number } {
   if (reattribution.revisions.size === 0) return { replaced: 0 };
   return rewriteSpeakerTagRuns(
@@ -414,7 +426,7 @@ export function relabelNotesSection(
   ydoc: Y.Doc,
   from: string,
   to: string,
-  heading: string = MEETING_NOTES_HEADING,
+  heading: string | readonly string[] = MEETING_NOTES_HEADINGS,
 ): RelabelNotesResult {
   if (!from || !to || from === to) return { replaced: 0 };
   const fragment = prose.getProseFragment(ydoc);
@@ -491,8 +503,9 @@ function demoteBodyHeadings(markdown: string): string {
     .join('\n');
 }
 
-function startsWithHeading(markdown: string, heading: string): boolean {
+function startsWithHeading(markdown: string, headings: readonly string[]): boolean {
   const first = markdown.trimStart().split('\n', 1)[0] ?? '';
   const m = first.match(/^#{1,6}\s+(.*)$/);
-  return m?.[1]?.trim() === heading;
+  const text = m?.[1]?.trim();
+  return text !== undefined && headings.includes(text);
 }

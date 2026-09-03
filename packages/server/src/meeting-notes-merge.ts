@@ -54,6 +54,7 @@ import * as Y from 'yjs';
 import { type NotesOwnership, classifyOwnership, itemKey, mdOfKey } from './notes-ownership.ts';
 import {
   type IncomingItem,
+  MEETING_NOTES_HEADING,
   type NoteItem,
   type NotesSectionSpan,
   findNotesSection,
@@ -62,6 +63,7 @@ import {
   itemsInSection,
   itemsOfMarkdown,
   marker,
+  sectionInsertIndex,
   stripSectionHeading,
 } from './notes-section.ts';
 
@@ -89,10 +91,14 @@ export {
   type IncomingItem,
   type NoteItem,
   type NotesSectionSpan,
+  MEETING_NOTES_HEADING,
+  MEETING_NOTES_HEADINGS,
+  TRANSCRIPT_HEADING,
   findNotesSection,
   itemsInSection,
   itemsOfMarkdown,
   listItemMarkdown,
+  sectionInsertIndex,
   stripSectionHeading,
 } from './notes-section.ts';
 
@@ -349,14 +355,14 @@ function takeSimilar(pool: string[], md: string): string | null {
 function dropEchoesOfEarlierSections(
   incoming: readonly IncomingItem[],
   fragment: Y.XmlFragment,
-  heading: string,
+  headings: readonly string[],
   target: NotesSectionSpan | null,
 ): IncomingItem[] {
   const top = fragment.toArray() as Y.XmlElement[];
   const keys: string[] = [];
   for (let i = 0; i < top.length; i++) {
     const el = top[i]!;
-    if (el.nodeName !== 'heading' || headingText(el) !== heading) continue;
+    if (el.nodeName !== 'heading' || !headings.includes(headingText(el))) continue;
     if (target && i === target.start) continue;
     const level = prose.headingLevelOf(el);
     let endExclusive = top.length;
@@ -663,13 +669,17 @@ function createSuggestion(
 export function mergeNotesSection(
   ydoc: Y.Doc,
   notesMarkdown: string,
-  heading: string,
+  heading: string | readonly string[],
   opts: {
     ownership: NotesOwnership;
     basedOn?: readonly string[];
     author?: suggestOps.SuggestionAuthor;
   },
 ): MergeNotesResult {
+  // One heading is written, any of them is found: a section written under an
+  // older spelling is still this meeting's section, not a doc to append below.
+  const headings = typeof heading === 'string' ? [heading] : heading;
+  const canonical = headings[0] ?? MEETING_NOTES_HEADING;
   const empty = (error: 'empty' | 'parse-failed'): MergeNotesResult => ({
     ok: false,
     error,
@@ -679,28 +689,46 @@ export function mergeNotesSection(
     dropped: 0,
   });
   if (!notesMarkdown.trim()) return empty('empty');
-  const body = stripSectionHeading(notesMarkdown, heading);
+  const body = stripSectionHeading(notesMarkdown, headings);
   const parsed = itemsOfMarkdown(body);
   if (parsed === null) return empty('parse-failed');
   if (parsed.length === 0) return empty('empty');
 
   const fragment = prose.getProseFragment(ydoc);
-  const found = findNotesSection(fragment, heading);
-  // Notes always land at the END of the doc (owner's call, 2026-09-01: "note
-  // always at the end of doc for now"). A section is this meeting's target
-  // only while it IS the doc's tail: the moment a person types a same-level
-  // heading below it, the next tick starts a fresh section at the end rather
-  // than writing above their words — whether or not the ledger still claims
-  // items in the section they wrote past. The claims half used to keep a
-  // claimed section as the target ("chosen once, not per tick"), and that
-  // put live notes above the text a person had typed below them.
-  const span = found && found.endExclusive === fragment.length ? found : null;
+  const found = findNotesSection(fragment, headings);
+  // A SECTION THIS MEETING HAS WRITTEN INTO IS ITS SECTION, WHEREVER IT NOW
+  // SITS. The position test used to be the only test, and it split the notes
+  // in two every time the product appended anything to the doc: press Research
+  // on a note, or say "can you research that", and `## Research: …` lands
+  // below the notes, the notes stop being last, and the next tick appends a
+  // SECOND "Meeting notes". Two presses left three sections with the meeting's
+  // points scattered across them.
+  //
+  // The ledger separates the two cases the position test was conflating. An
+  // item this session wrote is proof the section is this meeting's, so it is
+  // extended and never twinned — which is the whole of the fix.
+  const mine =
+    found !== null &&
+    itemsInSection(fragment, found).some((item) => opts.ownership.claims(item.el, item.md));
+  // A section it has written NOTHING into belongs to a previous recording, or
+  // to a server that restarted. Then the position test still holds, and still
+  // for the owner's reason (2026-09-01, "notes got inserted in the top in the
+  // original Meeting notes section, not at the end of the doc"): a new meeting
+  // does not grow an old meeting's notes above everything a person has written
+  // since. It starts its own, at the end.
+  //
+  // "At the end" now means above the raw transcript rather than at the last
+  // index, because the transcript owns the tail (`sectionInsertIndex`). Read
+  // any other way, a second meeting would refuse to join the section sitting
+  // immediately above the record it had just written.
+  const span =
+    found && (mine || found.endExclusive === sectionInsertIndex(fragment)) ? found : null;
   // Whatever an earlier section already holds is written. The composer's
   // `previous` is only the LAST section, so once a fresh one starts it
   // re-lists the points it no longer sees; appending those would say them
   // twice, so an entry that reads the same as a line of an earlier section
   // is dropped here.
-  const incoming = dropEchoesOfEarlierSections(parsed, fragment, heading, span);
+  const incoming = dropEchoesOfEarlierSections(parsed, fragment, headings, span);
   if (incoming.length === 0) {
     return {
       ok: true,
@@ -713,24 +741,25 @@ export function mergeNotesSection(
   }
   if (!span) {
     // First write of this meeting's section: nothing of anybody's to
-    // protect in it. Append it whole, at the end of the doc.
+    // protect in it. Append it whole, below everything a person has written
+    // and above the raw transcript when the doc already has one.
     // The composer's own markdown when every entry is new — its shape is
     // the shape wanted — and the entries re-listed otherwise.
     const fresh = incoming.length === parsed.length ? body : markdownOfItems(incoming);
     let blocks: Y.XmlElement[];
     try {
-      blocks = prose.parseMarkdownBlocks(`## ${heading}\n\n${fresh}`);
+      blocks = prose.parseMarkdownBlocks(`## ${canonical}\n\n${fresh}`);
     } catch {
       return empty('parse-failed');
     }
     if (blocks.length === 0) return empty('empty');
     ydoc.transact(() => {
-      fragment.insert(fragment.length, blocks);
+      fragment.insert(sectionInsertIndex(fragment), blocks);
     }, 'agent');
     // Everything in a section that did not exist a moment ago is the
     // agent's — read it back so the ledger keys on the elements the doc
     // actually holds, not on the ones handed to `insert`.
-    const written = findNotesSection(fragment, heading);
+    const written = findNotesSection(fragment, headings);
     const items = written ? itemsInSection(fragment, written) : [];
     opts.ownership.record(items.map((i) => ({ el: i.el, md: i.md })));
     return {
