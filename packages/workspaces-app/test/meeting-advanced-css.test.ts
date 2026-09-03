@@ -1,9 +1,9 @@
-import { readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { IPAD, PHONE, attach, installSheets, setViewport, styleOf } from './css-harness.ts';
 
 /**
- * The Advanced Options panel's SIZING, which no DOM test can see.
+ * The Advanced Options panel's SIZING, read off the cascade at each of the two
+ * viewports this project verifies.
  *
  * A fresh-eyes UX review of the panel at 430px found it shipped with no
  * `@media` rules at all: the desktop sizes rendered on the phone, giving
@@ -13,135 +13,96 @@ import { describe, expect, it } from 'vitest';
  * is the scarce axis — found Start Recording pushed below the fold once the
  * panel expanded, with nothing saying the popover scrolls.
  *
- * happy-dom resolves no media queries and has no layout engine, so this
- * asserts the CASCADE SHAPE: the rules exist, they are scoped to the mobile
- * block, and they declare AFTER the base rules they have to beat. A media
- * query adds no specificity ("A media query adds no specificity" in
- * learnings.md), so source order is the whole of it. The rendered sizes are
- * measured in a browser against a real build; that is what closes the
- * criterion.
+ * This file used to read `styles.css` as text and assert three things about
+ * its shape: that the rules exist, that they sit inside a `@media (max-width:
+ * 1100px)` block, and that they are written AFTER the base rules they have to
+ * beat (a media query adds no specificity, so source order is the whole of
+ * it). All three were proxies for one question — what size does a control
+ * come out at on a phone — and the cascade answers that question directly.
+ * The elements are built at each viewport and the computed value is read, so
+ * a rule moved above its base, or scoped to a query that no longer matches,
+ * fails here rather than passing on a surviving substring.
+ *
+ * What still belongs to the browser: the `::-webkit-slider-thumb` /
+ * `::-moz-range-thumb` sizing and the track's gradient fill. happy-dom
+ * returns nothing for a pseudo-element, so the 24px thumb and the painted
+ * progress fill are checked in `bun run ui:shot`, not here.
  */
-// Comments are stripped before anything is parsed: a selector is read as the
-// text before a rule's `{`, and prose commas inside a preceding comment would
-// otherwise split that text and hide the selector.
-const CSS = readFileSync(resolve('packages/workspaces-app/src/styles.css'), 'utf8').replace(
-  /\/\*[\s\S]*?\*\//g,
-  '',
-);
 
-/** The mobile tier per design-mobile.md, opened verbatim. */
-const MOBILE_CONDITION = '@media (max-width: 1100px) {';
+let cleanup = () => {};
+beforeEach(() => {
+  cleanup = installSheets('hub.css', 'styles.css');
+});
+afterEach(() => {
+  cleanup();
+  document.body.replaceChildren();
+});
 
-/** The body of the mobile block that carries the Advanced Options group. */
-function advancedMobileBlock(): { body: string; at: number } {
-  let from = 0;
-  for (;;) {
-    const at = CSS.indexOf(MOBILE_CONDITION, from);
-    if (at === -1) throw new Error('no mobile block carries the Advanced Options rules');
-    let depth = 1;
-    let i = at + MOBILE_CONDITION.length;
-    for (; i < CSS.length && depth > 0; i++) {
-      if (CSS[i] === '{') depth++;
-      else if (CSS[i] === '}') depth--;
-    }
-    const body = CSS.slice(at + MOBILE_CONDITION.length, i - 1);
-    if (body.includes('.meeting-adv')) return { body, at };
-    from = at + MOBILE_CONDITION.length;
-  }
+/** The Advanced Options panel and the controls inside it, at one viewport. */
+function panel(viewport: { width: number; height: number }) {
+  setViewport(viewport);
+  const adv = attach('meeting-adv');
+  const seg = attach('meeting-adv-seg', { parent: adv });
+  const stepper = attach('meeting-adv-stepper', { parent: adv });
+  return {
+    head: styleOf(attach('meeting-adv-head', { parent: adv })),
+    reset: styleOf(attach('meeting-adv-reset', { tag: 'button', parent: adv })),
+    range: styleOf(attach('', { tag: 'input', parent: adv, attrs: { type: 'range' } })),
+    segButton: styleOf(attach('', { tag: 'button', parent: seg })),
+    stepperButton: styleOf(attach('', { tag: 'button', parent: stepper })),
+    chips: styleOf(attach('meeting-adv-chips', { parent: adv })),
+    toggle: styleOf(attach('meeting-adv-toggle', { parent: adv })),
+  };
 }
 
-/**
- * Every declaration block in `css` whose selector list names `selector`.
- * Selectors are grouped (`.a,\n.b { … }`), so a rule cannot be found by
- * looking for "selector {".
- */
-function rulesFor(css: string, selector: string): string[] {
-  const out: string[] = [];
-  for (const rule of css.split('}')) {
-    const brace = rule.indexOf('{');
-    if (brace === -1) continue;
-    const selectors = rule
-      .slice(0, brace)
-      .split(',')
-      .map((s) => s.trim());
-    if (selectors.includes(selector)) out.push(rule.slice(brace + 1));
-  }
-  return out;
-}
+const px = (v: string) => Number.parseFloat(v);
 
-describe('the mobile tier', () => {
-  it('grows every Advanced Options tap target to the 44px the mock promises', () => {
-    const { body } = advancedMobileBlock();
+describe('the mobile tier sizes every Advanced Options tap target', () => {
+  it('grows each control to the 44px the mock promises', () => {
+    const phone = panel(PHONE);
     // Each control the review measured under target, and the dimension that
     // was under it. 44 is the number the approved mock promises.
-    const sized: ReadonlyArray<[string, RegExp]> = [
-      ['.meeting-adv-head', /min-height:\s*44px/],
-      ['.meeting-adv-reset', /min-height:\s*44px/],
-      // The INPUT is the 44px target the review measured at 16px; the thumb
-      // inside it is sized separately, below.
-      ['.meeting-adv input[type="range"]', /height:\s*44px/],
-      ['.meeting-adv-seg button', /min-height:\s*44px/],
-      ['.meeting-adv-stepper button', /min-(?:width|height):\s*44px/],
-      // The well, not the field inside it: clicking the well focuses the
-      // field, so the well is the target.
-      ['.meeting-adv-chips', /min-height:\s*44px/],
-    ];
-    for (const [selector, dimension] of sized) {
-      const rules = rulesFor(body, selector);
-      expect(rules.length, `${selector} has no mobile rule`).toBeGreaterThan(0);
-      expect(
-        rules.some((r) => dimension.test(r)),
-        `${selector} is not sized to the 44px target`,
-      ).toBe(true);
-    }
-    // The switch is the mock's one deliberate exception: 51×31 is the
-    // platform-standard pill, and it clears the mock's own 44×26 on both
-    // axes while sitting in a row that is itself ≥44 tall.
-    const toggle = rulesFor(body, '.meeting-adv-toggle').join('');
-    expect(toggle).toMatch(/width:\s*51px/);
-    expect(toggle).toMatch(/height:\s*31px/);
+    expect(px(phone.head.minHeight)).toBeGreaterThanOrEqual(44);
+    expect(px(phone.reset.minHeight)).toBeGreaterThanOrEqual(44);
+    // The INPUT is the 44px target the review measured at 16px; the thumb
+    // inside it is a pseudo-element, so its 24px is a browser check.
+    expect(px(phone.range.height)).toBeGreaterThanOrEqual(44);
+    expect(px(phone.segButton.minHeight)).toBeGreaterThanOrEqual(44);
+    expect(px(phone.stepperButton.minWidth)).toBeGreaterThanOrEqual(44);
+    expect(px(phone.stepperButton.minHeight)).toBeGreaterThanOrEqual(44);
+    // The well, not the field inside it: clicking the well focuses the
+    // field, so the well is the target.
+    expect(px(phone.chips.minHeight)).toBeGreaterThanOrEqual(44);
   });
 
-  it('paints a 24px slider thumb, and the fill the native control stops providing', () => {
-    const { body } = advancedMobileBlock();
-    // Sizing a thumb at all requires giving up the native control.
-    const input = rulesFor(body, '.meeting-adv input[type="range"]').join('');
-    expect(input).toMatch(/-webkit-appearance:\s*none/);
-    expect(input).toMatch(/(^|[^-])appearance:\s*none/);
-    // The mock's 24px, on both engines' pseudo-elements.
-    for (const thumb of [
-      '.meeting-adv input[type="range"]::-webkit-slider-thumb',
-      '.meeting-adv input[type="range"]::-moz-range-thumb',
-    ]) {
-      const rule = rulesFor(body, thumb).join('');
-      expect(rule, `${thumb} is missing`).not.toBe('');
-      expect(rule, `${thumb} is not 24px`).toMatch(/width:\s*24px/);
-      expect(rule, `${thumb} is not 24px`).toMatch(/height:\s*24px/);
-    }
-    // `appearance: none` costs Chrome its progress fill (there is no
-    // ::-webkit-slider-progress), so the track paints it from --fill. Losing
-    // this leaves a flat grey track under a thumb that appears to do nothing.
-    const track = rulesFor(
-      body,
-      '.meeting-adv input[type="range"]::-webkit-slider-runnable-track',
-    ).join('');
-    expect(track).toMatch(/var\(--fill/);
-    expect(track).toMatch(/linear-gradient/);
-    // Firefox paints its own, so it gets the progress pseudo-element instead.
-    expect(
-      rulesFor(body, '.meeting-adv input[type="range"]::-moz-range-progress').join(''),
-    ).toMatch(/background:\s*var\(--accent\)/);
+  it('sizes the switch to the platform pill, the mock’s one deliberate exception', () => {
+    // 51×31 is the platform-standard switch, and it clears the mock's own
+    // 44×26 on both axes while sitting in a row that is itself ≥44 tall.
+    const phone = panel(PHONE);
+    expect(phone.toggle.width).toBe('51px');
+    expect(phone.toggle.height).toBe('31px');
   });
 
-  it('declares after the desktop sizes it has to beat', () => {
-    const { at } = advancedMobileBlock();
-    // The base rules carry no media query, so only source order separates
-    // them from the mobile block. Each must appear BEFORE it.
-    for (const base of ['.meeting-adv-toggle {', '.meeting-adv-stepper button {']) {
-      const baseAt = CSS.indexOf(base);
-      expect(baseAt, `${base} is missing`).toBeGreaterThan(-1);
-      expect(baseAt, `${base} declares after the mobile block`).toBeLessThan(at);
-    }
+  it('gives up the native slider, which is what makes a thumb sizeable at all', () => {
+    // The 24px thumb itself is drawn on `::-webkit-slider-thumb` /
+    // `::-moz-range-thumb`; happy-dom resolves no pseudo-element, so what is
+    // checkable here is the precondition — a native control cannot be resized.
+    expect(panel(PHONE).range.appearance).toBe('none');
+  });
+
+  it('positive control: the same controls read their DESKTOP sizes at 1180×820', () => {
+    // The three things the old text version asserted separately — the rules
+    // exist, they are inside the ≤1100px block, and they are written after
+    // the base rules they beat — are all one observation: the phone reads the
+    // mobile value and the iPad reads the desktop one. A mobile block moved
+    // above its base would make these two identical.
+    const ipad = panel(IPAD);
+    expect(px(ipad.head.minHeight)).toBeLessThan(44);
+    expect(px(ipad.stepperButton.minHeight)).toBeLessThan(44);
+    expect(ipad.toggle.width).toBe('34px');
+    expect(ipad.toggle.height).toBe('20px');
+    // …and the slider carries no height of its own until the mobile block.
+    expect(ipad.range.height).toBe('');
   });
 });
 
@@ -150,17 +111,32 @@ describe('the popover on the iPad tier, where height is scarce', () => {
     // The popover has always scrolled; what it lacked was any sign that it
     // does, and a verb that survived the scroll. Sticky does both: the CTA
     // holds the scrollport's bottom edge and content slides under it.
-    const cta = CSS.slice(CSS.indexOf('.meeting-stop-cta,'));
-    const block = cta.slice(0, cta.indexOf('}'));
-    expect(block).toContain('position: sticky');
-    expect(block).toContain('bottom: 0');
+    setViewport(IPAD);
+    const cta = styleOf(attach('meeting-stop-cta', { tag: 'button' }));
+    expect(cta.position).toBe('sticky');
+    expect(cta.bottom).toBe('0px');
     // Opaque, or the content sliding under it shows through and the cue
-    // reads as a rendering bug.
-    expect(block).toMatch(/background:\s*var\(--red\)/);
-    // And the scrollport it sticks to is the popover itself.
-    const pop = CSS.slice(CSS.indexOf('.meeting-pop {'));
-    const popBlock = pop.slice(0, pop.indexOf('}'));
-    expect(popBlock).toContain('overflow: auto');
-    expect(popBlock).toMatch(/max-height:\s*calc\(100dvh/);
+    // reads as a rendering bug. `var(--red)` resolved through the cascade.
+    expect(cta.backgroundColor).toBe('#d73a49');
+    // And the scrollport it sticks to is the popover itself. The cap is
+    // `calc(100dvh - env(…) - 70px)`, which happy-dom returns unevaluated —
+    // so what is asserted is that a cap exists at all, not its pixels.
+    const pop = styleOf(attach('meeting-pop'));
+    expect(pop.overflow).toBe('auto');
+    expect(pop.maxHeight === 'none' || pop.maxHeight === '').toBe(false);
+    expect(pop.maxHeight).toContain('100dvh');
+  });
+
+  it('goes edge-to-edge under the bar on a narrow viewport', () => {
+    // Positive control for the popover reads above, and the narrow-width
+    // half of the same rule: at 1180 the popover is a 320px card pinned to
+    // the right; below 640 it is a sheet spanning the width.
+    setViewport(IPAD);
+    expect(styleOf(attach('meeting-pop')).width).toBe('320px');
+    setViewport({ width: 600, height: 900 });
+    const narrow = styleOf(attach('meeting-pop'));
+    expect(narrow.width).toBe('auto');
+    expect(narrow.left).toBe('6px');
+    expect(narrow.right).toBe('6px');
   });
 });

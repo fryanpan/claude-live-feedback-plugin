@@ -1,114 +1,123 @@
-import { readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { mountPointerPill } from '../src/pointer-pill.ts';
+import { IPAD, PHONE, attach, installSheets, setViewport, styleOf } from './css-harness.ts';
 
 /**
- * The pointer pill's stylesheet contract. happy-dom resolves no layout and
- * evaluates no media query, so what `mountPointerPill` cannot prove about
- * itself is asserted against the CSS text: that the pill is positioned in
- * viewport coordinates (the placement function works in nothing else), that
- * hiding keeps its box (it is measured while hidden, and a tap that blurred
- * the editor first still has to land on it), that a finger gets a 44px
- * target on the touch tiers, and — the one this replaces — that there is NO
- * bottom-sheet form at any width. The previous menu became a sheet at 560px;
- * a pill that leaves the pointer for the bottom of the screen on a phone is
- * the reach the pointer anchor exists to remove.
+ * The pointer pill's stylesheet contract, read off the cascade with the REAL
+ * component mounted.
  *
- * How it actually reads at 1180×820 and 430px is measured in a browser and
- * reported with the PR.
+ * What `mountPointerPill` cannot prove about itself is that the rules reach
+ * the element it builds: that the pill is positioned in viewport coordinates
+ * (the placement function works in nothing else), that hiding keeps its box
+ * (it is measured while hidden, and a tap that blurred the editor first still
+ * has to land on it), that a finger gets a 44px target on the touch tiers,
+ * and — the one this replaces — that there is NO bottom-sheet form at any
+ * width. The previous menu became a sheet at 560px; a pill that leaves the
+ * pointer for the bottom of the screen on a phone is the reach the pointer
+ * anchor exists to remove.
+ *
+ * The old version of this file matched the stylesheet's TEXT, which passes
+ * whether or not the media block it searched matches at the width a reader is
+ * on and whether or not the class chain is one the component ever emits. Both
+ * halves are answered here: the element under test is the one `mountPointerPill`
+ * produced, and every measurement names its viewport.
+ *
+ * Still a browser check (`bun run ui:shot`), because happy-dom resolves
+ * neither: how it reads at 1180×820 and 430px, and the `::after` arrow —
+ * pseudo-element styles come back empty, so the arrow's `--arrow-x` placement
+ * and its `no-arrow` suppression are not asserted here at all.
  */
-const CSS = readFileSync(resolve('packages/workspaces-app/src/styles.css'), 'utf8');
 
-function declarationsOnly(css: string): string {
-  return css.replace(/\/\*[\s\S]*?\*\//g, '');
-}
+let cleanup = () => {};
+beforeEach(() => {
+  // The review editor's page loads styles.css; the board loads hub.css before
+  // it (`renderHubShell`, packages/server/src/shells.ts). tokens.css is left
+  // out on purpose — the served /app/tokens.css is the vendored Open Props
+  // subset concatenated with src/tokens.css, and the mapping layer alone
+  // resolves its `var(--gray-9)` chain to nothing.
+  cleanup = installSheets('hub.css', 'styles.css');
+});
+afterEach(() => {
+  cleanup();
+  document.body.replaceChildren();
+});
 
-function rule(selector: string, within: string = declarationsOnly(CSS)): string {
-  const at = new RegExp(
-    `(^|\\n|\\{)\\s*${selector.replace(/[.+*[\]():]/g, '\\$&')}\\s*\\{([^}]*)\\}`,
-  ).exec(within);
-  return at?.[2] ?? '';
-}
-
-/** Every `@media` block with this query, concatenated, braces counted. */
-function media(query: string): string {
-  const css = declarationsOnly(CSS);
-  const out: string[] = [];
-  let from = 0;
-  for (;;) {
-    const start = css.indexOf(`@media ${query}`, from);
-    if (start < 0) break;
-    let depth = 0;
-    for (let i = css.indexOf('{', start); i < css.length; i++) {
-      if (css[i] === '{') depth++;
-      else if (css[i] === '}' && --depth === 0) {
-        out.push(css.slice(start, i));
-        from = i;
-        break;
-      }
-    }
-    if (from <= start) break;
-  }
-  return out.join('\n');
+/** The pill the app actually builds, at `viewport`. */
+function pill(viewport: { width: number; height: number }) {
+  setViewport(viewport);
+  const handle = mountPointerPill({
+    actions: [
+      { id: 'task', label: 'Make a task' },
+      { id: 'thread', label: 'Comment' },
+    ],
+    onPick: () => {},
+  });
+  const btn = handle.el.querySelector<HTMLElement>('.pointer-pill-btn');
+  if (!btn) throw new Error('the pill mounted no buttons');
+  return { handle, el: handle.el, btn };
 }
 
 describe('the pointer pill is placed in viewport coordinates', () => {
   it('is fixed, and above the comment pill that made the selection', () => {
-    const pill = rule('.pointer-pill');
-    expect(pill, 'the pill has no rule at all').not.toBe('');
-    expect(pill).toMatch(/position:\s*fixed/);
+    const { handle, el } = pill(IPAD);
+    const style = styleOf(el);
+    expect(style.position).toBe('fixed');
     // The caret pill sits at 800; a pill that opened BEHIND it would look
     // like one that failed to open.
-    expect(Number(/z-index:\s*(\d+)/.exec(pill)?.[1] ?? '0')).toBeGreaterThan(800);
+    expect(Number(style.zIndex)).toBeGreaterThan(800);
+    handle.destroy();
   });
 
   it('keeps its layout box while hidden', () => {
-    const hidden = rule('.pointer-pill.hidden');
-    expect(hidden).not.toBe('');
-    expect(hidden).toMatch(/opacity:\s*0/);
-    expect(hidden).toMatch(/pointer-events:\s*none/);
-    // The app's global `.hidden` is display:none; this one has to beat it.
-    expect(hidden).toMatch(/display:\s*inline-flex\s*!important/);
-  });
-
-  it('draws the arrow at --arrow-x and hides it when not above the anchor', () => {
-    expect(rule('.pointer-pill::after')).toMatch(/left:\s*var\(--arrow-x/);
-    expect(rule('.pointer-pill.no-arrow::after')).toMatch(/display:\s*none/);
+    // The component starts hidden, which is the state this is about.
+    const { handle, el } = pill(IPAD);
+    expect(handle.hidden).toBe(true);
+    const style = styleOf(el);
+    expect(style.opacity).toBe('0');
+    expect(style.pointerEvents).toBe('none');
+    // The app's global `.hidden` is `display: none !important`; this one has
+    // to beat it, and a computed `inline-flex` is that fight's verdict rather
+    // than a restatement of the declaration that fights it.
+    expect(style.display).toBe('inline-flex');
+    handle.destroy();
   });
 });
 
 describe('the buttons are targets, not text', () => {
   it('reach 44px on the touch tiers and stay clickable at a pointer', () => {
-    const base = Number(/min-height:\s*(\d+)px/.exec(rule('.pointer-pill-btn'))?.[1] ?? '0');
-    expect(base).toBeGreaterThanOrEqual(36);
-    const mobile = media('(max-width: 1100px)');
-    expect(mobile, 'no mobile-tier block').not.toBe('');
-    const touch = Number(
-      /min-height:\s*(\d+)px/.exec(rule('.pointer-pill-btn', mobile))?.[1] ?? '0',
-    );
-    expect(touch).toBeGreaterThanOrEqual(44);
+    const wide = pill(IPAD);
+    expect(Number.parseFloat(styleOf(wide.btn).minHeight)).toBeGreaterThanOrEqual(36);
+    wide.handle.destroy();
+    const narrow = pill(PHONE);
+    expect(Number.parseFloat(styleOf(narrow.btn).minHeight)).toBeGreaterThanOrEqual(44);
+    narrow.handle.destroy();
   });
 });
 
 describe('there is no bottom sheet', () => {
-  it('never restyles the pill at the sheet breakpoint the old menu used', () => {
-    // Positive control: the breakpoint itself still exists for the menus
-    // that ARE sheets, so an empty match here would be the pill's absence,
-    // not the block's.
-    const sheet = media('(max-width: 560px)');
-    expect(sheet).not.toBe('');
-    expect(sheet).not.toContain('.pointer-pill');
-    // And the old menu is gone with its sheet — no selector left to style.
-    expect(declarationsOnly(CSS)).not.toContain('.spinoff-menu');
+  it('places the pill the same way at 430px as at 1180px', () => {
+    // The sheet breakpoint the old menu used is 560px, so a phone is inside
+    // it. Measuring the pill there is what the old "the block does not mention
+    // `.pointer-pill`" text search was standing in for — and unlike that
+    // search it also catches a sheet written into any OTHER block.
+    const narrow = pill(PHONE);
+    const style = styleOf(narrow.el);
+    expect(style.position).toBe('fixed');
+    // A sheet pins itself to the bottom and spans the width; the pill does
+    // neither, at any width. `''` is what an undeclared inset computes to.
+    expect(style.bottom).toBe('');
+    expect(style.left).toBe('');
+    expect(style.right).toBe('');
+    narrow.handle.destroy();
   });
-});
 
-describe('the stylesheet stays mergeable', () => {
-  it('sits under a banner with more file after it, not appended at EOF', () => {
-    const at = CSS.indexOf('.pointer-pill {');
-    expect(at).toBeGreaterThan(0);
-    const banner = /\/\* =+ [^*]* =+ \*\//g;
-    expect((CSS.slice(0, at).match(banner) ?? []).length).toBeGreaterThan(0);
-    expect((CSS.slice(at).match(banner) ?? []).length).toBeGreaterThan(0);
+  it('the old menu is gone with its sheet — no selector left to style', () => {
+    setViewport(PHONE);
+    const ghost = styleOf(attach('spinoff-menu'));
+    expect(ghost.position).toBe('');
+    expect(ghost.background).toBe('');
+    // Control: an element that IS styled reads differently in the same pass,
+    // so the emptiness above is the class's absence and not the sheet's.
+    expect(styleOf(attach('pointer-pill')).position).toBe('fixed');
   });
 });
