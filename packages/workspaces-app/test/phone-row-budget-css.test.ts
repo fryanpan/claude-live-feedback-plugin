@@ -46,7 +46,7 @@ import { describe, expect, it } from 'vitest';
  * asserts the CASCADE SHAPE. The rendered 430px row is measured in a browser
  * against a real build; that is what closes the criterion.
  */
-const CSS = readFileSync(resolve('packages/markdown-app/src/hub.css'), 'utf8');
+const CSS = readFileSync(resolve('packages/workspaces-app/src/hub.css'), 'utf8');
 
 /**
  * The phone block's condition, verbatim. Both halves are load-bearing and the

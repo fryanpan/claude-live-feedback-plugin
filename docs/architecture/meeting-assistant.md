@@ -1022,7 +1022,7 @@ The composer never claims `in-progress` itself. A repeated mention links the row
 already has (find-or-create on a normalized title, then two shared
 significant words) rather than filing twice. The composer receives the resolved links and writes
 plain markdown links into the notes; the doc editor's `TaskLinkChips`
-decoration (markdown-app) renders title + live status chip beside them,
+decoration (workspaces-app) renders title + live status chip beside them,
 refreshed on the board's `task.transitioned` SSE push, without ever touching
 stored content.
 
@@ -1334,7 +1334,7 @@ painted.
   first mark and are not in `total` at all.
 
 Code: `packages/core/src/meeting-timing.ts` (the arithmetic, shared) ·
-`packages/markdown-app/src/meeting-timing-client.ts` (the browser marks, the
+`packages/workspaces-app/src/meeting-timing-client.ts` (the browser marks, the
 readout, the CSV).
 
 ## Load-bearing gotchas (each cost real debugging)
@@ -1468,7 +1468,7 @@ the chooser asked had no answer with nobody else there: who the microphone
 will hear, whether a bot should go instead, whom to have asked for consent.
 
 "Alone" is the doc's presence — `othersOnDoc` in
-`packages/markdown-app/src/meeting-solo.ts` counts the distinct other people
+`packages/workspaces-app/src/meeting-solo.ts` counts the distinct other people
 in the Yjs awareness, ignoring nameless states and the same person in a
 second tab — asked at the press through the strip's `alone` option. It is a
 proxy for the room, and an honest one both ways: a doc nobody else has open
@@ -1505,18 +1505,18 @@ everything else asks) + `notes-section.ts` (what a section decomposes into) ·
 correction lands on, and whether it may) ·
 `packages/core/src/speaker-tags.ts` (the tag grammar, its provenance, and the
 late correction) + `speaker-roster.ts` (the meeting's cast) ·
-`packages/markdown-app/src/speaker-reassign.ts` +
+`packages/workspaces-app/src/speaker-reassign.ts` +
 `speaker-reassign-menu.ts` (correcting one mention) ·
-`packages/markdown-app/src/meeting-strip.ts`
+`packages/workspaces-app/src/meeting-strip.ts`
 (UI) · `meeting-solo.ts` (who else is on the doc — the one-tap predicate) ·
-`packages/markdown-app/src/meeting-audio.ts` (capture + the room's
+`packages/workspaces-app/src/meeting-audio.ts` (capture + the room's
 microphone config) · `packages/server/src/recall.ts` (vendor
 client) · `recall-turns.ts` (frames → turns, naming) · `recall-status.ts` +
 `recall-webhook-auth.ts` (bot state, signatures) · `recall-meeting.ts` (the
 bot lifecycle) · `packages/core/src/meeting-bot.ts` (wire contract) ·
-`packages/markdown-app/src/meeting-bot-row.ts` (UI) ·
+`packages/workspaces-app/src/meeting-bot-row.ts` (UI) ·
 `packages/core/src/meeting-timing.ts` +
-`packages/markdown-app/src/meeting-timing-client.ts` (the `?timing=1`
+`packages/workspaces-app/src/meeting-timing-client.ts` (the `?timing=1`
 latency measurement) · `scripts/room-labels-check.ts` +
 `room-labels-score.ts` + `ami-truth.ts` (the room measurement, its
 arithmetic, and the AMI corpus reference it scores against).

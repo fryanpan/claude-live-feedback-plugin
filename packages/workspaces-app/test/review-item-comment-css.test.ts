@@ -12,7 +12,7 @@ import { describe, expect, it } from 'vitest';
  * the targets their floors and keep the card from spending height it does
  * not have. A browser measurement against a real build closes the criterion.
  */
-const CSS = readFileSync(resolve('packages/markdown-app/src/hub.css'), 'utf8');
+const CSS = readFileSync(resolve('packages/workspaces-app/src/hub.css'), 'utf8');
 
 function declarationsOnly(css: string): string {
   return css.replace(/\/\*[\s\S]*?\*\//g, '');

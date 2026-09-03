@@ -64,7 +64,7 @@ function fixtureRepo(): string {
   write(repo, 'README.md', '# fixture\n');
   write(repo, 'docs/product/plans/some-plan.md', '# plan\n\nfirst draft\n');
   write(repo, 'demos/mockup.html', '<!doctype html><title>m</title>\n');
-  write(repo, 'packages/markdown-app/src/app.ts', 'export const a = 1;\n');
+  write(repo, 'packages/workspaces-app/src/app.ts', 'export const a = 1;\n');
   write(repo, 'packages/plugin/skills/thing/SKILL.md', '# skill\n');
   git(repo, 'add', '-A');
   git(repo, 'commit', '-q', '-m', 'base');
@@ -76,7 +76,7 @@ describe('what a modified path means for a release', () => {
     // The marking half comes FIRST deliberately: it is the property that must
     // not regress, and the exemptions below are only meaningful next to it.
     for (const p of [
-      'packages/markdown-app/src/app.ts',
+      'packages/workspaces-app/src/app.ts',
       'packages/server/src/server.ts',
       'packages/widget/src/widget.ts',
       // Served live out of the deploy source (`bin.ts` → join(repoRoot,
@@ -120,10 +120,10 @@ describe('the marker a release carries', () => {
   it('marks a build-affecting edit and names the file that earned it', () => {
     const d = describeDeploySource({
       describe: 'a822618',
-      modifiedPaths: ['packages/markdown-app/src/app.ts'],
+      modifiedPaths: ['packages/workspaces-app/src/app.ts'],
     });
     expect(d.sourceRef).toBe('a822618-dirty');
-    expect(d.dirtyPaths).toEqual(['packages/markdown-app/src/app.ts']);
+    expect(d.dirtyPaths).toEqual(['packages/workspaces-app/src/app.ts']);
   });
 
   it('marks when a doc edit and a code edit are both outstanding', () => {
@@ -202,10 +202,10 @@ describe('against a real checkout', () => {
 
       // The positive control, in the same repo, with the doc edit still
       // outstanding: this is the case the marker exists for.
-      write(repo, 'packages/markdown-app/src/app.ts', 'export const a = 2;\n');
+      write(repo, 'packages/workspaces-app/src/app.ts', 'export const a = 2;\n');
       const codeDirty = readDeploySource(repo);
       expect(codeDirty?.sourceRef).toBe(`${head}-dirty`);
-      expect(codeDirty?.dirtyPaths).toContain('packages/markdown-app/src/app.ts');
+      expect(codeDirty?.dirtyPaths).toContain('packages/workspaces-app/src/app.ts');
       expect(codeDirty?.dirtyPathCount).toBe(2);
     } finally {
       rmSync(repo, { recursive: true, force: true });
@@ -215,12 +215,12 @@ describe('against a real checkout', () => {
   it('does not mark an untracked scratch file, matching what --dirty always did', () => {
     const repo = fixtureRepo();
     try {
-      write(repo, 'packages/markdown-app/src/scratch.ts', 'export const s = 1;\n');
+      write(repo, 'packages/workspaces-app/src/scratch.ts', 'export const s = 1;\n');
       expect(readDeploySource(repo)?.sourceRef).not.toContain('-dirty');
       // Positive control: the same path, tracked and modified, does mark.
       git(repo, 'add', '-A');
       git(repo, 'commit', '-q', '-m', 'track scratch');
-      write(repo, 'packages/markdown-app/src/scratch.ts', 'export const s = 2;\n');
+      write(repo, 'packages/workspaces-app/src/scratch.ts', 'export const s = 2;\n');
       expect(readDeploySource(repo)?.sourceRef).toContain('-dirty');
     } finally {
       rmSync(repo, { recursive: true, force: true });

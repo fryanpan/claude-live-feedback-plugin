@@ -309,7 +309,7 @@ describe('host gate + share scoping over HTTP', () => {
     });
 
     it('can reach its own review page and event stream route', async () => {
-      // Not asserting 200 — the markdown-app dist isn't built in tests.
+      // Not asserting 200 — the workspaces-app dist isn't built in tests.
       // What matters is that the scope check doesn't refuse them.
       //
       // No `redirect: 'manual'`, deliberately: `/review/<docId>` now

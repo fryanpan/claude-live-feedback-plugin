@@ -21,8 +21,8 @@ import { describe, expect, it } from 'vitest';
 // a one-line read is what `bun run test:audit` counts, and folding them into
 // a loop would hide a source-shape site rather than remove one.
 const CSS = [
-  readFileSync(resolve('packages/markdown-app/src/styles.css'), 'utf8'),
-  readFileSync(resolve('packages/markdown-app/src/hub.css'), 'utf8'),
+  readFileSync(resolve('packages/workspaces-app/src/styles.css'), 'utf8'),
+  readFileSync(resolve('packages/workspaces-app/src/hub.css'), 'utf8'),
 ].join('\n');
 
 /**

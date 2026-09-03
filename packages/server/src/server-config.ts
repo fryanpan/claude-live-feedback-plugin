@@ -45,9 +45,17 @@ export function resolveServerConfig(opts: {
   // working tree someone may be editing or switching branches in. Unset — `bun
   // run dev`, `bun run staging`, a bare bin.ts — falls back to this checkout's
   // own dist, which is what those want.
+  //
+  // The flag and the variable spell the app differently on purpose. The flag
+  // is internal — `scripts/serve.ts` is its only caller and it restarts with
+  // this file — so it followed the package rename. The variable is a launch
+  // config, the one input this repo cannot restart on somebody's behalf, and
+  // it already carries an `LF_MARKDOWN_APP_DIST` fallback (`env-names.ts`);
+  // renaming it would end that chain for a straggler that the sweep missed.
+  // Rename it in the same flag day that retires the `LF_` spellings.
   const { widget: widgetDist, markdownApp: markdownAppDist } = resolveClientDists({
     widgetDist: arg('widget-dist') ?? readRenamedEnv(env, 'CW_WIDGET_DIST'),
-    markdownAppDist: arg('markdown-app-dist') ?? readRenamedEnv(env, 'CW_MARKDOWN_APP_DIST'),
+    markdownAppDist: arg('workspaces-app-dist') ?? readRenamedEnv(env, 'CW_MARKDOWN_APP_DIST'),
     repoRoot,
   });
   const demosDir = pathOrNull(join(repoRoot, 'demos'));

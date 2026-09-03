@@ -24,7 +24,7 @@ import { type AccessHarness, accessHarness, mintAccessShare } from './access-sha
 function fakeBuild(marker: string): { dir: string; widget: string; markdownApp: string } {
   const dir = mkdtempSync(join(tmpdir(), 'lf-build-'));
   const widget = join(dir, 'widget');
-  const markdownApp = join(dir, 'markdown-app');
+  const markdownApp = join(dir, 'workspaces-app');
   mkdirSync(widget, { recursive: true });
   mkdirSync(markdownApp, { recursive: true });
   writeFileSync(join(widget, 'widget.iife.js'), `//${marker}\n`);

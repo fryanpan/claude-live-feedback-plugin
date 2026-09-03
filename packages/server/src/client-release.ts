@@ -1,7 +1,7 @@
 /**
  * Where the browser client prod serves actually lives.
  *
- * It used to be `packages/markdown-app/dist` inside the primary checkout,
+ * It used to be `packages/workspaces-app/dist` inside the primary checkout,
  * read per request. Two things followed from that, both bad:
  *
  *   1. Building the bundles anywhere in that checkout WAS a deploy to every
@@ -58,7 +58,7 @@ export interface ClientRelease {
   releaseDir: string;
   /** `<releaseDir>/widget` */
   widgetDir: string;
-  /** `<releaseDir>/markdown-app` */
+  /** `<releaseDir>/workspaces-app` */
   markdownAppDir: string;
   /** The release's directory name (a sortable timestamp + suffix). */
   id: string;
@@ -217,7 +217,7 @@ export function publishClientRelease(opts: {
   let releaseDir: string;
   try {
     cpSync(sources.widget, join(staging, 'widget'), { recursive: true, dereference: true });
-    cpSync(sources.markdownApp, join(staging, 'markdown-app'), {
+    cpSync(sources.markdownApp, join(staging, 'workspaces-app'), {
       recursive: true,
       dereference: true,
     });
@@ -256,7 +256,7 @@ export function publishClientRelease(opts: {
   return {
     releaseDir,
     widgetDir: join(releaseDir, 'widget'),
-    markdownAppDir: join(releaseDir, 'markdown-app'),
+    markdownAppDir: join(releaseDir, 'workspaces-app'),
     id,
   };
 }
@@ -292,13 +292,13 @@ export function currentClientRelease(root: string): ClientRelease | null {
   } catch {
     return null;
   }
-  if (!existsSync(join(releaseDir, 'markdown-app')) && !existsSync(join(releaseDir, 'widget'))) {
+  if (!existsSync(join(releaseDir, 'workspaces-app')) && !existsSync(join(releaseDir, 'widget'))) {
     return null;
   }
   return {
     releaseDir,
     widgetDir: join(releaseDir, 'widget'),
-    markdownAppDir: join(releaseDir, 'markdown-app'),
+    markdownAppDir: join(releaseDir, 'workspaces-app'),
     id: releaseDir.split('/').pop() ?? '',
   };
 }
@@ -526,7 +526,7 @@ export function prepareClientRelease(opts: {
   /**
    * The bundler already failed, so do not even look at `sources`. A failed
    * build can leave a dist that passes a file-existence check — the
-   * markdown-app build writes app.js before its second entrypoint — so
+   * workspaces-app build writes app.js before its second entrypoint — so
    * "publish if the files are there" would ship half a build.
    */
   buildError?: string | null;
@@ -587,7 +587,7 @@ export function resolveClientDists(opts: {
     widget: pick(opts.widgetDist, join(opts.repoRoot, 'packages', 'widget', 'dist')),
     markdownApp: pick(
       opts.markdownAppDist,
-      join(opts.repoRoot, 'packages', 'markdown-app', 'dist'),
+      join(opts.repoRoot, 'packages', 'workspaces-app', 'dist'),
     ),
   };
 }

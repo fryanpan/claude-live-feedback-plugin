@@ -2,7 +2,7 @@
  * The `/audio/<docId>` socket, kept out of `server.ts` the way `yjs-protocol`
  * keeps the editing socket out of it.
  *
- * NOT `packages/markdown-app/src/meeting-protocol.ts`. That file is the other
+ * NOT `packages/workspaces-app/src/meeting-protocol.ts`. That file is the other
  * end of this same socket — the strip's frame parsers and its transcript fold,
  * with no lifecycle in them. Two files, one name, in two packages: this one
  * sends what that one reads.

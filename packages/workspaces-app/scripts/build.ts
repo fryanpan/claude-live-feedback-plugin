@@ -286,7 +286,7 @@ async function buildOnce(): Promise<void> {
   if (!(await emit(buildId))) return;
 
   writeFileSync(join(dist, 'BUILD_INFO.txt'), `built ${buildId}\n`);
-  console.log(`[markdown-app] built to ${dist} (${buildId})`);
+  console.log(`[workspaces-app] built to ${dist} (${buildId})`);
 }
 
 await buildOnce();
@@ -299,10 +299,10 @@ if (isWatch) {
   const schedule = () => {
     if (timer) clearTimeout(timer);
     timer = setTimeout(() => {
-      void buildOnce().catch((err) => console.error('[markdown-app] rebuild failed:', err));
+      void buildOnce().catch((err) => console.error('[workspaces-app] rebuild failed:', err));
     }, 80);
   };
   watch(srcDir, { recursive: true }, schedule);
   watch(join(pkgRoot, 'index.html'), schedule);
-  console.log('[markdown-app] watching for changes…');
+  console.log('[workspaces-app] watching for changes…');
 }

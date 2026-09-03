@@ -16,7 +16,7 @@ import { describe, expect, it } from 'vitest';
  * Asserted here so deleting either half goes red rather than merely looking
  * different; how it actually reads at 1180 and 430 is checked in a browser.
  */
-const CSS = readFileSync(resolve('packages/markdown-app/src/styles.css'), 'utf8');
+const CSS = readFileSync(resolve('packages/workspaces-app/src/styles.css'), 'utf8');
 
 /** The phone breakpoint this strip stacks at. Named once — a stale copy of
  *  the number would silently search nothing and pass. */

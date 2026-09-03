@@ -7,7 +7,7 @@ What live-feedback shares across its surfaces today, what's implemented twice, a
 - The **data plane is genuinely unified**: one Yjs doc shape, one thread REST
 
   API, one SSE/watch channel, one identity module. Every surface speaks the same wire. This is the architecture's real asset — don't touch it.
-- The **client plane is two parallel worlds**: the markdown-app SPA
+- The **client plane is two parallel worlds**: the workspaces-app SPA
 
   (markdown/code/diff) and the injectable widget (mockup/dev/production) re-implement the same concepts — websocket client, thread panel, composer, helpers — with zero shared rendering code (~350–400 duplicated lines).
 - The **server has one god object**: `rooms.ts` (2,148 lines) mixes seven
@@ -29,7 +29,7 @@ What live-feedback shares across its surfaces today, what's implemented twice, a
 | Threads data + REST                 | shared                                 | shared                        | shared                              | shared                                   | shared        | —                      |
 | Threads UI                          | ThreadPanel (SPA)                      | ThreadPanel                   | ThreadPanel                         | **widget's own panel**                   | widget's      | —                      |
 | Composer / pill                     | SPA (app.ts)                           | **duplicated in code-app.ts** | =code                               | **widget's own**                         | widget's      | —                      |
-| WS client                           | markdown-app/client.ts                 | same                          | same                                | **widget/client.ts (admitted copy)**     | same          | —                      |
+| WS client                           | workspaces-app/client.ts                 | same                          | same                                | **widget/client.ts (admitted copy)**     | same          | —                      |
 | Multi-page context (url/view)       | n/a                                    | n/a                           | n/a                                 | AnchorContext                            | AnchorContext | —                      |
 | Grouping                            | setId                                  | workspace (bind_folder)       | workspace (bindDiff)                | none                                     | none          | —                      |
 | Agent edit tools                    | find_and_replace + thread-region tools | none (edit via repo)          | none                                | none                                     | none          | —                      |
@@ -51,23 +51,23 @@ Bold = the coupling/duplication hot spots.
 4. **`identity.ts`** — `resolveUser`/`hashToColor` used verbatim by both
 
   front-ends.
-5. **`ReviewSurface`** (markdown-app) — the 6-method seam that let the code
+5. **`ReviewSurface`** (workspaces-app) — the 6-method seam that let the code
 
   surface, and now the diff surface, reuse the whole thread flow. This abstraction earned its keep twice; it's the model to extend.
 
 ## 3. Parallel implementations (the duplication inventory)
 
-**Across the two front-ends (widget vs markdown-app):**
+**Across the two front-ends (widget vs workspaces-app):**
 
 | What                                                         | Where × where                                                | Size              |
 | ------------------------------------------------------------ | ------------------------------------------------------------ | ----------------- |
-| Yjs websocket client                                         | `widget/src/client.ts` vs `markdown-app/src/client.ts` — the widget file's header admits it's a copy; they've already drifted (awareness-on-open exists in one only) | ~120 lines        |
+| Yjs websocket client                                         | `widget/src/client.ts` vs `workspaces-app/src/client.ts` — the widget file's header admits it's a copy; they've already drifted (awareness-on-open exists in one only) | ~120 lines        |
 | Thread panel (open/orphan/resolved grouping, rows, reply, resolve) | `widget.ts:579-728` vs `threads.ts` ThreadPanel              | ~80 vs ~150 lines |
 | Composer                                                     | `widget.ts:424-458` vs `app.ts` composer wiring              | ~35 vs ~70 lines  |
 | `formatTime`, HTML-escape, status→color palette              | both, near-verbatim                                          | ~40 lines         |
 | Stylesheets                                                  | `widget/styles.ts` (310 L shadow DOM) vs `styles.css` (1,700+ L) — overlapping thread/row/status styling, no shared tokens | conceptual        |
 
-**Inside the markdown-app:**
+**Inside the workspaces-app:**
 
 - `app.ts` (1,473 L) and `code-app.ts` (652 L) duplicate the composer,
 
@@ -112,7 +112,7 @@ Bold = the coupling/duplication hot spots.
 | --- | ------------------------------------------------------------ | -------------------------------------------- | ------------------------------------------------------------ | ------------------------------------------------------------ |
 | 1   | **Share the Yjs WS client** — move to `@feedback/core` (tree-shakeable, no DOM deps) and consume from both bundles; reconcile the awareness-on-open drift | High — 120 actively-drifting protocol lines  | S                                                            | Low                                                          |
 | 2   | **`contentKind(meta)`**** helper** in core → `'prose' \      | 'flat' \                                     | 'none'`; collapse the ~16 server branch sites to one lookup each | High — makes the next doc kind a table-row, not a grep-hunt  |
-| 3   | **Extract shared review-boot wiring** in markdown-app: one boot that takes a `ReviewSurface` factory; `app.ts`/`code-app.ts` shrink to their genuinely different parts | High — stops the 450-line fork from tripling | M                                                            | Med                                                          |
+| 3   | **Extract shared review-boot wiring** in workspaces-app: one boot that takes a `ReviewSurface` factory; `app.ts`/`code-app.ts` shrink to their genuinely different parts | High — stops the 450-line fork from tripling | M                                                            | Med                                                          |
 | 4   | **Split ****`rooms.ts`** into modules (bindings, workspace-binds, thread-ops, edit-tools, persistence) — mechanical, no behavior change | Med — reviewability, safer future diffs      | M                                                            | Low                                                          |
 | 5   | **Unify ****`bindFolder`****/****`bindDiff`** around a shared bind-file-set core (file-list source becomes a parameter) | Med                                          | S–M                                                          | Low                                                          |
 | 6   | **Delete ****`type:'dev'`** (or implement it for real; deleting is right until a dev-specific behavior exists) + drop the legacy pre-Tiptap migration after checking persisted docs | Low–Med — removes standing traps             | S                                                            | Low                                                          |

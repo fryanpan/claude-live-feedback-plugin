@@ -59,7 +59,7 @@ Lines truncate with an ellipsis rather than wrapping, so a card cannot exceed it
 
 ### One implementation, every surface
 
-`ThreadPanel.renderThread` (`packages/markdown-app/src/threads.ts:195`) is already shared between the panel and the margin — its own comment says a balloon "is literally this same card (plus positioning classes), so reply/resolve/reopen/re-anchor behave identically everywhere instead of a second implementation drifting out of sync."
+`ThreadPanel.renderThread` (`packages/workspaces-app/src/threads.ts:195`) is already shared between the panel and the margin — its own comment says a balloon "is literally this same card (plus positioning classes), so reply/resolve/reopen/re-anchor behave identically everywhere instead of a second implementation drifting out of sync."
 
 The summary lines follow that rule: **one builder** produces the card, consumed by `renderThread`, by the margin's collapsed balloon (`buildCollapsedComment`, `redline/markup-margin.ts:456`), by the inline mobile card and by the sheet. Do not fork it. The two faces of each slot are built together by that one builder — see *Expanding*, which depends on both faces existing in the same node.
 

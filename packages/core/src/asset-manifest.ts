@@ -22,7 +22,7 @@
  */
 import { createHash } from 'node:crypto';
 
-/** Where the build writes the mapping, inside the markdown-app dist. */
+/** Where the build writes the mapping, inside the workspaces-app dist. */
 export const ASSET_MANIFEST_FILE = 'asset-manifest.json';
 
 /** Logical name (`app.js`) → the content-addressed name actually emitted. */

@@ -12,7 +12,7 @@ import { describe, expect, it } from 'vitest';
  * SHAPE instead — the rules exist, in the phone block, in an order where the
  * un-hide wins — and the 430px rendering is checked in a browser separately.
  */
-const CSS = readFileSync(resolve('packages/markdown-app/src/styles.css'), 'utf8');
+const CSS = readFileSync(resolve('packages/workspaces-app/src/styles.css'), 'utf8');
 
 /** Body of the first `@media (max-width: 720px)` block that styles .save-state. */
 function phoneBlockWithSaveState(): string {

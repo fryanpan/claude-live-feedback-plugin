@@ -19,9 +19,9 @@ import { describe, expect, it } from 'vitest';
 // single-file read amounted to. Separate one-line reads on purpose — that is
 // the shape `bun run test:audit` counts, and a loop would hide the sites
 // rather than remove them.
-const STYLES = readFileSync(resolve('packages/markdown-app/src/styles.css'), 'utf8');
-const HUB = readFileSync(resolve('packages/markdown-app/src/hub.css'), 'utf8');
-const SIGNIN = readFileSync(resolve('packages/markdown-app/src/signin.css'), 'utf8');
+const STYLES = readFileSync(resolve('packages/workspaces-app/src/styles.css'), 'utf8');
+const HUB = readFileSync(resolve('packages/workspaces-app/src/hub.css'), 'utf8');
+const SIGNIN = readFileSync(resolve('packages/workspaces-app/src/signin.css'), 'utf8');
 const CSS = [STYLES, HUB, SIGNIN].join('\n');
 
 function declarationsOnly(css: string): string {

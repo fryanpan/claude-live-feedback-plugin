@@ -665,7 +665,7 @@ describe('servedRefReader', () => {
    *  provenance file. Synthetic; nothing here is a real bundle. */
   function publish(root: string, id: string, provenance: Record<string, unknown> | null): void {
     const dir = join(root, 'releases', id);
-    mkdirSync(join(dir, 'markdown-app'), { recursive: true });
+    mkdirSync(join(dir, 'workspaces-app'), { recursive: true });
     if (provenance) {
       writeFileSync(join(dir, 'release.json'), `${JSON.stringify(provenance)}\n`);
     }

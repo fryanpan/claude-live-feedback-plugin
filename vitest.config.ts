@@ -35,7 +35,7 @@ export default defineConfig({
       // measures it instead, and `scripts/coverage.ts` joins the two.
       include: [
         'packages/core/src/**/*.ts',
-        'packages/markdown-app/src/**/*.{ts,tsx}',
+        'packages/workspaces-app/src/**/*.{ts,tsx}',
         'packages/mcp/src/**/*.ts',
         'packages/widget/src/**/*.ts',
       ],

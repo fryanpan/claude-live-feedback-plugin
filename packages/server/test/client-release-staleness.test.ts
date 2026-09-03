@@ -32,7 +32,7 @@ import {
 function fakeBuild(marker: string): { dir: string; widget: string; markdownApp: string } {
   const dir = mkdtempSync(join(tmpdir(), 'lf-build-'));
   const widget = join(dir, 'widget');
-  const markdownApp = join(dir, 'markdown-app');
+  const markdownApp = join(dir, 'workspaces-app');
   mkdirSync(widget, { recursive: true });
   mkdirSync(markdownApp, { recursive: true });
   writeFileSync(join(widget, 'widget.iife.js'), `//${marker}\n`);
@@ -46,7 +46,7 @@ function fakeBuild(marker: string): { dir: string; widget: string; markdownApp: 
   return { dir, widget, markdownApp };
 }
 
-/** A build whose markdown-app bundle is missing a file it must have — the
+/** A build whose workspaces-app bundle is missing a file it must have — the
  *  shape of a real half-written build. */
 function brokenBuild(marker: string): { dir: string; widget: string; markdownApp: string } {
   const b = fakeBuild(marker);

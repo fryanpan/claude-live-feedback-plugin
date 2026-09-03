@@ -40,7 +40,7 @@ const IGNORED_REL = join('packages', 'server', 'test', 'dist', 'zz-audit-ignored
 const IGNORED_ABS = join(REPO, IGNORED_REL);
 
 /** A site the audit already counts, committed and tracked. */
-const TRACKED_SITE = join('packages', 'markdown-app', 'test', 'back-link-tap-target-css.test.ts');
+const TRACKED_SITE = join('packages', 'workspaces-app', 'test', 'back-link-tap-target-css.test.ts');
 
 /** A file the sleep check must object to: one fixed wait, well over the bar. */
 const PROBE_SOURCE = `import { sleep } from 'bun';\n\nexport async function wait(): Promise<void> {\n  await sleep(2500);\n}\n`;

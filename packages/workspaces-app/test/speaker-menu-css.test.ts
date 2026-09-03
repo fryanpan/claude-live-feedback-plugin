@@ -12,7 +12,7 @@ import { describe, expect, it } from 'vitest';
  * the whole of it). The rendered result is measured in a real browser at
  * 1180x820 and 430px; that is what closes the criterion.
  */
-const CSS = readFileSync(resolve('packages/markdown-app/src/styles.css'), 'utf8');
+const CSS = readFileSync(resolve('packages/workspaces-app/src/styles.css'), 'utf8');
 const withoutComments = (css: string): string => css.replace(/\/\*[\s\S]*?\*\//g, '');
 
 /**

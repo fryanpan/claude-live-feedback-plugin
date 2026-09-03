@@ -33,7 +33,7 @@ describe('the row badges are capped against the viewport, not against themselves
     const { readFileSync } = await import('node:fs');
     const { resolve } = await import('node:path');
     // vitest runs from the repo root (vitest.config.ts lives there).
-    const css = readFileSync(resolve('packages/markdown-app/src/hub.css'), 'utf8');
+    const css = readFileSync(resolve('packages/workspaces-app/src/hub.css'), 'utf8');
     const rules = [...css.matchAll(/\.hub-task-badges\s*\{([^}]*)\}/g)].map((m) => m[1] ?? '');
     // Positive control: the rules this asserts about really were found, and
     // one of them really does cap the width.
@@ -61,7 +61,7 @@ describe('the walkthrough page reserves launcher clearance on a phone', () => {
   it('gives the card bottom clearance wherever the phone block restyles it', async () => {
     const { readFileSync } = await import('node:fs');
     const { resolve } = await import('node:path');
-    const css = readFileSync(resolve('packages/markdown-app/src/hub.css'), 'utf8');
+    const css = readFileSync(resolve('packages/workspaces-app/src/hub.css'), 'utf8');
     // The media blocks are the unit: sticky nav and card clearance have to
     // travel together, so find the block and assert about that one text.
     // Brace-scanned rather than regexed — a media block holds nested rules,
@@ -105,7 +105,7 @@ describe('the walkthrough card head keeps a readable title on a phone', () => {
   it('gives the title a width floor rather than letting it shrink to nothing', async () => {
     const { readFileSync } = await import('node:fs');
     const { resolve } = await import('node:path');
-    const css = readFileSync(resolve('packages/markdown-app/src/hub.css'), 'utf8');
+    const css = readFileSync(resolve('packages/workspaces-app/src/hub.css'), 'utf8');
     const rule = css.match(/\.hub-walk-title\s*\{([^}]*)\}/)?.[1] ?? '';
     // Positive control: the rule this asserts about was found and is the one
     // that lays the title out.
@@ -124,7 +124,7 @@ describe('the walkthrough card head keeps a readable title on a phone', () => {
  * a renamed selector fails loudly rather than passing vacuously.
  */
 describe('settings popover + presence visibility (CSS contract)', () => {
-  const css = readFileSync(resolve('packages/markdown-app/src/hub.css'), 'utf8');
+  const css = readFileSync(resolve('packages/workspaces-app/src/hub.css'), 'utf8');
 
   it('the settings panel floats instead of shifting the page', () => {
     const rule = css.match(/\.hub-settings-panel\s*\{([^}]*)\}/)?.[1] ?? '';
@@ -159,7 +159,7 @@ describe('hub-app voice wiring', () => {
   /** Comment lines stripped — prose ABOUT a call must not count as a call
    *  site. (It did, on the first run of this test.) */
   function code(): string {
-    const src = readFileSync(resolve('packages/markdown-app/src/hub/hub-app.ts'), 'utf8');
+    const src = readFileSync(resolve('packages/workspaces-app/src/hub/hub-app.ts'), 'utf8');
     return src
       .split('\n')
       .filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l))
@@ -196,7 +196,7 @@ describe('the unplaced banner is gone from the board', () => {
   }
 
   it('hub-app neither hosts the strip nor renders it', () => {
-    const src = code('packages/markdown-app/src/hub/hub-app.ts');
+    const src = code('packages/workspaces-app/src/hub/hub-app.ts');
     expect(src).not.toContain('hub-unplaced');
     expect(src).not.toContain('renderUnplacedStrip');
     // Positive control: the board host it used to sit above is still there.
@@ -204,7 +204,7 @@ describe('the unplaced banner is gone from the board', () => {
   });
 
   it('the stylesheet carries no rule for it', () => {
-    const css = readFileSync(resolve('packages/markdown-app/src/hub.css'), 'utf8');
+    const css = readFileSync(resolve('packages/workspaces-app/src/hub.css'), 'utf8');
     expect(css).not.toMatch(/\.hub-unplaced/);
     // Positive control: the board's own rules are still read from this file.
     expect(css).toMatch(/\.hub-board-foot/);
