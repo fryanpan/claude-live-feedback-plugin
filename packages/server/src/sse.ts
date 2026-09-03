@@ -96,7 +96,10 @@ export class SseHub {
    * which is the property that allows this signal to widen a delivery
    * decision where a bare subscriber count may only narrow one.
    */
-  private byDoc = new Map<string, Map<Sink, { shareId?: string; agentId?: string }>>();
+  private byDoc = new Map<
+    string,
+    Map<Sink, { shareId?: string; agentId?: string; shareMember?: string }>
+  >();
 
   /** channel → recent frames (broadcast + addressed), oldest first. Bounded by REPLAY_MAX_EVENTS
    *  and REPLAY_MAX_AGE_MS (see the constants above for why those numbers).
@@ -158,7 +161,13 @@ export class SseHub {
    */
   onAgentStreams: ((docId: string, agentId: string) => void) | null = null;
 
-  add(docId: string, sink: Sink, shareId?: string, agentId?: string): () => void {
+  add(
+    docId: string,
+    sink: Sink,
+    shareId?: string,
+    agentId?: string,
+    shareMember?: string,
+  ): () => void {
     let set = this.byDoc.get(docId);
     if (!set) {
       set = new Map();
@@ -167,6 +176,7 @@ export class SseHub {
     set.set(sink, {
       ...(shareId !== undefined ? { shareId } : {}),
       ...(agentId !== undefined ? { agentId } : {}),
+      ...(shareMember !== undefined ? { shareMember } : {}),
     });
     if (agentId !== undefined) this.onAgentStreams?.(docId, agentId);
     return () => this.remove(docId, sink);
@@ -448,6 +458,29 @@ export class SseHub {
     return closed;
   }
 
+  /**
+   * Close every stream whose authorizing MEMBERSHIP the predicate names — the
+   * SSE half of `Rooms.closeSocketsForShareMembers`, and there for the same
+   * reason: a stream is authorized once at open, so a share-link visitor who
+   * has been ejected keeps receiving every new comment until it drops.
+   */
+  closeForShareMembers(match: (memberKey: string) => boolean): number {
+    let closed = 0;
+    for (const [docId, set] of this.byDoc) {
+      for (const [sink, who] of set) {
+        if (!who.shareMember || !match(who.shareMember)) continue;
+        try {
+          sink.close();
+        } catch {
+          // Already gone; the remove below is the bookkeeping either way.
+        }
+        this.remove(docId, sink);
+        closed += 1;
+      }
+    }
+    return closed;
+  }
+
   /** Close streams whose authorizing share is no longer live (revoked or
    *  expired). Returns the shareIds swept. */
   closeForDeadShares(isLive: (shareId: string) => boolean): string[] {
@@ -486,6 +519,7 @@ export function openSseStream(
   transform?: (payload: SsePayload & Record<string, unknown>) => SsePayload,
   agentId?: string,
   lastEventId?: string,
+  shareMember?: string,
 ): Response {
   let controller: ReadableStreamDefaultController<Uint8Array> | null = null;
   const encoder = new TextEncoder();
@@ -512,7 +546,7 @@ export function openSseStream(
       };
       // initial comment so proxies flush headers
       c.enqueue(encoder.encode(':ok\n\n'));
-      remove = hub.add(docId, sink, shareId, agentId);
+      remove = hub.add(docId, sink, shareId, agentId, shareMember);
       // Catch-up, BETWEEN registration and the first live write. Everything
       // in start() runs synchronously on one event loop, so no broadcast can
       // land between `hub.add` above and this replay — the replayed tail and

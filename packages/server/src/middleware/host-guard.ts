@@ -123,6 +123,42 @@ export interface TrustedHostOpts {
    */
   proxiedTrustedHosts?: string[];
   /**
+   * The SHARE hostname(s) — `share.<domain>` — where a share link is opened
+   * and where the people who redeemed one keep working.
+   *
+   * The FIFTH list, and the one whose Access application admits EVERYONE:
+   * its policy is "any email, one-time PIN", so passing Cloudflare there
+   * proves an address and grants nothing at all. What decides a share-host
+   * visitor's reach is this server's own membership record — the emails that
+   * have redeemed a live link for a workspace (`ShareLinks.isMember`).
+   *
+   * Separate from `proxiedAccessHosts` for exactly that reason, and the
+   * separation is the security property. A collaboration hostname sits behind
+   * an application whose policy names people the operator admitted; this one
+   * sits behind an application that admits the world. Merging the lists would
+   * make "the operator let this address through the door" and "anybody with
+   * an email" the same fact, and every workspace reachable from the wider one
+   * would inherit the narrower one's trust.
+   *
+   * Requires `shareLinkAccessFronted` — its own audience, not the owner's.
+   */
+  shareLinkHosts?: string[];
+  /**
+   * True when a Cloudflare Access verifier is configured for the SHARE
+   * hostname specifically: team domain AND the share application's own
+   * audience (`CF_ACCESS_SHARE_AUD`).
+   *
+   * A SECOND flag rather than a reuse of `accessFronted`, and this is the
+   * audience cross-check made structural. The share application and the
+   * owner's application are different applications with different AUD tags;
+   * verifying a share-host request against the owner's audience would accept
+   * the operator's own token on the everyone-policy hostname, and verifying
+   * an owner-host request against the share audience would accept a token
+   * anyone on the internet can mint by typing an email. One flag would have
+   * let a deployment configure one and silently get the other.
+   */
+  shareLinkAccessFronted?: boolean;
+  /**
    * True when a Cloudflare Access verifier really is configured for the
    * proxied hosts above — team domain AND a static audience.
    *
@@ -333,6 +369,33 @@ export function isProxiedTrustedHost(
 }
 
 /**
+ * Is this Host the SHARE hostname arriving through the Cloudflare tunnel?
+ *
+ * The same three conditions every proxied list imposes — the request really
+ * came through the edge, Access really is configured, exact membership — with
+ * one difference that is the whole point: the Access condition it checks is
+ * `shareLinkAccessFronted`, the SHARE application's own audience, not the
+ * owner's. A deployment that configured `CF_ACCESS_AUD` and nothing else
+ * classifies no share host at all, which is refusal rather than a hostname
+ * verified against the wrong application.
+ *
+ * What a `true` means to the caller is narrower than it looks: the
+ * application behind this hostname admits any email, so classifying here
+ * grants only the chance to present a verified address. Everything after that
+ * is the membership check.
+ */
+export function isShareLinkHost(host: string | null | undefined, opts: TrustedHostOpts): boolean {
+  if (!opts.viaProxy) return false;
+  if (!opts.shareLinkAccessFronted) return false;
+  const h = normalizeHost(host);
+  if (h === '') return false;
+  return (opts.shareLinkHosts ?? [])
+    .map((c) => normalizeHost(c))
+    .filter((c) => c !== '')
+    .includes(h);
+}
+
+/**
  * Is this Host the dedicated hostname Recall.ai dials back on?
  *
  * Exact match against the single configured name, same rule as every other
@@ -386,6 +449,7 @@ export interface ShareTarget {
 export type HostDecision =
   | { kind: 'local' } // trusted local caller: no gate
   | { kind: 'share'; target: ShareTarget } // per-share Access host: JWT + scope
+  | { kind: 'share-link' } // the share hostname: JWT (share aud) + membership
   | { kind: 'collab' } // Access-fronted collaboration host: JWT + collabScope
   | { kind: 'proxied-local' } // Access-fronted operator host: JWT, then local
   | { kind: 'recall-callback' } // the bot callback host: two routes, nothing else
@@ -395,8 +459,8 @@ export type HostDecision =
  * Classify a request's Host.
  *
  * Order matters: our own names win, then the bot callback hostname, then a
- * per-share Access hostname, then the operator's opt-in collaboration hosts,
- * then the operator's own proxied address.
+ * per-share Access hostname, then the share hostname, then the operator's
+ * opt-in collaboration hosts, then the operator's own proxied address.
  * Anything else is refused — the tunnel forwards every hostname under its
  * ingress here, so "unrecognised" must mean refuse, never "skip the gate".
  *
@@ -428,6 +492,14 @@ export function classifyHost(
   const h = normalizeHost(host);
   const target = opts.lookupShare(h);
   if (target) return { kind: 'share', target };
+  // Ahead of `collab` on purpose. The two surfaces are the same size, and a
+  // hostname on both lists must resolve to the one whose Access application
+  // admits the WORLD — served as a share host, every workspace decided by
+  // this server's membership record. Resolving it as `collab` instead would
+  // judge an everyone-policy visitor by the collaboration hostname's
+  // membership rule (a live share's allow list), which was written for an
+  // application that admits only people the operator named.
+  if (isShareLinkHost(host, opts)) return { kind: 'share-link' };
   if (isAccessTunnelHost(host, opts)) return { kind: 'collab' };
   if (isProxiedTrustedHost(host, opts)) return { kind: 'proxied-local' };
   return { kind: 'deny', reason: 'unknown_host' };

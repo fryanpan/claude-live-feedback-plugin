@@ -47,6 +47,9 @@ const {
   proxiedTrustedHosts,
   proxiedTrustedEmails,
   proxiedTrustedReady,
+  shareLinkHosts,
+  cfAccessShareAud,
+  shareLinkReady,
   recallCallbackHost,
   meetingBotWebhookSecret,
   pluginRefreshIntervalMs,
@@ -191,6 +194,11 @@ while (!handle) {
       // release. Same string `initServerSentry` got above.
       ...(sentryDsn && releaseSourceRef ? { sentryRelease: releaseSourceRef } : {}),
       cfAccess,
+      // The share hostname and the audience of the ONE Access application in
+      // front of it. Passed only when BOTH resolved: `resolveServerConfig`
+      // already said loudly why it refused, and handing the list over without
+      // an audience would put an unverified hostname in the classifier.
+      ...(shareLinkReady ? { shareLinkHosts, shareLinkAudience: cfAccessShareAud } : {}),
       share,
       summarizer,
       ...(codeSenderChoice.sender ? { codeSender: codeSenderChoice.sender } : {}),

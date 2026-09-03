@@ -197,3 +197,96 @@ describe('resolveServerConfig', () => {
     expect(cfg.pluginRefreshIntervalMs).toBe(0);
   });
 });
+
+/**
+ * The one misconfiguration that is fatal rather than warned about.
+ *
+ * Everything else in the share-link block degrades to a hostname that answers
+ * 403. This one degrades to the operator's own address accepting a token that
+ * anyone on the internet can mint by typing an email at the everyone-policy
+ * share sign-in — so the server refuses to come up at all.
+ *
+ * Driven in a subprocess because the refusal IS `process.exit(1)`, which in
+ * this process would take the test runner with it. The exit code is the
+ * assertion; a warning that let boot continue would read as a pass here.
+ */
+describe('a share audience equal to the owner audience is fatal', () => {
+  const boot = async (env: Record<string, string>) => {
+    const proc = Bun.spawn(
+      [
+        process.execPath,
+        '-e',
+        [
+          "const m = await import('./packages/server/src/server-config.ts');",
+          'm.resolveServerConfig({',
+          '  env: JSON.parse(process.env.CW_TEST_ENV_JSON),',
+          '  repoRoot: process.cwd(),',
+          '  arg: (_n, f) => f,',
+          '});',
+          "console.log('booted');",
+        ].join(''),
+      ],
+      {
+        cwd: new URL('../../..', import.meta.url).pathname,
+        env: { ...process.env, CW_TEST_ENV_JSON: JSON.stringify(env) },
+        stdout: 'pipe',
+        stderr: 'pipe',
+      },
+    );
+    const [out, err, code] = await Promise.all([
+      new Response(proc.stdout).text(),
+      new Response(proc.stderr).text(),
+      proc.exited,
+    ]);
+    return { out, err, code };
+  };
+
+  const SHARED = {
+    CF_ACCESS_TEAM_DOMAIN: 'example.cloudflareaccess.com',
+    CW_SHARE_LINK_HOSTS: 'share.example.test',
+  };
+
+  it('refuses to start when the two audiences are the same', async () => {
+    const r = await boot({
+      ...SHARED,
+      CF_ACCESS_AUD: 'one-application-for-both',
+      CF_ACCESS_SHARE_AUD: 'one-application-for-both',
+    });
+    expect(r.code).toBe(1);
+    expect(r.out).not.toContain('booted');
+    expect(r.err).toContain('CF_ACCESS_SHARE_AUD');
+  });
+
+  it('refuses when they differ only by surrounding whitespace', async () => {
+    // The shape a copy-paste actually makes. Compared untrimmed, this is the
+    // one value that would slip past the check written to stop it.
+    const r = await boot({
+      ...SHARED,
+      CF_ACCESS_AUD: '  one-application-for-both  ',
+      CF_ACCESS_SHARE_AUD: 'one-application-for-both',
+    });
+    expect(r.code).toBe(1);
+  });
+
+  it('starts when they are two different applications', async () => {
+    // The positive control the refusals need: the same configuration with the
+    // share hostname on its own audience boots.
+    const r = await boot({
+      ...SHARED,
+      CF_ACCESS_AUD: 'owner-application',
+      CF_ACCESS_SHARE_AUD: 'share-application',
+    });
+    expect({ code: r.code, booted: r.out.includes('booted') }).toEqual({ code: 0, booted: true });
+  });
+
+  it('starts on an owner-audience-only configuration, which names no share audience', async () => {
+    // Every deployment that has not adopted share links. The check must be
+    // reachable only when a share hostname is configured, or it would refuse
+    // to boot the servers that never asked for this feature.
+    const r = await boot({
+      CF_ACCESS_TEAM_DOMAIN: SHARED.CF_ACCESS_TEAM_DOMAIN,
+      CF_ACCESS_AUD: 'owner-application',
+    });
+    expect({ code: r.code, booted: r.out.includes('booted') }).toEqual({ code: 0, booted: true });
+  });
+});
