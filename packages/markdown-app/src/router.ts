@@ -122,7 +122,7 @@ async function swap(docId: string): Promise<void> {
   applyBackLink(document, meta.backTo, returnItemFrom(location.search));
   // Same reasoning, same moment: the word is chrome the next doc must not
   // inherit, and a superseded navigation must not write it.
-  applyHuddleCrumb(document, meta.huddle === true);
+  applyHuddleCrumb(document, meta.huddle === true, meta.huddleKind);
 
   const client = o.connectFor(docId, meta.docType);
   // Registered FIRST → runs LAST on dispose, after the surface's teardown.

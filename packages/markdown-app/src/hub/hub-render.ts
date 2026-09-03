@@ -450,21 +450,23 @@ export function renderArchivedList(
 // ── Quick actions: the two ways work starts ───────────────────────────────
 
 /**
- * "New task", "Make a plan" and "Have a discussion", in the slot the
+ * "New task", "Make a plan" and "Have a meeting", in the slot the
  * quick-add box had.
  *
  * Bryan, 2026-08-29: *"From board, have a quick flow to create a new task
  * (replace current text box) that creates an empty item in the usual task
  * detail view. And have another button to start a planning huddle."* Neither
  * asks anything first: the task is an empty row the panel opens on with the
- * title ready to type, and the huddle is a doc the editor opens with the mic
+ * title ready to type, and the live doc is one the editor opens with the mic
  * already asked for.
  *
- * Renamed from "Start a planning huddle" / "Record a conversation" with the
- * round-4 entry mock (Bryan, 2026-09-01): the old labels named the mechanism;
- * these name what you leave with — a plan doc, or discussion notes. The
- * rename touches these buttons only; routes, params, classes and doc titles
- * keep the huddle name.
+ * Renamed twice. First from "Start a planning huddle" / "Record a
+ * conversation" with the round-4 entry mock (Bryan, 2026-09-01): the old
+ * labels named the mechanism; these name what you leave with. Then the second
+ * button became "Have a meeting" (Bryan, 2026-09-02: *"Drop it from the UI.
+ * We can have plans and meeting notes. And change the button to 'Have a
+ * meeting'."*). Words only — routes, params and class names keep the huddle
+ * name until the naming pass.
  *
  * The third is the same huddle for a room rather than for one person, and it
  * is what an in-person conversation has instead of a platform to join: the
@@ -527,7 +529,7 @@ export function renderQuickActions(container: HTMLElement, handlers: QuickAction
   const conversation = document.createElement('button');
   conversation.type = 'button';
   conversation.className = 'hub-btn hub-conversation-start';
-  conversation.innerHTML = `${SPEECH_ICON}<span>Have a discussion</span>`;
+  conversation.innerHTML = `${SPEECH_ICON}<span>Have a meeting</span>`;
   hold(conversation, handlers.onStartConversation);
   row.append(newTask, huddle, conversation);
   // Error prevention rather than error recovery, matching the doc surface's
