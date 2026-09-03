@@ -22,6 +22,33 @@
  *    doc's websocket, and mint or revoke shares. A share host may therefore
  *    reach only the app shell and the shared doc's own endpoints.
  *
+ * 3. **Access on every browser-facing hostname** (Bryan, 2026-09-02: *"Every
+ *    access including share link or reading requires sign in via one time
+ *    code or otherwise… Let's make everyone go through cloudflare access. No
+ *    internal hole."*). `accessOnly` is that rule, and the server turns it on
+ *    by default.
+ *
+ *    THE RULE: the only zone that reaches this server without a verified
+ *    Cloudflare Access identity is a process on the box — a request whose
+ *    Host is a loopback name AND whose socket peer is a loopback address.
+ *    Every other hostname is browser-facing, so it must classify into a kind
+ *    that verifies an Access token (`share`, `collab`, `proxied-local`) or be
+ *    denied.
+ *
+ *    THE HOLE IT CLOSES, in two halves. The first is the tailnet and the LAN:
+ *    `tailscaleHost`, `lanHosts` and `extraHosts` classified `local`, so any
+ *    browser on the private network read every board, doc, attachment, file
+ *    tree and diff, and opened any Yjs socket, with no identity at all. The
+ *    second is that `local` was decided from the `Host` header, which the
+ *    client writes: measured 2026-08-17, a LAN client and a tailnet client
+ *    each sending `Host: localhost:1` were both classified local, so the
+ *    first half could be walked around by typing. Requiring the peer address
+ *    to be loopback is what makes "on the box" a fact the kernel reports
+ *    rather than a claim the caller makes.
+ *
+ *    What it does NOT close: a process already running on the box. That is
+ *    inside the trust boundary either way — it can read this server's memory.
+ *
  * Both are pure predicates so they can be unit-tested without a server, and
  * are additionally exercised at the HTTP layer — the route layer is the part
  * nothing type-checks (see docs/process/learnings.md).
@@ -136,6 +163,40 @@ export interface TrustedHostOpts {
    *   working bot into one that joins, records, bills and delivers nothing.
    */
   recallCallbackHost?: string | null;
+  /**
+   * ACCESS-ONLY mode: every browser-facing hostname is behind Cloudflare
+   * Access, and the only unauthenticated zone is a process on the box.
+   *
+   * On, `isTrustedLocalHost` answers true for a loopback Host and a loopback
+   * `loopbackPeer` and nothing else — `tailscaleHost`, `lanHosts` and
+   * `extraHosts` stop granting anything, so a tailnet or LAN browser falls
+   * through to `deny` unless its hostname is on one of the Access lists. See
+   * rule 3 in this file's header for the hole that closes.
+   *
+   * Off restores the pre-2026-09-02 classification, which is what the tests
+   * of the LAN-alias grant still exercise. The deployment switch is
+   * `CW_ACCESS_ONLY_BROWSER_HOSTS` (server-config.ts), and it defaults ON;
+   * this option defaults OFF so that a caller constructing opts by hand gets
+   * the behaviour its other fields describe rather than a silent narrowing.
+   */
+  accessOnly?: boolean;
+  /**
+   * True when the request's SOCKET PEER is a loopback address — what
+   * `isLoopbackAddress(server.requestIP(req)?.address)` answers.
+   *
+   * Read only under `accessOnly`, and it is the half the Host header cannot
+   * fake. Absent answers false, so "I could not read the peer" is never "on
+   * the box".
+   *
+   * Note what it does NOT distinguish: both of this deployment's reverse
+   * proxies terminate on this machine and dial the server over loopback, so
+   * a Cloudflare visitor and a `tailscale serve` visitor BOTH arrive with a
+   * loopback peer (measured — see middleware/client-address.ts). Their Host
+   * is the tunnel or MagicDNS name rather than a loopback name, which is
+   * what separates them here, and the `viaProxy` veto separates the
+   * Cloudflare one again.
+   */
+  loopbackPeer?: boolean;
 }
 
 const LOOPBACK = new Set(['localhost', '127.0.0.1', '::1', '0.0.0.0']);
@@ -192,6 +253,10 @@ export function isTrustedLocalHost(
   const h = normalizeHost(host);
   if (h === '') return false; // HTTP/1.1 requires Host; absent = not trusted
   if (opts.viaProxy) return false; // arrived via Cloudflare — not our LAN
+  // Access-only: the box, and nothing else. BOTH halves are required — the
+  // Host says which surface was asked for, the peer address says the caller
+  // is really on this machine, and the header alone is client-controlled.
+  if (opts.accessOnly) return LOOPBACK.has(h) && opts.loopbackPeer === true;
   if (LOOPBACK.has(h)) return true;
   // NOTE: deliberately no "any private IPv4 is local" rule. Host is
   // client-controlled, so trusting 10/8, 192.168/16, 172.16/12 or CGNAT
@@ -320,7 +385,6 @@ export interface ShareTarget {
 export type HostDecision =
   | { kind: 'local' } // trusted local caller: no gate
   | { kind: 'share'; target: ShareTarget } // per-share Access host: JWT + scope
-  | { kind: 'link' } // public link host: authorize from the session cookie
   | { kind: 'collab' } // Access-fronted collaboration host: JWT + collabScope
   | { kind: 'proxied-local' } // Access-fronted operator host: JWT, then local
   | { kind: 'recall-callback' } // the bot callback host: two routes, nothing else
@@ -330,11 +394,17 @@ export type HostDecision =
  * Classify a request's Host.
  *
  * Order matters: our own names win, then the bot callback hostname, then a
- * per-share Access hostname, then the single public hostname that link shares
- * live on, then the operator's opt-in collaboration hosts, then the
- * operator's own proxied address.
+ * per-share Access hostname, then the operator's opt-in collaboration hosts,
+ * then the operator's own proxied address.
  * Anything else is refused — the tunnel forwards every hostname under its
  * ingress here, so "unrecognised" must mean refuse, never "skip the gate".
+ *
+ * There is no `link` kind any more. The single public hostname link-mode
+ * shares were served from used to classify here and be authorized from a
+ * signed COOKIE, which is precisely the browser-facing surface that reached
+ * board content with no verified identity behind it. It is now an
+ * unrecognised hostname like any other unless the operator also lists it as
+ * a collaboration host, where it gets an Access token like everyone else.
  *
  * The external kinds are checked narrowest-first on purpose, and the widest
  * — `proxied-local`, the whole product — LAST. Putting a name in an opt-in
@@ -347,8 +417,6 @@ export function classifyHost(
   host: string | null | undefined,
   opts: TrustedHostOpts & {
     lookupShare: (host: string) => ShareTarget | null;
-    /** The one hostname link-mode shares are served from, if configured. */
-    linkHost?: string | null;
   },
 ): HostDecision {
   if (isTrustedLocalHost(host, opts)) return { kind: 'local' };
@@ -359,8 +427,6 @@ export function classifyHost(
   const h = normalizeHost(host);
   const target = opts.lookupShare(h);
   if (target) return { kind: 'share', target };
-  const linkHost = normalizeHost(opts.linkHost ?? '');
-  if (linkHost !== '' && h === linkHost) return { kind: 'link' };
   if (isAccessTunnelHost(host, opts)) return { kind: 'collab' };
   if (isProxiedTrustedHost(host, opts)) return { kind: 'proxied-local' };
   return { kind: 'deny', reason: 'unknown_host' };

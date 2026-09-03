@@ -2,27 +2,21 @@
  * Share types — how a review surface is published to someone outside the
  * tailnet, and what they're allowed to reach.
  *
- * Two auth modes:
+ * ONE auth mode. A visitor proves an email address to Cloudflare Access in
+ * front of a per-share hostname, and the per-app AUD means a token minted for
+ * one share is rejected at another.
  *
- * - `link` — a SIGNED capability URL (the S3-presigned pattern). The URL
- *   carries the share id, an expiry, and an HMAC over both under a
- *   server-held key (share/url-signing.ts); a tampered or expired URL is
- *   indistinguishable from one that never existed. Needs no Cloudflare Zero
- *   Trust at all: no team domain, no account id, no API token — though an
- *   optional edge Worker (infra/share-link-worker/) runs the same check in
- *   front of the tunnel. Opening `/share/<id>?exp=…&sig=…` exchanges the
- *   URL for a signed session cookie; every later request is authorized from
- *   that cookie. Anyone holding the link is in, so TTLs are short and the
- *   scope check (middleware/host-guard.ts) is what bounds a leak.
+ * `link` mode is RETIRED (Bryan, 2026-09-02: *"Every access including share
+ * link or reading requires sign in via one time code or otherwise."*). It was
+ * a signed capability URL — `/share/<id>?exp=…&sig=…`, an HMAC over the id
+ * and the expiry — exchanged once for a session cookie, and anyone holding
+ * the link was in with no identity at all. That is the surface the decision
+ * closes, so nothing mints one any more and `/share/<id>` redeems nothing.
  *
- * - `access` — Cloudflare Access in front of a per-share hostname. The
- *   visitor proves an email address, and the per-app AUD means a token
- *   minted for one share is rejected at another. Use when the content is
- *   sensitive, the audience is more than a couple of people, or you need
- *   attribution and per-person revocation.
- *
- * Both modes share one scope engine — the mode only decides how we answer
- * "which share is this request for?".
+ * The RECORDS stay. Removing a capability is not deleting user content: a
+ * link record still lists, still shows who it was for and when it expires,
+ * and can still be revoked. `listForApi` marks every one of them
+ * `redeemable: false`, and `retired: 'link_mode'` says why.
  *
  * **A BOARD is the unit of sharing** (Bryan, 2026-08-17: "Workspace only — a
  * review must be filed on a board before it can be shared"). Two grants were
@@ -64,7 +58,11 @@ export interface Share {
   /** Random 8-hex id used as the registry primary key. */
   shareId: string;
   surface: ShareSurface;
-  /** How a visitor is authorized. Absent on pre-link-mode records = 'access'. */
+  /**
+   * How a visitor is authorized. Absent on pre-link-mode records = 'access'.
+   * `'link'` appears only on records minted before the retirement; nothing
+   * writes it now, and every serving path refuses it.
+   */
   mode?: ShareMode;
   /**
    * The doc this share's URL OPENS — the workspace's entry doc, or `''` for
@@ -112,24 +110,38 @@ export interface Share {
   expiresAt: number;
 }
 
-export interface CreateShareLinkReq {
+export interface CreateShareWorkspaceReq {
   /** The BOARD in scope. There is no `docId` and no `entryDocId`
    *  alternative: file the review on a board and share the board. */
   workspaceId: string;
-  /** Defaults to DEFAULT_LINK_TTL_SECONDS (two weeks). */
+  /**
+   * Who the Access application admits. Each entry is either an ADDRESS
+   * (`someone@partner.example`) or a DOMAIN (`@partner.example`, or the bare
+   * `partner.example`) — see `accessPolicyRule` in shares.ts, which is what
+   * turns one into a Cloudflare policy rule. Must be non-empty: an Access app
+   * with no allow policy admits nobody.
+   */
+  allowDomains: string[];
   ttlSeconds?: number;
   /** Optional human label shown in list_shares. */
   label?: string;
-}
-
-export interface CreateShareWorkspaceReq {
-  /** The BOARD in scope. See CreateShareLinkReq. */
-  workspaceId: string;
-  allowDomains: string[];
-  ttlSeconds?: number;
   /** Optional slug override. Default is `<YYYY-MM-DD>-<3hex>`. */
   name?: string;
 }
+
+/**
+ * A share as the API serves it: the stored record plus the one thing the
+ * record cannot say about itself.
+ *
+ * `redeemable` is false for every retired link-mode record and for anything
+ * past its expiry. It exists so a caller reading `list_shares` does not have
+ * to know the retirement happened to understand why a URL in the list does
+ * not open.
+ */
+export type ListedShare = Share & {
+  redeemable: boolean;
+  retired?: 'link_mode';
+};
 
 export interface ShareConfig {
   /** `access` mode only. */
@@ -143,9 +155,10 @@ export interface ShareConfig {
    */
   baseHostname?: string;
   /**
-   * The single public hostname link-mode shares are served from, e.g.
-   * `feedback.example.com`. Requests arriving on it are authorized by the
-   * session cookie rather than by hostname. Required for `link` mode.
+   * RETIRED. The single public hostname link-mode shares were served from.
+   * Accepted so a box that still sets `CF_SHARE_PUBLIC_HOSTNAME` starts and
+   * keeps a share config, and ignored everywhere else: nothing classifies a
+   * host by it and no route redeems on it.
    */
   publicHostname?: string;
   /** Default TTL for new shares in seconds. Defaults to one week. */

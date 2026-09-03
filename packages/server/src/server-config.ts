@@ -192,6 +192,51 @@ export function resolveServerConfig(opts: {
   const requireSignInToWrite = signInToWriteFromEnv(env.CW_REQUIRE_SIGNIN_TO_WRITE);
 
   /**
+   * ACCESS-ONLY browser hosts. Default ON (Bryan, 2026-09-02: *"Let's make
+   * everyone go through cloudflare access. No internal hole."*).
+   *
+   * This is the setting that says WHICH hostnames are browser-facing, and the
+   * answer it gives is "every one that is not loopback". On, the only zone
+   * that reaches this server without a verified Cloudflare Access identity is
+   * a process on the box: a loopback Host from a loopback socket peer. The
+   * tailnet name, this machine's LAN names and every `TRUSTED_HOSTS` entry
+   * stop being an unauthenticated door — they answer 403 unknown_host unless
+   * they are also listed as an Access host. See rule 3 in
+   * middleware/host-guard.ts.
+   *
+   * `CW_ACCESS_ONLY_BROWSER_HOSTS=0` (or false/no/off) restores the old
+   * classification. It is spelled the same way as `CW_REQUIRE_SIGNIN_TO_WRITE`
+   * — only an explicit falsey word turns it off — because a typo must fail
+   * CLOSED, and an unset variable is the secure default rather than the old
+   * behaviour.
+   */
+  const accessOnlyBrowserHosts = !['0', 'false', 'no', 'off'].includes(
+    (env.CW_ACCESS_ONLY_BROWSER_HOSTS ?? '').trim().toLowerCase(),
+  );
+
+  /**
+   * The server's OWN emailed-code sign-in — the `/signin` page and the
+   * `/api/auth/start` + `/api/auth/verify` routes behind it.
+   *
+   * Under access-only, every browser that reaches this server has already
+   * proven an address at Cloudflare Access, so a second sign-in asks a person
+   * to authenticate twice and leaves a "you are not signed in" dead end on a
+   * surface where nobody can be un-signed-in. It is therefore OFF whenever
+   * the access-only rule is on, and back on the moment that rule is turned
+   * off — the two are one decision, not two.
+   *
+   * `CW_EMAIL_CODE_SIGNIN=1` forces it on anyway, for a deployment that wants
+   * both doors. Spelled the opposite way round from the flags above on
+   * purpose: here the DEFAULT is the closed thing, so only an explicit truthy
+   * word opens it.
+   */
+  const emailCodeSignIn = ['1', 'true', 'yes', 'on'].includes(
+    (env.CW_EMAIL_CODE_SIGNIN ?? '').trim().toLowerCase(),
+  )
+    ? true
+    : !accessOnlyBrowserHosts;
+
+  /**
    * The address whose email identity is the fleet owner. Without it,
    * `isOwnerActor` keeps matching only the two pre-email spellings, and the
    * day the owner signs in by email the owner-activity view quietly reads
@@ -350,14 +395,37 @@ export function resolveServerConfig(opts: {
     );
   }
 
+  // Access-only with nothing Access-fronted means no browser can reach this
+  // server except one running ON the box. That is a correct fail-closed state
+  // and a miserable one to diagnose from a 403, so it is said at boot. LOUD
+  // rather than fatal: a fresh install has no Access application yet, and
+  // refusing to start would make the first run of the product the thing that
+  // fails.
+  const anyAccessHostConfigured =
+    (accessTunnelHosts.length > 0 && accessTunnelReady) ||
+    (proxiedTrustedHosts.length > 0 && proxiedTrustedReady);
+  if (accessOnlyBrowserHosts && !anyAccessHostConfigured) {
+    console.error(
+      '[feedback] ACCESS-ONLY is on and no Cloudflare Access hostname is configured: ' +
+        'the tailnet name, the LAN names and TRUSTED_HOSTS will answer 403 unknown_host, ' +
+        'so the only browser that can reach this server is one on this machine using ' +
+        'http://localhost:<port>. Set CF_ACCESS_TEAM_DOMAIN + CF_ACCESS_AUD and list the ' +
+        'hostname in CW_PROXIED_TRUSTED_HOSTS (operator) or CF_ACCESS_TUNNEL_HOSTS ' +
+        '(collaborators), or set CW_ACCESS_ONLY_BROWSER_HOSTS=0 to restore the old ' +
+        'unauthenticated tailnet/LAN access.',
+    );
+  }
+
   // Sharing.
   //
-  // LINK mode needs only CF_SHARE_PUBLIC_HOSTNAME — the single hostname the
-  // tunnel serves. No Cloudflare account, no Zero Trust team, no API token.
+  // ACCESS mode — per-share hostnames behind Cloudflare Access — is the only
+  // mode. It needs CF_SHARE_BASE_HOSTNAME + CF_ACCOUNT_ID +
+  // CF_ACCESS_TEAM_DOMAIN; the API token comes from the macOS Keychain via the
+  // share module's reader.
   //
-  // ACCESS mode (per-share hostnames behind Cloudflare Access) additionally
-  // needs CF_SHARE_BASE_HOSTNAME + CF_ACCOUNT_ID + CF_ACCESS_TEAM_DOMAIN; the
-  // API token comes from the macOS Keychain via the share module's reader.
+  // CF_SHARE_PUBLIC_HOSTNAME is read only so a box still setting it keeps a
+  // share config at all. It authorizes nothing: link mode is retired and the
+  // host classifier has no `link` kind.
   const accessShareConfigured = Boolean(
     env.CF_SHARE_BASE_HOSTNAME && env.CF_ACCOUNT_ID && cfAccessTeam,
   );
@@ -419,6 +487,8 @@ export function resolveServerConfig(opts: {
     sharingEnvLocked,
     requireEmailAuth,
     requireSignInToWrite,
+    accessOnlyBrowserHosts,
+    emailCodeSignIn,
     ownerEmail,
     trustedHosts,
     cfAccess,
