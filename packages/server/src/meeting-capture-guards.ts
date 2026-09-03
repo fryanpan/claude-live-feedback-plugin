@@ -5,14 +5,16 @@
  * about. The model's answer is never trusted on its own — a reference must
  * name a candidate the speech actually mentioned, a research topic and a
  * lookup query must be phrases somebody said, a requester must be a voice the
- * lines carried. See `meeting-task-capture.ts` for why a wrong link costs
- * more than a missing one.
+ * lines carried, and an ask must have used one of the two spoken cues. See
+ * `meeting-task-capture.ts` for why a wrong link costs more than a missing
+ * one.
  *
  * These are pure functions over turns and strings: no board, no model, no
  * clock. That is what lets the thresholds be argued about in a unit test
  * rather than in a live meeting, which is where they were all set.
  */
 
+import { type AskCue, hasAskCue } from './meeting-ask-cues.ts';
 import type { NotesTurn } from './meeting-notes.ts';
 import { clipToWordBoundary } from './task-title.ts';
 
@@ -307,4 +309,28 @@ export function speakerOnTick(turns: readonly NotesTurn[], claimed: string): str
     if (turn.speaker && turn.speaker.toLowerCase() === want) return turn.speaker;
   }
   return undefined;
+}
+
+/**
+ * Did the speech use one of the two spoken conventions — "Claude, can you …"
+ * for now, "create a task …" for later?
+ *
+ * The convention and its origin are in `meeting-ask-cues.ts`; what this adds
+ * is the window it is asked about. THE WHOLE WINDOW, not the one line an ask
+ * was quoted from: an ask straddles a tick boundary often enough that the
+ * overlap exists for it, and the measured half of that — "…that is the real
+ * cost" / boundary / "can you file a ticket for that one?" — puts the cue and
+ * the subject in different turns. A guard reading the quote alone would
+ * reject exactly the asks {@link overlapWindow} was built to rescue.
+ *
+ * Coarser than per-line, and safe in the direction that matters: a tick with
+ * neither cue anywhere in it files nothing and acts on nothing, which is the
+ * convention's own rule.
+ *
+ * Turns are joined on newlines so each spoken line opens its own utterance —
+ * one line's last word must not run into the next line's first and read as a
+ * cue neither of them said.
+ */
+export function cueSpokenOnTick(turns: readonly NotesTurn[], cue: AskCue): boolean {
+  return hasAskCue(turns.map((t) => t.text).join('\n'), cue);
 }
