@@ -5,7 +5,7 @@ import { answerAsksBack } from '@feedback/core';
  * Lifted verbatim out of `createServer`'s request closure; the handlers
  * read their collaborators off `TaskRoutesContext` instead of the scope.
  */
-import { classifyActor } from '../activity.ts';
+import { classifyActor } from '../actor-identity.ts';
 import { legacyDecisionItem } from '../tasks.ts';
 import type { TaskRouteRequest, TaskRoutesContext } from './task-routes-context.ts';
 

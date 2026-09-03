@@ -49,12 +49,11 @@ import {
   appendActivity,
   buildEventDoc,
   clampReadPayload,
-  classifyActor,
   eventId,
-  isOwnerActor,
   payloadDigest,
   toUtcIso,
 } from './activity.ts';
+import { classifyActor, isOwnerActor } from './actor-identity.ts';
 import {
   type BindDiffOpts,
   type BindDiffResult,

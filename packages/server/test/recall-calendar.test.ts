@@ -11,17 +11,16 @@ import { describe, expect, it } from 'bun:test';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { createGoogleOauthApp, resolveGoogleOauthCreds } from '../src/google-oauth.ts';
 import {
   CalendarConnectionStore,
   CalendarSyncConsumer,
   type RecallCalendarClient,
   type RecallCalendarEvent,
-  createGoogleOauthApp,
   createRecallCalendarClient,
   eligibleForBot,
   parseCalendarEvent,
   parseCalendarSyncWebhook,
-  resolveGoogleOauthCreds,
 } from '../src/recall-calendar.ts';
 import type { FetchLike } from '../src/recall.ts';
 

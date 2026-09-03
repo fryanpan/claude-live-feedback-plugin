@@ -13,17 +13,15 @@ import { describe, expect, it } from 'bun:test';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { VERIFY_APPEAR_GRACE_MS, watchDeployBoot } from '../src/deploy-verify.ts';
 import {
-  type DeployResult,
-  Deployer,
-  VERIFY_BOOT_TIMEOUT_MS,
   confirmDeployBoot,
   deployLogPath,
   expireDeployVerification,
   readDeployLog,
   writeDeployLog,
-} from '../src/deploy.ts';
+} from '../src/deploy-log.ts';
+import { VERIFY_APPEAR_GRACE_MS, watchDeployBoot } from '../src/deploy-verify.ts';
+import { type DeployResult, Deployer, VERIFY_BOOT_TIMEOUT_MS } from '../src/deploy.ts';
 
 const T0 = 1_700_000_000_000;
 

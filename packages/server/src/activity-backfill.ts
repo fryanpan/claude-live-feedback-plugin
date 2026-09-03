@@ -7,14 +7,12 @@ import * as Y from 'yjs';
 import {
   type Event,
   appendActivity,
-  authorFields,
   buildEventDoc,
-  classifyActor,
   eventId,
-  isOwnerActor,
   payloadDigest,
   toUtcIso,
 } from './activity.ts';
+import { authorFields, classifyActor, isOwnerActor } from './actor-identity.ts';
 import { loadIdentityLinks } from './identity-links.ts';
 import { readPrivateMeta } from './private-meta.ts';
 

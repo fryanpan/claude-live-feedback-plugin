@@ -286,21 +286,58 @@ which is what its header always claimed.
 Layer: domain, except `VoiceRouter` which stays a service. Final directory:
 `voice/` for the four voice files, `board/` for `ask-detection.ts`.
 
-## A7 · the operational adapters
+## A7 · the operational adapters — DONE
 
-| File | Becomes | Moves | Importers | Effort |
-|---|---|---|---|---|
-| `activity.ts` (582) | `actor-identity.ts` (~240) | `registerOwnerIdentity`, `linkIdentity`, `setIdentityRoster`, `resolveActor`, `classifyActor` and their `reset*` seams | 14 source files and 11 test files — the largest importer set in the plan | M |
-| `deploy.ts` (1,058) | `deploy-log.ts` (~250) | `writeDeployLog`, `readDeployLog`, `confirmDeployBoot`, `spawnDeployVerifier` | `bin.ts` import line | S |
-| `recall-calendar.ts` (721) | `google-oauth.ts` (~190) | `resolveGoogleOauthCreds`, `createGoogleOauthApp`, `createKeychainRefreshTokenVault`, `readKeychainAccount` | `bin.ts` and `server.ts` import lines | S |
+| File | Became | Moved | Measured |
+|---|---|---|---|
+| `activity.ts` (582) | `actor-identity.ts` | `classifyActor`, `authorFields`, `isOwnerActor`, the owner registry, the identity links, the roster handle and every `reset*` seam | 305 (est. ~240) |
+| `deploy.ts` (1,058) | `deploy-log.ts` | `writeDeployLog`, `readDeployLog`, `confirmDeployBoot`, `expireDeployVerification`, `spawnDeployVerifier`, and the record's four types | 282 (est. ~250) |
+| `recall-calendar.ts` (721) | `google-oauth.ts` | `resolveGoogleOauthCreds`, `createGoogleOauthApp`, `createKeychainRefreshTokenVault`, `readKeychainAccount` | 222 (est. ~190) |
 
-Three commits. `activity.ts` is a process-wide registry, so the extraction
-must not create a second module-level state: `actor-identity.ts` owns the maps
-and `activity.ts` imports them, never the reverse. Do the import rewrite with
-a single mechanical pass and let the type checker find the misses.
+Three commits, one per extraction, plus this one. The three parents end at
+**301**, **817** and **470** — which takes `activity.ts` and
+`recall-calendar.ts` off the over-limit list entirely, so their rows in
+`exceptions.md` are gone rather than marked done.
+
+**The importer set was 26, not 25, and the sweep found the extra one.**
+`classify-actor-malformed.test.ts` is not in either count in the row above.
+Rewriting every import with one mechanical pass over `packages/**/*.ts` — a
+regex on the import specifier, splitting each list into what stays and what
+goes — reached it without anyone having to remember it existed. The type
+checker then found nothing, which is the outcome that pass is for.
+
+**`isOwnerActor` and `authorFields` travelled with the five named symbols.**
+`isOwnerActor` reads `OWNER_IDS` and `resolveIdentityId`; `authorFields` is
+the defensive reader that both it and `classifyActor` call. Leaving either
+behind would have pointed the new file back at its parent, which is the cycle
+A2, A3 and A6 each hit. `ActorKind` moved for the same reason and
+`activity.ts` re-exports it, so `Event`'s own shape still reads from one
+import.
+
+**The deploy record's TYPES moved with the trace, and that was not in the
+plan.** `DeployResult`, `DeployStatus`, `DeployVerification` and `BusyDoc`
+describe a file three processes write and read without ever meeting — the
+deploy stamps `pending` before the restart kills it, the restarted server
+stamps `healthy`, a detached watchdog stamps `boot-failed`. That makes them a
+wire format belonging with the readers and writers, not an internal type of
+the runner. `VERIFY_BOOT_TIMEOUT_MS` went with them because it is the deadline
+written into the record. `deploy.ts` imports all five back and re-exports
+them, so no caller that names `DeployResult` changed.
+
+`bootFailedResult` is newly exported rather than moved-and-private:
+`Deployer.last` derives the same verdict at read time and stayed with the
+runner, and its own comment says the two must never tell different stories.
+
+**`google-oauth.ts` needed no back-import at all** — nothing below the seam in
+`recall-calendar.ts` reads any of it — with one exception that is worth
+recording. `clip`, a two-line clipper for a failed response's body, is called
+by both halves, and it was already written out by hand a third time in
+`recall.ts`. It is now exported from `recall.ts`, which both files already
+import and which imports neither, and all three sites call it. That is the
+only line changed beyond the move.
 
 Layer: `actor-identity.ts` is a service; `deploy-log.ts` and `google-oauth.ts`
-are infra. Final directory: `ops/` and `meeting/`.
+are adapters. Final directory: `ops/` and `meeting/`.
 
 ## A8 · the server test split — DONE
 
