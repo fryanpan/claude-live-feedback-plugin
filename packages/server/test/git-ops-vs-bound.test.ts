@@ -14,6 +14,7 @@ import {
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { classifyExternalContent } from '../src/git-provenance.ts';
+import { ROOM_TIMINGS } from '../src/room-timings.ts';
 import { Rooms } from '../src/rooms.ts';
 import { SseHub } from '../src/sse.ts';
 import { createWebhookDispatcher } from '../src/webhooks.ts';
@@ -312,7 +313,14 @@ describe('git operations against a bound doc', () => {
       await waitForFile(clonePath, (t) => t.includes('Live edit, not yet flushed.'));
       expect(readFileSync(clonePath, 'utf8')).not.toContain('Arrived from the remote.');
       expect(git(upstream, 'status', '--porcelain').trim()).toContain('doc.md');
-      expect(rooms.getSyncError('d3')?.message).toContain('git command');
+      // Waited for, not read once: the syncError is recorded on the same turn
+      // as the reassert, but reading it bare turned a missing conflict into
+      // "Received value must be an array type" — an error that names neither
+      // the doc nor what never happened.
+      const err = await waitFor(() => rooms.getSyncError('d3'), {
+        describe: 'the pull conflict to raise a syncError on d3',
+      });
+      expect(err?.message).toContain('git command');
     });
 
     /**
@@ -360,6 +368,101 @@ describe('git operations against a bound doc', () => {
       expect(err?.message).toContain('clobber-backups');
       expect(err?.message).not.toContain('git command');
     });
+  });
+});
+
+/**
+ * The interleaving above is reached by racing two overdue timers, so on a
+ * loaded machine it lands either way. This drives it DIRECTLY.
+ *
+ * The poll stamps `lastMtimeMs` the instant it sees a change and only then
+ * arms the read debounce. For the length of that debounce the write-back's
+ * own mtime guard compares disk against disk and concludes nothing moved —
+ * about bytes nobody has read yet. A flush landing in that window used to
+ * overwrite the external version with no backup, no syncError and no log
+ * line: the exact loss the conflict arm exists to prevent, reached by the
+ * one path that skipped it.
+ *
+ * Deterministic, with no sleeps: an injected clock steps past the touch
+ * rate-limit so `get()` polls on demand, and `flush()` runs the write-back
+ * synchronously while that reconcile is still pending.
+ */
+describe('a flush inside the read debounce cannot overwrite unread bytes', () => {
+  let root: string;
+  let dataDir: string;
+  let repo: string;
+  let path: string;
+  let rooms: Rooms;
+  let clock: number;
+
+  beforeEach(() => {
+    root = mkdtempSync(join(tmpdir(), 'lf-gitrace-'));
+    dataDir = mkdtempSync(join(tmpdir(), 'lf-gitrace-data-'));
+    repo = join(root, 'repo');
+    mkdirSync(repo);
+    git(repo, 'init', '-q', '-b', 'main');
+    path = join(repo, 'doc.md');
+    writeFileSync(path, MAIN_DOC);
+    git(repo, 'add', '.');
+    git(repo, 'commit', '-q', '-m', 'main version');
+    git(repo, 'checkout', '-q', '-b', 'other');
+    writeFileSync(path, OTHER_DOC);
+    git(repo, 'commit', '-q', '-am', 'other version');
+    git(repo, 'checkout', '-q', 'main');
+
+    clock = Date.now();
+    rooms = new Rooms({
+      dataDir,
+      sse: new SseHub(),
+      webhooks: createWebhookDispatcher({ onLog: () => {} }),
+      decorateDocMeta: (m) => ({ ...m, reviewUrl: `http://test/review/${m.docId}` }),
+      // The touch path's rate limit runs on this clock, so stepping it is
+      // what lets the test poll on demand instead of waiting for a tick.
+      now: () => clock,
+    });
+    rooms.getOrCreate('d1', { type: 'markdown', sourceUrl: path });
+    expect(rooms.attachFile('d1', path).ok).toBe(true);
+  });
+
+  afterEach(() => {
+    rmSync(root, { recursive: true, force: true });
+    rmSync(dataDir, { recursive: true, force: true });
+  });
+
+  it('the checked-out version is backed up and blamed on git, not silently lost', () => {
+    expect(
+      rooms.findAndReplace('d1', {
+        find: 'Intro paragraph on main.',
+        replace: 'Live edit, not yet flushed.',
+      }).ok,
+    ).toBe(true);
+
+    git(repo, 'checkout', '-q', 'other');
+    expect(readFileSync(path, 'utf8')).toContain('Intro paragraph on the other branch.');
+
+    // Step past the touch rate-limit so this `get` re-stats the file. That
+    // arms the read debounce and stamps the new mtime — the state the bug
+    // needed.
+    clock += ROOM_TIMINGS.filePollMs;
+    expect(rooms.get('d1')).toBeDefined();
+
+    // The write-back now fires with that reconcile still pending. Before the
+    // guard this wrote the live doc straight over the checkout.
+    rooms.flush();
+
+    const err = rooms.getSyncError('d1');
+    expect(err?.message).toContain('clobber-backups');
+    expect(err?.message).toContain('git command');
+
+    // The live edit still wins — the policy is unchanged, only the silence is.
+    expect(readFileSync(path, 'utf8')).toContain('Live edit, not yet flushed.');
+
+    // ...and the bytes it overwrote are recoverable, which is the whole point.
+    const backup = /\S*clobber-backups\S+/.exec(err?.message ?? '')?.[0];
+    expect(backup).toBeDefined();
+    expect(readFileSync(backup as string, 'utf8')).toContain(
+      'Intro paragraph on the other branch.',
+    );
   });
 });
 
