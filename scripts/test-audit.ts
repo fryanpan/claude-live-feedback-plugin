@@ -20,7 +20,7 @@
  *   bun run test:audit --write    rewrite the baseline to today's counts
  */
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
-import { join, sep } from 'node:path';
+import { dirname, join, relative, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const repoRoot = join(fileURLToPath(new URL('.', import.meta.url)), '..');
@@ -138,25 +138,280 @@ function fixedSleeps(): Check {
 }
 
 // 2. Source-shape tests: a test that reads a source, bundle or stylesheet file
-//    from the repo and asserts on its text. Counted as read sites, in test
-//    files that also carry at least one string assertion.
-const SOURCE_READ =
-  /(?:readFileSync|readFile|Bun\.file)\(\s*(?:[^)]*?)(?:['"`][^'"`]*(?:\/src\/|\/dist\/|\.css|\.js)['"`]|['"`][^'"`]*packages\/plugin[^'"`]*['"`])/;
-const TEXT_ASSERT = /expect\([^\n]*\)\s*(?:\.not)?\.(?:toContain|toMatch)\(/;
+//    from the repo and asserts on its text.
+//
+//    Two blind spots closed. The check used to look only INSIDE `*.test.ts`
+//    for the read, so nine MCP tests that read `packages/mcp/src` through
+//    `test/harness/mcp-source.ts` were invisible — and two of them had
+//    silently widened their slice to the whole file tail while the table
+//    stayed green. And it used to require `toContain`/`toMatch`, so
+//    `shell-grid-placement.test.ts` and `list-indent-css.test.ts`, which
+//    parse a stylesheet and assert the parsed value with `toBe` and
+//    `toBeGreaterThanOrEqual`, had never been counted at all.
+//
+//    So a test now counts when it reads source directly OR imports a module
+//    that does. Moving the read one file away is not an escape.
+//
+//    What it still cannot see, so that nobody reads a clean table as proof:
+//
+//    - A read in a TEST file whose path literal is on a different line, or in
+//      a constant declared elsewhere. `packages/widget/test/css-minify.test.ts`
+//      wraps its `join(..., 'src', 'styles.ts')` onto the next line and goes
+//      uncounted; `review-item-tools.test.ts` reads a `BUNDLE` const the same
+//      way. The module-level form below is looser precisely because a harness
+//      always does this; test files are still matched per line, so the site
+//      list can point at one.
+//    - A support module outside a `test/` directory. The walk stops at the
+//      edge of the test tree on purpose, and a reader parked in `src/` or in
+//      a sibling `helpers/` is therefore invisible.
+//    - `require()`. Only `import` specifiers are followed.
+
+/** A read call. The path may be computed, so the literal is matched separately. */
+const READ_CALL = /(?:readFileSync|readFile|Bun\.file)\(/;
+
+/**
+ * A quoted literal naming a source, bundle or stylesheet path.
+ *
+ * `fixtures/` is excluded on purpose: a test that reads its own fixture and
+ * asserts on it is testing a parser against sample input, which is behaviour.
+ * Without the exclusion a fixture named `.css` or `.js` would count, and the
+ * standard this check stands in for has nothing to say about it.
+ */
+const FIXTURE_PATH = /(?:^|\/)fixtures?(?:\/|$)/;
+const SOURCE_PATH = /(?:^|\/|\.\.)(?:src|dist)(?:\/|$)|\.css$|\.js$|packages\/plugin/;
+
+/** Does this quoted string name a source path the audit cares about? */
+function isSourcePath(literal: string): boolean {
+  return !FIXTURE_PATH.test(literal) && SOURCE_PATH.test(literal);
+}
+
+/** Source-path literals anywhere on a line. */
+function sourceLiterals(text: string): string[] {
+  return [...text.matchAll(/['"`]([^'"`\n]*)['"`]/g)]
+    .map((m) => m[1] ?? '')
+    .filter((l) => isSourcePath(l));
+}
+
+/** A read whose own call carries a source path — the precise, per-line form. */
+function readsSourceOnLine(text: string): boolean {
+  if (!READ_CALL.test(text)) return false;
+  return sourceLiterals(text).length > 0;
+}
+
+/**
+ * Does this MODULE read repo source at all?
+ *
+ * Deliberately looser than the per-line form: `mcp-source.ts` reads
+ * `readFileSync(join(SRC_DIR, f), 'utf8')`, where the only source-shaped
+ * literal in the file is the `'../../src'` that built `SRC_DIR` twenty lines
+ * up. A per-line rule sees nothing there, which is how nine tests hid.
+ */
+function moduleReadsSource(lines: string[]): boolean {
+  if (!lines.some((l) => READ_CALL.test(l) && !COMMENT_LINE.test(l))) return false;
+  return lines.some((l) => !COMMENT_LINE.test(l) && sourceLiterals(stripImports(l)).length > 0);
+}
+
+/**
+ * An import specifier is not a read.
+ *
+ * `packages/server/test/wait-for.ts` polls files at runtime paths and imports
+ * `../src/room-timings.ts` for the cadence constants. Counting that specifier
+ * as a source path made every one of its thirty-two importers a source-shape
+ * test — a bigger false positive than the blind spot this check was fixing.
+ */
+const IMPORT_CLAUSE = /(?:from\s*|\bimport\s*\(?\s*)['"][^'"]*['"]/g;
+
+function stripImports(text: string): string {
+  return text.replace(IMPORT_CLAUSE, '');
+}
+
+/**
+ * Every exported VALUE, and whether its type is written down.
+ *
+ * `annotated` is the load-bearing half. An export with no annotation is not
+ * evidence that the module returns no text — it is the absence of evidence,
+ * and `export const HUB_TEXT = TEXT['hub.css'];` appended to a harness is a
+ * one-line hole that inference would happily fill with `string` while a
+ * regex sees nothing. So an unannotated export lapses the exemption on its
+ * own, and `export {`, `export *`, `export default` and `export class` all
+ * count as unannotated for the same reason: nothing on the line says what
+ * comes out.
+ *
+ * Exported types and interfaces are skipped. `export type SheetName =
+ * 'hub.css' | …` is a string union that hands no test any stylesheet text.
+ */
+type ExportedValue = { annotated: boolean; type: string };
+
+function exportedValues(lines: string[]): ExportedValue[] {
+  const out: ExportedValue[] = [];
+  const opaque: ExportedValue = { annotated: false, type: '' };
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i] ?? '';
+    if (/^export\s+(?:type|interface)\b/.test(line)) continue;
+    if (/^export\s+(?:\*|\{|default\b|(?:abstract\s+)?class\b)/.test(line)) {
+      out.push(opaque);
+      continue;
+    }
+    if (/^export\s+(?:async\s+)?function\b/.test(line)) {
+      // Walk to the line that closes the signature: a multi-line signature
+      // puts the return type on the `): T {` line, not the `export` line.
+      for (let j = i; j < lines.length && j < i + 40; j++) {
+        const end = (lines[j] ?? '').match(/\)\s*(?::\s*([^{]*?))?\s*\{\s*$/);
+        if (end) {
+          out.push({ annotated: end[1] !== undefined, type: end[1] ?? '' });
+          i = j;
+          break;
+        }
+      }
+      continue;
+    }
+    const value = line.match(/^export\s+(?:const|let|var)\s+[A-Za-z_$][\w$]*\s*(?::\s*([^=]+))?=/);
+    if (value) out.push({ annotated: value[1] !== undefined, type: value[1] ?? '' });
+  }
+  return out;
+}
+
+/**
+ * The exemption, and why it is shaped this way.
+ *
+ * A module that reads source is assumed to hand that text to its importers.
+ * `packages/workspaces-app/test/css-harness.ts` is the honest exception: it
+ * reads four stylesheets only to INSTALL them in the test document, keeps the
+ * text in a module-private map, and returns computed styles and elements. Its
+ * forty-six importers assert behaviour and must not count.
+ *
+ * Claiming the exemption takes three things, each of which a reader can check
+ * on its own:
+ *
+ *  - a marker comment on a line of its own, holding nothing but the marker.
+ *    Prose that merely quotes the phrase does not exempt anything — the first
+ *    cut matched the phrase anywhere, so deleting the real marker from
+ *    `css-harness.ts` changed no count at all, because the module's header
+ *    paragraph said the words.
+ *  - every exported value annotated. No annotation is no evidence.
+ *  - no annotation naming `string`.
+ *
+ * So the marker cannot buy silence on its own: write it over a
+ * `function readSource(): string`, or over an export with no type at all, and
+ * the check counts you anyway. That is what stops the exemption from becoming
+ * the new hiding place, the way "put the read in a helper" was the old one.
+ */
+const NO_TEXT_MARKER = /^\s*\/\/\s*audit:\s*no-text\s*$/;
+
+function providesSourceText(rel: string): boolean {
+  const lines = read(rel);
+  if (!moduleReadsSource(lines)) return false;
+  if (!lines.some((l) => NO_TEXT_MARKER.test(l))) return true;
+  return exportedValues(lines).some((v) => !v.annotated || /\bstring\b/.test(v.type));
+}
+
+/** Relative import specifiers: static, side-effect and dynamic. */
+const IMPORT_SPECIFIER = /(?:from\s*|\bimport\s*\(?\s*)['"](\.[^'"]+)['"]/g;
+
+/**
+ * The walk stops at the edge of the test tree.
+ *
+ * A test that imports `../src/server.ts` is importing the SUBJECT, and the
+ * subject reads stylesheets and bundles as its day job — following the import
+ * in there counts every server test as a source-shape test and the number
+ * stops meaning anything (314 sites, against 18 real ones, when this filter
+ * was missing). What the check is looking for is a test-support module that
+ * reads source ON A TEST'S BEHALF, and those live beside the tests.
+ */
+const TEST_DIR = /(?:^|\/)tests?\//;
+
+function inTestTree(rel: string): boolean {
+  return TEST_DIR.test(rel);
+}
+
+function resolveImport(fromRel: string, spec: string): string | undefined {
+  const base = join(repoRoot, dirname(fromRel), spec);
+  const candidates = [
+    base,
+    `${base}.ts`,
+    `${base}.tsx`,
+    base.replace(/\.js$/, '.ts'),
+    join(base, 'index.ts'),
+  ];
+  for (const abs of candidates) {
+    if (/\.tsx?$/.test(abs) && existsSync(abs)) return relative(repoRoot, abs);
+  }
+  return undefined;
+}
+
+/**
+ * Does this module, or anything it imports, provide source text? Transitive,
+ * so a harness that wraps another harness is still counted, and memoised
+ * because forty-six test files ask about the same two modules.
+ */
+const textProviderCache = new Map<string, boolean>();
+
+function providesTransitively(rel: string, seen = new Set<string>()): boolean {
+  const cached = textProviderCache.get(rel);
+  if (cached !== undefined) return cached;
+  if (seen.has(rel)) return false;
+  seen.add(rel);
+  let answer = false;
+  if (inTestTree(rel) && existsSync(join(repoRoot, rel))) {
+    answer = providesSourceText(rel);
+    if (!answer) {
+      const body = readFileSync(join(repoRoot, rel), 'utf8');
+      for (const m of body.matchAll(IMPORT_SPECIFIER)) {
+        const next = resolveImport(rel, m[1] ?? '');
+        if (next && providesTransitively(next, seen)) {
+          answer = true;
+          break;
+        }
+      }
+    }
+  }
+  if (seen.size === 1) textProviderCache.set(rel, answer);
+  return answer;
+}
+
+/**
+ * An assertion on a value the test read out of a file.
+ *
+ * `toBe`/`toEqual`/`toStrictEqual` and the ordered comparisons join
+ * `toContain`/`toMatch` because a test that PARSES a stylesheet asserts the
+ * parsed value, not a substring — which is how the two stylesheet tests named
+ * at the top of this section stayed uncounted while grepping `styles.css`.
+ */
+const TEXT_ASSERT =
+  /expect\([^\n]*\)\s*(?:\.not)?\.(?:toContain|toMatch|toBe|toEqual|toStrictEqual|toBeGreaterThan|toBeGreaterThanOrEqual|toBeLessThan|toBeLessThanOrEqual)\(/;
+
 function sourceShape(): Check {
   const sites: Site[] = [];
   for (const file of gitFiles('*.test.ts', '*.test.tsx')) {
     const lines = read(file);
     if (!lines.some((l) => TEXT_ASSERT.test(l))) continue;
     lines.forEach((text, i) => {
-      if (SOURCE_READ.test(text)) sites.push({ file, line: i + 1, text: text.trim() });
+      if (COMMENT_LINE.test(text)) return;
+      if (readsSourceOnLine(text)) {
+        sites.push({ file, line: i + 1, text: text.trim() });
+        return;
+      }
+      for (const m of text.matchAll(IMPORT_SPECIFIER)) {
+        const target = resolveImport(file, m[1] ?? '');
+        if (target && providesTransitively(target)) {
+          sites.push({ file, line: i + 1, text: text.trim() });
+          return;
+        }
+      }
     });
   }
   return {
     id: 'sourceShape',
     title: 'source-shape reads (all suites)',
     pattern:
-      'readFileSync/Bun.file of a path under src/ or dist/, or a .css/.js/plugin file, in a test that asserts with toContain/toMatch',
+      'in a test that asserts with toContain/toMatch/toBe/toEqual/toStrictEqual or an ordered comparison: ' +
+      'a readFileSync/readFile/Bun.file whose call names a path under src/ or dist/, a .css/.js file or ' +
+      'packages/plugin (fixtures/ excluded), OR an import of a test module that reads one. ' +
+      'A reading module is assumed to hand the text on. It is exempt only when all three hold: a comment ' +
+      'line holding nothing but the marker `audit: no-text`, every exported value carrying an explicit ' +
+      'type or return annotation, and no annotation naming string. An unannotated export is not evidence, ' +
+      'so it counts (packages/workspaces-app/test/css-harness.ts returns computed styles and is the ' +
+      'module the exemption exists for)',
     sites,
   };
 }
