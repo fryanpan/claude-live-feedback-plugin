@@ -604,6 +604,149 @@ describe('POST /api/agents/:id/merge — review findings', () => {
   });
 });
 
+/**
+ * Merging BACK — the reversal `Identities.mergeAgent` documents ("the
+ * target's own `mergedInto` is cleared whenever it becomes a target").
+ * Reproduced on prod: A folded into B fine, and B folded back into A came
+ * out as `self-merge`, because the route resolved `into` with `get`, which
+ * follows `mergedInto` and answered A for both sides. The operator was left
+ * with the seat, the watch and the deliveries stranded on the wrong id.
+ */
+describe('POST /api/agents/:id/merge — merging back reverses an earlier merge', () => {
+  let handle: ServerHandle | null = null;
+  let dataDir: string | null = null;
+
+  afterEach(async () => {
+    await handle?.stop();
+    handle = null;
+    if (dataDir) rmSync(dataDir, { recursive: true, force: true });
+    dataDir = null;
+  });
+
+  const req = async (path: string, init: { method?: string; body?: unknown } = {}) => {
+    const port = handle?.port ?? 0;
+    const res = await fetch(`http://localhost:${port}${path}`, {
+      method: init.method ?? (init.body === undefined ? 'GET' : 'POST'),
+      headers: { host: `localhost:${port}`, 'content-type': 'application/json' },
+      ...(init.body !== undefined ? { body: JSON.stringify(init.body) } : {}),
+    });
+    return { status: res.status, json: (await res.json()) as Record<string, unknown> };
+  };
+
+  /** The raw roster row stored under this exact id — `get` would follow the
+   *  merge and answer the survivor, which is the thing under test here. */
+  const raw = (id: string) => handle?.identities.list().find((r) => r.id === id);
+  const watchKeys = (id: string) =>
+    (handle?.agentWatches.list(id, () => true).watches ?? []).map((w) => w.key);
+
+  /** agent-x LEADS its own board and holds a durable watch on it, then is
+   *  folded into agent-y — so both halves of a merge (the board seat and the
+   *  delivery set) have something to move back. Returns the workspace id. */
+  async function seedForwardMerge(): Promise<string> {
+    const created = await req('/api/workspaces', {
+      body: { name: 'merge-back-hub', goal: 'Ship it.', leadAgentId: 'agent-x' },
+    });
+    const wsId = (created.json.workspace as { id: string }).id;
+    expect(
+      (
+        await req(`/api/workspaces/${wsId}/attachments`, {
+          body: { agentId: 'agent-x', agentName: 'X', runtime: 'claude-code-local' },
+        })
+      ).status,
+    ).toBe(200);
+    expect(
+      (await req('/api/agents/agent-x/watches', { body: { add: [`ws:${wsId}`] } })).status,
+    ).toBe(200);
+
+    // POSITIVE CONTROL: the forward merge works, and really does move both.
+    const forward = await req('/api/agents/agent-x/merge', {
+      body: { into: 'agent-y', author: { id: 'agent-y', name: 'Y', kind: 'agent' } },
+    });
+    expect(forward.status, JSON.stringify(forward.json)).toBe(200);
+    expect(forward.json.seats).toEqual([wsId]);
+    expect(forward.json.watches).toEqual([`ws:${wsId}`]);
+    expect(handle?.tasks.getWorkspace(wsId)?.leadAgentId).toBe('agent-y');
+    expect(watchKeys('agent-y')).toEqual([`ws:${wsId}`]);
+    expect(raw('agent-x')?.mergedInto).toBe('agent-y');
+    return wsId;
+  }
+
+  it('moves the seat and the watch back, and clears the survivor mark on the new lead', async () => {
+    dataDir = mkdtempSync(join(tmpdir(), 'agent-merge-back-'));
+    handle = createServer({ port: 0, dataDir });
+    const wsId = await seedForwardMerge();
+
+    const back = await req('/api/agents/agent-y/merge', {
+      body: { into: 'agent-x', author: { id: 'agent-x', name: 'X', kind: 'agent' } },
+    });
+    expect(back.status, JSON.stringify(back.json)).toBe(200);
+    expect(back.json.seats).toEqual([wsId]);
+    expect(back.json.watches).toEqual([`ws:${wsId}`]);
+
+    // The seat and the delivery set came home…
+    expect(handle.tasks.getWorkspace(wsId)?.leadAgentId).toBe('agent-x');
+    expect(watchKeys('agent-x')).toEqual([`ws:${wsId}`]);
+    expect(watchKeys('agent-y')).toEqual([]);
+    // …and the roster reads the reversal: agent-x is live again, agent-y is
+    // the row that was folded, and agent-x resolves to itself.
+    expect(raw('agent-x')?.mergedInto).toBeUndefined();
+    expect(raw('agent-y')?.mergedInto).toBe('agent-x');
+    expect(handle.identities.get('agent-y')?.id).toBe('agent-x');
+    expect(handle.identities.get('agent-x')?.id).toBe('agent-x');
+    expect(handle.identities.get('agent-x')?.mergedFrom).toEqual(['agent-y']);
+
+    // The reversed id can attach again; the id it was folded into cannot.
+    const reattach = await req(`/api/workspaces/${wsId}/attachments`, {
+      body: { agentId: 'agent-x', runtime: 'claude-code-local' },
+    });
+    expect(reattach.status).toBe(200);
+    const stale = await req(`/api/workspaces/${wsId}/attachments`, {
+      body: { agentId: 'agent-y', runtime: 'claude-code-local' },
+    });
+    expect(stale.status).toBe(409);
+    expect(stale.json.into).toBe('agent-x');
+  });
+
+  it('dry-runs the reversal: the fold it reports is the one the write makes', async () => {
+    dataDir = mkdtempSync(join(tmpdir(), 'agent-merge-back-dry-'));
+    handle = createServer({ port: 0, dataDir });
+    const wsId = await seedForwardMerge();
+
+    const dry = await req('/api/agents/agent-y/merge', {
+      body: { into: 'agent-x', dryRun: true },
+    });
+    expect(dry.status, JSON.stringify(dry.json)).toBe(200);
+    expect(dry.json.seats).toEqual([wsId]);
+    expect(dry.json.watches).toEqual([`ws:${wsId}`]);
+    // agent-x is the survivor again, so the only id folded into it is
+    // agent-y — NOT agent-x itself, which is what a report built from the
+    // resolved (and therefore wrong) target used to say.
+    expect((dry.json.roster as { mergedFrom: string[] }).mergedFrom).toEqual(['agent-y']);
+    // The dry run touched nothing.
+    expect(handle.tasks.getWorkspace(wsId)?.leadAgentId).toBe('agent-y');
+    expect(raw('agent-x')?.mergedInto).toBe('agent-y');
+
+    // …and the write that follows lands exactly the set the dry run named.
+    const back = await req('/api/agents/agent-y/merge', { body: { into: 'agent-x' } });
+    expect(back.status, JSON.stringify(back.json)).toBe(200);
+    expect((back.json.roster as { mergedFrom: string[] }).mergedFrom).toEqual(['agent-y']);
+  });
+
+  it('still refuses a merge of an id into itself', async () => {
+    dataDir = mkdtempSync(join(tmpdir(), 'agent-merge-back-self-'));
+    handle = createServer({ port: 0, dataDir });
+    const res = await req('/api/agents/agent-x/merge', { body: { into: 'agent-x' } });
+    expect(res.status).toBe(400);
+    expect(res.json.error).toBe('self-merge');
+    // The refusal is not a side effect of the id being unknown: the same id
+    // pair with a live roster row behind it is refused too.
+    expect(handle.identities.upsertAgent('agent-x')?.id).toBe('agent-x');
+    const again = await req('/api/agents/agent-x/merge', { body: { into: 'agent-x' } });
+    expect(again.status).toBe(400);
+    expect(again.json.error).toBe('self-merge');
+  });
+});
+
 function nonLoopbackIPv4(): string[] {
   const out: string[] = [];
   for (const list of Object.values(networkInterfaces())) {
