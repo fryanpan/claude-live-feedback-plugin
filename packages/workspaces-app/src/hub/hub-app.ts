@@ -54,6 +54,7 @@ import {
   archivedGoals,
   archivedTasks,
   bandOfGoal,
+  boardBlockers,
   boardCalibration,
   boardSections,
   boardSectionsWithEffort,
@@ -640,6 +641,16 @@ export async function bootHub(env: HubBootEnv): Promise<void> {
   // ── Region renders ──────────────────────────────────────────────────────
   const taskList = () => [...state.tasks.values()];
   const titleOf = (taskId: string) => state.tasks.get(taskId)?.title ?? taskId;
+
+  /** The tickets one task is waiting on, as Related Links entries. Reads the
+   *  board's own derivation so a panel can never disagree with the ring on
+   *  the row; an id naming a row this board has never seen is skipped by
+   *  `boardBlockers` and so is absent here too. */
+  const openBlockersOf = (task: HubTask): { taskId: string; title: string }[] =>
+    (boardBlockers(taskList()).get(task.id) ?? []).map((id) => ({
+      taskId: id,
+      title: titleOf(id),
+    }));
 
   /** The one opener behind every task tap — board row, queue row, Home
    *  activity pane — so the panel opens the same way from each, with only
@@ -1441,6 +1452,13 @@ export async function bootHub(env: HubBootEnv): Promise<void> {
         // person's own open work other tasks wait on, the panel — and only
         // the panel — says so, via the amber blocked note.
         blocked: task ? humanBlockerRows(taskList()).find((r) => r.task.id === task.id) : undefined,
+        // The other direction: the tickets THIS task is waiting on, resolved
+        // to titles here because the panel holds no board. Derived from the
+        // same `boardBlockers` the board's rings come from, so the panel and
+        // the row can never disagree about what is holding the work.
+        blockers: task ? openBlockersOf(task) : [],
+        onRelatedAdd: (t, url) => void addRelatedLink(t, url),
+        onRelatedRemove: (t, entry) => void removeRelatedLink(t, entry),
         // The workspace's audit rows; the panel takes this task's out of them.
         // The same list the Activity view reads — one log, two surfaces.
         activity: state.events,
@@ -1926,6 +1944,8 @@ export async function bootHub(env: HubBootEnv): Promise<void> {
     assignTask,
     setTaskGoal,
     setTaskDue,
+    addRelatedLink,
+    removeRelatedLink,
     archiveTask,
     restoreTask,
     goalCascadeCount,

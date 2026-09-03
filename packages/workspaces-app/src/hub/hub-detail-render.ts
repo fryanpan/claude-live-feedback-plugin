@@ -115,6 +115,15 @@ function docLinkHref(docId: string, workspaceId?: string): string {
     : `/review/${encodeURIComponent(docId)}`;
 }
 
+/** The canonical href for a task: the board's own deep link. Without a
+ *  workspace id there is no address to build — the board is workspace-scoped
+ *  — so the anchor points at the query alone, which the board reads on the
+ *  page it is already on. */
+function taskLinkHref(taskId: string, workspaceId?: string): string {
+  const q = `?task=${encodeURIComponent(taskId)}`;
+  return workspaceId !== undefined ? `/workspaces/${encodeURIComponent(workspaceId)}${q}` : q;
+}
+
 /** Applies the shared link-title cache to one title-hydrated anchor.
  *  `null` (not `undefined`) means the server WAS asked and came back with
  *  nothing — a genuinely untitled doc, not a lookup still in flight — so it
@@ -387,6 +396,30 @@ export interface DetailHandlers {
    * says it, and the board row and the Home queue deliberately do not.
    */
   blocked?: BlockerRow;
+  /**
+   * The tickets this task is WAITING on — its open `after` edges, resolved to
+   * titles by the app, which is the only layer that holds the board's rows.
+   * They render as Related Links entries wearing the barred ring, because a
+   * blocker is a link to another ticket and giving it a section of its own
+   * would say the same thing twice.
+   *
+   * The opposite direction of `blocked`, which names work waiting on THIS
+   * task.
+   */
+  blockers?: readonly RelatedBlocker[];
+  /**
+   * Add whatever this URL names to Related Links. A ticket on this workspace
+   * becomes an `after` edge — that is how a blocker is set, since Blocked is
+   * derived from those edges and no status control offers it — a doc becomes
+   * a doc link, and anything else is kept as the plain address it is.
+   *
+   * The app decides which of those writes it is: the panel knows only that a
+   * reader typed a URL. Absent → no add control is drawn.
+   */
+  onRelatedAdd?: (task: HubTask, url: string) => void;
+  /** Take one entry back off: the `after` edge for a blocker, the ref for a
+   *  doc or a plain URL. Absent → no x is drawn. */
+  onRelatedRemove?: (task: HubTask, entry: RelatedEntry) => void;
   /** Clock for the "asked 3h ago" lines. Injected so a test can pin it. */
   now?: number;
   /**
@@ -597,6 +630,56 @@ export interface RelatedDocLink {
   held?: boolean;
 }
 
+/** One ticket this row is waiting on: an open `after` edge, resolved against
+ *  the board so the entry can read as a title rather than an id. */
+export interface RelatedBlocker {
+  taskId: string;
+  title: string;
+}
+
+/** What an x was pressed on. The caller decides what removing it means — an
+ *  `after` edge for a blocker, a ref for the other two — because only the app
+ *  knows which write that is. */
+export type RelatedEntry =
+  | { kind: 'blocker'; taskId: string }
+  | { kind: 'doc'; docId: string }
+  | { kind: 'url'; url: string };
+
+export interface RelatedLinksOptions {
+  /** The tickets this row waits on, listed FIRST and each wearing the barred
+   *  ring the board draws on the blocked row. Nothing is written to say they
+   *  are blockers: the ring is what says it, in the same place it says it on
+   *  the board (owner's rule — affordances, not captions). */
+  blockers?: readonly RelatedBlocker[];
+  /** Plain `url` refs, shown as the link itself. A pasted address that is not
+   *  a doc or a ticket on this workspace has no title to resolve to, and
+   *  inventing one would be a lie about what the reader will land on. */
+  urls?: readonly string[];
+  /** Remove one entry. Absent → no x is drawn at all, which is the goal
+   *  panel's case and every read-only surface's. */
+  onRemove?: (entry: RelatedEntry) => void;
+  /** Render the section even when it holds nothing, so an add control below
+   *  it has a heading to sit under. */
+  keepEmpty?: boolean;
+}
+
+/** The plain-URL refs a row carries, in stored order. Deduped by URL: the
+ *  same address linked twice is one entry, and the x would otherwise remove
+ *  both at once while only one row disappeared. */
+export function relatedUrlLinks(row: { links?: unknown[] }): string[] {
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const raw of row.links ?? []) {
+    if (typeof raw !== 'object' || raw === null) continue;
+    const ref = raw as Record<string, unknown>;
+    if (ref.kind !== 'url') continue;
+    if (typeof ref.url !== 'string' || ref.url === '' || seen.has(ref.url)) continue;
+    seen.add(ref.url);
+    out.push(ref.url);
+  }
+  return out;
+}
+
 /**
  * Every doc a task or goal ties to, in Related-Links order: the origin doc
  * first (a thread origin counts — the thread lives on a doc, and that doc is
@@ -654,8 +737,11 @@ export function relatedDocLinks(row: {
 export function renderRelatedLinks(
   links: readonly RelatedDocLink[],
   workspaceId?: string,
+  opts: RelatedLinksOptions = {},
 ): HTMLElement | null {
-  if (links.length === 0) return null;
+  const blockers = opts.blockers ?? [];
+  const urls = opts.urls ?? [];
+  if (links.length + blockers.length + urls.length === 0 && opts.keepEmpty !== true) return null;
   const wrap = document.createElement('div');
   wrap.className = 'hub-related-links';
   const heading = document.createElement('p');
@@ -664,6 +750,42 @@ export function renderRelatedLinks(
   const list = document.createElement('ul');
   list.className = 'hub-related-links-list';
   const anchors: HTMLAnchorElement[] = [];
+
+  /** The x. One per entry, and only when the caller can act on it. */
+  const remove = (li: HTMLElement, entry: RelatedEntry, reads: string): void => {
+    if (!opts.onRemove) return;
+    const x = document.createElement('button');
+    x.type = 'button';
+    x.className = 'hub-related-link-x';
+    x.setAttribute('aria-label', reads);
+    x.title = reads;
+    x.textContent = '×';
+    x.addEventListener('click', (ev) => {
+      ev.stopPropagation();
+      opts.onRemove?.(entry);
+    });
+    li.append(x);
+  };
+
+  // Blockers first: what this ticket is WAITING for outranks what it merely
+  // refers to, and a reader scanning the section wants the held-open ring in
+  // one run rather than scattered through the doc links.
+  for (const blocker of blockers) {
+    const li = document.createElement('li');
+    li.className = 'hub-related-blocker';
+    const mark = document.createElement('span');
+    mark.className = 'hub-status-mark hub-status-mark-blocked hub-related-mark';
+    mark.setAttribute('aria-hidden', 'true');
+    const a = document.createElement('a');
+    a.className = 'hub-related-link';
+    a.href = taskLinkHref(blocker.taskId, workspaceId);
+    a.textContent = blocker.title;
+    a.addEventListener('click', (ev) => ev.stopPropagation());
+    li.append(mark, a);
+    remove(li, { kind: 'blocker', taskId: blocker.taskId }, `Stop waiting on “${blocker.title}”`);
+    list.append(li);
+  }
+
   for (const link of links) {
     const li = document.createElement('li');
     const a = document.createElement('a');
@@ -679,9 +801,27 @@ export function renderRelatedLinks(
       held.textContent = 'Draft — held until the plan is approved';
       li.append(held);
     }
+    remove(li, { kind: 'doc', docId: link.docId }, 'Remove this link');
     list.append(li);
     anchors.push(a);
   }
+
+  // A pasted address that is not ours: the link itself, exactly as it was
+  // typed. There is no title to hydrate to and no ring to draw.
+  for (const url of urls) {
+    const li = document.createElement('li');
+    const a = document.createElement('a');
+    a.className = 'hub-related-link hub-related-link-plain';
+    a.href = url;
+    a.rel = 'noreferrer';
+    a.target = '_blank';
+    a.textContent = url;
+    a.addEventListener('click', (ev) => ev.stopPropagation());
+    li.append(a);
+    remove(li, { kind: 'url', url }, 'Remove this link');
+    list.append(li);
+  }
+
   wrap.append(heading, list);
   hydrateDocTitles(anchors);
   return wrap;
@@ -729,7 +869,14 @@ export function detailFields(
   const statusCtl = document.createElement('span');
   statusCtl.className = 'hub-detail-statusctl';
   const mark = document.createElement('span');
-  mark.className = `hub-status-mark hub-status-mark-${task.status}`;
+  // Blocked wears the board's barred ring here too, and for the same reason
+  // the shared class exists: the panel and the row must not disagree about
+  // what a state looks like. It is drawn from the SAME derivation the ring on
+  // the row comes from — an open `after` edge — and the picker beside it still
+  // reads "To do", because blocked is not a status and the way out of it is
+  // closing the ticket this one waits on.
+  const blocked = task.status === 'todo' && (handlers.blockers?.length ?? 0) > 0;
+  mark.className = `hub-status-mark hub-status-mark-${blocked ? 'blocked' : task.status}`;
   mark.setAttribute('aria-hidden', 'true');
   const status = document.createElement('select');
   // Deliberately NOT `hub-status-select` / `hub-chip-<status>`. Those two are
