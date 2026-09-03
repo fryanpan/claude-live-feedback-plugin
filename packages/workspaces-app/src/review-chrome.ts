@@ -12,6 +12,7 @@ import {
   applyPlacement,
   balloonMarginVisible,
   cardPlacement,
+  effectiveSurface,
   inlineCardsVisible,
   onPlacementChange,
   otherPlacement,
@@ -227,7 +228,9 @@ export function wireCardPlacementToggle(): void {
   if (!btn || btn.dataset.wired === '1') return;
   btn.dataset.wired = '1';
   const paint = () => {
-    const label = placementToggleLabel(cardPlacement());
+    // The SURFACE, not the stored choice: on a phone a stored `balloon`
+    // resolves to the sheet, and the button has to say so.
+    const label = placementToggleLabel(effectiveSurface());
     btn.textContent = label.glyph;
     btn.title = label.title;
     btn.setAttribute('aria-label', label.ariaLabel);

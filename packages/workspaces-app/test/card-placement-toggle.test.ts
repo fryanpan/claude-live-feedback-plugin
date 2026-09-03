@@ -83,6 +83,32 @@ describe('the placement toggle', () => {
     expect(document.body.dataset.cards).toBe('sheet');
   });
 
+  it('says sheet, not margin, on the phone where the margin cannot exist', () => {
+    // Same state as the test above, read from the CONTROL. The button used to
+    // paint from the stored choice, so a reader on a phone was told the cards
+    // were in the right margin — and a screen reader announced it — while the
+    // surface on screen was a sheet over the doc and the flow was empty.
+    setViewport(PHONE);
+    setCardPlacement('balloon');
+    const btn = topbarButton();
+    wireCardPlacementToggle();
+    expect(document.body.dataset.cards).toBe('sheet');
+    expect(btn.title).toContain('sheet');
+    expect(btn.title).not.toContain('margin');
+    expect(btn.getAttribute('aria-label')).not.toContain('right margin');
+
+    // Control: the same stored choice on a screen that HAS a margin still
+    // says margin, so the wording tracks the surface and not the viewport
+    // alone.
+    setViewport(IPAD);
+    setCardPlacement('balloon');
+    for (const n of Array.from(document.body.children)) n.remove();
+    const wide = topbarButton();
+    wireCardPlacementToggle();
+    expect(document.body.dataset.cards).toBe('balloon');
+    expect(wide.title).toContain('margin');
+  });
+
   it('wires once, however many times chrome remounts', () => {
     // `mountReviewChrome` runs on every doc change. A second listener would
     // flip the placement twice per click and land back where it started.

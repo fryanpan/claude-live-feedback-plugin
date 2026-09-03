@@ -170,25 +170,44 @@ export function otherPlacement(placement: CardPlacement): CardPlacement {
  * What the toggle says it will do. Named for the DESTINATION, because a
  * control that names its current state reads as a claim rather than an
  * offer — the same rule the edit-mode and doc-list toggles follow.
+ *
+ * Keyed on the SURFACE, not on the stored choice. The two differ in exactly
+ * one state and the button was wrong in all of it: at 430px with balloons
+ * stored, nothing renders in the flow and nothing renders in a margin, and a
+ * button reading "Comments in the margin" pointed at a margin that was not
+ * there — announced to a screen reader as fact. The stored choice is
+ * untouched by this; tapping still moves the reader to `inline`, and the
+ * sheet still becomes balloons again on the next wide screen.
  */
-export function placementToggleLabel(current: CardPlacement): {
+export function placementToggleLabel(current: 'inline' | 'balloon' | 'sheet'): {
   title: string;
   ariaLabel: string;
   glyph: string;
 } {
-  return current === 'inline'
-    ? {
-        // A block with its lower half filled: the card sits under the text.
-        glyph: '⬓',
-        title: 'Comments in the flow — tap to move them to the margin',
-        ariaLabel: 'Comment cards are in the document flow. Move them to the right margin.',
-      }
-    : {
-        // A block with its right column filled: the card sits beside the text.
-        glyph: '◨',
-        title: 'Comments in the margin — tap to move them into the flow',
-        ariaLabel: 'Comment cards are in the right margin. Move them into the document flow.',
-      };
+  if (current === 'inline') {
+    return {
+      // A block with its lower half filled: the card sits under the text.
+      glyph: '⬓',
+      title: 'Comments in the flow — tap to move them to the margin',
+      ariaLabel: 'Comment cards are in the document flow. Move them to the right margin.',
+    };
+  }
+  if (current === 'sheet') {
+    return {
+      // A block filled edge to edge: the sheet covers the doc rather than
+      // sitting in it.
+      glyph: '▤',
+      title: 'Comments in a sheet over the doc — tap to move them into the flow',
+      ariaLabel:
+        'Comment cards open in a sheet over the document. Move them into the document flow.',
+    };
+  }
+  return {
+    // A block with its right column filled: the card sits beside the text.
+    glyph: '◨',
+    title: 'Comments in the margin — tap to move them into the flow',
+    ariaLabel: 'Comment cards are in the right margin. Move them into the document flow.',
+  };
 }
 
 /**
