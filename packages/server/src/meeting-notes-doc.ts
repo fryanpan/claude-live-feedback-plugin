@@ -100,6 +100,7 @@ import {
   relabelNotesSection,
   retagSpeakerInNotes,
 } from './notes-section-write.ts';
+import { LEGACY_TRANSCRIPT_HEADING } from './notes-section.ts';
 
 /**
  * The section writers moved to `notes-section-write.ts`; the names stay on
@@ -127,6 +128,11 @@ export interface NotesDocRooms {
   get(
     docId: string,
   ): { ydoc: Y.Doc; meta: { type: DocType; title?: string; setId?: string } } | undefined;
+  /** The file this doc is bound to, when it is bound to one. Read only by the
+   *  legacy-transcript removal, which must not touch a `Raw transcript`
+   *  heading in a doc the old writer could never have written in. Optional so
+   *  a test can hand in a map; absent reads as unbound. */
+  boundPathOf?(docId: string): string | undefined;
 }
 
 /** The slice of `TaskStore` the context gatherer needs. */
@@ -178,6 +184,22 @@ export function createNotesLedger(): NotesLedger {
 }
 
 /**
+ * Docs already reported as keeping a `Raw transcript` section this process.
+ * The condition is a property of the DOC, not of the tick, so a meeting that
+ * ticks for an hour would otherwise say the same line sixty times.
+ */
+const legacyKeptReported = new Set<string>();
+
+function noteLegacyKept(docId: string): void {
+  if (legacyKeptReported.has(docId)) return;
+  legacyKeptReported.add(docId);
+  console.log(
+    `[meeting-notes] the "${LEGACY_TRANSCRIPT_HEADING}" section in ${docId} is not ` +
+      "the old note-taker's, so it stays",
+  );
+}
+
+/**
  * Write one composed update into its meeting doc, keeping every item the
  * agent did not write. False — never a throw — when the doc is gone or is
  * not prose: a meeting on a vanished doc still has its transcript file, and
@@ -187,6 +209,7 @@ export function applyNotesUpdate(
   rooms: NotesDocRooms,
   update: NotesUpdate,
   ledger: NotesLedger,
+  opts: { dataDir?: string } = {},
 ): boolean {
   const room = rooms.get(update.docId);
   if (!room) return false;
@@ -198,15 +221,15 @@ export function applyNotesUpdate(
   // unreviewed raw material, kept only to check exactly who said what and to
   // improve how we transcribe, so it belongs in the `-raw-transcript.md`
   // sister file beside the meeting's data dir. This call takes the section
-  // back out of any doc that received one while the writer shipped; the words
-  // are in that sister file already, so the removal loses nothing.
-  const legacy = dropLegacyTranscriptSection(room.ydoc);
-  if (legacy === 'kept') {
-    console.log(
-      `[meeting-notes] legacy transcript section left in ${update.docId}: ` +
-        'somebody has written in it',
-    );
-  }
+  // back out of any doc that received one while the writer shipped; those
+  // words are in that sister file, which is why removing them loses nothing —
+  // and why it removes only the writer's exact fingerprint and never a
+  // transcript a person put there themselves.
+  const legacy = dropLegacyTranscriptSection(room.ydoc, {
+    boundPath: rooms.boundPathOf?.(update.docId),
+    dataDir: opts.dataDir,
+  });
+  if (legacy === 'kept') noteLegacyKept(update.docId);
   return mergeNotesSection(room.ydoc, update.notes, MEETING_NOTES_HEADINGS, {
     ownership: ledger.forDoc(update.docId),
     ...(update.basedOn ? { basedOn: update.basedOn } : {}),
@@ -373,6 +396,11 @@ export function withServerNotesSinks(
      *  only `createServer` holds the comment + stamp path. Deduped here per
      *  meeting so a question repeated across ticks opens one thread. */
     onReviewAsk?: (ask: ReviewAsk) => void | Promise<void>;
+    /** The server's data dir. Read only by the legacy-transcript removal, to
+     *  tell a huddle doc from a doc bound into somebody's working tree.
+     *  Absent, every BOUND doc is treated as outside it and keeps whatever
+     *  `Raw transcript` section it has. */
+    dataDir?: string;
     /** Tests: an ownership ledger they can seed or read back. */
     ledger?: NotesLedger;
   },
@@ -492,7 +520,11 @@ export function withServerNotesSinks(
     },
     onNotes: (update: NotesUpdate): void => {
       try {
-        if (!applyNotesUpdate(deps.rooms(), update, ledger)) {
+        if (
+          !applyNotesUpdate(deps.rooms(), update, ledger, {
+            ...(deps.dataDir ? { dataDir: deps.dataDir } : {}),
+          })
+        ) {
           console.error(`[meeting-notes] doc write skipped for ${update.docId}`);
         }
       } catch (err) {
