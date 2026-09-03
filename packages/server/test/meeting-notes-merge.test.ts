@@ -690,11 +690,14 @@ describe('a stop-and-restart never replaces what is already written', () => {
     expect(md.indexOf('His plan.')).toBeLessThan(md.indexOf('new meeting note'));
   });
 
-  it('a heading a person types below the section sends the next notes to the END of the doc', () => {
-    // Owner's call (2026-09-01): "note always at the end of doc for now".
-    // The section this meeting was writing is no longer the doc's tail once
-    // a person writes below it; the next tick starts a fresh section after
-    // their words instead of growing the old one above them.
+  it('a heading a person types below the section no longer splits the notes', () => {
+    // This used to start a SECOND section after the person's words (owner,
+    // 2026-09-01: "note always at the end of doc for now"). The position test
+    // that did it could not tell a person's heading from the product's own —
+    // a research placeholder lands the same way — so a meeting could end with
+    // its points scattered across three sections. A section this session has
+    // written into is now this meeting's section wherever it sits, and the
+    // person's words are left exactly where they typed them.
     const ydoc = docFrom('# Doc');
     const ownership = createNotesOwnership();
     mergeNotesSection(ydoc, '- first note', HEADING, { ownership });
@@ -711,18 +714,18 @@ describe('a stop-and-restart never replaces what is already written', () => {
       basedOn: read?.items ?? [],
     });
     expect(res.ok).toBe(true);
-    expect(res.mode).toBe('appended');
+    expect(res.mode).toBe('merged');
     const md = markdownOf(ydoc);
-    // A second section, after the person's text…
-    expect(md.split('## Meeting notes').length).toBe(3);
-    expect(md.indexOf('Typed below.')).toBeLessThan(md.indexOf('second note'));
-    // …holding only what is NEW: the first note is already written above,
-    // and the fresh section does not say it again.
+    // One section, both notes in it, in order.
+    expect(md.split('## Meeting notes').length).toBe(2);
     expect(md.match(/first note/g)).toHaveLength(1);
-    expect(md.indexOf('first note')).toBeLessThan(md.indexOf('Typed below.'));
+    expect(md.indexOf('first note')).toBeLessThan(md.indexOf('second note'));
+    // And the person's words are untouched, still below.
+    expect(md).toContain('Typed below.');
+    expect(md.indexOf('second note')).toBeLessThan(md.indexOf('Typed below.'));
   });
 
-  it('once the fresh section is the tail, later ticks append into it and still skip the old lines', () => {
+  it('later ticks keep growing that one section, under the words typed below it', () => {
     const ydoc = docFrom('# Doc');
     const ownership = createNotesOwnership();
     mergeNotesSection(ydoc, '- first note', HEADING, { ownership });
@@ -732,10 +735,10 @@ describe('a stop-and-restart never replaces what is already written', () => {
     }, 'browser');
     mergeNotesSection(ydoc, '- first note\n- second note', HEADING, { ownership, basedOn: [] });
 
-    // The composer's `previous` is the last section only, so it re-lists
-    // the first note every tick. It lands nowhere new.
+    // The composer returns the whole notes every tick; the two it already
+    // wrote are matched in place and only the new one is inserted.
     const read = readNotesSection(ydoc, HEADING, ownership);
-    expect(read?.items).toEqual(['item second note']);
+    expect(read?.items).toEqual(['item first note', 'item second note']);
     const res = mergeNotesSection(ydoc, '- first note\n- second note\n- third note', HEADING, {
       ownership,
       basedOn: read?.items ?? [],
@@ -743,13 +746,13 @@ describe('a stop-and-restart never replaces what is already written', () => {
     expect(res.ok).toBe(true);
     expect(res.mode).toBe('merged');
     const md = markdownOf(ydoc);
-    expect(md.split('## Meeting notes').length).toBe(3);
+    expect(md.split('## Meeting notes').length).toBe(2);
     expect(md.match(/first note/g)).toHaveLength(1);
     expect(md.indexOf('second note')).toBeLessThan(md.indexOf('third note'));
-    expect(md.indexOf('Typed below.')).toBeLessThan(md.indexOf('third note'));
+    expect(md.indexOf('third note')).toBeLessThan(md.indexOf('Typed below.'));
   });
 
-  it('a tick that only re-lists written lines changes nothing and is not a failure', () => {
+  it('a tick that only re-lists what it already wrote changes nothing and is not a failure', () => {
     const ydoc = docFrom('# Doc');
     const ownership = createNotesOwnership();
     mergeNotesSection(ydoc, '- first note', HEADING, { ownership });
@@ -758,10 +761,15 @@ describe('a stop-and-restart never replaces what is already written', () => {
       fragment.insert(fragment.length, prose.parseMarkdownBlocks('## Aside\n\nTyped below.'));
     }, 'browser');
     const before = markdownOf(ydoc);
-    const res = mergeNotesSection(ydoc, '- first note', HEADING, { ownership, basedOn: [] });
+    const read = readNotesSection(ydoc, HEADING, ownership);
+    const res = mergeNotesSection(ydoc, '- first note', HEADING, {
+      ownership,
+      basedOn: read?.items ?? [],
+    });
     expect(res.ok).toBe(true);
     expect(res.inserted).toBe(0);
-    expect(res.dropped).toBe(1);
+    expect(res.deleted).toBe(0);
+    expect(res.suggested).toBe(0);
     expect(markdownOf(ydoc)).toBe(before);
   });
 
