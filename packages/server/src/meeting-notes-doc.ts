@@ -93,12 +93,13 @@ import {
   runTaskCapture,
 } from './meeting-task-capture.ts';
 import {
-  MEETING_NOTES_HEADING,
+  MEETING_NOTES_HEADINGS,
   appendResearchPlaceholder,
   reattributeNotesSection,
   relabelNotesSection,
   retagSpeakerInNotes,
 } from './notes-section-write.ts';
+import { appendTranscriptTurns, relabelTranscriptSection } from './notes-transcript-section.ts';
 
 /**
  * The section writers moved to `notes-section-write.ts`; the names stay on
@@ -112,6 +113,7 @@ export {
   type RelabelNotesResult,
   type ReplaceNotesResult,
   MEETING_NOTES_HEADING,
+  MEETING_NOTES_HEADINGS,
   appendResearchPlaceholder,
   reattributeNotesSection,
   relabelNotesSection,
@@ -189,10 +191,26 @@ export function applyNotesUpdate(
   const room = rooms.get(update.docId);
   if (!room) return false;
   if (contentKind(room.meta.type) !== 'prose') return false;
-  return mergeNotesSection(room.ydoc, update.notes, MEETING_NOTES_HEADING, {
+  return mergeNotesSection(room.ydoc, update.notes, MEETING_NOTES_HEADINGS, {
     ownership: ledger.forDoc(update.docId),
     ...(update.basedOn ? { basedOn: update.basedOn } : {}),
   }).ok;
+}
+
+/**
+ * Write one tick's settled words into the doc's raw-transcript section.
+ * Same tolerances as `applyNotesUpdate`: a doc that has gone away or was
+ * never prose is a false, never a throw — the JSONL under the data dir is
+ * the record either way.
+ */
+export function applyNotesTranscript(
+  rooms: NotesDocRooms,
+  input: { docId: string; lines: ReadonlyArray<{ speaker?: string; text: string }> },
+): boolean {
+  const room = rooms.get(input.docId);
+  if (!room) return false;
+  if (contentKind(room.meta.type) !== 'prose') return false;
+  return appendTranscriptTurns(room.ydoc, input.lines).ok;
 }
 
 /** The notes section as it currently reads, for the composer's `previous`. */
@@ -204,7 +222,7 @@ export function readNotesState(
   const room = rooms.get(ids.docId);
   if (!room) return null;
   if (contentKind(room.meta.type) !== 'prose') return null;
-  return readNotesSection(room.ydoc, MEETING_NOTES_HEADING, ledger.forDoc(ids.docId));
+  return readNotesSection(room.ydoc, MEETING_NOTES_HEADINGS, ledger.forDoc(ids.docId));
 }
 
 /**
@@ -234,9 +252,16 @@ export function applyNotesRelabel(
   // Through the reclaim wrapper, not straight at the doc: the rename edits
   // the agent's own lines in place, and the ledger has to come out the other
   // side still recognising them. See `reclaimAfterInPlaceEdit`.
+  // The record first, and outside the reclaim wrapper: the ledger tracks who
+  // owns a NOTE, and a code block of machine speech is nobody's note. It is
+  // gated on the same `rewriteUntagged` flag as the sweep below, for the same
+  // reason — a name two voices share cannot be rewritten by name anywhere.
+  if (relabel.rewriteUntagged) {
+    relabelTranscriptSection(room.ydoc, relabel.from, relabel.to);
+  }
   return reclaimAfterInPlaceEdit(
     room.ydoc,
-    MEETING_NOTES_HEADING,
+    MEETING_NOTES_HEADINGS,
     ledger.forDoc(relabel.docId),
     () => {
       // The untagged sweep runs FIRST, and the order is load-bearing. It
@@ -281,8 +306,8 @@ export function applyNotesCorrection(
   if (!room) return 'none';
   if (contentKind(room.meta.type) !== 'prose') return 'none';
   const ownership = ledger.forDoc(correction.docId);
-  const outcome = reclaimAfterInPlaceEdit(room.ydoc, MEETING_NOTES_HEADING, ownership, () =>
-    correctNotesSection(room.ydoc, MEETING_NOTES_HEADING, ownership, correction),
+  const outcome = reclaimAfterInPlaceEdit(room.ydoc, MEETING_NOTES_HEADINGS, ownership, () =>
+    correctNotesSection(room.ydoc, MEETING_NOTES_HEADINGS, ownership, correction),
   );
   if (outcome.applied === 'revised') return 'revised';
   if (outcome.applied === 'suggested') return 'suggested';
@@ -308,11 +333,11 @@ export function applyNotesReattribution(
   // snapshots there: ownership is element AND text, and the edit changes the
   // text. Afterwards the ledger would no longer claim the very lines this is
   // allowed to touch.
-  const owned = agentOwnedElements(room.ydoc, MEETING_NOTES_HEADING, ownership);
+  const owned = agentOwnedElements(room.ydoc, MEETING_NOTES_HEADINGS, ownership);
   if (owned.size === 0) return 0;
   return reclaimAfterInPlaceEdit(
     room.ydoc,
-    MEETING_NOTES_HEADING,
+    MEETING_NOTES_HEADINGS,
     ownership,
     () => reattributeNotesSection(room.ydoc, reattribution, owned).replaced,
   );
@@ -471,6 +496,18 @@ export function withServerNotesSinks(
         console.error('[meeting-notes] section read failed:', err);
         return null;
       }
+    },
+    onTranscript: (input): void => {
+      try {
+        if (!applyNotesTranscript(deps.rooms(), input)) {
+          console.error(`[meeting-notes] transcript write skipped for ${input.docId}`);
+        }
+      } catch (err) {
+        // Same containment as `onNotes`: the record is a convenience in the
+        // doc and the durable one is the JSONL beside it.
+        console.error('[meeting-notes] transcript write failed:', err);
+      }
+      options.onTranscript?.(input);
     },
     onNotes: (update: NotesUpdate): void => {
       try {
