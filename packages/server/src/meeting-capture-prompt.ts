@@ -15,6 +15,7 @@
 
 import {
   captureWindow,
+  cueSpokenOnTick,
   normalizedTitle,
   overlapWindow,
   phraseSpokenOnTick,
@@ -66,14 +67,13 @@ const QUERY_MAX = 120;
  * the word would catch only the asks that needed no help.
  */
 export const RESEARCH_PROMPT_RULE = [
-  'A RESEARCH ask when a speaker wants something FOUND OUT before it can be',
-  'decided or built — "go look into that", "dig into why it does that",',
-  '"find out what it would take", or asked of the assistant directly: "can',
-  'you research X", "look that up for us". They will rarely say the word',
-  '"research". Wondering aloud is not an ask; somebody has to want it done.',
-  '"topic": what to look into, in the words spoken; "question": what it',
-  'should answer, omitted if unsaid. Prefer "request" when they asked for',
-  'the WORK rather than for findings.',
+  'A RESEARCH ask when a speaker uses the NOW cue to have something FOUND',
+  'OUT before it can be decided or built — "can you look into why it does',
+  'that", "could you find out what it would take", "Claude, can you research',
+  'X". They will rarely say the word "research". Wondering aloud is not an',
+  'ask; somebody has to want it done. "topic": what to look into, in the',
+  'words spoken; "question": what it should answer, omitted if unsaid.',
+  'Prefer "request" when they asked for the WORK rather than for findings.',
 ] as const;
 
 /**
@@ -83,12 +83,11 @@ export const RESEARCH_PROMPT_RULE = [
  * one separating it from a question the room is answering for itself.
  */
 export const REVIEW_PROMPT_RULE = [
-  'A REVIEW ask when a speaker wants the agent or the team to LOOK AT the',
-  'notes or ANSWER a question they cannot settle in the room — "ask the',
-  'team whether we still need the tunnel", "can somebody check these',
-  'notes", "get the lead to review this". "question": what to ask, in the',
-  'words spoken. A question the room goes on to answer itself is not an',
-  'ask.',
+  'A REVIEW ask when a speaker uses the NOW cue to have the agent or the',
+  'team LOOK AT the notes or ANSWER a question they cannot settle in the',
+  'room — "can you ask the team whether we still need the tunnel", "could',
+  'you check these notes". "question": what to ask, in the words spoken. A',
+  'question the room goes on to answer itself is not an ask.',
 ] as const;
 
 /**
@@ -97,10 +96,10 @@ export const REVIEW_PROMPT_RULE = [
  * the only part of the ask that identifies anything (`meeting-lookup.ts`).
  */
 export const LOOKUP_PROMPT_RULE = [
-  'A LOOKUP when a speaker asks for material that ALREADY EXISTS to be',
-  'brought in — "pull up last week\'s notes", "link the design doc for',
-  'that", "what did we decide on Tuesday". "query": what they asked for in',
-  'their own words, KEEPING any "when" they said ("last week", "Tuesday").',
+  'A LOOKUP when a speaker uses the NOW cue to have material that ALREADY',
+  'EXISTS brought in — "can you pull up last week\'s notes", "could you link',
+  'the design doc for that". "query": what they asked for in their own',
+  'words, KEEPING any "when" they said ("last week", "Tuesday").',
 ] as const;
 
 /**
@@ -122,6 +121,33 @@ export const CORRECTION_PROMPT_RULE = [
   'words just spoken. Both short — a few words, never a sentence. Somebody',
   'CHANGING THEIR MIND ("actually, let\'s do Thursday") is new speech, not a',
   'correction. Omit the item unless both halves are clear.',
+] as const;
+
+/**
+ * The convention that decides now from later, and — the half that costs the
+ * tokens and earns them — that speech using NEITHER phrasing asks for
+ * nothing. Bryan, 2026-09-02 huddle; the phrases themselves are data in
+ * `meeting-ask-cues.ts`, where the guard that enforces the same rule reads
+ * them.
+ *
+ * The prompt and the guard must agree or the pass gets worse, not better: a
+ * model told to catch "go look into that" would keep returning asks the
+ * guard then throws away, spending output tokens on items that can never
+ * land. So the examples in every ask rule above were rewritten to carry a
+ * cue, rather than leaving the guard to clean up after them.
+ *
+ * References and corrections are carved out on purpose. Neither is an ask —
+ * one names work the board already tracks, the other fixes a note already
+ * written — so neither has anything to be for now or for later.
+ */
+export const ASK_CUE_PROMPT_RULE = [
+  'TWO CUES DECIDE NOW FROM LATER. NOW: "can you", "could you", "would you",',
+  'often after "Claude," — a research, lookup or review ask, acted on during',
+  'the meeting. LATER: "create a task", "make a task", "file a ticket", "add',
+  'a ticket" — a request, captured and not started. An ask carrying both',
+  '("can you create a task") is LATER. Speech with NEITHER cue asks for',
+  'nothing: no request, no research, no lookup, no review, however much it',
+  'sounds like one. References and corrections are not asks and need no cue.',
 ] as const;
 
 export const OVERLAP_PROMPT_RULE = [
@@ -150,11 +176,13 @@ export function buildTaskCapturePrompt(input: TaskCaptureInput): { system: strin
     '         |{"kind":"review","question":"...",',
     '           "requester":"who asked, omitted if unclear"}]}',
     '',
-    'A REQUEST only when a speaker explicitly asks for work to be tracked or',
-    'filed — "file a ticket", "let\'s track that", "add it to the board",',
-    '"can you create a task", "make that a task", "add a todo to…".',
-    'Discussing a problem, complaining about a bug, or agreeing something is',
-    'broken is NOT a request. Title: short, specific, in the words spoken.',
+    ...ASK_CUE_PROMPT_RULE,
+    '',
+    'A REQUEST only when a speaker explicitly asks, in the LATER cue, for a',
+    'task to be filed — "create a task", "make that a task", "file a ticket",',
+    '"add a ticket". Discussing a problem, complaining about a bug, or',
+    'agreeing something is broken is NOT a request. Title: short, specific,',
+    'in the words spoken.',
     'Mark a request "actionable": true only when it is clear enough to start',
     'without asking anything back — what to do and where — and nobody said',
     'to wait. When in doubt, false.',
@@ -202,8 +230,14 @@ export function buildTaskCapturePrompt(input: TaskCaptureInput): { system: strin
 
 /**
  * A model reply → guarded items. Strict by construction: malformed rows,
- * out-of-range matches, and references the transcript cannot vouch for are
- * dropped row by row, never letting one bad row cost the good ones.
+ * out-of-range matches, references the transcript cannot vouch for, and asks
+ * the speaker never cued are dropped row by row, never letting one bad row
+ * cost the good ones.
+ *
+ * A dropped ask is not a lost one. The speech it was found in still reaches
+ * the notes composer, which writes it into the doc as it writes everything
+ * else — which is exactly what "captured as a note, not a task and not an
+ * action" means here.
  */
 export function parseTaskCaptureReply(
   raw: string,
@@ -225,6 +259,18 @@ export function parseTaskCaptureReply(
   const items = (parsed as { items?: unknown }).items;
   if (!Array.isArray(items)) return [];
 
+  // The two spoken conventions, read once off the same lines the model saw.
+  // This is the guard half of the contract the prompt states: whatever the
+  // model returns, an ask the speech did not cue is DOWNGRADED TO A NOTE —
+  // dropped here, so the tick's words reach the notes composer as ordinary
+  // speech and nothing files, starts or is addressed to anybody. A request
+  // needs the later cue; the three intents that act during the meeting need
+  // the now cue. References and corrections are not asks and are not gated.
+  const cued = {
+    now: cueSpokenOnTick(window, 'now'),
+    later: cueSpokenOnTick(window, 'later'),
+  };
+
   const out: CapturedItem[] = [];
   const seenTasks = new Set<string>();
   const seenTitles = new Set<string>();
@@ -241,6 +287,9 @@ export function parseTaskCaptureReply(
       seenTasks.add(candidate.id);
       out.push({ kind: 'reference', taskId: candidate.id });
     } else if (row.kind === 'request') {
+      // "create a task …" is what asks for a row. Without it the speech is a
+      // note, even when the model heard a perfectly good piece of work in it.
+      if (!cued.later) continue;
       if (typeof row.title !== 'string' || row.title.trim().length === 0) continue;
       const title = clipToWordBoundary(row.title.trim(), TITLE_MAX);
       const key = title.toLowerCase();
@@ -255,6 +304,8 @@ export function parseTaskCaptureReply(
         ...(requester !== undefined ? { requester } : {}),
       });
     } else if (row.kind === 'research') {
+      // Acting during the meeting takes the now cue — see {@link cued}.
+      if (!cued.now) continue;
       if (typeof row.topic !== 'string') continue;
       const topic = clipToWordBoundary(row.topic.trim(), TITLE_MAX);
       if (topic.length === 0) continue;
@@ -277,6 +328,8 @@ export function parseTaskCaptureReply(
         ...(requester !== undefined ? { requester } : {}),
       });
     } else if (row.kind === 'lookup') {
+      // Acting during the meeting takes the now cue — see {@link cued}.
+      if (!cued.now) continue;
       if (typeof row.query !== 'string') continue;
       const query = row.query.trim().slice(0, QUERY_MAX);
       if (query.length === 0) continue;
@@ -308,6 +361,8 @@ export function parseTaskCaptureReply(
       seenTitles.add(key);
       out.push({ kind: 'correction', wrong, right });
     } else if (row.kind === 'review') {
+      // Acting during the meeting takes the now cue — see {@link cued}.
+      if (!cued.now) continue;
       if (typeof row.question !== 'string') continue;
       const question = row.question.trim().slice(0, QUESTION_MAX);
       if (question.length === 0) continue;

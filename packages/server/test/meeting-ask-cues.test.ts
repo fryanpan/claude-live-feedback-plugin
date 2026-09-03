@@ -1,20 +1,38 @@
 /**
- * The two spoken cues: which convention an utterance used, if either.
+ * The two spoken cues, and the guard that holds the capture pass to them.
  *
  * The convention (Bryan, 2026-09-02 huddle): "Claude, can you …" asks for
  * something NOW, "create a task …" asks for it LATER, and speech using
- * neither is a note. Two parts here — every phrase in both families, the
- * wake word and the punctuation transcription actually produces, with the
- * *neither* case carrying a positive control beside it so a false "no cue"
- * cannot pass for the rule working; then the turn-level guard, whose one job
- * beyond the detector is not to manufacture a cue across a line boundary.
+ * neither is a note. The tests below are in three parts, which is the shape
+ * of the feature:
+ *
+ * 1. The pure detector — every phrase in both families, the wake word, the
+ *    punctuation transcription actually produces, and the *neither* case with
+ *    a positive control beside it, so a false "no cue" cannot pass for the
+ *    rule working.
+ * 2. The turn-level guard, whose one job beyond the detector is not to
+ *    manufacture a cue across a line boundary.
+ * 3. The downgrade: what `parseTaskCaptureReply` does with an ask the speaker
+ *    never cued, and what it still lets through uncued — a reference and a
+ *    correction are not asks.
  *
  * Every fixture is invented speech. The repo is public.
  */
 import { describe, expect, it } from 'bun:test';
-import { askCueOfUtterance, askCuesIn, hasAskCue } from '../src/meeting-ask-cues.ts';
+import {
+  LATER_CUE_EXAMPLES,
+  NOW_CUES,
+  askCueOfUtterance,
+  askCuesIn,
+  hasAskCue,
+} from '../src/meeting-ask-cues.ts';
 import { cueSpokenOnTick } from '../src/meeting-capture-guards.ts';
 import type { NotesTurn } from '../src/meeting-notes.ts';
+import {
+  type TaskCaptureCandidate,
+  buildTaskCapturePrompt,
+  parseTaskCaptureReply,
+} from '../src/meeting-task-capture.ts';
 
 describe('askCueOfUtterance — the now cue', () => {
   it('reads each of the three phrasings', () => {
@@ -152,5 +170,104 @@ describe('cueSpokenOnTick', () => {
   it('answers false for an empty tick', () => {
     expect(cueSpokenOnTick([], 'now')).toBe(false);
     expect(cueSpokenOnTick([], 'later')).toBe(false);
+  });
+});
+
+describe('the capture prompt states the convention it is guarded by', () => {
+  it('names both cue families and says neither-cue speech is a note', () => {
+    // Read off the same tables the guard matches on: a prompt that taught a
+    // different convention from the one enforced would spend output tokens
+    // on asks that can never land.
+    const { system } = buildTaskCapturePrompt({ turns: [], candidates: [] });
+    for (const phrase of NOW_CUES) expect(system).toContain(phrase);
+    for (const phrase of LATER_CUE_EXAMPLES) expect(system).toContain(phrase);
+    expect(system).toContain('NEITHER cue');
+    expect(system).toContain('is LATER');
+  });
+});
+
+describe('parseTaskCaptureReply downgrades an ask the speaker never cued', () => {
+  const candidates: TaskCaptureCandidate[] = [
+    { id: 't-retry', title: 'Retry loop wakes the sync too often', status: 'todo' },
+  ];
+  /** Real speech about real work, asking for nothing. */
+  const uncued: NotesTurn[] = [
+    { turn: 1, speaker: 'Priya', text: 'The retry loop wakes the sync every ninety seconds.' },
+    { turn: 2, speaker: 'Priya', text: 'Go look into why it does that, it is the real cost.' },
+  ];
+  const nowCued: NotesTurn[] = [
+    { turn: 1, speaker: 'Priya', text: 'The retry loop wakes the sync every ninety seconds.' },
+    { turn: 2, speaker: 'Priya', text: 'Claude, can you look into why the retry loop does that?' },
+  ];
+  const laterCued: NotesTurn[] = [
+    { turn: 1, speaker: 'Priya', text: 'The retry loop wakes the sync every ninety seconds.' },
+    { turn: 2, speaker: 'Priya', text: 'Create a task for the retry loop, we will get to it.' },
+  ];
+  const reply = (items: unknown[]): string => JSON.stringify({ items });
+
+  const request = { kind: 'request', title: 'Retry loop wakes the sync', actionable: true };
+  const research = { kind: 'research', topic: 'retry loop' };
+  const lookup = { kind: 'lookup', query: 'the retry loop notes' };
+  const review = { kind: 'review', question: 'whether the retry loop still needs the sync' };
+
+  it('drops a request when nobody asked for a task', () => {
+    expect(parseTaskCaptureReply(reply([request]), candidates, uncued)).toEqual([]);
+  });
+
+  it('keeps the same request once the later cue is spoken — the control', () => {
+    expect(parseTaskCaptureReply(reply([request]), candidates, laterCued)).toEqual([
+      { kind: 'request', title: 'Retry loop wakes the sync', actionable: true },
+    ]);
+  });
+
+  it('drops the three acting-now intents when nobody used the now cue', () => {
+    expect(parseTaskCaptureReply(reply([research, lookup, review]), candidates, uncued)).toEqual(
+      [],
+    );
+  });
+
+  it('keeps all three once the now cue is spoken — the control', () => {
+    const items = parseTaskCaptureReply(reply([research, lookup, review]), candidates, nowCued);
+    expect(items.map((i) => i.kind)).toEqual(['research', 'lookup', 'review']);
+  });
+
+  it('does not let one cue license the other kind of ask', () => {
+    // A now cue asks for something in the meeting; it never files a row.
+    expect(parseTaskCaptureReply(reply([request]), candidates, nowCued)).toEqual([]);
+    // And a later cue files a row; it never starts the work.
+    expect(parseTaskCaptureReply(reply([research]), candidates, laterCued)).toEqual([]);
+  });
+
+  it('still reads a reference and a correction off uncued speech', () => {
+    // Neither is an ask: one names work the board already tracks, the other
+    // fixes a note already written, so neither has a now or a later.
+    expect(
+      parseTaskCaptureReply(reply([{ kind: 'reference', match: 0 }]), candidates, uncued),
+    ).toEqual([{ kind: 'reference', taskId: 't-retry' }]);
+    const correcting: NotesTurn[] = [
+      { turn: 3, speaker: 'Priya', text: 'No — I said ninety seconds, not nineteen.' },
+    ];
+    expect(
+      parseTaskCaptureReply(
+        reply([{ kind: 'correction', wrong: 'nineteen seconds', right: 'ninety seconds' }]),
+        candidates,
+        correcting,
+      ),
+    ).toEqual([{ kind: 'correction', wrong: 'nineteen seconds', right: 'ninety seconds' }]);
+  });
+
+  it('takes a cue from the marked overlap, so an ask may straddle a tick', () => {
+    // "Claude, can you" lands before the boundary and the subject after it —
+    // the case `overlapWindow` exists for, and a guard reading only the
+    // quoted line would throw away exactly these.
+    const prior: NotesTurn[] = [{ turn: 1, speaker: 'Priya', text: 'Claude, can you go and' }];
+    const after: NotesTurn[] = [
+      { turn: 2, speaker: 'Priya', text: 'look into why the retry loop wakes the sync.' },
+    ];
+    expect(parseTaskCaptureReply(reply([research]), candidates, after, prior)).toEqual([
+      { kind: 'research', topic: 'retry loop' },
+    ]);
+    // Without the earlier line the same reply has no cue behind it.
+    expect(parseTaskCaptureReply(reply([research]), candidates, after)).toEqual([]);
   });
 });
