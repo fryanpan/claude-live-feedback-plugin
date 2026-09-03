@@ -22,6 +22,7 @@
 
 import { readRenamedEnv } from '@feedback/core/env-names';
 import type { NotesComposeInput, NotesComposer, NotesTurn } from './meeting-notes.ts';
+import { DEFAULT_NOTES_INSTRUCTIONS } from './notes-prompt-store.ts';
 import { readKeychainPassword } from './share/keychain.ts';
 import { resolveKeyFrom } from './summarize.ts';
 
@@ -42,53 +43,17 @@ const HEADING_LINE = '## Meeting notes';
 /**
  * Prompt building is pure and exported: what the transcript is asked to
  * become is behaviour worth pinning without a network in the test.
+ *
+ * `instructions` is the system prompt — the note-taking rules, which now come
+ * from a store rather than from a literal here (`notes-prompt-store.ts`).
+ * They default to the stored default, so every existing caller and every test
+ * that built a prompt without one still gets the words it always got.
  */
-export function buildNotesPrompt(input: NotesComposeInput): { system: string; user: string } {
-  const system = [
-    'You are the live note-taker for a working meeting. You receive the notes',
-    'as they currently stand and the speech newly transcribed since the last',
-    'update. Return the COMPLETE notes as they should now read.',
-    '',
-    'Rules:',
-    `- Start with the exact heading "${HEADING_LINE}".`,
-    '- Keep notes short and structured: grouped bullets, with bold labels or',
-    '  ### subheadings only when the meeting has clear strands — decisions,',
-    '  action items (with owner when one was named), open questions, key',
-    '  points. Never a transcript restated.',
-    '- New material goes at the END of the notes: the reader keeps their',
-    '  place, and what they have already read stays where it was. Revise an',
-    '  earlier note only when the new speech is clearly about it — a',
-    '  correction, a decision overturned, an owner named — never to',
-    '  restructure notes the new speech does not touch.',
-    '- SOME LINES OF THE CURRENT NOTES WERE WRITTEN BY A PERSON IN THE',
-    '  MEETING, and are listed under "Written by a person". They are theirs:',
-    '  reproduce each one character for character, in the place it sits, and',
-    '  keep the wording, the formatting and the structure they chose. If you',
-    '  think one should read differently, return your version of that line in',
-    '  its place and nothing else will change: it reaches them as a suggestion',
-    '  they can accept or reject, never as a replacement. Never delete one,',
-    '  and never merge one into a note of your own. Never put a speaker tag',
-    '  on one either: a line a person typed is their own note, not something',
-    '  a voice in the room said.',
-    '- Only what was said: never invent names, numbers, or decisions the',
-    '  transcript does not contain. Transcription is imperfect — where a word',
-    '  is garbled, prefer the reading that fits the project context.',
-    '- Transcript lines are prefixed with who said them, as "Name (LABEL):".',
-    '  Use that to name the owner of an action item or the side of a',
-    '  disagreement; a name like "Speaker B" is a voice nobody has named yet —',
-    '  keep it as written, never guess who it is.',
-    '- ATTRIBUTE EVERY NOTE TO THE VOICE THAT SAID IT, as a speaker tag: the',
-    '  markdown link `[@Name](speaker:LABEL)`, where LABEL is the label in',
-    "  parentheses on the transcript line and Name is that line's name. Write",
-    '  it where the person would be named — usually opening the note — and',
-    '  write one per voice the note covers, never a tag for a voice that line',
-    '  did not come from. A note that summarizes the room rather than anybody',
-    '  in it takes no tag. Tags already in the current notes stay on the notes',
-    '  they are on: keep them when you revise the line around them, and never',
-    '  move one to a different note.',
-    '- Output markdown only: no preamble, no code fences, nothing after the',
-    '  notes.',
-  ].join('\n');
+export function buildNotesPrompt(
+  input: NotesComposeInput,
+  instructions: string = DEFAULT_NOTES_INSTRUCTIONS,
+): { system: string; user: string } {
+  const system = instructions;
 
   const parts: string[] = [];
   const ctx = input.context;
@@ -172,6 +137,13 @@ export interface HaikuNotesComposerOpts {
   apiKey?: string | null;
   /** Tests: the HTTP seam. Defaults to global fetch. */
   fetchImpl?: typeof fetch;
+  /**
+   * The note-taking instructions for this tick — `createNotesPromptStore`'s
+   * `read` in the server, which re-reads the operator's file every call.
+   * Absent, the built-in default: a composer constructed without a data dir
+   * still composes, it just cannot be retuned without a deploy.
+   */
+  instructions?: () => string;
 }
 
 /** Printed once per process, because the transcript leaving the machine must
@@ -198,7 +170,7 @@ export function createHaikuNotesComposer(opts: HaikuNotesComposerOpts = {}): Not
             'api.anthropic.com. Turn off with CW_MEETING_NOTES=0.',
         );
       }
-      const { system, user } = buildNotesPrompt(input);
+      const { system, user } = buildNotesPrompt(input, opts.instructions?.());
       const ctl = new AbortController();
       const timeout = setTimeout(() => ctl.abort(), TIMEOUT_MS);
       try {
