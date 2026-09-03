@@ -1,6 +1,5 @@
-import { readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { PHONE, attach, installSheets, setViewport, styleOf } from './css-harness.ts';
 
 /**
  * The decision card's SPACING, which is the whole of what was reported.
@@ -11,95 +10,118 @@ import { describe, expect, it } from 'vitest';
  * copy emitted `hub-detail-options` / `hub-detail-option` /
  * `hub-detail-option-label` / `hub-detail-option-detail` and the stylesheet had
  * **no rule for any of them** — so the browser's defaults stacked the options
- * edge to edge and jammed the answer box against them. That is a CSS absence,
- * which no DOM test can see: `hub-render.test.ts` asserts the structure the
- * rules hang off, and this asserts that the rules exist.
+ * edge to edge and jammed the answer box against them. `hub-render.test.ts`
+ * asserts the structure the rules hang off; this asserts that the rules reach
+ * it.
  *
- * happy-dom resolves no layout, so this reads the stylesheet as text. The
- * rendered result is checked in a browser against a real build; that is what
- * closes the criterion. What this file prevents is the state the report
- * described — classes emitted with nothing styling them — coming back silently.
+ * "Reach it" is the word that changed. This file used to regex `hub.css` for a
+ * rule whose selector matched each class — which says a rule exists SOMEWHERE,
+ * not that anything lands on the element. The sheets are installed here and
+ * every class is built, so an emitted class with nothing styling it — the
+ * exact state the report described — comes back as an unstyled box and fails.
+ *
+ * happy-dom lays nothing out, so the numbers are declared spacing rather than
+ * measured gaps; the rendered card stays a browser check.
+ *
+ * SHEETS: `hub.css` before `styles.css` is the order `renderHubShell` links
+ * them in; `tokens.css` is left out because the served file is a vendored Open
+ * Props subset plus `src/tokens.css`, and the mapping half alone re-points
+ * every remapped token at an undefined `var(--gray-N)`.
  */
-const CSS = readFileSync(resolve('packages/workspaces-app/src/hub.css'), 'utf8');
 
-function declarationsOnly(css: string): string {
-  return css.replace(/\/\*[\s\S]*?\*\//g, '');
+let cleanup = () => {};
+beforeEach(() => {
+  cleanup = installSheets('hub.css', 'styles.css');
+  // 430px, the width the report was written from. Nothing in this card is
+  // media-scoped, but a test that cares about a rule has to say which cascade
+  // it is reading — happy-dom's default 1024 is inside the mobile tier.
+  setViewport(PHONE);
+});
+afterEach(() => {
+  cleanup();
+  document.body.replaceChildren();
+});
+
+/** One of the card's elements, built where the panel builds it. */
+function el(classes: string, tag = 'div', parent?: Element) {
+  return styleOf(attach(classes, { tag, parent }));
 }
 
-/** The body of one top-level rule, comments stripped. */
-function rule(selector: string): string {
-  const at = new RegExp(`(^|\\n)${selector.replace(/[.+*[\]()]/g, '\\$&')}\\s*\\{([^}]*)\\}`).exec(
-    declarationsOnly(CSS),
-  );
-  return at?.[2] ?? '';
-}
+/** Every class the card emits, with one declaration its rule owns. The pair is
+ *  the point: a class with no rule reads '' for its property and fails here. */
+const CARD: ReadonlyArray<readonly [string, keyof CSSStyleDeclaration, string]> = [
+  ['hub-decide', 'padding', '16px'],
+  ['hub-decide-head', 'display', 'flex'],
+  ['hub-decide-kicker', 'fontWeight', '700'],
+  ['hub-decide-card-head', 'alignItems', 'baseline'],
+  ['hub-decide-k', 'padding', '2px 7px'],
+  ['hub-decide-headline', 'lineHeight', '1.4'],
+  ['hub-decide-body', 'lineHeight', '1.5'],
+  ['hub-decide-meta', 'fontSize', '12px'],
+  ['hub-decide-walk', 'display', 'flex'],
+  ['hub-decide-step', 'display', 'inline-flex'],
+  ['hub-decide-count', 'whiteSpace', 'nowrap'],
+  ['hub-decide-options', 'flexDirection', 'column'],
+  ['hub-decide-option', 'padding', '12px'],
+  ['hub-decide-option-label', 'fontWeight', '600'],
+  ['hub-decide-option-detail', 'lineHeight', '1.4'],
+  ['hub-decide-form', 'flexDirection', 'column'],
+  ['hub-decide-form-hint', 'fontSize', '13px'],
+];
 
 describe('the decision card has the spacing it was reported for missing', () => {
-  it('styles every class the card emits', () => {
-    // POSITIVE CONTROL, and the regression itself: the reported bug was that
-    // this list came back empty. An extractor that found nothing would let
-    // every assertion below pass by measuring nothing, so it is asserted first
-    // and by name.
-    for (const sel of [
-      '.hub-decide',
-      '.hub-decide-head',
-      '.hub-decide-kicker',
-      '.hub-decide-card-head',
-      '.hub-decide-k',
-      '.hub-decide-headline',
-      '.hub-decide-body',
-      '.hub-decide-meta',
-      '.hub-decide-walk',
-      '.hub-decide-step',
-      '.hub-decide-count',
-      '.hub-decide-options',
-      '.hub-decide-option',
-      '.hub-decide-option-label',
-      '.hub-decide-option-detail',
-      '.hub-decide-form',
-      '.hub-decide-form-hint',
-    ]) {
-      expect(rule(sel), `${sel} has no rule`).not.toBe('');
+  it('styles every class the card emits — the reported bug was that none of them were', () => {
+    for (const [cls, prop, value] of CARD) {
+      expect(el(cls)[prop], cls).toBe(value);
     }
+    // POSITIVE CONTROL: the same reads over a class no rule owns come back
+    // empty, so the list above is discriminating rather than measuring the
+    // browser's defaults.
+    const missing = el('hub-decide-nothing-owns-this');
+    expect(missing.padding).toBe('');
+    expect(missing.flexDirection).toBe('');
+    expect(missing.fontWeight).toBe('normal');
   });
 
   it('lets the blurb run to as many lines as it needs', () => {
     // *"The blurb may run a few lines — design for that."* The failure this
     // guards is a one-liner: any of these three turns a three-line question
     // into a clipped one, and a clipped decision question is unanswerable.
-    for (const sel of ['.hub-decide-headline', '.hub-decide-body']) {
-      const r = rule(sel);
-      expect(r, `${sel} clamps its line count`).not.toMatch(/-webkit-line-clamp/);
-      expect(r, `${sel} hides its overflow`).not.toMatch(/overflow:\s*hidden/);
-      expect(r, `${sel} refuses to wrap`).not.toMatch(/white-space:\s*nowrap/);
+    for (const cls of ['hub-decide-headline', 'hub-decide-body']) {
+      const r = el(cls);
+      expect(r.getPropertyValue('-webkit-line-clamp'), cls).toBe('');
+      expect(r.overflow, cls).not.toBe('hidden');
+      expect(r.whiteSpace, cls).not.toBe('nowrap');
+      // Control, and the one thing they DO declare about wrapping: a long
+      // unbroken token wraps rather than widening the panel.
+      expect(r.overflowWrap, cls).toBe('anywhere');
     }
-    // And it wraps a long unbroken token rather than widening the panel.
-    expect(rule('.hub-decide-headline')).toMatch(/overflow-wrap:\s*anywhere/);
   });
 
   it('lets the asked-by meta wrap — it is a sentence now, and 430px is real', () => {
     // The walkthrough head meta used to be a bare duration ("2 days") and
     // wore `white-space: nowrap`. It reads "Asked by <who> N days ago" now,
     // which nowrap would push out of a 430px head row.
-    expect(rule('.hub-walk-wait')).not.toMatch(/white-space:\s*nowrap/);
-    expect(rule('.hub-decide-meta')).not.toMatch(/white-space:\s*nowrap/);
+    expect(el('hub-walk-wait', 'span').whiteSpace).not.toBe('nowrap');
+    expect(el('hub-decide-meta').whiteSpace).not.toBe('nowrap');
+    // Control: the reader CAN see a nowrap when one is there — the count next
+    // to them still has it, so the two negatives above are not empty reads.
+    expect(el('hub-decide-count', 'span').whiteSpace).toBe('nowrap');
   });
 
   it('puts the walkthrough beside the kicker without moving it', () => {
     // With one item there is no walk at all, and the requirement is that the
     // card then *"look like today's single card"* — which `space-between`
     // gives for free, leaving the kicker exactly where it was.
-    const head = rule('.hub-decide-head');
-    expect(head).toMatch(/display:\s*flex/);
-    expect(head).toMatch(/justify-content:\s*space-between/);
+    const head = el('hub-decide-head');
+    expect(head.display).toBe('flex');
+    expect(head.justifyContent).toBe('space-between');
     // A step control is a tap target — at design-mobile.md's 36px floor, not
-    // the 32 it shipped with — and the count must not wrap mid-"2 of 3".
-    expect(
-      Number(/min-height:\s*(\d+)px/.exec(rule('.hub-decide-step'))?.[1]),
-    ).toBeGreaterThanOrEqual(36);
-    expect(rule('.hub-decide-count')).toMatch(/white-space:\s*nowrap/);
+    // the 32 it shipped with.
+    expect(Number.parseFloat(el('hub-decide-step', 'button').minHeight)).toBeGreaterThanOrEqual(36);
     // Only one card is on screen; the rest are hidden rather than unbuilt.
-    expect(rule('.hub-decide-card.hidden')).toMatch(/display:\s*none/);
+    expect(el('hub-decide-card hidden').display).toBe('none');
+    expect(el('hub-decide-card').display).not.toBe('none'); // control
   });
 
   it('puts real space between the answer buttons', () => {
@@ -107,48 +129,60 @@ describe('the decision card has the spacing it was reported for missing', () => 
     // spacing is a property of the group rather than a margin every button has
     // to remember — and one answer per row, since a row of pills puts two
     // answers under one thumb on a phone.
-    const opts = rule('.hub-decide-options');
-    expect(opts).toMatch(/display:\s*flex/);
-    expect(opts).toMatch(/flex-direction:\s*column/);
-    expect(opts).toMatch(/gap:\s*8px/);
+    const opts = el('hub-decide-options');
+    expect(opts.display).toBe('flex');
+    expect(opts.flexDirection).toBe('column');
+    expect(opts.gap).toBe('8px');
   });
 
   it('gives each option padding, and its detail its own line', () => {
     // "Options crammed against their details." The label and the detail are
     // separate elements; without a column and a gap they render as one run of
     // text with a space in it, which is what "crammed" describes.
-    const opt = rule('.hub-decide-option');
-    expect(opt).toMatch(/padding:\s*12px/);
-    expect(opt).toMatch(/flex-direction:\s*column/);
-    expect(opt).toMatch(/gap:\s*4px/);
+    const opt = el('hub-decide-option', 'button');
+    expect(opt.padding).toBe('12px');
+    expect(opt.flexDirection).toBe('column');
+    expect(opt.gap).toBe('4px');
     // "Nothing aligned": a button's text centres by default, so a two-line
     // option would centre both lines against each other.
-    expect(opt).toMatch(/text-align:\s*left/);
-    expect(opt).toMatch(/align-items:\s*flex-start/);
+    expect(opt.textAlign).toBe('left');
+    expect(opt.alignItems).toBe('flex-start');
     // The tap target design-mobile.md asks for.
-    expect(opt).toMatch(/min-height:\s*44px/);
+    expect(Number.parseFloat(opt.minHeight)).toBeGreaterThanOrEqual(44);
   });
 
-  it('separates the free-text box from the options above it', () => {
+  it('separates the free-text box from the options above it, and only then', () => {
     // "No spacing between buttons and comment text." Space AND a rule, because
     // the box is an alternative to the options rather than the next step after
     // them — and only when there are options for it to follow, which is why
     // this is the adjacent-sibling rule and not `.hub-decide-form` itself.
-    const after = rule('.hub-decide-options + .hub-decide-form');
-    expect(after).toMatch(/margin-top:\s*16px/);
-    expect(after).toMatch(/padding-top:\s*16px/);
-    expect(after).toMatch(/border-top:/);
+    const card = attach('hub-decide-card');
+    attach('hub-decide-options', { parent: card });
+    const after = styleOf(attach('hub-decide-form', { parent: card }));
+    expect(after.marginTop).toBe('16px');
+    expect(after.paddingTop).toBe('16px');
+    expect(Number.parseFloat(after.borderTopWidth)).toBeGreaterThan(0);
+    // Control, and the scoping the sibling selector exists for: a form with no
+    // options in front of it takes none of that separation.
+    const alone = styleOf(attach('hub-decide-form', { parent: attach('hub-decide-card') }));
+    expect(alone.marginTop).toBe('0px');
+    expect(alone.borderTopWidth).toBe('');
   });
 
   it('is written to be reusable by the Home card, not scoped to the panel', () => {
     // The Home queue's copy of this card is a separate ticket, on hold. These
     // names are the point: it should adopt them rather than grow a second
-    // layout that drifts. So no selector here may be scoped to the detail
-    // panel, or adopting it elsewhere would silently style nothing. The
-    // `body.hub-detail-full` exemption this pattern used to carry is gone with
-    // the rule it existed for — the full-screen mic mitigation, which the
-    // docked mic made unnecessary.
-    const scoped = /\.hub-detail[a-z-]*\s+\.hub-decide/.exec(declarationsOnly(CSS));
-    expect(scoped).toBeNull();
+    // layout that drifts. So the card must compute the same layout wherever it
+    // is mounted — a selector scoped to the detail panel would style nothing
+    // once the card moved, which is the failure this guards.
+    const inPanel = attach('hub-decide', {
+      parent: attach('hub-detail-panel', { parent: attach('hub-detail') }),
+    });
+    const onHome = attach('hub-decide', { parent: attach('hub-home') });
+    for (const prop of ['padding', 'margin', 'borderWidth', 'borderRadius'] as const) {
+      expect(styleOf(inPanel)[prop], prop).toBe(styleOf(onHome)[prop]);
+    }
+    // Control: the reads above are a rule's values, not two empty strings.
+    expect(styleOf(onHome).padding).toBe('16px');
   });
 });

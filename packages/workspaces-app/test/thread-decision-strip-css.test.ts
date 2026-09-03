@@ -1,10 +1,9 @@
-import { readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { IPAD, attach, installSheets, setViewport, styleOf } from './css-harness.ts';
 
 /**
- * The settled item's DECISION strip — the layout half, which no DOM test can
- * see because happy-dom resolves no layout and evaluates no media query.
+ * The settled item's DECISION strip — the layout half, read off the cascade
+ * rather than out of the stylesheet's text.
  *
  * The strip exists because the outcome used to be a fragment of a sentence
  * ("Answered by Cara: “AssemblyAI — go with what we prototyped”"), so the one
@@ -13,84 +12,84 @@ import { describe, expect, it } from 'vitest';
  * stacks the label ABOVE the words at a phone's — where a label and a
  * sentence on one line leave the sentence wrapping under a hanging label.
  *
- * Asserted here so deleting either half goes red rather than merely looking
- * different; how it actually reads at 1180 and 430 is checked in a browser.
+ * The stacking is the half a text read could not honestly hold: it lives in a
+ * `@media (max-width: 640px)` block, and matching that block's source proves
+ * nothing about the width a reader is on, nor about a later rule un-stacking
+ * it. Here the sheets are installed and the element is measured at each
+ * viewport, so the assertion is the value the browser would use. How it
+ * actually reads at 1180 and 430 is still checked in a browser — happy-dom
+ * lays nothing out.
+ *
+ * 430 rather than "just under 640": 430px is the phone this project verifies
+ * (docs/product/design-mobile.md), and the breakpoint's own number is now a
+ * detail of how the stack is reached rather than something a test restates.
  */
-const CSS = readFileSync(resolve('packages/workspaces-app/src/styles.css'), 'utf8');
 
-/** The phone breakpoint this strip stacks at. Named once — a stale copy of
- *  the number would silently search nothing and pass. */
-const PHONE = '(max-width: 640px)';
+/** The phone this project verifies. Inside the 640px breakpoint by 210px. */
+const PHONE_430 = { width: 430, height: 932 } as const;
 
-function declarationsOnly(css: string): string {
-  return css.replace(/\/\*[\s\S]*?\*\//g, '');
-}
+let cleanup = () => {};
+beforeEach(() => {
+  // The doc surface loads styles.css; the board loads hub.css first (see
+  // `renderHubShell` in packages/server/src/shells.ts). tokens.css stays out:
+  // the served sheet is the Open Props subset plus src/tokens.css, and the
+  // mapping layer alone resolves its `var(--gray-9)` chain to nothing.
+  cleanup = installSheets('hub.css', 'styles.css');
+});
+afterEach(() => {
+  cleanup();
+  document.body.replaceChildren();
+});
 
-/** The body of one rule. `within` scopes the search to a media block's text,
- *  because the same selector is styled differently at each breakpoint and a
- *  file-wide search would return whichever came first. */
-function rule(selector: string, within: string = declarationsOnly(CSS)): string {
-  const at = new RegExp(
-    `(^|\\n|\\{)\\s*${selector.replace(/[.+*[\]()]/g, '\\$&')}\\s*\\{([^}]*)\\}`,
-  ).exec(within);
-  return at?.[2] ?? '';
-}
-
-/** Every `@media` block matching this query, concatenated, braces balanced by
- *  counting — the stylesheet carries more than one block per breakpoint, and
- *  taking the first would search the wrong few hundred lines. */
-function media(query: string): string {
-  const css = declarationsOnly(CSS);
-  const out: string[] = [];
-  let from = 0;
-  for (;;) {
-    const start = css.indexOf(`@media ${query}`, from);
-    if (start < 0) break;
-    let depth = 0;
-    for (let i = css.indexOf('{', start); i < css.length; i++) {
-      if (css[i] === '{') depth++;
-      else if (css[i] === '}' && --depth === 0) {
-        out.push(css.slice(start, i));
-        from = i;
-        break;
-      }
-    }
-    if (from <= start) break;
-  }
-  return out.join('\n');
+function strip(viewport: { width: number; height: number }): CSSStyleDeclaration {
+  setViewport(viewport);
+  return styleOf(attach('thread-decision-strip'));
 }
 
 describe('the settled item’s decision strip', () => {
   it('puts the label beside the words at reading width', () => {
-    const strip = rule('.thread-decision-strip');
-    expect(strip).toMatch(/display:\s*flex/);
+    const wide = strip(IPAD);
+    expect(wide.display).toBe('flex');
     // Baseline, not centre: a one-word label against three lines of outcome
     // centres to the middle of the paragraph and reads as unattached.
-    expect(strip).toMatch(/align-items:\s*baseline/);
-    // Row is flex's default, so the absence of a column here is the claim.
-    expect(strip).not.toMatch(/flex-direction:\s*column/);
+    expect(wide.alignItems).toBe('baseline');
+    // Row is flex's default, so the absence of a column here is the claim —
+    // and an unset property computes to '' rather than to `row`, which is why
+    // both are accepted.
+    expect(wide.flexDirection === '' || wide.flexDirection === 'row').toBe(true);
   });
 
   it('keeps the label a label — uppercase, and never shrinking to fit', () => {
-    const label = rule('.thread-decision-label');
-    expect(label).toMatch(/text-transform:\s*uppercase/);
+    setViewport(IPAD);
+    const label = styleOf(attach('thread-decision-label'));
+    expect(label.textTransform).toBe('uppercase');
     // `flex: 0 0 auto` is what stops the label wrapping mid-word to give the
     // outcome room, which is the failure that makes a strip look broken.
-    expect(label).toMatch(/flex:\s*0\s+0\s+auto/);
+    expect(label.flex).toBe('0 0 auto');
   });
 
   it('stacks the label above the words at 430px', () => {
-    const phone = media(PHONE);
-    // Positive control: the block really was found and really is being read.
-    expect(phone, `no ${PHONE} block found in the stylesheet`).not.toBe('');
-    const stacked = rule('.thread-decision-strip', phone);
-    expect(stacked, `.thread-decision-strip is not restyled at ${PHONE}`).not.toBe('');
-    expect(stacked).toMatch(/flex-direction:\s*column/);
+    expect(strip(PHONE_430).flexDirection).toBe('column');
+    // …and only there: the same element measured on the iPad is still a row,
+    // which is what makes this a tier boundary rather than a global stack.
+    expect(strip(IPAD).flexDirection).not.toBe('column');
   });
 
   it('lets a long outcome break rather than widening the card', () => {
     // A pasted identifier or URL in a free-text answer is the case that
     // overflows a fixed-width margin rail.
-    expect(rule('.thread-answer-words')).toMatch(/overflow-wrap:\s*anywhere/);
+    setViewport(IPAD);
+    expect(styleOf(attach('thread-answer-words')).overflowWrap).toBe('anywhere');
+  });
+
+  it('positive control: the cascade is live — an unstyled box reads none of it', () => {
+    // Without this a renamed class would satisfy the row assertion above by
+    // measuring an element no rule reaches: `flex-direction` is '' there,
+    // which the `'' || row` allowance accepts, and `overflow-wrap` is '' too.
+    setViewport(IPAD);
+    const nothing = styleOf(attach('thread-decision-strip-not-a-class'));
+    expect(nothing.display).toBe('block');
+    expect(nothing.alignItems).toBe('');
+    expect(strip(IPAD).display).toBe('flex');
   });
 });
