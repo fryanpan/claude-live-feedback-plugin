@@ -4,7 +4,7 @@
   "licence": "CC BY 4.0",
   "source": "https://groups.inf.ed.ac.uk/ami/corpus/",
   "window": {
-    "fromSeconds": 300,
+    "fromSeconds": 900,
     "seconds": 660
   },
   "board": [
@@ -50,1146 +50,6 @@
     }
   ],
   "ticks": [
-    {
-      "turns": [
-        {
-          "speaker": "D",
-          "text": "Impressionist"
-        },
-        {
-          "speaker": "A",
-          "text": "Can't draw"
-        },
-        {
-          "speaker": "B",
-          "text": "Is"
-        },
-        {
-          "speaker": "A",
-          "text": "Um"
-        },
-        {
-          "speaker": "B",
-          "text": "that a whale"
-        },
-        {
-          "speaker": "A",
-          "text": "Yeah"
-        }
-      ]
-    },
-    {
-      "turns": [
-        {
-          "speaker": "A",
-          "text": "Um well anyway I don't know it's just the first animal I can think off the top of my head Um Yes Big reason is 'cause I'm allergic to most animals Allergic"
-        },
-        {
-          "speaker": "B",
-          "text": "Ah"
-        },
-        {
-          "speaker": "A",
-          "text": "to animal fur so um fish was a natural choice Um yeah and I kind of like whales They come in and go eat everything in sight And they're quite"
-        }
-      ]
-    },
-    {
-      "turns": [
-        {
-          "speaker": "D",
-          "text": "Alright"
-        },
-        {
-          "speaker": "A",
-          "text": "harmless and mild and interesting"
-        },
-        {
-          "speaker": "D",
-          "text": "Mm"
-        },
-        {
-          "speaker": "B",
-          "text": "Okay God I still don't know what I'm gonna write about Um"
-        },
-        {
-          "speaker": "D",
-          "text": "Superb sketch by the way"
-        },
-        {
-          "speaker": "A",
-          "text": "Tail's a bit big I think"
-        }
-      ]
-    },
-    {
-      "turns": [
-        {
-          "speaker": "B",
-          "text": "I was gonna choose a dog as well But I'll just draw a different kind of dog"
-        },
-        {
-          "speaker": "D",
-          "text": "Yep"
-        },
-        {
-          "speaker": "B",
-          "text": "M my favourite animal is my own dog at home Um"
-        },
-        {
-          "speaker": "B",
-          "text": "That doesn't really look like him actually"
-        }
-      ]
-    },
-    {
-      "turns": [
-        {
-          "speaker": "B",
-          "text": "He looks more like a pig actually"
-        },
-        {
-          "speaker": "B",
-          "text": "Ah well"
-        },
-        {
-          "speaker": "D",
-          "text": "I see a dog in there"
-        },
-        {
-          "speaker": "B",
-          "text": "Do you"
-        },
-        {
-          "speaker": "D",
-          "text": "Yep"
-        },
-        {
-          "speaker": "B",
-          "text": "Oh that's very good of you"
-        },
-        {
-          "speaker": "D",
-          "text": "Now I see a rooster"
-        }
-      ]
-    },
-    {
-      "turns": [
-        {
-          "speaker": "B",
-          "text": "Uh"
-        }
-      ]
-    },
-    {
-      "turns": [
-        {
-          "speaker": "D",
-          "text": "What kind is it"
-        },
-        {
-          "speaker": "B",
-          "text": "Um he's a mixture of uh various things Um and what do I like about him um That's just to suggest that his tail wags Um he's very friendly and cheery and always pleased to see you and very kind of affectionate and um"
-        }
-      ]
-    },
-    {
-      "turns": [
-        {
-          "speaker": "B",
-          "text": "uh and he's quite quite wee as well so you know he can doesn't take up too much space Um"
-        },
-        {
-          "speaker": "B",
-          "text": "and uh And he does a funny thing where he chases his tail as well which is quite amusing"
-        }
-      ]
-    },
-    {
-      "turns": [
-        {
-          "speaker": "D",
-          "text": "Is"
-        },
-        {
-          "speaker": "B",
-          "text": "so"
-        },
-        {
-          "speaker": "D",
-          "text": "he aware that th it's his own cha tail he's chasing"
-        },
-        {
-          "speaker": "B",
-          "text": "It is I think it is He only does it after he's had his dinner and um he'll just all of a sudden just get up and start chasing his tail"
-        },
-        {
-          "speaker": "D",
-          "text": "Hmm"
-        },
-        {
-          "speaker": "B",
-          "text": "'round the living room"
-        },
-        {
-          "speaker": "A",
-          "text": "It's an after dinner dog then"
-        },
-        {
-          "speaker": "B",
-          "text": "Yeah so"
-        },
-        {
-          "speaker": "D",
-          "text": "Probably when"
-        },
-        {
-          "speaker": "B",
-          "text": "uh"
-        },
-        {
-          "speaker": "D",
-          "text": "he was little he got lots of attention for doing it and"
-        }
-      ]
-    },
-    {
-      "turns": [
-        {
-          "speaker": "B",
-          "text": "Yeah"
-        },
-        {
-          "speaker": "D",
-          "text": "has"
-        },
-        {
-          "speaker": "B",
-          "text": "maybe"
-        },
-        {
-          "speaker": "D",
-          "text": "forever been conditioned"
-        },
-        {
-          "speaker": "B",
-          "text": "Maybe Right um where did you find this Just down here Yeah"
-        },
-        {
-          "speaker": "B",
-          "text": "Okay"
-        },
-        {
-          "speaker": "B",
-          "text": "Um what are we doing next Uh um"
-        }
-      ]
-    },
-    {
-      "turns": [
-        {
-          "speaker": "B",
-          "text": "Okay uh we now need to discuss the project finance Um"
-        },
-        {
-          "speaker": "B",
-          "text": "so according to the brief um we're gonna be selling this remote control for twenty five Euro um and we're aiming to make fifty million Euro Um so we're gonna be selling this on an international scale And uh we don't"
-        }
-      ]
-    },
-    {
-      "turns": [
-        {
-          "speaker": "D",
-          "text": "'Kay"
-        },
-        {
-          "speaker": "B",
-          "text": "want it to cost any more than uh twelve fifty Euros so fifty percent of the selling price"
-        },
-        {
-          "speaker": "D",
-          "text": "Um can we just go over that again"
-        },
-        {
-          "speaker": "B",
-          "text": "Sure"
-        },
-        {
-          "speaker": "D",
-          "text": "Uh so bas at twel Alright yeah Okay"
-        }
-      ]
-    },
-    {
-      "turns": [
-        {
-          "speaker": "D",
-          "text": "So cost like production cost is"
-        },
-        {
-          "speaker": "B",
-          "text": "All together"
-        },
-        {
-          "speaker": "D",
-          "text": "twelve fifty but selling price is is that wholesale or retail Like on the shelf"
-        },
-        {
-          "speaker": "B",
-          "text": "Um I dunno I imagine That's a good"
-        },
-        {
-          "speaker": "D",
-          "text": "Our"
-        },
-        {
-          "speaker": "B",
-          "text": "question"
-        },
-        {
-          "speaker": "D",
-          "text": "sale our sale anyway"
-        }
-      ]
-    },
-    {
-      "turns": [
-        {
-          "speaker": "B",
-          "text": "I imagine it probably is our"
-        },
-        {
-          "speaker": "D",
-          "text": "Yeah"
-        },
-        {
-          "speaker": "B",
-          "text": "sale"
-        },
-        {
-          "speaker": "D",
-          "text": "okay"
-        },
-        {
-          "speaker": "B",
-          "text": "actually because it's probably"
-        },
-        {
-          "speaker": "D",
-          "text": "okay"
-        },
-        {
-          "speaker": "B",
-          "text": "up to the"
-        },
-        {
-          "speaker": "B",
-          "text": "the um the retailer to uh"
-        },
-        {
-          "speaker": "D",
-          "text": "Okay"
-        },
-        {
-          "speaker": "B",
-          "text": "sell it for whatever price they want"
-        },
-        {
-          "speaker": "D",
-          "text": "Mm-hmm"
-        },
-        {
-          "speaker": "B",
-          "text": "Um"
-        },
-        {
-          "speaker": "D",
-          "text": "Alright"
-        },
-        {
-          "speaker": "B",
-          "text": "But I I don't know I mean do you think the fact that it's going to be sold internationally will have a bearing on how we design it at all"
-        }
-      ]
-    },
-    {
-      "turns": [
-        {
-          "speaker": "D",
-          "text": "Yes"
-        },
-        {
-          "speaker": "B",
-          "text": "Think it will"
-        },
-        {
-          "speaker": "D",
-          "text": "Mm-hmm"
-        },
-        {
-          "speaker": "B",
-          "text": "Um"
-        },
-        {
-          "speaker": "D",
-          "text": "Mm-hmm"
-        },
-        {
-          "speaker": "B",
-          "text": "Hmm"
-        },
-        {
-          "speaker": "D",
-          "text": "Well right away I'm wondering if there's um th th uh like with D_V_D_ players if there are zones"
-        }
-      ]
-    },
-    {
-      "turns": [
-        {
-          "speaker": "B",
-          "text": "Oh yeah"
-        },
-        {
-          "speaker": "D",
-          "text": "Um"
-        },
-        {
-          "speaker": "B",
-          "text": "regions and"
-        },
-        {
-          "speaker": "D",
-          "text": "f"
-        },
-        {
-          "speaker": "B",
-          "text": "stuff yeah"
-        },
-        {
-          "speaker": "D",
-          "text": "frequencies or something"
-        },
-        {
-          "speaker": "B",
-          "text": "Yeah"
-        },
-        {
-          "speaker": "D",
-          "text": "um"
-        },
-        {
-          "speaker": "B",
-          "text": "Okay"
-        },
-        {
-          "speaker": "D",
-          "text": "as well as uh characters um different uh keypad styles and s symbols"
-        },
-        {
-          "speaker": "A",
-          "text": "Hmm"
-        },
-        {
-          "speaker": "B",
-          "text": "Yeah Well for"
-        },
-        {
-          "speaker": "D",
-          "text": "Um"
-        },
-        {
-          "speaker": "B",
-          "text": "a remote control do you think that will be I suppose"
-        },
-        {
-          "speaker": "D",
-          "text": "I don't"
-        },
-        {
-          "speaker": "B",
-          "text": "it's"
-        }
-      ]
-    },
-    {
-      "turns": [
-        {
-          "speaker": "D",
-          "text": "know"
-        },
-        {
-          "speaker": "B",
-          "text": "depends on how complicated our remote control is"
-        },
-        {
-          "speaker": "D",
-          "text": "Yeah"
-        },
-        {
-          "speaker": "A",
-          "text": "It does make sense from maybe the design point of view 'cause you have more complicated characters like European languages then you need more buttons"
-        },
-        {
-          "speaker": "B",
-          "text": "Yeah"
-        },
-        {
-          "speaker": "D",
-          "text": "Yeah"
-        },
-        {
-          "speaker": "A",
-          "text": "So"
-        },
-        {
-          "speaker": "B",
-          "text": "yeah"
-        },
-        {
-          "speaker": "A",
-          "text": "possibly"
-        },
-        {
-          "speaker": "D",
-          "text": "Yeah"
-        },
-        {
-          "speaker": "B",
-          "text": "Okay"
-        }
-      ]
-    },
-    {
-      "turns": [
-        {
-          "speaker": "D",
-          "text": "And then a and then al the other thing international is on top of the price I'm thinking"
-        },
-        {
-          "speaker": "D",
-          "text": "the price might might appeal to a certain market in one region whereas in another it'll be different so"
-        },
-        {
-          "speaker": "B",
-          "text": "What just like"
-        },
-        {
-          "speaker": "D",
-          "text": "Just"
-        },
-        {
-          "speaker": "B",
-          "text": "in"
-        },
-        {
-          "speaker": "D",
-          "text": "a"
-        }
-      ]
-    },
-    {
-      "turns": [
-        {
-          "speaker": "B",
-          "text": "terms"
-        },
-        {
-          "speaker": "D",
-          "text": "chara just"
-        },
-        {
-          "speaker": "B",
-          "text": "of like"
-        },
-        {
-          "speaker": "D",
-          "text": "a characteristic"
-        },
-        {
-          "speaker": "B",
-          "text": "the wealth of the"
-        },
-        {
-          "speaker": "D",
-          "text": "of"
-        },
-        {
-          "speaker": "B",
-          "text": "country"
-        },
-        {
-          "speaker": "D",
-          "text": "the"
-        },
-        {
-          "speaker": "B",
-          "text": "Like how"
-        },
-        {
-          "speaker": "D",
-          "text": "Just"
-        },
-        {
-          "speaker": "B",
-          "text": "much money people have to spend on things"
-        },
-        {
-          "speaker": "D",
-          "text": "Or just"
-        },
-        {
-          "speaker": "B",
-          "text": "like"
-        },
-        {
-          "speaker": "D",
-          "text": "like basic product podi positioning the twenty five Euro remote control might be a big hit in London might not be such a big hit in Greece who knows"
-        }
-      ]
-    },
-    {
-      "turns": [
-        {
-          "speaker": "B",
-          "text": "Aye I"
-        },
-        {
-          "speaker": "D",
-          "text": "something"
-        },
-        {
-          "speaker": "B",
-          "text": "see what"
-        },
-        {
-          "speaker": "D",
-          "text": "like"
-        },
-        {
-          "speaker": "B",
-          "text": "you"
-        },
-        {
-          "speaker": "D",
-          "text": "that"
-        },
-        {
-          "speaker": "B",
-          "text": "mean"
-        },
-        {
-          "speaker": "D",
-          "text": "yeah"
-        },
-        {
-          "speaker": "B",
-          "text": "yeah"
-        },
-        {
-          "speaker": "B",
-          "text": "Marketing Good marketing"
-        },
-        {
-          "speaker": "D",
-          "text": "Yep"
-        },
-        {
-          "speaker": "B",
-          "text": "thoughts Oh gosh I should be writing all this down Um"
-        }
-      ]
-    },
-    {
-      "turns": [
-        {
-          "speaker": "D",
-          "text": "Right away I'm making some kind of assumptions about what what information we're given here"
-        },
-        {
-          "speaker": "B",
-          "text": "Mm"
-        },
-        {
-          "speaker": "D",
-          "text": "thinking 'kay trendy probably means something other than just basic"
-        },
-        {
-          "speaker": "B",
-          "text": "Yeah"
-        },
-        {
-          "speaker": "D",
-          "text": "something other than just standard Um"
-        },
-        {
-          "speaker": "D",
-          "text": "so I'm wondering right away is selling twenty five Euros is that sort of the thi is this gonna to be like the premium product kinda"
-        }
-      ]
-    },
-    {
-      "turns": [
-        {
-          "speaker": "B",
-          "text": "Yeah"
-        },
-        {
-          "speaker": "D",
-          "text": "thing"
-        },
-        {
-          "speaker": "B",
-          "text": "yeah"
-        },
-        {
-          "speaker": "D",
-          "text": "or"
-        },
-        {
-          "speaker": "B",
-          "text": "Like how much does you know a remote control cost"
-        },
-        {
-          "speaker": "D",
-          "text": "Uh-huh"
-        },
-        {
-          "speaker": "B",
-          "text": "Well twenty five Euro I mean that's um"
-        },
-        {
-          "speaker": "B",
-          "text": "that's about like eighteen pounds or something isn't it"
-        },
-        {
-          "speaker": "D",
-          "text": "Mm-hmm"
-        },
-        {
-          "speaker": "B",
-          "text": "Or no is it as much as that Sixteen"
-        },
-        {
-          "speaker": "D",
-          "text": "Yep"
-        },
-        {
-          "speaker": "B",
-          "text": "seventeen eighteen pounds"
-        },
-        {
-          "speaker": "D",
-          "text": "Yeah I'd say so yeah"
-        },
-        {
-          "speaker": "B",
-          "text": "Um I dunno I've never bought a remote control so I don't"
-        }
-      ]
-    },
-    {
-      "turns": [
-        {
-          "speaker": "D",
-          "text": "No"
-        },
-        {
-          "speaker": "B",
-          "text": "know how how good a remote"
-        },
-        {
-          "speaker": "D",
-          "text": "Yeah"
-        },
-        {
-          "speaker": "B",
-          "text": "control that would get you"
-        },
-        {
-          "speaker": "D",
-          "text": "yeah"
-        },
-        {
-          "speaker": "B",
-          "text": "Um"
-        },
-        {
-          "speaker": "B",
-          "text": "But yeah I suppose it has to look kind of cool"
-        },
-        {
-          "speaker": "D",
-          "text": "Mm-hmm"
-        },
-        {
-          "speaker": "B",
-          "text": "and gimmicky"
-        },
-        {
-          "speaker": "B",
-          "text": "Um right okay"
-        },
-        {
-          "speaker": "B",
-          "text": "Let me just scoot on ahead here Okay Um well d Does anybody have anything to add to uh to the finance issue at all"
-        }
-      ]
-    },
-    {
-      "turns": [
-        {
-          "speaker": "D",
-          "text": "Do"
-        },
-        {
-          "speaker": "B",
-          "text": "Thin"
-        },
-        {
-          "speaker": "D",
-          "text": "we have any other background information on like how that compares to other"
-        },
-        {
-          "speaker": "B",
-          "text": "No actually That"
-        },
-        {
-          "speaker": "D",
-          "text": "other"
-        },
-        {
-          "speaker": "B",
-          "text": "would be useful though wouldn't it if you knew like"
-        },
-        {
-          "speaker": "D",
-          "text": "Yeah"
-        },
-        {
-          "speaker": "B",
-          "text": "what your money would get you"
-        },
-        {
-          "speaker": "A",
-          "text": "Hmm"
-        },
-        {
-          "speaker": "B",
-          "text": "now"
-        },
-        {
-          "speaker": "D",
-          "text": "Mm-hmm"
-        },
-        {
-          "speaker": "B",
-          "text": "Mm-hmm"
-        }
-      ]
-    },
-    {
-      "turns": [
-        {
-          "speaker": "D",
-          "text": "Yeah interesting thing about discussing um production of a remote control for me is that l as you point out I just don't think of remote controls as somethin something people consciously assess in their purchasing habits"
-        },
-        {
-          "speaker": "B",
-          "text": "Yeah"
-        },
-        {
-          "speaker": "D",
-          "text": "It's just"
-        },
-        {
-          "speaker": "B",
-          "text": "yeah"
-        },
-        {
-          "speaker": "D",
-          "text": "like getting shoelaces with shoes or something"
-        }
-      ]
-    },
-    {
-      "turns": [
-        {
-          "speaker": "B",
-          "text": "Oh"
-        },
-        {
-          "speaker": "D",
-          "text": "It just"
-        },
-        {
-          "speaker": "B",
-          "text": "Five"
-        },
-        {
-          "speaker": "D",
-          "text": "comes"
-        },
-        {
-          "speaker": "B",
-          "text": "minutes"
-        },
-        {
-          "speaker": "D",
-          "text": "along"
-        },
-        {
-          "speaker": "B",
-          "text": "to end of meeting Oh okay We're a bit behind"
-        },
-        {
-          "speaker": "D",
-          "text": "Do you know what I mean"
-        },
-        {
-          "speaker": "C",
-          "text": "Yeah"
-        },
-        {
-          "speaker": "D",
-          "text": "Like"
-        },
-        {
-          "speaker": "A",
-          "text": "Yeah"
-        },
-        {
-          "speaker": "D",
-          "text": "so sort of like how do you I I mean one one way of looking at it would be well the people producing television sets maybe they have to buy remote controls Or another way is maybe people who have T_V_ sets are really fed up with their remote control and they really want"
-        }
-      ]
-    },
-    {
-      "turns": [
-        {
-          "speaker": "C",
-          "text": "I"
-        },
-        {
-          "speaker": "D",
-          "text": "a"
-        },
-        {
-          "speaker": "C",
-          "text": "know"
-        },
-        {
-          "speaker": "D",
-          "text": "better"
-        },
-        {
-          "speaker": "C",
-          "text": "um"
-        },
-        {
-          "speaker": "D",
-          "text": "one or something"
-        },
-        {
-          "speaker": "C",
-          "text": "My"
-        },
-        {
-          "speaker": "D",
-          "text": "But"
-        },
-        {
-          "speaker": "C",
-          "text": "parents went out and bought um remote controls because um they got fed up of having four or five different remote controls for each things"
-        },
-        {
-          "speaker": "D",
-          "text": "Right"
-        },
-        {
-          "speaker": "C",
-          "text": "the house"
-        },
-        {
-          "speaker": "D",
-          "text": "Right"
-        },
-        {
-          "speaker": "C",
-          "text": "So um"
-        },
-        {
-          "speaker": "D",
-          "text": "Okay"
-        },
-        {
-          "speaker": "C",
-          "text": "for them"
-        },
-        {
-          "speaker": "D",
-          "text": "so"
-        },
-        {
-          "speaker": "C",
-          "text": "it was just how many devices control"
-        },
-        {
-          "speaker": "D",
-          "text": "Right so in function one of the priorities might be"
-        },
-        {
-          "speaker": "B",
-          "text": "Yeah"
-        },
-        {
-          "speaker": "D",
-          "text": "to combine as many uses"
-        }
-      ]
-    },
-    {
-      "turns": [
-        {
-          "speaker": "B",
-          "text": "Right so do you think that should be like a main design aim of our remote control d you know"
-        },
-        {
-          "speaker": "D",
-          "text": "I think so"
-        },
-        {
-          "speaker": "B",
-          "text": "do your"
-        },
-        {
-          "speaker": "D",
-          "text": "Yeah"
-        },
-        {
-          "speaker": "B",
-          "text": "your satellite and"
-        },
-        {
-          "speaker": "D",
-          "text": "yeah"
-        },
-        {
-          "speaker": "B",
-          "text": "your regular telly and"
-        },
-        {
-          "speaker": "D",
-          "text": "Yeah"
-        },
-        {
-          "speaker": "B",
-          "text": "your V_C_R_ and everything"
-        },
-        {
-          "speaker": "D",
-          "text": "Well like um maybe what we could use is a sort of like a example of a successful other piece technology is palm palm pilots They're gone from being just like little sort of scribble boards to cameras M_P_ three players"
-        }
-      ]
-    },
-    {
-      "turns": [
-        {
-          "speaker": "B",
-          "text": "Mm-hmm"
-        },
-        {
-          "speaker": "D",
-          "text": "telephones"
-        },
-        {
-          "speaker": "D",
-          "text": "everything agenda So like I wonder if we might add something new to the to the remote control"
-        },
-        {
-          "speaker": "B",
-          "text": "Yeah"
-        },
-        {
-          "speaker": "D",
-          "text": "market such as the lighting in your house or um"
-        },
-        {
-          "speaker": "B",
-          "text": "Or even like you know notes about um what you wanna watch Like you might put in there oh I want"
-        }
-      ]
-    },
-    {
-      "turns": [
-        {
-          "speaker": "D",
-          "text": "Yeah"
-        },
-        {
-          "speaker": "B",
-          "text": "to watch such and such"
-        },
-        {
-          "speaker": "D",
-          "text": "yeah"
-        },
-        {
-          "speaker": "B",
-          "text": "and look a Oh that's a good idea"
-        },
-        {
-          "speaker": "D",
-          "text": "An"
-        },
-        {
-          "speaker": "B",
-          "text": "So extra functionalities"
-        },
-        {
-          "speaker": "D",
-          "text": "Yeah Like p personally for me at home I've I've combined the um the audio video of my television set and my D_V_D_ player and my C_D_ player So they w all work actually function together but I have different remote controls for each of them"
-        }
-      ]
-    },
-    {
-      "turns": [
-        {
-          "speaker": "B",
-          "text": "Mm-hmm"
-        },
-        {
-          "speaker": "D",
-          "text": "So it's sort of ironic that that then they're in there"
-        },
-        {
-          "speaker": "D",
-          "text": "um"
-        },
-        {
-          "speaker": "D",
-          "text": "you know the sound and everything it's just one system But each one's"
-        },
-        {
-          "speaker": "B",
-          "text": "Hmm"
-        },
-        {
-          "speaker": "D",
-          "text": "got its own little"
-        },
-        {
-          "speaker": "D",
-          "text": "part"
-        },
-        {
-          "speaker": "B",
-          "text": "Um okay uh I'd wel we're gonna have to wrap up pretty quickly in the next couple of minutes Um I'll just check we've nothing else Okay Um so anything else anybody wants to add about what they don't like about remote controls they've used what they would really like to be part of this new one at all"
-        }
-      ]
-    },
     {
       "turns": [
         {
@@ -1463,6 +323,318 @@
         {
           "speaker": "B",
           "text": "designer"
+        },
+        {
+          "speaker": "D",
+          "text": "that f it could be that functionally that doesn't make it any better but that just the appeal"
+        },
+        {
+          "speaker": "B",
+          "text": "It looks"
+        },
+        {
+          "speaker": "D",
+          "text": "of"
+        },
+        {
+          "speaker": "B",
+          "text": "better"
+        },
+        {
+          "speaker": "D",
+          "text": "of not having You know these days there's a r pe things in people's homes are becoming more and more like chic you know"
+        }
+      ]
+    },
+    {
+      "turns": [
+        {
+          "speaker": "B",
+          "text": "Yeah"
+        },
+        {
+          "speaker": "D",
+          "text": "Um nicer materials and"
+        },
+        {
+          "speaker": "B",
+          "text": "Okay"
+        },
+        {
+          "speaker": "D",
+          "text": "might be"
+        },
+        {
+          "speaker": "B",
+          "text": "Okay"
+        },
+        {
+          "speaker": "D",
+          "text": "be worth exploring anyway"
+        },
+        {
+          "speaker": "C",
+          "text": "Uh"
+        },
+        {
+          "speaker": "B",
+          "text": "Right well um so just to wrap up the next meeting's gonna be in thirty minutes So that's about um about ten to twelve by my watch Um so inbetween now and then um as the industrial designer you're gonna be working on you know the actual working"
+        }
+      ]
+    },
+    {
+      "turns": [
+        {
+          "speaker": "A",
+          "text": "Yep"
+        },
+        {
+          "speaker": "B",
+          "text": "design of it so y you know what you're doing there Um for user interface technical functions I guess that's you know like what we've been talking about what it'll actually do Um and uh marketing executive"
+        },
+        {
+          "speaker": "B",
+          "text": "you'll be just thinking about what it actually what you know what requirements it has to has to fulfil and you'll all get instructions emailed to you I guess"
+        }
+      ]
+    },
+    {
+      "turns": [
+        {
+          "speaker": "D",
+          "text": "Okay"
+        },
+        {
+          "speaker": "B",
+          "text": "Um"
+        }
+      ]
+    },
+    {
+      "turns": [
+        {
+          "speaker": "B",
+          "text": "Yeah so it's th the functional design stage is next I guess"
+        },
+        {
+          "speaker": "B",
+          "text": "And uh"
+        },
+        {
+          "speaker": "B",
+          "text": "and that's the end of the meeting"
+        },
+        {
+          "speaker": "B",
+          "text": "So I got"
+        },
+        {
+          "speaker": "D",
+          "text": "Um"
+        },
+        {
+          "speaker": "B",
+          "text": "that little message a lot sooner than I thought I would so"
+        }
+      ]
+    },
+    {
+      "turns": [
+        {
+          "speaker": "D",
+          "text": "Before we wrap up just to make sure we're all on the same page here"
+        },
+        {
+          "speaker": "B",
+          "text": "Mm-hmm"
+        },
+        {
+          "speaker": "D",
+          "text": "um do we We were given sort of an example of a coffee machine or something"
+        },
+        {
+          "speaker": "B",
+          "text": "Uh-huh"
+        },
+        {
+          "speaker": "D",
+          "text": "right"
+        },
+        {
+          "speaker": "B",
+          "text": "yeah"
+        },
+        {
+          "speaker": "A",
+          "text": "Mm-hmm"
+        },
+        {
+          "speaker": "D",
+          "text": "Well"
+        },
+        {
+          "speaker": "D",
+          "text": "um"
+        },
+        {
+          "speaker": "D",
+          "text": "are we at ma right now on the assumption that our television remote control may have features which go beyond the television Or are we keeping"
+        }
+      ]
+    },
+    {
+      "turns": [
+        {
+          "speaker": "B",
+          "text": "Th"
+        },
+        {
+          "speaker": "D",
+          "text": "sort of like a a design commitment to television features"
+        },
+        {
+          "speaker": "B",
+          "text": "Okay"
+        },
+        {
+          "speaker": "D",
+          "text": "I"
+        },
+        {
+          "speaker": "B",
+          "text": "well"
+        },
+        {
+          "speaker": "D",
+          "text": "I don't know"
+        },
+        {
+          "speaker": "B",
+          "text": "just very quickly 'cause this we're supposed to finish now"
+        },
+        {
+          "speaker": "D",
+          "text": "Yep"
+        },
+        {
+          "speaker": "B",
+          "text": "Um I guess"
+        },
+        {
+          "speaker": "D",
+          "text": "Yeah sure"
+        },
+        {
+          "speaker": "B",
+          "text": "that's up to us I mean you probably want some kind of unique selling point of it"
+        },
+        {
+          "speaker": "D",
+          "text": "Okay"
+        },
+        {
+          "speaker": "B",
+          "text": "so um"
+        }
+      ]
+    },
+    {
+      "turns": [
+        {
+          "speaker": "A",
+          "text": "I"
+        },
+        {
+          "speaker": "B",
+          "text": "you"
+        },
+        {
+          "speaker": "A",
+          "text": "think"
+        },
+        {
+          "speaker": "B",
+          "text": "know"
+        },
+        {
+          "speaker": "A",
+          "text": "one factor would be production cost"
+        },
+        {
+          "speaker": "D",
+          "text": "Okay yeah"
+        },
+        {
+          "speaker": "A",
+          "text": "Because"
+        },
+        {
+          "speaker": "B",
+          "text": "Yeah"
+        },
+        {
+          "speaker": "A",
+          "text": "there's a cap there so um"
+        },
+        {
+          "speaker": "D",
+          "text": "Okay"
+        },
+        {
+          "speaker": "A",
+          "text": "depends on how much you can cram into that price"
+        },
+        {
+          "speaker": "B",
+          "text": "Mm-hmm"
+        },
+        {
+          "speaker": "D",
+          "text": "Okay"
+        },
+        {
+          "speaker": "A",
+          "text": "Um"
+        },
+        {
+          "speaker": "B",
+          "text": "Yeah"
+        },
+        {
+          "speaker": "A",
+          "text": "I think that that's the main factor"
+        },
+        {
+          "speaker": "B",
+          "text": "Okay"
+        }
+      ]
+    },
+    {
+      "turns": [
+        {
+          "speaker": "D",
+          "text": "Okay"
+        },
+        {
+          "speaker": "B",
+          "text": "Right okay we'll that's that's the end of the meeting then"
+        },
+        {
+          "speaker": "D",
+          "text": "Alright"
+        },
+        {
+          "speaker": "B",
+          "text": "Um"
+        },
+        {
+          "speaker": "B",
+          "text": "So uh thank you all for coming"
+        },
+        {
+          "speaker": "A",
+          "text": "Cool"
         }
       ]
     }

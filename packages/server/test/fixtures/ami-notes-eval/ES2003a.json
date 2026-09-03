@@ -4,7 +4,7 @@
   "licence": "CC BY 4.0",
   "source": "https://groups.inf.ed.ac.uk/ami/corpus/",
   "window": {
-    "fromSeconds": 300,
+    "fromSeconds": 900,
     "seconds": 660
   },
   "board": [
@@ -52,254 +52,6 @@
   "ticks": [
     {
       "turns": [
-        {
-          "speaker": "C",
-          "text": "I think so"
-        },
-        {
-          "speaker": "B",
-          "text": "Yeah It'll follow you if you"
-        },
-        {
-          "speaker": "C",
-          "text": "Yeah There you go"
-        },
-        {
-          "speaker": "B",
-          "text": "You can probably just stick it in your pocket for now I wouldn't worry too much Should have good range"
-        }
-      ]
-    },
-    {
-      "turns": [
-        {
-          "speaker": "D",
-          "text": "Uh destroying your elephant here"
-        }
-      ]
-    },
-    {
-      "turns": [
-        {
-          "speaker": "D",
-          "text": "Uh here we have a tiger Uh"
-        },
-        {
-          "speaker": "D",
-          "text": "I've always loved tigers They're just they're big they're biggest cats uh I did a project on cats in the wild when I was a kid and uh it was my favourite cat just 'cause it was looks the best the stripes orange My dad used to talk about he's from Bangladesh so he used to tell me all about them when he was when I was a kid And uh they're just the most feared of of uh animals in the wild So uh that's why I like them Didn't say an anything about me really but"
-        }
-      ]
-    },
-    {
-      "turns": [
-        {
-          "speaker": "B",
-          "text": "Excellent thank you very much Dave if you'd like to uh"
-        },
-        {
-          "speaker": "B",
-          "text": "have a dash"
-        }
-      ]
-    },
-    {
-      "turns": [
-        {
-          "speaker": "A",
-          "text": "Um"
-        }
-      ]
-    },
-    {
-      "turns": [
-        {
-          "speaker": "A",
-          "text": "Um the monkey um The one f uh in fact this is a somewhat oblique reference in fact to uh well my I have a three uh three y year old daughter who h who who who is affectionately known as Miss Monkey Um monkeys have attitude Which I think is a good thing And I mean fr and from uh from the point of view of sort of the study of human evolution they and other primates are terribly interesting Um so I like monkeys And and th th th th thi thi this one seems to have perhaps more attitude than most"
-        }
-      ]
-    },
-    {
-      "turns": [
-        {
-          "speaker": "B",
-          "text": "Cheers"
-        }
-      ]
-    },
-    {
-      "turns": [
-        {
-          "speaker": "B",
-          "text": "Hardly what I'd call the best drawing in the world but it'll do for now Also not quite as feared as your average tiger but uh cats are one of my favourite animals they're very independent they're snotty as hell at the best of times and uh what can you say you got to love those qualities in an animal"
-        }
-      ]
-    },
-    {
-      "turns": [
-        {
-          "speaker": "B",
-          "text": "Right I think we've all managed to master the whiteboard there by looks of it so on to it Project finance As you can see twelve point five Euros per unit That's not a terrible lot as far as I'm aware and we're hoping to sell them for twenty five If we're aiming for fifty million Euros we're gonna have to be selling an awful lot of them"
-        }
-      ]
-    },
-    {
-      "turns": [
-        {
-          "speaker": "C",
-          "text": "Oh that was profiting that was an amount so that's the amount made"
-        },
-        {
-          "speaker": "B",
-          "text": "Yep"
-        },
-        {
-          "speaker": "C",
-          "text": "okay"
-        },
-        {
-          "speaker": "B",
-          "text": "Well fifty million and if you're making twelve point five Euros on each one then"
-        },
-        {
-          "speaker": "C",
-          "text": "Yeah"
-        },
-        {
-          "speaker": "B",
-          "text": "awful lot need to be sold"
-        },
-        {
-          "speaker": "B",
-          "text": "Okay Now we better actually just get on with the uh the meat of the project So I'm gonna guess that we've all used remote controls"
-        }
-      ]
-    },
-    {
-      "turns": [
-        {
-          "speaker": "B",
-          "text": "Any ideas of where you think a new remote control could go into this market"
-        },
-        {
-          "speaker": "A",
-          "text": "Well one thing I'm aware of is th there uh um at the sort of v very high price end of the market there's there's a em emerging market for sort of touch screen L_C_D_ remotes that can be uh programmed in m much more sophisticated ways than sort of conventional models so you get the sort of you get um you you can redesign the interface to your own needs you can programme in macros and you get a much greater degree um um I mean you get in these sort of three in one five in one whatevers but you can get integration between the different uh the the the diff the different things that it's designed to control to a much greater extent and you can have one uh you know one macro to turn the uh you know turn the T_V_ to the right channel get the uh re uh rewind the tape in the V_C_R_ and get it to play once it's rewound for instance"
-        }
-      ]
-    },
-    {
-      "turns": [
-        {
-          "speaker": "B",
-          "text": "Okay"
-        },
-        {
-          "speaker": "A",
-          "text": "Um b it occurs to me there might be a niche for uh for a remote that aimed towards some of that sort of functionality but using a just conventional push button design And therefore putting it into a um well much lower price bracket"
-        }
-      ]
-    },
-    {
-      "turns": [
-        {
-          "speaker": "B",
-          "text": "Okay yeah tha that's true with the price range we're looking at going for a touch screen would probably be possibly"
-        },
-        {
-          "speaker": "A",
-          "text": "Absolutely"
-        },
-        {
-          "speaker": "B",
-          "text": "out of"
-        },
-        {
-          "speaker": "A",
-          "text": "prohibitive"
-        },
-        {
-          "speaker": "B",
-          "text": "our yeah"
-        },
-        {
-          "speaker": "A",
-          "text": "yeah"
-        },
-        {
-          "speaker": "C",
-          "text": "Oh"
-        },
-        {
-          "speaker": "B",
-          "text": "But you think uh again something to control multiple units in uh a simple fashion"
-        },
-        {
-          "speaker": "A",
-          "text": "Yeah I mean I wouldn't like to say you g I mean you get ones that you can switch between multiple units but something that could um operate between multiple units in a more integrated fashion Some and ideally something into which it would have some at least limited facility for um running macros"
-        }
-      ]
-    },
-    {
-      "turns": [
-        {
-          "speaker": "B",
-          "text": "Would the the idea something along the lines of one on button would turn on say the video recorder the T_V_ maybe the sound system as well all in one go is that"
-        },
-        {
-          "speaker": "A",
-          "text": "For"
-        },
-        {
-          "speaker": "B",
-          "text": "kind"
-        },
-        {
-          "speaker": "A",
-          "text": "instance"
-        },
-        {
-          "speaker": "B",
-          "text": "of"
-        },
-        {
-          "speaker": "A",
-          "text": "um let's say oh oh um or um you know you pr uh you press uh say the play button for the D_V_D_ player and it turns the T_V_ on and onto the right channel as well um"
-        }
-      ]
-    },
-    {
-      "turns": [
-        {
-          "speaker": "B",
-          "text": "Okay that"
-        },
-        {
-          "speaker": "C",
-          "text": "'Kay"
-        },
-        {
-          "speaker": "B",
-          "text": "sounds like a a good strong idea Um"
-        },
-        {
-          "speaker": "B",
-          "text": "Any takes on this"
-        },
-        {
-          "speaker": "C",
-          "text": "Well um I've noticed that uh gaming c is becoming quite popular with television um when I was younger we used to e play games using our cable using the cable subscribed the cable providers"
-        }
-      ]
-    },
-    {
-      "turns": [
-        {
-          "speaker": "A",
-          "text": "Mm-hmm"
-        },
-        {
-          "speaker": "C",
-          "text": "but our remote controls would get worn out really easily and the remote control was not a great kind of keyboar um keypad for playing games So"
-        },
         {
           "speaker": "B",
           "text": "Okay"
@@ -371,6 +123,226 @@
         {
           "speaker": "C",
           "text": "Yeah"
+        },
+        {
+          "speaker": "B",
+          "text": "we've got a couple of ideas we can we'll have to work fast um alright as you can see we've got thirty minutes until the next meeting so we'll have to try and decide on some of the basic functionality um how the user interface might work that'll be a key aspect especially if the idea of um some kind of macros facility because you have to program it you have to have a lot of response back or at least some kind"
+        }
+      ]
+    },
+    {
+      "turns": [
+        {
+          "speaker": "A",
+          "text": "Mm-hmm"
+        },
+        {
+          "speaker": "B",
+          "text": "Um"
+        },
+        {
+          "speaker": "B",
+          "text": "And we're gonna maybe n try and have to figure out"
+        },
+        {
+          "speaker": "C",
+          "text": "What the user wants"
+        },
+        {
+          "speaker": "B",
+          "text": "what"
+        },
+        {
+          "speaker": "C",
+          "text": "uh"
+        },
+        {
+          "speaker": "B",
+          "text": "the user wants yes"
+        },
+        {
+          "speaker": "C",
+          "text": "Okay"
+        },
+        {
+          "speaker": "B",
+          "text": "Um right Has anybody got anything they'd like to add at this stage anything they think that might have been missed so far"
+        }
+      ]
+    },
+    {
+      "turns": [
+        {
+          "speaker": "D",
+          "text": "Well when you're talking about gaming and stuff do you think they should have some sort of"
+        },
+        {
+          "speaker": "D",
+          "text": "stick on it rather than"
+        },
+        {
+          "speaker": "C",
+          "text": "Oh"
+        },
+        {
+          "speaker": "D",
+          "text": "buttons"
+        },
+        {
+          "speaker": "C",
+          "text": "Okay"
+        },
+        {
+          "speaker": "D",
+          "text": "Like uh control pads you know of games but"
+        },
+        {
+          "speaker": "C",
+          "text": "Mm-hmm"
+        },
+        {
+          "speaker": "D",
+          "text": "or is that a bit ridiculous"
+        },
+        {
+          "speaker": "B",
+          "text": "I I don't see why not almost everybody is probably used to a console by now and all of them incorporate small keypads on them in fact even the mobile phones these days are beginning to use them as well so"
+        }
+      ]
+    },
+    {
+      "turns": [
+        {
+          "speaker": "D",
+          "text": "Yeah"
+        },
+        {
+          "speaker": "B",
+          "text": "it's probably an interface that most people are used to Um"
+        },
+        {
+          "speaker": "B",
+          "text": "and that could allow n easy navigation used as a joystick as well"
+        }
+      ]
+    },
+    {
+      "turns": [
+        {
+          "speaker": "A",
+          "text": "Mm-hmm The other key feature that uh that would be a good idea built into it is t is is to make something you know fairly sort of ergonomic something that just fits fits as comfortably as possible into the hand But of course uh al al also allows for the possibility of a more sort of"
+        }
+      ]
+    },
+    {
+      "turns": [
+        {
+          "speaker": "A",
+          "text": "slightly unconventional or attractive uh"
+        },
+        {
+          "speaker": "A",
+          "text": "sha"
+        },
+        {
+          "speaker": "B",
+          "text": "Okay"
+        },
+        {
+          "speaker": "A",
+          "text": "shape for it overall"
+        },
+        {
+          "speaker": "B",
+          "text": "So small"
+        },
+        {
+          "speaker": "A",
+          "text": "A"
+        },
+        {
+          "speaker": "B",
+          "text": "stylish"
+        },
+        {
+          "speaker": "A",
+          "text": "curve mm-hmm"
+        },
+        {
+          "speaker": "B",
+          "text": "and something that's"
+        },
+        {
+          "speaker": "A",
+          "text": "Something"
+        },
+        {
+          "speaker": "B",
+          "text": "just"
+        },
+        {
+          "speaker": "A",
+          "text": "sort"
+        },
+        {
+          "speaker": "B",
+          "text": "a little"
+        },
+        {
+          "speaker": "A",
+          "text": "of"
+        },
+        {
+          "speaker": "B",
+          "text": "different"
+        },
+        {
+          "speaker": "A",
+          "text": "sort of sl slightly sort of biomorphic in form uh which it would need to be to sort of conform to the shape of the hand more efficiently anyway"
+        }
+      ]
+    },
+    {
+      "turns": [
+        {
+          "speaker": "B",
+          "text": "Okay That's definitely something that we should be able to do quite easily"
+        },
+        {
+          "speaker": "B",
+          "text": "I would I would have hoped so anyway Um right"
+        },
+        {
+          "speaker": "B",
+          "text": "I'd say we finish this one up we get started I'll get in I'll write up what we've um kind of quickly done and I'll get that out to everybody"
+        }
+      ]
+    },
+    {
+      "turns": [
+        {
+          "speaker": "C",
+          "text": "'Kay"
+        },
+        {
+          "speaker": "B",
+          "text": "Yeah"
+        },
+        {
+          "speaker": "C",
+          "text": "So"
+        },
+        {
+          "speaker": "B",
+          "text": "Okay"
+        }
+      ]
+    },
+    {
+      "turns": [
+        {
+          "speaker": "B",
+          "text": "Um as far as I'm aware we leave the microphones here um unless we get told otherwise and just take the laptops with us"
         }
       ]
     }

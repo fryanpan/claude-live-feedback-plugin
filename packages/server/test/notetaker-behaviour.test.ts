@@ -56,6 +56,16 @@ describe('the notetaking instructions', () => {
     expect(system).toContain(`AT MOST ${MAX_BULLET_WORDS} WORDS`);
   });
 
+  it('ask for list items, which is what the model does not do unprompted', () => {
+    // Measured, not guessed. Run against real AMI speech, the instructions
+    // without this rule came back as PARAGRAPHS under the topic headings —
+    // good content, well organised, and not a set of notes: every
+    // bullet-shaped check downstream read zero bullets, and a reader cannot
+    // point at a line that is not a line. Naming the markdown is the fix.
+    expect(system).toContain('MARKDOWN LIST ITEM');
+    expect(system).toMatch(/beginning with[\s\S]{0,40}"- "/);
+  });
+
   it('name the four things a note should carry', () => {
     for (const asked of ['discussed', 'why it matters', 'decided', 'happens next']) {
       expect(system).toContain(asked);
