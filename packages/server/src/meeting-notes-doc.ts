@@ -418,6 +418,20 @@ export function withServerNotesSinks(
   // capture's own dedupe covers a request seen twice in one tick's window;
   // this covers "ask the team whether X" said again ten minutes later.
   const reviewAsked = new Map<string, Set<string>>();
+  // The cue lines each meeting has already spent, by turn number. One cue is
+  // one ask: without this the marked overlap would show the previous tick's
+  // "Claude, can you …" again and let it license whatever the room happened
+  // to be talking about next. Cleared with the rest of the per-meeting state
+  // in onSessionStart, because turn numbering restarts with the recording.
+  const spentCues = new Map<string, Set<number>>();
+  const spentCuesFor = (docId: string): Set<number> => {
+    let set = spentCues.get(docId);
+    if (!set) {
+      set = new Set<number>();
+      spentCues.set(docId, set);
+    }
+    return set;
+  };
   const captureIntents: MeetingNotesDeps['captureIntents'] =
     options.captureIntents ??
     (extractor && captureBoard
@@ -466,6 +480,7 @@ export function withServerNotesSinks(
               ...(room.meta.title !== undefined ? { docTitle: room.meta.title } : {}),
               turns,
               priorTurns,
+              spentCues: spentCuesFor(docId),
             },
           );
         }
@@ -479,6 +494,7 @@ export function withServerNotesSinks(
       // append instead of replace — the reported data-loss bug.
       ledger.beginMeeting(ids.docId);
       reviewAsked.delete(ids.docId);
+      spentCues.delete(ids.docId);
       options.onSessionStart?.(ids);
     },
     resolveContext: (docId: string): NotesProjectContext | undefined => {
