@@ -1,5 +1,5 @@
 /**
- * The editor's side of the Board's "Start a planning huddle".
+ * The editor's side of the Board's "Make a plan" and "Have a meeting".
  *
  * The button's click is the person's gesture, and a full navigation does not
  * carry it into the editor — so the Board puts a flag on the address and the
@@ -7,14 +7,17 @@
  * the flag back out of the address so a reload or a later Back into this
  * entry does not open a mic nobody pressed for.
  *
- * The "Huddle" word in the crumb is a different fact: it is about the DOC
- * (its meta says it is a huddle) and shows on every visit, so the router
- * applies it beside the back arrow, as shell chrome that outlives each mount.
+ * The kind word in the crumb — "Plan" or "Meeting notes" — is a different
+ * fact: it is about the DOC (its meta says which kind it is) and shows on
+ * every visit, so the router applies it beside the back arrow, as shell
+ * chrome that outlives each mount.
  */
 
 import {
   type CaptureMode,
+  type HuddleKind,
   type TranscriptionEngineName,
+  docKindLabel,
   parseCaptureMode,
   parseEngineName,
   parseRoomSpeakers,
@@ -25,7 +28,7 @@ import { type RoomAudioProcessing, parseRoomAudio } from './meeting-audio.ts';
 export const HUDDLE_START_PARAM = 'huddle';
 
 /**
- * `?mode=conversation` — the Board's "Record a conversation" button. The
+ * `?mode=conversation` — the Board's "Have a meeting" button. The
  * choice is made on the Board because that press is the only thing that says
  * anyone else is in the room: nothing announces an in-person conversation.
  */
@@ -117,31 +120,40 @@ export function withoutHuddleStart(href: string): string {
 let readingOnly = false;
 /** The last thing the crumb was told, so the latch can re-render it. */
 let lastHuddle = false;
+/** …and which kind it was, which is the word the crumb actually shows. */
+let lastKind: HuddleKind | undefined;
 
 /** Say this browser may only read, and repaint the crumb now. */
 export function applyReadingCrumb(doc: Document): void {
   readingOnly = true;
-  applyHuddleCrumb(doc, lastHuddle);
+  applyHuddleCrumb(doc, lastHuddle, lastKind);
 }
 
 /** Test seam — the latch is module state and outlives a single test. */
 export function resetReadingCrumbForTest(): void {
   readingOnly = false;
   lastHuddle = false;
+  lastKind = undefined;
 }
 
 /**
- * Name a huddle doc in the crumb, or put "Editing:" back for the next doc.
- * Always writes every branch — navigation is in place, and a word left over
- * from the last doc is a wrong label on this one.
+ * Name a live doc in the crumb — "Plan" or "Meeting notes" — or put
+ * "Editing:" back for the next doc. Always writes every branch — navigation
+ * is in place, and a word left over from the last doc is a wrong label on
+ * this one.
  *
- * "Huddle" survives the reading latch: it names WHAT the doc is, not what
- * you may do to it. "Editing:" does not, because it claims the second thing.
+ * The kind word survives the reading latch: it names WHAT the doc is, not
+ * what you may do to it. "Editing:" does not, because it claims the second
+ * thing.
+ *
+ * The word comes from `docKindLabel`, the same function the server titles the
+ * doc with, so the crumb and the title can never disagree.
  */
-export function applyHuddleCrumb(doc: Document, huddle: boolean): void {
+export function applyHuddleCrumb(doc: Document, huddle: boolean, kind?: HuddleKind): void {
   lastHuddle = huddle;
+  lastKind = kind;
   const label = doc.querySelector('.doc-crumb .doc-label');
   if (!label) return;
-  label.textContent = huddle ? 'Huddle' : readingOnly ? 'Reading:' : 'Editing:';
+  label.textContent = huddle ? docKindLabel(kind) : readingOnly ? 'Reading:' : 'Editing:';
   label.classList.toggle('doc-label-huddle', huddle);
 }

@@ -191,13 +191,13 @@ export interface MeetingStripOpts {
   autoStart?: boolean;
   /**
    * Open the start CHOOSER on mount instead of the microphone — the entry
-   * "Have a discussion" takes, where `autoStart` is what "Make a plan" takes.
+   * "Have a meeting" takes, where `autoStart` is what "Make a plan" takes.
    *
    * The difference is who else is in the room. A plan is one person thinking
-   * out loud, so the fastest honest thing is an open mic. A discussion has
+   * out loud, so the fastest honest thing is an open mic. A meeting has
    * other people in it, and the sentence that tells them they are being
-   * recorded is now a button they have to press — so a discussion cannot
-   * begin without somebody choosing, and "begin the huddle" has to land on
+   * recorded is now a button they have to press — so a meeting cannot
+   * begin without somebody choosing, and "begin the meeting" has to land on
    * the choice rather than on the recording.
    *
    * Mutually exclusive with `autoStart`, which wins if both are set: an open
@@ -1059,12 +1059,12 @@ export function mountMeetingStrip(opts: MeetingStripOpts): MeetingStripHandle {
       case 'error':
         if (tapToStart) {
           // Deliberately a button: the tap is the gesture the auto-start was
-          // missing, and pressing it is how the huddle gets its mic.
+          // missing, and pressing it is how the meeting gets its mic.
           clearTurnSpans();
           const note = document.createElement('button');
           note.type = 'button';
           note.className = 'meeting-note meeting-note-dismiss meeting-note-start';
-          note.textContent = 'The huddle is on — the mic needs one tap to start.';
+          note.textContent = 'The meeting is on — the mic needs one tap to start.';
           note.addEventListener('click', () => void start(false));
           line.append(note);
         } else {

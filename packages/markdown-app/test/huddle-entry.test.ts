@@ -19,13 +19,14 @@ import {
 } from '../src/huddle-entry.ts';
 
 /**
- * How the editor knows it was opened BY the Board's "Start a planning huddle"
- * button — the one moment the mic should start without a press. The button's
- * click is the person's gesture; a full navigation does not carry it into
- * the editor, so the flag rides the URL and the editor honours it once.
+ * How the editor knows it was opened BY the Board's "Make a plan" / "Have a
+ * meeting" button — the one moment the mic should start without a press. The
+ * button's click is the person's gesture; a full navigation does not carry it
+ * into the editor, so the flag rides the URL and the editor honours it once.
  *
- * The "Huddle" crumb is a fact about the DOC (its meta), not about how it was
- * opened: it shows on every later visit too. All fixtures synthetic.
+ * The kind word in the crumb — "Plan" or "Meeting notes" — is a fact about
+ * the DOC (its meta), not about how it was opened: it shows on every later
+ * visit too. All fixtures synthetic.
  */
 
 describe('wantsHuddleStart', () => {
@@ -83,15 +84,27 @@ describe('applyHuddleCrumb', () => {
     return document.querySelector('.doc-crumb .doc-label') as HTMLElement;
   };
 
-  it('names the doc a huddle in the crumb, and takes it back for the next doc', () => {
+  it('names the doc by its kind in the crumb, and takes it back for the next doc', () => {
     const label = crumb();
-    applyHuddleCrumb(document, true);
-    expect(label.textContent).toBe('Huddle');
+    applyHuddleCrumb(document, true, 'discussion');
+    expect(label.textContent).toBe('Meeting notes');
     expect(label.classList.contains('doc-label-huddle')).toBe(true);
     // Navigation is in-place: the next doc must not inherit the word.
     applyHuddleCrumb(document, false);
     expect(label.textContent).toBe('Editing:');
     expect(label.classList.contains('doc-label-huddle')).toBe(false);
+  });
+
+  it('says Plan on a plan doc, and falls back to Meeting notes with no kind', () => {
+    // The kind is what the word is FOR: a plan doc and a meeting doc are the
+    // same surface, and the crumb is the only thing that tells them apart.
+    // A doc created before the kind existed is a meeting doc, which is what
+    // an untyped live doc has always been.
+    const label = crumb();
+    applyHuddleCrumb(document, true, 'plan');
+    expect(label.textContent).toBe('Plan');
+    applyHuddleCrumb(document, true);
+    expect(label.textContent).toBe('Meeting notes');
   });
 
   it('does nothing on a shell with no crumb', () => {
@@ -111,11 +124,11 @@ describe('applyHuddleCrumb', () => {
     expect(label.textContent).toBe('Reading:');
   });
 
-  it('still names a huddle a huddle — that word is about the doc', () => {
+  it('still names a live doc by its kind — that word is about the doc', () => {
     const label = crumb();
     applyReadingCrumb(document);
-    applyHuddleCrumb(document, true);
-    expect(label.textContent).toBe('Huddle');
+    applyHuddleCrumb(document, true, 'plan');
+    expect(label.textContent).toBe('Plan');
     // And back to Reading, not to Editing, on the next ordinary doc.
     applyHuddleCrumb(document, false);
     expect(label.textContent).toBe('Reading:');

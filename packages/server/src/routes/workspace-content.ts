@@ -171,8 +171,8 @@ export async function handleWorkspaceContent(
     });
   }
   // --- REST: start a huddle ---
-  // The Board's "Start a planning huddle" button. ONE call: a
-  // workspace-tied markdown doc, titled by the clock, empty or headed
+  // The Board's "Make a plan" / "Have a meeting" buttons. ONE call: a
+  // workspace-tied markdown doc, titled by its kind and the clock, empty or headed
   // by the topic, filed on this board exactly as every other board doc
   // is (so `list_docs`, the hub's docs list and the board fan-out see
   // it with no new verb), flagged `huddle`, and answered with where to
@@ -225,14 +225,14 @@ export async function handleWorkspaceContent(
     // for a name that already resolves, and a huddle is always new.
     let created = rooms.createForCaller(huddleAlias(startedAt), {
       type: 'markdown',
-      title: huddleTitle(startedAt),
+      title: huddleTitle(startedAt, parsedKind.kind),
       huddle: true,
       huddleKind: parsedKind.kind,
     });
     if (created.ok && !created.minted) {
       created = rooms.createForCaller(huddleAlias(startedAt), {
         type: 'markdown',
-        title: huddleTitle(startedAt),
+        title: huddleTitle(startedAt, parsedKind.kind),
         huddle: true,
         huddleKind: parsedKind.kind,
       });

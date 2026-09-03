@@ -55,8 +55,11 @@ export function redactMetaForVisitor(
     ...(meta.lastActivityAt !== undefined ? { lastActivityAt: meta.lastActivityAt } : {}),
     ...(meta.stale !== undefined ? { stale: meta.stale } : {}),
     // A huddle is what the doc IS, not where it lives — the visitor's editor
-    // dresses it the same way the owner's does.
+    // dresses it the same way the owner's does. The kind rides along because
+    // it is the WORD the crumb shows ("Plan" / "Meeting notes"); without it a
+    // shared plan doc reads as meeting notes to the visitor alone.
     ...(meta.huddle !== undefined ? { huddle: meta.huddle } : {}),
+    ...(meta.huddleKind !== undefined ? { huddleKind: meta.huddleKind } : {}),
     // Diff presentation — line counts and status drive the badges the
     // visitor is looking at.
     //
