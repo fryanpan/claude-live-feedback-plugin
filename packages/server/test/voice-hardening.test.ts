@@ -32,17 +32,17 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { type ServerHandle, createServer } from '../src/server.ts';
 import { TaskStore, eventsLogPath, voiceQueuePath } from '../src/tasks.ts';
+import { resolveVoiceAction } from '../src/voice-action.ts';
 import {
   PROMPT_DATA_BEGIN,
   PROMPT_DATA_END,
   type VoiceContext,
   type VoiceResource,
-  VoiceRouter,
   buildVoicePrompt,
   parseVoiceReply,
   promptSafe,
-  resolveVoiceAction,
-} from '../src/voice.ts';
+} from '../src/voice-prompt.ts';
+import { VoiceRouter } from '../src/voice.ts';
 import { type AgentStream, openWorkspaceStream } from './agent-stream.ts';
 
 const PERSON = { id: 'known-jordan', name: 'Jordan', kind: 'known', color: '#2e7dd7' };
