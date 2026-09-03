@@ -1,0 +1,674 @@
+{
+  "meeting": "ES2003b",
+  "corpus": "AMI Meeting Corpus",
+  "licence": "CC BY 4.0",
+  "source": "https://groups.inf.ed.ac.uk/ami/corpus/",
+  "window": {
+    "fromSeconds": 420,
+    "seconds": 660
+  },
+  "board": [
+    {
+      "kind": "task",
+      "title": "Remote control design",
+      "url": "/workspaces/w-eval?task=t-1"
+    },
+    {
+      "kind": "task",
+      "title": "Corporate colour scheme",
+      "url": "/workspaces/w-eval?task=t-2"
+    },
+    {
+      "kind": "task",
+      "title": "Volume buttons",
+      "url": "/workspaces/w-eval?task=t-3"
+    },
+    {
+      "kind": "task",
+      "title": "Channel buttons",
+      "url": "/workspaces/w-eval?task=t-4"
+    },
+    {
+      "kind": "task",
+      "title": "Speech recognition",
+      "url": "/workspaces/w-eval?task=t-5"
+    },
+    {
+      "kind": "task",
+      "title": "Production cost target",
+      "url": "/workspaces/w-eval?task=t-6"
+    },
+    {
+      "kind": "task",
+      "title": "Target age group",
+      "url": "/workspaces/w-eval?task=t-7"
+    },
+    {
+      "kind": "task",
+      "title": "LCD screen",
+      "url": "/workspaces/w-eval?task=t-8"
+    }
+  ],
+  "ticks": [
+    {
+      "turns": [
+        {
+          "speaker": "B",
+          "text": "Okay yep"
+        },
+        {
+          "speaker": "C",
+          "text": "So we have the three birds we have the design that we have the the fancy bit right the voice recognition's fancy it's cool it's different it's radical so and then we have an extra bit I don't remember so I'm pretty sure people will buy the remote but is it practical to have a voice recognition system in a remote control I think is a big question Um will people"
+        }
+      ]
+    },
+    {
+      "turns": [
+        {
+          "speaker": "C",
+          "text": "will people be willing to wait for the the period that it'll take to train the remote 'cause I think it will the remote will uh get better over time with the same user user but for the first week or for the first two weeks are you willing to wait are you willing to have a bad remote control And uh what if you have visitors come round they stay the night they wanna use the T_V_ they can't use the remote because they speak differently to you Um how do you account for regional accents and stuff like that Uh will people return the remote control I think a lot of young people will buy the remote control if they have the money you know so"
+        }
+      ]
+    },
+    {
+      "turns": [
+        {
+          "speaker": "B",
+          "text": "Mm-hmm"
+        },
+        {
+          "speaker": "C",
+          "text": "do our audience have the money but would they return it after a while because it's not as fast as pressing a button it's not a practical So"
+        },
+        {
+          "speaker": "B",
+          "text": "If"
+        },
+        {
+          "speaker": "C",
+          "text": "These"
+        },
+        {
+          "speaker": "B",
+          "text": "you could"
+        },
+        {
+          "speaker": "C",
+          "text": "are things"
+        },
+        {
+          "speaker": "B",
+          "text": "uh"
+        },
+        {
+          "speaker": "C",
+          "text": "I think we should consider I"
+        },
+        {
+          "speaker": "B",
+          "text": "sor"
+        },
+        {
+          "speaker": "C",
+          "text": "think it's cool"
+        },
+        {
+          "speaker": "B",
+          "text": "if you could speed it up a bit yeah"
+        },
+        {
+          "speaker": "C",
+          "text": "I'm sorry"
+        },
+        {
+          "speaker": "B",
+          "text": "If you could uh speed it up a bit please"
+        }
+      ]
+    },
+    {
+      "turns": [
+        {
+          "speaker": "C",
+          "text": "Sure"
+        },
+        {
+          "speaker": "B",
+          "text": "yeah"
+        },
+        {
+          "speaker": "C",
+          "text": "I'm about"
+        },
+        {
+          "speaker": "B",
+          "text": "Sorry"
+        },
+        {
+          "speaker": "C",
+          "text": "to end yeah"
+        },
+        {
+          "speaker": "B",
+          "text": "Cool"
+        },
+        {
+          "speaker": "C",
+          "text": "I think it's cool"
+        },
+        {
+          "speaker": "C",
+          "text": "but there are definitely some considerations"
+        },
+        {
+          "speaker": "B",
+          "text": "Okay"
+        },
+        {
+          "speaker": "C",
+          "text": "So yeah"
+        },
+        {
+          "speaker": "B",
+          "text": "Excellent Right Um"
+        },
+        {
+          "speaker": "B",
+          "text": "Hear from the User Interface Designer now I think might be an idea"
+        }
+      ]
+    },
+    {
+      "turns": [
+        {
+          "speaker": "A",
+          "text": "Okay"
+        },
+        {
+          "speaker": "B",
+          "text": "Um"
+        },
+        {
+          "speaker": "D",
+          "text": "How did where"
+        },
+        {
+          "speaker": "B",
+          "text": "you've"
+        },
+        {
+          "speaker": "D",
+          "text": "did"
+        },
+        {
+          "speaker": "B",
+          "text": "got your presentation now"
+        },
+        {
+          "speaker": "A",
+          "text": "Yeah"
+        },
+        {
+          "speaker": "B",
+          "text": "is it"
+        },
+        {
+          "speaker": "A",
+          "text": "it's"
+        },
+        {
+          "speaker": "B",
+          "text": "on"
+        },
+        {
+          "speaker": "A",
+          "text": "in"
+        },
+        {
+          "speaker": "D",
+          "text": "where"
+        },
+        {
+          "speaker": "B",
+          "text": "the"
+        },
+        {
+          "speaker": "A",
+          "text": "the it's in the folder"
+        },
+        {
+          "speaker": "D",
+          "text": "did you"
+        },
+        {
+          "speaker": "A",
+          "text": "yeah"
+        },
+        {
+          "speaker": "D",
+          "text": "get"
+        },
+        {
+          "speaker": "B",
+          "text": "is"
+        },
+        {
+          "speaker": "D",
+          "text": "all your"
+        },
+        {
+          "speaker": "B",
+          "text": "it"
+        },
+        {
+          "speaker": "D",
+          "text": "in"
+        },
+        {
+          "speaker": "B",
+          "text": "Okay"
+        },
+        {
+          "speaker": "D",
+          "text": "information"
+        },
+        {
+          "speaker": "C",
+          "text": "There was uh a website"
+        },
+        {
+          "speaker": "D",
+          "text": "Oh"
+        },
+        {
+          "speaker": "C",
+          "text": "uh"
+        },
+        {
+          "speaker": "C",
+          "text": "right here"
+        },
+        {
+          "speaker": "D",
+          "text": "Ah okay"
+        },
+        {
+          "speaker": "B",
+          "text": "Technical functions"
+        },
+        {
+          "speaker": "A",
+          "text": "Mm"
+        },
+        {
+          "speaker": "B",
+          "text": "No Yeah"
+        }
+      ]
+    },
+    {
+      "turns": [
+        {
+          "speaker": "C",
+          "text": "G I started making stuff up then I got an email saying"
+        }
+      ]
+    },
+    {
+      "turns": [
+        {
+          "speaker": "B",
+          "text": "Okay"
+        },
+        {
+          "speaker": "A",
+          "text": "Okay this is a brief run through of the um of the technical functions of the remote As um is uh the the the presentation is uh already slightly obsolete because I had in mind something that would uh be i be aimed at controlling multiple devices but uh there's still stuff of relevance so"
+        }
+      ]
+    },
+    {
+      "turns": [
+        {
+          "speaker": "B",
+          "text": "Okay"
+        },
+        {
+          "speaker": "A",
+          "text": "press on I've looked at looked at a num uh couple of other uh remote control models just for an idea of basic design principles Um"
+        },
+        {
+          "speaker": "A",
+          "text": "and wasn't really satisfied by what I saw I have to say so this is more sort of springboard for uh how these could be improved on"
+        }
+      ]
+    },
+    {
+      "turns": [
+        {
+          "speaker": "A",
+          "text": "Um um basically the job of the device is to send commands to an appliance in this case the television set Um to save you getting off your backside Um and there's two main trends in th in the sort of design practice On the one hand and this uh this particularly relates to its sort of earliest models where with you know i so so many buttons on it so about the size of the television set Um giving you every possible function that the that the device has the remote control controls And most of these functions are not going to be used it creates a rather user unfriendly interface And on the other hand there's a user focused approach that pares things down to just what what is most likely to get used Um"
+        }
+      ]
+    },
+    {
+      "turns": [
+        {
+          "speaker": "A",
+          "text": "With uh a and a and of course there is a certain amount of sort of loss of function here obviously but mostly that's relatively peripheral functions And so you go for something that's fairly intuitive to use and um well f the for the most part for T_V_ remote it's uh tha that would be channel control and volume Um and if you if you if you are wanting to incorporate uh control of a D_V_ D_V_D_ or uh"
+        }
+      ]
+    },
+    {
+      "turns": [
+        {
+          "speaker": "A",
+          "text": "V_C_R_ presumably into that then there's a play pause stop rewind fast-forward record so forth Um"
+        },
+        {
+          "speaker": "A",
+          "text": "My own view is that we should definitely be going for a user focused design Um but uh the pro I think the problem with a lot of the sort of user focused designs that are about is that they sort of make assumptions in advance about what uh what a given user's going to uh want mo want to do from want it to do most So something that's uh"
+        }
+      ]
+    },
+    {
+      "turns": [
+        {
+          "speaker": "A",
+          "text": "something that is more programmable that uh perh perhaps has the full range of functions available to it but you can then specify yourself what you're most likely to want"
+        },
+        {
+          "speaker": "A",
+          "text": "Um so that those are then immediately accessible through fairly minimal number of controls um I liked Ebenezer's idea of including a joystick in that and uh possibly a sort of fairly minimal number of sort of function buttons and have a disp you then have some sort of basic display on it so that if you're um sort of cha changing from different modes for the device it'll tell you just exactly what uh you know each direction of the uh"
+        }
+      ]
+    },
+    {
+      "turns": [
+        {
+          "speaker": "A",
+          "text": "of the um joystick's going to do or wha or what each function button's going to do Um this is actually a again slightly taking inspiration off of uh games controllers"
+        },
+        {
+          "speaker": "C",
+          "text": "Mm"
+        },
+        {
+          "speaker": "A",
+          "text": "you know the Playstation control where you have four basic function buttons that are just marked with um distinctive uh geometrical shapes but the and then dependent on what you're doing with it what game and so on um those uh those functions are then sort of further specified And so it's taking taking the lead from that"
+        }
+      ]
+    },
+    {
+      "turns": [
+        {
+          "speaker": "A",
+          "text": "Um"
+        },
+        {
+          "speaker": "B",
+          "text": "Okay Yeah"
+        },
+        {
+          "speaker": "B",
+          "text": "Right"
+        },
+        {
+          "speaker": "A",
+          "text": "That's it"
+        },
+        {
+          "speaker": "B",
+          "text": "Um if we could hear from our Industrial engineer or"
+        },
+        {
+          "speaker": "D",
+          "text": "Yeah"
+        },
+        {
+          "speaker": "B",
+          "text": "Designer"
+        },
+        {
+          "speaker": "D",
+          "text": "Uh I was still working on stuff I hadn't got it finished Um alright"
+        },
+        {
+          "speaker": "D",
+          "text": "Click to save in where do I have to save it"
+        }
+      ]
+    },
+    {
+      "turns": [
+        {
+          "speaker": "B",
+          "text": "If you look on the desktop you'll find that there's a link to the project folder or project documents If you save it in there we can open it up from here"
+        }
+      ]
+    },
+    {
+      "turns": [
+        {
+          "speaker": "D",
+          "text": "Um what I've done with it I'm sorry"
+        }
+      ]
+    },
+    {
+      "turns": [
+        {
+          "speaker": "D",
+          "text": "Shit"
+        }
+      ]
+    },
+    {
+      "turns": [
+        {
+          "speaker": "D",
+          "text": "Um"
+        }
+      ]
+    },
+    {
+      "turns": [
+        {
+          "speaker": "B",
+          "text": "Are you finding it okay or"
+        },
+        {
+          "speaker": "D",
+          "text": "I'm just closing it now where I've saved it"
+        },
+        {
+          "speaker": "C",
+          "text": "Well like if you go to one uh whichever one you were"
+        },
+        {
+          "speaker": "D",
+          "text": "that's"
+        },
+        {
+          "speaker": "C",
+          "text": "working"
+        },
+        {
+          "speaker": "D",
+          "text": "it there yeah"
+        },
+        {
+          "speaker": "C",
+          "text": "yeah and you just click file save as"
+        }
+      ]
+    },
+    {
+      "turns": [
+        {
+          "speaker": "D",
+          "text": "Oh right"
+        },
+        {
+          "speaker": "B",
+          "text": "Okay"
+        }
+      ]
+    },
+    {
+      "turns": [
+        {
+          "speaker": "D",
+          "text": "Uh right I'm responsible for working design uh this is basically the inside going on of the"
+        },
+        {
+          "speaker": "D",
+          "text": "the uh remote control So we have the energy source we have the user interface this this is what I've seen Uh the sender will push the button the chip will respond uh and then the dig digital signal is sent to the T_V_ So uh"
+        }
+      ]
+    },
+    {
+      "turns": [
+        {
+          "speaker": "D",
+          "text": "uh if you go to next slide you'll see you'll see uh what do we need on the user interface Do we need uh many buttons or do we need l many light bulbs that could be easier to uh to realise which appliances are on or not Um or would that take too much power would we need more um components in there to supply the power Um the joystick is another thing if we were gonna add that um there'd be more components to deal with that"
+        }
+      ]
+    },
+    {
+      "turns": [
+        {
+          "speaker": "B",
+          "text": "Mm-hmm"
+        },
+        {
+          "speaker": "D",
+          "text": "Um so uh we need to I dunno exactly what"
+        },
+        {
+          "speaker": "D",
+          "text": "That's the design of the the the layout of the uh electronic design but um obviously there'll be more details once we've decided what we're putting on the user interface"
+        }
+      ]
+    },
+    {
+      "turns": [
+        {
+          "speaker": "B",
+          "text": "Okay"
+        },
+        {
+          "speaker": "D",
+          "text": "So that'll be decided I guess"
+        },
+        {
+          "speaker": "D",
+          "text": "Uh and the next slide"
+        },
+        {
+          "speaker": "D",
+          "text": "Oh yeah"
+        },
+        {
+          "speaker": "D",
+          "text": "Um if you go to the next slide then"
+        },
+        {
+          "speaker": "B",
+          "text": "Oh Yeah"
+        },
+        {
+          "speaker": "D",
+          "text": "I just used the it was a mess uh I was just putting adding it together at the end there"
+        }
+      ]
+    },
+    {
+      "turns": [
+        {
+          "speaker": "B",
+          "text": "Ah don't"
+        },
+        {
+          "speaker": "D",
+          "text": "Uh"
+        },
+        {
+          "speaker": "B",
+          "text": "worry about it at all mate"
+        },
+        {
+          "speaker": "D",
+          "text": "Uh so you have the energy source obviously connected to the chip and the user interface obviously contains everything You have the switch turn it on infrared bulb uh will contact the T_V_ and will have whatever device or D_V_D_ player the bulb will turn on to say it's on Uh so do we need on the control uh different buttons to decide or different light bulbs would it be easier Um I dunno what we should decide on that"
+        }
+      ]
+    },
+    {
+      "turns": [
+        {
+          "speaker": "B",
+          "text": "Okay Well Oh sorry I'm I'm interrupting you Are"
+        },
+        {
+          "speaker": "D",
+          "text": "No"
+        },
+        {
+          "speaker": "B",
+          "text": "you"
+        },
+        {
+          "speaker": "D",
+          "text": "it's finished"
+        },
+        {
+          "speaker": "B",
+          "text": "is it"
+        },
+        {
+          "speaker": "D",
+          "text": "yeah"
+        },
+        {
+          "speaker": "B",
+          "text": "yeah Okay Right Um right we can probably skip that for now So we've had some stuff put forward um"
+        }
+      ]
+    },
+    {
+      "turns": [
+        {
+          "speaker": "B",
+          "text": "along with the new user requirements"
+        }
+      ]
+    },
+    {
+      "turns": [
+        {
+          "speaker": "B",
+          "text": "um we've had a lot of kind of input I'd say so far Um"
+        },
+        {
+          "speaker": "B",
+          "text": "I hear what the Marketing Expert's saying about um voice activated control However I've got a couple of worries about that The power required um and the ability"
+        }
+      ]
+    },
+    {
+      "turns": [
+        {
+          "speaker": "D",
+          "text": "Cost"
+        },
+        {
+          "speaker": "B",
+          "text": "to"
+        },
+        {
+          "speaker": "D",
+          "text": "Mm"
+        }
+      ]
+    }
+  ]
+}

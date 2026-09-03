@@ -1,0 +1,1946 @@
+{
+  "meeting": "ES2002d",
+  "corpus": "AMI Meeting Corpus",
+  "licence": "CC BY 4.0",
+  "source": "https://groups.inf.ed.ac.uk/ami/corpus/",
+  "window": {
+    "fromSeconds": 300,
+    "seconds": 660
+  },
+  "board": [
+    {
+      "kind": "task",
+      "title": "Remote control design",
+      "url": "/workspaces/w-eval?task=t-1"
+    },
+    {
+      "kind": "task",
+      "title": "Corporate colour scheme",
+      "url": "/workspaces/w-eval?task=t-2"
+    },
+    {
+      "kind": "task",
+      "title": "Volume buttons",
+      "url": "/workspaces/w-eval?task=t-3"
+    },
+    {
+      "kind": "task",
+      "title": "Channel buttons",
+      "url": "/workspaces/w-eval?task=t-4"
+    },
+    {
+      "kind": "task",
+      "title": "Speech recognition",
+      "url": "/workspaces/w-eval?task=t-5"
+    },
+    {
+      "kind": "task",
+      "title": "Production cost target",
+      "url": "/workspaces/w-eval?task=t-6"
+    },
+    {
+      "kind": "task",
+      "title": "Target age group",
+      "url": "/workspaces/w-eval?task=t-7"
+    },
+    {
+      "kind": "task",
+      "title": "LCD screen",
+      "url": "/workspaces/w-eval?task=t-8"
+    }
+  ],
+  "ticks": [
+    {
+      "turns": [
+        {
+          "speaker": "D",
+          "text": "Um were gonna have the volume control here but um because we've got the the L_C_D_ and the jog-dial we just thought we'd um use that as the volume"
+        },
+        {
+          "speaker": "B",
+          "text": "Okay jog-dial for volume"
+        },
+        {
+          "speaker": "B",
+          "text": "And what"
+        },
+        {
+          "speaker": "C",
+          "text": "Mm-hmm"
+        },
+        {
+          "speaker": "B",
+          "text": "else do you do with the jog-dial"
+        },
+        {
+          "speaker": "D",
+          "text": "Um you can use it for um more advanced functions like contrast colour and"
+        }
+      ]
+    },
+    {
+      "turns": [
+        {
+          "speaker": "B",
+          "text": "Contrast brightness"
+        },
+        {
+          "speaker": "D",
+          "text": "Um yeah"
+        },
+        {
+          "speaker": "B",
+          "text": "yeah and anything else"
+        },
+        {
+          "speaker": "D",
+          "text": "Um just whatever else we wanted to include as the advanced functions um we didn't actually go through and specify the"
+        },
+        {
+          "speaker": "B",
+          "text": "Well of the designers what are they"
+        },
+        {
+          "speaker": "D",
+          "text": "Uh what can a T_V_ do"
+        }
+      ]
+    },
+    {
+      "turns": [
+        {
+          "speaker": "A",
+          "text": "Okay things like um brightness contrast"
+        },
+        {
+          "speaker": "B",
+          "text": "Uh-huh"
+        },
+        {
+          "speaker": "A",
+          "text": "um maybe tuning the channels"
+        },
+        {
+          "speaker": "B",
+          "text": "Okay channel tuning"
+        },
+        {
+          "speaker": "A",
+          "text": "Um"
+        },
+        {
+          "speaker": "B",
+          "text": "That's a good one"
+        },
+        {
+          "speaker": "A",
+          "text": "What else Um the various inputs Are you having a V_C_R_ are you"
+        },
+        {
+          "speaker": "C",
+          "text": "Mm-hmm"
+        },
+        {
+          "speaker": "A",
+          "text": "having"
+        },
+        {
+          "speaker": "C",
+          "text": "mm-hmm"
+        },
+        {
+          "speaker": "A",
+          "text": "you know which input do you have"
+        },
+        {
+          "speaker": "B",
+          "text": "Okay auxiliary"
+        },
+        {
+          "speaker": "C",
+          "text": "Mm-hmm probably"
+        }
+      ]
+    },
+    {
+      "turns": [
+        {
+          "speaker": "B",
+          "text": "inputs"
+        },
+        {
+          "speaker": "A",
+          "text": "Um"
+        },
+        {
+          "speaker": "C",
+          "text": "colour or sharpness"
+        },
+        {
+          "speaker": "A",
+          "text": "Yep colour sharpness"
+        },
+        {
+          "speaker": "B",
+          "text": "Sharpness"
+        },
+        {
+          "speaker": "A",
+          "text": "Um a lot of these things will have to be um free and open for users to define them"
+        },
+        {
+          "speaker": "C",
+          "text": "Mm-hmm"
+        },
+        {
+          "speaker": "B",
+          "text": "Okay what about uh sound settings Uh d can you change any of those at all"
+        },
+        {
+          "speaker": "C",
+          "text": "Audio"
+        },
+        {
+          "speaker": "A",
+          "text": "Audio we have like"
+        }
+      ]
+    },
+    {
+      "turns": [
+        {
+          "speaker": "D",
+          "text": "Um"
+        },
+        {
+          "speaker": "A",
+          "text": "your basic y your base your mid-range your high range"
+        },
+        {
+          "speaker": "A",
+          "text": "Um"
+        },
+        {
+          "speaker": "D",
+          "text": "the the balance hmm"
+        },
+        {
+          "speaker": "A",
+          "text": "Yep left-right balance um maybe even pre-programmed sound modes like"
+        },
+        {
+          "speaker": "B",
+          "text": "Okay"
+        },
+        {
+          "speaker": "A",
+          "text": "um the user could determine like a series of sound modes and then"
+        }
+      ]
+    },
+    {
+      "turns": [
+        {
+          "speaker": "C",
+          "text": "Mm-hmm"
+        },
+        {
+          "speaker": "A",
+          "text": "what could happen would be um when you click on that then it would go to that setting"
+        },
+        {
+          "speaker": "B",
+          "text": "Okay"
+        },
+        {
+          "speaker": "C",
+          "text": "Mm 'kay"
+        },
+        {
+          "speaker": "A",
+          "text": "Yeah"
+        },
+        {
+          "speaker": "B",
+          "text": "is there anything else at all it can do"
+        },
+        {
+          "speaker": "B",
+          "text": "That 'cause that's that's fine Just need to know so I can write it down Okay um right I g I guess that's it so we can now um"
+        }
+      ]
+    },
+    {
+      "turns": [
+        {
+          "speaker": "B",
+          "text": "We can now have a little look at the"
+        },
+        {
+          "speaker": "B",
+          "text": "the Excel sheet and price listing and see if we need to"
+        },
+        {
+          "speaker": "D",
+          "text": "Mm-hmm"
+        },
+        {
+          "speaker": "B",
+          "text": "um if we need to rethink anything at all So um for this first part here power-wise have we"
+        }
+      ]
+    },
+    {
+      "turns": [
+        {
+          "speaker": "A",
+          "text": "The"
+        },
+        {
+          "speaker": "B",
+          "text": "got"
+        },
+        {
+          "speaker": "A",
+          "text": "battery"
+        },
+        {
+          "speaker": "B",
+          "text": "battery Do we have kinetic as well"
+        },
+        {
+          "speaker": "A",
+          "text": "No"
+        },
+        {
+          "speaker": "B",
+          "text": "No Okay"
+        },
+        {
+          "speaker": "A",
+          "text": "Um"
+        },
+        {
+          "speaker": "B",
+          "text": "just battery"
+        },
+        {
+          "speaker": "A",
+          "text": "We need an"
+        },
+        {
+          "speaker": "B",
+          "text": "And that's because of cost restraints"
+        },
+        {
+          "speaker": "A",
+          "text": "Yep"
+        },
+        {
+          "speaker": "B",
+          "text": "is it"
+        },
+        {
+          "speaker": "D",
+          "text": "Yeah"
+        },
+        {
+          "speaker": "B",
+          "text": "Okay um"
+        },
+        {
+          "speaker": "A",
+          "text": "Yeah advanced"
+        },
+        {
+          "speaker": "B",
+          "text": "what about the"
+        },
+        {
+          "speaker": "A",
+          "text": "chip"
+        },
+        {
+          "speaker": "B",
+          "text": "electronics here"
+        },
+        {
+          "speaker": "A",
+          "text": "We"
+        },
+        {
+          "speaker": "B",
+          "text": "Advanced"
+        },
+        {
+          "speaker": "A",
+          "text": "need an advanced"
+        }
+      ]
+    },
+    {
+      "turns": [
+        {
+          "speaker": "B",
+          "text": "chip"
+        },
+        {
+          "speaker": "A",
+          "text": "chip I think yep Let me just confirm that Yes I think so"
+        }
+      ]
+    },
+    {
+      "turns": [
+        {
+          "speaker": "A",
+          "text": "Yep"
+        },
+        {
+          "speaker": "B",
+          "text": "Okay um the case what does it mean by single and double do you know"
+        },
+        {
+          "speaker": "D",
+          "text": "Um I think single would just be sort of one sort of oval whereas double is this sort of thing"
+        },
+        {
+          "speaker": "A",
+          "text": "Yeah"
+        },
+        {
+          "speaker": "B",
+          "text": "So we want double-curved"
+        },
+        {
+          "speaker": "A",
+          "text": "Yep"
+        },
+        {
+          "speaker": "B",
+          "text": "Okay"
+        },
+        {
+          "speaker": "B",
+          "text": "Um"
+        }
+      ]
+    },
+    {
+      "turns": [
+        {
+          "speaker": "A",
+          "text": "Plastic"
+        },
+        {
+          "speaker": "B",
+          "text": "Is there any rubber at all in the buttons"
+        },
+        {
+          "speaker": "A",
+          "text": "I think we're"
+        },
+        {
+          "speaker": "B",
+          "text": "or any"
+        },
+        {
+          "speaker": "A",
+          "text": "gonna have to skip the rubber"
+        },
+        {
+          "speaker": "B",
+          "text": "Okay"
+        },
+        {
+          "speaker": "A",
+          "text": "Um"
+        },
+        {
+          "speaker": "B",
+          "text": "um and we wanted special colours didn't"
+        },
+        {
+          "speaker": "A",
+          "text": "Yep"
+        },
+        {
+          "speaker": "B",
+          "text": "we So I'll have to put that Oh no wait we ho how many colours have we got there"
+        },
+        {
+          "speaker": "A",
+          "text": "For the case itself one colour It's one special colour"
+        }
+      ]
+    },
+    {
+      "turns": [
+        {
+          "speaker": "B",
+          "text": "Just one colour okay"
+        },
+        {
+          "speaker": "A",
+          "text": "'Cause the case unit itself the rest of our components"
+        },
+        {
+          "speaker": "B",
+          "text": "Okay"
+        },
+        {
+          "speaker": "A",
+          "text": "go on top"
+        },
+        {
+          "speaker": "C",
+          "text": "Mm"
+        },
+        {
+          "speaker": "A",
+          "text": "of it"
+        },
+        {
+          "speaker": "B",
+          "text": "so interface-wise is it this third option we"
+        },
+        {
+          "speaker": "A",
+          "text": "Yes"
+        },
+        {
+          "speaker": "B",
+          "text": "have the two of them there"
+        },
+        {
+          "speaker": "A",
+          "text": "One and the L_C_ display"
+        },
+        {
+          "speaker": "B",
+          "text": "Okay and then buttons"
+        }
+      ]
+    },
+    {
+      "turns": [
+        {
+          "speaker": "A",
+          "text": "How many"
+        },
+        {
+          "speaker": "B",
+          "text": "we have what"
+        },
+        {
+          "speaker": "D",
+          "text": "Um we have"
+        },
+        {
+          "speaker": "B",
+          "text": "two"
+        },
+        {
+          "speaker": "D",
+          "text": "um"
+        },
+        {
+          "speaker": "B",
+          "text": "colours"
+        },
+        {
+          "speaker": "D",
+          "text": "got some"
+        },
+        {
+          "speaker": "C",
+          "text": "Or even"
+        },
+        {
+          "speaker": "D",
+          "text": "push buttons"
+        },
+        {
+          "speaker": "C",
+          "text": "clear"
+        },
+        {
+          "speaker": "D",
+          "text": "as well"
+        },
+        {
+          "speaker": "A",
+          "text": "We've got push buttons as well"
+        },
+        {
+          "speaker": "B",
+          "text": "Like uh"
+        },
+        {
+          "speaker": "D",
+          "text": "'Kay"
+        },
+        {
+          "speaker": "B",
+          "text": "oh wait so push button and integrated scroll wheel push okay"
+        },
+        {
+          "speaker": "D",
+          "text": "So I reckon we've got one button for this thing 'cause it's just one big sheet of rubber"
+        }
+      ]
+    },
+    {
+      "turns": [
+        {
+          "speaker": "B",
+          "text": "Uh-huh"
+        },
+        {
+          "speaker": "D",
+          "text": "I'm not sure if that counts but"
+        },
+        {
+          "speaker": "B",
+          "text": "Okay"
+        },
+        {
+          "speaker": "A",
+          "text": "Okay let's just be safe and put like say four buttons for that one"
+        },
+        {
+          "speaker": "B",
+          "text": "Okay"
+        },
+        {
+          "speaker": "A",
+          "text": "Okay um and maybe a special colour for the buttons so maybe four again"
+        },
+        {
+          "speaker": "B",
+          "text": "Four"
+        }
+      ]
+    },
+    {
+      "turns": [
+        {
+          "speaker": "D",
+          "text": "You can see we're we're all very"
+        },
+        {
+          "speaker": "B",
+          "text": "So"
+        },
+        {
+          "speaker": "D",
+          "text": "far"
+        },
+        {
+          "speaker": "B",
+          "text": "w"
+        },
+        {
+          "speaker": "D",
+          "text": "beyond"
+        },
+        {
+          "speaker": "B",
+          "text": "why"
+        },
+        {
+          "speaker": "D",
+          "text": "the"
+        },
+        {
+          "speaker": "B",
+          "text": "are we arriving at the number four Where does the number four come from"
+        },
+        {
+          "speaker": "A",
+          "text": "'Cause that's one button by its the complexity of twelve buttons"
+        },
+        {
+          "speaker": "B",
+          "text": "Okay right so"
+        },
+        {
+          "speaker": "A",
+          "text": "So"
+        },
+        {
+          "speaker": "B",
+          "text": "we're writing"
+        },
+        {
+          "speaker": "A",
+          "text": "we're"
+        },
+        {
+          "speaker": "B",
+          "text": "down"
+        },
+        {
+          "speaker": "A",
+          "text": "just"
+        },
+        {
+          "speaker": "B",
+          "text": "four"
+        },
+        {
+          "speaker": "A",
+          "text": "estimating that yeah it would be less"
+        },
+        {
+          "speaker": "B",
+          "text": "Okay"
+        },
+        {
+          "speaker": "B",
+          "text": "How about these Are we wanting them in"
+        }
+      ]
+    },
+    {
+      "turns": [
+        {
+          "speaker": "A",
+          "text": "No"
+        },
+        {
+          "speaker": "B",
+          "text": "no they're just is"
+        },
+        {
+          "speaker": "A",
+          "text": "Yep"
+        },
+        {
+          "speaker": "B",
+          "text": "everything gonna be plastic"
+        },
+        {
+          "speaker": "A",
+          "text": "Yep"
+        },
+        {
+          "speaker": "B",
+          "text": "Okay So we're w w quite far over Now we're gonna something's gonna have to go Um we're at sixteen point eight and"
+        },
+        {
+          "speaker": "C",
+          "text": "Uh how mm-hmm how are we going to achieve this high-end product if"
+        }
+      ]
+    },
+    {
+      "turns": [
+        {
+          "speaker": "B",
+          "text": "Well we h something has to"
+        },
+        {
+          "speaker": "C",
+          "text": "We"
+        },
+        {
+          "speaker": "B",
+          "text": "go"
+        },
+        {
+          "speaker": "C",
+          "text": "only have"
+        },
+        {
+          "speaker": "B",
+          "text": "to the tune"
+        },
+        {
+          "speaker": "C",
+          "text": "very"
+        },
+        {
+          "speaker": "B",
+          "text": "of"
+        },
+        {
+          "speaker": "C",
+          "text": "sparse"
+        },
+        {
+          "speaker": "B",
+          "text": "two point t three Euro so let me see what are we"
+        },
+        {
+          "speaker": "C",
+          "text": "Two"
+        },
+        {
+          "speaker": "B",
+          "text": "I mean"
+        },
+        {
+          "speaker": "C",
+          "text": "point three Four point three no"
+        },
+        {
+          "speaker": "B",
+          "text": "oh yes sorry four point three My maths is all out"
+        },
+        {
+          "speaker": "D",
+          "text": "Well we could take out ones by making it single curved just fill in those bits"
+        }
+      ]
+    },
+    {
+      "turns": [
+        {
+          "speaker": "B",
+          "text": "Yeah"
+        },
+        {
+          "speaker": "C",
+          "text": "And then where"
+        },
+        {
+          "speaker": "A",
+          "text": "How"
+        },
+        {
+          "speaker": "C",
+          "text": "is"
+        },
+        {
+          "speaker": "A",
+          "text": "much"
+        },
+        {
+          "speaker": "C",
+          "text": "the"
+        },
+        {
+          "speaker": "A",
+          "text": "would that save us"
+        },
+        {
+          "speaker": "B",
+          "text": "How much would that save"
+        },
+        {
+          "speaker": "A",
+          "text": "That"
+        },
+        {
+          "speaker": "B",
+          "text": "us"
+        },
+        {
+          "speaker": "A",
+          "text": "will only save"
+        },
+        {
+          "speaker": "D",
+          "text": "That"
+        },
+        {
+          "speaker": "A",
+          "text": "you one"
+        },
+        {
+          "speaker": "D",
+          "text": "is one"
+        },
+        {
+          "speaker": "B",
+          "text": "One"
+        },
+        {
+          "speaker": "A",
+          "text": "The other thing could be that um you could take away the L_C_D_ panel and the advanced chip together um because when you"
+        },
+        {
+          "speaker": "A",
+          "text": "do something on the T_V_"
+        },
+        {
+          "speaker": "C",
+          "text": "Mm-hmm"
+        },
+        {
+          "speaker": "A",
+          "text": "the T_V_ responds and reacts as well so the user could be looking at the T_V_ and pushing his thing"
+        }
+      ]
+    },
+    {
+      "turns": [
+        {
+          "speaker": "D",
+          "text": "That's"
+        },
+        {
+          "speaker": "A",
+          "text": "so"
+        },
+        {
+          "speaker": "D",
+          "text": "fair"
+        },
+        {
+          "speaker": "A",
+          "text": "we"
+        },
+        {
+          "speaker": "D",
+          "text": "enough"
+        },
+        {
+          "speaker": "A",
+          "text": "may"
+        },
+        {
+          "speaker": "D",
+          "text": "yeah"
+        },
+        {
+          "speaker": "A",
+          "text": "not need to"
+        },
+        {
+          "speaker": "C",
+          "text": "Mm-hmm"
+        },
+        {
+          "speaker": "A",
+          "text": "so when we scroll we need just some way to"
+        },
+        {
+          "speaker": "C",
+          "text": "Mm-hmm"
+        },
+        {
+          "speaker": "A",
+          "text": "get the T_V_ to respond"
+        },
+        {
+          "speaker": "B",
+          "text": "Okay"
+        },
+        {
+          "speaker": "C",
+          "text": "Mm-hmm"
+        },
+        {
+          "speaker": "B",
+          "text": "so"
+        },
+        {
+          "speaker": "A",
+          "text": "which I think is a technically doable thing so"
+        },
+        {
+          "speaker": "C",
+          "text": "Mm-hmm"
+        },
+        {
+          "speaker": "B",
+          "text": "So w what's our reviewed suggestion Um take away the L_C_ display"
+        },
+        {
+          "speaker": "A",
+          "text": "Yep"
+        },
+        {
+          "speaker": "A",
+          "text": "And"
+        }
+      ]
+    },
+    {
+      "turns": [
+        {
+          "speaker": "C",
+          "text": "Mm-hmm"
+        },
+        {
+          "speaker": "A",
+          "text": "the advanced chip goes away as well"
+        },
+        {
+          "speaker": "B",
+          "text": "To be replaced with a"
+        },
+        {
+          "speaker": "A",
+          "text": "Regular chip"
+        },
+        {
+          "speaker": "B",
+          "text": "regular chip"
+        },
+        {
+          "speaker": "A",
+          "text": "Yep"
+        },
+        {
+          "speaker": "C",
+          "text": "Mm-hmm"
+        },
+        {
+          "speaker": "B",
+          "text": "Okay"
+        },
+        {
+          "speaker": "A",
+          "text": "So what that means is that"
+        },
+        {
+          "speaker": "B",
+          "text": "And"
+        },
+        {
+          "speaker": "A",
+          "text": "um"
+        },
+        {
+          "speaker": "B",
+          "text": "so we've got point three to get rid of Um and we ha where are the four the four push buttons are where exactly now"
+        }
+      ]
+    },
+    {
+      "turns": [
+        {
+          "speaker": "A",
+          "text": "The twelve buttons that you see there"
+        },
+        {
+          "speaker": "B",
+          "text": "Twelve buttons"
+        },
+        {
+          "speaker": "D",
+          "text": "That's um one piece of rubber but it's gonna have twelve button"
+        },
+        {
+          "speaker": "B",
+          "text": "Yeah"
+        },
+        {
+          "speaker": "D",
+          "text": "things underneath"
+        },
+        {
+          "speaker": "A",
+          "text": "Functionally"
+        },
+        {
+          "speaker": "D",
+          "text": "so"
+        },
+        {
+          "speaker": "A",
+          "text": "you're gonna have to intercept So four is a good estimate for"
+        },
+        {
+          "speaker": "B",
+          "text": "Do you think"
+        },
+        {
+          "speaker": "A",
+          "text": "Yeah so you can't actually cut It's like three times the number of"
+        }
+      ]
+    },
+    {
+      "turns": [
+        {
+          "speaker": "B",
+          "text": "Like"
+        },
+        {
+          "speaker": "A",
+          "text": "buttons"
+        },
+        {
+          "speaker": "B",
+          "text": "is"
+        },
+        {
+          "speaker": "A",
+          "text": "four eight twelve"
+        },
+        {
+          "speaker": "B",
+          "text": "is that one big button or is it twelve buttons how"
+        },
+        {
+          "speaker": "A",
+          "text": "It"
+        },
+        {
+          "speaker": "B",
+          "text": "can it be something in between"
+        },
+        {
+          "speaker": "A",
+          "text": "It needs to be more than one big button because if you open up your phone underneath"
+        },
+        {
+          "speaker": "C",
+          "text": "Mm-hmm"
+        },
+        {
+          "speaker": "A",
+          "text": "there's actually"
+        },
+        {
+          "speaker": "B",
+          "text": "Mm"
+        },
+        {
+          "speaker": "A",
+          "text": "one button underneath it's just that the panel itself is a single panel"
+        }
+      ]
+    },
+    {
+      "turns": [
+        {
+          "speaker": "C",
+          "text": "Mm-hmm"
+        },
+        {
+          "speaker": "B",
+          "text": "Okay well we have point three to get rid of somewhere"
+        },
+        {
+          "speaker": "A",
+          "text": "We just"
+        },
+        {
+          "speaker": "B",
+          "text": "Mm"
+        },
+        {
+          "speaker": "A",
+          "text": "report that it has to be over budget or the colours you"
+        },
+        {
+          "speaker": "B",
+          "text": "No"
+        },
+        {
+          "speaker": "A",
+          "text": "could"
+        },
+        {
+          "speaker": "B",
+          "text": "can"
+        },
+        {
+          "speaker": "A",
+          "text": "take away"
+        },
+        {
+          "speaker": "B",
+          "text": "do"
+        },
+        {
+          "speaker": "A",
+          "text": "s colours for th for the buttons"
+        },
+        {
+          "speaker": "C",
+          "text": "Yeah we could just go with"
+        },
+        {
+          "speaker": "D",
+          "text": "Yeah w"
+        },
+        {
+          "speaker": "C",
+          "text": "um"
+        },
+        {
+          "speaker": "A",
+          "text": "Normal coloured buttons"
+        },
+        {
+          "speaker": "B",
+          "text": "Well do you want colour differentiation here"
+        }
+      ]
+    },
+    {
+      "turns": [
+        {
+          "speaker": "A",
+          "text": "No"
+        },
+        {
+          "speaker": "D",
+          "text": "Um"
+        },
+        {
+          "speaker": "A",
+          "text": "that's not the button we're talking"
+        },
+        {
+          "speaker": "B",
+          "text": "Oh yeah"
+        },
+        {
+          "speaker": "A",
+          "text": "about"
+        },
+        {
+          "speaker": "B",
+          "text": "sorry"
+        },
+        {
+          "speaker": "A",
+          "text": "That's"
+        },
+        {
+          "speaker": "B",
+          "text": "yeah then"
+        },
+        {
+          "speaker": "A",
+          "text": "the buttons only refer to the pad so"
+        },
+        {
+          "speaker": "B",
+          "text": "Right so"
+        },
+        {
+          "speaker": "A",
+          "text": "Should we take that off uh"
+        },
+        {
+          "speaker": "B",
+          "text": "Ah"
+        },
+        {
+          "speaker": "A",
+          "text": "Hey"
+        },
+        {
+          "speaker": "B",
+          "text": "That's"
+        },
+        {
+          "speaker": "A",
+          "text": "it's back"
+        },
+        {
+          "speaker": "B",
+          "text": "it"
+        },
+        {
+          "speaker": "A",
+          "text": "to the original"
+        },
+        {
+          "speaker": "C",
+          "text": "Hmm"
+        },
+        {
+          "speaker": "A",
+          "text": "Um so then these just become normal coloured buttons"
+        }
+      ]
+    },
+    {
+      "turns": [
+        {
+          "speaker": "C",
+          "text": "Mm-hmm"
+        },
+        {
+          "speaker": "A",
+          "text": "so that might be some some way of cutting the cost"
+        },
+        {
+          "speaker": "C",
+          "text": "Mm"
+        },
+        {
+          "speaker": "B",
+          "text": "Okay ach that's a shame Um right so take away that completely Ah And now we're under budget So we do have point five Euro to play with if we wanted Um"
+        }
+      ]
+    },
+    {
+      "turns": [
+        {
+          "speaker": "D",
+          "text": "So I reckon"
+        },
+        {
+          "speaker": "C",
+          "text": "How about with embossing the logo isn't that going to cost us some money"
+        },
+        {
+          "speaker": "B",
+          "text": "Doesn't say so"
+        },
+        {
+          "speaker": "C",
+          "text": "Yeah That's"
+        },
+        {
+          "speaker": "D",
+          "text": "Reckon that"
+        },
+        {
+          "speaker": "C",
+          "text": "a freebie"
+        },
+        {
+          "speaker": "D",
+          "text": "probably counts as a special form for the buttons"
+        },
+        {
+          "speaker": "A",
+          "text": "Yeah"
+        },
+        {
+          "speaker": "B",
+          "text": "Yeah that's a good idea"
+        },
+        {
+          "speaker": "B",
+          "text": "Just one"
+        },
+        {
+          "speaker": "B",
+          "text": "Does that mean that one button has a special form or"
+        }
+      ]
+    },
+    {
+      "turns": [
+        {
+          "speaker": "D",
+          "text": "I think there's just one button so"
+        },
+        {
+          "speaker": "B",
+          "text": "Yeah"
+        },
+        {
+          "speaker": "D",
+          "text": "handy"
+        },
+        {
+          "speaker": "B",
+          "text": "okay Well well there we go So I'm just gonna have to redraw this now So we're not gonna have the L_C_D_ anymore and we'll just gonna have an on t on the T_V_ it'll show you what you're doing which I think is fair enough and so this is gonna be one big thing here"
+        }
+      ]
+    },
+    {
+      "turns": [
+        {
+          "speaker": "B",
+          "text": "Um"
+        },
+        {
+          "speaker": "C",
+          "text": "Was the goal in your in your prototype design that it be as low profile as possible"
+        },
+        {
+          "speaker": "A",
+          "text": "What do you mean by"
+        },
+        {
+          "speaker": "D",
+          "text": "Yeah"
+        },
+        {
+          "speaker": "A",
+          "text": "profile"
+        },
+        {
+          "speaker": "C",
+          "text": "Sort of flat as possible"
+        },
+        {
+          "speaker": "A",
+          "text": "No"
+        },
+        {
+          "speaker": "D",
+          "text": "You see I envision it as being um quite deep sort of"
+        }
+      ]
+    },
+    {
+      "turns": [
+        {
+          "speaker": "C",
+          "text": "Yeah"
+        },
+        {
+          "speaker": "D",
+          "text": "deep enough to be comfy to hold in your hands"
+        },
+        {
+          "speaker": "C",
+          "text": "Yeah that's"
+        },
+        {
+          "speaker": "D",
+          "text": "rather"
+        },
+        {
+          "speaker": "C",
+          "text": "what I"
+        },
+        {
+          "speaker": "D",
+          "text": "than"
+        },
+        {
+          "speaker": "C",
+          "text": "was"
+        },
+        {
+          "speaker": "D",
+          "text": "being"
+        },
+        {
+          "speaker": "C",
+          "text": "thinking"
+        },
+        {
+          "speaker": "D",
+          "text": "wide"
+        },
+        {
+          "speaker": "C",
+          "text": "to"
+        },
+        {
+          "speaker": "D",
+          "text": "and flat"
+        },
+        {
+          "speaker": "C",
+          "text": "Sure"
+        },
+        {
+          "speaker": "A",
+          "text": "We"
+        },
+        {
+          "speaker": "C",
+          "text": "okay"
+        },
+        {
+          "speaker": "A",
+          "text": "didn't have enough Play-Doh to make it three"
+        },
+        {
+          "speaker": "C",
+          "text": "Yeah"
+        },
+        {
+          "speaker": "A",
+          "text": "D_"
+        },
+        {
+          "speaker": "C",
+          "text": "alright yeah fair enough Okay just thought I'd ask"
+        },
+        {
+          "speaker": "A",
+          "text": "So there's one more dimension to the thing"
+        },
+        {
+          "speaker": "C",
+          "text": "Mm-hmm"
+        },
+        {
+          "speaker": "A",
+          "text": "which we need to to add and you might want to add in the report length width and height"
+        },
+        {
+          "speaker": "B",
+          "text": "Right okay"
+        }
+      ]
+    },
+    {
+      "turns": [
+        {
+          "speaker": "A",
+          "text": "Yeah"
+        },
+        {
+          "speaker": "B",
+          "text": "So just to well to be thorough then width-wise we're looking at about what three centimetres or something"
+        },
+        {
+          "speaker": "A",
+          "text": "Yeah"
+        },
+        {
+          "speaker": "B",
+          "text": "Okay and then so"
+        },
+        {
+          "speaker": "C",
+          "text": "Hmm"
+        },
+        {
+          "speaker": "B",
+          "text": "height-wise"
+        }
+      ]
+    },
+    {
+      "turns": [
+        {
+          "speaker": "B",
+          "text": "How how tall do you envisage it being About"
+        },
+        {
+          "speaker": "D",
+          "text": "Yeah"
+        },
+        {
+          "speaker": "B",
+          "text": "that"
+        },
+        {
+          "speaker": "D",
+          "text": "it works"
+        },
+        {
+          "speaker": "B",
+          "text": "big"
+        },
+        {
+          "speaker": "A",
+          "text": "Two"
+        },
+        {
+          "speaker": "D",
+          "text": "yeah"
+        },
+        {
+          "speaker": "B",
+          "text": "About two centimetres okay"
+        },
+        {
+          "speaker": "C",
+          "text": "Two's not very high at all though Maybe"
+        },
+        {
+          "speaker": "A",
+          "text": "This"
+        },
+        {
+          "speaker": "C",
+          "text": "a bit"
+        },
+        {
+          "speaker": "A",
+          "text": "is"
+        },
+        {
+          "speaker": "C",
+          "text": "higher"
+        },
+        {
+          "speaker": "A",
+          "text": "about this is about two"
+        },
+        {
+          "speaker": "A",
+          "text": "Slightly more than"
+        },
+        {
+          "speaker": "D",
+          "text": "See"
+        },
+        {
+          "speaker": "A",
+          "text": "two"
+        },
+        {
+          "speaker": "C",
+          "text": "Yeah"
+        },
+        {
+          "speaker": "A",
+          "text": "so"
+        },
+        {
+          "speaker": "D",
+          "text": "about that thick"
+        },
+        {
+          "speaker": "B",
+          "text": "Okay"
+        },
+        {
+          "speaker": "C",
+          "text": "Maybe closer"
+        },
+        {
+          "speaker": "B",
+          "text": "Ach that"
+        },
+        {
+          "speaker": "C",
+          "text": "to"
+        }
+      ]
+    },
+    {
+      "turns": [
+        {
+          "speaker": "B",
+          "text": "is"
+        },
+        {
+          "speaker": "C",
+          "text": "three even"
+        },
+        {
+          "speaker": "B",
+          "text": "Yeah"
+        },
+        {
+          "speaker": "A",
+          "text": "Okay"
+        },
+        {
+          "speaker": "C",
+          "text": "or two and a half"
+        },
+        {
+          "speaker": "B",
+          "text": "Okay we'll s we'll say two point five Okay um so we have it within cost anyway"
+        },
+        {
+          "speaker": "B",
+          "text": "Um so yeah project evaluation is this point"
+        },
+        {
+          "speaker": "B",
+          "text": "Um"
+        },
+        {
+          "speaker": "C",
+          "text": "Mm-hmm"
+        }
+      ]
+    },
+    {
+      "turns": [
+        {
+          "speaker": "B",
+          "text": "Right uh"
+        },
+        {
+          "speaker": "B",
+          "text": "Okay so can we close that This is what it's the final spec that it's gonna be"
+        },
+        {
+          "speaker": "C",
+          "text": "Mm-hmm"
+        },
+        {
+          "speaker": "B",
+          "text": "Someone is gonna have to yeah that's fine that's fine"
+        },
+        {
+          "speaker": "C",
+          "text": "Um it's probably just I dunno if it's worth getting into but um just in in that we want this to be stylish should we think a little bit more out of the box in terms of a button grid because I've seen there's lots of devices out there that that instead of taking your standard nine nine square grid and they have it sort of stylized or in different concept that that"
+        }
+      ]
+    },
+    {
+      "turns": [
+        {
+          "speaker": "A",
+          "text": "I think that's something that's very hard to catch"
+        },
+        {
+          "speaker": "C",
+          "text": "Yeah"
+        },
+        {
+          "speaker": "A",
+          "text": "so you you restrict the number of people who wanna try something"
+        },
+        {
+          "speaker": "C",
+          "text": "Sure okay"
+        },
+        {
+          "speaker": "A",
+          "text": "The the look and the colour is something which is cool"
+        },
+        {
+          "speaker": "C",
+          "text": "Yeah alright"
+        },
+        {
+          "speaker": "A",
+          "text": "but I think that there's also that factor of if it's too unfamiliar"
+        },
+        {
+          "speaker": "C",
+          "text": "Okay"
+        },
+        {
+          "speaker": "A",
+          "text": "then"
+        },
+        {
+          "speaker": "C",
+          "text": "sure"
+        },
+        {
+          "speaker": "A",
+          "text": "um because when you put"
+        }
+      ]
+    },
+    {
+      "turns": [
+        {
+          "speaker": "C",
+          "text": "What about"
+        },
+        {
+          "speaker": "A",
+          "text": "it on the"
+        },
+        {
+          "speaker": "C",
+          "text": "button"
+        },
+        {
+          "speaker": "A",
+          "text": "shelf"
+        },
+        {
+          "speaker": "C",
+          "text": "shape Square buttons"
+        },
+        {
+          "speaker": "A",
+          "text": "Yeah button shape might be a good idea to change"
+        },
+        {
+          "speaker": "C",
+          "text": "Okay"
+        },
+        {
+          "speaker": "A",
+          "text": "rather than rather than positioning"
+        },
+        {
+          "speaker": "C",
+          "text": "Yeah"
+        },
+        {
+          "speaker": "A",
+          "text": "'cause I think positioning is"
+        },
+        {
+          "speaker": "C",
+          "text": "Sure"
+        },
+        {
+          "speaker": "A",
+          "text": "we're kinda engrained into the"
+        },
+        {
+          "speaker": "D",
+          "text": "Yeah"
+        },
+        {
+          "speaker": "A",
+          "text": "the telephone kind"
+        },
+        {
+          "speaker": "C",
+          "text": "Yeah"
+        },
+        {
+          "speaker": "A",
+          "text": "of"
+        },
+        {
+          "speaker": "B",
+          "text": "Okay"
+        },
+        {
+          "speaker": "A",
+          "text": "pad"
+        },
+        {
+          "speaker": "B",
+          "text": "Right um"
+        }
+      ]
+    },
+    {
+      "turns": [
+        {
+          "speaker": "B",
+          "text": "So at this point we uh let me see discuss uh how satisfied we all are with um"
+        },
+        {
+          "speaker": "B",
+          "text": "with these four points with the room for creativity in the project and leadership and teamwork and the stuff we had around"
+        }
+      ]
+    },
+    {
+      "turns": [
+        {
+          "speaker": "C",
+          "text": "Mm 'kay"
+        },
+        {
+          "speaker": "B",
+          "text": "us I guess Um let me see uh"
+        },
+        {
+          "speaker": "C",
+          "text": "Do you want me to d um"
+        },
+        {
+          "speaker": "C",
+          "text": "Do you want me to do my um design evaluation last"
+        },
+        {
+          "speaker": "A",
+          "text": "Maybe"
+        }
+      ]
+    },
+    {
+      "turns": [
+        {
+          "speaker": "B",
+          "text": "Yeah I wasn't"
+        },
+        {
+          "speaker": "A",
+          "text": "we should"
+        },
+        {
+          "speaker": "C",
+          "text": "Or"
+        },
+        {
+          "speaker": "B",
+          "text": "really"
+        },
+        {
+          "speaker": "A",
+          "text": "do the"
+        },
+        {
+          "speaker": "B",
+          "text": "sure"
+        },
+        {
+          "speaker": "A",
+          "text": "design evaluation"
+        },
+        {
+          "speaker": "B",
+          "text": "what that was"
+        },
+        {
+          "speaker": "A",
+          "text": "first"
+        },
+        {
+          "speaker": "B",
+          "text": "Yeah"
+        },
+        {
+          "speaker": "C",
+          "text": "Evaluation"
+        },
+        {
+          "speaker": "B",
+          "text": "yeah go for that first I wasn't entirely sure what uh"
+        },
+        {
+          "speaker": "C",
+          "text": "Okay"
+        },
+        {
+          "speaker": "B",
+          "text": "who was supposed to be doing that but"
+        },
+        {
+          "speaker": "C",
+          "text": "Sure"
+        },
+        {
+          "speaker": "B",
+          "text": "y you go for it"
+        },
+        {
+          "speaker": "C",
+          "text": "Um alright so the way this works I'm gonna need to plug into PowerPoint"
+        },
+        {
+          "speaker": "B",
+          "text": "Okay"
+        },
+        {
+          "speaker": "C",
+          "text": "I'll try and do it as quick as possible"
+        }
+      ]
+    },
+    {
+      "turns": [
+        {
+          "speaker": "B",
+          "text": "Okay"
+        },
+        {
+          "speaker": "C",
+          "text": "Um this is um I'll just go over your head if that's okay"
+        },
+        {
+          "speaker": "B",
+          "text": "Yeah"
+        },
+        {
+          "speaker": "A",
+          "text": "I don't think you need the power so"
+        },
+        {
+          "speaker": "C",
+          "text": "What's that"
+        },
+        {
+          "speaker": "A",
+          "text": "No that's okay that's okay"
+        },
+        {
+          "speaker": "C",
+          "text": "I don't need the PowerPoint"
+        }
+      ]
+    }
+  ]
+}
