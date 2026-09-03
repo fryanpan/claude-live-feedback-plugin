@@ -71,21 +71,17 @@ import {
   MEETING_SAMPLE_RATE,
   type MeetingBotStatus,
   type MeetingServerMessage,
-  type MeetingTimingMark,
   type MeetingUnavailableReason,
   RECORDING_CONSENT_NOTE,
   type TranscriptionEngineName,
   describeBotState,
-  meetingSocketPath,
-  parseCaptureMode,
   speakerDisplayName,
 } from '@feedback/core';
 import type { MeetingTranscriptEvent } from '@feedback/core';
-import { liveTuningKeys, parseRoomSpeakers } from '@feedback/core';
+import { parseRoomSpeakers } from '@feedback/core';
 import {
   type AdvancedState,
   advancedControls,
-  buildAdvancedSection,
   defaultAdvancedState,
   tuningPayload,
 } from './meeting-advanced.ts';
@@ -96,73 +92,22 @@ import {
   startMeetingCapture,
 } from './meeting-audio.ts';
 import type { MeetingBotClient } from './meeting-bot-client.ts';
+import { type ChooserState, createMeetingChooser } from './meeting-chooser.ts';
 import type { MeetingLiveZone } from './meeting-live-zone.ts';
+import {
+  type TranscriptTurn,
+  diffTurnWords,
+  meetingSocketUrl,
+  parseMeetingServerMessage,
+  rollTranscript,
+} from './meeting-protocol.ts';
 import { type TimingSession, createTimingSession } from './meeting-timing-client.ts';
 import type { DocSpeakers } from './speaker-voices.ts';
-
-/**
- * How many turns stay on the strip. Three is what the flowing line holds
- * before the mask has faded the oldest out anyway.
- */
-export const TRANSCRIPT_KEEP = 3;
 
 /** How often the elapsed clock is redrawn. Twice a second: a second-resolution
  *  readout that ticks once a second visibly stalls whenever the two clocks
  *  drift out of phase. */
 const CLOCK_MS = 500;
-
-export interface TranscriptTurn {
-  turn: number;
-  text: string;
-  final: boolean;
-  /** The engine's label for the voice; the tag shows the name given to it. */
-  speaker?: string;
-}
-
-/**
- * Fold one transcript frame into the rolling window.
- *
- * A turn already on the strip is replaced WHERE IT IS — that is the whole
- * correction mechanism. A turn that has already rolled off is dropped rather
- * than re-added, because appending it would put an old line at the live end of
- * the strip, which reads as the speaker repeating themselves.
- */
-export function rollTranscript(
-  turns: readonly TranscriptTurn[],
-  next: TranscriptTurn,
-  keep = TRANSCRIPT_KEEP,
-): TranscriptTurn[] {
-  const at = turns.findIndex((t) => t.turn === next.turn);
-  if (at >= 0) {
-    const out = turns.slice();
-    out[at] = next;
-    return out;
-  }
-  const newest =
-    turns.length > 0 ? Math.max(...turns.map((t) => t.turn)) : Number.NEGATIVE_INFINITY;
-  if (next.turn < newest) return turns.slice();
-  return [...turns, next].slice(-keep);
-}
-
-/**
- * Which words of a turn the engine actually changed.
- *
- * Compared by position, which is what makes "check list" → "checklist" read
- * correctly: the word count moved, so everything from the change onward is
- * genuinely different text in a different place. A word past the end of the
- * previous text is NEW, not corrected — flashing it would mean flashing every
- * word as it is spoken.
- */
-export function diffTurnWords(
-  before: string,
-  after: string,
-): Array<{ text: string; changed: boolean }> {
-  const old = before.split(/\s+/).filter((w) => w.length > 0);
-  return after
-    .split(/\s+/)
-    .filter((w) => w.length > 0)
-    .map((text, i) => ({ text, changed: i < old.length && old[i] !== text }));
-}
 
 /** mm:ss, zero-padded, counting past an hour rather than wrapping. */
 export function formatElapsed(ms: number): string {
@@ -170,126 +115,6 @@ export function formatElapsed(ms: number): string {
   const mm = Math.floor(total / 60);
   const ss = total % 60;
   return `${String(mm).padStart(2, '0')}:${String(ss).padStart(2, '0')}`;
-}
-
-/**
- * The optional timing block, all-or-nothing.
- *
- * A partial block would produce a sample with a leg computed from a missing
- * number, which is worse than no sample: it would land in the percentiles
- * looking like a measurement. Absent on every ordinary meeting.
- */
-export function parseTimingMark(raw: unknown): MeetingTimingMark | null {
-  if (typeof raw !== 'object' || raw === null) return null;
-  const t = raw as Record<string, unknown>;
-  const keys = [
-    'seq',
-    'audioEndMs',
-    'chunkAudioEndMs',
-    'recvMs',
-    'fwdMs',
-    'engineMs',
-    'sendMs',
-  ] as const;
-  const out = {} as Record<(typeof keys)[number], number>;
-  for (const key of keys) {
-    const v = t[key];
-    if (typeof v !== 'number' || !Number.isFinite(v)) return null;
-    out[key] = v;
-  }
-  return out;
-}
-
-/** Parse a server frame, returning null for anything malformed. */
-export function parseMeetingServerMessage(raw: unknown): MeetingServerMessage | null {
-  if (typeof raw !== 'string') return null;
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(raw);
-  } catch {
-    return null;
-  }
-  if (typeof parsed !== 'object' || parsed === null) return null;
-  const m = parsed as Record<string, unknown>;
-  const str = (v: unknown): string => (typeof v === 'string' ? v : '');
-  switch (m.type) {
-    case 'ready':
-      return {
-        type: 'ready',
-        meetingId: str(m.meetingId),
-        startedAt: typeof m.startedAt === 'number' ? m.startedAt : 0,
-        engine: str(m.engine),
-        // The server's word on what it opened, not the client's on what it
-        // asked for — those differ if a server built before modes existed
-        // answers, and the one that is billed is this one.
-        mode: parseCaptureMode(m.mode),
-      };
-    case 'unavailable': {
-      const reason = m.reason;
-      if (
-        reason !== 'not_configured' &&
-        reason !== 'engine_unavailable' &&
-        reason !== 'already_recording'
-      ) {
-        return null;
-      }
-      return { type: 'unavailable', reason, message: str(m.message) };
-    }
-    case 'transcript': {
-      if (typeof m.turn !== 'number' || typeof m.text !== 'string') return null;
-      const timing = parseTimingMark(m.timing);
-      return {
-        type: 'transcript',
-        turn: m.turn,
-        text: m.text,
-        final: m.final === true,
-        ...(typeof m.speaker === 'string' && m.speaker ? { speaker: m.speaker } : {}),
-        ...(timing ? { timing } : {}),
-      };
-    }
-    case 'notes_progress': {
-      if (typeof m.tick !== 'number' || !Number.isFinite(m.tick)) return null;
-      const phase = m.phase;
-      if (phase !== 'composing' && phase !== 'written' && phase !== 'failed') return null;
-      return {
-        type: 'notes_progress',
-        tick: m.tick,
-        phase,
-        turns: Array.isArray(m.turns)
-          ? m.turns.filter((t): t is number => typeof t === 'number' && Number.isFinite(t))
-          : [],
-      };
-    }
-    case 'timing_pong': {
-      const num = (v: unknown): number | null =>
-        typeof v === 'number' && Number.isFinite(v) ? v : null;
-      const id = num(m.id);
-      const clientMs = num(m.clientMs);
-      const serverRecvMs = num(m.serverRecvMs);
-      const serverSendMs = num(m.serverSendMs);
-      if (id === null || clientMs === null || serverRecvMs === null || serverSendMs === null) {
-        return null;
-      }
-      return { type: 'timing_pong', id, clientMs, serverRecvMs, serverSendMs };
-    }
-    case 'tuned':
-      return {
-        type: 'tuned',
-        applied: Array.isArray(m.applied)
-          ? m.applied.filter((k): k is string => typeof k === 'string')
-          : [],
-      };
-    case 'stopped':
-      return {
-        type: 'stopped',
-        meetingId: str(m.meetingId),
-        endedAt: typeof m.endedAt === 'number' ? m.endedAt : 0,
-      };
-    case 'error':
-      return { type: 'error', message: str(m.message) };
-    default:
-      return null;
-  }
 }
 
 /** What the meeting machinery is doing. */
@@ -311,12 +136,6 @@ export interface MeetingSocket {
   onmessage: ((ev: { data: unknown }) => void) | null;
   onclose: (() => void) | null;
   onerror: (() => void) | null;
-}
-
-/** The doc's audio socket on this host. Same scheme rule as the Yjs socket. */
-export function meetingSocketUrl(docId: string): string {
-  const scheme = location.protocol === 'https:' ? 'wss' : 'ws';
-  return `${scheme}://${location.host}${meetingSocketPath(docId)}`;
 }
 
 export interface MeetingStripOpts {
@@ -702,25 +521,30 @@ export function mountMeetingStrip(opts: MeetingStripOpts): MeetingStripHandle {
   }
 
   // ---- chooser form state ---------------------------------------------------
-  /** The chooser's source choice. Mic unless the last press said otherwise. */
-  let chooseSource: 'mic' | 'bot' = 'mic';
   /**
-   * The chooser's speaker choice. Multiple by default — this product's
-   * ordinary meeting has other people in it, and the approved mock preselects
-   * it; "Just me" is the deliberate cheaper pick. An address that says solo
-   * (a Board solo huddle) presets it the other way — `opts.mode` is only
-   * ever set for that huddle-start case (`app.ts` leaves it `undefined`
-   * otherwise, on purpose: see its comment there), so this fallback is the
-   * one place the mock's default actually applies.
+   * The chooser form, held here because the Start press below reads it and
+   * the engine fetch below writes it; `meeting-chooser.ts` renders it.
+   *
+   * `chooseMode` defaults to Multiple — this product's ordinary meeting has
+   * other people in it, and the approved mock preselects it; "Just me" is the
+   * deliberate cheaper pick. An address that says solo (a Board solo huddle)
+   * presets it the other way, and `opts.mode` is only ever set for that
+   * huddle-start case (`app.ts` leaves it `undefined` otherwise, on purpose:
+   * see its comment there), so this fallback is the one place the mock's
+   * default actually applies. `chooseEngine` starts as the address's ask
+   * (`?engine=soniox`), the same start-time-only fact `mode` is, and settles
+   * when the fetch below answers.
    */
-  let chooseMode: CaptureMode = opts.mode ?? 'conversation';
-  /**
-   * The engine the next capture opens. Starts as the address's ask
-   * (`?engine=soniox`), the same start-time-only fact `mode` is; settled once
-   * the fetch below answers — the server's default, unless the address named
-   * one this server actually holds. Nothing in the chooser moves it.
-   */
-  let chooseEngine: string | undefined = opts.engine;
+  const choose: ChooserState = {
+    chooseSource: 'mic',
+    chooseMode: opts.mode ?? 'conversation',
+    chooseEngine: opts.engine,
+    advOpen: false,
+    chooseBotUrl: '',
+    chooseBotName: opts.botNamePrefill ?? '',
+    chooseError: '',
+    chooseBusy: false,
+  };
   /**
    * Advanced Options per engine, created on first look. Keyed by engine
    * because the panel is the engine's own — the address can name one and the
@@ -730,8 +554,6 @@ export function mountMeetingStrip(opts: MeetingStripOpts): MeetingStripHandle {
    * tuned it for.
    */
   const advStates = new Map<string, AdvancedState>();
-  /** Whether the Advanced section is unfolded — one flag across engines. */
-  let advOpen = false;
   /** The engine the LIVE capture runs on, from `ready` — what the menu's
    *  Advanced panel tunes. Null while idle. */
   let recordingEngine: string | null = null;
@@ -767,21 +589,38 @@ export function mountMeetingStrip(opts: MeetingStripOpts): MeetingStripHandle {
       // even unlisted, because the server is the authority on refusals.
       return;
     }
-    chooseEngine =
-      chooseEngine !== undefined && info.engines.includes(chooseEngine)
-        ? chooseEngine
+    choose.chooseEngine =
+      choose.chooseEngine !== undefined && info.engines.includes(choose.chooseEngine)
+        ? choose.chooseEngine
         : (info.default ?? info.engines[0]);
     // The chooser may already be open (a fast mount, a slow fetch); redraw it
     // so the Advanced panel — keyed on the engine — does not wait for a
     // second open to appear.
     if (view === 'chooser') renderPop();
   });
-  let chooseBotUrl = '';
-  let chooseBotName = opts.botNamePrefill ?? '';
-  /** Why the last chooser press did not start, shown in the sheet. */
-  let chooseError = '';
-  /** An invite is in flight; the CTA must not send a second bot. */
-  let chooseBusy = false;
+
+  /**
+   * The two popovers the Record button opens, bound once to what they reach
+   * for instead of capturing this closure. The four accessors are read at
+   * call time because each one is a `let` this mount moves: the socket opens
+   * and closes under a running chooser, and which popover is up changes with
+   * every press.
+   */
+  const chooser = createMeetingChooser({
+    choose,
+    pop,
+    appliedKeys,
+    staleKeys,
+    bot,
+    advFor,
+    cast,
+    speakerRow,
+    renderPop,
+    onStartPressed,
+    isChooserView: () => view === 'chooser',
+    socketOpen: () => socketOpen,
+    sendSocket: (data) => socket?.send(data),
+  });
 
   /**
    * The button every rename surface uses. The pill is a child so the button
@@ -1098,7 +937,7 @@ export function mountMeetingStrip(opts: MeetingStripOpts): MeetingStripHandle {
     // "Applied."; the rest wait for the next recording and say that instead.
     // A bot meeting has no microphone engine to tune, so it gets nothing.
     if (!live && recordingEngine !== null && advancedControls(recordingEngine).length > 0) {
-      pop.append(buildAdvancedPanel(recordingEngine, true));
+      pop.append(chooser.buildAdvancedPanel(recordingEngine, true));
     }
     const sep = document.createElement('div');
     sep.className = 'meeting-pop-sep';
@@ -1127,344 +966,28 @@ export function mountMeetingStrip(opts: MeetingStripOpts): MeetingStripHandle {
     pop.append(stopCta);
   }
 
-  /** One radio card in the chooser. */
-  function choice(args: {
-    group: string;
-    title: string;
-    detail: string;
-    checked: boolean;
-    onPick: () => void;
-  }): { el: HTMLLabelElement; body: HTMLElement; input: HTMLInputElement } {
-    const label = document.createElement('label');
-    label.className = args.checked ? 'meeting-choice is-selected' : 'meeting-choice';
-    const input = document.createElement('input');
-    input.type = 'radio';
-    input.name = args.group;
-    input.checked = args.checked;
-    const body = document.createElement('span');
-    body.className = 'meeting-choice-body';
-    const title = document.createElement('span');
-    title.className = 'meeting-choice-title';
-    title.textContent = args.title;
-    const detail = document.createElement('span');
-    detail.className = 'meeting-choice-detail';
-    detail.textContent = args.detail;
-    body.append(title, detail);
-    label.append(input, body);
-    input.addEventListener('change', () => {
-      if (input.checked) args.onPick();
-    });
-    return { el: label, body, input };
-  }
-
-  function choiceGroup(name: string): { group: HTMLElement; add: (el: HTMLElement) => void } {
-    const group = document.createElement('div');
-    group.className = 'meeting-choice-group';
-    const label = document.createElement('div');
-    label.className = 'meeting-choice-group-label';
-    label.textContent = name;
-    group.append(label);
-    return { group, add: (el) => group.append(el) };
-  }
-
-  /**
-   * One change to the LIVE meeting's knobs. Sent only for a key the running
-   * engine can take on the open socket; the server answers `tuned` naming
-   * what it applied, which is what turns the control's note into "Applied."
-   * Everything else — Soniox entirely, and the non-live keys — changes the
-   * stored panel and waits for the next recording, which the control already
-   * says under itself.
-   */
-  function sendTune(engineId: string, key: string): void {
-    // Whether the ENGINE is currently running this key, per the server's own
-    // `tuned` answer — the only honest basis for claiming it still is.
-    const wasApplied = appliedKeys.has(key);
-    appliedKeys.delete(key);
-    if (!socketOpen || !liveTuningKeys(engineId).has(key)) return;
-    const value = advFor(engineId)[key];
-    if (value === undefined) return;
-    // An emptied term list cannot travel — the server's sanitizer drops
-    // `[]` (an empty list IS the default) — so the frame would apply
-    // nothing and still flash "Applied.". If the engine already took a list
-    // this session it is still running it, and the control has to say so:
-    // an empty box over live terms is the panel lying about the session.
-    if (Array.isArray(value) && value.length === 0) {
-      if (wasApplied) staleKeys.add(key);
-      return;
-    }
-    staleKeys.delete(key);
-    socket?.send(
-      JSON.stringify({
-        type: 'tune',
-        settings: { [key]: Array.isArray(value) ? [...value] : value },
-      }),
-    );
-  }
-
-  /**
-   * The Advanced Options section, shared by the chooser (pre-recording) and
-   * the menu (mid-meeting tuning). State lives in `advStates`; every change
-   * re-renders the popover — except a slider mid-drag, which the section
-   * repaints in place and only commits when the drag settles.
-   */
-  function buildAdvancedPanel(engineId: string, recording: boolean): HTMLElement {
-    const rerenderKeeping = (key: string | null): void => {
-      renderPop();
-      if (!key) return;
-      // Adding a chip rebuilds the panel under the keyboard; hand focus back
-      // to the field that was being typed in so a list of terms is one
-      // sitting, not one term per tap. The selector only matches a chips
-      // control, so a slider commit moves nothing.
-      pop
-        .querySelector<HTMLInputElement>(
-          `.meeting-adv-ctl[data-key="${key}"] .meeting-adv-chips input`,
-        )
-        ?.focus();
-    };
-    return buildAdvancedSection({
-      engineId,
-      state: advFor(engineId),
-      open: advOpen,
-      recording,
-      applied: appliedKeys,
-      stale: staleKeys,
-      onToggleOpen: () => {
-        advOpen = !advOpen;
-        renderPop();
-      },
-      onReset: (wasModified) => {
-        // Mid-meeting, the panel's defaults must reach the live session too,
-        // or the UI claims defaults the engine is not running. Each reverted
-        // live key goes up as its own tune frame carrying the documented
-        // default the panel showed beside the knob. Keys the session cannot
-        // take already say "next recording" under themselves; a term list it
-        // CAN take but cannot be emptied over the wire is the one case that
-        // ends diverged, and `sendTune` marks it so the control admits it.
-        if (recording) {
-          for (const key of wasModified) sendTune(engineId, key);
-        }
-        renderPop();
-      },
-      onChange: (key) => {
-        if (recording) sendTune(engineId, key);
-        rerenderKeeping(key);
-      },
-    });
-  }
-
-  /**
-   * The start chooser: every decision a recording takes, taken here, and a
-   * red Start Recording that is the only verb.
-   */
-  function buildChooser(): void {
-    pop.replaceChildren();
-    pop.className = 'meeting-pop meeting-sheet';
-    pop.setAttribute('role', 'dialog');
-    pop.setAttribute('aria-label', 'Start recording');
-    const h = document.createElement('h3');
-    h.className = 'meeting-sheet-title';
-    h.textContent = 'Start recording';
-    pop.append(h);
-
-    // The last meeting's voices, still nameable after it ended — the behavior
-    // the old strip's idle legend carried, now living where the button leads.
-    const idleCast = cast();
-    if (idleCast.length > 0) {
-      const castWrap = document.createElement('div');
-      castWrap.className = 'meeting-pop-cast';
-      const hint = document.createElement('div');
-      hint.className = 'meeting-choice-group-label';
-      hint.textContent = 'Speakers from the last recording';
-      castWrap.append(hint);
-      for (const label of idleCast) castWrap.append(speakerRow(label));
-      pop.append(castWrap);
-    }
-
-    const source = choiceGroup('Source');
-    const micChoice = choice({
-      group: 'meeting-source',
-      title: 'Use microphone',
-      detail: 'Record the room from this device',
-      checked: chooseSource === 'mic',
-      onPick: () => {
-        chooseSource = 'mic';
-        renderChoiceSelection();
-      },
-    });
-    micChoice.el.classList.add('meeting-choice-mic');
-    source.add(micChoice.el);
-    // Only where the server can actually field one: no key means no bot
-    // source at all rather than a card that always fails.
-    if (bot?.configured()) {
-      const botChoice = choice({
-        group: 'meeting-source',
-        title: 'Join Zoom / Google Meet',
-        detail: 'A bot joins the call and records it',
-        checked: chooseSource === 'bot',
-        onPick: () => {
-          chooseSource = 'bot';
-          renderChoiceSelection();
-        },
-      });
-      botChoice.el.classList.add('meeting-choice-bot');
-      const url = document.createElement('input');
-      url.type = 'url';
-      url.className = 'meeting-bot-url';
-      url.placeholder = 'Paste the meeting link';
-      url.setAttribute('aria-label', 'Meeting link for the bot to join');
-      url.value = chooseBotUrl;
-      url.addEventListener('input', () => {
-        chooseBotUrl = url.value;
-      });
-      // Typing a link IS choosing the bot; make the radio agree.
-      url.addEventListener('focus', () => {
-        if (chooseSource !== 'bot') {
-          chooseSource = 'bot';
-          renderChoiceSelection();
-        }
-      });
-      // Bryan's late redline on the mock: sighted users saw a plain text box
-      // with a prefilled string and no cue what it controlled. A visible
-      // caption, not just the aria-label, says what the value becomes.
-      const nameHint = document.createElement('span');
-      nameHint.className = 'meeting-bot-name-hint';
-      nameHint.textContent = 'Name shown in the meeting';
-      const name = document.createElement('input');
-      name.type = 'text';
-      name.className = 'meeting-bot-name';
-      name.setAttribute('aria-label', 'Bot display name shown in the meeting — tap to change');
-      name.value = chooseBotName;
-      name.addEventListener('input', () => {
-        chooseBotName = name.value;
-      });
-      botChoice.body.append(url, nameHint, name);
-      source.add(botChoice.el);
-    }
-    pop.append(source.group);
-
-    // No engine row: the engine is the server's default (or the address's
-    // preference), never a question asked here — see the header.
-    const speakers = choiceGroup('Speakers');
-    speakers.add(
-      choice({
-        group: 'meeting-speakers',
-        title: 'Just me',
-        detail: 'No speaker labels',
-        checked: chooseMode === 'solo',
-        onPick: () => {
-          chooseMode = 'solo';
-          renderChoiceSelection();
-        },
-      }).el,
-    );
-    speakers.add(
-      choice({
-        group: 'meeting-speakers',
-        title: 'Multiple Speakers',
-        detail: 'Labels each voice in the transcript',
-        checked: chooseMode === 'conversation',
-        onPick: () => {
-          chooseMode = 'conversation';
-          renderChoiceSelection();
-        },
-      }).el,
-    );
-    pop.append(speakers.group);
-    // The one per-engine fact worth stating beside the toggle itself: the
-    // cap the AssemblyAI panels offer does not exist on Soniox at all.
-    if (chooseEngine === 'soniox' && chooseMode === 'conversation') {
-      const note = document.createElement('div');
-      note.className = 'meeting-engine-hint';
-      note.textContent = "Soniox labels speakers but doesn't cap how many.";
-      pop.append(note);
-    }
-
-    // Advanced Options, below Speakers: the engine's own knobs, collapsed
-    // until asked for. Absent entirely when the engine is unknown (an old
-    // server never answered the list).
-    if (chooseEngine !== undefined && advancedControls(chooseEngine).length > 0) {
-      pop.append(buildAdvancedPanel(chooseEngine, false));
-    }
-
-    syncStartActions();
-  }
-
-  /**
-   * The tail of the chooser — the error line and the start verb — rebuilt from
-   * the choices as they stand.
-   *
-   * Separate from `buildChooser` because it follows the SOURCE and SPEAKERS
-   * cards, which are picked without a rebuild.
-   *
-   * It stays a direct child of `pop` rather than moving into a wrapper of its
-   * own: `.meeting-start-actions` is sticky, and a sticky element can only
-   * travel inside its parent's box — put it in a wrapper the height of its own
-   * contents and it has nowhere to stick to.
-   */
-  function syncStartActions(): void {
-    for (const sel of ['.meeting-pop-error', '.meeting-start-actions']) {
-      pop.querySelector(sel)?.remove();
-    }
-
-    const err = document.createElement('span');
-    err.className = 'meeting-pop-error';
-    // Assertive: this one only ever appears in answer to a press, and it is
-    // the reason the thing the person just asked for did not happen.
-    err.setAttribute('aria-live', 'assertive');
-    err.textContent = chooseError;
-    pop.append(err);
-
-    // The verb rides a sticky footer: the chooser outgrows the iPad tier's
-    // height as soon as Advanced Options is open, so this is the ordinary
-    // case, not the edge one.
-    const actions = document.createElement('div');
-    actions.className = 'meeting-start-actions';
-
-    const startCta = document.createElement('button');
-    startCta.type = 'button';
-    startCta.className = 'meeting-start-cta';
-    startCta.textContent = '● Start Recording';
-    startCta.disabled = chooseBusy;
-    startCta.addEventListener('click', () => onStartPressed());
-    actions.append(startCta);
-
-    pop.append(actions);
-  }
-
-  /** Re-mark the selected cards without rebuilding inputs mid-interaction. */
-  function renderChoiceSelection(): void {
-    for (const card of pop.querySelectorAll('.meeting-choice')) {
-      const input = card.querySelector('input');
-      card.classList.toggle('is-selected', input?.checked === true);
-    }
-    // The verbs below depend on what was just picked. Guarded because this
-    // runs off card clicks, and only the chooser has cards — a menu that
-    // grew one later must not sprout a Start button.
-    if (view === 'chooser') syncStartActions();
-  }
-
   /** The chooser's one verb. */
   function onStartPressed(): void {
-    chooseError = '';
-    if (chooseSource === 'bot') {
-      if (chooseBusy || !bot) return;
-      chooseBusy = true;
+    choose.chooseError = '';
+    if (choose.chooseSource === 'bot') {
+      if (choose.chooseBusy || !bot) return;
+      choose.chooseBusy = true;
       renderPop();
       void bot
-        .invite(chooseBotUrl.trim(), chooseBotName)
+        .invite(choose.chooseBotUrl.trim(), choose.chooseBotName)
         .then(() => {
-          chooseBusy = false;
-          chooseBotUrl = '';
+          choose.chooseBusy = false;
+          choose.chooseBotUrl = '';
           if (!disposed) closePop();
         })
         .catch((e: Error) => {
-          chooseBusy = false;
-          chooseError = e.message;
+          choose.chooseBusy = false;
+          choose.chooseError = e.message;
           if (!disposed) renderPop();
         });
       return;
     }
-    mode = chooseMode;
+    mode = choose.chooseMode;
     closePop();
     void start(false);
   }
@@ -1488,7 +1011,7 @@ export function mountMeetingStrip(opts: MeetingStripOpts): MeetingStripHandle {
 
   function renderPop(): void {
     if (view === 'menu') buildMenu();
-    else if (view === 'chooser') buildChooser();
+    else if (view === 'chooser') chooser.buildChooser();
   }
 
   /** Which popover a press on the button should lead to right now. */
@@ -1749,14 +1272,14 @@ export function mountMeetingStrip(opts: MeetingStripOpts): MeetingStripHandle {
           // made here. A server that has never heard of engines never
           // receives the field, and this frame is byte-for-byte what an
           // older strip sent.
-          ...(chooseEngine !== undefined ? { engine: chooseEngine } : {}),
+          ...(choose.chooseEngine !== undefined ? { engine: choose.chooseEngine } : {}),
           // The Advanced Options — modified knobs only, and PRESENT even
           // when empty: sending the field is what hands the speaker cap to
           // the panel (default uncapped) instead of the legacy fallback.
           // Absent when the engine is unknown, which keeps an old server's
           // frame byte-for-byte what it was.
-          ...(chooseEngine !== undefined && advancedControls(chooseEngine).length > 0
-            ? { tuning: tuningPayload(chooseEngine, advFor(chooseEngine)) }
+          ...(choose.chooseEngine !== undefined && advancedControls(choose.chooseEngine).length > 0
+            ? { tuning: tuningPayload(choose.chooseEngine, advFor(choose.chooseEngine)) }
             : {}),
           ...(timing ? { timing: true } : {}),
         }),
