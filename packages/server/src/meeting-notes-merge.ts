@@ -321,6 +321,46 @@ export function planNotesMerge(
   return plan;
 }
 
+/**
+ * Does this plan want a topic heading INSIDE a run of bullets?
+ *
+ * The item-level merge inserts a top-level block by putting it after the
+ * whole list its cursor sits in — Yjs cannot re-parent an existing element,
+ * so there is no way to split a list around a new heading without
+ * re-creating the items below it. Left alone, a tick that first groups the
+ * meeting into topics therefore lands every heading below every bullet: the
+ * notes come out as a run of bullets followed by a stack of empty headings,
+ * which is worse than the flat list it was trying to organise.
+ *
+ * So the case is DETECTED rather than approximated, and the caller rebuilds
+ * the section body instead — allowed only when every item in it is the
+ * agent's own, which is the same invariant as everywhere else here.
+ *
+ * It is deliberately narrow. A heading the notes already carry is matched by
+ * the diff and never appears in an insert run at all, so an ordinary tick —
+ * bullets added under headings that already exist — never takes this path,
+ * and the items in the section keep their elements, their marks and their
+ * comment anchors. Only the tick that MOVES the furniture pays for it.
+ */
+export function planNeedsRelayout(current: readonly NoteItem[], plan: MergePlan): boolean {
+  const lastOfList = (item: NoteItem): boolean => {
+    if (item.kind !== 'item' || !item.list) return true;
+    const children = item.list.toArray();
+    return children.indexOf(item.el) === children.length - 1;
+  };
+  for (const run of plan.inserts) {
+    if (!run.entries.some((e) => e.kind === 'block')) continue;
+    // The top of the body: a block landing here is pushed below a list that
+    // already opens it.
+    if (!run.after) {
+      if (current[0]?.kind === 'item') return true;
+      continue;
+    }
+    if (!lastOfList(run.after)) return true;
+  }
+  return false;
+}
+
 /** The markdown of the `basedOn` entries no longer present among `current`,
  *  matched by item key so a restructured item counts as gone. */
 function missingFrom(basedOn: readonly string[], current: readonly NoteItem[]): string[] {
@@ -666,6 +706,51 @@ function createSuggestion(
  * before pressing record keeps it, at the price of the note-taker adding
  * beneath rather than revising.
  */
+/**
+ * Rewrite the section body to the shape the composer returned, and hand the
+ * ledger the elements it now holds.
+ *
+ * Every item written here is the agent's — the caller has already checked
+ * that every item REPLACED was too — so this is the invariant's own move
+ * rather than an exception to it. What it costs is element identity: a
+ * comment anchored to one of the agent's bullets is anchored to an element
+ * that no longer exists, and lands in the outdated-comment flow. That price
+ * is why the caller pays it only on the tick that reorganises, and never on
+ * a tick that merely adds a bullet.
+ *
+ * Null when the composer's markdown will not parse, which leaves the caller
+ * on the ordinary path rather than on an empty section.
+ */
+function relayoutSection(
+  ydoc: Y.Doc,
+  fragment: Y.XmlFragment,
+  span: NotesSectionSpan,
+  incoming: readonly IncomingItem[],
+  canonical: string,
+  headings: readonly string[],
+  ownership: NotesOwnership,
+): { deleted: number; inserted: number } | null {
+  let blocks: Y.XmlElement[];
+  try {
+    blocks = prose.parseMarkdownBlocks(`## ${canonical}\n\n${markdownOfItems(incoming)}`);
+  } catch {
+    return null;
+  }
+  if (blocks.length === 0) return null;
+  const deleted = itemsInSection(fragment, span).length;
+  ydoc.transact(() => {
+    fragment.delete(span.start, span.endExclusive - span.start);
+    fragment.insert(span.start, blocks);
+  }, 'agent');
+  // Read the items back off the doc rather than trusting the blocks handed
+  // to `insert`: the ledger has to key on what `itemsInSection` will return
+  // next tick, which is a list's listItems and not the list.
+  const written = findNotesSection(fragment, headings);
+  const items = written ? itemsInSection(fragment, written) : [];
+  ownership.record(items.map((i) => ({ el: i.el, md: i.md })));
+  return { deleted, inserted: items.length };
+}
+
 export function mergeNotesSection(
   ydoc: Y.Doc,
   notesMarkdown: string,
@@ -774,6 +859,30 @@ export function mergeNotesSection(
 
   const current = itemsInSection(fragment, span);
   const plan = planNotesMerge(current, incoming, opts);
+
+  // THE ONE CASE THE ITEM-LEVEL MERGE CANNOT EXPRESS: the notes are being
+  // grouped under topic headings for the first time, so a heading has to land
+  // between two bullets of a list that already exists. Re-laying the body is
+  // the only way to say that in a Yjs fragment, and it is permitted here for
+  // exactly the reason every other write is — everything in this section is
+  // the agent's own writing, so there is nothing of anybody else's to lose.
+  // One person's item anywhere in the section (or one pending proposal on
+  // one) turns this off and the ordinary merge runs, which places the heading
+  // below the list rather than inside it: worse looking, and safe.
+  const allAgent = current.length > 0 && classifyOwnership(current, opts.ownership).every(Boolean);
+  if (allAgent && plan.suggestions.length === 0 && planNeedsRelayout(current, plan)) {
+    const relaid = relayoutSection(
+      ydoc,
+      fragment,
+      span,
+      incoming,
+      canonical,
+      headings,
+      opts.ownership,
+    );
+    if (relaid) return { ok: true, mode: 'merged', ...relaid, suggested: 0, dropped: 0 };
+  }
+
   const applied = applyPlan(ydoc, plan, span.heading, opts.author ?? NOTES_SUGGESTION_AUTHOR);
   opts.ownership.record([...plan.keptAgent.map((i) => ({ el: i.el, md: i.md })), ...applied.owned]);
   return {
