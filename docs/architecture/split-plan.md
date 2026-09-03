@@ -302,16 +302,30 @@ a single mechanical pass and let the type checker find the misses.
 Layer: `actor-identity.ts` is a service; `deploy-log.ts` and `google-oauth.ts`
 are infra. Final directory: `ops/` and `meeting/`.
 
-## A8 · the server test split
+## A8 · the server test split — DONE
 
-| File | Becomes | Moves | Effort |
+| File | Became | Moved | Measured |
 |---|---|---|---|
-| `test/voice-smooth.test.ts` (729) | `test/voice-smooth-model.test.ts` | the eight describes of pure helpers — `navigationAsk`, `resolveByTitle`, `parseOrdinal`, `composeStatus` — leaving the route harness that stands up `createServer` | M |
+| `test/voice-smooth.test.ts` (729) | `test/voice-smooth-model.test.ts` | nine describes of pure helpers — `navigationAsk`, `resolveByTitle`, `parseOrdinal`, `pickByLabel`, `answerBody`, `statusAsk`, `composeStatus` and the word counters — leaving the route harness that stands up `createServer` | 287, parent at 493 |
 
-One commit. **Must land after A6**, because `composeStatus` moves to
-`voice-status.ts` there and this file imports it. Stage the new file before
-trusting `bun run test:audit`: an untracked test file is invisible to it and
-CI is not.
+One commit, plus this one. Nine describes rather than the eight the plan
+counted: `navigationAsk` has two, one for the phrasing and one for the board
+qualifier.
+
+The split is what says which LAYER broke when a promise stops holding — a red
+model file means the rule is wrong, a red route file over a green model file
+means the wiring is. The model half also runs in milliseconds without binding
+a port.
+
+**Both halves keep their own copy of the three title fixtures** — the target,
+the near-twin that makes "akash review" ambiguous, and the one-word decoy.
+That is fixture SHAPE rather than a contract between the halves: the route
+file binds them as real documents, the model file ranks them as bare strings,
+and neither would notice the other changing a word. Each file's comment now
+says which it is. The test count is unchanged, 41 before and 18 + 23 after.
+
+Landing after A6 mattered: `composeStatus` moved to `voice-status.ts` there
+and the model half imports it from that file.
 
 ---
 
