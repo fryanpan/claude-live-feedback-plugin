@@ -749,23 +749,51 @@ occurrences) and are absent from the new one, while `cfw:authToken`,
 `claude-feedback-widget` and `About this page` — one literal from each new
 module — appear once in both.
 
-## B8 · `agent-notes.ts`
+## B8 · `agent-notes.ts` — DONE
 
-653 lines in `packages/plugin/hooks/lib/`. **Effort S.** One PR, one commit.
+653 lines before, **241 after**. **Effort S.** One PR, one extraction commit
+plus the version bump.
 
-| Becomes | Moves |
-|---|---|
-| `note-redact.ts` (~390) | `stripInline`, `redactOpaque`, `isSecretName`, `reduceProseLine`, `commandShape`, `looksOpaque` |
+| Became | Moved | Measured |
+|---|---|---|
+| `note-redact.ts` | the whole `Reduction` section: `stripInline`, `reduceLocator`, `reduceWords`, `redactOpaque`, `isSecretName`, `reduceProseLine`, `fullNote`, `oneLine`, `commandShape`, `looksOpaque` and the 20 regexes they read | 430 (est. ~390) |
 
-`readAgentName`, `decideTurnNote`, `postNote` and `runHook` stay. Both files
-stay inside `packages/plugin` — the hooks run from the installed plugin
-directory and cannot import across the monorepo.
+`readAgentName`, `resolveBaseUrl`, `decideTurnNote`, `decideDenialNote`,
+`payloadKeys`, `postNote` and `runHook` stay, and reach the reduction through
+`fullNote` and `commandShape`. Both files stay inside `packages/plugin` — the
+hooks run from the installed plugin directory and cannot import across the
+monorepo.
 
-The diff touches `packages/plugin/**`, so **bump the patch version in all
-three places**: `packages/plugin/.claude-plugin/plugin.json`,
+Every moved line is byte-identical to the range it came from, verified by
+diffing each slab against the same line range of the parent's previous
+commit: no dedent was needed, because the whole section stood at top level.
+
+### Deviations
+
+- **The three text caps moved with the reduction.** `NOTE_TEXT_CAP`,
+  `FULL_NOTE_TEXT_CAP` and `SHAPE_CAP` have no reader left in
+  `agent-notes.ts` — they are the reducer's own limits, and `oneLine` /
+  `fullNote` take them as default arguments. `DEFAULT_BASE_URL`,
+  `POST_TIMEOUT_MS` and `SHORT_STRING_MAX` stay with the transport.
+- **`fullNote` and `oneLine` moved, though the row did not name them.** The
+  row listed the private helpers; the two public entry points sit on top of
+  the same 20 regexes, and leaving them behind would have meant exporting
+  the whole private surface for them to call.
+- **The test file split too, and both halves dropped under the limit.**
+  `packages/plugin/test/agent-notes.test.ts` was 681 lines with a *keep* row
+  in `exceptions.md`, and its `oneLine`, `fullNote` and `commandShape`
+  describes — 347 lines, every leak assertion the hooks have — are tests of
+  the moved module, not of the plumbing. They are now
+  `test/note-redact.test.ts`, moved verbatim, and each file covers the module
+  it names. `exceptions.md` loses both rows: nothing in `packages/plugin` is
+  over 500 lines any more.
+
+The diff touches `packages/plugin/**`, so the patch version was bumped in all
+three places — `packages/plugin/.claude-plugin/plugin.json`,
 `.claude-plugin/marketplace.json`, and `PLUGIN_VERSION` in
-`packages/mcp/src/mcp.ts`. Sequence this against B6, which rebuilds the same
-bundle.
+`packages/mcp/src/mcp.ts` — and the bundle rebuilt, sequenced after B6.
+
+Layer: hook surface. Final directory: `plugin/hooks/lib/` — no move.
 
 ---
 
