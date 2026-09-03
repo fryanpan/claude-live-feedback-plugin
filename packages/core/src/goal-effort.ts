@@ -55,133 +55,80 @@
  * everything else the forecast is built from.
  */
 
-import { EFFORT_ESTIMATE_PROMPT_VERSION } from './effort-estimate-prompt.ts';
+import {
+  type EffortCalibration,
+  type EffortRatio,
+  applyEffortRatio,
+  ratioForGoal,
+} from './effort-calibration.ts';
+import {
+  DAY_MS,
+  EFFORT_MIN_CLOSES_FOR_PROJECTION,
+  type EffortTaskInput,
+  countsTowardEffort,
+  effortClosedAt,
+  effortEstimateState,
+  estimateNumbers,
+  goalPaceWindowDays,
+  isEffortDone,
+  isObservedClose,
+} from './effort-task.ts';
 
-/**
- * A ratio outside this band is a correction nobody should trust more than
- * the estimate it corrects.
- *
- * The floor was 0.5, borrowed from the weekly-review multiplier, and on
- * this board it threw away the only thing calibration had learned. Nine
- * closed tickets ran at a median 0.099 of their estimated calendar time and
- * five at 0.010 of their estimated hands-on time; the clamp reported both
- * as 0.5, so a measured ten-fold speed-up left the forecast at half. A
- * floor is meant to refuse a correction drawn from too little evidence, and
- * a two-order-of-magnitude one drawn from nine samples is not that — it is
- * the answer. 0.02 still refuses the fifty-fold correction a single
- * mis-scored ticket can produce, and lets a measured 0.1 through intact.
- *
- * The ceiling is untouched: an estimate that ran LONGER than expected is the
- * direction where a single stuck ticket does the damage the trim exists to
- * stop.
- */
-export const EFFORT_RATIO_MIN = 0.02;
-export const EFFORT_RATIO_MAX = 2.0;
+export {
+  EFFORT_RATIO_MIN,
+  EFFORT_RATIO_MAX,
+  EFFORT_PRIOR_WALL_CLOCK_RATIO,
+  EFFORT_PRIOR_HANDS_ON_RATIO,
+  EFFORT_SHRINK_K,
+  EFFORT_MIN_SAMPLES_FOR_RANGE,
+  EFFORT_MIN_SAMPLES_FOR_CALIBRATION,
+  clampEffortRatio,
+  shrinkEffortRatio,
+  median,
+  quantile,
+  symmetricRatioError,
+  neutralRatio,
+  neutralRatioSet,
+  neutralCalibration,
+  computeEffortRatios,
+  computeEffortCalibration,
+  ratioForGoal,
+  applyEffortRatio,
+} from './effort-calibration.ts';
+export type {
+  EffortRatio,
+  EffortRatioSet,
+  EffortCalibration,
+  EffortSample,
+  EffortCalibrationTask,
+} from './effort-calibration.ts';
+export {
+  formatEffortSeconds,
+  formatGoalEffortSeconds,
+  formatEffortDate,
+} from './effort-format.ts';
 
-/**
- * What a board assumes before it has closed anything of its own: that the
- * scorer, told agents do the work, still sizes a ticket for a person.
- *
- * The weekly-review tool's priors, and the reason they are not 1.0. An
- * identity ratio is not the neutral choice it looks like — it is the claim
- * that the scorer is unbiased, which this board has direct evidence against
- * in both quantities and in the same direction. Starting at 1.0 meant every
- * goal with nothing closed under it forecast human effort, which on the
- * board that prompted this work read as months of the owner's own attention
- * on a goal an agent was days from finishing.
- *
- * Wall-clock corrects less than hands-on because it corrects a different
- * thing. An agent working continuously compresses the calendar, but a
- * ticket still waits on a review, a decision, or the thing before it — and
- * none of that waiting gets faster. Hands-on has no such floor: the work an
- * agent does alone leaves the owner's column entirely.
- *
- * A prior is a STARTING POINT, not a setting, and the handover is gradual
- * rather than a step: `computeEffortRatios` shrinks the board's measured
- * median TOWARD the prior on `EFFORT_SHRINK_K`, so the first close carries a
- * sixth of the answer and the prior is most of what is left. Without that
- * shrinkage a prior would not be a prior at all — the first ticket to close
- * would delete it, and one outlying close would move every forecast on the
- * board.
- */
-export const EFFORT_PRIOR_WALL_CLOCK_RATIO = 1 / 7;
-export const EFFORT_PRIOR_HANDS_ON_RATIO = 1 / 15;
-
-/** Shrinkage weight: a goal's own ratio carries `n / (n + K)` of the answer
- *  and the board-wide ratio carries the rest, so two closed tickets barely
- *  move a goal off the board's own experience. */
-export const EFFORT_SHRINK_K = 5;
-
-/**
- * The FURTHEST back `pace` looks when turning closes into a finish date.
- *
- * A ceiling rather than the window itself. It used to be both, and dividing
- * every goal's closes by a flat fourteen days made the denominator a fact
- * about the calendar instead of a fact about the goal: a goal three days old
- * with two closes read as `2/14` per day and looked becalmed, while a goal
- * running since spring read fast because only its last fortnight counted.
- * Same numerator, and the one that had earned it got the smaller rate.
- *
- * So the divisor is now the goal's own ACTIVE WINDOW — see
- * `goalPaceWindowDays` — and this constant only stops that window growing
- * without limit. Fourteen days is still the horizon a pace is drawn from,
- * because a rate learned from what a goal was doing two months ago is not a
- * rate: it is history.
- */
-export const EFFORT_PACE_WINDOW_DAYS = 14;
-
-/**
- * And the floor, because an active window shrinks toward zero.
- *
- * Three tickets closed within a minute of each other span almost no time at
- * all, and dividing their estimates by that span claims a rate no work
- * produced: at a two-minute window, a goal with an afternoon of work left
- * projects "done in ten minutes". So one hour is the shortest span this
- * board is willing to call a rate. Below it a goal is reported at the pace
- * it managed in an hour, which is the most a burst of evidence can honestly
- * say, and the soonest finish any goal can be given is an hour out.
- *
- * An hour rather than a day, because a day here is not a floor but a
- * different answer. The case this window exists for is a goal that closed
- * most of itself in one afternoon; rounding that afternoon up to a day puts
- * its finish back out past tomorrow, which is the exact reading the active
- * window was introduced to stop.
- */
-export const EFFORT_MIN_PACE_WINDOW_DAYS = 1 / 24;
-
-/** Below this many OBSERVED closes inside the pace window there is no
- *  projection — a date drawn from one or two closes is a number pretending
- *  to be a forecast, and a date drawn from three rows somebody swept out of
- *  the backlog is not even that (see `isObservedClose`). */
-export const EFFORT_MIN_CLOSES_FOR_PROJECTION = 3;
-
-/** Below this many samples there is no spread, so no "likely by" date: a
- *  range computed from one sample is not a range. */
-export const EFFORT_MIN_SAMPLES_FOR_RANGE = 3;
-
-/**
- * Below this many closed tickets a level does not get a factor of its own.
- *
- * Shrinkage was supposed to be the whole answer here and it is not, because
- * `shrink(r, r, 1) = r` exactly. A goal's own median is pulled toward the
- * BOARD's — and on a board whose only closed ticket is that goal's, the
- * board median IS that ticket. The pull is toward itself, the weight never
- * matters, and one close moved every forecast on the board at full strength.
- * The second close could move it back just as far.
- *
- * So there is a floor, and it applies at both levels the same way: below
- * three closes a level inherits the level above it — a goal takes the
- * board's factor, and the board takes the prior — rather than claiming a
- * correction of its own. Above three, shrinkage does the job it was always
- * good at: blending a small sample into a larger one.
- *
- * Three, and the same three as `EFFORT_MIN_CLOSES_FOR_PROJECTION` and
- * `EFFORT_MIN_SAMPLES_FOR_RANGE`, because it is the same judgement in all
- * three places: below three there is a data point, not a distribution. A
- * board that has closed two tickets is not a board that knows how fast it
- * is; it is a board with an anecdote.
- */
-export const EFFORT_MIN_SAMPLES_FOR_CALIBRATION = 3;
+export {
+  EFFORT_PACE_WINDOW_DAYS,
+  EFFORT_MIN_PACE_WINDOW_DAYS,
+  EFFORT_MIN_CLOSES_FOR_PROJECTION,
+  estimateNumbers,
+  isCurrentGenerationEstimate,
+  effortEstimateState,
+  isEffortDone,
+  countsTowardEffort,
+  effortClosedAt,
+  effortFirstSeenAt,
+  goalPaceWindowDays,
+  effortActualWallClockSeconds,
+  effortActualHandsOnSeconds,
+  isObservedClose,
+} from './effort-task.ts';
+export type {
+  EffortTransition,
+  EffortTaskInput,
+  EffortEstimateNumbers,
+} from './effort-task.ts';
 
 /**
  * Past this many days out, a projection stops being a forecast.
@@ -200,625 +147,6 @@ export const EFFORT_MIN_SAMPLES_FOR_CALIBRATION = 3;
  * will take forever", and those are opposite situations.
  */
 export const EFFORT_MAX_PROJECTION_DAYS = 365;
-
-const DAY_MS = 24 * 60 * 60 * 1000;
-
-/** The slice of a transition this module reads. Structural, so both the
- *  server's `TaskTransition` and the client's `HubTransition` satisfy it. */
-export interface EffortTransition {
-  ts: number;
-  to: string;
-}
-
-/**
- * What this module needs off a ticket.
- *
- * Deliberately a structural subset of both `Task` (server) and `HubTask`
- * (client) rather than either of them — that is what lets one
- * implementation serve both callers.
- */
-export interface EffortTaskInput {
-  status: string;
-  /** When the ticket was filed. Read by `goalPaceWindowDays` only, to date
-   *  the goal it sits under: a goal is as old as its oldest live ticket,
-   *  because the goal record itself never reaches this module. Optional so a
-   *  caller holding a row without one still gets a pace — the window then
-   *  falls back to the ticket's first transition, and to the full
-   *  `EFFORT_PACE_WINDOW_DAYS` when a band carries no timestamp at all. */
-  createdAt?: number;
-  /** Soft-deleted. Archived rows are excluded from every sum: a goal is not
-   *  more finished because somebody archived the rest of it. */
-  archivedAt?: number;
-  /** Chunk 2's stored run. Only `status: 'ok'` carries numbers; a `failed`
-   *  run is an attempt that produced nothing, and absent is a ticket never
-   *  scored. Three states, and none of them is zero. */
-  effortEstimate?: {
-    status: string;
-    handsOnSeconds?: number;
-    wallClockSeconds?: number;
-    /** Which generation of the ask produced this — see
-     *  `EFFORT_ESTIMATE_PROMPT_VERSION`. Read by the CALIBRATOR only, never
-     *  by the rollup: an estimate made under an older prompt is still the
-     *  best number this ticket has, and dropping it from the forecast would
-     *  make a scored goal read "not scored" for as long as re-scoring takes.
-     *  What it must not do is teach a correction factor — see
-     *  `isCurrentGenerationEstimate`. Absent on every row written before the
-     *  field existed. */
-    promptVersion?: number;
-  };
-  /** The append-only trail. Wall-clock actuals are read from it. */
-  transitions?: EffortTransition[];
-  /** Folded-up human attention on the ticket's body room. Hands-on actuals
-   *  are read from it, and its ABSENCE means not measured — never zero. */
-  readingTime?: { totalSeconds?: number };
-}
-
-/** A usable estimate, narrowed off the stored union. */
-export interface EffortEstimateNumbers {
-  handsOnSeconds: number;
-  wallClockSeconds: number;
-}
-
-function isPositiveFinite(v: unknown): v is number {
-  return typeof v === 'number' && Number.isFinite(v) && v > 0;
-}
-
-/**
- * Read a ticket's estimate as numbers, or `null`.
- *
- * `null` covers all three not-a-number cases on purpose — never scored, a
- * recorded failure, and a stored run whose fields did not survive whatever
- * wrote them. A caller that needs to tell those apart asks the row directly
- * (see `effortEstimateState`); a caller that wants to SUM wants exactly
- * this.
- */
-export function estimateNumbers(task: EffortTaskInput): EffortEstimateNumbers | null {
-  const e = task.effortEstimate;
-  if (!e || e.status !== 'ok') return null;
-  const { handsOnSeconds, wallClockSeconds } = e;
-  if (!isPositiveFinite(handsOnSeconds) || !isPositiveFinite(wallClockSeconds)) return null;
-  return { handsOnSeconds, wallClockSeconds };
-}
-
-/**
- * Was this estimate made under the CURRENT ask?
- *
- * Only calibration asks. A correction factor is `actual / estimate`, and
- * the estimate in that fraction was produced by one particular prompt — so
- * a factor learned from version 1's human-scaled numbers describes version
- * 1's bias and nothing else. Applied to version 2's agent-scaled numbers it
- * would discount the same speed-up twice: once because the prompt now says
- * an agent does the work, and again because the old estimates were wrong
- * about that. On the board this was measured on, that is a factor of 0.02
- * on top of an estimate already ten times smaller, which renders a goal
- * with real work left in it as "<1m".
- *
- * So a prompt bump deliberately empties the sample set, and the priors are
- * what a board forecasts with until it has closed tickets scored under the
- * new ask. That is the cost of changing the question, paid where it is
- * visible, rather than a stale answer to the old one carried forward
- * silently.
- *
- * A row with no `promptVersion` at all predates the field and is treated as
- * an older generation — the safe direction, and the same one
- * `recordEffortEstimate` takes with a missing revision.
- */
-export function isCurrentGenerationEstimate(task: EffortTaskInput): boolean {
-  return task.effortEstimate?.promptVersion === EFFORT_ESTIMATE_PROMPT_VERSION;
-}
-
-/** The three states named, for a surface that has to say which one it is. */
-export function effortEstimateState(task: EffortTaskInput): 'ok' | 'failed' | 'none' {
-  const e = task.effortEstimate;
-  if (!e) return 'none';
-  if (e.status === 'failed') return 'failed';
-  return estimateNumbers(task) ? 'ok' : 'failed';
-}
-
-export function isEffortDone(task: EffortTaskInput): boolean {
-  return task.status === 'done';
-}
-
-/** Archived rows are out of every sum — see `EffortTaskInput.archivedAt`. */
-export function countsTowardEffort(task: EffortTaskInput): boolean {
-  return task.archivedAt === undefined;
-}
-
-/**
- * When a ticket closed: the timestamp of its LAST move into `done`.
- *
- * Last rather than first, because a reopened-and-reclosed ticket finished
- * when it finished. `null` on a row with no done transition — including a
- * row whose status says done but whose trail predates the status gate,
- * which is a row we decline to date rather than one we date at zero.
- */
-export function effortClosedAt(task: EffortTaskInput): number | null {
-  const trail = task.transitions;
-  if (!trail) return null;
-  for (let i = trail.length - 1; i >= 0; i--) {
-    const t = trail[i];
-    if (t && t.to === 'done' && Number.isFinite(t.ts)) return t.ts;
-  }
-  return null;
-}
-
-/**
- * The earliest moment this module can prove the ticket existed.
- *
- * `createdAt` when the caller has one, and the first transition otherwise —
- * a row that moved must have existed by the time it moved. `null` when
- * neither is there, which is a row we decline to date rather than one we
- * date at the epoch: `Math.min` over a stray `0` would make every goal
- * containing that row fifty-six years old.
- */
-export function effortFirstSeenAt(task: EffortTaskInput): number | null {
-  if (isPositiveFinite(task.createdAt)) return task.createdAt;
-  let earliest: number | null = null;
-  for (const t of task.transitions ?? []) {
-    if (!Number.isFinite(t.ts) || t.ts <= 0) continue;
-    if (earliest === null || t.ts < earliest) earliest = t.ts;
-  }
-  return earliest;
-}
-
-/**
- * How many days of history a goal's pace is divided by.
- *
- * The span its counted closes actually happened in — the earliest one to
- * now — clamped into `[EFFORT_MIN_PACE_WINDOW_DAYS, EFFORT_PACE_WINDOW_DAYS]`.
- *
- * This began as the goal's AGE, first ticket filed to now. That fixed the
- * flat fortnight and then failed the case it was written for. Measured on
- * the live board: a goal three and a half days old closed most of itself in
- * a single four-hour run, and dividing that run by the goal's age still read
- * as a trickle and still put the finish a day and a half out. Age is how
- * long a goal has EXISTED; a pace is a fact about the stretch in which it
- * moved. A goal that sat for three days and then ran for four hours has a
- * four-hour window, and the three quiet days are not evidence about its rate.
- *
- * "Counted" is the same predicate the numerator uses — an observed close
- * (`isObservedClose`) carrying an estimate, inside the fourteen-day ceiling —
- * so this is exactly the span of the closes it will be divided into, and no
- * counted close can fall outside a window derived from it. Deriving the two
- * halves separately is how a rate ends up measured over one period and
- * divided by another.
- *
- * Closes are summed, never serialized: two tickets worked in parallel and
- * closed the same hour are two closes in that hour, not one after the other.
- * Throughput is what a goal got through, not what one worker could have.
- *
- * The window ends at `now` rather than at the last close, so it decays on its
- * own: an afternoon's burst is a four-hour window that afternoon and a
- * twenty-eight-hour window a day later. No goal keeps claiming a sprint's
- * rate for having sprinted once.
- *
- * When nothing has closed there is no span to measure, and the fallback is
- * the goal's age — its oldest live ticket's `createdAt`, or that ticket's
- * earliest transition. No date is drawn from it (that needs
- * `EFFORT_MIN_CLOSES_FOR_PROJECTION` closes); it only answers "how long has
- * this been going" for the sentence that names the window.
- *
- * Archived rows are already out of the list the caller passes (see
- * `countsTowardEffort`); nothing here re-filters them.
- */
-export function goalPaceWindowDays(tasks: EffortTaskInput[], now: number): number {
-  const ceiling = now - EFFORT_PACE_WINDOW_DAYS * DAY_MS;
-  let earliestClose: number | null = null;
-  for (const task of tasks) {
-    if (!isObservedClose(task)) continue;
-    if (!estimateNumbers(task)) continue;
-    const closedAt = effortClosedAt(task);
-    if (closedAt === null || closedAt > now || closedAt < ceiling) continue;
-    if (earliestClose === null || closedAt < earliestClose) earliestClose = closedAt;
-  }
-  if (earliestClose !== null) return clampPaceWindowDays((now - earliestClose) / DAY_MS);
-  let earliestSeen: number | null = null;
-  for (const task of tasks) {
-    const seen = effortFirstSeenAt(task);
-    if (seen === null) continue;
-    if (earliestSeen === null || seen < earliestSeen) earliestSeen = seen;
-  }
-  // A band with no timestamp anywhere gets the full window rather than the
-  // floor: nothing is known about its age, and an hour is a CLAIM about a
-  // young goal, not a neutral answer.
-  if (earliestSeen === null) return EFFORT_PACE_WINDOW_DAYS;
-  return clampPaceWindowDays((now - earliestSeen) / DAY_MS);
-}
-
-function clampPaceWindowDays(days: number): number {
-  if (!Number.isFinite(days)) return EFFORT_PACE_WINDOW_DAYS;
-  return Math.min(EFFORT_PACE_WINDOW_DAYS, Math.max(EFFORT_MIN_PACE_WINDOW_DAYS, days));
-}
-
-/**
- * Measured wall-clock: first move into `in-progress` to last move into
- * `done`, in seconds.
- *
- * `null` when the ticket never entered `in-progress` — a row that went
- * straight from `todo` to `done` was never observed being worked, and the
- * honest answer to "how long did it take" is that nobody knows. Filling
- * that in from `createdAt` would report the length of the QUEUE as the
- * length of the work, and it would do it on exactly the small tickets that
- * skip `in-progress`, biasing the whole calibration upward.
- */
-export function effortActualWallClockSeconds(task: EffortTaskInput): number | null {
-  const trail = task.transitions;
-  if (!trail) return null;
-  let startedAt: number | null = null;
-  for (const t of trail) {
-    if (t.to === 'in-progress' && Number.isFinite(t.ts)) {
-      startedAt = t.ts;
-      break;
-    }
-  }
-  if (startedAt === null) return null;
-  const closedAt = effortClosedAt(task);
-  if (closedAt === null || closedAt <= startedAt) return null;
-  return Math.round((closedAt - startedAt) / 1000);
-}
-
-/**
- * Measured hands-on: the reading time already folded onto the row.
- *
- * `null` when nothing was measured. This is the field whose type doc says
- * in as many words that no reader may default it to zero, and a calibration
- * sample built from an assumed zero would drive every future hands-on
- * estimate to the floor.
- */
-export function effortActualHandsOnSeconds(task: EffortTaskInput): number | null {
-  const total = task.readingTime?.totalSeconds;
-  return isPositiveFinite(total) ? Math.round(total) : null;
-}
-
-/**
- * Did anybody watch this ticket being worked?
- *
- * A close with a measured wall-clock actual behind it — which is to say a
- * ticket that entered `in-progress` and later closed. A row moved STRAIGHT
- * to `done` fails it, and that is the whole point: nobody observed the work,
- * so the close is bookkeeping rather than throughput.
- *
- * Calibration already refused those rows, because `actual / estimate` needs
- * an actual. Pace and the projection floor did not, and that was the bug:
- * sweeping five stale rows in one afternoon added five closes and their
- * whole estimate to the numerator of a rate that is supposed to describe how
- * fast the goal moves, and the projected finish jumped forward on an
- * afternoon of tidying. One rule now covers all three — an unobserved close
- * teaches nothing.
- *
- * What it does NOT touch is the arithmetic where a close is a plain fact
- * rather than evidence: the percentage bar still moves, the remainder still
- * drops, and a goal all of whose rows were bulk-closed still reads
- * `complete`. Those say the ticket is finished, which it is. Only the claims
- * about SPEED are withheld.
- */
-export function isObservedClose(task: EffortTaskInput): boolean {
-  return isEffortDone(task) && effortActualWallClockSeconds(task) !== null;
-}
-
-/** Clamp a correction factor into the trusted band. */
-export function clampEffortRatio(ratio: number): number {
-  if (!Number.isFinite(ratio)) return 1;
-  return Math.min(EFFORT_RATIO_MAX, Math.max(EFFORT_RATIO_MIN, ratio));
-}
-
-/**
- * Pull a small sample toward the board-wide answer.
- *
- * `n = 0` returns the board ratio exactly, which is what a brand new goal
- * needs: it inherits the board's experience rather than claiming none.
- */
-export function shrinkEffortRatio(sample: number, board: number, n: number): number {
-  if (n <= 0 || !Number.isFinite(sample)) return board;
-  const w = n / (n + EFFORT_SHRINK_K);
-  return board + (sample - board) * w;
-}
-
-/** Median of a list. `NaN` on empty — callers check first. */
-export function median(values: number[]): number {
-  if (values.length === 0) return Number.NaN;
-  const s = [...values].sort((a, b) => a - b);
-  const mid = s.length >> 1;
-  const hi = s[mid] as number;
-  return s.length % 2 === 1 ? hi : ((s[mid - 1] as number) + hi) / 2;
-}
-
-/** Nearest-rank quantile — no interpolation, so the value returned is one
- *  that actually occurred. */
-export function quantile(values: number[], q: number): number {
-  if (values.length === 0) return Number.NaN;
-  const s = [...values].sort((a, b) => a - b);
-  const idx = Math.min(s.length - 1, Math.max(0, Math.ceil(q * s.length) - 1));
-  return s[idx] as number;
-}
-
-/**
- * How wrong an estimate was, symmetrically: `exp(|ln(actual / estimate)|) - 1`.
- *
- * A 1.5x miss reads as 0.5 whether the estimate ran high or low, which is
- * the property that makes a median error comparable across weeks. A raw
- * `actual / estimate - 1` does not have it: running 2x long scores +1.0 and
- * running 2x short scores -0.5, so a board that is half too-high and half
- * too-low averages out to "accurate".
- */
-export function symmetricRatioError(actual: number, estimate: number): number {
-  if (!isPositiveFinite(actual) || !isPositiveFinite(estimate)) return Number.NaN;
-  return Math.exp(Math.abs(Math.log(actual / estimate))) - 1;
-}
-
-/** One learned correction, plus what it was learned from. */
-export interface EffortRatio {
-  /** The factor a raw estimate is multiplied by. Already shrunk and clamped. */
-  ratio: number;
-  /** How many closed tickets this level's factor was LEARNED FROM. `0` means
-   *  the level is inheriting — the board from the prior, or a goal from the
-   *  board — and it is the field every "×N from M closed tickets" sentence
-   *  keys on, so it must never be a count of closes that did not move the
-   *  number. */
-  samples: number;
-  /** How many closed tickets this level actually has, whether or not they
-   *  were enough to move the factor. The difference between this and
-   *  `samples` is the honest wording for a goal with one or two closes:
-   *  something HAS closed, and saying "nothing has closed yet" about it
-   *  would be false. */
-  observedSamples: number;
-  /** Spread of the samples, as p75 over median. `1` when there are too few
-   *  to say — which is what suppresses the "likely by" date. */
-  spread: number;
-  /** Does this factor rest on measured closes anywhere — this level, or the
-   *  level it inherited from?
-   *
-   *  Distinct from `samples > 0`, and the distinction is the whole reason
-   *  the flag exists. A goal with one close inherits a board factor learned
-   *  from forty, and its projection is calibrated even though the goal
-   *  taught it nothing; a goal on a board that has closed twice inherits a
-   *  prior, and its projection is a guess. Both have `samples: 0`. The
-   *  board's "estimate only" marker is this field, negated. */
-  calibrated: boolean;
-}
-
-/**
- * The ratio a board with nothing to learn from uses.
- *
- * `samples: 0` is the load-bearing field and it stays honest: a prior is
- * not evidence, so nothing may report it as a correction learned from
- * closed tickets. Every surface that explains a factor keys on this count,
- * and the one that says "×N from M closed tickets" must never say it about
- * a number no ticket produced.
- *
- * Defaults to the identity for a caller that genuinely has no prior; the
- * two quantities' own priors are named above and applied by
- * `neutralCalibration`.
- */
-export function neutralRatio(prior = 1, observedSamples = 0): EffortRatio {
-  return {
-    ratio: clampEffortRatio(prior),
-    samples: 0,
-    observedSamples,
-    spread: 1,
-    calibrated: false,
-  };
-}
-
-/** One quantity's ratios: the board's, and each goal's. */
-export interface EffortRatioSet {
-  board: EffortRatio;
-  byGoal: Record<string, EffortRatio>;
-}
-
-/**
- * Both quantities' ratios.
- *
- * Kept apart on purpose. Wall-clock is measured for nearly every closed
- * ticket and hands-on for very few, so folding them into one factor would
- * let a well-measured wall-clock correction quietly rewrite hands-on
- * numbers it knows nothing about. Each side falls back to neutral on its
- * own evidence.
- */
-export interface EffortCalibration {
-  wallClock: EffortRatioSet;
-  handsOn: EffortRatioSet;
-}
-
-export function neutralRatioSet(prior = 1): EffortRatioSet {
-  return { board: neutralRatio(prior), byGoal: {} };
-}
-
-/**
- * Both quantities at their priors — what a board forecasts with before
- * anything has closed under the current prompt.
- *
- * Not the identity calibration any more, and callers that want THAT (a
- * test isolating the rollup arithmetic from the correction) ask for it by
- * building one out of `neutralRatioSet()` with no argument. Making the
- * priors the default is deliberate: this is the function every real caller
- * reaches for when there is nothing to calibrate from, and a default that
- * quietly forecast human effort is the bug being fixed.
- */
-export function neutralCalibration(): EffortCalibration {
-  return {
-    wallClock: neutralRatioSet(EFFORT_PRIOR_WALL_CLOCK_RATIO),
-    handsOn: neutralRatioSet(EFFORT_PRIOR_HANDS_ON_RATIO),
-  };
-}
-
-/** A closed ticket with both an estimate and a measured actual. */
-export interface EffortSample {
-  goal: string;
-  estimateSeconds: number;
-  actualSeconds: number;
-}
-
-function spreadOf(ratios: number[], centre: number): number {
-  if (ratios.length < EFFORT_MIN_SAMPLES_FOR_RANGE || !isPositiveFinite(centre)) return 1;
-  const p75 = quantile(ratios, 0.75);
-  if (!isPositiveFinite(p75)) return 1;
-  return Math.min(EFFORT_RATIO_MAX, Math.max(1, p75 / centre));
-}
-
-/**
- * Learn one quantity's correction factors from tickets that already closed.
- *
- * Medians rather than means throughout: the distribution is heavy-tailed —
- * one ticket that sat open over a holiday would otherwise set the whole
- * board's factor.
- */
-export function computeEffortRatios(samples: EffortSample[], prior = 1): EffortRatioSet {
-  const usable = samples.filter(
-    (s) => isPositiveFinite(s.estimateSeconds) && isPositiveFinite(s.actualSeconds),
-  );
-  if (usable.length === 0) return neutralRatioSet(prior);
-  const allRatios = usable.map((s) => s.actualSeconds / s.estimateSeconds);
-  if (usable.length < EFFORT_MIN_SAMPLES_FOR_CALIBRATION) {
-    // One or two closes on the whole board. Every goal keeps the prior, and
-    // says so — `observedSamples` carries what did close, so a panel can
-    // report "two so far" instead of the false "nothing has closed yet".
-    // Shrinking here instead would not hold: with a single sample the board
-    // median is that sample and a goal's shrink target is itself, which is
-    // the bug this floor exists to close.
-    const board = neutralRatio(prior, usable.length);
-    const byGoal: Record<string, EffortRatio> = {};
-    for (const s of usable) {
-      const seen = (byGoal[s.goal]?.observedSamples ?? 0) + 1;
-      byGoal[s.goal] = neutralRatio(prior, seen);
-    }
-    return { board, byGoal };
-  }
-  const boardMedian = median(allRatios);
-  // The BOARD is shrunk toward the prior, on the same weight a goal is
-  // shrunk toward the board. Without this the prior is not a prior at all —
-  // it is a placeholder that the first close deletes: `boardMedian` would
-  // replace it outright, every goal with no samples inherits the board, and
-  // every goal WITH samples is shrunk toward it, so one outlying close moves
-  // every forecast on the board from ×0.07 to anywhere inside the clamp.
-  // Shrinkage is what makes the handover gradual, which is the only thing
-  // that makes a prior worth having.
-  const boardRatio = clampEffortRatio(shrinkEffortRatio(boardMedian, prior, usable.length));
-  const board: EffortRatio = {
-    ratio: boardRatio,
-    samples: usable.length,
-    observedSamples: usable.length,
-    // Spread is measured against the board's OWN median, not the shrunk
-    // ratio: it answers "how scattered were these closes", which is a fact
-    // about the samples and has nothing to do with how much of the prior is
-    // still in the answer.
-    spread: spreadOf(allRatios, boardMedian),
-    calibrated: true,
-  };
-  const grouped = new Map<string, number[]>();
-  for (const s of usable) {
-    const r = s.actualSeconds / s.estimateSeconds;
-    const list = grouped.get(s.goal);
-    if (list) list.push(r);
-    else grouped.set(s.goal, [r]);
-  }
-  const byGoal: Record<string, EffortRatio> = {};
-  for (const [goal, ratios] of grouped) {
-    if (ratios.length < EFFORT_MIN_SAMPLES_FOR_CALIBRATION) {
-      // One or two closes under this goal: it takes the board's factor
-      // whole, rather than a version of it bent by an anecdote. The board is
-      // calibrated (we are past the floor above), so the goal's projection
-      // is calibrated too — it simply learned the correction from the board
-      // rather than from itself, which `samples: 0` says and `calibrated`
-      // qualifies.
-      //
-      // The board's SPREAD comes with it, deliberately. A goal with no
-      // closes at all already inherits it — `ratioForGoal` falls through to
-      // `set.board` — and a goal with one close knowing less about its own
-      // scatter than a goal with none would be a strange thing to build.
-      byGoal[goal] = { ...board, samples: 0, observedSamples: ratios.length };
-      continue;
-    }
-    const own = median(ratios);
-    // Shrink toward the board BEFORE clamping. Clamping a wild sample first
-    // and then pulling it toward the board would launder an outlier into a
-    // number that looks like evidence.
-    //
-    // Toward `boardRatio` — the board as everything else on this board sees
-    // it — not toward the raw median. A goal with no samples inherits
-    // `board.ratio`, so shrinking a one-sample goal toward a different number
-    // would have two goals disagreeing about what the board's answer is.
-    byGoal[goal] = {
-      ratio: clampEffortRatio(shrinkEffortRatio(own, boardRatio, ratios.length)),
-      samples: ratios.length,
-      observedSamples: ratios.length,
-      spread: spreadOf(ratios, own),
-      calibrated: true,
-    };
-  }
-  return { board, byGoal };
-}
-
-/** A ticket as the calibrator reads it: whatever `EffortTaskInput` holds,
- *  plus the band it sits under. */
-export interface EffortCalibrationTask extends EffortTaskInput {
-  goal: string;
-}
-
-/**
- * Build both ratio sets from a board's own history.
- *
- * A ticket contributes to a quantity only when it closed, carries an
- * estimate, AND has a measured actual for THAT quantity — so a closed
- * ticket nobody ever opened calibrates wall-clock and stays out of
- * hands-on entirely, rather than entering it as a zero.
- */
-export function computeEffortCalibration(tasks: EffortCalibrationTask[]): EffortCalibration {
-  const wallClock: EffortSample[] = [];
-  const handsOn: EffortSample[] = [];
-  for (const task of tasks) {
-    if (!countsTowardEffort(task) || !isEffortDone(task)) continue;
-    if (!isCurrentGenerationEstimate(task)) continue;
-    const est = estimateNumbers(task);
-    if (!est) continue;
-    const wall = effortActualWallClockSeconds(task);
-    if (wall !== null) {
-      wallClock.push({
-        goal: task.goal,
-        estimateSeconds: est.wallClockSeconds,
-        actualSeconds: wall,
-      });
-    }
-    const hands = effortActualHandsOnSeconds(task);
-    if (hands !== null) {
-      handsOn.push({ goal: task.goal, estimateSeconds: est.handsOnSeconds, actualSeconds: hands });
-    }
-  }
-  return {
-    wallClock: computeEffortRatios(wallClock, EFFORT_PRIOR_WALL_CLOCK_RATIO),
-    handsOn: computeEffortRatios(handsOn, EFFORT_PRIOR_HANDS_ON_RATIO),
-  };
-}
-
-/**
- * The factor in force for one goal, in one ratio set.
- *
- * A goal with no entry has closed nothing, and inherits the board's FACTOR —
- * that is the whole design. What it must not inherit is the board's
- * EVIDENCE. Handing back `set.board` whole gave such a goal the board's
- * counts, and every sentence on the surfaces below says "on this goal": a
- * board holding two closes under some other band reported them as two closes
- * under this one, and a board holding forty reported forty. Both counts are
- * zeroed here, at the one place the inheritance happens, so no caller has to
- * remember to.
- *
- * `calibrated` is deliberately NOT zeroed: whether the factor rests on
- * measurement is a fact about the factor, and it travels with it.
- */
-export function ratioForGoal(set: EffortRatioSet, goal: string): EffortRatio {
-  return set.byGoal[goal] ?? { ...set.board, samples: 0, observedSamples: 0 };
-}
-
-/**
- * A raw estimate, corrected.
- *
- * Rounds once, here, at the point the applied number is summed — seconds
- * are integers everywhere (Bryan, 2026-08-30), and thousands of rows
- * summing into a goal must not carry drifting fractions.
- */
-export function applyEffortRatio(rawSeconds: number, ratio: number): number {
-  return Math.round(rawSeconds * clampEffortRatio(ratio));
-}
 
 /** A goal that has something to say. */
 export interface GoalEffortReady {
@@ -1002,85 +330,4 @@ export function summarizeGoalEffort(
     }
   }
   return summary;
-}
-
-/**
- * Seconds as a person reads them: at most two units, never a decimal.
- *
- * Seconds never reach the screen (plan §4) and the conversion happens in
- * exactly one place, which is this function and its coarse sibling below.
- * Anything under half a minute is `<1m` rather than a count of seconds — a
- * ticket estimated at eleven seconds is a scoring artefact, not a fact
- * worth four characters of precision.
- */
-export function formatEffortSeconds(seconds: number): string {
-  if (!Number.isFinite(seconds) || seconds < 0) return '—';
-  const s = Math.round(seconds);
-  if (s < 30) return '<1m';
-  // Round to whole minutes ONCE, up front, and branch on the ROUNDED value.
-  // Branching first and rounding inside each branch is what produced "60m"
-  // for 3599s and "24h" for 86399s: the carry was handled inside the hours
-  // branch and never ACROSS a branch boundary, so a value that rounds up into
-  // the next unit was still formatted by the unit it started in. Rounding
-  // first makes the carry structural instead of something each branch has to
-  // remember.
-  const totalMinutes = Math.round(s / 60);
-  if (totalMinutes < 1) return '<1m';
-  if (totalMinutes < 60) return `${totalMinutes}m`;
-  const totalHours = Math.floor(totalMinutes / 60);
-  const minutes = totalMinutes % 60;
-  if (totalHours < 24) return minutes > 0 ? `${totalHours}h ${minutes}m` : `${totalHours}h`;
-  const days = Math.floor(totalHours / 24);
-  // The leftover hours are ROUNDED, not truncated — 1d 23h 53m reads as 2d
-  // rather than losing the best part of an hour — and the carry that rounding
-  // can produce is handled here rather than left to the caller.
-  const hours = Math.round((totalMinutes - days * 24 * 60) / 60);
-  if (hours >= 24) return `${days + 1}d`;
-  return hours > 0 ? `${days}d ${hours}h` : `${days}d`;
-}
-
-/**
- * The same conversion, coarser, for a GOAL total.
- *
- * A goal's total is a sum of guesses and is never precise enough to earn a
- * minute — so below a day it rounds to ten minutes, and above one to half a
- * day. A separate function rather than a flag, because the two roundings
- * answer different questions and a flag would eventually be passed the
- * wrong way round on one of the two surfaces.
- */
-export function formatGoalEffortSeconds(seconds: number): string {
-  if (!Number.isFinite(seconds) || seconds < 0) return '—';
-  const s = Math.round(seconds);
-  if (s < 30) return '<1m';
-  // Under ten minutes there is no bucket to round into, so report the real
-  // minutes. Bucketing here produced a hard step at the boundary — 4m59s
-  // rounded down to nothing and printed "<1m", while 5m00s rounded up a whole
-  // bucket and printed "10m", a jump of a full bucket across one second. The
-  // two paths meet continuously at 600s, which both render as "10m".
-  if (s < 600) return formatEffortSeconds(s);
-  if (s < 86400) return formatEffortSeconds(Math.round(s / 600) * 600);
-  const days = Math.round(s / (86400 / 2)) / 2;
-  return `${days}d`;
-}
-
-/**
- * `Sep 12` — or `Sep 12, 2027` once the date leaves the current year.
- *
- * The year is not decoration. Without it a projection years out renders in
- * the same four characters as one months out, and the reader has no way to
- * tell them apart; `~Dec 29` was observed on the board for a date in 2041.
- * `now` is a parameter rather than a `Date.now()` call so that the decision
- * is testable and so every date on one render is judged against one clock.
- *
- * Every date this module produces is approximate; the surface that shows one
- * says so beside it.
- */
-export function formatEffortDate(at: number, now: number, locale?: string): string {
-  const d = new Date(at);
-  const sameYear = d.getFullYear() === new Date(now).getFullYear();
-  return d.toLocaleDateString(locale, {
-    month: 'short',
-    day: 'numeric',
-    ...(sameYear ? {} : { year: 'numeric' }),
-  });
 }
