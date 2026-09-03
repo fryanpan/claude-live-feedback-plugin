@@ -70,6 +70,7 @@ import {
   type EffortEstimateVerdict,
   type EffortEstimator,
 } from './effort-estimator.ts';
+import { type GoogleOauthApp, type RefreshTokenVault } from './google-oauth.ts';
 import {
   type BriefCoverage,
   type BriefInput,
@@ -143,9 +144,7 @@ import {
 import {
   CalendarConnectionStore,
   CalendarSyncConsumer,
-  type GoogleOauthApp,
   type RecallCalendarClient,
-  type RefreshTokenVault,
   parseCalendarSyncWebhook,
 } from './recall-calendar.ts';
 import { RecallMeetingRelay } from './recall-meeting.ts';
