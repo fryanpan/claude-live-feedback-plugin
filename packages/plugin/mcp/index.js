@@ -6621,9 +6621,6 @@ function parseThreadReviewItemId(id) {
   return { docId, threadId, commentId };
 }
 
-// packages/core/src/task-wire.ts
-var TASK_STATUSES = ["triage", "todo", "in-progress", "done"];
-
 // node_modules/.bun/zod@4.3.6/node_modules/zod/v4/core/core.js
 var NEVER = Object.freeze({
   status: "aborted"
@@ -14423,225 +14420,10 @@ function threadCreateRequest(input, author) {
   };
 }
 
-// packages/mcp/src/voice-line.ts
-function truncate4(s, n) {
-  return s.length > n ? `${s.slice(0, n - 1)}…` : s;
-}
-function where(p) {
-  const c = p.context;
-  if (!c)
-    return "";
-  return ` (at ${c.surface ?? "?"}${c.docId ? ` ${c.docId}` : ""}${c.taskId ? ` ${c.taskId}` : ""}${c.visibleHeading ? `, near "${c.visibleHeading}"` : ""})`;
-}
-function voiceRequestLine(p) {
-  if (p.route === "fast-path")
-    return null;
-  const by = p.actor?.name ? ` by ${p.actor.name}` : "";
-  const said = `[voice.request]${by}${where(p)}: "${p.transcript ?? ""}"`;
-  const told = truncate4(p.ack ?? "", 120);
-  if (p.route === "fast-path-action") {
-    return `${said} — the fast path ALREADY applied this to the board on the speaker's behalf; ` + `they were told: "${told}". Do NOT redo it — reconcile your own picture of the board ` + "with what changed, and pick up only whatever the utterance asked for beyond it.";
-  }
-  return `${said} — act on it through the task/edit tools; the speaker was told: "${told}"`;
-}
+// packages/core/src/task-wire.ts
+var TASK_STATUSES = ["triage", "todo", "in-progress", "done"];
 
-// packages/mcp/src/watch-coverage.ts
-function parseCoverage(res) {
-  if (!res || typeof res !== "object")
-    return;
-  const raw = res.coverage;
-  if (!raw || typeof raw !== "object")
-    return;
-  const c = raw;
-  if (typeof c.agentId !== "string")
-    return;
-  if (!Array.isArray(c.workspaces) || !Array.isArray(c.unattachedBoards))
-    return;
-  return {
-    agentId: c.agentId,
-    workspaces: c.workspaces,
-    unattachedBoards: c.unattachedBoards
-  };
-}
-function boardsWaitingOnYou(coverage) {
-  return (coverage?.unattachedBoards ?? []).filter((b) => b.queuedTotal > 0);
-}
-var plural = (n, one, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
-function describeQueue(q) {
-  const parts = [];
-  if (q.queuedVoice > 0)
-    parts.push(plural(q.queuedVoice, "voice note"));
-  return parts.join(", ");
-}
-function remedyFor(b, agentId) {
-  if (b.leadLive && b.leadAgentId !== undefined && b.leadAgentId !== agentId) {
-    return `${b.leadAgentId} holds the lead seat and is live, so the queue is addressed to them — ` + `ask them rather than taking it. attach_agent(workspaceId: "${b.workspaceId}") makes you ` + "addressable and subscribed without moving the seat.";
-  }
-  if (b.attached && !b.heartbeatFresh) {
-    return "your attachment is stale — the server has not seen a heartbeat OR a tool call from you " + "on this board inside the observed-work window, so deliveries for it are parking. " + `heartbeat(workspaceId: "${b.workspaceId}") now, and every few minutes while you work it.`;
-  }
-  return `set_workspace_lead(workspaceId: "${b.workspaceId}") attaches, subscribes and hands the ` + "backlog over in one call.";
-}
-function coverageAlertLine(coverage) {
-  const waiting = boardsWaitingOnYou(coverage);
-  if (waiting.length === 0)
-    return null;
-  const agentId = coverage?.agentId ?? "";
-  const described = waiting.map((b) => {
-    const via = b.watchedDocs.length > 0 ? `${plural(b.watchedDocs.length, "doc")} watched` : "this board watched directly";
-    return `"${b.name}" (${b.workspaceId}) — ${via}, ${b.queuedTotal} waiting ` + `(${describeQueue(b.queued)}); ${remedyFor(b, agentId)}`;
-  }).join(" ");
-  return `[not covered] ${plural(waiting.length, "board")} you follow ` + `${waiting.length === 1 ? "has" : "have"} work queued for a lead, and you are not live on ` + `${waiting.length === 1 ? "it" : "them"}. Watching is not attaching, and an attachment the ` + "server has stopped observing is not attached either — every delivery gate asks for recent " + `observed work, a heartbeat or a tool call, plus an open channel. ${described}`;
-}
-function boardsToReattach(coverage) {
-  return (coverage?.workspaces ?? []).filter((w) => w.kind === "board" && (w.lead === true || w.attached === true)).filter((w) => w.heartbeatFresh !== true).map((w) => w.workspaceId);
-}
-function restoreNoticeContent(opts) {
-  const lines = [];
-  const n = opts.restored.length;
-  const reattached = opts.reattached ?? [];
-  if (n > 0 || opts.pruned.length > 0) {
-    const dropped = opts.pruned.length > 0 ? `; ${opts.pruned.length} dropped (doc gone)` : "";
-    lines.push(`[watches restored] ${plural(n, "watch", "watches")} re-wired from the server for ` + `${opts.agentName} after restart${dropped}: ${opts.restored.join(", ")}`);
-  }
-  if (reattached.length > 0) {
-    lines.push(`[attachments restored] re-attached to ${plural(reattached.length, "board")} whose ` + "attachment came back stale, so lead-addressed work reaches this session again: " + `${reattached.join(", ")}`);
-  }
-  const alert = coverageAlertLine(opts.coverage);
-  if (alert)
-    lines.push(alert);
-  return lines.length > 0 ? lines.join(`
-`) : null;
-}
-
-// packages/mcp/src/mcp.ts
-function resolveBaseUrl() {
-  const override = readRenamedEnv(process.env, "CW_BASE_URL");
-  if (override)
-    return override;
-  const discovery = resolveDiscoveryFile(homedir(), existsSync);
-  if (discovery) {
-    try {
-      const j = JSON.parse(readFileSync(discovery, "utf8"));
-      if (j.port)
-        return `http://localhost:${j.port}`;
-    } catch {}
-  }
-  throw new Error("claude-workspaces server not found — start it with `bun run dev` (or set CW_BASE_URL). " + `Looked for a discovery file at ${discoveryCandidates(homedir()).join(" and ")}.`);
-}
-var AUTHOR = resolveAgentAuthor(process.env);
-var STATUS_TEXT_MAX = 4000;
-function suggestionAuthor() {
-  return { id: AUTHOR.id, name: AUTHOR.name, color: AUTHOR.color };
-}
-var PLUGIN_VERSION = "0.1.148";
-var PROCESS_ID = randomUUID();
-var server = new Server({
-  name: "claude-workspaces",
-  version: PLUGIN_VERSION
-}, {
-  capabilities: {
-    tools: {},
-    experimental: { "claude/channel": {} }
-  },
-  instructions: [
-    "Every markdown review doc is backed by a .md file on disk. The file is the",
-    "source of truth at rest; the live editor is the source of truth at runtime;",
-    "the plugin keeps them in sync bidirectionally (~1s debounced).",
-    "",
-    "CREATE: call create_review_doc(docId, path) to bring a .md under review.",
-    "The server reads the file, parses it into the live editor, sets up the",
-    "fs.watch + write-back, and returns a reviewUrl you can hand to a human.",
-    "",
-    "EDIT: never use Write/Edit/str_replace on the .md while it is under review",
-    "— direct filesystem edits race against the live doc’s own ~1s flush, and if",
-    "LF has any pending state your edit can be silently overwritten by the next",
-    "write-back. Route edits through the MCP tools below: find_and_replace for",
-    "prose changes, rewrite_thread_region / insert_after_thread / insert_blocks_after_thread",
-    "for comment-anchored edits, and set_doc_content(docId, markdown) for a",
-    "COMPREHENSIVE REWRITE of the whole doc (do NOT Write the file + reparse,",
-    "and do NOT delete_doc + Write + re-create — both race the flush and both",
-    "have destroyed content in the field). NEVER use set_doc_content on a doc a",
-    "human is reviewing or editing: a scoped request (a comment, one section)",
-    "gets a scoped edit — find_and_replace (table rows match in pipe syntax),",
-    "rewrite_thread_region, edit_at_anchor — and a whole-doc rewrite built from",
-    "an earlier read destroys their concurrent edits. The server refuses such a",
-    "write with 409 stale-write naming the human-edit time; re-read with",
-    "get_doc, re-apply your change onto the CURRENT content, and only retry",
-    "with confirmOverwriteHumanEdits: true if a full rewrite is truly needed.",
-    "External edits (VS Code, git pull)",
-    "flow back into the live doc via the file poll when LF is idle; if you wrote",
-    "to a bound file externally and need to be sure it landed, call",
-    "reparse_from_disk(docId) to force-pull from disk. If an edit response or",
-    "get_doc carries a `syncError`, read it — it names the conflict and where",
-    "the overwritten version was backed up.",
-    "",
-    "DIFF REVIEW / FOLDER BROWSE: when the human wants to review your code",
-    'changes ("review this diff", a branch, work in progress), call',
-    "create_diff_review(repo, base) — one review doc per changed file,",
-    "PR-style unified diff with line comments. Omit base to BROWSE a folder",
-    "instead (no diff): everything is navigable from the all-files sidebar,",
-    "files open lazily, markdown editable — works on plain folders and",
-    "fresh repos too (bind_folder is an alias for this). Default mode diffs",
-    "base against the LIVE working tree: keep editing the code and the reviewer",
-    "sees your changes re-render within ~1s, with their comments riding along",
-    "(threads orphan into the outdated-comments flow if their line disappears).",
-    "ALWAYS pass groups: [{title, paths[]}] — organize the changed files by",
-    "INTENT (the way you would split a branch into reviewable commits); you",
-    "know the semantics of your change far better than the heuristic fallback.",
-    "First group = read first; a directory path claims every file under it;",
-    'unlisted files land in "Other". Pass target only to pin a review to a',
-    "finished range. Re-run the tool after touching files that were not in",
-    "the diff before (idempotent; refreshes the file list; keeps your groups",
-    "unless you pass new ones). Share the returned entryUrl with the human",
-    "(bare URL on its own line); the file tree navigates the rest. Thread",
-    "events arrive per file via the auto-watch; resolve threads as you address",
-    "them; refresh_review(setId) to re-sync membership and reviews as files move (threads survive); delete_review(setId) when the review is done.",
-    "",
-    "SUGGEST: pass suggest: true on find_and_replace or rewrite_thread_region to",
-    "PROPOSE a change instead of applying it — the match is marked pending and",
-    "attributed to this agent; disk and every other reader stay on the accepted",
-    "state until a human (or accept_suggestion) accepts it. Returns { suggestionId }.",
-    "Use for judgment calls a reviewer should approve; use the plain edit for",
-    "mechanical fixes. list_suggestions(docId) / accept_suggestion(docId, sid) /",
-    "reject_suggestion(docId, sid) / resolve_all_suggestions(docId, action, authorId?)",
-    "manage proposals from any author. suggestion.created/accepted/rejected events",
-    "arrive on the same watch_doc channel as thread events.",
-    "",
-    "OBSERVE: call watch_doc(docId) once per doc to receive thread events as",
-    '<channel source="claude-workspaces" doc_id="..." thread_id="..." event="..." author="..." sent_at="...">body</channel>',
-    "messages. Treat each as an explicit ask from the reviewer; read, decide if it",
-    "is in your domain, act via an edit tool. unwatch_doc when you're done.",
-    "Watches are remembered on the server under this agent name (CW_AGENT_NAME)",
-    "and re-wired when the session respawns; list_watched_docs says whether the",
-    "current set was restored from the server or is session-only.",
-    "",
-    "CLEANUP: review docs are usually short-lived — bound for a ~30-minute",
-    "feedback pass, then obsolete. When you no longer need one, call",
-    "delete_doc(docId) to remove it (the bound source .md is left on disk; only",
-    "the review session goes away). It refuses if the doc still has open threads",
-    "(someone's waiting on that feedback) — resolve them first or pass force:true.",
-    "Don't leave stale docs piling up in list_docs.",
-    "",
-    "BEFORE YOU EDIT A .md FILE: call list_docs first. If a doc has sourceUrl",
-    "matching the path, route through the MCP. If not, normal file edits are fine.",
-    "",
-    "WORKSPACE HUB: a hub workspace is a goal + a task board + linked docs.",
-    "create_workspace mints one; attach_doc links existing docs/reviews to it;",
-    "create_tasks (ALWAYS a list — one idea is a one-row list) and",
-    "promote_to_task add work (omit `goal` and the task lands UNPLACED in",
-    "Backlog awaiting triage — the create says so and hands you the goal",
-    "bands, and placing it with set_task_goal IS the triage:",
-    "pick the goal AND the exact position). task_transition is the",
-    "single gate for status changes — blockers come back in the result.",
-    "attach_agent registers you as the workspace agent (heartbeat every few",
-    "minutes to stay live; lead-addressed deliveries only reach live agents).",
-    "Workspace events (task.*, decision.answered, workspace.goals_changed)",
-    "arrive on the same channel as thread events once you create/attach.",
-    "import_tasks_markdown moves an existing hand-maintained markdown tracker",
-    "onto the board (dry-run first — review the mapping before apply:true)."
-  ].join(" ")
-});
+// packages/mcp/src/tool-schemas.ts
 var REVIEW_ITEM_SCHEMA = {
   type: "object",
   description: "Declares this a Review Item, putting it on the reviewer's Home queue once it passes the board's quality gate. Omit it for ordinary comments — status notes and closing remarks are not review items. headline is the row title; missing or multi-line is refused, over-long files anyway with advice. Everything else goes in detail, in whatever shape the ask wants to read.",
@@ -14696,7 +14478,7 @@ var NEW_TASK_REVIEW_ITEM_SCHEMA = {
   ...REVIEW_ITEM_SCHEMA,
   description: "A question about the work this row creates — for when you are filing the work and the question together. If the question came up while working a task that already exists, hang it there with add_review_item instead, so the ask keeps the context of the work that raised it. The ticket title names the work; headline names the ask."
 };
-server.setRequestHandler(ListToolsRequestSchema, async () => ({
+var TOOL_LIST = {
   tools: [
     {
       name: "list_docs",
@@ -16371,7 +16153,228 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
       }
     }
   ]
-}));
+};
+
+// packages/mcp/src/voice-line.ts
+function truncate4(s, n) {
+  return s.length > n ? `${s.slice(0, n - 1)}…` : s;
+}
+function where(p) {
+  const c = p.context;
+  if (!c)
+    return "";
+  return ` (at ${c.surface ?? "?"}${c.docId ? ` ${c.docId}` : ""}${c.taskId ? ` ${c.taskId}` : ""}${c.visibleHeading ? `, near "${c.visibleHeading}"` : ""})`;
+}
+function voiceRequestLine(p) {
+  if (p.route === "fast-path")
+    return null;
+  const by = p.actor?.name ? ` by ${p.actor.name}` : "";
+  const said = `[voice.request]${by}${where(p)}: "${p.transcript ?? ""}"`;
+  const told = truncate4(p.ack ?? "", 120);
+  if (p.route === "fast-path-action") {
+    return `${said} — the fast path ALREADY applied this to the board on the speaker's behalf; ` + `they were told: "${told}". Do NOT redo it — reconcile your own picture of the board ` + "with what changed, and pick up only whatever the utterance asked for beyond it.";
+  }
+  return `${said} — act on it through the task/edit tools; the speaker was told: "${told}"`;
+}
+
+// packages/mcp/src/watch-coverage.ts
+function parseCoverage(res) {
+  if (!res || typeof res !== "object")
+    return;
+  const raw = res.coverage;
+  if (!raw || typeof raw !== "object")
+    return;
+  const c = raw;
+  if (typeof c.agentId !== "string")
+    return;
+  if (!Array.isArray(c.workspaces) || !Array.isArray(c.unattachedBoards))
+    return;
+  return {
+    agentId: c.agentId,
+    workspaces: c.workspaces,
+    unattachedBoards: c.unattachedBoards
+  };
+}
+function boardsWaitingOnYou(coverage) {
+  return (coverage?.unattachedBoards ?? []).filter((b) => b.queuedTotal > 0);
+}
+var plural = (n, one, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
+function describeQueue(q) {
+  const parts = [];
+  if (q.queuedVoice > 0)
+    parts.push(plural(q.queuedVoice, "voice note"));
+  return parts.join(", ");
+}
+function remedyFor(b, agentId) {
+  if (b.leadLive && b.leadAgentId !== undefined && b.leadAgentId !== agentId) {
+    return `${b.leadAgentId} holds the lead seat and is live, so the queue is addressed to them — ` + `ask them rather than taking it. attach_agent(workspaceId: "${b.workspaceId}") makes you ` + "addressable and subscribed without moving the seat.";
+  }
+  if (b.attached && !b.heartbeatFresh) {
+    return "your attachment is stale — the server has not seen a heartbeat OR a tool call from you " + "on this board inside the observed-work window, so deliveries for it are parking. " + `heartbeat(workspaceId: "${b.workspaceId}") now, and every few minutes while you work it.`;
+  }
+  return `set_workspace_lead(workspaceId: "${b.workspaceId}") attaches, subscribes and hands the ` + "backlog over in one call.";
+}
+function coverageAlertLine(coverage) {
+  const waiting = boardsWaitingOnYou(coverage);
+  if (waiting.length === 0)
+    return null;
+  const agentId = coverage?.agentId ?? "";
+  const described = waiting.map((b) => {
+    const via = b.watchedDocs.length > 0 ? `${plural(b.watchedDocs.length, "doc")} watched` : "this board watched directly";
+    return `"${b.name}" (${b.workspaceId}) — ${via}, ${b.queuedTotal} waiting ` + `(${describeQueue(b.queued)}); ${remedyFor(b, agentId)}`;
+  }).join(" ");
+  return `[not covered] ${plural(waiting.length, "board")} you follow ` + `${waiting.length === 1 ? "has" : "have"} work queued for a lead, and you are not live on ` + `${waiting.length === 1 ? "it" : "them"}. Watching is not attaching, and an attachment the ` + "server has stopped observing is not attached either — every delivery gate asks for recent " + `observed work, a heartbeat or a tool call, plus an open channel. ${described}`;
+}
+function boardsToReattach(coverage) {
+  return (coverage?.workspaces ?? []).filter((w) => w.kind === "board" && (w.lead === true || w.attached === true)).filter((w) => w.heartbeatFresh !== true).map((w) => w.workspaceId);
+}
+function restoreNoticeContent(opts) {
+  const lines = [];
+  const n = opts.restored.length;
+  const reattached = opts.reattached ?? [];
+  if (n > 0 || opts.pruned.length > 0) {
+    const dropped = opts.pruned.length > 0 ? `; ${opts.pruned.length} dropped (doc gone)` : "";
+    lines.push(`[watches restored] ${plural(n, "watch", "watches")} re-wired from the server for ` + `${opts.agentName} after restart${dropped}: ${opts.restored.join(", ")}`);
+  }
+  if (reattached.length > 0) {
+    lines.push(`[attachments restored] re-attached to ${plural(reattached.length, "board")} whose ` + "attachment came back stale, so lead-addressed work reaches this session again: " + `${reattached.join(", ")}`);
+  }
+  const alert = coverageAlertLine(opts.coverage);
+  if (alert)
+    lines.push(alert);
+  return lines.length > 0 ? lines.join(`
+`) : null;
+}
+
+// packages/mcp/src/mcp.ts
+function resolveBaseUrl() {
+  const override = readRenamedEnv(process.env, "CW_BASE_URL");
+  if (override)
+    return override;
+  const discovery = resolveDiscoveryFile(homedir(), existsSync);
+  if (discovery) {
+    try {
+      const j = JSON.parse(readFileSync(discovery, "utf8"));
+      if (j.port)
+        return `http://localhost:${j.port}`;
+    } catch {}
+  }
+  throw new Error("claude-workspaces server not found — start it with `bun run dev` (or set CW_BASE_URL). " + `Looked for a discovery file at ${discoveryCandidates(homedir()).join(" and ")}.`);
+}
+var AUTHOR = resolveAgentAuthor(process.env);
+var STATUS_TEXT_MAX = 4000;
+function suggestionAuthor() {
+  return { id: AUTHOR.id, name: AUTHOR.name, color: AUTHOR.color };
+}
+var PLUGIN_VERSION = "0.1.148";
+var PROCESS_ID = randomUUID();
+var server = new Server({
+  name: "claude-workspaces",
+  version: PLUGIN_VERSION
+}, {
+  capabilities: {
+    tools: {},
+    experimental: { "claude/channel": {} }
+  },
+  instructions: [
+    "Every markdown review doc is backed by a .md file on disk. The file is the",
+    "source of truth at rest; the live editor is the source of truth at runtime;",
+    "the plugin keeps them in sync bidirectionally (~1s debounced).",
+    "",
+    "CREATE: call create_review_doc(docId, path) to bring a .md under review.",
+    "The server reads the file, parses it into the live editor, sets up the",
+    "fs.watch + write-back, and returns a reviewUrl you can hand to a human.",
+    "",
+    "EDIT: never use Write/Edit/str_replace on the .md while it is under review",
+    "— direct filesystem edits race against the live doc’s own ~1s flush, and if",
+    "LF has any pending state your edit can be silently overwritten by the next",
+    "write-back. Route edits through the MCP tools below: find_and_replace for",
+    "prose changes, rewrite_thread_region / insert_after_thread / insert_blocks_after_thread",
+    "for comment-anchored edits, and set_doc_content(docId, markdown) for a",
+    "COMPREHENSIVE REWRITE of the whole doc (do NOT Write the file + reparse,",
+    "and do NOT delete_doc + Write + re-create — both race the flush and both",
+    "have destroyed content in the field). NEVER use set_doc_content on a doc a",
+    "human is reviewing or editing: a scoped request (a comment, one section)",
+    "gets a scoped edit — find_and_replace (table rows match in pipe syntax),",
+    "rewrite_thread_region, edit_at_anchor — and a whole-doc rewrite built from",
+    "an earlier read destroys their concurrent edits. The server refuses such a",
+    "write with 409 stale-write naming the human-edit time; re-read with",
+    "get_doc, re-apply your change onto the CURRENT content, and only retry",
+    "with confirmOverwriteHumanEdits: true if a full rewrite is truly needed.",
+    "External edits (VS Code, git pull)",
+    "flow back into the live doc via the file poll when LF is idle; if you wrote",
+    "to a bound file externally and need to be sure it landed, call",
+    "reparse_from_disk(docId) to force-pull from disk. If an edit response or",
+    "get_doc carries a `syncError`, read it — it names the conflict and where",
+    "the overwritten version was backed up.",
+    "",
+    "DIFF REVIEW / FOLDER BROWSE: when the human wants to review your code",
+    'changes ("review this diff", a branch, work in progress), call',
+    "create_diff_review(repo, base) — one review doc per changed file,",
+    "PR-style unified diff with line comments. Omit base to BROWSE a folder",
+    "instead (no diff): everything is navigable from the all-files sidebar,",
+    "files open lazily, markdown editable — works on plain folders and",
+    "fresh repos too (bind_folder is an alias for this). Default mode diffs",
+    "base against the LIVE working tree: keep editing the code and the reviewer",
+    "sees your changes re-render within ~1s, with their comments riding along",
+    "(threads orphan into the outdated-comments flow if their line disappears).",
+    "ALWAYS pass groups: [{title, paths[]}] — organize the changed files by",
+    "INTENT (the way you would split a branch into reviewable commits); you",
+    "know the semantics of your change far better than the heuristic fallback.",
+    "First group = read first; a directory path claims every file under it;",
+    'unlisted files land in "Other". Pass target only to pin a review to a',
+    "finished range. Re-run the tool after touching files that were not in",
+    "the diff before (idempotent; refreshes the file list; keeps your groups",
+    "unless you pass new ones). Share the returned entryUrl with the human",
+    "(bare URL on its own line); the file tree navigates the rest. Thread",
+    "events arrive per file via the auto-watch; resolve threads as you address",
+    "them; refresh_review(setId) to re-sync membership and reviews as files move (threads survive); delete_review(setId) when the review is done.",
+    "",
+    "SUGGEST: pass suggest: true on find_and_replace or rewrite_thread_region to",
+    "PROPOSE a change instead of applying it — the match is marked pending and",
+    "attributed to this agent; disk and every other reader stay on the accepted",
+    "state until a human (or accept_suggestion) accepts it. Returns { suggestionId }.",
+    "Use for judgment calls a reviewer should approve; use the plain edit for",
+    "mechanical fixes. list_suggestions(docId) / accept_suggestion(docId, sid) /",
+    "reject_suggestion(docId, sid) / resolve_all_suggestions(docId, action, authorId?)",
+    "manage proposals from any author. suggestion.created/accepted/rejected events",
+    "arrive on the same watch_doc channel as thread events.",
+    "",
+    "OBSERVE: call watch_doc(docId) once per doc to receive thread events as",
+    '<channel source="claude-workspaces" doc_id="..." thread_id="..." event="..." author="..." sent_at="...">body</channel>',
+    "messages. Treat each as an explicit ask from the reviewer; read, decide if it",
+    "is in your domain, act via an edit tool. unwatch_doc when you're done.",
+    "Watches are remembered on the server under this agent name (CW_AGENT_NAME)",
+    "and re-wired when the session respawns; list_watched_docs says whether the",
+    "current set was restored from the server or is session-only.",
+    "",
+    "CLEANUP: review docs are usually short-lived — bound for a ~30-minute",
+    "feedback pass, then obsolete. When you no longer need one, call",
+    "delete_doc(docId) to remove it (the bound source .md is left on disk; only",
+    "the review session goes away). It refuses if the doc still has open threads",
+    "(someone's waiting on that feedback) — resolve them first or pass force:true.",
+    "Don't leave stale docs piling up in list_docs.",
+    "",
+    "BEFORE YOU EDIT A .md FILE: call list_docs first. If a doc has sourceUrl",
+    "matching the path, route through the MCP. If not, normal file edits are fine.",
+    "",
+    "WORKSPACE HUB: a hub workspace is a goal + a task board + linked docs.",
+    "create_workspace mints one; attach_doc links existing docs/reviews to it;",
+    "create_tasks (ALWAYS a list — one idea is a one-row list) and",
+    "promote_to_task add work (omit `goal` and the task lands UNPLACED in",
+    "Backlog awaiting triage — the create says so and hands you the goal",
+    "bands, and placing it with set_task_goal IS the triage:",
+    "pick the goal AND the exact position). task_transition is the",
+    "single gate for status changes — blockers come back in the result.",
+    "attach_agent registers you as the workspace agent (heartbeat every few",
+    "minutes to stay live; lead-addressed deliveries only reach live agents).",
+    "Workspace events (task.*, decision.answered, workspace.goals_changed)",
+    "arrive on the same channel as thread events once you create/attach.",
+    "import_tasks_markdown moves an existing hand-maintained markdown tracker",
+    "onto the board (dry-run first — review the mapping before apply:true)."
+  ].join(" ")
+});
+server.setRequestHandler(ListToolsRequestSchema, async () => TOOL_LIST);
 var NO_AUTO_WATCH_TOOLS = new Set([
   "unwatch_doc",
   "watch_doc",

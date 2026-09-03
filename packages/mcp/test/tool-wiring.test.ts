@@ -12,11 +12,12 @@ import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
+import { readMcpSource } from './harness/mcp-source.ts';
 
 // Not `import.meta.dir` — that is Bun-only, and this file is collected by
 // vitest as well as by `bun test`.
 const HERE = dirname(fileURLToPath(import.meta.url));
-const SRC = readFileSync(join(HERE, '../src/mcp.ts'), 'utf8');
+const SRC = readMcpSource();
 
 /** Tool names from the `name: 'x',` lines inside the tools array — each is
  *  followed by a description on the next line, which is what distinguishes

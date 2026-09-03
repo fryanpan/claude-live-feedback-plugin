@@ -12,13 +12,10 @@
  * point and exports nothing, and the committed bundle is covered by CI's
  * build:mcp drift gate.
  */
-import { readFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
+import { readMcpSource } from './harness/mcp-source.ts';
 
-const HERE = dirname(fileURLToPath(import.meta.url));
-const SRC = readFileSync(join(HERE, '../src/mcp.ts'), 'utf8');
+const SRC = readMcpSource();
 
 /** emitChannelMessage's body, start to the next top-level function. */
 function channelRenderer(): string {

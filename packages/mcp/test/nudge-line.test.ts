@@ -8,6 +8,7 @@ import {
   reviewItemHeldLine,
   stalledLine,
 } from '../src/nudge-line.ts';
+import { readMcpSource } from './harness/mcp-source.ts';
 
 /**
  * The two wake events exist to make the board the scheduler instead of the
@@ -292,7 +293,7 @@ describe('the propagation clause on reviewAnsweredLine', () => {
 describe('the channel switch and the shipped bundle both use it', () => {
   const CLAUSE = 'walk its links as the propagation checklist';
   const HERE = dirname(fileURLToPath(import.meta.url));
-  const SRC = readFileSync(join(HERE, '../src/mcp.ts'), 'utf8');
+  const SRC = readMcpSource();
   const BUNDLE = readFileSync(join(HERE, '../../plugin/mcp/index.js'), 'utf8');
 
   /** The `case 'workspace.review_answered':` arm, up to the next case. */
@@ -506,8 +507,7 @@ describe('stalledLine names held review items as their own finding', () => {
 });
 
 describe('reviewItemHeldLine — the filer’s own wake', () => {
-  const HERE = dirname(fileURLToPath(import.meta.url));
-  const SRC = readFileSync(join(HERE, '../src/mcp.ts'), 'utf8');
+  const SRC = readMcpSource();
   const payload = {
     taskId: 't-b3',
     title: 'Rebuild the index nightly',
