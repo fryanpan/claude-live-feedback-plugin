@@ -403,33 +403,52 @@ Verify at 1180x820 and 430px per `docs/product/design-mobile.md`, and check
 that `check:build-id` still moves — a stylesheet split that leaves a page
 loading the wrong file will not fail any test.
 
-## B3 · the document surface
+## B3 · the document surface — **DONE**
 
-| File | Becomes | Moves | Effort |
-|---|---|---|---|
-| `app.ts` (1,918) | `editor-toolbar.ts` (~250) | `wireFormatBar`, `wireTableMenu`, `applyWidthPref` — already top-level at 1698–1918 with no importers outside `app.ts` | M |
-| | `doc-modes.ts` (~250) | the VIEW/EDIT and SUGGESTING blocks | |
-| | `doc-meeting-mount.ts` (~200) | the meeting mount block | |
-| `review-chrome.ts` (1,492) | `review-composer.ts` (~330) | `openComposer`, `renderThreadView`, `submitThreadReply` | M |
-| | `chrome-panels.ts` (~140) | `wireThreadRangeClicks` and the resizable side panels | |
-| | `chrome-dom.ts` (~110) | `el`, `showToast`, `makeBtn` | |
-| `threads.ts` (1,157) | `thread-card.ts` (~700) | `renderThread`, `decisionRow`, `itemCard`, `answeredRecord` | M |
-| `redline/markup-margin.ts` (996) | `redline/balloon-cards.ts` (~250) | `buildSuggestionBalloon`, `buildDelBalloon`, `addCollapseButton` | M |
-| | into the existing `redline/balloon-layout.ts` (~250) | `positionBalloons`, `relayout`, `restackThroughMorph` | |
-| | `redline/margin-sheets.ts` (~85) | `mountDeletionSheet`, `mountSuggestionSheet` | |
+Nine commits, not the ten planned. `app.ts` 1,918 → 1,505,
+`review-chrome.ts` 1,492 → 1,080, `threads.ts` 1,157 → 418 and
+`markup-margin.ts` 996 → 718, across seven new files under `doc/` and two
+under `redline/`. Every suite passes and the bundle gained exactly the new
+modules and lost none.
 
-Ten commits. `renderThread` is already consumed standalone by the balloon
-column through `ThreadPanel.renderThread`, which is the seam; panel state
-(`setThreads`, `setActive`, `filtered`, `revealThread`) stays. The
-`markup-margin.ts` pieces are methods of a 730-line closure, so each becomes a
-function taking the elements it needs.
+What the work turned up:
 
-Every seam here moves symbols within one entry's import graph, so the shipped
-bundles are unchanged. Assert that: `check:build-id` should move because bytes
-moved, and no bundle should gain or lose a module.
-
-Layers: controllers and renderers. Final directory: `doc/` for the `app.ts`
-and `review-chrome.ts` output, `redline/` already correct.
+- **The bundle assertion held, and was worth making.** Comparing the two
+  sourcemaps' `sources` arrays across the first commit showed 1,143 modules
+  identical and exactly one added. A file-name diff of `dist/` would not have
+  shown that: every entry is content-hashed, so the names move whether or not
+  the module set does.
+- **Two of the three `app.ts` seams were closures, not top-level code**, and
+  the difference decides the shape. The format bar came out as plain functions.
+  The mode switches had to come out as a controller owning `editMode` and
+  `suggesting`, because both are read and written on four paths — otherwise
+  the split would have produced two writers for one interlock.
+- **A card's state must be read live, never snapshotted.** `renderThread`
+  reads which thread is active inside handlers that run when a caret is
+  tapped, long after the card was built. The host it now takes exposes every
+  field as a call for that reason; a plain object of values would have been
+  correct at render time and wrong at tap time, which is the kind of bug that
+  survives a green suite.
+- **`positionBalloons` and `relayout` did NOT join `balloon-layout.ts`,** and
+  the plan was wrong to say they should. That file holds the pure stacking
+  algorithm — anchors in, y-positions out, testable without a DOM.
+  `positionBalloons` measures four elements' bounding rects and reads the
+  margin's private rendered-balloon union; `relayout` calls the deletion
+  grouper, the thread filter and the renderer in order and is the margin's
+  orchestration point, with eight dependencies for nine lines. Moving either
+  would make the algorithm depend on the margin's DOM and on a type the margin
+  does not export — the dependency pointing backwards. The margin keeps its
+  own geometry; `balloon-cards.ts` and `margin-sheets.ts` still came out.
+- **The card builders needed one callback and nothing else** — no view, no
+  column, no margin state. That is what lets the same suggestion builder
+  render into the phone's bottom sheet, and it is why that cut was cheap while
+  the geometry one was not.
+- **The test-audit ratchet does not see `.ts` source reads.** Its pattern
+  requires the path literal to end in `/src/`, `/dist/`, `.css` or `.js`, so a
+  test reading `../src/app.ts` has never been counted. Repointing
+  `huddle-entry.test.ts` at two files therefore moved no number. Left alone:
+  widening it would add a large backlog of existing sites in a commit that is
+  about something else.
 
 ## B4 · the meeting strip
 

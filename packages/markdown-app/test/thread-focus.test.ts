@@ -1,7 +1,8 @@
 import { describe, expect, it, vi } from 'vitest';
 import * as Y from 'yjs';
+import { wireThreadRangeClicks } from '../src/doc/chrome-panels.ts';
 import { MountScope } from '../src/mount-scope.ts';
-import { type ChromeOpts, mountReviewChrome, wireThreadRangeClicks } from '../src/review-chrome.ts';
+import { type ChromeOpts, mountReviewChrome } from '../src/review-chrome.ts';
 import type { ReviewSurface } from '../src/review-surface.ts';
 
 /**
