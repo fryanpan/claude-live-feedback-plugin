@@ -31,7 +31,7 @@ import {
   createStubNotesComposer,
 } from '../src/meeting-notes.ts';
 import { listMeetings, readTranscript } from '../src/meetings.ts';
-import { TRANSCRIPT_HEADING } from '../src/notes-section.ts';
+import { LEGACY_TRANSCRIPT_HEADING } from '../src/notes-section.ts';
 import { type ServerHandle, createServer } from '../src/server.ts';
 import { type MockScriptTurn, createMockTranscriptionEngine } from '../src/transcribe.ts';
 
@@ -145,13 +145,14 @@ describe('a meeting end to end: pauses become notes, stop/start stays consistent
   };
 
   /**
-   * The doc ABOVE the raw transcript — everything a reader meets before the
-   * verbatim record. A phrase said once appears twice in a meeting doc now,
-   * once as a note and once in the record, so a count over the whole markdown
-   * can no longer tell "the section was replaced" from "the section was
-   * doubled", which is the thing worth asserting.
+   * What a reader meets in the doc. The whole doc, now that the meeting's own
+   * words are not in it: the split guards the transitional case where a doc
+   * still carries the section one release wrote, so a phrase counted here is
+   * counted as a NOTE and "the section was replaced" stays distinguishable
+   * from "the section was doubled".
    */
-  const readerMarkdown = (): string => docMarkdown().split(`## ${TRANSCRIPT_HEADING}`)[0] ?? '';
+  const readerMarkdown = (): string =>
+    docMarkdown().split(`## ${LEGACY_TRANSCRIPT_HEADING}`)[0] ?? '';
 
   const meetingsList = async (): Promise<{
     meetings: Array<{
@@ -239,8 +240,10 @@ describe('a meeting end to end: pauses become notes, stop/start stays consistent
     expect(v2).toContain("Let's measure it first.");
     expect(v2.split('## Meeting notes').length).toBe(2);
     expect(readerMarkdown().split('So the sync is the bottleneck.').length).toBe(2);
-    // And the record below carries the same words, once each, in order.
-    expect(docMarkdown()).toContain("So the sync is the bottleneck.\nLet's measure it first.");
+    // And no verbatim record came with them (owner, 2026-09-03): the doc gets
+    // the notes, the words go to the JSONL asserted at the end of this test
+    // and to the `-raw-transcript.md` beside it.
+    expect(v2).not.toContain(`## ${LEGACY_TRANSCRIPT_HEADING}`);
 
     // The socket heard about both ticks as they happened — composing when
     // the pause fired, written when the note landed — carrying the same turn
@@ -330,11 +333,10 @@ describe('a meeting end to end: pauses become notes, stop/start stays consistent
     // The second meeting re-spoke the first sentence; the merge recognises
     // the line already in the doc rather than writing it twice.
     expect(readerMarkdown().split('So the sync is the bottleneck.').length).toBe(2);
-    // The RECORD is the other way round, and deliberately so: a sentence said
-    // in two meetings was said twice, and a verbatim record that deduplicated
-    // it would be lying about the second meeting.
-    const record = md.split(`## ${TRANSCRIPT_HEADING}`)[1] ?? '';
-    expect(record.split('So the sync is the bottleneck.').length).toBe(3);
+    // And the doc holds no verbatim record at all (owner, 2026-09-03): the
+    // words said in both meetings are kept apart in the JSONL and the
+    // `-raw-transcript.md` sister file, asserted below.
+    expect(md).not.toContain(`## ${LEGACY_TRANSCRIPT_HEADING}`);
 
     client.stop();
     await waitFor(() => client.frames.some((f) => f.type === 'stopped'), 'second stopped');

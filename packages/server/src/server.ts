@@ -1212,10 +1212,6 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
       ? withServerNotesSinks(opts.meetingNotes, {
           rooms: () => rooms,
           tasks: () => taskStore,
-          // Which docs may hold the meeting's own words. A huddle doc is
-          // unbound and its words sit beside its JSONL; a doc bound to a repo
-          // file gets notes and no verbatim record.
-          dataDir,
           // The capture pipeline's board writes, and the "go do it" wake —
           // the same immediate addressed delivery an answered review item
           // gets. Both close over consts declared below; a meeting can only
