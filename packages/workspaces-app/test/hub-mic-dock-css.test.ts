@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { IPAD, PHONE, attach, installSheets, setViewport, styleOf } from './css-harness.ts';
+import { HUB_BOOT_SOURCES } from './support/hub-boot-sources.ts';
 
 /**
  * The hold-to-talk mic is DOCKED in the workspace nav, not floating over the
@@ -35,7 +36,13 @@ import { IPAD, PHONE, attach, installSheets, setViewport, styleOf } from './css-
  * child order is a fact about the file that renders it. What a browser still
  * has to confirm is in the PR body: how the docked control READS.
  */
-const HUB_APP = readFileSync(resolve(import.meta.dirname, '../src/hub/hub-app.ts'), 'utf8');
+// The hub's boot sources: `hub-app.ts` and the three modules split out of
+// it. Read as one string because these assertions are about the board's
+// shape, not about which file a line ended up in — a move must not fail
+// them, and an absence checked across all four is the stronger read.
+const HUB_APP = HUB_BOOT_SOURCES.map((m) =>
+  readFileSync(resolve(import.meta.dirname, `../src/hub/${m}.ts`), 'utf8'),
+).join('\n');
 
 /** The 901–1100px band: the rail is a horizontal strip, in flow. */
 const STRIP = { width: 1000, height: 800 } as const;

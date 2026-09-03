@@ -15,6 +15,7 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import { type ReviewCriteria, mountReviewCriteria } from '../src/hub/review-criteria.ts';
+import { HUB_BOOT_SOURCES } from './support/hub-boot-sources.ts';
 
 const DEFAULT_TEXT = 'A good review item can be answered from the card alone.';
 const OWN_TEXT = 'Every headline is a question, and every option names its cost.';
@@ -162,7 +163,9 @@ describe('the review-item criteria field', () => {
  * it returned nothing.
  */
 describe('the settings panel carries the field', () => {
-  const shell = readFileSync(resolve(import.meta.dirname, '../src/hub/hub-app.ts'), 'utf8');
+  const shell = HUB_BOOT_SOURCES.map((m) =>
+    readFileSync(resolve(import.meta.dirname, `../src/hub/${m}.ts`), 'utf8'),
+  ).join('\n');
 
   it('has the textarea, its note and both buttons inside the settings panel', () => {
     const panel = shell.slice(
