@@ -3,8 +3,6 @@ import { randomUUID } from 'node:crypto';
 import { existsSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 
-import { readRenamedEnv } from '@feedback/core/env-names';
-import { discoveryCandidates, resolveDiscoveryFile } from '@feedback/core/machine-paths';
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
@@ -16,6 +14,7 @@ import { createChannelMessages } from './channel-messages.ts';
 import { createDeferredEmitter } from './deferred-emit.ts';
 import { createFrameDedup } from './frame-dedup.ts';
 import { createFrameHandler } from './frame-handler.ts';
+import { resolveBaseUrl as baseUrlFrom, createHttp, err, ok } from './http-client.ts';
 import { type Watcher, createSseLoops } from './sse-loop.ts';
 import { TOOL_LIST } from './tool-schemas.ts';
 import { handleDocsTool } from './tools/docs.ts';
@@ -47,33 +46,9 @@ import { createWatchRestore } from './watch-restore.ts';
  *   CW_AUTHOR      — fallback author key/name (default: agent)
  */
 
-// Resolved per-request, not frozen at module load. The MCP stdio child runs
-// for the life of a Claude Code session — sometimes days. The supervisor may
-// not be running yet at child-start, may move ports on restart, or may not
-// have written server.json yet. Reading the discovery file on each http()
-// call is a single fs read of a tiny JSON blob and lets the child pick up
-// port changes without a restart.
-//
-// No silent default: port 8787 used to be the fallback, but it's squatted by
-// notion-channel-mcp on developer machines and silently routed every call to
-// the wrong server. If discovery is unavailable, fail loudly with a hint.
-function resolveBaseUrl(): string {
-  const override = readRenamedEnv(process.env, 'CW_BASE_URL');
-  if (override) return override;
-  const discovery = resolveDiscoveryFile(homedir(), existsSync);
-  if (discovery) {
-    try {
-      const j = JSON.parse(readFileSync(discovery, 'utf8')) as { port?: number };
-      if (j.port) return `http://localhost:${j.port}`;
-    } catch {
-      // fall through to throw — corrupt discovery file
-    }
-  }
-  throw new Error(
-    'claude-workspaces server not found — start it with `bun run dev` (or set CW_BASE_URL). ' +
-      `Looked for a discovery file at ${discoveryCandidates(homedir()).join(' and ')}.`,
-  );
-}
+/** Resolved per request, not frozen at module load — see http-client.ts. */
+const resolveBaseUrl = () => baseUrlFrom({ env: process.env, homedir, existsSync, readFileSync });
+
 const AUTHOR = resolveAgentAuthor(process.env);
 /** What `post_status` accepts — the server's `NOTE_TEXT_MAX`
  *  (packages/server/src/agent-notes.ts), which refuses anything longer.
@@ -401,33 +376,8 @@ const restore = createWatchRestore({
 });
 const { ensureWatchesRestored } = restore;
 
-async function http(method: string, path: string, body?: unknown): Promise<unknown> {
-  const baseUrl = resolveBaseUrl();
-  const res = await fetch(`${baseUrl}${path}`, {
-    method,
-    headers: body ? { 'content-type': 'application/json' } : {},
-    body: body ? JSON.stringify(body) : undefined,
-  });
-  const text = await res.text();
-  // Check status before parsing — the server's catch-all returns the bare
-  // string "not found" for unmatched routes, which would explode JSON.parse
-  // and bury the actual HTTP error.
-  if (!res.ok) throw new Error(`${method} ${path} → ${res.status}: ${text}`);
-  return text ? JSON.parse(text) : {};
-}
-
-function ok(data: unknown) {
-  return {
-    content: [{ type: 'text' as const, text: JSON.stringify(data, null, 2) }],
-  };
-}
-
-function err(message: string) {
-  return {
-    isError: true,
-    content: [{ type: 'text' as const, text: message }],
-  };
-}
+/** The REST call every tool goes through; throws on a non-2xx. */
+const http = createHttp(resolveBaseUrl);
 
 const transport = new StdioServerTransport();
 // Once the client has finished initializing (not merely connected — the MCP
