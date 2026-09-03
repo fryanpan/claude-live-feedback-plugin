@@ -215,6 +215,66 @@ describe('park_task moves a row to triage and comments', () => {
       (await post('/api/tasks/t-missing/park', { parkedUntil: UNTIL, author: PERSON })).status,
     ).toBe(404);
   });
+
+  // ── the verb's new meaning: block on a ticket ────────────────────────────
+  //
+  // "Not now" is now spelled by naming what the row is waiting FOR, and
+  // triage goes back to meaning "nobody has vetted this". The park arm above
+  // keeps working for callers that cannot be restarted; these assert the arm
+  // this verb is FOR.
+
+  it('adds an after edge and leaves the row where it is', async () => {
+    const { wsId, G } = await seedWorkspace();
+    const blocker = await seedTodoTask(wsId, G.g1);
+    const held = await seedTodoTask(wsId, G.g1);
+    // Control: nothing is waiting on anything yet.
+    expect((await getTask(wsId, held.id)).after).toEqual([]);
+
+    await jj(await post(`/api/tasks/${held.id}/park`, { blockedBy: blocker.id, author: PERSON }));
+
+    const stored = await getTask(wsId, held.id);
+    expect(stored.after).toEqual([blocker.id]);
+    // Blocked is derived, so the STATUS is untouched — that is the whole
+    // point, and it is what lets the row return to todo by itself later.
+    expect(stored.status).toBe('todo');
+    // And no comment: the blocking ticket is the record now, not prose.
+    expect(await taskComments(held.id)).toEqual([]);
+  });
+
+  it('adds to the edges already there rather than replacing them', async () => {
+    const { wsId, G } = await seedWorkspace();
+    const first = await seedTodoTask(wsId, G.g1);
+    const second = await seedTodoTask(wsId, G.g1);
+    const held = await seedTodoTask(wsId, G.g1);
+
+    await jj(await post(`/api/tasks/${held.id}/park`, { blockedBy: [first.id], author: PERSON }));
+    await jj(await post(`/api/tasks/${held.id}/park`, { blockedBy: [second.id], author: PERSON }));
+
+    expect((await getTask(wsId, held.id)).after.sort()).toEqual([first.id, second.id].sort());
+  });
+
+  it('reports changed: false when the row already waits on that ticket', async () => {
+    const { wsId, G } = await seedWorkspace();
+    const blocker = await seedTodoTask(wsId, G.g1);
+    const held = await seedTodoTask(wsId, G.g1);
+    await jj(await post(`/api/tasks/${held.id}/park`, { blockedBy: blocker.id, author: PERSON }));
+    const again = await jj<{ changed: boolean; after: string[] }>(
+      await post(`/api/tasks/${held.id}/park`, { blockedBy: blocker.id, author: PERSON }),
+    );
+    expect(again.changed).toBe(false);
+    expect(again.after).toEqual([blocker.id]);
+  });
+
+  it('refuses an unknown blocker, a self-block, and an empty list', async () => {
+    const { wsId, G } = await seedWorkspace();
+    const held = await seedTodoTask(wsId, G.g1);
+    for (const bad of [{ blockedBy: 't-nope' }, { blockedBy: held.id }, { blockedBy: [] }]) {
+      const r = await post(`/api/tasks/${held.id}/park`, { ...bad, author: PERSON });
+      expect(r.status, JSON.stringify(bad)).toBe(400);
+    }
+    // Nothing was written by any of those refusals.
+    expect((await getTask(wsId, held.id)).after).toEqual([]);
+  });
 });
 
 /**
