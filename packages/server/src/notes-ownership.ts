@@ -92,7 +92,7 @@ export interface NotesSectionRead {
 
 export function readNotesSection(
   ydoc: Y.Doc,
-  heading: string,
+  heading: string | readonly string[],
   ownership: NotesOwnership,
 ): NotesSectionRead | null {
   const fragment = prose.getProseFragment(ydoc);
@@ -131,7 +131,7 @@ export function readNotesSection(
  */
 export function reclaimAfterInPlaceEdit<T>(
   ydoc: Y.Doc,
-  heading: string,
+  heading: string | readonly string[],
   ownership: NotesOwnership,
   edit: () => T,
 ): T {
@@ -161,7 +161,7 @@ export function reclaimAfterInPlaceEdit<T>(
  */
 export function agentOwnedElements(
   ydoc: Y.Doc,
-  heading: string,
+  heading: string | readonly string[],
   ownership: NotesOwnership,
 ): Set<Y.XmlElement> {
   const items = sectionItems(ydoc, heading);
