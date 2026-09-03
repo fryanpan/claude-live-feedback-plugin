@@ -64,13 +64,21 @@ export const FIXTURE_DIR = join(
  * explaining the recording equipment and one voice reads instructions: an
  * excerpt there measures nothing about note-taking while looking like a
  * result.
+ *
+ * THE TWO KICKOFF MEETINGS START MUCH LATER THAN THE REST. ES2002a and
+ * ES2003a open with the AMI icebreaker — each person draws their favourite
+ * animal on the whiteboard and talks about it for several minutes. A
+ * note-taker that writes nothing there is behaving CORRECTLY, which is real
+ * behaviour and useless to measure: run from 300s, those two meetings
+ * produced ticks that were all correct silence, and the eval reported almost
+ * no examples of anything. 900s is past the drawing and into the brief.
  */
 const MEETINGS: ReadonlyArray<{ meeting: string; fromSeconds: number; seconds: number }> = [
-  { meeting: 'ES2002a', fromSeconds: 300, seconds: 660 },
+  { meeting: 'ES2002a', fromSeconds: 900, seconds: 660 },
   { meeting: 'ES2002b', fromSeconds: 420, seconds: 660 },
   { meeting: 'ES2002c', fromSeconds: 420, seconds: 660 },
   { meeting: 'ES2002d', fromSeconds: 300, seconds: 660 },
-  { meeting: 'ES2003a', fromSeconds: 300, seconds: 660 },
+  { meeting: 'ES2003a', fromSeconds: 900, seconds: 660 },
   { meeting: 'ES2003b', fromSeconds: 420, seconds: 660 },
   { meeting: 'ES2003c', fromSeconds: 420, seconds: 660 },
   { meeting: 'ES2003d', fromSeconds: 300, seconds: 660 },

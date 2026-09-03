@@ -1381,7 +1381,7 @@ whether this intent is useful or a nuisance.
 Everything in the notetaking behaviour above is a property of what a MODEL
 wrote, and a unit test can only prove the instruction was SENT. So the
 instructions are checked the way a person would check them — run real meetings
-through the real pipeline and read the notes — except on 232 ticks rather than
+through the real pipeline and read the notes — except on 202 ticks rather than
 three (`scripts/notes-eval.ts`).
 
 **The corpus is AMI** (CC BY 4.0), the same one `room-labels-check.ts` scores
@@ -1432,16 +1432,23 @@ research stage now carries the direct-ask examples criterion 4 added.) At
 meeting-hour**, the four together ≈ $0.105, taking the measured $0.84 to
 about **$0.95**.
 
-**The notetaking behaviour itself cost +425 input tokens per tick**, measured
+**The notetaking behaviour itself cost +541 input tokens per tick**, measured
 with `count_tokens` on the compose prompt against the instructions as they
 stood before it (`bun run notes:cost --baseline <file>`, on a mid-meeting
-fixture tick): **1030 → 1455**. At ~200 ticks per meeting-hour and $1/MTok
-that is **+$0.085 per meeting-hour**, taking the figure above from about $0.95
-to about **$1.04**. The tick model is unchanged (Haiku 4.5), and prompts under
+fixture tick): **1030 → 1571**. At ~200 ticks per meeting-hour and $1/MTok
+that is **+$0.108 per meeting-hour**, taking the figure above from about $0.95
+to about **$1.06**. The tick model is unchanged (Haiku 4.5), and prompts under
 4096 tokens never cache there, so the whole delta is paid every tick. The
 per-tick reference block is not in that number: it appears only on the ticks
-whose speech named a board row — 36 of 232 in the eval corpus — and costs
-about 20 tokens per row cited.
+whose speech named a board row, and costs about 20 tokens per row cited.
+
+About a fifth of that delta buys one rule: **every note is a markdown list
+item beginning with `- `**. Saying "one point per bullet" and never naming the
+markdown was not enough. Run against real AMI speech, the model returned good,
+well-organised, correctly-linked content as PARAGRAPHS under the topic
+headings — which is the shape these notes exist instead of, and which read as
+zero bullets to every check downstream. The rule that costs tokens is the one
+that says what the output looks like, not the one that says what to think.
 
 Roughly two to three times the decision's ~58-tokens-per-intent figure,
 because each rule carries the example phrasings that teach an ask nobody
