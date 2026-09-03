@@ -170,6 +170,19 @@ export function wireMeMenu(opts: MeMenuOpts): () => void {
     if (menu.classList.contains('hidden')) open();
     else close();
   };
+  /**
+   * Close on a click that landed outside the chip and its menu.
+   *
+   * Registered on the CAPTURE phase, and that is the whole fix for the bug
+   * this comment exists for. In the bubble phase this handler runs AFTER the
+   * in-menu button that was clicked has already run — and "Change name"
+   * rewrites `menu.innerHTML`, which detaches the very node the event is
+   * still carrying as its target. `menu.contains(t)` then answers false for a
+   * click that came from inside the menu, so the menu closed itself the
+   * instant it rendered the rename form: the input appeared for one frame and
+   * vanished, which is exactly what a person sees as a flicker and no input.
+   * Capture runs before any of that, while the target is still in the tree.
+   */
   const onDocClick = (ev: Event) => {
     if (menu.classList.contains('hidden')) return;
     const t = ev.target as Node;
@@ -181,11 +194,11 @@ export function wireMeMenu(opts: MeMenuOpts): () => void {
   };
 
   button.addEventListener('click', onClick);
-  document.addEventListener('click', onDocClick);
+  document.addEventListener('click', onDocClick, true);
   document.addEventListener('keydown', onKeydown);
   return () => {
     button.removeEventListener('click', onClick);
-    document.removeEventListener('click', onDocClick);
+    document.removeEventListener('click', onDocClick, true);
     document.removeEventListener('keydown', onKeydown);
   };
 }
