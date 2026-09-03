@@ -20,9 +20,42 @@ declaration that still works. For layout and styling, render the page and read
 the computed value — `bun run ui:shot` gives you a real browser.
 
 *Check:* `test:audit` counts source/bundle/stylesheet reads in test files that
-assert with `toContain`/`toMatch`. It cannot tell a legitimate read (a
-generator's output, a fixture) from an illegitimate one, so the count is a
-ceiling, not a verdict.
+assert with `toContain`, `toMatch`, `toBe`, `toEqual`, `toStrictEqual` or an
+ordered comparison. It cannot tell a legitimate read (a generator's output)
+from an illegitimate one, so the count is a ceiling, not a verdict.
+
+**The read does not have to be in the test file.** A test that imports a
+module from its own test tree which reads source counts too, and the site
+listed is the import line. Nine MCP tests read `packages/mcp/src` through
+`packages/mcp/test/harness/mcp-source.ts` and were invisible for as long as
+that harness existed; two of them had widened their slice to the whole file
+tail while the table stayed green. Moving a read one module away is not an
+escape.
+
+A reading module is assumed to hand that text to its importers. To be exempt
+it needs three things, and the marker is only one of them:
+
+1. a comment line holding nothing but `audit: no-text`. Prose that quotes the
+   phrase exempts nothing — the first version matched it anywhere on a line,
+   so deleting the real marker from a harness moved no count at all because
+   the module's header paragraph said the words.
+2. every exported value carrying an explicit type or return annotation. No
+   annotation is no evidence: `export const HUB_TEXT = TEXT['hub.css'];` is a
+   one-line hole that inference fills with `string` while a regex sees
+   nothing.
+3. none of those annotations naming `string`.
+
+So the marker is a claim the check verifies rather than believes.
+`packages/workspaces-app/test/css-harness.ts` is the module the exemption
+exists for: it reads four stylesheets only to install them in the test
+document and returns computed styles, so its forty-six importers are
+asserting behaviour, not source shape. Reads under a `fixtures/` path are not
+counted at all — a parser driven over sample input is behaviour.
+
+Three things the check still cannot see, so a clean table is not proof: a read
+in a test file whose path literal sits on a different line or in a constant
+declared elsewhere, a support module outside a `test/` directory, and
+`require()`.
 
 ## 2. No fixed sleeps in the server suite
 
