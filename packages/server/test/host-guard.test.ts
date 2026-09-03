@@ -154,6 +154,80 @@ describe('isRecallCallbackHost', () => {
   });
 });
 
+/**
+ * Rule 3: Access on every browser-facing hostname.
+ *
+ * The predicate half. `accessOnly` narrows the unauthenticated zone to a
+ * process on the box — a loopback Host from a loopback socket peer — so the
+ * tailnet name, this machine's LAN names and every operator-added alias stop
+ * granting anything. Both halves are asserted, because each one alone was a
+ * hole: the Host list was the internal grant, and the Host header is
+ * client-controlled, so a LAN client typing `Host: localhost` walked around
+ * it.
+ */
+describe('isTrustedLocalHost — access-only', () => {
+  const ON = { ...LOCAL, accessOnly: true, loopbackPeer: true };
+
+  it('still trusts a loopback Host from a loopback peer — the agent on the box', () => {
+    for (const h of ['localhost:8787', '127.0.0.1:8787', '[::1]:8787', '0.0.0.0:8787']) {
+      expect(isTrustedLocalHost(h, ON), h).toBe(true);
+    }
+  });
+
+  it('refuses the tailnet name, the LAN names and operator aliases', () => {
+    for (const h of [
+      'mac-mini.tail-example.ts.net',
+      'mac-mini.local:8787',
+      '192.168.50.227:8787',
+    ]) {
+      // The pre-2026-09-02 answer for every one of these was `true`.
+      expect(isTrustedLocalHost(h, { ...LOCAL, extraHosts: [h] }), h).toBe(true);
+      expect(isTrustedLocalHost(h, { ...ON, extraHosts: [h] }), h).toBe(false);
+    }
+  });
+
+  it('refuses a loopback Host from a NON-loopback peer — the spoof', () => {
+    // Measured 2026-08-17: a LAN client and a tailnet client each sending
+    // `Host: localhost:1` were both classified local. The peer address is
+    // what the client cannot choose.
+    expect(isTrustedLocalHost('localhost:1', { ...ON, loopbackPeer: false })).toBe(false);
+    // Absent is not "on the box" either.
+    expect(isTrustedLocalHost('localhost:1', { ...LOCAL, accessOnly: true })).toBe(false);
+  });
+
+  it('leaves the proxy veto absolute', () => {
+    expect(isTrustedLocalHost('localhost', { ...ON, viaProxy: true })).toBe(false);
+  });
+});
+
+describe('classifyHost — access-only', () => {
+  const lookupShare = () => null;
+  const ON = { ...LOCAL, accessOnly: true, loopbackPeer: true, lookupShare };
+
+  it('denies the tailnet hostname that used to be the whole product', () => {
+    expect(classifyHost('mac-mini.tail-example.ts.net', ON)).toEqual({
+      kind: 'deny',
+      reason: 'unknown_host',
+    });
+    // POSITIVE CONTROL: the same call with the rule off is `local`, so the
+    // refusal above is the rule and not a broken fixture.
+    expect(classifyHost('mac-mini.tail-example.ts.net', { ...ON, accessOnly: false })).toEqual({
+      kind: 'local',
+    });
+  });
+
+  it('still classifies the Access-fronted operator hostname', () => {
+    expect(
+      classifyHost('operator.example.com', {
+        ...ON,
+        viaProxy: true,
+        proxiedTrustedHosts: ['operator.example.com'],
+        accessFronted: true,
+      }),
+    ).toEqual({ kind: 'proxied-local' });
+  });
+});
+
 describe('classifyHost', () => {
   const lookupShare = (h: string) =>
     h === 'share-abc.tunnel.example.com' ? { workspaceId: 'ws-shared' } : null;
@@ -1047,9 +1121,9 @@ describe('classifyHost — collaboration hosts', () => {
     ).toEqual({ kind: 'deny', reason: 'unknown_host' });
   });
 
-  it('does not take a hostname away from the share or link rule', () => {
-    // Collab is checked last, so a name that is already a share hostname or
-    // the link hostname keeps the narrower meaning it had.
+  it('does not take a hostname away from the share rule', () => {
+    // Collab is checked last, so a name that is already a share hostname
+    // keeps the narrower meaning it had.
     expect(
       classifyHost('share-abc.tunnel.example.com', {
         ...OPTED_IN,
@@ -1057,14 +1131,24 @@ describe('classifyHost — collaboration hosts', () => {
         viaProxy: true,
       }),
     ).toEqual({ kind: 'share', target: { workspaceId: 'ws-shared' } });
+  });
+
+  it('the retired LINK hostname is a collaboration host or it is nothing', () => {
+    // There is no `link` kind any more. The one public hostname link-mode
+    // shares were served from used to classify on its own and be authorized
+    // from a signed cookie; now it is an unrecognised name unless the
+    // operator lists it as a collaboration host, where it gets a token.
+    expect(classifyHost('links.example.com', { ...OPTED_IN, viaProxy: true })).toEqual({
+      kind: 'deny',
+      reason: 'unknown_host',
+    });
     expect(
       classifyHost('links.example.com', {
         ...OPTED_IN,
         proxiedAccessHosts: ['links.example.com'],
-        linkHost: 'links.example.com',
         viaProxy: true,
       }),
-    ).toEqual({ kind: 'link' });
+    ).toEqual({ kind: 'collab' });
   });
 });
 

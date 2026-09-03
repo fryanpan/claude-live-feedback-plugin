@@ -380,14 +380,15 @@ describe('the collaboration hostname over HTTP', () => {
       expect(await r.json()).toEqual({ error: 'unknown_host' });
     });
 
-    it('leaves the link hostname a link hostname', async () => {
+    it('leaves the retired link hostname reaching nothing', async () => {
       // The opt-in list is consulted last, so nothing it contains takes a
       // meaning away from a hostname that already had one. `links.example.com`
-      // is not on the list at all, and it must still be link mode: 401 for a
-      // missing session, not 403 for an unknown host.
+      // is not on the list at all. Link mode is retired, so it no longer
+      // answers 401 for a missing session — the name resolves to no share and
+      // is refused like any other unknown host.
       const r = await req('/api/docs/design-doc', LINK_HOST, { headers: CF_RAY });
-      expect(r.status).toBe(401);
-      expect(await r.json()).toEqual({ error: 'no_share_session' });
+      expect(r.status).toBe(403);
+      expect(await r.json()).toEqual({ error: 'unknown_host' });
     });
   });
 });

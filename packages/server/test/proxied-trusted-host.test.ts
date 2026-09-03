@@ -253,10 +253,16 @@ describe('a proxied trusted host, with Access in front of it', () => {
       });
       expect(viaProxy.status).toBe(403);
       expect(await viaProxy.json()).toEqual({ error: 'unknown_host' });
-      // …and the POSITIVE CONTROL: the same alias reached directly is what it
-      // always was — local, no token needed.
-      const direct = await get(h, '/api/docs', { host: LAN_ALIAS });
-      expect(direct.status).toBe(200);
+      // …and reached DIRECTLY it is refused too, because access-only closed
+      // the LAN grant: a trusted-host declaration no longer stands in for a
+      // sign-in.
+      expect((await get(h, '/api/docs', { host: LAN_ALIAS })).status).toBe(403);
+
+      // POSITIVE CONTROL, on a server with the rule turned off: the same
+      // alias is still a declared trusted host, so the refusals above are
+      // the access-only rule rather than a declaration that stopped working.
+      const legacy = spinUp({ trustedHosts: [LAN_ALIAS], accessOnlyBrowserHosts: false });
+      expect((await get(legacy, '/api/docs', { host: LAN_ALIAS })).status).toBe(200);
     });
 
     it('a collab-listed host still CANNOT reach an operator verb — same token, same server', async () => {
@@ -280,11 +286,14 @@ describe('a proxied trusted host, with Access in front of it', () => {
       expect((await get(h, '/app', collab)).status).not.toBe(403);
     });
 
-    it('leaves loopback and the link hostname exactly as they were', async () => {
+    it('leaves loopback alone, and the retired link hostname reaches nothing', async () => {
       expect((await get(h, '/api/docs', { host: `localhost:${h.port}` })).status).toBe(200);
+      // The link hostname used to answer 401 no_share_session — an invitation
+      // to redeem. Link mode is retired, so the name resolves to no share at
+      // all and is indistinguishable from one this server never served.
       const link = await get(h, '/api/docs', { host: LINK_HOST, ...CF_RAY });
-      expect(link.status).toBe(401);
-      expect(await link.json()).toEqual({ error: 'no_share_session' });
+      expect(link.status).toBe(403);
+      expect(await link.json()).toEqual({ error: 'unknown_host' });
     });
   });
 

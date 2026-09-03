@@ -22,7 +22,10 @@ afterEach(async () => {
 /** A server with a sender a test controls, torn down after the test. */
 function serverWith(codeSender: CodeSender): { base: string; handle: ServerHandle } {
   const dataDir = mkdtempSync(join(tmpdir(), 'code-sender-test-'));
-  const handle = createServer({ port: 0, dataDir, codeSender });
+  // emailCodeSignIn: the server's own emailed-code sign-in is off by default now
+  // that every browser-facing hostname sits behind Cloudflare Access. These tests
+  // are about that flow, so they ask for it explicitly.
+  const handle = createServer({ port: 0, dataDir, codeSender, emailCodeSignIn: true });
   cleanups.push(async () => {
     await handle.stop();
     rmSync(dataDir, { recursive: true, force: true });
@@ -108,7 +111,7 @@ describe('the log sender', () => {
 
   it('is what the server uses when nothing else is passed', async () => {
     const dataDir = mkdtempSync(join(tmpdir(), 'code-sender-default-'));
-    const handle = createServer({ port: 0, dataDir });
+    const handle = createServer({ port: 0, dataDir, emailCodeSignIn: true });
     cleanups.push(async () => {
       await handle.stop();
       rmSync(dataDir, { recursive: true, force: true });

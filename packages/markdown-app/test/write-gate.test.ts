@@ -15,10 +15,12 @@ import {
   WRITE_CONTROL_ATTR,
   asBackgroundWrite,
   fetchWriteAccess,
+  hasSignInPage,
   installWriteGateNotice,
   isSignInRequired,
   lockDocToReading,
   promptSignIn,
+  setSignInPageExists,
   showSignInBar,
   signInHref,
 } from '../src/signin/write-gate.ts';
@@ -162,6 +164,67 @@ describe('asking whether this browser may write', () => {
     );
     expect(await fetchWriteAccess()).toEqual({ signInToWrite: false, canWrite: true });
     vi.unstubAllGlobals();
+  });
+});
+
+describe('a deployment with no sign-in page of its own', () => {
+  // Access-only: Cloudflare Access proved an address before the page loaded,
+  // so `/signin` does not exist and 404s. A "Sign in" link painted anyway is
+  // a dead end — worse than none, because it reads as the one action that
+  // would fix things.
+  beforeEach(() => {
+    setSignInPageExists(true);
+  });
+
+  it('learns it from the session lookup, and defaults to yes', async () => {
+    // Default first: an unanswered lookup must leave the link exactly as it
+    // was, which is the direction every other unknown in this file fails.
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => jsonResponse(200, { signInToWrite: false, canWrite: true })),
+    );
+    await fetchWriteAccess();
+    expect(hasSignInPage()).toBe(true);
+
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () =>
+        jsonResponse(200, { signInToWrite: false, canWrite: true, emailCodeSignIn: false }),
+      ),
+    );
+    await fetchWriteAccess();
+    expect(hasSignInPage()).toBe(false);
+    vi.unstubAllGlobals();
+  });
+
+  it('raises the prompt with no link to nowhere', () => {
+    setSignInPageExists(false);
+    promptSignIn();
+    const card = document.querySelector('.signin-required .identity-card');
+    expect(card?.querySelector('.signin-required-go')).toBeNull();
+    expect(card?.textContent).toContain('Ask the owner');
+    // POSITIVE CONTROL: the same call on a deployment that HAS the page
+    // still paints the link, so the absence above is the flag.
+    document.querySelector('.signin-required')?.remove();
+    setSignInPageExists(true);
+    promptSignIn();
+    expect(document.querySelector('.signin-required .signin-required-go')).not.toBeNull();
+    document.querySelector('.signin-required')?.remove();
+  });
+
+  it('paints the standing bar with no link either', () => {
+    docShell();
+    setSignInPageExists(false);
+    showSignInBar();
+    const bar = document.querySelector('.signin-bar');
+    expect(bar).not.toBeNull();
+    expect(bar?.querySelector('a')).toBeNull();
+    expect(bar?.textContent).toContain('ask the owner');
+    bar?.remove();
+    // POSITIVE CONTROL, same surface: with the page present the link is back.
+    setSignInPageExists(true);
+    showSignInBar();
+    expect(document.querySelector('.signin-bar a')).not.toBeNull();
   });
 });
 

@@ -1,18 +1,28 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import type { CfApi } from './cf-api.ts';
+import type { CfApi, PolicyRule } from './cf-api.ts';
 import {
-  type CreateShareLinkReq,
   type CreateShareWorkspaceReq,
   DEFAULT_LINK_TTL_SECONDS,
   DEFAULT_TTL_SECONDS,
+  type ListedShare,
   type Share,
   type ShareConfig,
   type ShareSurface,
 } from './types.ts';
-import { loadUrlKey, signedSharePath, verifySignedShare } from './url-signing.ts';
 
 const REGISTRY_FILENAME = 'shares.json';
+
+/**
+ * What a mint throws when this deployment has no Cloudflare Access wiring.
+ *
+ * Every share is an Access share now, so there is nothing to fall back to:
+ * the operator has to set `CF_ACCOUNT_ID`, `CF_SHARE_BASE_HOSTNAME`,
+ * `CF_ACCESS_TEAM_DOMAIN` and put a Cloudflare API token in the Keychain.
+ * Exported so the route can answer with the same words rather than matching
+ * on a message.
+ */
+export const ACCESS_NOT_CONFIGURED = 'access_sharing_not_configured';
 
 /**
  * A TTL must be a positive, finite number of seconds. Zero, negative, NaN
@@ -44,12 +54,13 @@ export class Shares {
     return this.config.maxTtlSeconds;
   }
 
-  /** What a link mint gets when the caller names no TTL. */
+  /** What `share_link` gets when the caller names no TTL. Two weeks — kept
+   *  at the link-mode default through the retirement, because the ask a
+   *  caller makes with `share_link` did not change, only how it is served. */
   get defaultLinkTtlSeconds(): number {
     return this.config.defaultTtlSeconds ?? DEFAULT_LINK_TTL_SECONDS;
   }
   private shares: Share[] = [];
-  private urlKeyCache: string | null = null;
 
   constructor(opts: SharesOptions) {
     this.dataDir = opts.dataDir;
@@ -77,97 +88,6 @@ export class Shares {
     });
   }
 
-  /**
-   * Share a BOARD by signed link. No Cloudflare Access app, no email policy
-   * — the URL's HMAC signature is the credential until `expiresAt` (the
-   * S3-presigned pattern; see share/url-signing.ts). Validation throws
-   * BEFORE anything is signed or saved, so a refused mint leaves no grant.
-   *
-   * There is no single-doc form and no single-review form: a board is the
-   * unit of sharing. Both of those grants minted a share scoped to something
-   * smaller, which is exactly what went away, so an older caller still
-   * asking for one is refused at the route rather than quietly re-scoped to
-   * something it did not ask for.
-   */
-  async createShareLink(req: CreateShareLinkReq): Promise<Share> {
-    if (!this.config.publicHostname) {
-      throw new Error(
-        'link shares need config.publicHostname (the single hostname the tunnel serves)',
-      );
-    }
-    if (!req.workspaceId) throw new Error('workspaceId is required');
-    // Redemption lands on the board page, so there is no entry doc and the
-    // guard scopes by workspaceId alone.
-    const docId = '';
-
-    const hostname = this.config.publicHostname;
-    const ttl = assertTtl(
-      req.ttlSeconds ?? this.config.defaultTtlSeconds ?? DEFAULT_LINK_TTL_SECONDS,
-    );
-    const shareId = randomHex(8);
-    const expiresAt = Date.now() + ttl * 1000;
-    const share: Share = {
-      shareId,
-      surface: 'workspace',
-      mode: 'link',
-      docId,
-      workspaceId: req.workspaceId,
-      hostname,
-      url: await this.signedLinkUrl(shareId, expiresAt, hostname),
-      ...(req.label ? { label: req.label } : {}),
-      createdAt: Date.now(),
-      expiresAt,
-    };
-    this.shares.push(share);
-    this.save();
-    return share;
-  }
-
-  /**
-   * Verify a presented `/share/<id>?exp&sig` tuple and resolve the LIVE link
-   * share it names, or null. Signature and URL expiry first (attacker-typed
-   * input proves itself before it earns a registry lookup), then the record:
-   * `findLive` re-checks the share's own `expiresAt`, which is what makes
-   * early revocation and TTL shortening bite even against a validly signed
-   * URL — the app never trusts that the edge Worker ran.
-   */
-  async verifySignedLink(
-    shareId: string,
-    exp: string,
-    sig: string,
-    now: number = Date.now(),
-  ): Promise<Share | null> {
-    if (!(await verifySignedShare(shareId, exp, sig, this.urlKey(), now))) return null;
-    const share = this.findLive(shareId, now);
-    return share?.mode === 'link' ? share : null;
-  }
-
-  /**
-   * The share with its `url` recomputed to the CURRENT signed form — link
-   * mode only; anything else passes through. This is also the migration for
-   * records minted before signing existed: their stored `/s/<slug>` url is
-   * simply never served, and listing them hands back a signed URL computed
-   * on demand from the same record.
-   */
-  async withSignedUrl(share: Share): Promise<Share> {
-    if (share.mode !== 'link') return share;
-    const hostname = this.config.publicHostname ?? share.hostname;
-    return { ...share, url: await this.signedLinkUrl(share.shareId, share.expiresAt, hostname) };
-  }
-
-  private async signedLinkUrl(
-    shareId: string,
-    expiresAt: number,
-    hostname: string,
-  ): Promise<string> {
-    return `https://${hostname}${await signedSharePath(shareId, expiresAt, this.urlKey())}`;
-  }
-
-  private urlKey(): string {
-    this.urlKeyCache ??= loadUrlKey(this.dataDir);
-    return this.urlKeyCache;
-  }
-
   /** Look up a live share by id. Expired shares resolve to null. */
   findLive(shareId: string, now: number = Date.now()): Share | null {
     const s = this.shares.find((x) => x.shareId === shareId);
@@ -192,13 +112,6 @@ export class Shares {
     const s = this.findLive(shareId);
     if (!s) return null;
     s.expiresAt = Date.now() + ttl * 1000;
-    if (s.mode === 'link') {
-      s.url = await this.signedLinkUrl(
-        s.shareId,
-        s.expiresAt,
-        this.config.publicHostname ?? s.hostname,
-      );
-    }
     this.save();
     return s;
   }
@@ -209,11 +122,25 @@ export class Shares {
     workspaceId: string;
     allowDomains: string[];
     ttlSeconds?: number;
+    label?: string;
     name?: string;
   }): Promise<Share> {
     if (!req.allowDomains || req.allowDomains.length === 0) {
       throw new Error('allowDomains must be a non-empty array');
     }
+    // Two checks the LINK mint carried and this one did not, moved here when
+    // link mode retired and this became the only mint there is. Both run
+    // BEFORE any Cloudflare call, so a refused mint leaves no Access
+    // application behind — the same ordering rule the link mint had about
+    // signing and saving.
+    //
+    // Typed non-optional and checked anyway: `workspaceId` arrives from a
+    // JSON body through a route, and a compiler cannot refuse what a caller
+    // did not send. An empty one would mint a share whose scope predicate
+    // (`shareScopeAllows`) refuses everything, shell included — a grant that
+    // exists, costs a Cloudflare app, and opens nothing.
+    if (!req.workspaceId) throw new Error('workspaceId is required');
+    if (req.ttlSeconds !== undefined) assertTtl(req.ttlSeconds);
 
     const shareId = randomHex(8);
     const slug = req.name ?? `${dateSlug(new Date())}-${randomHex(3)}`;
@@ -225,7 +152,10 @@ export class Shares {
     const ttl = req.ttlSeconds ?? this.config.defaultTtlSeconds ?? DEFAULT_TTL_SECONDS;
     const expiresAt = Date.now() + ttl * 1000;
 
-    if (!this.cfApi) throw new Error('Cloudflare API not configured — use a link share instead');
+    // Named rather than generic: link mode was the fallback this message used
+    // to point at, and it is retired, so the only way forward is to configure
+    // Access. The route turns this into a 503 the caller can act on.
+    if (!this.cfApi) throw new Error(ACCESS_NOT_CONFIGURED);
     const app = await this.cfApi.createApp({
       // Only NEW applications get the new name. Teardown does not match on it
       // — `deleteShare` calls `deleteApp(share.appId)` with the id stored at
@@ -238,9 +168,7 @@ export class Shares {
     const policy = await this.cfApi.createPolicy(app.id, {
       name: `allow ${req.allowDomains.join(', ')}`,
       decision: 'allow',
-      include: req.allowDomains.map((d) => ({
-        email_domain: { domain: d.startsWith('@') ? d.slice(1) : d },
-      })),
+      include: req.allowDomains.map(accessPolicyRule),
     });
 
     const share: Share = {
@@ -254,6 +182,7 @@ export class Shares {
       appId: app.id,
       policyId: policy.id,
       allowDomains: req.allowDomains.slice(),
+      ...(req.label ? { label: req.label } : {}),
       createdAt: Date.now(),
       expiresAt,
     };
@@ -285,14 +214,24 @@ export class Shares {
     return this.shares.slice();
   }
 
-  /** `list()` with every link share's url recomputed — what the API serves. */
-  listWithUrls(): Promise<Share[]> {
-    return Promise.all(this.shares.map((s) => this.withSignedUrl(s)));
-  }
-
-  /** The single hostname link shares are served from, if configured. */
-  get publicHostname(): string | null {
-    return this.config.publicHostname ?? null;
+  /**
+   * `list()` with the one thing a record cannot say about itself: whether it
+   * can still be redeemed.
+   *
+   * This used to be `listWithUrls`, and it RE-SIGNED every link record's URL
+   * on the way out — which was the migration path for anything minted before
+   * URL signing existed. Link mode is retired (2026-09-02), so handing back a
+   * freshly signed URL would now be handing back a credential-shaped string
+   * for a door that no longer opens. The record is served exactly as stored,
+   * with `redeemable: false` and `retired: 'link_mode'` on it, so an operator
+   * can still see it, name it and revoke it.
+   */
+  listForApi(): ListedShare[] {
+    return this.shares.map((s) =>
+      s.mode === 'link'
+        ? { ...s, redeemable: false, retired: 'link_mode' as const }
+        : { ...s, redeemable: s.expiresAt > Date.now() },
+    );
   }
 
   /** An `access`-mode share owning this hostname (link shares all share one). */
@@ -388,4 +327,27 @@ function dateSlug(d: Date): string {
   const m = String(d.getMonth() + 1).padStart(2, '0');
   const day = String(d.getDate()).padStart(2, '0');
   return `${y}-${m}-${day}`;
+}
+
+/**
+ * One entry of a share's audience, as a Cloudflare Access policy rule.
+ *
+ * Two shapes, because the audience list now carries both. It used to be
+ * domains only — every entry became `email_domain`, and `@` was stripped if
+ * present — which was right while the only caller was `share_workspace`,
+ * whose argument is literally named `allowDomains`. `share_link` mints Access
+ * shares now (link mode is retired), and when its caller names nobody the
+ * server falls back to the OPERATOR ALLOWLIST, which is a list of addresses.
+ * Feeding an address through the old branch produced
+ * `email_domain: { domain: 'someone@example.com' }` — a domain no token can
+ * ever match, so the share would exist and admit nobody, which is a silent
+ * lockout rather than an error anyone reads.
+ *
+ * The discriminator is an `@` with something in front of it: `a@b.example`
+ * is a person, `@b.example` and `b.example` are a domain.
+ */
+export function accessPolicyRule(entry: string): PolicyRule {
+  const at = entry.indexOf('@');
+  if (at > 0) return { email: { email: entry } };
+  return { email_domain: { domain: at === 0 ? entry.slice(1) : entry } };
 }
