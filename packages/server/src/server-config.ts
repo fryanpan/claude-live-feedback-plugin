@@ -374,7 +374,15 @@ export function resolveServerConfig(opts: {
   // an email at the share sign-in. A warning on a boot log is not a control:
   // the server would come up serving the misconfiguration, and the two
   // audiences being equal is exactly the mistake a copy-paste makes.
-  if (shareLinkHosts.length && cfAccessShareAud && cfAccessShareAud === cfAccessAud) {
+  // Both trimmed before comparing. `cfAccessShareAud` is trimmed where it is
+  // read; `cfAccessAud` may not be, and a copy-pasted value with a trailing
+  // space is the exact shape of the mistake this refuses — so an untrimmed
+  // comparison would let the one misconfiguration it exists to stop through.
+  if (
+    shareLinkHosts.length &&
+    cfAccessShareAud &&
+    cfAccessShareAud === (cfAccessAud ?? '').trim()
+  ) {
     console.error(
       '[feedback] CF_ACCESS_SHARE_AUD equals CF_ACCESS_AUD: the share hostname and the ' +
         "owner's hostname would be one Access application, so a token minted by anyone " +

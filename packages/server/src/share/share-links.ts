@@ -36,7 +36,15 @@
  *
  * Nothing here talks to Cloudflare, and nothing here needs an API token.
  */
-import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  renameSync,
+  statSync,
+  writeFileSync,
+} from 'node:fs';
 import { join } from 'node:path';
 import { normalizeEmail } from '@feedback/core';
 
@@ -297,6 +305,17 @@ export class ShareLinks {
   private load(): void {
     const path = join(this.dataDir, REGISTRY_FILENAME);
     if (!existsSync(path)) return;
+    // Tighten a file that already exists. New writes are mode 600, but a
+    // registry written before that was true — or by a hand-edit, or restored
+    // from a backup — keeps whatever mode it had, and nothing else would ever
+    // narrow it. Same reasoning as the key files: this is the one place the
+    // server has a reason to look at the file at all. Best effort; a mode we
+    // cannot change is not a reason to refuse to boot.
+    try {
+      if ((statSync(path).mode & 0o777) !== SECRET_MODE) chmodSync(path, SECRET_MODE);
+    } catch {
+      // Read-only mount, or somebody else's file. The read below decides.
+    }
     try {
       const parsed = JSON.parse(readFileSync(path, 'utf8')) as Partial<Persisted>;
       const links = Array.isArray(parsed?.links) ? parsed.links : [];
