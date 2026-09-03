@@ -1,9 +1,8 @@
-import { readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { IPAD, PHONE, attach, installSheets, setViewport, styleOf } from './css-harness.ts';
 
 /**
- * The review shell's back arrow as a TAP TARGET.
+ * The review shell's back arrow as a TAP TARGET, read off the cascade.
  *
  * design-mobile.md asks for the back arrow to stay tappable at ≥36px. The hub
  * topbar's arrow has had that rule since it was written (`.hub-topbar
@@ -14,82 +13,81 @@ import { describe, expect, it } from 'vitest';
  * grow: widening `.back-link` globally would relayout the hub arrow that
  * already has its own sizing.
  *
- * happy-dom resolves no media queries and has no layout engine, so this asserts
- * the CASCADE SHAPE — the rule exists, it is scoped to the phone block, and it
- * declares AFTER the base rule it has to beat. A media query adds no
- * specificity ("A media query adds no specificity" in learnings.md), so source
- * order is the whole of it. The rendered size is measured in a browser against
- * a real build; that is what closes the criterion.
+ * This file used to read `styles.css` + `hub.css` as text, brace-walk to the
+ * phone block and regex the declarations out of it. That could not see the two
+ * things that actually decide the outcome — whether the block MATCHES at the
+ * width a reader is on, and whether anything later un-does it — so the sheets
+ * are installed here and the arrow is built at each viewport instead. The
+ * numbers below are the values the browser would use.
+ *
+ * The class chain is what `packages/workspaces-app/index.html` server-renders
+ * for the review topbar (`<a class="back-link">` inside `.doc-crumb`) and what
+ * `hub-app.ts`'s shell renders for the board (`.hub-topbar` > `.back-link`);
+ * `hub-render.test.ts` and the shell tests pin that markup.
+ *
+ * The rendered box is still a browser check — happy-dom lays nothing out, so
+ * `min-width`/`min-height` are read as declared floors, not as measured pixels.
+ *
+ * SHEETS: the real board page links `hub.css` BEFORE `styles.css`
+ * (`renderHubShell` in packages/server/src/shells.ts says so, and the
+ * `.hub-topbar .back-link:hover` rule is written against that order), so that
+ * is the order installed here. `tokens.css` is deliberately left out: the file
+ * the server serves is a vendored Open Props subset PLUS the mapping in
+ * `src/tokens.css`, and installing the mapping half alone re-points every
+ * remapped token at an undefined `var(--gray-N)`.
  */
-// The board's cascade is two files since the hub block moved to hub.css:
-// styles.css keeps the shared chrome, hub.css carries the board's own rules,
-// and the hub shell loads them in that order. A rule this suite pins may sit
-// in either, so read the pair the page actually loads. Two reads on purpose:
-// a one-line read is what `bun run test:audit` counts, and folding them into
-// a loop would hide a source-shape site rather than remove one.
-const CSS = [
-  readFileSync(resolve('packages/workspaces-app/src/styles.css'), 'utf8'),
-  readFileSync(resolve('packages/workspaces-app/src/hub.css'), 'utf8'),
-].join('\n');
 
-/** The review app's phone block, opened verbatim. */
-const PHONE_CONDITION = '@media (max-width: 720px) {';
+let cleanup = () => {};
+beforeEach(() => {
+  cleanup = installSheets('hub.css', 'styles.css');
+});
+afterEach(() => {
+  cleanup();
+  document.body.replaceChildren();
+});
 
-function declarationsOnly(css: string): string {
-  return css.replace(/\/\*[\s\S]*?\*\//g, '');
+/** The review shell's topbar crumb and the arrow inside it, at `vp`. */
+function reviewTopbar(vp: { width: number; height: number }) {
+  setViewport(vp);
+  const crumb = attach('doc-crumb');
+  return {
+    crumb: styleOf(crumb),
+    arrow: styleOf(attach('back-link', { tag: 'a', parent: crumb })),
+    path: styleOf(attach('doc-path', { tag: 'span', parent: crumb })),
+    toolbar: styleOf(attach('toolbar')),
+  };
 }
 
-/** Offset of the phone block that carries the topbar tightening group. */
-function topbarPhoneBlockAt(): number {
-  let from = 0;
-  for (;;) {
-    const at = CSS.indexOf(PHONE_CONDITION, from);
-    if (at === -1) return -1;
-    let depth = 1;
-    let i = at + PHONE_CONDITION.length;
-    const start = i;
-    while (i < CSS.length && depth > 0) {
-      if (CSS[i] === '{') depth++;
-      else if (CSS[i] === '}') depth--;
-      i++;
-    }
-    if (CSS.slice(start, i - 1).includes('.doc-path')) return at;
-    from = at + PHONE_CONDITION.length;
-  }
-}
-
-/** Body of that block, declarations only. */
-function topbarPhoneBlock(): string {
-  const at = topbarPhoneBlockAt();
-  if (at === -1) return '';
-  let depth = 1;
-  let i = at + PHONE_CONDITION.length;
-  const start = i;
-  while (i < CSS.length && depth > 0) {
-    if (CSS[i] === '{') depth++;
-    else if (CSS[i] === '}') depth--;
-    i++;
-  }
-  return declarationsOnly(CSS.slice(start, i - 1));
+/** The board's arrow, which shares the `.back-link` base and nothing else. */
+function hubArrow(vp: { width: number; height: number }) {
+  setViewport(vp);
+  return styleOf(
+    attach('back-link', { tag: 'a', parent: attach('hub-topbar', { tag: 'header' }) }),
+  );
 }
 
 describe("the review shell's back arrow on a phone", () => {
-  it('is a rule in the topbar phone block at all', () => {
-    // POSITIVE CONTROL for everything below: an extractor that came back empty
-    // would let each assertion pass by measuring nothing.
-    const body = topbarPhoneBlock();
-    expect(body).not.toBe('');
-    expect(body).toContain('.doc-path'); // it really is the topbar group
-    expect(body).toContain('.doc-crumb .back-link');
-  });
-
   it('reaches the 44px target in BOTH dimensions', () => {
     // 26 × 20 was the measured size, so a height-only fix would still leave a
     // thumb missing it horizontally. 36 was the first floor; 44 is the one
     // the phone's only navigation affordance gets (review of #564).
-    const rule = /\.doc-crumb \.back-link\s*\{([^}]*)\}/.exec(topbarPhoneBlock())?.[1] ?? '';
-    expect(rule).toMatch(/min-width:\s*44px/);
-    expect(rule).toMatch(/min-height:\s*44px/);
+    const { arrow, path } = reviewTopbar(PHONE);
+    expect(arrow.minWidth).toBe('44px');
+    expect(arrow.minHeight).toBe('44px');
+    // Positive control that this is the topbar-tightening block talking and
+    // not some other rule: the same block drops the path to 13px. Without it
+    // a renamed class would read '' for every floor above and say nothing.
+    expect(path.fontSize).toBe('13px');
+  });
+
+  it('centres the glyph in the grown box rather than letting it sit top-left', () => {
+    // `min-height` on an inline element does nothing, and on a block it grows
+    // the box while leaving the arrow at the top: the tap area would be right
+    // and the arrow would visibly detach from the file path beside it.
+    const { arrow } = reviewTopbar(PHONE);
+    expect(arrow.display).toBe('inline-flex');
+    expect(arrow.alignItems).toBe('center');
+    expect(arrow.justifyContent).toBe('center');
   });
 
   it('keeps the crumb from collapsing under the toolbar in edit mode', () => {
@@ -97,46 +95,37 @@ describe("the review shell's back arrow on a phone", () => {
     // arrow and doc name clipped inside it. The floor holds the crumb open and
     // the toolbar is the side that yields — it may shrink and scroll, and it
     // must never push off-screen or clip the crumb.
-    const block = topbarPhoneBlock();
-    const crumb = /\n\s*\.doc-crumb\s*\{([^}]*)\}/.exec(block)?.[1] ?? '';
-    expect(crumb).toMatch(/min-width:\s*\d+px/);
-    const toolbar = /\n\s*\.toolbar\s*\{([^}]*)\}/.exec(block)?.[1] ?? '';
-    expect(toolbar).toMatch(/flex:\s*0 1 auto/);
-    expect(toolbar).toMatch(/min-width:\s*0/);
-    expect(toolbar).toMatch(/overflow-x:\s*auto/);
+    const { crumb, toolbar } = reviewTopbar(PHONE);
+    expect(Number.parseFloat(crumb.minWidth)).toBeGreaterThanOrEqual(44);
+    expect(toolbar.flex).toBe('0 1 auto');
+    expect(toolbar.minWidth).toBe('0');
+    expect(toolbar.overflowX).toBe('auto');
   });
 
-  it('centres the glyph in the grown box rather than letting it sit top-left', () => {
-    // `min-height` on an inline element does nothing, and on a block it grows
-    // the box while leaving the arrow at the top: the tap area would be right
-    // and the arrow would visibly detach from the file path beside it.
-    const rule = /\.doc-crumb \.back-link\s*\{([^}]*)\}/.exec(topbarPhoneBlock())?.[1] ?? '';
-    expect(rule).toMatch(/display:\s*inline-flex/);
-    expect(rule).toMatch(/align-items:\s*center/);
-    expect(rule).toMatch(/justify-content:\s*center/);
+  it('leaves the desktop arrow alone — the floor is the phone block, not the base rule', () => {
+    // A phone tap target, not a redesign: on the iPad the base rule keeps its
+    // compact padding and no floor at all.
+    const { arrow } = reviewTopbar(IPAD);
+    expect(arrow.minWidth).not.toBe('44px');
+    expect(arrow.minHeight).not.toBe('44px');
+    expect(arrow.display).not.toBe('inline-flex');
+    // Positive control, and the reason the assertions above are not vacuous:
+    // an element no rule reaches reads '' for everything, which is exactly
+    // what "no floor" looks like. The base rule IS live here.
+    expect(arrow.padding).toBe('2px 6px');
+    expect(arrow.fontSize).toBe('16px');
   });
 
-  it('declares AFTER the shared base rule, or it silently loses', () => {
-    // `.doc-crumb .back-link` is two classes to the base rule's one, so it
-    // wins on specificity today — this pins the ORDER anyway, because the
-    // cheap future edit is to drop the `.doc-crumb ` prefix once someone
-    // notices the base rule is the only other one, and at equal specificity a
-    // media query contributes nothing and the later rule takes it.
-    const base = CSS.search(/\n\.back-link\s*\{/);
-    const phone = topbarPhoneBlockAt();
-    expect(base).toBeGreaterThan(-1);
-    expect(phone).toBeGreaterThan(-1);
-    expect(phone).toBeGreaterThan(base);
-  });
-
-  it('leaves the desktop arrow and the hub arrow alone', () => {
-    // A phone tap target, not a redesign: the base rule keeps its compact
-    // padding for the desktop topbar, and the hub keeps the sizing it has had
-    // since it was written.
-    const base = /\n\.back-link\s*\{([^}]*)\}/.exec(declarationsOnly(CSS))?.[1] ?? '';
-    expect(base).not.toMatch(/min-height/);
-    expect(base).toMatch(/padding:\s*2px 6px/);
-    const hub = /\.hub-topbar \.back-link\s*\{([^}]*)\}/.exec(declarationsOnly(CSS))?.[1] ?? '';
-    expect(hub).toMatch(/min-height:\s*36px/);
+  it('leaves the hub arrow at the 36px it has always had, at every width', () => {
+    // The board's arrow has its own sizing and must not inherit the review
+    // shell's 44px floor (nor lose its own to it) — the two surfaces share
+    // only the `.back-link` base.
+    for (const vp of [IPAD, PHONE]) {
+      const arrow = hubArrow(vp);
+      expect(arrow.minWidth, `${vp.width}px`).toBe('36px');
+      expect(arrow.minHeight, `${vp.width}px`).toBe('36px');
+      expect(arrow.display, `${vp.width}px`).toBe('inline-flex');
+      expect(arrow.fontSize, `${vp.width}px`).toBe('18px');
+    }
   });
 });

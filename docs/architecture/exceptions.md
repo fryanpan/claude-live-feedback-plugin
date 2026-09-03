@@ -32,6 +32,12 @@ gone rather than marked done. Neither of the two rounds put a new file over the
 limit: the eight modules lifted out of `mcp.ts` for coverage are 89–459 lines
 and none needs a row.
 
+Two rows were added on 2026-09-03, taking the list to **163**, when the app's
+stylesheet tests stopped grepping `styles.css` and started installing it. A
+rule that used to be one `toMatch` line became a mount, a viewport and a
+computed read, so `md-composer.test.ts` and `hub-mic-dock-css.test.ts` crossed
+the line without gaining a second subject.
+
 Test files are judged by a narrower rule, in their own table below: a long test
 file is an exception unless two *unrelated harnesses* share it. Many `describe`
 blocks over one set of fixtures is one harness, however long the file gets.
@@ -233,6 +239,8 @@ The remaining 93 are exceptions. Each row names the one harness its cases share.
 | `packages/server/test/grouping-share-removed.test.ts` | 545 | One describe using the shared `makeMockCfApi()` Cloudflare stub and one server. |
 | `packages/server/test/meeting-notes-correction.test.ts` | 543 | Predicate describes and the real notes-doc describes all build their subject with `docFrom()` / `NOTES()`. |
 | `packages/server/test/recall-callback-gate-http.test.ts` | 542 | Every describe uses the module-scope `spinUp()` / `callback()` / `signBody()` two-hostname harness. |
+| `packages/workspaces-app/test/md-composer.test.ts` | 542 | Every describe drives the one composer through the module-scope `mount()` / `surfaceOf()` helpers; the stylesheet describes now install the page's sheets over that same mount rather than grepping `styles.css`, which is what took it over the line. |
+| `packages/workspaces-app/test/hub-mic-dock-css.test.ts` | 540 | One subject — where the mic sits at each tier — over one `installSheets` / `setViewport` harness. It crossed the line converting text reads into computed reads: a rule that used to be one `toMatch` is now a mount, a viewport, and a comment naming the browser check that owns the half happy-dom cannot see. |
 | `packages/server/test/stall-gate.test.ts` | 538 | Every describe calls the module-scope `evaluate()` over rows from `task()`; no server anywhere. |
 | `packages/workspaces-app/test/goal-actions.test.ts` | 537 | Pure model describes and DOM-panel describes share `task()` / `handlers()` / `sectionOf()` for one feature. |
 | `packages/workspaces-app/test/activity-model.test.ts` | 536 | All describes are pure Home-activity functions over the shared `task()` / `note()` / `groups()` builders. |

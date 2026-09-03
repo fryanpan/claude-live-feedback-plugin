@@ -1,7 +1,7 @@
 {
   "_comment": "Ratchet for bun run test:audit. Counts may only go down. Lower a number in the same commit that lowers the count.",
-  "_sourceShape": "67 -> 80 when the board's rules moved from styles.css into hub.css (PR group B2). Twelve suites pin rules on both sides of that seam and now read both files, which is two one-line reads where there was one; signin-css.test.ts reads three, because it pins the sign-in card, the hub identity chip and the chrome under both. No suite began asserting on source that was not already; folding the pair into a loop would have dropped these twelve sites off the list without changing a single test, so the number goes up instead.",
+  "_sourceShape": "80 -> 18 when the app's stylesheet tests stopped reading styles.css and hub.css as text and started installing the sheets and reading a computed value (packages/workspaces-app/test/css-harness.ts). Sixty-two read sites went with them, across forty-two files. The eighteen that remain are the MCP suite's reads of the built plugin bundle, the server suite's reads of a published client release, and three stylesheet reads in two files that happy-dom cannot express: decide-option-hover-css.test.ts, whose whole subject is a :hover treatment, and hub-nav-widget-clearance-css.test.ts, whose rule is a calc() of max() and env() that happy-dom discards whole.",
   "fixedSleeps": 0,
-  "sourceShape": 80,
+  "sourceShape": 18,
   "wallClock": 10
 }

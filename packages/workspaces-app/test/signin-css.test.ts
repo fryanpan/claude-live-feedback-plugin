@@ -1,9 +1,17 @@
-import { readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
+import {
+  IPAD,
+  PHONE,
+  type SheetName,
+  attach,
+  installSheets,
+  setViewport,
+  styleOf,
+} from './css-harness.ts';
 
 /**
- * The sign-in page's layout promises, pinned where happy-dom cannot see them.
+ * The sign-in page's layout promises, read off the cascade rather than out of
+ * three stylesheets' text.
  *
  * The mockup's two hard viewport constraints: every state fits iPad
  * landscape's ~750px usable height without scrolling (the card is a single
@@ -11,84 +19,119 @@ import { describe, expect, it } from 'vitest';
  * minus page padding (46px boxes shrink to 40px under 480px:
  * 6×40 + 5×6 = 270px, well inside 430 − 32 of padding). How it LOOKS at
  * 1180x820 and 430px is a browser check; see the PR report.
+ *
+ * THREE PAGES, THREE CASCADES, and that is why the sheets are installed per
+ * test rather than once. `renderSigninShell` loads styles.css then signin.css
+ * then tokens.css; `renderHubShell` loads hub.css, styles.css, tokens.css and
+ * never signin.css; the review doc loads neither of the two page sheets.
+ * Installing exactly the sheets a page loads is also what replaces the old
+ * "which file is this rule in?" text assertions: a rule that moved into the
+ * shared sheet shows up as a value the OTHER page can now see.
+ *
+ * tokens.css is left out of all three. The served /app/tokens.css is the
+ * vendored Open Props subset concatenated with src/tokens.css, and installing
+ * the mapping layer alone resolves its `var(--gray-9)` chain to nothing —
+ * which would blank the colours compared below. tokens-css.test.ts installs
+ * the pair.
  */
 
-// Three files, because this suite pins rules on two different pages: the
-// sign-in card (signin.css), the hub's identity chip (hub.css), and the shared
-// chrome both sit on (styles.css). Reading them together is what the old
-// single-file read amounted to. Separate one-line reads on purpose — that is
-// the shape `bun run test:audit` counts, and a loop would hide the sites
-// rather than remove them.
-const STYLES = readFileSync(resolve('packages/workspaces-app/src/styles.css'), 'utf8');
-const HUB = readFileSync(resolve('packages/workspaces-app/src/hub.css'), 'utf8');
-const SIGNIN = readFileSync(resolve('packages/workspaces-app/src/signin.css'), 'utf8');
-const CSS = [STYLES, HUB, SIGNIN].join('\n');
+let cleanup = () => {};
+afterEach(() => {
+  cleanup();
+  document.body.replaceChildren();
+  document.body.className = '';
+});
 
-function declarationsOnly(css: string): string {
-  return css.replace(/\/\*[\s\S]*?\*\//g, '');
+/** Install the sheets one page loads, in that page's order. */
+function page(...sheets: SheetName[]): void {
+  cleanup();
+  cleanup = installSheets(...sheets);
 }
 
-function rule(selector: string, css: string = declarationsOnly(CSS)): string {
-  const at = new RegExp(
-    `(^|\\n|\\})\\s*${selector.replace(/[.#+*[\]()]/g, '\\$&')}\\s*\\{([^}]*)\\}`,
-  ).exec(css);
-  return at?.[2] ?? '';
-}
+const SIGNIN: SheetName[] = ['styles.css', 'signin.css'];
+const HUB: SheetName[] = ['hub.css', 'styles.css'];
 
 describe('sign-in page css', () => {
-  it('centers a fluid card that can never exceed the mockup width', () => {
-    const body = rule('.signin-body');
-    expect(body).toContain('display: flex');
-    expect(body).toContain('justify-content: center');
-    expect(body).toContain('min-height: 100dvh');
-    expect(rule('.signin-card')).toContain('width: min(380px, 100%)');
+  it('centers a fluid card', () => {
+    page(...SIGNIN);
+    setViewport(IPAD);
+    document.body.className = 'signin-body';
+    const body = styleOf(document.body);
+    expect(body.display).toBe('flex');
+    expect(body.justifyContent).toBe('center');
+    expect(body.minHeight).toBe('100dvh');
+    // NOT asserted, and dropped from the text version: the card's own
+    // `width: min(380px, 100%)`. happy-dom returns '' for any `width` built
+    // from `min()`/`calc()`/`var()`, so there is nothing to read — `bun run
+    // ui:shot` owns the card's measure. What IS readable is that the card
+    // rule reaches the element at all.
+    expect(styleOf(attach('signin-card')).textAlign).toBe('center');
   });
 
   it('sizes the code boxes per the mockup and shrinks them under 480px', () => {
-    const box = rule('.signin-code input');
-    expect(box).toContain('width: 46px');
-    expect(box).toContain('height: 56px');
-    // More than one 480px block exists; pin the one that shrinks the boxes.
-    const media = [
-      ...declarationsOnly(CSS).matchAll(/@media \(max-width: 480px\) \{([\s\S]*?)\n\}/g),
-    ].find((m) => m[1]?.includes('.signin-code'));
-    expect(media).toBeDefined();
-    const narrow = rule('.signin-code input', media?.[1] ?? '');
-    expect(narrow).toContain('width: 40px');
-    expect(narrow).toContain('height: 50px');
+    page(...SIGNIN);
+    const box = (viewport: { width: number; height: number }) => {
+      setViewport(viewport);
+      return styleOf(attach('', { tag: 'input', parent: attach('signin-code') }));
+    };
+    const wide = box(IPAD);
+    expect(wide.width).toBe('46px');
+    expect(wide.height).toBe('56px');
+    // Under 480px the boxes shrink so six of them plus five gaps clear a
+    // 430px screen. Measured at the phone this project verifies rather than
+    // at the breakpoint, and measured rather than matched: the block is one
+    // of several at this width, and a text search cannot say which one wins.
+    const narrow = box(PHONE);
+    expect(narrow.width).toBe('40px');
+    expect(narrow.height).toBe('50px');
+    expect(6 * Number.parseFloat(narrow.width) + 5 * 6).toBeLessThanOrEqual(PHONE.width - 32);
   });
 
   it('keeps inputs at 16px so iOS Safari does not zoom on focus', () => {
-    expect(rule('.signin-form input[type="email"],\n.signin-form input[type="text"]')).toContain(
-      'font-size: 16px',
-    );
+    page(...SIGNIN);
+    setViewport(PHONE);
+    const form = attach('signin-form');
+    for (const type of ['email', 'text']) {
+      const input = attach('', { tag: 'input', parent: form, attrs: { type } });
+      expect(styleOf(input).fontSize, type).toBe('16px');
+    }
   });
 
-  it('lives in the sign-in page\u2019s own stylesheet, not at the tail of a shared one', () => {
+  it('lives in the sign-in page’s own stylesheet, not at the tail of a shared one', () => {
     // What this used to assert — "filed under a banner, not appended at EOF" —
     // the split now settles by construction: these rules are a file the sign-in
     // shell loads and no other page does. What can still go wrong is a rule
-    // added to the shared sheet instead, so assert the ownership both ways.
-    expect(SIGNIN).toContain('SIGN-IN PAGE');
-    expect(SIGNIN).toMatch(/\.signin-card\s*\{/);
-    expect(STYLES).not.toMatch(/\.signin-card\s*\{/);
-    // The identity prompt stayed behind, and that is deliberate: the board and
-    // the editor both raise it, and sign-in never does.
-    expect(STYLES).toContain('FIRST-ARRIVAL IDENTITY PROMPT');
-    expect(SIGNIN).not.toContain('FIRST-ARRIVAL IDENTITY PROMPT');
+    // added to the shared sheet instead, and that is measurable: install the
+    // shared sheet ALONE and the sign-in card must reach nothing.
+    setViewport(IPAD);
+    page('styles.css');
+    expect(styleOf(attach('signin-card')).textAlign).toBe('');
+    // Control: styles.css did install — the identity prompt stayed behind in
+    // it, and that is deliberate. The board and the editor both raise the
+    // prompt, and sign-in never does.
+    expect(styleOf(attach('identity-prompt')).position).toBe('fixed');
+    // The other direction: signin.css alone carries the card and NOT the
+    // prompt, so neither file has quietly absorbed the other's section.
+    page('signin.css');
+    expect(styleOf(attach('signin-card')).textAlign).toBe('center');
+    expect(styleOf(attach('identity-prompt')).position).toBe('');
   });
 
   it('gives the hub identity chip a popover anchored like the settings panel', () => {
-    const chipMenu = rule('.hub-me-menu');
-    expect(chipMenu).toContain('position: absolute');
-    expect(chipMenu).toContain('right: 0');
+    page(...HUB);
+    setViewport(IPAD);
+    const menu = styleOf(attach('hub-me-menu'));
+    expect(menu.position).toBe('absolute');
+    expect(menu.right).toBe('0px');
   });
 
   it('keeps the identity chip at the 36px tap-target floor (design-mobile.md)', () => {
     // The chip is the sole sign-in entry point, and it is tapped on an iPad.
-    const chip = rule('.hub-me');
-    expect(chip).toContain('width: 36px');
-    expect(chip).toContain('height: 36px');
+    page(...HUB);
+    setViewport(IPAD);
+    const chip = styleOf(attach('hub-me', { tag: 'button' }));
+    expect(chip.width).toBe('36px');
+    expect(chip.height).toBe('36px');
   });
 
   it('makes the read-only notice a layout row, not an overlay', () => {
@@ -98,33 +141,58 @@ describe('sign-in page css', () => {
     // huddle" could not be clicked at all; at 430px on the doc it covered the
     // H1 and the format bar. A fixed box over a page covers something at some
     // width — taking space is the fix, not finding a band that looks free.
-    const bar = rule('.signin-bar');
-    expect(bar).not.toContain('position: fixed');
-    expect(bar).toContain('display: flex');
+    page(...SIGNIN);
+    setViewport(PHONE);
+    const bar = styleOf(attach('signin-bar'));
+    expect(bar.position).not.toBe('fixed');
+    expect(bar.display).toBe('flex');
     // The doc shell declares its own rows, so the bar's row has to be
     // declared too — otherwise it lands inside the topbar's 48px and clips.
     // Four tracks: the bar, the topbar, the meeting strip's auto row, the doc.
-    expect(rule('body.signin-gated #shell')).toContain('grid-template-rows: auto 48px auto 1fr');
+    document.body.className = 'signin-gated';
+    expect(styleOf(attach('', { attrs: { id: 'shell' } })).gridTemplateRows).toBe(
+      'auto 48px auto 1fr',
+    );
     // The fallback for a surface with no header still floats, and docks to
-    // the bottom rather than to the band the doc title lives in.
-    const floating = rule('.signin-bar--floating');
-    expect(floating).toContain('position: fixed');
-    expect(floating).toContain('bottom:');
-    expect(floating).not.toContain('top:');
+    // the bottom rather than to the band the doc title lives in — an unset
+    // `top` is what "not the top band" computes to.
+    const floating = styleOf(attach('signin-bar signin-bar--floating'));
+    expect(floating.position).toBe('fixed');
+    expect(floating.top).toBe('');
+    expect(floating.zIndex).toBe('900');
+    // NOT asserted: the `bottom` itself. It is `calc(12px + var(--safe-bottom,
+    // 0px))`, and happy-dom returns '' for a calc() carrying a var() — the
+    // same limitation that costs this file the card's width.
   });
 
   it('makes a control the write gate disabled LOOK disabled', () => {
     // Both gated toggles were pixel-identical to the live control beside
     // them: opacity 1, cursor pointer. A `title` is not the substitute — the
     // primary device here is an iPad, where nothing hovers.
-    for (const sel of ['.icon-btn:disabled', '.hub-btn:disabled']) {
-      const disabled = rule(sel);
-      expect(disabled).toContain('opacity: 0.35');
-      expect(disabled).toContain('cursor: default');
+    page(...HUB);
+    setViewport(IPAD);
+    for (const cls of ['icon-btn', 'hub-btn']) {
+      const off = styleOf(attach(cls, { tag: 'button', attrs: { disabled: '' } }));
+      expect(off.opacity, cls).toBe('0.35');
+      expect(off.cursor, cls).toBe('default');
+      // Control: the same class NOT disabled reads as the live control, so
+      // the two values above belong to `:disabled` and not to the base rule.
+      const on = styleOf(attach(cls, { tag: 'button' }));
+      expect(on.opacity === '' || on.opacity === '1', cls).toBe(true);
+      expect(on.cursor, cls).toBe('pointer');
     }
-    // And does not light up under a pointer, which is where the convention
-    // at `.comment-nav:disabled` stops and these two needed more.
-    expect(rule('.icon-btn:disabled:hover')).toContain('background:');
-    expect(rule('.icon-btn:disabled[aria-pressed="true"]')).toContain('background: var(--bg)');
+    // A pressed toggle that is disabled keeps the unpressed surface, so the
+    // gate does not read as "on". This is where the convention at
+    // `.comment-nav:disabled` stopped and these two needed more.
+    const pressed = attach('icon-btn', {
+      tag: 'button',
+      attrs: { disabled: '', 'aria-pressed': 'true' },
+    });
+    expect(styleOf(pressed).backgroundColor).toBe(
+      styleOf(document.documentElement).getPropertyValue('--bg').trim(),
+    );
+    // NOT asserted, and dropped from the text version: the `:disabled:hover`
+    // rule that stops the control lighting up under a pointer. happy-dom has
+    // no pointer, so `:hover` cannot be entered — `bun run ui:shot` owns it.
   });
 });

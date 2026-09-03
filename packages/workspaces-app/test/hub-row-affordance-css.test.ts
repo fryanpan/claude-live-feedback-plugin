@@ -1,9 +1,8 @@
-import { readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { IPAD, attach, installSheets, setViewport, styleOf } from './css-harness.ts';
 
 /**
- * The task row's two hover affordances, in CSS.
+ * The task row's title affordance, read off the cascade.
  *
  * Bryan, 2026-08-21, on the title: *"entering edit mode must NOT shift the
  * text — zero layout jump"*, and *"hovering over the title TEXT shows a subtle
@@ -13,69 +12,105 @@ import { describe, expect, it } from 'vitest';
  * Zero shift is structural in TS — the words are edited in place, so no
  * element is swapped and no box is rebuilt (`hub-render.test.ts`, "edits the
  * words where they are"). What CSS can still undo is exactly that: a border,
- * a padding, a font or a margin added for the hover or the editing state puts
- * the jump straight back, and it would do so ONLY in a browser, where these
- * tests do not run. So the rules are read as text and the forbidden
- * properties named — happy-dom has no layout engine and no media queries, so
- * an assertion about a rendered pixel here would be an assertion about
- * nothing.
+ * a padding, a font or a margin added for the resting or the editing state
+ * puts the jump straight back. That is what is measured here — the resting
+ * span and the editing span are both built and their computed boxes read, so
+ * a rule that grows one of them fails rather than surviving as a substring in
+ * a file nobody rendered.
+ *
+ * The HOVER half stays a browser check (`bun run ui:shot`): happy-dom has no
+ * pointer, so `:hover` never applies, and it matches `hover: hover` and
+ * `pointer: fine` at every viewport, so it cannot see that the rectangle is
+ * scoped to a pointer that can hover either. What is checkable here is the
+ * resting declaration the hover only recolours — the outline is already
+ * painted, transparent, so the hover changes a colour and nothing else.
  */
-const CSS = readFileSync(resolve('packages/workspaces-app/src/hub.css'), 'utf8');
 
-/** The declarations of the first rule whose selector list contains `sel`. */
-function block(sel: string): string {
-  const at = CSS.indexOf(sel);
-  expect(at, `no rule for ${sel}`).toBeGreaterThan(-1);
-  const open = CSS.indexOf('{', at);
-  return CSS.slice(open + 1, CSS.indexOf('}', open));
-}
+let cleanup = () => {};
+beforeEach(() => {
+  cleanup = installSheets('hub.css', 'styles.css');
+  setViewport(IPAD);
+});
+afterEach(() => {
+  cleanup();
+  document.body.replaceChildren();
+});
 
 /**
  * Anything that occupies space. `outline` is the one border-like paint that
- * does not, which is why the rectangle is drawn with it.
+ * does not, which is why the rectangle is drawn with it. An unset property
+ * computes to `''` here, not to its CSS initial value, so "takes no space" is
+ * read as "the cascade declares nothing", with the outline read alongside as
+ * the control that the element IS reached by a rule.
  */
-const TAKES_SPACE = ['border', 'padding', 'margin', 'font', 'line-height', 'width', 'height'];
+const TAKES_SPACE = [
+  'border-top-width',
+  'border-left-width',
+  'padding-top',
+  'padding-left',
+  'margin-top',
+  'margin-left',
+  'width',
+  'height',
+] as const;
 
-describe('the row title, hovered and edited', () => {
-  it('draws the hover rectangle with an outline, and reserves it when resting', () => {
+/** The row, its title cell, and a title span in one of its two states. */
+function titleRow(state: 'resting' | 'editing') {
+  const row = attach('hub-task-row');
+  const cell = attach(state === 'editing' ? 'hub-task-title hub-title-editing' : 'hub-task-title', {
+    parent: row,
+  });
+  const text = attach('hub-task-title-text', {
+    tag: 'span',
+    parent: cell,
+    attrs: state === 'editing' ? { contenteditable: 'true' } : {},
+  });
+  return { row: styleOf(row), cell: styleOf(cell), text: styleOf(text), cellEl: cell };
+}
+
+const px = (v: string) => Number.parseFloat(v);
+
+describe('the row title, resting and edited', () => {
+  it('reserves the hover rectangle as a transparent outline that costs no space', () => {
     // Declared transparent rather than absent: the hover then changes a colour
     // and nothing else, and — the half that is easy to lose — the declaration
     // is already there to beat the UA focus ring when this span takes focus.
-    const base = block('.hub-task-title-text {');
-    expect(base).toMatch(/outline:\s*1px solid transparent/);
-    expect(base).toContain('outline-offset');
-    for (const prop of TAKES_SPACE) expect(base).not.toContain(`${prop}:`);
-
-    // The hover itself, inside the fine-pointer query, changing colour only.
-    const hover = block('.hub-task-title-text:hover {');
-    expect(hover).toContain('outline-color:');
-    for (const prop of TAKES_SPACE) expect(hover).not.toContain(`${prop}:`);
-    // The dotted underline this replaced is gone: it was a decoration on the
-    // text, not a rectangle around it, and Bryan asked for the rectangle.
-    expect(hover).not.toContain('text-decoration');
+    const { text } = titleRow('resting');
+    expect(text.outlineStyle).toBe('solid');
+    expect(text.outlineColor).toBe('transparent');
+    expect(px(text.outlineWidth)).toBeGreaterThan(0);
+    expect(px(text.outlineOffset)).toBeGreaterThan(0);
+    for (const prop of TAKES_SPACE) {
+      expect(text.getPropertyValue(prop), `${prop} is declared on the title span`).toBe('');
+    }
   });
 
-  it('scopes the rectangle to the pointer that can hover', () => {
-    // The same question `finePointer()` asks in TS, and it must be the same
-    // question: on a coarse pointer the words carry no rename at all, so a
-    // rectangle there would advertise a gesture that does nothing.
-    const query = '@media (hover: hover) and (pointer: fine) {';
-    const at = CSS.indexOf(query);
-    expect(at).toBeGreaterThan(-1);
-    const scoped = CSS.slice(at, CSS.indexOf('\n}', at));
-    expect(scoped).toContain('.hub-task-title-text:hover');
-    expect(scoped).toContain('cursor: text');
+  it('leaves the words at the cell’s own type, so nothing reflows around them', () => {
+    // A font-size or a line-height on the span is the other way to move the
+    // text without declaring a box. Inherited values are equal to the cell's;
+    // an override would not be.
+    const { cell, text } = titleRow('resting');
+    expect(text.fontSize).toBe(cell.fontSize);
+    expect(text.lineHeight).toBe(cell.lineHeight);
   });
 
-  it('takes the rectangle away while editing, and adds no box in its place', () => {
-    const editingRule = block('.hub-task-title-text[contenteditable] {');
-    expect(editingRule).toMatch(/outline-color:\s*transparent/);
-    for (const prop of TAKES_SPACE) expect(editingRule).not.toContain(`${prop}:`);
-    // …including when the pointer is still over the words it is editing, which
-    // is the state a reader is actually in the instant after clicking. The
-    // hover rule and this one have equal specificity, so the editing state
-    // needs the extra `:hover` clause to win it.
-    expect(CSS).toContain('.hub-task-title-text:hover[contenteditable]');
+  it('says the words are typeable', () => {
+    // The same question `finePointer()` asks in TS. That it is SCOPED to a
+    // fine pointer is a browser check — happy-dom reports a fine, hover-capable
+    // pointer at every viewport, so it cannot tell a scoped rule from an
+    // unscoped one.
+    expect(titleRow('resting').text.cursor).toBe('text');
+  });
+
+  it('adds no box while editing either', () => {
+    // The instant after the click the same span is contenteditable. If the
+    // editing rule brought a border or a padding with it, the words would
+    // jump on the click — the one thing Bryan named.
+    const { text } = titleRow('editing');
+    expect(text.outlineColor).toBe('transparent');
+    for (const prop of TAKES_SPACE) {
+      expect(text.getPropertyValue(prop), `${prop} is declared while editing`).toBe('');
+    }
   });
 
   it('leaves the rectangle room inside the cell that clips it', () => {
@@ -88,28 +123,27 @@ describe('the row title, hovered and edited', () => {
     // The padding opens the room; the negative margin gives the same space
     // back to the grid so nothing moves. They are one declaration, and either
     // one alone is a bug — hence asserted as a pair, with the sum checked.
-    const cell = block('.hub-task-title {');
-    const pad = /padding:\s*(\d+)px;/.exec(cell)?.[1];
-    const mar = /margin:\s*-(\d+)px;/.exec(cell)?.[1];
-    expect(pad).toBeDefined();
-    expect(mar).toBe(pad);
+    const { cell, text } = titleRow('resting');
+    expect(px(cell.paddingTop)).toBeGreaterThan(0);
+    expect(px(cell.marginTop)).toBe(-px(cell.paddingTop));
+    expect(px(cell.paddingLeft)).toBe(px(cell.paddingTop));
+    expect(px(cell.marginLeft)).toBe(-px(cell.paddingTop));
     // …and enough of it: the outline sits `outline-offset` away from the words
     // and is `outline-width` thick, so anything less clips it again.
-    const base = block('.hub-task-title-text {');
-    const offset = Number(/outline-offset:\s*(\d+)px/.exec(base)?.[1]);
-    const width = Number(/outline:\s*(\d+)px/.exec(base)?.[1]);
-    expect(Number(pad)).toBeGreaterThanOrEqual(offset + width);
+    expect(px(cell.paddingTop)).toBeGreaterThanOrEqual(
+      px(text.outlineOffset) + px(text.outlineWidth),
+    );
     // The ellipsis is why the clip is there at all, so it must still be.
-    expect(cell).toContain('overflow: hidden');
+    expect(cell.overflow).toBe('hidden');
   });
 
   it('stops truncating a title that is being typed into', () => {
     // An ellipsis over an open edit is a lie about the text: the reader is
     // typing into characters the row is still drawing as "…".
-    expect(block('.hub-task-title.hub-title-editing {')).toContain('text-overflow: clip');
+    expect(titleRow('editing').cell.textOverflow).toBe('clip');
     // Positive control: the resting cell really does truncate, so the rule
     // above is turning something off rather than agreeing with the default.
-    expect(block('.hub-task-title {')).toContain('text-overflow: ellipsis');
+    expect(titleRow('resting').cell.textOverflow).toBe('ellipsis');
   });
 
   it('keeps one grid track per row child, with the flexible one under the title', () => {
@@ -118,10 +152,9 @@ describe('the row title, hovered and edited', () => {
     // six tracks, and the third — the title — is the one that flexes. Get the
     // count wrong and the title slides into a fixed track and renders at that
     // track's width on every row.
-    const tracks = /grid-template-columns:([^;]*);/
-      .exec(block('.hub-task-row {'))?.[1]
+    const tracks = titleRow('resting')
+      .row.gridTemplateColumns.replace('minmax(0, 1fr)', 'FLEX')
       .trim()
-      .replace(/minmax\(0, 1fr\)/, 'FLEX')
       .split(/\s+/);
     expect(tracks).toEqual(['auto', 'auto', 'FLEX', 'auto', 'auto', 'auto']);
   });

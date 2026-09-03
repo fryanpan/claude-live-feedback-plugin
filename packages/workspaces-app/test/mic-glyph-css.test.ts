@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { IPAD, attach, installSheets, setViewport, styleOf } from './css-harness.ts';
 
 /**
  * The mic is drawn the way the rest of the chrome is drawn.
@@ -17,35 +18,53 @@ import { describe, expect, it } from 'vitest';
  * `outline: auto 1px rgb(0, 95, 204)`. What the rule below changes is the
  * COLOUR — the platform blue for the accent every other focusable here uses.
  * Written down because a test that asserts a ring exists would pass on main
- * just as happily, and would say nothing about why the rule was added.
+ * just as happily, and would say nothing about why the rule was added. That
+ * is why the ring is compared against its two siblings rather than against a
+ * colour copied out of the ticket.
  *
- * These are stylesheet and markup facts; how the glyph reads at 430px and on
- * the rail is in the PR body, with screenshots.
+ * What that ring must NOT do — fire on a bare `:focus`, so the press-and-hold
+ * does not leave a ring behind after every utterance — stays a browser check.
+ * happy-dom matches `:focus-visible` on a programmatic focus exactly as it
+ * matches `:focus`, so the two are indistinguishable here; the separation is
+ * only observable where a POINTER press can set one and not the other. The
+ * old text version of this file asserted `.voice-mic:focus` was absent from
+ * the stylesheet, which is the source-shape proxy this conversion drops.
+ *
+ * The stylesheet halves of this file used to be regexes over `styles.css` and
+ * `hub.css`; they are computed reads now. The MARKUP halves still read the app
+ * source, because "which module mounts a mic" and "no emoji survives anywhere"
+ * are facts about files, not about any one rendered element.
  */
 const SRC = resolve(import.meta.dirname, '../src');
-// The board's cascade is two files since the hub block moved to hub.css:
-// styles.css keeps the shared chrome, hub.css carries the board's own rules,
-// and the hub shell loads them in that order. A rule this suite pins may sit
-// in either, so read the pair the page actually loads. Two reads on purpose:
-// a one-line read is what `bun run test:audit` counts, and folding them into
-// a loop would hide a source-shape site rather than remove one.
-const CSS = [
-  readFileSync(resolve(SRC, 'styles.css'), 'utf8'),
-  readFileSync(resolve(SRC, 'hub.css'), 'utf8'),
-].join('\n');
 const ICONS = readFileSync(resolve(SRC, 'icons.ts'), 'utf8');
 const HUB_APP = readFileSync(resolve(SRC, 'hub/hub-app.ts'), 'utf8');
 const HUB_RENDER = readFileSync(resolve(SRC, 'hub/hub-render.ts'), 'utf8');
 
-function declarationsOnly(css: string): string {
-  return css.replace(/\/\*[\s\S]*?\*\//g, '');
-}
+let cleanup = () => {};
+beforeEach(() => {
+  cleanup = installSheets('hub.css', 'styles.css');
+  setViewport(IPAD);
+});
+afterEach(() => {
+  cleanup();
+  document.body.replaceChildren();
+});
 
-function rule(selector: string): string {
-  const at = new RegExp(
-    `(^|\\n|\\{)\\s*${selector.replace(/[.+*[\]()]/g, '\\$&')}\\s*\\{([^}]*)\\}`,
-  ).exec(declarationsOnly(CSS));
-  return at?.[2] ?? '';
+/**
+ * The focus ring a control paints once it actually holds focus.
+ *
+ * `styleOf` cannot be used here: it drops happy-dom's computed-style cache by
+ * detaching and re-attaching the node, and detaching a focused element BLURS
+ * it — the ring vanishes before it can be read. So the element is built and
+ * focused after the viewport is set and read once, straight, which is the
+ * first read and therefore not a stale one. `:focus-visible` does match in
+ * happy-dom; only `:hover` (which has no state to set) is out of reach.
+ */
+function ringOf(classes: string): string {
+  const el = attach(classes, { tag: 'button' });
+  el.focus();
+  if (document.activeElement !== el) throw new Error(`.${classes} never took focus`);
+  return getComputedStyle(el).outline;
 }
 
 /**
@@ -103,52 +122,46 @@ describe('the mic wears the nav’s icon convention', () => {
     expect(HUB_RENDER).toMatch(/hub-huddle-start/);
   });
 
-  /**
-   * The declarations of the rule whose selector LIST contains this selector.
-   * `rule()` above only sees a selector that is the last one before the
-   * brace, so it stopped seeing `.hub-huddle-start svg` the moment a third
-   * mic button was added to the same grouped rule — a green-to-red on a
-   * stylesheet change that was correct.
-   */
-  const groupedRule = (selector: string): string => {
-    for (const m of declarationsOnly(CSS).matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
-      const sels = (m[1] ?? '').split(',').map((x) => x.trim());
-      if (sels.includes(selector)) return m[2] ?? '';
-    }
-    return '';
-  };
-
   it('sizes the glyph as a box, because a font-size no longer scales it', () => {
     // `.voice-mic` carried `font-size: 19px` and `.hub-quick-mic` carried 16px
     // to size an emoji. An SVG ignores both, so leaving them set is how the
-    // next reader concludes the glyph is still text.
-    expect(rule('.voice-mic')).not.toMatch(/font-size/);
-    expect(rule('.hub-huddle-start')).not.toMatch(/font-size:\s*\d+px/);
-    for (const sel of ['.voice-mic svg', '.hub-huddle-start svg']) {
-      const box = groupedRule(sel);
-      expect(box, `${sel} has no rule, so the glyph sizes itself`).not.toBe('');
-      expect(box).toMatch(/width:\s*\d+px/);
-      expect(box).toMatch(/height:\s*\d+px/);
+    // next reader concludes the glyph is still text. A button with no
+    // font-size of its own computes `inherit` here; one that declares a size
+    // computes the pixels — which is what the control below pins.
+    for (const host of ['voice-mic', 'hub-huddle-start']) {
+      const button = attach(host, { tag: 'button' });
+      const glyph = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+      button.appendChild(glyph);
+      expect(styleOf(button).fontSize, `.${host} still sizes a glyph as text`).toBe('inherit');
+      const box = styleOf(glyph);
+      expect(
+        Number.parseFloat(box.width),
+        `.${host} svg has no box, so the glyph sizes itself`,
+      ).toBeGreaterThan(0);
+      expect(Number.parseFloat(box.height)).toBeGreaterThan(0);
     }
-    // Control: the finder answers nothing for a selector nobody styles.
-    expect(groupedRule('.voice-mic-nonexistent svg')).toBe('');
+    // Controls: a glyph in a button nobody styles is left at its intrinsic
+    // size — the failure the rule above prevents — and a rule that DOES set a
+    // font-size reads as pixels, so the `inherit` reads are not vacuous.
+    const stray = attach('voice-mic-nonexistent', { tag: 'button' });
+    const strayGlyph = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+    stray.appendChild(strayGlyph);
+    expect(styleOf(strayGlyph).width).toBe('');
+    expect(styleOf(attach('meeting-speaker-pill', { tag: 'span' })).fontSize).toMatch(/px$/);
   });
 });
 
 describe('the mic focuses in the same colour as its neighbours', () => {
-  it('states the accent ring the rest of the chrome states', () => {
-    const focus = rule('.voice-mic:focus-visible');
-    expect(focus, 'the mic has no focus-visible rule').not.toBe('');
-    expect(focus).toMatch(/outline:\s*2px solid var\(--accent/);
-    // Positive control: this really is the shape the siblings use, read from
-    // the stylesheet rather than from memory of the ticket.
-    expect(rule('.doc-switcher:focus-visible')).toMatch(/outline:\s*2px solid var\(--accent/);
-    expect(rule('.thread-caret:focus-visible')).toMatch(/outline:\s*2px solid var\(--accent/);
-  });
-
-  it('rings on keyboard focus only, not on the press-and-hold', () => {
-    // The gesture IS a press. A `:focus` ring would stay behind after every
-    // utterance on a surface whose whole point is that talking is cheap.
-    expect(declarationsOnly(CSS)).not.toMatch(/\.voice-mic:focus\s*\{/);
+  it('paints the accent ring the rest of the chrome paints', () => {
+    // Not a colour copied from the ticket: the mic's ring is compared with
+    // the two siblings whose ring it was written to match, so a token that
+    // moves takes all three with it or fails here.
+    const mic = ringOf('voice-mic');
+    expect(mic).not.toBe('');
+    expect(mic).toBe(ringOf('doc-switcher'));
+    expect(mic).toBe(ringOf('thread-caret'));
+    // …and it is 2px of the accent rather than the UA's own hairline.
+    expect(mic).toContain('2px');
+    expect(mic).toContain(styleOf(document.documentElement).getPropertyValue('--accent'));
   });
 });

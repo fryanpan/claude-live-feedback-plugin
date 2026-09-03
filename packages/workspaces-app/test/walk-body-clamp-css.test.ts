@@ -1,60 +1,79 @@
-import { readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { IPAD, PHONE, attach, installSheets, setViewport, styleOf } from './css-harness.ts';
 
 /**
- * The walkthrough card's long-detail clamp is CSS the DOM tests cannot see
- * (happy-dom resolves no layout), so this pins the rules to the classes
- * `walkReviewBody` actually produces (review-walkthrough.test.ts pins those).
+ * The walkthrough card's long-detail clamp, read off the cascade rather than
+ * out of the stylesheet's text.
  *
  * The contract: the clamp and its expand affordance live ONLY in the mobile
  * tier (≤1100px). Wider screens — the iPad in landscape at 1180 — render the
  * whole detail with no affordance, because the ticket's promise is that the
  * card shows the same words as the thread, and only the phone needs a fold to
- * stay scannable. How it LOOKS at 1180x820 and 430px is a browser check; see
- * the PR.
+ * stay scannable.
+ *
+ * That tier boundary is exactly what a text read could not see: the old
+ * version of this file searched for the clamp inside a `@media (max-width:
+ * 1100px)` substring, which passes whether or not the query matches at the
+ * width a reader is on, and passes whether or not a later rule un-clamps it.
+ * Here the sheets are installed and the elements are built at each viewport,
+ * so the assertion is the value the browser would use.
+ *
+ * The class chain (`hub-walk-body hub-walk-body-clamp`, and the sibling
+ * `.hub-walk-body-expand`) is what `walkReviewBody` renders for a long ask;
+ * `review-walkthrough.test.ts` pins that the island produces it. What is left
+ * to the browser is the rendered height — happy-dom lays nothing out, so
+ * `max-height` is read as a declared cap, not as a measured fold.
  */
 
-const CSS = readFileSync(resolve('packages/workspaces-app/src/hub.css'), 'utf8');
+let cleanup = () => {};
+beforeEach(() => {
+  cleanup = installSheets('hub.css', 'styles.css');
+});
+afterEach(() => {
+  cleanup();
+  document.body.replaceChildren();
+});
 
-function declarationsOnly(css: string): string {
-  return css.replace(/\/\*[\s\S]*?\*\//g, '');
+/** The body element the island renders for a long ask, at the given width. */
+function clampedBody(viewport: { width: number; height: number }) {
+  setViewport(viewport);
+  return styleOf(attach('hub-walk-body hub-walk-body-clamp'));
 }
 
-/** The body of one rule, by exact selector, searched within `scope`. */
-function rule(selector: string, scope: string): string {
-  const at = new RegExp(
-    `(^|\\n|\\{|\\})\\s*${selector.replace(/[.+*[\]()]/g, '\\$&')}\\s*\\{([^}]*)\\}`,
-  ).exec(scope);
-  return at?.[2] ?? '';
-}
-
-/** Everything inside the one mobile-tier media block that mentions the clamp. */
-function mobileBlock(): string {
-  const css = declarationsOnly(CSS);
-  const blocks = css.split(/@media\s*\(max-width:\s*1100px\)\s*\{/).slice(1);
-  const withClamp = blocks.find((b) => b.includes('.hub-walk-body-clamp'));
-  return withClamp ?? '';
+/** The expand button the island renders alongside it. */
+function expandButton(viewport: { width: number; height: number }) {
+  setViewport(viewport);
+  return styleOf(attach('hub-walk-body-expand', { tag: 'button' }));
 }
 
 describe('the long-detail clamp is scoped to the mobile tier', () => {
-  it('clamps the body by height inside the ≤1100px block, not globally', () => {
-    const body = rule('.hub-walk-body-clamp', mobileBlock());
-    expect(body).toContain('max-height');
-    expect(body).toContain('overflow: hidden');
-    // And NOT outside a media query: strip every media block and the clamp
-    // selector must not carry a max-height at top level.
-    const topLevel = declarationsOnly(CSS).replace(/@media[^{]*\{(?:[^{}]*\{[^}]*\})*[^}]*\}/g, '');
-    expect(rule('.hub-walk-body-clamp', topLevel)).toBe('');
+  it('folds the body on the phone', () => {
+    const phone = clampedBody(PHONE);
+    expect(phone.maxHeight).not.toBe('none');
+    expect(phone.maxHeight).not.toBe('');
+    expect(phone.overflow).toBe('hidden');
   });
 
-  it('shows the expand affordance only there, at thumb size', () => {
-    // Hidden by default (wide screens render the full body, no affordance)…
-    const base = rule('.hub-walk-body-expand', declarationsOnly(CSS));
-    expect(base).toContain('display: none');
-    // …and a ≥36px target inside the mobile block (design-mobile.md).
-    const mobile = rule('.hub-walk-body-expand', mobileBlock());
-    const min = /min-height:\s*(\d+)px/.exec(mobile);
-    expect(Number(min?.[1] ?? 0)).toBeGreaterThanOrEqual(36);
+  it('leaves the body whole on the iPad, where the card shows the same words as the thread', () => {
+    const ipad = clampedBody(IPAD);
+    expect(ipad.maxHeight === 'none' || ipad.maxHeight === '').toBe(true);
+    expect(ipad.overflow === 'visible' || ipad.overflow === '').toBe(true);
+  });
+
+  it('shows the expand affordance only on the phone, at thumb size', () => {
+    expect(expandButton(IPAD).display).toBe('none');
+    const phone = expandButton(PHONE);
+    expect(phone.display).toBe('inline-flex');
+    expect(Number.parseFloat(phone.minHeight)).toBeGreaterThanOrEqual(36);
+  });
+
+  it('positive control: the cascade is live — the same element reads a rule that predates the clamp', () => {
+    // Without this, a renamed class would make every assertion above pass by
+    // measuring an element no rule reaches: an unstyled box has `max-height:
+    // none`, `overflow: visible` and `display: block`, which is precisely the
+    // iPad expectation.
+    setViewport(PHONE);
+    expect(styleOf(attach('hub-walk-body')).lineHeight).toBe('1.55');
+    expect(styleOf(attach('hub-walk-body-clamp')).maxHeight).not.toBe('none');
   });
 });
