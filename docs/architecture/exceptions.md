@@ -38,10 +38,16 @@ rule that used to be one `toMatch` line became a mount, a viewport and a
 computed read, so `md-composer.test.ts` and `hub-mic-dock-css.test.ts` crossed
 the line without gaining a second subject.
 
-A10 split `rooms.ts` (4801 → 3490) and added one row for `file-binding.ts`
-(1652), the seam the `rooms.ts` row had named. A split that lifts an oversized
-subject out of an oversized file adds to this list rather than shortening it —
-what changes is that each row now describes one thing.
+One more was added later on 2026-09-03 for `share-link-flow.test.ts`, the new
+share-link route suite. It is a first draft over the limit rather than a file
+that grew into it: the flow it drives needs two Access audiences and two
+hostnames configured on one server, and every question worth asking about a
+share link is a question about that one fixture.
+
+A10 then split `rooms.ts` (4801 → 3490) and added one row for
+`file-binding.ts` (1652), the seam the `rooms.ts` row had named. A split that
+lifts an oversized subject out of an oversized file adds to this list rather
+than shortening it — what changes is that each row now describes one thing.
 
 Test files are judged by a narrower rule, in their own table below: a long test
 file is an exception unless two *unrelated harnesses* share it. Many `describe`
@@ -224,6 +230,7 @@ The remaining 93 are exceptions. Each row names the one harness its cases share.
 | `packages/server/test/sentry-server.test.ts` | 617 | All describes drive `src/sentry.ts` against the module-scope `startCaptureServer()` harness. |
 | `packages/server/test/agent-watches.test.ts` | 615 | Store and route describes share the `AgentWatches` data-dir fixture. |
 | `packages/server/test/comment-durability.test.ts` | 610 | Both describes use the shared `listenFrames()` / `settle()` SSE harness against the agent comment queue. |
+| `packages/server/test/share-link-flow.test.ts` | 606 | Eight describes over one server: the share hostname, the owner hostname, two boards and a doc on each. The two-audience fixture is the point — every cross-check case is vacuous without both, so splitting the file would mean building it twice. |
 | `packages/workspaces-app/test/plan-gate.test.ts` | 605 | One describe on `mountPlanGate` over the shared `root` / `stubFetch` / `stubTimers` seam. |
 | `packages/server/test/parallelism-cap.test.ts` | 601 | Both describes assert the same workspace cap through the shared frame harness. |
 | `packages/server/test/owner-kind.test.ts` | 599 | The pure `resolveOwnerKind` tables and the HTTP describes are two declared layers of one decision over shared fixtures. |

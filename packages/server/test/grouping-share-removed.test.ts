@@ -108,6 +108,9 @@ describe('a grouping cannot be shared on its own', () => {
     handle = createServer({
       port: 0,
       dataDir,
+      // A share hostname, so `share_workspace` can mint a share link — the
+      // positive controls below need the mint to succeed.
+      shareLinkHosts: ['share.example.test'],
       ...access.serverOptions,
     });
     base = `http://localhost:${handle.port}`;
@@ -207,7 +210,7 @@ describe('a grouping cannot be shared on its own', () => {
       ).toBe(200);
     });
 
-    it('refuses share_workspace (Access mode) for a grouping, while a board mints', async () => {
+    it('refuses share_workspace for a grouping, while a board mints', async () => {
       // Verbatim from the 0.1.80 bundle's `case "share_workspace"`, which
       // forwards `{ workspaceId, allowDomains, entryDocId, ttlSeconds, name }`.
       const grouping = await local('/api/share/workspace', {
@@ -220,7 +223,9 @@ describe('a grouping cannot be shared on its own', () => {
       expect(grouping.status).toBe(410);
       expect(((await grouping.json()) as { error: string }).error).toBe('grouping_sharing_removed');
 
-      // Positive control: the board, through the same Cloudflare path.
+      // Positive control: the board, through the same route. It mints a SHARE
+      // LINK now, so the reply names `link` — the refusal above is what is
+      // under test, and it is unchanged.
       const board = await local('/api/share/workspace', {
         workspaceId: boardId,
         allowDomains: ['@partner.example'],
@@ -229,7 +234,9 @@ describe('a grouping cannot be shared on its own', () => {
         name: undefined,
       });
       expect(board.status).toBe(200);
-      expect(((await board.json()) as { share: Share }).share.workspaceId).toBe(boardId);
+      expect(((await board.json()) as { link: { workspaceId: string } }).link.workspaceId).toBe(
+        boardId,
+      );
     });
 
     it('still says "not found" for an id that is neither, so the 410 stays informative', async () => {
@@ -408,7 +415,9 @@ describe('a grouping cannot be shared on its own', () => {
        * layers, which is what makes this a control rather than two flavours
        * of the same failure.
        */
-      const mint = await local('/api/share/workspace', {
+      // `/api/share/link` rather than `/api/share/workspace`: this seam is
+      // about a per-share HOSTNAME, and that is the mint that still makes one.
+      const mint = await local('/api/share/link', {
         workspaceId: boardId,
         allowDomains: ['@partner.example'],
       });

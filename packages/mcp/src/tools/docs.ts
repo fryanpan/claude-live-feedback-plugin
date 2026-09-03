@@ -755,23 +755,23 @@ export async function handleDocsTool(
       });
     }
     case 'share_workspace': {
-      const {
-        workspaceId,
-        allowDomains,
-        ttlSeconds,
-        name: slug,
-      } = a as {
-        workspaceId: string;
-        allowDomains: string[];
-        ttlSeconds?: number;
-        name?: string;
-      };
+      // Forwarded AS SENT, plus this session's name. `allowDomains` and
+      // `name` no longer mean anything — one Access application covers the
+      // whole share hostname and the link has no subdomain of its own — but
+      // an older bundle still sends them, so the server accepts and ignores
+      // them and says `allowDomainsIgnored` when one arrived. Destructuring
+      // named keys here is what once turned an argument nobody honoured into
+      // a share wider than the caller asked for; the server refuses or
+      // honours each key by name instead.
       const res = await http('POST', '/api/share/workspace', {
-        workspaceId,
-        allowDomains,
-        ttlSeconds,
-        name: slug,
+        ...(a as Record<string, unknown>),
+        createdBy: AUTHOR.name,
       });
+      return ok(res);
+    }
+    case 'remove_share_member': {
+      const { workspaceId, email } = a as { workspaceId: string; email: string };
+      const res = await http('POST', '/api/share/member/remove', { workspaceId, email });
       return ok(res);
     }
     case 'share_link': {
