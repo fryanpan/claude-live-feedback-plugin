@@ -19,7 +19,10 @@ find packages \( -name '*.ts' -o -name '*.css' \) \
 ```
 
 Audited 2026-09-02 at `3a39db67`, and re-audited after A1 and A2 landed.
-**159 files** over 500 lines: 64 source and 95 test. A7 took `activity.ts` (582 → 301) and `recall-calendar.ts` (721 → 470) off this list entirely; their rows are gone rather than marked done.
+**158 files** over 500 lines: 64 source and 94 test. A7 took `activity.ts`
+(582 → 301) and `recall-calendar.ts` (721 → 470) off this list, and A8 took
+`voice-smooth.test.ts` (729 → 493); all three rows are gone rather than marked
+done.
 
 Test files are judged by a narrower rule, in their own table below: a long test
 file is an exception unless two *unrelated harnesses* share it. Many `describe`
@@ -136,7 +139,6 @@ real HTTP route — sharing the same fixture builders. That is one harness.
 | File | Lines | Verdict | Reason / seam |
 |---|---|---|---|
 | `packages/markdown-app/test/hub-render.test.ts` | 3882 | Exception | Twelve describes over one harness: the module-scope `task()` factory and the `root` beforeEach, asserting rendered DOM. The six that `readFileSync` `styles.css` and hub source and assert on text moved to `hub-source-contract.test.ts` in B1 — they were the second harness this row named. |
-| `packages/server/test/voice-smooth.test.ts` | 729 | Split | Lines 55–293 are eight describes of pure helpers (`navigationAsk`, `resolveByTitle`, `parseOrdinal`, `composeStatus`) with no server at all, while `voice, smoothly (route)` stands up `createServer` in its own `beforeAll`. Move the eight helper describes to `voice-smooth-model.test.ts`. **M** |
 
 The remaining 93 are exceptions. Each row names the one harness its cases share.
 
@@ -277,7 +279,7 @@ months, so splitting it buys almost nothing.
 | 28 | `packages/plugin/hooks/lib/agent-notes.ts` | 653 | 2 | S |
 | 29 | `recall-calendar.ts` + `google-oauth.ts` (split in A7) | 721 | 1 | done |
 | 30 | `packages/markdown-app/test/hub-render.test.ts` | 4078 | — | S |
-| 31 | `packages/server/test/voice-smooth.test.ts` | 729 | — | M |
+| 31 | `voice-smooth.test.ts` + `voice-smooth-model.test.ts` (split in A8) | 729 | — | done |
 
 The top eight are where the pain is: they carry 991 of the 1350 commits in this
 queue. Rows 1 through 8 are worth filing as tickets now; below row 20 a split is
