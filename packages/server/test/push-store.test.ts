@@ -5,7 +5,15 @@
  */
 
 import { describe, expect, it } from 'bun:test';
-import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import {
+  chmodSync,
+  existsSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { b64urlEncode } from '../src/push-crypto.ts';
@@ -70,6 +78,20 @@ describe('loadOrCreateVapidKeys', () => {
       await loadOrCreateVapidKeys(dir);
       const mode = statSync(join(dir, VAPID_FILENAME)).mode & 0o777;
       expect(mode).toBe(0o600);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('re-tightens a pre-existing key file that arrived loose', async () => {
+    const dir = tmp();
+    try {
+      await loadOrCreateVapidKeys(dir);
+      chmodSync(join(dir, VAPID_FILENAME), 0o644);
+      // Positive control: the file really is loose before the reload.
+      expect(statSync(join(dir, VAPID_FILENAME)).mode & 0o777).toBe(0o644);
+      await loadOrCreateVapidKeys(dir);
+      expect(statSync(join(dir, VAPID_FILENAME)).mode & 0o777).toBe(0o600);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

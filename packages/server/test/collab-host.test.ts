@@ -311,10 +311,13 @@ describe('the collaboration hostname over HTTP', () => {
       expect(diff.status).toBe(403);
     });
 
-    it('CANNOT deploy, or push a plugin refresh at the fleet', async () => {
+    it('CANNOT deploy, push a plugin refresh at the fleet, or merge agent ids', async () => {
       expect((await asCollaborator('/api/deploy', { method: 'POST' })).status).toBe(403);
       expect((await asCollaborator('/api/deploy')).status).toBe(403);
       expect((await asCollaborator('/api/plugin/refresh', { method: 'POST' })).status).toBe(403);
+      expect((await asCollaborator('/api/agents/agent-one/merge', { method: 'POST' })).status).toBe(
+        403,
+      );
     });
 
     it('CANNOT delete a doc it can read, or rewrite it wholesale', async () => {
