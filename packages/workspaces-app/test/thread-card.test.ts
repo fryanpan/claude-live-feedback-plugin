@@ -223,7 +223,10 @@ describe('thread card — the collapsed card is two lines', () => {
     // two now measures zero truthfully, and a slot left at its last good
     // height would carry a blank second row under a one-line card.
     const alone = makeThread({ id: 'z1', comments: [comment(alice, 'Alone.')] });
-    const withReply = makeThread({ id: 'z2', comments: [comment(alice, 'A.'), comment(bob, 'B.')] });
+    const withReply = makeThread({
+      id: 'z2',
+      comments: [comment(alice, 'A.'), comment(bob, 'B.')],
+    });
     const { panel, cardFor } = mountPanel();
     panel.setThreads([alone, withReply]);
 
