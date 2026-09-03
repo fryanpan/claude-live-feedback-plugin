@@ -296,6 +296,10 @@ async function runMeeting(
   });
 
   let before = '';
+  // Ticks whose compose never ran. Counted and reported rather than assumed
+  // away: a run that quietly measured 250 of 273 ticks would still print a
+  // pass rate, and the rate would be over a sample nobody could see.
+  let uncomposed = 0;
   for (let i = 0; i < ticks.length; i++) {
     const tick = ticks[i]!;
     const transcript = tick.turns.map((t) => `${t.speaker}: ${t.text}`).join('\n');
@@ -310,7 +314,8 @@ async function runMeeting(
     }
     const notes = shot.notes;
     const where = `${fixture.meeting} tick ${i + 1}`;
-    const references = (shot.input.references ?? []) as readonly NoteReference[];
+    if (!shot.input) uncomposed++;
+    const references = (shot.input?.references ?? []) as readonly NoteReference[];
 
     /* --- 1.1 readability, the decidable half --- */
     const over = overlongBullets(notes);
@@ -390,7 +395,8 @@ async function runMeeting(
   console.log(
     `  ${fixture.meeting}: ${ticks.length} ticks, ${allBullets(harness.notes()).length} bullets, ` +
       `${parseNotesTopics(harness.notes()).filter((t) => t.heading).length} topics, ` +
-      `${marked} marked unconfirmed`,
+      `${marked} marked unconfirmed` +
+      (uncomposed > 0 ? `, ${uncomposed} never composed` : ''),
   );
 }
 

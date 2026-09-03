@@ -71,8 +71,16 @@ export interface TickSnapshot {
   /** Every top-level heading, in order — the cheapest way to assert that a
    *  section did not move, get a twin, or gain a sibling. */
   headings: string[];
-  /** What the fake model was handed for this tick. */
-  input: NotesComposeInput;
+  /**
+   * What the model was handed for this tick — UNDEFINED when no compose ran
+   * for it.
+   *
+   * Optional because it really is optional: a tick whose compose was skipped
+   * or coalesced settles with a doc and no input, and this field used to be
+   * cast to non-null, which typechecked and then crashed a whole eval run
+   * twelve minutes in. A caller reading it must handle the absence.
+   */
+  input?: NotesComposeInput;
   /** What it answered. */
   composed: string;
 }
@@ -224,7 +232,7 @@ export function createNotesTickHarness(opts: NotesTickHarnessOptions): NotesTick
       markdown: markdown(),
       notes: sectionBody(MEETING_NOTES_HEADINGS),
       headings: headings(),
-      input: seen?.input as NotesComposeInput,
+      ...(seen?.input ? { input: seen.input } : {}),
       composed: seen?.composed ?? '',
     };
   };

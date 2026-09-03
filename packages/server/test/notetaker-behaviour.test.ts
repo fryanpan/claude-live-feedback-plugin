@@ -34,6 +34,20 @@ import {
   verbatimBullets,
 } from '../src/notes-quality.ts';
 import { createNotesTickHarness } from './notes-tick-harness.ts';
+import type { TickSnapshot } from './notes-tick-harness.ts';
+
+/**
+ * The compose input for a tick that definitely composed.
+ *
+ * `TickSnapshot.input` is optional because a coalesced or skipped tick has
+ * none. Every tick in this file drives a compose, so absence here is a broken
+ * test rather than a case to handle — and saying so out loud beats the cast
+ * that used to live in the harness and crashed the eval instead of failing.
+ */
+const composeInput = (shot: TickSnapshot): NotesComposeInput => {
+  if (!shot.input) throw new Error(`tick ${shot.tick} never reached the composer`);
+  return shot.input;
+};
 
 const emptyInput: NotesComposeInput = {
   docId: 'd1',
@@ -136,13 +150,13 @@ describe('a board row this tick named', () => {
     });
     await harness.end();
 
-    const cited = (shot.input.references ?? []).map((r) => r.title);
+    const cited = (composeInput(shot).references ?? []).map((r) => r.title);
     expect(cited).toContain('Retry loop wakes the sync every ninety seconds');
     expect(cited).toContain('Backoff design note');
     // The row nobody said stays off the prompt: that is the whole point of
     // searching rather than listing.
     expect(cited).not.toContain('Lantern badge counts stale invites');
-    expect(shot.input.references?.[0]?.url).toBe('/workspaces/w-1?task=t-3');
+    expect(composeInput(shot).references?.[0]?.url).toBe('/workspaces/w-1?task=t-3');
   });
 
   it('is absent when the doc belongs to no board', async () => {
@@ -154,7 +168,7 @@ describe('a board row this tick named', () => {
     });
     const shot = await harness.speak('The retry loop wakes the sync every ninety seconds.');
     await harness.end();
-    expect(shot.input.references ?? []).toEqual([]);
+    expect(composeInput(shot).references ?? []).toEqual([]);
   });
 });
 
@@ -256,8 +270,8 @@ describe('a bullet a person wrote', () => {
     await harness.speak('First words.');
     const second = await harness.speak('More words.');
     await harness.end();
-    expect(second.input.humanNotes).toContain('I think this predates the 0.4 rollout');
-    expect(buildNotesPrompt(second.input).user).toContain('Written by a person');
+    expect(composeInput(second).humanNotes).toContain('I think this predates the 0.4 rollout');
+    expect(buildNotesPrompt(composeInput(second)).user).toContain('Written by a person');
   });
 
   it('is not duplicated when the compose returns it in a new position', async () => {
