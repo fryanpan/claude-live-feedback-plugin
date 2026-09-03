@@ -12,7 +12,7 @@
  * `now`, so "a link that lapsed" is a number, not a sleep.
  */
 import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
-import { existsSync, mkdtempSync, rmSync, statSync } from 'node:fs';
+import { chmodSync, existsSync, mkdtempSync, rmSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { ShareLinks } from '../src/share/share-links.ts';
@@ -268,6 +268,22 @@ describe('the share-link store', () => {
       links.redeem(mint().linkId, REVIEWER);
       expect(existsSync(join(dataDir, 'share-links.json.tmp'))).toBe(false);
       expect(new ShareLinks({ dataDir }).isMember(BOARD, REVIEWER)).toBe(true);
+    });
+
+    it('tightens a registry it finds with a looser mode', () => {
+      // A registry written before this module set a mode, or restored from a
+      // backup, or copied by a deploy — the mode a file arrives with is not
+      // ours to assume. Opening one is the moment we can still fix it, so the
+      // load tightens it instead of trusting whatever the last writer left.
+      links.redeem(mint().linkId, REVIEWER);
+      const path = join(dataDir, 'share-links.json');
+      chmodSync(path, 0o644);
+
+      const reopened = new ShareLinks({ dataDir });
+
+      expect(statSync(path).mode & 0o777).toBe(0o600);
+      // ...and tightening it did not cost the contents.
+      expect(reopened.isMember(BOARD, REVIEWER)).toBe(true);
     });
   });
 

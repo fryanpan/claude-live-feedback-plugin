@@ -996,7 +996,7 @@ export const TOOL_LIST: ListToolsResult = {
     {
       name: 'remove_share_member',
       description:
-        "End one person's access to a board they joined through a share link. Takes effect on their next request. This is the verb for ejecting somebody — unshare only stops new people redeeming the link, and never removes anyone already in. list_shares names every member and which link they came through.",
+        "End one person's access to a board they joined through a share link. Their next request is refused, and any live editing socket or event stream that membership had already opened is hung up — the reply says how many of each. Membership is per board, so their connections to any OTHER board they hold are untouched. This is the verb for ejecting somebody — unshare only stops new people redeeming the link, and never removes anyone already in. list_shares names every member and which link they came through.",
       inputSchema: {
         type: 'object',
         properties: {
@@ -1071,7 +1071,7 @@ export const TOOL_LIST: ListToolsResult = {
     {
       name: 'set_sharing_enabled',
       description:
-        'Master switch for all external access. Off makes every share and link answer 403 and hangs up open connections — one call instead of revoking shares individually. Existing shares are preserved and resume when it is back on; the local and tailnet surface is unaffected. Call with no argument to read the current state.',
+        'Master switch for all external access. Off makes every share and link answer 403 — one call instead of revoking shares individually. It also hangs up open connections belonging to per-share visitors and to share-link members; a COLLABORATION-hostname visitor carries neither a share nor a membership, so their open socket survives until it drops. Existing shares are preserved and resume when it is back on; the local and tailnet surface is unaffected. Call with no argument to read the current state.',
       inputSchema: {
         type: 'object',
         properties: {
