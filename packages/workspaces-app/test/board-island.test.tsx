@@ -26,8 +26,6 @@
  *
  * All fixtures are synthetic — invented names, jordan@partner.example register.
  */
-import { readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { boardData } from '../src/hub/board-island.tsx';
 import {
@@ -38,6 +36,7 @@ import {
   type HubTask,
   boardSections,
 } from '../src/hub/hub-board-model.ts';
+import { IPAD, installSheets, setViewport, styleOf } from './css-harness.ts';
 import { type ShimHandlers, disposeBoards, renderBoard } from './support/board.ts';
 import { renderTaskDetail } from './support/task-detail.ts';
 
@@ -124,9 +123,20 @@ function withCaretApi(
 const tick = () => new Promise((r) => setTimeout(r, 0));
 
 let root: HTMLElement;
+/** The page's own sheets, in the order the hub shell loads them, so any case
+ *  here may read a computed value. Installing a stylesheet changes no text and
+ *  no structure, so every behavioural case in this file is unaffected. */
+let sheets = () => {};
 beforeEach(() => {
   root = document.createElement('div');
+  // The app's host is `<div id="hub-board" class="hub-board">` (hub-app.ts),
+  // and the island-wrapper rule below is scoped to that class. Carrying it
+  // here is what lets that rule be read off the board the island renders,
+  // rather than out of the stylesheet's text.
+  root.className = 'hub-board';
   document.body.replaceChildren(root);
+  setViewport(IPAD);
+  sheets = installSheets('hub.css', 'styles.css');
   // A fold is a reading preference kept in localStorage, and it outlives a
   // test unless it is cleared — one collapsed band would silently hide the
   // rows every later case is asserting on.
@@ -136,7 +146,25 @@ beforeEach(() => {
     /* private mode; nothing to clear */
   }
 });
-afterEach(disposeBoards);
+afterEach(() => {
+  sheets();
+  disposeBoards();
+});
+
+/**
+ * The grid tracks an element actually resolves to, as a list.
+ *
+ * Read off the rendered row rather than out of `hub.css`: a declaration that
+ * survives in the file proves nothing about the row, which may carry a class
+ * a later rule re-tracks, or sit inside a media query that does not match at
+ * the width being read. `minmax(0, 1fr)` holds a space after its comma, so
+ * the split ignores whitespace inside parentheses.
+ */
+function trackList(el: HTMLElement): string[] {
+  const cols = styleOf(el).gridTemplateColumns.trim();
+  expect(cols, 'the row resolved no grid-template-columns').not.toBe('');
+  return cols.split(/\s+(?![^(]*\))/);
+}
 
 /** A repaint of the board with new state, the island left mounted — what a
  *  peer's edit, an SSE event or an attachment refresh causes. */
@@ -365,14 +393,24 @@ describe('the board island contract', () => {
   });
 
   it('the wrapper is out of layout, so sections stay direct children of the board', () => {
-    // happy-dom does no layout, so this is pinned at the rule level. Without
-    // `display: contents` the wrapper becomes a block between `.hub-board` and
-    // its sections, which breaks the column's own spacing and — worse —
-    // changes what `.closest('.hub-section')` walks past during a drag.
-    const css = readFileSync(resolve('packages/workspaces-app/src/hub.css'), 'utf8');
-    const rule = css.match(/\.hub-board\s*>\s*\[data-preact-island\]\s*\{([^}]*)\}/)?.[1] ?? '';
-    expect(rule).toContain('display'); // positive control: found the rule
-    expect(rule).toMatch(/display:\s*contents/);
+    // Without `display: contents` the wrapper becomes a block between
+    // `.hub-board` and its sections, which breaks the column's own spacing
+    // and — worse — changes what `.closest('.hub-section')` walks past during
+    // a drag.
+    //
+    // Measured off the mounted island rather than read out of the stylesheet:
+    // the rule is `.hub-board > [data-preact-island]`, so it holds only if the
+    // wrapper Preact creates is a DIRECT child of a `.hub-board` host, which
+    // is the half a text read cannot see. happy-dom lays nothing out, so this
+    // is the `display` the browser would use, not the column it produces.
+    renderBoard(root, boardOf([task({ id: 'k-css', goal: 'g-pr', order: 1 })]), handlers());
+    const wrapper = root.querySelector('[data-preact-island="board"]') as HTMLElement;
+    expect(wrapper).not.toBeNull();
+    expect(styleOf(wrapper).display).toBe('contents');
+    // Positive control: the sheets are attached and the cascade reaches the
+    // rendered tree. An unstyled element reads `''` for every property, which
+    // would make "the wrapper is not a box" true of nothing at all.
+    expect(styleOf(root.querySelector('.hub-task-row') as HTMLElement).display).toBe('grid');
   });
 });
 
@@ -767,14 +805,12 @@ describe('renderBoard', () => {
     expect(shape(rows[1])).toEqual(shape(rows[0]));
     expect(shape(rows[2])).toEqual(shape(rows[0]));
 
-    // The stylesheet's own declaration, read rather than restated — a literal
-    // count here would just be a second place to forget to update.
-    const css = readFileSync(resolve('packages/workspaces-app/src/hub.css'), 'utf8');
-    const decl = /\.hub-task-row\s*\{[^}]*grid-template-columns:\s*([^;]+);/.exec(css)?.[1];
-    expect(decl).toBeDefined();
-    // `minmax(0, 1fr)` holds a space after its comma, so split on whitespace
-    // that is not inside parentheses.
-    const tracks = (decl as string).trim().split(/\s+(?![^(]*\))/);
+    // The grid the ROW ITSELF resolves to, not the stylesheet's text — a
+    // literal count here would just be a second place to forget to update,
+    // and a text read would pass against a declaration a later rule overrides
+    // or that this row's class chain never reaches.
+    expect(styleOf(rows[0]).display).toBe('grid'); // control: the sheet is live
+    const tracks = trackList(rows[0]);
     expect(tracks.length).toBeGreaterThan(1); // control: the split found tracks
 
     expect(shape(rows[0])).toHaveLength(tracks.length);
@@ -897,7 +933,7 @@ describe('the goal band row', () => {
     );
   });
 
-  // Same contract as the task row's track test: the stylesheet's declaration
+  // Same contract as the task row's track test: the grid the row resolves to
   // is read rather than restated, and the child count must match it.
   it('emits one child per declared grid track, with the title on the flexible one', () => {
     renderBoard(
@@ -913,10 +949,10 @@ describe('the goal band row', () => {
       'hub-goal-open',
       'hub-owner-ctl',
     ]);
-    const css = readFileSync(resolve('packages/workspaces-app/src/hub.css'), 'utf8');
-    const decl = /\.hub-goal-row\s*\{[^}]*grid-template-columns:\s*([^;]+);/.exec(css)?.[1];
-    expect(decl).toBeDefined();
-    const tracks = (decl as string).trim().split(/\s+(?![^(]*\))/);
+    const row = goalRow();
+    expect(styleOf(row).display).toBe('grid'); // control: the sheet is live
+    const tracks = trackList(row);
+    expect(tracks.length).toBeGreaterThan(1); // control: the split found tracks
     expect(shape).toHaveLength(tracks.length);
     expect(tracks[shape.indexOf('hub-goal-title')]).toContain('1fr');
     expect(tracks.filter((t) => t.includes('fr'))).toHaveLength(1);

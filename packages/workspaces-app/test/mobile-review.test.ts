@@ -8,6 +8,7 @@ import {
 } from '../src/mobile-review.ts';
 import type { InlineThreadCard } from '../src/review-surface.ts';
 import { ThreadPanel } from '../src/threads.ts';
+import { IPAD, PHONE, attach, installSheets, setViewport, styleOf } from './css-harness.ts';
 
 /**
  * Mobile review: comments inline in the document/source, the over-doc sheet
@@ -495,18 +496,59 @@ describe('showThread for a thread with no line to sit beside', () => {
  * can see that, because it is entirely a stylesheet fact.
  */
 describe('the mobile sheet rides the keyboard', () => {
-  it('pins #threads-pane to --kb-bottom, and caps its height against it too', async () => {
-    const { readFileSync } = await import('node:fs');
-    const { resolve } = await import('node:path');
-    // vitest runs from the repo root (vitest.config.ts lives there).
-    const css = readFileSync(resolve('packages/workspaces-app/src/styles.css'), 'utf8');
-    const phone = css.slice(
-      css.indexOf('/* ========== Over-doc bottom sheet on mobile =========='),
-    );
-    const rule = phone.match(/#threads-pane\s*\{([^}]*)\}/);
-    // Positive control: the block this asserts about really was found.
-    expect(rule?.[1]).toContain('position: fixed');
-    expect(rule?.[1]).toMatch(/bottom:\s*var\(--kb-bottom/);
-    expect(rule?.[1]).toMatch(/max-height:[^;]*--kb-bottom/);
+  let sheets = () => {};
+  afterEach(() => {
+    sheets();
+    document.documentElement.style.removeProperty('--kb-bottom');
+    setViewport({ width: 1024, height: 768 });
+    document.body.replaceChildren();
+  });
+
+  /** `#threads-pane` as the page resolves it, at a stated viewport and with
+   *  the keyboard inset `wireKeyboardInset` publishes set to `kb`. Snapshotted
+   *  rather than returned live: a computed style is bound to its element, and
+   *  the next call detaches it. */
+  function pane(viewport: { width: number; height: number }, kb: string) {
+    setViewport(viewport);
+    document.documentElement.style.setProperty('--kb-bottom', kb);
+    document.body.replaceChildren();
+    const style = styleOf(attach('x', { attrs: { id: 'threads-pane' } }));
+    return { position: style.position, bottom: style.bottom, maxHeight: style.maxHeight };
+  }
+
+  it('pins #threads-pane to --kb-bottom, and caps its height against it too', () => {
+    // Read off the cascade rather than out of the stylesheet's text. The old
+    // version searched one slice of `styles.css` for the declarations, which
+    // says nothing about whether they REACH the pane: they sit inside a
+    // `max-width: 900px` block, and a text match holds at every width whether
+    // or not the query does.
+    sheets = installSheets('styles.css');
+    const down = pane(PHONE, '0px');
+    expect(down.position).toBe('fixed');
+    expect(down.bottom).toBe('0px');
+
+    // The keyboard comes up. `bottom` follows it, and so does the height cap
+    // — that second half is what stops the sheet growing off the TOP of the
+    // screen as it is pushed up, and it is the one a `toMatch` on the source
+    // could not tell from a copy of the variable's name.
+    const up = pane(PHONE, '300px');
+    expect(up.bottom).toBe('300px');
+    expect(up.maxHeight).not.toBe(down.maxHeight);
+    expect(up.maxHeight).toContain('300px');
+    // happy-dom returns `min()` unevaluated, so the assertion is that the cap
+    // SHRANK by the inset, spelled the way the browser would compute it.
+    expect(down.maxHeight).toContain('- 0px - 56px');
+    expect(up.maxHeight).toContain('- 300px - 56px');
+  });
+
+  it('leaves the desktop pane alone — the sheet is the phone tier only', () => {
+    // The control the text read had no way to make: these declarations live
+    // in a `max-width: 900px` block, so on the iPad the pane must NOT be a
+    // fixed, keyboard-riding sheet. A grep for `position: fixed` passes here
+    // either way.
+    sheets = installSheets('styles.css');
+    const wide = pane(IPAD, '300px');
+    expect(wide.position).not.toBe('fixed');
+    expect(wide.bottom).not.toBe('300px');
   });
 });

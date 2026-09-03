@@ -1,7 +1,5 @@
-import { readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
 import { options } from 'preact';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { goalDetailData, mountGoalDetailIsland } from '../src/hub/goal-detail-island.tsx';
 import {
   type BoardSection,
@@ -10,6 +8,7 @@ import {
 } from '../src/hub/hub-board-model.ts';
 import type { TaskDiscussion } from '../src/hub/hub-detail-render.ts';
 import type { GoalDetailHandlers } from '../src/hub/hub-render.ts';
+import { IPAD, installSheets, setViewport, styleOf } from './css-harness.ts';
 
 /**
  * The goal panel's ISLAND contract, as opposed to what the panel shows — that
@@ -78,7 +77,17 @@ function repaint(
   goalDetailData.value = { section: { ...s }, discussion, handlers: handlers(extra) };
 }
 
+/** The page's own sheets, in the order the hub shell loads them, so any test
+ *  here may read a computed value. Installing a stylesheet changes no text and
+ *  no structure, so the behavioural cases either side are unaffected. */
+let sheets = () => {};
+beforeEach(() => {
+  setViewport(IPAD);
+  sheets = installSheets('hub.css', 'styles.css');
+});
+
 afterEach(() => {
+  sheets();
   live?.();
   live = null;
   goalDetailData.value = { section: null, handlers: handlers() };
@@ -111,13 +120,25 @@ describe('the goal detail island’s mount contract', () => {
   });
 
   it('the wrapper is out of layout, so the panel stays a direct child of the backdrop', () => {
-    // happy-dom resolves no layout, so this is pinned at the rule level:
-    // `.hub-detail` centres with flex, and without `display: contents` the
-    // wrapper — not the panel — becomes the flex item.
-    const css = readFileSync(resolve('packages/workspaces-app/src/hub.css'), 'utf8');
-    const rule = css.match(/\.hub-detail\s*>\s*\[data-preact-island\]\s*\{([^}]*)\}/)?.[1] ?? '';
-    expect(rule).toContain('display'); // positive control: the rule was found
-    expect(rule).toMatch(/display:\s*contents/);
+    // `.hub-detail` centres its child with flex, and without `display:
+    // contents` the WRAPPER — not the panel — becomes the flex item, so the
+    // panel stretches to fill it and the panel's own width stops describing
+    // anything on screen. Measured off the mounted island rather than read
+    // out of the stylesheet: the rule is `.hub-detail > [data-preact-island]`,
+    // and only a real mount can show that the wrapper Preact creates is
+    // actually a direct child of a `.hub-detail` host. happy-dom lays nothing
+    // out, so what is asserted is the `display` the browser would use, not the
+    // geometry that follows from it.
+    const host = mount();
+    repaint(section(), EMPTY);
+    const wrapper = host.querySelector('[data-preact-island="goal-detail"]') as HTMLElement;
+    expect(wrapper).not.toBeNull();
+    expect(styleOf(wrapper).display).toBe('contents');
+    // Positive control: the sheets really are attached and this host really is
+    // the `.hub-detail` backdrop — an unstyled element reads `''` for every
+    // property, which would satisfy nothing above but everything below.
+    expect(styleOf(host).position).toBe('fixed');
+    expect(styleOf(host.querySelector('.hub-detail-panel') as HTMLElement).display).not.toBe('');
   });
 
   it('closes on a backdrop tap, and stops listening once disposed', () => {
