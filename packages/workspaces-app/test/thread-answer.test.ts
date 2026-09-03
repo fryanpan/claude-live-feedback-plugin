@@ -285,10 +285,9 @@ describe('the full item interface in the carrying thread', () => {
       panel.setActive('t1');
       expect(container.querySelector('.thread-item-card')).not.toBeNull();
       expect(container.querySelector('.comment-review')).toBeNull();
-      // The headline appears exactly once on the SHOWING face. The folded
-      // face leads with the headline too (comments mock 3: the ask is the
-      // line you see before you open the card), but the two faces are never
-      // visible together — the resting one is inert and aria-hidden.
+      // The headline appears exactly once, open or folded. Line one of the
+      // card IS the headline in both states, so neither the opening comment's
+      // banner nor the item card below it may print it a second time.
       const headlines = Array.from(container.querySelectorAll('*')).filter(
         (n) =>
           n.children.length === 0 &&
@@ -333,13 +332,16 @@ describe('the full item interface in the carrying thread', () => {
 
     it('never showed the banner on the COLLAPSED face, so nothing folded loses it', () => {
       // Why the suppression is safe to make unconditional: the banner was
-      // only ever built into slot A's DETAIL face — the summary face a folded
-      // card shows is the topic line and nothing else.
+      // only ever built into the detail face — the summary face a folded card
+      // shows carries the discussion line and the ways to answer, and the ask
+      // itself sits on the head row above both faces.
       const { panel, container } = mountPanel();
       panel.setThreads([makeThread([declaringComment()])]);
       expect(container.querySelector('.thread.expanded')).toBeNull();
       expect(container.querySelector('.slot-a .face-summary .comment-review')).toBeNull();
-      expect(container.querySelector('.slot-a .face-summary .thread-topic')).not.toBeNull();
+      expect(container.querySelector('.thread-head .thread-topic')?.textContent).toBe(
+        'Pick the rota order',
+      );
     });
   });
 

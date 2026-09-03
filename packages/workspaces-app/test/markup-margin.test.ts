@@ -484,18 +484,18 @@ describe('mountMarkupMargin — comment balloons', () => {
     expect(balloon.getAttribute('data-thread-id')).toBe(thread.id);
     expect(balloon.textContent).toContain('Please clarify this.');
     expect(balloon.textContent).toContain('Bob'); // the comment's author
-    // ...with the streamlined card's own shape: both folding slots present,
-    // the opening message in slot A, and the reply box in slot B.
+    // ...with the streamlined card's own shape: line one outside the fold,
+    // and the one folding slot holding the opening message and the reply box.
     expect(balloon.classList.contains('expanded')).toBe(true);
     expect(balloon.querySelector('.slot-a .face-detail .thread-message')?.textContent).toContain(
       'Please clarify this.',
     );
-    expect(balloon.querySelector('.slot-b .face-detail textarea')).not.toBeNull();
+    expect(balloon.querySelector('.slot-a .face-detail textarea')).not.toBeNull();
 
     const fetchSpy = vi.fn(() => Promise.resolve({ ok: true }) as unknown as Promise<Response>);
     vi.stubGlobal('fetch', fetchSpy);
     try {
-      // ONE resolve control, in the foot, outside both slots.
+      // ONE resolve control, in the foot at the bottom of the opened card.
       const resolveBtn = balloon.querySelector<HTMLButtonElement>('.thread-foot .thread-resolve');
       expect(balloon.querySelectorAll('.thread-resolve')).toHaveLength(1);
       expect(resolveBtn?.getAttribute('aria-label')).toBe('Resolve thread');
@@ -833,7 +833,7 @@ describe('mountMarkupMargin — collapsed balloons (Word-style)', () => {
     expect(badge.title).toBe('3 more lines');
   });
 
-  it('a collapsed comment shows its reply count in the foot, beside the one resolve control', async () => {
+  it('a collapsed comment says where the conversation got to, not how many replies it has', async () => {
     const fixture = mountRedlineWithChrome('', 'Alpha bravo gamma.\n');
     const { parent, surface, ydoc, chrome, scope } = fixture;
     const t = openThreadAt(
@@ -866,10 +866,14 @@ describe('mountMarkupMargin — collapsed balloons (Word-style)', () => {
 
     const balloon = parent.querySelector('.lf-balloon-comment') as HTMLElement;
     expect(balloon.classList.contains('expanded')).toBe(false);
-    expect(balloon.querySelector('.thread-foot .thread-meta')?.textContent).toContain('1 reply');
-    // The count lives in the foot, OUTSIDE both folding slots, so expanding
-    // neither moves nor rebuilds it.
-    expect(balloon.querySelector('.thread-foot')?.closest('.thread-slot')).toBeNull();
+    // Line two of the folded balloon is the last thing said. It replaced a
+    // "1 reply" count in the foot, which told a reader scanning the margin
+    // that there was something to read without telling them what it was —
+    // and cost the balloon a third line to do it.
+    const line = balloon.querySelector('.slot-a > .face-summary .thread-discussion');
+    expect(line?.textContent).toBe('A reply.');
+    expect(balloon.querySelector('.thread-meta')).toBeNull();
+    expect(balloon.textContent).not.toContain('1 reply');
   });
 });
 
@@ -1602,16 +1606,16 @@ describe('mountMarkupMargin — a composer mounting re-measures the balloon that
     clickToExpand(balloon);
     expect(balloon.classList.contains('expanded')).toBe(true);
 
-    const slotB = balloon.querySelector<HTMLElement>('.slot-b') as HTMLElement;
-    const face = balloon.querySelector<HTMLElement>('.slot-b > .face-detail') as HTMLElement;
+    const slot = balloon.querySelector<HTMLElement>('.slot-a') as HTMLElement;
+    const face = balloon.querySelector<HTMLElement>('.slot-a > .face-detail') as HTMLElement;
     // The editor landed and the reply box grew from 2 rows to a mounted surface.
     Object.defineProperty(face, 'offsetHeight', { get: () => 80, configurable: true });
     // POSITIVE CONTROL: the slot still holds the pre-mount measurement.
-    expect(slotB.style.height).not.toBe('80px');
+    expect(slot.style.height).not.toBe('80px');
 
-    const ta = balloon.querySelector('.slot-b .face-detail textarea') as HTMLElement;
+    const ta = balloon.querySelector('.slot-a .face-detail textarea') as HTMLElement;
     ta.dispatchEvent(new CustomEvent('lf-composer-mounted', { bubbles: true }));
-    expect(slotB.style.height).toBe('80px');
+    expect(slot.style.height).toBe('80px');
   });
 });
 

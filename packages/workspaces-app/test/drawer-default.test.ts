@@ -266,7 +266,7 @@ describe('mountReviewChrome drawer default', () => {
     const card = document.querySelector('#threads-list .thread') as HTMLElement;
     expect(card).not.toBeNull(); // positive control: there IS a card to measure
     const slots = Array.from(card.querySelectorAll<HTMLElement>('.thread-slot'));
-    expect(slots).toHaveLength(2);
+    expect(slots).toHaveLength(1);
 
     // Stand in for the layout happy-dom doesn't have: a subtree inside a
     // `display: none` pane measures 0, and measures for real once it isn't.

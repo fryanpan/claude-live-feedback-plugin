@@ -3,10 +3,10 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ThreadPanel, type ThreadPanelOpts } from '../src/threads.ts';
 
 /**
- * The card as comments mock 3 has it (approved 2026-09-01): one glyph per
- * state in the head, the ASK as the folded line of a declared thread, the
- * ways to answer on the folded face, "Details ▾ / Less ▴" in words, and a
- * red "new" mark that clears in place.
+ * The card as the round-3 mock has it (approved 2026-09-02): one glyph per
+ * state on line one, the ASK as the folded line of a declared thread, the
+ * ways to answer on the folded face, one chevron in both states, and a red
+ * "new" mark on the glyph that clears in place.
  */
 
 const alice: User = { id: 'u1', name: 'Alice', kind: 'known', color: '#2e7dd7' };
@@ -123,7 +123,7 @@ describe('answering from the folded face', () => {
   it('a decision offers its option labels, and tapping one answers with provenance', () => {
     const c = comment('?', decision());
     const { card, onReply } = render(thread([c]));
-    const face = card.querySelector('.slot-b .face-summary');
+    const face = card.querySelector('.slot-a .face-summary');
     const buttons = Array.from(
       face?.querySelectorAll<HTMLButtonElement>('.thread-item-option-compact') ?? [],
     );
@@ -136,7 +136,7 @@ describe('answering from the folded face', () => {
 
   it('a question shows where to tap — a cue, not a control', () => {
     const { card } = render(thread([comment('?', question())]));
-    const cue = card.querySelector('.slot-b .face-summary .thread-answer-cta');
+    const cue = card.querySelector('.slot-a .face-summary .thread-answer-cta');
     expect(cue?.textContent).toBe('Answer');
     expect(cue?.tagName).not.toBe('BUTTON');
   });
@@ -147,14 +147,19 @@ describe('answering from the folded face', () => {
         comment('?', question({ answeredAt: ts, answeredBy: 'Bryan', answerText: 'Yes, both.' })),
       ]),
     );
-    const line = card.querySelector('.slot-b .face-summary .thread-answered-line');
+    const line = card.querySelector('.slot-a .face-summary .thread-answered-line');
     expect(line?.querySelector('.thread-answered-words')?.textContent).toBe('Yes, both.');
     expect(line?.querySelector('.thread-answered-who')?.textContent).toMatch(/you/i);
     expect(card.querySelector('.thread-options-compact')).toBe(null);
     expect(card.querySelector('.thread-answer-cta')).toBe(null);
   });
 
-  it('an answered decision does not repeat the outcome the flag row already shows', () => {
+  it('an answered decision names what was decided, on the folded card', () => {
+    // It used to be suppressed here because a "Decision" flag row above the
+    // head carried the outcome. That row went with the collapsed redesign, so
+    // this line is now the only place a folded card can say what was chosen —
+    // without it the card folded to "✓ — decided by you", which names
+    // everything except the decision.
     const { card } = render(
       thread([
         comment(
@@ -163,9 +168,10 @@ describe('answering from the folded face', () => {
         ),
       ]),
     );
-    expect(card.querySelector('.thread-decision-outcome')?.textContent).toBe('Cadence ceiling');
-    expect(card.querySelector('.thread-answered-words')).toBe(null);
-    expect(card.querySelector('.thread-answered-who')).not.toBe(null);
+    expect(card.querySelector('.thread-decision-outcome')).toBe(null);
+    const line = card.querySelector('.slot-a .face-summary .thread-answered-line');
+    expect(line?.querySelector('.thread-answered-words')?.textContent).toBe('Cadence ceiling');
+    expect(line?.querySelector('.thread-answered-who')).not.toBe(null);
   });
 
   it('a plain comment gets none of it', () => {
@@ -176,35 +182,40 @@ describe('answering from the folded face', () => {
   });
 });
 
-describe('Details / Less', () => {
-  it('a declared thread says it in words, and the words follow the fold', () => {
-    const { card, panel } = render(thread([comment('?', question())]));
-    const caret = card.querySelector<HTMLElement>('.thread-caret');
-    expect(caret?.classList.contains('thread-caret-words')).toBe(true);
-    expect(caret?.textContent).toBe('Details ▾');
-    panel.setActive('t1');
-    expect(caret?.textContent).toBe('Less ▴');
-    expect(caret?.getAttribute('aria-expanded')).toBe('true');
-    panel.setActive(null);
-    expect(caret?.textContent).toBe('Details ▾');
-  });
-
-  it('a plain comment keeps the chevron', () => {
-    const { card } = render(thread([comment('Looks fine.')]));
-    expect(card.querySelector('.thread-caret')?.textContent).toBe('›');
+describe('the chevron', () => {
+  it('is one glyph in both states, on a declared thread and a plain one alike', () => {
+    // It used to read "Details ▾ / Less ▴" on a declared thread. The words
+    // were a second label on a row that already carries a topic and a name,
+    // and `aria-expanded` is what actually announces the fold — in both.
+    const declared = render(thread([comment('?', question())]));
+    const plain = render(thread([comment('Looks fine.')]));
+    for (const { card, panel } of [declared, plain]) {
+      const caret = card.querySelector<HTMLElement>('.thread-caret');
+      expect(caret?.textContent).toBe('›');
+      expect(caret?.getAttribute('aria-expanded')).toBe('false');
+      panel.setActive('t1');
+      expect(caret?.textContent).toBe('›');
+      expect(caret?.getAttribute('aria-expanded')).toBe('true');
+      panel.setActive(null);
+    }
   });
 });
 
 describe('new since you last looked', () => {
-  it('stamps the card and tags the head when the panel says it is new', () => {
+  it('marks the glyph rather than tagging the head', () => {
+    // A "New" word competed with the topic for the one line the card has.
+    // The dot rides the glyph, where it costs no width in a 300px column.
     const { card } = render(thread([comment('Hi')]), { isNew: () => true });
     expect(card.classList.contains('is-new')).toBe(true);
-    expect(card.querySelector('.thread-new-tag')?.textContent).toBe('New');
+    expect(card.querySelector('.thread-new-tag')).toBe(null);
+    const dot = card.querySelector('.thread-new-dot');
+    expect(dot).not.toBe(null);
+    expect(dot?.closest('.thread-glyph')).not.toBe(null);
   });
 
   it('leaves a seen thread alone', () => {
     const { card } = render(thread([comment('Hi')]), { isNew: () => false });
     expect(card.classList.contains('is-new')).toBe(false);
-    expect(card.querySelector('.thread-new-tag')).toBe(null);
+    expect(card.querySelector('.thread-new-dot')).toBe(null);
   });
 });
