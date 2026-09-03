@@ -92,6 +92,7 @@ import {
   normalizedTitle,
   runTaskCapture,
 } from './meeting-task-capture.ts';
+import { dropLegacyTranscriptSection } from './notes-legacy-transcript.ts';
 import {
   MEETING_NOTES_HEADINGS,
   appendResearchPlaceholder,
@@ -99,11 +100,6 @@ import {
   relabelNotesSection,
   retagSpeakerInNotes,
 } from './notes-section-write.ts';
-import {
-  appendTranscriptTurns,
-  relabelTranscriptSection,
-  transcriptAllowedIn,
-} from './notes-transcript-section.ts';
 
 /**
  * The section writers moved to `notes-section-write.ts`; the names stay on
@@ -131,11 +127,6 @@ export interface NotesDocRooms {
   get(
     docId: string,
   ): { ydoc: Y.Doc; meta: { type: DocType; title?: string; setId?: string } } | undefined;
-  /** The file this doc is bound to, when it is bound to one — the fact the
-   *  raw-transcript companion keys on, and the only thing separating a huddle
-   *  doc from a file in somebody's working tree. Optional so a test can hand
-   *  in a map; absent reads as unbound. */
-  boundPathOf?(docId: string): string | undefined;
 }
 
 /** The slice of `TaskStore` the context gatherer needs. */
@@ -200,26 +191,26 @@ export function applyNotesUpdate(
   const room = rooms.get(update.docId);
   if (!room) return false;
   if (contentKind(room.meta.type) !== 'prose') return false;
+  // NO TRANSCRIPT IN THIS DOC (owner, 2026-09-03). A tick used to append the
+  // meeting's own words here under `## Raw transcript`. It does not any more:
+  // the notes are the shorter record a person has reviewed and edited, and
+  // that is what both people and agents should be reading. A transcript is
+  // unreviewed raw material, kept only to check exactly who said what and to
+  // improve how we transcribe, so it belongs in the `-raw-transcript.md`
+  // sister file beside the meeting's data dir. This call takes the section
+  // back out of any doc that received one while the writer shipped; the words
+  // are in that sister file already, so the removal loses nothing.
+  const legacy = dropLegacyTranscriptSection(room.ydoc);
+  if (legacy === 'kept') {
+    console.log(
+      `[meeting-notes] legacy transcript section left in ${update.docId}: ` +
+        'somebody has written in it',
+    );
+  }
   return mergeNotesSection(room.ydoc, update.notes, MEETING_NOTES_HEADINGS, {
     ownership: ledger.forDoc(update.docId),
     ...(update.basedOn ? { basedOn: update.basedOn } : {}),
   }).ok;
-}
-
-/**
- * Write one tick's settled words into the doc's raw-transcript section.
- * Same tolerances as `applyNotesUpdate`: a doc that has gone away or was
- * never prose is a false, never a throw — the JSONL under the data dir is
- * the record either way.
- */
-export function applyNotesTranscript(
-  rooms: NotesDocRooms,
-  input: { docId: string; lines: ReadonlyArray<{ speaker?: string; text: string }> },
-): boolean {
-  const room = rooms.get(input.docId);
-  if (!room) return false;
-  if (contentKind(room.meta.type) !== 'prose') return false;
-  return appendTranscriptTurns(room.ydoc, input.lines).ok;
 }
 
 /** The notes section as it currently reads, for the composer's `previous`. */
@@ -261,13 +252,6 @@ export function applyNotesRelabel(
   // Through the reclaim wrapper, not straight at the doc: the rename edits
   // the agent's own lines in place, and the ledger has to come out the other
   // side still recognising them. See `reclaimAfterInPlaceEdit`.
-  // The record first, and outside the reclaim wrapper: the ledger tracks who
-  // owns a NOTE, and a code block of machine speech is nobody's note. It is
-  // gated on the same `rewriteUntagged` flag as the sweep below, for the same
-  // reason — a name two voices share cannot be rewritten by name anywhere.
-  if (relabel.rewriteUntagged) {
-    relabelTranscriptSection(room.ydoc, relabel.from, relabel.to);
-  }
   return reclaimAfterInPlaceEdit(
     room.ydoc,
     MEETING_NOTES_HEADINGS,
@@ -389,10 +373,6 @@ export function withServerNotesSinks(
      *  only `createServer` holds the comment + stamp path. Deduped here per
      *  meeting so a question repeated across ticks opens one thread. */
     onReviewAsk?: (ask: ReviewAsk) => void | Promise<void>;
-    /** The server's data dir, so the transcript sink can tell a huddle doc
-     *  from a doc bound into somebody's working tree. Absent, every BOUND doc
-     *  is treated as outside it and gets no transcript section. */
-    dataDir?: string;
     /** Tests: an ownership ledger they can seed or read back. */
     ledger?: NotesLedger;
   },
@@ -509,30 +489,6 @@ export function withServerNotesSinks(
         console.error('[meeting-notes] section read failed:', err);
         return null;
       }
-    },
-    onTranscript: (input): void => {
-      try {
-        const rooms = deps.rooms();
-        // Where the doc lives decides whether it may hold spoken words. Not a
-        // failure and not an error: a repo-bound doc still gets its notes, and
-        // the verbatim record is in the data dir either way.
-        if (!transcriptAllowedIn(rooms.boundPathOf?.(input.docId), deps.dataDir)) {
-          console.log(
-            `[meeting-notes] transcript section not written for ${input.docId}: ` +
-              'the doc is bound to a file outside the data dir',
-          );
-          options.onTranscript?.(input);
-          return;
-        }
-        if (!applyNotesTranscript(rooms, input)) {
-          console.error(`[meeting-notes] transcript write skipped for ${input.docId}`);
-        }
-      } catch (err) {
-        // Same containment as `onNotes`: the record is a convenience in the
-        // doc and the durable one is the JSONL beside it.
-        console.error('[meeting-notes] transcript write failed:', err);
-      }
-      options.onTranscript?.(input);
     },
     onNotes: (update: NotesUpdate): void => {
       try {

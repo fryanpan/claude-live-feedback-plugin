@@ -65,26 +65,29 @@ export const MEETING_NOTES_HEADING = 'Meeting notes';
 export const MEETING_NOTES_HEADINGS: readonly string[] = [MEETING_NOTES_HEADING];
 
 /**
- * The section holding the meeting's own words, verbatim. It is the doc's TAIL
- * — everything the meeting writes goes above it — so it is named here beside
- * the notes heading rather than in the module that writes it: every writer
- * that appends a section to a meeting doc has to know to stop short of it.
+ * The heading one release wrote the meeting's own words under, before the
+ * owner's call on 2026-09-03 sent the transcript back to its `-raw-transcript.md`
+ * sister file for good. Nothing writes it any more; it survives so a doc that
+ * already carries such a section can be recognised — and removed, by
+ * `notes-legacy-transcript.ts` — rather than written around forever.
  */
-export const TRANSCRIPT_HEADING = 'Raw transcript';
+export const LEGACY_TRANSCRIPT_HEADING = 'Raw transcript';
 
 /**
- * Where a new top-level section belongs in a meeting doc: above the raw
- * transcript when the doc has one, at the end when it does not.
+ * Where a new top-level section belongs in a meeting doc: the end, unless the
+ * doc still carries a legacy transcript section, in which case above that.
  *
- * The transcript is machine text nobody reads top to bottom, so it sits under
- * everything a person might. Every append into a meeting doc goes through
+ * The transcript was machine text nobody reads top to bottom, so it sat under
+ * everything a person might, and every append into a meeting doc goes through
  * here — the notes' first write, the research placeholder — because a section
- * appended past the transcript is both in the wrong place and, until this
- * existed, the thing that pushed the notes section off the doc's tail.
+ * appended past it was both in the wrong place and the thing that pushed the
+ * notes section off the doc's tail. New docs never have one, so this is the
+ * end of the doc; a doc awaiting its next tick still might, until that tick
+ * takes it out.
  */
 export function sectionInsertIndex(fragment: Y.XmlFragment): number {
-  const transcript = findNotesSection(fragment, TRANSCRIPT_HEADING);
-  return transcript ? transcript.start : fragment.length;
+  const legacy = findNotesSection(fragment, LEGACY_TRANSCRIPT_HEADING);
+  return legacy ? legacy.start : fragment.length;
 }
 
 /** The heading's text, read the same way the serializer would render it. */

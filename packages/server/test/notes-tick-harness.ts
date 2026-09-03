@@ -27,12 +27,7 @@ import {
   type TickScheduler,
   beginNotesSession,
 } from '../src/meeting-notes.ts';
-import {
-  MEETING_NOTES_HEADINGS,
-  TRANSCRIPT_HEADING,
-  findNotesSection,
-  itemsInSection,
-} from '../src/notes-section.ts';
+import { MEETING_NOTES_HEADINGS, findNotesSection, itemsInSection } from '../src/notes-section.ts';
 import { waitFor } from './wait-for.ts';
 
 /**
@@ -73,8 +68,6 @@ export interface TickSnapshot {
   markdown: string;
   /** Just the notes section's body, markdown. */
   notes: string;
-  /** Just the raw transcript's words, one line per settled turn. */
-  transcript: string;
   /** Every top-level heading, in order — the cheapest way to assert that a
    *  section did not move, get a twin, or gain a sibling. */
   headings: string[];
@@ -99,11 +92,6 @@ export interface NotesTickHarnessOptions {
   docId?: string;
   meetingId?: string;
   docTitle?: string;
-  /** The file the doc is bound to, if any — what decides whether the meeting's
-   *  own words may be written into it. Pair with `dataDir`. */
-  boundPath?: string;
-  /** The server's data dir, as the transcript gate sees it. */
-  dataDir?: string;
 }
 
 export interface NotesTickHarness {
@@ -122,7 +110,6 @@ export interface NotesTickHarness {
   readonly ydoc: Y.Doc;
   markdown(): string;
   notes(): string;
-  transcript(): string;
   headings(): string[];
   /** How many top-level headings read exactly `text`. The duplicate-section
    *  assertion, spelled once. */
@@ -140,7 +127,6 @@ export function createNotesTickHarness(opts: NotesTickHarnessOptions): NotesTick
   };
   const rooms = {
     get: (id: string) => (id === docId ? { ydoc, meta } : undefined),
-    boundPathOf: (id: string) => (id === docId ? opts.boundPath : undefined),
   };
 
   const schedule = new ManualScheduler();
@@ -174,7 +160,6 @@ export function createNotesTickHarness(opts: NotesTickHarnessOptions): NotesTick
     {
       rooms: () => rooms,
       tasks: () => ({ listTasks: () => [] }),
-      ...(opts.dataDir ? { dataDir: opts.dataDir } : {}),
       ...(opts.ledger ? { ledger: opts.ledger } : {}),
     },
   );
@@ -195,12 +180,6 @@ export function createNotesTickHarness(opts: NotesTickHarnessOptions): NotesTick
     return out.join('\n\n');
   };
 
-  const transcript = (): string =>
-    sectionBody(TRANSCRIPT_HEADING)
-      .replace(/^```[a-zA-Z]*\n?/, '')
-      .replace(/\n?```$/, '')
-      .trim();
-
   const headings = (): string[] => {
     const top = prose.getProseFragment(ydoc).toArray() as Y.XmlElement[];
     return top
@@ -216,7 +195,6 @@ export function createNotesTickHarness(opts: NotesTickHarnessOptions): NotesTick
       tick,
       markdown: markdown(),
       notes: sectionBody(MEETING_NOTES_HEADINGS),
-      transcript: transcript(),
       headings: headings(),
       input: seen?.input as NotesComposeInput,
       composed: seen?.composed ?? '',
@@ -229,7 +207,6 @@ export function createNotesTickHarness(opts: NotesTickHarnessOptions): NotesTick
     ydoc,
     markdown,
     notes: () => sectionBody(MEETING_NOTES_HEADINGS),
-    transcript,
     headings,
     countHeadings: (text) => headings().filter((h) => h === text).length,
     say(...utterances) {
