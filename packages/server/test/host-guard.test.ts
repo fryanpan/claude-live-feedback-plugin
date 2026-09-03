@@ -6,6 +6,7 @@ import {
   isAccessTunnelHost,
   isProxiedTrustedHost,
   isRecallCallbackHost,
+  isShareLinkHost,
   isTrustedLocalHost,
   normalizeHost,
   shareScopeAllows,
@@ -1149,6 +1150,120 @@ describe('classifyHost — collaboration hosts', () => {
         viaProxy: true,
       }),
     ).toEqual({ kind: 'collab' });
+  });
+});
+
+describe('classifyHost — the share-link host', () => {
+  const lookupShare = (h: string) =>
+    h === 'share-abc.tunnel.example.com' ? { workspaceId: 'ws-shared' } : null;
+  /**
+   * The hostname one Access application covers with an "everyone" policy.
+   * `shareLinkAccessFronted` is its OWN flag, not the collaboration host's:
+   * the two hostnames sit behind two applications with two audiences, and a
+   * shared flag would let one be configured into existence by the other.
+   */
+  const SHARE_LINK = {
+    ...LOCAL,
+    lookupShare,
+    shareLinkHosts: ['share.example.com'],
+    shareLinkAccessFronted: true,
+  };
+
+  it('a proxied share-link host → share-link', () => {
+    expect(classifyHost('share.example.com', { ...SHARE_LINK, viaProxy: true })).toEqual({
+      kind: 'share-link',
+    });
+  });
+
+  it('is nothing without the proxy hop — a LAN client may claim any Host', () => {
+    // No `cf-ray` means no Cloudflare edge in front, so there is no Access
+    // application to have checked anybody. The name must not be recognised.
+    expect(classifyHost('share.example.com', { ...SHARE_LINK, viaProxy: false })).toEqual({
+      kind: 'deny',
+      reason: 'unknown_host',
+    });
+  });
+
+  it('is nothing until its OWN Access application is configured', () => {
+    // The audience for this hostname is configured separately. Until it is,
+    // an unverified request would arrive at a board with no token to check.
+    expect(
+      classifyHost('share.example.com', {
+        ...SHARE_LINK,
+        shareLinkAccessFronted: false,
+        viaProxy: true,
+      }),
+    ).toEqual({ kind: 'deny', reason: 'unknown_host' });
+    // …and the collaboration host's flag does not stand in for it.
+    expect(
+      classifyHost('share.example.com', {
+        ...SHARE_LINK,
+        shareLinkAccessFronted: false,
+        accessFronted: true,
+        viaProxy: true,
+      }),
+    ).toEqual({ kind: 'deny', reason: 'unknown_host' });
+  });
+
+  it('matches exactly — a lookalike neighbour is not the share host', () => {
+    for (const h of [
+      'share.example.com.attacker.test',
+      'evil-share.example.com',
+      'sub.share.example.com',
+    ]) {
+      expect(classifyHost(h, { ...SHARE_LINK, viaProxy: true }), h).toEqual({
+        kind: 'deny',
+        reason: 'unknown_host',
+      });
+    }
+  });
+
+  it('does not take a hostname away from the per-share rule', () => {
+    // The retired per-share applications are still serving records that have
+    // not expired. A name that is one of theirs keeps that narrower meaning.
+    expect(
+      classifyHost('share-abc.tunnel.example.com', {
+        ...SHARE_LINK,
+        shareLinkHosts: ['share-abc.tunnel.example.com'],
+        viaProxy: true,
+      }),
+    ).toEqual({ kind: 'share', target: { workspaceId: 'ws-shared' } });
+  });
+
+  it('leaves a deployment that configured no share hostname exactly as it was', () => {
+    expect(classifyHost('share.example.com', { ...LOCAL, lookupShare, viaProxy: true })).toEqual({
+      kind: 'deny',
+      reason: 'unknown_host',
+    });
+    // Positive control: the same request with the list populated is served,
+    // so the denial above is the empty list and not the fixture.
+    expect(classifyHost('share.example.com', { ...SHARE_LINK, viaProxy: true })).toEqual({
+      kind: 'share-link',
+    });
+  });
+});
+
+describe('isShareLinkHost', () => {
+  const OPTS = {
+    shareLinkHosts: ['share.example.com', 'invite.example.com'],
+    shareLinkAccessFronted: true,
+    viaProxy: true,
+  };
+
+  it('accepts a listed name, with or without a port', () => {
+    expect(isShareLinkHost('share.example.com', OPTS)).toBe(true);
+    expect(isShareLinkHost('Invite.Example.com:443', OPTS)).toBe(true);
+  });
+
+  it('refuses an absent Host header and an unlisted name', () => {
+    expect(isShareLinkHost(null, OPTS)).toBe(false);
+    expect(isShareLinkHost('', OPTS)).toBe(false);
+    expect(isShareLinkHost('workspaces.example.com', OPTS)).toBe(false);
+  });
+
+  it('refuses every name when the list is empty or absent', () => {
+    expect(isShareLinkHost('share.example.com', { ...OPTS, shareLinkHosts: [] })).toBe(false);
+    expect(isShareLinkHost('share.example.com', { viaProxy: true })).toBe(false);
   });
 });
 

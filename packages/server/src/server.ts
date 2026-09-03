@@ -5715,12 +5715,19 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
             accessEmail = result.email ?? null;
             // Nothing else: no `visitor`, no scope. From here on the request
             // is what a loopback request is.
-          } else if (cfAccessVerifier && !shares) {
-            // Legacy whole-server mode: cfAccess configured WITHOUT per-share
-            // hostnames means the entire deployment sits behind Access, so
-            // even a local-looking Host must present a token. (With shares
-            // wired, local traffic is the agent's own MCP calls over loopback
-            // and stays unauthenticated.)
+          } else if (cfAccessVerifier && !shares && !shareLinkVerifier) {
+            // Legacy whole-server mode: cfAccess configured WITHOUT any
+            // sharing surface means the entire deployment sits behind Access,
+            // so even a local-looking Host must present a token. (With
+            // sharing wired, local traffic is the agent's own MCP calls over
+            // loopback and stays unauthenticated.)
+            //
+            // A share-link hostname counts as a sharing surface, and it has
+            // to. The per-share mode it replaces is retired: an operator who
+            // finishes draining those records and removes the old settings
+            // would otherwise fall into this branch by deletion, and every
+            // agent on the box would start being asked for an Access token it
+            // has no way to hold.
             const result = await cfAccessVerifier(req);
             if (!result.ok) return j(result.status, { error: result.error });
             accessEmail = result.email ?? null;

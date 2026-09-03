@@ -273,10 +273,10 @@ describe('share REST endpoints', () => {
     // The slug is minted rather than named — `/api/share/link` takes no
     // `name` argument — so the shape is what is asserted: a `share-` hostname
     // under the configured base, and a URL that opens the BOARD on it.
-    expect(share.hostname).toMatch(/^share-[\w-]+\.tunnel\.fryanpan\.com$/);
-    expect(share.url).toBe(
-      `https://${share.hostname}/workspaces/${encodeURIComponent(boardId)}`,
+    expect(share.hostname).toMatch(
+      new RegExp(`^share-[\\w-]+\\.${SHARE_CONFIG.baseHostname.replace(/\./g, '\\.')}$`),
     );
+    expect(share.url).toBe(`https://${share.hostname}/workspaces/${encodeURIComponent(boardId)}`);
     // Scope comes from the board, and from nothing else.
     expect(share.workspaceId).toBe(boardId);
     expect(share.docId).toBe('');
