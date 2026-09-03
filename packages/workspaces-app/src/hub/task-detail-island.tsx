@@ -77,6 +77,7 @@ import {
   bodySlot,
   detailFields,
   relatedDocLinks,
+  relatedUrlLinks,
   renderRelatedLinks,
   renderTransitionRow,
 } from './hub-detail-render.ts';
@@ -829,7 +830,6 @@ function ActivityTab(props: { task: HubTask; handlers: DetailHandlers; hidden: b
   const { task, handlers, hidden } = props;
   const now = handlers.now ?? Date.now();
   const historyRef = useRef<HTMLUListElement | null>(null);
-  const metaRef = useRef<HTMLDListElement | null>(null);
   const linksRef = useRef<HTMLDivElement | null>(null);
   const feed = feedOf(task, handlers.activity);
   const hasFeed = feed.length > 0;
@@ -896,19 +896,6 @@ function ActivityTab(props: { task: HubTask; handlers: DetailHandlers; hidden: b
     setOpen((o) => (o ? { ...o, thread: t } : o));
     return true;
   };
-
-  // What is left of the old definition list: reference material. `Goal` and
-  // `Due` are not repeated here — they are in the fields row above.
-  const meta: [string, string][] = task.after.length > 0 ? [['After', task.after.join(', ')]] : [];
-  useFill(metaRef as RefObject<HTMLElement>, () =>
-    meta.flatMap(([k, v]) => {
-      const dt = document.createElement('dt');
-      dt.textContent = k;
-      const dd = document.createElement('dd');
-      dd.textContent = v;
-      return [dt, dd];
-    }),
-  );
 
   const links = renderTaskLinks(task, handlers.workspaceId);
   useFill(linksRef as RefObject<HTMLElement>, () => [
@@ -999,7 +986,6 @@ function ActivityTab(props: { task: HubTask; handlers: DetailHandlers; hidden: b
           <blockquote class="hub-detail-quote">{task.quote}</blockquote>
         </details>
       )}
-      {meta.length > 0 && <dl ref={metaRef} class="hub-detail-meta" />}
       {links !== null && <div ref={linksRef} class="hub-detail-links" />}
       <p class="hub-detail-body-link">
         {/* A secondary way in, not the way to edit: the same room in the full
@@ -1019,6 +1005,78 @@ function ActivityTab(props: { task: HubTask; handlers: DetailHandlers; hidden: b
  * moving to another task unmounts it, so nothing the last ticket was holding
  * follows the reader onto the next one.
  */
+/**
+ * The one way to grow Related Links: a box that takes any URL.
+ *
+ * What the address NAMES decides what is written — a ticket on this
+ * workspace becomes an `after` edge and the entry appears wearing the barred
+ * ring, a doc becomes a doc link that resolves to its title, and anything
+ * else is kept as the plain address. None of that is explained here: the
+ * reader pastes a link and sees what it became, which is the affordance
+ * carrying the meaning rather than a caption about it.
+ *
+ * Preact-owned, unlike the list above it. `useFill` rebuilds its children on
+ * every repaint, and a repaint arrives on every peer edit, every SSE thread
+ * and every attachment poll — an input living in there would lose a
+ * half-typed URL to somebody else's keystroke, which is precisely the defect
+ * the "New goal" box was moved into the island to fix.
+ */
+function RelatedLinkAdd(props: { onAdd: (url: string) => void }) {
+  const [open, setOpen] = useState(false);
+  const input = useRef<HTMLInputElement | null>(null);
+  const close = (): void => {
+    if (input.current) input.current.value = '';
+    setOpen(false);
+  };
+  // After the class has landed, never beside `setOpen(true)`: `.hidden` is
+  // `display: none !important`, and focusing a display:none element is a
+  // no-op in a real browser — which reads as "the button needs two taps".
+  useLayoutEffect(() => {
+    if (open) input.current?.focus();
+  }, [open]);
+  return (
+    <div class="hub-related-add">
+      <button
+        type="button"
+        class={open ? 'hub-related-add-btn hidden' : 'hub-related-add-btn'}
+        onClick={(ev) => {
+          ev.stopPropagation();
+          setOpen(true);
+        }}
+      >
+        + Link
+      </button>
+      <input
+        ref={input}
+        type="url"
+        class={open ? 'hub-related-add-input' : 'hub-related-add-input hidden'}
+        placeholder="Paste a link"
+        aria-label="Paste a link — a ticket here becomes a blocker"
+        onClick={(ev) => ev.stopPropagation()}
+        onKeyDown={(ev) => {
+          ev.stopPropagation();
+          if (ev.key === 'Enter') {
+            const url = (ev.currentTarget as HTMLInputElement).value.trim();
+            ev.preventDefault();
+            if (url !== '') props.onAdd(url);
+            close();
+            return;
+          }
+          if (ev.key === 'Escape') {
+            ev.preventDefault();
+            close();
+          }
+        }}
+        // Closing over typed-but-uncommitted text is how a half-written entry
+        // disappears, so only an EMPTY box closes on blur.
+        onBlur={(ev) => {
+          if ((ev.currentTarget as HTMLInputElement).value.trim() === '') close();
+        }}
+      />
+    </div>
+  );
+}
+
 function TaskDetailPanel(props: {
   host: HTMLElement;
   task: HubTask;
@@ -1087,8 +1145,21 @@ function TaskDetailPanel(props: {
   // only inside the fill, so a repaint that changes nothing about the links
   // does not build the DOM twice.
   const relatedLinks = relatedDocLinks(task);
+  const relatedUrls = relatedUrlLinks(task);
+  const blockers = handlers.blockers ?? [];
+  // The add control makes the section reachable even when the row names
+  // nothing yet, so on a panel that can add, the heading stands on its own.
+  const canAdd = handlers.onRelatedAdd !== undefined;
+  const hasRelated = relatedLinks.length + relatedUrls.length + blockers.length > 0 || canAdd;
   useFill(relatedLinksRef as RefObject<HTMLElement>, () => [
-    ...(renderRelatedLinks(relatedLinks, handlers.workspaceId)?.childNodes ?? []),
+    ...(renderRelatedLinks(relatedLinks, handlers.workspaceId, {
+      blockers,
+      urls: relatedUrls,
+      keepEmpty: canAdd,
+      ...(handlers.onRelatedRemove
+        ? { onRemove: (entry) => handlers.onRelatedRemove?.(task, entry) }
+        : {}),
+    })?.childNodes ?? []),
   ]);
 
   // The description slot is the one node a repaint must never rebuild: the
@@ -1285,10 +1356,20 @@ function TaskDetailPanel(props: {
           spent the entire first screen on facts identical across every task. */}
       <dl ref={fieldsRef} class="hub-detail-fields" />
 
-      {/* Title-only links to the docs this row ties to — the approved mock's
-          Related Links section, right below the fields row. Absent entirely
-          when the row names no doc, rather than an empty heading. */}
-      {relatedLinks.length > 0 && <div ref={relatedLinksRef} class="hub-related-links-slot" />}
+      {/* Related Links: what this ticket is waiting on, the docs it ties to,
+          and any address someone pasted — the approved mock's section, right
+          below the fields row. The list is filled imperatively; the add
+          control below it is Preact's, because `useFill` rebuilds its
+          children on every repaint and would delete a half-typed URL the way
+          the vanilla board used to delete a half-typed goal title. */}
+      {hasRelated && (
+        <div class="hub-related-links-slot">
+          <div ref={relatedLinksRef} />
+          {handlers.onRelatedAdd && (
+            <RelatedLinkAdd onAdd={(url) => handlers.onRelatedAdd?.(task, url)} />
+          )}
+        </div>
+      )}
 
       {/* The blocked note (design point 5): this task is a person's own open
           work that other tasks wait on, and this panel is the ONE surface that

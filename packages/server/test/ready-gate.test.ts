@@ -85,6 +85,18 @@ describe('the gate keys on dependency state, not on the clock', () => {
     expect(verdict.held).toEqual({ blocked: 1 });
   });
 
+  it('withholds a row held by an ADVISORY dependency too — Blocked is Blocked', () => {
+    // The board draws this row as blocked (an open `after` edge is all that
+    // takes), so a wake naming it would send an agent at work it cannot
+    // start. `ready` stays true here on purpose: the transition gate would
+    // still let a person move the row by hand, and that is a different
+    // question from whether to wake somebody for it.
+    const verdict = evaluateReadyWork([row({ ready: true, blocked: true })], probes());
+
+    expect(verdict.ready).toEqual([]);
+    expect(verdict.held).toEqual({ blocked: 1 });
+  });
+
   it('never sees a deliberately-deferred row at all', () => {
     // Parking used to be a hold reason here. It is now a move to `triage`
     // plus a comment, and `buildQueue` — the list this gate is handed — does

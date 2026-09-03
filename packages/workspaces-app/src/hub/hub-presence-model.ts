@@ -183,6 +183,7 @@ export const ACTIVITY_REFRESH_EVENTS = [
   'task.archived',
   'task.restored',
   'task.regrouped',
+  'task.unblocked',
   'review_item.added',
   'decision.answered',
   'decision.answer_withdrawn',
@@ -221,6 +222,15 @@ export function describeEvent(ev: ActivityEvent, titleOf: (taskId: string) => st
       return `${actorName(ev)} assigned ${title()}: ${assigneeLabel(String(ev.from))} → ${assigneeLabel(String(ev.to))}`;
     case 'task.regrouped':
       return `${actorName(ev)} regrouped ${title()}: ${String(ev.fromGoal)} → ${String(ev.toGoal)}`;
+    // The row came free. Blocked is derived, so nothing about the row changed
+    // and there is no transition to read this off — this line IS the record.
+    // The blocker's title comes off the EVENT: it may be renamed or archived
+    // later, and this is what was cleared on that day.
+    case 'task.unblocked': {
+      const by =
+        typeof ev.clearedByTitle === 'string' && ev.clearedByTitle ? ev.clearedByTitle : '';
+      return `${title()} is no longer blocked${by ? ` — “${by}” closed` : ''}`;
+    }
     case 'task.due_set': {
       // Three sentences, because clearing a date and setting one read
       // differently to whoever is scanning the trail for what slipped.
