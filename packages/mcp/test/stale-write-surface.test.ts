@@ -11,13 +11,10 @@
  *    never rewrite a doc a human is editing from a stale copy — because the
  *    2026-08-26 incident's agent did exactly what the old text suggested.
  */
-import { readFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
+import { readMcpSource } from './harness/mcp-source.ts';
 
-const HERE = dirname(fileURLToPath(import.meta.url));
-const SRC = readFileSync(join(HERE, '../src/mcp.ts'), 'utf8');
+const SRC = readMcpSource();
 
 /** The `case 'x': {` block for one tool, up to the next case. */
 function handlerFor(tool: string): string {

@@ -634,26 +634,78 @@ keyword pushed it past the line width.
 Layers: document model and domain rules. Final directory: `core/src/` — no
 move.
 
-## B6 · `mcp.ts`
+## B6 · `mcp.ts` — the registry and the 94-case dispatch — DONE
 
-5,563 lines, 155 commits. **Effort M.** One PR, four commits.
+5,569 lines before, **1,426 after**. One PR, four commits — the registry,
+then one per domain family. **Effort M.**
 
-| Commit | Becomes | Moves |
-|---|---|---|
-| 1 | `tool-schemas.ts` (~2045) | the `ListToolsRequestSchema` handler: a declarative array of 94 tool schemas with no logic |
-| 2–4 | `tools/docs.ts`, `tools/tasks.ts`, `tools/workspace.ts` (~700–800 each) | the `CallToolRequestSchema` switch, split by domain the way `routes/` was |
+| Commit | Became | Moved | Measured |
+|---|---|---|---|
+| 1 | `tool-schemas.ts` | the `ListToolsRequestSchema` handler's table: 94 tool schemas, no logic | 2,012 (est. ~2,045) |
+| 2 | `tools/docs.ts` | 52 arms: docs, threads, reviews, suggestions, anchors, watches, shares | 819 (est. ~700–800) |
+| 3 | `tools/tasks.ts` | 25 arms: rows, goals, review items, links — and the four helpers only they read | 1,070 (est. ~700–800) |
+| 4 | `tools/workspace.ts` | 17 arms: boards, the lead seat, attachments, the operator verbs | 528 (est. ~700–800) |
 
-This is the one place a split creates a directory: `packages/mcp/src/tools/`.
-The dispatch is a 94-case switch, and three files of one shape each read
-better than three more siblings in a flat directory of 20.
+This is the one place a split created a directory: `packages/mcp/src/tools/`.
+Each family is a function taking `(name, args, ctx)` and answering `undefined`
+for a name that is not its own, so `mcp.ts` chains the three with `??` and the
+last link — `err(\`unknown tool: ${name}\`)` — is where the switch's `default`
+went. Dependencies arrive in an explicit context following
+`routes/task-routes-context.ts`, because `mcp.ts` connects a stdio transport
+at the bottom of the file: importing it back would be an import that runs
+that.
 
-`PLUGIN_VERSION` must stay reachable from `mcp.ts` — it is the handshake
-literal, and `launcher.test.ts` asserts it only after `bun run build:mcp`. The
-diff touches `packages/mcp/src/**`, so run `bun run build:mcp` and commit
-`packages/plugin/mcp/index.js`. It does **not** touch `packages/plugin/**`
-source, so no version bump. Verify by grepping the rebuilt bundle for a
-literal from the change plus a negative control — a green build step can still
-ship nothing.
+`PLUGIN_VERSION` stays defined in `mcp.ts` and reaches `tools/workspace.ts`
+through the context rather than being re-spelled. `launcher.test.ts` asserts
+it through the built bundle and still passes.
+
+**The estimate for `tools/tasks.ts` was 35% low, and the reason is the one A2
+found: helpers follow the verbs.** `TaskPayload`, `taskCreatedSummary`,
+`heldResult` and the two review-item lookups have no reader outside the board
+arms, so they moved with them — about 140 lines the row did not count.
+`tools/workspace.ts` came out under for the opposite reason: its arms are
+mostly two-line route calls.
+
+### Deviations
+
+- **The context is built per tool call, not once at module load.** Half of
+  what it names — the watch registry and the functions over it — is declared
+  BELOW the handler in `mcp.ts`, and a module-level object literal up there
+  would read those `const`s inside their temporal dead zone.
+- **`RestoreState` moved to `watch-coverage.ts`.** Both readers are now
+  outside `mcp.ts` — the restore-notice renderer that was already there, and
+  `list_watched_docs` in `tools/docs.ts` — and neither may import an entry
+  point. This is the one shared helper the split touched, the way B5's row
+  said to record it.
+- **Three helpers take the context as a first argument**, because they used to
+  close over `http` and `AUTHOR`: `recordReviewAnswer`, `resolveReviewItemId`
+  and `setBoardRetired`. Seven call sites gained a `ctx`. These seven lines,
+  plus two that biome re-wrapped once the dedent changed what fits on a line,
+  are the ONLY moved lines that differ. Everything else is byte-identical,
+  verified by diffing each extracted slab against the same line range of the
+  parent's previous commit with a two-space dedent.
+- **The version WAS bumped, against this row's instruction.** The row said no
+  bump because the diff touches no `packages/plugin/**` source — but
+  `check-plugin-version.ts` guards the path prefix `packages/plugin/`, and the
+  rebuilt bundle `packages/plugin/mcp/index.js` is under it. The gate fails
+  the PR without a bump; every prior bundle-rebuilding PR bumped. **B8 rebuilds
+  the same bundle and must sequence its own number after this one.**
+- **A test harness was added: `test/harness/mcp-source.ts`.** Fourteen tests in
+  the package assert on `mcp.ts` as TEXT, because it exports nothing
+  importable. Left alone, their `readFileSync` would have silently narrowed
+  from "does the server do this?" to "does this one file do this?" — the
+  failure a split is most likely to cause and least likely to announce. They
+  now read the five files joined in source order.
+- **`tool-wiring.test.ts` reads `case` at four spaces or six.** Four is inside
+  a domain function, six was inside the request handler while the dispatch
+  spanned both. A bounded range rather than `\s+`, so a `case` nested deeper
+  cannot pass for a tool.
+- **All three `tools/` files are over 500 lines and have exception rows.** The
+  plan predicted 700–800 each and did not say what that meant for the audit.
+  Each is one dispatch family over one shared context; the length is a count
+  of tools, not of coupling.
+
+Layer: HTTP client / tool surface. Final directory: `mcp/src/` — no move.
 
 ## B7 · `widget.ts`
 

@@ -22,6 +22,7 @@
  */
 import { describe, expect, it } from 'vitest';
 import { declareWorkspaceLead } from '../src/declare-lead.ts';
+import { readMcpSource } from './harness/mcp-source.ts';
 
 const SELF = { id: 'agent-self', name: 'Self Agent', kind: 'agent' };
 const WS = 'ws-1';
@@ -284,10 +285,7 @@ describe('POSITIVE CONTROL — the legacy payload keeps its meaning', () => {
 /** mcp.ts ends in a top-level `await server.connect(transport)` and exports
  *  nothing, so its wiring can only be checked by reading it. */
 async function mcpSource(): Promise<string> {
-  const { readFileSync } = await import('node:fs');
-  const { dirname, join } = await import('node:path');
-  const { fileURLToPath } = await import('node:url');
-  return readFileSync(join(dirname(fileURLToPath(import.meta.url)), '../src/mcp.ts'), 'utf8');
+  return readMcpSource();
 }
 
 describe('the tool schema widened rather than narrowed', () => {

@@ -17,9 +17,10 @@ import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
+import { readMcpSource } from './harness/mcp-source.ts';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
-const SRC = readFileSync(join(HERE, '../src/mcp.ts'), 'utf8');
+const SRC = readMcpSource();
 const MANIFEST = JSON.parse(
   readFileSync(join(HERE, '../../plugin/.claude-plugin/plugin.json'), 'utf8'),
 ) as { version: string };

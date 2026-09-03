@@ -22,9 +22,10 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { type PresenceRow, claimWarning } from '../src/claim-warning.ts';
+import { readMcpSource } from './harness/mcp-source.ts';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
-const SRC = readFileSync(join(HERE, '../src/mcp.ts'), 'utf8');
+const SRC = readMcpSource();
 /** Peers load the BUNDLE, not the source. A green build step is not evidence
  *  the artifact carries the change. */
 const BUNDLE = readFileSync(join(HERE, '../../plugin/mcp/index.js'), 'utf8');

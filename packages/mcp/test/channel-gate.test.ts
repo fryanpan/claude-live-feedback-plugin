@@ -18,9 +18,10 @@ import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { isChannelEvent } from '../src/channel-gate.ts';
 import { createFrameDedup } from '../src/frame-dedup.ts';
+import { readMcpSource } from './harness/mcp-source.ts';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
-const SRC = readFileSync(join(HERE, '../src/mcp.ts'), 'utf8');
+const SRC = readMcpSource();
 const BUNDLE = readFileSync(join(HERE, '../../plugin/mcp/index.js'), 'utf8');
 
 /** The forward decision as `handleFrame` makes it: kind gate, then dedup. */
