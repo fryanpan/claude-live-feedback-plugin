@@ -6571,59 +6571,6 @@ function resolveDiscoveryFile(home, exists) {
   return discoveryCandidates(home).find(exists);
 }
 
-// packages/core/src/review-item-id.ts
-var B64URL = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
-function decodeBase64Url(s) {
-  if (s.length === 0 || s.length % 4 === 1)
-    return;
-  const bytes = [];
-  let buffer = 0;
-  let bits = 0;
-  for (const ch of s) {
-    const v = B64URL.indexOf(ch);
-    if (v < 0)
-      return;
-    buffer = buffer << 6 | v;
-    bits += 6;
-    if (bits >= 8) {
-      bits -= 8;
-      bytes.push(buffer >> bits & 255);
-    }
-  }
-  return Uint8Array.from(bytes);
-}
-var THREAD_ID_PREFIX = "rt-";
-function parseThreadReviewItemId(id) {
-  if (!id.startsWith(THREAD_ID_PREFIX))
-    return;
-  const bytes = decodeBase64Url(id.slice(THREAD_ID_PREFIX.length));
-  if (!bytes)
-    return;
-  let payload;
-  try {
-    payload = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
-  } catch {
-    return;
-  }
-  const commentAt = payload.lastIndexOf(`
-`);
-  if (commentAt < 0)
-    return;
-  const threadAt = payload.lastIndexOf(`
-`, commentAt - 1);
-  if (threadAt < 0)
-    return;
-  const docId = payload.slice(0, threadAt);
-  const threadId = payload.slice(threadAt + 1, commentAt);
-  const commentId = payload.slice(commentAt + 1);
-  if (docId === "" || threadId === "" || commentId === "")
-    return;
-  return { docId, threadId, commentId };
-}
-
-// packages/core/src/task-wire.ts
-var TASK_STATUSES = ["triage", "todo", "in-progress", "done"];
-
 // node_modules/.bun/zod@4.3.6/node_modules/zod/v4/core/core.js
 var NEVER = Object.freeze({
   status: "aborted"
@@ -13969,88 +13916,6 @@ function decisionAnsweredLine(p) {
   return `[decision.answered] ${p.taskId}${by}: "${truncate2(p.answer ?? "", 120)}"${walk}`;
 }
 
-// packages/mcp/src/declare-lead.ts
-async function declareWorkspaceLead(args, deps) {
-  const { workspaceId } = args;
-  const named = typeof args.leadAgentId === "string" ? args.leadAgentId.trim() : "";
-  const declaring = named.length === 0 || named === deps.self.id;
-  const leadAgentId = declaring ? deps.self.id : named;
-  const path = `/api/workspaces/${encodeURIComponent(workspaceId)}`;
-  if (declaring && deps.identityIsShared === true) {
-    return {
-      isError: true,
-      error: "author-required",
-      message: "This session has no identity: CW_AGENT_NAME is not set, so it resolves to the shared " + '"agent" category, which cannot lead a board or keep its watches across a restart. ' + "Set CW_AGENT_NAME in the launch environment, restart the session, and declare again. " + "No seat was changed."
-    };
-  }
-  let attached;
-  let subscription = { open: false, persisted: false };
-  if (declaring) {
-    attached = await deps.http("POST", `${path}/attachments`, {
-      agentId: deps.self.id,
-      agentName: deps.self.name,
-      runtime: deps.runtime,
-      pluginVersion: deps.pluginVersion,
-      processId: deps.processId
-    });
-    subscription = await deps.watchWorkspace(workspaceId);
-  }
-  const res = await deps.http("PUT", `${path}/lead`, {
-    leadAgentId,
-    author: deps.self,
-    ...args.takeover === true ? { takeover: true } : {}
-  });
-  const settledLead = res.workspace?.leadAgentId ?? leadAgentId;
-  const seat = {
-    workspaceId,
-    changed: res.changed,
-    leadAgentId: settledLead,
-    ...res.previousLeadAgentId !== undefined ? { previousLeadAgentId: res.previousLeadAgentId } : {},
-    ...res.declined !== undefined ? { declined: res.declined } : {}
-  };
-  if (!declaring)
-    return seat;
-  const a = attached ?? {};
-  for (const q of a.queuedComments ?? []) {
-    if (typeof q?.id !== "string")
-      continue;
-    try {
-      await deps.http("POST", `${path}/comment-queue/${encodeURIComponent(q.id)}/ack`, {});
-    } catch {}
-  }
-  const warnings = [];
-  if (!subscription.open) {
-    warnings.push("the event stream did not confirm it was open before the seat changed, so anything the " + "server delivered in that window may not have arrived — call list_watched_docs to check " + "coverage, and re-run this if it still looks wrong");
-  }
-  if (!subscription.persisted) {
-    warnings.push("this subscription was NOT persisted, so it will not come back after a respawn — the " + "server refused or did not answer the watch write; re-run this once the server is up " + "(a session with CW_AGENT_NAME unset is refused before this point)");
-  }
-  return {
-    ...subscription.persisted ? {} : { subscriptionPersisted: false, subscriptionWarning: warnings.join("; ") },
-    ...seat,
-    subscribed: subscription.open,
-    subscriptionPersisted: subscription.persisted,
-    ...warnings.length > 0 ? { subscriptionWarning: warnings.join("; ") } : {},
-    lead: settledLead === deps.self.id,
-    ...res.declined === "lead-held" ? {
-      note: `${settledLead} already leads this board and is live, so the seat was left alone — ` + "you are attached and subscribed, and everything on the board still reaches you. " + "Coordinate with them; pass takeover: true only if you mean to take the seat."
-    } : {},
-    ...a.retired ? { retired: a.retired } : {},
-    ...a.leadNameConflicts ? { leadNameConflicts: a.leadNameConflicts } : {},
-    gating: a.gating,
-    untriaged: a.untriaged ?? [],
-    queuedVoice: a.queuedVoice ?? [],
-    queuedComments: (a.queuedComments ?? []).map((q) => ({
-      docId: q.docId,
-      ...q.threadId !== undefined ? { threadId: q.threadId } : {},
-      event: q.event,
-      ...q.author !== undefined ? { author: q.author } : {},
-      text: q.text,
-      ts: q.ts
-    }))
-  };
-}
-
 // packages/mcp/src/deferred-emit.ts
 function createDeferredEmitter(schedule = (fn) => {
   setTimeout(fn, 0);
@@ -14299,18 +14164,6 @@ function reviewItemHeldLine(p) {
   return `[workspace.review_item_held] your review item ${ask}${on}${ids} was held off the queue by the quality gate${why}.${stood} ${fix}`;
 }
 
-// packages/mcp/src/parallelism-cap.ts
-function parseCapArg(raw) {
-  if (typeof raw === "number" && Number.isInteger(raw) && raw >= 1) {
-    return { ok: true, cap: raw };
-  }
-  const shown = typeof raw === "string" ? JSON.stringify(raw) : String(raw);
-  return {
-    ok: false,
-    error: `cap must be a positive integer — the most builders the board may have dispatched at once (got ${shown}). Pass a number of 1 or more, not a string.`
-  };
-}
-
 // packages/mcp/src/self-authored.ts
 var COMMENT_EVENTS = new Set(["thread.created", "thread.replied"]);
 var STATUS_EVENTS = new Set(["thread.resolved", "thread.reopened"]);
@@ -14372,276 +14225,10 @@ async function deliverThenCommit(frame, deliver, cursor, onGap) {
   }
 }
 
-// packages/mcp/src/task-projection.ts
-function projectTaskRows(tasks, fields) {
-  const rows = tasks;
-  if (!fields || fields.length === 0) {
-    return rows.map(({ body: _body, transitions, ...rest }) => ({
-      ...rest,
-      transitionCount: transitions?.length ?? 0
-    }));
-  }
-  const picked = new Set(["id", ...fields]);
-  return rows.map((t) => {
-    const row = {};
-    for (const key of picked) {
-      if (key === "transitionCount") {
-        row.transitionCount = t.transitions?.length ?? 0;
-      } else if (key in t) {
-        row[key] = t[key];
-      }
-    }
-    return row;
-  });
-}
+// packages/core/src/task-wire.ts
+var TASK_STATUSES = ["triage", "todo", "in-progress", "done"];
 
-// packages/mcp/src/thread-create.ts
-function threadCreateRequest(input, author) {
-  const doc2 = encodeURIComponent(input.docId);
-  if (input.find === undefined) {
-    return {
-      path: `/api/docs/${doc2}/threads`,
-      body: {
-        author,
-        text: input.text,
-        anchor: { kind: "subject" },
-        ...input.review !== undefined ? { review: input.review } : {}
-      }
-    };
-  }
-  return {
-    path: `/api/docs/${doc2}/threads/by_find`,
-    body: {
-      author,
-      text: input.text,
-      find: input.find,
-      ...input.contextBefore !== undefined ? { contextBefore: input.contextBefore } : {},
-      ...input.contextAfter !== undefined ? { contextAfter: input.contextAfter } : {},
-      ...input.occurrence !== undefined ? { occurrence: input.occurrence } : {},
-      ...input.review !== undefined ? { review: input.review } : {}
-    }
-  };
-}
-
-// packages/mcp/src/voice-line.ts
-function truncate4(s, n) {
-  return s.length > n ? `${s.slice(0, n - 1)}…` : s;
-}
-function where(p) {
-  const c = p.context;
-  if (!c)
-    return "";
-  return ` (at ${c.surface ?? "?"}${c.docId ? ` ${c.docId}` : ""}${c.taskId ? ` ${c.taskId}` : ""}${c.visibleHeading ? `, near "${c.visibleHeading}"` : ""})`;
-}
-function voiceRequestLine(p) {
-  if (p.route === "fast-path")
-    return null;
-  const by = p.actor?.name ? ` by ${p.actor.name}` : "";
-  const said = `[voice.request]${by}${where(p)}: "${p.transcript ?? ""}"`;
-  const told = truncate4(p.ack ?? "", 120);
-  if (p.route === "fast-path-action") {
-    return `${said} — the fast path ALREADY applied this to the board on the speaker's behalf; ` + `they were told: "${told}". Do NOT redo it — reconcile your own picture of the board ` + "with what changed, and pick up only whatever the utterance asked for beyond it.";
-  }
-  return `${said} — act on it through the task/edit tools; the speaker was told: "${told}"`;
-}
-
-// packages/mcp/src/watch-coverage.ts
-function parseCoverage(res) {
-  if (!res || typeof res !== "object")
-    return;
-  const raw = res.coverage;
-  if (!raw || typeof raw !== "object")
-    return;
-  const c = raw;
-  if (typeof c.agentId !== "string")
-    return;
-  if (!Array.isArray(c.workspaces) || !Array.isArray(c.unattachedBoards))
-    return;
-  return {
-    agentId: c.agentId,
-    workspaces: c.workspaces,
-    unattachedBoards: c.unattachedBoards
-  };
-}
-function boardsWaitingOnYou(coverage) {
-  return (coverage?.unattachedBoards ?? []).filter((b) => b.queuedTotal > 0);
-}
-var plural = (n, one, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
-function describeQueue(q) {
-  const parts = [];
-  if (q.queuedVoice > 0)
-    parts.push(plural(q.queuedVoice, "voice note"));
-  return parts.join(", ");
-}
-function remedyFor(b, agentId) {
-  if (b.leadLive && b.leadAgentId !== undefined && b.leadAgentId !== agentId) {
-    return `${b.leadAgentId} holds the lead seat and is live, so the queue is addressed to them — ` + `ask them rather than taking it. attach_agent(workspaceId: "${b.workspaceId}") makes you ` + "addressable and subscribed without moving the seat.";
-  }
-  if (b.attached && !b.heartbeatFresh) {
-    return "your attachment is stale — the server has not seen a heartbeat OR a tool call from you " + "on this board inside the observed-work window, so deliveries for it are parking. " + `heartbeat(workspaceId: "${b.workspaceId}") now, and every few minutes while you work it.`;
-  }
-  return `set_workspace_lead(workspaceId: "${b.workspaceId}") attaches, subscribes and hands the ` + "backlog over in one call.";
-}
-function coverageAlertLine(coverage) {
-  const waiting = boardsWaitingOnYou(coverage);
-  if (waiting.length === 0)
-    return null;
-  const agentId = coverage?.agentId ?? "";
-  const described = waiting.map((b) => {
-    const via = b.watchedDocs.length > 0 ? `${plural(b.watchedDocs.length, "doc")} watched` : "this board watched directly";
-    return `"${b.name}" (${b.workspaceId}) — ${via}, ${b.queuedTotal} waiting ` + `(${describeQueue(b.queued)}); ${remedyFor(b, agentId)}`;
-  }).join(" ");
-  return `[not covered] ${plural(waiting.length, "board")} you follow ` + `${waiting.length === 1 ? "has" : "have"} work queued for a lead, and you are not live on ` + `${waiting.length === 1 ? "it" : "them"}. Watching is not attaching, and an attachment the ` + "server has stopped observing is not attached either — every delivery gate asks for recent " + `observed work, a heartbeat or a tool call, plus an open channel. ${described}`;
-}
-function boardsToReattach(coverage) {
-  return (coverage?.workspaces ?? []).filter((w) => w.kind === "board" && (w.lead === true || w.attached === true)).filter((w) => w.heartbeatFresh !== true).map((w) => w.workspaceId);
-}
-function restoreNoticeContent(opts) {
-  const lines = [];
-  const n = opts.restored.length;
-  const reattached = opts.reattached ?? [];
-  if (n > 0 || opts.pruned.length > 0) {
-    const dropped = opts.pruned.length > 0 ? `; ${opts.pruned.length} dropped (doc gone)` : "";
-    lines.push(`[watches restored] ${plural(n, "watch", "watches")} re-wired from the server for ` + `${opts.agentName} after restart${dropped}: ${opts.restored.join(", ")}`);
-  }
-  if (reattached.length > 0) {
-    lines.push(`[attachments restored] re-attached to ${plural(reattached.length, "board")} whose ` + "attachment came back stale, so lead-addressed work reaches this session again: " + `${reattached.join(", ")}`);
-  }
-  const alert = coverageAlertLine(opts.coverage);
-  if (alert)
-    lines.push(alert);
-  return lines.length > 0 ? lines.join(`
-`) : null;
-}
-
-// packages/mcp/src/mcp.ts
-function resolveBaseUrl() {
-  const override = readRenamedEnv(process.env, "CW_BASE_URL");
-  if (override)
-    return override;
-  const discovery = resolveDiscoveryFile(homedir(), existsSync);
-  if (discovery) {
-    try {
-      const j = JSON.parse(readFileSync(discovery, "utf8"));
-      if (j.port)
-        return `http://localhost:${j.port}`;
-    } catch {}
-  }
-  throw new Error("claude-workspaces server not found — start it with `bun run dev` (or set CW_BASE_URL). " + `Looked for a discovery file at ${discoveryCandidates(homedir()).join(" and ")}.`);
-}
-var AUTHOR = resolveAgentAuthor(process.env);
-var STATUS_TEXT_MAX = 4000;
-function suggestionAuthor() {
-  return { id: AUTHOR.id, name: AUTHOR.name, color: AUTHOR.color };
-}
-var PLUGIN_VERSION = "0.1.149";
-var PROCESS_ID = randomUUID();
-var server = new Server({
-  name: "claude-workspaces",
-  version: PLUGIN_VERSION
-}, {
-  capabilities: {
-    tools: {},
-    experimental: { "claude/channel": {} }
-  },
-  instructions: [
-    "Every markdown review doc is backed by a .md file on disk. The file is the",
-    "source of truth at rest; the live editor is the source of truth at runtime;",
-    "the plugin keeps them in sync bidirectionally (~1s debounced).",
-    "",
-    "CREATE: call create_review_doc(docId, path) to bring a .md under review.",
-    "The server reads the file, parses it into the live editor, sets up the",
-    "fs.watch + write-back, and returns a reviewUrl you can hand to a human.",
-    "",
-    "EDIT: never use Write/Edit/str_replace on the .md while it is under review",
-    "— direct filesystem edits race against the live doc’s own ~1s flush, and if",
-    "LF has any pending state your edit can be silently overwritten by the next",
-    "write-back. Route edits through the MCP tools below: find_and_replace for",
-    "prose changes, rewrite_thread_region / insert_after_thread / insert_blocks_after_thread",
-    "for comment-anchored edits, and set_doc_content(docId, markdown) for a",
-    "COMPREHENSIVE REWRITE of the whole doc (do NOT Write the file + reparse,",
-    "and do NOT delete_doc + Write + re-create — both race the flush and both",
-    "have destroyed content in the field). NEVER use set_doc_content on a doc a",
-    "human is reviewing or editing: a scoped request (a comment, one section)",
-    "gets a scoped edit — find_and_replace (table rows match in pipe syntax),",
-    "rewrite_thread_region, edit_at_anchor — and a whole-doc rewrite built from",
-    "an earlier read destroys their concurrent edits. The server refuses such a",
-    "write with 409 stale-write naming the human-edit time; re-read with",
-    "get_doc, re-apply your change onto the CURRENT content, and only retry",
-    "with confirmOverwriteHumanEdits: true if a full rewrite is truly needed.",
-    "External edits (VS Code, git pull)",
-    "flow back into the live doc via the file poll when LF is idle; if you wrote",
-    "to a bound file externally and need to be sure it landed, call",
-    "reparse_from_disk(docId) to force-pull from disk. If an edit response or",
-    "get_doc carries a `syncError`, read it — it names the conflict and where",
-    "the overwritten version was backed up.",
-    "",
-    "DIFF REVIEW / FOLDER BROWSE: when the human wants to review your code",
-    'changes ("review this diff", a branch, work in progress), call',
-    "create_diff_review(repo, base) — one review doc per changed file,",
-    "PR-style unified diff with line comments. Omit base to BROWSE a folder",
-    "instead (no diff): everything is navigable from the all-files sidebar,",
-    "files open lazily, markdown editable — works on plain folders and",
-    "fresh repos too (bind_folder is an alias for this). Default mode diffs",
-    "base against the LIVE working tree: keep editing the code and the reviewer",
-    "sees your changes re-render within ~1s, with their comments riding along",
-    "(threads orphan into the outdated-comments flow if their line disappears).",
-    "ALWAYS pass groups: [{title, paths[]}] — organize the changed files by",
-    "INTENT (the way you would split a branch into reviewable commits); you",
-    "know the semantics of your change far better than the heuristic fallback.",
-    "First group = read first; a directory path claims every file under it;",
-    'unlisted files land in "Other". Pass target only to pin a review to a',
-    "finished range. Re-run the tool after touching files that were not in",
-    "the diff before (idempotent; refreshes the file list; keeps your groups",
-    "unless you pass new ones). Share the returned entryUrl with the human",
-    "(bare URL on its own line); the file tree navigates the rest. Thread",
-    "events arrive per file via the auto-watch; resolve threads as you address",
-    "them; refresh_review(setId) to re-sync membership and reviews as files move (threads survive); delete_review(setId) when the review is done.",
-    "",
-    "SUGGEST: pass suggest: true on find_and_replace or rewrite_thread_region to",
-    "PROPOSE a change instead of applying it — the match is marked pending and",
-    "attributed to this agent; disk and every other reader stay on the accepted",
-    "state until a human (or accept_suggestion) accepts it. Returns { suggestionId }.",
-    "Use for judgment calls a reviewer should approve; use the plain edit for",
-    "mechanical fixes. list_suggestions(docId) / accept_suggestion(docId, sid) /",
-    "reject_suggestion(docId, sid) / resolve_all_suggestions(docId, action, authorId?)",
-    "manage proposals from any author. suggestion.created/accepted/rejected events",
-    "arrive on the same watch_doc channel as thread events.",
-    "",
-    "OBSERVE: call watch_doc(docId) once per doc to receive thread events as",
-    '<channel source="claude-workspaces" doc_id="..." thread_id="..." event="..." author="..." sent_at="...">body</channel>',
-    "messages. Treat each as an explicit ask from the reviewer; read, decide if it",
-    "is in your domain, act via an edit tool. unwatch_doc when you're done.",
-    "Watches are remembered on the server under this agent name (CW_AGENT_NAME)",
-    "and re-wired when the session respawns; list_watched_docs says whether the",
-    "current set was restored from the server or is session-only.",
-    "",
-    "CLEANUP: review docs are usually short-lived — bound for a ~30-minute",
-    "feedback pass, then obsolete. When you no longer need one, call",
-    "delete_doc(docId) to remove it (the bound source .md is left on disk; only",
-    "the review session goes away). It refuses if the doc still has open threads",
-    "(someone's waiting on that feedback) — resolve them first or pass force:true.",
-    "Don't leave stale docs piling up in list_docs.",
-    "",
-    "BEFORE YOU EDIT A .md FILE: call list_docs first. If a doc has sourceUrl",
-    "matching the path, route through the MCP. If not, normal file edits are fine.",
-    "",
-    "WORKSPACE HUB: a hub workspace is a goal + a task board + linked docs.",
-    "create_workspace mints one; attach_doc links existing docs/reviews to it;",
-    "create_tasks (ALWAYS a list — one idea is a one-row list) and",
-    "promote_to_task add work (omit `goal` and the task lands UNPLACED in",
-    "Backlog awaiting triage — the create says so and hands you the goal",
-    "bands, and placing it with set_task_goal IS the triage:",
-    "pick the goal AND the exact position). task_transition is the",
-    "single gate for status changes — blockers come back in the result.",
-    "attach_agent registers you as the workspace agent (heartbeat every few",
-    "minutes to stay live; lead-addressed deliveries only reach live agents).",
-    "Workspace events (task.*, decision.answered, workspace.goals_changed)",
-    "arrive on the same channel as thread events once you create/attach.",
-    "import_tasks_markdown moves an existing hand-maintained markdown tracker",
-    "onto the board (dry-run first — review the mapping before apply:true)."
-  ].join(" ")
-});
+// packages/mcp/src/tool-schemas.ts
 var REVIEW_ITEM_SCHEMA = {
   type: "object",
   description: "Declares this a Review Item, putting it on the reviewer's Home queue once it passes the board's quality gate. Omit it for ordinary comments — status notes and closing remarks are not review items. headline is the row title; missing or multi-line is refused, over-long files anyway with advice. Everything else goes in detail, in whatever shape the ask wants to read.",
@@ -14696,7 +14283,7 @@ var NEW_TASK_REVIEW_ITEM_SCHEMA = {
   ...REVIEW_ITEM_SCHEMA,
   description: "A question about the work this row creates — for when you are filing the work and the question together. If the question came up while working a task that already exists, hang it there with add_review_item instead, so the ask keeps the context of the work that raised it. The ticket title names the work; headline names the ask."
 };
-server.setRequestHandler(ListToolsRequestSchema, async () => ({
+var TOOL_LIST = {
   tools: [
     {
       name: "list_docs",
@@ -16371,13 +15958,603 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
       }
     }
   ]
-}));
-var NO_AUTO_WATCH_TOOLS = new Set([
-  "unwatch_doc",
-  "watch_doc",
-  "observe_url",
-  "attach_doc"
-]);
+};
+
+// packages/mcp/src/thread-create.ts
+function threadCreateRequest(input, author) {
+  const doc2 = encodeURIComponent(input.docId);
+  if (input.find === undefined) {
+    return {
+      path: `/api/docs/${doc2}/threads`,
+      body: {
+        author,
+        text: input.text,
+        anchor: { kind: "subject" },
+        ...input.review !== undefined ? { review: input.review } : {}
+      }
+    };
+  }
+  return {
+    path: `/api/docs/${doc2}/threads/by_find`,
+    body: {
+      author,
+      text: input.text,
+      find: input.find,
+      ...input.contextBefore !== undefined ? { contextBefore: input.contextBefore } : {},
+      ...input.contextAfter !== undefined ? { contextAfter: input.contextAfter } : {},
+      ...input.occurrence !== undefined ? { occurrence: input.occurrence } : {},
+      ...input.review !== undefined ? { review: input.review } : {}
+    }
+  };
+}
+
+// packages/mcp/src/tools/docs.ts
+async function handleDocsTool(name, a, ctx) {
+  const {
+    http,
+    ok,
+    err,
+    AUTHOR,
+    STATUS_TEXT_MAX,
+    suggestionAuthor,
+    resolveBaseUrl,
+    watchers,
+    watchDoc,
+    watchWorkspace,
+    unwatchDoc,
+    refreshCoverage,
+    watchPersistenceMode,
+    restoreState,
+    lastPersistError,
+    IDENTITY_IS_SHARED,
+    SHARED_IDENTITY_REASON
+  } = ctx;
+  switch (name) {
+    case "list_docs": {
+      const { workspaceId, kind, query, sourcePrefix, limit, cursor, full } = a;
+      const params = new URLSearchParams;
+      if (workspaceId)
+        params.set("workspaceId", workspaceId);
+      if (kind)
+        params.set("kind", kind);
+      if (query)
+        params.set("query", query);
+      if (sourcePrefix)
+        params.set("sourcePrefix", sourcePrefix);
+      params.set("limit", String(typeof limit === "number" && limit > 0 ? Math.min(Math.floor(limit), 500) : 50));
+      if (cursor)
+        params.set("cursor", cursor);
+      if (full)
+        params.set("full", "1");
+      const res = await http("GET", `/api/docs?${params.toString()}`);
+      return ok(res);
+    }
+    case "list_threads": {
+      const { docId, status } = a;
+      const qs = status ? `?status=${encodeURIComponent(status)}` : "";
+      const res = await http("GET", `/api/docs/${encodeURIComponent(docId)}/threads${qs}`);
+      return ok(res);
+    }
+    case "get_thread": {
+      const { docId, threadId } = a;
+      const res = await http("GET", `/api/docs/${encodeURIComponent(docId)}/threads/${encodeURIComponent(threadId)}`);
+      return ok(res);
+    }
+    case "post_reply": {
+      const { docId, threadId, text, review } = a;
+      const res = await http("POST", `/api/docs/${encodeURIComponent(docId)}/threads/${encodeURIComponent(threadId)}/comments`, { author: AUTHOR, text, ...review !== undefined ? { review } : {} });
+      return ok(res);
+    }
+    case "post_status": {
+      const { text, taskId } = a;
+      const body = typeof text === "string" ? text.trim() : "";
+      if (body === "")
+        return err("text is empty — say where the work stands");
+      if (body.length > STATUS_TEXT_MAX) {
+        return err(`text is over ${STATUS_TEXT_MAX} chars — a status is a line to a few sentences; the full report is already on the Activity tab from your end-of-turn message`);
+      }
+      const path = taskId !== undefined && taskId !== "" ? `/api/tasks/${encodeURIComponent(taskId)}/notes` : "/api/agent-notes";
+      const res = await http("POST", path, {
+        agent: AUTHOR.name,
+        kind: "status",
+        text: body,
+        at: Date.now()
+      });
+      return ok({
+        posted: true,
+        ...res.taskId !== undefined ? { taskId: res.taskId } : {},
+        ...res.workspaceId !== undefined ? { workspaceId: res.workspaceId } : {},
+        ...res.taskId === undefined ? {
+          note: "no in-progress task of yours to pin this to — kept on your own recent-activity list; pass taskId to put it on a row"
+        } : {}
+      });
+    }
+    case "create_thread": {
+      const { path, body } = threadCreateRequest(a, AUTHOR);
+      const res = await http("POST", path, body);
+      return ok(res);
+    }
+    case "resolve_thread": {
+      const { docId, threadId } = a;
+      const res = await http("POST", `/api/docs/${encodeURIComponent(docId)}/threads/${encodeURIComponent(threadId)}/resolve`);
+      return ok(res);
+    }
+    case "summarize_thread": {
+      const { docId, threadId, force } = a;
+      const res = await http("POST", `/api/docs/${encodeURIComponent(docId)}/threads/${encodeURIComponent(threadId)}/summary`, force ? { force: true } : undefined);
+      return ok(res);
+    }
+    case "reopen_thread": {
+      const { docId, threadId } = a;
+      const res = await http("POST", `/api/docs/${encodeURIComponent(docId)}/threads/${encodeURIComponent(threadId)}/reopen`);
+      return ok(res);
+    }
+    case "get_doc": {
+      const { docId } = a;
+      const res = await http("GET", `/api/docs/${encodeURIComponent(docId)}/content?reader=${encodeURIComponent(AUTHOR.id)}`);
+      return ok(res);
+    }
+    case "doc_status": {
+      const { docId } = a;
+      const res = await http("GET", `/api/docs/${encodeURIComponent(docId)}/status`);
+      return ok(res);
+    }
+    case "create_review_doc": {
+      const { docId, path, title, setId, hubWorkspaceId, producedBy } = a;
+      const res = await http("POST", "/api/docs", {
+        docId,
+        type: "markdown",
+        sourceUrl: path,
+        owner: process.cwd(),
+        ...title ? { title } : {},
+        ...setId ? { setId } : {},
+        ...hubWorkspaceId ? { hubWorkspaceId } : {},
+        ...producedBy ? { producedBy } : {}
+      });
+      return ok(res);
+    }
+    case "set_doc_content": {
+      const { docId, markdown, confirmOverwriteHumanEdits } = a;
+      const res = await http("POST", `/api/docs/${encodeURIComponent(docId)}/content`, {
+        markdown,
+        author: AUTHOR,
+        ...confirmOverwriteHumanEdits === true ? { confirmOverwriteHumanEdits: true } : {}
+      });
+      return ok(res);
+    }
+    case "reparse_from_disk": {
+      const { docId } = a;
+      const res = await http("POST", `/api/docs/${encodeURIComponent(docId)}/reparse_from_disk`);
+      return ok(res);
+    }
+    case "delete_doc": {
+      const { docId, force } = a;
+      const qs = force ? "?force=true" : "";
+      const res = await http("DELETE", `/api/docs/${encodeURIComponent(docId)}${qs}`);
+      return ok(res);
+    }
+    case "bind_mock": {
+      const { docId, sourceHtmlPath, title, hubWorkspaceId } = a;
+      const res = await http("POST", "/api/docs", {
+        docId,
+        type: "mockup",
+        owner: process.cwd(),
+        ...sourceHtmlPath ? { sourceUrl: sourceHtmlPath } : {},
+        ...title ? { title } : {},
+        ...hubWorkspaceId ? { hubWorkspaceId } : {}
+      });
+      return ok(res);
+    }
+    case "bind_folder": {
+      const {
+        folderPath,
+        workspaceId,
+        hubWorkspaceId,
+        title,
+        include,
+        exclude,
+        maxFiles,
+        subscribe,
+        producedBy
+      } = a;
+      const res = await http("POST", "/api/workspaces", {
+        folderPath,
+        owner: process.cwd(),
+        ...workspaceId ? { workspaceId } : {},
+        ...hubWorkspaceId ? { hubWorkspaceId } : {},
+        ...title ? { title } : {},
+        ...include ? { include } : {},
+        ...exclude ? { exclude } : {},
+        ...maxFiles !== undefined ? { maxFiles } : {},
+        ...producedBy ? { producedBy } : {}
+      });
+      if (subscribe !== false && res?.workspaceId) {
+        await watchWorkspace(res.workspaceId);
+      }
+      return ok(res);
+    }
+    case "create_diff_review": {
+      const {
+        repo,
+        base,
+        target,
+        reviewId,
+        hubWorkspaceId,
+        title,
+        exclude,
+        groups,
+        maxFiles,
+        subscribe,
+        producedBy
+      } = a;
+      const res = await http("POST", "/api/diffs", {
+        repo,
+        base,
+        ...target ? { target } : {},
+        owner: process.cwd(),
+        ...reviewId ? { reviewId } : {},
+        ...hubWorkspaceId ? { hubWorkspaceId } : {},
+        ...title ? { title } : {},
+        ...exclude ? { exclude } : {},
+        ...groups ? { groups } : {},
+        ...maxFiles !== undefined ? { maxFiles } : {},
+        ...producedBy ? { producedBy } : {}
+      });
+      if (subscribe !== false && res?.reviewId) {
+        await watchWorkspace(res.reviewId);
+      }
+      return ok(res);
+    }
+    case "delete_review": {
+      const { setId, force, purge } = a;
+      const params = [force ? "force=true" : "", purge ? "purge=true" : ""].filter(Boolean);
+      const qs = params.length > 0 ? `?${params.join("&")}` : "";
+      const res = await http("DELETE", `/api/reviews/${encodeURIComponent(setId)}${qs}`);
+      return ok(res);
+    }
+    case "archive_review": {
+      const { setId, reason } = a;
+      const res = await http("POST", `/api/reviews/${encodeURIComponent(setId)}/archive`, {
+        author: AUTHOR,
+        ...reason !== undefined ? { reason } : {}
+      });
+      return ok(res);
+    }
+    case "unarchive_review": {
+      const { setId } = a;
+      const res = await http("POST", `/api/reviews/${encodeURIComponent(setId)}/unarchive`, {
+        author: AUTHOR
+      });
+      return ok(res);
+    }
+    case "archive_doc": {
+      const { docId, reason } = a;
+      const res = await http("POST", `/api/docs/${encodeURIComponent(docId)}/archive`, {
+        author: AUTHOR,
+        ...reason !== undefined ? { reason } : {}
+      });
+      return ok(res);
+    }
+    case "unarchive_doc": {
+      const { docId } = a;
+      const res = await http("POST", `/api/docs/${encodeURIComponent(docId)}/unarchive`, {
+        author: AUTHOR
+      });
+      return ok(res);
+    }
+    case "list_archived_reviews": {
+      const res = await http("GET", "/api/reviews/archived");
+      return ok(res);
+    }
+    case "delete_workspace": {
+      const { workspaceId, force, purge } = a;
+      const params = [force ? "force=true" : "", purge ? "purge=true" : ""].filter(Boolean);
+      const qs = params.length > 0 ? `?${params.join("&")}` : "";
+      const res = await http("DELETE", `/api/workspaces/${encodeURIComponent(workspaceId)}${qs}`);
+      return ok(res);
+    }
+    case "refresh_workspace":
+    case "refresh_review": {
+      const { setId, workspaceId } = a;
+      const id = setId ?? workspaceId ?? "";
+      const res = await http("POST", `/api/reviews/${encodeURIComponent(id)}/refresh`, {});
+      return ok(res);
+    }
+    case "set_workspace_groups":
+    case "set_review_groups": {
+      const { setId, workspaceId, groups } = a;
+      const id = setId ?? workspaceId ?? "";
+      const res = await http("POST", `/api/reviews/${encodeURIComponent(id)}/groups`, {
+        groups
+      });
+      return ok(res);
+    }
+    case "find_and_replace": {
+      const {
+        docId,
+        find,
+        replace,
+        contextBefore,
+        contextAfter,
+        occurrence,
+        replaceAll,
+        parseInlineMarks,
+        suggest
+      } = a;
+      const res = await http("POST", `/api/docs/${encodeURIComponent(docId)}/find_and_replace`, {
+        find,
+        replace,
+        ...contextBefore !== undefined ? { contextBefore } : {},
+        ...contextAfter !== undefined ? { contextAfter } : {},
+        ...occurrence !== undefined ? { occurrence } : {},
+        ...replaceAll === true ? { replaceAll: true } : {},
+        ...parseInlineMarks === true ? { parseInlineMarks: true } : {},
+        ...suggest === true ? { suggest: true, author: suggestionAuthor() } : {}
+      });
+      return ok(res);
+    }
+    case "rewrite_thread_region": {
+      const { docId, threadId, replacement, parseInlineMarks, suggest } = a;
+      const res = await http("POST", `/api/docs/${encodeURIComponent(docId)}/threads/${encodeURIComponent(threadId)}/rewrite_region`, {
+        replacement,
+        ...parseInlineMarks === true ? { parseInlineMarks: true } : {},
+        ...suggest === true ? { suggest: true, author: suggestionAuthor() } : {}
+      });
+      return ok(res);
+    }
+    case "list_suggestions": {
+      const { docId } = a;
+      const res = await http("GET", `/api/docs/${encodeURIComponent(docId)}/suggestions`);
+      return ok(res);
+    }
+    case "accept_suggestion": {
+      const { docId, sid } = a;
+      const res = await http("POST", `/api/docs/${encodeURIComponent(docId)}/suggestions/${encodeURIComponent(sid)}/accept`);
+      return ok(res);
+    }
+    case "reject_suggestion": {
+      const { docId, sid } = a;
+      const res = await http("POST", `/api/docs/${encodeURIComponent(docId)}/suggestions/${encodeURIComponent(sid)}/reject`);
+      return ok(res);
+    }
+    case "resolve_all_suggestions": {
+      const { docId, action, authorId } = a;
+      const res = await http("POST", `/api/docs/${encodeURIComponent(docId)}/suggestions/resolve_all`, { action, ...authorId !== undefined ? { authorId } : {} });
+      return ok(res);
+    }
+    case "insert_after_thread": {
+      const { docId, threadId, text } = a;
+      const res = await http("POST", `/api/docs/${encodeURIComponent(docId)}/threads/${encodeURIComponent(threadId)}/insert_after`, { text });
+      return ok(res);
+    }
+    case "insert_blocks_after_thread": {
+      const { docId, threadId, markdown, placement } = a;
+      const res = await http("POST", `/api/docs/${encodeURIComponent(docId)}/threads/${encodeURIComponent(threadId)}/insert_blocks_after`, { markdown, ...placement !== undefined ? { placement } : {} });
+      return ok(res);
+    }
+    case "create_anchor": {
+      const { docId, find, contextBefore, contextAfter, occurrence, label } = a;
+      const res = await http("POST", `/api/docs/${encodeURIComponent(docId)}/agent_anchors`, {
+        find,
+        ...contextBefore !== undefined ? { contextBefore } : {},
+        ...contextAfter !== undefined ? { contextAfter } : {},
+        ...occurrence !== undefined ? { occurrence } : {},
+        ...label !== undefined ? { label } : {}
+      });
+      return ok(res);
+    }
+    case "edit_at_anchor": {
+      const { docId, anchorId, op } = a;
+      const res = await http("POST", `/api/docs/${encodeURIComponent(docId)}/agent_anchors/${encodeURIComponent(anchorId)}/edit`, op);
+      return ok(res);
+    }
+    case "insert_blocks_at_anchor": {
+      const { docId, anchorId, markdown, placement } = a;
+      const res = await http("POST", `/api/docs/${encodeURIComponent(docId)}/agent_anchors/${encodeURIComponent(anchorId)}/insert_blocks`, { markdown, ...placement !== undefined ? { placement } : {} });
+      return ok(res);
+    }
+    case "delete_anchor": {
+      const { docId, anchorId } = a;
+      const res = await http("DELETE", `/api/docs/${encodeURIComponent(docId)}/agent_anchors/${encodeURIComponent(anchorId)}`);
+      return ok(res);
+    }
+    case "delete_block_at_anchor": {
+      const { docId, threadId, anchorId } = a;
+      const res = await http("POST", `/api/docs/${encodeURIComponent(docId)}/delete_block_at_anchor`, {
+        ...threadId !== undefined ? { threadId } : {},
+        ...anchorId !== undefined ? { anchorId } : {}
+      });
+      return ok(res);
+    }
+    case "delete_blocks_in_range": {
+      const {
+        docId,
+        startFind,
+        endFind,
+        contextBefore,
+        contextAfter,
+        startOccurrence,
+        endOccurrence
+      } = a;
+      const res = await http("POST", `/api/docs/${encodeURIComponent(docId)}/delete_blocks_in_range`, {
+        startFind,
+        endFind,
+        ...contextBefore !== undefined ? { contextBefore } : {},
+        ...contextAfter !== undefined ? { contextAfter } : {},
+        ...startOccurrence !== undefined ? { startOccurrence } : {},
+        ...endOccurrence !== undefined ? { endOccurrence } : {}
+      });
+      return ok(res);
+    }
+    case "delete_section": {
+      const { docId, heading, level, occurrence } = a;
+      const res = await http("POST", `/api/docs/${encodeURIComponent(docId)}/delete_section`, {
+        heading,
+        ...level !== undefined ? { level } : {},
+        ...occurrence !== undefined ? { occurrence } : {}
+      });
+      return ok(res);
+    }
+    case "observe_url": {
+      const { docId } = a;
+      return ok({ sseUrl: `${resolveBaseUrl()}/events/${encodeURIComponent(docId)}` });
+    }
+    case "watch_doc": {
+      const { docId } = a;
+      const persisted = await watchDoc(docId);
+      return ok({
+        docId,
+        watching: Array.from(watchers.keys()),
+        persisted,
+        persistence: watchPersistenceMode()
+      });
+    }
+    case "unwatch_doc": {
+      const { docId } = a;
+      const persisted = await unwatchDoc(docId);
+      return ok({
+        docId,
+        watching: Array.from(watchers.keys()),
+        persisted,
+        persistence: watchPersistenceMode()
+      });
+    }
+    case "list_watched_docs": {
+      const coverage = await refreshCoverage();
+      return ok({
+        watching: Array.from(watchers.keys()),
+        persistence: {
+          mode: watchPersistenceMode(),
+          agentId: AUTHOR.id,
+          ...IDENTITY_IS_SHARED ? { reason: SHARED_IDENTITY_REASON } : {}
+        },
+        restore: restoreState,
+        ...coverage ? { coverage } : {},
+        ...lastPersistError ? { lastPersistError } : {}
+      });
+    }
+    case "share_workspace": {
+      const {
+        workspaceId,
+        allowDomains,
+        ttlSeconds,
+        name: slug
+      } = a;
+      const res = await http("POST", "/api/share/workspace", {
+        workspaceId,
+        allowDomains,
+        ttlSeconds,
+        name: slug
+      });
+      return ok(res);
+    }
+    case "share_link": {
+      const res = await http("POST", "/api/share/link", a);
+      return ok(res);
+    }
+    case "set_share_ttl": {
+      const { shareId, ttlSeconds } = a;
+      const res = await http("POST", `/api/share/${encodeURIComponent(shareId)}/ttl`, {
+        ttlSeconds
+      });
+      return ok(res);
+    }
+    case "list_shares": {
+      const res = await http("GET", "/api/share");
+      return ok(res);
+    }
+    case "unshare": {
+      const { shareId } = a;
+      const res = await http("DELETE", `/api/share/${encodeURIComponent(shareId)}`);
+      return ok(res);
+    }
+    case "set_sharing_enabled": {
+      const { enabled } = a;
+      if (typeof enabled !== "boolean") {
+        const res2 = await http("GET", "/api/share");
+        return ok(res2);
+      }
+      const res = await http("POST", "/api/share/enabled", { enabled });
+      return ok(res);
+    }
+  }
+  return;
+}
+
+// packages/core/src/review-item-id.ts
+var B64URL = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+function decodeBase64Url(s) {
+  if (s.length === 0 || s.length % 4 === 1)
+    return;
+  const bytes = [];
+  let buffer = 0;
+  let bits = 0;
+  for (const ch of s) {
+    const v = B64URL.indexOf(ch);
+    if (v < 0)
+      return;
+    buffer = buffer << 6 | v;
+    bits += 6;
+    if (bits >= 8) {
+      bits -= 8;
+      bytes.push(buffer >> bits & 255);
+    }
+  }
+  return Uint8Array.from(bytes);
+}
+var THREAD_ID_PREFIX = "rt-";
+function parseThreadReviewItemId(id) {
+  if (!id.startsWith(THREAD_ID_PREFIX))
+    return;
+  const bytes = decodeBase64Url(id.slice(THREAD_ID_PREFIX.length));
+  if (!bytes)
+    return;
+  let payload;
+  try {
+    payload = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+  } catch {
+    return;
+  }
+  const commentAt = payload.lastIndexOf(`
+`);
+  if (commentAt < 0)
+    return;
+  const threadAt = payload.lastIndexOf(`
+`, commentAt - 1);
+  if (threadAt < 0)
+    return;
+  const docId = payload.slice(0, threadAt);
+  const threadId = payload.slice(threadAt + 1, commentAt);
+  const commentId = payload.slice(commentAt + 1);
+  if (docId === "" || threadId === "" || commentId === "")
+    return;
+  return { docId, threadId, commentId };
+}
+
+// packages/mcp/src/task-projection.ts
+function projectTaskRows(tasks, fields) {
+  const rows = tasks;
+  if (!fields || fields.length === 0) {
+    return rows.map(({ body: _body, transitions, ...rest }) => ({
+      ...rest,
+      transitionCount: transitions?.length ?? 0
+    }));
+  }
+  const picked = new Set(["id", ...fields]);
+  return rows.map((t) => {
+    const row = {};
+    for (const key of picked) {
+      if (key === "transitionCount") {
+        row.transitionCount = t.transitions?.length ?? 0;
+      } else if (key in t) {
+        row[key] = t[key];
+      }
+    }
+    return row;
+  });
+}
+
+// packages/mcp/src/tools/tasks.ts
 function taskCreatedSummary(task, ignoredLinks, shapeGaps, placed) {
   return {
     taskId: task.id,
@@ -16390,7 +16567,8 @@ function taskCreatedSummary(task, ignoredLinks, shapeGaps, placed) {
     ...ignoredLinks !== undefined && ignoredLinks.length > 0 ? { ignoredLinks } : {}
   };
 }
-async function recordReviewAnswer(args) {
+async function recordReviewAnswer(ctx, args) {
+  const { http, AUTHOR } = ctx;
   const { taskId, text, reviewItemId, answeredWith } = args;
   if (reviewItemId === undefined) {
     return await http("POST", `/api/tasks/${encodeURIComponent(taskId)}/answer`, {
@@ -16405,17 +16583,1060 @@ async function recordReviewAnswer(args) {
     author: AUTHOR
   });
 }
-async function resolveReviewItemId(reviewItemId) {
+async function resolveReviewItemId(ctx, reviewItemId) {
   const thread = parseThreadReviewItemId(reviewItemId);
   if (thread)
     return { kind: "doc-thread", ...thread };
-  const res = await http("GET", `/api/review-items/${encodeURIComponent(reviewItemId)}`);
+  const res = await ctx.http("GET", `/api/review-items/${encodeURIComponent(reviewItemId)}`);
   return {
     kind: "task-item",
     taskId: res.taskId,
     ...res.workspaceId !== undefined ? { workspaceId: res.workspaceId } : {}
   };
 }
+function heldResult(res) {
+  if (res.held !== true)
+    return {};
+  return {
+    held: true,
+    ...res.heldReason !== undefined ? { heldReason: res.heldReason } : {},
+    ...res.message !== undefined ? { message: res.message } : {}
+  };
+}
+async function handleTaskTool(name, a, ctx) {
+  const { http, ok, err, AUTHOR, claimNoticeFor } = ctx;
+  switch (name) {
+    case "create_tasks": {
+      const { workspaceId, tasks, sourceDoc } = a;
+      const res = await http("POST", `/api/workspaces/${encodeURIComponent(workspaceId)}/tasks/batch`, { tasks, author: AUTHOR, ...sourceDoc !== undefined ? { sourceDoc } : {} });
+      const gapsFor = (taskId) => res.shapeGaps?.find((g) => g.taskId === taskId)?.gaps ?? undefined;
+      const adviceFor = (taskId) => res.reviewAdvice?.find((r) => r.taskId === taskId)?.advice ?? undefined;
+      const visibilityFor = (taskId) => res.visibility?.find((v) => v.taskId === taskId)?.note ?? undefined;
+      const droppedFor = (taskId) => res.ignoredLinks?.find((l) => l.taskId === taskId)?.ignored ?? undefined;
+      const heldFor = (taskId) => {
+        const h = res.held?.find((r) => r.taskId === taskId);
+        return h === undefined ? {} : { reviewItemId: h.reviewItemId, ...heldResult({ held: true, ...h }) };
+      };
+      const unplaced = new Set(res.placement?.unplaced ?? []);
+      return ok({
+        created: res.tasks.map((t) => ({
+          title: t.title,
+          ...taskCreatedSummary(t, droppedFor(t.id), gapsFor(t.id), !unplaced.has(t.id)),
+          ...adviceFor(t.id) !== undefined ? { reviewAdvice: adviceFor(t.id) } : {},
+          ...heldFor(t.id),
+          ...visibilityFor(t.id) !== undefined ? { visibility: visibilityFor(t.id) } : {}
+        })),
+        failures: res.failures,
+        ...res.placement !== undefined ? { placement: res.placement } : {},
+        ...res.sourceDoc !== undefined ? { sourceDoc: res.sourceDoc } : {}
+      });
+    }
+    case "promote_to_task": {
+      const {
+        docId,
+        threadId,
+        workspaceId,
+        title,
+        body,
+        assignee,
+        assigneeKind,
+        needs,
+        goal,
+        dueAt,
+        links
+      } = a;
+      const res = await http("POST", `/api/docs/${encodeURIComponent(docId)}/threads/${encodeURIComponent(threadId)}/promote`, {
+        workspaceId,
+        ...title !== undefined ? { title } : {},
+        ...body !== undefined ? { body } : {},
+        ...assignee !== undefined ? { assignee } : {},
+        ...assigneeKind !== undefined ? { assigneeKind } : {},
+        ...needs !== undefined ? { needs } : {},
+        ...goal !== undefined ? { goal } : {},
+        ...dueAt !== undefined ? { dueAt } : {},
+        ...links !== undefined ? { links } : {},
+        author: AUTHOR
+      });
+      return ok({
+        ...taskCreatedSummary(res.task, res.ignoredLinks, undefined, res.placement?.placed),
+        ...res.placement?.goals !== undefined ? { goals: res.placement.goals } : {},
+        title: res.task.title,
+        quote: res.task.quote
+      });
+    }
+    case "next_tasks": {
+      const { workspaceId, assignee, limit, includeBlocked, includeArchived } = a;
+      const qs = new URLSearchParams;
+      if (assignee !== undefined)
+        qs.set("assignee", assignee);
+      if (limit !== undefined)
+        qs.set("limit", String(limit));
+      if (includeBlocked === true)
+        qs.set("includeBlocked", "true");
+      if (includeArchived === true)
+        qs.set("includeArchived", "true");
+      const query = qs.size > 0 ? `?${qs.toString()}` : "";
+      const res = await http("GET", `/api/workspaces/${encodeURIComponent(workspaceId)}/next${query}`);
+      return ok({
+        workspaceId,
+        ...res.retired ? { retired: res.retired } : {},
+        tasks: res.tasks
+      });
+    }
+    case "list_tasks": {
+      const { workspaceId, goal, status, assignee, needs, fields, includeArchived } = a;
+      const qs = new URLSearchParams;
+      if (goal !== undefined)
+        qs.set("goal", goal);
+      if (status !== undefined)
+        qs.set("status", status);
+      if (assignee !== undefined)
+        qs.set("assignee", assignee);
+      if (needs !== undefined)
+        qs.set("needs", needs);
+      if (includeArchived === true)
+        qs.set("includeArchived", "true");
+      const query = qs.size > 0 ? `?${qs.toString()}` : "";
+      const res = await http("GET", `/api/workspaces/${encodeURIComponent(workspaceId)}/tasks${query}`);
+      return ok({
+        workspaceId,
+        tasks: projectTaskRows(res.tasks, fields)
+      });
+    }
+    case "task_transition": {
+      const { taskId, to, note, usage } = a;
+      const claimNotice = to === "in-progress" ? await claimNoticeFor(taskId) : undefined;
+      const res = await http("POST", `/api/tasks/${encodeURIComponent(taskId)}/transition`, {
+        to,
+        author: AUTHOR,
+        ...note !== undefined ? { note } : {},
+        ...usage !== undefined ? { usage } : {}
+      });
+      return ok({
+        taskId,
+        status: res.task.status,
+        blockers: res.blockers,
+        ...claimNotice !== undefined ? { warning: claimNotice } : {}
+      });
+    }
+    case "assign_task": {
+      const { taskId, assignee, assigneeKind } = a;
+      const res = await http("POST", `/api/tasks/${encodeURIComponent(taskId)}/assignee`, {
+        assignee,
+        ...assigneeKind !== undefined ? { assigneeKind } : {},
+        author: AUTHOR
+      });
+      return ok({
+        taskId,
+        assignee: res.task.assignee,
+        changed: res.changed,
+        ...res.ownerKind !== undefined ? { ownerKind: res.ownerKind } : {}
+      });
+    }
+    case "park_task": {
+      const { taskId, until, reason } = a;
+      let parkedUntil;
+      if (until === undefined) {
+        parkedUntil = undefined;
+      } else if (until === null) {
+        parkedUntil = null;
+      } else if (typeof until === "number") {
+        if (!Number.isFinite(until))
+          return err("until must be a date, or omitted");
+        parkedUntil = until;
+      } else {
+        const parsed = Date.parse(until);
+        if (Number.isNaN(parsed)) {
+          return err(`could not read "${until}" as a date — pass epoch ms, "YYYY-MM-DD", or a full ISO timestamp`);
+        }
+        parkedUntil = parsed;
+      }
+      const res = await http("POST", `/api/tasks/${encodeURIComponent(taskId)}/park`, {
+        ...parkedUntil !== undefined ? { parkedUntil } : {},
+        ...reason !== undefined ? { reason } : {},
+        author: AUTHOR
+      });
+      return ok({
+        taskId,
+        status: res.task.status,
+        moved: res.changed,
+        commented: res.commented,
+        ...res.message !== undefined ? { message: res.message } : {}
+      });
+    }
+    case "archive_task": {
+      const { taskId, reason } = a;
+      const res = await http("POST", `/api/tasks/${encodeURIComponent(taskId)}/archive`, {
+        ...reason !== undefined ? { reason } : {},
+        author: AUTHOR
+      });
+      return ok({
+        taskId,
+        archivedAt: res.task.archivedAt ?? null,
+        ...res.task.archiveReason !== undefined ? { archiveReason: res.task.archiveReason } : {},
+        changed: res.changed
+      });
+    }
+    case "unarchive_task": {
+      const { taskId } = a;
+      const res = await http("POST", `/api/tasks/${encodeURIComponent(taskId)}/restore`, {
+        author: AUTHOR
+      });
+      return ok({
+        taskId,
+        goal: res.task.goal,
+        status: res.task.status,
+        changed: res.changed
+      });
+    }
+    case "rewrite_task": {
+      const { taskId, title, body, reason } = a;
+      if (body === undefined && title === undefined) {
+        return err("nothing to rewrite — pass title, body, or both");
+      }
+      if (body !== undefined) {
+        const res2 = await http("POST", `/api/tasks/${encodeURIComponent(taskId)}/body`, {
+          markdown: body,
+          ...title !== undefined ? { title } : {},
+          ...reason !== undefined ? { reason } : {},
+          author: AUTHOR
+        });
+        return ok({
+          taskId,
+          title: res2.task?.title,
+          body: res2.task?.body,
+          quote: res2.task?.quote
+        });
+      }
+      const res = await http("POST", `/api/tasks/${encodeURIComponent(taskId)}/title`, {
+        title,
+        ...reason !== undefined ? { reason } : {},
+        author: AUTHOR
+      });
+      return ok({ taskId, title: res.task?.title, changed: res.changed ?? false });
+    }
+    case "set_task_goal": {
+      const { taskId, goal, position, batchId } = a;
+      const res = await http("POST", `/api/tasks/${encodeURIComponent(taskId)}/goal`, {
+        goal,
+        author: AUTHOR,
+        ...position !== undefined ? { position } : {},
+        ...batchId !== undefined ? { batchId } : {}
+      });
+      return ok({ taskId, goal: res.task.goal, order: res.task.order, changed: res.changed });
+    }
+    case "set_goal_list": {
+      const { workspaceId, goals, drop } = a;
+      const res = await http("PUT", `/api/workspaces/${encodeURIComponent(workspaceId)}/goals`, {
+        goals,
+        ...drop !== undefined ? { drop } : {},
+        author: AUTHOR
+      });
+      return ok({
+        workspaceId,
+        changed: res.changed,
+        created: res.created,
+        movedToChores: res.movedToChores,
+        strandedDone: res.strandedDone,
+        ...res.bucketReview ? { bucketReview: res.bucketReview } : {}
+      });
+    }
+    case "rename_goal": {
+      const { workspaceId, goal, title, dueAt } = a;
+      const res = await http("POST", `/api/workspaces/${encodeURIComponent(workspaceId)}/goals/rename`, {
+        goal,
+        title,
+        ...dueAt !== undefined ? { dueAt } : {},
+        author: AUTHOR
+      });
+      return ok({ workspaceId, goal: res.goal, changed: res.changed });
+    }
+    case "reorder_goals": {
+      const { workspaceId, order } = a;
+      const res = await http("POST", `/api/workspaces/${encodeURIComponent(workspaceId)}/goals/reorder`, { order, author: AUTHOR });
+      return ok({
+        workspaceId,
+        order: res.order,
+        changed: res.changed
+      });
+    }
+    case "add_review_item": {
+      const { taskId, review } = a;
+      const res = await http("POST", `/api/tasks/${encodeURIComponent(taskId)}/review-items`, {
+        review,
+        author: AUTHOR
+      });
+      return ok({
+        taskId,
+        reviewItemId: res.item?.id,
+        ...res.reviewAdvice !== undefined ? { reviewAdvice: res.reviewAdvice } : {},
+        ...heldResult(res)
+      });
+    }
+    case "answer_review_item": {
+      const { taskId, reviewItemId, text, answeredWith } = a;
+      let effectiveTaskId = taskId;
+      if (effectiveTaskId === undefined) {
+        if (reviewItemId === undefined) {
+          return err("which item? Pass its reviewItemId (from the queue row or the ticket), or taskId — alone for a ticket that is itself a decision, with reviewItemId for one of the items filed on it");
+        }
+        const address = await resolveReviewItemId(ctx, reviewItemId);
+        if (address.kind === "doc-thread") {
+          await http("POST", `/api/docs/${encodeURIComponent(address.docId)}/threads/${encodeURIComponent(address.threadId)}/answer`, {
+            text,
+            commentId: address.commentId,
+            ...answeredWith !== undefined ? { optionId: answeredWith } : {},
+            author: AUTHOR
+          });
+          return ok({
+            reviewItemId,
+            docId: address.docId,
+            threadId: address.threadId,
+            commentId: address.commentId,
+            recorded: true
+          });
+        }
+        effectiveTaskId = address.taskId;
+      }
+      const res = await recordReviewAnswer(ctx, {
+        taskId: effectiveTaskId,
+        text,
+        ...reviewItemId !== undefined ? { reviewItemId } : {},
+        ...answeredWith !== undefined ? { answeredWith } : {}
+      });
+      return ok({
+        taskId: effectiveTaskId,
+        ...reviewItemId !== undefined ? { reviewItemId } : {},
+        recorded: true,
+        links: res.task.links ?? []
+      });
+    }
+    case "revise_review_item": {
+      const {
+        taskId,
+        reviewItemId,
+        docId,
+        threadId,
+        commentId,
+        headline,
+        detail,
+        options,
+        reply,
+        revisedRange
+      } = a;
+      const patch = {
+        ...headline !== undefined ? { headline } : {},
+        ...detail !== undefined ? { detail } : {},
+        ...options !== undefined ? { options } : {},
+        ...revisedRange !== undefined ? { revisedRange } : {},
+        author: AUTHOR
+      };
+      if (docId !== undefined || threadId !== undefined || commentId !== undefined) {
+        if (taskId !== undefined || reviewItemId !== undefined) {
+          return err("two addresses in one call — pass taskId + reviewItemId for an item on a ticket, or docId + threadId + commentId for one raised on a doc thread, not both");
+        }
+        if (docId === undefined || threadId === undefined || commentId === undefined) {
+          return err("the doc-thread form needs all three of docId + threadId + commentId — commentId is the thread.comments[].id that create_thread / post_reply returned when you raised the item");
+        }
+        if (reply !== undefined) {
+          return err("`reply` is ticket-only — a doc-thread item already lives in its thread, so point at the change there with post_reply");
+        }
+        const docRes = await http("POST", `/api/docs/${encodeURIComponent(docId)}/threads/${encodeURIComponent(threadId)}/revise`, { ...patch, commentId });
+        return ok({ docId, threadId, commentId, revised: true, ...heldResult(docRes) });
+      }
+      let effectiveTaskId = taskId;
+      if (effectiveTaskId === undefined) {
+        if (reviewItemId === undefined) {
+          return err("which item? A bare reviewItemId (from the queue row or the ticket), taskId (+ reviewItemId for one of the items filed on the ticket), or docId + threadId + commentId for one raised on a doc thread");
+        }
+        const address = await resolveReviewItemId(ctx, reviewItemId);
+        if (address.kind === "doc-thread") {
+          if (reply !== undefined) {
+            return err("`reply` is ticket-only — a doc-thread item already lives in its thread, so point at the change there with post_reply");
+          }
+          const docRes = await http("POST", `/api/docs/${encodeURIComponent(address.docId)}/threads/${encodeURIComponent(address.threadId)}/revise`, { ...patch, commentId: address.commentId });
+          return ok({
+            reviewItemId,
+            docId: address.docId,
+            threadId: address.threadId,
+            commentId: address.commentId,
+            revised: true,
+            ...heldResult(docRes)
+          });
+        }
+        effectiveTaskId = address.taskId;
+      }
+      if (reviewItemId === undefined && reply !== undefined) {
+        return err("`reply` needs an item thread to land on, and a ticket's own decision has none — revise without `reply`, then point at the change with post_reply on the task");
+      }
+      const targetItemId = reviewItemId ?? "r-legacy";
+      const res = await http("POST", `/api/tasks/${encodeURIComponent(effectiveTaskId)}/review-items/${encodeURIComponent(targetItemId)}/revise`, { ...patch, ...reply !== undefined ? { reply } : {} });
+      return ok({
+        taskId: effectiveTaskId,
+        ...reviewItemId !== undefined ? { reviewItemId } : { decision: true },
+        revised: true,
+        ...res.threadId !== undefined ? { threadId: res.threadId } : {},
+        ...reply !== undefined && res.threadId !== undefined ? { replied: true } : {},
+        ...res.reviewAdvice !== undefined ? { reviewAdvice: res.reviewAdvice } : {},
+        ...heldResult(res)
+      });
+    }
+    case "withdraw_review_item": {
+      const { reviewItemId, taskId, docId, threadId, commentId, reason, undo } = a;
+      const body = { author: AUTHOR, ...reason !== undefined ? { reason } : {} };
+      const docWithdraw = async (address) => {
+        await http("POST", `/api/docs/${encodeURIComponent(address.docId)}/threads/${encodeURIComponent(address.threadId)}/withdraw${undo ? "/undo" : ""}`, { ...body, commentId: address.commentId });
+        return ok({
+          ...reviewItemId !== undefined ? { reviewItemId } : {},
+          ...address,
+          withdrawn: undo !== true
+        });
+      };
+      if (reviewItemId !== undefined) {
+        if (docId !== undefined || threadId !== undefined || commentId !== undefined) {
+          return err("two addresses in one call — pass reviewItemId alone (it carries its own address), or the docId + threadId + commentId triple, not both");
+        }
+        const address = taskId !== undefined ? { kind: "task-item", taskId } : await resolveReviewItemId(ctx, reviewItemId);
+        if (address.kind === "doc-thread")
+          return docWithdraw(address);
+        await http("POST", `/api/tasks/${encodeURIComponent(address.taskId)}/review-items/${encodeURIComponent(reviewItemId)}/withdraw${undo ? "/undo" : ""}`, body);
+        return ok({ taskId: address.taskId, reviewItemId, withdrawn: undo !== true });
+      }
+      if (docId === undefined || threadId === undefined || commentId === undefined) {
+        return err("which item? Pass its reviewItemId (from the queue row or the ticket), or the full docId + threadId + commentId triple for one raised on a doc thread");
+      }
+      return docWithdraw({ docId, threadId, commentId });
+    }
+    case "request_more_info": {
+      const { taskId, reviewItemId, question } = a;
+      let effectiveTaskId = taskId;
+      if (effectiveTaskId === undefined) {
+        if (reviewItemId === undefined) {
+          return err("which item? Pass its reviewItemId (from the queue row or the ticket), or taskId — alone for a ticket that is itself a decision, with reviewItemId for one of the items filed on it");
+        }
+        const address = await http("GET", `/api/review-items/${encodeURIComponent(reviewItemId)}`);
+        if (address.kind === "doc-thread") {
+          await http("POST", `/api/docs/${encodeURIComponent(address.docId)}/threads/${encodeURIComponent(address.threadId)}/comments`, { author: AUTHOR, text: question });
+          return ok({
+            reviewItemId,
+            docId: address.docId,
+            threadId: address.threadId,
+            asked: true
+          });
+        }
+        effectiveTaskId = address.taskId;
+      }
+      const path = reviewItemId === undefined ? `/api/tasks/${encodeURIComponent(effectiveTaskId)}/more-info` : `/api/tasks/${encodeURIComponent(effectiveTaskId)}/review-items/${encodeURIComponent(reviewItemId)}/more-info`;
+      const res = await http("POST", path, { question, author: AUTHOR });
+      return ok({
+        taskId: effectiveTaskId,
+        ...reviewItemId !== undefined ? { reviewItemId } : {},
+        asked: true,
+        links: res.task.links ?? []
+      });
+    }
+    case "answer_decision": {
+      const { taskId, text, optionId, reviewItemId } = a;
+      const res = await recordReviewAnswer(ctx, {
+        taskId,
+        text,
+        ...reviewItemId !== undefined ? { reviewItemId } : {},
+        ...optionId !== undefined ? { answeredWith: optionId } : {}
+      });
+      return ok({ taskId, recorded: true, links: res.task.links ?? [] });
+    }
+    case "set_task_dependencies": {
+      const { taskId, after, afterEnforce } = a;
+      const res = await http("POST", `/api/tasks/${encodeURIComponent(taskId)}/after`, {
+        after,
+        ...afterEnforce !== undefined ? { afterEnforce } : {},
+        author: AUTHOR
+      });
+      return ok({
+        taskId,
+        changed: res.changed,
+        after: res.task.after ?? [],
+        afterEnforce: res.task.afterEnforce ?? []
+      });
+    }
+    case "import_tasks_markdown": {
+      const { workspaceId, path, apply } = a;
+      const res = await http("POST", `/api/workspaces/${encodeURIComponent(workspaceId)}/import-tasks`, { path, ...apply !== undefined ? { apply } : {}, author: AUTHOR });
+      return ok(res);
+    }
+    case "link_refs": {
+      const { taskId, ref } = a;
+      const res = await http("POST", `/api/tasks/${encodeURIComponent(taskId)}/links`, {
+        ref
+      });
+      return ok({ taskId, changed: res.changed });
+    }
+    case "list_backlinks": {
+      const { ref } = a;
+      const res = await http("POST", "/api/refs/backlinks", { ref });
+      return ok({ ref, tasks: res.tasks });
+    }
+    case "unlink_refs": {
+      const { taskId, ref } = a;
+      const res = await http("DELETE", `/api/tasks/${encodeURIComponent(taskId)}/links`, {
+        ref
+      });
+      return ok({ taskId, changed: res.changed });
+    }
+  }
+  return;
+}
+
+// packages/mcp/src/declare-lead.ts
+async function declareWorkspaceLead(args, deps) {
+  const { workspaceId } = args;
+  const named = typeof args.leadAgentId === "string" ? args.leadAgentId.trim() : "";
+  const declaring = named.length === 0 || named === deps.self.id;
+  const leadAgentId = declaring ? deps.self.id : named;
+  const path = `/api/workspaces/${encodeURIComponent(workspaceId)}`;
+  if (declaring && deps.identityIsShared === true) {
+    return {
+      isError: true,
+      error: "author-required",
+      message: "This session has no identity: CW_AGENT_NAME is not set, so it resolves to the shared " + '"agent" category, which cannot lead a board or keep its watches across a restart. ' + "Set CW_AGENT_NAME in the launch environment, restart the session, and declare again. " + "No seat was changed."
+    };
+  }
+  let attached;
+  let subscription = { open: false, persisted: false };
+  if (declaring) {
+    attached = await deps.http("POST", `${path}/attachments`, {
+      agentId: deps.self.id,
+      agentName: deps.self.name,
+      runtime: deps.runtime,
+      pluginVersion: deps.pluginVersion,
+      processId: deps.processId
+    });
+    subscription = await deps.watchWorkspace(workspaceId);
+  }
+  const res = await deps.http("PUT", `${path}/lead`, {
+    leadAgentId,
+    author: deps.self,
+    ...args.takeover === true ? { takeover: true } : {}
+  });
+  const settledLead = res.workspace?.leadAgentId ?? leadAgentId;
+  const seat = {
+    workspaceId,
+    changed: res.changed,
+    leadAgentId: settledLead,
+    ...res.previousLeadAgentId !== undefined ? { previousLeadAgentId: res.previousLeadAgentId } : {},
+    ...res.declined !== undefined ? { declined: res.declined } : {}
+  };
+  if (!declaring)
+    return seat;
+  const a = attached ?? {};
+  for (const q of a.queuedComments ?? []) {
+    if (typeof q?.id !== "string")
+      continue;
+    try {
+      await deps.http("POST", `${path}/comment-queue/${encodeURIComponent(q.id)}/ack`, {});
+    } catch {}
+  }
+  const warnings = [];
+  if (!subscription.open) {
+    warnings.push("the event stream did not confirm it was open before the seat changed, so anything the " + "server delivered in that window may not have arrived — call list_watched_docs to check " + "coverage, and re-run this if it still looks wrong");
+  }
+  if (!subscription.persisted) {
+    warnings.push("this subscription was NOT persisted, so it will not come back after a respawn — the " + "server refused or did not answer the watch write; re-run this once the server is up " + "(a session with CW_AGENT_NAME unset is refused before this point)");
+  }
+  return {
+    ...subscription.persisted ? {} : { subscriptionPersisted: false, subscriptionWarning: warnings.join("; ") },
+    ...seat,
+    subscribed: subscription.open,
+    subscriptionPersisted: subscription.persisted,
+    ...warnings.length > 0 ? { subscriptionWarning: warnings.join("; ") } : {},
+    lead: settledLead === deps.self.id,
+    ...res.declined === "lead-held" ? {
+      note: `${settledLead} already leads this board and is live, so the seat was left alone — ` + "you are attached and subscribed, and everything on the board still reaches you. " + "Coordinate with them; pass takeover: true only if you mean to take the seat."
+    } : {},
+    ...a.retired ? { retired: a.retired } : {},
+    ...a.leadNameConflicts ? { leadNameConflicts: a.leadNameConflicts } : {},
+    gating: a.gating,
+    untriaged: a.untriaged ?? [],
+    queuedVoice: a.queuedVoice ?? [],
+    queuedComments: (a.queuedComments ?? []).map((q) => ({
+      docId: q.docId,
+      ...q.threadId !== undefined ? { threadId: q.threadId } : {},
+      event: q.event,
+      ...q.author !== undefined ? { author: q.author } : {},
+      text: q.text,
+      ts: q.ts
+    }))
+  };
+}
+
+// packages/mcp/src/parallelism-cap.ts
+function parseCapArg(raw) {
+  if (typeof raw === "number" && Number.isInteger(raw) && raw >= 1) {
+    return { ok: true, cap: raw };
+  }
+  const shown = typeof raw === "string" ? JSON.stringify(raw) : String(raw);
+  return {
+    ok: false,
+    error: `cap must be a positive integer — the most builders the board may have dispatched at once (got ${shown}). Pass a number of 1 or more, not a string.`
+  };
+}
+
+// packages/mcp/src/tools/workspace.ts
+async function setBoardRetired(ctx, workspaceId, retired, reason) {
+  const { http, AUTHOR } = ctx;
+  const res = await http("PUT", `/api/workspaces/${encodeURIComponent(workspaceId)}/retired`, {
+    retired,
+    ...retired && reason !== undefined ? { reason } : {},
+    author: AUTHOR
+  });
+  return {
+    workspaceId,
+    name: res.workspace.name,
+    retired,
+    changed: res.changed,
+    ...res.workspace.retiredAt !== undefined ? { retiredAt: res.workspace.retiredAt } : {}
+  };
+}
+async function handleWorkspaceTool(name, a, ctx) {
+  const {
+    http,
+    ok,
+    err,
+    AUTHOR,
+    PLUGIN_VERSION,
+    PROCESS_ID,
+    IDENTITY_IS_SHARED,
+    markAttached,
+    watchWorkspace
+  } = ctx;
+  switch (name) {
+    case "create_workspace": {
+      const {
+        name: wsName,
+        leadAgentId,
+        subscribe
+      } = a;
+      const res = await http("POST", "/api/workspaces", {
+        name: wsName,
+        leadAgentId: leadAgentId ?? AUTHOR.id
+      });
+      if (subscribe !== false && res.workspace?.id) {
+        await watchWorkspace(res.workspace.id);
+      }
+      return ok({
+        workspaceId: res.workspace.id,
+        name: res.workspace.name,
+        leadAgentId: res.workspace.leadAgentId
+      });
+    }
+    case "rename_workspace": {
+      const { workspaceId, name: nextName } = a;
+      const res = await http("POST", `/api/workspaces/${encodeURIComponent(workspaceId)}/rename`, {
+        name: nextName,
+        author: AUTHOR
+      });
+      return ok({
+        workspaceId,
+        name: res.workspace.name,
+        changed: res.changed,
+        ...res.sameName ? { sameName: res.sameName } : {}
+      });
+    }
+    case "retire_workspace": {
+      const { workspaceId, reason } = a;
+      return ok(await setBoardRetired(ctx, workspaceId, true, reason));
+    }
+    case "unretire_workspace": {
+      const { workspaceId } = a;
+      return ok(await setBoardRetired(ctx, workspaceId, false));
+    }
+    case "set_workspace_lead": {
+      const { workspaceId, leadAgentId, takeover } = a;
+      const declared = await declareWorkspaceLead({
+        workspaceId,
+        ...leadAgentId !== undefined ? { leadAgentId } : {},
+        ...takeover === true ? { takeover: true } : {}
+      }, {
+        http,
+        watchWorkspace,
+        self: AUTHOR,
+        identityIsShared: IDENTITY_IS_SHARED,
+        runtime: "claude-code-local",
+        pluginVersion: PLUGIN_VERSION,
+        processId: PROCESS_ID
+      });
+      return declared.isError === true ? err(String(declared.message)) : ok(declared);
+    }
+    case "set_review_item_criteria": {
+      const { workspaceId, criteria, reviewItemId } = a;
+      let effectiveWorkspaceId = workspaceId;
+      if (effectiveWorkspaceId === undefined) {
+        if (reviewItemId === undefined) {
+          return err("which board? Pass workspaceId, or a reviewItemId — the criteria then land on the board that judges that item");
+        }
+        const res2 = await http("GET", `/api/review-items/${encodeURIComponent(reviewItemId)}`);
+        if (res2.workspaceId === undefined) {
+          return err("that item's doc is not attached to any workspace, so it names no board — pass workspaceId");
+        }
+        effectiveWorkspaceId = res2.workspaceId;
+      }
+      const res = await http("PUT", `/api/workspaces/${encodeURIComponent(effectiveWorkspaceId)}/settings`, {
+        reviewItemCriteria: criteria !== undefined && criteria.trim() !== "" ? criteria : null,
+        author: AUTHOR
+      });
+      return ok({
+        workspaceId: effectiveWorkspaceId,
+        criteria: res.reviewItemCriteria.value,
+        isDefault: res.reviewItemCriteria.isDefault
+      });
+    }
+    case "attach_doc": {
+      const { workspaceId, docId } = a;
+      const res = await http("POST", `/api/workspaces/${encodeURIComponent(workspaceId)}/docs`, {
+        docId
+      });
+      return ok({ ok: true, workspaceId, docIds: res.workspace?.docIds ?? [] });
+    }
+    case "get_workspace": {
+      const { workspaceId } = a;
+      const res = await http("GET", `/api/workspaces/${encodeURIComponent(workspaceId)}`);
+      return ok({
+        workspaceId: res.workspace.id,
+        name: res.workspace.name,
+        ...res.parallelismCap !== undefined ? { parallelismCap: res.parallelismCap } : {},
+        leadAgentId: res.workspace.leadAgentId,
+        ...res.workspace.reviewItemCriteria !== undefined ? { reviewItemCriteria: res.workspace.reviewItemCriteria } : {},
+        ...res.retired ? { retired: res.retired } : {},
+        goals: res.goalSummary
+      });
+    }
+    case "attach_agent": {
+      const { workspaceId, agentId, runtime, capabilities, subscribe } = a;
+      const res = await http("POST", `/api/workspaces/${encodeURIComponent(workspaceId)}/attachments`, {
+        agentId: agentId ?? AUTHOR.id,
+        ...agentId === undefined || agentId === AUTHOR.id ? { agentName: AUTHOR.name } : {},
+        runtime: runtime ?? "claude-code-local",
+        ...capabilities !== undefined ? { capabilities } : {},
+        pluginVersion: PLUGIN_VERSION,
+        processId: PROCESS_ID
+      });
+      if (agentId === undefined || agentId === AUTHOR.id)
+        markAttached(workspaceId);
+      if (subscribe !== false)
+        await watchWorkspace(workspaceId);
+      for (const q of res.queuedComments ?? []) {
+        if (typeof q?.id !== "string")
+          continue;
+        try {
+          await http("POST", `/api/workspaces/${encodeURIComponent(workspaceId)}/comment-queue/${encodeURIComponent(q.id)}/ack`, {});
+        } catch {}
+      }
+      return ok({
+        workspaceId,
+        agentId: res.attachment?.agentId ?? agentId ?? AUTHOR.id,
+        ...res.retired ? { retired: res.retired } : {},
+        ...res.leadNameConflicts ? { leadNameConflicts: res.leadNameConflicts } : {},
+        gating: res.gating,
+        lead: res.lead ?? false,
+        untriaged: res.untriaged ?? [],
+        queuedVoice: res.queuedVoice ?? [],
+        queuedComments: (res.queuedComments ?? []).map((q) => ({
+          docId: q.docId,
+          ...q.threadId !== undefined ? { threadId: q.threadId } : {},
+          event: q.event,
+          ...q.author !== undefined ? { author: q.author } : {},
+          text: q.text,
+          ts: q.ts
+        })),
+        ...res.notes !== undefined && res.notes.length > 0 ? { notes: res.notes } : {},
+        ...res.watching !== undefined ? { watching: res.watching } : {},
+        ...res.seat !== undefined ? { seat: res.seat } : {},
+        ...res.seatTakenFrom !== undefined ? { seatTakenFrom: res.seatTakenFrom } : {}
+      });
+    }
+    case "heartbeat": {
+      const { workspaceId, agentId, toolCallAt } = a;
+      const res = await http("POST", `/api/workspaces/${encodeURIComponent(workspaceId)}/attachments/${encodeURIComponent(agentId ?? AUTHOR.id)}/heartbeat`, { toolCallAt: toolCallAt ?? Date.now() });
+      if (agentId === undefined || agentId === AUTHOR.id)
+        markAttached(workspaceId);
+      return ok({ workspaceId, agentId: agentId ?? AUTHOR.id, state: res.attachment?.state });
+    }
+    case "get_unfiled_ask_count": {
+      const { agent } = a;
+      const who = agent?.trim() || AUTHOR.name;
+      return ok(await http("GET", `/api/chat-audit/${encodeURIComponent(who)}`));
+    }
+    case "publish_chat_audit": {
+      const { day, entries } = a;
+      return ok(await http("POST", "/api/chat-audit", {
+        ...day !== undefined ? { day } : {},
+        auditor: AUTHOR.name,
+        entries
+      }));
+    }
+    case "register_dispatch": {
+      const { taskId, worktreePath } = a;
+      return ok(await http("POST", "/api/dispatches", { taskId, worktreePath }));
+    }
+    case "close_dispatch": {
+      const { taskId } = a;
+      return ok(await http("DELETE", `/api/dispatches/${encodeURIComponent(taskId)}`));
+    }
+    case "set_parallelism_cap": {
+      const { workspaceId, cap: rawCap } = a;
+      const parsed = parseCapArg(rawCap);
+      if (!parsed.ok)
+        return err(parsed.error);
+      const res = await http("PUT", `/api/workspaces/${encodeURIComponent(workspaceId)}/parallelism-cap`, { cap: parsed.cap, author: AUTHOR });
+      return ok({
+        workspaceId,
+        cap: res.cap,
+        isDefault: res.isDefault,
+        default: res.default,
+        inUse: res.inUse,
+        free: res.free,
+        holders: res.holders,
+        lastChange: res.lastChange
+      });
+    }
+    case "request_plugin_refresh": {
+      return ok(await http("POST", "/api/plugin/refresh"));
+    }
+    case "list_attachments": {
+      const { workspaceId } = a;
+      const res = await http("GET", `/api/workspaces/${encodeURIComponent(workspaceId)}/attachments`);
+      return ok(res);
+    }
+  }
+  return;
+}
+
+// packages/mcp/src/voice-line.ts
+function truncate4(s, n) {
+  return s.length > n ? `${s.slice(0, n - 1)}…` : s;
+}
+function where(p) {
+  const c = p.context;
+  if (!c)
+    return "";
+  return ` (at ${c.surface ?? "?"}${c.docId ? ` ${c.docId}` : ""}${c.taskId ? ` ${c.taskId}` : ""}${c.visibleHeading ? `, near "${c.visibleHeading}"` : ""})`;
+}
+function voiceRequestLine(p) {
+  if (p.route === "fast-path")
+    return null;
+  const by = p.actor?.name ? ` by ${p.actor.name}` : "";
+  const said = `[voice.request]${by}${where(p)}: "${p.transcript ?? ""}"`;
+  const told = truncate4(p.ack ?? "", 120);
+  if (p.route === "fast-path-action") {
+    return `${said} — the fast path ALREADY applied this to the board on the speaker's behalf; ` + `they were told: "${told}". Do NOT redo it — reconcile your own picture of the board ` + "with what changed, and pick up only whatever the utterance asked for beyond it.";
+  }
+  return `${said} — act on it through the task/edit tools; the speaker was told: "${told}"`;
+}
+
+// packages/mcp/src/watch-coverage.ts
+function parseCoverage(res) {
+  if (!res || typeof res !== "object")
+    return;
+  const raw = res.coverage;
+  if (!raw || typeof raw !== "object")
+    return;
+  const c = raw;
+  if (typeof c.agentId !== "string")
+    return;
+  if (!Array.isArray(c.workspaces) || !Array.isArray(c.unattachedBoards))
+    return;
+  return {
+    agentId: c.agentId,
+    workspaces: c.workspaces,
+    unattachedBoards: c.unattachedBoards
+  };
+}
+function boardsWaitingOnYou(coverage) {
+  return (coverage?.unattachedBoards ?? []).filter((b) => b.queuedTotal > 0);
+}
+var plural = (n, one, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
+function describeQueue(q) {
+  const parts = [];
+  if (q.queuedVoice > 0)
+    parts.push(plural(q.queuedVoice, "voice note"));
+  return parts.join(", ");
+}
+function remedyFor(b, agentId) {
+  if (b.leadLive && b.leadAgentId !== undefined && b.leadAgentId !== agentId) {
+    return `${b.leadAgentId} holds the lead seat and is live, so the queue is addressed to them — ` + `ask them rather than taking it. attach_agent(workspaceId: "${b.workspaceId}") makes you ` + "addressable and subscribed without moving the seat.";
+  }
+  if (b.attached && !b.heartbeatFresh) {
+    return "your attachment is stale — the server has not seen a heartbeat OR a tool call from you " + "on this board inside the observed-work window, so deliveries for it are parking. " + `heartbeat(workspaceId: "${b.workspaceId}") now, and every few minutes while you work it.`;
+  }
+  return `set_workspace_lead(workspaceId: "${b.workspaceId}") attaches, subscribes and hands the ` + "backlog over in one call.";
+}
+function coverageAlertLine(coverage) {
+  const waiting = boardsWaitingOnYou(coverage);
+  if (waiting.length === 0)
+    return null;
+  const agentId = coverage?.agentId ?? "";
+  const described = waiting.map((b) => {
+    const via = b.watchedDocs.length > 0 ? `${plural(b.watchedDocs.length, "doc")} watched` : "this board watched directly";
+    return `"${b.name}" (${b.workspaceId}) — ${via}, ${b.queuedTotal} waiting ` + `(${describeQueue(b.queued)}); ${remedyFor(b, agentId)}`;
+  }).join(" ");
+  return `[not covered] ${plural(waiting.length, "board")} you follow ` + `${waiting.length === 1 ? "has" : "have"} work queued for a lead, and you are not live on ` + `${waiting.length === 1 ? "it" : "them"}. Watching is not attaching, and an attachment the ` + "server has stopped observing is not attached either — every delivery gate asks for recent " + `observed work, a heartbeat or a tool call, plus an open channel. ${described}`;
+}
+function boardsToReattach(coverage) {
+  return (coverage?.workspaces ?? []).filter((w) => w.kind === "board" && (w.lead === true || w.attached === true)).filter((w) => w.heartbeatFresh !== true).map((w) => w.workspaceId);
+}
+function restoreNoticeContent(opts) {
+  const lines = [];
+  const n = opts.restored.length;
+  const reattached = opts.reattached ?? [];
+  if (n > 0 || opts.pruned.length > 0) {
+    const dropped = opts.pruned.length > 0 ? `; ${opts.pruned.length} dropped (doc gone)` : "";
+    lines.push(`[watches restored] ${plural(n, "watch", "watches")} re-wired from the server for ` + `${opts.agentName} after restart${dropped}: ${opts.restored.join(", ")}`);
+  }
+  if (reattached.length > 0) {
+    lines.push(`[attachments restored] re-attached to ${plural(reattached.length, "board")} whose ` + "attachment came back stale, so lead-addressed work reaches this session again: " + `${reattached.join(", ")}`);
+  }
+  const alert = coverageAlertLine(opts.coverage);
+  if (alert)
+    lines.push(alert);
+  return lines.length > 0 ? lines.join(`
+`) : null;
+}
+
+// packages/mcp/src/mcp.ts
+function resolveBaseUrl() {
+  const override = readRenamedEnv(process.env, "CW_BASE_URL");
+  if (override)
+    return override;
+  const discovery = resolveDiscoveryFile(homedir(), existsSync);
+  if (discovery) {
+    try {
+      const j = JSON.parse(readFileSync(discovery, "utf8"));
+      if (j.port)
+        return `http://localhost:${j.port}`;
+    } catch {}
+  }
+  throw new Error("claude-workspaces server not found — start it with `bun run dev` (or set CW_BASE_URL). " + `Looked for a discovery file at ${discoveryCandidates(homedir()).join(" and ")}.`);
+}
+var AUTHOR = resolveAgentAuthor(process.env);
+var STATUS_TEXT_MAX = 4000;
+function suggestionAuthor() {
+  return { id: AUTHOR.id, name: AUTHOR.name, color: AUTHOR.color };
+}
+var PLUGIN_VERSION = "0.1.150";
+var PROCESS_ID = randomUUID();
+var server = new Server({
+  name: "claude-workspaces",
+  version: PLUGIN_VERSION
+}, {
+  capabilities: {
+    tools: {},
+    experimental: { "claude/channel": {} }
+  },
+  instructions: [
+    "Every markdown review doc is backed by a .md file on disk. The file is the",
+    "source of truth at rest; the live editor is the source of truth at runtime;",
+    "the plugin keeps them in sync bidirectionally (~1s debounced).",
+    "",
+    "CREATE: call create_review_doc(docId, path) to bring a .md under review.",
+    "The server reads the file, parses it into the live editor, sets up the",
+    "fs.watch + write-back, and returns a reviewUrl you can hand to a human.",
+    "",
+    "EDIT: never use Write/Edit/str_replace on the .md while it is under review",
+    "— direct filesystem edits race against the live doc’s own ~1s flush, and if",
+    "LF has any pending state your edit can be silently overwritten by the next",
+    "write-back. Route edits through the MCP tools below: find_and_replace for",
+    "prose changes, rewrite_thread_region / insert_after_thread / insert_blocks_after_thread",
+    "for comment-anchored edits, and set_doc_content(docId, markdown) for a",
+    "COMPREHENSIVE REWRITE of the whole doc (do NOT Write the file + reparse,",
+    "and do NOT delete_doc + Write + re-create — both race the flush and both",
+    "have destroyed content in the field). NEVER use set_doc_content on a doc a",
+    "human is reviewing or editing: a scoped request (a comment, one section)",
+    "gets a scoped edit — find_and_replace (table rows match in pipe syntax),",
+    "rewrite_thread_region, edit_at_anchor — and a whole-doc rewrite built from",
+    "an earlier read destroys their concurrent edits. The server refuses such a",
+    "write with 409 stale-write naming the human-edit time; re-read with",
+    "get_doc, re-apply your change onto the CURRENT content, and only retry",
+    "with confirmOverwriteHumanEdits: true if a full rewrite is truly needed.",
+    "External edits (VS Code, git pull)",
+    "flow back into the live doc via the file poll when LF is idle; if you wrote",
+    "to a bound file externally and need to be sure it landed, call",
+    "reparse_from_disk(docId) to force-pull from disk. If an edit response or",
+    "get_doc carries a `syncError`, read it — it names the conflict and where",
+    "the overwritten version was backed up.",
+    "",
+    "DIFF REVIEW / FOLDER BROWSE: when the human wants to review your code",
+    'changes ("review this diff", a branch, work in progress), call',
+    "create_diff_review(repo, base) — one review doc per changed file,",
+    "PR-style unified diff with line comments. Omit base to BROWSE a folder",
+    "instead (no diff): everything is navigable from the all-files sidebar,",
+    "files open lazily, markdown editable — works on plain folders and",
+    "fresh repos too (bind_folder is an alias for this). Default mode diffs",
+    "base against the LIVE working tree: keep editing the code and the reviewer",
+    "sees your changes re-render within ~1s, with their comments riding along",
+    "(threads orphan into the outdated-comments flow if their line disappears).",
+    "ALWAYS pass groups: [{title, paths[]}] — organize the changed files by",
+    "INTENT (the way you would split a branch into reviewable commits); you",
+    "know the semantics of your change far better than the heuristic fallback.",
+    "First group = read first; a directory path claims every file under it;",
+    'unlisted files land in "Other". Pass target only to pin a review to a',
+    "finished range. Re-run the tool after touching files that were not in",
+    "the diff before (idempotent; refreshes the file list; keeps your groups",
+    "unless you pass new ones). Share the returned entryUrl with the human",
+    "(bare URL on its own line); the file tree navigates the rest. Thread",
+    "events arrive per file via the auto-watch; resolve threads as you address",
+    "them; refresh_review(setId) to re-sync membership and reviews as files move (threads survive); delete_review(setId) when the review is done.",
+    "",
+    "SUGGEST: pass suggest: true on find_and_replace or rewrite_thread_region to",
+    "PROPOSE a change instead of applying it — the match is marked pending and",
+    "attributed to this agent; disk and every other reader stay on the accepted",
+    "state until a human (or accept_suggestion) accepts it. Returns { suggestionId }.",
+    "Use for judgment calls a reviewer should approve; use the plain edit for",
+    "mechanical fixes. list_suggestions(docId) / accept_suggestion(docId, sid) /",
+    "reject_suggestion(docId, sid) / resolve_all_suggestions(docId, action, authorId?)",
+    "manage proposals from any author. suggestion.created/accepted/rejected events",
+    "arrive on the same watch_doc channel as thread events.",
+    "",
+    "OBSERVE: call watch_doc(docId) once per doc to receive thread events as",
+    '<channel source="claude-workspaces" doc_id="..." thread_id="..." event="..." author="..." sent_at="...">body</channel>',
+    "messages. Treat each as an explicit ask from the reviewer; read, decide if it",
+    "is in your domain, act via an edit tool. unwatch_doc when you're done.",
+    "Watches are remembered on the server under this agent name (CW_AGENT_NAME)",
+    "and re-wired when the session respawns; list_watched_docs says whether the",
+    "current set was restored from the server or is session-only.",
+    "",
+    "CLEANUP: review docs are usually short-lived — bound for a ~30-minute",
+    "feedback pass, then obsolete. When you no longer need one, call",
+    "delete_doc(docId) to remove it (the bound source .md is left on disk; only",
+    "the review session goes away). It refuses if the doc still has open threads",
+    "(someone's waiting on that feedback) — resolve them first or pass force:true.",
+    "Don't leave stale docs piling up in list_docs.",
+    "",
+    "BEFORE YOU EDIT A .md FILE: call list_docs first. If a doc has sourceUrl",
+    "matching the path, route through the MCP. If not, normal file edits are fine.",
+    "",
+    "WORKSPACE HUB: a hub workspace is a goal + a task board + linked docs.",
+    "create_workspace mints one; attach_doc links existing docs/reviews to it;",
+    "create_tasks (ALWAYS a list — one idea is a one-row list) and",
+    "promote_to_task add work (omit `goal` and the task lands UNPLACED in",
+    "Backlog awaiting triage — the create says so and hands you the goal",
+    "bands, and placing it with set_task_goal IS the triage:",
+    "pick the goal AND the exact position). task_transition is the",
+    "single gate for status changes — blockers come back in the result.",
+    "attach_agent registers you as the workspace agent (heartbeat every few",
+    "minutes to stay live; lead-addressed deliveries only reach live agents).",
+    "Workspace events (task.*, decision.answered, workspace.goals_changed)",
+    "arrive on the same channel as thread events once you create/attach.",
+    "import_tasks_markdown moves an existing hand-maintained markdown tracker",
+    "onto the board (dry-run first — review the mapping before apply:true)."
+  ].join(" ")
+});
+server.setRequestHandler(ListToolsRequestSchema, async () => TOOL_LIST);
+var NO_AUTO_WATCH_TOOLS = new Set([
+  "unwatch_doc",
+  "watch_doc",
+  "observe_url",
+  "attach_doc"
+]);
 async function maybeAutoWatch(name, args) {
   if (NO_AUTO_WATCH_TOOLS.has(name))
     return;
@@ -16429,6 +17650,31 @@ async function maybeAutoWatch(name, args) {
   await watchDoc(a.docId);
 }
 var deferredEmits = createDeferredEmitter();
+function toolContext() {
+  return {
+    http,
+    ok,
+    err,
+    AUTHOR,
+    PLUGIN_VERSION,
+    PROCESS_ID,
+    markAttached,
+    STATUS_TEXT_MAX,
+    suggestionAuthor,
+    resolveBaseUrl,
+    watchers,
+    watchDoc,
+    watchWorkspace,
+    unwatchDoc,
+    refreshCoverage,
+    watchPersistenceMode,
+    claimNoticeFor,
+    restoreState,
+    lastPersistError,
+    IDENTITY_IS_SHARED,
+    SHARED_IDENTITY_REASON
+  };
+}
 server.setRequestHandler(CallToolRequestSchema, async (req) => {
   const { name, arguments: a = {} } = req.params;
   const endToolCall = deferredEmits.beginToolCall();
@@ -16436,1148 +17682,8 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
     await ensureWatchesRestored();
     sendDueHeartbeats();
     await maybeAutoWatch(name, a);
-    switch (name) {
-      case "list_docs": {
-        const { workspaceId, kind, query, sourcePrefix, limit, cursor, full } = a;
-        const params = new URLSearchParams;
-        if (workspaceId)
-          params.set("workspaceId", workspaceId);
-        if (kind)
-          params.set("kind", kind);
-        if (query)
-          params.set("query", query);
-        if (sourcePrefix)
-          params.set("sourcePrefix", sourcePrefix);
-        params.set("limit", String(typeof limit === "number" && limit > 0 ? Math.min(Math.floor(limit), 500) : 50));
-        if (cursor)
-          params.set("cursor", cursor);
-        if (full)
-          params.set("full", "1");
-        const res = await http("GET", `/api/docs?${params.toString()}`);
-        return ok(res);
-      }
-      case "list_threads": {
-        const { docId, status } = a;
-        const qs = status ? `?status=${encodeURIComponent(status)}` : "";
-        const res = await http("GET", `/api/docs/${encodeURIComponent(docId)}/threads${qs}`);
-        return ok(res);
-      }
-      case "get_thread": {
-        const { docId, threadId } = a;
-        const res = await http("GET", `/api/docs/${encodeURIComponent(docId)}/threads/${encodeURIComponent(threadId)}`);
-        return ok(res);
-      }
-      case "post_reply": {
-        const { docId, threadId, text, review } = a;
-        const res = await http("POST", `/api/docs/${encodeURIComponent(docId)}/threads/${encodeURIComponent(threadId)}/comments`, { author: AUTHOR, text, ...review !== undefined ? { review } : {} });
-        return ok(res);
-      }
-      case "post_status": {
-        const { text, taskId } = a;
-        const body = typeof text === "string" ? text.trim() : "";
-        if (body === "")
-          return err("text is empty — say where the work stands");
-        if (body.length > STATUS_TEXT_MAX) {
-          return err(`text is over ${STATUS_TEXT_MAX} chars — a status is a line to a few sentences; the full report is already on the Activity tab from your end-of-turn message`);
-        }
-        const path = taskId !== undefined && taskId !== "" ? `/api/tasks/${encodeURIComponent(taskId)}/notes` : "/api/agent-notes";
-        const res = await http("POST", path, {
-          agent: AUTHOR.name,
-          kind: "status",
-          text: body,
-          at: Date.now()
-        });
-        return ok({
-          posted: true,
-          ...res.taskId !== undefined ? { taskId: res.taskId } : {},
-          ...res.workspaceId !== undefined ? { workspaceId: res.workspaceId } : {},
-          ...res.taskId === undefined ? {
-            note: "no in-progress task of yours to pin this to — kept on your own recent-activity list; pass taskId to put it on a row"
-          } : {}
-        });
-      }
-      case "create_thread": {
-        const { path, body } = threadCreateRequest(a, AUTHOR);
-        const res = await http("POST", path, body);
-        return ok(res);
-      }
-      case "resolve_thread": {
-        const { docId, threadId } = a;
-        const res = await http("POST", `/api/docs/${encodeURIComponent(docId)}/threads/${encodeURIComponent(threadId)}/resolve`);
-        return ok(res);
-      }
-      case "summarize_thread": {
-        const { docId, threadId, force } = a;
-        const res = await http("POST", `/api/docs/${encodeURIComponent(docId)}/threads/${encodeURIComponent(threadId)}/summary`, force ? { force: true } : undefined);
-        return ok(res);
-      }
-      case "reopen_thread": {
-        const { docId, threadId } = a;
-        const res = await http("POST", `/api/docs/${encodeURIComponent(docId)}/threads/${encodeURIComponent(threadId)}/reopen`);
-        return ok(res);
-      }
-      case "get_doc": {
-        const { docId } = a;
-        const res = await http("GET", `/api/docs/${encodeURIComponent(docId)}/content?reader=${encodeURIComponent(AUTHOR.id)}`);
-        return ok(res);
-      }
-      case "doc_status": {
-        const { docId } = a;
-        const res = await http("GET", `/api/docs/${encodeURIComponent(docId)}/status`);
-        return ok(res);
-      }
-      case "create_review_doc": {
-        const { docId, path, title, setId, hubWorkspaceId, producedBy } = a;
-        const res = await http("POST", "/api/docs", {
-          docId,
-          type: "markdown",
-          sourceUrl: path,
-          owner: process.cwd(),
-          ...title ? { title } : {},
-          ...setId ? { setId } : {},
-          ...hubWorkspaceId ? { hubWorkspaceId } : {},
-          ...producedBy ? { producedBy } : {}
-        });
-        return ok(res);
-      }
-      case "set_doc_content": {
-        const { docId, markdown, confirmOverwriteHumanEdits } = a;
-        const res = await http("POST", `/api/docs/${encodeURIComponent(docId)}/content`, {
-          markdown,
-          author: AUTHOR,
-          ...confirmOverwriteHumanEdits === true ? { confirmOverwriteHumanEdits: true } : {}
-        });
-        return ok(res);
-      }
-      case "reparse_from_disk": {
-        const { docId } = a;
-        const res = await http("POST", `/api/docs/${encodeURIComponent(docId)}/reparse_from_disk`);
-        return ok(res);
-      }
-      case "delete_doc": {
-        const { docId, force } = a;
-        const qs = force ? "?force=true" : "";
-        const res = await http("DELETE", `/api/docs/${encodeURIComponent(docId)}${qs}`);
-        return ok(res);
-      }
-      case "bind_mock": {
-        const { docId, sourceHtmlPath, title, hubWorkspaceId } = a;
-        const res = await http("POST", "/api/docs", {
-          docId,
-          type: "mockup",
-          owner: process.cwd(),
-          ...sourceHtmlPath ? { sourceUrl: sourceHtmlPath } : {},
-          ...title ? { title } : {},
-          ...hubWorkspaceId ? { hubWorkspaceId } : {}
-        });
-        return ok(res);
-      }
-      case "bind_folder": {
-        const {
-          folderPath,
-          workspaceId,
-          hubWorkspaceId,
-          title,
-          include,
-          exclude,
-          maxFiles,
-          subscribe,
-          producedBy
-        } = a;
-        const res = await http("POST", "/api/workspaces", {
-          folderPath,
-          owner: process.cwd(),
-          ...workspaceId ? { workspaceId } : {},
-          ...hubWorkspaceId ? { hubWorkspaceId } : {},
-          ...title ? { title } : {},
-          ...include ? { include } : {},
-          ...exclude ? { exclude } : {},
-          ...maxFiles !== undefined ? { maxFiles } : {},
-          ...producedBy ? { producedBy } : {}
-        });
-        if (subscribe !== false && res?.workspaceId) {
-          await watchWorkspace(res.workspaceId);
-        }
-        return ok(res);
-      }
-      case "create_diff_review": {
-        const {
-          repo,
-          base,
-          target,
-          reviewId,
-          hubWorkspaceId,
-          title,
-          exclude,
-          groups,
-          maxFiles,
-          subscribe,
-          producedBy
-        } = a;
-        const res = await http("POST", "/api/diffs", {
-          repo,
-          base,
-          ...target ? { target } : {},
-          owner: process.cwd(),
-          ...reviewId ? { reviewId } : {},
-          ...hubWorkspaceId ? { hubWorkspaceId } : {},
-          ...title ? { title } : {},
-          ...exclude ? { exclude } : {},
-          ...groups ? { groups } : {},
-          ...maxFiles !== undefined ? { maxFiles } : {},
-          ...producedBy ? { producedBy } : {}
-        });
-        if (subscribe !== false && res?.reviewId) {
-          await watchWorkspace(res.reviewId);
-        }
-        return ok(res);
-      }
-      case "delete_review": {
-        const { setId, force, purge } = a;
-        const params = [force ? "force=true" : "", purge ? "purge=true" : ""].filter(Boolean);
-        const qs = params.length > 0 ? `?${params.join("&")}` : "";
-        const res = await http("DELETE", `/api/reviews/${encodeURIComponent(setId)}${qs}`);
-        return ok(res);
-      }
-      case "archive_review": {
-        const { setId, reason } = a;
-        const res = await http("POST", `/api/reviews/${encodeURIComponent(setId)}/archive`, {
-          author: AUTHOR,
-          ...reason !== undefined ? { reason } : {}
-        });
-        return ok(res);
-      }
-      case "unarchive_review": {
-        const { setId } = a;
-        const res = await http("POST", `/api/reviews/${encodeURIComponent(setId)}/unarchive`, {
-          author: AUTHOR
-        });
-        return ok(res);
-      }
-      case "archive_doc": {
-        const { docId, reason } = a;
-        const res = await http("POST", `/api/docs/${encodeURIComponent(docId)}/archive`, {
-          author: AUTHOR,
-          ...reason !== undefined ? { reason } : {}
-        });
-        return ok(res);
-      }
-      case "unarchive_doc": {
-        const { docId } = a;
-        const res = await http("POST", `/api/docs/${encodeURIComponent(docId)}/unarchive`, {
-          author: AUTHOR
-        });
-        return ok(res);
-      }
-      case "list_archived_reviews": {
-        const res = await http("GET", "/api/reviews/archived");
-        return ok(res);
-      }
-      case "delete_workspace": {
-        const { workspaceId, force, purge } = a;
-        const params = [force ? "force=true" : "", purge ? "purge=true" : ""].filter(Boolean);
-        const qs = params.length > 0 ? `?${params.join("&")}` : "";
-        const res = await http("DELETE", `/api/workspaces/${encodeURIComponent(workspaceId)}${qs}`);
-        return ok(res);
-      }
-      case "refresh_workspace":
-      case "refresh_review": {
-        const { setId, workspaceId } = a;
-        const id = setId ?? workspaceId ?? "";
-        const res = await http("POST", `/api/reviews/${encodeURIComponent(id)}/refresh`, {});
-        return ok(res);
-      }
-      case "set_workspace_groups":
-      case "set_review_groups": {
-        const { setId, workspaceId, groups } = a;
-        const id = setId ?? workspaceId ?? "";
-        const res = await http("POST", `/api/reviews/${encodeURIComponent(id)}/groups`, {
-          groups
-        });
-        return ok(res);
-      }
-      case "find_and_replace": {
-        const {
-          docId,
-          find,
-          replace,
-          contextBefore,
-          contextAfter,
-          occurrence,
-          replaceAll,
-          parseInlineMarks,
-          suggest
-        } = a;
-        const res = await http("POST", `/api/docs/${encodeURIComponent(docId)}/find_and_replace`, {
-          find,
-          replace,
-          ...contextBefore !== undefined ? { contextBefore } : {},
-          ...contextAfter !== undefined ? { contextAfter } : {},
-          ...occurrence !== undefined ? { occurrence } : {},
-          ...replaceAll === true ? { replaceAll: true } : {},
-          ...parseInlineMarks === true ? { parseInlineMarks: true } : {},
-          ...suggest === true ? { suggest: true, author: suggestionAuthor() } : {}
-        });
-        return ok(res);
-      }
-      case "rewrite_thread_region": {
-        const { docId, threadId, replacement, parseInlineMarks, suggest } = a;
-        const res = await http("POST", `/api/docs/${encodeURIComponent(docId)}/threads/${encodeURIComponent(threadId)}/rewrite_region`, {
-          replacement,
-          ...parseInlineMarks === true ? { parseInlineMarks: true } : {},
-          ...suggest === true ? { suggest: true, author: suggestionAuthor() } : {}
-        });
-        return ok(res);
-      }
-      case "list_suggestions": {
-        const { docId } = a;
-        const res = await http("GET", `/api/docs/${encodeURIComponent(docId)}/suggestions`);
-        return ok(res);
-      }
-      case "accept_suggestion": {
-        const { docId, sid } = a;
-        const res = await http("POST", `/api/docs/${encodeURIComponent(docId)}/suggestions/${encodeURIComponent(sid)}/accept`);
-        return ok(res);
-      }
-      case "reject_suggestion": {
-        const { docId, sid } = a;
-        const res = await http("POST", `/api/docs/${encodeURIComponent(docId)}/suggestions/${encodeURIComponent(sid)}/reject`);
-        return ok(res);
-      }
-      case "resolve_all_suggestions": {
-        const { docId, action, authorId } = a;
-        const res = await http("POST", `/api/docs/${encodeURIComponent(docId)}/suggestions/resolve_all`, { action, ...authorId !== undefined ? { authorId } : {} });
-        return ok(res);
-      }
-      case "insert_after_thread": {
-        const { docId, threadId, text } = a;
-        const res = await http("POST", `/api/docs/${encodeURIComponent(docId)}/threads/${encodeURIComponent(threadId)}/insert_after`, { text });
-        return ok(res);
-      }
-      case "insert_blocks_after_thread": {
-        const { docId, threadId, markdown, placement } = a;
-        const res = await http("POST", `/api/docs/${encodeURIComponent(docId)}/threads/${encodeURIComponent(threadId)}/insert_blocks_after`, { markdown, ...placement !== undefined ? { placement } : {} });
-        return ok(res);
-      }
-      case "create_anchor": {
-        const { docId, find, contextBefore, contextAfter, occurrence, label } = a;
-        const res = await http("POST", `/api/docs/${encodeURIComponent(docId)}/agent_anchors`, {
-          find,
-          ...contextBefore !== undefined ? { contextBefore } : {},
-          ...contextAfter !== undefined ? { contextAfter } : {},
-          ...occurrence !== undefined ? { occurrence } : {},
-          ...label !== undefined ? { label } : {}
-        });
-        return ok(res);
-      }
-      case "edit_at_anchor": {
-        const { docId, anchorId, op } = a;
-        const res = await http("POST", `/api/docs/${encodeURIComponent(docId)}/agent_anchors/${encodeURIComponent(anchorId)}/edit`, op);
-        return ok(res);
-      }
-      case "insert_blocks_at_anchor": {
-        const { docId, anchorId, markdown, placement } = a;
-        const res = await http("POST", `/api/docs/${encodeURIComponent(docId)}/agent_anchors/${encodeURIComponent(anchorId)}/insert_blocks`, { markdown, ...placement !== undefined ? { placement } : {} });
-        return ok(res);
-      }
-      case "delete_anchor": {
-        const { docId, anchorId } = a;
-        const res = await http("DELETE", `/api/docs/${encodeURIComponent(docId)}/agent_anchors/${encodeURIComponent(anchorId)}`);
-        return ok(res);
-      }
-      case "delete_block_at_anchor": {
-        const { docId, threadId, anchorId } = a;
-        const res = await http("POST", `/api/docs/${encodeURIComponent(docId)}/delete_block_at_anchor`, {
-          ...threadId !== undefined ? { threadId } : {},
-          ...anchorId !== undefined ? { anchorId } : {}
-        });
-        return ok(res);
-      }
-      case "delete_blocks_in_range": {
-        const {
-          docId,
-          startFind,
-          endFind,
-          contextBefore,
-          contextAfter,
-          startOccurrence,
-          endOccurrence
-        } = a;
-        const res = await http("POST", `/api/docs/${encodeURIComponent(docId)}/delete_blocks_in_range`, {
-          startFind,
-          endFind,
-          ...contextBefore !== undefined ? { contextBefore } : {},
-          ...contextAfter !== undefined ? { contextAfter } : {},
-          ...startOccurrence !== undefined ? { startOccurrence } : {},
-          ...endOccurrence !== undefined ? { endOccurrence } : {}
-        });
-        return ok(res);
-      }
-      case "delete_section": {
-        const { docId, heading, level, occurrence } = a;
-        const res = await http("POST", `/api/docs/${encodeURIComponent(docId)}/delete_section`, {
-          heading,
-          ...level !== undefined ? { level } : {},
-          ...occurrence !== undefined ? { occurrence } : {}
-        });
-        return ok(res);
-      }
-      case "observe_url": {
-        const { docId } = a;
-        return ok({ sseUrl: `${resolveBaseUrl()}/events/${encodeURIComponent(docId)}` });
-      }
-      case "watch_doc": {
-        const { docId } = a;
-        const persisted = await watchDoc(docId);
-        return ok({
-          docId,
-          watching: Array.from(watchers.keys()),
-          persisted,
-          persistence: watchPersistenceMode()
-        });
-      }
-      case "unwatch_doc": {
-        const { docId } = a;
-        const persisted = await unwatchDoc(docId);
-        return ok({
-          docId,
-          watching: Array.from(watchers.keys()),
-          persisted,
-          persistence: watchPersistenceMode()
-        });
-      }
-      case "list_watched_docs": {
-        const coverage = await refreshCoverage();
-        return ok({
-          watching: Array.from(watchers.keys()),
-          persistence: {
-            mode: watchPersistenceMode(),
-            agentId: AUTHOR.id,
-            ...IDENTITY_IS_SHARED ? { reason: SHARED_IDENTITY_REASON } : {}
-          },
-          restore: restoreState,
-          ...coverage ? { coverage } : {},
-          ...lastPersistError ? { lastPersistError } : {}
-        });
-      }
-      case "share_workspace": {
-        const {
-          workspaceId,
-          allowDomains,
-          ttlSeconds,
-          name: slug
-        } = a;
-        const res = await http("POST", "/api/share/workspace", {
-          workspaceId,
-          allowDomains,
-          ttlSeconds,
-          name: slug
-        });
-        return ok(res);
-      }
-      case "share_link": {
-        const res = await http("POST", "/api/share/link", a);
-        return ok(res);
-      }
-      case "set_share_ttl": {
-        const { shareId, ttlSeconds } = a;
-        const res = await http("POST", `/api/share/${encodeURIComponent(shareId)}/ttl`, {
-          ttlSeconds
-        });
-        return ok(res);
-      }
-      case "list_shares": {
-        const res = await http("GET", "/api/share");
-        return ok(res);
-      }
-      case "unshare": {
-        const { shareId } = a;
-        const res = await http("DELETE", `/api/share/${encodeURIComponent(shareId)}`);
-        return ok(res);
-      }
-      case "set_sharing_enabled": {
-        const { enabled } = a;
-        if (typeof enabled !== "boolean") {
-          const res2 = await http("GET", "/api/share");
-          return ok(res2);
-        }
-        const res = await http("POST", "/api/share/enabled", { enabled });
-        return ok(res);
-      }
-      case "create_workspace": {
-        const {
-          name: wsName,
-          leadAgentId,
-          subscribe
-        } = a;
-        const res = await http("POST", "/api/workspaces", {
-          name: wsName,
-          leadAgentId: leadAgentId ?? AUTHOR.id
-        });
-        if (subscribe !== false && res.workspace?.id) {
-          await watchWorkspace(res.workspace.id);
-        }
-        return ok({
-          workspaceId: res.workspace.id,
-          name: res.workspace.name,
-          leadAgentId: res.workspace.leadAgentId
-        });
-      }
-      case "rename_workspace": {
-        const { workspaceId, name: nextName } = a;
-        const res = await http("POST", `/api/workspaces/${encodeURIComponent(workspaceId)}/rename`, { name: nextName, author: AUTHOR });
-        return ok({
-          workspaceId,
-          name: res.workspace.name,
-          changed: res.changed,
-          ...res.sameName ? { sameName: res.sameName } : {}
-        });
-      }
-      case "retire_workspace": {
-        const { workspaceId, reason } = a;
-        return ok(await setBoardRetired(workspaceId, true, reason));
-      }
-      case "unretire_workspace": {
-        const { workspaceId } = a;
-        return ok(await setBoardRetired(workspaceId, false));
-      }
-      case "set_workspace_lead": {
-        const { workspaceId, leadAgentId, takeover } = a;
-        const declared = await declareWorkspaceLead({
-          workspaceId,
-          ...leadAgentId !== undefined ? { leadAgentId } : {},
-          ...takeover === true ? { takeover: true } : {}
-        }, {
-          http,
-          watchWorkspace,
-          self: AUTHOR,
-          identityIsShared: IDENTITY_IS_SHARED,
-          runtime: "claude-code-local",
-          pluginVersion: PLUGIN_VERSION,
-          processId: PROCESS_ID
-        });
-        return declared.isError === true ? err(String(declared.message)) : ok(declared);
-      }
-      case "set_review_item_criteria": {
-        const { workspaceId, criteria, reviewItemId } = a;
-        let effectiveWorkspaceId = workspaceId;
-        if (effectiveWorkspaceId === undefined) {
-          if (reviewItemId === undefined) {
-            return err("which board? Pass workspaceId, or a reviewItemId — the criteria then land on the board that judges that item");
-          }
-          const res2 = await http("GET", `/api/review-items/${encodeURIComponent(reviewItemId)}`);
-          if (res2.workspaceId === undefined) {
-            return err("that item's doc is not attached to any workspace, so it names no board — pass workspaceId");
-          }
-          effectiveWorkspaceId = res2.workspaceId;
-        }
-        const res = await http("PUT", `/api/workspaces/${encodeURIComponent(effectiveWorkspaceId)}/settings`, {
-          reviewItemCriteria: criteria !== undefined && criteria.trim() !== "" ? criteria : null,
-          author: AUTHOR
-        });
-        return ok({
-          workspaceId: effectiveWorkspaceId,
-          criteria: res.reviewItemCriteria.value,
-          isDefault: res.reviewItemCriteria.isDefault
-        });
-      }
-      case "attach_doc": {
-        const { workspaceId, docId } = a;
-        const res = await http("POST", `/api/workspaces/${encodeURIComponent(workspaceId)}/docs`, {
-          docId
-        });
-        return ok({ ok: true, workspaceId, docIds: res.workspace?.docIds ?? [] });
-      }
-      case "create_tasks": {
-        const { workspaceId, tasks, sourceDoc } = a;
-        const res = await http("POST", `/api/workspaces/${encodeURIComponent(workspaceId)}/tasks/batch`, { tasks, author: AUTHOR, ...sourceDoc !== undefined ? { sourceDoc } : {} });
-        const gapsFor = (taskId) => res.shapeGaps?.find((g) => g.taskId === taskId)?.gaps ?? undefined;
-        const adviceFor = (taskId) => res.reviewAdvice?.find((r) => r.taskId === taskId)?.advice ?? undefined;
-        const visibilityFor = (taskId) => res.visibility?.find((v) => v.taskId === taskId)?.note ?? undefined;
-        const droppedFor = (taskId) => res.ignoredLinks?.find((l) => l.taskId === taskId)?.ignored ?? undefined;
-        const heldFor = (taskId) => {
-          const h = res.held?.find((r) => r.taskId === taskId);
-          return h === undefined ? {} : { reviewItemId: h.reviewItemId, ...heldResult({ held: true, ...h }) };
-        };
-        const unplaced = new Set(res.placement?.unplaced ?? []);
-        return ok({
-          created: res.tasks.map((t) => ({
-            title: t.title,
-            ...taskCreatedSummary(t, droppedFor(t.id), gapsFor(t.id), !unplaced.has(t.id)),
-            ...adviceFor(t.id) !== undefined ? { reviewAdvice: adviceFor(t.id) } : {},
-            ...heldFor(t.id),
-            ...visibilityFor(t.id) !== undefined ? { visibility: visibilityFor(t.id) } : {}
-          })),
-          failures: res.failures,
-          ...res.placement !== undefined ? { placement: res.placement } : {},
-          ...res.sourceDoc !== undefined ? { sourceDoc: res.sourceDoc } : {}
-        });
-      }
-      case "promote_to_task": {
-        const {
-          docId,
-          threadId,
-          workspaceId,
-          title,
-          body,
-          assignee,
-          assigneeKind,
-          needs,
-          goal,
-          dueAt,
-          links
-        } = a;
-        const res = await http("POST", `/api/docs/${encodeURIComponent(docId)}/threads/${encodeURIComponent(threadId)}/promote`, {
-          workspaceId,
-          ...title !== undefined ? { title } : {},
-          ...body !== undefined ? { body } : {},
-          ...assignee !== undefined ? { assignee } : {},
-          ...assigneeKind !== undefined ? { assigneeKind } : {},
-          ...needs !== undefined ? { needs } : {},
-          ...goal !== undefined ? { goal } : {},
-          ...dueAt !== undefined ? { dueAt } : {},
-          ...links !== undefined ? { links } : {},
-          author: AUTHOR
-        });
-        return ok({
-          ...taskCreatedSummary(res.task, res.ignoredLinks, undefined, res.placement?.placed),
-          ...res.placement?.goals !== undefined ? { goals: res.placement.goals } : {},
-          title: res.task.title,
-          quote: res.task.quote
-        });
-      }
-      case "get_workspace": {
-        const { workspaceId } = a;
-        const res = await http("GET", `/api/workspaces/${encodeURIComponent(workspaceId)}`);
-        return ok({
-          workspaceId: res.workspace.id,
-          name: res.workspace.name,
-          ...res.parallelismCap !== undefined ? { parallelismCap: res.parallelismCap } : {},
-          leadAgentId: res.workspace.leadAgentId,
-          ...res.workspace.reviewItemCriteria !== undefined ? { reviewItemCriteria: res.workspace.reviewItemCriteria } : {},
-          ...res.retired ? { retired: res.retired } : {},
-          goals: res.goalSummary
-        });
-      }
-      case "next_tasks": {
-        const { workspaceId, assignee, limit, includeBlocked, includeArchived } = a;
-        const qs = new URLSearchParams;
-        if (assignee !== undefined)
-          qs.set("assignee", assignee);
-        if (limit !== undefined)
-          qs.set("limit", String(limit));
-        if (includeBlocked === true)
-          qs.set("includeBlocked", "true");
-        if (includeArchived === true)
-          qs.set("includeArchived", "true");
-        const query = qs.size > 0 ? `?${qs.toString()}` : "";
-        const res = await http("GET", `/api/workspaces/${encodeURIComponent(workspaceId)}/next${query}`);
-        return ok({
-          workspaceId,
-          ...res.retired ? { retired: res.retired } : {},
-          tasks: res.tasks
-        });
-      }
-      case "list_tasks": {
-        const { workspaceId, goal, status, assignee, needs, fields, includeArchived } = a;
-        const qs = new URLSearchParams;
-        if (goal !== undefined)
-          qs.set("goal", goal);
-        if (status !== undefined)
-          qs.set("status", status);
-        if (assignee !== undefined)
-          qs.set("assignee", assignee);
-        if (needs !== undefined)
-          qs.set("needs", needs);
-        if (includeArchived === true)
-          qs.set("includeArchived", "true");
-        const query = qs.size > 0 ? `?${qs.toString()}` : "";
-        const res = await http("GET", `/api/workspaces/${encodeURIComponent(workspaceId)}/tasks${query}`);
-        return ok({
-          workspaceId,
-          tasks: projectTaskRows(res.tasks, fields)
-        });
-      }
-      case "task_transition": {
-        const { taskId, to, note, usage } = a;
-        const claimNotice = to === "in-progress" ? await claimNoticeFor(taskId) : undefined;
-        const res = await http("POST", `/api/tasks/${encodeURIComponent(taskId)}/transition`, {
-          to,
-          author: AUTHOR,
-          ...note !== undefined ? { note } : {},
-          ...usage !== undefined ? { usage } : {}
-        });
-        return ok({
-          taskId,
-          status: res.task.status,
-          blockers: res.blockers,
-          ...claimNotice !== undefined ? { warning: claimNotice } : {}
-        });
-      }
-      case "assign_task": {
-        const { taskId, assignee, assigneeKind } = a;
-        const res = await http("POST", `/api/tasks/${encodeURIComponent(taskId)}/assignee`, {
-          assignee,
-          ...assigneeKind !== undefined ? { assigneeKind } : {},
-          author: AUTHOR
-        });
-        return ok({
-          taskId,
-          assignee: res.task.assignee,
-          changed: res.changed,
-          ...res.ownerKind !== undefined ? { ownerKind: res.ownerKind } : {}
-        });
-      }
-      case "park_task": {
-        const { taskId, until, reason } = a;
-        let parkedUntil;
-        if (until === undefined) {
-          parkedUntil = undefined;
-        } else if (until === null) {
-          parkedUntil = null;
-        } else if (typeof until === "number") {
-          if (!Number.isFinite(until))
-            return err("until must be a date, or omitted");
-          parkedUntil = until;
-        } else {
-          const parsed = Date.parse(until);
-          if (Number.isNaN(parsed)) {
-            return err(`could not read "${until}" as a date — pass epoch ms, "YYYY-MM-DD", or a full ISO timestamp`);
-          }
-          parkedUntil = parsed;
-        }
-        const res = await http("POST", `/api/tasks/${encodeURIComponent(taskId)}/park`, {
-          ...parkedUntil !== undefined ? { parkedUntil } : {},
-          ...reason !== undefined ? { reason } : {},
-          author: AUTHOR
-        });
-        return ok({
-          taskId,
-          status: res.task.status,
-          moved: res.changed,
-          commented: res.commented,
-          ...res.message !== undefined ? { message: res.message } : {}
-        });
-      }
-      case "archive_task": {
-        const { taskId, reason } = a;
-        const res = await http("POST", `/api/tasks/${encodeURIComponent(taskId)}/archive`, {
-          ...reason !== undefined ? { reason } : {},
-          author: AUTHOR
-        });
-        return ok({
-          taskId,
-          archivedAt: res.task.archivedAt ?? null,
-          ...res.task.archiveReason !== undefined ? { archiveReason: res.task.archiveReason } : {},
-          changed: res.changed
-        });
-      }
-      case "unarchive_task": {
-        const { taskId } = a;
-        const res = await http("POST", `/api/tasks/${encodeURIComponent(taskId)}/restore`, {
-          author: AUTHOR
-        });
-        return ok({
-          taskId,
-          goal: res.task.goal,
-          status: res.task.status,
-          changed: res.changed
-        });
-      }
-      case "rewrite_task": {
-        const { taskId, title, body, reason } = a;
-        if (body === undefined && title === undefined) {
-          return err("nothing to rewrite — pass title, body, or both");
-        }
-        if (body !== undefined) {
-          const res2 = await http("POST", `/api/tasks/${encodeURIComponent(taskId)}/body`, {
-            markdown: body,
-            ...title !== undefined ? { title } : {},
-            ...reason !== undefined ? { reason } : {},
-            author: AUTHOR
-          });
-          return ok({
-            taskId,
-            title: res2.task?.title,
-            body: res2.task?.body,
-            quote: res2.task?.quote
-          });
-        }
-        const res = await http("POST", `/api/tasks/${encodeURIComponent(taskId)}/title`, {
-          title,
-          ...reason !== undefined ? { reason } : {},
-          author: AUTHOR
-        });
-        return ok({ taskId, title: res.task?.title, changed: res.changed ?? false });
-      }
-      case "set_task_goal": {
-        const { taskId, goal, position, batchId } = a;
-        const res = await http("POST", `/api/tasks/${encodeURIComponent(taskId)}/goal`, {
-          goal,
-          author: AUTHOR,
-          ...position !== undefined ? { position } : {},
-          ...batchId !== undefined ? { batchId } : {}
-        });
-        return ok({ taskId, goal: res.task.goal, order: res.task.order, changed: res.changed });
-      }
-      case "set_goal_list": {
-        const { workspaceId, goals, drop } = a;
-        const res = await http("PUT", `/api/workspaces/${encodeURIComponent(workspaceId)}/goals`, {
-          goals,
-          ...drop !== undefined ? { drop } : {},
-          author: AUTHOR
-        });
-        return ok({
-          workspaceId,
-          changed: res.changed,
-          created: res.created,
-          movedToChores: res.movedToChores,
-          strandedDone: res.strandedDone,
-          ...res.bucketReview ? { bucketReview: res.bucketReview } : {}
-        });
-      }
-      case "rename_goal": {
-        const { workspaceId, goal, title, dueAt } = a;
-        const res = await http("POST", `/api/workspaces/${encodeURIComponent(workspaceId)}/goals/rename`, {
-          goal,
-          title,
-          ...dueAt !== undefined ? { dueAt } : {},
-          author: AUTHOR
-        });
-        return ok({ workspaceId, goal: res.goal, changed: res.changed });
-      }
-      case "reorder_goals": {
-        const { workspaceId, order } = a;
-        const res = await http("POST", `/api/workspaces/${encodeURIComponent(workspaceId)}/goals/reorder`, { order, author: AUTHOR });
-        return ok({
-          workspaceId,
-          order: res.order,
-          changed: res.changed
-        });
-      }
-      case "add_review_item": {
-        const { taskId, review } = a;
-        const res = await http("POST", `/api/tasks/${encodeURIComponent(taskId)}/review-items`, {
-          review,
-          author: AUTHOR
-        });
-        return ok({
-          taskId,
-          reviewItemId: res.item?.id,
-          ...res.reviewAdvice !== undefined ? { reviewAdvice: res.reviewAdvice } : {},
-          ...heldResult(res)
-        });
-      }
-      case "answer_review_item": {
-        const { taskId, reviewItemId, text, answeredWith } = a;
-        let effectiveTaskId = taskId;
-        if (effectiveTaskId === undefined) {
-          if (reviewItemId === undefined) {
-            return err("which item? Pass its reviewItemId (from the queue row or the ticket), or taskId — alone for a ticket that is itself a decision, with reviewItemId for one of the items filed on it");
-          }
-          const address = await resolveReviewItemId(reviewItemId);
-          if (address.kind === "doc-thread") {
-            await http("POST", `/api/docs/${encodeURIComponent(address.docId)}/threads/${encodeURIComponent(address.threadId)}/answer`, {
-              text,
-              commentId: address.commentId,
-              ...answeredWith !== undefined ? { optionId: answeredWith } : {},
-              author: AUTHOR
-            });
-            return ok({
-              reviewItemId,
-              docId: address.docId,
-              threadId: address.threadId,
-              commentId: address.commentId,
-              recorded: true
-            });
-          }
-          effectiveTaskId = address.taskId;
-        }
-        const res = await recordReviewAnswer({
-          taskId: effectiveTaskId,
-          text,
-          ...reviewItemId !== undefined ? { reviewItemId } : {},
-          ...answeredWith !== undefined ? { answeredWith } : {}
-        });
-        return ok({
-          taskId: effectiveTaskId,
-          ...reviewItemId !== undefined ? { reviewItemId } : {},
-          recorded: true,
-          links: res.task.links ?? []
-        });
-      }
-      case "revise_review_item": {
-        const {
-          taskId,
-          reviewItemId,
-          docId,
-          threadId,
-          commentId,
-          headline,
-          detail,
-          options,
-          reply,
-          revisedRange
-        } = a;
-        const patch = {
-          ...headline !== undefined ? { headline } : {},
-          ...detail !== undefined ? { detail } : {},
-          ...options !== undefined ? { options } : {},
-          ...revisedRange !== undefined ? { revisedRange } : {},
-          author: AUTHOR
-        };
-        if (docId !== undefined || threadId !== undefined || commentId !== undefined) {
-          if (taskId !== undefined || reviewItemId !== undefined) {
-            return err("two addresses in one call — pass taskId + reviewItemId for an item on a ticket, or docId + threadId + commentId for one raised on a doc thread, not both");
-          }
-          if (docId === undefined || threadId === undefined || commentId === undefined) {
-            return err("the doc-thread form needs all three of docId + threadId + commentId — commentId is the thread.comments[].id that create_thread / post_reply returned when you raised the item");
-          }
-          if (reply !== undefined) {
-            return err("`reply` is ticket-only — a doc-thread item already lives in its thread, so point at the change there with post_reply");
-          }
-          const docRes = await http("POST", `/api/docs/${encodeURIComponent(docId)}/threads/${encodeURIComponent(threadId)}/revise`, { ...patch, commentId });
-          return ok({ docId, threadId, commentId, revised: true, ...heldResult(docRes) });
-        }
-        let effectiveTaskId = taskId;
-        if (effectiveTaskId === undefined) {
-          if (reviewItemId === undefined) {
-            return err("which item? A bare reviewItemId (from the queue row or the ticket), taskId (+ reviewItemId for one of the items filed on the ticket), or docId + threadId + commentId for one raised on a doc thread");
-          }
-          const address = await resolveReviewItemId(reviewItemId);
-          if (address.kind === "doc-thread") {
-            if (reply !== undefined) {
-              return err("`reply` is ticket-only — a doc-thread item already lives in its thread, so point at the change there with post_reply");
-            }
-            const docRes = await http("POST", `/api/docs/${encodeURIComponent(address.docId)}/threads/${encodeURIComponent(address.threadId)}/revise`, { ...patch, commentId: address.commentId });
-            return ok({
-              reviewItemId,
-              docId: address.docId,
-              threadId: address.threadId,
-              commentId: address.commentId,
-              revised: true,
-              ...heldResult(docRes)
-            });
-          }
-          effectiveTaskId = address.taskId;
-        }
-        if (reviewItemId === undefined && reply !== undefined) {
-          return err("`reply` needs an item thread to land on, and a ticket's own decision has none — revise without `reply`, then point at the change with post_reply on the task");
-        }
-        const targetItemId = reviewItemId ?? "r-legacy";
-        const res = await http("POST", `/api/tasks/${encodeURIComponent(effectiveTaskId)}/review-items/${encodeURIComponent(targetItemId)}/revise`, { ...patch, ...reply !== undefined ? { reply } : {} });
-        return ok({
-          taskId: effectiveTaskId,
-          ...reviewItemId !== undefined ? { reviewItemId } : { decision: true },
-          revised: true,
-          ...res.threadId !== undefined ? { threadId: res.threadId } : {},
-          ...reply !== undefined && res.threadId !== undefined ? { replied: true } : {},
-          ...res.reviewAdvice !== undefined ? { reviewAdvice: res.reviewAdvice } : {},
-          ...heldResult(res)
-        });
-      }
-      case "withdraw_review_item": {
-        const { reviewItemId, taskId, docId, threadId, commentId, reason, undo } = a;
-        const body = { author: AUTHOR, ...reason !== undefined ? { reason } : {} };
-        const docWithdraw = async (address) => {
-          await http("POST", `/api/docs/${encodeURIComponent(address.docId)}/threads/${encodeURIComponent(address.threadId)}/withdraw${undo ? "/undo" : ""}`, { ...body, commentId: address.commentId });
-          return ok({
-            ...reviewItemId !== undefined ? { reviewItemId } : {},
-            ...address,
-            withdrawn: undo !== true
-          });
-        };
-        if (reviewItemId !== undefined) {
-          if (docId !== undefined || threadId !== undefined || commentId !== undefined) {
-            return err("two addresses in one call — pass reviewItemId alone (it carries its own address), or the docId + threadId + commentId triple, not both");
-          }
-          const address = taskId !== undefined ? { kind: "task-item", taskId } : await resolveReviewItemId(reviewItemId);
-          if (address.kind === "doc-thread")
-            return docWithdraw(address);
-          await http("POST", `/api/tasks/${encodeURIComponent(address.taskId)}/review-items/${encodeURIComponent(reviewItemId)}/withdraw${undo ? "/undo" : ""}`, body);
-          return ok({ taskId: address.taskId, reviewItemId, withdrawn: undo !== true });
-        }
-        if (docId === undefined || threadId === undefined || commentId === undefined) {
-          return err("which item? Pass its reviewItemId (from the queue row or the ticket), or the full docId + threadId + commentId triple for one raised on a doc thread");
-        }
-        return docWithdraw({ docId, threadId, commentId });
-      }
-      case "request_more_info": {
-        const { taskId, reviewItemId, question } = a;
-        let effectiveTaskId = taskId;
-        if (effectiveTaskId === undefined) {
-          if (reviewItemId === undefined) {
-            return err("which item? Pass its reviewItemId (from the queue row or the ticket), or taskId — alone for a ticket that is itself a decision, with reviewItemId for one of the items filed on it");
-          }
-          const address = await http("GET", `/api/review-items/${encodeURIComponent(reviewItemId)}`);
-          if (address.kind === "doc-thread") {
-            await http("POST", `/api/docs/${encodeURIComponent(address.docId)}/threads/${encodeURIComponent(address.threadId)}/comments`, { author: AUTHOR, text: question });
-            return ok({
-              reviewItemId,
-              docId: address.docId,
-              threadId: address.threadId,
-              asked: true
-            });
-          }
-          effectiveTaskId = address.taskId;
-        }
-        const path = reviewItemId === undefined ? `/api/tasks/${encodeURIComponent(effectiveTaskId)}/more-info` : `/api/tasks/${encodeURIComponent(effectiveTaskId)}/review-items/${encodeURIComponent(reviewItemId)}/more-info`;
-        const res = await http("POST", path, { question, author: AUTHOR });
-        return ok({
-          taskId: effectiveTaskId,
-          ...reviewItemId !== undefined ? { reviewItemId } : {},
-          asked: true,
-          links: res.task.links ?? []
-        });
-      }
-      case "answer_decision": {
-        const { taskId, text, optionId, reviewItemId } = a;
-        const res = await recordReviewAnswer({
-          taskId,
-          text,
-          ...reviewItemId !== undefined ? { reviewItemId } : {},
-          ...optionId !== undefined ? { answeredWith: optionId } : {}
-        });
-        return ok({ taskId, recorded: true, links: res.task.links ?? [] });
-      }
-      case "set_task_dependencies": {
-        const { taskId, after, afterEnforce } = a;
-        const res = await http("POST", `/api/tasks/${encodeURIComponent(taskId)}/after`, {
-          after,
-          ...afterEnforce !== undefined ? { afterEnforce } : {},
-          author: AUTHOR
-        });
-        return ok({
-          taskId,
-          changed: res.changed,
-          after: res.task.after ?? [],
-          afterEnforce: res.task.afterEnforce ?? []
-        });
-      }
-      case "import_tasks_markdown": {
-        const { workspaceId, path, apply } = a;
-        const res = await http("POST", `/api/workspaces/${encodeURIComponent(workspaceId)}/import-tasks`, { path, ...apply !== undefined ? { apply } : {}, author: AUTHOR });
-        return ok(res);
-      }
-      case "link_refs": {
-        const { taskId, ref } = a;
-        const res = await http("POST", `/api/tasks/${encodeURIComponent(taskId)}/links`, {
-          ref
-        });
-        return ok({ taskId, changed: res.changed });
-      }
-      case "list_backlinks": {
-        const { ref } = a;
-        const res = await http("POST", "/api/refs/backlinks", { ref });
-        return ok({ ref, tasks: res.tasks });
-      }
-      case "unlink_refs": {
-        const { taskId, ref } = a;
-        const res = await http("DELETE", `/api/tasks/${encodeURIComponent(taskId)}/links`, {
-          ref
-        });
-        return ok({ taskId, changed: res.changed });
-      }
-      case "attach_agent": {
-        const { workspaceId, agentId, runtime, capabilities, subscribe } = a;
-        const res = await http("POST", `/api/workspaces/${encodeURIComponent(workspaceId)}/attachments`, {
-          agentId: agentId ?? AUTHOR.id,
-          ...agentId === undefined || agentId === AUTHOR.id ? { agentName: AUTHOR.name } : {},
-          runtime: runtime ?? "claude-code-local",
-          ...capabilities !== undefined ? { capabilities } : {},
-          pluginVersion: PLUGIN_VERSION,
-          processId: PROCESS_ID
-        });
-        if (agentId === undefined || agentId === AUTHOR.id)
-          markAttached(workspaceId);
-        if (subscribe !== false)
-          await watchWorkspace(workspaceId);
-        for (const q of res.queuedComments ?? []) {
-          if (typeof q?.id !== "string")
-            continue;
-          try {
-            await http("POST", `/api/workspaces/${encodeURIComponent(workspaceId)}/comment-queue/${encodeURIComponent(q.id)}/ack`, {});
-          } catch {}
-        }
-        return ok({
-          workspaceId,
-          agentId: res.attachment?.agentId ?? agentId ?? AUTHOR.id,
-          ...res.retired ? { retired: res.retired } : {},
-          ...res.leadNameConflicts ? { leadNameConflicts: res.leadNameConflicts } : {},
-          gating: res.gating,
-          lead: res.lead ?? false,
-          untriaged: res.untriaged ?? [],
-          queuedVoice: res.queuedVoice ?? [],
-          queuedComments: (res.queuedComments ?? []).map((q) => ({
-            docId: q.docId,
-            ...q.threadId !== undefined ? { threadId: q.threadId } : {},
-            event: q.event,
-            ...q.author !== undefined ? { author: q.author } : {},
-            text: q.text,
-            ts: q.ts
-          })),
-          ...res.notes !== undefined && res.notes.length > 0 ? { notes: res.notes } : {},
-          ...res.watching !== undefined ? { watching: res.watching } : {},
-          ...res.seat !== undefined ? { seat: res.seat } : {},
-          ...res.seatTakenFrom !== undefined ? { seatTakenFrom: res.seatTakenFrom } : {}
-        });
-      }
-      case "heartbeat": {
-        const { workspaceId, agentId, toolCallAt } = a;
-        const res = await http("POST", `/api/workspaces/${encodeURIComponent(workspaceId)}/attachments/${encodeURIComponent(agentId ?? AUTHOR.id)}/heartbeat`, { toolCallAt: toolCallAt ?? Date.now() });
-        if (agentId === undefined || agentId === AUTHOR.id)
-          markAttached(workspaceId);
-        return ok({ workspaceId, agentId: agentId ?? AUTHOR.id, state: res.attachment?.state });
-      }
-      case "get_unfiled_ask_count": {
-        const { agent } = a;
-        const who = agent?.trim() || AUTHOR.name;
-        return ok(await http("GET", `/api/chat-audit/${encodeURIComponent(who)}`));
-      }
-      case "publish_chat_audit": {
-        const { day, entries } = a;
-        return ok(await http("POST", "/api/chat-audit", {
-          ...day !== undefined ? { day } : {},
-          auditor: AUTHOR.name,
-          entries
-        }));
-      }
-      case "register_dispatch": {
-        const { taskId, worktreePath } = a;
-        return ok(await http("POST", "/api/dispatches", { taskId, worktreePath }));
-      }
-      case "close_dispatch": {
-        const { taskId } = a;
-        return ok(await http("DELETE", `/api/dispatches/${encodeURIComponent(taskId)}`));
-      }
-      case "set_parallelism_cap": {
-        const { workspaceId, cap: rawCap } = a;
-        const parsed = parseCapArg(rawCap);
-        if (!parsed.ok)
-          return err(parsed.error);
-        const res = await http("PUT", `/api/workspaces/${encodeURIComponent(workspaceId)}/parallelism-cap`, { cap: parsed.cap, author: AUTHOR });
-        return ok({
-          workspaceId,
-          cap: res.cap,
-          isDefault: res.isDefault,
-          default: res.default,
-          inUse: res.inUse,
-          free: res.free,
-          holders: res.holders,
-          lastChange: res.lastChange
-        });
-      }
-      case "request_plugin_refresh": {
-        return ok(await http("POST", "/api/plugin/refresh"));
-      }
-      case "list_attachments": {
-        const { workspaceId } = a;
-        const res = await http("GET", `/api/workspaces/${encodeURIComponent(workspaceId)}/attachments`);
-        return ok(res);
-      }
-      default:
-        return err(`unknown tool: ${name}`);
-    }
+    const ctx = toolContext();
+    return await handleDocsTool(name, a, ctx) ?? await handleTaskTool(name, a, ctx) ?? await handleWorkspaceTool(name, a, ctx) ?? err(`unknown tool: ${name}`);
   } catch (e) {
     return err(e instanceof Error ? e.message : String(e));
   } finally {
@@ -17889,15 +17995,6 @@ async function ackCommentRow(payload) {
   } catch {}
 }
 var HUB_EVENT_RE = /^(task|decision|workspace|agent|voice)\./;
-function heldResult(res) {
-  if (res.held !== true)
-    return {};
-  return {
-    held: true,
-    ...res.heldReason !== undefined ? { heldReason: res.heldReason } : {},
-    ...res.message !== undefined ? { message: res.message } : {}
-  };
-}
 async function emitHubChannelMessage(event, rawPayload) {
   const p = rawPayload ?? {};
   if (event === "agent.heartbeat")
@@ -18070,20 +18167,6 @@ async function emitChannelMessage(event, rawPayload) {
 }
 function truncate5(s, n) {
   return s.length > n ? `${s.slice(0, n - 1)}…` : s;
-}
-async function setBoardRetired(workspaceId, retired, reason) {
-  const res = await http("PUT", `/api/workspaces/${encodeURIComponent(workspaceId)}/retired`, {
-    retired,
-    ...retired && reason !== undefined ? { reason } : {},
-    author: AUTHOR
-  });
-  return {
-    workspaceId,
-    name: res.workspace.name,
-    retired,
-    changed: res.changed,
-    ...res.workspace.retiredAt !== undefined ? { retiredAt: res.workspace.retiredAt } : {}
-  };
 }
 async function http(method, path, body) {
   const baseUrl = resolveBaseUrl();

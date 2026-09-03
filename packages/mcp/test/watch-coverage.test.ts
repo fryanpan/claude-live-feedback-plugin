@@ -20,8 +20,6 @@
  *
  * Fixtures are synthetic. The repo is public.
  */
-import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import {
   type CoverageQueue,
@@ -33,6 +31,7 @@ import {
   parseCoverage,
   restoreNoticeContent,
 } from '../src/watch-coverage.ts';
+import { readMcpSource } from './harness/mcp-source.ts';
 
 const EMPTY: CoverageQueue = {
   queuedVoice: 0,
@@ -376,7 +375,7 @@ describe('mcp.ts wires the readout in', () => {
   // nothing, so a test cannot import it. Source assertions are the only
   // available proof that the helpers above are reached at all — without them
   // every test here could pass against a module nothing calls.
-  const src = readFileSync(join(import.meta.dirname, '../src/mcp.ts'), 'utf8');
+  const src = readMcpSource();
 
   it('list_watched_docs carries `coverage` through', () => {
     const tool = src.slice(src.indexOf("case 'list_watched_docs'"));

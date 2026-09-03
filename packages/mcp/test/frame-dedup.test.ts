@@ -24,10 +24,9 @@
  * that category: they carry no seq, they ride exactly one channel, and
  * swallowing one would be a real drop rather than a saved duplicate.
  */
-import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { createFrameDedup } from '../src/frame-dedup.ts';
+import { readMcpSource } from './harness/mcp-source.ts';
 
 /** A thread frame as `broadcastToRoom` stamps it. */
 function threadFrame(docId: string, seq: number) {
@@ -207,7 +206,7 @@ describe('createFrameDedup', () => {
      * backoff, because resetting anywhere else would not be the fix.
      */
     it('is wired into the SSE reconnect in mcp.ts', () => {
-      const src = readFileSync(join(import.meta.dirname, '../src/mcp.ts'), 'utf8');
+      const src = readMcpSource();
       const backoff = src.indexOf('setTimeout(r, 1500)');
       expect(backoff).toBeGreaterThan(-1);
       const afterBackoff = src.slice(backoff, backoff + 900);

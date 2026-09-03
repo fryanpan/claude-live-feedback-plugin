@@ -28,9 +28,10 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { threadReviewItemId } from '@feedback/core/review-item-id';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { readMcpSource } from './harness/mcp-source.ts';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
-const SRC = readFileSync(join(HERE, '../src/mcp.ts'), 'utf8');
+const SRC = readMcpSource();
 const BUNDLE = join(HERE, '../../plugin/mcp/index.js');
 
 type Recorded = { method: string; path: string; body: Record<string, unknown> };
