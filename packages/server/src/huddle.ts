@@ -12,7 +12,7 @@
 
 import { randomBytes } from 'node:crypto';
 import { join } from 'node:path';
-import type { HuddleKind } from '@feedback/core';
+import { type HuddleKind, docKindLabel } from '@feedback/core';
 
 export type { HuddleKind };
 
@@ -22,14 +22,21 @@ export const HUDDLE_TOPIC_MAX = 200;
 const pad = (n: number): string => String(n).padStart(2, '0');
 
 /**
- * "Huddle 2026-08-29 14:05" — the clock, to the minute, in the SERVER's
+ * "Plan 2026-08-29 14:05" / "Meeting notes 2026-08-29 14:05" — the doc's kind
+ * in the product's words, then the clock, to the minute, in the SERVER's
  * local time. The server is the box on Bryan's desk, so its clock is the
  * room's clock; a browser-supplied zone would be one more thing to get
  * wrong for a title that only has to read naturally to the people in it.
+ *
+ * The word is the KIND, not the mechanism: Bryan retired "Huddle" from the
+ * UI on 2026-09-02 ("We can have plans and meeting notes"). An absent kind is
+ * a caller from before the split and reads as meeting notes, which is what
+ * an untyped live doc has always been.
  */
-export function huddleTitle(at: number): string {
+export function huddleTitle(at: number, kind?: HuddleKind): string {
   const d = new Date(at);
-  return `Huddle ${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  const clock = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  return `${docKindLabel(kind)} ${clock}`;
 }
 
 /**
@@ -63,7 +70,7 @@ export function parseHuddleTopic(raw: unknown): { ok: true; topic?: string } | {
 
 /**
  * Which of the Board's two entry flows is asking. `'plan'` is "Make a plan"
- * — the doc opens goal-shaped; `'discussion'` is "Have a discussion" — live
+ * — the doc opens goal-shaped; `'discussion'` is "Have a meeting" — live
  * notes over an empty doc. Absent is the old payload (a caller from before
  * the split) and keeps the old behavior exactly.
  */

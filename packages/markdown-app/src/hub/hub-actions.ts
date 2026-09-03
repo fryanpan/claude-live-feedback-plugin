@@ -593,7 +593,7 @@ export function createHubActions(deps: HubActionDeps) {
    * to start the meeting assistant without a press. The click here is the
    * person's gesture; `huddle-entry.ts` is the other half.
    *
-   * "Make a plan" and "Have a discussion" are the same route and the same
+   * "Make a plan" and "Have a meeting" are the same route and the same
    * file; `kind` tells the server which doc to seed (a plan opens under a
    * `# Goal` heading) and `mode` rides the address for the mic. Solo asks
    * for no speaker labels and pays for none.
@@ -605,7 +605,7 @@ export function createHubActions(deps: HubActionDeps) {
     const url = typeof res.data?.url === 'string' ? res.data.url : null;
     if (!res.ok || !url) {
       const why =
-        typeof res.data?.message === 'string' ? res.data.message : 'Could not start a huddle';
+        typeof res.data?.message === 'string' ? res.data.message : 'Could not start a meeting';
       showToast(why);
       return false;
     }

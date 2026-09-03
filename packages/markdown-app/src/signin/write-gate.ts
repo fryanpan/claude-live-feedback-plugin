@@ -273,8 +273,8 @@ export function promptSignIn(message?: string): void {
  * It used to be one `position: fixed` box under the top of the viewport,
  * offset by the doc topbar's measured height. That was wrong twice. On the
  * board there is no `#topbar` at all, so the measurement fell back to a 52px
- * constant and the bar landed on the action row — "Start a planning huddle"
- * failed hit-testing entirely. At 430px on the doc it covered the H1 and the
+ * constant and the bar landed on the action row — the quick action that is
+ * now "Make a plan" failed hit-testing entirely. At 430px on the doc it covered the H1 and the
  * formatting toolbar. A fixed overlay covers whatever is beneath it, and a
  * notice that says "reading is unchanged" cannot be the thing eating the
  * document's title.

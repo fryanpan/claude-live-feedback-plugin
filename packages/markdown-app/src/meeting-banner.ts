@@ -201,7 +201,7 @@ export class MeetingBannerEl extends HTMLElement {
     const caption = document.createElement('div');
     caption.className = 'caption';
     if (kind === 'joined') {
-      caption.textContent = 'Bot in call · transcribing to a new discussion doc';
+      caption.textContent = 'Bot in call · transcribing to a new meeting notes doc';
     } else {
       const workspace = this.getAttribute('workspace-name');
       const line = bannerTimeLine(event, this.now());
