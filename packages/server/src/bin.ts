@@ -5,6 +5,7 @@ import { confirmDeployBoot, deployLogPath } from './deploy-log.ts';
 import { installLogSquelch } from './log-squelch.ts';
 import { acquirePort, classifyBindError, probeLocalPort, shouldWalkPorts } from './port-bind.ts';
 import { lanHostnames, tailscaleHost } from './public-host.ts';
+import { reservedPortError } from './reserved-ports.ts';
 import { captureServerError, flushServerSentry, initServerSentry } from './sentry.ts';
 import { resolveServerConfig } from './server-config.ts';
 import { createServerDeps } from './server-deps.ts';
@@ -25,6 +26,7 @@ function arg(name: string, fallback?: string): string | undefined {
 const cfg = resolveServerConfig({ env: process.env, repoRoot, arg });
 const {
   requestedPort,
+  hostname,
   dataDir,
   widgetDist,
   markdownAppDist,
@@ -144,6 +146,21 @@ const logSquelch = installLogSquelch();
 // answers the same for every port, so walking cannot help and must not run —
 // see packages/server/src/port-bind.ts for the whole story.
 const walkPorts = shouldWalkPorts(args);
+
+// The reserved-port refusal applies exactly where `walkPorts` does: prod is
+// the one caller that passes `--no-port-walk` (`scripts/serve.ts`, `--deploy`
+// mode), and prod is the one process actually entitled to 8787 — the same
+// flag that says "the port is a fixed contract, do not move off it" is what
+// tells this apart from a dev/staging start that landed on someone else's
+// port by accident. See reserved-ports.ts for the outage this prevents.
+if (walkPorts) {
+  const err = reservedPortError(requestedPort);
+  if (err) {
+    console.error(`[feedback] ${err}`);
+    process.exit(2);
+  }
+}
+
 const sleep = (ms: number): Promise<void> =>
   new Promise((r) => {
     setTimeout(r, ms);
@@ -169,6 +186,7 @@ while (!handle) {
   try {
     handle = createServer({
       port,
+      ...(hostname ? { hostname } : {}),
       dataDir,
       widgetDistDir: widgetDist,
       markdownAppDistDir: markdownAppDist,
@@ -266,6 +284,11 @@ if (deployer) {
 const ts = tailscaleHost();
 const lan = lanHostnames();
 console.log(`[feedback] listening on :${port}`);
+// Named only when it is not the wildcard prod relies on for tailnet/LAN
+// reach — a bind address nobody chose does not need a line, one somebody
+// deliberately narrowed does.
+if (hostname)
+  console.log(`[feedback]   bind:       ${hostname} (not the wildcard — set --host to widen)`);
 console.log(`[feedback]   local:      http://localhost:${port}`);
 if (ts) console.log(`[feedback]   tailscale:  http://${ts}:${port}`);
 // Which base every reviewUrl / entryUrl the server hands out is built on.

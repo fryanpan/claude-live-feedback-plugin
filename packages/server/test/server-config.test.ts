@@ -49,6 +49,14 @@ describe('resolveServerConfig', () => {
     expect(cfg.requestedPort).toBe(9002);
   });
 
+  it("leaves hostname undefined with nothing set — prod must keep Bun's own wildcard default", () => {
+    expect(resolve({}).hostname).toBeUndefined();
+  });
+
+  it('reads --host when a caller passes one', () => {
+    expect(resolve({}, argsFrom({ host: '127.0.0.1' })).hostname).toBe('127.0.0.1');
+  });
+
   it('reads PORT when no flag is passed', () => {
     expect(resolve({ PORT: '9001' }).requestedPort).toBe(9001);
   });
