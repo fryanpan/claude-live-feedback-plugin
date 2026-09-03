@@ -44,18 +44,31 @@ function serverOrigin(el: FeedbackWidgetEl): string {
 }
 
 /**
- * The cheap question on load: does this workspace refuse unsigned writes?
- * One GET, no token, and a route that fails or is missing (an older
- * server) reads as "open" — the 401 on the first write remains the
- * backstop, so a wrong "open" costs one refused post, never a comment.
+ * The cheap question on load: does this workspace refuse unsigned writes,
+ * and would it refuse THIS browser? One GET, no token, and a route that
+ * fails or is missing (an older server) reads as "open" — the 401 on the
+ * first write remains the backstop, so a wrong "open" costs one refused
+ * post, never a comment.
+ *
+ * TWO fields, because the flag alone cannot name a writer. A Cloudflare
+ * Access visitor (and a cookie session) satisfies the write gate with no
+ * popup token at all, so `signInToWrite` is true for them and the offer
+ * fired anyway: every composer opened saying "Sign in to post" to a person
+ * whose every post was landing. `canWrite` is the answer to the question
+ * the offer is actually about — see server/src/routes/auth-share.ts, which
+ * resolves it through the same three proofs the gate uses.
+ *
+ * A MISSING `canWrite` is not permission: a server too old to send the
+ * field keeps today's behaviour and arms the offer, so the 401 backstop is
+ * never the only thing standing between that visitor and a lost comment.
  */
 export async function askIfSignInRequired(el: FeedbackWidgetEl): Promise<void> {
   try {
     const res = await fetch(`${httpBase(el)}/api/auth/session`);
     // The route is never gated and always 200s; anything else here is a
     // proxy page, which is not JSON and lands in the catch.
-    const body = (await res.json()) as { signInToWrite?: unknown };
-    if (body.signInToWrite === true) requireSignIn(el);
+    const body = (await res.json()) as { signInToWrite?: unknown; canWrite?: unknown };
+    if (body.signInToWrite === true && body.canWrite !== true) requireSignIn(el);
   } catch {}
 }
 

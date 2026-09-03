@@ -74,9 +74,12 @@ export interface WidgetOpts {
    * Sign-in has two triggers, and this is the optional one. The other is
    * the workspace itself: when it refuses unsigned writes (the server's
    * `requireSignInToWrite`, on by default since the owner decision on the
-   * security row, 2026-09-02), EVERY embed offers the popup-token handshake
-   * — asked once on load via `GET /api/auth/session`, and again as the
-   * backstop when a write comes back `sign_in_required`. Without the
+   * security row, 2026-09-02) AND this browser cannot already make one,
+   * the embed offers the popup-token handshake — asked once on load via
+   * `GET /api/auth/session`, which answers both halves, and again as the
+   * backstop when a write comes back `sign_in_required`. Both halves,
+   * because a Cloudflare Access visitor passes the gate with no token at
+   * all and must not be told to sign in. Without the
    * offer, flipping that flag would have silently refused every comment
    * from every mockup and dev page, with nothing on screen that could fix
    * it. `auth-offer` keeps meaning what it meant: on an OPEN workspace a
@@ -149,7 +152,9 @@ export class FeedbackWidgetEl extends HTMLElement {
   showResolved = false;
   /** The popup-token, when this embed offers auth and a person signed in. */
   authToken: string | null = null;
-  /** The workspace refuses unsigned writes — learned on load or from a 401. */
+  /** This browser must sign in before it can write — learned on load (the
+   *  workspace refuses unsigned writes and does not already accept this
+   *  browser's) or from a 401. */
   signInToWrite = false;
   /** The post that sign-in interrupted, re-run once the token arrives. */
   retryAfterSignIn: (() => void) | null = null;
