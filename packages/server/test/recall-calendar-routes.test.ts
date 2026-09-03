@@ -15,12 +15,8 @@ import { afterAll, beforeAll, describe, expect, it } from 'bun:test';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import type {
-  GoogleOauthApp,
-  RecallCalendarClient,
-  RecallCalendarEvent,
-  RefreshTokenVault,
-} from '../src/recall-calendar.ts';
+import type { GoogleOauthApp, RefreshTokenVault } from '../src/google-oauth.ts';
+import type { RecallCalendarClient, RecallCalendarEvent } from '../src/recall-calendar.ts';
 import type { CreateBotArgs, RecallClient } from '../src/recall.ts';
 import { type ServerHandle, createServer } from '../src/server.ts';
 

@@ -22,7 +22,7 @@
  * It waits a grace period for a pending record to APPEAR, and only a record
  * it has actually seen pending can make it write anything.
  */
-import { expireDeployVerification, readDeployLog } from './deploy.ts';
+import { expireDeployVerification, readDeployLog } from './deploy-log.ts';
 
 /** How often the log is re-read. The verdict deadline is minutes; seconds of
  *  lag on the write are invisible. */

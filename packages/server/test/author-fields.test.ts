@@ -12,6 +12,7 @@
  */
 import { afterEach, describe, expect, test } from 'bun:test';
 import { emailIdentityId } from '@feedback/core';
+import { eventsForDoc } from '../src/activity-backfill';
 import {
   authorFields,
   classifyActor,
@@ -19,8 +20,7 @@ import {
   ownerIdentityIds,
   registerOwnerIdentity,
   resetOwnerIdentities,
-} from '../src/activity';
-import { eventsForDoc } from '../src/activity-backfill';
+} from '../src/actor-identity';
 
 describe('authorFields — legacy string authors carry a recoverable name', () => {
   test('reads a bare string author as the name', () => {

@@ -41,7 +41,8 @@
  * be a no-op against any server running the new rule.
  */
 import type { Comment, Thread } from '@feedback/core';
-import { asksPerson, knownPeople, unansweredRun } from './review-queue.ts';
+import { asksPerson } from './ask-detection.ts';
+import { knownPeople, unansweredRun } from './review-queue.ts';
 
 export type Disposition = 'question' | 'receipt' | 'skim';
 

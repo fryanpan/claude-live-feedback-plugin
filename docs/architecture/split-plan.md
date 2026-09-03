@@ -235,48 +235,134 @@ Layer: `pause-ticker.ts`, both capture halves and `notes-section.ts` are
 domain; `notes-ownership.ts` and `notes-section-write.ts` are services with
 the rest of the family.
 
-## A6 · voice and the review queue
+## A6 · voice and the review queue — DONE
 
-| File | Becomes | Moves | Importers | Effort |
-|---|---|---|---|---|
-| `voice.ts` (2,109) | `voice-prompt.ts` (~450) | `buildVoicePrompt`, `parseVoiceReply`, `renderResourceBlock` | tests | S |
-| | `voice-action.ts` (~350) | `VOICE_ACTIONS`, `resolveVoiceAction` | `voice-actions.test.ts` | |
-| `voice-resolve.ts` (762) | `voice-status.ts` (~190) | `composeStatus`, `ago`, `quote`, `listTitles`, `capWords` | `voice.ts`, `voice-smooth.test.ts` | S |
-| `review-queue.ts` (831) | `ask-detection.ts` (~250) | `asksPerson`, `findAsk`, `extractAsk`, `sentenceQuestion`, `codeSpans`, `stripEmphasis` | `review-migration.ts`, `review-queue.test.ts` | S |
+| File | Became | Moved | Measured |
+|---|---|---|---|
+| `voice.ts` (2,109) | `voice-prompt.ts` | the utterance vocabulary, `buildVoicePrompt`, `parseVoiceReply`, `renderResourceBlock`, `VOICE_ACTIONS` | 499 (est. ~450) |
+| | `voice-action.ts` | `VoiceActor`, `VoiceActionPlan`, `resolveVoiceAction`, `speakerLicensesAction`, `pickReviewItem` | 357 (est. ~350) |
+| `voice-resolve.ts` (762) | `voice-status.ts` | `composeStatus`, `ago`, `quote`, `listTitles`, `capWords`, `countWords`, the status shapes | 187 (est. ~190) |
+| `review-queue.ts` (831) | `ask-detection.ts` | `asksPerson`, `findAsk`, `extractAsk`, `sentenceQuestion`, `codeSpans`, `stripEmphasis` | 249 (est. ~250) |
 
-Four commits. The ask detector and its extractor must keep sharing one
-address pattern — they drifted apart once, and the drift clipped the very
-question the feature existed to surface. One matcher, used by both.
+Four commits, one per row. The three parents end at **1,318**, **588** and
+**602**. Every extracted file is pure; `VoiceRouter` stays the service.
+
+**The ask matcher is now unsplittable, which was the point.** `extractAsk`
+calls `findAsk` and there is no second pattern in the file to drift from it.
+
+**`VOICE_ACTIONS` went to `voice-prompt.ts`, not to the guardrail this plan
+filed it under, and the reason is a dependency rather than a preference.**
+The system prompt lists the five action shapes and `parseVoiceReply` refuses
+a verb outside them — both in `voice-prompt.ts` — while `resolveVoiceAction`
+switches over the already-parsed verb and never reads the list. Filing the
+list with the guardrail would have made the prompt file import a value from a
+file that imports values back, which is the cycle A2 and A3 each hit.
+
+**The vocabulary had to move with the prompt for the same reason.**
+`VoiceContext`, `VoiceResource`, the `VoiceReviewItem` family and
+`reviewItemKey` are read by the renderer AND by the guardrail, and an
+extracted file may not import a value from the file that imports it, so they
+sit in the leaf. That is what took `voice-prompt.ts` to 499 rather than 450.
+`VoiceActor` went the other way, to `voice-action.ts`: the guardrail's fourth
+condition is about `actor.kind` and the prompt never renders a speaker.
+
+**Two module-private helpers became exported and one did not move.**
+`sameOriginPath` and `refNavigation` are called by the router, so they are
+now part of `voice-prompt.ts`'s surface. `choiceAnchor` stayed with the
+router — it keys a pending question, not an action. Inside
+`ask-detection.ts` nothing new was exported: `sentenceQuestion`, `codeSpans`
+and `stripEmphasis` had no caller outside the parent before the split and
+have none now.
+
+**`parseVoiceContext` stayed in `voice.ts`** while its type left. Its only
+caller is `routes/workspace-settings.ts`, which reads it as the route's input
+sanitizer, and moving it would have pushed `voice-prompt.ts` over 500 lines —
+a split that creates a fresh row in `exceptions.md` has not finished.
+
+**`voice-resolve.ts` now imports nothing at all.** `StatusTask` was the only
+reader of `TaskStatus`, so the resolver came out of this as pure over strings,
+which is what its header always claimed.
 
 Layer: domain, except `VoiceRouter` which stays a service. Final directory:
-`voice/` for the three voice files, `board/` for `ask-detection.ts`.
+`voice/` for the four voice files, `board/` for `ask-detection.ts`.
 
-## A7 · the operational adapters
+## A7 · the operational adapters — DONE
 
-| File | Becomes | Moves | Importers | Effort |
-|---|---|---|---|---|
-| `activity.ts` (582) | `actor-identity.ts` (~240) | `registerOwnerIdentity`, `linkIdentity`, `setIdentityRoster`, `resolveActor`, `classifyActor` and their `reset*` seams | 14 source files and 11 test files — the largest importer set in the plan | M |
-| `deploy.ts` (1,058) | `deploy-log.ts` (~250) | `writeDeployLog`, `readDeployLog`, `confirmDeployBoot`, `spawnDeployVerifier` | `bin.ts` import line | S |
-| `recall-calendar.ts` (721) | `google-oauth.ts` (~190) | `resolveGoogleOauthCreds`, `createGoogleOauthApp`, `createKeychainRefreshTokenVault`, `readKeychainAccount` | `bin.ts` and `server.ts` import lines | S |
+| File | Became | Moved | Measured |
+|---|---|---|---|
+| `activity.ts` (582) | `actor-identity.ts` | `classifyActor`, `authorFields`, `isOwnerActor`, the owner registry, the identity links, the roster handle and every `reset*` seam | 305 (est. ~240) |
+| `deploy.ts` (1,058) | `deploy-log.ts` | `writeDeployLog`, `readDeployLog`, `confirmDeployBoot`, `expireDeployVerification`, `spawnDeployVerifier`, and the record's four types | 282 (est. ~250) |
+| `recall-calendar.ts` (721) | `google-oauth.ts` | `resolveGoogleOauthCreds`, `createGoogleOauthApp`, `createKeychainRefreshTokenVault`, `readKeychainAccount` | 222 (est. ~190) |
 
-Three commits. `activity.ts` is a process-wide registry, so the extraction
-must not create a second module-level state: `actor-identity.ts` owns the maps
-and `activity.ts` imports them, never the reverse. Do the import rewrite with
-a single mechanical pass and let the type checker find the misses.
+Three commits, one per extraction, plus this one. The three parents end at
+**301**, **817** and **470** — which takes `activity.ts` and
+`recall-calendar.ts` off the over-limit list entirely, so their rows in
+`exceptions.md` are gone rather than marked done.
+
+**The importer set was 26, not 25, and the sweep found the extra one.**
+`classify-actor-malformed.test.ts` is not in either count in the row above.
+Rewriting every import with one mechanical pass over `packages/**/*.ts` — a
+regex on the import specifier, splitting each list into what stays and what
+goes — reached it without anyone having to remember it existed. The type
+checker then found nothing, which is the outcome that pass is for.
+
+**`isOwnerActor` and `authorFields` travelled with the five named symbols.**
+`isOwnerActor` reads `OWNER_IDS` and `resolveIdentityId`; `authorFields` is
+the defensive reader that both it and `classifyActor` call. Leaving either
+behind would have pointed the new file back at its parent, which is the cycle
+A2, A3 and A6 each hit. `ActorKind` moved for the same reason and
+`activity.ts` re-exports it, so `Event`'s own shape still reads from one
+import.
+
+**The deploy record's TYPES moved with the trace, and that was not in the
+plan.** `DeployResult`, `DeployStatus`, `DeployVerification` and `BusyDoc`
+describe a file three processes write and read without ever meeting — the
+deploy stamps `pending` before the restart kills it, the restarted server
+stamps `healthy`, a detached watchdog stamps `boot-failed`. That makes them a
+wire format belonging with the readers and writers, not an internal type of
+the runner. `VERIFY_BOOT_TIMEOUT_MS` went with them because it is the deadline
+written into the record. `deploy.ts` imports all five back and re-exports
+them, so no caller that names `DeployResult` changed.
+
+`bootFailedResult` is newly exported rather than moved-and-private:
+`Deployer.last` derives the same verdict at read time and stayed with the
+runner, and its own comment says the two must never tell different stories.
+
+**`google-oauth.ts` needed no back-import at all** — nothing below the seam in
+`recall-calendar.ts` reads any of it — with one exception that is worth
+recording. `clip`, a two-line clipper for a failed response's body, is called
+by both halves, and it was already written out by hand a third time in
+`recall.ts`. It is now exported from `recall.ts`, which both files already
+import and which imports neither, and all three sites call it. That is the
+only line changed beyond the move.
 
 Layer: `actor-identity.ts` is a service; `deploy-log.ts` and `google-oauth.ts`
-are infra. Final directory: `ops/` and `meeting/`.
+are adapters. Final directory: `ops/` and `meeting/`.
 
-## A8 · the server test split
+## A8 · the server test split — DONE
 
-| File | Becomes | Moves | Effort |
+| File | Became | Moved | Measured |
 |---|---|---|---|
-| `test/voice-smooth.test.ts` (729) | `test/voice-smooth-model.test.ts` | the eight describes of pure helpers — `navigationAsk`, `resolveByTitle`, `parseOrdinal`, `composeStatus` — leaving the route harness that stands up `createServer` | M |
+| `test/voice-smooth.test.ts` (729) | `test/voice-smooth-model.test.ts` | nine describes of pure helpers — `navigationAsk`, `resolveByTitle`, `parseOrdinal`, `pickByLabel`, `answerBody`, `statusAsk`, `composeStatus` and the word counters — leaving the route harness that stands up `createServer` | 287, parent at 493 |
 
-One commit. **Must land after A6**, because `composeStatus` moves to
-`voice-status.ts` there and this file imports it. Stage the new file before
-trusting `bun run test:audit`: an untracked test file is invisible to it and
-CI is not.
+One commit, plus this one. Nine describes rather than the eight the plan
+counted: `navigationAsk` has two, one for the phrasing and one for the board
+qualifier.
+
+The split is what says which LAYER broke when a promise stops holding — a red
+model file means the rule is wrong, a red route file over a green model file
+means the wiring is. The model half also runs in milliseconds without binding
+a port.
+
+**Both halves keep their own copy of the three title fixtures** — the target,
+the near-twin that makes "akash review" ambiguous, and the one-word decoy.
+That is fixture SHAPE rather than a contract between the halves: the route
+file binds them as real documents, the model file ranks them as bare strings,
+and neither would notice the other changing a word. Each file's comment now
+says which it is. The test count is unchanged, 41 before and 18 + 23 after.
+
+Landing after A6 mattered: `composeStatus` moved to `voice-status.ts` there
+and the model half imports it from that file.
 
 ---
 

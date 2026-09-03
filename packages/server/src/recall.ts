@@ -391,6 +391,23 @@ export interface RecallBot {
 
 export type FetchLike = (url: string, init: RequestInit) => Promise<Response>;
 
+/**
+ * A failed response's body, clipped, for an error message.
+ *
+ * Lives here rather than in either client because BOTH reach for it and
+ * neither may import the other: the Recall client below, the Recall Calendar
+ * client in `recall-calendar.ts`, and Google's OAuth exchange in
+ * `google-oauth.ts`. It was written out by hand in all three, which is how it
+ * came to be the one thing `google-oauth.ts` could not take with it in A7.
+ *
+ * 400 characters is enough for an API's error object and short of anything
+ * that could carry a credential back into a log — these bodies name a grant
+ * problem, not a secret, and the cap is what keeps that true by accident.
+ */
+export function clip(detail: string): string {
+  return detail ? `: ${detail.slice(0, 400)}` : '';
+}
+
 export interface RecallClientOptions {
   apiKey?: string | null;
   env?: Record<string, string | undefined>;
@@ -520,7 +537,7 @@ export function createRecallClient(opts: RecallClientOptions = {}): RecallClient
       const detail = await res.text().catch(() => '');
       throw new Error(
         `recall: ${init.method ?? 'GET'} ${path} failed (${res.status})` +
-          `${detail ? `: ${detail.slice(0, 400)}` : ''}` +
+          clip(detail) +
           (res.status === 401 ? ` — is RECALL_REGION=${config.region} the key's region?` : ''),
       );
     }
