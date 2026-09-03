@@ -45,7 +45,7 @@ describe('router', () => {
   /**
    * The session answer reaches every mount as a VALUE.
    *
-   * `main()` awaits `/api/auth/session` before starting the router, and the
+   * `bootApp` awaits `/api/auth/session` before starting the router, and the
    * surfaces used to throw that away and re-ask for themselves — which left
    * each one editable for the length of its own round trip. The answer riding
    * on the MountContext, exactly like `user`, is what closes that: a mount

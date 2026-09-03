@@ -50,8 +50,9 @@ describe('walkNextUrl', () => {
   });
 });
 
-// hub-app has no boot harness (same pin pattern as home-nav-reset.test.ts):
-// assert the wiring exists in source — the boot reads the handoff, an armed
+// Pinned on the source: these three sit behind a four-second deadline and a
+// cross-workspace hop, so the wiring is read rather than driven — the boot
+// itself is driveable (hub-boot.test.ts). The boot reads the handoff, an armed
 // walk auto-opens after the first review-items load, and a drained queue
 // chains to the next workspace instead of dead-ending on a cleared card.
 describe('hub-app wires the handoff', () => {

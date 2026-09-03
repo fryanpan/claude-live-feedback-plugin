@@ -6,7 +6,9 @@ import { describe, expect, it } from 'vitest';
 // until the server grew /load-reports. This is the client half: after boot the
 // board reports how long its own first paint and first ydoc projection took,
 // once per page load, so slowness is a recorded fact with phase attribution.
-// hub-app has no boot harness — pins on the source, same as lazy-events.
+// Pinned on the source: the board's boot is driveable (hub-boot.test.ts),
+// but what this asserts is which PHASES the beacon reports, and a report
+// that names them is easier to read off the call than to reconstruct.
 describe('the board reports its own load time', () => {
   const src = readFileSync(join(__dirname, '..', 'src', 'hub', 'hub-app.ts'), 'utf8');
 

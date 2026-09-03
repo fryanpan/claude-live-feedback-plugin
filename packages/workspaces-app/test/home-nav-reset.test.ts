@@ -76,9 +76,9 @@ describe('CLOSED_WALK — the pair that means the Home page is showing', () => {
   });
 });
 
-/** `setNav` lives inside `main()` and is unreachable from a test — the module
- *  starts the app on import. These read the source instead, which is the
- *  established shape for hub-app wiring in this suite. */
+/** `setNav` is a local declaration inside `bootHub`, so it is unreachable by
+ *  name even though the boot itself can now be driven (hub-boot.test.ts).
+ *  These read its source; what the nav DOES on arrival is asserted there. */
 function setNavBody(): string {
   const body = HUB_APP.match(/function setNav\([\s\S]*?\n {2}\}\n/)?.[0] ?? '';
   expect(body, 'setNav went missing from hub-app.ts').not.toBe('');

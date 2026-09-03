@@ -537,30 +537,14 @@ describe('the fetch wrapper', () => {
   });
 });
 
-describe('the board and the doc surface actually go through this gate', () => {
-  // Neither entry point has a boot harness (they run `main()` at import,
-  // against a live DOM and server), so the wiring is pinned on the source —
-  // the same shape load-beacon.test.ts uses for hub-app. The behaviour each
-  // call produces is covered above; what this pins is that both surfaces
-  // make the calls, in the order that makes them true: the wrapper before
-  // the first write, and the bar off the answer to "may I write".
-  const hub = readFileSync(join(__dirname, '..', 'src', 'hub', 'hub-app.ts'), 'utf8');
-  const app = readFileSync(join(__dirname, '..', 'src', 'app.ts'), 'utf8');
-
-  it.each([
-    ['the board', hub],
-    ['the doc surface', app],
-  ])('%s installs the notice as the first thing main() does', (_name, src) => {
-    const main = src.slice(src.indexOf('async function main(): Promise<void> {'));
-    const firstCall = main.match(/\n\s+(\w[\w.]*)\(/)?.[1];
-    expect(firstCall).toBe('installWriteGateNotice');
-  });
-
-  it.each([
-    ['the board', hub],
-    ['the doc surface', app],
-  ])('%s asks whether it may write, and raises the bar when it may not', (_name, src) => {
-    expect(src).toMatch(/const writeAccess = await fetchWriteAccess\(\);/);
-    expect(src).toMatch(/if \(!writeAccess\.canWrite\) showSignInBar\(\);/);
-  });
-});
+/**
+ * Both entry points going through this gate is asserted by DRIVING them, in
+ * `app-boot.test.ts` and `hub-boot.test.ts`: each boot is given a server that
+ * refuses writes and the bar has to appear, and the doc boot has to have asked
+ * before it opened its socket.
+ *
+ * It used to be pinned here on the source text of `main()`, because neither
+ * entry point could be imported at all — importing one WAS running the app.
+ * They export `bootApp` / `bootHub` now, so the wiring is checked by what it
+ * does rather than by how it is spelled.
+ */
