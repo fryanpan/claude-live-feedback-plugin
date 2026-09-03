@@ -144,8 +144,9 @@ describe('applyHuddleCrumb', () => {
 });
 
 /**
- * app.ts runs main() on import, so the mount that reads the flag is pinned by
- * source text (the same shape meeting-strip-css.test.ts uses for it).
+ * The mount that reads the flag is pinned by source text. It is not part of
+ * the boot sequence app-boot.test.ts drives — `mountMarkdown` runs per doc,
+ * not per page — so there is nothing here to call.
  *
  * Two files since the meeting surface moved out: app.ts still decides that a
  * huddle started here, and doc/doc-meeting-mount.ts is what acts on it. Read

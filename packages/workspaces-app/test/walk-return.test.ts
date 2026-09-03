@@ -49,8 +49,8 @@ describe('walkAimAfterOpen', () => {
   });
 });
 
-// hub-app has no boot harness (same pin pattern as walk-handoff.test.ts): the
-// wiring is asserted in source. The behaviour itself was verified headlessly
+// Pinned on the source (the pattern of walk-handoff.test.ts): the return hop
+// leaves the page, which a driven boot cannot follow. The behaviour itself was verified headlessly
 // at 430px against a built client — see the PR.
 describe('hub-app wires the return', () => {
   const src = readFileSync(join(__dirname, '..', 'src', 'hub', 'hub-app.ts'), 'utf8');
