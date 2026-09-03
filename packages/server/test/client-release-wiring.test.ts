@@ -12,7 +12,7 @@ const repoRoot = join(here, '..', '..', '..');
 function fakeBuild(marker: string): { dir: string; widget: string; markdownApp: string } {
   const dir = mkdtempSync(join(tmpdir(), 'lf-build-'));
   const widget = join(dir, 'widget');
-  const markdownApp = join(dir, 'markdown-app');
+  const markdownApp = join(dir, 'workspaces-app');
   mkdirSync(widget, { recursive: true });
   mkdirSync(markdownApp, { recursive: true });
   writeFileSync(join(widget, 'widget.iife.js'), `//${marker}\n`);
@@ -37,7 +37,7 @@ describe('prepareClientRelease', () => {
     try {
       const got = prepareClientRelease({ root, sources: build });
       expect(got.stale).toBe(false);
-      expect(got.markdownApp).toBe(join(got.releaseDir as string, 'markdown-app'));
+      expect(got.markdownApp).toBe(join(got.releaseDir as string, 'workspaces-app'));
       expect(got.error).toBeUndefined();
     } finally {
       for (const d of [root, build.dir]) rmSync(d, { recursive: true, force: true });
@@ -81,7 +81,7 @@ describe('prepareClientRelease', () => {
  * the REST-route layer). Drive the real entrypoint and read the bytes back
  * over HTTP.
  */
-describe('bin.ts --markdown-app-dist / --widget-dist', () => {
+describe('bin.ts --workspaces-app-dist / --widget-dist', () => {
   it('serves the release passed on the command line, not the repo dist', async () => {
     const root = mkdtempSync(join(tmpdir(), 'lf-releases-'));
     const dataDir = mkdtempSync(join(tmpdir(), 'lf-data-'));
@@ -98,7 +98,7 @@ describe('bin.ts --markdown-app-dist / --widget-dist', () => {
         String(port),
         '--data-dir',
         dataDir,
-        '--markdown-app-dist',
+        '--workspaces-app-dist',
         rel.markdownAppDir,
         '--widget-dist',
         rel.widgetDir,
@@ -152,7 +152,7 @@ describe('bin.ts --markdown-app-dist / --widget-dist', () => {
         String(port),
         '--data-dir',
         dataDir,
-        '--markdown-app-dist',
+        '--workspaces-app-dist',
         rel.markdownAppDir,
         '--widget-dist',
         rel.widgetDir,

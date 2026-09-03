@@ -34,8 +34,44 @@
         "yjs": "^13.6.20",
       },
     },
-    "packages/markdown-app": {
-      "name": "@feedback/markdown-app",
+    "packages/mcp": {
+      "name": "@fryanpan/claude-workspaces-mcp",
+      "version": "0.1.0",
+      "bin": {
+        "claude-workspaces-mcp": "./dist/mcp.js",
+      },
+      "dependencies": {
+        "@modelcontextprotocol/sdk": "^1.29.0",
+      },
+      "devDependencies": {
+        "@feedback/core": "workspace:*",
+      },
+    },
+    "packages/server": {
+      "name": "@feedback/server",
+      "version": "0.0.0",
+      "dependencies": {
+        "@feedback/core": "workspace:*",
+        "@modelcontextprotocol/sdk": "^1.29.0",
+        "@sentry/bun": "^10.71.0",
+        "jose": "^5.9.6",
+        "lib0": "^0.2.117",
+        "y-protocols": "^1.0.7",
+        "yjs": "^13.6.30",
+      },
+    },
+    "packages/widget": {
+      "name": "@feedback/widget",
+      "version": "0.0.0",
+      "dependencies": {
+        "@feedback/core": "workspace:*",
+        "lib0": "^0.2.117",
+        "y-protocols": "^1.0.6",
+        "yjs": "^13.6.20",
+      },
+    },
+    "packages/workspaces-app": {
+      "name": "@feedback/workspaces-app",
       "version": "0.0.0",
       "dependencies": {
         "@codemirror/commands": "^6.7.1",
@@ -81,42 +117,6 @@
         "unified": "^11.0.5",
         "y-codemirror.next": "^0.3.5",
         "y-prosemirror": "^1.3.7",
-        "y-protocols": "^1.0.6",
-        "yjs": "^13.6.20",
-      },
-    },
-    "packages/mcp": {
-      "name": "@fryanpan/claude-workspaces-mcp",
-      "version": "0.1.0",
-      "bin": {
-        "claude-workspaces-mcp": "./dist/mcp.js",
-      },
-      "dependencies": {
-        "@modelcontextprotocol/sdk": "^1.29.0",
-      },
-      "devDependencies": {
-        "@feedback/core": "workspace:*",
-      },
-    },
-    "packages/server": {
-      "name": "@feedback/server",
-      "version": "0.0.0",
-      "dependencies": {
-        "@feedback/core": "workspace:*",
-        "@modelcontextprotocol/sdk": "^1.29.0",
-        "@sentry/bun": "^10.71.0",
-        "jose": "^5.9.6",
-        "lib0": "^0.2.117",
-        "y-protocols": "^1.0.7",
-        "yjs": "^13.6.30",
-      },
-    },
-    "packages/widget": {
-      "name": "@feedback/widget",
-      "version": "0.0.0",
-      "dependencies": {
-        "@feedback/core": "workspace:*",
-        "lib0": "^0.2.117",
         "y-protocols": "^1.0.6",
         "yjs": "^13.6.20",
       },
@@ -263,11 +263,11 @@
 
     "@feedback/demo-mockup": ["@feedback/demo-mockup@workspace:demos/mockup"],
 
-    "@feedback/markdown-app": ["@feedback/markdown-app@workspace:packages/markdown-app"],
-
     "@feedback/server": ["@feedback/server@workspace:packages/server"],
 
     "@feedback/widget": ["@feedback/widget@workspace:packages/widget"],
+
+    "@feedback/workspaces-app": ["@feedback/workspaces-app@workspace:packages/workspaces-app"],
 
     "@fryanpan/claude-workspaces-mcp": ["@fryanpan/claude-workspaces-mcp@workspace:packages/mcp"],
 
@@ -401,7 +401,7 @@
 
     "@sentry/conventions": ["@sentry/conventions@0.16.0", "", {}, "sha512-fO9PLmHdVURcSPUpWCItWAtgKiMwGdJHbovoSEyLplX5sxs2ugvI4CBPTrkkgqhObnZOD0CnWBKDzSVQYBKEyQ=="],
 
-    "@sentry/core": ["@sentry/core@10.71.0", "", { "dependencies": { "@sentry/conventions": "^0.16.0" } }, "sha512-OIjT7rzcWJjUC6r3eBT3Td1j0afDBMkbbx9jTocSD+ZSfc25eEU7hoIPS0WvfeIOTIN3y8bfQnXavwMReaNVHQ=="],
+    "@sentry/core": ["@sentry/core@10.72.0", "", { "dependencies": { "@sentry/conventions": "^0.16.0" } }, "sha512-UJMHZfbjP4qk+g4AQhZmzosMdICC2D9p0/hLrm1LofPsp+WBfcSnv9jsY1a9TfmpS4WCAmTx8nANYTIXifcBjA=="],
 
     "@sentry/feedback": ["@sentry/feedback@10.71.0", "", { "dependencies": { "@sentry/core": "10.71.0" } }, "sha512-4+zMAmn1DcbYBtFE0pWt6zo8vWoBHTuP/UhtCMTCoGB4sVYvmwRxv9Hc9OpRHSzE9kSl8beD0zKFxuoVHizKQQ=="],
 
@@ -1341,15 +1341,15 @@
 
     "@modelcontextprotocol/sdk/jose": ["jose@6.2.2", "", {}, "sha512-d7kPDd34KO/YnzaDOlikGpOurfF0ByC2sEV4cANCtdqLlTfBlw2p14O/5d/zv40gJPbIQxfES3nSx1/oYNyuZQ=="],
 
-    "@sentry/bun/@sentry/core": ["@sentry/core@10.72.0", "", { "dependencies": { "@sentry/conventions": "^0.16.0" } }, "sha512-UJMHZfbjP4qk+g4AQhZmzosMdICC2D9p0/hLrm1LofPsp+WBfcSnv9jsY1a9TfmpS4WCAmTx8nANYTIXifcBjA=="],
+    "@sentry/browser/@sentry/core": ["@sentry/core@10.71.0", "", { "dependencies": { "@sentry/conventions": "^0.16.0" } }, "sha512-OIjT7rzcWJjUC6r3eBT3Td1j0afDBMkbbx9jTocSD+ZSfc25eEU7hoIPS0WvfeIOTIN3y8bfQnXavwMReaNVHQ=="],
 
-    "@sentry/node/@sentry/core": ["@sentry/core@10.72.0", "", { "dependencies": { "@sentry/conventions": "^0.16.0" } }, "sha512-UJMHZfbjP4qk+g4AQhZmzosMdICC2D9p0/hLrm1LofPsp+WBfcSnv9jsY1a9TfmpS4WCAmTx8nANYTIXifcBjA=="],
+    "@sentry/browser-utils/@sentry/core": ["@sentry/core@10.71.0", "", { "dependencies": { "@sentry/conventions": "^0.16.0" } }, "sha512-OIjT7rzcWJjUC6r3eBT3Td1j0afDBMkbbx9jTocSD+ZSfc25eEU7hoIPS0WvfeIOTIN3y8bfQnXavwMReaNVHQ=="],
 
-    "@sentry/node-core/@sentry/core": ["@sentry/core@10.72.0", "", { "dependencies": { "@sentry/conventions": "^0.16.0" } }, "sha512-UJMHZfbjP4qk+g4AQhZmzosMdICC2D9p0/hLrm1LofPsp+WBfcSnv9jsY1a9TfmpS4WCAmTx8nANYTIXifcBjA=="],
+    "@sentry/feedback/@sentry/core": ["@sentry/core@10.71.0", "", { "dependencies": { "@sentry/conventions": "^0.16.0" } }, "sha512-OIjT7rzcWJjUC6r3eBT3Td1j0afDBMkbbx9jTocSD+ZSfc25eEU7hoIPS0WvfeIOTIN3y8bfQnXavwMReaNVHQ=="],
 
-    "@sentry/opentelemetry/@sentry/core": ["@sentry/core@10.72.0", "", { "dependencies": { "@sentry/conventions": "^0.16.0" } }, "sha512-UJMHZfbjP4qk+g4AQhZmzosMdICC2D9p0/hLrm1LofPsp+WBfcSnv9jsY1a9TfmpS4WCAmTx8nANYTIXifcBjA=="],
+    "@sentry/replay/@sentry/core": ["@sentry/core@10.71.0", "", { "dependencies": { "@sentry/conventions": "^0.16.0" } }, "sha512-OIjT7rzcWJjUC6r3eBT3Td1j0afDBMkbbx9jTocSD+ZSfc25eEU7hoIPS0WvfeIOTIN3y8bfQnXavwMReaNVHQ=="],
 
-    "@sentry/server-utils/@sentry/core": ["@sentry/core@10.72.0", "", { "dependencies": { "@sentry/conventions": "^0.16.0" } }, "sha512-UJMHZfbjP4qk+g4AQhZmzosMdICC2D9p0/hLrm1LofPsp+WBfcSnv9jsY1a9TfmpS4WCAmTx8nANYTIXifcBjA=="],
+    "@sentry/replay-canvas/@sentry/core": ["@sentry/core@10.71.0", "", { "dependencies": { "@sentry/conventions": "^0.16.0" } }, "sha512-OIjT7rzcWJjUC6r3eBT3Td1j0afDBMkbbx9jTocSD+ZSfc25eEU7hoIPS0WvfeIOTIN3y8bfQnXavwMReaNVHQ=="],
 
     "@tiptap/starter-kit/@tiptap/extension-code-block": ["@tiptap/extension-code-block@3.22.3", "", { "peerDependencies": { "@tiptap/core": "^3.22.3", "@tiptap/pm": "^3.22.3" } }, "sha512-RiQtEjDAPrHpdo6sw6b7fOw/PijqgFIsozKKkGcSeBgWHQuFg7q9OxJTj+l0e60rVwSu/5gmKEEobzM9bX+t2Q=="],
 

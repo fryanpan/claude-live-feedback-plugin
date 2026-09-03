@@ -17,7 +17,7 @@ import { STATUS_COLORS } from '@feedback/core';
  * - .auth-signin: the panel's offer, and the same control inside a composer
  *   whose draft the workspace refused — same action, same 44px target.
  * - .thread .last: full summary line even on a narrow panel — wrap instead
- *   of ellipsizing, same rule as the markdown-app card lines; length is
+ *   of ellipsizing, same rule as the workspaces-app card lines; length is
  *   bounded upstream.
  */
 export const widgetStyles = `

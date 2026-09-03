@@ -1,5 +1,5 @@
 /**
- * Tiny presentation helpers shared by BOTH front-ends (markdown-app SPA and
+ * Tiny presentation helpers shared by BOTH front-ends (workspaces-app SPA and
  * the injectable widget). Keep this file dependency-free and DOM-free — the
  * widget's bundle-size constraint rides on it.
  */

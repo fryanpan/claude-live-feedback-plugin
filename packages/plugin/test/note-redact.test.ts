@@ -232,8 +232,8 @@ describe('fullNote — the whole closing message, reduced line by line', () => {
     const kept =
       'renderCommentMarkdown at 910ffe6d, bumped 0.1.126, TASK_NOTES_STORE_CAP, internationalization, convertToBase64String, ran 1700000000000 ms';
     expect(fullNote(kept)).toBe(kept);
-    expect(fullNote('see packages/markdown-app/src/hub/task-detail-island.tsx')).toBe(
-      'see packages/markdown-app/src/hub/task-detail-island.tsx',
+    expect(fullNote('see packages/workspaces-app/src/hub/task-detail-island.tsx')).toBe(
+      'see packages/workspaces-app/src/hub/task-detail-island.tsx',
     );
     expect(fullNote('on feat/activity-feed-v2-2026-08-29')).toBe(
       'on feat/activity-feed-v2-2026-08-29',

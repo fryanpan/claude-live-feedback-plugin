@@ -556,7 +556,7 @@ export interface ServerOptions {
   dispatchWatchFactory?: WatchFactory;
   /** Absolute path to the built widget dist dir, or null to skip. */
   widgetDistDir?: string | null;
-  /** Absolute path to the built markdown-app dist dir. */
+  /** Absolute path to the built workspaces-app dist dir. */
   markdownAppDistDir?: string | null;
   /** Absolute path to the demos dir (static HTML). */
   demosDir?: string | null;
@@ -808,7 +808,7 @@ export interface ServerOptions {
   slowRequestMs?: number;
 }
 
-/** Files the markdown-app build emits that must ALSO answer at the root
+/** Files the workspaces-app build emits that must ALSO answer at the root
  *  path. See the route for why each one is here rather than under /app/. */
 const ROOT_ALIASED_ASSETS = new Set([
   '/sw.js',

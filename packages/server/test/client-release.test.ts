@@ -20,7 +20,7 @@ import {
 } from '../src/client-release.ts';
 
 /**
- * Prod used to serve `packages/markdown-app/dist` out of the primary checkout,
+ * Prod used to serve `packages/workspaces-app/dist` out of the primary checkout,
  * per request. That made "build the bundles" and "deploy to everyone" the same
  * act, and made the served client depend on whichever commit that working tree
  * happened to be sitting on.
@@ -36,7 +36,7 @@ import {
 function fakeBuild(marker: string): { dir: string; widget: string; markdownApp: string } {
   const dir = mkdtempSync(join(tmpdir(), 'lf-build-'));
   const widget = join(dir, 'widget');
-  const markdownApp = join(dir, 'markdown-app');
+  const markdownApp = join(dir, 'workspaces-app');
   mkdirSync(widget, { recursive: true });
   mkdirSync(markdownApp, { recursive: true });
   writeFileSync(join(widget, 'widget.iife.js'), `//${marker}\n`);
@@ -111,7 +111,7 @@ describe('publishClientRelease', () => {
       const entries = readdirSync(join(root, 'releases'));
       expect(entries.length).toBe(1);
       for (const e of entries) {
-        expect(existsSync(join(root, 'releases', e, 'markdown-app', 'app.js'))).toBe(true);
+        expect(existsSync(join(root, 'releases', e, 'workspaces-app', 'app.js'))).toBe(true);
         expect(existsSync(join(root, 'releases', e, 'widget', 'widget.iife.js'))).toBe(true);
       }
     } finally {
@@ -133,7 +133,7 @@ describe('publishClientRelease', () => {
       const b = publishClientRelease({ root, sources: second });
       expect(lstatSync(link).isSymbolicLink()).toBe(true);
       expect(realpathSync(link)).toBe(realpathSync(b.releaseDir));
-      expect(readFileSync(join(link, 'markdown-app', 'app.js'), 'utf8')).toContain('gen-2');
+      expect(readFileSync(join(link, 'workspaces-app', 'app.js'), 'utf8')).toContain('gen-2');
     } finally {
       for (const d of [root, first.dir, second.dir]) rmSync(d, { recursive: true, force: true });
     }
@@ -148,7 +148,7 @@ describe('publishClientRelease', () => {
     rmSync(join(broken.markdownApp, 'app.js'));
     try {
       const a = publishClientRelease({ root, sources: good });
-      expect(readFileSync(join(root, 'current', 'markdown-app', 'app.js'), 'utf8')).toContain(
+      expect(readFileSync(join(root, 'current', 'workspaces-app', 'app.js'), 'utf8')).toContain(
         'gen-1',
       );
 
@@ -186,7 +186,9 @@ describe('publishClientRelease', () => {
       expect(entries.length).toBe(2);
       expect(entries).toContain(last.split('/').pop() as string);
       expect(realpathSync(join(root, 'current'))).toBe(realpathSync(last));
-      expect(readFileSync(join(root, 'current', 'markdown-app', 'app.js'), 'utf8')).toContain('g5');
+      expect(readFileSync(join(root, 'current', 'workspaces-app', 'app.js'), 'utf8')).toContain(
+        'g5',
+      );
     } finally {
       rmSync(root, { recursive: true, force: true });
       for (const b of builds) rmSync(b.dir, { recursive: true, force: true });
@@ -243,7 +245,7 @@ describe('resolveClientDists', () => {
   it('falls back to the repo dist dirs when no release is given', () => {
     const repoRoot = mkdtempSync(join(tmpdir(), 'lf-repo-'));
     const w = join(repoRoot, 'packages', 'widget', 'dist');
-    const m = join(repoRoot, 'packages', 'markdown-app', 'dist');
+    const m = join(repoRoot, 'packages', 'workspaces-app', 'dist');
     mkdirSync(w, { recursive: true });
     mkdirSync(m, { recursive: true });
     try {

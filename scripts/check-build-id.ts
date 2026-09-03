@@ -18,10 +18,10 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
-const buildInfo = join(repoRoot, 'packages/markdown-app/dist/BUILD_INFO.txt');
+const buildInfo = join(repoRoot, 'packages/workspaces-app/dist/BUILD_INFO.txt');
 
 async function build(): Promise<string> {
-  const proc = Bun.spawn(['bun', 'run', 'build:markdown-app'], {
+  const proc = Bun.spawn(['bun', 'run', 'build:workspaces-app'], {
     cwd: repoRoot,
     stdout: 'pipe',
     stderr: 'pipe',
@@ -29,7 +29,7 @@ async function build(): Promise<string> {
   const code = await proc.exited;
   if (code !== 0) {
     console.error(await new Response(proc.stderr).text());
-    throw new Error(`build:markdown-app exited ${code}`);
+    throw new Error(`build:workspaces-app exited ${code}`);
   }
   return readFileSync(buildInfo, 'utf8').trim();
 }

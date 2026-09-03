@@ -32,7 +32,7 @@ read markdown syntax with `+`/`-` gutters instead of reading the document.
   `baseText` is therefore immutable bytes for the life of the review.
 - Threads on a diff doc anchor as `text-range` `Y.RelativePosition`s into the flat
   `content` Y.Text, **line-snapped** (`rooms.ts:455`, flat branch at `:479`).
-- The render switch is a single branch on doc type — `packages/markdown-app/src/app.ts:101`:
+- The render switch is a single branch on doc type — `packages/workspaces-app/src/app.ts:101`:
   ```ts
   if (docType === 'code' || docType === 'diff') { void bootCode({...}); return; }
   ```
@@ -89,7 +89,7 @@ flowchart TD
 | Unit | Where | Responsibility |
 |---|---|---|
 | `computeRedline(baseMd, newMd)` | new — `packages/core/src/redline.ts` | Pure. Block-level LCS (reusing the machinery behind `applyMarkdownToFragment`), then word-level diff on paired changed blocks. Returns blocks of `{text, kind, contentOffset?}` segments. No Yjs, fully unit-testable. |
-| Redline renderer | new — `packages/markdown-app/src/redline/` | Builds a local read-only Tiptap doc with two marks, `redlineIns` (`<ins>`) / `redlineDel` (`<del>`); emits the provenance map. |
+| Redline renderer | new — `packages/workspaces-app/src/redline/` | Builds a local read-only Tiptap doc with two marks, `redlineIns` (`<ins>`) / `redlineDel` (`<del>`); emits the provenance map. |
 | Anchor bridge | same dir | The bidirectional map. Reuses `snapToLines` and the existing `text-range` encoding. |
 | View switch + toggle | `app.ts:101`, doc header | `type === 'diff' && relPath.endsWith('.md')` → redline; toggle flips to today's `bootCode`. |
 

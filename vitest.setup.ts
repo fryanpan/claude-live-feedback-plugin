@@ -1,5 +1,5 @@
-import * as composerChunk from './packages/markdown-app/src/md-composer-chunk.ts';
-import { setComposerEditorLoader } from './packages/markdown-app/src/md-composer.ts';
+import * as composerChunk from './packages/workspaces-app/src/md-composer-chunk.ts';
+import { setComposerEditorLoader } from './packages/workspaces-app/src/md-composer.ts';
 
 /**
  * Composers reach their markdown editor through a dynamic `import()` — the

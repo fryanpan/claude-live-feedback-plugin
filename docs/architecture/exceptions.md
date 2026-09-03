@@ -73,31 +73,31 @@ blocks over one set of fixtures is one harness, however long the file gets.
 | `packages/server/src/summarize.ts` | 549 | Exception | One outbound-API owner, `ThreadSummarizer`. `generate`, `generateHomeBrief` and `backfill` share the key resolution, `post`, and the debounce maps that stop three browsers paying three times. |
 | `packages/server/src/meetings.ts` | 516 | Exception | One durable record: the append-only transcript and index paths, the `listMeetings` / `readTranscript` folds over them, and `MeetingStore` as the live handle on the same files. |
 
-## packages/markdown-app
+## packages/workspaces-app
 
 | File | Lines | Verdict | Reason / seam |
 |---|---|---|---|
-| `packages/markdown-app/src/styles.css` | 6545 | Split | B2 took the board's half into `hub.css` (loaded BEFORE this file, which is where the block sat) and the sign-in page's into `signin.css`, which is what took this file from 12042. What is left is the review editor's own surfaces — file tree, meeting chrome, diff nav, threads pane — plus the chrome every page shares: design tokens, top bar, toast, connection banner, the first-arrival identity prompt. Splitting THAT means naming which blocks each page reaches, and the measurement is in the B2 PR body: about 2,459 lines are reached by the editor alone and by neither other page, which is the next cut. Doing it needs a shared base every page keeps loading, which is a design decision this PR did not take. |
-| `packages/markdown-app/src/hub.css` | 5364 | Exception | The board's whole stylesheet, lifted out of `styles.css` in B2 in source order so no rule changed the cascade it lands in. It is one page, and the 28 `##### HUB · …` sub-banners are the split: a rule goes under the banner naming the surface it paints (`grep -n '##### HUB' packages/markdown-app/src/hub.css`). Cutting it into files per surface would trade a labelled region for an import graph between stylesheets, and the board loads all of it on every visit either way. |
-| `packages/markdown-app/src/hub/hub-board-model.ts` | 1397 | Exception | One model, the board itself: what a row is (`HubTask`, `ownerKind`, `statusLabel`), which section it lands in (`taskVisible`, `boardSections`, `goalSection`), how much work a goal has left (`boardEffort`, `goalEffortLabel`) and where a drag drops it (`dropTarget`, `stepTarget`). Split out of `hub-model.ts` (B1). Cutting it further would separate a row's shape from the ordering rule that reads it, which is the pair `byBoardOrder` exists to keep in one place. |
-| `packages/markdown-app/src/hub/hub-review-model.ts` | 1262 | Exception | One queue end to end: what a review item is, the ranking that puts everything waiting on a person into one list (`reviewQueue`, `decisionQueue`, `humanBlockerRows`), the walkthrough that walks it (`advanceWalk`, `walkHandoff`), and the wording each row and card wears (`reviewHeadline`, `askedMeta`). Split out of `hub-model.ts` (B1). The ranking and the wording are asserted against each other — a row's title is derived from the same ask the rank reads — so a further cut would need both halves imported back. |
-| `packages/markdown-app/src/hub/hub-presence-model.ts` | 1019 | Exception | One strip of chrome fed by one clock: who is here (`presenceChips`, `leadSeatLabel`), what is running (`pluginDriftNotice`, `clientDriftNotice`, `uptimeSummary`), what has happened (`describeEvent`, `activityRows`) and where the hub is standing (`navFromPath`, `homeSinceLabel`). The remainder of `hub-model.ts` after B1's other two cuts. `timeAgo` dates a presence chip, a release and a trail row alike, so a further cut would put that one clock behind an import in three places. |
-| `packages/markdown-app/src/hub/hub-actions.ts` | 640 | Exception | Every REST write the board performs, bound once to an explicit `HubActionDeps` instead of captured from `main()`'s closure, plus `HubState` — the projection those writes mutate — and the three primitives every verb ends in (`send`, `fetchJson`, `showToast`). Split out of `hub-app.ts` (B1). Splitting the verbs from the state they write, or from the toast that reports a refusal, would put the blast radius back behind an import. |
-| `packages/markdown-app/src/hub/hub-app.ts` | 2538 | Exception | The hub's entry: it builds the shell, holds `main()`'s one `HubState`, and owns the renders and the address bar. B1 lifted the REST writes to `hub-actions.ts`, the review queue's controller to `hub-review-controller.ts` and the live path to `hub-live-wiring.ts`, each behind a named deps object. What is left is the render layer and the boot sequence, which share `state` and every `render*` closure by construction — a further cut would pass the whole closure as an argument and call it a seam. |
-| `packages/markdown-app/src/hub/hub-detail-render.ts` | 1145 | Exception | One panel: who has the task (`assigneePicker`), what it says (`detailFields`, `bodySlot`), what it cost (`effortFields`, `effortComputationLines`), what it points at (`renderTaskLinks`, `renderRelatedLinks`) and what happened to it (`activityRow`, `renderTransitionRow`). Split out of `hub-render.ts` (B1). Larger than the plan's ~900 estimate because the doc-title hydration helpers and `assigneePicker` came with it — both are used only by this panel, and leaving them behind would have pointed `hub-render.ts` back at this file. |
-| `packages/markdown-app/src/hub/hub-render.ts` | 770 | Exception | The hub's shell chrome after B1: the topbar, the lead-agent strip, the archived list, the goal detail panel, the quick actions, the review banner, the Home brief and the activity view. Eight small regions that share the shell's own idioms and nothing else; the three regions with a vocabulary of their own are now `hub-detail-render.ts`, `hub-discussion-render.ts` and `hub-review-render.ts`. |
-| `packages/markdown-app/src/meeting-strip.ts` | 1476 | Split | B4 took the DOM-free wire layer to `meeting-protocol.ts` (200) and both popovers to `meeting-chooser.ts` (433). What is left is the socket state machine and the surface it drives: the Record button, the strip's own render, the speaker menu, and the `handle` switch that turns a server frame into a state. Those share `state`, `socket`, `turns` and `view` by construction — the next candidate seam, the transcript feed's render, reads three of the four — so what remains is one subject rather than a set of jobs. `buildChooser` and `buildAdvancedPanel` were closures over eight form fields, not top-level functions; they left behind an explicit `ChooserState` and a `MeetingChooserDeps`, which is the B1 `HubActionDeps` shape. **M** |
-| `packages/markdown-app/src/app.ts` | 1505 | Split | B3 took the format bar and its table popover to `doc/editor-toolbar.ts`, the view/edit and Suggesting interlock to `doc/doc-modes.ts`, and the whole live-meeting surface to `doc/doc-meeting-mount.ts`. What is left is `mountMarkdown()` itself: the boot order for one document — connect, editor, chrome, floats, gates — which is a sequence rather than a set of jobs, and every remaining candidate seam is a run of that sequence rather than a separable subject. **M** |
-| `packages/markdown-app/src/review-chrome.ts` | 1080 | Split | B3 took the two writing surfaces to `doc/review-composer.ts`, the panel resize handle and thread-range clicks to `doc/chrome-panels.ts`, and the shared DOM helpers to `doc/chrome-dom.ts`. What remains is `mountReviewChrome`: the threads panel and its redraw, the drawer and set pane, the mobile review surface, the doc label and the seen tracker — all reading one `opts` and one ydoc. The next seam is the thread projection (`collectThreads`, `resolveThreadRange`, `redrawThreads`), roughly 300 lines, which needs the pending-reply state that the drawer also reads. **M** |
-| `packages/markdown-app/src/doc/thread-card.ts` | 812 | Exception | One comment thread as a card, out of `threads.ts` in B3 — and the same card the redline margin renders as a balloon, which is why it is shared rather than duplicated. It looks like two files, the card and the eight DOM helpers under it, and is deliberately one: every helper has this card as its only caller, and the four faces a card can show (summary, detail, collapsed, answered) are built together because the fold cross-fades between faces that must already exist in the same box. |
-| `packages/markdown-app/src/redline/markup-margin.ts` | 718 | Exception | B3 took the card builders to `balloon-cards.ts` and the phone sheets to `margin-sheets.ts`. What is left is the margin's own geometry and the render list it measures: `positionBalloons` reads four elements' rects plus the private rendered-balloon union, and `relayout` is the orchestration point that calls the deletion grouper, the thread filter and the renderer in order. The plan had both joining `balloon-layout.ts`; they did not, because that file holds the pure stacking algorithm and taking the glue there would point the dependency backwards — see split-plan.md B3. |
-| `packages/markdown-app/src/voice-capture.ts` | 705 | Exception | One gesture controller: `createVoiceCapture` and the hold rules (`SPACE_HOLD_ARM_MS`, `spaceHoldTargetsPage`) plus the messages that hold produces. All of it is the hold-to-talk surface. |
-| `packages/markdown-app/src/diff-nav.ts` | 598 | Exception | One sidebar renderer with two views sharing the toggle, `viewKey` and `diffNavSignature`. The all-files half is ~110 lines and cannot be understood apart from the toggle that selects it. |
-| `packages/markdown-app/src/meeting-advanced.ts` | 581 | Exception | One panel. The `AdvancedControl` descriptors exist only to drive `buildAdvancedSection`, and the canonical specs already live in core's `meeting-tuning.ts`. |
-| `packages/markdown-app/src/code/code-editor.ts` | 550 | Exception | One CodeMirror surface: `createCodeEditor` returning `CodeSurface`, with the gutter and decoration internals that only that editor instantiates. |
-| `packages/markdown-app/src/suggest-input.ts` | 510 | Exception | One ProseMirror plugin. `SuggestInput` and the handlers it installs all mutate the same `suggestInputKey` state. |
+| `packages/workspaces-app/src/styles.css` | 6545 | Split | B2 took the board's half into `hub.css` (loaded BEFORE this file, which is where the block sat) and the sign-in page's into `signin.css`, which is what took this file from 12042. What is left is the review editor's own surfaces — file tree, meeting chrome, diff nav, threads pane — plus the chrome every page shares: design tokens, top bar, toast, connection banner, the first-arrival identity prompt. Splitting THAT means naming which blocks each page reaches, and the measurement is in the B2 PR body: about 2,459 lines are reached by the editor alone and by neither other page, which is the next cut. Doing it needs a shared base every page keeps loading, which is a design decision this PR did not take. |
+| `packages/workspaces-app/src/hub.css` | 5364 | Exception | The board's whole stylesheet, lifted out of `styles.css` in B2 in source order so no rule changed the cascade it lands in. It is one page, and the 28 `##### HUB · …` sub-banners are the split: a rule goes under the banner naming the surface it paints (`grep -n '##### HUB' packages/workspaces-app/src/hub.css`). Cutting it into files per surface would trade a labelled region for an import graph between stylesheets, and the board loads all of it on every visit either way. |
+| `packages/workspaces-app/src/hub/hub-board-model.ts` | 1397 | Exception | One model, the board itself: what a row is (`HubTask`, `ownerKind`, `statusLabel`), which section it lands in (`taskVisible`, `boardSections`, `goalSection`), how much work a goal has left (`boardEffort`, `goalEffortLabel`) and where a drag drops it (`dropTarget`, `stepTarget`). Split out of `hub-model.ts` (B1). Cutting it further would separate a row's shape from the ordering rule that reads it, which is the pair `byBoardOrder` exists to keep in one place. |
+| `packages/workspaces-app/src/hub/hub-review-model.ts` | 1262 | Exception | One queue end to end: what a review item is, the ranking that puts everything waiting on a person into one list (`reviewQueue`, `decisionQueue`, `humanBlockerRows`), the walkthrough that walks it (`advanceWalk`, `walkHandoff`), and the wording each row and card wears (`reviewHeadline`, `askedMeta`). Split out of `hub-model.ts` (B1). The ranking and the wording are asserted against each other — a row's title is derived from the same ask the rank reads — so a further cut would need both halves imported back. |
+| `packages/workspaces-app/src/hub/hub-presence-model.ts` | 1019 | Exception | One strip of chrome fed by one clock: who is here (`presenceChips`, `leadSeatLabel`), what is running (`pluginDriftNotice`, `clientDriftNotice`, `uptimeSummary`), what has happened (`describeEvent`, `activityRows`) and where the hub is standing (`navFromPath`, `homeSinceLabel`). The remainder of `hub-model.ts` after B1's other two cuts. `timeAgo` dates a presence chip, a release and a trail row alike, so a further cut would put that one clock behind an import in three places. |
+| `packages/workspaces-app/src/hub/hub-actions.ts` | 640 | Exception | Every REST write the board performs, bound once to an explicit `HubActionDeps` instead of captured from `main()`'s closure, plus `HubState` — the projection those writes mutate — and the three primitives every verb ends in (`send`, `fetchJson`, `showToast`). Split out of `hub-app.ts` (B1). Splitting the verbs from the state they write, or from the toast that reports a refusal, would put the blast radius back behind an import. |
+| `packages/workspaces-app/src/hub/hub-app.ts` | 2538 | Exception | The hub's entry: it builds the shell, holds `main()`'s one `HubState`, and owns the renders and the address bar. B1 lifted the REST writes to `hub-actions.ts`, the review queue's controller to `hub-review-controller.ts` and the live path to `hub-live-wiring.ts`, each behind a named deps object. What is left is the render layer and the boot sequence, which share `state` and every `render*` closure by construction — a further cut would pass the whole closure as an argument and call it a seam. |
+| `packages/workspaces-app/src/hub/hub-detail-render.ts` | 1145 | Exception | One panel: who has the task (`assigneePicker`), what it says (`detailFields`, `bodySlot`), what it cost (`effortFields`, `effortComputationLines`), what it points at (`renderTaskLinks`, `renderRelatedLinks`) and what happened to it (`activityRow`, `renderTransitionRow`). Split out of `hub-render.ts` (B1). Larger than the plan's ~900 estimate because the doc-title hydration helpers and `assigneePicker` came with it — both are used only by this panel, and leaving them behind would have pointed `hub-render.ts` back at this file. |
+| `packages/workspaces-app/src/hub/hub-render.ts` | 770 | Exception | The hub's shell chrome after B1: the topbar, the lead-agent strip, the archived list, the goal detail panel, the quick actions, the review banner, the Home brief and the activity view. Eight small regions that share the shell's own idioms and nothing else; the three regions with a vocabulary of their own are now `hub-detail-render.ts`, `hub-discussion-render.ts` and `hub-review-render.ts`. |
+| `packages/workspaces-app/src/meeting-strip.ts` | 1476 | Split | B4 took the DOM-free wire layer to `meeting-protocol.ts` (200) and both popovers to `meeting-chooser.ts` (433). What is left is the socket state machine and the surface it drives: the Record button, the strip's own render, the speaker menu, and the `handle` switch that turns a server frame into a state. Those share `state`, `socket`, `turns` and `view` by construction — the next candidate seam, the transcript feed's render, reads three of the four — so what remains is one subject rather than a set of jobs. `buildChooser` and `buildAdvancedPanel` were closures over eight form fields, not top-level functions; they left behind an explicit `ChooserState` and a `MeetingChooserDeps`, which is the B1 `HubActionDeps` shape. **M** |
+| `packages/workspaces-app/src/app.ts` | 1505 | Split | B3 took the format bar and its table popover to `doc/editor-toolbar.ts`, the view/edit and Suggesting interlock to `doc/doc-modes.ts`, and the whole live-meeting surface to `doc/doc-meeting-mount.ts`. What is left is `mountMarkdown()` itself: the boot order for one document — connect, editor, chrome, floats, gates — which is a sequence rather than a set of jobs, and every remaining candidate seam is a run of that sequence rather than a separable subject. **M** |
+| `packages/workspaces-app/src/review-chrome.ts` | 1080 | Split | B3 took the two writing surfaces to `doc/review-composer.ts`, the panel resize handle and thread-range clicks to `doc/chrome-panels.ts`, and the shared DOM helpers to `doc/chrome-dom.ts`. What remains is `mountReviewChrome`: the threads panel and its redraw, the drawer and set pane, the mobile review surface, the doc label and the seen tracker — all reading one `opts` and one ydoc. The next seam is the thread projection (`collectThreads`, `resolveThreadRange`, `redrawThreads`), roughly 300 lines, which needs the pending-reply state that the drawer also reads. **M** |
+| `packages/workspaces-app/src/doc/thread-card.ts` | 812 | Exception | One comment thread as a card, out of `threads.ts` in B3 — and the same card the redline margin renders as a balloon, which is why it is shared rather than duplicated. It looks like two files, the card and the eight DOM helpers under it, and is deliberately one: every helper has this card as its only caller, and the four faces a card can show (summary, detail, collapsed, answered) are built together because the fold cross-fades between faces that must already exist in the same box. |
+| `packages/workspaces-app/src/redline/markup-margin.ts` | 718 | Exception | B3 took the card builders to `balloon-cards.ts` and the phone sheets to `margin-sheets.ts`. What is left is the margin's own geometry and the render list it measures: `positionBalloons` reads four elements' rects plus the private rendered-balloon union, and `relayout` is the orchestration point that calls the deletion grouper, the thread filter and the renderer in order. The plan had both joining `balloon-layout.ts`; they did not, because that file holds the pure stacking algorithm and taking the glue there would point the dependency backwards — see split-plan.md B3. |
+| `packages/workspaces-app/src/voice-capture.ts` | 705 | Exception | One gesture controller: `createVoiceCapture` and the hold rules (`SPACE_HOLD_ARM_MS`, `spaceHoldTargetsPage`) plus the messages that hold produces. All of it is the hold-to-talk surface. |
+| `packages/workspaces-app/src/diff-nav.ts` | 598 | Exception | One sidebar renderer with two views sharing the toggle, `viewKey` and `diffNavSignature`. The all-files half is ~110 lines and cannot be understood apart from the toggle that selects it. |
+| `packages/workspaces-app/src/meeting-advanced.ts` | 581 | Exception | One panel. The `AdvancedControl` descriptors exist only to drive `buildAdvancedSection`, and the canonical specs already live in core's `meeting-tuning.ts`. |
+| `packages/workspaces-app/src/code/code-editor.ts` | 550 | Exception | One CodeMirror surface: `createCodeEditor` returning `CodeSurface`, with the gutter and decoration internals that only that editor instantiates. |
+| `packages/workspaces-app/src/suggest-input.ts` | 510 | Exception | One ProseMirror plugin. `SuggestInput` and the handlers it installs all mutate the same `suggestInputKey` state. |
 
-Every markdown-app seam above moves symbols within one entry's import graph, so
+Every workspaces-app seam above moves symbols within one entry's import graph, so
 the shipped bundle is unchanged.
 
 ## packages/core
@@ -147,18 +147,18 @@ real HTTP route — sharing the same fixture builders. That is one harness.
 
 | File | Lines | Verdict | Reason / seam |
 |---|---|---|---|
-| `packages/markdown-app/test/hub-render.test.ts` | 3882 | Exception | Twelve describes over one harness: the module-scope `task()` factory and the `root` beforeEach, asserting rendered DOM. The six that `readFileSync` `styles.css` and hub source and assert on text moved to `hub-source-contract.test.ts` in B1 — they were the second harness this row named. |
+| `packages/workspaces-app/test/hub-render.test.ts` | 3882 | Exception | Twelve describes over one harness: the module-scope `task()` factory and the `root` beforeEach, asserting rendered DOM. The six that `readFileSync` `styles.css` and hub source and assert on text moved to `hub-source-contract.test.ts` in B1 — they were the second harness this row named. |
 
 The remaining 93 are exceptions. Each row names the one harness its cases share.
 
 | File | Lines | Reason |
 |---|---|---|
-| `packages/markdown-app/test/hub-model.test.ts` | 2331 | All describes are pure model functions fed by the one module-scope `task()` factory. |
-| `packages/markdown-app/test/meeting-strip.test.ts` | 2102 | The four parser describes are the strip's own helpers; the other 18 go through `mount()` with `FakeSocket` / `FakeBot`. |
+| `packages/workspaces-app/test/hub-model.test.ts` | 2331 | All describes are pure model functions fed by the one module-scope `task()` factory. |
+| `packages/workspaces-app/test/meeting-strip.test.ts` | 2102 | The four parser describes are the strip's own helpers; the other 18 go through `mount()` with `FakeSocket` / `FakeBot`. |
 | `packages/server/test/meeting-notes.test.ts` | 2045 | Every describe drives the notes pipeline off the module-scope `ManualScheduler`. |
-| `packages/markdown-app/test/markup-margin.test.ts` | 1670 | All 17 describes mount through `mountSurface` / `mountMargin` and share the `afterEach` teardown list. |
+| `packages/workspaces-app/test/markup-margin.test.ts` | 1670 | All 17 describes mount through `mountSurface` / `mountMargin` and share the `afterEach` teardown list. |
 | `packages/core/test/prose.test.ts` | 1645 | Every describe seeds a `Y.XmlFragment` via `seedDoc()` and its two anchor helpers. |
-| `packages/markdown-app/test/review-walkthrough.test.ts` | 1544 | All describes build fixtures with `task()` / `threadItem()` and render through `renderHomeReview` against the shared `root`. |
+| `packages/workspaces-app/test/review-walkthrough.test.ts` | 1544 | All describes build fixtures with `task()` / `threadItem()` and render through `renderHomeReview` against the shared `root`. |
 | `packages/server/test/review-item-gate.test.ts` | 1480 | A single top-level describe over one real server and the SSE `listenFrames` harness. |
 | `packages/core/src/review-item.test.ts` | 1399 | All 22 describes exercise the review-item payload vocabulary off the `decision()` / `review()` builders. |
 | `packages/server/test/review-queue.test.ts` | 1377 | Every describe feeds `comment()` / `thread()` fixtures into the queue functions. |
@@ -172,7 +172,7 @@ The remaining 93 are exceptions. Each row names the one harness its cases share.
 | `packages/server/test/voice.test.ts` | 960 | A single describe over one real server with an injected `complete`. |
 | `packages/server/test/workspace-lead.test.ts` | 947 | Every describe constructs a `TaskStore`, or a server over one, for the same lead-seat contract. |
 | `packages/server/test/review-item-routes.test.ts` | 943 | The module-scope `handle` / `base` server plus `mkdoc()` / `seedThread()` feed all nine describes. |
-| `packages/markdown-app/test/voice-capture.test.ts` | 939 | The four pure describes are helpers of the same capture module; the rest share `FakeRecognition` and `holdSpace()`. |
+| `packages/workspaces-app/test/voice-capture.test.ts` | 939 | The four pure describes are helpers of the same capture module; the rest share `FakeRecognition` and `holdSpace()`. |
 | `packages/server/test/ready-nudge-routes.test.ts` | 932 | A single describe over one real board, stream, and the `listenFrames` / `waitForFrames` harness. |
 | `packages/server/test/ready-nudge.test.ts` | 917 | All describes run the nudger through the module-scope `board()` and `harness()` fake world. |
 | `packages/server/test/task-tool-routes.test.ts` | 899 | One describe, one `beforeAll` server, four routes. |
@@ -183,11 +183,11 @@ The remaining 93 are exceptions. Each row names the one harness its cases share.
 | `packages/server/test/attachments.test.ts` | 831 | Pure, store and route describes all exercise one `AgentAttachment` record shape with shared `readAudit` / `listen` helpers. |
 | `packages/server/test/deploy-runner.test.ts` | 790 | Every describe builds deps via `fakeGit()` / `deps()` / `fakeWait()`. |
 | `packages/server/test/meeting-notes-merge.test.ts` | 789 | All describes build a doc with `docFrom()` and edit it with the shared `typeBullet` / `editBullet` helpers. |
-| `packages/markdown-app/test/thread-card.test.ts` | 784 | Nine describes, all through `mountPanel()` and `makeThread()`. |
+| `packages/workspaces-app/test/thread-card.test.ts` | 784 | Nine describes, all through `mountPanel()` and `makeThread()`. |
 | `packages/server/test/hub-share.test.ts` | 778 | A single describe over one server with `connectDoc` / `readSseUntil` helpers. |
 | `packages/server/test/summarize.test.ts` | 776 | Every describe injects `fakeFetch()` into a `ThreadSummarizer` over `thread()` fixtures. |
 | `packages/mcp/test/review-item-tools.test.ts` | 774 | All describes speak JSON-RPC to the one spawned bundle child via `call()` / `last()`. |
-| `packages/markdown-app/test/thread-morph.test.ts` | 752 | Every describe mounts via `mountCard()` and inspects `recordAnimations()`. |
+| `packages/workspaces-app/test/thread-morph.test.ts` | 752 | Every describe mounts via `mountCard()` and inspects `recordAnimations()`. |
 | `packages/server/test/bind-diff.test.ts` | 744 | Both describes build the same `makeFixtureRepo()` git fixture; `makeRooms` extends it rather than replacing it. |
 | `packages/server/test/goal-ids.test.ts` | 739 | Every describe seeds a `TaskStore`, or a server over one, for the same goal-id contract. |
 | `packages/server/test/meeting-socket.test.ts` | 717 | Seven describes, each a real server plus the shared `AudioClient` class, varying only engine config. |
@@ -200,13 +200,13 @@ The remaining 93 are exceptions. Each row names the one harness its cases share.
 | `packages/server/test/auth-write-gate.test.ts` | 656 | Every case, HTTP and y-sync socket alike, boots through the one `boot(requireSignInToWrite)` harness. |
 | `packages/server/test/voice-hardening.test.ts` | 646 | The prompt, resolver and handle describes share the file's `PERSON` / `AGENT` / `INJECTION` fixtures with the one end-to-end describe. |
 | `packages/server/test/decision-routes.test.ts` | 636 | One describe with one `beforeAll` server; every assertion reads an effect back over the same REST base. |
-| `packages/markdown-app/test/hub-detail-css.test.ts` | 632 | Every describe parses the same `CSS` string through the shared `rule()` / `media()` helpers. |
+| `packages/workspaces-app/test/hub-detail-css.test.ts` | 632 | Every describe parses the same `CSS` string through the shared `rule()` / `media()` helpers. |
 | `packages/server/test/task-import.test.ts` | 629 | The parser describes and the route describe both exercise `parseTrackerMarkdown` on the same synthetic tracker fixture. |
 | `packages/server/test/goal-rename.test.ts` | 627 | Store and route describes share the `bands()` / `boardFor()` goal-id fixture builders. |
 | `packages/server/test/sentry-server.test.ts` | 617 | All describes drive `src/sentry.ts` against the module-scope `startCaptureServer()` harness. |
 | `packages/server/test/agent-watches.test.ts` | 615 | Store and route describes share the `AgentWatches` data-dir fixture. |
 | `packages/server/test/comment-durability.test.ts` | 610 | Both describes use the shared `listenFrames()` / `settle()` SSE harness against the agent comment queue. |
-| `packages/markdown-app/test/plan-gate.test.ts` | 605 | One describe on `mountPlanGate` over the shared `root` / `stubFetch` / `stubTimers` seam. |
+| `packages/workspaces-app/test/plan-gate.test.ts` | 605 | One describe on `mountPlanGate` over the shared `root` / `stubFetch` / `stubTimers` seam. |
 | `packages/server/test/parallelism-cap.test.ts` | 601 | Both describes assert the same workspace cap through the shared frame harness. |
 | `packages/server/test/owner-kind.test.ts` | 599 | The pure `resolveOwnerKind` tables and the HTTP describes are two declared layers of one decision over shared fixtures. |
 | `packages/core/test/thread-summary.test.ts` | 599 | Every describe builds its subject with the module-scope `makeThread()` ydoc builder. |
@@ -222,17 +222,17 @@ The remaining 93 are exceptions. Each row names the one harness its cases share.
 | `packages/server/test/recall-meeting.test.ts` | 559 | One describe over the `FakeRecall` / `ManualScheduler` / `transcriptFrame()` vendor harness. |
 | `packages/mcp/test/nudge-line.test.ts` | 559 | All describes call the pure `*Line()` renderers with inline row literals; no setup exists to be disjoint. |
 | `packages/widget/test/widget-auth.test.ts` | 550 | Every describe runs against the module-scope `stubGlobals()` / `importWidget()` widget harness. |
-| `packages/markdown-app/test/thread-modal.test.ts` | 549 | All describes mount through the shared `mount()` harness and its `comment()` / `thread()` builders. |
+| `packages/workspaces-app/test/thread-modal.test.ts` | 549 | All describes mount through the shared `mount()` harness and its `comment()` / `thread()` builders. |
 | `packages/server/test/proxied-trusted-host.test.ts` | 547 | All describes depend on the module-scope `jwks` / `signJwt` `beforeAll` and the shared `get()` helper. |
 | `packages/server/test/task-review-items.test.ts` | 545 | A single describe over one `TaskStore` fixture and the shared `payload()` builder. |
 | `packages/server/test/grouping-share-removed.test.ts` | 545 | One describe using the shared `makeMockCfApi()` Cloudflare stub and one server. |
 | `packages/server/test/meeting-notes-correction.test.ts` | 543 | Predicate describes and the real notes-doc describes all build their subject with `docFrom()` / `NOTES()`. |
 | `packages/server/test/recall-callback-gate-http.test.ts` | 542 | Every describe uses the module-scope `spinUp()` / `callback()` / `signBody()` two-hostname harness. |
 | `packages/server/test/stall-gate.test.ts` | 538 | Every describe calls the module-scope `evaluate()` over rows from `task()`; no server anywhere. |
-| `packages/markdown-app/test/goal-actions.test.ts` | 537 | Pure model describes and DOM-panel describes share `task()` / `handlers()` / `sectionOf()` for one feature. |
-| `packages/markdown-app/test/activity-model.test.ts` | 536 | All describes are pure Home-activity functions over the shared `task()` / `note()` / `groups()` builders. |
+| `packages/workspaces-app/test/goal-actions.test.ts` | 537 | Pure model describes and DOM-panel describes share `task()` / `handlers()` / `sectionOf()` for one feature. |
+| `packages/workspaces-app/test/activity-model.test.ts` | 536 | All describes are pure Home-activity functions over the shared `task()` / `note()` / `groups()` builders. |
 | `packages/server/test/share-grouping-scope.test.ts` | 533 | One describe over the shared `connectDoc()` / `git()` fixture and a single `beforeAll` server. |
-| `packages/markdown-app/test/thread-modal-chrome.test.ts` | 529 | Every describe mounts the review chrome via `harness()` on the same `mountChromeDom()` / `fakeSurface()` base. |
+| `packages/workspaces-app/test/thread-modal-chrome.test.ts` | 529 | Every describe mounts the review chrome via `harness()` on the same `mountChromeDom()` / `fakeSurface()` base. |
 | `packages/server/test/voice-actions.test.ts` | 525 | One describe, one `beforeAll` server; all cases route spoken verbs through it. |
 | `packages/server/test/projection.test.ts` | 525 | One describe over the shared `connectDoc()` / `listen()` / `auditLines()` Yjs-client harness. |
 | `packages/server/test/artifact-check.test.ts` | 522 | Classifier, store and server-wiring describes are the layers of one check and share `prRef` / `fetchStub`. |
@@ -241,9 +241,9 @@ The remaining 93 are exceptions. Each row names the one harness its cases share.
 | `packages/server/test/effort-estimate-gate.test.ts` | 519 | A single describe with one stub-estimator server fixture. |
 | `packages/server/test/cross-origin-routes.test.ts` | 517 | Both describes stand up a real server and probe it from the module-scope `EVIL` origin for the `CANARY` body; the trusted host and the public share host are two modes of one guard, not two harnesses. |
 | `packages/server/test/sync-clobber.test.ts` | 517 | Both describes exercise the same write-back clobber path over the shared `makeRooms()` / `writeExternal()` fixtures, one directly and one over HTTP. |
-| `packages/markdown-app/test/mobile-review.test.ts` | 512 | Every describe uses the shared `harness()` mount plus `comment()` / `thread()` / `orphanThread()`. |
+| `packages/workspaces-app/test/mobile-review.test.ts` | 512 | Every describe uses the shared `harness()` mount plus `comment()` / `thread()` / `orphanThread()`. |
 | `packages/server/test/home-routes.test.ts` | 506 | All four describes construct their server via the one `makeHarness(summarizer?)` factory. |
-| `packages/markdown-app/test/write-gate.test.ts` | 503 | Every describe uses the module-scope `beforeEach` DOM reset with `docShell()` / `hubShell()`. |
+| `packages/workspaces-app/test/write-gate.test.ts` | 503 | Every describe uses the module-scope `beforeEach` DOM reset with `docShell()` / `hubShell()`. |
 | `packages/server/test/dispatch-routes.test.ts` | 502 | One describe over the shared `listenFrames` / `waitForFrames` fake-watcher server harness. |
 
 ---
@@ -260,14 +260,14 @@ months, so splitting it buys almost nothing.
 | 1 | `packages/server/src/server.ts` | 7131 | 233 | L |
 | 2 | `styles.css` + `hub.css` + `signin.css` (split in B2) | 12042 | 158 | M |
 | 3 | `packages/mcp/src/mcp.ts` | 5563 | 156 | M |
-| 4 | `packages/markdown-app/src/hub/hub-app.ts` | 3594 | 102 | L |
-| 5 | `packages/markdown-app/src/hub/hub-render.ts` | 2707 | 95 | M |
+| 4 | `packages/workspaces-app/src/hub/hub-app.ts` | 3594 | 102 | L |
+| 5 | `packages/workspaces-app/src/hub/hub-render.ts` | 2707 | 95 | M |
 | 6 | `hub-board-model.ts` + `hub-review-model.ts` + `hub-presence-model.ts` (was `hub-model.ts`, split in B1) | 3645 | 89 | M |
 | 7 | `packages/server/src/tasks.ts` | 4714 | 87 | M |
 | 8 | `packages/server/src/rooms.ts` | 4801 | 71 | M |
-| 9 | `packages/markdown-app/src/app.ts` | 1505 | 55 | M |
+| 9 | `packages/workspaces-app/src/app.ts` | 1505 | 55 | M |
 | 10 | `packages/server/src/task-projection.ts` | 743 | 43 | done |
-| 11 | `packages/markdown-app/src/review-chrome.ts` | 1080 | 24 | M |
+| 11 | `packages/workspaces-app/src/review-chrome.ts` | 1080 | 24 | M |
 | 12 | `thread-card.ts` + `threads.ts` (was `threads.ts`, split in B3) | 1230 | 20 | done |
 | 13 | `meeting-protocol.ts` + `meeting-chooser.ts` + `meeting-strip.ts` (was `meeting-strip.ts`, split in B4) | 1953 | 18 | done |
 | 14 | `review-item-check.ts` + `review-item-wire.ts` + `review-item.ts` (split in B5) | 1769 | 18 | done |
@@ -278,7 +278,7 @@ months, so splitting it buys almost nothing.
 | 19 | `voice.ts` + `voice-prompt.ts` + `voice-action.ts` (split in A6) | 2109 | 11 | done |
 | 20 | `packages/server/src/meeting-notes-doc.ts` + `notes-section-write.ts` (split in A5) | 986 | 11 | done |
 | 21 | `activity.ts` + `actor-identity.ts` (split in A7) | 582 | 11 | done |
-| 22 | `packages/markdown-app/src/redline/markup-margin.ts` | 718 | 9 | done |
+| 22 | `packages/workspaces-app/src/redline/markup-margin.ts` | 718 | 9 | done |
 | 23 | `meeting-task-capture.ts` + `meeting-capture-prompt.ts` + `meeting-capture-guards.ts` (split in A5) | 1348 | 6 | done |
 | 24 | `meeting-notes-merge.ts` + `notes-ownership.ts` + `notes-section.ts` (split in A5) | 1067 | 5 | done |
 | 25 | `deploy.ts` + `deploy-log.ts` (split in A7) | 1058 | 4 | done |
@@ -286,7 +286,7 @@ months, so splitting it buys almost nothing.
 | 27 | `voice-resolve.ts` + `voice-status.ts` (split in A6) | 762 | 2 | done |
 | 28 | `agent-notes.ts` + `note-redact.ts` (split in B8) | 671 | 2 | done |
 | 29 | `recall-calendar.ts` + `google-oauth.ts` (split in A7) | 721 | 1 | done |
-| 30 | `packages/markdown-app/test/hub-render.test.ts` | 4078 | — | S |
+| 30 | `packages/workspaces-app/test/hub-render.test.ts` | 4078 | — | S |
 | 31 | `voice-smooth.test.ts` + `voice-smooth-model.test.ts` (split in A8) | 729 | — | done |
 
 The top eight are where the pain is: they carry 991 of the 1350 commits in this

@@ -24,7 +24,7 @@ import type { User } from '@feedback/core';
 import {
   type ActivityEvent,
   describeEvent,
-} from '../../markdown-app/src/hub/hub-presence-model.ts';
+} from '../../workspaces-app/src/hub/hub-presence-model.ts';
 import { type ServerHandle, createServer } from '../src/server.ts';
 import { type Task, eventsLogPath } from '../src/tasks.ts';
 

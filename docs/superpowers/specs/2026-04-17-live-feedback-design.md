@@ -88,7 +88,7 @@ flowchart TD
 ```mermaid
 graph TB
     subgraph "Browser — Surface 1: Markdown"
-        MA[markdown-app<br/>Tiptap + y-prosemirror + tiptap-markdown]
+        MA[workspaces-app<br/>Tiptap + y-prosemirror + tiptap-markdown]
         MA --> CORE
     end
 
@@ -115,7 +115,7 @@ graph TB
 |---|---|---|
 | `@feedback/core` | Yjs schema, thread/anchor types, anchor resolvers, user identity | yjs |
 | `@feedback/server` | Bun HTTP+WS server, MCP, SSE, webhook dispatch, doc persistence | core, @modelcontextprotocol/sdk, y-websocket/bin |
-| `@feedback/markdown-app` | Surface 1 browser app (WYSIWYG) | core, @tiptap/core, @tiptap/starter-kit, @tiptap/extension-collaboration, @tiptap/y-tiptap, tiptap-markdown |
+| `@feedback/workspaces-app` | Surface 1 browser app (WYSIWYG) | core, @tiptap/core, @tiptap/starter-kit, @tiptap/extension-collaboration, @tiptap/y-tiptap, tiptap-markdown |
 | `@feedback/widget` | Surfaces 2 & 3 injectable widget | core (minus server-only deps) |
 | `@feedback/demo-mockup` | Static HTML mockup using the widget | widget |
 | `@feedback/demo-dev-server` | Vite dev server using the widget | widget |
@@ -125,7 +125,7 @@ graph TB
 **Server REST + WS:**
 ```
 GET  /                                 → landing page (list open docs)
-GET  /review/:docId?as=bryan|agent     → markdown-app for that doc
+GET  /review/:docId?as=bryan|agent     → workspaces-app for that doc
 GET  /widget.js                        → widget bundle (ESM)
 GET  /widget.iife.js                   → widget bundle (IIFE)
 WS   /y/:docId                         → Yjs sync
@@ -258,7 +258,7 @@ One autonomous build session. Chunked as:
 
 - **Tiptap / y-prosemirror plugin-key mismatch** — Tiptap's Collaboration extension registers its ySyncPlugin under `@tiptap/y-tiptap`'s PluginKey, not `y-prosemirror`'s. Imports MUST come from `@tiptap/y-tiptap` or `getState()` returns undefined and selections never resolve. Pin `@tiptap/y-tiptap` alongside `@tiptap/extension-collaboration`.
 - **Widget bundle size** — Yjs is ~40KB gzipped alone. We may need to tree-shake or code-split; if we blow the budget, document it and propose a fix rather than silently shipping over.
-- **Shadow DOM + mermaid** — Mermaid uses global state and SVG id collisions. Only used in the markdown-app (no Shadow DOM there), so should be fine.
+- **Shadow DOM + mermaid** — Mermaid uses global state and SVG id collisions. Only used in the workspaces-app (no Shadow DOM there), so should be fine.
 - **Bun + MCP SDK compatibility** — Anthropic's MCP SDK is Node-first. If Bun chokes, fall back to a Node sidecar for MCP only.
 
 ## Testing & deployment

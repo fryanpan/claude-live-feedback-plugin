@@ -7,7 +7,7 @@ import * as Y from 'yjs';
 /**
  * Browser-side Yjs websocket client for the feedback server's minimal
  * protocol (varuint kind prefix: 0 = sync, 1 = awareness). THE single
- * implementation — consumed by both the markdown-app SPA and the injectable
+ * implementation — consumed by both the workspaces-app SPA and the injectable
  * widget, which previously carried a drifting copy each. Deliberately
  * DOM-free beyond WebSocket so it stays safe for the widget bundle.
  */

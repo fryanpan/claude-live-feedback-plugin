@@ -34,7 +34,7 @@ afterEach(async () => {
   while (trash.length > 0) rmSync(trash.pop() as string, { recursive: true, force: true });
 });
 
-/** A markdown-app dist with the files the root aliases point at. */
+/** A workspaces-app dist with the files the root aliases point at. */
 function fakeClient(): string {
   const dir = tmp('lf-push-app-');
   writeFileSync(join(dir, 'app.js'), '//app\n');
@@ -226,7 +226,7 @@ describe('web app shells', () => {
     // so a served-HTML assertion here would either need a fixture doc or
     // would quietly be checking the "doc not found" page instead.
     const html = await Bun.file(
-      join(import.meta.dir, '..', '..', 'markdown-app', 'index.html'),
+      join(import.meta.dir, '..', '..', 'workspaces-app', 'index.html'),
     ).text();
     expect(html).toContain('rel="manifest"');
     expect(html).toContain('apple-touch-icon');

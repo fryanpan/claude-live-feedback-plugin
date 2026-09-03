@@ -16,7 +16,7 @@
  *
  * Modes:
  *   default     — DEV: server runs under `bun --watch` (hot-reload on any
- *                 imported change) + a markdown-app bundler in --watch mode.
+ *                 imported change) + a workspaces-app bundler in --watch mode.
  *   --no-watch  — PROD: rebuilds the browser bundles once, publishes them as
  *                 an immutable client release outside this checkout, and runs
  *                 the server as a plain long-lived process against it. No
@@ -149,7 +149,7 @@ const port = await resolvePort();
 //      loading a pre-feature app.js. So: rebuild both bundles here, once,
 //      before the server starts — restart == deploy.
 //
-//   2. The server then served `packages/markdown-app/dist` FROM THIS CHECKOUT,
+//   2. The server then served `packages/workspaces-app/dist` FROM THIS CHECKOUT,
 //      per request. That made building anywhere in this checkout a deploy to
 //      the whole fleet, and made the served client track whichever commit the
 //      working tree happened to be parked on. So: copy the built bundles into
@@ -162,7 +162,7 @@ const port = await resolvePort();
 const clientArgs: string[] = [];
 if (noWatch) {
   const failures: string[] = [];
-  for (const pkg of ['widget', 'markdown-app']) {
+  for (const pkg of ['widget', 'workspaces-app']) {
     const r = spawnSync('bun', ['run', join(repoRoot, 'packages', pkg, 'scripts', 'build.ts')], {
       stdio: 'inherit',
     });
@@ -174,7 +174,7 @@ if (noWatch) {
 
   const root = clientReleaseRoot();
   // A failed build must not be published even if dist LOOKS complete — the
-  // markdown-app build writes app.js before its second entrypoint, so a late
+  // workspaces-app build writes app.js before its second entrypoint, so a late
   // failure leaves a dist that passes a file-existence check and is wrong.
   // `buildError` is how prepareClientRelease is told that, so BOTH kinds of
   // failure land in the same ledger and the board sees either one.
@@ -182,7 +182,7 @@ if (noWatch) {
     root,
     sources: {
       widget: join(repoRoot, 'packages', 'widget', 'dist'),
-      markdownApp: join(repoRoot, 'packages', 'markdown-app', 'dist'),
+      markdownApp: join(repoRoot, 'packages', 'workspaces-app', 'dist'),
     },
     // What the served client was built FROM. Freshness of the artifact is not
     // freshness of the source: a checkout parked on an old commit builds
@@ -212,7 +212,7 @@ if (noWatch) {
   }
 
   if (prepared.widget) clientArgs.push('--widget-dist', prepared.widget);
-  if (prepared.markdownApp) clientArgs.push('--markdown-app-dist', prepared.markdownApp);
+  if (prepared.markdownApp) clientArgs.push('--workspaces-app-dist', prepared.markdownApp);
   // Only the process that publishes may report on the published client. Dev
   // and staging share this machine's default release root while serving their
   // own dist, so arming them would put PROD's deploy state on a board that is
@@ -223,7 +223,7 @@ if (noWatch) {
 // DEV supervises two processes so code is never stale:
 //   1. The HTTP/WS server via `bun --watch` — restarts on any imported
 //      TypeScript change under packages/**.
-//   2. The markdown-app bundler in --watch mode — rebuilds dist on any
+//   2. The workspaces-app bundler in --watch mode — rebuilds dist on any
 //      src/**/*.{ts,css} or index.html change.
 // PROD (--no-watch) runs neither watcher: the server is a plain long-lived
 // process serving a client release published above, which nothing can change
@@ -288,7 +288,7 @@ const mdApp: ChildProcess | null = noWatch
   ? null
   : spawn(
       'bun',
-      ['run', join(repoRoot, 'packages', 'markdown-app', 'scripts', 'build.ts'), '--watch'],
+      ['run', join(repoRoot, 'packages', 'workspaces-app', 'scripts', 'build.ts'), '--watch'],
       { stdio: 'inherit', env: { ...process.env, NODE_ENV: 'dev' } },
     );
 const children = (): ChildProcess[] => (mdApp ? [server, mdApp] : [server]);
