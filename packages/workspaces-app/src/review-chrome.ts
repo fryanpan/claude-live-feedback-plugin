@@ -8,6 +8,17 @@ import {
   summaryPending,
 } from '@feedback/core';
 import type * as Y from 'yjs';
+import {
+  applyPlacement,
+  balloonMarginVisible,
+  cardPlacement,
+  effectiveSurface,
+  inlineCardsVisible,
+  onPlacementChange,
+  otherPlacement,
+  placementToggleLabel,
+  setCardPlacement,
+} from './card-placement.ts';
 import { type SeenTracker, createSeenTracker } from './comment-seen.ts';
 import { el, showToast } from './doc/chrome-dom.ts';
 import { wireResizeHandle } from './doc/chrome-panels.ts';
@@ -119,21 +130,6 @@ export interface ChromeOpts {
 }
 
 /**
- * The width at or below which comment cards sit inline in the document.
- *
- * The SAME boundary the balloon margin hides at (`markup-margin.ts`), and
- * deliberately so: one always-on comment surface at every width, never two
- * and never none. 901–1100px used to fall between them — the margin had
- * already collapsed and inline cards had not yet started — which left the
- * drawer as the only way to see a comment.
- */
-export const INLINE_CARDS_QUERY = '(max-width: 1100px)';
-
-export function inlineCardsVisible(): boolean {
-  return window.matchMedia(INLINE_CARDS_QUERY).matches;
-}
-
-/**
  * Should the threads drawer start open for this mount? Pure so the
  * drawer-default policy is unit-testable without a DOM.
  *  - mobile: never (it's an overlay there)
@@ -146,7 +142,7 @@ export function inlineCardsVisible(): boolean {
 export function initialDrawerOpen(opts: {
   isDesktop: boolean;
   marginVisible: boolean;
-  /** Inline cards cover this width — see `INLINE_CARDS_QUERY`. */
+  /** Inline cards are this device's chosen surface — see `card-placement.ts`. */
   inlineVisible: boolean;
   stored: string | null;
 }): boolean {
@@ -208,6 +204,44 @@ export function wireSetPaneToggle(): void {
     } catch {
       // storage unavailable — the choice holds for this page only.
     }
+  });
+}
+
+/**
+ * Wire the topbar's comment-placement toggle: cards in the flow, or cards in
+ * the right margin.
+ *
+ * Beside the doc-list toggle and the comments toggle, because it is the same
+ * kind of thing — a stored per-device view preference, not a doc setting. Runs
+ * once per page for the same reason `wireSetPaneToggle` does: chrome remounts
+ * on every doc change, and a second listener would flip the placement twice
+ * per click.
+ *
+ * The glyph shows the placement IN FORCE and the labels name the destination,
+ * so a reader who has never touched it can still tell where their comments
+ * are. There is no `aria-pressed`: this is not an on/off, it is a choice
+ * between two surfaces, and "pressed = margin" would be an arbitrary reading
+ * of which one counts as on.
+ */
+export function wireCardPlacementToggle(): void {
+  const btn = document.getElementById('toggle-cards');
+  if (!btn || btn.dataset.wired === '1') return;
+  btn.dataset.wired = '1';
+  const paint = () => {
+    // The SURFACE, not the stored choice: on a phone a stored `balloon`
+    // resolves to the sheet, and the button has to say so.
+    const label = placementToggleLabel(effectiveSurface());
+    btn.textContent = label.glyph;
+    btn.title = label.title;
+    btn.setAttribute('aria-label', label.ariaLabel);
+  };
+  paint();
+  // Repaint on a width change too: with nothing stored the placement follows
+  // the width, so crossing the default boundary moves the cards and a button
+  // still showing the old glyph would be describing the other surface.
+  onPlacementChange((target, type, fn) => target.addEventListener(type, fn), paint);
+  btn.addEventListener('click', () => {
+    setCardPlacement(otherPlacement(cardPlacement()));
   });
 }
 
@@ -350,6 +384,7 @@ export function mountReviewChrome(opts: ChromeOpts): ReviewChrome {
     label: 'Resize comments panel',
   });
   wireSetPaneToggle();
+  wireCardPlacementToggle();
   wireResizeHandle({
     pane: document.getElementById('set-pane'),
     cssVar: '--set-w',
@@ -360,6 +395,10 @@ export function mountReviewChrome(opts: ChromeOpts): ReviewChrome {
     handleClass: 'set-resize',
     label: 'Resize review panel',
   });
+  // Publish the comment surface BEFORE anything measures or mounts: every
+  // rule that places a card keys off `body[data-cards]`, so a doc that paints
+  // before this runs paints with no surface at all.
+  applyPlacement();
   // Desktop layout shows the drawer inline. Default open — EXCEPT when a
   // balloon margin is visible, where the drawer duplicates the balloons.
   let storedPref: string | null = null;
@@ -368,8 +407,7 @@ export function mountReviewChrome(opts: ChromeOpts): ReviewChrome {
   } catch {
     // storage unavailable
   }
-  const marginVisible =
-    (opts.hasBalloonMargin ?? false) && window.matchMedia('(min-width: 1101px)').matches;
+  const marginVisible = (opts.hasBalloonMargin ?? false) && balloonMarginVisible();
   // Enforce (not just apply-when-open): the `threads-open` class lives on the
   // shell and survives navigation, so a drawer a previous doc opened via
   // revealThread would otherwise leak into a doc whose default is closed.
@@ -833,12 +871,13 @@ export function mountReviewChrome(opts: ChromeOpts): ReviewChrome {
   // Crossing the phone breakpoint changes which surface owns the comments —
   // inline cards must appear (or be handed back) at the same width the
   // stylesheet swaps the drawer for a sheet.
-  on(window.matchMedia(INLINE_CARDS_QUERY), 'change', () => {
+  onPlacementChange(on, () => {
+    applyPlacement();
     mobile.refresh();
-    // Crossing DOWN hands the conversation to the inline card and the sheet.
-    // Leaving the dialog up would stack a second dismissable layer over the
-    // same thread — and page zoom moves a reviewer across this line, so it is
-    // not a hypothetical transition.
+    // Moving TO the inline surface hands the conversation to the inline card
+    // and the sheet. Leaving the dialog up would stack a second dismissable
+    // layer over the same thread — and the toggle, a rotation and page zoom
+    // all move a reviewer across this line, so it is not a hypothetical.
     if (inlineCardsVisible()) threadModal.close();
   });
 
