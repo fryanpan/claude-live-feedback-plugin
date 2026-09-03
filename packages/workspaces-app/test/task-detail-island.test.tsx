@@ -174,8 +174,15 @@ describe('the task detail island’s mount contract', () => {
     // Positive control: the sheets are attached and this host really is the
     // backdrop the rule is scoped to. An unstyled element reads `''` for every
     // property, which would satisfy an "is not a box" assertion vacuously.
+    //
+    // So the panel is checked by VALUE. `.hub-detail-panel` sets no `display`
+    // at all, which made the old `not.toBe('')` here true of the UA default
+    // for a div with no stylesheet in the document — a control that could not
+    // fail. `overflow` and `padding` come only from the rule.
     expect(styleOf(host).position).toBe('fixed');
-    expect(styleOf(host.querySelector('.hub-detail-panel') as HTMLElement).display).not.toBe('');
+    const panel = styleOf(host.querySelector('.hub-detail-panel') as HTMLElement);
+    expect(panel.overflow).toBe('auto');
+    expect(panel.padding).toBe('0px 16px 24px');
   });
 
   it('closes on a backdrop tap, and stops listening once disposed', () => {

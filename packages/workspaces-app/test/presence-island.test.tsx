@@ -207,9 +207,15 @@ describe('presence island contract', () => {
     // Positive control: the sheets are attached and the host really is the
     // strip the rule is scoped to — an unstyled element reads `''` for every
     // property, which would make "not a box" true of nothing.
+    //
+    // The circle is checked by VALUE for the same reason. `not.toBe('')` was
+    // satisfied by any rule at all reaching the element, including one that
+    // had stopped making it a circle; `50%` and `28px` are what
+    // `.hub-presence-circle` sets.
     expect(styleOf(host).display).toBe('flex');
-    const circle = host.querySelector('.hub-presence-circle') as HTMLElement;
-    expect(styleOf(circle).borderRadius).not.toBe('');
+    const circle = styleOf(host.querySelector('.hub-presence-circle') as HTMLElement);
+    expect(circle.borderRadius).toBe('50%');
+    expect(circle.width).toBe('28px');
   });
 });
 

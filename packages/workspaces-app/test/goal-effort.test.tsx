@@ -738,15 +738,34 @@ describe('the strip’s columns and its two-row fold, measured on the rendered b
     expect(styleOf(phone.progress).gridArea).toBe('prog');
     expect(styleOf(phone.hands).gridArea).toBe('hands');
     // The bar takes the first row's slack rather than a fixed width — that,
-    // and not a smaller type size, is what buys the row.
-    expect(styleOf(phone.bar).width).toBe('auto');
+    // and not a smaller type size, is what buys the row. Both halves of the
+    // phone rule are read: `width: auto` alone would still be `auto` on a bar
+    // that had stopped growing, and it is `flex: 1 1 auto` that makes it take
+    // the slack.
+    const phoneBar = styleOf(phone.bar);
+    expect(phoneBar.width).toBe('auto');
+    expect(phoneBar.flex).toBe('1 1 auto');
 
     // Control, and the assertion a text read could never make: at the tablet
     // tier the fold is NOT in force. The strip is three columns with no
     // areas at all, and the bar is back to its fixed width.
+    //
+    // Read as the VALUE, not as "not auto". An element no rule reaches
+    // computes `''` for width, and `''` is not `'auto'` — so the negative
+    // passed against a renamed `.hub-goal-bar` and against a deleted rule
+    // alike, which is how a mutation run found it. 110px is the only number
+    // that says the base rule is the one in force.
     const wide = strip(IPAD);
     expect(wide.style.gridTemplateAreas).toBe('');
-    expect(styleOf(wide.bar).width).not.toBe('auto');
+    const wideBar = styleOf(wide.bar);
+    expect(wideBar.width).toBe('110px');
+    expect(wideBar.flex).toBe('0 0 auto');
+    // An 8px rule has no baseline to share with the values beside it, so it
+    // centres on the row instead. Same reason this is a value and not an
+    // absence: the rule that sets it is its own selector and nothing else
+    // asserted it.
+    expect(styleOf(wide.progress).display).toBe('flex'); // control for the pair below
+    expect(wideBar.alignSelf).toBe('center');
   });
 
   it('leaves the goal row a five-track grid — the strip takes no track', () => {
