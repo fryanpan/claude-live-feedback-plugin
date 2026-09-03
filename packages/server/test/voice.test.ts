@@ -19,6 +19,7 @@ import { join } from 'node:path';
 import { type ServerHandle, createServer } from '../src/server.ts';
 import { KEYCHAIN_SERVICE, KEYCHAIN_SERVICE_LEGACY } from '../src/summarize.ts';
 import { TaskStore, type TaskStoreEvent, voiceQueuePath } from '../src/tasks.ts';
+import { resolveVoiceAction } from '../src/voice-action.ts';
 import {
   PROMPT_DATA_END,
   RESOURCE_MAX,
@@ -26,7 +27,7 @@ import {
   type VoiceResource,
   parseVoiceReply,
 } from '../src/voice-prompt.ts';
-import { VoiceRouter, haikuVoiceComplete, resolveVoiceAction } from '../src/voice.ts';
+import { VoiceRouter, haikuVoiceComplete } from '../src/voice.ts';
 import { type AgentStream, openWorkspaceStream } from './agent-stream.ts';
 
 const PERSON = { id: 'known-jordan', name: 'Jordan', kind: 'known', color: '#2e7dd7' };
