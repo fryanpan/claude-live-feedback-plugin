@@ -235,10 +235,17 @@ describe('share mutation routes refuse browser callers', () => {
     });
   });
 
-  describe('the guard is keyed on METHOD, so reads are untouched', () => {
-    it('a page still reads GET /api/share', async () => {
+  describe('the guard is keyed on the ROUTE, so the read is refused too', () => {
+    it('a page cannot read GET /api/share, and the agent still can', async () => {
+      // This read used to be exempt, for a settings pane that does not exist:
+      // nothing in the browser bundles fetches this route. What the exemption
+      // handed a page on another local port was every link id — which is the
+      // whole secret of a share URL — and every member's email address.
       await post('/api/share/link', { allowDomains: ['@partner.example'], workspaceId: boardId });
-      const r = await page('/api/share', {});
+      await expectRefused(await page('/api/share', {}));
+      // Positive control on the same route and the same body: the agent, who
+      // is the only real caller, still reads it.
+      const r = await agent('/api/share');
       expect(r.status).toBe(200);
       expect(((await r.json()) as ShareList).shares).toHaveLength(1);
     });

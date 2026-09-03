@@ -15455,7 +15455,7 @@ var TOOL_LIST = {
     },
     {
       name: "share_workspace",
-      description: "Publish a board behind a Cloudflare Access gate so named external reviewers can read, comment and co-edit. A board is the unit of sharing — file a doc or review on one first; a review id is refused. Everything on that board travels with the share, so check what else is filed there, or give the review its own board. Read .claude/claude-workspaces.json's share.defaultAllowDomains; if there is none, ask which domains to allow — never default to anyone. Default TTL 72h.",
+      description: "Mint a share link for a board: anyone you send it to signs in once with their email and is a member of that board from then on; already signed in means straight in. A board is the unit of sharing — file a doc or review on one first; a review id is refused. Everything on that board travels with the share, so check what else is filed there, or give the review its own board. Returns a share.<domain>/s/<id> URL. Links are long-living: pass ttlSeconds only when you want one to lapse. allowDomains no longer restricts anything (one Access application covers the share hostname and the server records members itself) — it is accepted and ignored, and the reply says so. unshare stops new people redeeming without ejecting the ones already in; remove_share_member ends one person's access.",
       inputSchema: {
         type: "object",
         properties: {
@@ -15463,15 +15463,30 @@ var TOOL_LIST = {
             type: "string",
             description: "The BOARD to share — the id create_workspace returned, or the hubWorkspaceId bind_folder / create_diff_review reported. NOT a review/review id."
           },
+          ttlSeconds: {
+            type: "number",
+            description: "Optional lifetime in seconds. Omit for a link with no expiry, which is the default."
+          },
+          label: { type: "string", description: "Human label shown in list_shares." },
           allowDomains: {
             type: "array",
             items: { type: "string" },
-            description: "Email domains, e.g. ['@partner-org.example']"
-          },
-          ttlSeconds: { type: "number" },
-          name: { type: "string", description: "Optional slug override for the subdomain" }
+            description: "Accepted and IGNORED — kept so an older caller is not refused. Anyone who opens the link and signs in becomes a member."
+          }
         },
-        required: ["workspaceId", "allowDomains"]
+        required: ["workspaceId"]
+      }
+    },
+    {
+      name: "remove_share_member",
+      description: "End one person's access to a board they joined through a share link. Their next request is refused, and any live editing socket or event stream that membership had already opened is hung up — the reply says how many of each. Membership is per board, so their connections to any OTHER board they hold are untouched. This is the verb for ejecting somebody — unshare only stops new people redeeming the link, and never removes anyone already in. list_shares names every member and which link they came through.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          workspaceId: { type: "string", description: "The board to remove them from." },
+          email: { type: "string", description: "The address to remove, as list_shares shows it." }
+        },
+        required: ["workspaceId", "email"]
       }
     },
     {
@@ -15516,12 +15531,12 @@ var TOOL_LIST = {
     },
     {
       name: "list_shares",
-      description: "List currently active shares with their hostnames, allowed domains, and expiry.",
+      description: "Every share of every board: the links, who has redeemed each one and when, and whether each is live, revoked or expired — plus any shares still on the retired per-hostname mode, with their hostnames and allowed domains.",
       inputSchema: { type: "object", properties: {} }
     },
     {
       name: "unshare",
-      description: "Revoke a share by id. Deletes the Cloudflare Access app + policy and removes the registry entry. Use this for early teardown — shares otherwise expire on their own at the configured TTL.",
+      description: "Revoke a share by id. For a share link this stops anyone NEW redeeming it and leaves the people who already joined as members — use remove_share_member to eject somebody. For a share on the retired per-hostname mode it deletes the Cloudflare Access app and policy and removes the entry. Use it for early teardown; a link with a TTL otherwise lapses on its own, and one without never does.",
       inputSchema: {
         type: "object",
         properties: { shareId: { type: "string" } },
@@ -15530,7 +15545,7 @@ var TOOL_LIST = {
     },
     {
       name: "set_sharing_enabled",
-      description: "Master switch for all external access. Off makes every share and link answer 403 and hangs up open connections — one call instead of revoking shares individually. Existing shares are preserved and resume when it is back on; the local and tailnet surface is unaffected. Call with no argument to read the current state.",
+      description: "Master switch for all external access. Off makes every share and link answer 403 — one call instead of revoking shares individually. It also hangs up open connections belonging to per-share visitors and to share-link members; a COLLABORATION-hostname visitor carries neither a share nor a membership, so their open socket survives until it drops. Existing shares are preserved and resume when it is back on; the local and tailnet surface is unaffected. Call with no argument to read the current state.",
       inputSchema: {
         type: "object",
         properties: {
@@ -16843,18 +16858,15 @@ async function handleDocsTool(name, a, ctx) {
       });
     }
     case "share_workspace": {
-      const {
-        workspaceId,
-        allowDomains,
-        ttlSeconds,
-        name: slug
-      } = a;
       const res = await http("POST", "/api/share/workspace", {
-        workspaceId,
-        allowDomains,
-        ttlSeconds,
-        name: slug
+        ...a,
+        createdBy: AUTHOR.name
       });
+      return ok2(res);
+    }
+    case "remove_share_member": {
+      const { workspaceId, email: email2 } = a;
+      const res = await http("POST", "/api/share/member/remove", { workspaceId, email: email2 });
       return ok2(res);
     }
     case "share_link": {
@@ -18126,7 +18138,7 @@ var STATUS_TEXT_MAX = 4000;
 function suggestionAuthor() {
   return { id: AUTHOR.id, name: AUTHOR.name, color: AUTHOR.color };
 }
-var PLUGIN_VERSION = "0.1.154";
+var PLUGIN_VERSION = "0.1.155";
 var PROCESS_ID = randomUUID();
 var server = new Server({
   name: "claude-workspaces",

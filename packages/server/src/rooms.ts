@@ -135,6 +135,17 @@ export type WsCtx = {
    */
   shareId?: string;
   /**
+   * The MEMBERSHIP that authorized this socket, when it came from a share-link
+   * visitor: `shareMemberKey(workspaceId, email)`.
+   *
+   * The same problem `shareId` solves, for the door that has no share behind
+   * it. A share-link visitor is admitted by being a member, so ejecting them —
+   * or shutting external access off entirely — has to be able to find the
+   * connections that membership opened. Absent on every other socket, so the
+   * sweeps below can never reach an owner's.
+   */
+  shareMember?: string;
+  /**
    * This socket may READ the doc and may not change it.
    *
    * Set at the upgrade when `CW_REQUIRE_SIGNIN_TO_WRITE` is on and the
@@ -2499,6 +2510,32 @@ export class Rooms {
         if (ws.data?.shareId !== shareId) continue;
         try {
           ws.close(1008, 'share revoked');
+        } catch {
+          // Already gone — the close handler does the bookkeeping.
+        }
+        closed += 1;
+      }
+    }
+    return closed;
+  }
+
+  /**
+   * Close every socket whose authorizing MEMBERSHIP the predicate names.
+   *
+   * A predicate rather than a key, because the two callers ask different
+   * questions with it: ejecting one member matches one key, and turning the
+   * external-access switch off matches every one of them. Sockets carrying no
+   * membership — the owner's, an agent's, the retired per-share mode's — are
+   * never offered to it, so neither caller can reach them by mistake.
+   */
+  closeSocketsForShareMembers(match: (memberKey: string) => boolean): number {
+    let closed = 0;
+    for (const room of this.rooms.values()) {
+      for (const ws of room.conns) {
+        const key = ws.data?.shareMember;
+        if (!key || !match(key)) continue;
+        try {
+          ws.close(1008, 'share access ended');
         } catch {
           // Already gone — the close handler does the bookkeeping.
         }

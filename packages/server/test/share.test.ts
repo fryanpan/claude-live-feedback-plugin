@@ -1,12 +1,21 @@
 /**
- * Access-mode sharing through the real route table.
+ * PER-SHARE-APPLICATION sharing through the real route table — the retired
+ * mode, kept under test because the records it minted must keep working.
+ *
+ * The mint this file used to drive, `POST /api/share/workspace`, is now the
+ * SHARE LINK mint (2026-09-03): a row in a file and a `share.<domain>/s/<id>`
+ * URL, with no Cloudflare application behind it. Its own coverage is
+ * `share-link-flow.test.ts`. What is left on the old path is
+ * `POST /api/share/link`, which still mints one Access application per share,
+ * and that is what this file drives now — every assertion below is about a
+ * record of that kind and the hostname it is served on.
  *
  * **A BOARD is the unit of sharing** (2026-08-17), so every share minted here
- * goes through `POST /api/share/workspace` over a board id. This file used to
- * drive `POST /api/share/doc`, which is now a 410 that names the replacement —
- * asserted below rather than deleted, because an older plugin bundle's
- * `share_doc` still POSTs there and the useful behaviour is the refusal, not a
- * 404 that reads as "your server is broken".
+ * goes over a board id. This file used to drive `POST /api/share/doc`, which
+ * is now a 410 that names the replacement — asserted below rather than
+ * deleted, because an older plugin bundle's `share_doc` still POSTs there and
+ * the useful behaviour is the refusal, not a 404 that reads as "your server
+ * is broken".
  *
  * The fixture is a board with a folder bind FILED on it, because a folder bind
  * is a grouping and a grouping can no longer be shared alone (its own 410 is
@@ -85,7 +94,7 @@ describe('share REST endpoints', () => {
   let entryDocId: string;
 
   const shareWorkspace = (body: Record<string, unknown>) =>
-    fetch(`${base}/api/share/workspace`, {
+    fetch(`${base}/api/share/link`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify(body),
@@ -139,11 +148,11 @@ describe('share REST endpoints', () => {
 
   it('rejects share creation when sharing is not enabled', async () => {
     // Spin up a second server *without* the share option. Probed through
-    // /api/share/workspace rather than /api/share/doc, which now answers 410
+    // /api/share/link rather than /api/share/doc, which now answers 410
     // unconditionally and would say nothing about whether sharing is wired.
     const dd = mkdtempSync(join(tmpdir(), 'share-noshare-'));
     const h = createServer({ port: 0, dataDir: dd });
-    const r = await fetch(`http://localhost:${h.port}/api/share/workspace`, {
+    const r = await fetch(`http://localhost:${h.port}/api/share/link`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ workspaceId: 'x', allowDomains: ['@x.com'] }),
@@ -191,7 +200,6 @@ describe('share REST endpoints', () => {
     const ok = await shareWorkspace({
       workspaceId: boardId,
       allowDomains: ['@partner-org.example'],
-      name: 'control-slug',
     });
     expect(ok.status).toBe(200);
     const minted = ((await ok.json()) as { share: { shareId: string } }).share;
@@ -257,16 +265,18 @@ describe('share REST endpoints', () => {
     const r = await shareWorkspace({
       workspaceId: boardId,
       allowDomains: ['@partner-org.example'],
-      name: 'fixed-slug',
     });
     expect(r.status).toBe(200);
     const { share } = (await r.json()) as {
       share: { hostname: string; url: string; workspaceId: string; docId: string; aud?: string };
     };
-    expect(share.hostname).toBe('share-fixed-slug.tunnel.fryanpan.com');
-    expect(share.url).toBe(
-      `https://share-fixed-slug.tunnel.fryanpan.com/workspaces/${encodeURIComponent(boardId)}`,
+    // The slug is minted rather than named — `/api/share/link` takes no
+    // `name` argument — so the shape is what is asserted: a `share-` hostname
+    // under the configured base, and a URL that opens the BOARD on it.
+    expect(share.hostname).toMatch(
+      new RegExp(`^share-[\\w-]+\\.${SHARE_CONFIG.baseHostname.replace(/\./g, '\\.')}$`),
     );
+    expect(share.url).toBe(`https://${share.hostname}/workspaces/${encodeURIComponent(boardId)}`);
     // Scope comes from the board, and from nothing else.
     expect(share.workspaceId).toBe(boardId);
     expect(share.docId).toBe('');
@@ -316,7 +326,6 @@ describe('share REST endpoints', () => {
     const mk = await shareWorkspace({
       workspaceId: persistBoardId,
       allowDomains: ['@partner-org.example'],
-      name: 'p',
     });
     expect(mk.status).toBe(200);
 
