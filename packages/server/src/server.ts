@@ -1212,6 +1212,10 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
       ? withServerNotesSinks(opts.meetingNotes, {
           rooms: () => rooms,
           tasks: () => taskStore,
+          // Read by the legacy-transcript removal alone: it must not take a
+          // `Raw transcript` heading out of a doc bound into somebody's
+          // working tree, where the old note-taker never wrote one.
+          dataDir,
           // The capture pipeline's board writes, and the "go do it" wake —
           // the same immediate addressed delivery an answered review item
           // gets. Both close over consts declared below; a meeting can only

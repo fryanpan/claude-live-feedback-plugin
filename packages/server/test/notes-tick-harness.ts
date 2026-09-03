@@ -92,6 +92,12 @@ export interface NotesTickHarnessOptions {
   docId?: string;
   meetingId?: string;
   docTitle?: string;
+  /** The file the doc is bound to, if any — what decides whether the old
+   *  note-taker could have written a transcript section here. Pair with
+   *  `dataDir`. */
+  boundPath?: string;
+  /** The server's data dir, as that placement rule reads it. */
+  dataDir?: string;
 }
 
 export interface NotesTickHarness {
@@ -127,6 +133,7 @@ export function createNotesTickHarness(opts: NotesTickHarnessOptions): NotesTick
   };
   const rooms = {
     get: (id: string) => (id === docId ? { ydoc, meta } : undefined),
+    boundPathOf: (id: string) => (id === docId ? opts.boundPath : undefined),
   };
 
   const schedule = new ManualScheduler();
@@ -160,6 +167,7 @@ export function createNotesTickHarness(opts: NotesTickHarnessOptions): NotesTick
     {
       rooms: () => rooms,
       tasks: () => ({ listTasks: () => [] }),
+      ...(opts.dataDir ? { dataDir: opts.dataDir } : {}),
       ...(opts.ledger ? { ledger: opts.ledger } : {}),
     },
   );
