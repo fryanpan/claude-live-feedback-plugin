@@ -6521,56 +6521,6 @@ import { randomUUID } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 
-// packages/core/src/env-names.ts
-var ENV_RENAMES = [
-  ["FEEDBACK_BASE_URL", "CW_BASE_URL"],
-  ["FEEDBACK_AGENT_NAME", "CW_AGENT_NAME"],
-  ["FEEDBACK_AUTHOR", "CW_AUTHOR"],
-  ["LF_CLIENT_ROOT", "CW_CLIENT_ROOT"],
-  ["LF_PUBLIC_BASE_URL", "CW_PUBLIC_BASE_URL"],
-  ["LF_PROXIED_TRUSTED_HOSTS", "CW_PROXIED_TRUSTED_HOSTS"],
-  ["LF_WIDGET_DIST", "CW_WIDGET_DIST"],
-  ["LF_MARKDOWN_APP_DIST", "CW_MARKDOWN_APP_DIST"],
-  ["LF_SHARING_DISABLED", "CW_SHARING_DISABLED"],
-  ["LF_SUMMARIES", "CW_SUMMARIES"],
-  ["LF_SUMMARY_BACKFILL", "CW_SUMMARY_BACKFILL"],
-  ["LF_SUMMARY_BACKFILL_MINUTES", "CW_SUMMARY_BACKFILL_MINUTES"],
-  ["LF_PLUGIN_REFRESH_MINUTES", "CW_PLUGIN_REFRESH_MINUTES"],
-  ["LF_CLAUDE_BIN", "CW_CLAUDE_BIN"],
-  ["LF_MCP_PRINT_NODE", "CW_MCP_PRINT_NODE"],
-  ["LIVE_FEEDBACK_SUMMARY_API_KEY", "CW_SUMMARY_API_KEY"]
-];
-var LEGACY_OF = new Map(ENV_RENAMES.map(([legacy, current]) => [current, legacy]));
-function present(v) {
-  return v !== undefined && v.trim() !== "";
-}
-function readRenamedEnv(env, current) {
-  const direct = env[current];
-  if (present(direct))
-    return direct;
-  const legacy = LEGACY_OF.get(current);
-  if (legacy !== undefined) {
-    const old = env[legacy];
-    if (present(old))
-      return old;
-  }
-  return direct;
-}
-
-// packages/core/src/machine-paths.ts
-import { join } from "node:path";
-var PRODUCT_SLUG = "claude-workspaces";
-var PRODUCT_SLUG_LEGACY = "live-feedback";
-var DISCOVERY_DIR_CURRENT = PRODUCT_SLUG;
-var DISCOVERY_DIR_LEGACY = PRODUCT_SLUG_LEGACY;
-var DISCOVERY_FILE = "server.json";
-function discoveryCandidates(home) {
-  return [DISCOVERY_DIR_CURRENT, DISCOVERY_DIR_LEGACY].map((dir) => join(home, ".claude", dir, DISCOVERY_FILE));
-}
-function resolveDiscoveryFile(home, exists) {
-  return discoveryCandidates(home).find(exists);
-}
-
 // node_modules/.bun/zod@4.3.6/node_modules/zod/v4/core/core.js
 var NEVER = Object.freeze({
   status: "aborted"
@@ -13719,59 +13669,6 @@ class StdioServerTransport {
   }
 }
 
-// packages/mcp/src/attach-backlog.ts
-async function deliverAttachBacklog(workspaceId, backlog, deps) {
-  let comments = 0;
-  for (const row of backlog.queuedComments ?? []) {
-    if (typeof row?.id !== "string")
-      continue;
-    const original = row.payload && typeof row.payload === "object" ? row.payload : undefined;
-    const event = typeof original?.event === "string" ? original.event : typeof row.event === "string" ? row.event : undefined;
-    if (event === undefined)
-      continue;
-    const payload = original ? { ...original } : {
-      event,
-      ...typeof row.docId === "string" ? { docId: row.docId } : {},
-      ...typeof row.threadId === "string" ? { threadId: row.threadId } : {},
-      comment: {
-        ...row.author !== undefined ? { author: row.author } : {},
-        ...typeof row.text === "string" ? { text: row.text } : {},
-        ...typeof row.ts === "number" ? { ts: row.ts } : {}
-      }
-    };
-    payload.workspaceId = workspaceId;
-    payload.commentQueueId = row.id;
-    try {
-      await deps.emit(event, payload);
-    } catch {
-      continue;
-    }
-    comments += 1;
-    try {
-      await deps.ackComment(row.id);
-    } catch {}
-  }
-  let voice = 0;
-  for (const row of backlog.queuedVoice ?? []) {
-    if (typeof row?.transcript !== "string")
-      continue;
-    const applied = typeof row.applied === "string" ? row.applied : undefined;
-    const payload = {
-      route: "agent",
-      transcript: row.transcript,
-      ack: applied ? `Delivered from the queue. Already applied: ${applied}` : "Delivered from the queue.",
-      ...row.context !== undefined ? { context: row.context } : {},
-      ...row.actor !== undefined ? { actor: row.actor } : {},
-      workspaceId
-    };
-    try {
-      await deps.emit("voice.request", payload);
-      voice += 1;
-    } catch {}
-  }
-  return { comments, voice };
-}
-
 // packages/mcp/src/attachment-keepalive.ts
 var DEFAULT_INTERVAL_MS = 120000;
 function createAttachmentKeepalive(opts) {
@@ -13795,6 +13692,106 @@ function createAttachmentKeepalive(opts) {
     },
     boards: () => [...lastSent.keys()]
   };
+}
+
+// packages/mcp/src/claim-warning.ts
+function truncate(s, n) {
+  return s.length > n ? `${s.slice(0, n - 1)}…` : s;
+}
+function humanDuration(ms) {
+  const totalMinutes = Math.floor(ms / 60000);
+  if (totalMinutes < 1)
+    return `${Math.max(0, Math.floor(ms / 1000))}s`;
+  if (totalMinutes < 60)
+    return `${totalMinutes}m`;
+  const hours = Math.floor(totalMinutes / 60);
+  const minutes = totalMinutes % 60;
+  return minutes === 0 ? `${hours}h` : `${hours}h ${minutes}m`;
+}
+function heldByAnother(p, selfAgentId) {
+  return p !== undefined && p.state === "active" && p.agentId !== selfAgentId;
+}
+function namedRow(row) {
+  return row.title ? `${row.id} "${truncate(row.title, 60)}"` : row.id;
+}
+function claimWarning(row, selfAgentId, now) {
+  const claim = heldByAnother(row.claimedBy, selfAgentId) ? row.claimedBy : undefined;
+  const owner = claim ? undefined : row.ownerSession;
+  const holder = claim ?? (heldByAnother(owner, selfAgentId) ? owner : undefined);
+  if (!holder)
+    return;
+  const seen = `last seen ${humanDuration(Math.max(0, now - holder.lastToolCallAt))} ago`;
+  const held = claim ? `is already IN PROGRESS under session ${holder.agentId} (${seen}, claimed ${humanDuration(Math.max(0, now - claim.at))} ago)` : `is owned by session ${holder.agentId}, which is live (${seen})`;
+  return `[claim] ${namedRow(row)} ${held}. Do not start this row blind — message that session over claude-hive, agree who has it, and take a different row if they do. Nothing here refuses you: two sessions on one row is sometimes right, but it has to be a decision rather than a collision neither side can see.`;
+}
+
+// packages/mcp/src/attachments.ts
+function now(deps) {
+  return (deps.now ?? Date.now)();
+}
+function createAttachments(deps) {
+  return {
+    markAttached: (workspaceId) => markAttached(deps, workspaceId),
+    sendDueHeartbeats: () => sendDueHeartbeats(deps),
+    claimNoticeFor: (taskId) => claimNoticeFor(deps, taskId)
+  };
+}
+function markAttached(deps, workspaceId) {
+  deps.keepalive.mark(workspaceId);
+}
+async function sendDueHeartbeats(deps) {
+  for (const workspaceId of deps.keepalive.due()) {
+    try {
+      await deps.http("POST", `/api/workspaces/${encodeURIComponent(workspaceId)}/attachments/${encodeURIComponent(deps.author.id)}/heartbeat`, { toolCallAt: now(deps) });
+    } catch {}
+  }
+}
+async function claimNoticeFor(deps, taskId) {
+  for (const workspaceId of deps.keepalive.boards()) {
+    try {
+      const res = await deps.http("GET", `/api/workspaces/${encodeURIComponent(workspaceId)}/next?includeBlocked=true`);
+      const row = res.tasks?.find((t) => t?.id === taskId);
+      if (row)
+        return claimWarning(row, deps.author.id, now(deps));
+    } catch {}
+  }
+  return;
+}
+
+// packages/core/src/env-names.ts
+var ENV_RENAMES = [
+  ["FEEDBACK_BASE_URL", "CW_BASE_URL"],
+  ["FEEDBACK_AGENT_NAME", "CW_AGENT_NAME"],
+  ["FEEDBACK_AUTHOR", "CW_AUTHOR"],
+  ["LF_CLIENT_ROOT", "CW_CLIENT_ROOT"],
+  ["LF_PUBLIC_BASE_URL", "CW_PUBLIC_BASE_URL"],
+  ["LF_PROXIED_TRUSTED_HOSTS", "CW_PROXIED_TRUSTED_HOSTS"],
+  ["LF_WIDGET_DIST", "CW_WIDGET_DIST"],
+  ["LF_MARKDOWN_APP_DIST", "CW_MARKDOWN_APP_DIST"],
+  ["LF_SHARING_DISABLED", "CW_SHARING_DISABLED"],
+  ["LF_SUMMARIES", "CW_SUMMARIES"],
+  ["LF_SUMMARY_BACKFILL", "CW_SUMMARY_BACKFILL"],
+  ["LF_SUMMARY_BACKFILL_MINUTES", "CW_SUMMARY_BACKFILL_MINUTES"],
+  ["LF_PLUGIN_REFRESH_MINUTES", "CW_PLUGIN_REFRESH_MINUTES"],
+  ["LF_CLAUDE_BIN", "CW_CLAUDE_BIN"],
+  ["LF_MCP_PRINT_NODE", "CW_MCP_PRINT_NODE"],
+  ["LIVE_FEEDBACK_SUMMARY_API_KEY", "CW_SUMMARY_API_KEY"]
+];
+var LEGACY_OF = new Map(ENV_RENAMES.map(([legacy, current]) => [current, legacy]));
+function present(v) {
+  return v !== undefined && v.trim() !== "";
+}
+function readRenamedEnv(env, current) {
+  const direct = env[current];
+  if (present(direct))
+    return direct;
+  const legacy = LEGACY_OF.get(current);
+  if (legacy !== undefined) {
+    const old = env[legacy];
+    if (present(old))
+      return old;
+  }
+  return direct;
 }
 
 // packages/core/src/identity.ts
@@ -13868,42 +13865,46 @@ function resolveAgentAuthor(env) {
   return { name, color: hashToColor(name), id: agentIdForName(name), kind: "known" };
 }
 
-// packages/mcp/src/channel-gate.ts
-function isChannelEvent(event) {
-  if (event.startsWith("meeting."))
-    return false;
-  return true;
-}
-
-// packages/mcp/src/claim-warning.ts
-function truncate(s, n) {
-  return s.length > n ? `${s.slice(0, n - 1)}…` : s;
-}
-function humanDuration(ms) {
-  const totalMinutes = Math.floor(ms / 60000);
-  if (totalMinutes < 1)
-    return `${Math.max(0, Math.floor(ms / 1000))}s`;
-  if (totalMinutes < 60)
-    return `${totalMinutes}m`;
-  const hours = Math.floor(totalMinutes / 60);
-  const minutes = totalMinutes % 60;
-  return minutes === 0 ? `${hours}h` : `${hours}h ${minutes}m`;
-}
-function heldByAnother(p, selfAgentId) {
-  return p !== undefined && p.state === "active" && p.agentId !== selfAgentId;
-}
-function namedRow(row) {
-  return row.title ? `${row.id} "${truncate(row.title, 60)}"` : row.id;
-}
-function claimWarning(row, selfAgentId, now) {
-  const claim = heldByAnother(row.claimedBy, selfAgentId) ? row.claimedBy : undefined;
-  const owner = claim ? undefined : row.ownerSession;
-  const holder = claim ?? (heldByAnother(owner, selfAgentId) ? owner : undefined);
-  if (!holder)
+// packages/mcp/src/call-tool.ts
+var NO_AUTO_WATCH_TOOLS = new Set([
+  "unwatch_doc",
+  "watch_doc",
+  "observe_url",
+  "attach_doc"
+]);
+async function maybeAutoWatch(watchDoc, name, args) {
+  if (NO_AUTO_WATCH_TOOLS.has(name))
     return;
-  const seen = `last seen ${humanDuration(Math.max(0, now - holder.lastToolCallAt))} ago`;
-  const held = claim ? `is already IN PROGRESS under session ${holder.agentId} (${seen}, claimed ${humanDuration(Math.max(0, now - claim.at))} ago)` : `is owned by session ${holder.agentId}, which is live (${seen})`;
-  return `[claim] ${namedRow(row)} ${held}. Do not start this row blind — message that session over claude-hive, agree who has it, and take a different row if they do. Nothing here refuses you: two sessions on one row is sometimes right, but it has to be a decision rather than a collision neither side can see.`;
+  if (!args || typeof args !== "object")
+    return;
+  const a = args;
+  if (a.subscribe === false)
+    return;
+  if (typeof a.docId !== "string" || a.docId.length === 0)
+    return;
+  await watchDoc(a.docId);
+}
+function createCallToolHandler(deps) {
+  return async (req) => {
+    const { name, arguments: a = {} } = req.params;
+    const endToolCall = deps.deferredEmits.beginToolCall();
+    try {
+      await deps.ensureWatchesRestored();
+      deps.sendDueHeartbeats();
+      await maybeAutoWatch(deps.watchDoc, name, a);
+      const ctx = deps.toolContext();
+      for (const handle of deps.handlers) {
+        const answer = await handle(name, a, ctx);
+        if (answer !== undefined)
+          return answer;
+      }
+      return deps.err(`unknown tool: ${name}`);
+    } catch (e) {
+      return deps.err(e instanceof Error ? e.message : String(e));
+    } finally {
+      endToolCall();
+    }
+  };
 }
 
 // packages/mcp/src/decision-line.ts
@@ -13916,105 +13917,8 @@ function decisionAnsweredLine(p) {
   return `[decision.answered] ${p.taskId}${by}: "${truncate2(p.answer ?? "", 120)}"${walk}`;
 }
 
-// packages/mcp/src/deferred-emit.ts
-function createDeferredEmitter(schedule = (fn) => {
-  setTimeout(fn, 0);
-}) {
-  const queue = [];
-  let inFlight = 0;
-  let scheduled = false;
-  let draining = false;
-  const scheduleFlush = () => {
-    if (scheduled || queue.length === 0)
-      return;
-    scheduled = true;
-    schedule(() => {
-      scheduled = false;
-      drain();
-    });
-  };
-  const drain = async () => {
-    if (draining || inFlight > 0)
-      return;
-    draining = true;
-    try {
-      while (queue.length > 0 && inFlight === 0) {
-        const fn = queue.shift();
-        if (!fn)
-          break;
-        try {
-          await fn();
-        } catch {}
-      }
-    } finally {
-      draining = false;
-    }
-  };
-  return {
-    emitOutsideToolCall(fn) {
-      queue.push(fn);
-      if (inFlight === 0)
-        scheduleFlush();
-    },
-    beginToolCall() {
-      inFlight++;
-      let released = false;
-      return () => {
-        if (released)
-          return;
-        released = true;
-        inFlight--;
-        if (inFlight === 0)
-          scheduleFlush();
-      };
-    },
-    pending: () => queue.length
-  };
-}
-
-// packages/mcp/src/frame-dedup.ts
-var DEFAULT_LIMIT = 512;
-var DEFAULT_TTL_MS = 30000;
-function createFrameDedup(opts) {
-  const limit = opts?.limit ?? DEFAULT_LIMIT;
-  const ttlMs = opts?.ttlMs ?? DEFAULT_TTL_MS;
-  const now = opts?.now ?? Date.now;
-  const seen = new Map;
-  function shouldForward(event, payload) {
-    const key = frameKey(event, payload);
-    if (key === undefined)
-      return true;
-    const t = now();
-    const at = seen.get(key);
-    if (at !== undefined && t - at < ttlMs)
-      return false;
-    seen.delete(key);
-    seen.set(key, t);
-    while (seen.size > limit) {
-      const oldest = seen.keys().next();
-      if (oldest.done)
-        break;
-      seen.delete(oldest.value);
-    }
-    return true;
-  }
-  return { shouldForward, reset: () => seen.clear() };
-}
-function frameKey(event, payload) {
-  if (typeof payload !== "object" || payload === null)
-    return;
-  const p = payload;
-  if (typeof p.eid === "string" && p.eid !== "")
-    return `eid#${p.eid}`;
-  if (typeof p.seq !== "number" || !Number.isFinite(p.seq))
-    return;
-  if (typeof p.docId !== "string" || p.docId === "")
-    return;
-  return `${event}#${p.docId}#${p.seq}`;
-}
-
 // packages/mcp/src/nudge-line.ts
-function capClause(cap, now, style) {
+function capClause(cap, now2, style) {
   if (cap === undefined || typeof cap.value !== "number")
     return "";
   const change = cap.lastChange;
@@ -14022,7 +13926,7 @@ function capClause(cap, now, style) {
   let setter = "";
   if (change !== undefined && typeof name === "string" && name.length > 0) {
     const at = typeof change.ts === "number" ? change.ts : undefined;
-    const clock = typeof now === "number" ? now : Date.now();
+    const clock = typeof now2 === "number" ? now2 : Date.now();
     const ago = at === undefined ? "" : ` ${humanDuration2(Math.max(0, clock - at))} ago`;
     const was = typeof change.from === "number" ? `, was ${change.from}` : "";
     setter = `, set by ${name}${ago}${was}`;
@@ -14202,6 +14106,431 @@ function isSelfAuthoredEvent(event, payload, selfId) {
   return author !== undefined && author.toLowerCase() === selfId.trim().toLowerCase();
 }
 
+// packages/mcp/src/voice-line.ts
+function truncate4(s, n) {
+  return s.length > n ? `${s.slice(0, n - 1)}…` : s;
+}
+function where(p) {
+  const c = p.context;
+  if (!c)
+    return "";
+  return ` (at ${c.surface ?? "?"}${c.docId ? ` ${c.docId}` : ""}${c.taskId ? ` ${c.taskId}` : ""}${c.visibleHeading ? `, near "${c.visibleHeading}"` : ""})`;
+}
+function voiceRequestLine(p) {
+  if (p.route === "fast-path")
+    return null;
+  const by = p.actor?.name ? ` by ${p.actor.name}` : "";
+  const said = `[voice.request]${by}${where(p)}: "${p.transcript ?? ""}"`;
+  const told = truncate4(p.ack ?? "", 120);
+  if (p.route === "fast-path-action") {
+    return `${said} — the fast path ALREADY applied this to the board on the speaker's behalf; ` + `they were told: "${told}". Do NOT redo it — reconcile your own picture of the board ` + "with what changed, and pick up only whatever the utterance asked for beyond it.";
+  }
+  return `${said} — act on it through the task/edit tools; the speaker was told: "${told}"`;
+}
+
+// packages/mcp/src/channel-messages.ts
+function createChannelMessages(deps) {
+  return {
+    emitChannelMessage: (event, payload) => emitChannelMessage(deps, event, payload),
+    emitHubChannelMessage: (event, payload) => emitHubChannelMessage(deps, event, payload)
+  };
+}
+function nowMs(deps) {
+  return (deps.now ?? Date.now)();
+}
+function nowIso(deps) {
+  return new Date(nowMs(deps)).toISOString();
+}
+var HUB_EVENT_RE = /^(task|decision|workspace|agent|voice)\./;
+async function emitHubChannelMessage(deps, event, rawPayload) {
+  const p = rawPayload ?? {};
+  if (event === "agent.heartbeat")
+    return;
+  if (event === "task.noted")
+    return;
+  if (p.actor?.id === deps.authorId)
+    return;
+  const by = p.actor?.name ? ` by ${p.actor.name}` : "";
+  let body;
+  switch (event) {
+    case "task.created":
+      body = `[task.created] "${truncate5(p.task?.title ?? p.taskId ?? "", 60)}" → ${p.goal ?? "?"}${p.assignee ? ` (assignee ${p.assignee})` : ""}`;
+      break;
+    case "task.transitioned":
+      body = `[task.transitioned] ${p.taskId}: ${p.from} → ${p.to}${by}${p.note ? ` — ${truncate5(p.note, 80)}` : ""}`;
+      break;
+    case "task.assigned":
+      body = `[task.assigned] ${p.taskId}: ${p.from} → ${p.to}${by}`;
+      break;
+    case "task.regrouped":
+      body = `[task.regrouped] ${p.taskId}: ${p.fromGoal} → ${p.toGoal}${by}`;
+      break;
+    case "task.retitled":
+      body = `[task.retitled] "${truncate5(p.titleFrom ?? "", 60)}" → "${truncate5(p.titleTo ?? "", 60)}"${by}${p.reason ? ` — ${truncate5(p.reason, 80)}` : ""}`;
+      break;
+    case "task.body_edited":
+      body = p.titleFrom && p.titleTo ? `[task.body_edited] reshaped "${truncate5(p.titleFrom, 60)}" → "${truncate5(p.titleTo, 60)}"${by}${p.reason ? ` — ${truncate5(p.reason, 80)}` : ""}` : `[task.body_edited] ${p.taskId}${by}${p.reason ? ` — ${truncate5(p.reason, 80)}` : ""}`;
+      break;
+    case "task.gate_refused":
+      body = `[task.gate_refused] ${p.taskId}: ${p.riskTier}-tier ${p.reason}${by} — → ${p.to} did NOT happen`;
+      break;
+    case "decision.answered":
+      body = decisionAnsweredLine(p);
+      break;
+    case "workspace.lead_changed":
+      body = p.leadAgentId === deps.authorId ? `[workspace.lead_changed]${by}: you are now the lead agent — this board's asks are addressed to you` : `[workspace.lead_changed]${by}: lead agent is now ${p.leadAgentId ?? "?"}`;
+      break;
+    case "workspace.goals_changed": {
+      const moved = p.movedToChores?.length ?? 0;
+      body = `[workspace.goals_changed] ${p.kind ?? "edit"}${by}${moved > 0 ? ` — ${moved} task(s) moved to Backlog, re-place with set_task_goal` : ""}`;
+      break;
+    }
+    case "workspace.ready_idle":
+      body = readyIdleLine(p);
+      break;
+    case "workspace.review_answered":
+      body = reviewAnsweredLine(p);
+      break;
+    case "workspace.stalled":
+      body = stalledLine(p);
+      break;
+    case "workspace.review_item_held":
+      body = reviewItemHeldLine(p);
+      break;
+    case "agent.attached":
+    case "agent.detached":
+      body = `[${event}] ${p.agentId ?? "?"}`;
+      break;
+    case "voice.request": {
+      const line = voiceRequestLine(p);
+      if (line === null)
+        return;
+      body = line;
+      break;
+    }
+    default:
+      body = `[${event}]${p.taskId ? ` task ${p.taskId}` : ""}`;
+  }
+  await deps.notify({
+    method: "notifications/claude/channel",
+    params: {
+      source: "claude-workspaces",
+      sent_at: nowIso(deps),
+      content: body,
+      meta: {
+        workspace_id: p.workspaceId ?? "unknown",
+        ...p.taskId ? { task_id: p.taskId } : {},
+        event,
+        ...p.actor?.name ? { author: p.actor.name } : {}
+      }
+    }
+  });
+  if (event === "voice.request" && typeof p.queueId === "string" && p.workspaceId) {
+    try {
+      await deps.http("POST", `/api/workspaces/${encodeURIComponent(p.workspaceId)}/voice-queue/${encodeURIComponent(p.queueId)}/ack`, {});
+    } catch {}
+  }
+}
+async function emitChannelMessage(deps, event, rawPayload) {
+  if (HUB_EVENT_RE.test(event)) {
+    await emitHubChannelMessage(deps, event, rawPayload);
+    return;
+  }
+  if (isSelfAuthoredEvent(event, rawPayload, deps.authorId))
+    return;
+  const p = rawPayload ?? {};
+  const docId = p.docId ?? "unknown";
+  if (event === "doc.sync_error") {
+    const where2 = p.path ?? docId;
+    const body2 = `[sync error] ${where2}: ${p.message ?? "disk↔doc sync failed — call get_doc for details"}`;
+    await deps.notify({
+      method: "notifications/claude/channel",
+      params: {
+        source: "claude-workspaces",
+        sent_at: nowIso(deps),
+        content: body2,
+        meta: {
+          doc_id: docId,
+          event,
+          ...p.path ? { path: p.path } : {},
+          ...p.backupPath ? { backup_path: p.backupPath } : {}
+        }
+      }
+    });
+    return;
+  }
+  if (event.startsWith("suggestion.")) {
+    const sid = p.sid ?? "";
+    const action2 = event.slice("suggestion.".length);
+    const author2 = p.suggestion?.author?.name ?? "";
+    const snippet2 = p.suggestion?.snippet ?? "";
+    const kind = p.suggestion?.kind ?? "";
+    const header2 = snippet2 ? `"${truncate5(snippet2, 60)}"` : sid;
+    const body2 = `[suggestion ${action2}] ${author2 ? `${author2}: ` : ""}${kind} ${header2}`.trim();
+    await deps.notify({
+      method: "notifications/claude/channel",
+      params: {
+        source: "claude-workspaces",
+        sent_at: nowIso(deps),
+        content: body2,
+        meta: {
+          doc_id: docId,
+          sid,
+          event,
+          author: author2,
+          anchor_text: snippet2
+        }
+      }
+    });
+    return;
+  }
+  const threadId = p.threadId ?? "";
+  const snippet = p.thread?.anchor?.snippet?.text ?? p.thread?.anchor?.original?.snippet?.text ?? "";
+  const reviewItemId = p.reviewItemId ?? (p.thread?.anchor?.kind === "review-item" ? p.thread.anchor.reviewItemId : undefined);
+  const statusChange = event === "thread.resolved" || event === "thread.reopened";
+  const author = statusChange ? p.actor?.name ?? "" : p.comment?.author?.name ?? p.thread?.comments?.[0]?.author?.name ?? "";
+  const text = statusChange ? "" : p.comment?.text ?? p.thread?.comments?.at(-1)?.text ?? "";
+  const sentAt = new Date(p.comment?.ts ?? nowMs(deps)).toISOString();
+  const action = event.startsWith("thread.") ? event.slice("thread.".length) : event;
+  const header = snippet ? `on "${truncate5(snippet, 60)}"` : "";
+  const onItem = reviewItemId ? ` on review item ${reviewItemId}${snippet ? ` "${truncate5(snippet, 60)}"` : ""} —` : "";
+  const body = text ? `[${action}]${onItem} ${author ? `${author}: ` : ""}${text}` : `[${action}]${onItem}${author ? ` by ${author} —` : ""} thread ${threadId} ${header}`.trim();
+  await deps.notify({
+    method: "notifications/claude/channel",
+    params: {
+      source: "claude-workspaces",
+      sent_at: sentAt,
+      content: body,
+      meta: {
+        doc_id: docId,
+        thread_id: threadId,
+        ...reviewItemId ? { review_item_id: reviewItemId } : {},
+        event,
+        author,
+        anchor_text: snippet
+      }
+    }
+  });
+}
+function truncate5(s, n) {
+  return s.length > n ? `${s.slice(0, n - 1)}…` : s;
+}
+
+// packages/mcp/src/deferred-emit.ts
+function createDeferredEmitter(schedule = (fn) => {
+  setTimeout(fn, 0);
+}) {
+  const queue = [];
+  let inFlight = 0;
+  let scheduled = false;
+  let draining = false;
+  const scheduleFlush = () => {
+    if (scheduled || queue.length === 0)
+      return;
+    scheduled = true;
+    schedule(() => {
+      scheduled = false;
+      drain();
+    });
+  };
+  const drain = async () => {
+    if (draining || inFlight > 0)
+      return;
+    draining = true;
+    try {
+      while (queue.length > 0 && inFlight === 0) {
+        const fn = queue.shift();
+        if (!fn)
+          break;
+        try {
+          await fn();
+        } catch {}
+      }
+    } finally {
+      draining = false;
+    }
+  };
+  return {
+    emitOutsideToolCall(fn) {
+      queue.push(fn);
+      if (inFlight === 0)
+        scheduleFlush();
+    },
+    beginToolCall() {
+      inFlight++;
+      let released = false;
+      return () => {
+        if (released)
+          return;
+        released = true;
+        inFlight--;
+        if (inFlight === 0)
+          scheduleFlush();
+      };
+    },
+    pending: () => queue.length
+  };
+}
+
+// packages/mcp/src/frame-dedup.ts
+var DEFAULT_LIMIT = 512;
+var DEFAULT_TTL_MS = 30000;
+function createFrameDedup(opts) {
+  const limit = opts?.limit ?? DEFAULT_LIMIT;
+  const ttlMs = opts?.ttlMs ?? DEFAULT_TTL_MS;
+  const now2 = opts?.now ?? Date.now;
+  const seen = new Map;
+  function shouldForward(event, payload) {
+    const key = frameKey(event, payload);
+    if (key === undefined)
+      return true;
+    const t = now2();
+    const at = seen.get(key);
+    if (at !== undefined && t - at < ttlMs)
+      return false;
+    seen.delete(key);
+    seen.set(key, t);
+    while (seen.size > limit) {
+      const oldest = seen.keys().next();
+      if (oldest.done)
+        break;
+      seen.delete(oldest.value);
+    }
+    return true;
+  }
+  return { shouldForward, reset: () => seen.clear() };
+}
+function frameKey(event, payload) {
+  if (typeof payload !== "object" || payload === null)
+    return;
+  const p = payload;
+  if (typeof p.eid === "string" && p.eid !== "")
+    return `eid#${p.eid}`;
+  if (typeof p.seq !== "number" || !Number.isFinite(p.seq))
+    return;
+  if (typeof p.docId !== "string" || p.docId === "")
+    return;
+  return `${event}#${p.docId}#${p.seq}`;
+}
+
+// packages/mcp/src/channel-gate.ts
+function isChannelEvent(event) {
+  if (event.startsWith("meeting."))
+    return false;
+  return true;
+}
+
+// packages/mcp/src/frame-handler.ts
+function nowMs2(deps) {
+  return (deps.now ?? Date.now)();
+}
+function createFrameHandler(deps) {
+  return (raw) => handleFrame(deps, raw);
+}
+async function handleFrame(deps, raw) {
+  const lines = raw.split(`
+`);
+  let ev = "message";
+  const dataParts = [];
+  for (const line of lines) {
+    if (line.startsWith(":"))
+      continue;
+    if (line.startsWith("event:"))
+      ev = line.slice(6).trim();
+    else if (line.startsWith("data:"))
+      dataParts.push(line.slice(5).trimStart());
+  }
+  if (dataParts.length === 0)
+    return;
+  let payload;
+  try {
+    payload = JSON.parse(dataParts.join(`
+`));
+  } catch {
+    return;
+  }
+  if (ev === "replay.gap") {
+    const p = payload ?? {};
+    await deps.notify({
+      method: "notifications/claude/channel",
+      params: {
+        source: "claude-workspaces",
+        sent_at: new Date(nowMs2(deps)).toISOString(),
+        content: `[replay.gap] events on ${p.docId ?? "a watched channel"} may have been missed while this session was disconnected — refetch state (get_doc / list_threads / next_tasks) rather than assuming the stream was complete`,
+        meta: { event: "replay.gap", ...p.docId ? { doc_id: p.docId } : {} }
+      }
+    });
+    return;
+  }
+  if (isChannelEvent(ev) && deps.shouldForward(ev, payload)) {
+    await deps.emitChannelMessage(ev, payload);
+  }
+  await ackCommentRow(deps, payload);
+}
+async function ackCommentRow(deps, payload) {
+  const p = payload;
+  if (typeof p?.commentQueueId !== "string" || typeof p?.workspaceId !== "string")
+    return;
+  try {
+    await deps.http("POST", `/api/workspaces/${encodeURIComponent(p.workspaceId)}/comment-queue/${encodeURIComponent(p.commentQueueId)}/ack`, {});
+  } catch {}
+}
+
+// packages/core/src/machine-paths.ts
+import { join } from "node:path";
+var PRODUCT_SLUG = "claude-workspaces";
+var PRODUCT_SLUG_LEGACY = "live-feedback";
+var DISCOVERY_DIR_CURRENT = PRODUCT_SLUG;
+var DISCOVERY_DIR_LEGACY = PRODUCT_SLUG_LEGACY;
+var DISCOVERY_FILE = "server.json";
+function discoveryCandidates(home) {
+  return [DISCOVERY_DIR_CURRENT, DISCOVERY_DIR_LEGACY].map((dir) => join(home, ".claude", dir, DISCOVERY_FILE));
+}
+function resolveDiscoveryFile(home, exists) {
+  return discoveryCandidates(home).find(exists);
+}
+
+// packages/mcp/src/http-client.ts
+function resolveBaseUrl(deps) {
+  const override = readRenamedEnv(deps.env, "CW_BASE_URL");
+  if (override)
+    return override;
+  const discovery = resolveDiscoveryFile(deps.homedir(), deps.existsSync);
+  if (discovery) {
+    try {
+      const j = JSON.parse(deps.readFileSync(discovery, "utf8"));
+      if (j.port)
+        return `http://localhost:${j.port}`;
+    } catch {}
+  }
+  throw new Error("claude-workspaces server not found — start it with `bun run dev` (or set CW_BASE_URL). " + `Looked for a discovery file at ${discoveryCandidates(deps.homedir()).join(" and ")}.`);
+}
+function createHttp(resolve, fetchFn = fetch) {
+  return async (method, path, body) => {
+    const baseUrl = resolve();
+    const res = await fetchFn(`${baseUrl}${path}`, {
+      method,
+      headers: body ? { "content-type": "application/json" } : {},
+      body: body ? JSON.stringify(body) : undefined
+    });
+    const text = await res.text();
+    if (!res.ok)
+      throw new Error(`${method} ${path} → ${res.status}: ${text}`);
+    return text ? JSON.parse(text) : {};
+  };
+}
+function ok(data) {
+  return {
+    content: [{ type: "text", text: JSON.stringify(data, null, 2) }]
+  };
+}
+function err(message) {
+  return {
+    isError: true,
+    content: [{ type: "text", text: message }]
+  };
+}
+
 // packages/mcp/src/sse-cursor.ts
 function frameMeta(raw) {
   const meta2 = {};
@@ -14223,6 +14552,90 @@ async function deliverThenCommit(frame, deliver, cursor, onGap) {
   } else if (meta2.id !== undefined) {
     cursor.lastEventId = meta2.id;
   }
+}
+
+// packages/mcp/src/sse-loop.ts
+var RECONNECT_BACKOFF_MS = 1500;
+var DEFAULT_CONNECT_CAP_MS = 3000;
+function createSseLoops(deps) {
+  return {
+    runSseLoop: (label, path, signal, onFirstAttempt) => runSseLoop(deps, label, path, signal, onFirstAttempt),
+    startSseLoop: (label, path, controller) => startSseLoop(deps, label, path, controller)
+  };
+}
+async function runSseLoop(deps, label, path, signal, onFirstAttempt) {
+  let first = onFirstAttempt;
+  const settleFirst = (open) => {
+    if (!first)
+      return;
+    const f = first;
+    first = undefined;
+    f(open);
+  };
+  const setOpen = (open) => {
+    const w = deps.watchers.get(label);
+    if (w)
+      w.open = open;
+  };
+  const cursor = { lastEventId: undefined };
+  while (!signal.aborted) {
+    try {
+      const res = await deps.fetch(`${deps.resolveBaseUrl()}${path}`, {
+        signal,
+        ...cursor.lastEventId ? { headers: { "Last-Event-ID": cursor.lastEventId } } : {}
+      });
+      const live = res.ok && res.body !== null;
+      setOpen(live);
+      settleFirst(live);
+      if (!res.ok || !res.body)
+        throw new Error(`sse ${path} → ${res.status}`);
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder;
+      let buf = "";
+      while (!signal.aborted) {
+        const { value, done } = await reader.read();
+        if (done)
+          break;
+        buf += decoder.decode(value, { stream: true });
+        let sep = buf.indexOf(`
+
+`);
+        while (sep >= 0) {
+          const frame = buf.slice(0, sep);
+          buf = buf.slice(sep + 2);
+          await deliverThenCommit(frame, deps.handleFrame, cursor, deps.resetDedup);
+          sep = buf.indexOf(`
+
+`);
+        }
+      }
+    } catch (err2) {
+      setOpen(false);
+      settleFirst(false);
+      if (signal.aborted)
+        return;
+      deps.log(`[claude-workspaces-mcp] ${label} sse error, retrying:`, err2);
+    }
+    setOpen(false);
+    await deps.sleep(RECONNECT_BACKOFF_MS);
+    deps.resetDedup();
+  }
+  setOpen(false);
+  settleFirst(false);
+}
+function startSseLoop(deps, label, path, controller) {
+  return new Promise((resolve) => {
+    const cap = deps.timers.set(() => resolve(false), deps.connectCapMs ?? DEFAULT_CONNECT_CAP_MS);
+    runSseLoop(deps, label, path, controller.signal, (open) => {
+      deps.timers.clear(cap);
+      resolve(open);
+    }).catch((err2) => {
+      deps.log(`[claude-workspaces-mcp] watcher ${label} crashed:`, err2);
+      deps.watchers.delete(label);
+      deps.timers.clear(cap);
+      resolve(false);
+    });
+  });
 }
 
 // packages/core/src/task-wire.ts
@@ -15992,12 +16405,12 @@ function threadCreateRequest(input, author) {
 async function handleDocsTool(name, a, ctx) {
   const {
     http,
-    ok,
-    err,
+    ok: ok2,
+    err: err2,
     AUTHOR,
     STATUS_TEXT_MAX,
     suggestionAuthor,
-    resolveBaseUrl,
+    resolveBaseUrl: resolveBaseUrl2,
     watchers,
     watchDoc,
     watchWorkspace,
@@ -16027,31 +16440,31 @@ async function handleDocsTool(name, a, ctx) {
       if (full)
         params.set("full", "1");
       const res = await http("GET", `/api/docs?${params.toString()}`);
-      return ok(res);
+      return ok2(res);
     }
     case "list_threads": {
       const { docId, status } = a;
       const qs = status ? `?status=${encodeURIComponent(status)}` : "";
       const res = await http("GET", `/api/docs/${encodeURIComponent(docId)}/threads${qs}`);
-      return ok(res);
+      return ok2(res);
     }
     case "get_thread": {
       const { docId, threadId } = a;
       const res = await http("GET", `/api/docs/${encodeURIComponent(docId)}/threads/${encodeURIComponent(threadId)}`);
-      return ok(res);
+      return ok2(res);
     }
     case "post_reply": {
       const { docId, threadId, text, review } = a;
       const res = await http("POST", `/api/docs/${encodeURIComponent(docId)}/threads/${encodeURIComponent(threadId)}/comments`, { author: AUTHOR, text, ...review !== undefined ? { review } : {} });
-      return ok(res);
+      return ok2(res);
     }
     case "post_status": {
       const { text, taskId } = a;
       const body = typeof text === "string" ? text.trim() : "";
       if (body === "")
-        return err("text is empty — say where the work stands");
+        return err2("text is empty — say where the work stands");
       if (body.length > STATUS_TEXT_MAX) {
-        return err(`text is over ${STATUS_TEXT_MAX} chars — a status is a line to a few sentences; the full report is already on the Activity tab from your end-of-turn message`);
+        return err2(`text is over ${STATUS_TEXT_MAX} chars — a status is a line to a few sentences; the full report is already on the Activity tab from your end-of-turn message`);
       }
       const path = taskId !== undefined && taskId !== "" ? `/api/tasks/${encodeURIComponent(taskId)}/notes` : "/api/agent-notes";
       const res = await http("POST", path, {
@@ -16060,7 +16473,7 @@ async function handleDocsTool(name, a, ctx) {
         text: body,
         at: Date.now()
       });
-      return ok({
+      return ok2({
         posted: true,
         ...res.taskId !== undefined ? { taskId: res.taskId } : {},
         ...res.workspaceId !== undefined ? { workspaceId: res.workspaceId } : {},
@@ -16072,32 +16485,32 @@ async function handleDocsTool(name, a, ctx) {
     case "create_thread": {
       const { path, body } = threadCreateRequest(a, AUTHOR);
       const res = await http("POST", path, body);
-      return ok(res);
+      return ok2(res);
     }
     case "resolve_thread": {
       const { docId, threadId } = a;
       const res = await http("POST", `/api/docs/${encodeURIComponent(docId)}/threads/${encodeURIComponent(threadId)}/resolve`);
-      return ok(res);
+      return ok2(res);
     }
     case "summarize_thread": {
       const { docId, threadId, force } = a;
       const res = await http("POST", `/api/docs/${encodeURIComponent(docId)}/threads/${encodeURIComponent(threadId)}/summary`, force ? { force: true } : undefined);
-      return ok(res);
+      return ok2(res);
     }
     case "reopen_thread": {
       const { docId, threadId } = a;
       const res = await http("POST", `/api/docs/${encodeURIComponent(docId)}/threads/${encodeURIComponent(threadId)}/reopen`);
-      return ok(res);
+      return ok2(res);
     }
     case "get_doc": {
       const { docId } = a;
       const res = await http("GET", `/api/docs/${encodeURIComponent(docId)}/content?reader=${encodeURIComponent(AUTHOR.id)}`);
-      return ok(res);
+      return ok2(res);
     }
     case "doc_status": {
       const { docId } = a;
       const res = await http("GET", `/api/docs/${encodeURIComponent(docId)}/status`);
-      return ok(res);
+      return ok2(res);
     }
     case "create_review_doc": {
       const { docId, path, title, setId, hubWorkspaceId, producedBy } = a;
@@ -16111,7 +16524,7 @@ async function handleDocsTool(name, a, ctx) {
         ...hubWorkspaceId ? { hubWorkspaceId } : {},
         ...producedBy ? { producedBy } : {}
       });
-      return ok(res);
+      return ok2(res);
     }
     case "set_doc_content": {
       const { docId, markdown, confirmOverwriteHumanEdits } = a;
@@ -16120,18 +16533,18 @@ async function handleDocsTool(name, a, ctx) {
         author: AUTHOR,
         ...confirmOverwriteHumanEdits === true ? { confirmOverwriteHumanEdits: true } : {}
       });
-      return ok(res);
+      return ok2(res);
     }
     case "reparse_from_disk": {
       const { docId } = a;
       const res = await http("POST", `/api/docs/${encodeURIComponent(docId)}/reparse_from_disk`);
-      return ok(res);
+      return ok2(res);
     }
     case "delete_doc": {
       const { docId, force } = a;
       const qs = force ? "?force=true" : "";
       const res = await http("DELETE", `/api/docs/${encodeURIComponent(docId)}${qs}`);
-      return ok(res);
+      return ok2(res);
     }
     case "bind_mock": {
       const { docId, sourceHtmlPath, title, hubWorkspaceId } = a;
@@ -16143,7 +16556,7 @@ async function handleDocsTool(name, a, ctx) {
         ...title ? { title } : {},
         ...hubWorkspaceId ? { hubWorkspaceId } : {}
       });
-      return ok(res);
+      return ok2(res);
     }
     case "bind_folder": {
       const {
@@ -16171,7 +16584,7 @@ async function handleDocsTool(name, a, ctx) {
       if (subscribe !== false && res?.workspaceId) {
         await watchWorkspace(res.workspaceId);
       }
-      return ok(res);
+      return ok2(res);
     }
     case "create_diff_review": {
       const {
@@ -16203,14 +16616,14 @@ async function handleDocsTool(name, a, ctx) {
       if (subscribe !== false && res?.reviewId) {
         await watchWorkspace(res.reviewId);
       }
-      return ok(res);
+      return ok2(res);
     }
     case "delete_review": {
       const { setId, force, purge } = a;
       const params = [force ? "force=true" : "", purge ? "purge=true" : ""].filter(Boolean);
       const qs = params.length > 0 ? `?${params.join("&")}` : "";
       const res = await http("DELETE", `/api/reviews/${encodeURIComponent(setId)}${qs}`);
-      return ok(res);
+      return ok2(res);
     }
     case "archive_review": {
       const { setId, reason } = a;
@@ -16218,14 +16631,14 @@ async function handleDocsTool(name, a, ctx) {
         author: AUTHOR,
         ...reason !== undefined ? { reason } : {}
       });
-      return ok(res);
+      return ok2(res);
     }
     case "unarchive_review": {
       const { setId } = a;
       const res = await http("POST", `/api/reviews/${encodeURIComponent(setId)}/unarchive`, {
         author: AUTHOR
       });
-      return ok(res);
+      return ok2(res);
     }
     case "archive_doc": {
       const { docId, reason } = a;
@@ -16233,32 +16646,32 @@ async function handleDocsTool(name, a, ctx) {
         author: AUTHOR,
         ...reason !== undefined ? { reason } : {}
       });
-      return ok(res);
+      return ok2(res);
     }
     case "unarchive_doc": {
       const { docId } = a;
       const res = await http("POST", `/api/docs/${encodeURIComponent(docId)}/unarchive`, {
         author: AUTHOR
       });
-      return ok(res);
+      return ok2(res);
     }
     case "list_archived_reviews": {
       const res = await http("GET", "/api/reviews/archived");
-      return ok(res);
+      return ok2(res);
     }
     case "delete_workspace": {
       const { workspaceId, force, purge } = a;
       const params = [force ? "force=true" : "", purge ? "purge=true" : ""].filter(Boolean);
       const qs = params.length > 0 ? `?${params.join("&")}` : "";
       const res = await http("DELETE", `/api/workspaces/${encodeURIComponent(workspaceId)}${qs}`);
-      return ok(res);
+      return ok2(res);
     }
     case "refresh_workspace":
     case "refresh_review": {
       const { setId, workspaceId } = a;
       const id = setId ?? workspaceId ?? "";
       const res = await http("POST", `/api/reviews/${encodeURIComponent(id)}/refresh`, {});
-      return ok(res);
+      return ok2(res);
     }
     case "set_workspace_groups":
     case "set_review_groups": {
@@ -16267,7 +16680,7 @@ async function handleDocsTool(name, a, ctx) {
       const res = await http("POST", `/api/reviews/${encodeURIComponent(id)}/groups`, {
         groups
       });
-      return ok(res);
+      return ok2(res);
     }
     case "find_and_replace": {
       const {
@@ -16291,7 +16704,7 @@ async function handleDocsTool(name, a, ctx) {
         ...parseInlineMarks === true ? { parseInlineMarks: true } : {},
         ...suggest === true ? { suggest: true, author: suggestionAuthor() } : {}
       });
-      return ok(res);
+      return ok2(res);
     }
     case "rewrite_thread_region": {
       const { docId, threadId, replacement, parseInlineMarks, suggest } = a;
@@ -16300,37 +16713,37 @@ async function handleDocsTool(name, a, ctx) {
         ...parseInlineMarks === true ? { parseInlineMarks: true } : {},
         ...suggest === true ? { suggest: true, author: suggestionAuthor() } : {}
       });
-      return ok(res);
+      return ok2(res);
     }
     case "list_suggestions": {
       const { docId } = a;
       const res = await http("GET", `/api/docs/${encodeURIComponent(docId)}/suggestions`);
-      return ok(res);
+      return ok2(res);
     }
     case "accept_suggestion": {
       const { docId, sid } = a;
       const res = await http("POST", `/api/docs/${encodeURIComponent(docId)}/suggestions/${encodeURIComponent(sid)}/accept`);
-      return ok(res);
+      return ok2(res);
     }
     case "reject_suggestion": {
       const { docId, sid } = a;
       const res = await http("POST", `/api/docs/${encodeURIComponent(docId)}/suggestions/${encodeURIComponent(sid)}/reject`);
-      return ok(res);
+      return ok2(res);
     }
     case "resolve_all_suggestions": {
       const { docId, action, authorId } = a;
       const res = await http("POST", `/api/docs/${encodeURIComponent(docId)}/suggestions/resolve_all`, { action, ...authorId !== undefined ? { authorId } : {} });
-      return ok(res);
+      return ok2(res);
     }
     case "insert_after_thread": {
       const { docId, threadId, text } = a;
       const res = await http("POST", `/api/docs/${encodeURIComponent(docId)}/threads/${encodeURIComponent(threadId)}/insert_after`, { text });
-      return ok(res);
+      return ok2(res);
     }
     case "insert_blocks_after_thread": {
       const { docId, threadId, markdown, placement } = a;
       const res = await http("POST", `/api/docs/${encodeURIComponent(docId)}/threads/${encodeURIComponent(threadId)}/insert_blocks_after`, { markdown, ...placement !== undefined ? { placement } : {} });
-      return ok(res);
+      return ok2(res);
     }
     case "create_anchor": {
       const { docId, find, contextBefore, contextAfter, occurrence, label } = a;
@@ -16341,22 +16754,22 @@ async function handleDocsTool(name, a, ctx) {
         ...occurrence !== undefined ? { occurrence } : {},
         ...label !== undefined ? { label } : {}
       });
-      return ok(res);
+      return ok2(res);
     }
     case "edit_at_anchor": {
       const { docId, anchorId, op } = a;
       const res = await http("POST", `/api/docs/${encodeURIComponent(docId)}/agent_anchors/${encodeURIComponent(anchorId)}/edit`, op);
-      return ok(res);
+      return ok2(res);
     }
     case "insert_blocks_at_anchor": {
       const { docId, anchorId, markdown, placement } = a;
       const res = await http("POST", `/api/docs/${encodeURIComponent(docId)}/agent_anchors/${encodeURIComponent(anchorId)}/insert_blocks`, { markdown, ...placement !== undefined ? { placement } : {} });
-      return ok(res);
+      return ok2(res);
     }
     case "delete_anchor": {
       const { docId, anchorId } = a;
       const res = await http("DELETE", `/api/docs/${encodeURIComponent(docId)}/agent_anchors/${encodeURIComponent(anchorId)}`);
-      return ok(res);
+      return ok2(res);
     }
     case "delete_block_at_anchor": {
       const { docId, threadId, anchorId } = a;
@@ -16364,7 +16777,7 @@ async function handleDocsTool(name, a, ctx) {
         ...threadId !== undefined ? { threadId } : {},
         ...anchorId !== undefined ? { anchorId } : {}
       });
-      return ok(res);
+      return ok2(res);
     }
     case "delete_blocks_in_range": {
       const {
@@ -16384,7 +16797,7 @@ async function handleDocsTool(name, a, ctx) {
         ...startOccurrence !== undefined ? { startOccurrence } : {},
         ...endOccurrence !== undefined ? { endOccurrence } : {}
       });
-      return ok(res);
+      return ok2(res);
     }
     case "delete_section": {
       const { docId, heading, level, occurrence } = a;
@@ -16393,16 +16806,16 @@ async function handleDocsTool(name, a, ctx) {
         ...level !== undefined ? { level } : {},
         ...occurrence !== undefined ? { occurrence } : {}
       });
-      return ok(res);
+      return ok2(res);
     }
     case "observe_url": {
       const { docId } = a;
-      return ok({ sseUrl: `${resolveBaseUrl()}/events/${encodeURIComponent(docId)}` });
+      return ok2({ sseUrl: `${resolveBaseUrl2()}/events/${encodeURIComponent(docId)}` });
     }
     case "watch_doc": {
       const { docId } = a;
       const persisted = await watchDoc(docId);
-      return ok({
+      return ok2({
         docId,
         watching: Array.from(watchers.keys()),
         persisted,
@@ -16412,7 +16825,7 @@ async function handleDocsTool(name, a, ctx) {
     case "unwatch_doc": {
       const { docId } = a;
       const persisted = await unwatchDoc(docId);
-      return ok({
+      return ok2({
         docId,
         watching: Array.from(watchers.keys()),
         persisted,
@@ -16421,7 +16834,7 @@ async function handleDocsTool(name, a, ctx) {
     }
     case "list_watched_docs": {
       const coverage = await refreshCoverage();
-      return ok({
+      return ok2({
         watching: Array.from(watchers.keys()),
         persistence: {
           mode: watchPersistenceMode(),
@@ -16446,36 +16859,36 @@ async function handleDocsTool(name, a, ctx) {
         ttlSeconds,
         name: slug
       });
-      return ok(res);
+      return ok2(res);
     }
     case "share_link": {
       const res = await http("POST", "/api/share/link", a);
-      return ok(res);
+      return ok2(res);
     }
     case "set_share_ttl": {
       const { shareId, ttlSeconds } = a;
       const res = await http("POST", `/api/share/${encodeURIComponent(shareId)}/ttl`, {
         ttlSeconds
       });
-      return ok(res);
+      return ok2(res);
     }
     case "list_shares": {
       const res = await http("GET", "/api/share");
-      return ok(res);
+      return ok2(res);
     }
     case "unshare": {
       const { shareId } = a;
       const res = await http("DELETE", `/api/share/${encodeURIComponent(shareId)}`);
-      return ok(res);
+      return ok2(res);
     }
     case "set_sharing_enabled": {
       const { enabled } = a;
       if (typeof enabled !== "boolean") {
         const res2 = await http("GET", "/api/share");
-        return ok(res2);
+        return ok2(res2);
       }
       const res = await http("POST", "/api/share/enabled", { enabled });
-      return ok(res);
+      return ok2(res);
     }
   }
   return;
@@ -16604,7 +17017,7 @@ function heldResult(res) {
   };
 }
 async function handleTaskTool(name, a, ctx) {
-  const { http, ok, err, AUTHOR, claimNoticeFor } = ctx;
+  const { http, ok: ok2, err: err2, AUTHOR, claimNoticeFor: claimNoticeFor2 } = ctx;
   switch (name) {
     case "create_tasks": {
       const { workspaceId, tasks, sourceDoc } = a;
@@ -16618,7 +17031,7 @@ async function handleTaskTool(name, a, ctx) {
         return h === undefined ? {} : { reviewItemId: h.reviewItemId, ...heldResult({ held: true, ...h }) };
       };
       const unplaced = new Set(res.placement?.unplaced ?? []);
-      return ok({
+      return ok2({
         created: res.tasks.map((t) => ({
           title: t.title,
           ...taskCreatedSummary(t, droppedFor(t.id), gapsFor(t.id), !unplaced.has(t.id)),
@@ -16657,7 +17070,7 @@ async function handleTaskTool(name, a, ctx) {
         ...links !== undefined ? { links } : {},
         author: AUTHOR
       });
-      return ok({
+      return ok2({
         ...taskCreatedSummary(res.task, res.ignoredLinks, undefined, res.placement?.placed),
         ...res.placement?.goals !== undefined ? { goals: res.placement.goals } : {},
         title: res.task.title,
@@ -16677,7 +17090,7 @@ async function handleTaskTool(name, a, ctx) {
         qs.set("includeArchived", "true");
       const query = qs.size > 0 ? `?${qs.toString()}` : "";
       const res = await http("GET", `/api/workspaces/${encodeURIComponent(workspaceId)}/next${query}`);
-      return ok({
+      return ok2({
         workspaceId,
         ...res.retired ? { retired: res.retired } : {},
         tasks: res.tasks
@@ -16698,21 +17111,21 @@ async function handleTaskTool(name, a, ctx) {
         qs.set("includeArchived", "true");
       const query = qs.size > 0 ? `?${qs.toString()}` : "";
       const res = await http("GET", `/api/workspaces/${encodeURIComponent(workspaceId)}/tasks${query}`);
-      return ok({
+      return ok2({
         workspaceId,
         tasks: projectTaskRows(res.tasks, fields)
       });
     }
     case "task_transition": {
       const { taskId, to, note, usage } = a;
-      const claimNotice = to === "in-progress" ? await claimNoticeFor(taskId) : undefined;
+      const claimNotice = to === "in-progress" ? await claimNoticeFor2(taskId) : undefined;
       const res = await http("POST", `/api/tasks/${encodeURIComponent(taskId)}/transition`, {
         to,
         author: AUTHOR,
         ...note !== undefined ? { note } : {},
         ...usage !== undefined ? { usage } : {}
       });
-      return ok({
+      return ok2({
         taskId,
         status: res.task.status,
         blockers: res.blockers,
@@ -16726,7 +17139,7 @@ async function handleTaskTool(name, a, ctx) {
         ...assigneeKind !== undefined ? { assigneeKind } : {},
         author: AUTHOR
       });
-      return ok({
+      return ok2({
         taskId,
         assignee: res.task.assignee,
         changed: res.changed,
@@ -16742,12 +17155,12 @@ async function handleTaskTool(name, a, ctx) {
         parkedUntil = null;
       } else if (typeof until === "number") {
         if (!Number.isFinite(until))
-          return err("until must be a date, or omitted");
+          return err2("until must be a date, or omitted");
         parkedUntil = until;
       } else {
         const parsed = Date.parse(until);
         if (Number.isNaN(parsed)) {
-          return err(`could not read "${until}" as a date — pass epoch ms, "YYYY-MM-DD", or a full ISO timestamp`);
+          return err2(`could not read "${until}" as a date — pass epoch ms, "YYYY-MM-DD", or a full ISO timestamp`);
         }
         parkedUntil = parsed;
       }
@@ -16756,7 +17169,7 @@ async function handleTaskTool(name, a, ctx) {
         ...reason !== undefined ? { reason } : {},
         author: AUTHOR
       });
-      return ok({
+      return ok2({
         taskId,
         status: res.task.status,
         moved: res.changed,
@@ -16770,7 +17183,7 @@ async function handleTaskTool(name, a, ctx) {
         ...reason !== undefined ? { reason } : {},
         author: AUTHOR
       });
-      return ok({
+      return ok2({
         taskId,
         archivedAt: res.task.archivedAt ?? null,
         ...res.task.archiveReason !== undefined ? { archiveReason: res.task.archiveReason } : {},
@@ -16782,7 +17195,7 @@ async function handleTaskTool(name, a, ctx) {
       const res = await http("POST", `/api/tasks/${encodeURIComponent(taskId)}/restore`, {
         author: AUTHOR
       });
-      return ok({
+      return ok2({
         taskId,
         goal: res.task.goal,
         status: res.task.status,
@@ -16792,7 +17205,7 @@ async function handleTaskTool(name, a, ctx) {
     case "rewrite_task": {
       const { taskId, title, body, reason } = a;
       if (body === undefined && title === undefined) {
-        return err("nothing to rewrite — pass title, body, or both");
+        return err2("nothing to rewrite — pass title, body, or both");
       }
       if (body !== undefined) {
         const res2 = await http("POST", `/api/tasks/${encodeURIComponent(taskId)}/body`, {
@@ -16801,7 +17214,7 @@ async function handleTaskTool(name, a, ctx) {
           ...reason !== undefined ? { reason } : {},
           author: AUTHOR
         });
-        return ok({
+        return ok2({
           taskId,
           title: res2.task?.title,
           body: res2.task?.body,
@@ -16813,7 +17226,7 @@ async function handleTaskTool(name, a, ctx) {
         ...reason !== undefined ? { reason } : {},
         author: AUTHOR
       });
-      return ok({ taskId, title: res.task?.title, changed: res.changed ?? false });
+      return ok2({ taskId, title: res.task?.title, changed: res.changed ?? false });
     }
     case "set_task_goal": {
       const { taskId, goal, position, batchId } = a;
@@ -16823,7 +17236,7 @@ async function handleTaskTool(name, a, ctx) {
         ...position !== undefined ? { position } : {},
         ...batchId !== undefined ? { batchId } : {}
       });
-      return ok({ taskId, goal: res.task.goal, order: res.task.order, changed: res.changed });
+      return ok2({ taskId, goal: res.task.goal, order: res.task.order, changed: res.changed });
     }
     case "set_goal_list": {
       const { workspaceId, goals, drop } = a;
@@ -16832,7 +17245,7 @@ async function handleTaskTool(name, a, ctx) {
         ...drop !== undefined ? { drop } : {},
         author: AUTHOR
       });
-      return ok({
+      return ok2({
         workspaceId,
         changed: res.changed,
         created: res.created,
@@ -16849,12 +17262,12 @@ async function handleTaskTool(name, a, ctx) {
         ...dueAt !== undefined ? { dueAt } : {},
         author: AUTHOR
       });
-      return ok({ workspaceId, goal: res.goal, changed: res.changed });
+      return ok2({ workspaceId, goal: res.goal, changed: res.changed });
     }
     case "reorder_goals": {
       const { workspaceId, order } = a;
       const res = await http("POST", `/api/workspaces/${encodeURIComponent(workspaceId)}/goals/reorder`, { order, author: AUTHOR });
-      return ok({
+      return ok2({
         workspaceId,
         order: res.order,
         changed: res.changed
@@ -16866,7 +17279,7 @@ async function handleTaskTool(name, a, ctx) {
         review,
         author: AUTHOR
       });
-      return ok({
+      return ok2({
         taskId,
         reviewItemId: res.item?.id,
         ...res.reviewAdvice !== undefined ? { reviewAdvice: res.reviewAdvice } : {},
@@ -16878,7 +17291,7 @@ async function handleTaskTool(name, a, ctx) {
       let effectiveTaskId = taskId;
       if (effectiveTaskId === undefined) {
         if (reviewItemId === undefined) {
-          return err("which item? Pass its reviewItemId (from the queue row or the ticket), or taskId — alone for a ticket that is itself a decision, with reviewItemId for one of the items filed on it");
+          return err2("which item? Pass its reviewItemId (from the queue row or the ticket), or taskId — alone for a ticket that is itself a decision, with reviewItemId for one of the items filed on it");
         }
         const address = await resolveReviewItemId(ctx, reviewItemId);
         if (address.kind === "doc-thread") {
@@ -16888,7 +17301,7 @@ async function handleTaskTool(name, a, ctx) {
             ...answeredWith !== undefined ? { optionId: answeredWith } : {},
             author: AUTHOR
           });
-          return ok({
+          return ok2({
             reviewItemId,
             docId: address.docId,
             threadId: address.threadId,
@@ -16904,7 +17317,7 @@ async function handleTaskTool(name, a, ctx) {
         ...reviewItemId !== undefined ? { reviewItemId } : {},
         ...answeredWith !== undefined ? { answeredWith } : {}
       });
-      return ok({
+      return ok2({
         taskId: effectiveTaskId,
         ...reviewItemId !== undefined ? { reviewItemId } : {},
         recorded: true,
@@ -16933,29 +17346,29 @@ async function handleTaskTool(name, a, ctx) {
       };
       if (docId !== undefined || threadId !== undefined || commentId !== undefined) {
         if (taskId !== undefined || reviewItemId !== undefined) {
-          return err("two addresses in one call — pass taskId + reviewItemId for an item on a ticket, or docId + threadId + commentId for one raised on a doc thread, not both");
+          return err2("two addresses in one call — pass taskId + reviewItemId for an item on a ticket, or docId + threadId + commentId for one raised on a doc thread, not both");
         }
         if (docId === undefined || threadId === undefined || commentId === undefined) {
-          return err("the doc-thread form needs all three of docId + threadId + commentId — commentId is the thread.comments[].id that create_thread / post_reply returned when you raised the item");
+          return err2("the doc-thread form needs all three of docId + threadId + commentId — commentId is the thread.comments[].id that create_thread / post_reply returned when you raised the item");
         }
         if (reply !== undefined) {
-          return err("`reply` is ticket-only — a doc-thread item already lives in its thread, so point at the change there with post_reply");
+          return err2("`reply` is ticket-only — a doc-thread item already lives in its thread, so point at the change there with post_reply");
         }
         const docRes = await http("POST", `/api/docs/${encodeURIComponent(docId)}/threads/${encodeURIComponent(threadId)}/revise`, { ...patch, commentId });
-        return ok({ docId, threadId, commentId, revised: true, ...heldResult(docRes) });
+        return ok2({ docId, threadId, commentId, revised: true, ...heldResult(docRes) });
       }
       let effectiveTaskId = taskId;
       if (effectiveTaskId === undefined) {
         if (reviewItemId === undefined) {
-          return err("which item? A bare reviewItemId (from the queue row or the ticket), taskId (+ reviewItemId for one of the items filed on the ticket), or docId + threadId + commentId for one raised on a doc thread");
+          return err2("which item? A bare reviewItemId (from the queue row or the ticket), taskId (+ reviewItemId for one of the items filed on the ticket), or docId + threadId + commentId for one raised on a doc thread");
         }
         const address = await resolveReviewItemId(ctx, reviewItemId);
         if (address.kind === "doc-thread") {
           if (reply !== undefined) {
-            return err("`reply` is ticket-only — a doc-thread item already lives in its thread, so point at the change there with post_reply");
+            return err2("`reply` is ticket-only — a doc-thread item already lives in its thread, so point at the change there with post_reply");
           }
           const docRes = await http("POST", `/api/docs/${encodeURIComponent(address.docId)}/threads/${encodeURIComponent(address.threadId)}/revise`, { ...patch, commentId: address.commentId });
-          return ok({
+          return ok2({
             reviewItemId,
             docId: address.docId,
             threadId: address.threadId,
@@ -16967,11 +17380,11 @@ async function handleTaskTool(name, a, ctx) {
         effectiveTaskId = address.taskId;
       }
       if (reviewItemId === undefined && reply !== undefined) {
-        return err("`reply` needs an item thread to land on, and a ticket's own decision has none — revise without `reply`, then point at the change with post_reply on the task");
+        return err2("`reply` needs an item thread to land on, and a ticket's own decision has none — revise without `reply`, then point at the change with post_reply on the task");
       }
       const targetItemId = reviewItemId ?? "r-legacy";
       const res = await http("POST", `/api/tasks/${encodeURIComponent(effectiveTaskId)}/review-items/${encodeURIComponent(targetItemId)}/revise`, { ...patch, ...reply !== undefined ? { reply } : {} });
-      return ok({
+      return ok2({
         taskId: effectiveTaskId,
         ...reviewItemId !== undefined ? { reviewItemId } : { decision: true },
         revised: true,
@@ -16986,7 +17399,7 @@ async function handleTaskTool(name, a, ctx) {
       const body = { author: AUTHOR, ...reason !== undefined ? { reason } : {} };
       const docWithdraw = async (address) => {
         await http("POST", `/api/docs/${encodeURIComponent(address.docId)}/threads/${encodeURIComponent(address.threadId)}/withdraw${undo ? "/undo" : ""}`, { ...body, commentId: address.commentId });
-        return ok({
+        return ok2({
           ...reviewItemId !== undefined ? { reviewItemId } : {},
           ...address,
           withdrawn: undo !== true
@@ -16994,16 +17407,16 @@ async function handleTaskTool(name, a, ctx) {
       };
       if (reviewItemId !== undefined) {
         if (docId !== undefined || threadId !== undefined || commentId !== undefined) {
-          return err("two addresses in one call — pass reviewItemId alone (it carries its own address), or the docId + threadId + commentId triple, not both");
+          return err2("two addresses in one call — pass reviewItemId alone (it carries its own address), or the docId + threadId + commentId triple, not both");
         }
         const address = taskId !== undefined ? { kind: "task-item", taskId } : await resolveReviewItemId(ctx, reviewItemId);
         if (address.kind === "doc-thread")
           return docWithdraw(address);
         await http("POST", `/api/tasks/${encodeURIComponent(address.taskId)}/review-items/${encodeURIComponent(reviewItemId)}/withdraw${undo ? "/undo" : ""}`, body);
-        return ok({ taskId: address.taskId, reviewItemId, withdrawn: undo !== true });
+        return ok2({ taskId: address.taskId, reviewItemId, withdrawn: undo !== true });
       }
       if (docId === undefined || threadId === undefined || commentId === undefined) {
-        return err("which item? Pass its reviewItemId (from the queue row or the ticket), or the full docId + threadId + commentId triple for one raised on a doc thread");
+        return err2("which item? Pass its reviewItemId (from the queue row or the ticket), or the full docId + threadId + commentId triple for one raised on a doc thread");
       }
       return docWithdraw({ docId, threadId, commentId });
     }
@@ -17012,12 +17425,12 @@ async function handleTaskTool(name, a, ctx) {
       let effectiveTaskId = taskId;
       if (effectiveTaskId === undefined) {
         if (reviewItemId === undefined) {
-          return err("which item? Pass its reviewItemId (from the queue row or the ticket), or taskId — alone for a ticket that is itself a decision, with reviewItemId for one of the items filed on it");
+          return err2("which item? Pass its reviewItemId (from the queue row or the ticket), or taskId — alone for a ticket that is itself a decision, with reviewItemId for one of the items filed on it");
         }
         const address = await http("GET", `/api/review-items/${encodeURIComponent(reviewItemId)}`);
         if (address.kind === "doc-thread") {
           await http("POST", `/api/docs/${encodeURIComponent(address.docId)}/threads/${encodeURIComponent(address.threadId)}/comments`, { author: AUTHOR, text: question });
-          return ok({
+          return ok2({
             reviewItemId,
             docId: address.docId,
             threadId: address.threadId,
@@ -17028,7 +17441,7 @@ async function handleTaskTool(name, a, ctx) {
       }
       const path = reviewItemId === undefined ? `/api/tasks/${encodeURIComponent(effectiveTaskId)}/more-info` : `/api/tasks/${encodeURIComponent(effectiveTaskId)}/review-items/${encodeURIComponent(reviewItemId)}/more-info`;
       const res = await http("POST", path, { question, author: AUTHOR });
-      return ok({
+      return ok2({
         taskId: effectiveTaskId,
         ...reviewItemId !== undefined ? { reviewItemId } : {},
         asked: true,
@@ -17043,7 +17456,7 @@ async function handleTaskTool(name, a, ctx) {
         ...reviewItemId !== undefined ? { reviewItemId } : {},
         ...optionId !== undefined ? { answeredWith: optionId } : {}
       });
-      return ok({ taskId, recorded: true, links: res.task.links ?? [] });
+      return ok2({ taskId, recorded: true, links: res.task.links ?? [] });
     }
     case "set_task_dependencies": {
       const { taskId, after, afterEnforce } = a;
@@ -17052,7 +17465,7 @@ async function handleTaskTool(name, a, ctx) {
         ...afterEnforce !== undefined ? { afterEnforce } : {},
         author: AUTHOR
       });
-      return ok({
+      return ok2({
         taskId,
         changed: res.changed,
         after: res.task.after ?? [],
@@ -17062,26 +17475,26 @@ async function handleTaskTool(name, a, ctx) {
     case "import_tasks_markdown": {
       const { workspaceId, path, apply } = a;
       const res = await http("POST", `/api/workspaces/${encodeURIComponent(workspaceId)}/import-tasks`, { path, ...apply !== undefined ? { apply } : {}, author: AUTHOR });
-      return ok(res);
+      return ok2(res);
     }
     case "link_refs": {
       const { taskId, ref } = a;
       const res = await http("POST", `/api/tasks/${encodeURIComponent(taskId)}/links`, {
         ref
       });
-      return ok({ taskId, changed: res.changed });
+      return ok2({ taskId, changed: res.changed });
     }
     case "list_backlinks": {
       const { ref } = a;
       const res = await http("POST", "/api/refs/backlinks", { ref });
-      return ok({ ref, tasks: res.tasks });
+      return ok2({ ref, tasks: res.tasks });
     }
     case "unlink_refs": {
       const { taskId, ref } = a;
       const res = await http("DELETE", `/api/tasks/${encodeURIComponent(taskId)}/links`, {
         ref
       });
-      return ok({ taskId, changed: res.changed });
+      return ok2({ taskId, changed: res.changed });
     }
   }
   return;
@@ -17200,13 +17613,13 @@ async function setBoardRetired(ctx, workspaceId, retired, reason) {
 async function handleWorkspaceTool(name, a, ctx) {
   const {
     http,
-    ok,
-    err,
+    ok: ok2,
+    err: err2,
     AUTHOR,
     PLUGIN_VERSION,
     PROCESS_ID,
     IDENTITY_IS_SHARED,
-    markAttached,
+    markAttached: markAttached2,
     watchWorkspace
   } = ctx;
   switch (name) {
@@ -17223,7 +17636,7 @@ async function handleWorkspaceTool(name, a, ctx) {
       if (subscribe !== false && res.workspace?.id) {
         await watchWorkspace(res.workspace.id);
       }
-      return ok({
+      return ok2({
         workspaceId: res.workspace.id,
         name: res.workspace.name,
         leadAgentId: res.workspace.leadAgentId
@@ -17235,7 +17648,7 @@ async function handleWorkspaceTool(name, a, ctx) {
         name: nextName,
         author: AUTHOR
       });
-      return ok({
+      return ok2({
         workspaceId,
         name: res.workspace.name,
         changed: res.changed,
@@ -17244,11 +17657,11 @@ async function handleWorkspaceTool(name, a, ctx) {
     }
     case "retire_workspace": {
       const { workspaceId, reason } = a;
-      return ok(await setBoardRetired(ctx, workspaceId, true, reason));
+      return ok2(await setBoardRetired(ctx, workspaceId, true, reason));
     }
     case "unretire_workspace": {
       const { workspaceId } = a;
-      return ok(await setBoardRetired(ctx, workspaceId, false));
+      return ok2(await setBoardRetired(ctx, workspaceId, false));
     }
     case "set_workspace_lead": {
       const { workspaceId, leadAgentId, takeover } = a;
@@ -17265,18 +17678,18 @@ async function handleWorkspaceTool(name, a, ctx) {
         pluginVersion: PLUGIN_VERSION,
         processId: PROCESS_ID
       });
-      return declared.isError === true ? err(String(declared.message)) : ok(declared);
+      return declared.isError === true ? err2(String(declared.message)) : ok2(declared);
     }
     case "set_review_item_criteria": {
       const { workspaceId, criteria, reviewItemId } = a;
       let effectiveWorkspaceId = workspaceId;
       if (effectiveWorkspaceId === undefined) {
         if (reviewItemId === undefined) {
-          return err("which board? Pass workspaceId, or a reviewItemId — the criteria then land on the board that judges that item");
+          return err2("which board? Pass workspaceId, or a reviewItemId — the criteria then land on the board that judges that item");
         }
         const res2 = await http("GET", `/api/review-items/${encodeURIComponent(reviewItemId)}`);
         if (res2.workspaceId === undefined) {
-          return err("that item's doc is not attached to any workspace, so it names no board — pass workspaceId");
+          return err2("that item's doc is not attached to any workspace, so it names no board — pass workspaceId");
         }
         effectiveWorkspaceId = res2.workspaceId;
       }
@@ -17284,7 +17697,7 @@ async function handleWorkspaceTool(name, a, ctx) {
         reviewItemCriteria: criteria !== undefined && criteria.trim() !== "" ? criteria : null,
         author: AUTHOR
       });
-      return ok({
+      return ok2({
         workspaceId: effectiveWorkspaceId,
         criteria: res.reviewItemCriteria.value,
         isDefault: res.reviewItemCriteria.isDefault
@@ -17295,12 +17708,12 @@ async function handleWorkspaceTool(name, a, ctx) {
       const res = await http("POST", `/api/workspaces/${encodeURIComponent(workspaceId)}/docs`, {
         docId
       });
-      return ok({ ok: true, workspaceId, docIds: res.workspace?.docIds ?? [] });
+      return ok2({ ok: true, workspaceId, docIds: res.workspace?.docIds ?? [] });
     }
     case "get_workspace": {
       const { workspaceId } = a;
       const res = await http("GET", `/api/workspaces/${encodeURIComponent(workspaceId)}`);
-      return ok({
+      return ok2({
         workspaceId: res.workspace.id,
         name: res.workspace.name,
         ...res.parallelismCap !== undefined ? { parallelismCap: res.parallelismCap } : {},
@@ -17321,7 +17734,7 @@ async function handleWorkspaceTool(name, a, ctx) {
         processId: PROCESS_ID
       });
       if (agentId === undefined || agentId === AUTHOR.id)
-        markAttached(workspaceId);
+        markAttached2(workspaceId);
       if (subscribe !== false)
         await watchWorkspace(workspaceId);
       for (const q of res.queuedComments ?? []) {
@@ -17331,7 +17744,7 @@ async function handleWorkspaceTool(name, a, ctx) {
           await http("POST", `/api/workspaces/${encodeURIComponent(workspaceId)}/comment-queue/${encodeURIComponent(q.id)}/ack`, {});
         } catch {}
       }
-      return ok({
+      return ok2({
         workspaceId,
         agentId: res.attachment?.agentId ?? agentId ?? AUTHOR.id,
         ...res.retired ? { retired: res.retired } : {},
@@ -17358,17 +17771,17 @@ async function handleWorkspaceTool(name, a, ctx) {
       const { workspaceId, agentId, toolCallAt } = a;
       const res = await http("POST", `/api/workspaces/${encodeURIComponent(workspaceId)}/attachments/${encodeURIComponent(agentId ?? AUTHOR.id)}/heartbeat`, { toolCallAt: toolCallAt ?? Date.now() });
       if (agentId === undefined || agentId === AUTHOR.id)
-        markAttached(workspaceId);
-      return ok({ workspaceId, agentId: agentId ?? AUTHOR.id, state: res.attachment?.state });
+        markAttached2(workspaceId);
+      return ok2({ workspaceId, agentId: agentId ?? AUTHOR.id, state: res.attachment?.state });
     }
     case "get_unfiled_ask_count": {
       const { agent } = a;
       const who = agent?.trim() || AUTHOR.name;
-      return ok(await http("GET", `/api/chat-audit/${encodeURIComponent(who)}`));
+      return ok2(await http("GET", `/api/chat-audit/${encodeURIComponent(who)}`));
     }
     case "publish_chat_audit": {
       const { day, entries } = a;
-      return ok(await http("POST", "/api/chat-audit", {
+      return ok2(await http("POST", "/api/chat-audit", {
         ...day !== undefined ? { day } : {},
         auditor: AUTHOR.name,
         entries
@@ -17376,19 +17789,19 @@ async function handleWorkspaceTool(name, a, ctx) {
     }
     case "register_dispatch": {
       const { taskId, worktreePath } = a;
-      return ok(await http("POST", "/api/dispatches", { taskId, worktreePath }));
+      return ok2(await http("POST", "/api/dispatches", { taskId, worktreePath }));
     }
     case "close_dispatch": {
       const { taskId } = a;
-      return ok(await http("DELETE", `/api/dispatches/${encodeURIComponent(taskId)}`));
+      return ok2(await http("DELETE", `/api/dispatches/${encodeURIComponent(taskId)}`));
     }
     case "set_parallelism_cap": {
       const { workspaceId, cap: rawCap } = a;
       const parsed = parseCapArg(rawCap);
       if (!parsed.ok)
-        return err(parsed.error);
+        return err2(parsed.error);
       const res = await http("PUT", `/api/workspaces/${encodeURIComponent(workspaceId)}/parallelism-cap`, { cap: parsed.cap, author: AUTHOR });
-      return ok({
+      return ok2({
         workspaceId,
         cap: res.cap,
         isDefault: res.isDefault,
@@ -17400,37 +17813,15 @@ async function handleWorkspaceTool(name, a, ctx) {
       });
     }
     case "request_plugin_refresh": {
-      return ok(await http("POST", "/api/plugin/refresh"));
+      return ok2(await http("POST", "/api/plugin/refresh"));
     }
     case "list_attachments": {
       const { workspaceId } = a;
       const res = await http("GET", `/api/workspaces/${encodeURIComponent(workspaceId)}/attachments`);
-      return ok(res);
+      return ok2(res);
     }
   }
   return;
-}
-
-// packages/mcp/src/voice-line.ts
-function truncate4(s, n) {
-  return s.length > n ? `${s.slice(0, n - 1)}…` : s;
-}
-function where(p) {
-  const c = p.context;
-  if (!c)
-    return "";
-  return ` (at ${c.surface ?? "?"}${c.docId ? ` ${c.docId}` : ""}${c.taskId ? ` ${c.taskId}` : ""}${c.visibleHeading ? `, near "${c.visibleHeading}"` : ""})`;
-}
-function voiceRequestLine(p) {
-  if (p.route === "fast-path")
-    return null;
-  const by = p.actor?.name ? ` by ${p.actor.name}` : "";
-  const said = `[voice.request]${by}${where(p)}: "${p.transcript ?? ""}"`;
-  const told = truncate4(p.ack ?? "", 120);
-  if (p.route === "fast-path-action") {
-    return `${said} — the fast path ALREADY applied this to the board on the speaker's behalf; ` + `they were told: "${told}". Do NOT redo it — reconcile your own picture of the board ` + "with what changed, and pick up only whatever the utterance asked for beyond it.";
-  }
-  return `${said} — act on it through the task/edit tools; the speaker was told: "${told}"`;
 }
 
 // packages/mcp/src/watch-coverage.ts
@@ -17502,27 +17893,258 @@ function restoreNoticeContent(opts) {
 `) : null;
 }
 
-// packages/mcp/src/mcp.ts
-function resolveBaseUrl() {
-  const override = readRenamedEnv(process.env, "CW_BASE_URL");
-  if (override)
-    return override;
-  const discovery = resolveDiscoveryFile(homedir(), existsSync);
-  if (discovery) {
+// packages/mcp/src/watch-registry.ts
+function watchesPath(deps) {
+  return `/api/agents/${encodeURIComponent(deps.author.id)}/watches`;
+}
+function createWatchRegistry(deps) {
+  const state = { coverage: undefined, lastPersistError: undefined };
+  return {
+    watchDoc: (docId, persist) => watchDoc(deps, state, docId, persist),
+    watchWorkspace: (workspaceId, persist) => watchWorkspace(deps, state, workspaceId, persist),
+    unwatchDoc: (docId) => unwatchDoc(deps, state, docId),
+    refreshCoverage: () => refreshCoverage(deps, state),
+    coverage: () => state.coverage,
+    setCoverage: (next) => {
+      state.coverage = next;
+    },
+    watchPersistenceMode: () => watchPersistenceMode(deps),
+    lastPersistError: () => state.lastPersistError,
+    watchesPath: () => watchesPath(deps)
+  };
+}
+function isSharedIdentity(authorId) {
+  return authorId === "known-agent";
+}
+var SHARED_IDENTITY_REASON = "CW_AGENT_NAME is not set, so this session has no identity to key its watches on; " + "they will not survive a restart. Set it in the launch environment and restart the session.";
+async function refreshCoverage(deps, state) {
+  if (deps.identityIsShared)
+    return;
+  try {
+    state.coverage = parseCoverage(await deps.http("GET", watchesPath(deps))) ?? state.coverage;
+  } catch {}
+  return state.coverage;
+}
+function watchPersistenceMode(deps) {
+  return deps.identityIsShared ? "session-only" : "server";
+}
+async function persistWatchChange(deps, state, change) {
+  if (deps.identityIsShared)
+    return false;
+  try {
+    await deps.http("POST", watchesPath(deps), { ...change, name: deps.author.name });
+    state.lastPersistError = undefined;
+    return true;
+  } catch (err2) {
+    state.lastPersistError = err2 instanceof Error ? err2.message : String(err2);
+    deps.log("[claude-workspaces-mcp] could not persist watch change:", state.lastPersistError);
+    return false;
+  }
+}
+async function watchDoc(deps, state, docId, persist = true) {
+  if (!deps.watchers.has(docId)) {
+    const controller = new AbortController;
+    deps.watchers.set(docId, { controller, docId, open: false });
+    await deps.startSseLoop(docId, `/events/${encodeURIComponent(docId)}`, controller);
+  }
+  return persist ? persistWatchChange(deps, state, { add: [docId] }) : false;
+}
+async function watchWorkspace(deps, state, workspaceId, persist = true) {
+  const key = `ws:${workspaceId}`;
+  let open = deps.watchers.get(key)?.open === true;
+  if (!deps.watchers.has(key)) {
+    const controller = new AbortController;
+    deps.watchers.set(key, { controller, docId: key, open: false });
+    open = await deps.startSseLoop(key, `/events/workspace/${encodeURIComponent(workspaceId)}?agentId=${encodeURIComponent(deps.author.id)}`, controller);
+  }
+  const persisted = persist ? await persistWatchChange(deps, state, { add: [key] }) : false;
+  return { open, persisted };
+}
+async function unwatchDoc(deps, state, docId) {
+  const w = deps.watchers.get(docId);
+  if (w) {
+    w.controller.abort();
+    deps.watchers.delete(docId);
+  }
+  return persistWatchChange(deps, state, { remove: [docId] });
+}
+
+// packages/mcp/src/attach-backlog.ts
+async function deliverAttachBacklog(workspaceId, backlog, deps) {
+  let comments = 0;
+  for (const row of backlog.queuedComments ?? []) {
+    if (typeof row?.id !== "string")
+      continue;
+    const original = row.payload && typeof row.payload === "object" ? row.payload : undefined;
+    const event = typeof original?.event === "string" ? original.event : typeof row.event === "string" ? row.event : undefined;
+    if (event === undefined)
+      continue;
+    const payload = original ? { ...original } : {
+      event,
+      ...typeof row.docId === "string" ? { docId: row.docId } : {},
+      ...typeof row.threadId === "string" ? { threadId: row.threadId } : {},
+      comment: {
+        ...row.author !== undefined ? { author: row.author } : {},
+        ...typeof row.text === "string" ? { text: row.text } : {},
+        ...typeof row.ts === "number" ? { ts: row.ts } : {}
+      }
+    };
+    payload.workspaceId = workspaceId;
+    payload.commentQueueId = row.id;
     try {
-      const j = JSON.parse(readFileSync(discovery, "utf8"));
-      if (j.port)
-        return `http://localhost:${j.port}`;
+      await deps.emit(event, payload);
+    } catch {
+      continue;
+    }
+    comments += 1;
+    try {
+      await deps.ackComment(row.id);
     } catch {}
   }
-  throw new Error("claude-workspaces server not found — start it with `bun run dev` (or set CW_BASE_URL). " + `Looked for a discovery file at ${discoveryCandidates(homedir()).join(" and ")}.`);
+  let voice = 0;
+  for (const row of backlog.queuedVoice ?? []) {
+    if (typeof row?.transcript !== "string")
+      continue;
+    const applied = typeof row.applied === "string" ? row.applied : undefined;
+    const payload = {
+      route: "agent",
+      transcript: row.transcript,
+      ack: applied ? `Delivered from the queue. Already applied: ${applied}` : "Delivered from the queue.",
+      ...row.context !== undefined ? { context: row.context } : {},
+      ...row.actor !== undefined ? { actor: row.actor } : {},
+      workspaceId
+    };
+    try {
+      await deps.emit("voice.request", payload);
+      voice += 1;
+    } catch {}
+  }
+  return { comments, voice };
 }
+
+// packages/mcp/src/watch-restore.ts
+function now2(deps) {
+  return (deps.now ?? Date.now)();
+}
+function createWatchRestore(deps) {
+  const rt = {
+    state: deps.identityIsShared ? { status: "session-only", from: "session", restored: [], pruned: [], attempts: 0 } : { status: "pending", from: "session", restored: [], pruned: [], attempts: 0 },
+    inFlight: null,
+    retryAt: 0
+  };
+  return {
+    ensureWatchesRestored: () => ensureWatchesRestored(deps, rt),
+    state: () => rt.state
+  };
+}
+async function ensureWatchesRestored(deps, rt) {
+  if (rt.state.status === "restored" || rt.state.status === "session-only")
+    return;
+  if (rt.inFlight)
+    return rt.inFlight;
+  if (rt.state.status === "failed" && now2(deps) < rt.retryAt)
+    return;
+  rt.inFlight = (async () => {
+    const attempts = rt.state.attempts + 1;
+    try {
+      const res = await deps.http("GET", deps.registry.watchesPath());
+      deps.registry.setCoverage(parseCoverage(res));
+      const keys = (res.watches ?? []).map((w) => w.key);
+      const restored = [];
+      for (const key of keys) {
+        if (deps.watchers.has(key))
+          continue;
+        if (key.startsWith("ws:"))
+          await deps.registry.watchWorkspace(key.slice("ws:".length), false);
+        else
+          await deps.registry.watchDoc(key, false);
+        restored.push(key);
+      }
+      const reattached = [];
+      for (const workspaceId of boardsToReattach(deps.registry.coverage())) {
+        try {
+          const attachRes = await deps.http("POST", `/api/workspaces/${encodeURIComponent(workspaceId)}/attachments`, {
+            agentId: deps.author.id,
+            agentName: deps.author.name,
+            runtime: "claude-code-local",
+            pluginVersion: deps.pluginVersion,
+            processId: deps.processId
+          });
+          deps.markAttached(workspaceId);
+          reattached.push(workspaceId);
+          deps.deferredEmits.emitOutsideToolCall(() => deliverAttachBacklog(workspaceId, attachRes, {
+            emit: async (ev, payload) => {
+              if (deps.shouldForward(ev, payload)) {
+                await deps.emitChannelMessage(ev, payload);
+              }
+            },
+            ackComment: async (rowId) => {
+              await deps.http("POST", `/api/workspaces/${encodeURIComponent(workspaceId)}/comment-queue/${encodeURIComponent(rowId)}/ack`, {});
+            }
+          }));
+        } catch {}
+      }
+      if (reattached.length > 0)
+        await deps.registry.refreshCoverage();
+      const state = {
+        status: "restored",
+        from: "server",
+        restored,
+        reattached,
+        pruned: res.pruned ?? [],
+        at: new Date(now2(deps)).toISOString(),
+        attempts
+      };
+      rt.state = state;
+      deps.deferredEmits.emitOutsideToolCall(() => emitRestoreNotice(deps, state));
+    } catch (err2) {
+      rt.state = {
+        ...rt.state,
+        status: "failed",
+        error: err2 instanceof Error ? err2.message : String(err2),
+        attempts
+      };
+      rt.retryAt = now2(deps) + Math.min(30000, 1000 * 2 ** attempts);
+    } finally {
+      rt.inFlight = null;
+    }
+  })();
+  return rt.inFlight;
+}
+async function emitRestoreNotice(deps, state) {
+  const content = restoreNoticeContent({
+    restored: state.restored,
+    reattached: state.reattached ?? [],
+    pruned: state.pruned,
+    agentName: deps.author.name,
+    coverage: deps.registry.coverage()
+  });
+  if (content === null)
+    return;
+  await deps.notify({
+    method: "notifications/claude/channel",
+    params: {
+      source: "claude-workspaces",
+      sent_at: state.at ?? new Date(now2(deps)).toISOString(),
+      content,
+      meta: {
+        event: "watches.restored",
+        restored: state.restored,
+        pruned: state.pruned,
+        ...deps.registry.coverage() ? { unattachedBoards: deps.registry.coverage()?.unattachedBoards } : {}
+      }
+    }
+  });
+}
+
+// packages/mcp/src/mcp.ts
+var resolveBaseUrl2 = () => resolveBaseUrl({ env: process.env, homedir, existsSync, readFileSync });
 var AUTHOR = resolveAgentAuthor(process.env);
 var STATUS_TEXT_MAX = 4000;
 function suggestionAuthor() {
   return { id: AUTHOR.id, name: AUTHOR.name, color: AUTHOR.color };
 }
-var PLUGIN_VERSION = "0.1.152";
+var PLUGIN_VERSION = "0.1.153";
 var PROCESS_ID = randomUUID();
 var server = new Server({
   name: "claude-workspaces",
@@ -17631,24 +18253,6 @@ var server = new Server({
   ].join(" ")
 });
 server.setRequestHandler(ListToolsRequestSchema, async () => TOOL_LIST);
-var NO_AUTO_WATCH_TOOLS = new Set([
-  "unwatch_doc",
-  "watch_doc",
-  "observe_url",
-  "attach_doc"
-]);
-async function maybeAutoWatch(name, args) {
-  if (NO_AUTO_WATCH_TOOLS.has(name))
-    return;
-  if (!args || typeof args !== "object")
-    return;
-  const a = args;
-  if (a.subscribe === false)
-    return;
-  if (typeof a.docId !== "string" || a.docId.length === 0)
-    return;
-  await watchDoc(a.docId);
-}
 var deferredEmits = createDeferredEmitter();
 function toolContext() {
   return {
@@ -17658,547 +18262,97 @@ function toolContext() {
     AUTHOR,
     PLUGIN_VERSION,
     PROCESS_ID,
-    markAttached,
+    markAttached: markAttached2,
     STATUS_TEXT_MAX,
     suggestionAuthor,
-    resolveBaseUrl,
+    resolveBaseUrl: resolveBaseUrl2,
     watchers,
-    watchDoc,
-    watchWorkspace,
-    unwatchDoc,
-    refreshCoverage,
-    watchPersistenceMode,
-    claimNoticeFor,
-    restoreState,
-    lastPersistError,
+    watchDoc: watchDoc2,
+    watchWorkspace: watchWorkspace2,
+    unwatchDoc: unwatchDoc2,
+    refreshCoverage: refreshCoverage2,
+    watchPersistenceMode: watchPersistenceMode2,
+    claimNoticeFor: claimNoticeFor2,
+    restoreState: restore.state(),
+    lastPersistError: registry2.lastPersistError(),
     IDENTITY_IS_SHARED,
     SHARED_IDENTITY_REASON
   };
 }
-server.setRequestHandler(CallToolRequestSchema, async (req) => {
-  const { name, arguments: a = {} } = req.params;
-  const endToolCall = deferredEmits.beginToolCall();
-  try {
-    await ensureWatchesRestored();
-    sendDueHeartbeats();
-    await maybeAutoWatch(name, a);
-    const ctx = toolContext();
-    return await handleDocsTool(name, a, ctx) ?? await handleTaskTool(name, a, ctx) ?? await handleWorkspaceTool(name, a, ctx) ?? err(`unknown tool: ${name}`);
-  } catch (e) {
-    return err(e instanceof Error ? e.message : String(e));
-  } finally {
-    endToolCall();
+server.setRequestHandler(CallToolRequestSchema, createCallToolHandler({
+  deferredEmits,
+  ensureWatchesRestored: () => ensureWatchesRestored2(),
+  sendDueHeartbeats: () => sendDueHeartbeats2(),
+  watchDoc: (docId) => watchDoc2(docId),
+  toolContext,
+  handlers: [handleDocsTool, handleTaskTool, handleWorkspaceTool],
+  err
+}));
+var watchers = new Map;
+var IDENTITY_IS_SHARED = isSharedIdentity(AUTHOR.id);
+var { markAttached: markAttached2, sendDueHeartbeats: sendDueHeartbeats2, claimNoticeFor: claimNoticeFor2 } = createAttachments({
+  http: (method, path, body) => http(method, path, body),
+  author: AUTHOR,
+  keepalive: createAttachmentKeepalive()
+});
+var shouldForwardFrame = createFrameDedup();
+var channel = createChannelMessages({
+  notify: (n) => server.notification(n),
+  http: (method, path, body) => http(method, path, body),
+  authorId: AUTHOR.id
+});
+var handleFrame2 = createFrameHandler({
+  notify: (n) => server.notification(n),
+  emitChannelMessage: (event, payload) => channel.emitChannelMessage(event, payload),
+  http: (method, path, body) => http(method, path, body),
+  shouldForward: (event, payload) => shouldForwardFrame.shouldForward(event, payload)
+});
+var { startSseLoop: startSseLoop2 } = createSseLoops({
+  watchers,
+  resolveBaseUrl: resolveBaseUrl2,
+  fetch: (url, init) => fetch(url, init),
+  handleFrame: (raw) => handleFrame2(raw),
+  resetDedup: () => shouldForwardFrame.reset(),
+  log: (...args) => console.error(...args),
+  sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
+  timers: {
+    set: (fn, ms) => setTimeout(fn, ms),
+    clear: (h) => clearTimeout(h)
   }
 });
-var watchers = new Map;
-var IDENTITY_IS_SHARED = AUTHOR.id === "known-agent";
-var SHARED_IDENTITY_REASON = "CW_AGENT_NAME is not set, so this session has no identity to key its watches on; " + "they will not survive a restart. Set it in the launch environment and restart the session.";
-var restoreState = IDENTITY_IS_SHARED ? { status: "session-only", from: "session", restored: [], pruned: [], attempts: 0 } : { status: "pending", from: "session", restored: [], pruned: [], attempts: 0 };
-var restoreInFlight = null;
-var restoreRetryAt = 0;
-var lastPersistError;
-var keepalive = createAttachmentKeepalive();
-function markAttached(workspaceId) {
-  keepalive.mark(workspaceId);
-}
-async function sendDueHeartbeats() {
-  for (const workspaceId of keepalive.due()) {
-    try {
-      await http("POST", `/api/workspaces/${encodeURIComponent(workspaceId)}/attachments/${encodeURIComponent(AUTHOR.id)}/heartbeat`, { toolCallAt: Date.now() });
-    } catch {}
-  }
-}
-async function claimNoticeFor(taskId) {
-  for (const workspaceId of keepalive.boards()) {
-    try {
-      const res = await http("GET", `/api/workspaces/${encodeURIComponent(workspaceId)}/next?includeBlocked=true`);
-      const row = res.tasks?.find((t) => t?.id === taskId);
-      if (row)
-        return claimWarning(row, AUTHOR.id, Date.now());
-    } catch {}
-  }
-  return;
-}
-var lastCoverage;
-async function refreshCoverage() {
-  if (IDENTITY_IS_SHARED)
-    return;
-  try {
-    lastCoverage = parseCoverage(await http("GET", watchesPath())) ?? lastCoverage;
-  } catch {}
-  return lastCoverage;
-}
-function watchPersistenceMode() {
-  return IDENTITY_IS_SHARED ? "session-only" : "server";
-}
-var watchesPath = () => `/api/agents/${encodeURIComponent(AUTHOR.id)}/watches`;
-async function persistWatchChange(change) {
-  if (IDENTITY_IS_SHARED)
-    return false;
-  try {
-    await http("POST", watchesPath(), { ...change, name: AUTHOR.name });
-    lastPersistError = undefined;
-    return true;
-  } catch (err) {
-    lastPersistError = err instanceof Error ? err.message : String(err);
-    console.error("[claude-workspaces-mcp] could not persist watch change:", lastPersistError);
-    return false;
-  }
-}
-async function ensureWatchesRestored() {
-  if (restoreState.status === "restored" || restoreState.status === "session-only")
-    return;
-  if (restoreInFlight)
-    return restoreInFlight;
-  if (restoreState.status === "failed" && Date.now() < restoreRetryAt)
-    return;
-  restoreInFlight = (async () => {
-    const attempts = restoreState.attempts + 1;
-    try {
-      const res = await http("GET", watchesPath());
-      lastCoverage = parseCoverage(res);
-      const keys = (res.watches ?? []).map((w) => w.key);
-      const restored = [];
-      for (const key of keys) {
-        if (watchers.has(key))
-          continue;
-        if (key.startsWith("ws:"))
-          await watchWorkspace(key.slice("ws:".length), false);
-        else
-          await watchDoc(key, false);
-        restored.push(key);
-      }
-      const reattached = [];
-      for (const workspaceId of boardsToReattach(lastCoverage)) {
-        try {
-          const attachRes = await http("POST", `/api/workspaces/${encodeURIComponent(workspaceId)}/attachments`, {
-            agentId: AUTHOR.id,
-            agentName: AUTHOR.name,
-            runtime: "claude-code-local",
-            pluginVersion: PLUGIN_VERSION,
-            processId: PROCESS_ID
-          });
-          markAttached(workspaceId);
-          reattached.push(workspaceId);
-          deferredEmits.emitOutsideToolCall(() => deliverAttachBacklog(workspaceId, attachRes, {
-            emit: async (ev, payload) => {
-              if (shouldForwardFrame.shouldForward(ev, payload)) {
-                await emitChannelMessage(ev, payload);
-              }
-            },
-            ackComment: async (rowId) => {
-              await http("POST", `/api/workspaces/${encodeURIComponent(workspaceId)}/comment-queue/${encodeURIComponent(rowId)}/ack`, {});
-            }
-          }));
-        } catch {}
-      }
-      if (reattached.length > 0)
-        await refreshCoverage();
-      const state = {
-        status: "restored",
-        from: "server",
-        restored,
-        reattached,
-        pruned: res.pruned ?? [],
-        at: new Date().toISOString(),
-        attempts
-      };
-      restoreState = state;
-      deferredEmits.emitOutsideToolCall(() => emitRestoreNotice(state));
-    } catch (err) {
-      restoreState = {
-        ...restoreState,
-        status: "failed",
-        error: err instanceof Error ? err.message : String(err),
-        attempts
-      };
-      restoreRetryAt = Date.now() + Math.min(30000, 1000 * 2 ** attempts);
-    } finally {
-      restoreInFlight = null;
-    }
-  })();
-  return restoreInFlight;
-}
-async function emitRestoreNotice(state) {
-  const content = restoreNoticeContent({
-    restored: state.restored,
-    reattached: state.reattached ?? [],
-    pruned: state.pruned,
-    agentName: AUTHOR.name,
-    coverage: lastCoverage
-  });
-  if (content === null)
-    return;
-  await server.notification({
-    method: "notifications/claude/channel",
-    params: {
-      source: "claude-workspaces",
-      sent_at: state.at ?? new Date().toISOString(),
-      content,
-      meta: {
-        event: "watches.restored",
-        restored: state.restored,
-        pruned: state.pruned,
-        ...lastCoverage ? { unattachedBoards: lastCoverage.unattachedBoards } : {}
-      }
-    }
-  });
-}
-async function watchDoc(docId, persist = true) {
-  if (!watchers.has(docId)) {
-    const controller = new AbortController;
-    watchers.set(docId, { controller, docId, open: false });
-    await startSseLoop(docId, `/events/${encodeURIComponent(docId)}`, controller);
-  }
-  return persist ? persistWatchChange({ add: [docId] }) : false;
-}
-async function watchWorkspace(workspaceId, persist = true) {
-  const key = `ws:${workspaceId}`;
-  let open = watchers.get(key)?.open === true;
-  if (!watchers.has(key)) {
-    const controller = new AbortController;
-    watchers.set(key, { controller, docId: key, open: false });
-    open = await startSseLoop(key, `/events/workspace/${encodeURIComponent(workspaceId)}?agentId=${encodeURIComponent(AUTHOR.id)}`, controller);
-  }
-  const persisted = persist ? await persistWatchChange({ add: [key] }) : false;
-  return { open, persisted };
-}
-async function unwatchDoc(docId) {
-  const w = watchers.get(docId);
-  if (w) {
-    w.controller.abort();
-    watchers.delete(docId);
-  }
-  return persistWatchChange({ remove: [docId] });
-}
-async function runSseLoop(label, path, signal, onFirstAttempt) {
-  let first = onFirstAttempt;
-  const settleFirst = (open) => {
-    if (!first)
-      return;
-    const f = first;
-    first = undefined;
-    f(open);
-  };
-  const setOpen = (open) => {
-    const w = watchers.get(label);
-    if (w)
-      w.open = open;
-  };
-  const cursor = { lastEventId: undefined };
-  while (!signal.aborted) {
-    try {
-      const res = await fetch(`${resolveBaseUrl()}${path}`, {
-        signal,
-        ...cursor.lastEventId ? { headers: { "Last-Event-ID": cursor.lastEventId } } : {}
-      });
-      const live = res.ok && res.body !== null;
-      setOpen(live);
-      settleFirst(live);
-      if (!res.ok || !res.body)
-        throw new Error(`sse ${path} → ${res.status}`);
-      const reader = res.body.getReader();
-      const decoder = new TextDecoder;
-      let buf = "";
-      while (!signal.aborted) {
-        const { value, done } = await reader.read();
-        if (done)
-          break;
-        buf += decoder.decode(value, { stream: true });
-        let sep = buf.indexOf(`
-
-`);
-        while (sep >= 0) {
-          const frame = buf.slice(0, sep);
-          buf = buf.slice(sep + 2);
-          await deliverThenCommit(frame, handleFrame, cursor, () => shouldForwardFrame.reset());
-          sep = buf.indexOf(`
-
-`);
-        }
-      }
-    } catch (err) {
-      setOpen(false);
-      settleFirst(false);
-      if (signal.aborted)
-        return;
-      console.error(`[claude-workspaces-mcp] ${label} sse error, retrying:`, err);
-    }
-    setOpen(false);
-    await new Promise((r) => setTimeout(r, 1500));
-    shouldForwardFrame.reset();
-  }
-  setOpen(false);
-  settleFirst(false);
-}
-function startSseLoop(label, path, controller) {
-  return new Promise((resolve) => {
-    const cap = setTimeout(() => resolve(false), 3000);
-    runSseLoop(label, path, controller.signal, (open) => {
-      clearTimeout(cap);
-      resolve(open);
-    }).catch((err) => {
-      console.error(`[claude-workspaces-mcp] watcher ${label} crashed:`, err);
-      watchers.delete(label);
-      clearTimeout(cap);
-      resolve(false);
-    });
-  });
-}
-var shouldForwardFrame = createFrameDedup();
-async function handleFrame(raw) {
-  const lines = raw.split(`
-`);
-  let ev = "message";
-  const dataParts = [];
-  for (const line of lines) {
-    if (line.startsWith(":"))
-      continue;
-    if (line.startsWith("event:"))
-      ev = line.slice(6).trim();
-    else if (line.startsWith("data:"))
-      dataParts.push(line.slice(5).trimStart());
-  }
-  if (dataParts.length === 0)
-    return;
-  let payload;
-  try {
-    payload = JSON.parse(dataParts.join(`
-`));
-  } catch {
-    return;
-  }
-  if (ev === "replay.gap") {
-    const p = payload ?? {};
-    await server.notification({
-      method: "notifications/claude/channel",
-      params: {
-        source: "claude-workspaces",
-        sent_at: new Date().toISOString(),
-        content: `[replay.gap] events on ${p.docId ?? "a watched channel"} may have been missed while this session was disconnected — refetch state (get_doc / list_threads / next_tasks) rather than assuming the stream was complete`,
-        meta: { event: "replay.gap", ...p.docId ? { doc_id: p.docId } : {} }
-      }
-    });
-    return;
-  }
-  if (isChannelEvent(ev) && shouldForwardFrame.shouldForward(ev, payload)) {
-    await emitChannelMessage(ev, payload);
-  }
-  await ackCommentRow(payload);
-}
-async function ackCommentRow(payload) {
-  const p = payload;
-  if (typeof p?.commentQueueId !== "string" || typeof p?.workspaceId !== "string")
-    return;
-  try {
-    await http("POST", `/api/workspaces/${encodeURIComponent(p.workspaceId)}/comment-queue/${encodeURIComponent(p.commentQueueId)}/ack`, {});
-  } catch {}
-}
-var HUB_EVENT_RE = /^(task|decision|workspace|agent|voice)\./;
-async function emitHubChannelMessage(event, rawPayload) {
-  const p = rawPayload ?? {};
-  if (event === "agent.heartbeat")
-    return;
-  if (event === "task.noted")
-    return;
-  if (p.actor?.id === AUTHOR.id)
-    return;
-  const by = p.actor?.name ? ` by ${p.actor.name}` : "";
-  let body;
-  switch (event) {
-    case "task.created":
-      body = `[task.created] "${truncate5(p.task?.title ?? p.taskId ?? "", 60)}" → ${p.goal ?? "?"}${p.assignee ? ` (assignee ${p.assignee})` : ""}`;
-      break;
-    case "task.transitioned":
-      body = `[task.transitioned] ${p.taskId}: ${p.from} → ${p.to}${by}${p.note ? ` — ${truncate5(p.note, 80)}` : ""}`;
-      break;
-    case "task.assigned":
-      body = `[task.assigned] ${p.taskId}: ${p.from} → ${p.to}${by}`;
-      break;
-    case "task.regrouped":
-      body = `[task.regrouped] ${p.taskId}: ${p.fromGoal} → ${p.toGoal}${by}`;
-      break;
-    case "task.retitled":
-      body = `[task.retitled] "${truncate5(p.titleFrom ?? "", 60)}" → "${truncate5(p.titleTo ?? "", 60)}"${by}${p.reason ? ` — ${truncate5(p.reason, 80)}` : ""}`;
-      break;
-    case "task.body_edited":
-      body = p.titleFrom && p.titleTo ? `[task.body_edited] reshaped "${truncate5(p.titleFrom, 60)}" → "${truncate5(p.titleTo, 60)}"${by}${p.reason ? ` — ${truncate5(p.reason, 80)}` : ""}` : `[task.body_edited] ${p.taskId}${by}${p.reason ? ` — ${truncate5(p.reason, 80)}` : ""}`;
-      break;
-    case "task.gate_refused":
-      body = `[task.gate_refused] ${p.taskId}: ${p.riskTier}-tier ${p.reason}${by} — → ${p.to} did NOT happen`;
-      break;
-    case "decision.answered":
-      body = decisionAnsweredLine(p);
-      break;
-    case "workspace.lead_changed":
-      body = p.leadAgentId === AUTHOR.id ? `[workspace.lead_changed]${by}: you are now the lead agent — this board's asks are addressed to you` : `[workspace.lead_changed]${by}: lead agent is now ${p.leadAgentId ?? "?"}`;
-      break;
-    case "workspace.goals_changed": {
-      const moved = p.movedToChores?.length ?? 0;
-      body = `[workspace.goals_changed] ${p.kind ?? "edit"}${by}${moved > 0 ? ` — ${moved} task(s) moved to Backlog, re-place with set_task_goal` : ""}`;
-      break;
-    }
-    case "workspace.ready_idle":
-      body = readyIdleLine(p);
-      break;
-    case "workspace.review_answered":
-      body = reviewAnsweredLine(p);
-      break;
-    case "workspace.stalled":
-      body = stalledLine(p);
-      break;
-    case "workspace.review_item_held":
-      body = reviewItemHeldLine(p);
-      break;
-    case "agent.attached":
-    case "agent.detached":
-      body = `[${event}] ${p.agentId ?? "?"}`;
-      break;
-    case "voice.request": {
-      const line = voiceRequestLine(p);
-      if (line === null)
-        return;
-      body = line;
-      break;
-    }
-    default:
-      body = `[${event}]${p.taskId ? ` task ${p.taskId}` : ""}`;
-  }
-  await server.notification({
-    method: "notifications/claude/channel",
-    params: {
-      source: "claude-workspaces",
-      sent_at: new Date().toISOString(),
-      content: body,
-      meta: {
-        workspace_id: p.workspaceId ?? "unknown",
-        ...p.taskId ? { task_id: p.taskId } : {},
-        event,
-        ...p.actor?.name ? { author: p.actor.name } : {}
-      }
-    }
-  });
-  if (event === "voice.request" && typeof p.queueId === "string" && p.workspaceId) {
-    try {
-      await http("POST", `/api/workspaces/${encodeURIComponent(p.workspaceId)}/voice-queue/${encodeURIComponent(p.queueId)}/ack`, {});
-    } catch {}
-  }
-}
-async function emitChannelMessage(event, rawPayload) {
-  if (HUB_EVENT_RE.test(event)) {
-    await emitHubChannelMessage(event, rawPayload);
-    return;
-  }
-  if (isSelfAuthoredEvent(event, rawPayload, AUTHOR.id))
-    return;
-  const p = rawPayload ?? {};
-  const docId = p.docId ?? "unknown";
-  if (event === "doc.sync_error") {
-    const where2 = p.path ?? docId;
-    const body2 = `[sync error] ${where2}: ${p.message ?? "disk↔doc sync failed — call get_doc for details"}`;
-    await server.notification({
-      method: "notifications/claude/channel",
-      params: {
-        source: "claude-workspaces",
-        sent_at: new Date().toISOString(),
-        content: body2,
-        meta: {
-          doc_id: docId,
-          event,
-          ...p.path ? { path: p.path } : {},
-          ...p.backupPath ? { backup_path: p.backupPath } : {}
-        }
-      }
-    });
-    return;
-  }
-  if (event.startsWith("suggestion.")) {
-    const sid = p.sid ?? "";
-    const action2 = event.slice("suggestion.".length);
-    const author2 = p.suggestion?.author?.name ?? "";
-    const snippet2 = p.suggestion?.snippet ?? "";
-    const kind = p.suggestion?.kind ?? "";
-    const header2 = snippet2 ? `"${truncate5(snippet2, 60)}"` : sid;
-    const body2 = `[suggestion ${action2}] ${author2 ? `${author2}: ` : ""}${kind} ${header2}`.trim();
-    await server.notification({
-      method: "notifications/claude/channel",
-      params: {
-        source: "claude-workspaces",
-        sent_at: new Date().toISOString(),
-        content: body2,
-        meta: {
-          doc_id: docId,
-          sid,
-          event,
-          author: author2,
-          anchor_text: snippet2
-        }
-      }
-    });
-    return;
-  }
-  const threadId = p.threadId ?? "";
-  const snippet = p.thread?.anchor?.snippet?.text ?? p.thread?.anchor?.original?.snippet?.text ?? "";
-  const reviewItemId = p.reviewItemId ?? (p.thread?.anchor?.kind === "review-item" ? p.thread.anchor.reviewItemId : undefined);
-  const statusChange = event === "thread.resolved" || event === "thread.reopened";
-  const author = statusChange ? p.actor?.name ?? "" : p.comment?.author?.name ?? p.thread?.comments?.[0]?.author?.name ?? "";
-  const text = statusChange ? "" : p.comment?.text ?? p.thread?.comments?.at(-1)?.text ?? "";
-  const sentAt = new Date(p.comment?.ts ?? Date.now()).toISOString();
-  const action = event.startsWith("thread.") ? event.slice("thread.".length) : event;
-  const header = snippet ? `on "${truncate5(snippet, 60)}"` : "";
-  const onItem = reviewItemId ? ` on review item ${reviewItemId}${snippet ? ` "${truncate5(snippet, 60)}"` : ""} —` : "";
-  const body = text ? `[${action}]${onItem} ${author ? `${author}: ` : ""}${text}` : `[${action}]${onItem}${author ? ` by ${author} —` : ""} thread ${threadId} ${header}`.trim();
-  await server.notification({
-    method: "notifications/claude/channel",
-    params: {
-      source: "claude-workspaces",
-      sent_at: sentAt,
-      content: body,
-      meta: {
-        doc_id: docId,
-        thread_id: threadId,
-        ...reviewItemId ? { review_item_id: reviewItemId } : {},
-        event,
-        author,
-        anchor_text: snippet
-      }
-    }
-  });
-}
-function truncate5(s, n) {
-  return s.length > n ? `${s.slice(0, n - 1)}…` : s;
-}
-async function http(method, path, body) {
-  const baseUrl = resolveBaseUrl();
-  const res = await fetch(`${baseUrl}${path}`, {
-    method,
-    headers: body ? { "content-type": "application/json" } : {},
-    body: body ? JSON.stringify(body) : undefined
-  });
-  const text = await res.text();
-  if (!res.ok)
-    throw new Error(`${method} ${path} → ${res.status}: ${text}`);
-  return text ? JSON.parse(text) : {};
-}
-function ok(data) {
-  return {
-    content: [{ type: "text", text: JSON.stringify(data, null, 2) }]
-  };
-}
-function err(message) {
-  return {
-    isError: true,
-    content: [{ type: "text", text: message }]
-  };
-}
+var registry2 = createWatchRegistry({
+  watchers,
+  http: (method, path, body) => http(method, path, body),
+  author: AUTHOR,
+  startSseLoop: startSseLoop2,
+  identityIsShared: IDENTITY_IS_SHARED,
+  log: (...args) => console.error(...args)
+});
+var { watchDoc: watchDoc2, watchWorkspace: watchWorkspace2, unwatchDoc: unwatchDoc2, refreshCoverage: refreshCoverage2, watchPersistenceMode: watchPersistenceMode2 } = registry2;
+var restore = createWatchRestore({
+  http: (method, path, body) => http(method, path, body),
+  registry: registry2,
+  watchers,
+  author: AUTHOR,
+  pluginVersion: PLUGIN_VERSION,
+  processId: PROCESS_ID,
+  markAttached: markAttached2,
+  notify: (n) => server.notification(n),
+  emitChannelMessage: (event, payload) => channel.emitChannelMessage(event, payload),
+  shouldForward: (event, payload) => shouldForwardFrame.shouldForward(event, payload),
+  deferredEmits,
+  identityIsShared: IDENTITY_IS_SHARED
+});
+var { ensureWatchesRestored: ensureWatchesRestored2 } = restore;
+var http = createHttp(resolveBaseUrl2);
 var transport = new StdioServerTransport;
 server.oninitialized = () => {
-  ensureWatchesRestored();
+  ensureWatchesRestored2();
 };
 await server.connect(transport);
 var bannerBase;
 try {
-  bannerBase = resolveBaseUrl();
+  bannerBase = resolveBaseUrl2();
 } catch {
   bannerBase = "<discovery pending — server not yet running>";
 }
