@@ -83,6 +83,11 @@ export interface GateRow {
   status: string;
   /** False when an open ENFORCED dependency holds the row (`QueueRow.ready`). */
   ready: boolean;
+  /** True when the row waits on ANY unfinished ticket — the board's Blocked
+   *  state (`QueueRow.blocked`). Optional so a caller that predates it still
+   *  types; absent reads as "not blocked", and `ready` alone then decides
+   *  exactly as it used to. */
+  blocked?: boolean;
   /** False when the row's goal is not on the workspace's ranked goal list —
    *  the reserved `chores` id first of all. Such a row is formal backlog and
    *  the dispatch rule would never start it, so a wake must not count it. */
@@ -179,7 +184,11 @@ export function evaluateReadyWork(
       hold('goal-triage');
       continue;
     }
-    if (!row.ready) {
+    // Any open dependency holds the row, not only an enforced one: a wake
+    // naming a ticket whose blocker is unfinished sends an agent at work it
+    // cannot start. `!ready` stays in the test because an enforced edge is an
+    // open edge — the two can only disagree on a caller that supplies one.
+    if (row.blocked === true || !row.ready) {
       hold('blocked');
       continue;
     }

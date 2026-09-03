@@ -144,11 +144,14 @@ describe('task store events + audit log', () => {
       const refused = store.transition(blocked.task.id, 'in-progress', { actor: AGENT });
       expect(refused.ok).toBe(false);
       expect(events).toHaveLength(0);
-      // Positive control: the gating task itself transitions fine.
+      // Positive control: the gating task itself transitions fine. Two rows
+      // now, in the order they happened — the gate closed, and then the row
+      // it was holding came free (`task.unblocked`, added 2026-09-03; Blocked
+      // is derived, so that event is the only record the row was ever held).
       const okRes = store.transition(gate.task.id, 'done', { actor: PERSON });
       expect(okRes.ok).toBe(true);
-      expect(events).toHaveLength(1);
-      expect(events[0]?.type).toBe('task.transitioned');
+      expect(events.map((e) => e.type)).toEqual(['task.transitioned', 'task.unblocked']);
+      expect(events[1]).toMatchObject({ taskId: blocked.task.id, clearedBy: gate.task.id });
     });
   });
 
