@@ -16,15 +16,17 @@ import type { RoomAudioProcessing } from '../src/meeting-audio.ts';
 import type { MeetingCaptureStart } from '../src/meeting-audio.ts';
 import type { MeetingBotClient } from '../src/meeting-bot-client.ts';
 import {
-  type MeetingSocket,
-  type MeetingStripHandle,
   TRANSCRIPT_KEEP,
-  clipSpeakerName,
   diffTurnWords,
-  formatElapsed,
-  mountMeetingStrip,
   parseMeetingServerMessage,
   rollTranscript,
+} from '../src/meeting-protocol.ts';
+import {
+  type MeetingSocket,
+  type MeetingStripHandle,
+  clipSpeakerName,
+  formatElapsed,
+  mountMeetingStrip,
 } from '../src/meeting-strip.ts';
 import type { DocSpeakers } from '../src/speaker-voices.ts';
 
