@@ -199,7 +199,7 @@ import {
   redactWorkspaceTreeForVisitor,
   relativeReviewUrl,
 } from './share/redact-meta.ts';
-import { Shares } from './share/shares.ts';
+import { Shares, audienceEntryAdmits } from './share/shares.ts';
 import { SharingGate } from './share/sharing-gate.ts';
 import type { Share, ShareConfig } from './share/types.ts';
 import { sanitizeVisitorAuthor } from './share/visitor-identity.ts';
@@ -3758,6 +3758,60 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
   }
 
   /**
+   * Is this Access-verified email a MEMBER of this workspace — the question
+   * the collaboration hostname asks after Cloudflare Access has answered
+   * "is this someone Bryan admitted to the hostname at all?".
+   *
+   * The two are not the same question, and treating them as one was the
+   * weakness this closes: every email the Access application admitted could
+   * open every workspace on the server by id, because the only thing checked
+   * after the token was whether the PATH was in scope for the workspace it
+   * named. A share hostname never had that problem — it is minted for one
+   * workspace with one allow list — so the fix is to give the collaboration
+   * hostname the same record rather than a new one.
+   *
+   * THE MEMBERSHIP SET, exactly: the allow lists of the workspace's LIVE
+   * shares, plus the owner allowlist. A share is the only place an email is
+   * ever written down against a workspace, so a workspace with no live share
+   * admits nobody here — which is the correct answer, not a gap: nobody has
+   * been given it.
+   *
+   * Three details, each of which would otherwise be a hole:
+   *
+   *   - The candidate set is the workspace itself PLUS every workspace that
+   *     covers it (`shareWorkspacesOf`). A doc's path resolves to its REVIEW,
+   *     while the share that admits people is minted on the BOARD the review
+   *     is filed on, so checking the path's workspace alone would refuse
+   *     every legitimately shared diff review and folder bind. This is the
+   *     same set `shareScopeAllows` reaches through, so it grants exactly
+   *     what a share on one of those boards already grants — no wider.
+   *   - `boardShareTarget` is applied to each share, so a record whose
+   *     workspace is no longer a board is as dead here as it is on its own
+   *     hostname. One rule for what a share is worth.
+   *   - A token with NO email claim is nobody, and nobody is a member. It
+   *     reaches the app shell and nothing else.
+   */
+  const collabMemberOf = (workspaceId: string, email: string | null): boolean => {
+    const who = email ? normalizeEmail(email) : '';
+    if (who === '' || !workspaceId) return false;
+    // The owner half. Same list the operator hostname checks and the same
+    // list a `share_link` with no audience falls back to, so "who is this
+    // deployment's own people" has one answer.
+    if (proxiedTrustedEmails.has(who)) return true;
+    if (!shares) return false;
+    const candidates = new Set<string>([workspaceId, ...shareWorkspacesOf(workspaceId)]);
+    for (const wsId of candidates) {
+      for (const share of shares.liveForWorkspace(wsId)) {
+        if (!boardShareTarget(share)) continue;
+        if ((share.allowDomains ?? []).some((entry) => audienceEntryAdmits(entry, who))) {
+          return true;
+        }
+      }
+    }
+    return false;
+  };
+
+  /**
    * Every hub board a DOC's discussion actually reaches — the boards holding
    * the doc itself, plus the one review→board hop a diff review / folder
    * bind needs (its members carry the review tag, and the review is what
@@ -5333,7 +5387,20 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
             // is refused — the doc list, share administration, folder binds,
             // diff creation, delete, wholesale rewrite, the landing page — is
             // refused here by the same lines.
-            const scope = collabScope(pathname, req.method, shareWorkspacesOf);
+            // …and Access proves the visitor was admitted to the HOSTNAME,
+            // not to a board behind it. `isMember` is the second condition:
+            // the workspace the path names must list this email, through a
+            // live share's allow list or the owner allowlist.
+            //
+            // The refusal is spelled exactly like the out-of-scope one, on
+            // purpose. Two different bodies would tell an admitted
+            // collaborator which guessed workspace ids are real, which is an
+            // enumeration oracle over precisely the ids this check exists to
+            // stop them opening.
+            const scope = collabScope(pathname, req.method, {
+              workspacesOf: shareWorkspacesOf,
+              isMember: (wsId) => collabMemberOf(wsId, accessEmail),
+            });
             if (!scope.allowed) return j(403, { error: 'out_of_share_scope' });
             // An outsider like any other: identity rewritten to a guest, doc
             // metadata redacted, `visitor`-gated routes closed. What it does

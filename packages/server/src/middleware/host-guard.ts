@@ -703,6 +703,29 @@ export function shareScopeAllows(
 const NO_WORKSPACE = '\u0000collab-no-workspace';
 
 /**
+ * What `collabScope` needs to answer, beyond the path itself.
+ *
+ * `isMember` is REQUIRED, and the options object exists so that it is. It
+ * used to be a third positional parameter list ending in an optional
+ * `workspacesOf`, and appending an optional membership check to that would
+ * have made "forgot to pass it" mean "admitted everybody" — the exact
+ * failure this predicate was added to remove.
+ */
+export interface CollabScopeOpts {
+  /** See the same parameter on `shareScopeAllows`. */
+  workspacesOf?: (id: string) => string[];
+  /**
+   * Is the request's Access-verified email a member of this workspace?
+   *
+   * The server owns the answer, because membership is recorded outside this
+   * module: the allow lists of the workspace's LIVE shares, plus the owner
+   * allowlist. This module owns only WHICH workspace is asked about, which is
+   * the half that has to agree with the scope verdict.
+   */
+  isMember: (workspaceId: string) => boolean;
+}
+
+/**
  * May a request on a COLLABORATION host touch this path?
  *
  * The surface is the share surface — read the docs, open the board, comment —
@@ -711,8 +734,30 @@ const NO_WORKSPACE = '\u0000collab-no-workspace';
  * a share hostname carries its scope, and a collaboration hostname is one
  * stable address whose scope is decided per request.
  *
- * It is ONE rule, not two. Everything is answered by `shareScopeAllows` with
- * the path's own workspace as the target, so the operator verbs a share
+ * TWO conditions, both required. The path must be in scope for the workspace
+ * it names, AND the visitor must be a member of that workspace. Passing
+ * Cloudflare Access proves only that the operator admitted this email to the
+ * HOSTNAME; it says nothing about which boards behind it that person was
+ * given, so without the second condition every admitted email reached every
+ * workspace on the server by id. `isMember` is that condition, and it is
+ * asked about the same workspace the scope verdict was made about — one
+ * derivation, so the two halves cannot answer about different boards.
+ *
+ * A path can name MORE THAN ONE workspace, and both conditions are asked of
+ * each in turn. A doc filed on two boards belongs to both; taking only the
+ * first — whichever the store happened to iterate first — asked membership
+ * about a board the visitor was never given and refused them a doc their own
+ * board shows them. So the candidates are walked in order and the answer is
+ * the first that satisfies BOTH, which is also the workspace the request is
+ * then served as: redaction and scoping run against a board this visitor
+ * really holds, never against one they merely reached through.
+ *
+ * A path that names NO workspace — the app shell, the widget bundle, the
+ * favicon — is not membership-checked, because there is nothing to be a
+ * member of. That is the whole of what an admitted non-member reaches.
+ *
+ * It is ONE rule, not two. Everything else is answered by `shareScopeAllows`
+ * with the path's own workspace as the target, so the operator verbs a share
  * visitor is refused — the doc list, share administration, folder binds, diff
  * creation, DELETE, `content`, `reparse_from_disk`, the landing page — are
  * refused here by the same lines, and a route added to one is added to both.
@@ -726,33 +771,47 @@ const NO_WORKSPACE = '\u0000collab-no-workspace';
 export function collabScope(
   pathname: string,
   method: string,
-  workspacesOf?: (id: string) => string[],
+  opts: CollabScopeOpts,
 ): { allowed: false } | { allowed: true; target: ShareTarget } {
-  const workspaceId = pathWorkspace(pathname, workspacesOf);
-  const allowed = shareScopeAllows(
-    pathname,
-    method,
-    { workspaceId: workspaceId ?? NO_WORKSPACE },
-    workspacesOf,
-  );
-  if (!allowed) return { allowed: false };
-  // A shell path names no workspace, so the visitor it creates is scoped to
-  // none — `{}` rather than the sentinel, which must never escape this file.
-  return { allowed: true, target: workspaceId ? { workspaceId } : {} };
+  const { workspacesOf, isMember } = opts;
+  const candidates = pathWorkspaces(pathname, workspacesOf);
+  // A shell path names no workspace, so there is nothing to be a member of.
+  // It is judged against the sentinel — leaving exactly the static
+  // allowances — and the visitor it creates is scoped to no workspace: `{}`
+  // rather than the sentinel, which must never escape this file.
+  if (candidates.length === 0) {
+    const shell = shareScopeAllows(pathname, method, { workspaceId: NO_WORKSPACE }, workspacesOf);
+    return shell ? { allowed: true, target: {} } : { allowed: false };
+  }
+  for (const workspaceId of candidates) {
+    if (!isMember(workspaceId)) continue;
+    if (!shareScopeAllows(pathname, method, { workspaceId }, workspacesOf)) continue;
+    return { allowed: true, target: { workspaceId } };
+  }
+  return { allowed: false };
 }
 
 /**
- * Which workspace does this path address — directly, or through the doc it
- * names? Null when it names neither, which is every static asset and every
+ * Which workspaces does this path address — directly, or through the doc it
+ * names? Empty when it names none, which is every static asset and every
  * enumerate-the-server route.
  *
- * Deliberately permissive: it only proposes a candidate, and
+ * A LIST rather than one answer, because a doc belongs to more than one
+ * workspace at once: its review, and every hub board that review or doc is
+ * filed on. Answering with the first of them asked the membership question
+ * about whichever board the store iterated first, so a doc filed on two
+ * boards was refused to a visitor who holds the second — while that board's
+ * own share hostname served them the same doc. Membership is a set on the
+ * share side; it has to be a set here too.
+ *
+ * Deliberately permissive: it only proposes candidates, and
  * `shareScopeAllows` then decides whether the path is reachable AT ALL and
  * whether the id really belongs to that workspace. Proposing the wrong
- * workspace cannot open anything — the membership check refuses it — so the
- * failure mode of a parsing mistake here is a 403, not a leak.
+ * workspace cannot open anything — the scope check and the membership check
+ * both still run against it — so the failure mode of a parsing mistake here
+ * is a 403, not a leak.
  */
-function pathWorkspace(pathname: string, workspacesOf?: (id: string) => string[]): string | null {
+function pathWorkspaces(pathname: string, workspacesOf?: (id: string) => string[]): string[] {
   /** The first path segment after `prefix`, or null when it doesn't match. */
   const seg = (prefix: string): string | null => {
     if (!pathname.startsWith(prefix)) return null;
@@ -763,21 +822,27 @@ function pathWorkspace(pathname: string, workspacesOf?: (id: string) => string[]
   };
 
   // Paths whose segment IS a workspace (or a review filed on one — the guard
-  // accepts either through `inWorkspaceScope`).
+  // accepts either through `inWorkspaceScope`). One candidate: the path spells
+  // the workspace out, so there is nothing to resolve.
   const named = seg('/events/workspace/') ?? seg('/workspaces/') ?? seg('/api/reviews/');
-  if (named) return named;
+  if (named) return [named];
   // `/api/workspaces/` splits: `<id>/tree` names a workspace, and so does the
-  // bare `<id>`; the LIST route has no segment and falls through to null.
+  // bare `<id>`; the LIST route has no segment and falls through to none.
   const wsApi = seg('/api/workspaces/');
-  if (wsApi) return wsApi;
+  if (wsApi) return [wsApi];
   // The board room socket is `/y/ws:<id>`; every other `/y/<id>` is a doc.
   const room = seg('/y/');
-  if (room?.startsWith('ws:')) return room.slice('ws:'.length);
+  if (room?.startsWith('ws:')) return [room.slice('ws:'.length)];
 
-  // Paths that name a DOC — its own workspace, most specific first.
+  // Paths that name a DOC — every workspace it belongs to, most specific
+  // first, which is the order `collabScope` then prefers between them.
   const doc = seg('/review/') ?? room ?? seg('/events/') ?? seg('/api/docs/');
-  if (!doc) return null;
-  return workspacesOf?.(doc)?.[0] ?? null;
+  if (!doc) return [];
+  const owners = workspacesOf?.(doc);
+  // `Array.isArray` for the reason `shareScopeAllows` gives at its own use of
+  // this parameter: a caller still handing back a bare string would otherwise
+  // be spread into one candidate per CHARACTER.
+  return Array.isArray(owners) ? owners : [];
 }
 
 /**

@@ -20,6 +20,14 @@
  *      exactly what it was? (Refusal, not exposure.)
  *   B. With both, does a collaborator actually reach the board and its docs?
  *   C. …and do the privileged routes still refuse them?
+ *   E. …and does an admitted email reach only the boards it was GIVEN?
+ *
+ * E is the newest and the one the others depend on. Passing Access proves an
+ * email is one the owner admitted to the hostname; it says nothing about which
+ * boards behind it that person was given, and until this suite existed every
+ * admitted email could open every workspace on the server by id. Membership is
+ * the allow lists of a board's LIVE shares plus the owner allowlist, so these
+ * fixtures mint real shares rather than only filing docs.
  *
  * The predicates are unit-tested in host-guard.test.ts. These drive the real
  * route table, because the route layer is the part nothing type-checks — a
@@ -33,6 +41,7 @@ import { join } from 'node:path';
 import { emailIdentityId } from '@feedback/core';
 import { type JSONWebKeySet, type JWK, SignJWT, exportJWK, generateKeyPair } from 'jose';
 import { type ServerHandle, createServer } from '../src/server.ts';
+import { ACCESS_SHARE_CONFIG, mockCfApi } from './access-share.ts';
 
 const TEAM_DOMAIN = 'test.cloudflareaccess.com';
 const KID = 'collab-host-kid';
@@ -44,8 +53,23 @@ const LINK_HOST = 'links.example.com';
 /** Cloudflare stamps this on everything it proxies; its presence IS the hop. */
 const CF_RAY = { 'cf-ray': '8a1b2c3d4e5f-SJC' };
 
+/**
+ * Four admitted emails. Every one of them holds a VALID token for the
+ * hostname's Access application — that is the point. What separates them is
+ * only what they were given.
+ */
+/** Given `board`, by a DOMAIN entry on its share. */
+const MEMBER_EMAIL = 'collaborator@partner.example';
+/** Given `exactBoard`, by an entry naming this address and no other. */
+const NAMED_EMAIL = 'named@other.example';
+/** Given nothing — and deliberately at the same domain as NAMED_EMAIL, so an
+ *  exact entry read as a domain would admit them. */
+const NEIGHBOUR_EMAIL = 'neighbour@other.example';
+/** The deployment's own operator: a member of every board, named in no share. */
+const OWNER_EMAIL = 'owner@example.com';
+
 let jwks: JSONWebKeySet;
-let signJwt: (aud: string) => Promise<string>;
+let signJwt: (aud: string, email?: string) => Promise<string>;
 
 beforeAll(async () => {
   const { publicKey, privateKey } = await generateKeyPair('RS256');
@@ -54,8 +78,8 @@ beforeAll(async () => {
   publicJwk.alg = 'RS256';
   publicJwk.use = 'sig';
   jwks = { keys: [publicJwk] };
-  signJwt = (aud: string) =>
-    new SignJWT({ email: 'collaborator@partner.example' })
+  signJwt = (aud: string, email: string = MEMBER_EMAIL) =>
+    new SignJWT({ email })
       .setProtectedHeader({ alg: 'RS256', kid: KID })
       .setIssuer(`https://${TEAM_DOMAIN}`)
       .setAudience(aud)
@@ -74,6 +98,21 @@ describe('the collaboration hostname over HTTP', () => {
   /** A board the collaborator is meant to reach, and one they are not. */
   let board: string;
   let otherBoard: string;
+  /** A third, shared with ONE named address rather than a domain. */
+  let exactBoard: string;
+
+  /**
+   * A board with one file-backed doc filed on it; answers the board id and
+   * the id the server minted for the doc. Assigned in `beforeAll` and used by
+   * the tests too, which is why it is declared out here.
+   */
+  let boardWith: (
+    name: string,
+    requestedDocId: string,
+  ) => Promise<{ boardId: string; mintedDocId: string }>;
+  /** Write an allow list down against a board — which is what a share IS, and
+   *  therefore the only way anybody becomes a member of one. */
+  let shareBoard: (boardId: string, allowDomains: string[]) => Promise<void>;
   /** The readable names the caller asks for… */
   const DOC = 'design-doc';
   const OTHER_DOC = 'private-doc';
@@ -106,28 +145,48 @@ describe('the collaboration hostname over HTTP', () => {
       },
     });
 
+  /** The same, as whoever you like — every one of them Access-admitted. */
+  const asEmail = async (email: string, path: string, init: RequestInit = {}) =>
+    req(path, TUNNEL_HOST, {
+      ...init,
+      headers: {
+        ...CF_RAY,
+        'cf-access-jwt-assertion': await signJwt(COLLAB_AUD, email),
+        ...((init.headers as Record<string, string>) ?? {}),
+      },
+    });
+
   beforeAll(async () => {
     dataDir = mkdtempSync(join(tmpdir(), 'collab-host-'));
     handle = createServer({
       port: 0,
       dataDir,
       cfAccess: { teamDomain: TEAM_DOMAIN, audience: COLLAB_AUD, jwks },
-      // Link sharing configured TOO, deliberately, because that is what prod
+      // Share hosting configured TOO, deliberately, because that is what prod
       // looks like and it is where the wiring can go wrong: with `shares`
       // present the main verifier resolves its AUD per share hostname and
       // answers `null` for anything that is not one. A collaboration host is
       // never a share hostname, so a shared verifier would refuse every
       // request here with `no_share_for_host`. The collab host gets its own
       // verifier built from the static AUD, and this fixture is what proves it.
-      share: { config: { publicHostname: LINK_HOST } },
+      //
+      // It is also what makes membership testable at all: a share is where a
+      // board's allow list is written down, and the mock Cloudflare client is
+      // what lets one be minted without leaving the process.
+      share: {
+        config: { ...ACCESS_SHARE_CONFIG, publicHostname: LINK_HOST },
+        cfApi: mockCfApi(),
+      },
+      // The owner half of the membership set — the same list the operator
+      // hostname checks. No `proxiedTrustedHosts`, so nothing is classified
+      // differently; only who counts as this deployment's own people.
+      proxiedTrustedEmails: [OWNER_EMAIL],
       accessTunnelHosts: [TUNNEL_HOST],
     });
     base = `http://localhost:${handle.port}`;
     jwt = await signJwt(COLLAB_AUD);
 
-    /** A board with one file-backed doc filed on it; returns the board id and
-     *  the id the server minted for the doc. */
-    const boardWith = async (
+    boardWith = async (
       name: string,
       requestedDocId: string,
     ): Promise<{ boardId: string; mintedDocId: string }> => {
@@ -157,10 +216,23 @@ describe('the collaboration hostname over HTTP', () => {
       expect(filed.status).toBe(200);
       return { boardId: id, mintedDocId };
     };
+    shareBoard = async (boardId: string, allowDomains: string[]): Promise<void> => {
+      const res = await asOwner('/api/share/link', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ workspaceId: boardId, allowDomains }),
+      });
+      expect(res.status, await res.clone().text()).toBe(200);
+    };
+
     ({ boardId: board, mintedDocId: docId } = await boardWith('Shared work', DOC));
     ({ boardId: otherBoard, mintedDocId: otherDocId } = await boardWith('Not shared', OTHER_DOC));
+    ({ boardId: exactBoard } = await boardWith('Named guest', 'exact-doc'));
     expect(docId).toBeTruthy();
     expect(otherDocId).toBeTruthy();
+    // `board` by domain, `exactBoard` by one address, `otherBoard` not at all.
+    await shareBoard(board, ['@partner.example']);
+    await shareBoard(exactBoard, [NAMED_EMAIL]);
   });
 
   afterAll(async () => {
@@ -359,15 +431,161 @@ describe('the collaboration hostname over HTTP', () => {
       expect((await asCollaborator(own)).status).not.toBe(403);
     });
 
-    it('reaches the OTHER board too — the surface is scoped per path, not per host', async () => {
-      // Stated as its own test rather than left implicit, because it is the
-      // widest thing this hostname grants and it should be visible in the
-      // test names. An Access-admitted collaborator can open any BOARD they
-      // have the id for; what they cannot do is enumerate the ids (the two
-      // list routes above), or touch anything an operator touches.
-      expect(
-        (await asCollaborator(`/api/workspaces/${encodeURIComponent(otherBoard)}`)).status,
-      ).toBe(200);
+    it('CANNOT reach a board it was not given, even holding a valid token', async () => {
+      // This test used to assert the opposite, and the assertion was right
+      // about the code: an Access-admitted collaborator could open ANY board
+      // they had the id for. Access admits an email to the HOSTNAME; the
+      // board's own allow list is what says who was given the board.
+      const r = await asCollaborator(`/api/workspaces/${encodeURIComponent(otherBoard)}`);
+      expect(r.status).toBe(403);
+      // POSITIVE CONTROL: the same request shape, the same token, on the board
+      // this collaborator WAS given — so the 403 above is membership and not
+      // a route that stopped answering.
+      expect((await asCollaborator(`/api/workspaces/${encodeURIComponent(board)}`)).status).toBe(
+        200,
+      );
+    });
+  });
+
+  /**
+   * E. Membership: which boards an admitted email actually reaches.
+   *
+   * Every request below carries a VALID token for this hostname's Access
+   * application. What separates a 200 from a 403 is only whether the board's
+   * live share names that person.
+   */
+  describe('E. one admitted email, one board', () => {
+    const boardPath = (id: string) => `/api/workspaces/${encodeURIComponent(id)}`;
+
+    it('a DOMAIN entry admits every address at that domain', async () => {
+      // `board` was shared with `@partner.example`, and the collaborator is
+      // at it. A second, never-named address at the same domain gets in too —
+      // that is what a domain entry means, and it must not be read as an
+      // exact address.
+      expect((await asCollaborator(boardPath(board))).status).toBe(200);
+      expect((await asEmail('someone-else@partner.example', boardPath(board))).status).toBe(200);
+    });
+
+    it('an EXACT entry admits that address and not its neighbour', async () => {
+      // The pairing is the whole test: both emails are at `other.example`,
+      // and only one is written in the share. An entry read as a domain would
+      // pass them both.
+      expect((await asEmail(NAMED_EMAIL, boardPath(exactBoard))).status).toBe(200);
+      expect((await asEmail(NEIGHBOUR_EMAIL, boardPath(exactBoard))).status).toBe(403);
+    });
+
+    it('a second admitted email is refused the board it was not given', async () => {
+      // The weakness, stated as a test. `named@other.example` is admitted to
+      // the hostname and holds a board of their own; that buys them nothing
+      // on somebody else's.
+      const crossed = await asEmail(NAMED_EMAIL, boardPath(board));
+      expect(crossed.status).toBe(403);
+      expect(await crossed.json()).toEqual({ error: 'out_of_share_scope' });
+      // POSITIVE CONTROL: the given email on the same path.
+      expect((await asCollaborator(boardPath(board))).status).toBe(200);
+      // …and the refusal is not "this email reaches nothing": their own board
+      // still opens.
+      expect((await asEmail(NAMED_EMAIL, boardPath(exactBoard))).status).toBe(200);
+    });
+
+    it('a board with no live share admits nobody', async () => {
+      for (const email of [MEMBER_EMAIL, NAMED_EMAIL, NEIGHBOUR_EMAIL]) {
+        const r = await asEmail(email, boardPath(otherBoard));
+        expect(r.status, email).toBe(403);
+      }
+      // POSITIVE CONTROL: the board exists and answers — to the owner over
+      // loopback, and to the owner's own email through the tunnel.
+      expect((await asOwner(boardPath(otherBoard))).status).toBe(200);
+      expect((await asEmail(OWNER_EMAIL, boardPath(otherBoard))).status).toBe(200);
+    });
+
+    it('the owner allowlist is a member of every board, naming no share', async () => {
+      for (const id of [board, otherBoard, exactBoard]) {
+        expect((await asEmail(OWNER_EMAIL, boardPath(id))).status, id).toBe(200);
+      }
+    });
+
+    it('refuses the DOCS of a board it was not given, over REST and the socket', async () => {
+      // The board id is the cheap probe; the doc and its Yjs room are what
+      // the probe would have been worth. `/y/<id>` is gated before the
+      // upgrade, so a 403 here is the gate rather than a failed handshake.
+      for (const path of [
+        `/api/docs/${otherDocId}`,
+        `/api/docs/${otherDocId}/threads`,
+        `/review/${otherDocId}`,
+        `/y/${otherDocId}`,
+        `/y/ws:${encodeURIComponent(otherBoard)}`,
+        `/events/workspace/${encodeURIComponent(otherBoard)}`,
+      ]) {
+        expect((await asCollaborator(path)).status, path).toBe(403);
+      }
+      // POSITIVE CONTROL: the matching paths on the board they WERE given.
+      expect((await asCollaborator(`/api/docs/${docId}`)).status).toBe(200);
+      expect((await asCollaborator(`/api/docs/${docId}/threads`)).status).toBe(200);
+      expect((await asCollaborator(`/y/${docId}`)).status).not.toBe(403);
+    });
+
+    it('cannot comment on a doc it was not given', async () => {
+      // The one write a collaborator has. Refused by the gate, and the doc is
+      // untouched afterwards.
+      const r = await asCollaborator(`/api/docs/${otherDocId}/threads/by_find`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          author: { id: 'x', name: 'x', kind: 'known', color: '#2e7dd7' },
+          text: 'should never land',
+          find: 'Body',
+        }),
+      });
+      expect(r.status).toBe(403);
+      const listed = await asOwner(`/api/docs/${otherDocId}/threads`);
+      const { threads } = (await listed.json()) as { threads: unknown[] };
+      expect(threads).toHaveLength(0);
+    });
+
+    it('reaches a doc filed on TWO boards through EITHER board it holds', async () => {
+      // A doc belongs to every board it is filed on. Asking membership about
+      // only the first — whichever the store iterates first — refused a
+      // visitor the doc their own board shows them, while that board's own
+      // share hostname served it. Both orders are asserted, because the bug
+      // was invisible in one of them.
+      const first = await boardWith('Filed first', 'two-board-doc');
+      const second = await asOwner('/api/workspaces', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ name: 'Filed second' }),
+      });
+      expect(second.status).toBe(200);
+      const secondId = ((await second.json()) as { workspace: { id: string } }).workspace.id;
+      const filed = await asOwner(`/api/workspaces/${encodeURIComponent(secondId)}/docs`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ docId: 'two-board-doc' }),
+      });
+      expect(filed.status).toBe(200);
+
+      // Shared on the SECOND board only — the one that is not first in the
+      // store's order.
+      await shareBoard(secondId, [NAMED_EMAIL]);
+      expect((await asEmail(NAMED_EMAIL, `/api/docs/${first.mintedDocId}`)).status).toBe(200);
+
+      // POSITIVE CONTROL, the reverse: share the FIRST board with a different
+      // address, and that address reaches the same doc too.
+      await shareBoard(first.boardId, ['@partner.example']);
+      expect((await asCollaborator(`/api/docs/${first.mintedDocId}`)).status).toBe(200);
+
+      // …and a member of NEITHER board is still refused it, so the two 200s
+      // above are membership rather than a doc that answers anybody.
+      expect((await asEmail(NEIGHBOUR_EMAIL, `/api/docs/${first.mintedDocId}`)).status).toBe(403);
+    });
+
+    it('still loads the app shell — an admitted non-member sees the page', async () => {
+      // Membership is asked about a workspace, and these paths name none.
+      // Refusing them would leave a collaborator on the wrong board staring
+      // at a blank tab instead of a page that can say so.
+      for (const p of ['/app/app.js', '/favicon.ico']) {
+        expect((await asEmail(NEIGHBOUR_EMAIL, p)).status, p).not.toBe(403);
+      }
     });
   });
 
@@ -453,9 +671,14 @@ describe('the opt-in fails closed', () => {
  * A collaborator arrives with an Access-verified email and, until now, wrote
  * as `guest-<hash>` regardless — the surface knew exactly who they were and
  * threw it away. With email identity in effect the claim becomes the author.
- * The half that matters more is the ABSENCE: a token with no email claim must
- * leave them a guest, never unattributed and never whatever their body said,
- * because a visitor's body is precisely what the guest namespace distrusts.
+ *
+ * The half that matters more is the ABSENCE, and membership sharpened what it
+ * means. A token with no email claim used to be admitted and written down as a
+ * guest; now it names nobody, and nobody is a member of anything, so it reaches
+ * the app shell and stops there. Guest attribution itself is still exercised on
+ * the share surfaces (visitor-identity.test.ts and the share-scope suites) —
+ * what this file pins is that the collaboration hostname does not admit an
+ * unnamed visitor in the first place.
  */
 describe('the collaboration hostname, with email identity in effect', () => {
   const dirs: string[] = [];
@@ -487,10 +710,14 @@ describe('the collaboration hostname, with email identity in effect', () => {
       dataDir,
       requireEmailAuth: true,
       cfAccess: { teamDomain: TEAM_DOMAIN, audience: COLLAB_AUD, jwks: { keys: [jwk] } },
-      // Link sharing configured too, for the reason spelled out in the first
+      // Share hosting configured too, for the reason spelled out in the first
       // fixture: without it the whole server falls into legacy Access mode
-      // and even the local setup calls need a token.
-      share: { config: { publicHostname: LINK_HOST } },
+      // and even the local setup calls need a token. It is also what mints
+      // the board's allow list below.
+      share: {
+        config: { ...ACCESS_SHARE_CONFIG, publicHostname: LINK_HOST },
+        cfApi: mockCfApi(),
+      },
       accessTunnelHosts: [TUNNEL_HOST],
     });
     handles.push(h);
@@ -536,6 +763,14 @@ describe('the collaboration hostname, with email identity in effect', () => {
       body: JSON.stringify({ docId: name }),
     });
     expect(filed.status).toBe(200);
+    // Who was GIVEN this board. Without it nobody reaches the doc at all and
+    // these tests would be measuring the membership gate instead of identity.
+    const shared = await local('/api/share/link', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ workspaceId: boardId, allowDomains: ['@example.com'] }),
+    });
+    expect(shared.status, await shared.clone().text()).toBe(200);
     return { port: h.port, docId, sign };
   }
 
@@ -575,12 +810,36 @@ describe('the collaboration hostname, with email identity in effect', () => {
     expect(author.id).not.toBe('known-bryan');
   });
 
-  it('a token with NO email claim leaves them a guest, not unattributed', async () => {
+  it('a token with NO email claim is nobody, and nobody is a member', async () => {
+    // The board's allow list is a set of addresses. A token that carries no
+    // address cannot be in it, whatever the entry says — a domain entry least
+    // of all, since there is no domain to compare. So the write is refused
+    // before attribution is ever reached.
     const s = await surface();
-    const author = await authorOfWrite(s, await s.sign());
-    expect(author.id.startsWith('guest-')).toBe(true);
-    // Never the claimed body, and never the anonymous fallback.
-    expect(author.id).not.toBe('known-bryan');
-    expect(author.id).not.toBe('anon-unattributed');
+    const res = await fetch(`http://localhost:${s.port}/api/docs/${s.docId}/threads/by_find`, {
+      method: 'POST',
+      headers: {
+        host: TUNNEL_HOST,
+        ...CF_RAY,
+        'cf-access-jwt-assertion': await s.sign(),
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({
+        author: { id: 'known-bryan', name: 'Bryan', kind: 'known', color: '#2e7dd7' },
+        text: 'a nameless note',
+        find: 'Body',
+      }),
+    });
+    expect(res.status).toBe(403);
+    expect(await res.json()).toEqual({ error: 'out_of_share_scope' });
+    // POSITIVE CONTROL: the same request with an email the board admits.
+    const named = await authorOfWrite(s, await s.sign('collaborator@example.com'));
+    expect(named.id).toBe(emailIdentityId('collaborator@example.com'));
+    // …and the nameless one really did land nothing.
+    const listed = await fetch(`http://localhost:${s.port}/api/docs/${s.docId}/threads`, {
+      headers: { host: `localhost:${s.port}` },
+    });
+    const { threads } = (await listed.json()) as { threads: Array<{ comments: unknown[] }> };
+    expect(threads).toHaveLength(1);
   });
 });

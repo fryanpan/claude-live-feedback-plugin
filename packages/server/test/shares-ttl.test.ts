@@ -14,7 +14,7 @@ import { describe, expect, it } from 'bun:test';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { ACCESS_NOT_CONFIGURED, Shares } from '../src/share/shares.ts';
+import { ACCESS_NOT_CONFIGURED, Shares, audienceEntryAdmits } from '../src/share/shares.ts';
 import { ACCESS_SHARE_CONFIG, mockCfApi } from './access-share.ts';
 
 function makeShares() {
@@ -211,5 +211,73 @@ describe('audienceResolver ignores expired shares', () => {
     } finally {
       rmSync(dataDir, { recursive: true, force: true });
     }
+  });
+});
+
+/**
+ * The membership record the collaboration hostname reads.
+ *
+ * A share is the only place an email is written down against a workspace, so
+ * these two functions are what "was this person given this board?" resolves
+ * to. `audienceEntryAdmits` is the reading half of `accessPolicyRule` — one
+ * tells Cloudflare who may reach a share hostname, the other tells our own
+ * gate who may reach the same board over the collaboration hostname — so a
+ * disagreement between them opens one door and not the other.
+ */
+describe('workspace membership', () => {
+  it('lists only LIVE shares of exactly that workspace', async () => {
+    const { shares, cleanup } = makeShares();
+    try {
+      const mine = await shares.createShareWorkspace({ ...LINK, ttlSeconds: 60 });
+      await shares.createShareWorkspace({
+        workspaceId: 'ws2',
+        allowDomains: ['@other.example'],
+        ttlSeconds: 60,
+      });
+      expect(shares.liveForWorkspace('ws1').map((s) => s.shareId)).toEqual([mine.shareId]);
+      // Another board's share is not this board's membership.
+      expect(shares.liveForWorkspace('ws2')).toHaveLength(1);
+      expect(shares.liveForWorkspace('')).toHaveLength(0);
+
+      // An expired share revokes the board it was minted for. A share's TTL
+      // has to mean the same thing on both hostnames — otherwise expiry shuts
+      // the share address and leaves the collaboration address open.
+      mine.expiresAt = Date.now() - 1;
+      expect(shares.liveForWorkspace('ws1')).toHaveLength(0);
+    } finally {
+      cleanup();
+    }
+  });
+
+  it('matches a domain entry by domain and an address entry by address', () => {
+    // A domain entry admits everyone at it…
+    expect(audienceEntryAdmits('@partner.example', 'anyone@partner.example')).toBe(true);
+    expect(audienceEntryAdmits('partner.example', 'ANYONE@Partner.Example')).toBe(true);
+    expect(audienceEntryAdmits('@partner.example', 'anyone@other.example')).toBe(false);
+    // …and never by suffix: a domain that merely ends with the entry is a
+    // different domain, and reading it as a match hands the board to whoever
+    // registers it.
+    expect(audienceEntryAdmits('@partner.example', 'anyone@evil-partner.example')).toBe(false);
+    expect(audienceEntryAdmits('@partner.example', 'anyone@sub.partner.example')).toBe(false);
+
+    // An address entry admits that address only — never its neighbours.
+    expect(audienceEntryAdmits('named@partner.example', 'named@partner.example')).toBe(true);
+    expect(audienceEntryAdmits('Named@Partner.Example', 'named@partner.example')).toBe(true);
+    expect(audienceEntryAdmits('named@partner.example', 'other@partner.example')).toBe(false);
+  });
+
+  it('admits nobody on an entry or an email that names nobody', () => {
+    // The failure mode of a permissive parse here is a board open to every
+    // admitted email on the deployment, so each of these answers false.
+    for (const entry of ['', ' ', '@', 'named@partner.example']) {
+      expect(audienceEntryAdmits(entry, ''), entry).toBe(false);
+      expect(audienceEntryAdmits(entry, 'not-an-email'), entry).toBe(false);
+      expect(audienceEntryAdmits(entry, '@partner.example'), entry).toBe(false);
+    }
+    expect(audienceEntryAdmits('', 'anyone@partner.example')).toBe(false);
+    expect(audienceEntryAdmits('@', 'anyone@partner.example')).toBe(false);
+    // Positive control: the same shape, with an entry and an email that do
+    // name somebody.
+    expect(audienceEntryAdmits('@partner.example', 'anyone@partner.example')).toBe(true);
   });
 });

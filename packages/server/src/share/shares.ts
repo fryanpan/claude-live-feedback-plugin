@@ -88,6 +88,30 @@ export class Shares {
     });
   }
 
+  /**
+   * Every LIVE share whose scope is exactly this workspace.
+   *
+   * This is the record the collaboration hostname reads to answer "was this
+   * person given this board?" — a share is the only place an email is ever
+   * written down against a workspace, so the union of these shares' allow
+   * lists IS the membership set (plus the owner allowlist, which the server
+   * folds in; it is not a share and does not belong in the registry).
+   *
+   * Live, not merely present, for the reason `findLiveByHostname` exists: an
+   * expired grant that still admitted its audience would mean a share's TTL
+   * revoked one hostname and left the collaboration hostname open.
+   *
+   * `link`-mode records are excluded. They are retired and every serving path
+   * already refuses them, so honouring one here would revive a grant through
+   * the one door that never checked the mode.
+   */
+  liveForWorkspace(workspaceId: string, now: number = Date.now()): Share[] {
+    if (!workspaceId) return [];
+    return this.shares.filter(
+      (s) => s.mode !== 'link' && s.workspaceId === workspaceId && s.expiresAt > now,
+    );
+  }
+
   /** Look up a live share by id. Expired shares resolve to null. */
   findLive(shareId: string, now: number = Date.now()): Share | null {
     const s = this.shares.find((x) => x.shareId === shareId);
@@ -350,4 +374,36 @@ export function accessPolicyRule(entry: string): PolicyRule {
   const at = entry.indexOf('@');
   if (at > 0) return { email: { email: entry } };
   return { email_domain: { domain: at === 0 ? entry.slice(1) : entry } };
+}
+
+/**
+ * Does one entry of a share's audience admit this email?
+ *
+ * The READING half of `accessPolicyRule`, and it sits next to it because the
+ * two must agree: that function tells Cloudflare who may reach a share
+ * hostname, this one tells our own gate who may reach the same workspace over
+ * the collaboration hostname. Split them across files and the day someone
+ * adds a third entry shape, one door opens for it and the other does not.
+ *
+ * Same discriminator, therefore: an `@` with something in front of it is a
+ * person (`a@b.example` matches that address and no other), anything else is
+ * a domain (`@b.example` and `b.example` both match every address at it).
+ * Matching is case-insensitive on both sides, because Cloudflare's is and
+ * because the verified claim arrives however the IdP spells it.
+ *
+ * An entry that is neither — an empty string, a bare `@` — admits nobody
+ * rather than everybody. That is not hypothetical tidiness: `allowDomains` is
+ * a JSON array off a request body, and the failure mode of a permissive parse
+ * here is a workspace open to every admitted email on the deployment.
+ */
+export function audienceEntryAdmits(entry: string, email: string): boolean {
+  const who = email.trim().toLowerCase();
+  const at = who.lastIndexOf('@');
+  if (at <= 0 || at === who.length - 1) return false;
+  const rule = entry.trim().toLowerCase();
+  const ruleAt = rule.indexOf('@');
+  if (ruleAt > 0) return rule === who;
+  const domain = ruleAt === 0 ? rule.slice(1) : rule;
+  if (domain === '') return false;
+  return who.slice(at + 1) === domain;
 }
