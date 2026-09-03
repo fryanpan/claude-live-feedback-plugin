@@ -8,7 +8,6 @@ import { discoveryCandidates, resolveDiscoveryFile } from '@feedback/core/machin
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
-import { type BacklogCommentRow, deliverAttachBacklog } from './attach-backlog.ts';
 import { createAttachmentKeepalive } from './attachment-keepalive.ts';
 import { resolveAgentAuthor } from './author.ts';
 import { createChannelMessages } from './channel-messages.ts';
@@ -21,13 +20,9 @@ import { TOOL_LIST } from './tool-schemas.ts';
 import { type DocsToolContext, handleDocsTool } from './tools/docs.ts';
 import { type TaskToolContext, handleTaskTool } from './tools/tasks.ts';
 import { type WorkspaceToolContext, handleWorkspaceTool } from './tools/workspace.ts';
-import {
-  type RestoreState,
-  boardsToReattach,
-  parseCoverage,
-  restoreNoticeContent,
-} from './watch-coverage.ts';
+
 import { SHARED_IDENTITY_REASON, createWatchRegistry, isSharedIdentity } from './watch-registry.ts';
+import { createWatchRestore } from './watch-restore.ts';
 
 /**
  * Thin MCP server that proxies tool calls to a running feedback server
@@ -314,7 +309,7 @@ function toolContext(): DocsToolContext & TaskToolContext & WorkspaceToolContext
     refreshCoverage,
     watchPersistenceMode,
     claimNoticeFor,
-    restoreState,
+    restoreState: restore.state(),
     lastPersistError: registry.lastPersistError(),
     IDENTITY_IS_SHARED,
     SHARED_IDENTITY_REASON,
@@ -371,14 +366,6 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
 const watchers = new Map<string, Watcher>();
 
 const IDENTITY_IS_SHARED = isSharedIdentity(AUTHOR.id);
-
-let restoreState: RestoreState = IDENTITY_IS_SHARED
-  ? { status: 'session-only', from: 'session', restored: [], pruned: [], attempts: 0 }
-  : { status: 'pending', from: 'session', restored: [], pruned: [], attempts: 0 };
-let restoreInFlight: Promise<void> | null = null;
-/** After a failed restore, don't hammer a down server from every tool call —
- *  back off (capped at 30s), then try again on the next call after that. */
-let restoreRetryAt = 0;
 
 /**
  * Which boards this session is attached to, and when it last proved it.
@@ -454,175 +441,6 @@ async function claimNoticeFor(taskId: string): Promise<string | undefined> {
   return undefined;
 }
 
-/**
- * Ask the server what this identity was watching and re-wire it. Single
- * flight; a failure leaves `restoreState.status = 'failed'` and the next call
- * tries again. Once `restored`, further calls are no-ops — the server set
- * only changes through this process's own watch/unwatch from then on (or
- * through a sibling session with the same name, whose additions reach this
- * process at ITS next respawn, not live).
- */
-async function ensureWatchesRestored(): Promise<void> {
-  if (restoreState.status === 'restored' || restoreState.status === 'session-only') return;
-  if (restoreInFlight) return restoreInFlight;
-  if (restoreState.status === 'failed' && Date.now() < restoreRetryAt) return;
-  restoreInFlight = (async () => {
-    const attempts = restoreState.attempts + 1;
-    try {
-      const res = (await http('GET', registry.watchesPath())) as {
-        watches?: Array<{ key: string }>;
-        pruned?: string[];
-      };
-      registry.setCoverage(parseCoverage(res));
-      const keys = (res.watches ?? []).map((w) => w.key);
-      const restored: string[] = [];
-      for (const key of keys) {
-        if (watchers.has(key)) continue;
-        if (key.startsWith('ws:')) await watchWorkspace(key.slice('ws:'.length), false);
-        else await watchDoc(key, false);
-        restored.push(key);
-      }
-      // Re-ATTACH, not just re-subscribe. Restoring the keys puts the events
-      // back on the wire; it does nothing about the attachment record, which
-      // hydrates with the heartbeat from before the restart and is therefore
-      // `away` the moment the session comes back. Every lead-addressed
-      // delivery — voice notes above all — asks for a LIVE attachment, so
-      // without this a respawned lead is
-      // subscribed and still invisible, which is the original incident with
-      // extra steps. Only boards it already led or was already attached to;
-      // see boardsToReattach.
-      const reattached: string[] = [];
-      for (const workspaceId of boardsToReattach(registry.coverage())) {
-        try {
-          const attachRes = (await http(
-            'POST',
-            `/api/workspaces/${encodeURIComponent(workspaceId)}/attachments`,
-            {
-              agentId: AUTHOR.id,
-              agentName: AUTHOR.name,
-              runtime: 'claude-code-local',
-              pluginVersion: PLUGIN_VERSION,
-              processId: PROCESS_ID,
-            },
-          )) as {
-            queuedComments?: BacklogCommentRow[];
-            queuedVoice?: Array<{ transcript?: unknown }>;
-          };
-          markAttached(workspaceId);
-          reattached.push(workspaceId);
-          // This POST is the fourth attach site, and the only one whose
-          // response body no tool call reads — yet the server just drained
-          // the backlog into it (voice destructively; comment rows marked
-          // emitted). Dropping it here is the ticket's own failure mode one
-          // layer down: the respawned session the queue waited for arrives,
-          // and the arrival itself eats the delivery. So forward each row as
-          // the channel notification its SSE frame would have been, acking a
-          // comment row only after its emit succeeded — same order, same
-          // reason as handleFrame.
-          //
-          // Deferred as ONE unit rather than emit-by-emit: the restore runs
-          // inside the first tool call's await (see deferredEmits), and these
-          // frames go unread there exactly like the notice below did. Keeping
-          // the whole delivery together preserves emit-then-ack — a receipt
-          // must still follow the frame it acknowledges, not precede it.
-          deferredEmits.emitOutsideToolCall(() =>
-            deliverAttachBacklog(workspaceId, attachRes, {
-              emit: async (ev, payload) => {
-                if (shouldForwardFrame.shouldForward(ev, payload)) {
-                  await emitChannelMessage(ev, payload);
-                }
-              },
-              ackComment: async (rowId) => {
-                await http(
-                  'POST',
-                  `/api/workspaces/${encodeURIComponent(workspaceId)}/comment-queue/${encodeURIComponent(rowId)}/ack`,
-                  {},
-                );
-              },
-            }),
-          );
-        } catch {
-          // Best effort, exactly like the watch restore: the notice below
-          // reads the coverage AFTER this, so a failure shows up as a board
-          // still waiting rather than as a silent claim of success.
-        }
-      }
-      // Re-read, so the notice describes the state the session is actually
-      // in rather than the one it woke up in — otherwise a successful
-      // re-attach still prints an alarm about itself.
-      if (reattached.length > 0) await refreshCoverage();
-      const state: RestoreState = {
-        status: 'restored',
-        from: 'server',
-        restored,
-        reattached,
-        pruned: res.pruned ?? [],
-        at: new Date().toISOString(),
-        attempts,
-      };
-      restoreState = state;
-      // Unconditional now — `emitRestoreNotice` decides whether there is
-      // anything to say. It speaks on an EMPTY restore when a board is
-      // waiting on this session, which is the incident's own shape: the
-      // watches were wired by hand this run, so there was nothing to restore
-      // and nothing was said, while four items sat queued for a seat nobody
-      // held.
-      //
-      // Deferred, not awaited. This promise is what the first tool call awaits
-      // at the top of the CallTool handler, so emitting here wrote the notice
-      // into the window between that request and its response — measured
-      // 2026-08-20 as a respawn that read `restored` in a tool RESULT and
-      // never saw the frame. See deferred-emit.ts.
-      deferredEmits.emitOutsideToolCall(() => emitRestoreNotice(state));
-    } catch (err) {
-      restoreState = {
-        ...restoreState,
-        status: 'failed',
-        error: err instanceof Error ? err.message : String(err),
-        attempts,
-      };
-      restoreRetryAt = Date.now() + Math.min(30_000, 1_000 * 2 ** attempts);
-    } finally {
-      restoreInFlight = null;
-    }
-  })();
-  return restoreInFlight;
-}
-
-/**
- * One line into the session saying the feedback loop came back intact — and
- * naming any board that is waiting on this session but has no attachment from
- * it. Silent when there is nothing of either kind to report.
- *
- * The second half is the one that matters: an agent that does not know the
- * gap exists never runs the probe that would show it, so the report has to
- * arrive unprompted or it may as well not exist.
- */
-async function emitRestoreNotice(state: RestoreState): Promise<void> {
-  const content = restoreNoticeContent({
-    restored: state.restored,
-    reattached: state.reattached ?? [],
-    pruned: state.pruned,
-    agentName: AUTHOR.name,
-    coverage: registry.coverage(),
-  });
-  if (content === null) return;
-  await server.notification({
-    method: 'notifications/claude/channel',
-    params: {
-      source: 'claude-workspaces',
-      sent_at: state.at ?? new Date().toISOString(),
-      content,
-      meta: {
-        event: 'watches.restored',
-        restored: state.restored,
-        pruned: state.pruned,
-        ...(registry.coverage() ? { unattachedBoards: registry.coverage()?.unattachedBoards } : {}),
-      },
-    },
-  });
-}
-
 /** Shared across every SSE loop in this process — the whole point is to catch
  *  a frame arriving on the board stream that the review stream already
  *  delivered, so a per-loop instance would see nothing. See frame-dedup.ts
@@ -641,7 +459,6 @@ const channel = createChannelMessages({
   http: (method, path, body) => http(method, path, body),
   authorId: AUTHOR.id,
 });
-const emitChannelMessage = channel.emitChannelMessage;
 
 /**
  * The SSE frame handler, bound to this process. See frame-handler.ts for the
@@ -687,6 +504,28 @@ const registry = createWatchRegistry({
   log: (...args) => console.error(...args),
 });
 const { watchDoc, watchWorkspace, unwatchDoc, refreshCoverage, watchPersistenceMode } = registry;
+
+/**
+ * The watch restore, bound to this process. See watch-restore.ts — it asks
+ * the server for this identity's set, re-wires it, re-attaches to the boards
+ * that were already this session's, and forwards the backlog the attach
+ * response drains.
+ */
+const restore = createWatchRestore({
+  http: (method, path, body) => http(method, path, body),
+  registry,
+  watchers,
+  author: AUTHOR,
+  pluginVersion: PLUGIN_VERSION,
+  processId: PROCESS_ID,
+  markAttached,
+  notify: (n) => server.notification(n),
+  emitChannelMessage: (event, payload) => channel.emitChannelMessage(event, payload),
+  shouldForward: (event, payload) => shouldForwardFrame.shouldForward(event, payload),
+  deferredEmits,
+  identityIsShared: IDENTITY_IS_SHARED,
+});
+const { ensureWatchesRestored } = restore;
 
 async function http(method: string, path: string, body?: unknown): Promise<unknown> {
   const baseUrl = resolveBaseUrl();
