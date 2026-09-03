@@ -1496,8 +1496,11 @@ transcript, audio tee and `meeting.json`) + `scripts/replay-meeting-audio.ts`
 (replaying that audio) ·
 `packages/server/src/meeting-lookup.ts` (what a "pull that in" ask points
 at) · `packages/server/src/meeting-notes.ts` + `meeting-notes-doc.ts` (composer +
-doc sink; the two clocks live in `createPauseTicker`) · `packages/server/src/meeting-notes-merge.ts` (the merge that
-keeps a person's writing, and the ownership ledger everything else asks) ·
+doc sink) + `pause-ticker.ts` (the two clocks, in `createPauseTicker`) +
+`notes-section-write.ts` (every write into a live section) ·
+`packages/server/src/meeting-notes-merge.ts` (the merge that
+keeps a person's writing) + `notes-ownership.ts` (the ownership ledger
+everything else asks) + `notes-section.ts` (what a section decomposes into) ·
 `packages/server/src/meeting-notes-correction.ts` (which note a spoken
 correction lands on, and whether it may) ·
 `packages/core/src/speaker-tags.ts` (the tag grammar, its provenance, and the
