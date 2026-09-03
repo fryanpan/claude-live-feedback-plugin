@@ -18,10 +18,8 @@ import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { isChannelEvent } from '../src/channel-gate.ts';
 import { createFrameDedup } from '../src/frame-dedup.ts';
-import { readMcpSource } from './harness/mcp-source.ts';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
-const SRC = readMcpSource();
 const BUNDLE = readFileSync(join(HERE, '../../plugin/mcp/index.js'), 'utf8');
 
 /** The forward decision as `handleFrame` makes it: kind gate, then dedup. */
@@ -85,12 +83,11 @@ describe('the channel gate on meeting frames', () => {
     }
   });
 
-  it('handleFrame gates the channel emit on isChannelEvent BEFORE the dedup', () => {
-    const start = SRC.indexOf('async function handleFrame(');
-    expect(start).toBeGreaterThan(-1);
-    const body = SRC.slice(start, SRC.indexOf('async function ackCommentRow('));
-    expect(body).toContain('isChannelEvent(ev) && shouldForwardFrame.shouldForward(ev, payload)');
-  });
+  // That `handleFrame` puts this gate BEFORE the dedup is asserted where the
+  // handler now lives: frame-handler.test.ts feeds it a `meeting.words` frame
+  // and reads a dedup predicate that records what it was asked about. The
+  // regex that used to stand here could not tell a working gate from a
+  // surviving string.
 
   it('the committed bundle carries the gate (a source-only change reaches nobody)', () => {
     expect(BUNDLE).toContain('startsWith("meeting.")');

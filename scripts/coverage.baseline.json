@@ -2,7 +2,7 @@
   "_comment": "Per-package line-coverage floors for `bun run coverage`. Set to the measured number rounded down; a number may only go UP. The bar is 80% (scripts/coverage.ts TARGET_PCT); these are where the packages are today.",
   "core": 94,
   "workspaces-app": 85,
-  "mcp": 14,
+  "mcp": 27,
   "widget": 83,
   "server": 95
 }

@@ -18,14 +18,19 @@ find packages \( -name '*.ts' -o -name '*.css' \) \
   | xargs wc -l | awk '$1>500' | sort -rn
 ```
 
-Audited 2026-09-02 at `3a39db67`, and re-audited after A1, A2 and B6 landed.
-**164 files** over 500 lines: 70 source and 94 test. A7 took `activity.ts`
+Audited 2026-09-02 at `3a39db67`, and re-counted 2026-09-03 with the command
+above: **161 files** over 500 lines, 68 source and 93 test. (The count written
+here on 2026-09-02 said 164/70/94; two of that difference predates this
+re-count and is not attributable to a listed split.) A7 took `activity.ts`
 (582 → 301) and `recall-calendar.ts` (721 → 470) off this list, and A8 took
 `voice-smooth.test.ts` (729 → 493); all three rows are gone rather than marked
 done. B5 took `prose.ts` (2847 → 83) and `goal-effort.ts` (1086 → 333) off it
 the same way, and added three rows for the files that came out of `prose.ts`.
-B6 did not take `mcp.ts` off the list — 5,563 → 1,426 clears the seam its row
-named without clearing the bar — and added four rows for what came out of it.
+B6 shrank `mcp.ts` 5,563 → 1,426, which cleared the seam its row named without
+clearing the bar; the coverage extraction then took it to 400 and its row is
+gone rather than marked done. Neither of the two rounds put a new file over the
+limit: the eight modules lifted out of `mcp.ts` for coverage are 89–459 lines
+and none needs a row.
 
 Test files are judged by a narrower rule, in their own table below: a long test
 file is an exception unless two *unrelated harnesses* share it. Many `describe`
@@ -117,7 +122,6 @@ the shipped bundle is unchanged.
 
 | File | Lines | Verdict | Reason / seam |
 |---|---|---|---|
-| `packages/mcp/src/mcp.ts` | 1426 | Exception | Was 5,563 and the seam named here is taken: B6 moved the 94-schema registry to `tool-schemas.ts` and the 94-case dispatch to `tools/`, split by domain. What is left is the entry point and the one thing only it can own — process identity, the HTTP client, and the SSE-to-channel bridge that turns server events into `notifications/claude/channel` frames, which exists to serve the watch registry the tools call into. It connects a stdio transport at the bottom of the file, so nothing may import it and every consumer is handed what it needs instead. The visible next seam if it grows is the channel bridge; nothing is queued. |
 | `packages/mcp/src/tools/workspace.ts` | 528 | Exception | The third of the same shape: one dispatch family — the arms addressed to a board rather than to a document or a row — over one shared context, plus `setBoardRetired`, which two of them are. Length is a count of tools, not of coupling. |
 | `packages/mcp/src/tools/tasks.ts` | 1070 | Exception | The other half of the same shape as `tools/docs.ts` below: one dispatch family — every arm that addresses a task, by `taskId` or by a `reviewItemId` that resolves to one — over one shared context. The four helpers with it (`TaskPayload`, `taskCreatedSummary`, `heldResult`, and the two review-item lookups) have no reader anywhere else, which is why they are here and why moving them out would only add a file. Length is a count of tools, not of coupling. |
 | `packages/mcp/src/tools/docs.ts` | 819 | Exception | One dispatch family: every arm that names a `docId`, over one shared context, in the order they stood in the switch. Cutting further would put one `switch` across two files and re-open the question the domain split just answered — which file a tool is in — for no reader's benefit, since nobody reads an arm they did not come looking for by name. The arms are independent by construction, so length here is a count of tools, not of coupling. |
@@ -259,7 +263,7 @@ months, so splitting it buys almost nothing.
 |---|---|---|---|---|
 | 1 | `packages/server/src/server.ts` | 7131 | 233 | L |
 | 2 | `styles.css` + `hub.css` + `signin.css` (split in B2) | 12042 | 158 | M |
-| 3 | `packages/mcp/src/mcp.ts` | 5563 | 156 | M |
+| 3 | `mcp.ts` + `tool-schemas.ts` + `tools/` + the eight modules lifted for coverage (all under `packages/mcp/src`, split in B6 and again for coverage) | 5563 | 156 | done |
 | 4 | `packages/workspaces-app/src/hub/hub-app.ts` | 3594 | 102 | L |
 | 5 | `packages/workspaces-app/src/hub/hub-render.ts` | 2707 | 95 | M |
 | 6 | `hub-board-model.ts` + `hub-review-model.ts` + `hub-presence-model.ts` (was `hub-model.ts`, split in B1) | 3645 | 89 | M |
@@ -292,3 +296,26 @@ months, so splitting it buys almost nothing.
 The top eight are where the pain is: they carry 991 of the 1350 commits in this
 queue. Rows 1 through 8 are worth filing as tickets now; below row 20 a split is
 tidiness, and is best done by whoever is already editing the file.
+
+---
+
+## Files with no coverage, and why
+
+A second kind of exception, kept here because it answers the same question the
+rest of the page does: *this file breaks a bar, and here is the written reason.*
+`bun run coverage` reports a per-package floor, not a per-file one, so nothing
+mechanical fails on the rows below — they exist so that a zero in the per-file
+listing is a decision on the record rather than an oversight.
+
+One typographic quirk: the first row names its file as `mcp/src/mcp.ts`, with
+the `packages/` prefix dropped on purpose. `loc-audit.ts` reads every
+`packages/….ts` string anywhere in this document as a size-exception row, and
+that file is 400 lines — spelling it in full would report a permanently stale
+row at every run. Rows for files that ARE over the limit spell the path
+normally.
+
+| File | File lines | Why it has no test |
+|---|---|---|
+| `mcp/src/mcp.ts` | 400 | The boot file, and the one thing here that genuinely cannot be imported: it ends in `await server.connect(transport)`, so any test that loaded it would start an MCP server on the test runner's stdio and never return. Everything it used to hold has been lifted into modules that take their dependencies as arguments and are covered directly — `http-client`, `channel-messages`, `frame-handler`, `sse-loop`, `watch-registry`, `watch-restore`, `attachments` and `call-tool`, all at **100% line** coverage. Branch coverage across the eight runs 75–100%, lowest on `channel-messages` (75%), whose renderers carry a long tail of `??` fallbacks for fields older servers omit. What is left is construction and wiring: reading identity out of the environment, building the `Server`, and handing each module its collaborators in an order the language enforces. The wiring is asserted end to end instead, by the suites that spawn the shipped bundle as a child process and speak JSON-RPC to it (`packages/mcp/test/review-item-tools.test.ts`, `packages/server/test/mcp-durable-watches.test.ts`). |
+| `packages/mcp/src/tool-schemas.ts` | 2012 | Declarative data with no branch in it: the 94-entry `tools/list` result. A test would restate the table. The one property worth asserting — that every advertised name has a dispatch arm — belongs to the dispatcher, not to the table. |
+| `packages/mcp/src/tools/docs.ts`, `tools/tasks.ts`, `tools/workspace.ts` | 819 / 1070 / 528 | Not exempt, just not done: these are the three `CallTool` domain families, and the dispatcher that reaches them is now covered while the arms themselves are not. Each arm is a small translation from tool arguments to one REST call, so they are testable the moment someone writes the fakes; the coverage extraction stopped at the dispatcher to keep its diff a pure move. |
