@@ -51,6 +51,7 @@ import {
   renameSpeakerTags,
   speakerDisplayName,
 } from '@feedback/core';
+import { type NoteReference, matchReferences } from './notes-references.ts';
 import {
   DEFAULT_NOTES_CADENCE_MS,
   DEFAULT_NOTES_QUIET_MS,
@@ -75,6 +76,8 @@ export {
   createPauseTicker,
   realTickScheduler,
 } from './pause-ticker.ts';
+
+export type { NoteReference } from './notes-references.ts';
 
 /** One settled turn as a tick's delta carries it. */
 export interface NotesTurn {
@@ -183,6 +186,14 @@ export interface NotesComposeInput {
   /** Material THIS tick's speech asked to have pulled in, already resolved.
    *  Absent on the same terms as `taskLinks`, and for the same reason. */
   docLinks?: readonly NoteDocLink[];
+  /**
+   * Board rows and docs THIS tick's speech NAMED — found by searching the
+   * meeting's catalogue for the titles the words contain
+   * (`notes-references.ts`), so a note about work that has a ticket can cite
+   * it. Distinct from `taskLinks`, which are rows the capture pass FILED or
+   * touched: these were merely mentioned, and most ticks name none.
+   */
+  references?: readonly NoteReference[];
 }
 
 export interface NotesComposer {
@@ -364,6 +375,16 @@ export interface MeetingNotesDeps {
    */
   resolveContext?: (docId: string) => NotesProjectContext | undefined;
   /**
+   * Everything on this meeting's board a note could link to — every open row
+   * and every doc, with its URL — read ONCE at session start and searched per
+   * tick for the titles that tick's speech contains.
+   *
+   * Deliberately not part of `context`: context is prompt text, and this is a
+   * board-sized list that must never become prompt text. What reaches the
+   * compose is the handful of entries the words actually named.
+   */
+  resolveReferences?: (docId: string) => readonly NoteReference[];
+  /**
    * The capture pass, run per tick BEFORE the compose so the links it
    * returns can ride the same compose input. Its failure costs the tick its
    * links, never its notes — capture is an enhancement on the same terms as
@@ -542,6 +563,10 @@ export function beginNotesSession(
   // finished writing, and this session must never replace it.
   deps.onSessionStart?.(ids);
   const context = deps.resolveContext?.(ids.docId) ?? deps.context;
+  /** The board as it stood when the meeting started. Not refreshed per tick:
+   *  a row filed mid-meeting reaches the notes through the capture pass's
+   *  `taskLinks`, which is the path that knows it was just created. */
+  const catalogue = deps.resolveReferences?.(ids.docId) ?? [];
   let previous: string | null = null;
   /** Raw engine labels, never display names — a carried turn is re-mapped
    *  on its next attempt, and mapping a name a second time would wrap it. */
@@ -650,6 +675,11 @@ export function beginNotesSession(
           deps.onError?.(err instanceof Error ? err.message : 'task capture failed');
         }
       }
+      // What this tick's words named on the board. A local scan of a list
+      // read at session start — no store call, no network, nothing that can
+      // fail a tick — so it sits outside the try blocks the fallible stages
+      // need.
+      const references = matchReferences(turns.map((t) => t.text).join('\n'), catalogue);
       // Read INSIDE the chain, immediately before composing: the compose is
       // the thing that must not be written from stale text, and the chain is
       // what serializes it against the previous tick's write.
@@ -679,6 +709,7 @@ export function beginNotesSession(
         ...(context ? { context } : {}),
         ...(taskLinks.length > 0 ? { taskLinks } : {}),
         ...(docLinks.length > 0 ? { docLinks } : {}),
+        ...(references.length > 0 ? { references } : {}),
       };
       try {
         const composed = await deps.composer.compose(input);
