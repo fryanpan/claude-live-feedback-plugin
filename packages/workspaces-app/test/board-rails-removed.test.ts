@@ -1,10 +1,11 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import * as boardIsland from '../src/hub/board-island.tsx';
 import * as hubDetailRender from '../src/hub/hub-detail-render.ts';
 import * as hubRender from '../src/hub/hub-render.ts';
 import * as taskDetailIsland from '../src/hub/task-detail-island.tsx';
+import { IPAD, PHONE, attach, installSheets, setViewport, styleOf } from './css-harness.ts';
 
 /**
  * The board's two side rails — "Docs" and "Open threads (N)" — are gone.
@@ -23,11 +24,32 @@ import * as taskDetailIsland from '../src/hub/task-detail-island.tsx';
  * control in the same layer — the same read, over the same artifact, finding
  * something that is still there. Without that half a mistyped path, a moved
  * file or an empty string reads as a clean removal.
+ *
+ * The stylesheet layer no longer greps `hub.css`. It installs the board's
+ * sheets and reads the computed style of the classes, so the control and the
+ * absence are both measured the way a browser would answer them.
  */
 
 const SRC = resolve(import.meta.dirname, '../src');
 const hubApp = readFileSync(resolve(SRC, 'hub/hub-app.ts'), 'utf8');
-const css = readFileSync(resolve(SRC, 'hub.css'), 'utf8');
+
+/* The stylesheet layer is read by RENDERING it, not by grepping it: the
+   board's sheets are installed and the classes are built, so "no rail is
+   styled" is measured as "nothing reaches an element carrying the rail's
+   class" rather than as "the file does not contain the string". A hidden rail
+   whose selector had been renamed would satisfy the old read and fail this
+   one. `hub.css` before `styles.css` is the order `renderHubShell` links them
+   in; `tokens.css` is left out because the served file is a vendored Open
+   Props subset plus `src/tokens.css`, and the mapping half alone re-points
+   every remapped token at an undefined `var(--gray-N)`. */
+let cleanup = () => {};
+beforeEach(() => {
+  cleanup = installSheets('hub.css', 'styles.css');
+});
+afterEach(() => {
+  cleanup();
+  document.body.replaceChildren();
+});
 
 describe('the board no longer carries the docs and open-threads rails', () => {
   it('exports neither renderer, and still exports the board renderers', () => {
@@ -73,12 +95,22 @@ describe('the board no longer carries the docs and open-threads rails', () => {
     expect(existsSync(resolve(SRC, 'hub/hub-sidebar.ts'))).toBe(false);
   });
 
-  it('styles no rail, and the board layout track survives', () => {
-    // Positive control: the stylesheet read is the right file and the layout
-    // rule the rails used to sit beside is still in it.
-    expect(css).toContain('.hub-main {');
-    expect(css).toContain('.hub-board-col');
-    expect(css).not.toContain('.hub-side');
+  it('styles no rail, and the board layout still lays out around the columns it kept', () => {
+    setViewport(IPAD);
+    // Positive control: the sheets are installed and the layout rule the rails
+    // used to sit beside is live. Without it every absence below would pass by
+    // measuring an element no stylesheet reaches.
+    expect(styleOf(attach('hub-main')).display).toBe('grid');
+    // The board column is a real, styled surface: Home hides it, the board
+    // shows it. Both halves, so the selector is proved reachable.
+    const home = attach('hub-main hub-main--home');
+    expect(styleOf(attach('hub-board-col', { parent: home })).display).toBe('none');
+    expect(styleOf(attach('hub-board-col', { parent: attach('hub-main') })).display).not.toBe(
+      'none',
+    );
+    // And nothing at all reaches a rail: a bare <div> the cascade never
+    // touches computes the UA's own `display: block`.
+    expect(styleOf(attach('hub-side', { tag: 'aside' })).display).toBe('block');
   });
 
   it('gives the board a min-0 track, so a long title cannot widen the page', () => {
@@ -87,11 +119,17 @@ describe('the board no longer carries the docs and open-threads rails', () => {
     // unbreakable task title push the whole page wider than the viewport —
     // the bug the three-column layout was already guarding against. The nav
     // rail's `max-content` track may sit in front of it; what may never come
-    // back is a bare `1fr` anywhere in the template.
-    const main = css.slice(css.indexOf('.hub-main {'));
-    const block = main.slice(0, main.indexOf('}'));
-    const template = /grid-template-columns:([^;]*);/.exec(block)?.[1] ?? '';
+    // back is a bare `1fr` anywhere in the template. Read off the cascade, so
+    // a media override that reintroduced one would be caught too.
+    setViewport(IPAD);
+    const template = styleOf(attach('hub-main')).gridTemplateColumns;
     expect(template).toContain('minmax(0, 1fr)');
     expect(template.replace(/minmax\(0, 1fr\)/g, '')).not.toContain('1fr');
+    // Below 1100 the same guarantee is bought differently — a block-level flex
+    // item is sized from its container, so there is no track to widen at all.
+    setViewport(PHONE);
+    const phone = styleOf(attach('hub-main'));
+    expect(phone.display).toBe('flex');
+    expect(phone.flexDirection).toBe('column');
   });
 });

@@ -1,75 +1,76 @@
-import { readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { IPAD, PHONE, attach, installSheets, setViewport, styleOf } from './css-harness.ts';
 
 /**
  * The reconnecting state existed on the review surface for months and was
  * invisible on a phone: one `.save-state { display: none }` inside the ≤720px
  * block hid it, and a deploy usually catches Bryan on his phone.
  *
- * happy-dom has no layout engine and no cascade resolution for media queries,
- * so a rendered assertion isn't available here. This asserts the CASCADE
- * SHAPE instead — the rules exist, in the phone block, in an order where the
- * un-hide wins — and the 430px rendering is checked in a browser separately.
+ * This file used to brace-walk `styles.css` for that block and compare the two
+ * rules' OFFSETS, on the reasoning that equal specificity makes source order
+ * the decider. That reasoning was right and the test still could not see the
+ * answer: it never asked whether the block matched at 430px, and a third rule
+ * anywhere else in the cascade would have re-hidden the badge with both
+ * offsets unchanged. The sheet is installed here and the badge is built at
+ * each viewport, so the assertion IS the cascade's verdict — which is also why
+ * the old comment about `display:\\s*(?!none)` backtracking is gone with the
+ * regex it was about.
+ *
+ * SHEETS: the review shell links `styles.css` (then `tokens.css`, left out
+ * here — the served file is a vendored Open Props subset plus `src/tokens.css`,
+ * and the mapping half alone re-points every remapped token at an undefined
+ * `var(--gray-N)`).
  */
-const CSS = readFileSync(resolve('packages/workspaces-app/src/styles.css'), 'utf8');
 
-/** Body of the first `@media (max-width: 720px)` block that styles .save-state. */
-function phoneBlockWithSaveState(): string {
-  const re = /@media \(max-width: 720px\) \{/g;
-  let m: RegExpExecArray | null = re.exec(CSS);
-  while (m !== null) {
-    let depth = 1;
-    let i = m.index + m[0].length;
-    const start = i;
-    while (i < CSS.length && depth > 0) {
-      if (CSS[i] === '{') depth++;
-      else if (CSS[i] === '}') depth--;
-      i++;
-    }
-    const body = CSS.slice(start, i - 1);
-    if (body.includes('.save-state')) return body;
-    m = re.exec(CSS);
-  }
-  return '';
+let cleanup = () => {};
+beforeEach(() => {
+  cleanup = installSheets('styles.css');
+});
+afterEach(() => {
+  cleanup();
+  document.body.replaceChildren();
+});
+
+/** The routine badge and the reconnecting one, as the topbar renders them. */
+function badges(vp: { width: number; height: number }) {
+  setViewport(vp);
+  return {
+    saved: styleOf(attach('save-state save-state--saved', { tag: 'span' })),
+    offline: styleOf(attach('save-state save-state--offline', { tag: 'span' })),
+  };
 }
 
 describe('the phone breakpoint', () => {
-  it('has a ≤720px block that speaks about .save-state at all', () => {
-    // POSITIVE CONTROL for the two assertions below: if the extractor came
-    // back empty they would both pass by measuring nothing.
-    expect(phoneBlockWithSaveState()).not.toBe('');
-  });
-
   it('still hides the routine saved/dirty badge', () => {
-    const body = phoneBlockWithSaveState();
-    expect(/\.save-state\s*\{[^}]*display:\s*none/.test(body)).toBe(true);
+    expect(badges(PHONE).saved.display).toBe('none');
   });
 
-  it('un-hides the reconnecting one, after the hide so it wins', () => {
-    const body = phoneBlockWithSaveState();
-    const hide = body.search(/\.save-state\s*\{/);
-    const show = body.search(/\.save-state--offline\s*\{/);
-    expect(show).toBeGreaterThan(-1);
-    // Same specificity (one class each), so source order decides.
-    expect(show).toBeGreaterThan(hide);
-    const rule = /\.save-state--offline\s*\{([^}]*)\}/.exec(body)?.[1] ?? '';
-    // Two assertions, not one negative lookahead: `display:\s*(?!none)` reads
-    // as "a display that isn't none" and is satisfied by `display: none`,
-    // because \s* backtracks to zero width and the lookahead then sees the
-    // space. Caught by mutating the rule to `display: none` and watching this
-    // pass.
-    expect(rule).toMatch(/display:\s*\S/);
-    expect(rule).not.toMatch(/display:\s*none/);
+  it('un-hides the reconnecting one — the phone shows "we lost the server"', () => {
+    // Same specificity (one class each) so source order decides, and this is
+    // where that decision lands. A hide that came back later in the cascade
+    // would read here as `none`, whatever the two offsets in the file said.
+    const { offline } = badges(PHONE);
+    expect(offline.display).toBe('inline-block');
+  });
+
+  it('positive control: the hide is scoped to the phone, and the base rule is live above it', () => {
+    // Without this the two assertions above could both pass on a stylesheet
+    // that failed to attach at all — an unstyled span reads '' for display,
+    // and `''` is not `'none'`, so "un-hidden" would be free.
+    const { saved, offline } = badges(IPAD);
+    expect(saved.display).toBe('');
+    expect(offline.display).toBe('');
+    expect(saved.fontSize).toBe('11.5px'); // the shared base rule, still there
   });
 });
 
 describe('the board connection banner', () => {
   it('is styled, and sits in flow rather than over the page', () => {
-    const rule = /\n\.conn-banner\s*\{([^}]*)\}/.exec(CSS)?.[1];
-    expect(rule).toBeDefined();
     // A fixed/absolute banner covers a control for the whole outage, which at
     // 430px is every control there is.
-    expect(rule).not.toMatch(/position:\s*(fixed|absolute)/);
+    setViewport(PHONE);
+    const banner = styleOf(attach('conn-banner'));
+    expect(banner.padding).toBe('7px 14px'); // control: the rule reaches it
+    expect(banner.position === 'static' || banner.position === '').toBe(true);
   });
 });

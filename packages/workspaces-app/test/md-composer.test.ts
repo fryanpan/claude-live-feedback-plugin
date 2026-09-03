@@ -1,5 +1,3 @@
-import { readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import * as realChunk from '../src/md-composer-chunk.ts';
 import {
@@ -14,6 +12,7 @@ import {
   refreshMarkdownComposer,
   setComposerEditorLoader,
 } from '../src/md-composer.ts';
+import { IPAD, PHONE, attach, installSheets, setViewport, styleOf } from './css-harness.ts';
 import { frame, renderedHtml, surfaceOf } from './support/composer.ts';
 
 /**
@@ -295,63 +294,131 @@ describe('when the editor’s chunk never arrives', () => {
 });
 
 /**
- * happy-dom resolves no layout, so the stylesheet is read as text — same
- * pattern as `hub-decide-css.test.ts`, and for the same reason: classes
- * emitted with nothing styling them is a state no DOM test can see.
+ * The composer's own styling, measured off the cascade.
+ *
+ * happy-dom lays nothing out, so a rendered pixel is still a browser check
+ * (`bun run ui:shot`) — but the values the browser would lay out WITH are the
+ * cascade's answer, and reading them off a real composer catches what a text
+ * read cannot: a rule a later one overrides, a selector the composer no longer
+ * carries, a declaration inside a media query that does not match. Classes
+ * emitted with nothing styling them stays the state under test; the difference
+ * is that "nothing styles it" is now asked of the element rather than of the
+ * file.
+ *
+ * The board's cascade is two files since the hub block moved to hub.css:
+ * styles.css keeps the shared chrome, hub.css carries the board's own rules,
+ * and the hub shell loads them in that order — which is the order they are
+ * installed here, because two rules of equal specificity are settled by which
+ * sheet came last.
  */
 describe('the markdown composer is styled', () => {
-  // The board's cascade is two files since the hub block moved to hub.css:
-  // styles.css keeps the shared chrome, hub.css carries the board's own
-  // rules, and the hub shell loads them in that order. A rule this suite
-  // pins may sit in either, so read the pair the page actually loads.
-  // The board's cascade is two files since the hub block moved to hub.css:
-  // styles.css keeps the shared chrome, hub.css carries the board's own rules,
-  // and the hub shell loads them in that order. A rule this suite pins may sit
-  // in either, so read the pair the page actually loads. Two reads on purpose:
-  // a one-line read is what `bun run test:audit` counts, and folding them into
-  // a loop would hide a source-shape site rather than remove one.
-  const CSS = [
-    readFileSync(resolve('packages/workspaces-app/src/styles.css'), 'utf8'),
-    readFileSync(resolve('packages/workspaces-app/src/hub.css'), 'utf8'),
-  ].join('\n');
-  const stripped = CSS.replace(/\/\*[\s\S]*?\*\//g, '');
+  let sheets = () => {};
+  beforeEach(() => {
+    setViewport(IPAD);
+    sheets = installSheets('hub.css', 'styles.css');
+  });
+  afterEach(() => {
+    sheets();
+    setViewport({ width: 1024, height: 768 });
+  });
 
-  /** The body of one top-level rule, comments stripped. */
-  function rule(selector: string): string {
-    const at = new RegExp(
-      `(^|\\n)${selector.replace(/[.+*[\]()>]/g, '\\$&')}\\s*\\{([^}]*)\\}`,
-    ).exec(stripped);
-    return at?.[2] ?? '';
+  /**
+   * Whether the cascade reaches `el` with a rule of its OWN, asked by
+   * comparing it with a same-tag element carrying a class the sheets have
+   * never heard of.
+   *
+   * The comparison is the point: an unstyled element does not read `''` for
+   * everything — `display` comes back `block` on a bare div and every
+   * inherited property comes down from an ancestor — so "some property is
+   * set" would call every element on the page styled. Only non-inherited
+   * properties are read, so a candidate nested inside a styled parent is not
+   * credited with its parent's type.
+   */
+  const OWN = [
+    'display',
+    'width',
+    'flexDirection',
+    'padding',
+    'margin',
+    'border',
+    'borderRadius',
+    'background',
+    'minHeight',
+    'maxHeight',
+    'overflowY',
+    'opacity',
+  ] as const;
+
+  function look(el: HTMLElement): string {
+    const style = styleOf(el);
+    return OWN.map((k) => `${k}=${style[k]}`).join(' ');
+  }
+
+  function isStyled(el: HTMLElement): boolean {
+    return look(el) !== look(attach('md-composer-nonesuch', { tag: el.tagName }));
   }
 
   it('styles every class the composer emits', () => {
-    for (const sel of [
-      '.md-composer',
-      '.md-composer-surface',
-      '.md-composer-disabled .md-composer-surface',
-      '.md-composer-surface .ProseMirror',
-    ]) {
-      expect(rule(sel), `no rule for ${sel}`).not.toBe('');
-    }
+    // Asked of elements rather than of the file: a rule can exist and still
+    // reach nothing, which is the failure this case is for.
+    const live = attach('md-composer md-composer-live');
+    expect(isStyled(live), 'no rule reaches .md-composer').toBe(true);
+    expect(isStyled(attach('md-composer-surface', { parent: live }))).toBe(true);
+    const disabled = attach('md-composer md-composer-disabled');
+    const disabledSurface = attach('md-composer-surface', { parent: disabled });
+    expect(styleOf(disabledSurface).opacity, 'a disabled surface is not dimmed').not.toBe('');
+    const editor = attach('ProseMirror', { parent: attach('md-composer-surface') });
+    expect(isStyled(editor), 'no rule reaches .md-composer-surface .ProseMirror').toBe(true);
+    // Negative control: a second element carrying the unheard-of class reads
+    // the same as the yardstick, so the trues above are differences and not
+    // an unstyled document answering everything.
+    expect(isStyled(attach('md-composer-nonesuch'))).toBe(false);
   });
 
   it('the editor is off screen until it exists, and takes the box’s place when it does', () => {
-    expect(rule('.md-composer > .md-composer-surface')).toContain('display: none');
-    expect(rule('.md-composer-live > .md-composer-surface')).toContain('display: block');
-    expect(rule('.md-composer-live > textarea')).toContain('display: none');
+    // Driven through the real `attachMarkdownComposer`, so what is measured is
+    // the wrapper the code produces and not a hand-built class chain.
+    const pending = attach('md-composer');
+    const pendingSurface = attach('md-composer-surface', { parent: pending });
+    const pendingBox = attach('', { tag: 'textarea', parent: pending });
+    expect(styleOf(pendingSurface).display).toBe('none');
+    expect(styleOf(pendingBox).display).not.toBe('none');
+
+    attachMarkdownComposer(ta);
+    expect(ta.parentElement?.className).toBe('md-composer md-composer-live');
+    expect(styleOf(surfaceOf(ta) as HTMLElement).display).toBe('block');
+    expect(styleOf(ta).display).toBe('none');
   });
 
   it('clamps its height — a growing composer must not push itself off screen', () => {
-    // The preview this replaced was measured doing exactly that at 820px.
-    expect(rule('.md-composer-surface')).toMatch(/max-height:\s*min\(/);
-    expect(rule('.md-composer-surface')).toContain('overflow-y: auto');
+    // The preview this replaced was measured pushing itself off screen at
+    // 820px. happy-dom returns `min()` unevaluated, but the `vh` inside it
+    // resolves — so the cap genuinely tracks the window, and the two readings
+    // below differ. That difference is the behaviour; a `toMatch(/min\(/)` on
+    // the source could not tell it from a cap that ignored the viewport.
+    const surface = () => {
+      document.body.replaceChildren();
+      const el = attach('md-composer-surface', { parent: attach('md-composer') });
+      const style = styleOf(el);
+      return { maxHeight: style.maxHeight, overflowY: style.overflowY };
+    };
+    setViewport(IPAD);
+    const tall = surface();
+    setViewport(PHONE);
+    const short = surface();
+    expect(tall.maxHeight).not.toBe('');
+    expect(tall.overflowY).toBe('auto');
+    expect(short.maxHeight).not.toBe(tall.maxHeight);
   });
 
-  it('renders the placeholder, which is the only label these boxes have', () => {
-    expect(
-      rule('.md-composer-surface .ProseMirror p.is-editor-empty:first-child::before'),
-    ).toContain('attr(data-placeholder)');
-  });
+  // The placeholder itself is NOT read here. It is drawn by
+  // `.md-composer-surface .ProseMirror p.is-editor-empty:first-child::before
+  // { content: attr(data-placeholder) }`, and happy-dom returns nothing for a
+  // pseudo-element, so any assertion about it would be an assertion about an
+  // empty string. What this suite can still pin is the half the rule depends
+  // on — that the editor's first paragraph carries `data-placeholder` — and
+  // "carries the box’s placeholder onto the editor" above does exactly that.
+  // The painted text is a browser check: `bun run ui:shot`.
 
   it('keeps the document surface’s type off a composer nested inside it', () => {
     // An inline thread card lives inside `#editor` and carries a reply
@@ -359,24 +426,47 @@ describe('the markdown composer is styled', () => {
     // composer's editor and won — an id outranks any number of classes. The
     // measured result at 820px: an empty reply box 18px serif and 60vh tall,
     // with the Reply button pushed off the bottom of the screen.
-    // POSITIVE CONTROL: those rules are still here to be got wrong.
-    expect(stripped).toContain('#editor > .ProseMirror');
-    expect(stripped).not.toMatch(/#editor\s+\.ProseMirror/);
+    //
+    // Built as the nesting that produced it and read off both editors, which
+    // is the whole defect in one comparison: the child combinator is what
+    // keeps them different, and a source grep for `#editor > .ProseMirror`
+    // passes just as well when a second, looser rule has been added beside it.
+    const editor = attach('', { attrs: { id: 'editor' } });
+    const docEditor = attach('ProseMirror', { parent: editor });
+    const card = attach('thread-card', { parent: docEditor });
+    const reply = attach('thread-reply', { parent: card });
+    const replySurface = attach('md-composer-surface', { parent: reply });
+    const replyEditor = attach('ProseMirror', { parent: replySurface });
+
+    // Positive control: the document surface really does carry the prose type,
+    // so the difference below is a difference and not two unstyled boxes.
+    const doc = styleOf(docEditor);
+    expect(doc.fontFamily).toContain('serif');
+    expect(doc.fontSize).toBe('18px');
+
+    const nested = styleOf(replyEditor);
+    expect(nested.fontFamily).not.toBe(doc.fontFamily);
+    expect(nested.fontSize).not.toBe(doc.fontSize);
+    expect(nested.minHeight).not.toBe(doc.minHeight);
   });
 
   it('dresses the surface wherever a composer lives — one look per context', () => {
-    // POSITIVE CONTROL: the extractor can see a rule that is definitely there.
-    expect(stripped).toContain('.thread-reply textarea');
+    // Five contexts, each of which has to give the surface a look of its own.
+    // A bare surface is the control: every context must read differently from
+    // it, which is what "dressed" means and what a `toContain` on the
+    // selector string could not check.
+    const bare = attach('md-composer-surface');
+    const bareLook = [styleOf(bare).fontSize, styleOf(bare).borderRadius].join('|');
     for (const context of [
-      '.thread-reply',
-      '.hub-comment-form',
-      '.hub-answer-form',
-      '.hub-walk-answer',
-      '.composer-inner',
+      'thread-reply',
+      'hub-comment-form',
+      'hub-answer-form',
+      'hub-walk-answer',
+      'composer-inner',
     ]) {
-      expect(stripped, `${context} does not dress .md-composer-surface`).toContain(
-        `${context} .md-composer-surface`,
-      );
+      const surface = attach('md-composer-surface', { parent: attach(context) });
+      const look = [styleOf(surface).fontSize, styleOf(surface).borderRadius].join('|');
+      expect(look, `.${context} does not dress .md-composer-surface`).not.toBe(bareLook);
     }
   });
 });
