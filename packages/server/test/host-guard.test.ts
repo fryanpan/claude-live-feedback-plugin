@@ -1164,9 +1164,17 @@ describe('collabScope', () => {
   const workspacesOf = (id: string): string[] => {
     if (id === 'design-doc') return ['ws-a'];
     if (id === 'other-doc') return ['ws-b'];
+    // Filed on two boards at once — the shape a review filed on a hub has,
+    // and the one a single-answer lookup got wrong.
+    if (id === 'two-board-doc') return ['ws-a', 'ws-b'];
     return [];
   };
-  const allows = (p: string, m = 'GET') => collabScope(p, m, workspacesOf).allowed;
+  /** Path scope only: everybody is a member, so a `false` here is the path. */
+  const allows = (p: string, m = 'GET') =>
+    collabScope(p, m, { workspacesOf, isMember: () => true }).allowed;
+  /** The membership half: `member` names the workspaces this visitor holds. */
+  const allowsFor = (member: string[], p: string, m = 'GET') =>
+    collabScope(p, m, { workspacesOf, isMember: (id) => member.includes(id) }).allowed;
 
   it('reaches a board, its tabs, and the docs filed on it', () => {
     for (const p of [
@@ -1191,22 +1199,27 @@ describe('collabScope', () => {
 
   it('reaches the app shell, which names no workspace at all', () => {
     for (const p of ['/app/app.js', '/app/styles.css', '/widget.js', '/favicon.ico']) {
-      expect(allows(p), p).toBe(true);
+      // Asserted for a visitor who is a member of NOTHING: there is nothing
+      // to be a member of on these paths, and an admitted non-member still
+      // has to be able to load the page that tells them so.
+      expect(allowsFor([], p), p).toBe(true);
     }
     // …and the target it produces names no workspace either, so nothing
     // downstream can read a shell request as scoped to one.
-    expect(collabScope('/app/app.js', 'GET', workspacesOf)).toEqual({
+    expect(collabScope('/app/app.js', 'GET', { workspacesOf, isMember: () => false })).toEqual({
       allowed: true,
       target: {},
     });
   });
 
   it('names the workspace the path belongs to, so the visitor is scoped to it', () => {
-    expect(collabScope('/api/docs/design-doc', 'GET', workspacesOf)).toEqual({
+    expect(
+      collabScope('/api/docs/design-doc', 'GET', { workspacesOf, isMember: () => true }),
+    ).toEqual({
       allowed: true,
       target: { workspaceId: 'ws-a' },
     });
-    expect(collabScope('/workspaces/ws-b', 'GET', workspacesOf)).toEqual({
+    expect(collabScope('/workspaces/ws-b', 'GET', { workspacesOf, isMember: () => true })).toEqual({
       allowed: true,
       target: { workspaceId: 'ws-b' },
     });
@@ -1279,6 +1292,73 @@ describe('collabScope', () => {
     // Naming it as a WORKSPACE buys nothing either: it is exactly as reachable
     // as any other id that names no workspace, and the routes behind it 404.
     expect(allows(`/workspaces/${encodeURIComponent(sentinel)}/docs/design-doc`)).toBe(false);
+  });
+
+  it('refuses every path of a workspace the visitor is not a member of', () => {
+    // The weakness this predicate closes: an in-scope path on a board this
+    // person was never given. Each of these is allowed for a member (the
+    // first test in this suite) and must be refused for a non-member, so the
+    // pairing is the control — a blanket `false` would pass one and fail the
+    // other.
+    for (const p of [
+      '/workspaces/ws-a',
+      '/workspaces/ws-a/tasks',
+      '/api/workspaces/ws-a',
+      '/api/workspaces/ws-a/tree',
+      '/api/docs/design-doc',
+      '/api/docs/design-doc/threads',
+      '/review/design-doc',
+      '/y/design-doc',
+      '/y/ws:ws-a',
+      '/events/workspace/ws-a',
+    ]) {
+      expect(allowsFor(['ws-b'], p), p).toBe(false);
+      expect(allowsFor(['ws-a'], p), p).toBe(true);
+    }
+  });
+
+  it('asks about the workspace the SCOPE verdict was made about', () => {
+    // One derivation, two conditions. Membership of the workspace a path
+    // does not name buys nothing, and membership of the one it does buys
+    // exactly that workspace — never its neighbour.
+    expect(allowsFor(['ws-a'], '/api/docs/other-doc')).toBe(false);
+    expect(allowsFor(['ws-b'], '/api/docs/other-doc')).toBe(true);
+    expect(allowsFor(['ws-a', 'ws-b'], '/api/docs/other-doc')).toBe(true);
+  });
+
+  it('reaches a doc filed on two workspaces through EITHER of them', () => {
+    // Membership of either board admits, and neither order is privileged:
+    // taking the first candidate alone refused the holder of the second.
+    expect(allowsFor(['ws-a'], '/api/docs/two-board-doc')).toBe(true);
+    expect(allowsFor(['ws-b'], '/api/docs/two-board-doc')).toBe(true);
+    expect(allowsFor(['ws-c'], '/api/docs/two-board-doc')).toBe(false);
+  });
+
+  it('serves a multi-workspace doc as a board the visitor actually holds', () => {
+    // The target is what redaction and scoping then run against, so it must
+    // never be a board they only reached THROUGH.
+    const scoped = (member: string[]) =>
+      collabScope('/api/docs/two-board-doc', 'GET', {
+        workspacesOf,
+        isMember: (id) => member.includes(id),
+      });
+    expect(scoped(['ws-b'])).toEqual({ allowed: true, target: { workspaceId: 'ws-b' } });
+    expect(scoped(['ws-a'])).toEqual({ allowed: true, target: { workspaceId: 'ws-a' } });
+    // Holding both, the most specific candidate wins — the order
+    // `workspacesOf` answers in.
+    expect(scoped(['ws-a', 'ws-b'])).toEqual({ allowed: true, target: { workspaceId: 'ws-a' } });
+  });
+
+  it('never asks about a workspace when the path names none', () => {
+    // The shell must not depend on the answer at all: a membership function
+    // that threw would prove it is consulted, and it must not be.
+    const isMember = (): boolean => {
+      throw new Error('membership must not be consulted for a shell path');
+    };
+    expect(collabScope('/app/app.js', 'GET', { workspacesOf, isMember })).toEqual({
+      allowed: true,
+      target: {},
+    });
   });
 });
 
