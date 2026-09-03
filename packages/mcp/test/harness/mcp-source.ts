@@ -33,6 +33,9 @@ export const MCP_SOURCE_FILES = [
   'tools/docs.ts',
   'tools/tasks.ts',
   'tools/workspace.ts',
+  // Last, because its code stood at the end of `mcp.ts` before the channel
+  // renderers were lifted into their own module.
+  'channel-messages.ts',
 ] as const;
 
 /** All of it, joined — the subject the source-shape tests are written about. */
