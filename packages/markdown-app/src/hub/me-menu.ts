@@ -1,5 +1,5 @@
 import { escapeHtml, storeUserName } from '@feedback/core';
-import { signInHref } from '../signin/write-gate.ts';
+import { hasSignInPage, signInHref } from '../signin/write-gate.ts';
 
 /**
  * The identity chip's menu — the sign-in entry point.
@@ -15,6 +15,9 @@ import { signInHref } from '../signin/write-gate.ts';
 export interface MeSession {
   authenticated: boolean;
   user?: { name: string };
+  /** Whether this deployment has a `/signin` page. Absent reads as yes, the
+   *  way an unanswered session lookup does. */
+  emailCodeSignIn?: boolean;
 }
 
 export interface MeMenuOpts {
@@ -106,8 +109,14 @@ export function wireMeMenu(opts: MeMenuOpts): () => void {
     }
     // The chip's name comes from this browser's storage, not a session — say
     // so, or "Signed in as Bryan" (the chip's tooltip) reads as verified.
-    menu.innerHTML = `
-      <p class="hub-me-row hub-me-note">Commenting as <b>${escapeHtml(opts.localName)}</b> — not signed in</p>
+    const note = `<p class="hub-me-row hub-me-note">Commenting as <b>${escapeHtml(opts.localName)}</b> — not signed in</p>`;
+    // Under access-only there is no `/signin` page to offer, and a link to a
+    // 404 is worse than none. The session says which deployment this is.
+    if (session.emailCodeSignIn === false || !hasSignInPage()) {
+      menu.innerHTML = note;
+      return;
+    }
+    menu.innerHTML = `${note}
       <a class="hub-me-action" href="${escapeHtml(signinHref)}">Sign in</a>`;
   };
 

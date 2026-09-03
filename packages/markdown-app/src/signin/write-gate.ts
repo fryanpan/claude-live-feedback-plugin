@@ -46,6 +46,31 @@ export function signInHref(pathname: string, search: string): string {
   return `/signin?next=${encodeURIComponent(pathname + search)}`;
 }
 
+/**
+ * Whether this deployment HAS a `/signin` page to send anyone to.
+ *
+ * Under access-only it does not: Cloudflare Access proved an address before
+ * the request reached the server, so the emailed-code page is turned off and
+ * the route 404s. A "Sign in" link painted anyway is a dead end — worse than
+ * no link, because it reads as the one action that would fix things.
+ *
+ * Starts TRUE and is corrected by the session lookup, the same direction
+ * every other unknown in this file fails: a server that never answers must
+ * leave the app exactly as it was rather than quietly removing a person's
+ * way in.
+ */
+let signInPageExists = true;
+
+/** Told by `fetchWriteAccess`, read by everything that paints a link. */
+export function setSignInPageExists(exists: boolean): void {
+  signInPageExists = exists;
+}
+
+/** `false` only when the server said this deployment has no sign-in page. */
+export function hasSignInPage(): boolean {
+  return signInPageExists;
+}
+
 /** `true` for the body the server sends with a refused write. Shape-checked
  *  rather than assumed: a 401 from anything else (a dead widget token, a
  *  route with its own auth) must not raise this prompt. */
@@ -101,7 +126,11 @@ export async function fetchWriteAccess(): Promise<WriteAccess> {
     try {
       const res = await fetch('/api/auth/session');
       if (!res.ok) return open;
-      const body = (await res.json()) as Partial<WriteAccess>;
+      const body = (await res.json()) as Partial<WriteAccess> & { emailCodeSignIn?: boolean };
+      // Recorded as a side effect rather than returned: every caller of this
+      // function wants the write answer, and the surfaces that paint a link
+      // are not the ones that call it.
+      setSignInPageExists(body.emailCodeSignIn !== false);
       return {
         signInToWrite: body.signInToWrite === true,
         canWrite: body.canWrite !== false,
@@ -212,6 +241,12 @@ export function promptSignIn(message?: string): void {
   go.className = 'signin-required-go';
   go.textContent = 'Sign in';
   go.href = signInHref(location.pathname, location.search);
+  if (!hasSignInPage()) {
+    // Nowhere to go: the deployment has no sign-in of its own. Say what is
+    // true instead of offering a link that 404s.
+    body.textContent =
+      'This server does not sign anyone in itself — access is granted before the page loads. Ask the owner for access.';
+  }
 
   const close = () => overlay.remove();
   later.addEventListener('click', close);
@@ -225,11 +260,11 @@ export function promptSignIn(message?: string): void {
     if (e.target === overlay) close();
   });
 
-  actions.append(later, go);
+  actions.append(later, ...(hasSignInPage() ? [go] : []));
   card.append(title, body, actions);
   overlay.append(card);
   document.body.appendChild(overlay);
-  go.focus();
+  (hasSignInPage() ? go : later).focus();
 }
 
 /**
@@ -286,6 +321,13 @@ export function showSignInBar(): void {
   bar.setAttribute('role', 'status');
   const text = document.createElement('span');
   text.textContent = 'You are not signed in — reading only.';
+  if (!hasSignInPage()) {
+    // No page to link to, so the bar says only what it can act on.
+    text.textContent = 'You are reading only — ask the owner for access to comment or edit.';
+    bar.append(text);
+    mountSignInBar(bar);
+    return;
+  }
   const link = document.createElement('a');
   link.textContent = 'Sign in to comment or edit';
   link.href = signInHref(location.pathname, location.search);
