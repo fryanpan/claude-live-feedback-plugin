@@ -968,7 +968,7 @@ export const TOOL_LIST: ListToolsResult = {
     {
       name: 'share_workspace',
       description:
-        'Mint a share link for a board: anyone you send it to signs in once with their email and is a member of that board from then on; already signed in means straight in. A board is the unit of sharing — file a doc or review on one first; a review id is refused. Everything on that board travels with the share, so check what else is filed there, or give the review its own board. Returns a share.<domain>/s/<id> URL. Links are long-living: pass ttlSeconds only when you want one to lapse. allowDomains no longer restricts anything (one Access application covers the share hostname and the server records members itself) — it is accepted and ignored, and the reply says so. unshare stops new people redeeming without ejecting the ones already in; remove_share_member ends one person\'s access.',
+        "Mint a share link for a board: anyone you send it to signs in once with their email and is a member of that board from then on; already signed in means straight in. A board is the unit of sharing — file a doc or review on one first; a review id is refused. Everything on that board travels with the share, so check what else is filed there, or give the review its own board. Returns a share.<domain>/s/<id> URL. Links are long-living: pass ttlSeconds only when you want one to lapse. allowDomains no longer restricts anything (one Access application covers the share hostname and the server records members itself) — it is accepted and ignored, and the reply says so. unshare stops new people redeeming without ejecting the ones already in; remove_share_member ends one person's access.",
       inputSchema: {
         type: 'object',
         properties: {
@@ -1061,7 +1061,7 @@ export const TOOL_LIST: ListToolsResult = {
     {
       name: 'unshare',
       description:
-        "Revoke a share by id. For a share link this stops anyone NEW redeeming it and leaves the people who already joined as members — use remove_share_member to eject somebody. For a share on the retired per-hostname mode it deletes the Cloudflare Access app and policy and removes the entry. Use it for early teardown; a link with a TTL otherwise lapses on its own, and one without never does.",
+        'Revoke a share by id. For a share link this stops anyone NEW redeeming it and leaves the people who already joined as members — use remove_share_member to eject somebody. For a share on the retired per-hostname mode it deletes the Cloudflare Access app and policy and removes the entry. Use it for early teardown; a link with a TTL otherwise lapses on its own, and one without never does.',
       inputSchema: {
         type: 'object',
         properties: { shareId: { type: 'string' } },
