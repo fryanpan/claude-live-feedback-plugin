@@ -81,6 +81,14 @@ describe('wireMeMenu', () => {
       expect(menu.querySelector('.hub-me-rename')).not.toBeNull();
     });
     menu.querySelector<HTMLButtonElement>('.hub-me-rename')?.click();
+    // The form has to be LOOKED AT, not merely present. A click on a control
+    // inside the menu rewrites the menu's own innerHTML, which detaches the
+    // clicked node before the document-level outside-click handler sees the
+    // event — and that handler used to read the detached target as "outside"
+    // and close the menu. The input was in the DOM the whole time and never
+    // on screen for more than a frame.
+    expect(menu.classList.contains('hidden')).toBe(false);
+    expect(button.getAttribute('aria-expanded')).toBe('true');
     const input = menu.querySelector<HTMLInputElement>('#hub-me-name');
     expect(input?.value).toBe('Bryan');
     if (!input) throw new Error('no rename input');
@@ -127,6 +135,23 @@ describe('wireMeMenu', () => {
     document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
     expect(menu.classList.contains('hidden')).toBe(true);
     expect(button.getAttribute('aria-expanded')).toBe('false');
+  });
+
+  it('keeps the menu open when a click inside it re-renders the menu', async () => {
+    wire({ authenticated: true, user: { name: 'Bryan' } });
+    button.click();
+    await vi.waitFor(() => {
+      expect(menu.querySelector('.hub-me-rename')).not.toBeNull();
+    });
+    const rename = menu.querySelector<HTMLButtonElement>('.hub-me-rename');
+    if (!rename) throw new Error('no rename button');
+    // A real click, dispatched the way a browser dispatches one: it reaches
+    // the button, the button rewrites the menu, and the event then carries on
+    // to the document with a target that is no longer in the tree.
+    rename.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+    expect(rename.isConnected).toBe(false);
+    expect(menu.classList.contains('hidden')).toBe(false);
+    expect(menu.querySelector('#hub-me-name')).not.toBeNull();
   });
 
   it('falls back to the signed-out view when the session read fails', async () => {
