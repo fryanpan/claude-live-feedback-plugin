@@ -99,6 +99,11 @@ export interface NotesTickHarnessOptions {
   docId?: string;
   meetingId?: string;
   docTitle?: string;
+  /** The file the doc is bound to, if any — what decides whether the meeting's
+   *  own words may be written into it. Pair with `dataDir`. */
+  boundPath?: string;
+  /** The server's data dir, as the transcript gate sees it. */
+  dataDir?: string;
 }
 
 export interface NotesTickHarness {
@@ -133,7 +138,10 @@ export function createNotesTickHarness(opts: NotesTickHarnessOptions): NotesTick
     type: opts.docType ?? ('markdown' as DocType),
     ...(opts.docTitle ? { title: opts.docTitle } : {}),
   };
-  const rooms = { get: (id: string) => (id === docId ? { ydoc, meta } : undefined) };
+  const rooms = {
+    get: (id: string) => (id === docId ? { ydoc, meta } : undefined),
+    boundPathOf: (id: string) => (id === docId ? opts.boundPath : undefined),
+  };
 
   const schedule = new ManualScheduler();
   const snapshots: TickSnapshot[] = [];
@@ -166,6 +174,7 @@ export function createNotesTickHarness(opts: NotesTickHarnessOptions): NotesTick
     {
       rooms: () => rooms,
       tasks: () => ({ listTasks: () => [] }),
+      ...(opts.dataDir ? { dataDir: opts.dataDir } : {}),
       ...(opts.ledger ? { ledger: opts.ledger } : {}),
     },
   );
