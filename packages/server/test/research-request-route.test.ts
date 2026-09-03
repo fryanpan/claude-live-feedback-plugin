@@ -21,10 +21,9 @@ import { join } from 'node:path';
 import { type User, prose } from '@feedback/core';
 import { researchAskComment, researchPlaceholderMarkdown } from '../src/huddle.ts';
 import { type ServerHandle, createServer } from '../src/server.ts';
-import { SHARE_COOKIE } from '../src/share/link-session.ts';
+import { type AccessHarness, accessHarness, mintAccessShare } from './access-share.ts';
 
 const PERSON: User = { id: 'known-jordan', name: 'Jordan', kind: 'known', color: '#2e7dd7' };
-const PUBLIC_HOST = 'feedback.example.com';
 
 const NOTES = `# Widget rollout
 
@@ -49,6 +48,7 @@ interface ResearchResponse {
 
 describe('POST /api/docs/:docId/research-request', () => {
   let handle: ServerHandle;
+  let access: AccessHarness;
   let dataDir: string;
   let base: string;
   let workspaceId: string;
@@ -102,10 +102,11 @@ describe('POST /api/docs/:docId/research-request', () => {
 
   beforeAll(async () => {
     dataDir = mkdtempSync(join(tmpdir(), 'research-request-'));
+    access = await accessHarness();
     handle = createServer({
       port: 0,
       dataDir,
-      share: { config: { publicHostname: PUBLIC_HOST } },
+      ...access.serverOptions,
     });
     base = `http://localhost:${handle.port}`;
     workspaceId = (
@@ -210,13 +211,13 @@ describe('POST /api/docs/:docId/research-request', () => {
       anchor,
     });
     expect(category.status).toBe(400);
+    const share = await mintAccessShare(base, access, workspaceId);
+    // Positive control: those same credentials DO read the doc, so the
+    // refusal below is the route's rule rather than a rejected visitor.
+    expect((await fetch(`${base}/api/docs/${docId}`, { headers: share.headers })).status).toBe(200);
     const visitor = await fetch(`${base}/api/docs/${docId}/research-request`, {
       method: 'POST',
-      headers: {
-        host: PUBLIC_HOST,
-        'content-type': 'application/json',
-        cookie: `${SHARE_COOKIE}=not-a-real-session`,
-      },
+      headers: { ...share.headers, 'content-type': 'application/json' },
       body: JSON.stringify({ author: PERSON, topic: 'x', anchor }),
     });
     expect(visitor.ok).toBe(false);

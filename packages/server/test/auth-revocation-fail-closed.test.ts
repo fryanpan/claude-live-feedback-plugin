@@ -83,7 +83,10 @@ describe('an unreadable revoked-sessions file self-heals by ending every session
 
     // A healthy first boot: the denylist file is created eagerly and a
     // session works — the positive control for everything below.
-    const first = createServer({ port: 0, dataDir });
+    // emailCodeSignIn: the server's own emailed-code sign-in is off by default now
+    // that every browser-facing hostname sits behind Cloudflare Access. These tests
+    // are about that flow, so they ask for it explicitly.
+    const first = createServer({ port: 0, dataDir, emailCodeSignIn: true });
     const base1 = `http://localhost:${first.port}`;
     const oldCookie = await login(base1, 'healed@example.com');
     expect(await authenticated(base1, oldCookie)).toBe(true);
@@ -93,7 +96,7 @@ describe('an unreadable revoked-sessions file self-heals by ending every session
     // The denylist rots on disk between boots.
     writeFileSync(join(dataDir, 'revoked-sessions.json'), 'not json{{{');
 
-    const second = createServer({ port: 0, dataDir });
+    const second = createServer({ port: 0, dataDir, emailCodeSignIn: true });
     const base2 = `http://localhost:${second.port}`;
     try {
       // The old cookie still verifies cryptographically (same key file),
@@ -113,7 +116,7 @@ describe('an unreadable revoked-sessions file self-heals by ending every session
 
   it('a denylist deleted at runtime refuses sessions outright', async () => {
     const dataDir = freshDir();
-    const handle = createServer({ port: 0, dataDir });
+    const handle = createServer({ port: 0, dataDir, emailCodeSignIn: true });
     const base = `http://localhost:${handle.port}`;
     try {
       const cookie = await login(base, 'runtime-delete@example.com');

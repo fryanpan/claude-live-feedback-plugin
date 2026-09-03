@@ -573,7 +573,10 @@ describe('POST /api/agents/:id/merge — review findings', () => {
 
   it('is loopback-only, like /api/deploy — a tailnet caller cannot move a seat', async () => {
     dataDir = mkdtempSync(join(tmpdir(), 'agent-merge-loopback-'));
-    handle = createServer({ port: 0, dataDir });
+    // The subject is the MERGE route's own loopback rule. The access-only
+    // browser gate would refuse this LAN probe a layer earlier, which would
+    // make the assertion below about the wrong gate.
+    handle = createServer({ port: 0, dataDir, accessOnlyBrowserHosts: false });
     const wsId = await seed();
     const addrs = nonLoopbackIPv4();
     if (addrs.length === 0) {

@@ -26,9 +26,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { type ServerHandle, createServer } from '../src/server.ts';
-import { SHARE_COOKIE } from '../src/share/link-session.ts';
-
-const PUBLIC_HOST = 'feedback.example.com';
+import { type AccessHarness, accessHarness, mintAccessShare } from './access-share.ts';
 
 interface DocResponse {
   hubWorkspaceId?: string;
@@ -168,7 +166,8 @@ describe('the back target is not handed to a share visitor', () => {
   let dataDir: string;
   let base: string;
   let boardId: string;
-  let cookie: string;
+  let visitorHeaders: Record<string, string>;
+  let access: AccessHarness;
   /** The id the server minted for the doc posted as `shared-doc` — the name
    *  is an alias, and every URL the server emits carries the minted id. */
   let sharedId: string;
@@ -190,15 +189,16 @@ describe('the back target is not handed to a share visitor', () => {
   const pub = (path: string) =>
     fetch(`${base}${path}`, {
       redirect: 'manual',
-      headers: { host: PUBLIC_HOST, cookie: `${SHARE_COOKIE}=${cookie}` },
+      headers: { ...visitorHeaders },
     });
 
   beforeAll(async () => {
     dataDir = mkdtempSync(join(tmpdir(), 'doc-back-share-'));
+    access = await accessHarness();
     handle = createServer({
       port: 0,
       dataDir,
-      share: { config: { publicHostname: PUBLIC_HOST } },
+      ...access.serverOptions,
     });
     base = `http://localhost:${handle.port}`;
 
@@ -218,18 +218,7 @@ describe('the back target is not handed to a share visitor', () => {
       200,
     );
 
-    const mint = await post('/api/share/link', { workspaceId: boardId, label: 'a share' });
-    expect(mint.status).toBe(200);
-    const shareUrl = new URL(((await mint.json()) as { share: { url: string } }).share.url);
-    const redeemed = await fetch(`${base}${shareUrl.pathname}${shareUrl.search}`, {
-      redirect: 'manual',
-      headers: { host: PUBLIC_HOST },
-    });
-    expect(redeemed.status).toBe(302);
-    cookie = (redeemed.headers.get('set-cookie') ?? '').match(
-      new RegExp(`${SHARE_COOKIE}=([^;]+)`),
-    )?.[1] as string;
-    expect(cookie).toBeTruthy();
+    visitorHeaders = (await mintAccessShare(base, access, boardId, { label: 'a share' })).headers;
   });
 
   afterAll(() => {

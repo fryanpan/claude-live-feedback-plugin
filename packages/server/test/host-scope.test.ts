@@ -253,9 +253,11 @@ describe('host gate + share scoping over HTTP', () => {
       expect(admin.status).toBe(200);
     });
 
-    it('honours an operator-declared trusted host', async () => {
-      const r = await req('/api/docs', LOCAL_ALIAS);
-      expect(r.status).toBe(200);
+    it('refuses an operator-declared trusted host — access-only closed that grant', async () => {
+      // A TRUSTED_HOSTS entry used to be served like loopback. Every
+      // browser-facing hostname now sits behind Access, and a declaration is
+      // not a sign-in, so the alias is refused like any other unknown name.
+      expect((await req('/api/docs', LOCAL_ALIAS)).status).toBe(403);
     });
 
     it('refuses a proxied request that claims a local Host', async () => {

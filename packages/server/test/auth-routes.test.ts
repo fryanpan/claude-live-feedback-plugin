@@ -32,7 +32,10 @@ beforeAll(() => {
     original(...(args as []));
   };
   dataDir = mkdtempSync(join(tmpdir(), 'auth-routes-test-'));
-  handle = createServer({ port: 0, dataDir });
+  // emailCodeSignIn: the server's own emailed-code sign-in is off by default now
+  // that every browser-facing hostname sits behind Cloudflare Access. These tests
+  // are about that flow, so they ask for it explicitly.
+  handle = createServer({ port: 0, dataDir, emailCodeSignIn: true });
   base = `http://localhost:${handle.port}`;
 });
 
@@ -204,7 +207,7 @@ describe('the session cookie', () => {
     const { Identities } = await import('../src/identities.ts');
     const store = new Identities({ dataDir });
     store.archive(emailIdentityId(email), 'test');
-    const fresh = createServer({ port: 0, dataDir });
+    const fresh = createServer({ port: 0, dataDir, emailCodeSignIn: true });
     try {
       const res = await fetch(`http://localhost:${fresh.port}/api/auth/session`, {
         headers: { cookie },
@@ -224,7 +227,7 @@ describe('the session cookie', () => {
     // minted" without a test having to sleep.
     const store = new Identities({ dataDir, now: () => Date.now() + 60_000 });
     store.revokeSessions(emailIdentityId(email));
-    const fresh = createServer({ port: 0, dataDir });
+    const fresh = createServer({ port: 0, dataDir, emailCodeSignIn: true });
     try {
       const res = await fetch(`http://localhost:${fresh.port}/api/auth/session`, {
         headers: { cookie },
@@ -263,12 +266,15 @@ describe('GET /api/auth/session', () => {
     // acting on something nobody meant to publish. `signInToWrite`/`canWrite`
     // joined it with the sign-in write gate (middleware/write-gate.ts) — both
     // report the gate's default-ON state, as seen by an agent (no `Origin`),
-    // which may write regardless.
+    // which may write regardless. `emailCodeSignIn` joined them so a browser can
+    // tell a deployment where this flow still exists from one where it does not,
+    // and offer a sign-in link only in the first.
     expect(await res.json()).toEqual({
       required: false,
       authenticated: false,
       signInToWrite: true,
       canWrite: true,
+      emailCodeSignIn: true,
     });
   });
 });
@@ -298,7 +304,7 @@ describe('logout revokes the session server-side', () => {
 
   beforeAll(() => {
     dataDir2 = mkdtempSync(join(tmpdir(), 'auth-revoke-test-'));
-    handle2 = createServer({ port: 0, dataDir: dataDir2 });
+    handle2 = createServer({ port: 0, dataDir: dataDir2, emailCodeSignIn: true });
     base2 = `http://localhost:${handle2.port}`;
   });
 
@@ -354,7 +360,7 @@ describe('logout revokes the session server-side', () => {
     const cookie = await signIn('logout-durable@example.com');
     const survivor = await signIn('logout-durable@example.com');
     await fetch(`${base2}/api/auth/logout`, { method: 'POST', headers: { cookie } });
-    const fresh = createServer({ port: 0, dataDir: dataDir2 });
+    const fresh = createServer({ port: 0, dataDir: dataDir2, emailCodeSignIn: true });
     try {
       const at = `http://localhost:${fresh.port}`;
       expect(await authenticated(cookie, at)).toBe(false);

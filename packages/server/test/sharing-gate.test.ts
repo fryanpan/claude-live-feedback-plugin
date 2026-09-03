@@ -19,10 +19,8 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { type ServerHandle, createServer } from '../src/server.ts';
-import { SHARE_COOKIE } from '../src/share/link-session.ts';
 import { SharingGate } from '../src/share/sharing-gate.ts';
-
-const PUBLIC_HOST = 'feedback.example.com';
+import { type AccessHarness, accessHarness, mintAccessShare } from './access-share.ts';
 
 describe('SharingGate (unit)', () => {
   let dir: string;
@@ -79,8 +77,9 @@ describe('sharing gate over HTTP', () => {
   let dataDir: string;
   let folder: string;
   let base: string;
-  let cookie: string;
-  let sharePath: string;
+  let visitorHeaders: Record<string, string>;
+  let access: AccessHarness;
+  let boardId: string;
   /** Member docId of the bound folder — `<group>:<relPath>`, so it carries a
    *  colon and every URL below uses the encoded form. */
   let docId: string;
@@ -96,14 +95,14 @@ describe('sharing gate over HTTP', () => {
       },
     });
 
-  const pub = (path: string, withCookie = true) =>
+  /** A visitor request. `withToken: false` keeps the share's hostname and
+   *  drops the Access token — the "proves nothing" caller. */
+  const pub = (path: string, withToken = true) =>
     fetch(`${base}${path}`, {
       redirect: 'manual',
-      headers: {
-        host: PUBLIC_HOST,
-        'x-forwarded-proto': 'https',
-        ...(withCookie ? { cookie: `${SHARE_COOKIE}=${cookie}` } : {}),
-      },
+      headers: withToken
+        ? { ...visitorHeaders, 'x-forwarded-proto': 'https' }
+        : { host: visitorHeaders.host as string, 'x-forwarded-proto': 'https' },
     });
 
   const setSharing = (enabled: boolean) =>
@@ -115,10 +114,11 @@ describe('sharing gate over HTTP', () => {
     const docPath = join(folder, 'note.md');
     writeFileSync(docPath, '# Note\n\nbody\n');
 
+    access = await accessHarness();
     handle = createServer({
       port: 0,
       dataDir,
-      share: { config: { publicHostname: PUBLIC_HOST } },
+      ...access.serverOptions,
     });
     base = `http://localhost:${handle.port}`;
 
@@ -129,7 +129,7 @@ describe('sharing gate over HTTP', () => {
       method: 'POST',
       body: JSON.stringify({ name: 'Gate board' }),
     }).then((r) => r.json());
-    const boardId = board.workspace.id as string;
+    boardId = board.workspace.id as string;
     expect(boardId).toBeTruthy();
 
     const bind = await local('/api/workspaces', {
@@ -145,23 +145,7 @@ describe('sharing gate over HTTP', () => {
     docSeg = encodeURIComponent(docId);
     expect(docId).not.toBe('');
 
-    const share = await local('/api/share/link', {
-      method: 'POST',
-      body: JSON.stringify({ workspaceId: boardId }),
-    }).then((r) => r.json());
-    const shareUrl = new URL(share.share.url);
-    sharePath = `${shareUrl.pathname}${shareUrl.search}`;
-    expect(sharePath).toContain('sig=');
-
-    const redeemed = await fetch(`${base}${sharePath}`, {
-      redirect: 'manual',
-      headers: { host: PUBLIC_HOST, 'x-forwarded-proto': 'https' },
-    });
-    expect(redeemed.status).toBe(302);
-    cookie = (redeemed.headers.get('set-cookie') ?? '').match(
-      new RegExp(`${SHARE_COOKIE}=([^;]+)`),
-    )?.[1] as string;
-    expect(cookie).toBeTruthy();
+    visitorHeaders = (await mintAccessShare(base, access, boardId)).headers;
   });
 
   afterAll(async () => {
@@ -176,12 +160,12 @@ describe('sharing gate over HTTP', () => {
     expect((await r.json()).meta.docId).toBe(docId);
   });
 
-  it('CONTROL: a fresh signed URL redeems while sharing is on', async () => {
-    const r = await fetch(`${base}${sharePath}`, {
-      redirect: 'manual',
-      headers: { host: PUBLIC_HOST, 'x-forwarded-proto': 'https' },
+  it('CONTROL: a fresh share mints while sharing is on', async () => {
+    const r = await local('/api/share/link', {
+      method: 'POST',
+      body: JSON.stringify({ workspaceId: boardId, allowDomains: ['@partner.example'] }),
     });
-    expect(r.status).toBe(302);
+    expect(r.status).toBe(200);
   });
 
   it('refuses a valid session once sharing is off', async () => {
@@ -191,21 +175,26 @@ describe('sharing gate over HTTP', () => {
     expect((await r.json()).error).toBe('sharing_disabled');
   });
 
-  it('refuses link redemption once sharing is off', async () => {
-    const r = await fetch(`${base}${sharePath}`, {
+  it('lets the box mint, and refuses the visitor that share would have let in', async () => {
+    // Minting is a LOCAL call and stays reachable — the switch is about the
+    // outside door, and the operator has to be able to prepare a share for
+    // the moment they reopen it. What the switch owes is that the fresh
+    // share buys nothing while it is off, which is the second half here.
+    const minted = await mintAccessShare(base, access, boardId);
+    const r = await fetch(`${base}/api/docs/${docSeg}`, {
       redirect: 'manual',
-      headers: { host: PUBLIC_HOST, 'x-forwarded-proto': 'https' },
+      headers: { ...minted.headers, 'x-forwarded-proto': 'https' },
     });
     expect(r.status).toBe(403);
+    expect(((await r.json()) as { error: string }).error).toBe('sharing_disabled');
   });
 
   it('refuses the websocket upgrade once sharing is off', async () => {
     const r = await fetch(`${base}/y/${docSeg}`, {
       headers: {
-        host: PUBLIC_HOST,
+        ...visitorHeaders,
         'x-forwarded-proto': 'https',
-        cookie: `${SHARE_COOKIE}=${cookie}`,
-        origin: `https://${PUBLIC_HOST}`,
+        origin: `https://${visitorHeaders.host}`,
       },
     });
     expect(r.status).toBe(403);
@@ -216,7 +205,7 @@ describe('sharing gate over HTTP', () => {
     expect(r.status).toBe(403);
   });
 
-  it('gates BEFORE auth — no cookie looks the same as a good one', async () => {
+  it('gates BEFORE auth — no token looks the same as a good one', async () => {
     const withOut = await pub(`/api/docs/${docSeg}`, false);
     expect(withOut.status).toBe(403);
     expect((await withOut.json()).error).toBe('sharing_disabled');
