@@ -38,7 +38,7 @@ import {
   reviewWithdrawn,
   threadReviewItemId,
 } from '@feedback/core';
-import { classifyActor } from './activity.ts';
+import { classifyActor } from './actor-identity.ts';
 import { asksPerson, extractAsk } from './ask-detection.ts';
 
 /**

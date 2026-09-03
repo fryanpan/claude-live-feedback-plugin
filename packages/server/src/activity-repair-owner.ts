@@ -2,7 +2,8 @@
 import { existsSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { type LockHolder, acquireActivityLock, releaseActivityLock } from './activity-lock.ts';
-import { activityLogPath, isOwnerActor } from './activity.ts';
+import { activityLogPath } from './activity.ts';
+import { isOwnerActor } from './actor-identity.ts';
 import { loadIdentityLinks } from './identity-links.ts';
 
 /**

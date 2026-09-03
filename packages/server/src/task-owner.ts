@@ -18,7 +18,7 @@
  */
 import { agentIdCandidates } from '@feedback/core';
 import type { DeclaredOwnerKind } from '@feedback/core/task-wire';
-import { classifyActor } from './activity.ts';
+import { classifyActor } from './actor-identity.ts';
 import { SHARED_AGENT_IDS } from './agent-watches.ts';
 
 /** The old default. It names a category, not somebody, so it is not an owner. */

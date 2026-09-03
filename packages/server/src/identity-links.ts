@@ -1,6 +1,6 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { replaceIdentityLinks } from './activity.ts';
+import { replaceIdentityLinks } from './actor-identity.ts';
 
 /**
  * `<dataDir>/identity-links.json` — explicit "this actor id IS that identity"

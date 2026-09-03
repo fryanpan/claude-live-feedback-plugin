@@ -49,7 +49,7 @@ import {
   summaryHash,
 } from '@feedback/core';
 import { needsCall } from '@feedback/core/summary-prompt';
-import { classifyActor } from '../activity.ts';
+import { classifyActor } from '../actor-identity.ts';
 import { normalizeDocHome, resolveHomeCheckout } from '../doc-home.ts';
 import { RESERVED_DOC_PREFIXES } from '../doc-ids.ts';
 import { compactDocRow, matchesDocFilters, pageDocs, parseListDocsQuery } from '../doc-listing.ts';

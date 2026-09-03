@@ -8,7 +8,7 @@
  * late from re-holding an item a reader has just released.
  */
 import { type ReviewItemJudgement, readTaskReviewItem } from '@feedback/core';
-import { classifyActor } from '../activity.ts';
+import { classifyActor } from '../actor-identity.ts';
 import { wordsRevisionOf } from '../task-fields.ts';
 import { LEGACY_REVIEW_ITEM_ID, legacyDecisionItem, reviewItemVersion } from './derive.ts';
 import type { ReviewItemPersistence } from './persistence.ts';
