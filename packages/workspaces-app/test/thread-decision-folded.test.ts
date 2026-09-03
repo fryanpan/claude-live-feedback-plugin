@@ -3,17 +3,25 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { ThreadPanel } from '../src/threads.ts';
 
 /**
- * The "decision needed" indicator on a thread's COLLAPSED card.
+ * What a COLLAPSED card says about a decision.
  *
- * A decision is the one thing in a thread a reader must not scroll past, and
- * until now nothing on the folded card said one was there: the kind chip lives
- * inside the item card, which is on the detail face, which is `inert` and
- * invisible until the thread is opened. So a decision waiting on somebody
- * looked exactly like any other comment in the column.
+ * The requirement has not moved: a decision is the one thing in a thread a
+ * reader must not scroll past, and the kind chip that names it lives inside
+ * the item card, which is on the detail face, which is `inert` until the
+ * thread is opened. Something on the folded card has to carry it.
  *
- * The flag sits on its own row above `.thread-head`, outside both folding
- * slots — so it is there in both states, expanding never rebuilds or moves it,
- * and it shares no horizontal space with the author's name.
+ * What carries it has moved. It used to be a "Decision needed" flag on its
+ * own row above the head, with the chosen outcome riding the same row once
+ * answered. The collapsed redesign took that row out: on a one-line card the
+ * flag was a third statement of a fact the amber glyph and the option buttons
+ * already make, and it clipped the asker's name to about seven characters in
+ * a 300px column. So the folded card now says it with the parts it already
+ * has — the glyph for the state, the option buttons for what to do, and the
+ * answered line for what was chosen.
+ *
+ * These tests assert THAT, not the row: an unanswered decision is
+ * distinguishable from a comment without opening it, and an answered one
+ * names what was decided without opening it.
  */
 
 const alice: User = { id: 'u1', name: 'Alice', kind: 'known', color: '#2e7dd7' };
@@ -70,59 +78,40 @@ function render(t: Thread): HTMLElement {
   return card;
 }
 
-const flagOf = (card: HTMLElement): HTMLElement | null =>
-  card.querySelector<HTMLElement>('.thread-decision-flag');
+const glyphOf = (card: HTMLElement): HTMLElement | null =>
+  card.querySelector<HTMLElement>('.thread-head .thread-glyph');
 
-describe('the decision flag', () => {
-  it('is absent from an ordinary thread', () => {
-    expect(flagOf(render(thread([comment('Looks good to me')])))).toBe(null);
+const foldedFace = (card: HTMLElement): HTMLElement | null =>
+  card.querySelector<HTMLElement>('.slot-a > .face-summary');
+
+describe('an unanswered decision, folded', () => {
+  it('is distinguishable from an ordinary comment by its glyph alone', () => {
+    const asking = glyphOf(render(thread([comment('Which one?', decisionPayload())])));
+    const chatting = glyphOf(render(thread([comment('Looks good to me')])));
+    expect(asking?.className).toContain('lf-ic-question');
+    expect(chatting?.className).toContain('lf-ic-comment');
   });
 
-  it('is absent from a thread carrying a plain question', () => {
-    const question: ReviewPayload = { shape: 'review', headline: 'Read this' };
-    expect(flagOf(render(thread([comment('Have a look', question)])))).toBe(null);
-  });
-
-  it('says a decision is needed while one is unanswered', () => {
-    const flag = flagOf(render(thread([comment('Which one?', decisionPayload())])));
-    expect(flag?.textContent).toBe('Decision needed');
-  });
-
-  it('drops the "needed" once somebody has answered', () => {
-    const answered = decisionPayload({ answeredAt: ts, answerText: 'Write through' });
-    const flag = flagOf(render(thread([comment('Which one?', answered)])));
-    expect(flag?.textContent).toBe('Decision');
-    expect(flag?.classList.contains('is-answered')).toBe(true);
-  });
-
-  it('sits outside both slots, so it survives the fold', () => {
+  it('offers the choice itself on the folded face, so answering costs no fold', () => {
     const card = render(thread([comment('Which one?', decisionPayload())]));
-    expect(flagOf(card)?.closest('.thread-face')).toBe(null);
+    const labels = Array.from(
+      foldedFace(card)?.querySelectorAll<HTMLElement>('.thread-item-option') ?? [],
+    ).map((b) => b.textContent);
+    expect(labels).toEqual(['Write through', 'Write behind']);
   });
 
-  // Measured in the field at 1180px: the flag shared the head row with the
-  // author, and a ~115px chip inside a 300px column clipped the name to about
-  // seven characters. Two people asking for two different decisions rendered
-  // as the same truncated string, so the column could no longer say WHO was
-  // waiting — which is most of what a decision flag is for.
-  it('gets its own row, so it cannot squeeze the author name', () => {
+  it('spends no line on saying "decision" in words', () => {
+    // The row this file was named after. It cost the card a whole line to
+    // repeat what the glyph and the two buttons below it already say.
     const card = render(thread([comment('Which one?', decisionPayload())]));
-    const flag = flagOf(card);
-    expect(flag?.closest('.thread-head')).toBe(null);
-    expect(flag?.parentElement?.classList.contains('thread-flag-row')).toBe(true);
-    // Above the identity line rather than below it: the reader meets the
-    // reason the card is in their queue before the name attached to it.
-    expect(flag?.parentElement?.nextElementSibling?.classList.contains('thread-head')).toBe(true);
-  });
-
-  it('adds no row to a thread that carries no decision', () => {
-    const card = render(thread([comment('Looks good to me')]));
     expect(card.querySelector('.thread-flag-row')).toBe(null);
+    expect(card.querySelector('.thread-decision-flag')).toBe(null);
+    expect(card.textContent).not.toContain('Decision needed');
   });
 
-  it('is announced, not left as a bare colour', () => {
-    const flag = flagOf(render(thread([comment('Which one?', decisionPayload())])));
-    expect(flag?.getAttribute('title')).toBeTruthy();
+  it('keeps the glyph out of both folding faces, so opening never moves it', () => {
+    const card = render(thread([comment('Which one?', decisionPayload())]));
+    expect(glyphOf(card)?.closest('.thread-face')).toBe(null);
   });
 });
 
@@ -134,13 +123,9 @@ describe('the decision flag', () => {
  * the item, not a reply — and useless. The one fact worth scanning a column
  * for is what was decided, and it was two folds away, inside the answered
  * record on the detail face.
- *
- * It rides on the decision row rather than replacing the discussion line: the
- * discussion line's job is where the conversation GOT TO, and a thread with an
- * answer and three replies still has a last reply worth showing.
  */
 const outcomeOf = (card: HTMLElement): HTMLElement | null =>
-  card.querySelector<HTMLElement>('.thread-decision-outcome');
+  card.querySelector<HTMLElement>('.slot-a > .face-summary .thread-answered-words');
 
 describe('the decided outcome', () => {
   it('names the chosen option on the folded card', () => {
@@ -151,10 +136,8 @@ describe('the decided outcome', () => {
     });
     const card = render(thread([comment('Which one?', answered)]));
     expect(outcomeOf(card)?.textContent).toBe('Write through');
-    // On the decision row, outside both slots — the whole point is that it is
-    // readable without opening anything.
-    expect(outcomeOf(card)?.closest('.thread-flag-row')).not.toBe(null);
-    expect(outcomeOf(card)?.closest('.thread-face')).toBe(null);
+    // And the glyph has stopped asking.
+    expect(glyphOf(card)?.className).toContain('lf-ic-done');
   });
 
   // An answer tapped before `answerText` existed recorded only the option id.
@@ -172,7 +155,7 @@ describe('the decided outcome', () => {
     expect(outcomeOf(render(thread([comment('Looks good to me')])))).toBe(null);
   });
 
-  // Plain text: an answer is a person's words, and this row is not the place
+  // Plain text: an answer is a person's words, and this line is not the place
   // that escapes them.
   it('renders the words as text, never as markup', () => {
     const answered = decisionPayload({
@@ -181,5 +164,6 @@ describe('the decided outcome', () => {
     });
     const card = render(thread([comment('Which one?', answered)]));
     expect(outcomeOf(card)?.querySelector('img')).toBe(null);
+    expect(outcomeOf(card)?.textContent).toContain('<img src=x onerror=1>');
   });
 });

@@ -1,35 +1,33 @@
 /**
  * The thread card's expand/collapse morph.
  *
- * A card is not "collapsed content that grows". Each summary line is paired
- * with what it BECOMES, and both faces live in the same box, absolutely
- * positioned at `top: 0`:
+ * A card is not "collapsed content that grows". A summary line is paired with
+ * what it BECOMES, and both faces live in the same box, absolutely positioned
+ * at `top: 0`:
  *
- * | slot | summary face          | detail face                |
- * |------|-----------------------|----------------------------|
- * | A    | the topic line        | the opening message        |
- * | B    | participants + state  | the replies + reply box    |
+ * | slot | summary face             | detail face                    |
+ * |------|--------------------------|--------------------------------|
+ * | A    | discussion + answer row  | the conversation + reply box   |
  *
  * A slot therefore has NO intrinsic height — its height exists only because
  * this module measures the showing face and writes it. Nothing ever collapses
  * to zero, because a slot is never empty: one face is always resting at its
  * measured height.
  *
- * Expanding is two overlapping phases over 150 ms. Slot A leads on expand
- * (the topic grows into the opening message) and slot B follows, riding down
- * intact on slot A's growth before it cross-fades into the replies. Collapse
- * runs the same two phases in the opposite order, so the thread retreats back
- * into the two lines it came from.
+ * ONE slot and one phase. The card used to fold in two overlapping phases,
+ * because its head cross-faded too: the topic line grew into the opening
+ * message while a second slot rode down on it. In the collapsed redesign the
+ * head STAYS PUT — glyph, topic and who are in the same place folded and
+ * unfolded — so there is one disclosure to animate and nothing to lag behind
+ * it. The lag constants went with the second slot rather than being left
+ * unreachable. `MORPH_MS` is the whole gesture, and the balloon column times
+ * its restack against it.
  */
 
 import { COMPOSER_MOUNTED_EVENT } from './md-composer.ts';
 
-/** Total morph, both phases. */
+/** The whole gesture. The balloon column restacks against this. */
 export const MORPH_MS = 150;
-/** Each phase's own length: 62% of the total. */
-export const MORPH_SPAN_MS = 93;
-/** How far the second phase starts behind the first: 38% of the total. */
-export const MORPH_LAG_MS = 57;
 /** The leaving face fades out over this fraction of the phase, so the two
  *  texts never read as one overlapping smear. */
 export const LEAVING_FRACTION = 0.6;
@@ -41,29 +39,16 @@ export interface PhaseTiming {
   delay: number;
 }
 
-export interface MorphTiming {
-  a: PhaseTiming;
-  b: PhaseTiming;
-}
-
 /**
- * Which slot leads and by how much. Pure, so the phase order is checkable
+ * How long the fold takes. Pure, so the reduced-motion answer is checkable
  * without a browser.
  *
- * Expand leads with slot A (0 → 93 ms) and lags slot B (57 → 150 ms).
- * Collapse is the mirror: slot B leads, slot A lags. `reduce` zeroes the
- * DURATION AND THE DELAY only — the class flip and the measured height
+ * `reduce` zeroes the DURATION only — the class flip and the measured height
  * assignment still run, so the card lands in exactly the right state with no
  * tween. Never branch to a different layout for reduced motion.
  */
-export function morphTiming(open: boolean, reduce: boolean): MorphTiming {
-  if (reduce) {
-    return { a: { duration: 0, delay: 0 }, b: { duration: 0, delay: 0 } };
-  }
-  const duration = MORPH_SPAN_MS;
-  return open
-    ? { a: { duration, delay: 0 }, b: { duration, delay: MORPH_LAG_MS } }
-    : { a: { duration, delay: MORPH_LAG_MS }, b: { duration, delay: 0 } };
+export function morphTiming(reduce: boolean): PhaseTiming {
+  return { duration: reduce ? 0 : MORPH_MS, delay: 0 };
 }
 
 /** Exported because the morph is not the only motion the card produces: the
@@ -148,11 +133,6 @@ export function syncFaceVisibility(card: HTMLElement, expanded: boolean): void {
   // line to the whole conversation with no state change announced at all.
   const caret = card.querySelector('.thread-caret');
   caret?.setAttribute('aria-expanded', String(expanded));
-  // A review item's caret is words, and the words have to say which way the
-  // card is folded — "Details" to open, "Less" to close.
-  if (caret?.classList.contains('thread-caret-words')) {
-    caret.textContent = expanded ? 'Less ▴' : 'Details ▾';
-  }
   const showing = expanded ? 'face-detail' : 'face-summary';
   for (const face of Array.from(card.querySelectorAll<HTMLElement>('.thread-face'))) {
     if (face.classList.contains(showing)) {
@@ -283,20 +263,21 @@ export function morphThread(id: string, open: boolean, root: ParentNode = docume
  * One card. The class flip happens FIRST and sets the resting state; the
  * keyframes only replay the journey, so an interrupted or unsupported
  * animation still leaves the card correct.
+ *
+ * Every slot on the card, not the first one: the doc card builds exactly one,
+ * and a query that assumed that would silently leave a second one behind if
+ * a surface ever grew one.
  */
 export function morphCard(card: HTMLElement, open: boolean): void {
-  const slotA = card.querySelector<HTMLElement>('.slot-a');
-  const slotB = card.querySelector<HTMLElement>('.slot-b');
-  // Measure BEFORE the class flip: `from` is the height the card is leaving.
-  const fromA = slotA?.offsetHeight ?? 0;
-  const fromB = slotB?.offsetHeight ?? 0;
+  const slots = Array.from(card.querySelectorAll<HTMLElement>('.thread-slot'));
+  // Measure BEFORE the class flip: `from` is the height each slot is leaving.
+  const from = slots.map((s) => s.offsetHeight);
 
   card.classList.toggle('expanded', open);
   syncFaceVisibility(card, open);
 
-  const timing = morphTiming(open, prefersReducedMotion());
-  slide(slotA, open, fromA, timing.a);
-  slide(slotB, open, fromB, timing.b);
+  const timing = morphTiming(prefersReducedMotion());
+  slots.forEach((slot, i) => slide(slot, open, from[i] ?? 0, timing));
 }
 
 /**
