@@ -2,6 +2,6 @@
   "_comment": "Ratchet for bun run test:audit. Counts may only go down. Lower a number in the same commit that lowers the count.",
   "_sourceShape": "52 after the reader blind spots closed. 18 was never the real number: the check read only *.test.ts, matched only a path literal ending at /src/ or /dist/, and required toContain/toMatch. So it missed nine MCP tests reading packages/mcp/src through test/harness/mcp-source.ts, every read written as join(__dirname, '..', 'src', ...) or '../src/hub/hub-app.ts', and two stylesheet tests asserting a parsed value with toBe. What remains is the MCP suite's reads of the built plugin bundle and of its own source, the server suite's reads of a published client release, the app's reads of hub-app.ts and app.ts (both bundle entry points with nothing importable), and three stylesheet reads happy-dom cannot express: decide-option-hover-css.test.ts, whose subject is a :hover treatment, and hub-nav-widget-clearance-css.test.ts, whose rule is a calc() of max() and env() that happy-dom discards whole.",
   "fixedSleeps": 0,
-  "sourceShape": 53,
+  "sourceShape": 52,
   "wallClock": 10
 }
