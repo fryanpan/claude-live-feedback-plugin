@@ -36,9 +36,11 @@ import { type OriginPolicy, isAllowedBrowserOrigin } from '../middleware/browser
 import { browserCannotOperateBody, isBrowserRequest } from '../middleware/write-gate.ts';
 import type { Rooms } from '../rooms.ts';
 import { readCookie } from '../share/link-session.ts';
+import { type ShareLinks, shareMemberKey } from '../share/share-links.ts';
 import { ACCESS_NOT_CONFIGURED, type Shares } from '../share/shares.ts';
 import type { SharingGate } from '../share/sharing-gate.ts';
 import { resolveTtl } from '../share/ttl.ts';
+import { DEFAULT_LINK_TTL_SECONDS } from '../share/types.ts';
 import type { SseHub } from '../sse.ts';
 import type { TaskStore } from '../tasks.ts';
 import { widgetAuthPage } from '../widget-auth-page.ts';
@@ -123,6 +125,19 @@ export interface AuthShareRoutesContext {
   taskStore: TaskStore;
   /** The share registry, or null when sharing was never configured. */
   shares: Shares | null;
+  /**
+   * Share LINKS and the workspace membership redeeming one creates — the
+   * 2026-09-03 flow. Never null: it needs no Cloudflare wiring, so it exists
+   * wherever the server does, and a null would have to be read as "nobody is
+   * a member" at the place that decides who gets in.
+   */
+  shareLinks: ShareLinks;
+  /**
+   * The hostname share URLs are built from (the first `CW_SHARE_LINK_HOSTS`
+   * entry), or `''` when this deployment configured none. Empty refuses the
+   * mint: a link whose URL names no hostname is a link nobody can open.
+   */
+  shareLinkBaseHost: string;
   /** The master switch for external access. */
   sharingGate: SharingGate;
   /** The email-keyed roster. */
@@ -208,6 +223,8 @@ export async function handleAuthShareRoutes(
     sse,
     taskStore,
     shares,
+    shareLinks,
+    shareLinkBaseHost,
     sharingGate,
     identities,
     emailCodes,
@@ -490,24 +507,52 @@ export async function handleAuthShareRoutes(
   // external access after the operator closed it; the routes' own
   // "local-only" comments are about the HOST class, which does not tell
   // a page on a local dev origin from the agent that is the only real
-  // caller. Keyed on METHOD rather than a route list, the same way
-  // `isGatedWrite` is: a share mutation added later is covered by
-  // construction, and the GET stays open because reading the share list
-  // is what the board's own settings pane does.
+  // caller.
+  //
+  // The READ is refused too, and used not to be. That exemption was written
+  // for "the board's own settings pane", which does not exist: nothing under
+  // `packages/workspaces-app/src` or `packages/widget/src` fetches this route,
+  // and every real caller is the MCP tool layer or a script from the box.
+  // What the open read handed a page on another local port was every
+  // `linkId` — the whole secret of a share URL, redeemable by anyone who can
+  // pass an everyone-policy sign-in — and every member's email address. The
+  // machine-local origin class gets readable CORS, so such a page could read
+  // the reply, not merely send the request.
+  //
+  // So the guard is keyed on the ROUTE now, not the method: everything under
+  // `/api/share` is an operator surface. A share read added later is covered
+  // by construction, the same way a mutation already was.
   if (
     (pathname === '/api/share' || pathname.startsWith('/api/share/')) &&
-    req.method !== 'GET' &&
     isBrowserRequest(req.headers)
   ) {
     return j(403, browserCannotOperateBody());
   }
   if (pathname === '/api/share' && req.method === 'GET') {
-    if (!shares) return j(404, { error: 'sharing not enabled' });
-    // `listForApi` stamps `redeemable` on every row. A retired link-mode
+    // Enabled when EITHER kind of sharing is wired. `shares` alone used to be
+    // the test, and a deployment on the 2026-09-03 flow has no Cloudflare
+    // client at all — reading the list would have answered "sharing not
+    // enabled" on the server that is doing the sharing.
+    if (!shares && !shareLinkBaseHost) return j(404, { error: 'sharing not enabled' });
+    // Two lists, because there are two kinds of record and neither can be
+    // written as the other. `shares` are Cloudflare Access applications minted
+    // under the retired per-share mode; `links` are the share links, each with
+    // the redemptions that came through it — who signed in, and when.
+    //
+    // `listForApi` stamps `redeemable` on every share row. A retired link-mode
     // record reads `redeemable: false, retired: 'link_mode'` — it is still
     // listed, still labelled and still revocable, and it no longer hands back
     // a freshly signed URL for a door that does not open.
-    return j(200, { shares: shares.listForApi(), sharing: sharingGate.status() });
+    // `members` is its own list rather than a field on a link, because the two
+    // can disagree and the difference is the point: a redemption says somebody
+    // came through this link, and a membership says they can still get in. Eject
+    // someone and the redemption stays on the record while the membership goes.
+    return j(200, {
+      shares: shares ? shares.listForApi() : [],
+      links: shareLinks.listForApi(),
+      members: shareLinks.allMembers(),
+      sharing: sharingGate.status(),
+    });
   }
   // Flip the master switch. Local-only, like the rest of /api/share*.
   // Turning it OFF also hangs up what is already connected: a websocket
@@ -515,7 +560,13 @@ export async function handleAuthShareRoutes(
   // would otherwise keep syncing and keep receiving comments on a doc
   // that is no longer reachable. Same lesson as share revocation.
   if (pathname === '/api/share/enabled' && req.method === 'POST') {
-    if (!shares) return j(404, { error: 'sharing not enabled' });
+    // EITHER kind of sharing, for the same reason the GET above takes both.
+    // The gate refuses `share`, `share-link`, `collab` and `proxied-local`
+    // alike, so a deployment on the 2026-09-03 flow is one this switch still
+    // governs — and keyed on the retired registry alone, the only way to shut
+    // the outside door there was `CW_SHARING_DISABLED` plus a restart. That
+    // one is deliberately one-way, so the way back was a restart as well.
+    if (!shares && !shareLinkBaseHost) return j(404, { error: 'sharing not enabled' });
     const body = await safeJson(req);
     const enabled = body?.enabled;
     if (typeof enabled !== 'boolean') {
@@ -531,10 +582,16 @@ export async function handleAuthShareRoutes(
     let closedSockets = 0;
     let closedStreams = 0;
     if (!enabled) {
-      for (const share of shares.list()) {
+      for (const share of shares?.list() ?? []) {
         closedSockets += rooms.closeSocketsForShare(share.shareId);
         closedStreams += sse.closeForShare(share.shareId);
       }
+      // And every share-link visitor, who carries no Cloudflare shareId for
+      // the sweep above to match. Without this the switch closed the door to
+      // new requests while an already-open `/y/<doc>` kept reading AND
+      // writing, and an `/events/` stream kept delivering.
+      closedSockets += rooms.closeSocketsForShareMembers(() => true);
+      closedStreams += sse.closeForShareMembers(() => true);
     }
     return j(200, {
       ok: true,
@@ -752,64 +809,173 @@ export async function handleAuthShareRoutes(
     }
   }
 
-  // Share a whole workspace (folder bind / diff review) rather than one
-  // doc: the visitor gets the file tree and every member, so the set
-  // browses as a set. Scope is enforced in middleware/host-guard.ts.
+  // --- Mint a SHARE LINK (`share_workspace`) ---
+  //
+  // The 2026-09-03 flow, and the whole of what this route now does: write a
+  // row, hand back `https://share.<domain>/s/<id>`. No Cloudflare API call, no
+  // Access application, no DNS record, no policy, no API token on the box. One
+  // Access application the operator made by hand covers the share hostname
+  // with an "everyone" policy, so proving an email is Cloudflare's job and
+  // deciding who may open which workspace is this server's — which is the
+  // layering the security model already described everywhere else.
+  //
+  // THE OLD PAYLOAD IS STILL ACCEPTED. `allowDomains` and `name` were the two
+  // arguments the per-share-application mint needed — who the policy admits,
+  // and what to call the subdomain — and neither exists any more. Peers keep
+  // calling the shared server with the payload THEIR bundle sends long after
+  // this one stopped sending it (CLAUDE.md), so they are accepted and ignored
+  // rather than refused: the ask "publish this board" did not change. The
+  // reply says `allowDomainsIgnored` so a caller that named an audience is
+  // told its request no longer means anything, instead of believing the link
+  // is narrower than it is.
+  //
+  // The RESPONSE shape is new (no hostname, no audience, no appId) and there
+  // is no shim for the old one — Bryan waived compatibility shims for
+  // prototype-phase surfaces (2026-08-18).
   if (pathname === '/api/share/workspace' && req.method === 'POST') {
-    if (!shares) return j(404, { error: 'sharing not enabled' });
     const body = await safeJson(req);
     const workspaceId = (body?.workspaceId as string) ?? '';
-    const allowDomains = (body?.allowDomains as string[]) ?? [];
     if (!workspaceId) return j(400, { error: 'workspaceId required' });
-    if (!Array.isArray(allowDomains) || allowDomains.length === 0) {
-      return j(400, { error: 'allowDomains must be a non-empty array' });
+    // A `docId` in the body is an OLDER BUNDLE asking for a single-doc share.
+    // Refused by name rather than widened to the board, exactly as the sibling
+    // route refuses it: the dangerous reading of a payload is "ignore the
+    // field you do not know and mint something".
+    if (body?.docId !== undefined) {
+      return j(410, {
+        error: 'per_doc_sharing_removed',
+        hint: 'A workspace is the unit of sharing. Pass workspaceId (the doc must be filed on a workspace) — docId is no longer accepted.',
+      });
     }
-    // Same board-only rule as the link route, and for the same reason:
-    // the two modes differ only in how a visitor is authorized, never
-    // in what may be shared.
-    const accessBoard = taskStore.getWorkspace(workspaceId);
-    if (!accessBoard) {
+    // Only a BOARD may be shared, and the same two refusals as every other
+    // mint. A board is what `taskStore` answers for; a review is what only
+    // `rooms` knows about, and they arrive in the same field, so the lookup IS
+    // the discriminator.
+    const board = taskStore.getWorkspace(workspaceId);
+    if (!board) {
       if (rooms.list().some((m) => m.workspaceId === workspaceId)) {
         return j(410, GROUPING_SHARING_REMOVED);
       }
       return j(404, { error: 'workspace not found', workspaceId });
     }
-    // Same Unfiled refusal as the link route — see there for why the
-    // predicate is the board's name.
-    if (accessBoard.name === DEFAULT_HUB_WORKSPACE_NAME) {
+    // And never the UNFILED board — matched by NAME, the way
+    // `defaultHubWorkspaceId()` finds it, because the id is never cached and
+    // any board answering that lookup receives other agents' stray reviews.
+    if (board.name === DEFAULT_HUB_WORKSPACE_NAME) {
       return j(403, UNFILED_SHARING_REFUSED);
     }
+    // BELOW the board lookup, in the order the retired mint used: an older
+    // bundle sends `entryDocId: undefined` on every board share, and a
+    // grouping id with a member doc must still answer "a grouping cannot be
+    // shared" rather than "that argument is unsupported".
     if (body?.entryDocId) {
       return j(400, {
         error: 'a board share opens the board — entryDocId is not supported',
       });
     }
-    try {
-      const share = await shares.createShareWorkspace({
-        workspaceId,
-        allowDomains,
-        ttlSeconds: typeof body?.ttlSeconds === 'number' ? body.ttlSeconds : undefined,
-        name: typeof body?.name === 'string' ? body.name : undefined,
+    if (body?.label !== undefined && typeof body.label !== 'string') {
+      return j(400, { error: 'bad_label', hint: 'label must be a string' });
+    }
+    // NO EXPIRY BY DEFAULT (Bryan, 2026-09-03: links are long-living). An
+    // optional one stays on the record for the cases that want it, and the
+    // same resolver as every other share route reads it, so a configured
+    // ceiling still clamps a caller who asks for more.
+    let ttlSeconds: number | undefined;
+    if (body?.ttl !== undefined || body?.ttlSeconds !== undefined) {
+      const ttl = resolveTtl({
+        ttl: body?.ttl,
+        ttlSeconds: body?.ttlSeconds,
+        // Unreachable — this branch only runs when the caller named one —
+        // and required by the resolver's shape. A caller who names neither
+        // gets no expiry at all, which is the line above, not a default here.
+        defaultSeconds: shares?.defaultLinkTtlSeconds ?? DEFAULT_LINK_TTL_SECONDS,
+        ...(shares?.maxTtlSeconds ? { maxSeconds: shares.maxTtlSeconds } : {}),
       });
-      return j(200, { share });
+      if (!ttl.ok) return j(400, { error: ttl.error, hint: ttl.hint });
+      ttlSeconds = ttl.seconds;
+    }
+    // The configuration refusal is LAST, below every argument and board
+    // check, so a caller sharing something that could never be shared hears
+    // which — a 503 in front of the 410 would tell a peer whose diff review
+    // stopped being shareable that the server is misconfigured instead.
+    if (!shareLinkBaseHost) {
+      return j(503, {
+        error: 'share_hostname_not_configured',
+        hint: "Set CW_SHARE_LINK_HOSTS to the share hostname and CF_ACCESS_SHARE_AUD to the audience of the Cloudflare Access application in front of it (its own application, not the owner hostname's), alongside CF_ACCESS_TEAM_DOMAIN.",
+      });
+    }
+    try {
+      const link = shareLinks.create({
+        workspaceId,
+        createdBy: typeof body?.createdBy === 'string' && body.createdBy ? body.createdBy : 'agent',
+        ...(ttlSeconds !== undefined ? { ttlSeconds } : {}),
+        ...(typeof body?.label === 'string' ? { label: body.label } : {}),
+      });
+      const url = `https://${shareLinkBaseHost}/s/${link.linkId}`;
+      return j(200, {
+        link,
+        url,
+        // Said whenever a caller named one, because the field no longer does
+        // anything: the link admits whoever opens it and signs in, and the
+        // reply must not let a caller believe otherwise.
+        ...(body?.allowDomains !== undefined ? { allowDomainsIgnored: true } : {}),
+      });
     } catch (err) {
-      const error = err instanceof Error ? err.message : 'create_share_failed';
-      // The same named refusal as the route above, and the same status: a
-      // deployment with no Access wiring cannot mint, and that is config
-      // rather than a bad gateway.
-      if (error === ACCESS_NOT_CONFIGURED) {
-        return j(503, {
-          error,
-          hint: 'Set CF_ACCOUNT_ID, CF_SHARE_BASE_HOSTNAME and CF_ACCESS_TEAM_DOMAIN, and put a Cloudflare API token in the Keychain (service cloudflare-api-token).',
-        });
-      }
-      return j(502, { error });
+      return j(400, { error: err instanceof Error ? err.message : 'create_share_link_failed' });
     }
   }
+
+  // --- Take a member's access away ---
+  //
+  // The other half of `unshare`, and deliberately a separate verb. Revoking a
+  // link stops new arrivals; this ends the access of someone who already came
+  // through one. Collapsing the two would mean revoking a link ejected
+  // everybody it ever admitted, which is the behaviour the "redeeming makes a
+  // lasting member" decision exists to avoid.
+  //
+  // Effective on the NEXT REQUEST for HTTP, and immediately for what is
+  // already open. A websocket and an SSE stream are authorized once, at their
+  // upgrade, and never re-checked — so this used to answer `sockets:
+  // 'unchanged'` and mean it: a removed member with the board already open
+  // kept reading AND writing over `/y/<doc>` until the connection dropped.
+  // The membership is now stamped on both, so both can be found and hung up,
+  // and the reply says how many were.
+  if (pathname === '/api/share/member/remove' && req.method === 'POST') {
+    const body = await safeJson(req);
+    const workspaceId = (body?.workspaceId as string) ?? '';
+    const email = (body?.email as string) ?? '';
+    if (!workspaceId || typeof workspaceId !== 'string') {
+      return j(400, { error: 'workspaceId required' });
+    }
+    if (!email || typeof email !== 'string') return j(400, { error: 'email required' });
+    const removed = shareLinks.removeMember(workspaceId, email);
+    if (!removed) return j(404, { error: 'not a member', workspaceId });
+    // Exactly this membership. Someone ejected from one board may still hold
+    // another, and their connections to that one must survive.
+    const key = shareMemberKey(workspaceId, email);
+    const closedSockets = rooms.closeSocketsForShareMembers((k) => k === key);
+    const closedStreams = sse.closeForShareMembers((k) => k === key);
+    return j(200, { ok: true, closedSockets, closedStreams });
+  }
+
   const shareIdMatch = pathname.match(/^\/api\/share\/([^/]+)$/);
   if (shareIdMatch && req.method === 'DELETE') {
-    if (!shares) return j(404, { error: 'sharing not enabled' });
+    if (!shares && !shareLinkBaseHost) return j(404, { error: 'sharing not enabled' });
     const shareId = decodeURIComponent(shareIdMatch[1] ?? '');
+    // ONE verb for both kinds of record, because `unshare(id)` is one ask and
+    // the caller does not know which registry an id came out of. The old
+    // registry is tried first — it is the one whose teardown makes a network
+    // call, so a miss there is cheap and a hit must not be shadowed.
+    //
+    // What revoking a LINK does NOT do is eject the people who already came
+    // through it. That is the "redeeming makes a lasting member" decision
+    // (Bryan, 2026-09-03): the link stops admitting anybody new, and ending
+    // one person's access is `POST /api/share/member/remove`. So there are no
+    // sockets to hang up here and none are closed — the members are still
+    // members, and their next request will say so.
+    if (shareLinks.revoke(shareId)) {
+      return j(200, { ok: true, revoked: 'link', members: 'unchanged' });
+    }
+    if (!shares) return j(404, { error: 'share not found' });
     try {
       const result = await shares.deleteShare(shareId);
       // Authorization is checked per HTTP request, but a websocket is

@@ -145,6 +145,10 @@ describe('host gate + share scoping over HTTP', () => {
       port: 0,
       dataDir,
       trustedHosts: [LOCAL_ALIAS],
+      // A share hostname, so `share_workspace` can mint a share link — the
+      // positive controls below need the mint to succeed.
+      shareLinkHosts: ['share.example.test'],
+
       // audience is overridden by the shares registry's per-share AUD
       cfAccess: { teamDomain: TEAM_DOMAIN, audience: 'unused', jwks },
       share: { config: SHARE_CONFIG, cfApi: makeMockCfApi({ apps: [], policies: [] }) },
@@ -195,7 +199,11 @@ describe('host gate + share scoping over HTTP', () => {
     boardShared = await boardHolding('Shared review', WS_SHARED);
     boardOther = await boardHolding('Other review', WS_OTHER);
 
-    const sr = await fetch(`${base}/api/share/workspace`, {
+    // `/api/share/link`, not `/api/share/workspace`: this suite is about the
+    // per-share HOSTNAME and its own audience, and that is the mint that
+    // still makes one. `share_workspace` mints a share LINK now, which has
+    // neither.
+    const sr = await fetch(`${base}/api/share/link`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ workspaceId: boardShared, allowDomains: ['partner.example'] }),
@@ -487,7 +495,7 @@ describe('host gate + share scoping over HTTP', () => {
       // Over the BOARD, not the grouping `WS_OTHER` it holds: a grouping is no
       // longer shareable on its own, so passing one here would make the control
       // a 410 and the whole suite would pass on a dead share stack.
-      const mint = await req('/api/share/workspace', `localhost:${handle.port}`, {
+      const mint = await req('/api/share/link', `localhost:${handle.port}`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ workspaceId: boardOther, allowDomains: ['partner.example'] }),
@@ -615,6 +623,9 @@ describe('workspace share over HTTP', () => {
       port: 0,
       dataDir,
       cfAccess: { teamDomain: TEAM_DOMAIN, audience: 'unused', jwks },
+      // A share hostname, so `share_workspace` can mint a share link — the
+      // positive controls below need the mint to succeed.
+      shareLinkHosts: ['share.example.test'],
       share: { config: SHARE_CONFIG, cfApi: makeMockCfApi({ apps: [], policies: [] }) },
     });
     base = `http://localhost:${handle.port}`;
@@ -655,7 +666,7 @@ describe('workspace share over HTTP', () => {
       body: JSON.stringify({ docId: outsideDocId, type: 'markdown', sourceUrl: outsidePath }),
     });
 
-    const sr = await fetch(`${base}/api/share/workspace`, {
+    const sr = await fetch(`${base}/api/share/link`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ workspaceId: boardId, allowDomains: ['partner.example'] }),
@@ -966,8 +977,10 @@ describe('workspace share over HTTP', () => {
       body: JSON.stringify({ workspaceId: boardId, allowDomains: ['partner.example'] }),
     });
     expect(ok.status).toBe(200);
-    const { share } = (await ok.json()) as { share: { shareId: string } };
-    await fetch(`${base}/api/share/${share.shareId}`, {
+    // A share LINK now, so the id to revoke is `link.linkId` — and `unshare`
+    // is one verb over both registries, so the DELETE below is unchanged.
+    const { link } = (await ok.json()) as { link: { linkId: string } };
+    await fetch(`${base}/api/share/${link.linkId}`, {
       method: 'DELETE',
       headers: { host: `localhost:${handle.port}` },
     });

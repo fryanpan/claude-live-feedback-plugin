@@ -97,6 +97,9 @@ describe('the Unfiled board cannot be shared', () => {
     handle = createServer({
       port: 0,
       dataDir,
+      // A share hostname, so `share_workspace` can mint a share link — the
+      // positive controls below need the mint to succeed.
+      shareLinkHosts: ['share.example.test'],
       share: {
         config: { publicHostname: PUBLIC_HOST, baseHostname: BASE_HOST, cfAccountId: 'acct' },
         cfApi: makeMockCfApi({ apps: [], policies: [] }),
@@ -147,7 +150,7 @@ describe('the Unfiled board cannot be shared', () => {
     expect(((await minted.json()) as { share: Share }).share.workspaceId).toBe(boardId);
   });
 
-  it('refuses share_workspace (Access mode) the same way — the modes differ only in visitor auth', async () => {
+  it('refuses share_workspace the same way — both mints refuse the catch-all board', async () => {
     const refused = await local('/api/share/workspace', {
       workspaceId: unfiledBoardId,
       allowDomains: ['@partner.example'],
@@ -157,13 +160,17 @@ describe('the Unfiled board cannot be shared', () => {
     expect(body.error).toBe('unfiled_board_not_shareable');
     expect(body.hint).toContain('file the review on a real board first');
 
-    // Positive control: the named board, through the same Cloudflare path.
+    // Positive control: the named board, through the same route. It mints a
+    // SHARE LINK now rather than a Cloudflare application, so the reply names
+    // `link` — what is under test here is the refusal, which is unchanged.
     const minted = await local('/api/share/workspace', {
       workspaceId: boardId,
       allowDomains: ['@partner.example'],
     });
     expect(minted.status).toBe(200);
-    expect(((await minted.json()) as { share: Share }).share.workspaceId).toBe(boardId);
+    expect(((await minted.json()) as { link: { workspaceId: string } }).link.workspaceId).toBe(
+      boardId,
+    );
   });
 
   it('refuses by NAME, so a fresh restart cannot mint a share of a re-created Unfiled', async () => {
