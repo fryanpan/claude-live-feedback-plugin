@@ -48,6 +48,12 @@ async function defaultSignOut(): Promise<void> {
   await fetch('/api/auth/logout', { method: 'POST' });
 }
 
+/** The rename form's persist step when there is no session to write to —
+ *  the local store, seeded by the caller, is the whole record. */
+async function saveNothing(): Promise<boolean> {
+  return true;
+}
+
 async function defaultSaveName(name: string): Promise<boolean> {
   const res = await fetch('/api/auth/profile', {
     method: 'POST',
@@ -97,7 +103,7 @@ export function wireMeMenu(opts: MeMenuOpts): () => void {
           <button type="button" class="hub-me-action hub-me-signout">Sign out</button>
         </div>`;
       menu.querySelector('.hub-me-rename')?.addEventListener('click', () => {
-        renderRename(session.user?.name ?? '');
+        renderRename(session.user?.name ?? '', saveName);
       });
       menu.querySelector('.hub-me-signout')?.addEventListener('click', () => {
         void signOut().then(() => {
@@ -109,22 +115,33 @@ export function wireMeMenu(opts: MeMenuOpts): () => void {
     }
     // The chip's name comes from this browser's storage, not a session — say
     // so, or "Signed in as Bryan" (the chip's tooltip) reads as verified.
-    const note = `<p class="hub-me-row hub-me-note">Commenting as <b>${escapeHtml(opts.localName)}</b> — not signed in</p>`;
-    // Under access-only there is no `/signin` page to offer, and a link to a
-    // 404 is worse than none. The session says which deployment this is.
-    if (session.emailCodeSignIn === false || !hasSignInPage()) {
-      menu.innerHTML = note;
-      return;
-    }
-    menu.innerHTML = `${note}
-      <a class="hub-me-action" href="${escapeHtml(signinHref)}">Sign in</a>`;
+    // "Change name" is offered here as well as when signed in: the name on
+    // this row is the one every comment from this browser is stamped with,
+    // and until now the only way to change it was to sign in first.
+    //
+    // "Sign in" is offered only where the server still has a `/signin` page.
+    // Under access-only it does not, and a link to a 404 is worse than none —
+    // the session says which deployment this is.
+    const offerSignIn = session.emailCodeSignIn !== false && hasSignInPage();
+    menu.innerHTML = `
+      <p class="hub-me-row hub-me-note">Commenting as <b>${escapeHtml(opts.localName)}</b> — not signed in</p>
+      <div class="hub-me-actions">
+        <button type="button" class="hub-me-action hub-me-rename">Change name</button>
+        ${offerSignIn ? `<a class="hub-me-action" href="${escapeHtml(signinHref)}">Sign in</a>` : ''}
+      </div>`;
+    menu.querySelector('.hub-me-rename')?.addEventListener('click', () => {
+      // No server call: an unsigned browser has no profile to write to, so
+      // the local store IS the record. `saveNothing` keeps one submit path.
+      renderRename(opts.localName, saveNothing);
+    });
   };
 
   /** The rename form — what "You can change this later from the board"
-   *  promises. Saves through the same profile route the sign-in flow uses,
-   *  seeds the confirmed name locally, then reloads so every surface —
+   *  promises. `save` is where the name goes first: the profile route for a
+   *  verified session, nowhere for an unsigned browser. Either way the
+   *  confirmed name is seeded locally and the page reloads, so every surface —
    *  awareness, the chip, comment attribution — repaints as this name. */
-  const renderRename = (current: string) => {
+  const renderRename = (current: string, save: (name: string) => Promise<boolean>) => {
     menu.innerHTML = `
       <form class="hub-me-rename-form">
         <label class="hub-me-row" for="hub-me-name">Display name</label>
@@ -142,7 +159,7 @@ export function wireMeMenu(opts: MeMenuOpts): () => void {
         input?.focus();
         return;
       }
-      void saveName(name).then((ok) => {
+      void save(name).then((ok) => {
         if (!ok) {
           const err = menu.querySelector<HTMLElement>('.hub-me-error');
           if (err) {
@@ -179,6 +196,19 @@ export function wireMeMenu(opts: MeMenuOpts): () => void {
     if (menu.classList.contains('hidden')) open();
     else close();
   };
+  /**
+   * Close on a click that landed outside the chip and its menu.
+   *
+   * Registered on the CAPTURE phase, and that is the whole fix for the bug
+   * this comment exists for. In the bubble phase this handler runs AFTER the
+   * in-menu button that was clicked has already run — and "Change name"
+   * rewrites `menu.innerHTML`, which detaches the very node the event is
+   * still carrying as its target. `menu.contains(t)` then answers false for a
+   * click that came from inside the menu, so the menu closed itself the
+   * instant it rendered the rename form: the input appeared for one frame and
+   * vanished, which is exactly what a person sees as a flicker and no input.
+   * Capture runs before any of that, while the target is still in the tree.
+   */
   const onDocClick = (ev: Event) => {
     if (menu.classList.contains('hidden')) return;
     const t = ev.target as Node;
@@ -190,11 +220,11 @@ export function wireMeMenu(opts: MeMenuOpts): () => void {
   };
 
   button.addEventListener('click', onClick);
-  document.addEventListener('click', onDocClick);
+  document.addEventListener('click', onDocClick, true);
   document.addEventListener('keydown', onKeydown);
   return () => {
     button.removeEventListener('click', onClick);
-    document.removeEventListener('click', onDocClick);
+    document.removeEventListener('click', onDocClick, true);
     document.removeEventListener('keydown', onKeydown);
   };
 }
