@@ -21,9 +21,8 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { type ServerHandle, createServer } from '../src/server.ts';
-import { SHARE_COOKIE } from '../src/share/link-session.ts';
+import { type AccessHarness, accessHarness, mintAccessShare } from './access-share.ts';
 
-const PUBLIC_HOST = 'feedback.example.com';
 const TAILNET = 'mac-mini.tail-test.ts.net';
 
 describe('workspace share does not leak host details', () => {
@@ -33,7 +32,8 @@ describe('workspace share does not leak host details', () => {
   let base: string;
   let boardId: string;
   let workspaceId: string;
-  let cookie: string;
+  let visitorHeaders: Record<string, string>;
+  let access: AccessHarness;
 
   const local = (path: string, init: RequestInit = {}) =>
     fetch(`${base}${path}`, {
@@ -49,9 +49,8 @@ describe('workspace share does not leak host details', () => {
     fetch(`${base}${path}`, {
       redirect: 'manual',
       headers: {
-        host: PUBLIC_HOST,
+        ...visitorHeaders,
         'x-forwarded-proto': 'https',
-        cookie: `${SHARE_COOKIE}=${cookie}`,
       },
     });
 
@@ -62,10 +61,11 @@ describe('workspace share does not leak host details', () => {
     writeFileSync(join(folder, 'README.md'), '# Entry\n\nbody\n');
     writeFileSync(join(folder, 'sub', 'two.md'), '# Two\n\nmore\n');
 
+    access = await accessHarness();
     handle = createServer({
       port: 0,
       dataDir,
-      share: { config: { publicHostname: PUBLIC_HOST } },
+      ...access.serverOptions,
       // Make the tailnet name appear in reviewUrl the way it does in prod.
       trustedHosts: [TAILNET],
     });
@@ -89,20 +89,7 @@ describe('workspace share does not leak host details', () => {
     ).workspaceId;
     expect(workspaceId).toBeTruthy();
 
-    const share = await local('/api/share/link', {
-      method: 'POST',
-      body: JSON.stringify({ workspaceId: boardId }),
-    }).then((r) => r.json());
-    const shareUrl = new URL(share.share.url);
-    const redeemed = await fetch(`${base}${shareUrl.pathname}${shareUrl.search}`, {
-      redirect: 'manual',
-      headers: { host: PUBLIC_HOST, 'x-forwarded-proto': 'https' },
-    });
-    expect(redeemed.status).toBe(302);
-    cookie = (redeemed.headers.get('set-cookie') ?? '').match(
-      new RegExp(`${SHARE_COOKIE}=([^;]+)`),
-    )?.[1] as string;
-    expect(cookie).toBeTruthy();
+    visitorHeaders = (await mintAccessShare(base, access, boardId)).headers;
   });
 
   afterAll(async () => {
@@ -167,9 +154,8 @@ describe('workspace share does not leak host details', () => {
     const opened = await fetch(`${base}/api/workspaces/${workspaceId}/context-file`, {
       method: 'POST',
       headers: {
-        host: PUBLIC_HOST,
+        ...visitorHeaders,
         'x-forwarded-proto': 'https',
-        cookie: `${SHARE_COOKIE}=${cookie}`,
         'content-type': 'application/json',
       },
       body: JSON.stringify({ relPath: 'sub/two.md' }),

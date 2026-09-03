@@ -20,11 +20,10 @@ import * as syncProtocol from 'y-protocols/sync';
 import * as Y from 'yjs';
 import { readPrivateMeta } from '../src/private-meta.ts';
 import { type ServerHandle, createServer } from '../src/server.ts';
-import { SHARE_COOKIE } from '../src/share/link-session.ts';
+import { type AccessHarness, accessHarness, mintAccessShare } from './access-share.ts';
 import { waitForFile } from './wait-for.ts';
 
 const MSG_SYNC = 0;
-const PUBLIC_HOST = 'feedback.example.com';
 const CANARY = 'CanaryBodyText';
 const OWNER = '/Volumes/Data/Users/someone/dev/private-repo';
 
@@ -87,7 +86,8 @@ describe('the sync channel leaks no host metadata', () => {
   let dataDir: string;
   let docPath: string;
   let base: string;
-  let cookie: string;
+  let visitorHeaders: Record<string, string>;
+  let access: AccessHarness;
   /**
    * The id the server MINTED for the doc the caller named `leaky`.
    *
@@ -112,10 +112,11 @@ describe('the sync channel leaks no host metadata', () => {
     dataDir = mkdtempSync(join(tmpdir(), 'ws-meta-leak-'));
     docPath = join(dataDir, 'secret-project-notes.md');
     writeFileSync(docPath, `# Notes\n\n${CANARY}.\n`);
+    access = await accessHarness();
     handle = createServer({
       port: 0,
       dataDir,
-      share: { config: { publicHostname: PUBLIC_HOST } },
+      ...access.serverOptions,
     });
     base = `http://localhost:${handle.port}`;
 
@@ -147,21 +148,7 @@ describe('the sync channel leaks no host metadata', () => {
     leakyId = ((await created.json()) as { docId: string }).docId;
     expect(leakyId).toBeTruthy();
 
-    const mint = await local('/api/share/link', {
-      method: 'POST',
-      body: JSON.stringify({ workspaceId: boardId }),
-    });
-    const { share } = (await mint.json()) as { share: { url: string } };
-    const shareUrl = new URL(share.url);
-    const redeemed = await fetch(`${base}${shareUrl.pathname}${shareUrl.search}`, {
-      redirect: 'manual',
-      headers: { host: PUBLIC_HOST },
-    });
-    cookie =
-      (redeemed.headers.get('set-cookie') ?? '').match(
-        new RegExp(`${SHARE_COOKIE}=([^;]+)`),
-      )?.[1] ?? '';
-    expect(cookie).not.toBe('');
+    visitorHeaders = (await mintAccessShare(base, access, boardId)).headers;
   });
 
   afterAll(async () => {
@@ -171,8 +158,7 @@ describe('the sync channel leaks no host metadata', () => {
 
   it('gives a share visitor the document and none of the machine', async () => {
     const { text, meta, close } = await syncAs(handle.port, leakyId, {
-      host: PUBLIC_HOST,
-      cookie: `${SHARE_COOKIE}=${cookie}`,
+      ...visitorHeaders,
     });
     // POSITIVE CONTROL — without this every assertion below is vacuous.
     expect(text).toContain(CANARY);
@@ -251,11 +237,7 @@ describe('legacy docs are migrated, not grandfathered', () => {
     writeFileSync(join(dataDir, 'legacy.ydoc'), Y.encodeStateAsUpdate(seed));
     expect(existsSync(join(dataDir, 'legacy.private.json'))).toBe(false);
 
-    handle = createServer({
-      port: 0,
-      dataDir,
-      share: { config: { publicHostname: PUBLIC_HOST } },
-    });
+    handle = createServer({ port: 0, dataDir });
     base = `http://localhost:${handle.port}`;
 
     // Loading the room is what triggers the migration.

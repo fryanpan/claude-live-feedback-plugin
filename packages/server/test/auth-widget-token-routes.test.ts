@@ -65,7 +65,15 @@ function boot(options: { requireEmailAuth?: boolean; dataDir?: string } = {}): {
   handle: ServerHandle;
 } {
   const dataDir = options.dataDir ?? mkdtempSync(join(tmpdir(), 'widget-token-routes-'));
-  const handle = createServer({ port: 0, dataDir, requireEmailAuth: options.requireEmailAuth });
+  // emailCodeSignIn: the server's own emailed-code sign-in is off by default now
+  // that every browser-facing hostname sits behind Cloudflare Access. These tests
+  // are about that flow, so they ask for it explicitly.
+  const handle = createServer({
+    port: 0,
+    dataDir,
+    emailCodeSignIn: true,
+    requireEmailAuth: options.requireEmailAuth,
+  });
   cleanups.push(async () => {
     await handle.stop();
     rmSync(dataDir, { recursive: true, force: true });
@@ -336,7 +344,7 @@ describe('revocation kills the token', () => {
     // sessionsValidFrom watermark, and restarts the list empty. A widget
     // token minted from a pre-bump session must die with it.
     writeFileSync(join(dataDir, 'revoked-sessions.json'), 'not json{');
-    const second = createServer({ port: 0, dataDir });
+    const second = createServer({ port: 0, dataDir, emailCodeSignIn: true });
     cleanups.push(async () => {
       await second.stop();
     });
@@ -398,7 +406,7 @@ describe('an archived identity', () => {
     (row as { sessionsValidFrom: number }).sessionsValidFrom = 0;
     writeFileSync(rosterPath, JSON.stringify(roster));
 
-    const second = createServer({ port: 0, dataDir });
+    const second = createServer({ port: 0, dataDir, emailCodeSignIn: true });
     cleanups.push(async () => {
       await second.stop();
     });

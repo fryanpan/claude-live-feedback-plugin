@@ -28,9 +28,13 @@ import * as encoding from 'lib0/encoding';
 import * as syncProtocol from 'y-protocols/sync';
 import * as Y from 'yjs';
 import { type ServerHandle, createServer } from '../src/server.ts';
-import { SHARE_COOKIE } from '../src/share/link-session.ts';
+import {
+  ACCESS_BASE_HOSTNAME,
+  type AccessHarness,
+  accessHarness,
+  mintAccessShare,
+} from './access-share.ts';
 
-const PUBLIC_HOST = 'feedback.example.com';
 const MSG_SYNC = 0;
 
 /** The repo's own Yjs client (ws.test.ts shape) — a RAW socket never
@@ -95,6 +99,7 @@ interface DiffResponse {
 
 describe('a shared board reaches the reviews filed on it — and no others', () => {
   let handle: ServerHandle;
+  let access: AccessHarness;
   let dataDir: string;
   let base: string;
   let repo: string;
@@ -109,7 +114,7 @@ describe('a shared board reaches the reviews filed on it — and no others', () 
   let memberB: string;
   let folderGroupingA: string;
   let folderEntryA: string;
-  let cookieA: string;
+  let visitorA: Record<string, string>;
 
   const local = (path: string, init: RequestInit = {}) =>
     fetch(`${base}${path}`, {
@@ -127,26 +132,21 @@ describe('a shared board reaches the reviews filed on it — and no others', () 
       body: JSON.stringify(body),
     });
 
-  const pub = (path: string, cookie?: string, init: RequestInit = {}) =>
+  /** A request as a share visitor: their own hostname and their own token. */
+  const pub = (path: string, visitor?: Record<string, string>, init: RequestInit = {}) =>
     fetch(`${base}${path}`, {
       redirect: 'manual',
       ...init,
       headers: {
-        host: PUBLIC_HOST,
-        ...(cookie ? { cookie: `${SHARE_COOKIE}=${cookie}` } : {}),
+        host: ACCESS_BASE_HOSTNAME,
+        ...(visitor ?? {}),
         ...((init.headers as Record<string, string>) ?? {}),
       },
     });
 
-  /** Redeem a signed share URL and return the session cookie value. */
-  const redeem = async (shareUrl: string): Promise<string> => {
-    const u = new URL(shareUrl);
-    const r = await pub(`${u.pathname}${u.search}`);
-    expect(r.status).toBe(302);
-    const m = (r.headers.get('set-cookie') ?? '').match(new RegExp(`${SHARE_COOKIE}=([^;]+)`));
-    expect(m).not.toBeNull();
-    return m?.[1] ?? '';
-  };
+  /** Mint a board share and return the headers its visitor carries. */
+  const visitorFor = async (workspaceId: string): Promise<Record<string, string>> =>
+    (await mintAccessShare(base, access, workspaceId)).headers;
 
   /**
    * The visitor gets exactly what the OWNER gets on this path.
@@ -163,9 +163,9 @@ describe('a shared board reaches the reviews filed on it — and no others', () 
    * the redirect would compare a followed status against an unfollowed one and
    * report a difference that is entirely the test's own doing.
    */
-  const sameAsOwner = async (path: string, cookie: string) => {
+  const sameAsOwner = async (path: string, visitor: Record<string, string>) => {
     const owner = await local(path, { redirect: 'manual' });
-    const seen = await pub(path, cookie);
+    const seen = await pub(path, visitor);
     expect(owner.status, `owner ${path}`).not.toBe(403);
     expect(seen.status, `visitor ${path}`).toBe(owner.status);
   };
@@ -197,10 +197,11 @@ describe('a shared board reaches the reviews filed on it — and no others', () 
     writeFileSync(join(repo, 'src', 'a.ts'), 'const a = 2;\n');
     writeFileSync(join(repo, 'src', 'b.ts'), 'const b = 2;\n');
 
+    access = await accessHarness();
     handle = createServer({
       port: 0,
       dataDir,
-      share: { config: { publicHostname: PUBLIC_HOST } },
+      ...access.serverOptions,
     });
     base = `http://localhost:${handle.port}`;
 
@@ -235,9 +236,8 @@ describe('a shared board reaches the reviews filed on it — and no others', () 
     folderEntryA = fb.files[0]?.docId ?? '';
     expect(folderEntryA).not.toBe('');
 
-    const hs = await post('/api/share/link', { workspaceId: boardA, label: 'board alpha share' });
-    expect(hs.status).toBe(200);
-    cookieA = await redeem(((await hs.json()) as { share: { url: string } }).share.url);
+    visitorA = (await mintAccessShare(base, access, boardA, { label: 'board alpha share' }))
+      .headers;
   });
 
   afterAll(() => {
@@ -248,8 +248,8 @@ describe('a shared board reaches the reviews filed on it — and no others', () 
 
   describe('positive control: the visitor is a real visitor on board A', () => {
     it('reaches the board page and the board record', async () => {
-      expect((await pub(`/workspaces/${boardA}`, cookieA)).status).toBe(200);
-      const r = await pub(`/api/workspaces/${boardA}`, cookieA);
+      expect((await pub(`/workspaces/${boardA}`, visitorA)).status).toBe(200);
+      const r = await pub(`/api/workspaces/${boardA}`, visitorA);
       expect(r.status).toBe(200);
       const { workspace } = (await r.json()) as { workspace: { name: string } };
       expect(workspace.name).toBe('board-alpha');
@@ -264,24 +264,24 @@ describe('a shared board reaches the reviews filed on it — and no others', () 
   describe('the review row on the shared board opens', () => {
     it('serves the grouping’s navigation endpoints', async () => {
       for (const sub of ['tree', 'grouped', 'threads', 'files']) {
-        const r = await pub(`/api/workspaces/${groupingA}/${sub}`, cookieA);
+        const r = await pub(`/api/workspaces/${groupingA}/${sub}`, visitorA);
         expect(r.status, `GET ${sub}`).toBe(200);
       }
     });
 
     it('serves a member file: review page, doc REST, and the Yjs socket', async () => {
-      await sameAsOwner(`/review/${memberA}`, cookieA);
-      expect((await pub(`/api/docs/${memberA}`, cookieA)).status).toBe(200);
-      expect((await pub(`/api/docs/${memberA}/threads`, cookieA)).status).toBe(200);
+      await sameAsOwner(`/review/${memberA}`, visitorA);
+      expect((await pub(`/api/docs/${memberA}`, visitorA)).status).toBe(200);
+      expect((await pub(`/api/docs/${memberA}/threads`, visitorA)).status).toBe(200);
       // 426 = past the guard, upgrade-required on a plain fetch.
-      expect((await pub(`/y/${memberA}`, cookieA)).status).toBe(426);
+      expect((await pub(`/y/${memberA}`, visitorA)).status).toBe(426);
     });
 
     it('lets a visitor open a lazily-bound member of a folder bind', async () => {
-      expect((await pub(`/api/workspaces/${folderGroupingA}/tree`, cookieA)).status).toBe(200);
-      await sameAsOwner(`/review/${folderEntryA}`, cookieA);
-      expect((await pub(`/api/docs/${folderEntryA}`, cookieA)).status).toBe(200);
-      const r = await pub(`/api/workspaces/${folderGroupingA}/context-file`, cookieA, {
+      expect((await pub(`/api/workspaces/${folderGroupingA}/tree`, visitorA)).status).toBe(200);
+      await sameAsOwner(`/review/${folderEntryA}`, visitorA);
+      expect((await pub(`/api/docs/${folderEntryA}`, visitorA)).status).toBe(200);
+      const r = await pub(`/api/workspaces/${folderGroupingA}/context-file`, visitorA, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ relPath: 'notes.md' }),
@@ -298,14 +298,14 @@ describe('a shared board reaches the reviews filed on it — and no others', () 
   describe('a review filed on a DIFFERENT board stays shut', () => {
     it('refuses the other grouping’s navigation endpoints', async () => {
       for (const sub of ['tree', 'grouped', 'threads', 'files']) {
-        const r = await pub(`/api/workspaces/${groupingB}/${sub}`, cookieA);
+        const r = await pub(`/api/workspaces/${groupingB}/${sub}`, visitorA);
         expect(r.status, `GET ${sub}`).toBe(403);
       }
     });
 
     it('refuses the other grouping’s lazy-open verbs', async () => {
       for (const sub of ['context-file', 'editable-file']) {
-        const r = await pub(`/api/workspaces/${groupingB}/${sub}`, cookieA, {
+        const r = await pub(`/api/workspaces/${groupingB}/${sub}`, visitorA, {
           method: 'POST',
           headers: { 'content-type': 'application/json' },
           body: JSON.stringify({ relPath: 'src/a.ts' }),
@@ -315,31 +315,31 @@ describe('a shared board reaches the reviews filed on it — and no others', () 
     });
 
     it('refuses the other board’s member docs on every transport', async () => {
-      expect((await pub(`/review/${memberB}`, cookieA)).status).toBe(403);
-      expect((await pub(`/api/docs/${memberB}`, cookieA)).status).toBe(403);
-      expect((await pub(`/api/docs/${memberB}/threads`, cookieA)).status).toBe(403);
-      expect((await pub(`/y/${memberB}`, cookieA)).status).toBe(403);
-      expect((await pub(`/events/${memberB}`, cookieA)).status).toBe(403);
+      expect((await pub(`/review/${memberB}`, visitorA)).status).toBe(403);
+      expect((await pub(`/api/docs/${memberB}`, visitorA)).status).toBe(403);
+      expect((await pub(`/api/docs/${memberB}/threads`, visitorA)).status).toBe(403);
+      expect((await pub(`/y/${memberB}`, visitorA)).status).toBe(403);
+      expect((await pub(`/events/${memberB}`, visitorA)).status).toBe(403);
     });
 
     it('refuses the other board itself', async () => {
-      expect((await pub(`/workspaces/${boardB}`, cookieA)).status).toBe(403);
-      expect((await pub(`/api/workspaces/${boardB}`, cookieA)).status).toBe(403);
-      expect((await pub(`/y/ws%3A${boardB}`, cookieA)).status).toBe(403);
-      expect((await pub(`/events/workspace/${boardB}`, cookieA)).status).toBe(403);
+      expect((await pub(`/workspaces/${boardB}`, visitorA)).status).toBe(403);
+      expect((await pub(`/api/workspaces/${boardB}`, visitorA)).status).toBe(403);
+      expect((await pub(`/y/ws%3A${boardB}`, visitorA)).status).toBe(403);
+      expect((await pub(`/events/workspace/${boardB}`, visitorA)).status).toBe(403);
     });
 
     it('still refuses the operator surfaces on its OWN grouping', async () => {
       // Widening reachability must not widen the verb set: DELETE of the
       // review, and the doc-enumeration list, stay shut.
       expect(
-        (await pub(`/api/workspaces/${groupingA}`, cookieA, { method: 'DELETE' })).status,
+        (await pub(`/api/workspaces/${groupingA}`, visitorA, { method: 'DELETE' })).status,
       ).toBe(403);
-      expect((await pub('/api/workspaces', cookieA)).status).toBe(403);
-      expect((await pub('/api/docs', cookieA)).status).toBe(403);
+      expect((await pub('/api/workspaces', visitorA)).status).toBe(403);
+      expect((await pub('/api/docs', visitorA)).status).toBe(403);
       expect(
         (
-          await pub(`/api/docs/${memberA}/content`, cookieA, {
+          await pub(`/api/docs/${memberA}/content`, visitorA, {
             method: 'POST',
             headers: { 'content-type': 'application/json' },
             body: JSON.stringify({ markdown: '# overwritten' }),
@@ -361,13 +361,11 @@ describe('a shared board reaches the reviews filed on it — and no others', () 
    */
   describe('revoking the board share hangs up the member doc it opened', () => {
     it('closes a member-doc socket and stream the board share authorized', async () => {
-      const mint = await post('/api/share/link', { workspaceId: boardA });
-      const share = ((await mint.json()) as { share: { shareId: string; url: string } }).share;
-      const cookie = await redeem(share.url);
+      const share = await mintAccessShare(base, access, boardA);
+      const cookie = share.headers;
 
       const client = connectDoc(`ws://localhost:${handle.port}/y/${encodeURIComponent(memberA)}`, {
-        host: PUBLIC_HOST,
-        cookie: `${SHARE_COOKIE}=${cookie}`,
+        ...share.headers,
       });
       // Positive control: a REAL Yjs sync completed on a doc reachable only
       // through the grouping-on-board hop this PR adds.
@@ -385,8 +383,10 @@ describe('a shared board reaches the reviews filed on it — and no others', () 
       expect(body.closedSockets ?? 0).toBeGreaterThanOrEqual(1);
       expect(body.closedStreams ?? 0).toBeGreaterThanOrEqual(1);
       expect(await closedCode).toBe(1008); // policy violation
-      // …and the door is shut for new requests too.
-      expect((await pub(`/api/docs/${memberA}`, cookie)).status).toBe(401);
+      // …and the door is shut for new requests too. 403 rather than 401:
+      // the share's hostname no longer names a live share at all, so the
+      // token is refused by the guard before any session is consulted.
+      expect((await pub(`/api/docs/${memberA}`, cookie)).status).toBe(403);
       await stream.body?.cancel().catch(() => {});
     });
   });
@@ -412,7 +412,10 @@ describe('a shared board reaches the reviews filed on it — and no others', () 
    */
   describe('the narrow shares are gone, and the narrowest surviving one still bounds', () => {
     it('refuses to mint a doc-scoped share on either route', async () => {
-      const link = await post('/api/share/link', { docId: memberA });
+      const link = await post('/api/share/link', {
+        allowDomains: ['@partner.example'],
+        docId: memberA,
+      });
       expect(link.status).toBe(410);
       expect((await link.json()) as { error: string }).toMatchObject({
         error: 'per_doc_sharing_removed',
@@ -427,7 +430,10 @@ describe('a shared board reaches the reviews filed on it — and no others', () 
       });
       // POSITIVE CONTROL: minting is not broken in general — a share on the
       // BOARD that grouping is filed on succeeds on the same route.
-      const ok = await post('/api/share/link', { workspaceId: boardA });
+      const ok = await post('/api/share/link', {
+        allowDomains: ['@partner.example'],
+        workspaceId: boardA,
+      });
       expect(ok.status).toBe(200);
       const { share } = (await ok.json()) as { share: { shareId: string; workspaceId: string } };
       expect(share.workspaceId).toBe(boardA);
@@ -439,7 +445,10 @@ describe('a shared board reaches the reviews filed on it — and no others', () 
       // members": both a diff review and a folder bind are groupings, both are
       // real ids, and neither can be shared on its own any more.
       for (const grouping of [groupingA, folderGroupingA]) {
-        const r = await post('/api/share/link', { workspaceId: grouping });
+        const r = await post('/api/share/link', {
+          allowDomains: ['@partner.example'],
+          workspaceId: grouping,
+        });
         expect(r.status, grouping).toBe(410);
         const body = (await r.json()) as { error: string; hint: string };
         expect(body.error).toBe('grouping_sharing_removed');
@@ -448,7 +457,10 @@ describe('a shared board reaches the reviews filed on it — and no others', () 
       }
       // POSITIVE CONTROL on the same route in the same pass: the board those
       // two groupings are filed on mints.
-      const ok = await post('/api/share/link', { workspaceId: boardA });
+      const ok = await post('/api/share/link', {
+        allowDomains: ['@partner.example'],
+        workspaceId: boardA,
+      });
       expect(ok.status).toBe(200);
       const { share } = (await ok.json()) as { share: { shareId: string } };
       expect((await local(`/api/share/${share.shareId}`, { method: 'DELETE' })).status).toBe(200);
@@ -463,11 +475,7 @@ describe('a shared board reaches the reviews filed on it — and no others', () 
       const narrowMember = narrow.files[0]?.docId ?? '';
       expect(narrowMember).not.toBe('');
 
-      const gs = await post('/api/share/link', { workspaceId: narrowBoard });
-      expect(gs.status).toBe(200);
-      const narrowCookie = await redeem(
-        ((await gs.json()) as { share: { url: string } }).share.url,
-      );
+      const narrowCookie = await visitorFor(narrowBoard);
       // Positive control: its own board, its own review's tree, its own member.
       expect((await pub(`/api/workspaces/${narrowBoard}`, narrowCookie)).status).toBe(200);
       expect((await pub(`/api/workspaces/${narrow.reviewId}/tree`, narrowCookie)).status).toBe(200);
@@ -510,21 +518,19 @@ describe('a shared board reaches the reviews filed on it — and no others', () 
       expect(handle.tasks.getWorkspace(boardA)?.docIds).toContain('rev-shared');
       expect(handle.tasks.getWorkspace(secondBoard)?.docIds).toContain('rev-shared');
 
-      const gs = await post('/api/share/link', { workspaceId: secondBoard });
-      const gammaCookie = await redeem(((await gs.json()) as { share: { url: string } }).share.url);
+      const gammaCookie = await visitorFor(secondBoard);
 
       // Positive control: the gamma visitor is a real visitor on its board.
       expect((await pub(`/api/workspaces/${secondBoard}`, gammaCookie)).status).toBe(200);
 
       // Both boards reach it — neither link is the "first" one.
-      for (const cookie of [cookieA, gammaCookie]) {
+      for (const cookie of [visitorA, gammaCookie]) {
         expect((await pub('/api/workspaces/rev-shared/tree', cookie)).status).toBe(200);
         expect((await pub(`/api/docs/${sharedMember}`, cookie)).status).toBe(200);
       }
 
       // …and a third board that was never linked still gets nothing.
-      const bs = await post('/api/share/link', { workspaceId: boardB });
-      const betaCookie = await redeem(((await bs.json()) as { share: { url: string } }).share.url);
+      const betaCookie = await visitorFor(boardB);
       expect((await pub(`/api/workspaces/${boardB}`, betaCookie)).status).toBe(200); // control
       expect((await pub('/api/workspaces/rev-shared/tree', betaCookie)).status).toBe(403);
       expect((await pub(`/api/docs/${sharedMember}`, betaCookie)).status).toBe(403);

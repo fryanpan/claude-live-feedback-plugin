@@ -126,6 +126,7 @@ describe('the Unfiled board cannot be shared', () => {
 
   it('refuses share_link for the Unfiled board, while a named board mints', async () => {
     const refused = await local('/api/share/link', {
+      allowDomains: ['@partner.example'],
       workspaceId: unfiledBoardId,
       label: 'everything anyone ever bound',
     });
@@ -138,7 +139,10 @@ describe('the Unfiled board cannot be shared', () => {
     expect(body.hint).toContain('hubWorkspaceId');
 
     // Positive control, same server, same route: the named board mints.
-    const minted = await local('/api/share/link', { workspaceId: boardId });
+    const minted = await local('/api/share/link', {
+      allowDomains: ['@partner.example'],
+      workspaceId: boardId,
+    });
     expect(minted.status).toBe(200);
     expect(((await minted.json()) as { share: Share }).share.workspaceId).toBe(boardId);
   });
@@ -172,14 +176,20 @@ describe('the Unfiled board cannot be shared', () => {
     // refuse any id whose board answers to the Unfiled lookup.
     if (named.status === 200) {
       const id = ((await named.json()) as { workspace: { id: string } }).workspace.id;
-      const res = await local('/api/share/link', { workspaceId: id });
+      const res = await local('/api/share/link', {
+        allowDomains: ['@partner.example'],
+        workspaceId: id,
+      });
       expect(res.status).toBe(403);
       expect(((await res.json()) as { error: string }).error).toBe('unfiled_board_not_shareable');
     }
 
     // And an id that exists as nothing still 404s — the refusal is for the
     // Unfiled board, not a new answer for every unrecognised id.
-    const unknown = await local('/api/share/link', { workspaceId: 'no-such-workspace' });
+    const unknown = await local('/api/share/link', {
+      allowDomains: ['@partner.example'],
+      workspaceId: 'no-such-workspace',
+    });
     expect(unknown.status).toBe(404);
     expect(((await unknown.json()) as { error: string }).error).toBe('workspace not found');
   });

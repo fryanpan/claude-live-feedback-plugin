@@ -36,9 +36,14 @@ import * as encoding from 'lib0/encoding';
 import * as syncProtocol from 'y-protocols/sync';
 import * as Y from 'yjs';
 import { HUB_FEEDBACK_DOC_ID, type ServerHandle, createServer } from '../src/server.ts';
-import { SHARE_COOKIE } from '../src/share/link-session.ts';
+import {
+  ACCESS_BASE_HOSTNAME,
+  type AccessHarness,
+  type MintedShare,
+  accessHarness,
+  mintAccessShare,
+} from './access-share.ts';
 
-const PUBLIC_HOST = 'feedback.example.com';
 const PERSON = { id: 'known-jordan', name: 'Jordan', kind: 'known', color: '#2e7dd7' };
 
 const MSG_SYNC = 0;
@@ -128,6 +133,7 @@ function sseData(text: string, event: string): Record<string, unknown> | null {
 
 describe('workspace-hub minimal share (§3.12 commit 8)', () => {
   let handle: ServerHandle;
+  let access: AccessHarness;
   let dataDir: string;
   let base: string;
   let wsBase: string;
@@ -135,13 +141,13 @@ describe('workspace-hub minimal share (§3.12 commit 8)', () => {
   let hubId: string;
   let taskId: string;
   let decisionId: string;
-  let hubShare: { shareId: string; url: string };
-  let hubCookie: string;
+  let hubShare: MintedShare;
+  let hubCookie: Record<string, string>;
   /** A second, unrelated hub workspace and a live share on it. This is the
    *  "authorized visitor who is not in THIS workspace" — the shape that
    *  replaces the doc-scoped invite. */
   let otherId: string;
-  let otherCookie: string;
+  let otherCookie: Record<string, string>;
 
   const ATTACHED = 'plan-doc';
   const PRIVATE = 'private-doc';
@@ -171,33 +177,27 @@ describe('workspace-hub minimal share (§3.12 commit 8)', () => {
       body: JSON.stringify(body),
     });
 
-  const pub = (path: string, cookie?: string, init: RequestInit = {}) =>
+  /** A request as a share visitor: their own hostname and their own token.
+   *  With no visitor it is the un-signed-in caller Access has not vouched
+   *  for, which is what every 403 below is about. */
+  const pub = (path: string, visitor?: Record<string, string>, init: RequestInit = {}) =>
     fetch(`${base}${path}`, {
       redirect: 'manual',
       ...init,
       headers: {
-        host: PUBLIC_HOST,
-        ...(cookie ? { cookie: `${SHARE_COOKIE}=${cookie}` } : {}),
+        host: ACCESS_BASE_HOSTNAME,
+        ...(visitor ?? {}),
         ...((init.headers as Record<string, string>) ?? {}),
       },
     });
 
-  /** Redeem a signed share URL and return the session cookie value. */
-  const redeem = async (shareUrl: string): Promise<string> => {
-    const u = new URL(shareUrl);
-    const r = await pub(`${u.pathname}${u.search}`);
-    expect(r.status).toBe(302);
-    const m = (r.headers.get('set-cookie') ?? '').match(new RegExp(`${SHARE_COOKIE}=([^;]+)`));
-    expect(m).not.toBeNull();
-    return m?.[1] ?? '';
-  };
-
   beforeAll(async () => {
     dataDir = mkdtempSync(join(tmpdir(), 'hub-share-'));
+    access = await accessHarness();
     handle = createServer({
       port: 0,
       dataDir,
-      share: { config: { publicHostname: PUBLIC_HOST } },
+      ...access.serverOptions,
     });
     base = `http://localhost:${handle.port}`;
     wsBase = `ws://localhost:${handle.port}`;
@@ -261,14 +261,9 @@ describe('workspace-hub minimal share (§3.12 commit 8)', () => {
     otherId = ((await other.json()) as { workspace: { id: string } }).workspace.id;
 
     // Shares: the whole hub workspace, and the unrelated workspace.
-    const hs = await post('/api/share/link', { workspaceId: hubId, label: 'hub share' });
-    expect(hs.status).toBe(200);
-    hubShare = ((await hs.json()) as { share: typeof hubShare }).share;
-    hubCookie = await redeem(hubShare.url);
-
-    const os = await post('/api/share/link', { workspaceId: otherId, label: 'other share' });
-    expect(os.status).toBe(200);
-    otherCookie = await redeem(((await os.json()) as { share: { url: string } }).share.url);
+    hubShare = await mintAccessShare(base, access, hubId, { label: 'hub share' });
+    hubCookie = hubShare.headers;
+    otherCookie = (await mintAccessShare(base, access, otherId, { label: 'other share' })).headers;
   });
 
   afterAll(async () => {
@@ -277,15 +272,20 @@ describe('workspace-hub minimal share (§3.12 commit 8)', () => {
   });
 
   describe('minting + landing', () => {
-    it('mints a link share against a hub workspace (no bound member docs required)', () => {
-      expect(new URL(hubShare.url).searchParams.get('sig')).toMatch(/^[0-9a-f]{64}$/);
+    it('mints a share against a hub workspace (no bound member docs required)', () => {
+      // The capability is the HOSTNAME now, not a signature in the query: the
+      // share gets its own Access application, and there is nothing in the URL
+      // a person could hold without signing in.
+      const u = new URL(hubShare.url);
+      expect(u.hostname).toBe(hubShare.host);
+      expect(u.hostname.endsWith(`.${ACCESS_BASE_HOSTNAME}`)).toBe(true);
+      expect(u.search).toBe('');
     });
 
-    it('redeeming lands IN the hub — never a review URL, never a lobby', async () => {
-      const u = new URL(hubShare.url);
-      const r = await pub(`${u.pathname}${u.search}`);
-      expect(r.status).toBe(302);
-      expect(r.headers.get('location')).toBe(`/workspaces/${hubId}`);
+    it('the share URL lands IN the hub — never a review URL, never a lobby', async () => {
+      expect(new URL(hubShare.url).pathname).toBe(`/workspaces/${hubId}`);
+      const r = await pub(`/workspaces/${hubId}`, hubShare.headers);
+      expect(r.status).toBe(200);
     });
 
     /**
@@ -296,14 +296,21 @@ describe('workspace-hub minimal share (§3.12 commit 8)', () => {
      * `docId` to this same server long after this one stopped.
      */
     it('refuses to mint a share scoped to one doc, and names the replacement', async () => {
-      const r = await post('/api/share/link', { docId: ATTACHED, label: 'doc share' });
+      const r = await post('/api/share/link', {
+        allowDomains: ['@partner.example'],
+        docId: ATTACHED,
+        label: 'doc share',
+      });
       expect(r.status).toBe(410);
       const body = (await r.json()) as { error: string; hint?: string };
       expect(body.error).toBe('per_doc_sharing_removed');
       expect(body.hint).toContain('workspaceId');
       // Positive control: the workspace ATTACHED is filed on shares fine, and
       // that share is what reaches the doc (see the doc block further down).
-      const ok = await post('/api/share/link', { workspaceId: hubId });
+      const ok = await post('/api/share/link', {
+        allowDomains: ['@partner.example'],
+        workspaceId: hubId,
+      });
       expect(ok.status).toBe(200);
       await local(
         `/api/share/${((await ok.json()) as { share: { shareId: string } }).share.shareId}`,
@@ -321,7 +328,10 @@ describe('workspace-hub minimal share (§3.12 commit 8)', () => {
     });
 
     it('refuses it without a session, and to another workspace’s visitor (absence)', async () => {
-      expect((await pub(`/workspaces/${hubId}`)).status).toBe(401);
+      // 403, not 401: with Access in front of every browser-facing host a
+      // request that proves nothing is refused outright, not invited to sign
+      // in at a surface this server serves.
+      expect((await pub(`/workspaces/${hubId}`)).status).toBe(403);
       // Positive control: the same cookie serves its OWN hub page, so the
       // 403 is the scope check rather than a dead session.
       expect((await pub(`/workspaces/${otherId}`, otherCookie)).status).toBe(200);
@@ -349,10 +359,7 @@ describe('workspace-hub minimal share (§3.12 commit 8)', () => {
 
   describe('transport 2: the ws:<id> board room socket', () => {
     it('a workspace visitor completes a REAL Yjs sync and sees the board (presence)', async () => {
-      const client = connectDoc(`${wsBase}/y/ws%3A${hubId}`, {
-        host: PUBLIC_HOST,
-        cookie: `${SHARE_COOKIE}=${hubCookie}`,
-      });
+      const client = connectDoc(`${wsBase}/y/ws%3A${hubId}`, { ...hubCookie });
       try {
         await client.ready;
         // Positive control FIRST: the doc's own state arrived. Without this
@@ -379,11 +386,9 @@ describe('workspace-hub minimal share (§3.12 commit 8)', () => {
     it('refuses the socket to another workspace’s visitor whose socket auth otherwise works (absence)', async () => {
       // Positive control: the SAME cookie passes the guard for its own board
       // room (426 = past the guard, upgrade-required on a plain fetch).
-      expect(
-        (await pub(`/y/ws%3A${otherId}`, otherCookie, { headers: { host: PUBLIC_HOST } })).status,
-      ).toBe(426);
+      expect((await pub(`/y/ws%3A${otherId}`, otherCookie)).status).toBe(426);
       expect((await pub(`/y/ws%3A${hubId}`, otherCookie)).status).toBe(403);
-      expect((await pub(`/y/ws%3A${hubId}`)).status).toBe(401);
+      expect((await pub(`/y/ws%3A${hubId}`)).status).toBe(403);
     });
   });
 
@@ -429,7 +434,7 @@ describe('workspace-hub minimal share (§3.12 commit 8)', () => {
       expect(own.status).toBe(200);
       await own.body?.cancel().catch(() => {});
       expect((await pub(`/events/workspace/${hubId}`, otherCookie)).status).toBe(403);
-      expect((await pub(`/events/workspace/${hubId}`)).status).toBe(401);
+      expect((await pub(`/events/workspace/${hubId}`)).status).toBe(403);
     });
 
     // Voice landed AFTER the commit-8 share slice, and §3.3's enumeration of
@@ -488,7 +493,7 @@ describe('workspace-hub minimal share (§3.12 commit 8)', () => {
       // Positive control for the refusal: the other cookie reads ITS record.
       expect((await pub(`/api/workspaces/${otherId}`, otherCookie)).status).toBe(200);
       expect((await pub(`/api/workspaces/${hubId}`, otherCookie)).status).toBe(403);
-      expect((await pub(`/api/workspaces/${hubId}`)).status).toBe(401);
+      expect((await pub(`/api/workspaces/${hubId}`)).status).toBe(403);
     });
 
     /**
@@ -504,7 +509,7 @@ describe('workspace-hub minimal share (§3.12 commit 8)', () => {
       expect(Array.isArray(seen.items)).toBe(true);
       expect((await pub(`/api/workspaces/${otherId}/review-items`, otherCookie)).status).toBe(200);
       expect((await pub(`/api/workspaces/${hubId}/review-items`, otherCookie)).status).toBe(403);
-      expect((await pub(`/api/workspaces/${hubId}/review-items`)).status).toBe(401);
+      expect((await pub(`/api/workspaces/${hubId}/review-items`)).status).toBe(403);
       // Read-only, like every other allowance on this gate.
       expect((await pub(`/api/workspaces/${hubId}/tasks`, hubCookie)).status).toBe(403);
     });
@@ -696,7 +701,7 @@ describe('workspace-hub minimal share (§3.12 commit 8)', () => {
       expect(seen.hubWorkspaceId).toBeUndefined();
     });
 
-    it('posts a comment attributed as a guest, never as a fleet identity', async () => {
+    it('posts a comment under the proven email, never a claimed fleet identity', async () => {
       const r = await pub(`/api/docs/${attachedId}/threads/by_find`, hubCookie, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
@@ -708,9 +713,15 @@ describe('workspace-hub minimal share (§3.12 commit 8)', () => {
       });
       expect(r.status).toBe(200);
       const { thread } = (await r.json()) as {
-        thread: { comments: Array<{ author: { id: string } }> };
+        thread: { comments: Array<{ author: { id: string; name: string } }> };
       };
-      expect(thread.comments[0]?.author.id).toStartWith('guest-');
+      // Access proved who this is, so the comment carries that identity —
+      // and the fleet id the body claimed is not it. The old assertion here
+      // was `guest-`, which is what a visitor got when nothing was proven.
+      const author = thread.comments[0]?.author;
+      expect(author?.id).not.toBe('known-bryan');
+      // The display name is derived from the proven address, not typed.
+      expect(author?.name).toBe('Reviewer');
     });
 
     it('still cannot reach a doc outside the workspace (absence)', async () => {
@@ -750,14 +761,10 @@ describe('workspace-hub minimal share (§3.12 commit 8)', () => {
 
   describe('revocation hangs up the hub, it does not just refuse', () => {
     it('closes the board room socket and the workspace stream a share had open', async () => {
-      const mint = await post('/api/share/link', { workspaceId: hubId });
-      const share = ((await mint.json()) as { share: { shareId: string; url: string } }).share;
-      const cookie = await redeem(share.url);
+      const share = await mintAccessShare(base, access, hubId);
+      const cookie = share.headers;
 
-      const client = connectDoc(`${wsBase}/y/ws%3A${hubId}`, {
-        host: PUBLIC_HOST,
-        cookie: `${SHARE_COOKIE}=${cookie}`,
-      });
+      const client = connectDoc(`${wsBase}/y/ws%3A${hubId}`, { ...share.headers });
       await client.ready; // positive control: the socket really synced
       const closedCode = new Promise<number>((resolve) => {
         client.ws.addEventListener('close', (e) => resolve((e as CloseEvent).code));

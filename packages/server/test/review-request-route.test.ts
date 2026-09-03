@@ -22,10 +22,9 @@ import { join } from 'node:path';
 import type { User } from '@feedback/core';
 import { REVIEW_REQUEST_COMMENT } from '../src/huddle.ts';
 import { type ServerHandle, createServer } from '../src/server.ts';
-import { SHARE_COOKIE } from '../src/share/link-session.ts';
+import { type AccessHarness, accessHarness, mintAccessShare } from './access-share.ts';
 
 const PERSON: User = { id: 'known-jordan', name: 'Jordan', kind: 'known', color: '#2e7dd7' };
-const PUBLIC_HOST = 'feedback.example.com';
 
 interface HuddleResponse {
   docId: string;
@@ -53,6 +52,7 @@ interface DocResponse {
 
 describe('POST /api/docs/:docId/review-request', () => {
   let handle: ServerHandle;
+  let access: AccessHarness;
   let dataDir: string;
   let base: string;
   let workspaceId: string;
@@ -85,10 +85,11 @@ describe('POST /api/docs/:docId/review-request', () => {
 
   beforeAll(async () => {
     dataDir = mkdtempSync(join(tmpdir(), 'review-request-'));
+    access = await accessHarness();
     handle = createServer({
       port: 0,
       dataDir,
-      share: { config: { publicHostname: PUBLIC_HOST } },
+      ...access.serverOptions,
     });
     base = `http://localhost:${handle.port}`;
     workspaceId = (
@@ -177,24 +178,10 @@ describe('POST /api/docs/:docId/review-request', () => {
 
   it('refuses a share visitor, whose cookie does reach the doc', async () => {
     const docId = await newHuddle('discussion');
-    const { share } = await jj<{ share: { url: string } }>(
-      await post('/api/share/link', { workspaceId, label: 'review-request share' }),
-    );
-    const shareUrl = new URL(share.url);
-    const redeem = await fetch(`${base}${shareUrl.pathname}${shareUrl.search}`, {
-      redirect: 'manual',
-      headers: { host: PUBLIC_HOST },
+    const visitor = await mintAccessShare(base, access, workspaceId, {
+      label: 'review-request share',
     });
-    expect(redeem.status).toBe(302);
-    const cookie = (redeem.headers.get('set-cookie') ?? '').match(
-      new RegExp(`${SHARE_COOKIE}=([^;]+)`),
-    )?.[1];
-    expect(cookie).toBeTruthy();
-    const visitorHeaders = {
-      host: PUBLIC_HOST,
-      cookie: `${SHARE_COOKIE}=${cookie}`,
-      'content-type': 'application/json',
-    };
+    const visitorHeaders = { ...visitor.headers, 'content-type': 'application/json' };
     const read = await fetch(`${base}/api/docs/${docId}`, { headers: visitorHeaders });
     expect(read.status).toBe(200);
     const asked = await fetch(`${base}/api/docs/${docId}/review-request`, {

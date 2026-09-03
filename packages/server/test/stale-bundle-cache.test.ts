@@ -96,7 +96,10 @@ describe('a reload cannot return the old bundle', () => {
     dataDir = mkdtempSync(join(tmpdir(), 'stale-cache-data-'));
     dist = mkdtempSync(join(tmpdir(), 'stale-cache-dist-'));
     publish(v(1));
-    handle = createServer({ port: 0, dataDir, markdownAppDistDir: dist });
+    // emailCodeSignIn: the server's own emailed-code sign-in is off by default now
+    // that every browser-facing hostname sits behind Cloudflare Access. These tests
+    // are about that flow, so they ask for it explicitly.
+    handle = createServer({ port: 0, dataDir, markdownAppDistDir: dist, emailCodeSignIn: true });
     base = `http://localhost:${handle.port}`;
     const ws = await local('/api/workspaces', {
       method: 'POST',

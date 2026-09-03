@@ -11,9 +11,7 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { type ServerHandle, createServer } from '../src/server.ts';
-import { SHARE_COOKIE } from '../src/share/link-session.ts';
-
-const PUBLIC_HOST = 'feedback.example.com';
+import { type AccessHarness, accessHarness, mintAccessShare } from './access-share.ts';
 
 /** Read an SSE stream until `stop()`, collecting the event names seen. */
 function listen(res: Response): {
@@ -52,6 +50,8 @@ const settle = (ms = 300) => new Promise((r) => setTimeout(r, ms));
 
 describe('a revoked share loses its event stream', () => {
   let handle: ServerHandle | null = null;
+  let access: AccessHarness;
+  let visitorHeaders: Record<string, string>;
   let dataDir = '';
 
   afterEach(async () => {
@@ -64,10 +64,11 @@ describe('a revoked share loses its event stream', () => {
     dataDir = mkdtempSync(join(tmpdir(), 'sse-revoke-'));
     const docPath = join(dataDir, 'notes.md');
     writeFileSync(docPath, '# Notes\n\nBody text here.\n');
+    access = await accessHarness();
     handle = createServer({
       port: 0,
       dataDir,
-      share: { config: { publicHostname: PUBLIC_HOST } },
+      ...access.serverOptions,
     });
     const port = handle.port;
     const base = `http://localhost:${port}`;
@@ -106,22 +107,8 @@ describe('a revoked share loses its event stream', () => {
       body: JSON.stringify({ docId: 'ws-shared' }),
     });
     expect(filed.status).toBe(200);
-    const mint = await local('/api/share/link', {
-      method: 'POST',
-      body: JSON.stringify({ workspaceId: boardId }),
-    });
-    expect(mint.status).toBe(200);
-    const { share } = (await mint.json()) as { share: { url: string; shareId: string } };
-    const shareUrl = new URL(share.url);
-    const redeemed = await fetch(`${base}${shareUrl.pathname}${shareUrl.search}`, {
-      redirect: 'manual',
-      headers: { host: PUBLIC_HOST },
-    });
-    const cookie =
-      (redeemed.headers.get('set-cookie') ?? '').match(
-        new RegExp(`${SHARE_COOKIE}=([^;]+)`),
-      )?.[1] ?? '';
-    expect(cookie).not.toBe('');
+    const minted = await mintAccessShare(base, access, boardId);
+    visitorHeaders = minted.headers;
 
     /** Post a comment as the owner — every live stream should see it. */
     const comment = (text: string) =>
@@ -136,10 +123,10 @@ describe('a revoked share loses its event stream', () => {
 
     const openStream = () =>
       fetch(`${base}/events/shared`, {
-        headers: { host: PUBLIC_HOST, cookie: `${SHARE_COOKIE}=${cookie}` },
+        headers: { ...visitorHeaders },
       });
 
-    return { base, local, comment, openStream, shareId: share.shareId };
+    return { base, local, comment, openStream, shareId: minted.shareId };
   }
 
   it('stops delivering events after the share is revoked', async () => {

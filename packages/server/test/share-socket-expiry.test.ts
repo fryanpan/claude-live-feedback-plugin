@@ -18,10 +18,9 @@ import * as encoding from 'lib0/encoding';
 import * as syncProtocol from 'y-protocols/sync';
 import * as Y from 'yjs';
 import { type ServerHandle, createServer } from '../src/server.ts';
-import { SHARE_COOKIE } from '../src/share/link-session.ts';
+import { type AccessHarness, accessHarness, mintAccessShare } from './access-share.ts';
 
 const MSG_SYNC = 0;
-const PUBLIC_HOST = 'feedback.example.com';
 
 interface Conn {
   closeCode: number | null;
@@ -86,6 +85,8 @@ function sweep(handle: ServerHandle): void {
 
 describe('expired shares lose their sockets', () => {
   let handle: ServerHandle | null = null;
+  let access: AccessHarness;
+  let visitorHeaders: Record<string, string>;
   let dataDir = '';
 
   afterEach(async () => {
@@ -94,13 +95,14 @@ describe('expired shares lose their sockets', () => {
     if (dataDir) rmSync(dataDir, { recursive: true, force: true });
   });
 
-  async function setup(): Promise<{ base: string; cookie: string; shareId: string }> {
+  async function setup(): Promise<{ base: string; shareId: string }> {
     dataDir = mkdtempSync(join(tmpdir(), 'share-expiry-'));
     writeFileSync(join(dataDir, 'notes.md'), '# Notes\n\nBody.\n');
+    access = await accessHarness();
     handle = createServer({
       port: 0,
       dataDir,
-      share: { config: { publicHostname: PUBLIC_HOST } },
+      ...access.serverOptions,
     });
     const base = `http://localhost:${handle.port}`;
     const local = (path: string, init: RequestInit = {}) =>
@@ -137,31 +139,16 @@ describe('expired shares lose their sockets', () => {
       body: JSON.stringify({ docId: 'ws-shared' }),
     });
     expect(filed.status).toBe(200);
-    const mint = await local('/api/share/link', {
-      method: 'POST',
-      body: JSON.stringify({ workspaceId: boardId }),
-    });
-    expect(mint.status).toBe(200);
-    const { share } = (await mint.json()) as { share: { url: string; shareId: string } };
-    const u = new URL(share.url);
-    const redeemed = await fetch(`${base}${u.pathname}${u.search}`, {
-      redirect: 'manual',
-      headers: { host: PUBLIC_HOST },
-    });
-    const cookie =
-      (redeemed.headers.get('set-cookie') ?? '').match(
-        new RegExp(`${SHARE_COOKIE}=([^;]+)`),
-      )?.[1] ?? '';
-    expect(cookie).not.toBe('');
-    return { base, cookie, shareId: share.shareId };
+    const minted = await mintAccessShare(base, access, boardId);
+    visitorHeaders = minted.headers;
+    return { base, shareId: minted.shareId };
   }
 
   it('closes a visitor socket once the share has expired', async () => {
-    const { base, cookie, shareId } = await setup();
+    const { base, shareId } = await setup();
     const port = handle?.port ?? 0;
     const conn = connect(`ws://localhost:${port}/y/shared`, {
-      host: PUBLIC_HOST,
-      cookie: `${SHARE_COOKIE}=${cookie}`,
+      ...visitorHeaders,
     });
     // POSITIVE CONTROL: the socket has to be genuinely connected and synced,
     // or "it closed" would just mean it never opened.
@@ -210,12 +197,11 @@ describe('expired shares lose their sockets', () => {
   });
 
   it('leaves the owner’s own socket alone — it carries no shareId', async () => {
-    const { cookie, shareId } = await setup();
+    const { shareId } = await setup();
     const port = handle?.port ?? 0;
     const owner = connect(`ws://localhost:${port}/y/shared`, { host: `localhost:${port}` });
     const visitor = connect(`ws://localhost:${port}/y/shared`, {
-      host: PUBLIC_HOST,
-      cookie: `${SHARE_COOKIE}=${cookie}`,
+      ...visitorHeaders,
     });
     await owner.synced;
     await visitor.synced;
