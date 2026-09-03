@@ -98,6 +98,24 @@ export interface NotesTickHarnessOptions {
   boundPath?: string;
   /** The server's data dir, as that placement rule reads it. */
   dataDir?: string;
+  /**
+   * The board this meeting's doc belongs to. Wiring it is what turns on the
+   * two stages that need a board: the task titles in the composer's context,
+   * and the per-tick reference search. Absent, both are empty, which is the
+   * huddle-with-no-board case every other script here runs in.
+   */
+  workspaceId?: string;
+  /** The board's rows, as the task store would list them. */
+  tasks?: Array<{ id?: string; title: string; status: string; kind?: 'task' | 'goal' }>;
+  /** The board's other docs, as the lookup would list them. */
+  boardDocs?: Array<{ docId: string; title: string; meetingAt?: number }>;
+  /**
+   * How long `tick()` waits for the write. The default suits a scripted
+   * composer, which answers in microseconds; `notes-eval.ts` drives a REAL
+   * model whose reply grows with the notes, and five seconds is not enough
+   * by the twentieth tick of a meeting.
+   */
+  tickTimeoutMs?: number;
 }
 
 export interface NotesTickHarness {
@@ -166,7 +184,9 @@ export function createNotesTickHarness(opts: NotesTickHarnessOptions): NotesTick
     },
     {
       rooms: () => rooms,
-      tasks: () => ({ listTasks: () => [] }),
+      tasks: () => ({ listTasks: () => opts.tasks ?? [] }),
+      ...(opts.workspaceId ? { boardOf: () => opts.workspaceId } : {}),
+      ...(opts.boardDocs ? { lookup: { docs: () => opts.boardDocs ?? [] } } : {}),
       ...(opts.dataDir ? { dataDir: opts.dataDir } : {}),
       ...(opts.ledger ? { ledger: opts.ledger } : {}),
     },
@@ -236,7 +256,10 @@ export function createNotesTickHarness(opts: NotesTickHarnessOptions): NotesTick
     async tick() {
       const n = ++tickNo;
       schedule.fire();
-      await waitFor(() => done.has(n), { describe: `notes tick ${n} to be written` });
+      await waitFor(() => done.has(n), {
+        describe: `notes tick ${n} to be written`,
+        ...(opts.tickTimeoutMs !== undefined ? { timeout: opts.tickTimeoutMs } : {}),
+      });
       const shot = snapshot(n);
       snapshots.push(shot);
       return shot;

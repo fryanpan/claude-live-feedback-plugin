@@ -64,6 +64,7 @@
 
 import { type DocType, contentKind } from '@feedback/core';
 import * as Y from 'yjs';
+import { docLookupUrl } from './meeting-lookup.ts';
 import { correctNotesSection } from './meeting-notes-correction.ts';
 import {
   type NotesOwnership,
@@ -91,8 +92,10 @@ import {
   type TaskCaptureLookup,
   normalizedTitle,
   runTaskCapture,
+  taskCaptureUrl,
 } from './meeting-task-capture.ts';
 import { dropLegacyTranscriptSection } from './notes-legacy-transcript.ts';
+import { type NoteReference, referenceDate } from './notes-references.ts';
 import {
   MEETING_NOTES_HEADINGS,
   appendResearchPlaceholder,
@@ -109,6 +112,17 @@ import { LEGACY_TRANSCRIPT_HEADING } from './notes-section.ts';
 /** Enough names to inform the composer; few enough that a thousand-row board
  *  cannot flood the prompt. */
 const MAX_CONTEXT_TASKS = 30;
+
+/**
+ * How much of the board the per-tick reference search may scan.
+ *
+ * Far larger than `MAX_CONTEXT_TASKS`, and for the opposite reason: nothing
+ * here reaches the prompt unless a tick's words named it, so the cost of a
+ * big catalogue is a string scan rather than tokens. The cap exists only so
+ * a board nobody has ever archived cannot turn one tick into a linear walk of
+ * ten thousand rows.
+ */
+const MAX_REFERENCE_ROWS = 500;
 
 export {
   type RelabelNotesResult,
@@ -135,9 +149,12 @@ export interface NotesDocRooms {
   boundPathOf?(docId: string): string | undefined;
 }
 
-/** The slice of `TaskStore` the context gatherer needs. */
+/** The slice of `TaskStore` the context gatherer needs. `id` is here for the
+ *  reference catalogue, which needs a URL and not only a name. */
 export interface NotesContextTasks {
-  listTasks(workspaceId: string): Array<{ title: string; status: string; kind?: 'task' | 'goal' }>;
+  listTasks(
+    workspaceId: string,
+  ): Array<{ id?: string; title: string; status: string; kind?: 'task' | 'goal' }>;
 }
 
 /**
@@ -523,6 +540,46 @@ export function withServerNotesSinks(
       const supplied = options.resolveContext?.(docId) ?? options.context;
       const merged = { ...gathered, ...supplied };
       return Object.keys(merged).length > 0 ? merged : undefined;
+    },
+    /**
+     * The board this meeting could cite: every open row and every doc the
+     * board holds, each with the URL a note would link.
+     *
+     * Rows the board has already finished are IN — "we shipped the balloons
+     * ticket last week" is exactly the sentence whose link a reader wants,
+     * and a done row is still the thing that was named. Goals are out: a goal
+     * is a heading over the work rather than a thing a note is about, and its
+     * words ("live meeting notes") are the words half the meeting uses.
+     *
+     * Never throws. A store that cannot answer costs the notes their links,
+     * the same way a store that cannot answer costs them their context.
+     */
+    resolveReferences: (docId: string): readonly NoteReference[] => {
+      const out: NoteReference[] = [];
+      try {
+        const workspaceId = boardOf(docId);
+        if (!workspaceId) return out;
+        for (const task of deps.tasks().listTasks(workspaceId)) {
+          if (out.length >= MAX_REFERENCE_ROWS) break;
+          if (task.kind === 'goal' || !task.id || !task.title) continue;
+          out.push({ kind: 'task', title: task.title, url: taskCaptureUrl(workspaceId, task.id) });
+        }
+        // The meeting's own doc is excluded for the reason the lookup
+        // excludes it: a note citing the page it is written on is a link to
+        // itself, and the reader is already there.
+        for (const doc of deps.lookup?.docs(workspaceId, docId) ?? []) {
+          if (out.length >= MAX_REFERENCE_ROWS) break;
+          out.push({
+            kind: 'doc',
+            title: doc.title,
+            url: docLookupUrl(workspaceId, doc.docId),
+            ...(doc.meetingAt !== undefined ? { when: referenceDate(doc.meetingAt) } : {}),
+          });
+        }
+      } catch (err) {
+        console.error('[meeting-notes] reference catalogue failed:', err);
+      }
+      return out;
     },
     readSection: (ids: { docId: string; meetingId: string }): NotesSectionState | null => {
       try {

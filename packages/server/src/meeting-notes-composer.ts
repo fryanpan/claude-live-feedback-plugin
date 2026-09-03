@@ -91,6 +91,20 @@ export function buildNotesPrompt(
     );
   }
 
+  if (input.references?.length) {
+    parts.push(
+      [
+        'Named in this speech, and already on the board. Where a note covers',
+        'one, write its name as a markdown link — [its title](its url) — the',
+        'first time that note mentions it. Do not add one to a note that is',
+        'not about it, and do not link the same thing twice in one note.',
+        ...input.references.map(
+          (r) => `- [${r.title}](${r.url}) — ${r.kind}${r.when ? `, met ${r.when}` : ''}`,
+        ),
+      ].join('\n'),
+    );
+  }
+
   parts.push(
     `Current notes:\n${input.previous ?? '(none yet — this is the first update of the meeting)'}`,
   );
