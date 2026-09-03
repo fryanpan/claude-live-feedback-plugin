@@ -172,4 +172,33 @@ describe('file-binding routes refuse browser callers', () => {
       );
     });
   });
+
+  describe('POST /api/agents/<id>/merge', () => {
+    // Not a binding route, but the same class: an operator verb whose only
+    // reachability check is a loopback PEER ADDRESS, which a page served
+    // from this machine also has (security review pass 3, 2026-09-02).
+    const body = { into: 'agent-two', dryRun: true };
+
+    it('positive control: an agent (no Origin) runs a dry-run merge', async () => {
+      const r = await post('/api/agents/agent-one/merge', body);
+      expect(r.status).toBe(200);
+    });
+
+    it('a page on another local port cannot merge agent ids', async () => {
+      const r = await post('/api/agents/agent-one/merge', body, devServerPage());
+      expect(r.status).toBe(403);
+      expect(((await r.json()) as { error: string }).error).toBe('browser_cannot_operate');
+    });
+
+    it('nor can a same-origin page — the app never merges from the browser', async () => {
+      const r = await post('/api/agents/agent-one/merge', body, samePage());
+      expect(r.status).toBe(403);
+      expect(((await r.json()) as { error: string }).error).toBe('browser_cannot_operate');
+    });
+
+    it('nor a request that crossed the edge, whatever its peer address', async () => {
+      const r = await post('/api/agents/agent-one/merge', body, { 'cf-ray': '8a1b2c3d4e5f-SJC' });
+      expect(r.status).toBe(403);
+    });
+  });
 });
