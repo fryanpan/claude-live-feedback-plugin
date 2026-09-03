@@ -33,14 +33,12 @@ import { mintWidgetToken } from '../auth/widget-token.ts';
 import type { Identities, IdentityRecord } from '../identities.ts';
 import { userForIdentity } from '../identities.ts';
 import { type OriginPolicy, isAllowedBrowserOrigin } from '../middleware/browser-origin.ts';
-import type { ShareTarget } from '../middleware/host-guard.ts';
 import { browserCannotOperateBody, isBrowserRequest } from '../middleware/write-gate.ts';
 import type { Rooms } from '../rooms.ts';
-import { readCookie, sessionCookieHeader } from '../share/link-session.ts';
-import type { Shares } from '../share/shares.ts';
+import { readCookie } from '../share/link-session.ts';
+import { ACCESS_NOT_CONFIGURED, type Shares } from '../share/shares.ts';
 import type { SharingGate } from '../share/sharing-gate.ts';
 import { resolveTtl } from '../share/ttl.ts';
-import type { Share } from '../share/types.ts';
 import type { SseHub } from '../sse.ts';
 import type { TaskStore } from '../tasks.ts';
 import { widgetAuthPage } from '../widget-auth-page.ts';
@@ -88,7 +86,13 @@ const UNFILED_SHARING_REFUSED = {
  * refused by name (400 unsupported_argument) — `docId` and `entryDocId` are
  * checked before this set is consulted, each with its own reply.
  */
-const SHARE_LINK_ARGS: ReadonlySet<string> = new Set(['workspaceId', 'ttl', 'ttlSeconds', 'label']);
+const SHARE_LINK_ARGS: ReadonlySet<string> = new Set([
+  'workspaceId',
+  'ttl',
+  'ttlSeconds',
+  'label',
+  'allowDomains',
+]);
 
 /**
  * Shown when a share link doesn't resolve. Says nothing about WHY — unknown,
@@ -133,8 +137,28 @@ export interface AuthShareRoutesContext {
   requireEmailAuth: boolean;
   /** Whether an unsigned browser write is refused. */
   requireSignInToWrite: boolean;
+  /**
+   * Whether this server offers its own emailed-code sign-in.
+   *
+   * Off under access-only, where Cloudflare Access proved an address before
+   * the request arrived. Only the two CHALLENGE routes close with it —
+   * `session`, `profile` and `logout` stay open, because a session minted
+   * before the flag moved still has to be readable and endable.
+   */
+  emailCodeSignIn: boolean;
   /** The name of the catch-all board, which may not be shared. */
   defaultHubWorkspaceName: string;
+  /**
+   * Who a share admits when the caller names nobody — the operator allowlist
+   * (`CW_PROXIED_TRUSTED_EMAILS`, defaulting to `CW_OWNER_EMAIL`).
+   *
+   * It exists because `share_link` used to need no audience at all: the URL
+   * was the credential. Every older bundle still calls it that way, so the
+   * server has to answer the question the caller did not ask, and the only
+   * safe answer is the narrowest one it already knows. Empty means the mint
+   * is refused rather than guessed at.
+   */
+  defaultShareAudience: string[];
 
   /** JSON response helper — status plus body, no CORS (the per-request
    *  wrapper in createServer adds that, because it knows the Origin). */
@@ -142,12 +166,8 @@ export interface AuthShareRoutesContext {
   /** Parse a request body, answering null rather than throwing. */
   safeJson: (req: Request) => Promise<Record<string, unknown> | null>;
 
-  /** What a share may reach, or null when it may reach nothing. */
-  boardShareTarget: (share: Share | null | undefined) => ShareTarget | null;
   /** The rate-limit key for a caller, from the socket and the proxy header. */
   clientKeyFor: (req: Request) => string;
-  /** The HMAC key behind link-mode session cookies. */
-  cookieKey: () => string;
   /** The HMAC key behind email-session cookies. */
   emailSessionKey: () => string;
   /** The HMAC key behind widget popup tokens. */
@@ -195,19 +215,19 @@ export async function handleAuthShareRoutes(
     codeSender,
     requireEmailAuth,
     requireSignInToWrite,
+    emailCodeSignIn,
     defaultHubWorkspaceName: DEFAULT_HUB_WORKSPACE_NAME,
+    defaultShareAudience,
     j,
     safeJson,
-    boardShareTarget,
     clientKeyFor,
-    cookieKey,
     emailSessionKey,
     widgetTokenKey,
     isSecureRequest,
     policyFor,
     sessionIdentityFor,
   } = ctx;
-  const { req, url, pathname, widgetIdentity, browserProvedNobody, provenIdentityFor } = rq;
+  const { req, pathname, widgetIdentity, browserProvedNobody, provenIdentityFor } = rq;
 
   // --- The widget popup-token handshake ---
   // The popup page itself. The handshake is popup-only: framed, it
@@ -270,6 +290,10 @@ export async function handleAuthShareRoutes(
   }
 
   if (pathname === '/api/auth/start' && req.method === 'POST') {
+    // 404, not 403: with the emailed code turned off this route does not
+    // exist on this deployment, and saying so any more precisely would tell a
+    // stranger what it could be if they came back later.
+    if (!emailCodeSignIn) return j(404, { error: 'not_found' });
     const body = await safeJson(req);
     const email = typeof body?.email === 'string' ? body.email : '';
     const peer = clientKeyFor(req);
@@ -340,6 +364,7 @@ export async function handleAuthShareRoutes(
   }
 
   if (pathname === '/api/auth/verify' && req.method === 'POST') {
+    if (!emailCodeSignIn) return j(404, { error: 'not_found' });
     const body = await safeJson(req);
     const email = typeof body?.email === 'string' ? body.email : '';
     const code = typeof body?.code === 'string' ? body.code : '';
@@ -409,6 +434,15 @@ export async function handleAuthShareRoutes(
        */
       signInToWrite: requireSignInToWrite,
       canWrite: !requireSignInToWrite || !browserProvedNobody(),
+      /**
+       * Whether the `/signin` page exists on this deployment.
+       *
+       * The client needs it to decide whether "not signed in" has an ACTION
+       * attached. Under access-only there is no second sign-in to offer, and
+       * a link to a 404 is worse than no link — so the me-menu and the write
+       * gate both read this before painting one.
+       */
+      emailCodeSignIn,
       ...(rec ? { user: userForIdentity(rec) } : {}),
     });
   }
@@ -469,9 +503,11 @@ export async function handleAuthShareRoutes(
   }
   if (pathname === '/api/share' && req.method === 'GET') {
     if (!shares) return j(404, { error: 'sharing not enabled' });
-    // `listWithUrls` recomputes every link share's signed URL, which is
-    // how a record minted before signing serves a usable URL at all.
-    return j(200, { shares: await shares.listWithUrls(), sharing: sharingGate.status() });
+    // `listForApi` stamps `redeemable` on every row. A retired link-mode
+    // record reads `redeemable: false, retired: 'link_mode'` — it is still
+    // listed, still labelled and still revocable, and it no longer hands back
+    // a freshly signed URL for a door that does not open.
+    return j(200, { shares: shares.listForApi(), sharing: sharingGate.status() });
   }
   // Flip the master switch. Local-only, like the rest of /api/share*.
   // Turning it OFF also hangs up what is already connected: a websocket
@@ -518,85 +554,47 @@ export async function handleAuthShareRoutes(
       hint: 'A workspace is the unit of sharing. File the doc on a workspace (attach_doc / bind_folder / create_diff_review) and call share_workspace or share_link with workspaceId.',
     });
   }
-  // --- Redeem a share link ---
-  // A SIGNED capability URL: `/share/<id>?exp=<unix-seconds>&sig=<hex>`,
-  // HMAC over `<id>.<exp>` (share/url-signing.ts). Exchange it for a
-  // signed session cookie, then redirect to the board. Validated here
-  // on every request as defense-in-depth — the edge Worker
-  // (infra/share-link-worker/) is the first gate, and the app never
-  // trusts that it ran. Deliberately gives nothing away on failure —
-  // tampered, expired, revoked, and never-existed all look alike.
-  const redeemMatch = pathname.match(/^\/share\/([^/]+)$/);
-  if (redeemMatch && req.method === 'GET') {
-    const shareId = decodeURIComponent(redeemMatch[1] ?? '');
-    const share = shares
-      ? await shares.verifySignedLink(
-          shareId,
-          url.searchParams.get('exp') ?? '',
-          url.searchParams.get('sig') ?? '',
-        )
-      : null;
-    if (!share) {
-      return new Response(renderLinkNotFound(), {
-        status: 404,
-        headers: {
-          'content-type': 'text/html; charset=utf-8',
-          // Even the failure page must not leak the (possibly almost-
-          // valid) signed URL into a Referer header.
-          'referrer-policy': 'no-referrer',
-        },
-      });
-    }
-    // A share lands IN the board — never a review URL, never a lobby
-    // (§2.5). Resolved at redemption like everything else, so a board
-    // deleted after minting falls through to the same not-found.
-    //
-    // A legacy GROUPING share lands here too, and gets that same 404
-    // rather than a named 410. The route's own rule is that an unknown,
-    // an expired and a tampered URL are indistinguishable — telling a
-    // stranger holding a leaked link that it was once real would give
-    // away more than the removal takes back. The named 410 is for the
-    // MINT routes, where the caller is a peer with a legitimate ask.
-    if (!boardShareTarget(share)) {
-      return new Response(renderLinkNotFound(), {
-        status: 404,
-        headers: {
-          'content-type': 'text/html; charset=utf-8',
-          'referrer-policy': 'no-referrer',
-        },
-      });
-    }
-    const maxAge = Math.floor((share.expiresAt - Date.now()) / 1000);
-    return new Response(null, {
-      status: 302,
-      headers: {
-        location: `/workspaces/${encodeURIComponent(share.workspaceId)}`,
-        'set-cookie': sessionCookieHeader(share.shareId, cookieKey(), maxAge),
-        // Keep the signed URL out of any downstream Referer header.
-        'referrer-policy': 'no-referrer',
-      },
-    });
-  }
-
-  // The RETIRED unsigned form. `/s/<slug>` stopped being accepted when
-  // links became signed URLs — the registry is never consulted, so a
-  // record that still carries a slug redeems nothing. The records
-  // themselves stay (soft behavior): list_shares serves each one a
-  // fresh signed URL computed on demand, which is the migration path
-  // for anything minted before signing.
-  if (req.method === 'GET' && /^\/s\/[^/]+$/.test(pathname)) {
+  // --- The RETIRED link-share redemption ---
+  // Both spellings, one answer: the not-found page.
+  //
+  // `/share/<id>?exp=…&sig=…` was a signed capability URL exchanged once for
+  // a session cookie, and `/s/<slug>` was the unsigned form before it. Link
+  // mode is retired (Bryan, 2026-09-02: *"Every access including share link
+  // or reading requires sign in."*), so neither redeems anything: the
+  // registry is not consulted, no cookie is minted, and a record that still
+  // carries a signature or a slug opens nothing.
+  //
+  // Answered here rather than left to fall through, for the same reason the
+  // unsigned form always was: the route has to exist to say nothing. It
+  // gives nothing away — retired, tampered, expired, revoked and
+  // never-existed all render the same page — and the `no-referrer` header
+  // keeps a nearly-valid signed URL out of any downstream Referer.
+  //
+  // Note the hostname these used to arrive on is refused a layer above this
+  // now (there is no `link` kind in classifyHost any more), so on a live
+  // deployment this branch is reached only if the operator also listed that
+  // hostname as an Access host. It is defence in depth, not the gate.
+  if (req.method === 'GET' && /^\/(?:share|s)\/[^/]+$/.test(pathname)) {
     return new Response(renderLinkNotFound(), {
       status: 404,
       headers: {
         'content-type': 'text/html; charset=utf-8',
-        // An old slug is a retired credential — same Referer hygiene.
         'referrer-policy': 'no-referrer',
       },
     });
   }
 
-  // Mint a share link. Local-only: /api/share* is out of scope for a
-  // visitor, so this can only be called from the machine or the tailnet.
+  // Mint a share. Local-only: /api/share* is out of scope for a visitor, so
+  // this can only be called from the machine.
+  //
+  // THE ROUTE NAME IS THE ONLY THING LEFT OF LINK MODE. `share_link` used to
+  // mint a signed capability URL that anyone holding it could open with no
+  // identity at all; it now mints an ACCESS share, exactly as
+  // `/api/share/workspace` does, and the two differ only in how the audience
+  // is named. The path and the payload are kept because peers keep calling
+  // the shared server with the payload THEIR bundle sends, long after this
+  // one stopped sending it (CLAUDE.md) — the ask "publish this board" did not
+  // change, only what publishing means.
   if (pathname === '/api/share/link' && req.method === 'POST') {
     if (!shares) return j(404, { error: 'sharing not enabled' });
     const body = await safeJson(req);
@@ -662,6 +660,36 @@ export async function handleAuthShareRoutes(
     if (body?.label !== undefined && typeof body.label !== 'string') {
       return j(400, { error: 'bad_label', hint: 'label must be a string' });
     }
+    // WHO the Access application admits. A caller that names an audience gets
+    // it; one that does not — every older bundle, whose `share_link` had no
+    // such argument because a link admitted the world — falls back to the
+    // OPERATOR ALLOWLIST. That fallback can only narrow: the old behaviour
+    // was "anyone with the URL", and the new one is "the addresses this
+    // deployment already trusts with the operator hostname". Refused only
+    // when there is no allowlist either, because an Access app with no allow
+    // policy admits nobody and would be a share that silently does nothing.
+    const rawAudience = body?.allowDomains;
+    if (rawAudience !== undefined) {
+      if (
+        !Array.isArray(rawAudience) ||
+        rawAudience.length === 0 ||
+        rawAudience.some((d) => typeof d !== 'string' || d.trim() === '')
+      ) {
+        return j(400, {
+          error: 'bad_allow_domains',
+          hint: 'allowDomains must be a non-empty array of addresses ("someone@partner.example") or domains ("@partner.example").',
+        });
+      }
+    }
+    const audience = (Array.isArray(rawAudience) ? (rawAudience as string[]) : defaultShareAudience)
+      .map((d: string) => d.trim())
+      .filter((d: string) => d !== '');
+    if (audience.length === 0) {
+      return j(400, {
+        error: 'no_share_audience',
+        hint: 'Every share is a Cloudflare Access share now, so it needs an audience. Pass allowDomains (["someone@partner.example"] or ["@partner.example"]), or set CW_PROXIED_TRUSTED_EMAILS / CW_OWNER_EMAIL so the server has a default.',
+      });
+    }
     const linkTtl = resolveTtl({
       ttl: body?.ttl,
       ttlSeconds: body?.ttlSeconds,
@@ -670,17 +698,29 @@ export async function handleAuthShareRoutes(
     });
     if (!linkTtl.ok) return j(400, { error: linkTtl.error, hint: linkTtl.hint });
     try {
-      const share = await shares.createShareLink({
+      const share = await shares.createShareWorkspace({
         workspaceId,
+        allowDomains: audience,
         ttlSeconds: linkTtl.seconds,
         label: typeof body?.label === 'string' ? body.label : undefined,
       });
       return j(200, {
         share,
+        // Said on every reply, not only when it was defaulted: the caller has
+        // to tell a person who can open this, and the answer is no longer
+        // "whoever you send the URL to".
+        allowDomains: audience,
+        ...(Array.isArray(rawAudience) ? {} : { audienceDefaulted: true }),
         ...(linkTtl.clamped ? { ttlClamped: linkTtl.clamped } : {}),
       });
     } catch (err) {
       const error = err instanceof Error ? err.message : 'create_share_failed';
+      if (error === ACCESS_NOT_CONFIGURED) {
+        return j(503, {
+          error,
+          hint: 'Link shares are retired, so every share needs Cloudflare Access: set CF_ACCOUNT_ID, CF_SHARE_BASE_HOSTNAME and CF_ACCESS_TEAM_DOMAIN, and put a Cloudflare API token in the Keychain (service cloudflare-api-token).',
+        });
+      }
       return j(400, { error });
     }
   }
@@ -754,6 +794,15 @@ export async function handleAuthShareRoutes(
       return j(200, { share });
     } catch (err) {
       const error = err instanceof Error ? err.message : 'create_share_failed';
+      // The same named refusal as the route above, and the same status: a
+      // deployment with no Access wiring cannot mint, and that is config
+      // rather than a bad gateway.
+      if (error === ACCESS_NOT_CONFIGURED) {
+        return j(503, {
+          error,
+          hint: 'Set CF_ACCOUNT_ID, CF_SHARE_BASE_HOSTNAME and CF_ACCESS_TEAM_DOMAIN, and put a Cloudflare API token in the Keychain (service cloudflare-api-token).',
+        });
+      }
       return j(502, { error });
     }
   }
