@@ -113,13 +113,33 @@ export function balloonMarginVisible(): boolean {
 }
 
 /**
- * Publish the placement to the stylesheet. Every rule that used to sit in a
- * `(max-width: 1100px)` block now sits under `body[data-cards="inline"]`, so
- * this attribute is what actually moves the cards.
+ * Which comment surface is actually on screen — the placement, plus the one
+ * case where a chosen placement cannot be honoured.
+ *
+ * `balloon` and `sheet` are the SAME choice: a reader who picked balloons and
+ * then opened the doc on a phone has not changed their mind, so `cardPlacement`
+ * still reads `balloon` and the toggle still offers to move them into the
+ * flow. This is only what the stylesheet gets to see.
+ */
+export function effectiveSurface(
+  placement: CardPlacement = cardPlacement(),
+): 'inline' | 'balloon' | 'sheet' {
+  if (placement === 'inline') return 'inline';
+  return balloonsBecomeSheet() ? 'sheet' : 'balloon';
+}
+
+/**
+ * Publish the surface to the stylesheet. Every rule that used to sit in a
+ * `(max-width: 1100px)` block now sits under `body[data-cards=…]`, so this
+ * attribute is what actually moves the cards.
+ *
+ * It carries the EFFECTIVE surface, which is why `onPlacementChange` re-runs
+ * it on the two width boundaries as well as on the toggle: crossing the sheet
+ * floor changes what is on screen without changing what anyone chose.
  */
 export function applyPlacement(placement: CardPlacement = cardPlacement()): void {
   if (typeof document === 'undefined' || !document.body) return;
-  document.body.dataset.cards = placement;
+  document.body.dataset.cards = effectiveSurface(placement);
 }
 
 /**
@@ -158,13 +178,40 @@ export function placementToggleLabel(current: CardPlacement): {
 } {
   return current === 'inline'
     ? {
-        glyph: '⫞',
+        // A block with its lower half filled: the card sits under the text.
+        glyph: '⬓',
         title: 'Comments in the flow — tap to move them to the margin',
         ariaLabel: 'Comment cards are in the document flow. Move them to the right margin.',
       }
     : {
-        glyph: '⫟',
+        // A block with its right column filled: the card sits beside the text.
+        glyph: '◨',
         title: 'Comments in the margin — tap to move them into the flow',
         ariaLabel: 'Comment cards are in the right margin. Move them into the document flow.',
       };
+}
+
+/**
+ * Run `handler` whenever the comment surface in force changes.
+ *
+ * THREE sources, because there are three ways it can move and a listener on
+ * one of them alone is a silent half-fix: the reader flips the toggle
+ * (`PLACEMENT_CHANGED_EVENT`), the window crosses the width where the DEFAULT
+ * changes (`BALLOON_ROOM_QUERY` — still live, because a reader who has chosen
+ * nothing is still following the width), or it crosses the floor where a
+ * chosen balloon has to become the sheet (`BALLOON_SHEET_QUERY`).
+ *
+ * `listen` is the caller's own scoped binder, so the subscription is torn
+ * down with whatever mounted it.
+ */
+export function onPlacementChange(
+  listen: (target: EventTarget, type: string, fn: () => void) => void,
+  handler: () => void,
+): void {
+  if (typeof window === 'undefined') return;
+  listen(window, PLACEMENT_CHANGED_EVENT, handler);
+  if (typeof window.matchMedia !== 'function') return;
+  for (const q of [BALLOON_ROOM_QUERY, BALLOON_SHEET_QUERY]) {
+    listen(window.matchMedia(q), 'change', handler);
+  }
 }

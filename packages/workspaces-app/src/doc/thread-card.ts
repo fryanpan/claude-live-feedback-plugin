@@ -163,8 +163,9 @@ export function renderThreadCard(
   // A declared thread's folded line is the ASK, not the sentence it hangs
   // off: the highlight in the prose already shows the sentence, and a card
   // that repeated it said nothing about what was wanted.
+  const topicIsAsk = itemComment?.review?.headline !== undefined;
   const topic = itemComment?.review?.headline ?? summary.topic;
-  el.appendChild(head(host, t, status, { kind, topic }));
+  el.appendChild(head(host, t, status, { kind, topic, topicIsAsk }));
   el.appendChild(body(host, t, summary, status, { pending, itemComment, pendingReply }));
   syncFaceVisibility(el, host.activeId() === t.id && !shownElsewhere);
 
@@ -204,7 +205,7 @@ function head(
   host: ThreadCardHost,
   t: Thread,
   status: 'open' | 'resolved' | 'orphan',
-  mark: { kind: ReturnType<typeof threadKind>; topic: string },
+  mark: { kind: ReturnType<typeof threadKind>; topic: string; topicIsAsk: boolean },
 ): HTMLElement {
   const head = div('thread-head');
   // ONE glyph per state, everywhere it appears: blue bubble for a comment,
@@ -230,6 +231,15 @@ function head(
   // the opening message itself never repeats the name. The separator is its
   // own node so the name reads as exactly the name to anything that asks
   // for it, here and in the hub's activity feed.
+  //
+  // NOT on a card whose line one is an ASK (the approved mock: a question or
+  // decision card carries the ask and the chevron and nothing else). Two
+  // reasons, and the first is measured: in a 260px balloon "Induction
+  // ordering · Rota Assistant" clipped the name to seven characters, which is
+  // the same failure that cost the old decision flag its row. The second is
+  // that the name answers a different question here — the ask is addressed TO
+  // the reader, so who asked matters when they open it, and the opened card
+  // names them directly under line one.
   const author = t.comments[0]?.author ?? t.createdBy;
   const sep = span('thread-sep');
   sep.textContent = ' · ';
@@ -248,7 +258,7 @@ function head(
     tag.textContent = ' · orphan';
     who.appendChild(tag);
   }
-  line.append(sep, who);
+  if (!mark.topicIsAsk || status === 'orphan') line.append(sep, who);
 
   const lineLabel = host.opts.threadLineLabel?.(t.id);
   if (lineLabel) {
@@ -323,19 +333,32 @@ function body(
 ): HTMLElement {
   const { pending, itemComment, pendingReply } = item;
 
-  const summaryFace: HTMLElement[] = [discussionLine(summary)];
   // A review item answers from its FOLDED face (approved: comments mock 3).
   // A decision offers its option labels right there; a question shows
   // where to tap; an answered item keeps a compact record — who, when, and
   // the words — so nothing has to be opened to see what a card is asking or
   // what it was told. The full item card, with the detail and each option's
   // reasoning, stays one fold away behind the chevron.
-  if (itemComment?.review) {
-    const compact = compactItemLine(host, t, itemComment, itemComment.review, pending !== null);
-    if (compact) summaryFace.push(compact);
-  }
+  const compact = itemComment?.review
+    ? compactItemLine(host, t, itemComment, itemComment.review, pending !== null)
+    : null;
+  // Line two of the FOLDED card is one thing or the other, never both plus a
+  // filler. "No replies yet" is true of most review items and worth no line:
+  // the mock shows the discussion summary on a conversation card and the way
+  // to answer on an item card. Conditioned on the answer row EXISTING, not on
+  // the kind, because a face with no children measures zero — and
+  // `sizeThreadSlots` refuses a zero, which would leave a card that opens and
+  // cannot close.
+  const summaryFace: HTMLElement[] = [];
+  if (!(compact && summary.discussionKind === 'none')) summaryFace.push(discussionLine(summary));
+  if (compact) summaryFace.push(compact);
 
-  const detailFace: Node[] = [discussionLine(summary)];
+  // The opened card shows every reply in full below, so a summary of them is
+  // an abstract over something already on screen — worth keeping while it
+  // says something, and never worth a line to say there is nothing. The
+  // detail face always carries the opening message and the foot, so dropping
+  // this one can never leave it empty.
+  const detailFace: Node[] = summary.discussionKind === 'none' ? [] : [discussionLine(summary)];
 
   // Who opened this and when. On the folded card the name rides line one;
   // here it is the attribution for the opening message directly under it,
@@ -427,7 +450,16 @@ function body(
   // card's answer box. Once settled the card holds the answered record and
   // the composer returns to its usual place as a plain Reply.
   if (itemComment?.review) {
-    const card = itemCard(host, t, itemComment, itemComment.review, pending !== null);
+    const card = itemCard(host, t, itemComment, itemComment.review, pending !== null, {
+      // The asked-by line above already attributes this declaration when the
+      // opening comment IS the declaration — the usual case. Printing it in
+      // the card too put "Rota Assistant · 8m" and "Asked by Rota Assistant 8
+      // minutes ago" three lines apart on one open card. Kept for a
+      // declaration that arrived as a REPLY, where the two name different
+      // people at different times and the card is the only thing that says
+      // who put the question.
+      attributed: itemComment.id === opening?.id,
+    });
     if (answering) card.append(reply);
     detailFace.push(card);
   }
@@ -557,6 +589,7 @@ function itemCard(
   c: Comment,
   review: ReviewPayload,
   pending: boolean,
+  opts: { attributed?: boolean } = {},
 ): HTMLElement {
   const card = div('thread-item-card');
   const head = div('thread-item-head');
@@ -572,13 +605,15 @@ function itemCard(
   // ask twice on one open card, in two type sizes, and pushed the buttons
   // that answer it further down. The chip and the asked-by line stay: they
   // say what KIND of ask it is and who is waiting, which line one does not.
-  const meta = document.createElement('p');
-  meta.className = 'thread-item-meta';
-  // A declaration IS an ask, so this always reads "Asked" — same judgment
-  // the hub's `askedMeta` records for declared items. The clock is the
-  // declaring comment's, which is when the question was put.
-  meta.textContent = askedMetaLine(authorLabel(c.author), true, c.ts, Date.now());
-  head.append(meta);
+  if (!opts.attributed) {
+    const meta = document.createElement('p');
+    meta.className = 'thread-item-meta';
+    // A declaration IS an ask, so this always reads "Asked" — same judgment
+    // the hub's `askedMeta` records for declared items. The clock is the
+    // declaring comment's, which is when the question was put.
+    meta.textContent = askedMetaLine(authorLabel(c.author), true, c.ts, Date.now());
+    head.append(meta);
+  }
   card.append(head);
 
   // ONE body, markdown-rendered — the payload's `detail`, via the same
