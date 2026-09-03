@@ -1386,7 +1386,7 @@ three (`scripts/notes-eval.ts`).
 
 **The corpus is AMI** (CC BY 4.0), the same one `room-labels-check.ts` scores
 the room measurement against, excerpted into committed fixtures by
-`scripts/notes-eval-fixtures.ts`: eight meetings, eleven minutes each, cut
+`scripts/notes-eval-fixtures.ts`: eight meetings, fifteen minutes each, cut
 into ticks by the pipeline's OWN two clocks so a fixture tick holds what a
 real tick would have held. Speakers are letters; nothing names a person. The
 fixtures are checked in because the corpus is a 23 MB download of somebody
@@ -1413,7 +1413,7 @@ be 100% and meaningless.
 
 **On demand only.** It spends money and reaches the network, so nothing runs
 it on a push except a `--smoke` slice — one meeting, three ticks, one judged —
-which measured **$0.007**. It is not a test and does not live in the suites: a
+which measured **$0.011**. It is not a test and does not live in the suites: a
 check whose verdict depends on a model's mood must never take somebody else's
 CI red, which is why the CI job is `continue-on-error` and skips itself, out
 loud, when no key is configured.
