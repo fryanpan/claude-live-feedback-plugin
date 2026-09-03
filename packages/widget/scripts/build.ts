@@ -1,8 +1,9 @@
 #!/usr/bin/env bun
-import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { BunPlugin } from 'bun';
+import { minifyCss } from './minify-css.ts';
 import { assertShimCovers } from './shim-guard.ts';
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -14,8 +15,9 @@ const shims = join(here, 'shims');
  * The widget ships under a hard gzipped budget (`bun run check:widget-size`),
  * and yjs plus lib0 account for about two thirds of it. The plugins below are
  * the shrinks that do NOT change how a host page loads the widget: they swap
- * two lib0 modules for stand-ins covering the API the bundle actually reads.
- * Each one is documented where it lives; see the shims for what they drop.
+ * two lib0 modules for stand-ins covering the API the bundle actually reads,
+ * and minify the stylesheet the bundler otherwise ships verbatim. Each one is
+ * documented where it lives; see the shims for what they drop and why.
  */
 
 /**
@@ -49,6 +51,25 @@ const lib0Shims: BunPlugin = {
   },
 };
 
+const cssMinify: BunPlugin = {
+  name: 'widget-css-minify',
+  setup(build) {
+    build.onLoad({ filter: /widget[/\\]src[/\\]styles\.ts$/ }, (args) => {
+      const src = readFileSync(args.path, 'utf8');
+      let hit = false;
+      const contents = src.replace(
+        /export const widgetStyles = `([\s\S]*?)`;/,
+        (_m, css: string) => {
+          hit = true;
+          return `export const widgetStyles = \`${minifyCss(css)}\`;`;
+        },
+      );
+      if (!hit) throw new Error('widget-css-minify: could not find widgetStyles template literal');
+      return { contents, loader: 'ts' };
+    });
+  },
+};
+
 rmSync(dist, { recursive: true, force: true });
 mkdirSync(dist, { recursive: true });
 
@@ -60,7 +81,7 @@ async function build(format: 'esm' | 'iife', name: string) {
     format: format === 'iife' ? 'iife' : 'esm',
     minify: true,
     sourcemap: 'external',
-    plugins: [lib0Shims],
+    plugins: [lib0Shims, cssMinify],
     naming: {
       entry: name,
     },
