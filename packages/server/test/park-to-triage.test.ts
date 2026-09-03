@@ -265,6 +265,24 @@ describe('park_task moves a row to triage and comments', () => {
     expect(again.after).toEqual([blocker.id]);
   });
 
+  it('refuses an edge that would close a ring, and hands back its name', async () => {
+    const { wsId, G } = await seedWorkspace();
+    const a = await seedTodoTask(wsId, G.g1);
+    const b = await seedTodoTask(wsId, G.g1);
+    await jj(await post(`/api/tasks/${b.id}/park`, { blockedBy: a.id, author: PERSON }));
+    const r = await post(`/api/tasks/${a.id}/park`, { blockedBy: b.id, author: PERSON });
+    expect(r.status).toBe(400);
+    const said = (await r.json()) as { error: string; cycle?: string[]; message?: string };
+    expect(said.error).toBe('cycle');
+    expect(said.cycle).toEqual([a.id, b.id, a.id]);
+    // The panel shows this sentence verbatim, so it has to name the tickets.
+    expect(said.message).toContain(a.title);
+    expect(said.message).toContain(b.title);
+    // Nothing was written, and the edge that WAS legitimate still stands.
+    expect((await getTask(wsId, a.id)).after).toEqual([]);
+    expect((await getTask(wsId, b.id)).after).toEqual([a.id]);
+  });
+
   it('refuses an unknown blocker, a self-block, and an empty list', async () => {
     const { wsId, G } = await seedWorkspace();
     const held = await seedTodoTask(wsId, G.g1);
