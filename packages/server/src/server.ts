@@ -199,6 +199,8 @@ import {
   redactWorkspaceTreeForVisitor,
   relativeReviewUrl,
 } from './share/redact-meta.ts';
+import { renderShareLinkUnavailable } from './share/share-link-page.ts';
+import { ShareLinks } from './share/share-links.ts';
 import { Shares, audienceEntryAdmits } from './share/shares.ts';
 import { SharingGate } from './share/sharing-gate.ts';
 import type { Share, ShareConfig } from './share/types.ts';
@@ -634,6 +636,35 @@ export interface ServerOptions {
    */
   proxiedTrustedEmails?: string[];
   /**
+   * The SHARE hostname(s) — `share.<domain>` — where a share link is opened.
+   *
+   * The fifth list, and the one whose Access application admits ANY email:
+   * its policy is "everyone, one-time PIN", so passing Cloudflare there
+   * proves an address and grants nothing. Reach is decided afterwards by this
+   * server's own membership record — the emails that redeemed a live link for
+   * the workspace the path names (`shareLinks.isMember`). Root and every path
+   * that names no workspace answer nothing but the app shell.
+   *
+   * The FIRST entry is what share URLs are built from; the rest are honoured
+   * so a hostname rename does not break links already sent.
+   *
+   * IGNORED unless `shareLinkAudience` is also set, and the verifier built
+   * from it is the share application's OWN audience — never `cfAccess`'s.
+   * That separation is the audience cross-check: an owner-host token must not
+   * verify here, and an any-email share-host token must not verify there.
+   */
+  shareLinkHosts?: string[];
+  /**
+   * The AUD tag of the ONE Cloudflare Access application in front of
+   * `shareLinkHosts` (`CF_ACCESS_SHARE_AUD`).
+   *
+   * Its own option rather than a reuse of `cfAccess.audience` for the reason
+   * above: the two applications have different policies, and one audience
+   * covering both would mean a token anyone can mint by typing an email into
+   * the share sign-in also opens the operator's hostname.
+   */
+  shareLinkAudience?: string;
+  /**
    * Browser origins allowed to call the API cross-origin, beyond the server's
    * own origin and loopback (which the widget on a dev server needs). Matched
    * exactly. Anything else gets no CORS headers, so the browser blocks it —
@@ -1053,6 +1084,53 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
       config: opts.share.config,
     });
   }
+
+  /**
+   * Share links and the workspace membership redeeming one creates.
+   *
+   * Built ALWAYS, not only when `opts.share` is set, and the difference
+   * matters: a `Shares` registry exists to talk to Cloudflare, so a
+   * deployment with no Cloudflare wiring has none. A share link needs no
+   * Cloudflare API at all — only an Access application the operator made by
+   * hand — so the store that answers "is this email a member of this
+   * workspace" must exist wherever the gate can be asked, and a null one
+   * would have to be read as "nobody is a member" at exactly the place that
+   * decides who gets in.
+   */
+  const shareLinks = new ShareLinks({ dataDir });
+
+  /**
+   * The hostname share URLs are built from — the first configured share host.
+   * Empty when the deployment has none, which is what the mint route refuses
+   * on: a link whose URL names no hostname is a link nobody can open.
+   */
+  const shareLinkHosts = opts.shareLinkHosts ?? [];
+  const shareLinkBaseHost = shareLinkHosts[0] ?? '';
+
+  /**
+   * The Access verifier for the SHARE hostname — its own application, its own
+   * audience, built from `shareLinkAudience` and never from `cfAccess`.
+   *
+   * This is the audience cross-check, and it is one line because it is
+   * structural rather than a comparison somewhere: a token minted for the
+   * owner's application carries the owner's AUD and simply fails `jwtVerify`
+   * here, and a token minted at the everyone-policy share sign-in fails at
+   * the owner's verifier for the mirror reason. Neither check can be
+   * forgotten, because neither is a check.
+   *
+   * Null — and the whole host list ignored — unless BOTH a team domain and
+   * the share audience are configured. `server-config.ts` warns at boot; this
+   * is the half in the request path, for an embedded caller that never goes
+   * through bin.ts.
+   */
+  const shareLinkVerifier =
+    opts.cfAccess?.teamDomain && opts.shareLinkAudience
+      ? createCfAccessVerifier({
+          teamDomain: opts.cfAccess.teamDomain,
+          audience: opts.shareLinkAudience,
+          ...(opts.cfAccess.jwks ? { jwks: opts.cfAccess.jwks } : {}),
+        })
+      : null;
 
   /**
    * The master switch for external access. Consulted on every request whose
@@ -3816,6 +3894,100 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
   };
 
   /**
+   * Is this Access-verified email a member of this workspace, on the SHARE
+   * hostname — the question asked after Cloudflare has confirmed an address
+   * that its "everyone" policy admitted without knowing anything about them.
+   *
+   * Deliberately NOT `collabMemberOf`, and the separation is the whole
+   * security property of the share hostname. That function's membership set
+   * is the allow lists of a workspace's live shares plus the owner allowlist
+   * — records that say "the operator named this person". The share hostname's
+   * application names nobody, so reusing it would answer the question with a
+   * record that was written about a different door: every address the
+   * operator ever allow-listed anywhere would reach the share host, and every
+   * redeemed reviewer would reach the collaboration host. Two doors, two
+   * records, and a redemption grants exactly one of them.
+   *
+   * The candidate set is the workspace itself PLUS every workspace that
+   * covers it, for the reason `collabMemberOf` gives at the same line: a
+   * doc's path resolves to its REVIEW, while the link that admitted people
+   * was minted on the BOARD the review is filed on. Same set
+   * `shareScopeAllows` reaches through, so it grants exactly what the board's
+   * own link already grants — no wider.
+   *
+   * `boardShareTarget`'s rule applies here too, spelled as the lookup it is:
+   * a workspace that is no longer a board grants nothing, so a link minted
+   * before a board was retired stops admitting people the moment it stops
+   * being a board.
+   *
+   * A token with NO email claim is nobody, and nobody is a member.
+   */
+  const shareLinkMemberOf = (workspaceId: string, email: string | null): boolean => {
+    if (!email || !workspaceId) return false;
+    const candidates = new Set<string>([workspaceId, ...shareWorkspacesOf(workspaceId)]);
+    for (const wsId of candidates) {
+      if (!taskStore.getWorkspace(wsId)) continue;
+      if (shareLinks.isMember(wsId, email)) return true;
+    }
+    return false;
+  };
+
+  /** A path segment, decoded, answering itself rather than throwing on `%`. */
+  const safeDecodeSegment = (s: string): string => {
+    try {
+      return decodeURIComponent(s);
+    } catch {
+      return s;
+    }
+  };
+
+  /**
+   * `GET /s/<id>` on the share hostname: turn a verified email into a member.
+   *
+   * The ONLY write a non-member can make here, and its whole content is the
+   * caller's own Access-verified address against the workspace the link
+   * already names. Nothing in the request body or the path can change WHICH
+   * workspace — that came from the record.
+   *
+   * Everything that is not a live link on a live board renders the one
+   * unavailable page and records nothing: revoked, expired, unknown,
+   * malformed, and a workspace that is no longer a board. Four answers would
+   * let anyone with the route learn which ids exist by the difference between
+   * them, so there is one.
+   *
+   * The board check runs BEFORE the redeem, so a link whose board was retired
+   * writes no membership row on its way to being refused.
+   *
+   * Success is a redirect to the board on this same hostname, which is where
+   * a returning member's next visit goes directly.
+   */
+  const redeemShareLink = (linkId: string, email: string | null): Response => {
+    const unavailable = () =>
+      new Response(renderShareLinkUnavailable(), {
+        status: 404,
+        headers: {
+          'content-type': 'text/html; charset=utf-8',
+          // Keeps the link id out of any downstream Referer, the same reason
+          // the retired link routes set it.
+          'referrer-policy': 'no-referrer',
+          'cache-control': 'no-store',
+        },
+      });
+    const link = shareLinks.get(linkId);
+    if (!link || !taskStore.getWorkspace(link.workspaceId)) return unavailable();
+    const outcome = shareLinks.redeem(linkId, email ?? '');
+    if (!outcome.ok) return unavailable();
+    return new Response(null, {
+      status: 302,
+      headers: {
+        location: `/workspaces/${encodeURIComponent(outcome.workspaceId)}`,
+        'referrer-policy': 'no-referrer',
+        'cache-control': 'no-store',
+      },
+    });
+  };
+
+  /**
    * Every hub board a DOC's discussion actually reaches — the boards holding
    * the doc itself, plus the one review→board hop a diff review / folder
    * bind needs (its members carry the review tag, and the review is what
@@ -4877,6 +5049,8 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
     sse,
     taskStore,
     shares,
+    shareLinks,
+    shareLinkBaseHost,
     sharingGate,
     identities,
     emailCodes,
@@ -5286,6 +5460,12 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
             // with the same static-audience verifier behind it.
             proxiedTrustedHosts,
             accessFronted: staticAccessVerifier !== null,
+            // The share hostname, and the fact that its OWN Access
+            // application is configured. `shareLinkAccessFronted` is a
+            // separate flag from `accessFronted` because the two hostnames
+            // sit behind two applications with two audiences — see the field.
+            shareLinkHosts,
+            shareLinkAccessFronted: shareLinkVerifier !== null,
             // Recall's own hostname. Neither `viaProxy` nor `accessFronted`
             // applies to it — see the field on TrustedHostOpts for why both
             // absences are deliberate.
@@ -5346,6 +5526,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           // mean.
           if (
             (decision.kind === 'share' ||
+              decision.kind === 'share-link' ||
               decision.kind === 'collab' ||
               decision.kind === 'proxied-local') &&
             !sharingGate.isEnabled()
@@ -5371,6 +5552,60 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
             visitor = decision.target;
             visitorShareId =
               shares?.findLiveByHostname(req.headers.get('host') ?? '')?.shareId ?? null;
+          } else if (decision.kind === 'share-link') {
+            // THE SHARE HOSTNAME. One Cloudflare Access application covers
+            // the whole host with an "everyone" policy and a one-time PIN
+            // login, so what arrives here is a verified email address and
+            // nothing else — Cloudflare has said WHO, and said nothing about
+            // what they may open. Everything below is this server answering
+            // the second question.
+            //
+            // Non-null by construction (the host could not have classified
+            // share-link without it), re-checked because "I could not verify"
+            // must never mean "serve it".
+            if (!shareLinkVerifier) {
+              return j(503, { error: 'access_not_configured' });
+            }
+            const result = await shareLinkVerifier(req);
+            if (!result.ok) return j(result.status, { error: result.error });
+            accessEmail = result.email ?? null;
+
+            // The redeem route, ABOVE the scope check on purpose: `/s/<id>`
+            // names no workspace, so `collabScope` would refuse it as an
+            // out-of-scope path and nobody could ever become a member. It is
+            // the one path on this hostname a non-member may reach, and all
+            // it can do is write the caller's own verified address down
+            // against the workspace the link already names.
+            const redeemMatch = pathname.match(/^\/s\/([^/]+)$/);
+            if (redeemMatch && req.method === 'GET') {
+              return redeemShareLink(safeDecodeSegment(redeemMatch[1] ?? ''), accessEmail);
+            }
+
+            // Every other request on this hostname is judged on MEMBERSHIP,
+            // not on the link. `collabScope` is `shareScopeAllows` with the
+            // path's own workspace as the target, so every operator verb a
+            // share visitor is refused — the doc list, share administration,
+            // folder binds, diff creation, DELETE, wholesale rewrite — is
+            // refused here by the same lines, and a route added to one is
+            // added to both.
+            //
+            // A path that names no workspace (root, `/api/docs`, anything
+            // this deployment serves that is not a board's content) reaches
+            // only the static app shell, which is what makes "root answers
+            // nothing useful" true rather than asserted.
+            //
+            // The refusal is spelled exactly like the collaboration
+            // hostname's, on purpose: two different bodies would tell a
+            // signed-in stranger which guessed workspace ids are real.
+            const scope = collabScope(pathname, req.method, {
+              workspacesOf: shareWorkspacesOf,
+              isMember: (wsId) => shareLinkMemberOf(wsId, accessEmail),
+            });
+            if (!scope.allowed) return j(403, { error: 'out_of_share_scope' });
+            // An outsider like any other: identity rewritten to a guest, doc
+            // metadata redacted, `visitor`-gated routes closed. No
+            // `visitorShareId` — there is no Cloudflare share behind this.
+            visitor = scope.target;
           } else if (decision.kind === 'collab') {
             // The collaboration hostname: one stable public address, an
             // Access application in front of it, and the SHARE surface behind
