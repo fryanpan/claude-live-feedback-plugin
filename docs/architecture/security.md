@@ -2,7 +2,9 @@
 
 Claude Workspaces runs on one person's own computer. That person is the owner. The owner's Claude Code agents talk to the server from the same machine. Anyone else reaches it only through a Cloudflare tunnel the owner set up. There is no shared service and no shared database: the security boundary is the owner's machine.
 
-One server holds many workspaces. A share link opens exactly one workspace, fixed when the share is made, and a share that names no workspace opens nothing. The collaboration hostname is one stable address for many workspaces, so it asks a second question after Cloudflare Access confirms the email: was this email given the workspace the address names? The answer comes from the live shares of that workspace (their email and domain lists) plus the owner's own emails. A workspace nobody has shared admits nobody there.
+One server holds many workspaces, so every outside hostname asks two questions rather than one. Cloudflare Access answers the first: which email is this? The server answers the second: was this email given the workspace being asked for? Neither answer is worth anything without the other, and no hostname is a workspace by itself.
+
+A share link opens exactly one workspace, fixed when the link is made. The link is an invitation, not a credential: following it proves nothing on its own, because a visitor arrives at the share hostname only after Cloudflare Access has confirmed an email. The server records that email as a member of the workspace the link names, and from then on the membership is what admits them. The collaboration hostname asks the same second question and answers it from the live shares of that workspace, their email and domain lists, plus the owner's own emails. A workspace nobody has shared admits nobody at either address.
 
 This document describes how the server decides who gets in, what each kind of caller can read and write, and where secrets are kept. It describes the design as it is; it is not a promise that nothing was missed. Every check named below has a comment at the top of its own file explaining why it exists. Read that before changing it.
 
@@ -38,7 +40,7 @@ The tunnel is the only way in from outside the owner's machine. Every request, w
 | ------------------------ | ------------------------------------------------------------ | ------------------------------------------------------------ |
 | Programs on this machine | The owner's agents, hooks and shell                          | The request is addressed to `localhost` **and** the connection starts on this machine. Both must be true. |
 | The owner in a browser   | The owner, using their own hostname through the tunnel       | The hostname is on the owner's list, and Cloudflare Access has confirmed the owner's email |
-| Invited collaborator     | Someone the owner shared a workspace with                    | A hostname made for that share, and Cloudflare Access has confirmed their email |
+| Invited collaborator     | Someone the owner shared a workspace with                    | The share hostname, an email Cloudflare Access has confirmed, and a membership of the workspace being asked for |
 | Meeting-bot service      | Recall.ai, delivering transcripts                            | Its own hostname, and a signed message                       |
 | Everyone else            | The rest of the internet, and any local-network or Tailscale name | Not recognized. Refused before any page or API runs.         |
 
@@ -60,17 +62,37 @@ Because Cloudflare confirms the person's email before the page loads, the server
 
 If the rule is on and no Access hostname is configured, the server prints a clear warning when it starts, because then the only browser that can reach it is one on this machine.
 
+## A share link invites a person; a membership lets them back in
+
+One Cloudflare Access application covers one hostname, `share.<domain>`, with a policy that admits everyone and a login method that emails a one-time code. That application answers exactly one question: which email is this? It decides nothing about workspaces, and it is not meant to. Anyone willing to receive a code can get through it, which is why the server never treats reaching that hostname as permission to open anything.
+
+Sharing a workspace mints a record and nothing else: an unguessable id, the workspace it opens, who made it, when, and an expiry if one was asked for. Links do not expire by default, because a review that goes quiet for three weeks should still open on the fourth. Nothing is created in Cloudflare, no DNS record is added, and the server needs no Cloudflare credential to share a board. The link is `https://share.<domain>/s/<id>`.
+
+The first visit is the whole flow. Cloudflare confirms an email, the server checks the link is still live, records that email as a member of the workspace the link names, and sends the visitor to the board. Visiting a second time adds nothing: the same email is already a member. From then on the link is incidental. Every later request is judged on the membership, per request, against the workspace named in that request's own path. A path that names no workspace, the site root included, is refused rather than answered, so the hostname tells an admitted stranger nothing about what exists behind it.
+
+The workspace comes off the record, never off the request, so nothing a visitor sends can move a redemption onto a board the link does not name.
+
+A link that is revoked, expired, or never existed renders one page, and it is the same page in all three cases. Four different answers would turn the address into a way to test whether a guessed id is real. The page names no workspace and no owner.
+
+The share hostname's Access application has its own audience, configured apart from the owner's. A token minted for the owner's address fails at the share hostname and a token minted at the share hostname fails at the owner's, because each is checked against the audience of its own application. That second direction is the one that matters: the share application admits anyone who can read email, so its token must be worth nothing anywhere else.
+
+Two verbs end access, and they are not the same act. Revoking a link stops anyone new from redeeming it and leaves the people who already did, because a link is often revoked simply because it has been passed around enough. Removing a member ends that person's access on their next request. Neither destroys anything: a revoked link keeps its record and its list of who redeemed it and when, which is the only account of who was ever let in.
+
+Membership on the share hostname and membership on the collaboration hostname are separate records on purpose. A redeemed share link does not make somebody a collaborator, and an address on the owner's list is not a member of anything on the share hostname. Two doors, two answers.
+
+Workspaces used to be shared by creating a Cloudflare Access application and a DNS record for each individual share. That is retired. Records already minted that way keep working until they expire, and nothing new is made that way.
+
 ## What each caller can read and write
 
 | Caller                                                   | Reads                                                        | Writes                                                       |
 | -------------------------------------------------------- | ------------------------------------------------------------ | ------------------------------------------------------------ |
 | Program on this machine                                  | Everything                                                   | Everything                                                   |
 | Owner in a browser                                       | Everything, after Cloudflare confirms an email on the owner's list | Everything, except binding a path on this machine (see below) |
-| Share or collaboration visitor                           | A share: the one workspace it names. The collaboration hostname: only the workspaces whose live shares list the visitor's email | Comments, suggestions, the reading tracker, and the text of documents through live editing |
+| Share-link or collaboration visitor                      | Only the workspaces their confirmed email is a member of. On the share hostname that membership comes from a share link they redeemed; on the collaboration hostname it comes from that workspace's live shares plus the owner's own emails | Comments, suggestions, the reading tracker, and the text of documents through live editing |
 | Meeting-bot service                                      | Two routes                                                   | One incoming message                                         |
 | Anyone else, including local-network and Tailscale names | Nothing                                                      | Nothing                                                      |
 
-In code: programs on this machine pass `isTrustedLocalHost` with no sign-in; the owner's browser passes `isProxiedTrustedHost`; a visitor is held to `shareScopeAllows` and `collabScope`, which list what is allowed and refuse everything else; the meeting bot passes `middleware/recall-callback-gate.ts`; everyone else is refused by `classifyHost`.
+In code: programs on this machine pass `isTrustedLocalHost` with no sign-in; the owner's browser passes `isProxiedTrustedHost`; a visitor is held to `shareScopeAllows` and `collabScope`, which list what is allowed and refuse everything else; the meeting bot passes `middleware/recall-callback-gate.ts`; everyone else is refused by `classifyHost`. On the share hostname the membership question is asked per request, against the workspace that request's own path names.
 
 Letting a visitor edit document text is on purpose: that is what a live review is. It happens over the live-editing connection, not over the normal API, and only for a visitor whose email Cloudflare confirmed.
 
@@ -137,7 +159,9 @@ Which hostnames face a browser is configuration, read once in `server-config.ts`
 | `CW_PROXIED_TRUSTED_HOSTS`               | The owner's own hostname(s) through the tunnel. Behind Access, they see the whole product. |
 | `CW_PROXIED_TRUSTED_EMAILS`              | Which confirmed emails those hostnames admit. Defaults to `CW_OWNER_EMAIL`. |
 | `CF_ACCESS_TUNNEL_HOSTS`                 | Hostnames for collaborators. They see the shared surfaces, not the owner's controls. |
-| `CF_SHARE_BASE_HOSTNAME`                 | The parent domain that each workspace share gets its own hostname under. |
+| `CW_SHARE_LINK_HOSTS`                    | The hostname share links are served from, `share.<domain>`. Comma-separated if there is more than one. Ignored unless the two settings below are both set. |
+| `CF_ACCESS_SHARE_AUD`                    | The Cloudflare Access application covering that hostname. Its own audience, deliberately not `CF_ACCESS_AUD`, which is what makes a token for one address worthless at the other. |
+| `CF_SHARE_BASE_HOSTNAME`                 | Retired. The parent domain each workspace share used to get its own hostname under. |
 | `CF_ACCESS_TEAM_DOMAIN`, `CF_ACCESS_AUD` | The Cloudflare Access team and application that the owner and collaborator hostnames are checked against. |
 | `CW_EMAIL_CODE_SIGNIN`                   | Turns the server's own emailed-code sign-in on.              |
 | `CW_REQUIRE_SIGNIN_TO_WRITE`             | Whether a browser must be signed in to change anything. On by default. |
