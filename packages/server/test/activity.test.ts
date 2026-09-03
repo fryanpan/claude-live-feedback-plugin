@@ -344,14 +344,14 @@ describe('activity backfill', () => {
 
 describe('classifyActor', () => {
   it('classifies named per-agent identities (agent-<slug> ids) as agent, not person', async () => {
-    const { classifyActor } = await import('../src/activity.ts');
+    const { classifyActor } = await import('../src/actor-identity.ts');
     expect(classifyActor({ id: 'agent-lighthouse', name: 'Lighthouse', kind: 'known' })).toBe(
       'agent',
     );
   });
 
   it('keeps the legacy agent signals and person classification', async () => {
-    const { classifyActor } = await import('../src/activity.ts');
+    const { classifyActor } = await import('../src/actor-identity.ts');
     expect(classifyActor({ id: 'known-agent', name: 'Agent', kind: 'known' })).toBe('agent');
     expect(classifyActor({ id: 'anon-abc123', name: 'Casey', kind: 'known' })).toBe('person');
     expect(classifyActor({ id: 'known-bryan', name: 'Bryan', kind: 'known' })).toBe('person');
@@ -362,7 +362,7 @@ describe('classifyActor', () => {
   // exactly why it read as working. Asserting only the omitted-kind case
   // would let the inverted case back in unnoticed.
   it('honours an explicit actor-axis kind in BOTH directions', async () => {
-    const { classifyActor } = await import('../src/activity.ts');
+    const { classifyActor } = await import('../src/actor-identity.ts');
     // A caller that declares itself an agent must not be recorded as a human.
     expect(classifyActor({ id: 'team-lead', name: 'Team Lead', kind: 'agent' })).toBe('agent');
     // ...and a caller that declares itself a person keeps that.
@@ -374,7 +374,7 @@ describe('classifyActor', () => {
   // so `'Agent'` matching nothing would misfile a caller that DID declare
   // itself, which is the original bug wearing a capital letter.
   it('reads a declared agent kind regardless of case', async () => {
-    const { classifyActor } = await import('../src/activity.ts');
+    const { classifyActor } = await import('../src/actor-identity.ts');
     for (const kind of ['Agent', 'AGENT', 'aGeNt']) {
       expect(classifyActor({ id: 'team-lead', name: 'Team Lead', kind })).toBe('agent');
     }
@@ -384,14 +384,14 @@ describe('classifyActor', () => {
   });
 
   it('classifies a caller with no kind at all as an agent', async () => {
-    const { classifyActor } = await import('../src/activity.ts');
+    const { classifyActor } = await import('../src/actor-identity.ts');
     // Browser users always carry 'known' | 'anon'; a missing `kind` means the
     // call came from somewhere that isn't a browser session.
     expect(classifyActor({ id: 'team-lead', name: 'Team Lead' })).toBe('agent');
   });
 
   it('resolves a contradictory author to agent, never to person', async () => {
-    const { classifyActor } = await import('../src/activity.ts');
+    const { classifyActor } = await import('../src/actor-identity.ts');
     // `kind` is overloaded: on a browser User it means known-vs-anon, and a
     // caller may also use it to declare the actor axis. When the two signals
     // disagree, the tie goes to 'agent' on purpose — an agent misfiled as a
@@ -411,7 +411,7 @@ describe('classifyActor', () => {
 describe('an old-id activity row resolves to the merged identity at read', () => {
   it('resolveActor answers the canonical id and the roster name', async () => {
     const { Identities } = await import('../src/identities.ts');
-    const { resolveActor, setIdentityRoster } = await import('../src/activity.ts');
+    const { resolveActor, setIdentityRoster } = await import('../src/actor-identity.ts');
     const dataDir = mkdtempSync(join(tmpdir(), 'activity-merge-'));
     try {
       const roster = new Identities({ dataDir });
@@ -428,7 +428,7 @@ describe('an old-id activity row resolves to the merged identity at read', () =>
         name: 'Someone',
       });
     } finally {
-      const { setIdentityRoster: reset } = await import('../src/activity.ts');
+      const { setIdentityRoster: reset } = await import('../src/actor-identity.ts');
       reset(undefined);
       rmSync(dataDir, { recursive: true, force: true });
     }

@@ -18,9 +18,10 @@ import {
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { activityLogPath, resetOwnerIdentities } from '../src/activity';
+import { activityLogPath } from '../src/activity';
 import { acquireActivityLock, activityLockPath, releaseActivityLock } from '../src/activity-lock';
 import { repairActivityOwner } from '../src/activity-repair-owner';
+import { resetOwnerIdentities } from '../src/actor-identity';
 import { identityLinksPath } from '../src/identity-links';
 
 const tmpDirs: string[] = [];

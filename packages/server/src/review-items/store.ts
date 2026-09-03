@@ -27,7 +27,7 @@ import {
   withdrawReview,
 } from '@feedback/core';
 import type { TaskActor } from '@feedback/core/task-wire';
-import { classifyActor } from '../activity.ts';
+import { classifyActor } from '../actor-identity.ts';
 import { cryptoId } from '../task-fields.ts';
 import { TaskDecisionStore } from './decisions.ts';
 import { LEGACY_REVIEW_ITEM_ID } from './derive.ts';

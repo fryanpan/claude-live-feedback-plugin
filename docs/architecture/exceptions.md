@@ -19,7 +19,10 @@ find packages \( -name '*.ts' -o -name '*.css' \) \
 ```
 
 Audited 2026-09-02 at `3a39db67`, and re-audited after A1 and A2 landed.
-**161 files** over 500 lines: 66 source and 95 test.
+**158 files** over 500 lines: 64 source and 94 test. A7 took `activity.ts`
+(582 → 301) and `recall-calendar.ts` (721 → 470) off this list, and A8 took
+`voice-smooth.test.ts` (729 → 493); all three rows are gone rather than marked
+done.
 
 Test files are judged by a narrower rule, in their own table below: a long test
 file is an exception unless two *unrelated harnesses* share it. Many `describe`
@@ -43,25 +46,23 @@ blocks over one set of fixtures is one harness, however long the file gets.
 | `packages/server/src/rooms.ts` | 4801 | Split | A3 took document mutation out to `doc-edit-ops.ts`, threads to `doc-threads.ts` and the workspace surface to `rooms-workspaces.ts`. What is left is one subject in three layers: the room lifecycle (`getOrCreate`, `hydrateDoc`, `evictIdleRooms`, `teardownRoom`, `flush`), the file bindings that ride on it (`attachFile`, the mtime poll, the write-back and its conflict reconcile), and the websocket fan-out. The bindings are the next seam — `file-binding.ts`, roughly 900 lines — but they reach into the room's `ydoc` and its persist timers on every path, so that split needs a room handle designed for it rather than a line range. **M** |
 | `packages/server/src/rooms-workspaces.ts` | 1040 | Exception | The workspace surface of a review, out of `rooms.ts` in A3: the projections that answer "what is in this review" (tree, grouped diff, all-files, thread roll-up, the lazy context and companion opens) and the archive verbs that retire one as a unit. Both walk the same member list — `list()` filtered by `reviewIdOf` — and the archive path is written in terms of the projections' own vocabulary, so splitting them would leave two files reading one index. |
 | `packages/server/src/doc-threads.ts` | 755 | Exception | Comment threads, moved whole out of `rooms.ts` in A3: open, reply, resolve, reopen, re-anchor, and the review payload a thread can carry. The review verbs look like a second file and are not: a review IS a field on a thread here, all five end in the same `thread.replied` frame, and splitting them would put the payload's rules in one file and the thread they are a property of in another. |
-| `packages/server/src/voice.ts` | 2109 | Split | Two free-function groups sit above `VoiceRouter` with explicit args and no shared state: prompt building and reply parsing (`buildVoicePrompt`, `parseVoiceReply`, `renderResourceBlock`) → `voice-prompt.ts` ~450, and the write guardrail (`VOICE_ACTIONS`, `resolveVoiceAction`) → `voice-action.ts` ~350. **S** |
+| `packages/server/src/voice.ts` | 1318 | Exception | A6 took the classification to `voice-prompt.ts` and the write guardrail to `voice-action.ts`. What is left is `VoiceRouter` — the one thing here that is not pure. It holds the pending-choice map, the retry window and the completer, and every path through `handle()` ends in an ack plus a `voice.request` event, which is the promise this subsystem makes. Splitting the router further would separate a path from the ack it owes. |
 | `packages/server/src/meeting-task-capture.ts` | 794 | Exception | A5 took the prompt and its reader to `meeting-capture-prompt.ts` and the transcript guards to `meeting-capture-guards.ts`. What is left is one pipeline: six intents parsed from one reply, each filed through the same board slice and accumulated into the same `CaptureLinks` the notes read back. The Haiku extractor at the bottom looks separable and is the consent seam this file's header is about — the transcript leaves the machine there, on the dedicated key, or capture stays off — so it belongs with the pass it feeds. |
 | `packages/server/src/meeting-notes-merge.ts` | 758 | Exception | A5 took the ownership ledger to `notes-ownership.ts` and section reading to `notes-section.ts`. What is left is one algorithm in two halves that share a vocabulary: `planNotesMerge` decides which items are kept, inserted, suggested on or dropped, and `applyPlan` performs exactly that plan against the Yjs fragment. Splitting a plan from the only thing that applies it would put the invariant — an agent write touches only agent items — in one file and its enforcement in another. |
-| `packages/server/src/deploy.ts` | 1058 | Split | The durable trace already has its own banner at line 668: `writeDeployLog`, `readDeployLog`, `confirmDeployBoot`, `spawnDeployVerifier` touch only the filesystem and the clock, never git or launchd → `deploy-log.ts` ~250, leaving the decision (`decideDeploy`) and the executor (`runDeploy`, `launchctlRestart`) ~800. **S** |
+| `packages/server/src/deploy.ts` | 817 | Exception | A7 took the durable trace to `deploy-log.ts` (282, against an estimated ~250). What is left is one deploy: the decision (`decideDeploy` over `DeployFacts`), the executor (`runDeploy`, `launchctlRestart`, the git and `bun install` runners) and the single-flight `Deployer` that serialises them. The record's four types went WITH the trace and are imported back — `DeployResult` is a wire format between three processes that never meet, not an internal type of the runner. |
 | `packages/server/src/meeting-notes.ts` | 870 | Exception | A5 took the two clocks to `pause-ticker.ts`. What is left is mostly this subsystem's contract surface — the turn, compose, relabel, correction and reattribution shapes every other meeting file imports — plus `beginNotesSession`, the session that produces them. The types are not a file of their own: each one is documented by the verb beside it, and a types file would move the documentation away from the behaviour it describes. |
 | `packages/server/src/task-projection.ts` | 743 | Exception | A2 took `projectTask` out to `task-row.ts`; what is left is the room lifecycle — `ensureWorkspace`, `refresh`, `scheduleSnapshot` and the debounced snapshot writer — which is one object's behaviour over one `Rooms`. The owner readers (`ownerKindReader`, `claimSessionReader`) still read as a separable pair and would move beside `task-owner.ts`; that is ~90 lines and does not justify a third file on its own. |
 | `packages/server/src/meeting-notes-doc.ts` | 524 | Exception | A5 took every section writer to `notes-section-write.ts`. What is left is the sink: the per-doc ownership ledger, the context gather, and the tick handlers that decide WHICH write a tick makes. Just over the line, and all of it reads the same `NotesDocRooms` slice. |
 | `packages/server/src/stall-nudge.ts` | 867 | Exception | One `StallNudger`: the tick, the arming stamps, and addressing. The held-item nudge (`nudgeFilers`) reuses the same tick, `reachable`, and stamp file, so lifting it out would duplicate all three. |
 | `packages/server/src/ready-nudge.ts` | 843 | Exception | One `ReadyWorkNudger`. Most of the file is the not-sending rules (`armed`, `NudgeTally`) that only make sense against the frame they suppress. |
-| `packages/server/src/review-queue.ts` | 831 | Split | Two jobs. `asksPerson` / `findAsk` / `extractAsk` with `sentenceQuestion`, `codeSpans` and `stripEmphasis` (~250) is a pure text predicate with no queue concept → `ask-detection.ts`; `reviewThreadItems` / `taskReviewItems` / `reviewItemRows` stay ~580. **S** |
-| `packages/server/src/voice-resolve.ts` | 762 | Split | Resolution and composition are unrelated. `composeStatus` with `ago`, `quote`, `listTitles` and `capWords` (~190) writes the spoken status answer → `voice-status.ts`; `tokenize` / `rankTitles` / `resolveByTitle` / `navigationAsk` stay as the utterance resolver ~570. **S** |
+| `packages/server/src/review-queue.ts` | 602 | Exception | A6 took the ask predicate to `ask-detection.ts` (249, against an estimated ~250). What is left is one queue in three shapes: `reviewThreadItems`, `taskReviewItems` and `reviewItemRows`, which is the whole queue in one order. They share the band rule, the thread source and `classifyActor`'s judgement about who counts as an agent — a second notion of that is the drift this file exists to avoid. |
+| `packages/server/src/voice-resolve.ts` | 588 | Exception | A6 took the spoken brief to `voice-status.ts` (187, against an estimated ~190). What is left is one resolver: `tokenize` and the trigram similarity feed `rankTitles`, which feeds `resolveByTitle`, and the intent detectors (`navigationAsk`, `statusAsk`, `hubDestinationAsk`, `goalOrdinalAsk`, `parseOrdinal`, `pickByLabel`) all read the same stopword list and the same confidence floor. It now imports nothing at all. |
 | `packages/server/src/middleware/host-guard.ts` | 756 | Exception | One question — may this request proceed on this host. `collabScope` deliberately answers through `shareScopeAllows` rather than a second allowlist, because the allowlist that drifts open is the breach; `classifyHost` and the scope check are two halves of one decision. |
 | `packages/server/src/home-brief.ts` | 743 | Exception | One feature end to end: `HomeBriefStore` plus the pure pipeline `briefEvents` → `deterministicBrief` / `buildBriefPrompt` → `acceptBrief`. The network half already lives in `ThreadSummarizer`. |
 | `packages/server/src/transcribe-assemblyai.ts` | 735 | Exception | One protocol client end to end: `streamingUrl` builds the v3 session and `createAssemblyAiEngine` speaks the Begin/Turn/Termination sequence; `expiryFrom` and `resolveAssemblyAiKey` serve only that socket. |
-| `packages/server/src/recall-calendar.ts` | 721 | Split | Two vendors in one file. `resolveGoogleOauthCreds`, `createGoogleOauthApp`, `createKeychainRefreshTokenVault` and `readKeychainAccount` (~190) are the Google OAuth and token-vault concern → `google-oauth.ts`; `createRecallCalendarClient`, `CalendarConnectionStore` and `CalendarSyncConsumer` stay ~530. **S** |
 | `packages/server/src/meeting-protocol.ts` | 655 | Exception | One class, `MeetingRelay`. The `/audio/<docId>` socket *is* the meeting lifecycle, so open, frames, and every ending path have to sit together to end it exactly once. |
-| `packages/server/src/recall.ts` | 599 | Exception | One vendor client: `recallConfigFromEnv`, `buildCreateBotBody`, `createRecallClient`. The callback-URL helpers exist only because Recall dials us back. |
+| `packages/server/src/recall.ts` | 616 | Exception | One vendor client: `recallConfigFromEnv`, `buildCreateBotBody`, `createRecallClient`. The callback-URL helpers exist only because Recall dials us back. It also hosts `clip`, the failed-response clipper all three HTTP clients in this family share — A7 put it here because `recall-calendar.ts` and `google-oauth.ts` both call it and neither may import the other. |
 | `packages/server/src/client-release.ts` | 593 | Exception | One lifecycle for the numbered release directory: `publishClientRelease`, `currentClientRelease`, `readPublishLedger`, and `prepareClientRelease` — which is the decision the other three exist to make. |
-| `packages/server/src/activity.ts` | 582 | Split | Two jobs sharing a file. The process-wide actor registry (`registerOwnerIdentity`, `linkIdentity`, `setIdentityRoster`, `resolveActor`, `classifyActor` and their `reset*` seams, ~240) → `actor-identity.ts`; the append-only event schema (`eventId`, `payloadDigest`, `buildEventDoc`, `appendActivity`) stays ~340. **M** — `classifyActor` has importers outside this file. |
 | `packages/server/src/recall-meeting.ts` | 572 | Exception | One class, `RecallMeetingRelay`: invite, webhook status, and the dialled transcript socket are three channels of one bot lifecycle. |
 | `packages/server/src/sse.ts` | 566 | Exception | One fan-out. `SseHub` holds `byDoc` and the bounded `replay`; `openSseStream` is the socket that consumes both, including the `replay.gap` path. |
 | `packages/server/src/identities.ts` | 557 | Exception | One store — the `Identities` class over `identities.json` — plus its sanitizer and the single projection `userForIdentity`. |
@@ -138,7 +139,6 @@ real HTTP route — sharing the same fixture builders. That is one harness.
 | File | Lines | Verdict | Reason / seam |
 |---|---|---|---|
 | `packages/markdown-app/test/hub-render.test.ts` | 3882 | Exception | Twelve describes over one harness: the module-scope `task()` factory and the `root` beforeEach, asserting rendered DOM. The six that `readFileSync` `styles.css` and hub source and assert on text moved to `hub-source-contract.test.ts` in B1 — they were the second harness this row named. |
-| `packages/server/test/voice-smooth.test.ts` | 729 | Split | Lines 55–293 are eight describes of pure helpers (`navigationAsk`, `resolveByTitle`, `parseOrdinal`, `composeStatus`) with no server at all, while `voice, smoothly (route)` stands up `createServer` in its own `beforeAll`. Move the eight helper describes to `voice-smooth-model.test.ts`. **M** |
 
 The remaining 93 are exceptions. Each row names the one harness its cases share.
 
@@ -264,22 +264,22 @@ months, so splitting it buys almost nothing.
 | 13 | `meeting-protocol.ts` + `meeting-chooser.ts` + `meeting-strip.ts` (was `meeting-strip.ts`, split in B4) | 1953 | 18 | done |
 | 14 | `packages/core/src/review-item.ts` | 1769 | 18 | S |
 | 15 | `packages/core/src/prose.ts` | 2847 | 16 | M |
-| 16 | `packages/server/src/review-queue.ts` | 831 | 15 | S |
+| 16 | `review-queue.ts` + `ask-detection.ts` (split in A6) | 831 | 15 | done |
 | 17 | `packages/widget/src/widget.ts` | 1320 | 13 | M |
 | 18 | `packages/server/src/meeting-notes.ts` + `pause-ticker.ts` (split in A5) | 1039 | 12 | done |
-| 19 | `packages/server/src/voice.ts` | 2109 | 11 | S |
+| 19 | `voice.ts` + `voice-prompt.ts` + `voice-action.ts` (split in A6) | 2109 | 11 | done |
 | 20 | `packages/server/src/meeting-notes-doc.ts` + `notes-section-write.ts` (split in A5) | 986 | 11 | done |
-| 21 | `packages/server/src/activity.ts` | 582 | 11 | M |
+| 21 | `activity.ts` + `actor-identity.ts` (split in A7) | 582 | 11 | done |
 | 22 | `packages/markdown-app/src/redline/markup-margin.ts` | 718 | 9 | done |
 | 23 | `meeting-task-capture.ts` + `meeting-capture-prompt.ts` + `meeting-capture-guards.ts` (split in A5) | 1348 | 6 | done |
 | 24 | `meeting-notes-merge.ts` + `notes-ownership.ts` + `notes-section.ts` (split in A5) | 1067 | 5 | done |
-| 25 | `packages/server/src/deploy.ts` | 1058 | 4 | S |
+| 25 | `deploy.ts` + `deploy-log.ts` (split in A7) | 1058 | 4 | done |
 | 26 | `packages/core/src/goal-effort.ts` | 1086 | 4 | S |
-| 27 | `packages/server/src/voice-resolve.ts` | 762 | 2 | S |
+| 27 | `voice-resolve.ts` + `voice-status.ts` (split in A6) | 762 | 2 | done |
 | 28 | `packages/plugin/hooks/lib/agent-notes.ts` | 653 | 2 | S |
-| 29 | `packages/server/src/recall-calendar.ts` | 721 | 1 | S |
+| 29 | `recall-calendar.ts` + `google-oauth.ts` (split in A7) | 721 | 1 | done |
 | 30 | `packages/markdown-app/test/hub-render.test.ts` | 4078 | — | S |
-| 31 | `packages/server/test/voice-smooth.test.ts` | 729 | — | M |
+| 31 | `voice-smooth.test.ts` + `voice-smooth-model.test.ts` (split in A8) | 729 | — | done |
 
 The top eight are where the pain is: they carry 991 of the 1350 commits in this
 queue. Rows 1 through 8 are worth filing as tickets now; below row 20 a split is

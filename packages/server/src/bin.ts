@@ -1,7 +1,7 @@
 #!/usr/bin/env bun
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { confirmDeployBoot, deployLogPath } from './deploy.ts';
+import { confirmDeployBoot, deployLogPath } from './deploy-log.ts';
 import { installLogSquelch } from './log-squelch.ts';
 import { acquirePort, classifyBindError, probeLocalPort, shouldWalkPorts } from './port-bind.ts';
 import { lanHostnames, tailscaleHost } from './public-host.ts';

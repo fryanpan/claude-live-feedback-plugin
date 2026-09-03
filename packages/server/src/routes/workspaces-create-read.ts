@@ -4,7 +4,7 @@
  * Lifted verbatim out of `createServer`'s request closure; the handlers
  * read their collaborators off `WorkspaceRoutesContext` instead of the scope.
  */
-import { classifyActor } from '../activity.ts';
+import { classifyActor } from '../actor-identity.ts';
 import { browserCannotBindBody, isBrowserRequest } from '../middleware/write-gate.ts';
 import { redactHubWorkspaceForVisitor } from '../share/redact-workspace.ts';
 import { summarizeGoals } from '../task-queue.ts';
