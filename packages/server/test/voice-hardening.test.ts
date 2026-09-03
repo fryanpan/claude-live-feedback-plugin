@@ -37,12 +37,11 @@ import {
   PROMPT_DATA_END,
   type VoiceContext,
   type VoiceResource,
-  VoiceRouter,
   buildVoicePrompt,
   parseVoiceReply,
   promptSafe,
-  resolveVoiceAction,
-} from '../src/voice.ts';
+} from '../src/voice-prompt.ts';
+import { VoiceRouter, resolveVoiceAction } from '../src/voice.ts';
 import { type AgentStream, openWorkspaceStream } from './agent-stream.ts';
 
 const PERSON = { id: 'known-jordan', name: 'Jordan', kind: 'known', color: '#2e7dd7' };
