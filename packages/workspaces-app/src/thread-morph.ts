@@ -1,35 +1,33 @@
 /**
  * The thread card's expand/collapse morph.
  *
- * A card is not "collapsed content that grows". Each summary line is paired
- * with what it BECOMES, and both faces live in the same box, absolutely
- * positioned at `top: 0`:
+ * A card is not "collapsed content that grows". A summary line is paired with
+ * what it BECOMES, and both faces live in the same box, absolutely positioned
+ * at `top: 0`:
  *
- * | slot | summary face          | detail face                |
- * |------|-----------------------|----------------------------|
- * | A    | the topic line        | the opening message        |
- * | B    | participants + state  | the replies + reply box    |
+ * | slot | summary face             | detail face                    |
+ * |------|--------------------------|--------------------------------|
+ * | A    | discussion + answer row  | the conversation + reply box   |
  *
  * A slot therefore has NO intrinsic height — its height exists only because
  * this module measures the showing face and writes it. Nothing ever collapses
  * to zero, because a slot is never empty: one face is always resting at its
  * measured height.
  *
- * Expanding is two overlapping phases over 150 ms. Slot A leads on expand
- * (the topic grows into the opening message) and slot B follows, riding down
- * intact on slot A's growth before it cross-fades into the replies. Collapse
- * runs the same two phases in the opposite order, so the thread retreats back
- * into the two lines it came from.
+ * ONE slot and one phase. The card used to fold in two overlapping phases,
+ * because its head cross-faded too: the topic line grew into the opening
+ * message while a second slot rode down on it. In the collapsed redesign the
+ * head STAYS PUT — glyph, topic and who are in the same place folded and
+ * unfolded — so there is one disclosure to animate and nothing to lag behind
+ * it. The lag constants went with the second slot rather than being left
+ * unreachable. `MORPH_MS` is the whole gesture, and the balloon column times
+ * its restack against it.
  */
 
 import { COMPOSER_MOUNTED_EVENT } from './md-composer.ts';
 
-/** Total morph, both phases. */
+/** The whole gesture. The balloon column restacks against this. */
 export const MORPH_MS = 150;
-/** Each phase's own length: 62% of the total. */
-export const MORPH_SPAN_MS = 93;
-/** How far the second phase starts behind the first: 38% of the total. */
-export const MORPH_LAG_MS = 57;
 /** The leaving face fades out over this fraction of the phase, so the two
  *  texts never read as one overlapping smear. */
 export const LEAVING_FRACTION = 0.6;
@@ -41,29 +39,16 @@ export interface PhaseTiming {
   delay: number;
 }
 
-export interface MorphTiming {
-  a: PhaseTiming;
-  b: PhaseTiming;
-}
-
 /**
- * Which slot leads and by how much. Pure, so the phase order is checkable
+ * How long the fold takes. Pure, so the reduced-motion answer is checkable
  * without a browser.
  *
- * Expand leads with slot A (0 → 93 ms) and lags slot B (57 → 150 ms).
- * Collapse is the mirror: slot B leads, slot A lags. `reduce` zeroes the
- * DURATION AND THE DELAY only — the class flip and the measured height
+ * `reduce` zeroes the DURATION only — the class flip and the measured height
  * assignment still run, so the card lands in exactly the right state with no
  * tween. Never branch to a different layout for reduced motion.
  */
-export function morphTiming(open: boolean, reduce: boolean): MorphTiming {
-  if (reduce) {
-    return { a: { duration: 0, delay: 0 }, b: { duration: 0, delay: 0 } };
-  }
-  const duration = MORPH_SPAN_MS;
-  return open
-    ? { a: { duration, delay: 0 }, b: { duration, delay: MORPH_LAG_MS } }
-    : { a: { duration, delay: MORPH_LAG_MS }, b: { duration, delay: 0 } };
+export function morphTiming(reduce: boolean): PhaseTiming {
+  return { duration: reduce ? 0 : MORPH_MS, delay: 0 };
 }
 
 /** Exported because the morph is not the only motion the card produces: the
@@ -148,11 +133,6 @@ export function syncFaceVisibility(card: HTMLElement, expanded: boolean): void {
   // line to the whole conversation with no state change announced at all.
   const caret = card.querySelector('.thread-caret');
   caret?.setAttribute('aria-expanded', String(expanded));
-  // A review item's caret is words, and the words have to say which way the
-  // card is folded — "Details" to open, "Less" to close.
-  if (caret?.classList.contains('thread-caret-words')) {
-    caret.textContent = expanded ? 'Less ▴' : 'Details ▾';
-  }
   const showing = expanded ? 'face-detail' : 'face-summary';
   for (const face of Array.from(card.querySelectorAll<HTMLElement>('.thread-face'))) {
     if (face.classList.contains(showing)) {
@@ -179,14 +159,20 @@ function faceOf(slot: HTMLElement, expanded: boolean): HTMLElement | null {
  * whenever text metrics change underneath a measurement that has already been
  * taken (see `installSlotRemeasure`).
  *
- * A zero measurement is REFUSED, never written. The showing face always has
- * content (both lines render on every card, always), so zero can only mean
- * "this subtree isn't being laid out" — the drawer is `display: none` while
- * closed on desktop, and the cards inside it are rendered anyway. Writing
- * that zero pins every slot shut with nothing left to reopen it: the card
- * keeps its head and its foot and loses everything in between. Skipping
- * leaves the last good height in place until the drawer opens and someone
- * re-measures for real (`ReviewChrome.openDrawer`).
+ * A zero measured from a face THAT HAS CHILDREN is refused, never written.
+ * Such a zero can only mean "this subtree isn't being laid out" — the drawer
+ * is `display: none` while closed on desktop, and the cards inside it are
+ * rendered anyway. Writing that zero pins every slot shut with nothing left
+ * to reopen it: the card keeps its head and its foot and loses everything in
+ * between. Skipping leaves the last good height in place until the drawer
+ * opens and someone re-measures for real (`ReviewChrome.openDrawer`).
+ *
+ * A face with NO children is a different thing and its zero is the truth. A
+ * folded card whose line two would have said "No replies yet" renders no line
+ * two at all, and the guard used to read that deliberate emptiness as the
+ * not-laid-out case: the slot kept whatever height it was last given, so a
+ * one-line card carried a blank second row. The two are told apart by asking
+ * the face what is in it, which needs no layout and cannot be wrong.
  *
  * The pass repeats until the numbers stop moving, because WRITING the heights
  * can reflow the very faces it just measured: on a scroller whose content
@@ -206,7 +192,10 @@ export function sizeThreadSlots(root: ParentNode): void {
       const face = faceOf(slot, expanded);
       if (!face) continue;
       const h = face.offsetHeight;
-      if (h > 0 && slot.style.height !== `${h}px`) {
+      // See the note above: an empty face's zero is real, a populated face's
+      // zero is a measurement taken while nothing was being laid out.
+      const measured = h > 0 || face.childElementCount === 0;
+      if (measured && slot.style.height !== `${h}px`) {
         slot.style.height = `${h}px`;
         changed = true;
       }
@@ -283,20 +272,21 @@ export function morphThread(id: string, open: boolean, root: ParentNode = docume
  * One card. The class flip happens FIRST and sets the resting state; the
  * keyframes only replay the journey, so an interrupted or unsupported
  * animation still leaves the card correct.
+ *
+ * Every slot on the card, not the first one: the doc card builds exactly one,
+ * and a query that assumed that would silently leave a second one behind if
+ * a surface ever grew one.
  */
 export function morphCard(card: HTMLElement, open: boolean): void {
-  const slotA = card.querySelector<HTMLElement>('.slot-a');
-  const slotB = card.querySelector<HTMLElement>('.slot-b');
-  // Measure BEFORE the class flip: `from` is the height the card is leaving.
-  const fromA = slotA?.offsetHeight ?? 0;
-  const fromB = slotB?.offsetHeight ?? 0;
+  const slots = Array.from(card.querySelectorAll<HTMLElement>('.thread-slot'));
+  // Measure BEFORE the class flip: `from` is the height each slot is leaving.
+  const from = slots.map((s) => s.offsetHeight);
 
   card.classList.toggle('expanded', open);
   syncFaceVisibility(card, open);
 
-  const timing = morphTiming(open, prefersReducedMotion());
-  slide(slotA, open, fromA, timing.a);
-  slide(slotB, open, fromB, timing.b);
+  const timing = morphTiming(prefersReducedMotion());
+  slots.forEach((slot, i) => slide(slot, open, from[i] ?? 0, timing));
 }
 
 /**
@@ -319,12 +309,21 @@ function slide(
   const leaving = faceOf(slot, !expanded);
   if (!arriving || !leaving) return;
   const to = arriving.offsetHeight;
-  // Same refusal as `sizeThreadSlots`: zero means this card is not being laid
-  // out, not that its face is empty. A card folds on EVERY copy at once, and
-  // one of those copies is routinely in a closed (`display: none`) drawer —
-  // writing that zero would outlive the fold and open the drawer on a card
-  // clipped to its head and its foot. The class flip above already landed.
-  if (to <= 0) return;
+  // Same refusal as `sizeThreadSlots`, and the same narrowing. A zero from a
+  // face that HAS children means this card is not being laid out: a card
+  // folds on EVERY copy at once, and one of those copies is routinely in a
+  // closed (`display: none`) drawer — writing that zero would outlive the
+  // fold and open the drawer on a card clipped to its head and its foot. The
+  // class flip above already landed.
+  //
+  // A face with no children is empty on purpose, and its zero is the height
+  // it should get. `sizeThreadSlots` learned that when line two stopped
+  // saying "No replies yet"; this function did not, and the gap it left
+  // outlived the fold in exactly the way the paragraph above describes. A
+  // resolved card folded to 33px on first paint, and after one open and
+  // close its slot stayed at 237px: a blank second row under a one-line
+  // card, which survived a resize because the remeasure agreed with it.
+  if (to <= 0 && arriving.childElementCount > 0) return;
   // The resting state lands immediately; the tween below replays the journey.
   slot.style.height = `${to}px`;
   if (!timing.duration || typeof slot.animate !== 'function') return;

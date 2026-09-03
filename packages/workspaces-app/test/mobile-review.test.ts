@@ -431,6 +431,23 @@ describe('prev/next comment nav', () => {
     );
   });
 
+  it('stays usable when the cards are in the margin, and steps into the sheet', () => {
+    // The sheet case: the reader chose balloons on a screen with no room for
+    // a margin, so no inline card is built — but the doc is full of anchored
+    // comments and ‹ › is how you reach them. Counting BUILT CARDS here
+    // disabled the nav on exactly the surface that needs it most.
+    const h = harness([thread('a'), thread('b')], { inlineVisible: () => false });
+    const next = document.getElementById('next-comment') as HTMLButtonElement;
+    expect(h.placed()).toEqual([]);
+    expect(next.disabled).toBe(false);
+    expect(next.title).toBe('Next comment');
+
+    next.click();
+    // No card to centre on, so the thread is shown where its only copy is.
+    expect(h.sheetOpen()).toBe(true);
+    expect(h.panel.getActive()).toBe('a');
+  });
+
   it('does nothing (rather than wrapping onto nothing) when there is no inline thread', () => {
     const h = harness([orphanThread('o')]);
     expect(() => h.mobile.step(1)).not.toThrow();
