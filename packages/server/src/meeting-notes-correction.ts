@@ -317,7 +317,7 @@ function sitesInItem(
  */
 export function correctNotesSection(
   ydoc: Y.Doc,
-  heading: string,
+  heading: string | readonly string[],
   ownership: NotesOwnership,
   correction: SpokenCorrection,
 ): CorrectionOutcome {
