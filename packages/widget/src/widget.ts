@@ -1,36 +1,30 @@
 import {
   type AnchorContext,
   type ElementAnchor,
-  type Thread,
-  type User,
-  anchors,
-  listThreads,
-  resolveUser,
-} from '@feedback/core';
-
-const { contextMatches, hasContext } = anchors;
-import {
   type FeedbackClient,
   STATUS_COLORS,
+  type User,
   connect,
-  cssColor,
-  escapeHtml as escape,
-  formatTime,
+  resolveUser,
 } from '@feedback/core';
 import { widgetStyles } from './styles.ts';
-
-/**
- * The line a thread row shows above its latest comment.
- *
- * A subject anchor points at the PAGE rather than into it — `create_thread`
- * with no `find` makes one on any doc — so it names that instead of quoting
- * something. Without this the row would read a snippet that isn't there.
- */
-function threadSnippet(anchor: Thread['anchor']): string {
-  if (anchor.kind === 'orphan') return anchor.original.snippet.text;
-  if (anchor.kind === 'subject') return 'About this page';
-  return (anchor as ElementAnchor).snippet.text;
-}
+import {
+  askIfSignInRequired,
+  authedPost,
+  httpBase,
+  loadStoredAuth,
+  updateAuthUi,
+  validateStoredAuth,
+} from './widget-auth.ts';
+import {
+  IGNORE_ATTR,
+  TAG,
+  enterFeedbackMode,
+  exitFeedbackMode,
+  isInOwnChrome,
+  toggleFeedbackMode,
+} from './widget-picker.ts';
+import { positionPins, renderThreadsInto } from './widget-threads.ts';
 
 /**
  * <claude-feedback-widget> web component
@@ -104,31 +98,6 @@ export interface WidgetOpts {
   authOffer?: boolean;
 }
 
-/** localStorage keys for the popup-token handshake. Always under `cfw:` —
- *  the token belongs to the widget even when identityScope is 'host'.
- *  Host-page storage is readable by every script on that origin, which is
- *  why the handshake is a dev-server-only opt-in — see `authOffer`. */
-const AUTH_TOKEN_KEY = 'cfw:authToken';
-const AUTH_USER_KEY = 'cfw:authUser';
-
-/**
- * `true` when a 401 is the workspace saying "sign in first" rather than
- * "your token is dead". Read off a CLONE so the caller still gets an
- * unconsumed response, and false for anything unparseable — an unreadable
- * body must not turn a dead token into a sign-in prompt.
- */
-async function isSignInRequired(res: Response): Promise<boolean> {
-  try {
-    const body = (await res.clone().json()) as { error?: unknown };
-    return body?.error === 'sign_in_required';
-  } catch {
-    return false;
-  }
-}
-
-const TAG = 'claude-feedback-widget';
-const IGNORE_ATTR = 'data-feedback-widget';
-
 /** One speech bubble, three uses: the FAB icon, the feedback-mode cursor. */
 const BUBBLE_PATH =
   'M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z';
@@ -151,47 +120,44 @@ function defaultServerUrl(): string {
   return `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}`;
 }
 
-class FeedbackWidgetEl extends HTMLElement {
-  private shadow: ShadowRoot;
-  private client: FeedbackClient | null = null;
-  private user: User | null = null;
+export class FeedbackWidgetEl extends HTMLElement {
+  shadow: ShadowRoot;
+  client: FeedbackClient | null = null;
+  user: User | null = null;
   private initialized = false;
-  private opts: WidgetOpts & { serverUrl: string; user: string | null } = {
+  opts: WidgetOpts & { serverUrl: string; user: string | null } = {
     serverUrl: '',
     docId: '',
     user: null,
   };
-  private currentContext: AnchorContext = {};
+  currentContext: AnchorContext = {};
   private historyPatched = false;
-  private feedbackMode = false;
-  private modeCleanup: (() => void) | null = null;
-  private hoverEl: HTMLElement | null = null;
+  feedbackMode = false;
+  modeCleanup: (() => void) | null = null;
+  hoverEl: HTMLElement | null = null;
   private overlay: HTMLDivElement | null = null;
-  private pinLayer: HTMLDivElement | null = null;
+  pinLayer: HTMLDivElement | null = null;
   private panelOpen = false;
-  private activeThread: string | null = null;
-  private threadPositions = new Map<
-    string,
-    { el: HTMLElement; status: 'open' | 'resolved' | 'orphan' }
-  >();
+  activeThread: string | null = null;
+  threadPositions = new Map<string, { el: HTMLElement; status: 'open' | 'resolved' | 'orphan' }>();
   private observer: MutationObserver | null = null;
   private statusEl: HTMLElement | null = null;
   private rafId: number | null = null;
   private resizeHandler: (() => void) | null = null;
   private scrollHandler: (() => void) | null = null;
   private vvHandler: (() => void) | null = null;
-  private showResolved = false;
+  showResolved = false;
   /** The popup-token, when this embed offers auth and a person signed in. */
-  private authToken: string | null = null;
+  authToken: string | null = null;
   /** The workspace refuses unsigned writes — learned on load or from a 401. */
-  private signInToWrite = false;
+  signInToWrite = false;
   /** The post that sign-in interrupted, re-run once the token arrives. */
-  private retryAfterSignIn: (() => void) | null = null;
-  private authUser: User | null = null;
+  retryAfterSignIn: (() => void) | null = null;
+  authUser: User | null = null;
   /** The identity the browser had before sign-in — restored on sign-out. */
-  private anonUser: User | null = null;
-  private authPopup: Window | null = null;
-  private authMsgHandler: ((ev: MessageEvent) => void) | null = null;
+  anonUser: User | null = null;
+  authPopup: Window | null = null;
+  authMsgHandler: ((ev: MessageEvent) => void) | null = null;
 
   constructor() {
     super();
@@ -230,7 +196,7 @@ class FeedbackWidgetEl extends HTMLElement {
     });
     this.anonUser = this.user;
     this.opts.authOffer = opts.authOffer === true;
-    if (this.opts.authOffer) this.loadStoredAuth();
+    if (this.opts.authOffer) loadStoredAuth(this);
     this.showResolved = localStorage.getItem('cfw:showResolved') === '1';
     this.currentContext = {
       url: currentUrl(),
@@ -241,8 +207,8 @@ class FeedbackWidgetEl extends HTMLElement {
     this.renderShell();
     this.connect();
     this.startObserver();
-    if (this.opts.authOffer) void this.validateStoredAuth();
-    void this.askIfSignInRequired();
+    if (this.opts.authOffer) void validateStoredAuth(this);
+    void askIfSignInRequired(this);
   }
 
   // Auto-initialize from HTML attributes. Lets the canonical "drop in a tag +
@@ -345,7 +311,7 @@ class FeedbackWidgetEl extends HTMLElement {
 
   disconnectedCallback(): void {
     try {
-      this.exitFeedbackMode();
+      exitFeedbackMode(this);
     } catch {}
     try {
       this.client?.close();
@@ -420,7 +386,7 @@ class FeedbackWidgetEl extends HTMLElement {
     fab.innerHTML =
       `<svg class="fab-icon fab-icon-bubble" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="${BUBBLE_PATH}"/></svg>` +
       '<span class="fab-icon fab-icon-close">×</span>';
-    fab.addEventListener('click', () => this.toggleFeedbackMode());
+    fab.addEventListener('click', () => toggleFeedbackMode(this));
     this.shadow.appendChild(fab);
 
     const panel = document.createElement('div');
@@ -440,10 +406,10 @@ class FeedbackWidgetEl extends HTMLElement {
     this.shadow.appendChild(panel);
 
     this.statusEl = panel.querySelector('.status') as HTMLElement;
-    this.updateAuthUi();
+    updateAuthUi(this);
 
     panel.querySelector('.close-panel')?.addEventListener('click', () => this.togglePanel(false));
-    panel.querySelector('.pick-btn')?.addEventListener('click', () => this.enterFeedbackMode());
+    panel.querySelector('.pick-btn')?.addEventListener('click', () => enterFeedbackMode(this));
 
     // Make the pin overlay in the light DOM so pins can use page coords
     this.overlay = document.createElement('div');
@@ -460,7 +426,7 @@ class FeedbackWidgetEl extends HTMLElement {
     this.injectLightStyles();
   }
 
-  private togglePanel(force?: boolean): void {
+  togglePanel(force?: boolean): void {
     const panel = this.shadow.querySelector('.panel') as HTMLElement | null;
     if (!panel) return;
     const open = force ?? !this.panelOpen;
@@ -468,442 +434,14 @@ class FeedbackWidgetEl extends HTMLElement {
     panel.classList.toggle('open', open);
   }
 
-  // --- Workspace sign-in (popup-token handshake) ---
-
-  private httpBase(): string {
-    return this.opts.serverUrl.replace(/^ws/, 'http');
-  }
-
-  /** The one origin the message listener will take a token from. */
-  private serverOrigin(): string {
-    return new URL(this.httpBase()).origin;
-  }
-
-  /**
-   * The cheap question on load: does this workspace refuse unsigned writes?
-   * One GET, no token, and a route that fails or is missing (an older
-   * server) reads as "open" — the 401 on the first write remains the
-   * backstop, so a wrong "open" costs one refused post, never a comment.
-   */
-  private async askIfSignInRequired(): Promise<void> {
-    try {
-      const res = await fetch(`${this.httpBase()}/api/auth/session`);
-      // The route is never gated and always 200s; anything else here is a
-      // proxy page, which is not JSON and lands in the catch.
-      const body = (await res.json()) as { signInToWrite?: unknown };
-      if (body.signInToWrite === true) this.requireSignIn();
-    } catch {}
-  }
-
-  /**
-   * The workspace needs a signed-in writer. Adopt the token a previous visit
-   * left in storage (validated before it is trusted with a post — a dead one
-   * clears and the offer returns), and put the offer in the panel. A plain
-   * embed on an OPEN workspace never reaches here, so it still adopts
-   * nothing and shows nothing — see WidgetOpts.authOffer.
-   */
-  private requireSignIn(): void {
-    if (this.signInToWrite) return;
-    this.signInToWrite = true;
-    if (!this.opts.authOffer) {
-      this.loadStoredAuth();
-      void this.validateStoredAuth();
-    }
-    this.updateAuthUi();
-    this.scheduleRender();
-  }
-
-  private loadStoredAuth(): void {
-    try {
-      this.authToken = localStorage.getItem(AUTH_TOKEN_KEY);
-      const raw = localStorage.getItem(AUTH_USER_KEY);
-      this.authUser = raw ? (JSON.parse(raw) as User) : null;
-    } catch {
-      this.authToken = null;
-      this.authUser = null;
-    }
-    if (this.authUser) this.user = this.authUser;
-  }
-
-  /**
-   * Ask the server whether the stored token still stands. The server 401s a
-   * dead one (revoked, expired, tampered) — that clears it and the offer
-   * returns; it never silently keeps a token the server would refuse.
-   */
-  private async validateStoredAuth(): Promise<void> {
-    if (!this.authToken) return;
-    try {
-      const res = await fetch(`${this.httpBase()}/api/auth/widget-session`, {
-        headers: { authorization: `Bearer ${this.authToken}` },
-      });
-      if (!res.ok) {
-        this.clearAuth();
-        return;
-      }
-      const body = (await res.json()) as { authenticated: boolean; user?: User };
-      if (!body.authenticated || !body.user) {
-        this.clearAuth();
-        return;
-      }
-      this.setAuth(this.authToken, body.user);
-    } catch {
-      // Offline is not signed-out: keep the token, the next post decides.
-    }
-  }
-
-  private setAuth(token: string, user: User): void {
-    this.authToken = token;
-    this.authUser = user;
-    this.user = user;
-    try {
-      localStorage.setItem(AUTH_TOKEN_KEY, token);
-      localStorage.setItem(AUTH_USER_KEY, JSON.stringify(user));
-    } catch {}
-    this.updateAuthUi();
-    this.scheduleRender();
-    // The post this sign-in was for. Rebuilt from the composer, so it goes
-    // out under the identity the widget now holds, token and name both. A
-    // second refusal re-arms it only after an await, so clearing here is safe.
-    this.retryAfterSignIn?.();
-    this.retryAfterSignIn = null;
-  }
-
-  /** Local only — the workspace session lives on, sign-out there revokes. */
-  private clearAuth(): void {
-    this.authToken = null;
-    this.authUser = null;
-    this.user = this.anonUser;
-    try {
-      localStorage.removeItem(AUTH_TOKEN_KEY);
-      localStorage.removeItem(AUTH_USER_KEY);
-    } catch {}
-    this.updateAuthUi();
-    this.scheduleRender();
-  }
-
-  private startSignIn(): void {
-    const url = `${this.httpBase()}/widget-auth?origin=${encodeURIComponent(location.origin)}`;
-    this.authPopup = window.open(url, 'cw-widget-auth', 'popup,width=420,height=560');
-    if (!this.authMsgHandler) {
-      this.authMsgHandler = (ev: MessageEvent) => {
-        // Both walls, independently: the token may only arrive FROM the
-        // workspace origin, and only from the window this widget opened.
-        if (ev.origin !== this.serverOrigin()) return;
-        if (!this.authPopup || ev.source !== this.authPopup) return;
-        const data = ev.data as { type?: string; token?: string; user?: User } | null;
-        if (!data || data.type !== 'cw-widget-auth') return;
-        if (typeof data.token !== 'string' || !data.user) return;
-        this.setAuth(data.token, data.user);
-      };
-      window.addEventListener('message', this.authMsgHandler);
-    }
-  }
-
-  private updateAuthUi(): void {
-    const actions = this.shadow.querySelector('.panel-actions') as HTMLElement | null;
-    if (!actions) return;
-    const me = actions.querySelector('.me') as HTMLElement | null;
-    if (!me) return;
-    actions.querySelector('.auth-signin')?.remove();
-    if (this.user) {
-      me.innerHTML = `<span class="swatch" style="background:${cssColor(this.user.color)}"></span>${escape(this.user.name)}`;
-    }
-    // Sign-in UI exists when this embed opted in, or when it has to.
-    if (!this.opts.authOffer && !this.signInToWrite) return;
-    if (this.authToken) {
-      const out = document.createElement('button');
-      out.className = 'auth-signout';
-      out.textContent = 'sign out';
-      out.addEventListener('click', () => this.clearAuth());
-      me.appendChild(out);
-    } else {
-      const btn = document.createElement('button');
-      btn.className = 'auth-signin';
-      btn.title = 'Sign in with your workspace session to comment as yourself';
-      btn.textContent = 'Sign in';
-      btn.addEventListener('click', () => this.startSignIn());
-      actions.appendChild(btn);
-    }
-  }
-
-  /**
-   * POST with the token when one is held. On a 401 the server has refused
-   * the token (revoked, expired) — sign out locally and retry once without
-   * it, so the comment lands as anonymous rather than vanishing.
-   *
-   * Takes a BUILDER, not a built request: the body names `this.user` as the
-   * claimed author, and the server trusts that claim on the local surface.
-   * A retry that re-sent the request built before `clearAuth()` would carry
-   * the revoked person's name without their token — exactly the attribution
-   * the 401 just refused. Rebuilding after the sign-out sends the anonymous
-   * identity the widget now actually holds.
-   */
-  private async authedPost(url: string, build: () => RequestInit): Promise<Response> {
-    const send = (): Promise<Response> => {
-      const init = build();
-      if (!this.authToken) return fetch(url, init);
-      return fetch(url, {
-        ...init,
-        headers: {
-          ...(init.headers as Record<string, string>),
-          authorization: `Bearer ${this.authToken}`,
-        },
-      });
-    };
-    const res = await send();
-    if (res.status !== 401) return res;
-    // TWO different 401s, and the old code could only see one of them.
-    //
-    // `sign_in_required` is the workspace refusing an UNSIGNED write
-    // (server/src/middleware/write-gate.ts). Clearing a token we do not hold
-    // and retrying anonymously produces the identical refusal, forever, and
-    // every caller here ignores the response — so the comment simply
-    // vanished, which is the exact failure the gate exists to replace.
-    if (await isSignInRequired(res)) {
-      this.requireSignIn();
-      return res;
-    }
-    // Anything else with a token is the token being refused (revoked,
-    // expired): sign out locally and retry once so the comment lands as
-    // anonymous rather than vanishing. Rebuilt after `clearAuth`, so the
-    // retry carries the identity the widget now actually holds.
-    if (!this.authToken) return res;
-    this.clearAuth();
-    return send();
-  }
-
-  /**
-   * Say, inside the composer and beside the draft it blocks, that posting
-   * needs a signed-in person — and arm the retry, so signing in finishes the
-   * post rather than asking for a second click.
-   *
-   * ALWAYS a control the person clicks — never an automatic `window.open`.
-   * After a refusal this runs past an awaited request and a parsed body, by
-   * which point the submit click's transient activation has expired, so a
-   * popup opened here is exactly what a popup blocker exists to stop. The
-   * click on this control carries its own activation.
-   *
-   * The retry checks the composer is still on the page: a draft cancelled
-   * while the popup was open must not be posted by the token arriving.
-   */
-  private composerSignIn(composer: HTMLElement, submit: HTMLButtonElement): void {
-    // No `type="button"` on any widget control: nothing in the shadow root
-    // is a form, so the default cannot submit — and each one shipped bytes.
-    const btn = document.createElement('button');
-    btn.className = 'auth-signin';
-    btn.textContent = 'Sign in';
-    btn.addEventListener('click', () => this.startSignIn());
-    this.composerNote(composer, 'Sign in to post. Your draft is kept. ').appendChild(btn);
-    this.retryAfterSignIn = () => {
-      if (composer.isConnected) submit.click();
-    };
-  }
-
-  /** The composer's one line of news, created on first use. */
-  private composerNote(composer: HTMLElement, text: string): HTMLElement {
-    let err = composer.querySelector('.composer-err') as HTMLElement | null;
-    if (!err) {
-      err = document.createElement('div');
-      err.className = 'composer-err';
-      composer.appendChild(err);
-    }
-    err.textContent = text;
-    return err;
-  }
-
-  // --- Feedback mode ---
-  //
-  // The FAB is a MODE toggle, not a menu: one click arms it, every click on
-  // the page after that composes a comment, and it stays armed until the FAB
-  // is clicked again (or Escape with no composer open). Modeled on the
-  // comment mode in Claude Desktop artifacts — toggle on, click to place a
-  // bubble, type — because the whole point is fewer clicks per comment.
-
-  private toggleFeedbackMode(): void {
-    if (this.feedbackMode) this.exitFeedbackMode();
-    else this.enterFeedbackMode();
-  }
-
-  private enterFeedbackMode(): void {
-    if (this.feedbackMode) return;
-    this.feedbackMode = true;
-    // The speech-bubble cursor rides a body class (see injectLightStyles) so
-    // it beats per-element cursor styles the host page declares.
-    document.body.classList.add('cfw-feedback-mode');
-    // iOS Safari fires `click` reliably only on elements that have
-    // `cursor: pointer` (or are a button/anchor). The mode needs to catch
-    // taps on arbitrary mockup elements — `<div>`s, custom components,
-    // etc. — that DON'T have a clickable cursor style. A window-level click
-    // listener silently no-ops on those.
-    //
-    // Pointer events fix it: `pointerup` fires for mouse, touch, and pen
-    // regardless of cursor style. Bonus: `touch-action: manipulation` on the
-    // body suppresses the 300ms double-tap-zoom delay on iOS so taps
-    // register instantly.
-    const prevTouchAction = document.body.style.touchAction;
-    document.body.style.touchAction = 'manipulation';
-    this.togglePanel(false);
-    const fab = this.shadow.querySelector('.fab');
-    fab?.setAttribute('aria-pressed', 'true');
-    fab?.classList.add('open');
-
-    // The banner names the mode and holds the way out — the cursor alone
-    // says "you're in a mode" but not how to leave it.
-    const banner = document.createElement('div');
-    banner.className = 'picker-banner';
-    banner.innerHTML = `
-      <span>Click anything to comment.</span>
-      <button class="picker-cancel">Done (Esc)</button>
-    `;
-    this.shadow.appendChild(banner);
-
-    const onMove = (ev: PointerEvent) => {
-      // Skip hover-highlight on touch — fingers don't "hover," and
-      // repainting outlines along a drag is just visual noise.
-      if (ev.pointerType === 'touch') return;
-      const t = this.hitTest(ev);
-      if (this.hoverEl && this.hoverEl !== t) this.unhighlight(this.hoverEl);
-      this.hoverEl = t;
-      if (t) this.highlight(t);
-    };
-    const onTap = (ev: PointerEvent) => {
-      const t = this.hitTest(ev);
-      // Own chrome (FAB, composer, pins) keeps its normal behavior — a
-      // preventDefault here would break the very controls the mode relies on.
-      if (!t) return;
-      ev.preventDefault();
-      ev.stopPropagation();
-      this.openComposerForElement(t, ev.clientX, ev.clientY);
-    };
-    const onKey = (ev: KeyboardEvent) => {
-      if (ev.key !== 'Escape') return;
-      // First Escape backs out of the comment being written; the next one
-      // exits the mode. Matches every modal-inside-a-mode convention.
-      const composer = this.shadow.querySelector('.composer');
-      if (composer) {
-        composer.remove();
-        return;
-      }
-      this.exitFeedbackMode();
-    };
-    banner.querySelector('.picker-cancel')?.addEventListener('click', (ev) => {
-      ev.stopPropagation();
-      this.exitFeedbackMode();
-    });
-    window.addEventListener('pointermove', onMove, true);
-    window.addEventListener('pointerup', onTap, true);
-    window.addEventListener('keydown', onKey, true);
-
-    this.modeCleanup = () => {
-      document.body.classList.remove('cfw-feedback-mode');
-      document.body.style.touchAction = prevTouchAction;
-      if (this.hoverEl) this.unhighlight(this.hoverEl);
-      this.hoverEl = null;
-      banner.remove();
-      fab?.setAttribute('aria-pressed', 'false');
-      fab?.classList.remove('open');
-      window.removeEventListener('pointermove', onMove, true);
-      window.removeEventListener('pointerup', onTap, true);
-      window.removeEventListener('keydown', onKey, true);
-    };
-  }
-
-  /** A composer left open survives the exit — mid-typed text is not the
-   *  mode's to discard. */
-  private exitFeedbackMode(): void {
-    if (!this.feedbackMode) return;
-    this.feedbackMode = false;
-    this.modeCleanup?.();
-    this.modeCleanup = null;
-  }
-
-  private hitTest(ev: MouseEvent): HTMLElement | null {
-    const el = document.elementFromPoint(ev.clientX, ev.clientY) as HTMLElement | null;
-    if (!el) return null;
-    // skip widget chrome
-    if (el.closest(`[${IGNORE_ATTR}]`) || el.tagName === TAG.toUpperCase()) return null;
-    return el;
-  }
-
-  private highlight(el: HTMLElement): void {
-    el.dataset.cfwPrevOutline = el.style.outline;
-    el.style.outline = '2px solid #2e7dd7';
-  }
-  private unhighlight(el: HTMLElement): void {
-    el.style.outline = el.dataset.cfwPrevOutline ?? '';
-    delete el.dataset.cfwPrevOutline;
-  }
-
-  // --- Composer ---
-
-  private openComposerForElement(el: HTMLElement, cx: number, cy: number): void {
-    const anchor: ElementAnchor = {
-      ...anchors.Element.createAnchor(el),
-      ...(hasContext(this.currentContext) ? { context: { ...this.currentContext } } : {}),
-    };
-    this.showComposer(anchor, cx, cy, null);
-  }
-
-  private showComposer(
-    anchor: ElementAnchor,
-    cx: number,
-    cy: number,
-    replyTo: string | null,
-  ): void {
-    const existing = this.shadow.querySelector('.composer') as HTMLElement | null;
-    existing?.remove();
-    const composer = document.createElement('div');
-    composer.className = 'composer';
-    composer.style.left = `${Math.min(cx + 12, window.innerWidth - 320)}px`;
-    composer.style.top = `${Math.min(cy + 12, window.innerHeight - 200)}px`;
-    composer.innerHTML = `
-      <div class="composer-snippet">${escape(anchor.snippet.text)}</div>
-      <textarea placeholder="${replyTo ? 'Reply…' : 'Comment on this element…'}" rows="3"></textarea>
-      <div class="composer-actions">
-        <button class="cancel">Cancel</button>
-        <button class="primary submit">Post</button>
-      </div>
-    `;
-    this.shadow.appendChild(composer);
-    const ta = composer.querySelector('textarea') as HTMLTextAreaElement;
-    ta.focus();
-    composer.querySelector('.cancel')?.addEventListener('click', () => composer.remove());
-    const submit = composer.querySelector('.submit') as HTMLButtonElement;
-    // Say it before the first attempt when the widget already knows.
-    if (this.signInToWrite && !this.authToken) this.composerSignIn(composer, submit);
-    submit.addEventListener('click', async () => {
-      const text = ta.value.trim();
-      if (!text || !this.user) return;
-      // A silent await reads as a dead button — say the click landed.
-      submit.disabled = true;
-      submit.textContent = 'Posting…';
-      // A rejected fetch (server unreachable) is a failed post like any
-      // other — without the catch it would strand the button at "Posting…".
-      let posted = false;
-      try {
-        posted = replyTo
-          ? await this.postReply(replyTo, text)
-          : await this.postNewThread(anchor, text);
-      } catch {}
-      if (!posted) {
-        // Kept on failure, with the text still in it.
-        submit.disabled = false;
-        submit.textContent = 'Post';
-        if (this.signInToWrite && !this.authToken) this.composerSignIn(composer, submit);
-        else this.composerNote(composer, 'Couldn’t post — try again.');
-        return;
-      }
-      composer.remove();
-    });
-  }
-
   /** `false` when the server refused it — the caller keeps the composer, and
    *  the typed comment, so signing in and pressing Post again is all it takes.
    *  Discarding it on a refusal would lose the very thing the sign-in prompt
    *  is asking the person to come back and finish. */
-  private async postNewThread(anchor: ElementAnchor, text: string): Promise<boolean> {
-    const res = await this.authedPost(
-      `${this.httpBase()}/api/docs/${encodeURIComponent(this.opts.docId)}/threads`,
+  async postNewThread(anchor: ElementAnchor, text: string): Promise<boolean> {
+    const res = await authedPost(
+      this,
+      `${httpBase(this)}/api/docs/${encodeURIComponent(this.opts.docId)}/threads`,
       () => ({
         method: 'POST',
         headers: { 'content-type': 'application/json' },
@@ -914,9 +452,10 @@ class FeedbackWidgetEl extends HTMLElement {
   }
 
   /** `false` when the server refused it — see `postNewThread`. */
-  private async postReply(threadId: string, text: string): Promise<boolean> {
-    const res = await this.authedPost(
-      `${this.httpBase()}/api/docs/${encodeURIComponent(this.opts.docId)}/threads/${encodeURIComponent(threadId)}/comments`,
+  async postReply(threadId: string, text: string): Promise<boolean> {
+    const res = await authedPost(
+      this,
+      `${httpBase(this)}/api/docs/${encodeURIComponent(this.opts.docId)}/threads/${encodeURIComponent(threadId)}/comments`,
       () => ({
         method: 'POST',
         headers: { 'content-type': 'application/json' },
@@ -926,262 +465,13 @@ class FeedbackWidgetEl extends HTMLElement {
     return res.ok;
   }
 
-  private async setStatus(threadId: string, status: 'open' | 'resolved'): Promise<void> {
+  async setStatus(threadId: string, status: 'open' | 'resolved'): Promise<void> {
     const action = status === 'resolved' ? 'resolve' : 'reopen';
-    await this.authedPost(
-      `${this.httpBase()}/api/docs/${encodeURIComponent(this.opts.docId)}/threads/${encodeURIComponent(threadId)}/${action}`,
+    await authedPost(
+      this,
+      `${httpBase(this)}/api/docs/${encodeURIComponent(this.opts.docId)}/threads/${encodeURIComponent(threadId)}/${action}`,
       () => ({ method: 'POST' }),
     );
-  }
-
-  // --- Threads / pins ---
-
-  private renderThreads(): void {
-    if (!this.client) return;
-    const threads = listThreads(this.client.ydoc);
-    // pin layer
-    this.threadPositions.clear();
-    const pinLayer = this.pinLayer;
-    if (!pinLayer) return; // disconnectedCallback fired between schedule and render
-    pinLayer.innerHTML = '';
-    const annotated: {
-      thread: Thread;
-      status: 'open' | 'resolved' | 'orphan';
-      el: HTMLElement | null;
-    }[] = [];
-    for (const t of threads) {
-      // A subject thread has nothing on the page to pin, but the panel is the
-      // one place it can ever appear — dropping it here is how a comment ends
-      // up in the store with no surface able to show it.
-      if (t.anchor.kind === 'subject') {
-        annotated.push({
-          thread: t,
-          status: t.status === 'resolved' ? 'resolved' : 'open',
-          el: null,
-        });
-        continue;
-      }
-      if (t.anchor.kind !== 'element' && t.anchor.kind !== 'orphan') continue;
-      const statusBase: 'open' | 'resolved' | 'orphan' =
-        t.status === 'resolved' ? 'resolved' : 'open';
-      if (t.anchor.kind === 'orphan') {
-        annotated.push({ thread: t, status: 'orphan', el: null });
-        continue;
-      }
-      // Pin only when the anchor's captured context matches the current
-      // page / view. Legacy anchors with no context show everywhere
-      // (back-compat). Off-context threads still flow into the side
-      // panel via listThreads — they're just not overlaid on the doc.
-      if (!contextMatches(t.anchor.context, this.currentContext)) {
-        annotated.push({ thread: t, status: statusBase, el: null });
-        continue;
-      }
-      const res = anchors.Element.resolve(t.anchor, { root: document });
-      if (!res.ok) {
-        annotated.push({ thread: t, status: 'orphan', el: null });
-        continue;
-      }
-      annotated.push({ thread: t, status: statusBase, el: res.element });
-      // Hide pins for resolved threads by default — they pile up visual
-      // noise on the page during iteration. The thread still flows into
-      // the panel list (where it's collapsed under a "Show resolved (N)"
-      // toggle), so reopening is one click away.
-      if (statusBase === 'resolved' && !this.showResolved) continue;
-      const pin = document.createElement('div');
-      pin.setAttribute(IGNORE_ATTR, '');
-      pin.className = 'cfw-pin';
-      pin.dataset.threadId = t.id;
-      pin.dataset.status = statusBase;
-      pin.style.cssText = [
-        'position:absolute',
-        'pointer-events:auto',
-        'width:24px',
-        'height:24px',
-        'border-radius:50%',
-        `background:${statusBase === 'resolved' ? STATUS_COLORS.resolved : STATUS_COLORS.open}`,
-        'color:#fff',
-        'font:600 12px system-ui',
-        'display:flex',
-        'align-items:center',
-        'justify-content:center',
-        'cursor:pointer',
-        'box-shadow:0 2px 6px rgba(0,0,0,0.25)',
-        'transform:translate(-50%,-100%)',
-      ].join(';');
-      const idx = annotated.filter((a) => a.status !== 'orphan').length;
-      pin.textContent = String(idx);
-      pin.title = t.comments[0]?.text ?? 'open thread';
-      pin.addEventListener('click', (ev) => {
-        this.showThreadPopover(t, ev.clientX, ev.clientY);
-      });
-      pinLayer.appendChild(pin);
-      this.threadPositions.set(t.id, { el: res.element, status: statusBase });
-    }
-    this.positionPins();
-    const badge = this.shadow.querySelector('.fab-list .count') as HTMLElement | null;
-    if (badge) {
-      const open = annotated.filter((a) => a.status === 'open').length;
-      badge.textContent = String(open);
-      badge.hidden = open === 0;
-    }
-    this.renderPanelList(annotated);
-  }
-
-  private positionPins(): void {
-    if (!this.pinLayer) return;
-    for (const pin of Array.from(this.pinLayer.children)) {
-      const id = (pin as HTMLElement).dataset.threadId;
-      if (!id) continue;
-      const pos = this.threadPositions.get(id);
-      if (!pos) continue;
-      const rect = pos.el.getBoundingClientRect();
-      (pin as HTMLElement).style.left = `${rect.right - 6}px`;
-      (pin as HTMLElement).style.top = `${rect.top + 6}px`;
-    }
-  }
-
-  private renderPanelList(
-    entries: { thread: Thread; status: 'open' | 'resolved' | 'orphan' }[],
-  ): void {
-    const list = this.shadow.querySelector('.panel-threads') as HTMLElement | null;
-    if (!list) return;
-    list.innerHTML = '';
-    const groups: Record<'open' | 'orphan' | 'resolved', typeof entries> = {
-      open: entries.filter((e) => e.status === 'open'),
-      orphan: entries.filter((e) => e.status === 'orphan'),
-      resolved: entries.filter((e) => e.status === 'resolved'),
-    };
-    if (entries.length === 0) {
-      const e = document.createElement('div');
-      e.className = 'empty';
-      e.textContent = 'No comments yet. Tap the bubble, then click anything on the page.';
-      list.appendChild(e);
-      return;
-    }
-    for (const key of ['open', 'orphan'] as const) {
-      const group = groups[key];
-      if (!group.length) continue;
-      const h = document.createElement('div');
-      h.className = 'section-heading';
-      h.textContent = `${capitalize(key)} (${group.length})`;
-      list.appendChild(h);
-      for (const { thread, status } of group) {
-        list.appendChild(this.renderThreadRow(thread, status));
-      }
-    }
-    if (groups.resolved.length) {
-      const toggle = document.createElement('button');
-      toggle.className = 'resolved-toggle';
-      toggle.textContent = this.showResolved
-        ? `Hide resolved (${groups.resolved.length})`
-        : `Show resolved (${groups.resolved.length})`;
-      toggle.addEventListener('click', () => {
-        this.showResolved = !this.showResolved;
-        localStorage.setItem('cfw:showResolved', this.showResolved ? '1' : '0');
-        // Rerender to flip pins on/off and the resolved group visibility
-        this.scheduleRender();
-      });
-      list.appendChild(toggle);
-      if (this.showResolved) {
-        for (const { thread, status } of groups.resolved) {
-          list.appendChild(this.renderThreadRow(thread, status));
-        }
-      }
-    }
-  }
-
-  private renderThreadRow(t: Thread, status: 'open' | 'resolved' | 'orphan'): HTMLElement {
-    const row = document.createElement('div');
-    row.className = `thread status-${status}`;
-    if (this.activeThread === t.id) row.classList.add('active');
-
-    const snippet = threadSnippet(t.anchor);
-    const last = t.comments[t.comments.length - 1];
-    row.innerHTML = `
-      <div class="meta">
-        <span class="dot"></span>
-        <span class="author-name">${escape(t.createdBy.name)}</span>
-        <span class="time">${formatTime(last?.ts ?? 0)}</span>
-      </div>
-      <div class="snippet">${escape(snippet)}</div>
-      <div class="last">${escape(last?.text ?? '')}</div>
-    `;
-    row.addEventListener('click', () => {
-      const pos = this.threadPositions.get(t.id);
-      if (pos?.el) pos.el.scrollIntoView({ behavior: 'smooth', block: 'center' });
-      this.activeThread = t.id;
-      this.showThreadPopoverForThread(t);
-    });
-    return row;
-  }
-
-  private showThreadPopoverForThread(t: Thread): void {
-    if (t.anchor.kind === 'element') {
-      const res = anchors.Element.resolve(t.anchor, { root: document });
-      if (res.ok) {
-        const r = res.element.getBoundingClientRect();
-        this.showThreadPopover(t, r.right, r.top);
-        return;
-      }
-    }
-    this.showThreadPopover(t, window.innerWidth / 2, 80);
-  }
-
-  private showThreadPopover(t: Thread, cx: number, cy: number): void {
-    const existing = this.shadow.querySelector('.thread-popover');
-    existing?.remove();
-    const pop = document.createElement('div');
-    pop.className = 'thread-popover';
-    pop.style.left = `${Math.min(cx + 6, window.innerWidth - 340)}px`;
-    pop.style.top = `${Math.min(cy + 6, window.innerHeight - 240)}px`;
-    const snippet = threadSnippet(t.anchor);
-    const status = t.anchor.kind === 'orphan' ? 'orphan' : t.status;
-    pop.innerHTML = `
-      <header>
-        <span class="tag tag-${status}">${status}</span>
-        <button class="icon-btn close">×</button>
-      </header>
-      <div class="snippet">${escape(snippet)}</div>
-      <div class="comments"></div>
-      <div class="actions">
-        <textarea rows="2" placeholder="Reply as ${escape(this.user?.name ?? 'Anon')}…"></textarea>
-        <button class="primary submit">Reply</button>
-        ${
-          status === 'resolved'
-            ? `<button class="reopen">Reopen</button>`
-            : status === 'open'
-              ? `<button class="resolve">Resolve</button>`
-              : ''
-        }
-      </div>
-    `;
-    const cList = pop.querySelector('.comments') as HTMLElement;
-    for (const c of t.comments) {
-      const row = document.createElement('div');
-      row.className = 'comment';
-      row.innerHTML = `
-        <div class="author"><span class="swatch" style="background:${cssColor(c.author.color)}"></span>${escape(c.author.name)} <span class="time">${formatTime(c.ts)}</span></div>
-        <div class="body">${escape(c.text)}</div>
-      `;
-      cList.appendChild(row);
-    }
-    this.shadow.appendChild(pop);
-    pop.querySelector('.close')?.addEventListener('click', () => pop.remove());
-    pop.querySelector('.submit')?.addEventListener('click', async () => {
-      const ta = pop.querySelector('textarea') as HTMLTextAreaElement;
-      const text = ta.value.trim();
-      if (!text) return;
-      if (!(await this.postReply(t.id, text))) return;
-      pop.remove();
-    });
-    pop.querySelector('.resolve')?.addEventListener('click', async () => {
-      await this.setStatus(t.id, 'resolved');
-      pop.remove();
-    });
-    pop.querySelector('.reopen')?.addEventListener('click', async () => {
-      await this.setStatus(t.id, 'open');
-      pop.remove();
-    });
   }
 
   // --- Light-DOM styles (pins, overlay) ---
@@ -1208,7 +498,17 @@ class FeedbackWidgetEl extends HTMLElement {
 
   private pendingRender = false;
 
-  private scheduleRender(): void {
+  /**
+   * The render loop's one entry point. Kept as a method after
+   * `widget-threads.ts` was extracted, because the element is the surface
+   * everything the widget does is still reachable through — the panel test
+   * drives a render by calling it.
+   */
+  renderThreads(): void {
+    renderThreadsInto(this);
+  }
+
+  scheduleRender(): void {
     if (this.pendingRender) return;
     this.pendingRender = true;
     requestAnimationFrame(() => {
@@ -1240,37 +540,19 @@ class FeedbackWidgetEl extends HTMLElement {
       attributes: false,
       characterData: false,
     });
-    this.resizeHandler = () => this.positionPins();
-    this.scrollHandler = () => this.positionPins();
+    this.resizeHandler = () => positionPins(this);
+    this.scrollHandler = () => positionPins(this);
     window.addEventListener('resize', this.resizeHandler);
     window.addEventListener('scroll', this.scrollHandler, { passive: true, capture: true });
     // A gentle rAF loop keeps pins attached during layout animations where
     // MutationObserver doesn't fire (e.g. CSS transitions, scroll in
     // overflow containers). Position-only, no render.
     const tick = () => {
-      this.positionPins();
+      positionPins(this);
       this.rafId = requestAnimationFrame(tick);
     };
     this.rafId = requestAnimationFrame(tick);
   }
-}
-
-function isInOwnChrome(node: Node): boolean {
-  let el: Node | null = node;
-  while (el) {
-    if (el.nodeType === 1) {
-      const e = el as Element;
-      if (
-        e.hasAttribute?.(IGNORE_ATTR) ||
-        e.tagName === TAG.toUpperCase() ||
-        e.id === 'cfw-light-styles'
-      ) {
-        return true;
-      }
-    }
-    el = el.parentNode;
-  }
-  return false;
 }
 
 // --- Public FeedbackWidget global ---
@@ -1310,10 +592,6 @@ if (typeof window !== 'undefined') {
 
 export { FeedbackWidget };
 export default FeedbackWidget;
-
-function capitalize(s: string): string {
-  return s.charAt(0).toUpperCase() + s.slice(1);
-}
 
 function currentUrl(): string {
   return location.pathname + location.search + location.hash;

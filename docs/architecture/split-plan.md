@@ -707,21 +707,47 @@ mostly two-line route calls.
 
 Layer: HTTP client / tool surface. Final directory: `mcp/src/` — no move.
 
-## B7 · `widget.ts`
+## B7 · `widget.ts` — DONE
 
-1,320 lines. **Effort M**, because methods must become functions taking the
-element. One PR, three commits.
+1,320 lines before, **598 after**. One PR, three commits. **Effort M**,
+because methods had to become functions taking the element.
 
-| Becomes | Moves |
-|---|---|
-| `widget-auth.ts` (~230) | `loadStoredAuth`, `authedPost`, `composerSignIn` |
-| `widget-picker.ts` (~200) | `enterFeedbackMode`, `hitTest`, `openComposerForElement` |
-| `widget-threads.ts` (~290) | `renderThreads`, `positionPins`, `showThreadPopover` |
+| Becomes | Moves | Measured |
+|---|---|---|
+| `widget-auth.ts` | `loadStoredAuth`, `authedPost`, `composerSignIn` and the rest of the popup-token handshake | 284 (est. ~230) |
+| `widget-picker.ts` | `enterFeedbackMode`, `hitTest`, `openComposerForElement` | 232 (est. ~200) |
+| `widget-threads.ts` | `renderThreads`, `positionPins`, `showThreadPopover` | 297 (est. ~290) |
 
-Everything stays reachable from the custom element, so the shipped bundle is
-unchanged — but run `bun run build:widget && bun run check:widget-size` and
-report the number in the PR body. The budget is 40 KB gzipped and it is a hard
-constraint.
+The three estimates were close and the one that missed did so for the reason
+A2 found: a verb is not separable from the state it reads. `widget-auth.ts`
+came out 54 over because `httpBase`, `serverOrigin`, `setAuth`, `clearAuth`,
+`startSignIn`, `updateAuthUi` and `requireSignIn` all had to move with the
+three named methods — they are the same handshake, and leaving any of them
+behind would have made the parent import a value from the file that imports
+it.
+
+**`TAG` and `IGNORE_ATTR` moved to `widget-picker.ts` for the same reason,
+and `isInOwnChrome` went with them.** Both constants answer one question in
+two directions: `hitTest` asks whether a pointer landed on the widget's own
+chrome, `isInOwnChrome` asks whether a mutation record came from it. The
+parent imports all three names back, as `tasks.ts` does in A2.
+
+**The element keeps a `renderThreads()` method** forwarding into
+`widget-threads.ts`. "Everything stays reachable from the custom element" is
+not decoration here — the panel test drives a synchronous render by calling
+it rather than waiting on the rAF, and it was the one thing in the suite that
+noticed the split.
+
+**Bundle: 40,935 bytes gzipped before, 40,898 after, against a 40,960 budget.
+The split BOUGHT headroom rather than spending it** — the file started 25
+bytes under the limit. Top-level functions minify to one-letter names where
+class methods have to keep their property names, so moving nine methods out
+of the class more than paid for the import headers. Verified by content, not
+by exit code: `showThreadPopoverForThread`, `openComposerForElement` and
+`validateStoredAuth` shipped verbatim in the old bundle (2, 2 and 3
+occurrences) and are absent from the new one, while `cfw:authToken`,
+`claude-feedback-widget` and `About this page` — one literal from each new
+module — appear once in both.
 
 ## B8 · `agent-notes.ts` — DONE
 
