@@ -195,26 +195,45 @@ around it.
 
 Layer: entry.
 
-## A5 · the meeting family
+## A5 · the meeting family — DONE
 
-| File | Becomes | Moves | Importers | Effort |
-|---|---|---|---|---|
-| `meeting-task-capture.ts` (1,348) | `meeting-capture-prompt.ts` (~380) | `buildTaskCapturePrompt`, `parseTaskCaptureReply`, the `*_PROMPT_RULE` constants | tests | M |
-| | `meeting-capture-guards.ts` (~200) | `tickMentionsCandidate`, `phraseSpokenOnTick`, `captureWindow` | tests | |
-| `meeting-notes-merge.ts` (1,067) | `notes-ownership.ts` (~250) | `createNotesOwnership`, `classifyOwnership`, `reclaimAfterInPlaceEdit` | `meeting-notes.ts`, tests | M |
-| | `notes-section.ts` (~250) | `findNotesSection`, `itemsOfMarkdown`, `readNotesSection` | `meeting-notes-doc.ts`, tests | |
-| `meeting-notes.ts` (1,039) | `pause-ticker.ts` (~190) | `createPauseTicker`, `TickScheduler`, `realTickScheduler` | tests use `ManualScheduler` against this contract | S |
-| `meeting-notes-doc.ts` (986) | `notes-section-write.ts` (~470) | `replaceNotesSection`, `retagSpeakerInNotes`, `reattributeNotesSection`, `demoteBodyHeadings` | tests | S |
+| File | Became | Moved | Measured |
+|---|---|---|---|
+| `meeting-task-capture.ts` (1,348) | `meeting-capture-prompt.ts` | the five intent rules, `buildTaskCapturePrompt`, `parseTaskCaptureReply` and the three length caps | 330 (est. ~380) |
+| | `meeting-capture-guards.ts` | every "did the transcript vouch for it" predicate, the overlap window they are asked about, and the word helpers they share | 310 (est. ~200) |
+| `meeting-notes-merge.ts` (1,067) | `notes-ownership.ts` | the ledger, `classifyOwnership`, `readNotesSection`, `reclaimAfterInPlaceEdit`, `agentOwnedElements` | 172 (est. ~250) |
+| | `notes-section.ts` | the item model, `findNotesSection`, the flatteners, `stripSectionHeading` | 218 (est. ~250) |
+| `meeting-notes.ts` (1,039) | `pause-ticker.ts` | `createPauseTicker`, `TickScheduler`, `realTickScheduler`, both durations | 210 (est. ~190) |
+| `meeting-notes-doc.ts` (986) | `notes-section-write.ts` | every verb that writes into a live section, plus the tag-run rewriter they share | 498 (est. ~470) |
 
-Seven commits. `reclaimAfterInPlaceEdit` sits at the bottom of
-`meeting-notes-merge.ts`, below `mergeNotesSection`, not with the other two
-ownership functions — move all three regardless; they answer one question.
-`pause-ticker.ts` is the two-clock detector and knows nothing about notes,
-which is the point: read
-[meeting-assistant.md](meeting-assistant.md) before touching the clock.
+Six commits, one per extracted file, plus this one. The four parents end at
+794, 758, 870 and 524 against estimates of 600, 550, 800 and 400. Every name
+each parent exported it still exports, by re-export, so no caller and no test
+changed.
 
-Layer: `pause-ticker.ts`, the guards and the prompt builders are domain; the
-rest stay services. Final directory: `meeting/`.
+**`readNotesSection` went with the ledger, not with the section readers.** The
+plan filed it under `notes-section.ts`; it reads through `classifyOwnership` to
+say which items are a person's, and `reclaimAfterInPlaceEdit` reads through
+`findNotesSection` to find them, so the planned arrangement makes the two new
+files import each other. Ownership imports section, one way.
+
+**The guards came out bigger than the plan and the prompt smaller**, for the
+same reason: the three named guards share `significantWords` and the stopword
+list with three more (`requestMatchesCandidate`, `spokenLineFor`,
+`speakerOnTick`), so all six travelled rather than leaving one private helper
+in two files. Four structural helpers in `notes-section.ts` (`headingText`,
+`isList`, `marker`, `sectionItems`) are exported for the same reason — the
+merge planner still calls them — but stay off `meeting-notes-merge.ts`'s own
+surface.
+
+`relabelNotesSection` and `appendResearchPlaceholder` were not in the plan's
+list for `notes-section-write.ts` and moved anyway: they sit inside the same
+run of section surgery and share its tag-run rewriter and text-node
+collectors.
+
+Layer: `pause-ticker.ts`, both capture halves and `notes-section.ts` are
+domain; `notes-ownership.ts` and `notes-section-write.ts` are services with
+the rest of the family.
 
 ## A6 · voice and the review queue
 
