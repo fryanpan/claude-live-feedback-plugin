@@ -302,6 +302,15 @@ export interface ServerOptions {
    */
   sharingEnvLocked?: boolean;
   port?: number;
+  /**
+   * The bind address, passed straight to `Bun.serve`. Unset — every caller
+   * except `scripts/staging.ts` — keeps Bun's own default (the wildcard,
+   * every interface), which is what prod needs to be reachable over
+   * Tailscale and the LAN. Only `scripts/staging.ts` passes a value, and it
+   * defaults that value to loopback: see `reserved-ports.ts` for the outage
+   * a wildcard-bound dev/staging server caused.
+   */
+  hostname?: string;
   dataDir?: string;
   /**
    * Email-keyed identity is IN EFFECT (`CW_REQUIRE_EMAIL_AUTH`). Default off,
@@ -1054,6 +1063,7 @@ const REVIEW_DELETE = /^\/api\/reviews\/([^/]+)$/;
 
 export function createServer(opts: ServerOptions = {}): ServerHandle {
   const port = opts.port ?? DEFAULT_PORT;
+  const hostname = opts.hostname;
   const dataDir = opts.dataDir ?? join(process.cwd(), 'data');
   const slowRequestMs = opts.slowRequestMs ?? 500;
   const clientReleaseRootDir = opts.clientReleaseRootDir ?? null;
@@ -5157,6 +5167,10 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
 
   const server = Bun.serve<UpgradeData>({
     port,
+    // Unset means Bun's own default (every interface) — unchanged for every
+    // caller but `scripts/staging.ts`, which is the only one that passes a
+    // value. See `ServerOptions.hostname` above for why.
+    ...(hostname ? { hostname } : {}),
     // Explicit because the DEFAULT is what broke the event streams: Bun's is
     // 10 seconds, the SSE keepalive ran on 20, and so every stream idled out
     // before its own guard could write. Paired with `SSE_KEEPALIVE_MS` and
