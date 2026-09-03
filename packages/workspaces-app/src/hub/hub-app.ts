@@ -152,7 +152,7 @@ export interface HubBootEnv {
  *  before concluding it is genuinely clear. Generous against a slow ydoc
  *  sync; short enough that a truly cleared board hands off while the reader
  *  is still looking at it. */
-const WALK_HANDOFF_DEADLINE_MS = 4000;
+export const WALK_HANDOFF_DEADLINE_MS = 4000;
 
 /** Icons. The four nav glyphs are the approved mockup's (home-pane-mockup-v1);
  *  share and settings are new, for the top-right cluster. The shared
@@ -2414,9 +2414,9 @@ export async function bootHub(env: HubBootEnv): Promise<void> {
     },
   });
 
-  // Gmail-style row shortcuts — the handler lives in hub-shortcuts.ts so it
-  // can be tested (this module runs main() on import, which nothing in a
-  // test can satisfy).
+  // Gmail-style row shortcuts — the handler lives in hub-shortcuts.ts so a
+  // test can call it directly with a state of its own, rather than booting a
+  // board first and pressing keys at it.
   document.addEventListener(
     'keydown',
     hubShortcutKeydown({

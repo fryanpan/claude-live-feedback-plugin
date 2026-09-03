@@ -136,6 +136,27 @@ export function fakeStorage(seed: Record<string, string> = {}): FakeStorage {
   };
 }
 
+// ── One ordered log across the fakes ───────────────────────────────────────────
+
+let timeline: string[] = [];
+
+/**
+ * Everything the boot did to the outside world, in the order it did it.
+ *
+ * Requests and socket opens land in ONE list because the questions worth
+ * asking about a boot are questions about order — did it ask whether this
+ * browser may write before it opened the room? — and two separate logs cannot
+ * answer that. Cleared by `FakeServer.reset()`.
+ */
+export function bootTimeline(): readonly string[] {
+  return timeline;
+}
+
+/** Index of the first entry containing `needle`, or -1. */
+export function firstAt(needle: string): number {
+  return timeline.findIndex((e) => e.includes(needle));
+}
+
 // ── The Yjs socket ─────────────────────────────────────────────────────────
 
 export interface FakeClient extends FeedbackClient {
@@ -206,6 +227,7 @@ export function fakeSockets(): FakeSockets {
   const opened: FakeClient[] = [];
   return {
     connect(url: string): FakeClient {
+      timeline.push(`socket ${url}`);
       const client = makeClient(url);
       opened.push(client);
       return client;
@@ -267,6 +289,7 @@ export function installFakeServer(): FakeServer {
       }
     }
     calls.push({ url, method: init?.method ?? 'GET', body: parsed });
+    timeline.push(`${init?.method ?? 'GET'} ${path}`);
     let match: Route | undefined;
     for (const route of routes) if (path.startsWith(route.path)) match = route;
     const status = match?.status ?? 200;
@@ -286,6 +309,7 @@ export function installFakeServer(): FakeServer {
     reset(): void {
       routes = [];
       calls = [];
+      timeline = [];
     },
   };
 }

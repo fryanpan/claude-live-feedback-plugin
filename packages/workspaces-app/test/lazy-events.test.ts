@@ -6,8 +6,8 @@ import { describe, expect, it } from 'vitest';
 // and only two surfaces read it: the Activity view and an open detail panel.
 // It used to be fetched unconditionally at boot AND re-fetched on every SSE
 // task event — dead weight on exactly the load Bryan measured at 10+ seconds
-// on his iPad. hub-app has no boot harness, so these pin the
-// source (same pattern as home-nav-reset.test.ts).
+// on his iPad. What these pin is the ABSENCE of a fetch on paths that must
+// not make one, which a driven boot can only show for the paths it takes.
 describe('the activity log loads only when something reads it', () => {
   const src = readFileSync(join(__dirname, '..', 'src', 'hub', 'hub-app.ts'), 'utf8');
 

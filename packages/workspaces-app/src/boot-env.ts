@@ -42,6 +42,26 @@ export interface BootStorage {
 }
 
 /**
+ * The real browser's storage, read LAZILY.
+ *
+ * `window.localStorage` is a getter that THROWS where storage is blocked
+ * (Safari's private mode is the reported one), so naming it in the entry
+ * module's env object would run that getter at module evaluation — before the
+ * write gate, the keyboard inset and the doc switcher are wired, and the whole
+ * page would die on a browser that used to boot and simply forget its
+ * preferences. Every call site inside a boot already guards its own read; this
+ * keeps the read AT those call sites, which is where it was.
+ */
+export const browserStorage: BootStorage = {
+  getItem(key: string): string | null {
+    return localStorage.getItem(key);
+  },
+  setItem(key: string, value: string): void {
+    localStorage.setItem(key, value);
+  },
+};
+
+/**
  * The global event target a boot subscribes to — popstate on the board, scroll
  * on the document editor — and hands on to the repaint guard, which watches it
  * for the touch releases a press-parked repaint waits on.
