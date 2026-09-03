@@ -42,11 +42,11 @@ that arrives through it is classified before any route runs.
 
 | Zone | Who is in it | How the server recognizes them |
 |---|---|---|
-| The box | The owner's agents, hooks and shell — MCP tools, `curl`, the CLI | The `Host` header names one of this machine's own names, and the request did not come through the tunnel |
-| The owner's browser | A signed-in browser on the box, the tailnet or the LAN | Same host classification, plus a session cookie |
-| Invited collaborator | Someone the owner shared a board with | A dedicated hostname through the tunnel, plus either a Cloudflare Access identity or a signed share cookie |
+| The box | The owner's agents, hooks and shell — MCP tools, `curl`, the CLI | The `Host` header names loopback AND the socket's peer address is loopback. Both, always |
+| The owner's browser | The owner, reaching their own hostname through the tunnel | The operator host list, plus a Cloudflare Access identity on the operator allowlist |
+| Invited collaborator | Someone the owner shared a board with | A dedicated hostname through the tunnel, plus a Cloudflare Access identity |
 | Meeting-bot backend | Recall.ai, delivering transcription callbacks | A dedicated hostname, plus a signed webhook |
-| Everyone else | The rest of the internet | Not recognized — refused before any route runs |
+| Everyone else | The rest of the internet, and every LAN or tailnet name | Not recognized — refused before any route runs |
 
 One function decides which zone a request is in — `classifyHost` in
 `packages/server/src/middleware/host-guard.ts`. Every route sits behind it, so
@@ -60,20 +60,68 @@ a caller may talk to the server at all; a session cookie, an Access claim or a
 widget token says who they are. A caller on the box skips the first and still
 owes the second before it may write.
 
-**Direction of travel:** the owner has decided that every browser-facing
-hostname will sit behind Cloudflare Access, with no internal exemption. That
-work is not built yet, so what follows describes today's boundaries.
+### Every browser-facing hostname is behind Cloudflare Access
+
+The rule, in one sentence: **the box is served without a token, and nothing
+else is.** No exemption for the tailnet, the LAN, or a hostname the operator
+declared — a declaration is not a sign-in.
+
+It closed two holes at once, and both were reachable by anyone who could route
+a packet to this machine:
+
+- **The LAN / tailnet grant.** Any name that resolved here — a `TRUSTED_HOSTS`
+  entry, a Tailscale name, a LAN alias — used to be served exactly like
+  loopback: the whole product, no token, no sign-in.
+- **The `Host` header.** Both reverse proxies dial the origin over loopback, so
+  the socket's peer address cannot separate a tunnel visitor from an agent on
+  the box, and the header was the only thing consulted. A request from anywhere
+  claiming `Host: localhost` read as local. Being on the box now requires the
+  loopback Host *and* a loopback peer address.
+
+What still reaches the server without a Cloudflare Access token is one thing:
+a process on this machine calling `http://localhost:<port>`, which is how every
+MCP client and hook resolves it from the discovery file. Everything a person
+opens in a browser — the board, a doc, its attachments, a folder tree, a diff
+review, the Yjs socket, the SSE stream — requires a verified identity.
+
+Because access proves an address before the page loads, the server's own
+emailed-code sign-in is off under this rule (`CW_EMAIL_CODE_SIGNIN=1` puts it
+back). The `/signin` page and the two challenge routes answer 404; reading a
+session, renaming, and signing out stay open, and `/api/auth/session` reports
+which deployment this is so no surface paints a link to a page that is not
+there.
+
+There is one tier of access, not two. A signed-in visitor reads and writes
+under the address Access proved — a comment they post carries that identity,
+whatever the request body claims.
+
+**Configuration, by name.** Which hosts are browser-facing is config, resolved
+once in `server-config.ts` and never read inline:
+
+| Env var | What it names |
+|---|---|
+| `CW_ACCESS_ONLY_BROWSER_HOSTS` | The rule itself. Defaults ON; only `0`/`false`/`no`/`off` turns it off, so a typo fails closed |
+| `CW_PROXIED_TRUSTED_HOSTS` | The owner's own hostname(s) through the tunnel — the whole product behind Access |
+| `CW_PROXIED_TRUSTED_EMAILS` | Which verified addresses that hostname admits (defaults to `CW_OWNER_EMAIL`) |
+| `CF_ACCESS_TUNNEL_HOSTS` | Collaboration hostname(s) — the product's shared surfaces, not the operator verbs |
+| `CF_SHARE_BASE_HOSTNAME` | The parent of every per-share hostname a board share mints under |
+| `CF_ACCESS_TEAM_DOMAIN`, `CF_ACCESS_AUD` | The Access team and the static audience the operator and collaboration hosts verify against |
+| `TRUSTED_HOSTS` | LAN / tailnet aliases. **No longer a grant** while the rule is on — kept for the deployments that turn it off |
+| `CW_EMAIL_CODE_SIGNIN` | Forces the server's own emailed-code sign-in back on |
+
+With the rule on and no Access hostname configured, the server logs a loud
+warning at boot naming these variables: the only browser that can reach it is
+one on the box.
 
 ## Who may read and write what
 
 | Caller | Reads | Writes | Enforced by |
 |---|---|---|---|
-| Agent on the box, tailnet or LAN | Everything | Everything except binding a host path from a browser | `isTrustedLocalHost` — no session needed |
-| Browser on one of those hosts | Everything | Only when signed in | The sign-in write gate, `middleware/write-gate.ts` |
+| Agent on the box (loopback Host AND loopback peer) | Everything | Everything except binding a host path from a browser | `isTrustedLocalHost` — no session needed |
+| Owner's proxied hostname | Everything the box gets, after an Access token on the operator allowlist | Same | `isProxiedTrustedHost` |
 | Share or collaboration visitor | One board and its members | Comment threads, suggestions, the reading tracker, and document prose over the editing socket | `shareScopeAllows` / `collabScope` — an allowlist, closed by default |
-| Owner's proxied hostname | Everything the box gets, after an Access token | Same | `isProxiedTrustedHost` |
 | Meeting-bot backend | Two routes | One webhook | `middleware/recall-callback-gate.ts` |
-| Any other host | Nothing | Nothing | `classifyHost` returns a refusal |
+| A tailnet or LAN name, or any other host | Nothing | Nothing | `classifyHost` returns a refusal |
 
 A visitor's ability to edit document prose is deliberate: that is what a live
 review is. It runs over the Yjs websocket rather than over REST, and only for
@@ -81,7 +129,7 @@ a visitor whose Cloudflare Access identity the server verified.
 
 `SharingGate` (`share/sharing-gate.ts`) is the switch above all of this. Turned
 off, every external host is refused before authentication runs, and an
-unparseable config fails closed. It covers the share, link, collaboration and
+unparseable config fails closed. It covers the share, collaboration and
 proxied-operator zones. The meeting-bot callback hostname is deliberately
 outside it, because closing that mid-call would drop a live meeting's
 callbacks; that hostname serves two routes, each armed only while its own

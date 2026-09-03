@@ -112,7 +112,7 @@ function suggestionAuthor(): { id: string; name: string; color: string } {
  * bundle than the deploy source would install. A second literal would be a
  * fourth version site, and this file's history is that version sites drift.
  */
-const PLUGIN_VERSION = '0.1.147';
+const PLUGIN_VERSION = '0.1.148';
 
 /**
  * One nonce per PROCESS, minted at module load and sent on every attach.
@@ -1201,7 +1201,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     {
       name: 'share_link',
       description:
-        'Publish a board as an unguessable link — no sign-in, the default way to share outside the tailnet. Same scope as an Access share, and a board is still the unit: there is no doc-scoped link, and a docId is refused rather than widened to the board. The link is the credential: treat it like a password, keep the TTL short for anything sensitive, and give the person the bare URL on its own line. Use share_workspace when you need verified identities, per-person revocation, or attribution. Default TTL two weeks; a configured ceiling clamps longer asks and the reply says so (ttlClamped). Every argument is honoured or refused by name — never silently dropped.',
+        'Publish a board to people outside the tailnet. Everyone signs in: the share gets its own hostname behind Cloudflare Access, so the URL carries no secret and can be pasted anywhere. The unguessable no-sign-in link this tool used to mint is retired (2026-09-02) — existing ones are kept and listed, and redeem nowhere. Same scope as share_workspace, and a board is still the unit: there is no doc-scoped share, and a docId is refused rather than widened to the board. allowDomains says who may sign in; with none given it falls back to the operator allowlist and says so (audienceDefaulted), and refuses when there is no allowlist either — it never admits anyone. Default TTL two weeks; a configured ceiling clamps longer asks and the reply says so (ttlClamped). Every argument is honoured or refused by name — never silently dropped.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -1221,6 +1221,12 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
               'Lifetime in seconds. Defaults to two weeks (1209600) when neither ttl nor ttlSeconds is given.',
           },
           label: { type: 'string', description: 'Human label shown in list_shares.' },
+          allowDomains: {
+            type: 'array',
+            items: { type: 'string' },
+            description:
+              "Who may sign in: email addresses ('reviewer@partner-org.example') or domains ('@partner-org.example'). Read .claude/claude-workspaces.json's share.defaultAllowDomains first; omit only when you mean the operator allowlist, and never widen to a domain nobody asked for.",
+          },
         },
         required: ['workspaceId'],
       },

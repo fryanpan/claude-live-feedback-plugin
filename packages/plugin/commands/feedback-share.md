@@ -55,16 +55,17 @@ reports. Everything on that board is available to everyone the share reaches
 
 4. **Call `share_workspace`** with `{ workspaceId, allowDomains, ttlSeconds? }`,
    where `workspaceId` is the BOARD id. Default ttl is 72h; override only if
-   the user requests a different window. For a link share with no sign-in,
-   call `share_link({ workspaceId })` instead — the slug IS the credential,
-   so keep the TTL short. Either call answers `410 grouping_sharing_removed`
-   if you hand it a review id by mistake.
+   the user requests a different window. `share_link({ workspaceId })` does
+   the same thing under an older name and is still accepted. Either call
+   answers `410 grouping_sharing_removed` if you hand it a review id by
+   mistake.
 
 5. **Share the resulting URL** with the user along with a brief instruction
    the user can forward to reviewers:
 
-   > "Click the link, enter your @<domain> email, you'll get a 6-digit code
-   > by email, then you'll land on the review page. Comments save automatically."
+   > "Click the link, enter your @<domain> email, you'll get a one-time code
+   > from Cloudflare, then you'll land on the review page. Comments save
+   > automatically."
 
 6. **Watch the docs** via `watch_doc(docId)` if you aren't already, so external
    comments arrive on the same channel as internal ones.
@@ -93,7 +94,7 @@ reports. Everything on that board is available to everyone the share reaches
   ingress to the claude-workspaces server
 - Server started with `CF_ACCESS_TEAM_DOMAIN`, `CF_ACCOUNT_ID`, and
   `CF_SHARE_BASE_HOSTNAME` env vars set (see `docs/product/sharing.md`).
-  Link mode needs only `CF_SHARE_PUBLIC_HOSTNAME`.
+  There is no no-sign-in link mode any more — every visitor signs in.
 
 If a prerequisite is missing, the `share_workspace` MCP call returns a
 specific error message — surface it to the user with the install hint and let

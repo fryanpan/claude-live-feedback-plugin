@@ -22,9 +22,7 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { type ServerHandle, createServer } from '../src/server.ts';
-import { SHARE_COOKIE } from '../src/share/link-session.ts';
-
-const PUBLIC_HOST = 'feedback.example.com';
+import { type AccessHarness, accessHarness, mintAccessShare } from './access-share.ts';
 
 function git(repo: string, ...args: string[]): string {
   return execFileSync('git', ['-C', repo, ...args], {
@@ -46,7 +44,8 @@ describe('a share visitor’s /grouped leaks no hostname and no other board', ()
   let base: string;
   let boardId: string;
   let reviewId: string;
-  let cookie: string;
+  let visitorHeaders: Record<string, string>;
+  let access: AccessHarness;
 
   const local = (path: string, init: RequestInit = {}) =>
     fetch(`${base}${path}`, {
@@ -62,9 +61,8 @@ describe('a share visitor’s /grouped leaks no hostname and no other board', ()
     fetch(`${base}${path}`, {
       redirect: 'manual',
       headers: {
-        host: PUBLIC_HOST,
+        ...visitorHeaders,
         'x-forwarded-proto': 'https',
-        cookie: `${SHARE_COOKIE}=${cookie}`,
       },
     });
 
@@ -85,10 +83,11 @@ describe('a share visitor’s /grouped leaks no hostname and no other board', ()
     writeFileSync(join(repo, 'alpha.ts'), 'export const a = 2;\n');
     writeFileSync(join(repo, 'beta.ts'), 'export const b = 2;\n');
 
+    access = await accessHarness();
     handle = createServer({
       port: 0,
       dataDir,
-      share: { config: { publicHostname: PUBLIC_HOST } },
+      ...access.serverOptions,
     });
     base = `http://localhost:${handle.port}`;
 
@@ -107,20 +106,7 @@ describe('a share visitor’s /grouped leaks no hostname and no other board', ()
     reviewId = diff.reviewId;
     expect(reviewId).toBeTruthy();
 
-    const share = (await local('/api/share/link', {
-      method: 'POST',
-      body: JSON.stringify({ workspaceId: boardId }),
-    }).then((r) => r.json())) as { share: { url: string } };
-    const u = new URL(share.share.url);
-    const redeemed = await fetch(`${base}${u.pathname}${u.search}`, {
-      redirect: 'manual',
-      headers: { host: PUBLIC_HOST, 'x-forwarded-proto': 'https' },
-    });
-    expect(redeemed.status).toBe(302);
-    cookie = (redeemed.headers.get('set-cookie') ?? '').match(
-      new RegExp(`${SHARE_COOKIE}=([^;]+)`),
-    )?.[1] as string;
-    expect(cookie).toBeTruthy();
+    visitorHeaders = (await mintAccessShare(base, access, boardId)).headers;
   });
 
   afterAll(async () => {

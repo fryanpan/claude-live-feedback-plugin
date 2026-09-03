@@ -17,6 +17,7 @@ import * as encoding from 'lib0/encoding';
 import * as syncProtocol from 'y-protocols/sync';
 import * as Y from 'yjs';
 import { type ServerHandle, createServer } from '../src/server.ts';
+import { type AccessHarness, accessHarness, mintAccessShare } from './access-share.ts';
 import { waitFor } from './wait-for.ts';
 
 const EVIL = 'https://evil.example.com';
@@ -295,21 +296,24 @@ describe('cross-origin access to the trusted host', () => {
  * cookie into /y/<docId> and act as a logged-in visitor.
  */
 describe('the public share host is same-origin only', () => {
-  const PUBLIC_HOST = 'feedback.example.com';
   let handle: ServerHandle;
   let dataDir: string;
   let base: string;
-  let cookie: string;
+  /** The share's own hostname — the visitor's origin, and the only one the
+   *  share surface may echo. */
+  let PUBLIC_HOST: string;
+  let visitorHeaders: Record<string, string>;
 
   beforeAll(async () => {
     dataDir = mkdtempSync(join(tmpdir(), 'share-origin-'));
     const docPath = join(dataDir, 'notes.md');
     writeFileSync(docPath, `# Notes\n\n${CANARY}.\n`);
+    const access: AccessHarness = await accessHarness();
     handle = createServer({
       port: 0,
       dataDir,
       allowedOrigins: ['https://mockups.example.com'],
-      share: { config: { publicHostname: PUBLIC_HOST } },
+      ...access.serverOptions,
       requireSignInToWrite: false,
     });
     base = `http://localhost:${handle.port}`;
@@ -342,19 +346,9 @@ describe('the public share host is same-origin only', () => {
       body: JSON.stringify({ docId: 'ws-shared' }),
     });
     expect(filed.status).toBe(200);
-    const mint = await local('/api/share/link', {
-      method: 'POST',
-      body: JSON.stringify({ workspaceId: boardId }),
-    });
-    expect(mint.status).toBe(200);
-    const { share } = (await mint.json()) as { share: { url: string } };
-    const shareUrl = new URL(share.url);
-    const redeemed = await fetch(`${base}${shareUrl.pathname}${shareUrl.search}`, {
-      redirect: 'manual',
-      headers: { host: PUBLIC_HOST },
-    });
-    cookie = (redeemed.headers.get('set-cookie') ?? '').match(/lf_share=([^;]+)/)?.[1] ?? '';
-    expect(cookie).not.toBe('');
+    const minted = await mintAccessShare(base, access, boardId);
+    PUBLIC_HOST = minted.host;
+    visitorHeaders = minted.headers;
   });
 
   afterAll(async () => {
@@ -368,9 +362,8 @@ describe('the public share host is same-origin only', () => {
   const asVisitor = (path: string, origin: string | null) =>
     fetch(`${base}${path}`, {
       headers: {
-        host: PUBLIC_HOST,
+        ...visitorHeaders,
         'x-forwarded-proto': 'https',
-        cookie: `lf_share=${cookie}`,
         ...(origin ? { origin } : {}),
       },
     });
@@ -395,9 +388,9 @@ describe('the public share host is same-origin only', () => {
     // websocket — an outage, not a hardening.
     const r = await fetch(`${base}/api/docs/shared`, {
       headers: {
+        ...visitorHeaders,
         host: `${PUBLIC_HOST}:443`,
         'x-forwarded-proto': 'https',
-        cookie: `lf_share=${cookie}`,
         origin: `https://${PUBLIC_HOST}`,
       },
     });
@@ -418,9 +411,8 @@ describe('the public share host is same-origin only', () => {
     ]) {
       const r = await fetch(`${base}/api/docs/shared`, {
         headers: {
-          host: PUBLIC_HOST,
+          ...visitorHeaders,
           'x-forwarded-proto': forged,
-          cookie: `lf_share=${cookie}`,
           origin: 'https://evil.example.com',
         },
       });
@@ -428,16 +420,13 @@ describe('the public share host is same-origin only', () => {
     }
   });
 
-  it('refuses a forged x-forwarded-proto on the WEBSOCKET too', async () => {
-    // The socket is where this actually paid out: the reviewer synced a whole
-    // document through it.
+  /**
+   * Open `/y/shared` with the given headers and return whatever prose the
+   * socket handed us inside the window. Empty means nothing ever synced.
+   */
+  const syncedProse = async (headers: Record<string, string>): Promise<string> => {
     const ws = new WebSocket(`ws://localhost:${handle.port}/y/shared`, {
-      headers: {
-        host: PUBLIC_HOST,
-        'x-forwarded-proto': 'https://evil.example.com#',
-        cookie: `lf_share=${cookie}`,
-        origin: 'https://evil.example.com',
-      },
+      headers,
     } as unknown as string[]);
     const ydoc = new Y.Doc();
     ws.binaryType = 'arraybuffer';
@@ -455,12 +444,35 @@ describe('the public share host is same-origin only', () => {
       syncProtocol.readSyncMessage(dec, enc, ydoc, ws);
       if (encoding.length(enc) > 1) ws.send(encoding.toUint8Array(enc));
     });
-    // timed: the claim is that nothing ever syncs, so the window has to pass.
+    // timed: a claim that nothing ever syncs needs the window to pass.
     await new Promise((r) => setTimeout(r, 1200));
-    expect(ydoc.getXmlFragment('prose').toString()).toBe('');
     try {
       ws.close();
     } catch {}
+    return ydoc.getXmlFragment('prose').toString();
+  };
+
+  it('POSITIVE CONTROL: a same-origin visitor socket really does sync', async () => {
+    // Without this every "nothing synced" below would also pass on a socket
+    // that was refused for some unrelated reason — a wrong credential, a
+    // renamed doc, a server that never serves this room at all.
+    const prose = await syncedProse({
+      ...visitorHeaders,
+      'x-forwarded-proto': 'https',
+      origin: `https://${PUBLIC_HOST}`,
+    });
+    expect(prose).toContain(CANARY);
+  });
+
+  it('refuses a forged x-forwarded-proto on the WEBSOCKET too', async () => {
+    // The socket is where this actually paid out: the reviewer synced a whole
+    // document through it.
+    const prose = await syncedProse({
+      ...visitorHeaders,
+      'x-forwarded-proto': 'https://evil.example.com#',
+      origin: 'https://evil.example.com',
+    });
+    expect(prose).toBe('');
   });
 
   it('still honours a LEGITIMATE x-forwarded-proto — POSITIVE CONTROL', async () => {
@@ -482,36 +494,12 @@ describe('the public share host is same-origin only', () => {
 
   it('refuses a websocket from an allowlisted origin on the share host', async () => {
     // The one CORS genuinely cannot protect: the browser would send the
-    // SameSite=Lax cookie and hand the page the doc regardless of headers.
-    const ws = new WebSocket(`ws://localhost:${handle.port}/y/shared`, {
-      headers: {
-        host: PUBLIC_HOST,
-        'x-forwarded-proto': 'https',
-        cookie: `lf_share=${cookie}`,
-        origin: 'https://mockups.example.com',
-      },
-    } as unknown as string[]);
-    const ydoc = new Y.Doc();
-    ws.binaryType = 'arraybuffer';
-    ws.addEventListener('open', () => {
-      const enc = encoding.createEncoder();
-      encoding.writeVarUint(enc, 0);
-      syncProtocol.writeSyncStep1(enc, ydoc);
-      ws.send(encoding.toUint8Array(enc));
+    // request regardless of headers, and hand the page the doc.
+    const prose = await syncedProse({
+      ...visitorHeaders,
+      'x-forwarded-proto': 'https',
+      origin: 'https://mockups.example.com',
     });
-    ws.addEventListener('message', (ev) => {
-      const dec = decoding.createDecoder(new Uint8Array(ev.data as ArrayBuffer));
-      if (decoding.readVarUint(dec) !== 0) return;
-      const enc = encoding.createEncoder();
-      encoding.writeVarUint(enc, 0);
-      syncProtocol.readSyncMessage(dec, enc, ydoc, ws);
-      if (encoding.length(enc) > 1) ws.send(encoding.toUint8Array(enc));
-    });
-    // timed: the claim is that nothing ever syncs, so the window has to pass.
-    await new Promise((r) => setTimeout(r, 1200));
-    expect(ydoc.getXmlFragment('prose').toString()).toBe('');
-    try {
-      ws.close();
-    } catch {}
+    expect(prose).toBe('');
   });
 });

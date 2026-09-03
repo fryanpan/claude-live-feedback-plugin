@@ -1,5 +1,5 @@
 import { escapeHtml, storeUserName } from '@feedback/core';
-import { signInHref } from '../signin/write-gate.ts';
+import { hasSignInPage, signInHref } from '../signin/write-gate.ts';
 
 /**
  * The identity chip's menu — the sign-in entry point.
@@ -15,6 +15,9 @@ import { signInHref } from '../signin/write-gate.ts';
 export interface MeSession {
   authenticated: boolean;
   user?: { name: string };
+  /** Whether this deployment has a `/signin` page. Absent reads as yes, the
+   *  way an unanswered session lookup does. */
+  emailCodeSignIn?: boolean;
 }
 
 export interface MeMenuOpts {
@@ -115,11 +118,16 @@ export function wireMeMenu(opts: MeMenuOpts): () => void {
     // "Change name" is offered here as well as when signed in: the name on
     // this row is the one every comment from this browser is stamped with,
     // and until now the only way to change it was to sign in first.
+    //
+    // "Sign in" is offered only where the server still has a `/signin` page.
+    // Under access-only it does not, and a link to a 404 is worse than none —
+    // the session says which deployment this is.
+    const offerSignIn = session.emailCodeSignIn !== false && hasSignInPage();
     menu.innerHTML = `
       <p class="hub-me-row hub-me-note">Commenting as <b>${escapeHtml(opts.localName)}</b> — not signed in</p>
       <div class="hub-me-actions">
         <button type="button" class="hub-me-action hub-me-rename">Change name</button>
-        <a class="hub-me-action" href="${escapeHtml(signinHref)}">Sign in</a>
+        ${offerSignIn ? `<a class="hub-me-action" href="${escapeHtml(signinHref)}">Sign in</a>` : ''}
       </div>`;
     menu.querySelector('.hub-me-rename')?.addEventListener('click', () => {
       // No server call: an unsigned browser has no profile to write to, so

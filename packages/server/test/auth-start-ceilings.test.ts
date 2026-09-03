@@ -57,10 +57,14 @@ describe('the global sends-per-hour ceiling', () => {
       original(...(args as []));
     };
     dataDir = mkdtempSync(join(tmpdir(), 'auth-ceiling-global-test-'));
+    // emailCodeSignIn: the server's own emailed-code sign-in is off by default now
+    // that every browser-facing hostname sits behind Cloudflare Access. These tests
+    // are about that flow, so they ask for it explicitly.
     handle = createServer({
       port: 0,
       dataDir,
       codeSender: capture.sender,
+      emailCodeSignIn: true,
       authCeilings: { globalStartsPerHour: 2 },
     });
     base = `http://localhost:${handle.port}`;
@@ -106,6 +110,7 @@ describe('the per-peer sends-per-hour ceiling', () => {
       port: 0,
       dataDir,
       codeSender: capture.sender,
+      emailCodeSignIn: true,
       authCeilings: { globalStartsPerHour: 1000, peerStartsPerHour: 2 },
     });
     base = `http://localhost:${handle.port}`;

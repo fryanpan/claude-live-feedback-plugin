@@ -28,8 +28,7 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { type ServerHandle, createServer } from '../src/server.ts';
-
-const PUBLIC_HOST = 'feedback.example.com';
+import { type AccessHarness, accessHarness } from './access-share.ts';
 
 interface ShareList {
   shares: Array<{ shareId: string }>;
@@ -86,10 +85,11 @@ describe('share mutation routes refuse browser callers', () => {
     folder = mkdtempSync(join(tmpdir(), 'share-browser-src-'));
     writeFileSync(join(folder, 'note.md'), '# Note\n\nbody\n');
 
+    const access: AccessHarness = await accessHarness();
     handle = createServer({
       port: 0,
       dataDir,
-      share: { config: { publicHostname: PUBLIC_HOST } },
+      ...access.serverOptions,
       // The sign-in gate would refuse these browser POSTs FIRST, with a 401 —
       // which is not the state the hole has. The hole is a page running while
       // the operator IS signed in, and a session cookie is same-site with a
@@ -114,7 +114,10 @@ describe('share mutation routes refuse browser callers', () => {
 
   describe('POST /api/share/link — minting a public link', () => {
     it('positive control: an agent mints one', async () => {
-      const r = await post('/api/share/link', { workspaceId: boardId });
+      const r = await post('/api/share/link', {
+        allowDomains: ['@partner.example'],
+        workspaceId: boardId,
+      });
       expect(r.status).toBe(200);
       expect((await state()).shares).toHaveLength(1);
     });
@@ -203,7 +206,10 @@ describe('share mutation routes refuse browser callers', () => {
 
   describe('the lifetime routes on an existing share', () => {
     const mint = async (): Promise<string> => {
-      const r = await post('/api/share/link', { workspaceId: boardId });
+      const r = await post('/api/share/link', {
+        allowDomains: ['@partner.example'],
+        workspaceId: boardId,
+      });
       expect(r.status).toBe(200);
       return ((await r.json()) as { share: { shareId: string } }).share.shareId;
     };
@@ -231,7 +237,7 @@ describe('share mutation routes refuse browser callers', () => {
 
   describe('the guard is keyed on METHOD, so reads are untouched', () => {
     it('a page still reads GET /api/share', async () => {
-      await post('/api/share/link', { workspaceId: boardId });
+      await post('/api/share/link', { allowDomains: ['@partner.example'], workspaceId: boardId });
       const r = await page('/api/share', {});
       expect(r.status).toBe(200);
       expect(((await r.json()) as ShareList).shares).toHaveLength(1);
