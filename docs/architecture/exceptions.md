@@ -132,9 +132,9 @@ the shipped bundle is unchanged.
 
 ## packages/plugin
 
-| File | Lines | Verdict | Reason / seam |
-|---|---|---|---|
-| `packages/plugin/hooks/lib/agent-notes.ts` | 653 | Split | The redaction engine and the hook plumbing are separable. `stripInline`, `redactOpaque`, `isSecretName`, `reduceProseLine`, `commandShape`, `looksOpaque` (~390) → `note-redact.ts`; `readAgentName`, `decideTurnNote`, `postNote`, `runHook` (~260) stay. Both stay inside `packages/plugin` — no monorepo imports. **S** |
+No file in this package is over the limit. `hooks/lib/agent-notes.ts` was,
+until B8 took the reduction out to `note-redact.ts` (430) and left the hook
+plumbing at 241.
 
 ---
 
@@ -195,7 +195,6 @@ The remaining 93 are exceptions. Each row names the one harness its cases share.
 | `packages/server/test/goal-reorder.test.ts` | 692 | Store and route describes both seed goals with `bands()` / `seededGoalList()`. |
 | `packages/server/test/stall-nudge-routes.test.ts` | 689 | A single describe over one real board plus `listenFrames` / `waitForFrames`. |
 | `packages/server/test/home-brief.test.ts` | 687 | Every describe feeds `ev()` / `input()` rows into the brief pipeline, store included. |
-| `packages/plugin/test/agent-notes.test.ts` | 681 | All describes drive the one pure hook module with `fakeFetch()` / `sentBody()`. |
 | `packages/server/test/sse-replay.test.ts` | 660 | Every describe exercises an `SseHub` stream through the shared `listenFrames()` and `settle()`. |
 | `packages/server/test/refresh-workspace.test.ts` | 658 | All three describes build a `Rooms` through the module-scope `makeRooms(dataDir)` and `git()` helpers. |
 | `packages/server/test/auth-write-gate.test.ts` | 656 | Every case, HTTP and y-sync socket alike, boots through the one `boot(requireSignInToWrite)` harness. |
@@ -285,7 +284,7 @@ months, so splitting it buys almost nothing.
 | 25 | `deploy.ts` + `deploy-log.ts` (split in A7) | 1058 | 4 | done |
 | 26 | `effort-task.ts` + `effort-calibration.ts` + `effort-format.ts` + `goal-effort.ts` (split in B5) | 1086 | 4 | done |
 | 27 | `voice-resolve.ts` + `voice-status.ts` (split in A6) | 762 | 2 | done |
-| 28 | `packages/plugin/hooks/lib/agent-notes.ts` | 653 | 2 | S |
+| 28 | `agent-notes.ts` + `note-redact.ts` (split in B8) | 671 | 2 | done |
 | 29 | `recall-calendar.ts` + `google-oauth.ts` (split in A7) | 721 | 1 | done |
 | 30 | `packages/markdown-app/test/hub-render.test.ts` | 4078 | — | S |
 | 31 | `voice-smooth.test.ts` + `voice-smooth-model.test.ts` (split in A8) | 729 | — | done |
