@@ -104,13 +104,38 @@ describe('the Comment float', () => {
     expect(anchor.querySelectorAll('.doc-floats')).toHaveLength(1);
   });
 
-  it('leaves room under the last line for the dock that sits over it', () => {
-    // Without this the paragraph most likely to be commented on is the one
-    // hidden behind the Comment button.
+  it('reserves no room of its own in any OTHER editor in the pane', () => {
+    // The dock needs the last paragraph to clear it, and the first version of
+    // that rule asked the whole pane for the room: `#editor-pane .ProseMirror
+    // { padding-bottom: 84px }`. Every reply composer in the pane is a
+    // ProseMirror too — an inline card's and a margin balloon's both live
+    // inside #editor — and one id beats the two classes of
+    // `.md-composer-surface .ProseMirror`, so an empty reply box opened with
+    // 84px of dead space under the caret. The clearance comes from #editor's
+    // own bottom padding instead, which reaches nothing nested.
     setViewport(IPAD);
-    const prose = document.createElement('div');
-    prose.className = 'ProseMirror';
-    pane().appendChild(prose);
-    expect(Number.parseFloat(styleOf(prose).paddingBottom)).toBeGreaterThanOrEqual(60);
+    const editor = document.createElement('div');
+    editor.id = 'editor';
+    pane().appendChild(editor);
+
+    const composer = document.createElement('div');
+    composer.className = 'md-composer-surface';
+    const composerProse = document.createElement('div');
+    composerProse.className = 'ProseMirror';
+    composer.appendChild(composerProse);
+    editor.appendChild(composer);
+    expect(Number.parseFloat(styleOf(composerProse).paddingBottom) || 0).toBeLessThan(60);
+
+    // Two controls, because a negative on its own is also what an element no
+    // rule reaches would give. The sheet IS installed and the selectors DO
+    // resolve: the document's own surface is a direct child of #editor and
+    // picks up the rules written for it, and the composer above is inside the
+    // pane where the deleted rule would have caught it.
+    const docProse = document.createElement('div');
+    docProse.className = 'ProseMirror';
+    editor.appendChild(docProse);
+    expect(styleOf(docProse).fontSize).toBe('18px');
+    expect(styleOf(composerProse).fontSize).not.toBe('18px');
+    expect(composerProse.closest('#editor-pane')).not.toBe(null);
   });
 });

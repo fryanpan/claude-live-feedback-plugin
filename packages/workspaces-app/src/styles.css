@@ -940,12 +940,15 @@ body.has-set .doc-switcher-caret {
   border-color: var(--accent);
   color: var(--accent);
 }
-/* The prose scrolls under the dock, so the last line of a doc must be able to
-   clear it — otherwise the one paragraph most likely to be commented on is
-   the one sitting behind the Comment button. */
-#editor-pane .ProseMirror {
-  padding-bottom: 84px;
-}
+/* No dock-clearance rule here, and the empty space is the point. `#editor`
+   already ends in `max(160px, …)` of bottom padding (see its own rule), which
+   is more than the dock needs, and the pane-scoped rule that used to sit here
+   reached every OTHER ProseMirror in the pane as well: an id plus a class
+   beats `.md-composer-surface .ProseMirror`, so a reply composer inside an
+   inline card or a margin balloon opened 139px tall with 84px of dead space
+   under the caret. That is the exact trap the comment above `#editor >
+   .ProseMirror` warns about, one selector further out. Anything the document
+   surface needs goes on `#editor` or on `#editor > .ProseMirror`. */
 @media (max-width: 640px) {
   /* Edge-to-edge above the home indicator: a centred pill at phone width is
      a small target over the one control the doc is waiting on. Two floats
@@ -3464,9 +3467,13 @@ body.threads-resizing {
   background-image: var(--ic-done);
 }
 /* The red dot: something here changed since the reader last looked. On the
-   glyph rather than beside it, so it costs no width in a 300px column. */
-.lf-ic.is-new::after,
-.thread.is-new .thread-glyph::after {
+   glyph rather than beside it, so it costs no width in a 300px column.
+   The CARD's copy of this dot is a real element (`.thread-new-dot`, below)
+   that `head()` builds, and this pseudo used to draw a second one at the same
+   7px and the same offset, exactly on top of it. This selector is now the
+   hint icons only (comment-hints.ts), which carry `is-new` on the icon
+   itself and build no element. */
+.lf-ic.is-new::after {
   content: "";
   position: absolute;
   top: -3px;
@@ -3581,6 +3588,26 @@ body.threads-resizing {
   overflow: visible;
   font-weight: 650;
   font-size: 14px;
+}
+/* Except in the margin, where line one may not move at all.
+   "The title and the glyph stay put on expand" is a claim about the fold, and
+   the fold is tightest exactly where the column is 260px wide: a topic that
+   fits one clipped row folded wraps to three rows open, the head grows from
+   18px to 55px, and `align-items: center` re-centres the glyph 20px down the
+   row the reader just tapped. Measured at 1180x820 (2026-09-03). The prose
+   surfaces — drawer, modal, inline card — have the width to let it wrap, and
+   there the growth is the header behaving like a header. */
+.markup-margin .thread.expanded .thread-topic-line {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  /* Restated, not reverted: these are the folded values from
+     `.thread-topic-line` above, and `revert` would go past them to the
+     browser default. `normal` rather than `inherit` for the same reason a
+     step further on — `inherit` is the right answer in a browser and an
+     unresolved keyword to the test that has to compare the two states. */
+  font-weight: normal;
+  font-size: 13.5px;
 }
 /* Who opened it and when, under line one on the open card only. The folded
    card names the starter on line one instead — a swatch beside the glyph
@@ -3933,20 +3960,30 @@ body.threads-resizing {
 .thread-item-body > :last-child {
   margin-bottom: 0;
 }
-/* One answer per row with real air between them — on a phone the tap IS the
-   primary gesture, and two answers must never share one thumb. */
+/* Answers wrap rather than stretch. `flex-direction: column` with
+   `width: 100%` was written when a card was only ever 260px wide and the two
+   were the same shape; once a card could sit in the flow of a 1180px pane,
+   the same rule drew two 872px buttons for "Yes" and "No" — a target eight
+   times wider than its label, and the row the 900px prose cap narrowed the
+   card to fix and could not reach. A 240px basis does both jobs from one
+   rule: below ~500px each answer still takes its own row and no two share a
+   thumb, and above it they sit side by side and stop at `max-width`. */
 .thread-item-options {
   display: flex;
-  flex-direction: column;
+  /* Stated rather than left to the initial value: it is the half of this rule
+     that changed, and an unset property is not something a test can read. */
+  flex-direction: row;
+  flex-wrap: wrap;
   gap: 8px;
   margin-top: 10px;
+  max-width: 560px;
 }
 .thread-item-option {
   display: flex;
   flex-direction: column;
   align-items: flex-start;
   gap: 3px;
-  width: 100%;
+  flex: 1 1 240px;
   min-height: 44px;
   padding: 10px 12px;
   border: 1px solid var(--border-strong, var(--border));
@@ -4997,16 +5034,12 @@ body.composer-open #editor > .ProseMirror ::selection {
   min-height: 76px;
 }
 /* Options side by side once there is width for them — the shape that made a
-   decision unreadable in a 300px column. */
+   decision unreadable in a 300px column. The wrapping row moved to the base
+   rule when inline cards made the modal stop being the only wide surface;
+   what stays here is the modal's own wider ceiling, because the dialog is
+   sized for reading a decision rather than for sitting beside prose. */
 .thread-modal-body .thread-item-options {
-  flex-direction: row;
-  flex-wrap: wrap;
-}
-.thread-modal-body .thread-item-option {
-  /* `width: 100%` on the base rule is what makes a column of buttons; in a row
-     it would pin every option to a full line and defeat the wrap. */
-  width: auto;
-  flex: 1 1 240px;
+  max-width: none;
 }
 
 /* ================= UTILITIES ================= */
