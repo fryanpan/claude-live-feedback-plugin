@@ -1,5 +1,6 @@
 import { type Thread, suggestOps, threadRenderKey } from '@feedback/core';
 import type { EditorView } from '@tiptap/pm/view';
+import { balloonMarginVisible } from '../card-placement.ts';
 import { keptComposerFocus, restoreComposerFocus } from '../composer-keep.ts';
 import { showToast } from '../doc/chrome-dom.ts';
 import { COMPOSER_MOUNTED_EVENT } from '../md-composer.ts';
@@ -115,14 +116,13 @@ const GAP = 8;
 const RELAYOUT_DEBOUNCE_MS = 100;
 const SVG_NS = 'http://www.w3.org/2000/svg';
 
-/** Mirrors the styles.css breakpoint that hides `.markup-margin` (and the
- *  leader overlay) — `rendered[]` is populated regardless of viewport, so
- *  anything answering "is this balloon actually visible?" must consult this,
- *  not the DOM. Same query app.ts uses for its mobile checks. */
-const MARGIN_HIDDEN_QUERY = '(max-width: 1100px)';
-
+/** Is the margin actually on screen? `rendered[]` is populated regardless of
+ *  the surface in force, so anything answering "is this balloon visible?" must
+ *  consult the placement, not the DOM. It used to mirror a `max-width` query
+ *  the stylesheet also carried; both now read `card-placement.ts`, so the
+ *  reader's stored choice moves the column and this check together. */
 function marginHidden(): boolean {
-  return window.matchMedia(MARGIN_HIDDEN_QUERY).matches;
+  return !balloonMarginVisible();
 }
 
 /** `CSS.escape` guarded — happy-dom (and very old browsers) may not have it. */

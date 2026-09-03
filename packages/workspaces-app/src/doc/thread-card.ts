@@ -11,6 +11,52 @@
  * is a CALL rather than a value: a card's handlers run long after it was
  * built, and a snapshot of "which thread is active" taken at render time would
  * be stale by the time a caret is tapped.
+ *
+ * ---------------------------------------------------------------------------
+ * WHAT A COLLAPSED CARD IS FOR
+ * ---------------------------------------------------------------------------
+ *
+ * A reader scanning a meeting's doc has one question per card — "is this one
+ * mine?" — and answers it in about a second. The collapsed card has exactly
+ * four jobs, and every pixel of it serves one of them:
+ *
+ *  1. WHAT IS IT ABOUT.  Line one leads with the topic: the ask's headline
+ *     when the thread carries one, otherwise the generated summary topic.
+ *     Never the sentence it hangs off — the highlight in the prose already
+ *     shows that, and a card repeating it said nothing about what was wanted.
+ *  2. WHO IS IT WAITING ON.  The glyph says which KIND of wait (blue bubble
+ *     for a comment, amber question for an open ask, green tick once it is
+ *     settled), and line one names who started it. Together they answer
+ *     "does this need me" without opening anything.
+ *  3. ANSWER IT, OR OPEN IT.  A thread that is waiting on this reader grows
+ *     one answer row under the two lines — a decision's options as buttons,
+ *     a question's "Answer" cue — so the common case is finished from the
+ *     folded card. Everything else is behind the chevron.
+ *  4. OPEN OR RESOLVED.  Carried by the glyph and by the card's own wash,
+ *     not by a word: a resolved card is faded and green-ticked.
+ *
+ * And the things a collapsed line deliberately does NOT carry, each removed
+ * because it cost a line without answering one of the four (Bryan, round 2 of
+ * the card mocks): a reply count, a "Decision needed" tag, a "New" word tag,
+ * a participants row, a second copy of the title, a resolve button, and the
+ * timestamp. Anything added here has to name which of the four it serves.
+ *
+ * ---------------------------------------------------------------------------
+ * THE ANATOMY
+ * ---------------------------------------------------------------------------
+ *
+ * ```
+ * .thread-head    ◆ topic · Who                                 ›   ← line 1
+ * .thread-slot      where the conversation got to                   ← line 2
+ *                   [ option ] [ option ]                           ← answers
+ * ```
+ *
+ * Line one and the glyph STAY PUT when the card opens (approved: card mock
+ * round 3) — the row you tapped becomes the open card's header rather than
+ * being replaced by a second panel that repeats it. Only line two is a
+ * folding slot: its summary face is the discussion line plus the answer row,
+ * and its detail face is the same discussion line followed by the whole
+ * conversation. One slot, not two, because there is only one disclosure.
  */
 import {
   type Comment,
@@ -27,7 +73,7 @@ import {
 } from '@feedback/core';
 import { renderCommentMarkdown, renderCommentMarkdownInline } from '../comment-markdown.ts';
 import { askedMetaLine, decidedMetaLine } from '../hub/hub-review-model.ts';
-import { decisionOutcome, threadDecision } from '../long-thread.ts';
+import { threadDecision } from '../long-thread.ts';
 import { attachMarkdownComposer } from '../md-composer.ts';
 import { threadGlyph, threadKind } from '../thread-kind.ts';
 import { isFoldingTap, syncFaceVisibility } from '../thread-morph.ts';
@@ -54,22 +100,23 @@ export interface ThreadCardHost {
  * reply/resolve/reopen/re-anchor behave identically everywhere instead of
  * a second implementation drifting out of sync. Public on purpose.
  *
- * Four rows (five when a decision is waiting), and the middle two are
- * *slots* holding two faces each:
+ * Two rows, and only the second one folds:
  *
  * ```
- * .thread-flag-row  DECISION NEEDED          (only on a decision thread)
- * .thread-head    ● Alice · orphan                              ›
- * .thread-slot.slot-a   topic line          ⇄  the opening message
- * .thread-slot.slot-b   who + discussion    ⇄  the replies + reply box
- * .thread-foot    3 replies · 2h                     [ ✓ Resolve ]
+ * .thread-head        ◆ topic · Who                             ›
+ * .thread-slot.slot-a   discussion + answers ⇄  the conversation
  * ```
  *
- * Each summary line is paired with what it BECOMES, and both faces are
- * built here, together, always — the expand animation cross-fades between
- * two faces that already exist in the same box, so neither may be built
- * lazily and neither may be omitted. The head and the foot sit outside
- * both slots so expanding never rebuilds or moves them.
+ * The head is built once and never rebuilt or moved: the title and the glyph
+ * are in the same place folded and unfolded, which is what makes opening read
+ * as "this card grew" rather than "a second panel appeared under it".
+ *
+ * The slot holds two faces at once — the expand animation cross-fades between
+ * two boxes that already exist, so neither may be built lazily and neither
+ * may be omitted. Both faces open with the discussion line for that reason:
+ * the summary face must never be empty (an empty face measures zero, and a
+ * zero is refused rather than written, which would leave a card that opens
+ * and cannot close), and repeating one short line is what keeps it honest.
  */
 export function renderThreadCard(
   host: ThreadCardHost,
@@ -113,16 +160,13 @@ export function renderThreadCard(
   const pending = pendingDeclaration(t);
   const itemComment = pending ?? latestDeclaredComment(t.comments);
 
-  const flagRow = decisionRow(t);
-  if (flagRow) el.appendChild(flagRow);
-  el.appendChild(head(host, t, status, { kind, declared: itemComment?.review !== undefined }));
   // A declared thread's folded line is the ASK, not the sentence it hangs
   // off: the highlight in the prose already shows the sentence, and a card
   // that repeated it said nothing about what was wanted.
+  const topicIsAsk = itemComment?.review?.headline !== undefined;
   const topic = itemComment?.review?.headline ?? summary.topic;
-  el.appendChild(slotA(t, topic, itemComment?.id));
-  el.appendChild(slotB(host, t, summary, status, { pending, itemComment, pendingReply }));
-  el.appendChild(foot(host, t, status));
+  el.appendChild(head(host, t, status, { kind, topic, topicIsAsk }));
+  el.appendChild(body(host, t, summary, status, { pending, itemComment, pendingReply }));
   syncFaceVisibility(el, host.activeId() === t.id && !shownElsewhere);
 
   // The whole card is the tap target; the caret is a hint, not the hit
@@ -143,107 +187,86 @@ export function renderThreadCard(
 }
 
 /**
- * Row 0, and only when there is a decision on the thread: why this card is
- * in the reader's queue at all.
+ * Line one, and the row that stays put.
  *
- * A decision is the one thing in a thread a reader must not scroll past, and
- * the folded card said nothing about it — the kind chip lives inside the item
- * card, on the detail face, `inert` and invisible until the thread is opened.
+ * Glyph, topic, who started it, the caret — built once, never rebuilt, and
+ * identical folded and unfolded. That is the whole of Bryan's round-2 note
+ * about the card: opening it must not stack a second box under a row that
+ * then repeats itself.
  *
- * Its OWN row rather than a chip in the head, because the head is a flex row
- * inside a 300px column: measured in the field at 1180px, a ~115px chip
- * beside the name clipped the name to about seven characters, and two
- * different askers came out as the same truncated string. A flag that costs
- * you the identity of whoever is waiting has taken away more than it gave.
- * Above both slots either way, so it is there folded and expanded alike and
- * expanding never rebuilds or moves it.
+ * Everything that used to sit here and is now gone was removed for the same
+ * reason — it cost a line and answered none of the four jobs in this file's
+ * header. The "Decision needed" flag went with the loudest of them: a
+ * decision announces itself through the amber glyph and the option buttons
+ * on the folded card, and the flag was a third statement of the same fact
+ * that clipped the asker's name to seven characters in a 300px column.
  */
-function decisionRow(t: Thread): HTMLElement | null {
-  const decision = threadDecision(t);
-  if (decision === 'none') return null;
-  const row = div('thread-flag-row');
-  const flag = span('thread-decision-flag');
-  const pending = decision === 'pending';
-  if (!pending) flag.classList.add('is-answered');
-  flag.textContent = pending ? 'Decision needed' : 'Decision';
-  // The colour alone is not the message — it says nothing to a screen
-  // reader and nothing to anyone who cannot separate the two swatches.
-  flag.title = pending
-    ? 'This thread is waiting on a decision'
-    : 'This thread carries a decision that has been answered';
-  row.appendChild(flag);
-
-  // WHAT was decided, next to the fact that something was. Reported from a
-  // walkthrough: an answered decision's folded card led with "No replies
-  // yet" — true, since an answer is a payload on the item rather than a
-  // reply, and useless. The outcome was two folds away inside the answered
-  // record, on the detail face. It rides here rather than replacing the
-  // discussion line, whose job is where the conversation GOT TO: a decision
-  // with an answer and three replies still has a last reply worth showing.
-  const outcome = decisionOutcome(t);
-  if (outcome) {
-    const words = span('thread-decision-outcome clip');
-    // Plain text: an answer is a person's words and this row does not escape
-    // them. `clip` ellipsizes whatever the column's real width turns out to
-    // be; `decisionOutcome` has already capped the length.
-    words.textContent = outcome;
-    words.title = outcome;
-    row.appendChild(words);
-  }
-  return row;
-}
-
-/** Row 1: identity. The attribution for the OPENING MESSAGE and nothing
- *  else — which is why the opening message never repeats the name. */
 function head(
   host: ThreadCardHost,
   t: Thread,
   status: 'open' | 'resolved' | 'orphan',
-  mark: { kind: ReturnType<typeof threadKind>; declared: boolean },
+  mark: { kind: ReturnType<typeof threadKind>; topic: string; topicIsAsk: boolean },
 ): HTMLElement {
   const head = div('thread-head');
-  head.appendChild(div('status-dot'));
   // ONE glyph per state, everywhere it appears: blue bubble for a comment,
   // amber question mark for an open review item (question or decision
   // alike), green tick once answered or resolved. The same glyph sits on
   // the highlighted sentence, the top-bar chip and the off-screen hints.
   const glyph = span(`thread-glyph lf-ic lf-ic-${threadGlyph(mark.kind)}`);
   glyph.setAttribute('aria-hidden', 'true');
+  // Unread rides the glyph as a dot rather than a "New" tag beside the name.
+  // A word there competed with the topic for the one line the card has, and
+  // said less than a mark on the thing it is marking.
+  if (host.opts.isNew?.(t)) glyph.appendChild(span('thread-new-dot'));
   head.appendChild(glyph);
 
-  const author = t.comments[0]?.author ?? t.createdBy;
-  const swatch = span('swatch');
-  // Assigning a style PROPERTY can't smuggle extra declarations the way an
-  // interpolated style ATTRIBUTE can — the CSS parser drops the whole value
-  // if it isn't a colour. Same treatment every author swatch already gets.
-  swatch.style.background = author.color;
-  head.appendChild(swatch);
+  const line = div('thread-topic-line clip');
+  // Plain text, never HTML: the topic is doc content or an agent-supplied
+  // headline, and both are untrusted.
+  const topicEl = span('thread-topic');
+  topicEl.textContent = mark.topic;
+  line.appendChild(topicEl);
 
-  const who = span('thread-who clip');
+  // Who started it — the attribution for the OPENING MESSAGE, which is why
+  // the opening message itself never repeats the name. The separator is its
+  // own node so the name reads as exactly the name to anything that asks
+  // for it, here and in the hub's activity feed.
+  //
+  // NOT on a card whose line one is an ASK (the approved mock: a question or
+  // decision card carries the ask and the chevron and nothing else). Two
+  // reasons, and the first is measured: in a 260px balloon "Induction
+  // ordering · Rota Assistant" clipped the name to seven characters, which is
+  // the same failure that cost the old decision flag its row. The second is
+  // that the name answers a different question here — the ask is addressed TO
+  // the reader, so who asked matters when they open it, and the opened card
+  // names them directly under line one.
+  const author = t.comments[0]?.author ?? t.createdBy;
+  const sep = span('thread-sep');
+  sep.textContent = ' · ';
+  const who = span('thread-who');
   const name = span('name');
   // Plain text, never HTML: author names are agent-supplied and untrusted.
   name.textContent = authorLabel(author);
   who.appendChild(name);
   // Status only varies where resolved/orphaned threads can appear at all —
-  // the margin renders open threads exclusively, so this is empty there.
-  if (status !== 'open') {
+  // the margin renders open threads exclusively, so this is empty there. An
+  // orphan is the one status worth a word: it has lost its anchor and needs
+  // repairing, which no glyph says. Resolved is carried by the tick and the
+  // card's own fade.
+  if (status === 'orphan') {
     const tag = span('thread-tag');
-    tag.textContent = ` · ${status}`;
+    tag.textContent = ' · orphan';
     who.appendChild(tag);
   }
-  head.appendChild(who);
+  if (!mark.topicIsAsk || status === 'orphan') line.append(sep, who);
 
   const lineLabel = host.opts.threadLineLabel?.(t.id);
   if (lineLabel) {
     const chip = span('thread-line');
     chip.textContent = lineLabel;
-    head.appendChild(chip);
+    line.appendChild(chip);
   }
-  if (host.opts.isNew?.(t)) {
-    const tag = span('thread-new-tag');
-    tag.textContent = 'New';
-    head.appendChild(tag);
-  }
+  head.appendChild(line);
 
   // Top right, as far from ✓ Resolve as the card allows: the two were a
   // thumb-width apart, and the misfire that costs you resolves a thread.
@@ -259,56 +282,39 @@ function head(
   caret.type = 'button';
   caret.className = 'thread-caret';
   // Named for its own thread, not "Toggle comment thread" on every card. A
-  // sighted reader tells the column apart by the name and the flag; a
+  // sighted reader tells the column apart by the topic and the glyph; a
   // keyboard user tabbing it got a run of identical buttons, with no way to
   // know which thread they were on or which one was holding a decision. The
   // decision half is also the only place that fact reaches a screen reader
-  // at all — the flag says it in colour and in a `title` nothing announces.
+  // at all, now that the flag row it used to announce is gone.
   const decision = threadDecision(t);
   const decisionSuffix =
     decision === 'pending' ? ', decision needed' : decision === 'answered' ? ', decision' : '';
   caret.setAttribute('aria-label', `Comment from ${authorLabel(author)}${decisionSuffix}`);
   caret.setAttribute('aria-expanded', String(host.activeId() === t.id));
-  // A review item's card says in words what the fold reveals — "Details" —
-  // because its folded face already carries the ask and the ways to answer
-  // it, so the fold is not "open the comment" but "show the why". The words
-  // follow the fold in `syncFaceVisibility`, the same place the caret's
-  // announced state does.
-  if (mark.declared) {
-    caret.classList.add('thread-caret-words');
-    caret.textContent = host.activeId() === t.id ? 'Less ▴' : 'Details ▾';
-  } else {
-    caret.textContent = '›';
-  }
+  // One glyph in both states — the rotation is the state. Words here ("Details
+  // ▾" / "Less ▴") were a second label on a row that already has a topic and
+  // a name to read; the caret's `aria-expanded` is what actually announces
+  // the fold, and it says it in both.
+  caret.textContent = '›';
   head.appendChild(caret);
   return head;
 }
 
-/** Slot A: the topic line becomes the opening message, in place. */
-function slotA(t: Thread, topic: string, itemCommentId?: string): HTMLElement {
-  const topicEl = div('thread-topic clip');
-  // Plain text, never HTML: the snippet is doc content, untrusted.
-  topicEl.textContent = topic;
-
-  const msg = div('thread-message body');
-  // Comments are untrusted input; renderCommentMarkdown escapes first and
-  // only emits a fixed safe tag set, so innerHTML is safe here.
-  msg.innerHTML = renderCommentMarkdown(t.comments[0]?.text ?? '');
-
-  // The banner an opening declaration carries — SUPPRESSED when slot B's
-  // item card is already carrying this same declaration, which is the usual
-  // case for a declared thread. Both render the kind chip, the headline and
-  // the why, so leaving both in place stated the question twice and pushed
-  // the interface that answers it below the fold. Kept for a declaration no
-  // card is showing (a superseded ask, still part of the history): there,
-  // nothing else says it was ever asked.
-  const opening = t.comments[0];
-  const header = opening && opening.id !== itemCommentId ? reviewHeader(opening.review) : null;
-  return slot('slot-a', [topicEl], header ? [header, msg] : [msg]);
-}
-
-/** Slot B: who spoke + where it got to becomes the replies + the reply box. */
-function slotB(
+/**
+ * Line two, and the only thing that folds.
+ *
+ * Summary face: where the conversation got to, plus — when this thread is
+ * waiting on the reader — the row that answers it without opening anything.
+ * Detail face: the same summary line, then the whole thread.
+ *
+ * The summary line is repeated at the top of the detail face on purpose. It
+ * keeps line two in place across the fold (the mock's "the row you tapped
+ * becomes the header"), and it reads as the abstract over the history below
+ * it, which is a different thing from the raw replies: one is what the thread
+ * MEANS, the other is what was said.
+ */
+function body(
   host: ThreadCardHost,
   t: Thread,
   summary: {
@@ -326,36 +332,71 @@ function slotB(
   },
 ): HTMLElement {
   const { pending, itemComment, pendingReply } = item;
-  const summaryFace: HTMLElement[] = [];
-  // The only row that comes and goes — with nobody but the author in the
-  // thread there is nobody to list. Both LINES are always rendered.
-  if (summary.participants) summaryFace.push(participantsRow(summary.participants));
-  const discussion = div('thread-discussion clip');
-  if (summary.discussionKind === 'none') discussion.classList.add('none');
-  if (summary.discussionKind === 'pending') discussion.classList.add('pending');
-  discussion.textContent = summary.discussion;
-  summaryFace.push(discussion);
+
   // A review item answers from its FOLDED face (approved: comments mock 3).
   // A decision offers its option labels right there; a question shows
   // where to tap; an answered item keeps a compact record — who, when, and
   // the words — so nothing has to be opened to see what a card is asking or
   // what it was told. The full item card, with the detail and each option's
-  // reasoning, stays one fold away behind "Details".
-  if (itemComment?.review) {
-    const compact = compactItemLine(host, t, itemComment, itemComment.review, pending !== null);
-    if (compact) summaryFace.push(compact);
-  }
+  // reasoning, stays one fold away behind the chevron.
+  const compact = itemComment?.review
+    ? compactItemLine(host, t, itemComment, itemComment.review, pending !== null)
+    : null;
+  // Line two of the FOLDED card is one thing or the other, and sometimes
+  // neither. "No replies yet" is a fact about the card the reader can do
+  // nothing with, it is true of most review items and of every thread nobody
+  // has answered yet, and it lands on resolved cards too — where it is the
+  // last thing left to say about a thread that is finished. A card with
+  // nothing on line two folds to its head, which is the one line this
+  // redesign is named for.
+  //
+  // That makes an EMPTY summary face reachable, and `sizeThreadSlots` used to
+  // refuse every zero it measured. It now refuses a zero only from a face
+  // that has children — the case its guard was written for, a subtree not
+  // being laid out — so an empty face closes to nothing and still reopens.
+  const summaryFace: HTMLElement[] = [];
+  if (summary.discussionKind !== 'none') summaryFace.push(discussionLine(summary));
+  if (compact) summaryFace.push(compact);
+
+  // The opened card shows every reply in full below, so a summary of them is
+  // an abstract over something already on screen — worth keeping while it
+  // says something, and never worth a line to say there is nothing. The
+  // detail face always carries the opening message and the foot, so dropping
+  // this one can never leave it empty.
+  const detailFace: Node[] = summary.discussionKind === 'none' ? [] : [discussionLine(summary)];
+
+  // Who opened this and when. On the folded card the name rides line one;
+  // here it is the attribution for the opening message directly under it,
+  // which is why that message never repeats the name.
+  const opening = t.comments[0];
+  if (opening) detailFace.push(askedMeta(opening));
+
+  const msg = div('thread-message body');
+  // Comments are untrusted input; renderCommentMarkdown escapes first and
+  // only emits a fixed safe tag set, so innerHTML is safe here.
+  msg.innerHTML = renderCommentMarkdown(opening?.text ?? '');
+  // The banner an opening declaration carries — SUPPRESSED when the item
+  // card below is already carrying this same declaration, which is the usual
+  // case for a declared thread. Both render the kind chip, the headline and
+  // the why, so leaving both in place stated the question twice and pushed
+  // the interface that answers it below the fold. Kept for a declaration no
+  // card is showing (a superseded ask, still part of the history): there,
+  // nothing else says it was ever asked.
+  const openingHeader =
+    opening && opening.id !== itemComment?.id ? reviewHeader(opening.review) : null;
+  if (openingHeader) detailFace.push(openingHeader);
+  detailFace.push(msg);
 
   const comments = div('comments');
-  // Same suppression as slot A, one row further down: a reply that declared
-  // the ask the item card is carrying must not repeat its chip, headline and
-  // why in the history directly beneath the card that just said them.
+  // Same suppression one row further down: a reply that declared the ask the
+  // item card is carrying must not repeat its chip, headline and why in the
+  // history directly beneath the card that just said them.
   for (const c of t.comments.slice(1))
     comments.appendChild(commentRow(c, c.id === itemComment?.id));
 
   const reply = div('thread-reply');
   // The ask these words will answer, if there is one. `pendingDeclaration`
-  // (computed by the caller, above both slots) is the SAME rule the server's
+  // (computed by the caller, above the slot) is the SAME rule the server's
   // queue reads (core exports one copy): newest declaration wins, ts order
   // not array order, and a resolved thread has nothing pending. Anything
   // looser here offers an Answer composer for an item no queue is showing —
@@ -398,8 +439,8 @@ function slotB(
   });
   const actions = div('thread-actions');
   actions.appendChild(btn(answering ? 'Answer' : 'Reply', 'primary', submitReply));
-  // Resolve/Reopen is NOT here — one control, in the foot, outside the
-  // slots. Re-anchoring is a repair, not a reply, and belongs with the
+  // Resolve/Reopen is NOT here — one control, in the foot at the bottom of
+  // this face. Re-anchoring is a repair, not a reply, and belongs with the
   // conversation it is repairing.
   if (status === 'orphan') {
     actions.appendChild(btn('Re-anchor…', '', () => host.opts.onReanchor(t.id)));
@@ -410,26 +451,70 @@ function slotB(
   // design, review-flow-mock-v1; Bryan verbatim: "if I open a comment that
   // has one or more review items in it, I should get the full review item
   // interface, with the comment history secondary"). The full item card
-  // renders FIRST, the conversation drops below an "Earlier in this
-  // thread" label, and while the item is pending the one composer is the
+  // renders FIRST, and while the item is pending the one composer is the
   // card's answer box. Once settled the card holds the answered record and
   // the composer returns to its usual place as a plain Reply.
-  const detailFace: Node[] = [];
   if (itemComment?.review) {
-    const card = itemCard(host, t, itemComment, itemComment.review, pending !== null);
+    const card = itemCard(host, t, itemComment, itemComment.review, pending !== null, {
+      // The asked-by line above already attributes this declaration when the
+      // opening comment IS the declaration — the usual case. Printing it in
+      // the card too put "Rota Assistant · 8m" and "Asked by Rota Assistant 8
+      // minutes ago" three lines apart on one open card. Kept for a
+      // declaration that arrived as a REPLY, where the two name different
+      // people at different times and the card is the only thing that says
+      // who put the question.
+      attributed: itemComment.id === opening?.id,
+    });
     if (answering) card.append(reply);
     detailFace.push(card);
-    if (t.comments.length > 1) {
-      const label = div('thread-history-label');
-      label.textContent = 'Earlier in this thread';
-      detailFace.push(label);
-    }
-    detailFace.push(comments);
-    if (!answering) detailFace.push(reply);
-  } else {
-    detailFace.push(comments, reply);
   }
-  return slot('slot-b', summaryFace, detailFace);
+  // The history is headed "Comments" and nothing counts replies (Bryan,
+  // round 2: a count answers none of the collapsed card's four jobs, and
+  // opened cards are read, not tallied). The heading only appears when
+  // there is a history to head.
+  if (t.comments.length > 1) {
+    const label = div('thread-history-label');
+    label.textContent = 'Comments';
+    detailFace.push(label);
+  }
+  detailFace.push(comments);
+  if (!answering) detailFace.push(reply);
+  detailFace.push(foot(host, t, status));
+
+  return slot('slot-a', summaryFace, detailFace);
+}
+
+/** Line two's text, built twice — once per face. */
+function discussionLine(summary: {
+  discussion: string;
+  discussionKind: 'replies' | 'none' | 'pending';
+}): HTMLElement {
+  const discussion = div('thread-discussion clip');
+  if (summary.discussionKind === 'none') discussion.classList.add('none');
+  if (summary.discussionKind === 'pending') discussion.classList.add('pending');
+  discussion.textContent = summary.discussion;
+  return discussion;
+}
+
+/**
+ * Who opened the thread and when, under line one on the opened card.
+ *
+ * The swatch is here rather than on line one: on the folded card the glyph
+ * already owns the left edge, and a second coloured mark beside it made two
+ * different threads read as the same one at a glance.
+ */
+function askedMeta(opening: Comment): HTMLElement {
+  const meta = div('thread-asked-meta');
+  const swatch = span('swatch');
+  // Assigning a style PROPERTY can't smuggle extra declarations the way an
+  // interpolated style ATTRIBUTE can — the CSS parser drops the whole value
+  // if it isn't a colour.
+  swatch.style.background = opening.author.color;
+  const who = span('thread-asked-who');
+  // Plain text, never HTML: author names are agent-supplied and untrusted.
+  who.textContent = `${authorLabel(opening.author)} · ${formatTime(opening.ts)}`;
+  meta.append(swatch, who);
+  return meta;
 }
 
 /**
@@ -451,20 +536,22 @@ function compactItemLine(
     const tick = span('thread-answered-tick');
     tick.textContent = '✓ ';
     line.appendChild(tick);
-    // A decision's outcome already rides the flag row above the head;
-    // repeating it here would say the same words twice on a folded card.
-    if (review.shape !== 'decision') {
-      const words = span('thread-answered-words');
-      // Plain text: an answer is a person's words.
-      words.textContent = (
-        review.answerText ??
-        review.options?.find((o) => o.id === review.answeredWith)?.label ??
-        ''
-      )
-        .replace(/\s+/g, ' ')
-        .trim();
-      line.appendChild(words);
-    }
+    // WHAT was decided, on the folded card. A decision's outcome used to ride
+    // the "Decision" flag row above the head instead, and was suppressed here
+    // to avoid saying it twice; the flag row went with the collapsed redesign,
+    // so this is now the only place a folded card can say it. Without it an
+    // answered decision folded to "✓ — decided by Bryan", which names
+    // everything except the decision.
+    const words = span('thread-answered-words');
+    // Plain text: an answer is a person's words.
+    words.textContent = (
+      review.answerText ??
+      review.options?.find((o) => o.id === review.answeredWith)?.label ??
+      ''
+    )
+      .replace(/\s+/g, ' ')
+      .trim();
+    line.appendChild(words);
     const meta = span('thread-answered-who');
     meta.textContent = decidedMetaLine(
       review.answeredBy,
@@ -507,6 +594,7 @@ function itemCard(
   c: Comment,
   review: ReviewPayload,
   pending: boolean,
+  opts: { attributed?: boolean } = {},
 ): HTMLElement {
   const card = div('thread-item-card');
   const head = div('thread-item-head');
@@ -516,19 +604,21 @@ function itemCard(
   const kind = span(`thread-item-k thread-item-k-${decision ? 'decision' : 'review'}`);
   kind.textContent = decision ? 'Decision' : 'Question';
   head.append(kind);
-  const headline = document.createElement('p');
-  headline.className = 'thread-item-headline';
-  // Plain text, never HTML: the headline is agent-supplied and the API
-  // takes it as a single-line string, not markdown.
-  headline.textContent = review.headline;
-  head.append(headline);
-  const meta = document.createElement('p');
-  meta.className = 'thread-item-meta';
-  // A declaration IS an ask, so this always reads "Asked" — same judgment
-  // the hub's `askedMeta` records for declared items. The clock is the
-  // declaring comment's, which is when the question was put.
-  meta.textContent = askedMetaLine(authorLabel(c.author), true, c.ts, Date.now());
-  head.append(meta);
+  // NO headline here. Line one of the card above is this very headline —
+  // `renderThreadCard` takes the topic from `itemComment.review.headline`,
+  // and this card is that same declaration — so printing it again put the
+  // ask twice on one open card, in two type sizes, and pushed the buttons
+  // that answer it further down. The chip and the asked-by line stay: they
+  // say what KIND of ask it is and who is waiting, which line one does not.
+  if (!opts.attributed) {
+    const meta = document.createElement('p');
+    meta.className = 'thread-item-meta';
+    // A declaration IS an ask, so this always reads "Asked" — same judgment
+    // the hub's `askedMeta` records for declared items. The clock is the
+    // declaring comment's, which is when the question was put.
+    meta.textContent = askedMetaLine(authorLabel(c.author), true, c.ts, Date.now());
+    head.append(meta);
+  }
   card.append(head);
 
   // ONE body, markdown-rendered — the payload's `detail`, via the same
@@ -630,24 +720,25 @@ function answeredRecord(
   return wrap;
 }
 
-/** Row 4: how much conversation there is, and the one resolve control. */
+/**
+ * The one resolve control, at the bottom of the opened card.
+ *
+ * It used to sit outside the fold beside "3 replies · 2h". Both went with the
+ * collapsed redesign: the count answered none of the four jobs a folded line
+ * has, and a Resolve a thumb-width from the chevron is a misfire that closes
+ * somebody's thread. Resolving is now a deliberate act on an open card.
+ */
 function foot(
   host: ThreadCardHost,
   t: Thread,
   status: 'open' | 'resolved' | 'orphan',
 ): HTMLElement {
   const foot = div('thread-foot');
-  const meta = span('thread-meta');
-  const replies = Math.max(0, t.commentCount - 1);
-  const count = replies > 0 ? `${replies} ${replies === 1 ? 'reply' : 'replies'} · ` : '';
-  meta.textContent = `${count}${formatTime(t.lastActivity)}`;
-  foot.appendChild(meta);
-
-  // ONE control, same element and same class in both states, so expanding
-  // never swaps it for a different button. It reads as an action before you
-  // take it — never icon-only, never green-only-once-resolved.
+  // ONE control, same element and same class in both states, so resolving
+  // and reopening are never two different buttons. It reads as an action
+  // before you take it — never icon-only, never green-only-once-resolved.
   const resolved = status === 'resolved';
-  const b = btn(resolved ? '✓ Resolved' : '✓ Resolve', 'thread-resolve', () =>
+  const b = btn(resolved ? '\u2713 Resolved' : '\u2713 Resolve', 'thread-resolve', () =>
     resolved ? host.opts.onReopen(t.id) : host.opts.onResolve(t.id),
   );
   b.setAttribute('aria-label', resolved ? 'Reopen thread' : 'Resolve thread');
@@ -668,11 +759,11 @@ function span(cls: string): HTMLElement {
 }
 
 /**
- * A folding slot: two faces stacked in the same box, the summary one and the
- * one it morphs into. Both are absolutely positioned at `top: 0` by CSS, so
- * the slot has no intrinsic height — the morph engine measures the visible
- * face and sets it. That is what lets the opening message land on the exact
- * pixel row the topic line occupied.
+ * The folding slot: two faces stacked in the same box, the summary one and
+ * the one it morphs into. Both are absolutely positioned at `top: 0` by CSS,
+ * so the slot has no intrinsic height — the morph engine measures the visible
+ * face and sets it. That is what lets the conversation land on the exact
+ * pixel row the discussion line occupied.
  */
 function slot(cls: string, summaryFace: Node[], detailFace: Node[]): HTMLElement {
   const el = div(`thread-slot ${cls}`);
@@ -682,27 +773,6 @@ function slot(cls: string, summaryFace: Node[], detailFace: Node[]): HTMLElement
   b.append(...detailFace);
   el.append(a, b);
   return el;
-}
-
-/** Who else is in the thread, sitting with the discussion line it describes. */
-function participantsRow(p: Participants): HTMLElement {
-  const row = div('thread-participants clip');
-  for (const u of p.repliers) {
-    const sw = span('swatch');
-    sw.style.background = u.color;
-    row.appendChild(sw);
-  }
-  if (p.label.kind === 'named' && p.label.text.startsWith(p.label.name)) {
-    // Style the name, but take the wording from the builder — the seam owns
-    // what the row SAYS; this only decides how it looks.
-    const nameEl = span('name');
-    // Plain text, never HTML: names are untrusted (agent-supplied).
-    nameEl.textContent = p.label.name;
-    row.append(nameEl, document.createTextNode(p.label.text.slice(p.label.name.length)));
-  } else {
-    row.appendChild(document.createTextNode(p.label.text));
-  }
-  return row;
 }
 
 /**
