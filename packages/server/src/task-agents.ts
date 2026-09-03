@@ -1,25 +1,32 @@
 /**
- * Agents on a board: who is attached, how recently the server saw them, the
- * lead seat's health, and the two delivery queues (voice change-requests and
- * comments) that hold work for an agent that is not live right now.
+ * Agents on a board: who is attached, how recently the server saw them, and
+ * the lead seat's health.
  *
  * Split out of `tasks.ts` — the second of the store's four responsibilities.
- * Nothing here reads or writes a task row: attachments and queues live in
- * their own sidecars, and what this file needs from the store arrives through
+ * Nothing here reads or writes a task row: attachments live in their own
+ * sidecar, and what this file needs from the store arrives through
  * `AgentStorePersistence` rather than a `this` that reaches all of it.
  *
- * The attachment constants, the derived-state helpers and the queue types
- * live here rather than in `tasks.ts` for the same reason `isRetired` lives
- * in `workspace-store.ts`: this file may not import a VALUE from the file
- * that imports it. `tasks.ts` imports them back and re-exports them, so no
- * caller outside either file changes.
+ * The two delivery queues that hold work for an agent that is not live right
+ * now — voice change-requests and comments — were split further, into
+ * `agent-voice-queue.ts` and `agent-comment-queue.ts`: each was already a
+ * banner in this file (`// ── Voice`, `// ── Comment queue`), one store each,
+ * reachable only through this same `AgentStorePersistence` seam. `AgentStore`
+ * composes one instance of each and its own methods delegate to them, so its
+ * public API is unchanged.
+ *
+ * The attachment constants and the derived-state helpers live here rather
+ * than in `tasks.ts` for the same reason `isRetired` lives in
+ * `workspace-store.ts`: this file may not import a VALUE from the file that
+ * imports it. `tasks.ts` imports them back and re-exports them, so no caller
+ * outside either file changes.
  */
 
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { Task, TaskActor } from '@feedback/core/task-wire';
 import { classifyActor } from './actor-identity.ts';
-import { cryptoId } from './task-fields.ts';
+import { AgentCommentQueue, type QueuedComment } from './agent-comment-queue.ts';
+import { AgentVoiceQueue, type QueuedVoiceRequest } from './agent-voice-queue.ts';
 import { AUTHOR_REQUIRED_MESSAGE, isCategoryAuthor } from './task-owner.ts';
 import type {
   AgentAttachedEvent,
@@ -35,6 +42,20 @@ import type {
   WorkspaceState,
 } from './tasks.ts';
 import { isRetired, normalizeWorkspaceName, retiredNotice } from './workspace-store.ts';
+
+export {
+  AgentCommentQueue,
+  COMMENT_ACK_GRACE_MS,
+  MAX_QUEUED_COMMENTS,
+  type QueuedComment,
+  commentQueuePath,
+} from './agent-comment-queue.ts';
+export {
+  AgentVoiceQueue,
+  VOICE_ACK_GRACE_MS,
+  type QueuedVoiceRequest,
+  voiceQueuePath,
+} from './agent-voice-queue.ts';
 
 /**
  * The four rows this file announces.
@@ -109,18 +130,6 @@ function describeGap(ms: number): string {
   if (hours < 48) return `${hours}h`;
   return `${Math.floor(hours / 24)}d`;
 }
-
-/**
- * How long an emitted utterance is left alone before the queue offers it again.
- *
- * The floor is "how long can a busy agent reasonably take to acknowledge a
- * channel frame" — a frame lands at a turn boundary, so it waits out whatever
- * tool call is in progress. The ceiling is Bryan noticing nothing happened. 90
- * seconds sits between: past it, an unacked entry is far more likely lost than
- * pending, and re-offering costs at worst one duplicated instruction where NOT
- * re-offering costs the whole request.
- */
-export const VOICE_ACK_GRACE_MS = 90_000;
 
 export type AttachmentState = 'active' | 'unresponsive' | 'away';
 
@@ -401,102 +410,6 @@ export function attachmentsSidecarPath(dataDir: string, workspaceId: string): st
   return join(dataDir, 'workspaces', `${workspaceId}.attachments.json`);
 }
 
-/** One change-utterance waiting for an agent to attach (§2.4: "agent away —
- *  queued"). Persisted synchronously — "queued" is a promise, and a promise
- *  that lives only in memory dies with the process (grounded-pending). */
-export interface QueuedVoiceRequest {
-  /** Names this entry so a receipt can clear exactly one. Absent on rows
-   *  written before the queue became the record rather than the fallback —
-   *  those still drain, they just cannot be acked individually. */
-  id?: string;
-  /**
-   * When the server last put this on the wire, or absent if it never has.
-   *
-   * An emitted-and-unacked entry and a lost one look identical from here, so
-   * this is what the grace window is measured from: long enough that a working
-   * agent has had its chance to acknowledge, short enough that a genuinely
-   * lost utterance comes back quickly.
-   */
-  emittedAt?: number;
-  transcript: string;
-  context?: unknown;
-  actor: TaskActor;
-  /**
-   * What the voice fast path ALREADY applied to the board for this utterance,
-   * as the speaker was told it — present only when it applied something.
-   *
-   * An utterance can carry more than the one verb voice handles ("mark this
-   * done and then draft the migration notes"), and with no agent live the
-   * queue is the only durable channel for the rest of it. Delivering the
-   * transcript alone would ask the agent to redo the half that already
-   * happened; this field is how the same row says "that part is done".
-   */
-  applied?: string;
-  ts: number;
-}
-
-/** Where a workspace's queued voice requests persist. Exported so tests
- *  assert the real contract path. */
-export function voiceQueuePath(dataDir: string, workspaceId: string): string {
-  return join(dataDir, 'workspaces', `${workspaceId}.voice-queue.json`);
-}
-
-/**
- * One comment waiting for the agent it is addressed to.
- *
- * Same durable-queue contract as `QueuedVoiceRequest` — the queue is the
- * record, live delivery is the fast path, and the row clears on a receipt
- * from the receiving process — with the one divergence voice got wrong and
- * this queue must not copy: the row is ADDRESSED. `agentId` names who it is
- * for at queue time, and every drain filters on it, so a bystander attaching
- * first cannot walk off with the lead's comments.
- */
-export interface QueuedComment {
-  /** Names this row so a receipt can clear exactly one. */
-  id: string;
-  /** The agent this row is FOR. It drains only to this agent. */
-  agentId: string;
-  docId: string;
-  threadId?: string;
-  /** The broadcast this row stands in for: thread.created | thread.replied. */
-  event: string;
-  /** Who wrote the comment — never the addressee; the queue site excludes
-   *  an agent's own comments before a row is written. */
-  author: { id: string; name: string };
-  text: string;
-  /**
-   * The broadcast payload verbatim, replayed on redelivery so the frame an
-   * agent gets late is the same frame it would have gotten live — plus the
-   * `commentQueueId` the redelivery stamps on top.
-   */
-  payload?: unknown;
-  /** When the server last put this row on the wire (see QueuedVoiceRequest —
-   *  emitted is not delivered; the grace window is measured from here). */
-  emittedAt?: number;
-  ts: number;
-}
-
-/** Where a workspace's queued comments persist. Exported so tests assert the
- *  real contract path. */
-export function commentQueuePath(dataDir: string, workspaceId: string): string {
-  return join(dataDir, 'workspaces', `${workspaceId}.comment-queue.json`);
-}
-
-/**
- * The queue is DELIVERY state, not the record — the comment itself lives in
- * its thread's ydoc. An addressee that never sends receipts (a session on an
- * old bundle) must not grow the file without bound, so past this many rows
- * the oldest are dropped. Capping delivery bookkeeping is not a soft-delete
- * concern (CLAUDE.md: "the rule is about user content and history").
- */
-export const MAX_QUEUED_COMMENTS = 200;
-
-/** Same reasoning as VOICE_ACK_GRACE_MS, same number: past it an unacked row
- *  is far more likely lost than pending, and re-offering costs at worst one
- *  duplicate frame (which the MCP's eid dedup collapses) where NOT
- *  re-offering costs the comment. */
-export const COMMENT_ACK_GRACE_MS = VOICE_ACK_GRACE_MS;
-
 /**
  * What an agent verb may reach in the store, and nothing else.
  *
@@ -528,7 +441,13 @@ export interface AgentStorePersistence {
 /** Attachments and delivery queues. One per `TaskStore`, holding no state of
  *  its own — the records live in the workspace rows and the sidecars. */
 export class AgentStore {
-  constructor(private readonly p: AgentStorePersistence) {}
+  private readonly voice: AgentVoiceQueue;
+  private readonly comments: AgentCommentQueue;
+
+  constructor(private readonly p: AgentStorePersistence) {
+    this.voice = new AgentVoiceQueue(p);
+    this.comments = new AgentCommentQueue(p);
+  }
 
   /**
    * Fold agent id `from` into `into` on EVERY board: the seat moves where
@@ -826,14 +745,9 @@ export class AgentStore {
     };
   }
 
-  // ── Voice (§2.4 / §3.8) ──────────────────────────────────────────────────
+  // ── Voice — delegates to AgentVoiceQueue (agent-voice-queue.ts) ───────────
 
-  /**
-   * Record a voice utterance + its routing outcome. This is the §3.6
-   * `voice.request` row: it reaches the audit log and every subscriber via
-   * the emit choke point, so "voice always answers" has a checkable
-   * artifact. Returns false (and emits nothing) for an unknown workspace.
-   */
+  /** @see AgentVoiceQueue.recordVoiceRequest */
   recordVoiceRequest(
     workspaceId: string,
     req: {
@@ -847,32 +761,10 @@ export class AgentStore {
       actor: { id: string; name: string; kind?: string };
     },
   ): boolean {
-    if (!this.p.hasWorkspace(workspaceId)) return false;
-    this.p.emit({
-      type: 'voice.request',
-      workspaceId,
-      transcript: req.transcript,
-      route: req.route,
-      ack: req.ack,
-      ...(req.queueId !== undefined ? { queueId: req.queueId } : {}),
-      ...(req.context !== undefined ? { context: req.context } : {}),
-      actor: {
-        id: req.actor.id,
-        name: req.actor.name,
-        kind: classifyActor(req.actor),
-      },
-      ts: Date.now(),
-    });
-    return true;
+    return this.voice.recordVoiceRequest(workspaceId, req);
   }
 
-  /**
-   * Queue a change-utterance for the next agent attach. SYNCHRONOUS write,
-   * unlike every other sidecar: the caller is about to tell the speaker
-   * "queued", and an ack grounded in a debounce that a crash can drop would
-   * be the summaries-incident lie. Queue writes are rare (only while no
-   * agent is live), so the sync cost is nothing.
-   */
+  /** @see AgentVoiceQueue.queueVoiceRequest */
   queueVoiceRequest(
     workspaceId: string,
     item: {
@@ -882,131 +774,35 @@ export class AgentStore {
       applied?: string;
     },
   ): string | false {
-    if (!this.p.hasWorkspace(workspaceId)) return false;
-    const id = cryptoId('vq');
-    const queued: QueuedVoiceRequest = {
-      id,
-      transcript: item.transcript,
-      ...(item.context !== undefined ? { context: item.context } : {}),
-      actor: { id: item.actor.id, name: item.actor.name, kind: classifyActor(item.actor) },
-      ...(item.applied !== undefined ? { applied: item.applied } : {}),
-      ts: Date.now(),
-    };
-    const path = voiceQueuePath(this.p.dataDir(), workspaceId);
-    try {
-      const dir = join(this.p.dataDir(), 'workspaces');
-      if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
-      const existing = this.listQueuedVoice(workspaceId);
-      writeFileSync(path, `${JSON.stringify({ queue: [...existing, queued] }, null, 2)}\n`);
-      return id;
-    } catch (err) {
-      console.error(`[tasks] failed to queue voice request for ${workspaceId}:`, err);
-      return false;
-    }
+    return this.voice.queueVoiceRequest(workspaceId, item);
   }
 
-  /** Read the queue without draining it (the hub could render a badge). */
+  /** @see AgentVoiceQueue.listQueuedVoice */
   listQueuedVoice(workspaceId: string): QueuedVoiceRequest[] {
-    const path = voiceQueuePath(this.p.dataDir(), workspaceId);
-    if (!existsSync(path)) return [];
-    try {
-      const parsed = JSON.parse(readFileSync(path, 'utf8')) as {
-        queue?: QueuedVoiceRequest[];
-      };
-      return (parsed.queue ?? []).filter((q) => typeof q?.transcript === 'string');
-    } catch (err) {
-      console.error(`[tasks] unreadable voice queue for ${workspaceId} — skipped:`, err);
-      return [];
-    }
+    return this.voice.listQueuedVoice(workspaceId);
   }
 
-  /** Replace the queue file, removing it when nothing is left — same
-   *  synchronous write as `queueVoiceRequest`, and for the same reason. */
-  private writeVoiceQueue(workspaceId: string, queue: QueuedVoiceRequest[]): void {
-    const path = voiceQueuePath(this.p.dataDir(), workspaceId);
-    try {
-      if (queue.length === 0) {
-        rmSync(path, { force: true });
-        return;
-      }
-      writeFileSync(path, `${JSON.stringify({ queue }, null, 2)}\n`);
-    } catch (err) {
-      console.error(`[tasks] failed to rewrite voice queue for ${workspaceId}:`, err);
-    }
-  }
-
-  /**
-   * Record that this entry has gone out on the wire.
-   *
-   * Not the same as delivered, and the difference is the whole point: the
-   * server knows what it wrote to a socket and nothing more. Until an ack
-   * comes back the entry stays on the books.
-   */
+  /** @see AgentVoiceQueue.markVoiceEmitted */
   markVoiceEmitted(workspaceId: string, id: string): boolean {
-    const queue = this.listQueuedVoice(workspaceId);
-    const entry = queue.find((q) => q.id === id);
-    if (!entry) return false;
-    entry.emittedAt = Date.now();
-    this.writeVoiceQueue(workspaceId, queue);
-    return true;
+    return this.voice.markVoiceEmitted(workspaceId, id);
   }
 
-  /**
-   * The receiving process confirms it has the utterance. THIS is what makes a
-   * live delivery durable — before it, the route's only record that a message
-   * had been sent was a socket write that nothing checked.
-   *
-   * Returns false for an id that is not on the queue, rather than treating a
-   * stale or replayed receipt as licence to clear anything.
-   */
+  /** @see AgentVoiceQueue.ackVoiceRequest */
   ackVoiceRequest(workspaceId: string, id: string): boolean {
-    const queue = this.listQueuedVoice(workspaceId);
-    const next = queue.filter((q) => q.id !== id);
-    if (next.length === queue.length) return false;
-    this.writeVoiceQueue(workspaceId, next);
-    return true;
+    return this.voice.ackVoiceRequest(workspaceId, id);
   }
 
-  /**
-   * Hand over what this agent should act on, and keep what might still be in
-   * flight.
-   *
-   * `freshProcess` is the attach case. A session that just attached cannot be
-   * holding anything: whatever was emitted went to the process that is gone,
-   * so the grace window protects nobody and only delays the redelivery.
-   */
+  /** @see AgentVoiceQueue.drainVoiceQueue */
   private drainVoiceQueue(
     workspaceId: string,
     opts?: { freshProcess?: boolean },
   ): QueuedVoiceRequest[] {
-    const queue = this.listQueuedVoice(workspaceId);
-    if (queue.length === 0) return [];
-    const now = Date.now();
-    const inFlight = (q: QueuedVoiceRequest): boolean =>
-      !opts?.freshProcess &&
-      q.emittedAt !== undefined &&
-      now - q.emittedAt < this.p.voiceAckGraceMs;
-    const handOver = queue.filter((q) => !inFlight(q));
-    this.writeVoiceQueue(
-      workspaceId,
-      queue.filter((q) => inFlight(q)),
-    );
-    return handOver;
+    return this.voice.drainVoiceQueue(workspaceId, opts);
   }
 
-  // ── Comment queue ────────────────────────────────────────────────────────
-  // The voice queue's shape (the queue is the record; live delivery is the
-  // fast path; the row clears on a receipt) with two deliberate differences:
-  // rows are ADDRESSED to one agent and drain only for it, and a drain never
-  // removes anything — only `ackComment` does, so a handover the session
-  // never read comes back after the grace window instead of dying with the
-  // response body that carried it.
+  // ── Comment queue — delegates to AgentCommentQueue (agent-comment-queue.ts)
 
-  /**
-   * Queue one comment for one agent. SYNCHRONOUS write, like
-   * `queueVoiceRequest` and for the same reason: "queued" is a promise, and
-   * a promise living in a debounce dies with the process.
-   */
+  /** @see AgentCommentQueue.queueComment */
   queueComment(
     workspaceId: string,
     item: {
@@ -1019,148 +815,43 @@ export class AgentStore {
       payload?: unknown;
     },
   ): string | false {
-    if (!this.p.hasWorkspace(workspaceId)) return false;
-    const id = cryptoId('cq');
-    const queued: QueuedComment = {
-      id,
-      agentId: item.agentId,
-      docId: item.docId,
-      ...(item.threadId !== undefined ? { threadId: item.threadId } : {}),
-      event: item.event,
-      author: { id: item.author.id, name: item.author.name },
-      text: item.text,
-      ...(item.payload !== undefined ? { payload: item.payload } : {}),
-      ts: Date.now(),
-    };
-    try {
-      const dir = join(this.p.dataDir(), 'workspaces');
-      if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
-      // Oldest dropped past the cap — PER ADDRESSEE, not across the file.
-      // This file is delivery bookkeeping and the comment itself lives in
-      // its thread, so an addressee that never acks (an old bundle, an
-      // orphaned durable watch) must not grow it forever. But the cap it
-      // hits must be its own: a shared cap would let one dead addressee's
-      // backlog silently evict a LIVE agent's still-pending row, with no
-      // signal anywhere that it happened.
-      const existing = this.listQueuedComments(workspaceId);
-      const mine = existing.filter((q) => q.agentId === item.agentId);
-      const overflow = mine.length + 1 - MAX_QUEUED_COMMENTS;
-      let next = [...existing, queued];
-      if (overflow > 0) {
-        const drop = new Set(mine.slice(0, overflow).map((q) => q.id));
-        next = next.filter((q) => !drop.has(q.id));
-      }
-      writeFileSync(
-        commentQueuePath(this.p.dataDir(), workspaceId),
-        `${JSON.stringify({ queue: next }, null, 2)}\n`,
-      );
-      return id;
-    } catch (err) {
-      console.error(`[tasks] failed to queue comment for ${workspaceId}:`, err);
-      return false;
-    }
+    return this.comments.queueComment(workspaceId, item);
   }
 
-  /** Read the whole queue without touching it (badges, tests, coverage). */
+  /** @see AgentCommentQueue.listQueuedComments */
   listQueuedComments(workspaceId: string): QueuedComment[] {
-    const path = commentQueuePath(this.p.dataDir(), workspaceId);
-    if (!existsSync(path)) return [];
-    try {
-      const parsed = JSON.parse(readFileSync(path, 'utf8')) as { queue?: QueuedComment[] };
-      return (parsed.queue ?? []).filter(
-        (q) => typeof q?.id === 'string' && typeof q?.agentId === 'string',
-      );
-    } catch (err) {
-      console.error(`[tasks] unreadable comment queue for ${workspaceId} — skipped:`, err);
-      return [];
-    }
+    return this.comments.listQueuedComments(workspaceId);
   }
 
-  /** Replace the queue file, removing it when nothing is left — same
-   *  synchronous write as `queueComment`, and for the same reason. */
+  /** @see AgentCommentQueue.writeCommentQueue — used by `mergeAgent` to
+   *  re-key a backlog to a surviving id; every other write to this queue
+   *  stays inside `AgentCommentQueue` itself. */
   private writeCommentQueue(workspaceId: string, queue: QueuedComment[]): void {
-    const path = commentQueuePath(this.p.dataDir(), workspaceId);
-    try {
-      if (queue.length === 0) {
-        rmSync(path, { force: true });
-        return;
-      }
-      writeFileSync(path, `${JSON.stringify({ queue }, null, 2)}\n`);
-    } catch (err) {
-      console.error(`[tasks] failed to rewrite comment queue for ${workspaceId}:`, err);
-    }
+    this.comments.writeCommentQueue(workspaceId, queue);
   }
 
-  /** Record that this row went out on the wire. Not the same as delivered —
-   *  the row stays on the books until the ack. */
+  /** @see AgentCommentQueue.markCommentEmitted */
   markCommentEmitted(workspaceId: string, id: string): boolean {
-    const queue = this.listQueuedComments(workspaceId);
-    const entry = queue.find((q) => q.id === id);
-    if (!entry) return false;
-    entry.emittedAt = Date.now();
-    this.writeCommentQueue(workspaceId, queue);
-    return true;
+    return this.comments.markCommentEmitted(workspaceId, id);
   }
 
-  /**
-   * Roll back an emitted mark for a row whose send reached NO socket. The
-   * heartbeat route marks a row emitted when it hands it over, then attempts
-   * the addressed frame — but `sse.sendToAgent` returning 0 is a real answer
-   * ("the agent holds no stream"), and a row left marked against a send that
-   * never happened waits out a full grace window before anything re-offers
-   * it. Worse, if the agent's stream stays down while its heartbeats keep
-   * landing, the cycle repeats forever: mark → silent 0-sink send → grace →
-   * mark again. Clearing the mark makes the very next heartbeat a fresh
-   * delivery attempt instead. No-op (false) for unknown or un-emitted rows.
-   */
+  /** @see AgentCommentQueue.clearCommentEmitted */
   clearCommentEmitted(workspaceId: string, id: string): boolean {
-    const queue = this.listQueuedComments(workspaceId);
-    const entry = queue.find((q) => q.id === id);
-    if (!entry || entry.emittedAt === undefined) return false;
-    // JSON.stringify drops an undefined property, so the persisted row
-    // comes back with no emittedAt at all — indistinguishable from never
-    // having been sent, which is the point.
-    entry.emittedAt = undefined;
-    this.writeCommentQueue(workspaceId, queue);
-    return true;
+    return this.comments.clearCommentEmitted(workspaceId, id);
   }
 
-  /**
-   * The receiving process confirms it has the comment — the ONLY thing that
-   * removes a row. False for an unknown id, so a stale or replayed receipt
-   * is never licence to clear anything else.
-   */
+  /** @see AgentCommentQueue.ackComment */
   ackComment(workspaceId: string, id: string): boolean {
-    const queue = this.listQueuedComments(workspaceId);
-    const next = queue.filter((q) => q.id !== id);
-    if (next.length === queue.length) return false;
-    this.writeCommentQueue(workspaceId, next);
-    return true;
+    return this.comments.ackComment(workspaceId, id);
   }
 
-  /**
-   * Hand over what THIS agent should hear now, marking each row emitted but
-   * removing nothing. `freshProcess` is the attach case, exactly as for
-   * voice: whatever was in flight went to a process that is gone, so the
-   * grace window protects nobody there.
-   */
+  /** @see AgentCommentQueue.takeDeliverableComments */
   private takeDeliverableComments(
     workspaceId: string,
     agentId: string,
     opts?: { freshProcess?: boolean },
   ): QueuedComment[] {
-    const queue = this.listQueuedComments(workspaceId);
-    if (queue.length === 0) return [];
-    const now = Date.now();
-    const inFlight = (q: QueuedComment): boolean =>
-      !opts?.freshProcess &&
-      q.emittedAt !== undefined &&
-      now - q.emittedAt < this.p.commentAckGraceMs;
-    const handOver = queue.filter((q) => q.agentId === agentId && !inFlight(q));
-    if (handOver.length === 0) return [];
-    for (const q of handOver) q.emittedAt = now;
-    this.writeCommentQueue(workspaceId, queue);
-    return handOver;
+    return this.comments.takeDeliverableComments(workspaceId, agentId, opts);
   }
 
   /**
