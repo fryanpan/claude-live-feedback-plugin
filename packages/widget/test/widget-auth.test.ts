@@ -548,3 +548,88 @@ describe('a workspace that requires a signed-in writer', () => {
     expect(posts).toBe(1);
   });
 });
+
+describe('a workspace that requires a signed-in writer, asked by a browser that already is', () => {
+  // Cloudflare Access (and a cookie session) satisfy the write gate without
+  // the widget holding a popup token at all. `signInToWrite` alone cannot
+  // tell that visitor from a stranger — only `canWrite` can — so arming the
+  // offer on the flag alone put "Sign in to post" on every composer of a
+  // person whose every post was landing.
+  const user = { id: 'user-abc', name: 'Reviewer', kind: 'known', color: '#2e7dd7' };
+  const json = (body: unknown, status = 200) =>
+    new Response(JSON.stringify(body), {
+      status,
+      headers: { 'content-type': 'application/json' },
+    });
+
+  function openComposer(el: HTMLElement): HTMLElement {
+    const root = el.shadowRoot!;
+    document.elementFromPoint = () => document.getElementById('hello') as HTMLElement;
+    (root.querySelector('.fab') as HTMLButtonElement).click();
+    window.dispatchEvent(new PointerEvent('pointerup', { clientX: 10, clientY: 10 }));
+    return root.querySelector('.composer') as HTMLElement;
+  }
+
+  async function mount(session: unknown, docId: string) {
+    const mod = await importWidget();
+    fetchResponder = (url) => (url.includes('/api/auth/session') ? json(session) : json({}));
+    const el = mod.FeedbackWidget.init({ docId });
+    await flush();
+    return el;
+  }
+
+  it('arms nothing when the server says this browser can write', async () => {
+    const el = await mount({ signInToWrite: true, canWrite: true }, 'doc-access-visitor');
+    expect((el as unknown as { signInToWrite: boolean }).signInToWrite).toBe(false);
+    expect(el.shadowRoot!.querySelector('.auth-signin')).toBeNull();
+    const composer = openComposer(el);
+    expect(composer.querySelector('.composer-err')).toBeNull();
+    expect(composer.querySelector('.auth-signin')).toBeNull();
+  });
+
+  it('does not adopt or probe a stored token on that answer either', async () => {
+    // The token is what makes this a real negative: with nothing stored the
+    // probe returns early whatever the answer was.
+    localStorage.setItem('cfw:authToken', 'wt1.stored-token');
+    localStorage.setItem('cfw:authUser', JSON.stringify(user));
+    const el = await mount({ signInToWrite: true, canWrite: true }, 'doc-access-stored');
+    expect(fetchCalls.some((c) => c.url.includes('/api/auth/widget-session'))).toBe(false);
+    expect(el.shadowRoot!.querySelector('.me')?.textContent).not.toContain('Reviewer');
+    expect(el.shadowRoot!.querySelector('.auth-signout')).toBeNull();
+  });
+
+  it('still arms the offer when the server says this browser cannot write', async () => {
+    const el = await mount({ signInToWrite: true, canWrite: false }, 'doc-access-stranger');
+    expect((el as unknown as { signInToWrite: boolean }).signInToWrite).toBe(true);
+    expect(el.shadowRoot!.querySelector('.auth-signin')).toBeTruthy();
+    expect(openComposer(el).querySelector('.auth-signin')).toBeTruthy();
+  });
+
+  it('still arms the offer against a server too old to answer canWrite', async () => {
+    // A missing field is not a permission. Reading it as "can write" would
+    // silently drop the offer on every deployment that predates the field.
+    const el = await mount({ signInToWrite: true }, 'doc-access-old-server');
+    expect((el as unknown as { signInToWrite: boolean }).signInToWrite).toBe(true);
+    expect(el.shadowRoot!.querySelector('.auth-signin')).toBeTruthy();
+  });
+
+  it('a write actually refused still arms the offer, canWrite or not', async () => {
+    // The load-time answer is a hint; the 401 is the fact. An Access session
+    // that ends mid-visit must still get the way back in.
+    const mod = await importWidget();
+    fetchResponder = (url) => {
+      if (url.includes('/api/auth/session')) return json({ signInToWrite: true, canWrite: true });
+      if (url.includes('/threads'))
+        return json({ error: 'sign_in_required', signInUrl: '/signin' }, 401);
+      return json({});
+    };
+    const el = mod.FeedbackWidget.init({ docId: 'doc-access-expired' });
+    await flush();
+    expect((el as unknown as { signInToWrite: boolean }).signInToWrite).toBe(false);
+    // biome-ignore lint/suspicious/noExplicitAny: reaching into a private for the test
+    const posted = await (el as any).postReply('t-1', 'hello');
+    expect(posted).toBe(false);
+    expect((el as unknown as { signInToWrite: boolean }).signInToWrite).toBe(true);
+    expect(el.shadowRoot!.querySelector('.auth-signin')).toBeTruthy();
+  });
+});
