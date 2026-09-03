@@ -199,7 +199,14 @@ export function mountMobileReview(opts: MobileReviewOpts): MobileReview {
     // are actually in the document, or every inline card renders as a header
     // and a footer with nothing between them.
     for (const c of cards) if (c.el.isConnected) sizeThreadSlots(c.el);
-    syncNavButtons(cards.length);
+    // Count the ANCHORED THREADS, not the cards built. The two used to be the
+    // same number; they stop being the same the moment a reader picks
+    // balloons on a screen too narrow to hold a margin, where no inline card
+    // is built and the sheet is the comment surface. Counting cards there
+    // disabled ‹ › on a doc full of comments — and stepping is exactly how
+    // you reach a thread whose only copy is in the sheet, which `showThread`
+    // already opens for it.
+    syncNavButtons(inlineThreads().length);
   }
 
   function flash(el: HTMLElement): void {
