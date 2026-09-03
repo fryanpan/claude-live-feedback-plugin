@@ -1,5 +1,5 @@
 /**
- * One notes section, ever — and the raw transcript under it.
+ * One notes section, ever.
  *
  * THE BUG THIS PINS. A tick used to accept its section only while that
  * section was the doc's TAIL. Everything the product itself appends to a
@@ -25,9 +25,9 @@ import { createNotesLedger } from '../src/meeting-notes-doc.ts';
 import { mergeNotesSection } from '../src/meeting-notes-merge.ts';
 import { appendResearchPlaceholder } from '../src/notes-section-write.ts';
 import {
+  LEGACY_TRANSCRIPT_HEADING,
   MEETING_NOTES_HEADING,
   MEETING_NOTES_HEADINGS,
-  TRANSCRIPT_HEADING,
   findNotesSection,
   sectionInsertIndex,
   stripSectionHeading,
@@ -79,7 +79,7 @@ describe('the notes tick keeps one section', () => {
     await h.end();
   });
 
-  it('a spoken research ask writes its placeholder above the transcript', async () => {
+  it('a spoken research ask writes its placeholder after the notes', async () => {
     const h = createNotesTickHarness({
       doc: '# Agenda\n',
       compose: () => '## Meeting notes\n\n- we should measure first\n',
@@ -87,7 +87,10 @@ describe('the notes tick keeps one section', () => {
     await h.speak('We should measure first.');
     const res = appendResearchPlaceholder(h.ydoc, 'Research the pricing', 'http://example/task/1');
     expect(res).toEqual({ ok: true, mode: 'appended' });
-    expect(h.headings().at(-1)).toBe(TRANSCRIPT_HEADING);
+    // Nothing sits under it any more: the doc's tail is the placeholder, and
+    // the meeting's own words are in the sister file, not in this doc.
+    expect(h.headings().at(-1)).toBe('Research the pricing');
+    expect(h.headings()).not.toContain(LEGACY_TRANSCRIPT_HEADING);
     await h.end();
   });
 
@@ -185,21 +188,21 @@ describe('stripSectionHeading', () => {
 });
 
 describe('sectionInsertIndex', () => {
-  it('is the end of the doc when there is no transcript', () => {
+  it('is the end of the doc, which is every doc written since the transcript left', () => {
     const ydoc = new Y.Doc();
     prose.applyMarkdownToFragment(prose.getProseFragment(ydoc), '# A\n\nb\n');
     const fragment = prose.getProseFragment(ydoc);
     expect(sectionInsertIndex(fragment)).toBe(fragment.length);
   });
 
-  it('is the transcript heading when there is one', () => {
+  it('stops short of a legacy transcript section a doc still carries', () => {
     const ydoc = new Y.Doc();
     prose.applyMarkdownToFragment(
       prose.getProseFragment(ydoc),
       '# A\n\nb\n\n## Raw transcript\n\n```text\nsomebody: hello\n```\n',
     );
     const fragment = prose.getProseFragment(ydoc);
-    const span = findNotesSection(fragment, TRANSCRIPT_HEADING);
+    const span = findNotesSection(fragment, LEGACY_TRANSCRIPT_HEADING);
     expect(span).not.toBeNull();
     expect(sectionInsertIndex(fragment)).toBe(span!.start);
   });

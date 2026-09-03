@@ -404,25 +404,6 @@ export interface MeetingNotesDeps {
   /** Where composed notes go. The doc-writing stage plugs in here. */
   onNotes: (update: NotesUpdate) => void;
   /**
-   * The tick's settled words, on their way to the doc's raw-transcript
-   * section.
-   *
-   * Called when the tick FIRES, outside the compose chain and before it, for
-   * two reasons. The record must not depend on a model: a meeting whose every
-   * compose fails still leaves its words in the doc, which is the whole point
-   * of having a record beside a view. And the tick's delta is the one list
-   * with each turn in it exactly once — the compose input carries `carry` as
-   * well, so a failed compose would write its words to the record twice.
-   *
-   * Optional: a session wired without a doc has nowhere to put them, and the
-   * JSONL under the data dir is the durable record either way.
-   */
-  onTranscript?: (input: {
-    docId: string;
-    meetingId: string;
-    lines: ReadonlyArray<{ speaker?: string; text: string }>;
-  }) => void;
-  /**
    * Where a rename of a voice already written about goes. Optional: a
    * session with no sink for it still renames the voices in its own
    * `previous`, so nothing composed AFTER the rename disagrees with the
@@ -608,27 +589,6 @@ export function beginNotesSession(
         tick.tick,
         tick.turns.map((t) => t.turn),
       );
-      // The record, before the view and outside the chain. Names ride along
-      // only once a second voice has been heard — the same gate the composer's
-      // speaker tags sit behind, because a solo meeting's every line prefixed
-      // with the one person's name says nothing.
-      if (deps.onTranscript) {
-        const named = seen.size >= 2;
-        try {
-          deps.onTranscript({
-            docId: ids.docId,
-            meetingId: ids.meetingId,
-            lines: tick.turns.map((t) => {
-              const speaker = named ? withNames(t).speaker : undefined;
-              return speaker === undefined ? { text: t.text } : { speaker, text: t.text };
-            }),
-          });
-        } catch (err) {
-          // A record that cannot reach the doc is a blemish; letting it reach
-          // the compose chain would cost the meeting its notes, which is not.
-          deps.onError?.(err instanceof Error ? err.message : 'notes transcript write failed');
-        }
-      }
     }
     chain = chain.then(async () => {
       const raw = [...carry, ...tick.turns];
