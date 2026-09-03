@@ -44,6 +44,10 @@ export async function loadOrCreateVapidKeys(dataDir: string): Promise<VapidKeys>
       throw new Error(`${path} is missing publicKey/privateKey`);
     }
     const keys = { publicKey: parsed.publicKey, privateKey: parsed.privateKey };
+    // A file that arrived loose (an older build, a restore, a copy under a
+    // permissive umask) keeps its old mode otherwise — the create branch's
+    // `mode` only applies to a file this call makes.
+    chmodSync(path, SECRET_MODE);
     // Prove the pair is usable now, while the operator can still read the
     // error, rather than at send time as an opaque 401 from a push service.
     await importVapidKeys(keys);

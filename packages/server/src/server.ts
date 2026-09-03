@@ -114,7 +114,12 @@ import {
   shareScopeAllows,
 } from './middleware/host-guard.ts';
 import { RECALL_STATUS_PATH, recallCallbackAllows } from './middleware/recall-callback-gate.ts';
-import { isBrowserRequest, isGatedWrite, signInRequiredBody } from './middleware/write-gate.ts';
+import {
+  browserCannotOperateBody,
+  isBrowserRequest,
+  isGatedWrite,
+  signInRequiredBody,
+} from './middleware/write-gate.ts';
 import {
   captureMockup,
   isHtmlMockupSource,
@@ -5942,6 +5947,20 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
                 'agent merges must be run from this machine (loopback only) — a merge moves lead seats and re-keys deliveries',
             });
           }
+          // The same two refusals the deploy and plugin-refresh routes
+          // carry (routes/ops.ts), for the same reasons: cloudflared runs
+          // on this box, so a tunnelled request also has a loopback peer
+          // address and only `cf-ray` says it crossed the edge; and a
+          // page served from this machine also has a loopback peer
+          // address and rides the owner's session cookie — see
+          // browserCannotOperateBody. (Security review pass 3, 2026-09-02.)
+          if (req.headers.has('cf-ray')) {
+            return j(403, {
+              error:
+                'agent merges cannot be run through the edge (proxied request) — run them from the box',
+            });
+          }
+          if (isBrowserRequest(req.headers)) return j(403, browserCannotOperateBody());
           const from = decodeURIComponent(agentMergeMatch[1] ?? '');
           const body = await safeJson(req);
           const into = typeof body?.into === 'string' ? body.into.trim() : '';
