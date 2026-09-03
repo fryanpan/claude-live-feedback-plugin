@@ -626,6 +626,87 @@ describe('sizeThreadSlots refuses a zero measurement', () => {
   });
 });
 
+describe('a card with nothing on line two refolds to nothing', () => {
+  /* The other half of the same rule, in the other function that writes a
+     slot height. `sizeThreadSlots` learned to tell a deliberately empty face
+     from an unmeasurable one; `slide` — the one that runs on the FOLD — did
+     not, so its `if (to <= 0) return` left the open height in place. Measured
+     in a browser: a resolved card folded to 33px on first paint, and after
+     one open and close its slot stayed at 237px. A blank second row under a
+     one-line card, and a resize remeasure agreed with it. */
+
+  /** A plain comment nobody has replied to: line two has nothing to say. */
+  function loneComment(): Thread {
+    const alice = { id: 'u1', name: 'Alice', kind: 'known' as const, color: '#2e7dd7' };
+    return thread({
+      status: 'resolved',
+      commentCount: 1,
+      comments: [{ id: 'c1', author: alice, text: 'The opening message.', ts: 1_699_999_000_000 }],
+    });
+  }
+
+  function mountEmptyFaced(): { card: HTMLElement; slot: HTMLElement } {
+    const container = document.createElement('div');
+    document.body.appendChild(container);
+    const panel = new ThreadPanel({
+      container,
+      currentUser: { id: 'me', name: 'Bryan', kind: 'known', color: '#0a0' },
+      onThreadClick: () => {},
+      onReply: () => {},
+      onResolve: () => {},
+      onReopen: () => {},
+      onReanchor: () => {},
+    });
+    const card = panel.renderThread(loneComment());
+    container.appendChild(card);
+    fakeLayout(card, { '.slot-a > .face-summary': 0, '.slot-a > .face-detail': 222 });
+    sizeThreadSlots(container);
+    return { card, slot: card.querySelector<HTMLElement>('.slot-a') as HTMLElement };
+  }
+
+  it('returns the slot to zero on every fold, not only on first paint', () => {
+    const { card, slot } = mountEmptyFaced();
+    // The premise: this really is the empty-face card, not a card whose
+    // summary happens to measure zero.
+    const summary = card.querySelector<HTMLElement>('.slot-a > .face-summary') as HTMLElement;
+    expect(summary.childElementCount).toBe(0);
+    expect(slot.style.height).toBe('0px');
+
+    // Twice, because the reported failure needed one full round trip: the
+    // first fold is what wrote the height that then outlived it.
+    for (let round = 0; round < 2; round++) {
+      morphCard(card, true);
+      expect(slot.style.height).toBe('222px');
+      morphCard(card, false);
+      expect(slot.style.height).toBe('0px');
+    }
+  });
+
+  it('still leaves a populated face alone when it cannot be measured', () => {
+    // The original guard, rebuilt. A card folding inside a closed drawer
+    // measures zero on a face that HAS children, and the fold must not write
+    // that zero — which is what pinned a card to its head and its foot.
+    const { card } = mountCard();
+    const slot = card.querySelector<HTMLElement>('.slot-a') as HTMLElement;
+    const summary = card.querySelector<HTMLElement>('.slot-a > .face-summary') as HTMLElement;
+    morphCard(card, true);
+    expect(slot.style.height).toBe('222px');
+
+    expect(summary.childElementCount).toBeGreaterThan(0);
+    Object.defineProperty(summary, 'offsetHeight', { get: () => 0, configurable: true });
+    morphCard(card, false);
+    expect(slot.style.height).toBe('222px');
+
+    // POSITIVE CONTROL: the same fold lands once the face can be measured,
+    // so the assertion above is about the zero and not about a fold that
+    // stopped writing anything.
+    Object.defineProperty(summary, 'offsetHeight', { get: () => 22, configurable: true });
+    morphCard(card, true);
+    morphCard(card, false);
+    expect(slot.style.height).toBe('22px');
+  });
+});
+
 describe('sizeThreadSlots converges when its own writes change layout', () => {
   /* Writing slot heights can itself reflow the cards it just measured: on a
      scroller whose content crosses its height only once the slots are tall,
