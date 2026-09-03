@@ -555,7 +555,7 @@ describe('a workspace that requires a signed-in writer, asked by a browser that 
   // tell that visitor from a stranger — only `canWrite` can — so arming the
   // offer on the flag alone put "Sign in to post" on every composer of a
   // person whose every post was landing.
-  const user = { id: 'user-abc', name: 'Reviewer', kind: 'known', color: '#2e7dd7' };
+  const user = { id: 'user-abc', name: 'Stored Fixture', kind: 'known', color: '#2e7dd7' };
   const json = (body: unknown, status = 200) =>
     new Response(JSON.stringify(body), {
       status,
@@ -594,7 +594,7 @@ describe('a workspace that requires a signed-in writer, asked by a browser that 
     localStorage.setItem('cfw:authUser', JSON.stringify(user));
     const el = await mount({ signInToWrite: true, canWrite: true }, 'doc-access-stored');
     expect(fetchCalls.some((c) => c.url.includes('/api/auth/widget-session'))).toBe(false);
-    expect(el.shadowRoot!.querySelector('.me')?.textContent).not.toContain('Reviewer');
+    expect(el.shadowRoot!.querySelector('.me')?.textContent).not.toContain('Stored Fixture');
     expect(el.shadowRoot!.querySelector('.auth-signout')).toBeNull();
   });
 
