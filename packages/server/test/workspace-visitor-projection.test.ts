@@ -26,9 +26,8 @@ import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'nod
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { type ServerHandle, createServer } from '../src/server.ts';
-import { SHARE_COOKIE } from '../src/share/link-session.ts';
+import { type AccessHarness, accessHarness, mintAccessShare } from './access-share.ts';
 
-const PUBLIC_HOST = 'feedback.example.com';
 const OWNER = { id: 'known-casey', name: 'Casey', kind: 'person' };
 
 function git(cwd: string, ...args: string[]): string {
@@ -52,7 +51,8 @@ describe('a share visitor reads a projected workspace, not the stored record', (
   let handle: ServerHandle;
   let base: string;
   let workspaceId: string;
-  let cookie: string;
+  let visitorHeaders: Record<string, string>;
+  let access: AccessHarness;
 
   const local = (path: string, init: RequestInit = {}) =>
     fetch(`${base}${path}`, {
@@ -77,7 +77,7 @@ describe('a share visitor reads a projected workspace, not the stored record', (
   const pub = (path: string) =>
     fetch(`${base}${path}`, {
       redirect: 'manual',
-      headers: { host: PUBLIC_HOST, cookie: `${SHARE_COOKIE}=${cookie}` },
+      headers: { ...visitorHeaders },
     });
 
   beforeAll(async () => {
@@ -91,10 +91,11 @@ describe('a share visitor reads a projected workspace, not the stored record', (
     git(repoRoot, 'add', '.');
     git(repoRoot, 'commit', '-m', 'init');
 
+    access = await accessHarness();
     handle = createServer({
       port: 0,
       dataDir,
-      share: { config: { publicHostname: PUBLIC_HOST } },
+      ...access.serverOptions,
     });
     base = `http://localhost:${handle.port}`;
 
@@ -129,20 +130,7 @@ describe('a share visitor reads a projected workspace, not the stored record', (
       ).status,
     ).toBe(200);
 
-    const share = await post('/api/share/link', { workspaceId });
-    expect(share.status, await share.clone().text()).toBe(200);
-    const url = ((await share.json()) as { share: { url: string } }).share.url;
-    const u = new URL(url);
-    const redeemed = await fetch(`${base}${u.pathname}${u.search}`, {
-      redirect: 'manual',
-      headers: { host: PUBLIC_HOST },
-    });
-    expect(redeemed.status).toBe(302);
-    cookie =
-      (redeemed.headers.get('set-cookie') ?? '').match(
-        new RegExp(`${SHARE_COOKIE}=([^;]+)`),
-      )?.[1] ?? '';
-    expect(cookie).toBeTruthy();
+    visitorHeaders = (await mintAccessShare(base, access, workspaceId)).headers;
   });
 
   afterAll(async () => {

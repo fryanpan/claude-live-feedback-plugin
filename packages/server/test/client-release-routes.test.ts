@@ -19,9 +19,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { prepareClientRelease, publishClientRelease } from '../src/client-release.ts';
 import { type ServerHandle, createServer } from '../src/server.ts';
-import { SHARE_COOKIE } from '../src/share/link-session.ts';
-
-const PUBLIC_HOST = 'feedback.example.com';
+import { type AccessHarness, accessHarness, mintAccessShare } from './access-share.ts';
 
 function fakeBuild(marker: string): { dir: string; widget: string; markdownApp: string } {
   const dir = mkdtempSync(join(tmpdir(), 'lf-build-'));
@@ -71,14 +69,15 @@ afterEach(async () => {
 /** A server plus a workspace to read the strip of. */
 async function startWith(
   opts: { clientReleaseRootDir?: string | null; share?: boolean } = {},
-): Promise<{ base: string; port: number; workspaceId: string }> {
+): Promise<{ base: string; port: number; workspaceId: string; access: AccessHarness | null }> {
+  const access = opts.share ? await accessHarness() : null;
   const server = createServer({
     port: 0,
     dataDir: tmp('lf-crr-data-'),
     ...(opts.clientReleaseRootDir !== undefined
       ? { clientReleaseRootDir: opts.clientReleaseRootDir }
       : {}),
-    ...(opts.share ? { share: { config: { publicHostname: PUBLIC_HOST } } } : {}),
+    ...(access ? access.serverOptions : {}),
   });
   handle = server;
   const base = `http://localhost:${server.port}`;
@@ -88,7 +87,7 @@ async function startWith(
     body: JSON.stringify({ name: 'release-hub', goal: 'Ship it.' }),
   });
   const workspaceId = ((await res.json()) as { workspace: { id: string } }).workspace.id;
-  return { base, port: server.port, workspaceId };
+  return { base, port: server.port, workspaceId, access };
 }
 
 function owner(base: string, port: number, path: string): Promise<Response> {
@@ -194,7 +193,7 @@ describe('client release over the attachments route', () => {
     prepareClientRelease({ root, sources: broken, now: 2000 });
     prepareClientRelease({ root, sources: broken, now: 3000 });
 
-    const { base, port, workspaceId } = await startWith({
+    const { base, port, workspaceId, access } = await startWith({
       clientReleaseRootDir: root,
       share: true,
     });
@@ -206,31 +205,12 @@ describe('client release over the attachments route', () => {
     ).json()) as ClientReleaseBody;
     expect(ownerBody.clientRelease?.stale).toBe(true);
 
-    const share = (await (
-      await fetch(`${base}/api/share/link`, {
-        method: 'POST',
-        headers: { host: `localhost:${port}`, 'content-type': 'application/json' },
-        body: JSON.stringify({ workspaceId }),
-      })
-    ).json()) as { share: { url: string } };
-    const shareUrl = new URL(share.share.url);
-    const redeemed = await fetch(`${base}${shareUrl.pathname}${shareUrl.search}`, {
-      redirect: 'manual',
-      headers: { host: PUBLIC_HOST, 'x-forwarded-proto': 'https' },
-    });
-    const cookie = (redeemed.headers.get('set-cookie') ?? '').match(
-      new RegExp(`${SHARE_COOKIE}=([^;]+)`),
-    )?.[1] as string;
-    expect(cookie).toBeTruthy();
+    const visitor = await mintAccessShare(base, access as AccessHarness, workspaceId);
 
     const raw = await (
       await fetch(`${base}/api/workspaces/${workspaceId}/attachments`, {
         redirect: 'manual',
-        headers: {
-          host: PUBLIC_HOST,
-          'x-forwarded-proto': 'https',
-          cookie: `${SHARE_COOKIE}=${cookie}`,
-        },
+        headers: { ...visitor.headers, 'x-forwarded-proto': 'https' },
       })
     ).text();
     expect(raw).toContain('attachments');

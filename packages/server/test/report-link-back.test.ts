@@ -32,10 +32,9 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { type ServerHandle, createServer } from '../src/server.ts';
-import { SHARE_COOKIE } from '../src/share/link-session.ts';
+import { type AccessHarness, accessHarness, mintAccessShare } from './access-share.ts';
 
 const PUBLIC_BASE = 'https://feedback.example.com';
-const PUBLIC_HOST = 'feedback.example.com';
 
 const AGENT = { id: 'agent-search-revamp', name: 'Search Revamp', kind: 'known', color: '#888888' };
 
@@ -211,7 +210,8 @@ describe('the handoff link is owner-only', () => {
   let base: string;
   let boardId: string;
   let taskId: string;
-  let cookie: string;
+  let visitorHeaders: Record<string, string>;
+  let access: AccessHarness;
 
   const local = (path: string, init: RequestInit = {}) =>
     fetch(`${base}${path}`, {
@@ -233,19 +233,19 @@ describe('the handoff link is owner-only', () => {
       method: 'POST',
       redirect: 'manual',
       headers: {
-        host: PUBLIC_HOST,
+        ...visitorHeaders,
         'content-type': 'application/json',
-        cookie: `${SHARE_COOKIE}=${cookie}`,
       },
       body: JSON.stringify(body),
     });
 
   beforeAll(async () => {
     dataDir = mkdtempSync(join(tmpdir(), 'report-link-share-'));
+    access = await accessHarness();
     handle = createServer({
       port: 0,
       dataDir,
-      share: { config: { publicHostname: PUBLIC_HOST } },
+      ...access.serverOptions,
     });
     base = `http://localhost:${handle.port}`;
 
@@ -257,18 +257,7 @@ describe('the handoff link is owner-only', () => {
     });
     taskId = ((await t.json()) as { task: { id: string } }).task.id;
 
-    const mint = await post('/api/share/link', { workspaceId: boardId, label: 'a share' });
-    expect(mint.status).toBe(200);
-    const shareUrl = new URL(((await mint.json()) as { share: { url: string } }).share.url);
-    const redeemed = await fetch(`${base}${shareUrl.pathname}${shareUrl.search}`, {
-      redirect: 'manual',
-      headers: { host: PUBLIC_HOST },
-    });
-    expect(redeemed.status).toBe(302);
-    cookie = (redeemed.headers.get('set-cookie') ?? '').match(
-      new RegExp(`${SHARE_COOKIE}=([^;]+)`),
-    )?.[1] as string;
-    expect(cookie).toBeTruthy();
+    visitorHeaders = (await mintAccessShare(base, access, boardId, { label: 'a share' })).headers;
   });
 
   afterAll(async () => {

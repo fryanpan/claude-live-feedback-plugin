@@ -34,14 +34,18 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'nod
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { type ServerHandle, createServer } from '../src/server.ts';
-import { SHARE_COOKIE } from '../src/share/link-session.ts';
 import { Shares } from '../src/share/shares.ts';
 import type { Share } from '../src/share/types.ts';
+import { type AccessHarness, accessHarness, mintAccessShare } from './access-share.ts';
 
-const PUBLIC_HOST = 'feedback.example.test';
+/** The hostname legacy link records on disk carry. A fixture string: link
+ *  mode is retired, so nothing is served on it. */
+const PUBLIC_HOST = 'feedback.example.com';
 
 describe('per-doc sharing is removed', () => {
   let handle: ServerHandle;
+  let access: AccessHarness;
+  let visitorHeaders: Record<string, string>;
   let dataDir: string;
   let folder: string;
   let base: string;
@@ -65,11 +69,12 @@ describe('per-doc sharing is removed', () => {
     writeFileSync(join(folder, 'README.md'), '# Entry\n\nThe workspace entry.\n');
     writeFileSync(join(folder, 'design.md'), '# Design\n\nA sibling file.\n');
 
+    access = await accessHarness();
     handle = createServer({
       port: 0,
       dataDir,
       // Link mode only — it needs no Cloudflare credentials at all.
-      share: { config: { publicHostname: PUBLIC_HOST } },
+      ...access.serverOptions,
     });
     base = `http://localhost:${handle.port}`;
 
@@ -120,7 +125,10 @@ describe('per-doc sharing is removed', () => {
       expect(body.hint).toContain('workspace');
 
       // Positive control, same server, same pass: the board route works.
-      const ws = await local('/api/share/link', { workspaceId: boardId });
+      const ws = await local('/api/share/link', {
+        allowDomains: ['@partner.example'],
+        workspaceId: boardId,
+      });
       expect(ws.status).toBe(200);
       expect(((await ws.json()) as { share: Share }).share.workspaceId).toBe(boardId);
     });
@@ -130,6 +138,7 @@ describe('per-doc sharing is removed', () => {
       // ttlSeconds, label }` and forwards all five. For a per-doc call that
       // means docId is set and workspaceId is undefined.
       const doc = await local('/api/share/link', {
+        allowDomains: ['@partner.example'],
         docId: SOLO,
         workspaceId: undefined,
         entryDocId: undefined,
@@ -152,6 +161,7 @@ describe('per-doc sharing is removed', () => {
       // a side effect. An old bundle sharing a board sends it undefined, which
       // JSON.stringify drops, exactly like docId above.
       const ws = await local('/api/share/link', {
+        allowDomains: ['@partner.example'],
         docId: undefined,
         workspaceId: boardId,
         entryDocId: undefined,
@@ -165,12 +175,19 @@ describe('per-doc sharing is removed', () => {
     });
 
     it('refuses a share_link with no scope at all, and says which field', async () => {
-      const none = await local('/api/share/link', { label: 'nothing' });
+      const none = await local('/api/share/link', {
+        allowDomains: ['@partner.example'],
+        label: 'nothing',
+      });
       expect(none.status).toBe(400);
       expect(((await none.json()) as { error: string }).error).toBe('workspaceId required');
 
       // Positive control: adding the one named field is all it takes.
-      const ok = await local('/api/share/link', { label: 'nothing', workspaceId: boardId });
+      const ok = await local('/api/share/link', {
+        allowDomains: ['@partner.example'],
+        label: 'nothing',
+        workspaceId: boardId,
+      });
       expect(ok.status).toBe(200);
     });
   });
@@ -293,27 +310,11 @@ describe('per-doc sharing is removed', () => {
       const { docId } = (await opened.json()) as { docId: string };
       expect(docId).toBeTruthy();
 
-      const mint = await local('/api/share/link', { workspaceId: boardId });
-      expect(mint.status).toBe(200);
-      const share = ((await mint.json()) as { share: Share }).share;
-
-      const shareUrl = new URL(share.url);
-      const r = await fetch(`${base}${shareUrl.pathname}${shareUrl.search}`, {
-        headers: { host: PUBLIC_HOST },
-        redirect: 'manual',
-      });
-      expect(r.status).toBe(302);
-      // Redemption lands on the board, not on any doc — there is no entry doc
-      // to land on, which is why `entryDocId` is gone from the mint payload.
-      expect(r.headers.get('location')).toBe(`/workspaces/${encodeURIComponent(boardId)}`);
-      const cookie = (r.headers.get('set-cookie') ?? '').match(
-        new RegExp(`${SHARE_COOKIE}=([^;]+)`),
-      )?.[1];
-      expect(cookie).toBeTruthy();
+      visitorHeaders = (await mintAccessShare(base, access, boardId)).headers;
 
       const asVisitor = (path: string) =>
         fetch(`${base}${path}`, {
-          headers: { host: PUBLIC_HOST, cookie: `${SHARE_COOKIE}=${cookie}` },
+          headers: { ...visitorHeaders },
         });
 
       // The newly filed doc is in scope because it is a MEMBER — never

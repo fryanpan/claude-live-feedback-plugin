@@ -25,9 +25,8 @@ import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { type ServerHandle, createServer } from '../src/server.ts';
-import { SHARE_COOKIE } from '../src/share/link-session.ts';
+import { type AccessHarness, accessHarness, mintAccessShare } from './access-share.ts';
 
-const PUBLIC_HOST = 'feedback.example.com';
 const SECRET = 'SECRET-PRIVATE-KEY-MATERIAL';
 
 function git(repo: string, ...args: string[]): string {
@@ -50,7 +49,8 @@ describe('symlink escape from a shared workspace', () => {
   let outside: string;
   let base: string;
   let workspaceId: string;
-  let cookie: string;
+  let visitorHeaders: Record<string, string>;
+  let access: AccessHarness;
 
   const local = (path: string, init: RequestInit = {}) =>
     fetch(`${base}${path}`, {
@@ -68,8 +68,7 @@ describe('symlink escape from a shared workspace', () => {
       redirect: 'manual',
       ...init,
       headers: {
-        host: PUBLIC_HOST,
-        cookie: `${SHARE_COOKIE}=${cookie}`,
+        ...visitorHeaders,
         'content-type': 'application/json',
         ...((init.headers as Record<string, string>) ?? {}),
       },
@@ -106,10 +105,11 @@ describe('symlink escape from a shared workspace', () => {
     git(repo, 'add', '-A');
     git(repo, 'commit', '-q', '-m', 'fixture with symlinks');
 
+    access = await accessHarness();
     handle = createServer({
       port: 0,
       dataDir,
-      share: { config: { publicHostname: PUBLIC_HOST } },
+      ...access.serverOptions,
     });
     base = `http://localhost:${handle.port}`;
 
@@ -130,20 +130,7 @@ describe('symlink escape from a shared workspace', () => {
     workspaceId = bound.workspaceId;
     expect(workspaceId).toBeTruthy();
 
-    const share = await local('/api/share/link', {
-      method: 'POST',
-      body: JSON.stringify({ workspaceId: boardId }),
-    }).then((r) => r.json());
-    const shareUrl = new URL(share.share.url);
-    const redeemed = await fetch(`${base}${shareUrl.pathname}${shareUrl.search}`, {
-      redirect: 'manual',
-      headers: { host: PUBLIC_HOST },
-    });
-    expect(redeemed.status).toBe(302);
-    cookie = (redeemed.headers.get('set-cookie') ?? '').match(
-      new RegExp(`${SHARE_COOKIE}=([^;]+)`),
-    )?.[1] as string;
-    expect(cookie).toBeTruthy();
+    visitorHeaders = (await mintAccessShare(base, access, boardId)).headers;
   });
 
   afterAll(async () => {

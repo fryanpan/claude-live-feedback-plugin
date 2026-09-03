@@ -43,47 +43,18 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { type ServerHandle, createServer } from '../src/server.ts';
-import type { CfAccessApp, CfAccessPolicy } from '../src/share/cf-api.ts';
-import { CfApi } from '../src/share/cf-api.ts';
 import { SHARE_COOKIE, loadCookieKey, signSession } from '../src/share/link-session.ts';
-import type { Share } from '../src/share/types.ts';
+import type { ListedShare, Share } from '../src/share/types.ts';
+import {
+  ACCESS_BASE_HOSTNAME,
+  type AccessHarness,
+  accessHarness,
+  mintAccessShare,
+} from './access-share.ts';
 
+/** The hostname the retired link mode served every share from. */
 const PUBLIC_HOST = 'feedback.example.test';
-const BASE_HOST = 'example.test';
-
-/** Cloudflare Access, faked. Only the two calls `create()` makes. */
-function makeMockCfApi(state: { apps: CfAccessApp[]; policies: CfAccessPolicy[] }) {
-  // biome-ignore lint/suspicious/noExplicitAny: Bun fetch type compatibility
-  const fetchImpl: any = async (input: string | URL | Request, init?: RequestInit) => {
-    const url = typeof input === 'string' ? input : input.toString();
-    const method = init?.method ?? 'GET';
-    if (method === 'POST' && url.endsWith('/access/apps')) {
-      const body = JSON.parse(init?.body as string);
-      const app: CfAccessApp = {
-        id: `app-${state.apps.length + 1}`,
-        name: body.name,
-        domain: body.domain,
-        aud: `aud-${state.apps.length + 1}`,
-        session_duration: body.session_duration,
-      };
-      state.apps.push(app);
-      return new Response(JSON.stringify({ success: true, result: app }), { status: 200 });
-    }
-    const policyMatch = url.match(/access\/apps\/([^/]+)\/policies$/);
-    if (method === 'POST' && policyMatch) {
-      const body = JSON.parse(init?.body as string);
-      const policy: CfAccessPolicy = {
-        id: `policy-${state.policies.length + 1}`,
-        name: body.name,
-        decision: body.decision,
-      };
-      state.policies.push(policy);
-      return new Response(JSON.stringify({ success: true, result: policy }), { status: 200 });
-    }
-    return new Response(JSON.stringify({ success: true, result: {} }), { status: 200 });
-  };
-  return new CfApi({ accountId: 'acct', token: 'tok', fetchImpl });
-}
+const BASE_HOST = ACCESS_BASE_HOSTNAME;
 
 describe('a grouping cannot be shared on its own', () => {
   let handle: ServerHandle;
@@ -100,6 +71,7 @@ describe('a grouping cannot be shared on its own', () => {
   let boardId: string;
   /** A doc that is a member of the diff review filed on `boardId`. */
   let diffMemberDocId: string;
+  let access: AccessHarness;
 
   const local = (path: string, body: unknown, method = 'POST') =>
     fetch(`${base}${path}`, {
@@ -132,14 +104,11 @@ describe('a grouping cannot be shared on its own', () => {
     git('commit', '-qm', 'base');
     writeFileSync(join(repo, 'app.md'), '# App\n\nAfter the change.\n');
 
+    access = await accessHarness();
     handle = createServer({
       port: 0,
       dataDir,
-      share: {
-        config: { publicHostname: PUBLIC_HOST, baseHostname: BASE_HOST, cfAccountId: 'acct' },
-        cfApi: makeMockCfApi({ apps: [], policies: [] }),
-        cfApiToken: 'tok',
-      },
+      ...access.serverOptions,
     });
     base = `http://localhost:${handle.port}`;
 
@@ -186,6 +155,7 @@ describe('a grouping cannot be shared on its own', () => {
       // destructures `{ workspaceId, entryDocId, ttlSeconds, label }` and
       // forwards all four.
       const grouping = await local('/api/share/link', {
+        allowDomains: ['@partner.example'],
         workspaceId: bindGroupingId,
         entryDocId: undefined,
         ttlSeconds: undefined,
@@ -203,6 +173,7 @@ describe('a grouping cannot be shared on its own', () => {
       // board id works. An older peer sharing a BOARD sends the identical
       // body with entryDocId undefined, which JSON.stringify drops.
       const board = await local('/api/share/link', {
+        allowDomains: ['@partner.example'],
         workspaceId: boardId,
         entryDocId: undefined,
         ttlSeconds: undefined,
@@ -216,6 +187,7 @@ describe('a grouping cannot be shared on its own', () => {
 
     it('refuses share_link for a diff review, the most-used grouping', async () => {
       const res = await local('/api/share/link', {
+        allowDomains: ['@partner.example'],
         workspaceId: diffGroupingId,
         entryDocId: diffMemberDocId,
         ttlSeconds: 3600,
@@ -225,7 +197,14 @@ describe('a grouping cannot be shared on its own', () => {
       expect(((await res.json()) as { error: string }).error).toBe('grouping_sharing_removed');
 
       // Positive control: the board the review is filed on shares fine.
-      expect((await local('/api/share/link', { workspaceId: boardId })).status).toBe(200);
+      expect(
+        (
+          await local('/api/share/link', {
+            allowDomains: ['@partner.example'],
+            workspaceId: boardId,
+          })
+        ).status,
+      ).toBe(200);
     });
 
     it('refuses share_workspace (Access mode) for a grouping, while a board mints', async () => {
@@ -257,22 +236,39 @@ describe('a grouping cannot be shared on its own', () => {
       // The 410 must mean "this exists and is no longer shareable", not
       // "anything I do not recognise". Otherwise it is an existence oracle
       // AND a useless error at the same time.
-      const unknown = await local('/api/share/link', { workspaceId: 'no-such-workspace' });
+      const unknown = await local('/api/share/link', {
+        allowDomains: ['@partner.example'],
+        workspaceId: 'no-such-workspace',
+      });
       expect(unknown.status).toBe(404);
       expect(((await unknown.json()) as { error: string }).error).toBe('workspace not found');
 
       // Positive control: the id that DOES exist as a grouping gets the 410.
-      const known = await local('/api/share/link', { workspaceId: bindGroupingId });
+      const known = await local('/api/share/link', {
+        allowDomains: ['@partner.example'],
+        workspaceId: bindGroupingId,
+      });
       expect(known.status).toBe(410);
     });
 
     it('refuses an entryDocId even on a board — a board share opens the board', async () => {
-      const res = await local('/api/share/link', { workspaceId: boardId, entryDocId: 'anything' });
+      const res = await local('/api/share/link', {
+        allowDomains: ['@partner.example'],
+        workspaceId: boardId,
+        entryDocId: 'anything',
+      });
       expect(res.status).toBe(400);
       expect(((await res.json()) as { error: string }).error).toContain('entryDocId');
 
       // Positive control: drop the field and the same call mints.
-      expect((await local('/api/share/link', { workspaceId: boardId })).status).toBe(200);
+      expect(
+        (
+          await local('/api/share/link', {
+            allowDomains: ['@partner.example'],
+            workspaceId: boardId,
+          })
+        ).status,
+      ).toBe(200);
     });
   });
 
@@ -308,99 +304,91 @@ describe('a grouping cannot be shared on its own', () => {
       handle = createServer({
         port: 0,
         dataDir,
-        share: {
-          config: { publicHostname: PUBLIC_HOST, baseHostname: BASE_HOST, cfAccountId: 'acct' },
-          cfApi: makeMockCfApi({ apps: [], policies: [] }),
-          cfApiToken: 'tok',
-        },
+        ...access.serverOptions,
       });
       base = `http://localhost:${handle.port}`;
     };
 
-    it('no longer redeems, where a board share on the same server does', async () => {
-      const board = await local('/api/share/link', { workspaceId: boardId });
-      expect(board.status).toBe(200);
-      const boardUrl = ((await board.json()) as { share: Share }).share.url;
-      expect(boardUrl).toBeTruthy();
+    it('is listed as retired and redeems nowhere, where a board share still works', async () => {
+      const board = await mintAccessShare(base, access, boardId);
 
       const legacySlug = 'e'.repeat(32);
       await restartWith([groupingShare(diffGroupingId, legacySlug, diffMemberDocId)]);
 
-      const redeem = (shareUrl: string) => {
-        const u = new URL(shareUrl);
-        return fetch(`${base}${u.pathname}${u.search}`, {
-          headers: { host: PUBLIC_HOST },
-          redirect: 'manual',
-        });
-      };
-
-      // Positive control FIRST: the registry — and the signing key, which
-      // lives in the same dataDir — survived the restart and the redeem
-      // route works at all.
-      const ok = await redeem(boardUrl);
-      expect(ok.status).toBe(302);
-      expect(ok.headers.get('location')).toBe(`/workspaces/${encodeURIComponent(boardId)}`);
-
       // The record is still on disk (this removes a capability, not user
-      // content, so an operator can still see and revoke it), and the list
-      // serves it a freshly SIGNED url…
+      // content, so an operator can still see and revoke it) and the list
+      // says plainly that it buys nothing.
       const listed = await fetch(`${base}/api/share`, {
         headers: { host: `localhost:${handle.port}` },
       });
-      const legacy = ((await listed.json()) as { shares: Share[] }).shares.find(
-        (s) => s.shareId === 'legacy02',
-      );
+      const shares = ((await listed.json()) as { shares: ListedShare[] }).shares;
+      const legacy = shares.find((sh) => sh.shareId === 'legacy02');
       expect(legacy).toBeDefined();
+      expect(legacy?.redeemable).toBe(false);
+      expect(legacy?.retired).toBe('link_mode');
 
-      // …but even that validly signed url is refused at redemption: the 404
-      // is the board-only rule, not a signature failure, and it is
-      // indistinguishable from a link that never existed. A named 410 here
-      // would tell a stranger holding a leaked link that it was once real.
-      const gone = await redeem(legacy?.url ?? '');
-      expect(gone.status).toBe(404);
+      // Positive control on the same list: the board's ACCESS share is
+      // redeemable, so `redeemable:false` above is this record's verdict and
+      // not a field the route hard-codes.
+      const alive = shares.find((sh) => sh.shareId === board.shareId);
+      expect(alive?.redeemable).toBe(true);
+      expect(alive?.retired).toBeUndefined();
 
-      // The retired unsigned form is dead outright, for every record alike.
-      const unsigned = await fetch(`${base}/s/${legacySlug}`, {
-        headers: { host: PUBLIC_HOST },
-        redirect: 'manual',
-      });
-      expect(unsigned.status).toBe(404);
+      // Both redeem forms are dead outright — for the grouping record and for
+      // every other one alike. A named 410 would tell a stranger holding a
+      // leaked link that it was once real, so it is a plain 404.
+      const u = new URL(legacy?.url ?? '');
+      expect((await fetch(`${base}${u.pathname}${u.search}`, { redirect: 'manual' })).status).toBe(
+        404,
+      );
+      expect((await fetch(`${base}/s/${legacySlug}`, { redirect: 'manual' })).status).toBe(404);
     });
 
     it('stops honouring a session cookie minted before the upgrade', async () => {
       // A visitor who redeemed a grouping link YESTERDAY still holds a valid
       // signed cookie today. Closing only the redeem route would leave them
-      // inside — the cookie is re-resolved on every request, and that is the
-      // resolution this change has to close.
+      // inside — the cookie was re-resolved on every request, and that is the
+      // resolution this change has to close. It now closes for BOTH records:
+      // link mode is retired, so a signed cookie is no longer a credential at
+      // all, whichever share minted it.
       const legacySlug = 'f'.repeat(32);
+      const board = await mintAccessShare(base, access, boardId);
       await restartWith([groupingShare(diffGroupingId, legacySlug, diffMemberDocId)]);
 
       const key = loadCookieKey(dataDir);
-      const legacyCookie = signSession('legacy02', key);
-
-      const asLegacy = (path: string) =>
+      const withCookie = (shareId: string, path: string) =>
         fetch(`${base}${path}`, {
-          headers: { host: PUBLIC_HOST, cookie: `${SHARE_COOKIE}=${legacyCookie}` },
+          headers: {
+            host: board.host,
+            cookie: `${SHARE_COOKIE}=${signSession(shareId, key)}`,
+          },
         });
 
       // A member of the grouping the cookie names — the exact doc it used to
-      // open.
-      expect((await asLegacy(`/api/docs/${encodeURIComponent(diffMemberDocId)}`)).status).toBe(401);
+      // open — and the grouping's own tree.
+      // 401 is Access saying "you presented no token" — the cookie is not
+      // read at all any more, which is the whole point.
       expect(
-        (await asLegacy(`/api/workspaces/${encodeURIComponent(diffGroupingId)}/tree`)).status,
+        (await withCookie('legacy02', `/api/docs/${encodeURIComponent(diffMemberDocId)}`)).status,
+      ).toBe(401);
+      expect(
+        (await withCookie('legacy02', `/api/workspaces/${encodeURIComponent(diffGroupingId)}/tree`))
+          .status,
+      ).toBe(401);
+      // …and a cookie for the LIVE board share is no better: the credential
+      // itself is retired, not just this record.
+      expect(
+        (await withCookie(board.shareId, `/api/docs/${encodeURIComponent(diffMemberDocId)}`))
+          .status,
       ).toBe(401);
 
-      // Positive control, same server and same transport: a cookie for a
-      // BOARD share reaches that member, so the 401s above are this change
-      // and not a server that refuses every cookie.
-      const board = await local('/api/share/link', { workspaceId: boardId });
-      expect(board.status).toBe(200);
-      const boardShareId = ((await board.json()) as { share: Share }).share.shareId;
-      const boardCookie = signSession(boardShareId, key);
-      const asBoard = await fetch(`${base}/api/docs/${encodeURIComponent(diffMemberDocId)}`, {
-        headers: { host: PUBLIC_HOST, cookie: `${SHARE_COOKIE}=${boardCookie}` },
+      // Positive control, same server and same transport: that board share's
+      // own Access token reaches the member, so the refusals above are the
+      // retirement rather than a server refusing everything.
+      const asVisitor = await fetch(`${base}/api/docs/${encodeURIComponent(diffMemberDocId)}`, {
+        headers: board.headers,
       });
-      expect(asBoard.status).toBe(200);
+      expect(asVisitor.status).toBe(200);
     });
 
     it('stops resolving a legacy Access-mode grouping HOSTNAME', async () => {
@@ -411,14 +399,14 @@ describe('a grouping cannot be shared on its own', () => {
        * Closing the link seams alone would have left an emailed Access URL for
        * a grouping still granting.
        *
-       * Asserted without a Cloudflare JWT, which the test server has no
-       * verifier for. It does not need one: an unresolvable host never reaches
-       * authentication. `classifyHost` asks `lookupShare` first, and a null
-       * answer falls through to `deny`, so the two cases separate one layer
-       * ABOVE the JWT — 403 unknown_host for a host that resolves to nothing,
-       * versus 503 access_not_configured for one that resolves and then finds
-       * no verifier. Different codes from different layers, which is exactly
-       * what makes this a control rather than two flavours of failure.
+       * Asserted without a Cloudflare JWT, and it does not need one: an
+       * unresolvable host never reaches authentication. `classifyHost` asks
+       * `lookupShare` first, and a null answer falls through to `deny`, so the
+       * two cases separate one layer ABOVE the JWT — 403 unknown_host for a
+       * host that resolves to nothing, versus 401 for one that resolves and
+       * then finds no token on the request. Different codes from different
+       * layers, which is what makes this a control rather than two flavours
+       * of the same failure.
        */
       const mint = await local('/api/share/workspace', {
         workspaceId: boardId,
@@ -453,8 +441,7 @@ describe('a grouping cannot be shared on its own', () => {
       // Positive control FIRST: the BOARD's share hostname still resolves, so
       // the registry survived the restart and hostname lookup works at all.
       const board = await onHost(boardHost);
-      expect(board.status).toBe(503);
-      expect(((await board.json()) as { error: string }).error).toBe('access_not_configured');
+      expect(board.status).toBe(401);
 
       // The grouping's hostname now resolves to nothing — indistinguishable
       // from a hostname this server has never heard of.
@@ -469,26 +456,10 @@ describe('a grouping cannot be shared on its own', () => {
 
   describe('what replaces it', () => {
     it('reaches the filed diff review through a share of the board', async () => {
-      const mint = await local('/api/share/link', { workspaceId: boardId });
-      expect(mint.status).toBe(200);
-      const share = ((await mint.json()) as { share: Share }).share;
+      const share = await mintAccessShare(base, access, boardId);
+      expect(new URL(share.url).pathname).toBe(`/workspaces/${encodeURIComponent(boardId)}`);
 
-      const shareUrl = new URL(share.url);
-      const redeemed = await fetch(`${base}${shareUrl.pathname}${shareUrl.search}`, {
-        headers: { host: PUBLIC_HOST },
-        redirect: 'manual',
-      });
-      expect(redeemed.status).toBe(302);
-      expect(redeemed.headers.get('location')).toBe(`/workspaces/${encodeURIComponent(boardId)}`);
-      const cookie = (redeemed.headers.get('set-cookie') ?? '').match(
-        new RegExp(`${SHARE_COOKIE}=([^;]+)`),
-      )?.[1];
-      expect(cookie).toBeTruthy();
-
-      const asVisitor = (path: string) =>
-        fetch(`${base}${path}`, {
-          headers: { host: PUBLIC_HOST, cookie: `${SHARE_COOKIE}=${cookie}` },
-        });
+      const asVisitor = (path: string) => fetch(`${base}${path}`, { headers: share.headers });
 
       // The board page itself.
       expect((await asVisitor(`/workspaces/${encodeURIComponent(boardId)}`)).status).toBe(200);
@@ -530,7 +501,10 @@ describe('a grouping cannot be shared on its own', () => {
       expect(((await bound.json()) as { hubWorkspaceId: string }).hubWorkspaceId).toBe(freshBoard);
 
       // 3. The share.
-      const mint = await local('/api/share/link', { workspaceId: freshBoard });
+      const mint = await local('/api/share/link', {
+        allowDomains: ['@partner.example'],
+        workspaceId: freshBoard,
+      });
       expect(mint.status).toBe(200);
 
       const elapsed = Date.now() - started;

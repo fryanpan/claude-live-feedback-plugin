@@ -28,6 +28,11 @@ beforeAll(() => {
     port: 0,
     dataDir,
     authCeilings: { globalStartsPerHour: 10_000, peerStartsPerHour: 10_000 },
+    // The forged-header case needs a peer that is neither loopback nor
+    // proxied, and the access-only gate refuses exactly that caller before
+    // the rate limiter ever sees it. The subject here is the KEYING, so the
+    // gate is turned off rather than tested a second time.
+    accessOnlyBrowserHosts: false,
   });
   base = `http://localhost:${handle.port}`;
 });

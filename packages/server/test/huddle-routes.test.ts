@@ -25,11 +25,10 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { User } from '@feedback/core';
 import { type ServerHandle, createServer } from '../src/server.ts';
-import { SHARE_COOKIE } from '../src/share/link-session.ts';
 import { UNTITLED_TASK_TITLE } from '../src/tasks.ts';
+import { type AccessHarness, accessHarness, mintAccessShare } from './access-share.ts';
 
 const PERSON: User = { id: 'known-jordan', name: 'Jordan', kind: 'known', color: '#2e7dd7' };
-const PUBLIC_HOST = 'feedback.example.com';
 /** "Huddle 2026-08-29 14:05" — the clock, to the minute, in local time. */
 const HUDDLE_TITLE = /^Huddle \d{4}-\d{2}-\d{2} \d{2}:\d{2}$/;
 
@@ -64,6 +63,7 @@ interface TaskRow {
 
 describe('POST /api/workspaces/:id/huddles and the empty task', () => {
   let handle: ServerHandle;
+  let access: AccessHarness;
   let dataDir: string;
   let base: string;
   let workspaceId: string;
@@ -95,10 +95,11 @@ describe('POST /api/workspaces/:id/huddles and the empty task', () => {
 
   beforeAll(async () => {
     dataDir = mkdtempSync(join(tmpdir(), 'huddle-routes-'));
+    access = await accessHarness();
     handle = createServer({
       port: 0,
       dataDir,
-      share: { config: { publicHostname: PUBLIC_HOST } },
+      ...access.serverOptions,
     });
     base = `http://localhost:${handle.port}`;
     workspaceId = await newBoard('huddle-board');
@@ -260,7 +261,7 @@ describe('POST /api/workspaces/:id/huddles and the empty task', () => {
       handle = createServer({
         port: 0,
         dataDir,
-        share: { config: { publicHostname: PUBLIC_HOST } },
+        ...access.serverOptions,
       });
       base = `http://localhost:${handle.port}`;
       const row = (await boardDocs(workspaceId)).find((d) => d.docId === r.docId);
@@ -354,24 +355,8 @@ describe('POST /api/workspaces/:id/huddles and the empty task', () => {
 
   describe('share visitors', () => {
     it('can reach the hub page but neither quick action (403)', async () => {
-      const { share } = await jj<{ share: { url: string } }>(
-        await post('/api/share/link', { workspaceId, label: 'hub share' }),
-      );
-      const shareUrl = new URL(share.url);
-      const redeem = await fetch(`${base}${shareUrl.pathname}${shareUrl.search}`, {
-        redirect: 'manual',
-        headers: { host: PUBLIC_HOST },
-      });
-      expect(redeem.status).toBe(302);
-      const cookie = (redeem.headers.get('set-cookie') ?? '').match(
-        new RegExp(`${SHARE_COOKIE}=([^;]+)`),
-      )?.[1];
-      expect(cookie).toBeTruthy();
-      const visitorHeaders = {
-        host: PUBLIC_HOST,
-        cookie: `${SHARE_COOKIE}=${cookie}`,
-        'content-type': 'application/json',
-      };
+      const visitor = await mintAccessShare(base, access, workspaceId, { label: 'hub share' });
+      const visitorHeaders = { ...visitor.headers, 'content-type': 'application/json' };
       // Presence: the cookie DOES reach the hub page.
       const page = await fetch(`${base}/workspaces/${workspaceId}`, { headers: visitorHeaders });
       expect(page.status).toBe(200);

@@ -179,10 +179,14 @@ describe('a verified Access email mints the same identity as a code', () => {
       return await jwt.sign(privateKey);
     };
     dataDir = mkdtempSync(join(tmpdir(), 'cf-access-identity-'));
+    // emailCodeSignIn: the server's own emailed-code sign-in is off by default now
+    // that every browser-facing hostname sits behind Cloudflare Access. These tests
+    // are about that flow, so they ask for it explicitly.
     handle = createServer({
       port: 0,
       dataDir,
       requireEmailAuth: true,
+      emailCodeSignIn: true,
       cfAccess: { teamDomain: TEAM, audience: AUD, jwks: { keys: [publicJwk] } },
     });
     base = `http://localhost:${handle.port}`;
