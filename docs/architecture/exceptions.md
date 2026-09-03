@@ -18,12 +18,14 @@ find packages \( -name '*.ts' -o -name '*.css' \) \
   | xargs wc -l | awk '$1>500' | sort -rn
 ```
 
-Audited 2026-09-02 at `3a39db67`, and re-audited after A1 and A2 landed.
-**160 files** over 500 lines: 66 source and 94 test. A7 took `activity.ts`
+Audited 2026-09-02 at `3a39db67`, and re-audited after A1, A2 and B6 landed.
+**164 files** over 500 lines: 70 source and 94 test. A7 took `activity.ts`
 (582 → 301) and `recall-calendar.ts` (721 → 470) off this list, and A8 took
 `voice-smooth.test.ts` (729 → 493); all three rows are gone rather than marked
 done. B5 took `prose.ts` (2847 → 83) and `goal-effort.ts` (1086 → 333) off it
 the same way, and added three rows for the files that came out of `prose.ts`.
+B6 did not take `mcp.ts` off the list — 5,563 → 1,426 clears the seam its row
+named without clearing the bar — and added four rows for what came out of it.
 
 Test files are judged by a narrower rule, in their own table below: a long test
 file is an exception unless two *unrelated harnesses* share it. Many `describe`
@@ -115,7 +117,7 @@ the shipped bundle is unchanged.
 
 | File | Lines | Verdict | Reason / seam |
 |---|---|---|---|
-| `packages/mcp/src/mcp.ts` | 5563 | Split | Two things bolted together at line 2396. The `ListToolsRequestSchema` handler (351–2395) is a declarative array of 94 tool schemas with no logic; the `CallToolRequestSchema` handler is a 94-case dispatch switch. Move the registry verbatim to `tool-schemas.ts` ~2045 — that piece genuinely is one cohesive table, it just does not belong beside the dispatcher — then split the switch by domain the way `routes/` did (~700–800 each). `PLUGIN_VERSION` must stay reachable from `mcp.ts`. **M** |
+| `packages/mcp/src/mcp.ts` | 1426 | Exception | Was 5,563 and the seam named here is taken: B6 moved the 94-schema registry to `tool-schemas.ts` and the 94-case dispatch to `tools/`, split by domain. What is left is the entry point and the one thing only it can own — process identity, the HTTP client, and the SSE-to-channel bridge that turns server events into `notifications/claude/channel` frames, which exists to serve the watch registry the tools call into. It connects a stdio transport at the bottom of the file, so nothing may import it and every consumer is handed what it needs instead. The visible next seam if it grows is the channel bridge; nothing is queued. |
 | `packages/mcp/src/tools/workspace.ts` | 528 | Exception | The third of the same shape: one dispatch family — the arms addressed to a board rather than to a document or a row — over one shared context, plus `setBoardRetired`, which two of them are. Length is a count of tools, not of coupling. |
 | `packages/mcp/src/tools/tasks.ts` | 1070 | Exception | The other half of the same shape as `tools/docs.ts` below: one dispatch family — every arm that addresses a task, by `taskId` or by a `reviewItemId` that resolves to one — over one shared context. The four helpers with it (`TaskPayload`, `taskCreatedSummary`, `heldResult`, and the two review-item lookups) have no reader anywhere else, which is why they are here and why moving them out would only add a file. Length is a count of tools, not of coupling. |
 | `packages/mcp/src/tools/docs.ts` | 819 | Exception | One dispatch family: every arm that names a `docId`, over one shared context, in the order they stood in the switch. Cutting further would put one `switch` across two files and re-open the question the domain split just answered — which file a tool is in — for no reader's benefit, since nobody reads an arm they did not come looking for by name. The arms are independent by construction, so length here is a count of tools, not of coupling. |
