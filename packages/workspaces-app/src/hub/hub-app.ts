@@ -110,20 +110,18 @@ import {
   walkNextUrl,
   walkPosition,
 } from './hub-review-model.ts';
+import { wireHubSettingsPanel } from './hub-settings-panel.ts';
 import { NAV_ICONS, buildShell } from './hub-shell.ts';
 import { hubShortcutKeydown } from './hub-shortcuts.ts';
 import { mountIslandProbe } from './island-probe.tsx';
 import { wireMeMenu } from './me-menu.ts';
-import { mountParallelismCap } from './parallelism-cap.ts';
 import {
   driftData,
   mountDriftIsland,
   mountPresenceIsland,
   presenceData,
 } from './presence-island.tsx';
-import { mountPushToggle } from './push-toggle.ts';
 import { createRepaintGuard } from './repaint-guard.ts';
-import { mountReviewCriteria } from './review-criteria.ts';
 import { GOAL_PLACEHOLDER_TEXT, createTaskBodyEditorHost } from './task-body-editor.ts';
 import { type DetailTab, mountTaskDetailIsland, taskDetailData } from './task-detail-island.tsx';
 import { mountWalkthroughIsland, walkthroughData } from './walkthrough-island.tsx';
@@ -2095,128 +2093,25 @@ export async function bootHub(env: HubBootEnv): Promise<void> {
       renderBoardRegion();
     },
   );
-  // Notifications for THIS device. Mounted once; its state is read from the
-  // browser rather than held here, because the browser is where it actually
-  // lives — a permission revoked in site settings has to show up on the row
-  // without the app being told.
-  const pushToggle = mountPushToggle({
-    toggle: document.getElementById('hub-push-toggle') as HTMLInputElement,
-    note: el('hub-push-note'),
-    author: () => ({ id: user.id, name: user.name }),
-  });
-  void pushToggle.refresh();
-
-  // What the quality gate judges an agent's ask against, in the owner's own
-  // words. Read on every open, because an agent can rewrite it from a tool
-  // while this tab sits here and a stale box that got saved would put the old
-  // words back.
-  const reviewCriteria = mountReviewCriteria({
-    box: document.getElementById('hub-review-criteria') as HTMLTextAreaElement,
-    note: el('hub-review-criteria-note'),
-    save: el('hub-review-criteria-save') as HTMLButtonElement,
-    useDefault: el('hub-review-criteria-default') as HTMLButtonElement,
-    read: async () => {
-      const data = await fetchJson<{
-        reviewItemCriteria?: { value?: string; isDefault?: boolean };
-      }>(`/api/workspaces/${encodeURIComponent(workspaceId)}/settings`);
-      const criteria = data?.reviewItemCriteria;
-      return typeof criteria?.value === 'string'
-        ? { value: criteria.value, isDefault: criteria.isDefault === true }
-        : null;
+  // The settings panel's three controls, the ways it opens and closes, and
+  // the share button beside it. `hub-settings-panel.ts`, called here so the
+  // document-level click and keydown listeners register in the same order
+  // relative to the ones around them.
+  wireHubSettingsPanel({
+    document,
+    el,
+    workspaceId,
+    author,
+    user,
+    fetchJson,
+    send,
+    showToast,
+    isOpen: () => state.settingsOpen,
+    setOpen: (open) => {
+      state.settingsOpen = open;
     },
-    write: async (value) => {
-      const res = await send(`/api/workspaces/${encodeURIComponent(workspaceId)}/settings`, 'PUT', {
-        reviewItemCriteria: value,
-        author,
-      });
-      return res.ok;
-    },
-    toast: showToast,
-  });
-
-  // How many builders this board's lead may dispatch at once, and how many
-  // of that are already spent. Read on every open for the same reason as the
-  // criteria above: an agent can change the cap or open a dispatch from a
-  // tool while this tab sits here, and a stale box that got saved would
-  // write the old number back over a change nobody here saw happen.
-  const parallelismCap = mountParallelismCap({
-    box: document.getElementById('hub-parallelism-cap') as HTMLInputElement,
-    note: el('hub-parallelism-cap-note'),
-    save: el('hub-parallelism-cap-save') as HTMLButtonElement,
-    useDefault: el('hub-parallelism-cap-default') as HTMLButtonElement,
-    read: async () => {
-      const data = await fetchJson<{
-        parallelismCap?: {
-          value?: number;
-          isDefault?: boolean;
-          lastChange?: { actor?: { name?: string }; ts?: number; from?: number; to?: number };
-        };
-        dispatchesInUse?: number;
-      }>(`/api/workspaces/${encodeURIComponent(workspaceId)}/settings`);
-      const cap = data?.parallelismCap;
-      const change = cap?.lastChange;
-      const lastChange =
-        typeof change?.actor?.name === 'string' &&
-        typeof change.ts === 'number' &&
-        typeof change.from === 'number' &&
-        typeof change.to === 'number'
-          ? { actorName: change.actor.name, ts: change.ts, from: change.from, to: change.to }
-          : undefined;
-      return typeof cap?.value === 'number'
-        ? {
-            value: cap.value,
-            isDefault: cap.isDefault === true,
-            ...(typeof data?.dispatchesInUse === 'number' ? { inUse: data.dispatchesInUse } : {}),
-            ...(lastChange ? { lastChange } : {}),
-          }
-        : null;
-    },
-    write: async (value) => {
-      const res = await send(`/api/workspaces/${encodeURIComponent(workspaceId)}/settings`, 'PUT', {
-        parallelismCap: value,
-        author,
-      });
-      return res.ok;
-    },
-    toast: showToast,
-  });
-
-  el('hub-settings').addEventListener('click', () => {
-    state.settingsOpen = !state.settingsOpen;
-    renderSettingsPanel();
-    // Re-read on open: permission can change in site settings while the tab
-    // sits here, and the row is only ever read at the moment it is opened.
-    // Same reason for the criteria, which an agent can rewrite from a tool.
-    if (state.settingsOpen) {
-      void pushToggle.refresh();
-      void reviewCriteria.refresh();
-      void parallelismCap.refresh();
-    }
-  });
-  // A popover that only closes by hitting the same small button again is one
-  // people leave open over the list they were trying to read.
-  document.addEventListener('click', (ev) => {
-    if (!state.settingsOpen) return;
-    const t = ev.target as Node | null;
-    if (!t) return;
-    if (el('hub-settings-panel').contains(t) || el('hub-settings').contains(t)) return;
-    state.settingsOpen = false;
-    renderSettingsPanel();
-  });
-  // Escape closes it too — it floats over the board now, and a floating panel
-  // that ignores Escape reads as stuck. Focus goes back to the button that
-  // opened it, so a keyboard user is not dropped at the top of the document.
-  document.addEventListener('keydown', (ev) => {
-    if (ev.key !== 'Escape' || !state.settingsOpen) return;
-    state.settingsOpen = false;
-    renderSettingsPanel();
-    el('hub-settings').focus();
-  });
-  el('hub-share').addEventListener('click', () => {
-    void navigator.clipboard?.writeText(location.href).then(
-      () => showToast('Workspace URL copied'),
-      () => showToast(location.href),
-    );
+    renderSettingsPanel,
+    href: () => location.href,
   });
 
   // Voice (§2.4/§3.8): hold Space or the mic button; the context object sent
