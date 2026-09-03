@@ -19,7 +19,7 @@ find packages \( -name '*.ts' -o -name '*.css' \) \
 ```
 
 Audited 2026-09-02 at `3a39db67`, and re-audited after A1 and A2 landed.
-**159 files** over 500 lines: 65 source and 94 test. A7 took `activity.ts`
+**160 files** over 500 lines: 66 source and 94 test. A7 took `activity.ts`
 (582 → 301) and `recall-calendar.ts` (721 → 470) off this list, and A8 took
 `voice-smooth.test.ts` (729 → 493); all three rows are gone rather than marked
 done. B5 took `prose.ts` (2847 → 83) and `goal-effort.ts` (1086 → 333) off it
