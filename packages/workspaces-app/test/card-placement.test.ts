@@ -163,4 +163,24 @@ describe('the toggle control', () => {
     expect(inFlow.glyph).not.toBe(inMargin.glyph);
     expect(inFlow.ariaLabel).not.toBe(inMargin.ariaLabel);
   });
+
+  it('describes the sheet as a sheet, never as a margin that is not there', () => {
+    // The stored choice and the surface differ in exactly one state, and the
+    // button was wrong for all of it: at 430px with balloons stored nothing
+    // renders in the flow and there is no margin, while the control said
+    // "Comments in the margin" and announced the right margin as fact.
+    const sheet = placementToggleLabel('sheet');
+    expect(sheet.title).toContain('sheet');
+    expect(sheet.title).not.toContain('margin');
+    expect(sheet.ariaLabel).not.toContain('margin');
+    // Still an offer to move into the flow, because the stored choice is
+    // untouched and that is what tapping does.
+    expect(sheet.title).toContain('into the flow');
+    // Its own face, so a reader can tell the three states apart.
+    const others = [placementToggleLabel('inline'), placementToggleLabel('balloon')];
+    for (const other of others) {
+      expect(sheet.glyph).not.toBe(other.glyph);
+      expect(sheet.ariaLabel).not.toBe(other.ariaLabel);
+    }
+  });
 });
