@@ -8,7 +8,7 @@ import {
   resolveUser,
 } from '@feedback/core';
 
-const { contextMatches, hasContext } = anchors;
+const { contextMatches } = anchors;
 import {
   type FeedbackClient,
   STATUS_COLORS,
@@ -21,13 +21,19 @@ import { widgetStyles } from './styles.ts';
 import {
   askIfSignInRequired,
   authedPost,
-  composerNote,
-  composerSignIn,
   httpBase,
   loadStoredAuth,
   updateAuthUi,
   validateStoredAuth,
 } from './widget-auth.ts';
+import {
+  IGNORE_ATTR,
+  TAG,
+  enterFeedbackMode,
+  exitFeedbackMode,
+  isInOwnChrome,
+  toggleFeedbackMode,
+} from './widget-picker.ts';
 
 /**
  * The line a thread row shows above its latest comment.
@@ -114,9 +120,6 @@ export interface WidgetOpts {
   authOffer?: boolean;
 }
 
-const TAG = 'claude-feedback-widget';
-const IGNORE_ATTR = 'data-feedback-widget';
-
 /** One speech bubble, three uses: the FAB icon, the feedback-mode cursor. */
 const BUBBLE_PATH =
   'M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z';
@@ -149,11 +152,11 @@ export class FeedbackWidgetEl extends HTMLElement {
     docId: '',
     user: null,
   };
-  private currentContext: AnchorContext = {};
+  currentContext: AnchorContext = {};
   private historyPatched = false;
-  private feedbackMode = false;
-  private modeCleanup: (() => void) | null = null;
-  private hoverEl: HTMLElement | null = null;
+  feedbackMode = false;
+  modeCleanup: (() => void) | null = null;
+  hoverEl: HTMLElement | null = null;
   private overlay: HTMLDivElement | null = null;
   private pinLayer: HTMLDivElement | null = null;
   private panelOpen = false;
@@ -333,7 +336,7 @@ export class FeedbackWidgetEl extends HTMLElement {
 
   disconnectedCallback(): void {
     try {
-      this.exitFeedbackMode();
+      exitFeedbackMode(this);
     } catch {}
     try {
       this.client?.close();
@@ -408,7 +411,7 @@ export class FeedbackWidgetEl extends HTMLElement {
     fab.innerHTML =
       `<svg class="fab-icon fab-icon-bubble" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="${BUBBLE_PATH}"/></svg>` +
       '<span class="fab-icon fab-icon-close">×</span>';
-    fab.addEventListener('click', () => this.toggleFeedbackMode());
+    fab.addEventListener('click', () => toggleFeedbackMode(this));
     this.shadow.appendChild(fab);
 
     const panel = document.createElement('div');
@@ -431,7 +434,7 @@ export class FeedbackWidgetEl extends HTMLElement {
     updateAuthUi(this);
 
     panel.querySelector('.close-panel')?.addEventListener('click', () => this.togglePanel(false));
-    panel.querySelector('.pick-btn')?.addEventListener('click', () => this.enterFeedbackMode());
+    panel.querySelector('.pick-btn')?.addEventListener('click', () => enterFeedbackMode(this));
 
     // Make the pin overlay in the light DOM so pins can use page coords
     this.overlay = document.createElement('div');
@@ -448,7 +451,7 @@ export class FeedbackWidgetEl extends HTMLElement {
     this.injectLightStyles();
   }
 
-  private togglePanel(force?: boolean): void {
+  togglePanel(force?: boolean): void {
     const panel = this.shadow.querySelector('.panel') as HTMLElement | null;
     if (!panel) return;
     const open = force ?? !this.panelOpen;
@@ -456,197 +459,11 @@ export class FeedbackWidgetEl extends HTMLElement {
     panel.classList.toggle('open', open);
   }
 
-  // --- Feedback mode ---
-  //
-  // The FAB is a MODE toggle, not a menu: one click arms it, every click on
-  // the page after that composes a comment, and it stays armed until the FAB
-  // is clicked again (or Escape with no composer open). Modeled on the
-  // comment mode in Claude Desktop artifacts — toggle on, click to place a
-  // bubble, type — because the whole point is fewer clicks per comment.
-
-  private toggleFeedbackMode(): void {
-    if (this.feedbackMode) this.exitFeedbackMode();
-    else this.enterFeedbackMode();
-  }
-
-  private enterFeedbackMode(): void {
-    if (this.feedbackMode) return;
-    this.feedbackMode = true;
-    // The speech-bubble cursor rides a body class (see injectLightStyles) so
-    // it beats per-element cursor styles the host page declares.
-    document.body.classList.add('cfw-feedback-mode');
-    // iOS Safari fires `click` reliably only on elements that have
-    // `cursor: pointer` (or are a button/anchor). The mode needs to catch
-    // taps on arbitrary mockup elements — `<div>`s, custom components,
-    // etc. — that DON'T have a clickable cursor style. A window-level click
-    // listener silently no-ops on those.
-    //
-    // Pointer events fix it: `pointerup` fires for mouse, touch, and pen
-    // regardless of cursor style. Bonus: `touch-action: manipulation` on the
-    // body suppresses the 300ms double-tap-zoom delay on iOS so taps
-    // register instantly.
-    const prevTouchAction = document.body.style.touchAction;
-    document.body.style.touchAction = 'manipulation';
-    this.togglePanel(false);
-    const fab = this.shadow.querySelector('.fab');
-    fab?.setAttribute('aria-pressed', 'true');
-    fab?.classList.add('open');
-
-    // The banner names the mode and holds the way out — the cursor alone
-    // says "you're in a mode" but not how to leave it.
-    const banner = document.createElement('div');
-    banner.className = 'picker-banner';
-    banner.innerHTML = `
-      <span>Click anything to comment.</span>
-      <button class="picker-cancel">Done (Esc)</button>
-    `;
-    this.shadow.appendChild(banner);
-
-    const onMove = (ev: PointerEvent) => {
-      // Skip hover-highlight on touch — fingers don't "hover," and
-      // repainting outlines along a drag is just visual noise.
-      if (ev.pointerType === 'touch') return;
-      const t = this.hitTest(ev);
-      if (this.hoverEl && this.hoverEl !== t) this.unhighlight(this.hoverEl);
-      this.hoverEl = t;
-      if (t) this.highlight(t);
-    };
-    const onTap = (ev: PointerEvent) => {
-      const t = this.hitTest(ev);
-      // Own chrome (FAB, composer, pins) keeps its normal behavior — a
-      // preventDefault here would break the very controls the mode relies on.
-      if (!t) return;
-      ev.preventDefault();
-      ev.stopPropagation();
-      this.openComposerForElement(t, ev.clientX, ev.clientY);
-    };
-    const onKey = (ev: KeyboardEvent) => {
-      if (ev.key !== 'Escape') return;
-      // First Escape backs out of the comment being written; the next one
-      // exits the mode. Matches every modal-inside-a-mode convention.
-      const composer = this.shadow.querySelector('.composer');
-      if (composer) {
-        composer.remove();
-        return;
-      }
-      this.exitFeedbackMode();
-    };
-    banner.querySelector('.picker-cancel')?.addEventListener('click', (ev) => {
-      ev.stopPropagation();
-      this.exitFeedbackMode();
-    });
-    window.addEventListener('pointermove', onMove, true);
-    window.addEventListener('pointerup', onTap, true);
-    window.addEventListener('keydown', onKey, true);
-
-    this.modeCleanup = () => {
-      document.body.classList.remove('cfw-feedback-mode');
-      document.body.style.touchAction = prevTouchAction;
-      if (this.hoverEl) this.unhighlight(this.hoverEl);
-      this.hoverEl = null;
-      banner.remove();
-      fab?.setAttribute('aria-pressed', 'false');
-      fab?.classList.remove('open');
-      window.removeEventListener('pointermove', onMove, true);
-      window.removeEventListener('pointerup', onTap, true);
-      window.removeEventListener('keydown', onKey, true);
-    };
-  }
-
-  /** A composer left open survives the exit — mid-typed text is not the
-   *  mode's to discard. */
-  private exitFeedbackMode(): void {
-    if (!this.feedbackMode) return;
-    this.feedbackMode = false;
-    this.modeCleanup?.();
-    this.modeCleanup = null;
-  }
-
-  private hitTest(ev: MouseEvent): HTMLElement | null {
-    const el = document.elementFromPoint(ev.clientX, ev.clientY) as HTMLElement | null;
-    if (!el) return null;
-    // skip widget chrome
-    if (el.closest(`[${IGNORE_ATTR}]`) || el.tagName === TAG.toUpperCase()) return null;
-    return el;
-  }
-
-  private highlight(el: HTMLElement): void {
-    el.dataset.cfwPrevOutline = el.style.outline;
-    el.style.outline = '2px solid #2e7dd7';
-  }
-  private unhighlight(el: HTMLElement): void {
-    el.style.outline = el.dataset.cfwPrevOutline ?? '';
-    delete el.dataset.cfwPrevOutline;
-  }
-
-  // --- Composer ---
-
-  private openComposerForElement(el: HTMLElement, cx: number, cy: number): void {
-    const anchor: ElementAnchor = {
-      ...anchors.Element.createAnchor(el),
-      ...(hasContext(this.currentContext) ? { context: { ...this.currentContext } } : {}),
-    };
-    this.showComposer(anchor, cx, cy, null);
-  }
-
-  private showComposer(
-    anchor: ElementAnchor,
-    cx: number,
-    cy: number,
-    replyTo: string | null,
-  ): void {
-    const existing = this.shadow.querySelector('.composer') as HTMLElement | null;
-    existing?.remove();
-    const composer = document.createElement('div');
-    composer.className = 'composer';
-    composer.style.left = `${Math.min(cx + 12, window.innerWidth - 320)}px`;
-    composer.style.top = `${Math.min(cy + 12, window.innerHeight - 200)}px`;
-    composer.innerHTML = `
-      <div class="composer-snippet">${escape(anchor.snippet.text)}</div>
-      <textarea placeholder="${replyTo ? 'Reply…' : 'Comment on this element…'}" rows="3"></textarea>
-      <div class="composer-actions">
-        <button class="cancel">Cancel</button>
-        <button class="primary submit">Post</button>
-      </div>
-    `;
-    this.shadow.appendChild(composer);
-    const ta = composer.querySelector('textarea') as HTMLTextAreaElement;
-    ta.focus();
-    composer.querySelector('.cancel')?.addEventListener('click', () => composer.remove());
-    const submit = composer.querySelector('.submit') as HTMLButtonElement;
-    // Say it before the first attempt when the widget already knows.
-    if (this.signInToWrite && !this.authToken) composerSignIn(this, composer, submit);
-    submit.addEventListener('click', async () => {
-      const text = ta.value.trim();
-      if (!text || !this.user) return;
-      // A silent await reads as a dead button — say the click landed.
-      submit.disabled = true;
-      submit.textContent = 'Posting…';
-      // A rejected fetch (server unreachable) is a failed post like any
-      // other — without the catch it would strand the button at "Posting…".
-      let posted = false;
-      try {
-        posted = replyTo
-          ? await this.postReply(replyTo, text)
-          : await this.postNewThread(anchor, text);
-      } catch {}
-      if (!posted) {
-        // Kept on failure, with the text still in it.
-        submit.disabled = false;
-        submit.textContent = 'Post';
-        if (this.signInToWrite && !this.authToken) composerSignIn(this, composer, submit);
-        else composerNote(composer, 'Couldn’t post — try again.');
-        return;
-      }
-      composer.remove();
-    });
-  }
-
   /** `false` when the server refused it — the caller keeps the composer, and
    *  the typed comment, so signing in and pressing Post again is all it takes.
    *  Discarding it on a refusal would lose the very thing the sign-in prompt
    *  is asking the person to come back and finish. */
-  private async postNewThread(anchor: ElementAnchor, text: string): Promise<boolean> {
+  async postNewThread(anchor: ElementAnchor, text: string): Promise<boolean> {
     const res = await authedPost(
       this,
       `${httpBase(this)}/api/docs/${encodeURIComponent(this.opts.docId)}/threads`,
@@ -660,7 +477,7 @@ export class FeedbackWidgetEl extends HTMLElement {
   }
 
   /** `false` when the server refused it — see `postNewThread`. */
-  private async postReply(threadId: string, text: string): Promise<boolean> {
+  async postReply(threadId: string, text: string): Promise<boolean> {
     const res = await authedPost(
       this,
       `${httpBase(this)}/api/docs/${encodeURIComponent(this.opts.docId)}/threads/${encodeURIComponent(threadId)}/comments`,
@@ -1001,24 +818,6 @@ export class FeedbackWidgetEl extends HTMLElement {
     };
     this.rafId = requestAnimationFrame(tick);
   }
-}
-
-function isInOwnChrome(node: Node): boolean {
-  let el: Node | null = node;
-  while (el) {
-    if (el.nodeType === 1) {
-      const e = el as Element;
-      if (
-        e.hasAttribute?.(IGNORE_ATTR) ||
-        e.tagName === TAG.toUpperCase() ||
-        e.id === 'cfw-light-styles'
-      ) {
-        return true;
-      }
-    }
-    el = el.parentNode;
-  }
-  return false;
 }
 
 // --- Public FeedbackWidget global ---
