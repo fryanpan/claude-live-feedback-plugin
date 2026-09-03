@@ -15,9 +15,12 @@ import type { ReviewSurface } from '../src/review-surface.ts';
  * files passed still failed, on one unhandled `ReferenceError` naming nothing
  * a person could act on.
  *
- * Cancelling the timer when the composer goes away is also the behaviour a
- * reader wants on its own: a composer dismissed inside those 30ms should not
- * pull the caret back to a box that has left the screen.
+ * Two things had to be true, and there is a test for each. The timer is
+ * cancelled when the composer goes away, so nothing is pending to land — that
+ * is also the behaviour a reader wants, since a dismissed composer taking the
+ * caret is a bug on its own. And the focus itself declines to run where there
+ * is no `requestAnimationFrame`, so the next stray timer from anywhere fails
+ * quietly instead of failing the run.
  */
 
 function mountChromeDom(): void {
@@ -94,6 +97,12 @@ function harness() {
 
 const composerText = () => document.getElementById('composer-text') as HTMLTextAreaElement;
 
+/** The global Tiptap's focus command reaches for, gone the way a torn-down
+ *  test environment takes it. */
+function removeAnimationFrame(): void {
+  vi.stubGlobal('requestAnimationFrame', undefined);
+}
+
 afterEach(() => {
   vi.useRealTimers();
   vi.unstubAllGlobals();
@@ -118,6 +127,14 @@ describe('the composer’s delayed focus cannot outlive the composer', () => {
     scope.dispose();
     vi.advanceTimersByTime(200);
     expect(isComposerFocused(composerText())).toBe(false);
+  });
+
+  it('a focus that lands where there is no requestAnimationFrame does not throw', () => {
+    vi.useFakeTimers();
+    const { chrome } = harness();
+    chrome.openComposer();
+    removeAnimationFrame();
+    expect(() => vi.advanceTimersByTime(200)).not.toThrow();
   });
 
   it('positive control: a composer left open still gets the caret', () => {
