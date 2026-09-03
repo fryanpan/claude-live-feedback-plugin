@@ -1,20 +1,8 @@
 import {
-  appendFileSync,
-  existsSync,
-  mkdirSync,
-  readFileSync,
-  readdirSync,
-  renameSync,
-  rmSync,
-  writeFileSync,
-} from 'node:fs';
-import { join } from 'node:path';
-import {
   type ReviewItemJudgement,
   type ReviewItemRange,
   type ReviewPayload,
   type TaskReviewItem,
-  agentIdCandidates,
   agentIdForName,
 } from '@feedback/core';
 import { DEFAULT_EFFORT_ESTIMATE_PROMPT } from '@feedback/core/effort-estimate-prompt';
@@ -41,7 +29,6 @@ import {
 } from './decision-shape.ts';
 import { TaskDecisionStore } from './review-items/decisions.ts';
 import { ReviewJudgementStore } from './review-items/judgements.ts';
-import type { ReviewItemPersistence } from './review-items/persistence.ts';
 import { ReviewItemQueries } from './review-items/queries.ts';
 import { ReviewItemStore } from './review-items/store.ts';
 import type {
@@ -61,13 +48,24 @@ import type {
   WithdrawAnswerResult,
   WithdrawReviewItemResult,
 } from './review-items/types.ts';
+import { TaskEventBus } from './task-event-bus.ts';
 import { bumpWordsRevision, cryptoId, isArchived, wordsRevisionOf } from './task-fields.ts';
+import type { AttachmentRuntime } from './task-helpers.ts';
 import {
   type DeclaredOwnerKind,
   GENERIC_ASSIGNEE,
   HUMAN_ASSIGNEE,
   declaredAssigneeKind,
 } from './task-owner.ts';
+import {
+  agentPersistenceFor,
+  goalPersistenceFor,
+  hydrateTasksFromDisk,
+  persistAttachmentsSidecar,
+  persistWorkspaceTasks,
+  reviewItemPersistenceFor,
+  workspacePersistenceFor,
+} from './task-persistence.ts';
 import { bodyHead } from './task-title.ts';
 
 /**
@@ -154,12 +152,7 @@ export type {
   WithdrawReviewItemResult,
 } from './review-items/types.ts';
 
-import {
-  CHORES_GOAL_ID,
-  GoalStore,
-  type GoalStorePersistence,
-  isReservedGoalId,
-} from './task-goals.ts';
+import { CHORES_GOAL_ID, GoalStore, isReservedGoalId } from './task-goals.ts';
 
 export {
   CHORES_GOAL_ID,
@@ -171,7 +164,6 @@ export {
 
 import {
   AgentStore,
-  type AgentStorePersistence,
   type AgentStreamProbe,
   type AttachAgentResult,
   type AttachmentThresholds,
@@ -184,9 +176,6 @@ import {
   type QueuedComment,
   type QueuedVoiceRequest,
   VOICE_ACK_GRACE_MS,
-  attachmentsSidecarPath,
-  commentQueuePath,
-  voiceQueuePath,
 } from './task-agents.ts';
 
 export type {
@@ -222,7 +211,6 @@ export {
 
 import {
   WorkspaceStore,
-  type WorkspaceStorePersistence,
   isRetired,
   normalizeWorkspaceName,
   retiredNotice,
@@ -346,44 +334,11 @@ export interface ParallelismCapChange {
   to: number;
 }
 
-/**
- * A goal list as it may arrive from OUTSIDE — a payload written before
- * subgoals were removed, or a workspace on disk that still holds them.
- *
- * Subgoals are gone from the product (Bryan, 2026-08-30: *"We no longer
- * support subgoals. If there's any code left for subgoals remove it"*), but
- * a stored board is not rewritten by that decision. `flattenNestedGoals` is
- * the one door such a payload comes through, and every one of them arrives
- * flat on the other side.
- */
-export interface NestedGoalInput {
-  id: string;
-  title: string;
-  dueAt?: number;
-  subgoals?: NestedGoalInput[];
-}
-
-/**
- * Splice any nested goals into the top level, each one landing directly after
- * the parent that held it.
- *
- * That position is not a choice: the board has drawn subgoals as flat rows in
- * exactly this order all along, so a flattened list looks like the board the
- * reader already had. Depth beyond one level was never written, but the walk
- * is recursive anyway — a payload that has it should still load rather than
- * lose rows.
- */
-export function flattenNestedGoals(goals: readonly NestedGoalInput[]): WorkspaceGoal[] {
-  const out: WorkspaceGoal[] = [];
-  const walk = (list: readonly NestedGoalInput[]) => {
-    for (const g of list) {
-      out.push({ id: g.id, title: g.title, ...(g.dueAt !== undefined ? { dueAt: g.dueAt } : {}) });
-      if (g.subgoals?.length) walk(g.subgoals);
-    }
-  };
-  walk(goals);
-  return out;
-}
+/* `NestedGoalInput` and `flattenNestedGoals` live in `task-helpers.ts` now —
+   `task-persistence.ts` needs them and may not import a VALUE from this
+   file. Re-exported so no caller of either symbol changes. */
+export type { NestedGoalInput } from './task-helpers.ts';
+export { flattenNestedGoals } from './task-helpers.ts';
 
 export interface HubWorkspace {
   /** Crypto-random and unguessable — URLs hang off it (§3.2). */
@@ -839,17 +794,11 @@ export type UnlinkRefResult =
 
 // ── Agent attachments (plan §4) ─────────────────────────────────────────────
 
-export type AttachmentRuntime = 'claude-code-local' | 'managed-agent' | 'webhook';
-
-const ATTACHMENT_RUNTIMES: ReadonlySet<string> = new Set([
-  'claude-code-local',
-  'managed-agent',
-  'webhook',
-]);
-
-export function isAttachmentRuntime(v: unknown): v is AttachmentRuntime {
-  return typeof v === 'string' && ATTACHMENT_RUNTIMES.has(v);
-}
+/* `AttachmentRuntime` and `isAttachmentRuntime` live in `task-helpers.ts`
+   now — `task-persistence.ts` needs them and may not import a VALUE from
+   this file. Re-exported so no caller of either symbol changes. */
+export type { AttachmentRuntime } from './task-helpers.ts';
+export { isAttachmentRuntime } from './task-helpers.ts';
 
 /**
  * The workspace↔agent link, stored as DATA from day one (§4) — keyed
@@ -1483,28 +1432,10 @@ export type TaskStoreEvent =
   | AgentHeartbeatEvent
   | VoiceRequestEvent;
 
-/**
- * Sidecars the REMOVED triage-request flow used to queue undelivered asks in:
- * the workspace-level north-star re-triage (`.retriage.json`), the "a band
- * appeared, re-look at the bucket" ask (`.bucket.json`), and the lead's
- * task-review queue (`.taskreviews.json`).
- *
- * Nothing reads or writes any of them any more — the lead is woken by the
- * events that already reach it, so there is no bespoke ask to park. They
- * survive as names only so `deleteWorkspace` keeps sweeping the files up: a
- * board deleted after this change would otherwise leave sidecars behind that
- * nothing on the box can reach or explain. Deleting queue bookkeeping is not
- * a soft-delete concern (CLAUDE.md: "the rule is about user content and
- * history"); these files hold neither.
- */
-export function legacyTriageSidecarPaths(dataDir: string, workspaceId: string): string[] {
-  const dir = join(dataDir, 'workspaces');
-  return [
-    join(dir, `${workspaceId}.retriage.json`),
-    join(dir, `${workspaceId}.bucket.json`),
-    join(dir, `${workspaceId}.taskreviews.json`),
-  ];
-}
+/* `legacyTriageSidecarPaths` lives in `task-persistence.ts` now, next to
+   `tasksSidecarPath` and every other per-workspace path this store owns.
+   Re-exported so no caller changes. */
+export { legacyTriageSidecarPaths } from './task-persistence.ts';
 
 export type SetLeadAgentResult =
   | {
@@ -1774,36 +1705,31 @@ export interface WorkspaceState {
   attachments: Map<string, AgentAttachment>;
 }
 
-/** Where a workspace's sidecar lives. Exported so tests assert the real
- *  contract path rather than a re-implementation of it. */
-export function tasksSidecarPath(dataDir: string, workspaceId: string): string {
-  return join(dataDir, 'workspaces', `${workspaceId}.tasks.json`);
-}
-
-/** Where a workspace's append-only event audit log lives (plan §3.6: "the
- *  event log is the audit trail"). Exported so tests assert the real path. */
-export function eventsLogPath(dataDir: string, workspaceId: string): string {
-  return join(dataDir, 'workspaces', `${workspaceId}.events.jsonl`);
-}
+/* `tasksSidecarPath` lives in `task-persistence.ts` now, and `eventsLogPath`
+   in `task-event-bus.ts`. Re-exported so no caller of either changes. */
+export { tasksSidecarPath } from './task-persistence.ts';
+export { eventsLogPath } from './task-event-bus.ts';
 
 export class TaskStore {
-  private workspaces = new Map<string, WorkspaceState>();
-  private taskIndex = new Map<string, string>(); // taskId → workspaceId
+  // Not `private`: `task-persistence.ts` reads and writes these directly,
+  // through the exact same `Map` instances — see `TaskPersistenceHost`.
+  workspaces = new Map<string, WorkspaceState>();
+  taskIndex = new Map<string, string>(); // taskId → workspaceId
   /** goalId → workspaceId. Deliberately NOT merged into `taskIndex`: that one
    *  is what `getTask` resolves through, and a goal id resolving there would
    *  put goal rows within reach of every task verb by id. */
-  private goalIndex = new Map<string, string>();
-  private saveTimers = new Map<string, ReturnType<typeof setTimeout>>();
-  private attachmentSaveTimers = new Map<string, ReturnType<typeof setTimeout>>();
-  private dataDir: string;
+  goalIndex = new Map<string, string>();
+  saveTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  attachmentSaveTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  // Not `private`, for the same reason as the maps above.
+  dataDir: string;
   private debounceMs: number;
-  private attachmentThresholds: AttachmentThresholds;
-  private deliveryProbe: DeliveryProbe | undefined;
-  private roster: AgentRoster | undefined;
-  private readonly voiceAckGraceMs: number;
-  private readonly commentAckGraceMs: number;
-  private agentStreamProbe: AgentStreamProbe | undefined;
-  private eventListeners = new Set<(event: TaskStoreEvent) => void>();
+  attachmentThresholds: AttachmentThresholds;
+  deliveryProbe: DeliveryProbe | undefined;
+  roster: AgentRoster | undefined;
+  readonly voiceAckGraceMs: number;
+  readonly commentAckGraceMs: number;
+  agentStreamProbe: AgentStreamProbe | undefined;
   /**
    * The doc store's settled `contentRevision` for a docId, wired by server.ts
    * (`rooms.settledContentRevision`). At the STORE rather than per route so
@@ -1822,140 +1748,34 @@ export class TaskStore {
    * Anything it needs that is not on that list is a deliberate decision to
    * widen the contract, not an autocomplete away.
    */
-  private readonly reviewItems = new ReviewItemStore(this.reviewItemPersistence());
+  private readonly reviewItems = new ReviewItemStore(reviewItemPersistenceFor(this));
   /** The ticket's OWN decision (the derived `r-legacy` row). */
-  private readonly decisions = new TaskDecisionStore(this.reviewItemPersistence());
+  private readonly decisions = new TaskDecisionStore(reviewItemPersistenceFor(this));
   /** The quality gate's verdicts, on both shapes. */
-  private readonly judgements = new ReviewJudgementStore(this.reviewItemPersistence());
+  private readonly judgements = new ReviewJudgementStore(reviewItemPersistenceFor(this));
   /** Reads across a ticket and a board, plus the judging criteria. */
-  private readonly reviewQueries = new ReviewItemQueries(this.reviewItemPersistence());
-
-  /** This store, seen through the review-item contract and nothing more. */
-  private reviewItemPersistence(): ReviewItemPersistence {
-    return {
-      getTask: (taskId) => this.getTask(taskId),
-      listTasksIn: (workspaceId) => this.workspaces.get(workspaceId)?.tasks.values() ?? [],
-      listWorkspaceIds: () => this.workspaces.keys(),
-      getWorkspaceRecord: (workspaceId) => this.workspaces.get(workspaceId)?.workspace,
-      save: (workspaceId) => this.scheduleSave(workspaceId),
-      emit: (event) => this.emit(event),
-      now: () => Date.now(),
-      noteBodyEdited: (taskId, opts) => this.noteBodyEdited(taskId, opts),
-      renameTask: (taskId, title, opts) => this.renameTask(taskId, title, opts),
-    };
-  }
+  private readonly reviewQueries = new ReviewItemQueries(reviewItemPersistenceFor(this));
 
   /** The goal bands, and this store seen through the contract they need. */
-  private readonly goals = new GoalStore(this.goalPersistence());
-
-  private goalPersistence(): GoalStorePersistence {
-    return {
-      state: (workspaceId) => this.workspaces.get(workspaceId),
-      states: () => this.workspaces.values(),
-      getTask: (taskId) => this.getTask(taskId),
-      goalIdExists: (workspace, goalId) => this.goalIdExists(workspace, goalId),
-      syncGoalRows: (state, mintStatus) => this.syncGoalRows(state, mintStatus),
-      scheduleSave: (workspaceId) => this.scheduleSave(workspaceId),
-      emit: (event) => this.emit(event),
-    };
-  }
+  private readonly goals = new GoalStore(goalPersistenceFor(this));
 
   /** Attachments and delivery queues, and this store seen through the
    *  contract they need. The probes' defaults are folded in here so
    *  `task-agents.ts` never restates them. */
-  private readonly agents = new AgentStore(this.agentPersistence());
-
-  private agentPersistence(): AgentStorePersistence {
-    const store = this;
-    return {
-      dataDir: () => this.dataDir,
-      state: (workspaceId) => this.workspaces.get(workspaceId),
-      states: () => this.workspaces.values(),
-      hasWorkspace: (workspaceId) => this.workspaces.has(workspaceId),
-      get thresholds() {
-        return store.attachmentThresholds;
-      },
-      get voiceAckGraceMs() {
-        return store.voiceAckGraceMs;
-      },
-      get commentAckGraceMs() {
-        return store.commentAckGraceMs;
-      },
-      roster: () => this.roster,
-      agentStreamProbe: (workspaceId, agentId) =>
-        this.agentStreamProbe?.(workspaceId, agentId) ?? false,
-      deliveryProbe: (workspaceId) => this.deliveryProbe?.(workspaceId) ?? true,
-      saveAttachments: (workspaceId) => this.scheduleAttachmentsSave(workspaceId),
-      listUntriaged: (workspaceId) => this.listUntriaged(workspaceId),
-      assignLead: (state, leadAgentId, actor, ts) =>
-        this.workspaceStore.assignLead(state, leadAgentId, actor, ts),
-      emit: (event) => this.emit(event),
-    };
-  }
+  private readonly agents = new AgentStore(agentPersistenceFor(this));
 
   /** The board registry, and this store seen through the contract it needs.
    *  Same shape as the review-item seam above: a named list of rows and
    *  writers, not a `this` that reaches the whole store. */
-  private readonly workspaceStore = new WorkspaceStore(this.workspacePersistence());
+  readonly workspaceStore: WorkspaceStore = new WorkspaceStore(workspacePersistenceFor(this));
 
-  private workspacePersistence(): WorkspaceStorePersistence {
-    return {
-      state: (workspaceId) => this.workspaces.get(workspaceId),
-      states: () => this.workspaces.values(),
-      register: (workspaceId, state) => {
-        this.workspaces.set(workspaceId, state);
-      },
-      forget: (workspaceId) => {
-        this.workspaces.delete(workspaceId);
-      },
-      forgetRows: (taskIds, goalIds) => {
-        for (const taskId of taskIds) this.taskIndex.delete(taskId);
-        for (const goalId of goalIds) this.goalIndex.delete(goalId);
-      },
-      scheduleSave: (workspaceId) => this.scheduleSave(workspaceId),
-      scheduleAttachmentsSave: (workspaceId) => this.scheduleAttachmentsSave(workspaceId),
-      cancelPendingSaves: (workspaceId) => {
-        const pending = this.saveTimers.get(workspaceId);
-        if (pending) clearTimeout(pending);
-        this.saveTimers.delete(workspaceId);
-        const pendingAttachments = this.attachmentSaveTimers.get(workspaceId);
-        if (pendingAttachments) clearTimeout(pendingAttachments);
-        this.attachmentSaveTimers.delete(workspaceId);
-        return { tasks: pending !== undefined, attachments: pendingAttachments !== undefined };
-      },
-      removeTasksSidecar: (workspaceId) => {
-        try {
-          rmSync(tasksSidecarPath(this.dataDir, workspaceId), { force: true });
-          return true;
-        } catch (err) {
-          console.error(`[tasks] failed to remove the tasks sidecar for ${workspaceId}:`, err);
-          return false;
-        }
-      },
-      removeSidecars: (workspaceId) => {
-        // The list is every OTHER per-workspace path this file exports; a new
-        // sidecar belongs here the day it is added, or it becomes a file
-        // nothing can reach.
-        for (const path of [
-          attachmentsSidecarPath(this.dataDir, workspaceId),
-          eventsLogPath(this.dataDir, workspaceId),
-          voiceQueuePath(this.dataDir, workspaceId),
-          commentQueuePath(this.dataDir, workspaceId),
-          ...legacyTriageSidecarPaths(this.dataDir, workspaceId),
-        ]) {
-          try {
-            rmSync(path, { force: true });
-          } catch (err) {
-            console.error(`[tasks] failed to remove ${path}:`, err);
-          }
-        }
-      },
-      getTask: (taskId) => this.getTask(taskId),
-      getGoalRow: (goalId) => this.getGoalRow(goalId),
-      hasLiveLeadAttachment: (workspaceId) => this.hasLiveLeadAttachment(workspaceId),
-      emit: (event) => this.emit(event),
-    };
-  }
+  /** This store's event bus and audit trail — see `task-event-bus.ts`. */
+  private readonly eventBus = new TaskEventBus({
+    dataDir: () => this.dataDir,
+    attachmentsFor: (workspaceId) => this.workspaces.get(workspaceId)?.attachments,
+    noteAgentToolCall: (workspaceId, agentId, at) =>
+      this.noteAgentToolCall(workspaceId, agentId, at),
+  });
 
   setDocRevisionReader(reader: ((docId: string) => number | undefined) | undefined): void {
     this.docRevisionFor = reader;
@@ -1990,16 +1810,20 @@ export class TaskStore {
         : {}),
       ...(opts.leadSeatStaleMs !== undefined ? { leadSeatStaleMs: opts.leadSeatStaleMs } : {}),
     };
-    this.hydrateFromDisk();
+    hydrateTasksFromDisk(this);
   }
 
   // ── Events + triage delivery ─────────────────────────────────────────────
+  //
+  // The bus itself lives in `task-event-bus.ts`; what follows forwards onto
+  // it. `onEvent` and `emit` keep their signatures because every verb below
+  // — and every external subscriber — calls them without knowing emit now
+  // crosses a file boundary.
 
   /** Subscribe to store events; returns the unsubscribe. The SSE transport
    *  and audit log (a later commit) hang off this. */
   onEvent(listener: (event: TaskStoreEvent) => void): () => void {
-    this.eventListeners.add(listener);
-    return () => this.eventListeners.delete(listener);
+    return this.eventBus.onEvent(listener);
   }
 
   /**
@@ -2072,84 +1896,12 @@ export class TaskStore {
       task.assignee === assignee || (wantedId !== undefined && this.ownerIdOf(task) === wantedId);
   }
 
-  /**
-   * Every emitted board change is also EVIDENCE that its author was alive at
-   * that moment, so the work clock moves here rather than at ~20 call sites.
-   *
-   * The call-site version of this is what failed: `noteAgentToolCall` shipped
-   * with no caller at all and sat unused, because "remember to also record
-   * liveness" is exactly the kind of step that gets forgotten. At the choke
-   * point it cannot be — a new route that emits is observed for free.
-   *
-   * Two things it deliberately does NOT do:
-   *  - `agent.*` events never count. A heartbeat asserting work is what
-   *    collapsed the two clocks into one and made `unresponsive` unreachable;
-   *    `attachAgent` sets both clocks itself and needs no help here.
-   *  - A person's edit never moves an agent's clock. The actor is resolved
-   *    against the attachment roster, and a name that matches nothing is a
-   *    no-op.
-   */
-  private noteObservedWork(event: TaskStoreEvent): void {
-    if (event.type.startsWith('agent.')) return;
-    const { workspaceId } = event;
-    const attachments = this.workspaces.get(workspaceId)?.attachments;
-    if (!attachments || attachments.size === 0) return;
-    const actor = (event as { actor?: { id?: unknown; name?: unknown } }).actor;
-    if (!actor) return;
-    // Match on every spelling a roster could hold. The event's actor id and
-    // the attachment key demonstrably disagree in the field — `live-feedback`
-    // against `agent-live-feedback` on the same session — so matching one
-    // spelling matches roughly none of the fleet.
-    const candidates = new Set<string>();
-    for (const raw of [actor.id, actor.name]) {
-      if (typeof raw !== 'string') continue;
-      candidates.add(raw.trim().toLowerCase());
-      for (const c of agentIdCandidates(raw)) candidates.add(c);
-    }
-    if (candidates.size === 0) return;
-    for (const agentId of attachments.keys()) {
-      if (!candidates.has(agentId.trim().toLowerCase())) continue;
-      // Through the public method rather than touching the field, so there
-      // is exactly one definition of "the agent was observed working" — and
-      // so that method finally has the production caller whose absence is
-      // the whole reason the clock never moved.
-      this.noteAgentToolCall(workspaceId, agentId, event.ts);
-      return;
-    }
-  }
-
-  private emit(event: TaskStoreEvent): void {
-    // Audit FIRST, at the emit choke point: "an event was emitted" and "the
-    // audit log has it" are the same fact by construction (§3.6), so the log
-    // can never disagree with what subscribers saw.
-    this.appendAudit(event);
-    this.noteObservedWork(event);
-    for (const listener of this.eventListeners) {
-      try {
-        listener(event);
-      } catch (err) {
-        console.error('[tasks] event listener threw:', err);
-      }
-    }
-  }
-
-  /** Append one JSON line to the per-workspace events.jsonl. Shaped exactly
-   *  like the SSE payload (`event` key, not `type`) so the two records are
-   *  the same bytes-modulo-transport. Synchronous append — an event either
-   *  reaches both the log and the listeners, or (I/O failure, logged loudly)
-   *  the listeners still fire: delivery beats bookkeeping. */
-  private appendAudit(event: TaskStoreEvent): void {
-    try {
-      const dir = join(this.dataDir, 'workspaces');
-      if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
-      const { type, ...rest } = event;
-      appendFileSync(
-        eventsLogPath(this.dataDir, event.workspaceId),
-        `${JSON.stringify({ event: type, ...rest })}\n`,
-      );
-    } catch (err) {
-      console.error('[tasks] failed to append audit event:', err);
-    }
+  /** Every store mutation's event passes through here — audit append, the
+   *  observed-work note, then listener fan-out, in that order (§3.6). See
+   *  `TaskEventBus.emit` for the order's own reasoning. Not `private`: every
+   *  persistence adapter in `task-persistence.ts` emits through this. */
+  emit(event: TaskStoreEvent): void {
+    this.eventBus.emit(event);
   }
 
   // ── Workspaces ───────────────────────────────────────────────────────────
@@ -2626,7 +2378,7 @@ export class TaskStore {
    * mint at all; they pass `todo` as the answer that would be right if they
    * somehow did, since a goal already on the list is one somebody placed.
    */
-  private syncGoalRows(state: WorkspaceState, mintStatus: TaskStatus): void {
+  syncGoalRows(state: WorkspaceState, mintStatus: TaskStatus): void {
     const now = Date.now();
     state.workspace.goals.forEach((g, index) => {
       const existing = state.goalRows.get(g.id);
@@ -4329,7 +4081,7 @@ export class TaskStore {
       - Persisted `riskTier` values are left alone. Nothing reads them; a
         migration that rewrote everyone's rows would be the riskier change. */
 
-  private goalIdExists(workspace: HubWorkspace, goalId: string): boolean {
+  goalIdExists(workspace: HubWorkspace, goalId: string): boolean {
     if (isReservedGoalId(goalId)) return true;
     return workspace.goals.some((g) => g.id === goalId);
   }
@@ -4494,7 +4246,7 @@ export class TaskStore {
     this.flush();
   }
 
-  private scheduleSave(workspaceId: string): void {
+  scheduleSave(workspaceId: string): void {
     const prev = this.saveTimers.get(workspaceId);
     if (prev) clearTimeout(prev);
     const timer = setTimeout(() => {
@@ -4506,7 +4258,7 @@ export class TaskStore {
     this.saveTimers.set(workspaceId, timer);
   }
 
-  private scheduleAttachmentsSave(workspaceId: string): void {
+  scheduleAttachmentsSave(workspaceId: string): void {
     const prev = this.attachmentSaveTimers.get(workspaceId);
     if (prev) clearTimeout(prev);
     const timer = setTimeout(() => {
@@ -4519,196 +4271,14 @@ export class TaskStore {
 
   /** Attachments get their own sidecar so heartbeat churn never rewrites the
    *  task data. Empty registry → the file is removed (private-meta pattern:
-   *  nothing sensitive left on disk when nothing is attached). */
+   *  nothing sensitive left on disk when nothing is attached). See
+   *  `task-persistence.ts`. */
   private persistAttachments(workspaceId: string): void {
-    const state = this.workspaces.get(workspaceId);
-    if (!state) return;
-    const dir = join(this.dataDir, 'workspaces');
-    const path = attachmentsSidecarPath(this.dataDir, workspaceId);
-    const tmp = `${path}.tmp`;
-    try {
-      if (state.attachments.size === 0) {
-        rmSync(path, { force: true });
-        return;
-      }
-      if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
-      const payload = { attachments: Array.from(state.attachments.values()) };
-      writeFileSync(tmp, `${JSON.stringify(payload, null, 2)}\n`);
-      renameSync(tmp, path);
-    } catch (err) {
-      console.error(`[tasks] failed to persist attachments for ${workspaceId}:`, err);
-      try {
-        rmSync(tmp, { force: true });
-      } catch {}
-    }
+    persistAttachmentsSidecar(this, workspaceId);
   }
 
-  /** Load a workspace's attachments sidecar. Records hydrate with their old
-   *  clocks — a stale lastHeartbeat honestly reads as `away` until the agent
-   *  heartbeats again; we never reset it to look alive. */
-  private loadAttachments(workspaceId: string): Map<string, AgentAttachment> {
-    const out = new Map<string, AgentAttachment>();
-    const path = attachmentsSidecarPath(this.dataDir, workspaceId);
-    if (!existsSync(path)) return out;
-    try {
-      const parsed = JSON.parse(readFileSync(path, 'utf8')) as {
-        attachments?: AgentAttachment[];
-      };
-      for (const att of parsed.attachments ?? []) {
-        if (typeof att?.agentId !== 'string' || !isAttachmentRuntime(att.runtime)) continue;
-        out.set(att.agentId, { ...att, workspaceId });
-      }
-    } catch (err) {
-      // A corrupt sidecar loses the attachments, never the workspace.
-      console.error(`[tasks] unreadable attachments sidecar for ${workspaceId} — skipped:`, err);
-    }
-    return out;
-  }
-
+  /** Write this workspace's task-row sidecar. See `task-persistence.ts`. */
   private persist(workspaceId: string): void {
-    const state = this.workspaces.get(workspaceId);
-    if (!state) return;
-    const dir = join(this.dataDir, 'workspaces');
-    const path = tasksSidecarPath(this.dataDir, workspaceId);
-    const tmp = `${path}.tmp`;
-    try {
-      if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
-      const payload = {
-        workspace: state.workspace,
-        tasks: Array.from(state.tasks.values()),
-        // A key of its own rather than rows mixed into `tasks`: a reader that
-        // has not heard of goal rows gets exactly the task list it expects,
-        // and `workspace.goals[]` above stays on disk as the rollback path.
-        goalRows: Array.from(state.goalRows.values()),
-      };
-      // Write-then-rename so a crash mid-write can't leave a torn sidecar —
-      // the sidecar is authoritative on hydrate, so a torn one loses the
-      // whole board.
-      writeFileSync(tmp, `${JSON.stringify(payload, null, 2)}\n`);
-      renameSync(tmp, path);
-    } catch (err) {
-      console.error(`[tasks] failed to persist workspace ${workspaceId}:`, err);
-      try {
-        rmSync(tmp, { force: true });
-      } catch {}
-    }
-  }
-
-  private hydrateFromDisk(): void {
-    const dir = join(this.dataDir, 'workspaces');
-    if (!existsSync(dir)) return;
-    let entries: string[] = [];
-    try {
-      entries = readdirSync(dir);
-    } catch (err) {
-      console.error('[tasks] failed to read workspaces dir:', err);
-      return;
-    }
-    for (const entry of entries) {
-      if (!entry.endsWith('.tasks.json')) continue;
-      try {
-        const parsed = JSON.parse(readFileSync(join(dir, entry), 'utf8')) as {
-          workspace?: HubWorkspace;
-          tasks?: Task[];
-          goalRows?: GoalRow[];
-        };
-        const workspace = parsed.workspace;
-        if (!workspace || typeof workspace.id !== 'string') {
-          console.error(`[tasks] sidecar ${entry} has no workspace — skipped`);
-          continue;
-        }
-        // Boards written before subgoals were removed still hold them, and
-        // every reader below this line looks at `goals` alone. Without this
-        // the nested bands would simply not exist after the deploy — their
-        // tasks reading as unknown-goal work, and the next goal-list edit
-        // stranding them for real. Flattened HERE, at the one door a stored
-        // list comes through, rather than in each reader.
-        workspace.goals = flattenNestedGoals((workspace.goals ?? []) as readonly NestedGoalInput[]);
-        const tasks = new Map<string, Task>();
-        for (const task of parsed.tasks ?? []) {
-          if (typeof task?.id !== 'string') continue;
-          // `unplacedSince` is deliberately NOT cleared here — see the field.
-          // But every task written before it existed lacks it, and the sweep
-          // now keys on it, so a writer-only fix would empty the bucket for
-          // the entire existing board at the deploy. Reproduce the membership
-          // rule the old predicate used (Backlog + open + never placed) and
-          // date it from `createdAt`, the only honest timestamp available.
-          //
-          // It over-includes a legacy explicit `goal: 'chores'` create, and
-          // it has to: that distinction was never recorded, so there is
-          // nothing on disk to read it from. Over-including asks about one
-          // extra task; under-including silently drops real ones.
-          if (
-            task.unplacedSince === undefined &&
-            task.goal === CHORES_GOAL_ID &&
-            task.status !== 'done' &&
-            task.triagedAgainst === undefined
-          ) {
-            task.unplacedSince = task.createdAt;
-          }
-          // A judge call that was out when the last process died never
-          // came back. The item must not stay off the queue for it: a
-          // verdict nobody will deliver is a judge failure, and those pass.
-          for (const item of task.reviews ?? []) {
-            if (item?.judge?.verdict === 'pending') {
-              item.judge = {
-                at: item.judge.at,
-                verdict: 'unavailable',
-                reason: 'the server restarted before the judge answered',
-              };
-            }
-          }
-          tasks.set(task.id, task);
-          this.taskIndex.set(task.id, workspace.id);
-        }
-        const goalRows = new Map<string, GoalRow>();
-        // Goals archived as somebody ELSE's cascade member — the shape a
-        // subgoal's archive left behind, and the second half of the same
-        // migration. A goal row no longer carries `archivedWithGoal` at all,
-        // so the stored key is read once here and cleared.
-        const cascadedGoals = new Set<string>();
-        for (const row of parsed.goalRows ?? []) {
-          if (typeof row?.id !== 'string') continue;
-          const legacy = row as { archivedWithGoal?: string };
-          if (legacy.archivedWithGoal !== undefined) {
-            cascadedGoals.add(row.id);
-            legacy.archivedWithGoal = undefined;
-          }
-          goalRows.set(row.id, row);
-          this.goalIndex.set(row.id, workspace.id);
-        }
-        // Its tasks were stamped with the PARENT's id, which is what made the
-        // pair restore together. Flattened, that band restores on its own —
-        // and would come back empty, its work still archived, while restoring
-        // the old parent revived those tasks under a band that is still off
-        // the board. Re-point them at the band they actually sit in, so
-        // either restore is the whole of one decision again.
-        if (cascadedGoals.size > 0) {
-          for (const task of parsed.tasks ?? []) {
-            if (task?.archivedWithGoal === undefined) continue;
-            if (cascadedGoals.has(task.goal)) task.archivedWithGoal = task.goal;
-          }
-        }
-        this.workspaces.set(workspace.id, {
-          workspace,
-          tasks,
-          goalRows,
-          attachments: this.loadAttachments(workspace.id),
-        });
-        // The migration, and it is lazy on purpose: every board on disk today
-        // has `goals` and no `goalRows`, so the rows are minted the first time
-        // that board is read back. Re-running it is safe by construction — the
-        // reconcile refreshes only what the goal LIST owns.
-        const state = this.workspaces.get(workspace.id);
-        // `todo`, NOT the create default: this is the migration, and every
-        // band on an existing board was agreed to long before goal rows
-        // existed. Minting these `triage` would halt dispatch fleet-wide on
-        // the first read after deploy.
-        if (state) this.syncGoalRows(state, 'todo');
-      } catch (err) {
-        // A corrupt sidecar loses that one workspace, never the server.
-        console.error(`[tasks] unreadable sidecar ${entry} — skipped:`, err);
-      }
-    }
+    persistWorkspaceTasks(this, workspaceId);
   }
 }
