@@ -3640,6 +3640,93 @@ body.hub-body {
   color: var(--fg-muted);
   font-size: 12px;
 }
+/* An entry is a row: [ring] link … [x]. The list item became a flex row when
+   blocking tickets joined it — before that every entry was one anchor and
+   needed no layout at all. */
+.hub-related-links-list li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 32px;
+}
+/* A blocking ticket wears the board's own barred ring, in the place the board
+   wears it: at the head of the row. Nothing is written to say the entry is a
+   blocker — the ring says it, and a reader who has seen the board once has
+   already learnt it. Slightly smaller than the board's, to sit with text
+   rather than with rows. */
+.hub-related-mark {
+  width: 15px;
+  height: 15px;
+  border-width: 1.5px;
+}
+/* Take this entry off. Quiet until the row is hovered or the button itself is
+   focused, like every other secondary control on the panel — a permanent
+   column of × on a list you read by skimming is noise. It stays reachable by
+   keyboard at all times: focus is what reveals it. */
+.hub-related-link-x {
+  margin-left: auto;
+  flex: none;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border: none;
+  border-radius: var(--radius);
+  background: none;
+  color: var(--fg-muted);
+  font: inherit;
+  font-size: 15px;
+  line-height: 1;
+  cursor: pointer;
+  opacity: 0;
+}
+.hub-related-links-list li:hover .hub-related-link-x,
+.hub-related-link-x:focus-visible {
+  opacity: 1;
+}
+.hub-related-link-x:hover {
+  background: var(--bg-hover);
+  color: var(--fg);
+}
+/* A pasted address that is not ours: shown as itself, muted rather than in
+   the accent, because there is no title behind it and it is not a place on
+   this board. */
+.hub-related-link-plain {
+  color: var(--fg-muted);
+}
+/* The add control: quiet until used, exactly like the board's "+ New goal"
+   row it is modelled on. No caption explains what a link becomes — paste one
+   and the entry says so. */
+.hub-related-add {
+  margin-top: 6px;
+}
+.hub-related-add-btn {
+  appearance: none;
+  padding: 0 12px;
+  min-height: 32px;
+  border: 1px dashed var(--border);
+  border-radius: var(--radius-pill);
+  background: none;
+  color: var(--fg-muted);
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+.hub-related-add-btn:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.hub-related-add-input {
+  width: 100%;
+  max-width: 420px;
+  min-height: 32px;
+  padding: 4px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg);
+  color: var(--fg);
+  font: inherit;
+  font-size: 14px;
+}
 /* Link chips: what a `url` ref is FOR. Wraps rather than scrolls — the
    detail panel has vertical room and a hidden link is the bug this
    replaced. */
@@ -5123,6 +5210,22 @@ a.hub-link-chip:hover {
   .hub-band-tasks::before {
     left: 12px;
   }
+  /* Related Links on a touch tier: every control takes the 44px floor from
+     design-mobile.md, and the x stops hiding — there is no hover to reveal it
+     with, so a control that only appears on hover is a control this reader
+     does not have. */
+  .hub-related-links-list li {
+    min-height: 44px;
+  }
+  .hub-related-link-x {
+    width: 44px;
+    height: 44px;
+    opacity: 1;
+  }
+  .hub-related-add-btn,
+  .hub-related-add-input {
+    min-height: 44px;
+  }
 }
 
 /* ################# HUB · RESPONSIVE ≤720px (PHONE) #################
@@ -5342,6 +5445,13 @@ a.hub-link-chip:hover {
   .hub-task-badges .hub-badge {
     display: none;
   }
+  /* The state word is NOT a badge and stays. It was added to this strip when
+     Blocked arrived (2026-09-03), which makes the paragraph above no longer
+     true of the whole strip: a phone row is title-plus-state now, not
+     title-only. It stays because it is the one thing here that changes what
+     the reader does — a blocked row cannot be started — where a due date is a
+     fact they can read in the panel. The approved mock's phone frame keeps it
+     for the same reason. */
   /* The half that makes “whole or not at all” structural rather than
      arithmetic. The base rule's `min-width: 0` (with `overflow: hidden`) makes
      this grid track contribute a ZERO minimum, so the `minmax(0, 1fr)` title

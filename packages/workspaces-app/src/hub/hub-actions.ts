@@ -16,7 +16,7 @@
  * `send`, `fetchJson` and `showToast` come along because every verb ends in
  * one of them — a write that lands, or a one-line report that it did not.
  */
-import type { CaptureMode, HuddleKind, User } from '@feedback/core';
+import { type CaptureMode, type HuddleKind, type User, parseWorkspaceLink } from '@feedback/core';
 import { HUDDLE_MODE_PARAM } from '../huddle-entry.ts';
 import {
   type BoardSection,
@@ -27,7 +27,7 @@ import {
   type ReorderTarget,
   cascadePhrase,
 } from './hub-board-model.ts';
-import type { TaskDiscussion } from './hub-detail-render.ts';
+import type { RelatedEntry, TaskDiscussion } from './hub-detail-render.ts';
 import type {
   ActivityEvent,
   ActivityFilter,
@@ -313,6 +313,81 @@ export function createHubActions(deps: HubActionDeps) {
     });
     if (!res.ok)
       showToast(dueAt === null ? 'Clearing the due date failed' : 'Setting the due date failed');
+  }
+
+  /**
+   * Grow Related Links from a pasted address.
+   *
+   * What the URL NAMES decides the write, which is the whole reason there is
+   * one control rather than three:
+   *
+   *  - a **ticket or goal on this workspace** becomes an `after` edge, which
+   *    is how a blocker gets set at all. Blocked is derived from those edges
+   *    and no status control offers it, so this is the panel's only door to
+   *    it. It goes through the same additive route `block_task` uses.
+   *  - a **doc or mockup** becomes a doc ref, and the entry resolves to the
+   *    doc's title like every other Related Link.
+   *  - **anything else** is kept verbatim as a `url` ref and shown as itself.
+   *    The server refuses a scheme that is not http(s) — a `javascript:` link
+   *    in this list would become an href — and the toast says so.
+   */
+  async function addRelatedLink(task: HubTask, url: string): Promise<void> {
+    const parsed = parseWorkspaceLink(url);
+    if (parsed?.kind === 'task' || parsed?.kind === 'goal') {
+      const blockedBy = parsed.kind === 'task' ? parsed.taskId : parsed.goalId;
+      // A row cannot wait on itself, and the server would refuse it — but the
+      // toast for a self-link should say what happened rather than repeat a
+      // validation message about ids.
+      if (blockedBy === task.id) {
+        showToast('A ticket cannot wait on itself');
+        return;
+      }
+      const res = await send(`/api/tasks/${encodeURIComponent(task.id)}/park`, 'POST', {
+        blockedBy: [blockedBy],
+        author,
+      });
+      if (!res.ok) showToast('Adding the blocking ticket failed');
+      return;
+    }
+    const ref =
+      parsed?.kind === 'doc' || parsed?.kind === 'mockup'
+        ? { kind: 'doc', docId: parsed.docId }
+        : { kind: 'url', url };
+    const res = await send(`/api/tasks/${encodeURIComponent(task.id)}/links`, 'POST', {
+      ref,
+      author,
+    });
+    if (!res.ok)
+      showToast(res.status === 400 ? 'That is not a link we can store' : 'Adding the link failed');
+  }
+
+  /**
+   * Take one Related Links entry back off.
+   *
+   * A blocker is an `after` edge and comes off by rewriting the list without
+   * it — `afterEnforce` is rewritten alongside, because the route replaces
+   * what it is given and omitting the second list would quietly drop every
+   * enforced edge the row had.
+   */
+  async function removeRelatedLink(task: HubTask, entry: RelatedEntry): Promise<void> {
+    if (entry.kind === 'blocker') {
+      const res = await send(`/api/tasks/${encodeURIComponent(task.id)}/after`, 'POST', {
+        after: task.after.filter((id) => id !== entry.taskId),
+        ...(task.afterEnforce !== undefined
+          ? { afterEnforce: task.afterEnforce.filter((id) => id !== entry.taskId) }
+          : {}),
+        author,
+      });
+      if (!res.ok) showToast('Removing the blocking ticket failed');
+      return;
+    }
+    const ref =
+      entry.kind === 'doc' ? { kind: 'doc', docId: entry.docId } : { kind: 'url', url: entry.url };
+    const res = await send(`/api/tasks/${encodeURIComponent(task.id)}/links`, 'DELETE', {
+      ref,
+      author,
+    });
+    if (!res.ok) showToast('Removing the link failed');
   }
 
   /**
@@ -622,6 +697,8 @@ export function createHubActions(deps: HubActionDeps) {
     assignTask,
     setTaskGoal,
     setTaskDue,
+    addRelatedLink,
+    removeRelatedLink,
     archiveTask,
     restoreTask,
     goalCascadeCount,

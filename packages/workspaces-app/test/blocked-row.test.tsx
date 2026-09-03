@@ -209,11 +209,11 @@ describe('the gutter curve', () => {
   function stubLayout(): void {
     const box = root.querySelector<HTMLElement>('.hub-band-tasks');
     if (!box) throw new Error('no band');
-    box.getBoundingClientRect = () =>
-      ({ top: 0, left: 0, width: 600, height: 200 }) as DOMRect;
+    box.getBoundingClientRect = () => ({ top: 0, left: 0, width: 600, height: 200 }) as DOMRect;
     const rows = [...root.querySelectorAll<HTMLElement>('.hub-task-row')];
     rows.forEach((el, i) => {
-      el.getBoundingClientRect = () => ({ top: i * 40, left: 0, width: 600, height: 40 }) as DOMRect;
+      el.getBoundingClientRect = () =>
+        ({ top: i * 40, left: 0, width: 600, height: 40 }) as DOMRect;
       Object.defineProperty(el, 'offsetHeight', { value: 40, configurable: true });
     });
   }
