@@ -385,9 +385,10 @@ describe('mcp.ts wires the readout in', () => {
     expect(body).toContain('restore');
   });
 
-  it('the restore path builds its notice from restoreNoticeContent', () => {
-    expect(src).toContain("from './watch-coverage.ts'");
-    expect(src).toContain('restoreNoticeContent(');
-    expect(src).toContain('parseCoverage(');
-  });
+  // That the restore path reaches `restoreNoticeContent`, `parseCoverage` and
+  // `boardsToReattach` at all is asserted by driving it: watch-restore.test.ts
+  // runs a whole restore against fakes and reads the notice that came out, the
+  // board it re-attached to and the coverage it parsed. Three `toContain`
+  // checks on an import line could not tell a reached helper from an imported
+  // one.
 });
