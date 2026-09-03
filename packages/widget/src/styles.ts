@@ -4,8 +4,10 @@ import { STATUS_COLORS } from '@feedback/core';
  * Styles for the shadow-DOM portion of the widget.
  * Kept as a TS string so the build can tree-shake it into the bundle.
  *
- * Comments inside the template literal SHIP — the minifier cannot strip
- * them — and the bundle budget is hard, so the longer notes live here:
+ * The build minifies this literal on the way into the bundle (the `cssMinify`
+ * plugin in `scripts/build.ts`) — comments, indentation and newlines here cost
+ * the budget nothing, so write for the reader. Keep the longer notes below
+ * rather than inline anyway: they are about the whole file, not one rule.
  *
  * - 44px touch floor (.icon-btn and the shared pill-button block): these are
  *   the controls a phone reviewer aims at. Unconditional rather than wrapped
