@@ -3504,6 +3504,19 @@ body.threads-resizing {
   gap: 6px;
   margin-top: 6px;
 }
+/* Content width, not a share of the row. A compact option carries
+   `.thread-item-option` as well, for the frame and the tap target, and that
+   rule's `flex: 1 1 240px` is written for the OPEN card — where an answer is
+   the thing you came to press. Folded, these are chips on line two beside a
+   topic, and inheriting the basis stretched a two-word option to 345px in a
+   card sitting in the flow. Two classes rather than one, because
+   `.thread-item-option` is declared further down this file and would win a
+   tie on order alone. `max-width` keeps a long label inside the row instead
+   of widening it. */
+.thread-options-compact .thread-item-option {
+  flex: 0 1 auto;
+  max-width: 100%;
+}
 .thread-item-option-compact {
   min-height: 30px;
   padding: 4px 10px;
