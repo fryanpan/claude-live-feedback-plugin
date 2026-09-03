@@ -235,21 +235,56 @@ Layer: `pause-ticker.ts`, both capture halves and `notes-section.ts` are
 domain; `notes-ownership.ts` and `notes-section-write.ts` are services with
 the rest of the family.
 
-## A6 · voice and the review queue
+## A6 · voice and the review queue — DONE
 
-| File | Becomes | Moves | Importers | Effort |
-|---|---|---|---|---|
-| `voice.ts` (2,109) | `voice-prompt.ts` (~450) | `buildVoicePrompt`, `parseVoiceReply`, `renderResourceBlock` | tests | S |
-| | `voice-action.ts` (~350) | `VOICE_ACTIONS`, `resolveVoiceAction` | `voice-actions.test.ts` | |
-| `voice-resolve.ts` (762) | `voice-status.ts` (~190) | `composeStatus`, `ago`, `quote`, `listTitles`, `capWords` | `voice.ts`, `voice-smooth.test.ts` | S |
-| `review-queue.ts` (831) | `ask-detection.ts` (~250) | `asksPerson`, `findAsk`, `extractAsk`, `sentenceQuestion`, `codeSpans`, `stripEmphasis` | `review-migration.ts`, `review-queue.test.ts` | S |
+| File | Became | Moved | Measured |
+|---|---|---|---|
+| `voice.ts` (2,109) | `voice-prompt.ts` | the utterance vocabulary, `buildVoicePrompt`, `parseVoiceReply`, `renderResourceBlock`, `VOICE_ACTIONS` | 499 (est. ~450) |
+| | `voice-action.ts` | `VoiceActor`, `VoiceActionPlan`, `resolveVoiceAction`, `speakerLicensesAction`, `pickReviewItem` | 357 (est. ~350) |
+| `voice-resolve.ts` (762) | `voice-status.ts` | `composeStatus`, `ago`, `quote`, `listTitles`, `capWords`, `countWords`, the status shapes | 187 (est. ~190) |
+| `review-queue.ts` (831) | `ask-detection.ts` | `asksPerson`, `findAsk`, `extractAsk`, `sentenceQuestion`, `codeSpans`, `stripEmphasis` | 249 (est. ~250) |
 
-Four commits. The ask detector and its extractor must keep sharing one
-address pattern — they drifted apart once, and the drift clipped the very
-question the feature existed to surface. One matcher, used by both.
+Four commits, one per row. The three parents end at **1,318**, **588** and
+**602**. Every extracted file is pure; `VoiceRouter` stays the service.
+
+**The ask matcher is now unsplittable, which was the point.** `extractAsk`
+calls `findAsk` and there is no second pattern in the file to drift from it.
+
+**`VOICE_ACTIONS` went to `voice-prompt.ts`, not to the guardrail this plan
+filed it under, and the reason is a dependency rather than a preference.**
+The system prompt lists the five action shapes and `parseVoiceReply` refuses
+a verb outside them — both in `voice-prompt.ts` — while `resolveVoiceAction`
+switches over the already-parsed verb and never reads the list. Filing the
+list with the guardrail would have made the prompt file import a value from a
+file that imports values back, which is the cycle A2 and A3 each hit.
+
+**The vocabulary had to move with the prompt for the same reason.**
+`VoiceContext`, `VoiceResource`, the `VoiceReviewItem` family and
+`reviewItemKey` are read by the renderer AND by the guardrail, and an
+extracted file may not import a value from the file that imports it, so they
+sit in the leaf. That is what took `voice-prompt.ts` to 499 rather than 450.
+`VoiceActor` went the other way, to `voice-action.ts`: the guardrail's fourth
+condition is about `actor.kind` and the prompt never renders a speaker.
+
+**Two module-private helpers became exported and one did not move.**
+`sameOriginPath` and `refNavigation` are called by the router, so they are
+now part of `voice-prompt.ts`'s surface. `choiceAnchor` stayed with the
+router — it keys a pending question, not an action. Inside
+`ask-detection.ts` nothing new was exported: `sentenceQuestion`, `codeSpans`
+and `stripEmphasis` had no caller outside the parent before the split and
+have none now.
+
+**`parseVoiceContext` stayed in `voice.ts`** while its type left. Its only
+caller is `routes/workspace-settings.ts`, which reads it as the route's input
+sanitizer, and moving it would have pushed `voice-prompt.ts` over 500 lines —
+a split that creates a fresh row in `exceptions.md` has not finished.
+
+**`voice-resolve.ts` now imports nothing at all.** `StatusTask` was the only
+reader of `TaskStatus`, so the resolver came out of this as pure over strings,
+which is what its header always claimed.
 
 Layer: domain, except `VoiceRouter` which stays a service. Final directory:
-`voice/` for the three voice files, `board/` for `ask-detection.ts`.
+`voice/` for the four voice files, `board/` for `ask-detection.ts`.
 
 ## A7 · the operational adapters
 
