@@ -339,6 +339,23 @@ export class Identities {
     return null;
   }
 
+  /**
+   * The row stored under this EXACT id, without following `mergedInto` —
+   * agents only, null for anything else.
+   *
+   * `get` answers "who is this actor now", which is what every reader wants
+   * and what a merge WRITER must not have. After A is folded into B,
+   * `get(A)` is B; a caller merging B back into A — the reversal this class
+   * supports, since a target's `mergedInto` is cleared whenever it becomes a
+   * target — would otherwise hand `mergeAgent` two copies of B and be
+   * refused as a self-merge. A writer that means the id it was given asks
+   * this instead.
+   */
+  rawAgent(id: string): IdentityRecord | null {
+    const rec = this.state.identities[id.trim()];
+    return rec && rec.kind === 'agent' ? rec : null;
+  }
+
   /** The row `rec` was folded into, however many merges deep — bounded, so
    *  a hand-edited cycle terminates rather than hanging the reader. */
   private followMerges(rec: IdentityRecord): IdentityRecord {
