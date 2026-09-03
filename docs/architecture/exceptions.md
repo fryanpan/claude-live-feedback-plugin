@@ -128,7 +128,7 @@ the shipped bundle is unchanged.
 
 | File | Lines | Verdict | Reason / seam |
 |---|---|---|---|
-| `packages/widget/src/widget.ts` | 1320 | Split | `FeedbackWidgetEl` holds three unrelated method clusters: auth and session (`loadStoredAuth`, `authedPost`, `composerSignIn`) ~230 → `widget-auth.ts`; element picking and the composer (`enterFeedbackMode`, `hitTest`, `openComposerForElement`) ~200 → `widget-picker.ts`; thread render, pins and popover (`renderThreads`, `positionPins`, `showThreadPopover`) ~290 → `widget-threads.ts`. The shipped bundle is unchanged — every piece stays reachable from the custom element. **M**, since methods must become functions taking the element. |
+| `packages/widget/src/widget.ts` | 598 | Exception | What is left of the custom element after B7 took the three method clusters out: `widget-auth.ts` (284), `widget-picker.ts` (232) and `widget-threads.ts` (297). The remainder is one object — the element's own lifecycle. Construction, `init`, the attribute upgrade, the context it keeps in step with `location`, the WebSocket, the shadow-DOM shell, the three posting verbs the other modules reach through, and the observer that schedules a render. Every one of those reads the element's fields directly, and a further split would trade them for an interface. |
 
 ## packages/plugin
 
@@ -273,7 +273,7 @@ months, so splitting it buys almost nothing.
 | 14 | `review-item-check.ts` + `review-item-wire.ts` + `review-item.ts` (split in B5) | 1769 | 18 | done |
 | 15 | `prose-fragment.ts` + `prose-markdown.ts` + `prose-edit.ts` + `prose-blocks.ts` + `prose.ts` (was `prose.ts`, split in B5) | 2847 | 16 | done |
 | 16 | `review-queue.ts` + `ask-detection.ts` (split in A6) | 831 | 15 | done |
-| 17 | `packages/widget/src/widget.ts` | 1320 | 13 | M |
+| 17 | `widget.ts` + `widget-auth.ts` + `widget-picker.ts` + `widget-threads.ts` (split in B7) | 1411 | 13 | done |
 | 18 | `packages/server/src/meeting-notes.ts` + `pause-ticker.ts` (split in A5) | 1039 | 12 | done |
 | 19 | `voice.ts` + `voice-prompt.ts` + `voice-action.ts` (split in A6) | 2109 | 11 | done |
 | 20 | `packages/server/src/meeting-notes-doc.ts` + `notes-section-write.ts` (split in A5) | 986 | 11 | done |
