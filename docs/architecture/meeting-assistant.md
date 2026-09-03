@@ -664,6 +664,38 @@ section via the Yjs fragment. The composer is an LLM call (Haiku) and
 follows the same no-default seam as the engine: nothing that merely spins a
 server up can reach an LLM.
 
+**What the note-taker is asked to write** is a settings file rather than a
+code path (`notes-prompt-store.ts`), and the words in it are the behaviour.
+They ask for what a good notetaker does in a shared meeting (Bryan's row,
+2026-09-03: *"the doc is the room's shared memory instead of a transcript
+with headings"*):
+
+- **Paraphrase, and filter hard.** Say what a point MEANS in a short written
+  sentence. One point per bullet, at most **20 words**. Most of what is said —
+  greetings, thinking aloud, a point going round again — is not a note.
+- **Cover the four things**: what was discussed, why it matters, what was
+  decided and by whom, what happens next. A decision is its own bullet, never
+  a clause inside a description of the discussion.
+- **Organise under `###` topic headings**, one per topic or question. Speech
+  that continues a topic goes under THAT heading, reused exactly; a new
+  heading means the discussion actually moved.
+- **Reorganise its own writing.** Rewrite, merge, split and MOVE earlier
+  bullets so related points sit together. This REPLACED the opposite rule —
+  new material at the end, "never to restructure notes the new speech does not
+  touch" — which produced a doc shaped like the clock, where the third mention
+  of a topic sat nowhere near the first two.
+- **Mark a guess.** Where the point rests on a garbled word, write the note
+  and end it `(unconfirmed)`. A marked guess beats a confident wrong note and
+  beats no note.
+- **Keep the speaker on a decision and on an open question.** Who decided and
+  who is asking is part of what those notes say.
+- **Link what it names**: a board row or doc the tick's speech named arrives
+  in the prompt with its URL (below), and the note cites it inline.
+
+A person's line is protected by the MERGE rather than by any of this — the
+prompt asks the model to reproduce one verbatim and to propose rather than
+replace, and the ownership ledger makes it true whatever the model returns.
+
 **Notes always land at the end of the doc** (owner, 2026-09-01: *"note always
 at the end of doc for now"*). `mergeNotesSection` treats the last "Meeting
 notes" heading as this meeting's section and keeps it as the ONE section for
@@ -764,6 +796,47 @@ typed since the last one. Now (`meeting-notes-merge.ts`):
   person. `reclaimAfterInPlaceEdit` snapshots what the ledger claimed before
   the edit and re-records exactly those elements after it — never a line the
   person had already made theirs.
+- **A topic heading landing INSIDE a run of bullets re-lays the section.**
+  This is the one thing the item-level merge cannot express: Yjs will not
+  re-parent an existing element, so there is no way to split a bullet list
+  around a new heading without re-creating the items below it. Left alone,
+  the tick that first grouped a meeting into topics put every heading BELOW
+  every bullet — a run of bullets followed by a stack of empty headings,
+  worse than the flat list it was organising. So the case is detected
+  (`planNeedsRelayout`) and the body is rebuilt from the composer's markdown
+  instead. It is allowed only when every item in the section is the agent's
+  own and no proposal is pending on one, which is the same invariant as
+  everywhere else here. It costs element identity — a comment anchored to one
+  of the agent's bullets orphans into the outdated-comment flow — which is
+  why it fires on the tick that MOVES the furniture and never on a tick that
+  merely adds a bullet under a heading that already exists.
+
+### What a note may link: the board, searched per tick
+
+A note-taker links the ticket somebody just named. Doing that needs the board,
+and the board is hundreds of rows — handing all of them to every tick would
+cost more prompt than the notes. So the catalogue is assembled ONCE per
+meeting (`resolveReferences`: every open row with its `taskCaptureUrl`, every
+doc the board holds with its `docLookupUrl` and the date it last carried a
+meeting) and SEARCHED per tick (`notes-references.ts`). Only what this tick's
+words actually named reaches the prompt, with its URL, and the composer's job
+is to write the link rather than to recognise the name.
+
+**The matcher favours precision over recall, deliberately.** A link to the
+wrong ticket is a claim, in the room's shared record, that this discussion was
+about that work — and nobody rereading the notes can tell it was a guess. A
+missed link costs a reader one search. So a match needs a contiguous run of
+the title's own significant words: three words is distinctive by itself, two
+only when they are half the title or more, and one only when it is eight
+characters or longer. That coverage rule is what refuses "meeting notes" as a
+match for a six-word row about meeting notes — the pair every row on a board
+about this product shares. Words are stemmed on both sides, because a board
+writes "Export dialog forgets the chosen range" and the room says "the export
+dialog's forgetting the chosen range".
+
+Four references per tick, at most. Rows the capture pass FILED from this
+speech arrive separately as `taskLinks`; these were merely mentioned, and most
+ticks name none.
 
 ### A rename reaches backwards (owner's call, 2026-08-29: "rewrite them")
 
@@ -1303,6 +1376,48 @@ composer revises the notes for it as it always has. The prompt rule spends
 most of its tokens on that distinction, because it is the one that decides
 whether this intent is useful or a nuisance.
 
+### Is it behaving? `bun run notes:eval`
+
+Everything in the notetaking behaviour above is a property of what a MODEL
+wrote, and a unit test can only prove the instruction was SENT. So the
+instructions are checked the way a person would check them — run real meetings
+through the real pipeline and read the notes — except on 232 ticks rather than
+three (`scripts/notes-eval.ts`).
+
+**The corpus is AMI** (CC BY 4.0), the same one `room-labels-check.ts` scores
+the room measurement against, excerpted into committed fixtures by
+`scripts/notes-eval-fixtures.ts`: eight meetings, eleven minutes each, cut
+into ticks by the pipeline's OWN two clocks so a fixture tick holds what a
+real tick would have held. Speakers are letters; nothing names a person. The
+fixtures are checked in because the corpus is a 23 MB download of somebody
+else's data, so a fresh clone needs only a key.
+
+Invented speech is the one thing this could not use. A transcript written to
+be summarised is already half a summary — no false starts, nobody talking
+over anybody, nothing said twice — and a model scores well on it while
+failing on the meeting it was built for.
+
+**Two kinds of judge, and the split is the point.** Anything decidable is
+decided in code (`notes-quality.ts`, unit-tested): bullet length, a topic
+opened twice, a decision with no voice on it, a named row left unlinked, a
+bullet copied verbatim out of the transcript, and the seeded human bullet
+still reading character for character. Only reading comprehension goes to a
+model (Sonnet): was the paraphrase faithful, does the note say what was
+decided and by whom, was that new heading really a new topic. A model
+grading what a regex can settle is money spent on a worse answer.
+
+**A person's bullet is seeded into every fixture's doc** before the meeting
+starts. Criterion 1.2 has no examples without one: a meeting where nobody
+types is a meeting where the rule cannot be broken, and its pass rate would
+be 100% and meaningless.
+
+**On demand only.** It spends money and reaches the network, so nothing runs
+it on a push except a `--smoke` slice — one meeting, three ticks, one judged —
+which measured **$0.007**. It is not a test and does not live in the suites: a
+check whose verdict depends on a model's mood must never take somebody else's
+CI red, which is why the CI job is `continue-on-error` and skips itself, out
+loud, when no key is configured.
+
 ### Cost
 
 The four intents are prompt text on a call that was already being made.
@@ -1316,6 +1431,17 @@ research stage now carries the direct-ask examples criterion 4 added.) At
 ~200 ticks per meeting-hour and $1/MTok the review ask is **≈ $0.024 per
 meeting-hour**, the four together ≈ $0.105, taking the measured $0.84 to
 about **$0.95**.
+
+**The notetaking behaviour itself cost +425 input tokens per tick**, measured
+with `count_tokens` on the compose prompt against the instructions as they
+stood before it (`bun run notes:cost --baseline <file>`, on a mid-meeting
+fixture tick): **1030 → 1455**. At ~200 ticks per meeting-hour and $1/MTok
+that is **+$0.085 per meeting-hour**, taking the figure above from about $0.95
+to about **$1.04**. The tick model is unchanged (Haiku 4.5), and prompts under
+4096 tokens never cache there, so the whole delta is paid every tick. The
+per-tick reference block is not in that number: it appears only on the ticks
+whose speech named a board row — 36 of 232 in the eval corpus — and costs
+about 20 tokens per row cited.
 
 Roughly two to three times the decision's ~58-tokens-per-intent figure,
 because each rule carries the example phrasings that teach an ask nobody
@@ -1589,4 +1715,11 @@ bot lifecycle) · `packages/core/src/meeting-bot.ts` (wire contract) ·
 `packages/workspaces-app/src/meeting-timing-client.ts` (the `?timing=1`
 latency measurement) · `scripts/room-labels-check.ts` +
 `room-labels-score.ts` + `ami-truth.ts` (the room measurement, its
-arithmetic, and the AMI corpus reference it scores against).
+arithmetic, and the AMI corpus reference it scores against) ·
+`packages/server/src/notes-prompt-store.ts` (what the note-taker is told to
+do) + `notes-references.ts` (which board rows this tick's speech named) +
+`notes-quality.ts` (the decidable half of "did it behave") ·
+`scripts/notes-eval.ts` + `notes-eval-fixtures.ts` +
+`packages/server/test/fixtures/ami-notes-eval/` (the behaviour eval, its
+corpus excerpts, and the CC BY 4.0 attribution they carry) ·
+`scripts/notes-prompt-cost.ts` (what a wording change costs per tick).
