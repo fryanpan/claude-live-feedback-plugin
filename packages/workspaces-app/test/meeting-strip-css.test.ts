@@ -1,70 +1,58 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { IPAD, attach, installSheets, setViewport, styleOf } from './css-harness.ts';
 
 /**
  * The top-bar overhaul moved the transcript strip out of `#editor-pane` and
  * into `#shell` itself — the strip is `#shell`'s second grid row, fused
  * directly under the bar the Record button sits in (the notch points at it),
  * so its height comes out of the editor below rather than sitting on top of
- * the prose. happy-dom resolves no real layout, so that placement and the
- * strip's own shape are asserted against the stylesheet and the shell markup,
- * same as before the redesign.
+ * the prose.
  *
  * One shape at both widths Bryan reads on (1180x820 and 430px) — a single
  * flex row that only tweaks its own padding/gap/notch position narrow; there
  * is no separate stacked-panel layout any more (the old chrome's mode/engine
  * switches, toggle button and status word are gone — every choice now lives
  * in the popovers behind the Record button).
+ *
+ * This file used to regex `styles.css` for those declarations, which passes
+ * against a rule the cascade no longer applies. The sheets are installed here
+ * and the strip is built at each viewport instead. The SHELL half still reads
+ * `index.html` and `meeting-strip.ts`, because "the strip element sits between
+ * the header and main, and only a markdown doc mounts it" is a fact about
+ * files rather than about any computed value.
+ *
+ * What stays a browser check (`bun run ui:shot`), because happy-dom resolves
+ * no pseudo-element, no `color-mix()` and no `prefers-reduced-motion`: the
+ * notch that fuses the strip to the Record button, the pencil glyph on the
+ * speaker pill, the red wash while live, and the reduced-motion stand-down.
  */
-const SRC = resolve(import.meta.dirname, '../src');
-const CSS = readFileSync(resolve(SRC, 'styles.css'), 'utf8');
 const SHELL = readFileSync(resolve(import.meta.dirname, '../index.html'), 'utf8');
-const MOUNT = readFileSync(resolve(SRC, 'meeting-strip.ts'), 'utf8');
-const APP = readFileSync(resolve(SRC, 'app.ts'), 'utf8');
+const MOUNT = readFileSync(resolve(import.meta.dirname, '../src/meeting-strip.ts'), 'utf8');
+const APP = readFileSync(resolve(import.meta.dirname, '../src/app.ts'), 'utf8');
 
-function declarationsOnly(css: string): string {
-  return css.replace(/\/\*[\s\S]*?\*\//g, '');
-}
-
-function rule(selector: string, within: string = declarationsOnly(CSS)): string {
-  const at = new RegExp(
-    `(^|\\n|\\{)\\s*${selector.replace(/[.+*[\]():#-]/g, '\\$&')}\\s*\\{([^}]*)\\}`,
-  ).exec(within);
-  return at?.[2] ?? '';
-}
-
-/** The body of a brace-balanced at-rule, so nested rules can be read out. */
-function block(header: string, within = CSS): string {
-  const start = within.indexOf(header);
-  if (start < 0) return '';
-  let depth = 0;
-  for (let i = within.indexOf('{', start); i < within.length; i++) {
-    if (within[i] === '{') depth += 1;
-    else if (within[i] === '}') {
-      depth -= 1;
-      if (depth === 0) return within.slice(within.indexOf('{', start) + 1, i);
-    }
-  }
-  return '';
-}
-
-/** Everything under the MEETING banner, up to the next banner. */
-const SECTION = (() => {
-  const at = /\/\* =+ MEETING RECORD CHROME =+/.exec(CSS);
-  if (!at) return '';
-  const rest = CSS.slice(at.index + at[0].length);
-  const next = /\n\/\* =+ [A-Z]/.exec(rest);
-  return next ? rest.slice(0, next.index) : rest;
-})();
-
-describe('the strip lives in its own section of the stylesheet', () => {
-  it('has a banner of its own rather than being appended at the end', () => {
-    expect(SECTION, 'no MEETING RECORD CHROME banner').not.toBe('');
-    // Appending at EOF is what makes parallel branches conflict every time.
-    expect(CSS.trimEnd().endsWith(SECTION.trimEnd())).toBe(false);
-  });
+let cleanup = () => {};
+beforeEach(() => {
+  cleanup = installSheets('hub.css', 'styles.css');
+  setViewport(IPAD);
 });
+afterEach(() => {
+  cleanup();
+  document.body.replaceChildren();
+  document.body.removeAttribute('data-edit-viewport');
+});
+
+/** A token's value as the cascade resolves it, so no colour is hand-copied. */
+const token = (name: string) => styleOf(document.documentElement).getPropertyValue(name);
+
+const px = (v: string) => Number.parseFloat(v);
+
+/** The strip, and the parts of it a test asks about. */
+function strip(extra = '') {
+  const el = attach(`meeting-strip ${extra}`.trim());
+  return { el, style: styleOf(el) };
+}
 
 describe('the shell reserves a row for the strip', () => {
   it('gives #shell three tracks: topbar, strip, main', () => {
@@ -75,15 +63,17 @@ describe('the shell reserves a row for the strip', () => {
     // strip's row and leave the last one empty. The three children are pinned
     // explicitly now — shell-grid-placement.test.ts owns that invariant and
     // the control that proves the bug is still detectable.
-    expect(rule('#shell')).toMatch(/grid-template-rows:\s*48px auto minmax\(0,\s*1fr\)/);
+    const shell = styleOf(attach('', { attrs: { id: 'shell' } }));
+    expect(shell.display).toBe('grid');
+    expect(shell.gridTemplateRows).toBe('48px auto minmax(0, 1fr)');
   });
 
   it('no longer asks #editor-pane for that row — the strip left the pane', () => {
     // Two tracks only: the format bar and the document. The floating Approve
     // button and the view-controls toggle are `position: absolute` and claim
     // no track of their own.
-    expect(rule('#editor-pane')).toMatch(/grid-template-rows:\s*auto 1fr\s*;/);
-    expect(rule('#editor-pane')).not.toMatch(/auto 1fr auto/);
+    const pane = styleOf(attach('', { attrs: { id: 'editor-pane' } }));
+    expect(pane.gridTemplateRows).toBe('auto 1fr');
   });
 
   it('positive control: the shell really puts the strip between the bar and main', () => {
@@ -102,8 +92,13 @@ describe('the shell reserves a row for the strip', () => {
     expect(MOUNT).toMatch(/root\.hidden = !stripVisible\(\)/);
     expect(MOUNT).toMatch(/root\.hidden = true/);
     // A hidden strip must not claim its grid row anyway — `display: flex`
-    // out-specifies the UA's `[hidden]` rule, so this override is load-bearing.
-    expect(rule('.meeting-strip[hidden]', declarationsOnly(SECTION))).toMatch(/display:\s*none/);
+    // out-specifies the UA's `[hidden]` rule, so this override is load-bearing
+    // and is read as the value the browser would use, not as a declaration.
+    const hidden = styleOf(attach('meeting-strip', { attrs: { hidden: '' } }));
+    expect(hidden.display).toBe('none');
+    // Positive control: without the override the class would win — the strip
+    // that is NOT hidden is a flex row on the same cascade.
+    expect(strip().style.display).toBe('flex');
     // The diff surface's own floating controls are absolutely positioned, so
     // they claim no track — but only the markdown mount adds the strip at all.
     expect(APP).toMatch(/docType === 'markdown'/);
@@ -111,17 +106,21 @@ describe('the shell reserves a row for the strip', () => {
 });
 
 describe('the speaker tag', () => {
-  const tag = rule('.meeting-speaker', declarationsOnly(SECTION));
+  /** The button and the pill inside it, mounted as the feed mounts them. */
+  function speaker() {
+    const host = strip().el;
+    const button = attach('meeting-speaker', { tag: 'button', parent: host });
+    const pill = attach('meeting-speaker-pill', { tag: 'span', parent: button });
+    return { strip: styleOf(host), button: styleOf(button), pill: styleOf(pill) };
+  }
 
-  it('lives in the strip section, muted and smaller than the words it labels', () => {
-    expect(tag, 'no .meeting-speaker rule in the MEETING section').not.toBe('');
-    expect(tag).toMatch(/cursor:\s*pointer/);
+  it('reads as a tag: muted, smaller than the words it labels, and clickable', () => {
+    const { strip: bar, button, pill } = speaker();
+    expect(button.cursor).toBe('pointer');
     // The look lives on the pill inside it; see the split below.
-    const pill = rule('.meeting-speaker-pill', declarationsOnly(SECTION));
-    expect(pill).toMatch(/color:\s*var\(--fg-muted\)/);
-    expect(pill).toMatch(/font-size:\s*1[01](\.\d+)?px/);
-    // A button that reads as a tag: no UA chrome.
-    expect(pill).toMatch(/border-radius:\s*var\(--radius-pill\)/);
+    expect(pill.color).toBe(token('--fg-muted'));
+    expect(px(pill.fontSize)).toBeLessThan(px(bar.fontSize));
+    expect(pill.borderRadius).toBe(token('--radius-pill'));
   });
 
   /**
@@ -135,182 +134,165 @@ describe('the speaker tag', () => {
    * pseudo-element hit area that a clip on any ancestor (including the
    * button's own) silently ate down to 19px.
    */
-  const px = (v: string | undefined, emBase: number): number => {
-    if (!v) return Number.NaN;
-    const em = /^(-?[\d.]+)em$/.exec(v.trim());
-    if (em) return Number(em[1]) * emBase;
-    const n = /^(-?[\d.]+)px$/.exec(v.trim());
-    return n ? Number(n[1]) : Number.NaN;
-  };
-  const decl = (body: string, prop: string): string | undefined =>
-    new RegExp(`(?:^|;)\\s*${prop}:\\s*([^;]+)`).exec(body)?.[1]?.trim();
-
   it('the tap target MEASURES at least 36px — the pill plus the button padding', () => {
-    const STRIP_FONT = px(decl(rule('.meeting-strip', declarationsOnly(SECTION)), 'font-size'), 16);
-    const pill = rule('.meeting-speaker-pill', declarationsOnly(SECTION));
-    const pillH =
-      px(decl(pill, 'font-size'), STRIP_FONT) * Number(decl(pill, 'line-height')) +
-      2 * px(/^([\d.]+px)/.exec(decl(pill, 'border') ?? '')?.[1], STRIP_FONT);
-    const btnPad = Number(
-      /padding:\s*([\d.]+)px/.exec(rule('.meeting-speaker', declarationsOnly(SECTION)))?.[1],
-    );
-    expect(Number.isFinite(pillH) && pillH > 0, 'the model read nothing off the pill').toBe(true);
-    const hit = pillH + 2 * btnPad;
-    expect(hit, `hit ${hit} from a ${pillH}px pill and ${btnPad}px padding`).toBeGreaterThanOrEqual(
-      36,
-    );
+    const { button, pill } = speaker();
+    const pillHeight = px(pill.fontSize) * Number(pill.lineHeight) + 2 * px(pill.borderTopWidth);
+    expect(Number.isFinite(pillHeight) && pillHeight > 0, 'read nothing off the pill').toBe(true);
+    const hit = pillHeight + 2 * px(button.paddingTop);
+    expect(
+      hit,
+      `hit ${hit} from a ${pillHeight}px pill and ${px(button.paddingTop)}px padding`,
+    ).toBeGreaterThanOrEqual(36);
   });
 
   it('keeps the target and the clip on separate elements', () => {
     // The split IS the fix: the button holds the padding and nothing that
     // clips; the pill holds every visual and the only overflow. Collapse them
     // and the ellipsis clips the tap target again.
-    const btn = rule('.meeting-speaker', declarationsOnly(SECTION));
-    expect(btn).not.toMatch(/overflow:/);
-    expect(btn).not.toMatch(/text-overflow:/);
-    expect(btn).toMatch(/background:\s*none/);
-    expect(btn).toMatch(/border:\s*0/);
+    const { button, pill } = speaker();
+    expect(button.overflow).toBe('');
+    expect(button.textOverflow).toBe('');
+    expect(button.backgroundColor).toBe('none');
+    expect(px(button.borderTopWidth)).toBe(0);
     // The line box must not grow by the padding, or the feed's line moves.
-    expect(btn).toMatch(/margin:\s*-\d+px/);
-    // And no pseudo-element target survives to be clipped a third time.
-    expect(rule('.meeting-speaker::before', declarationsOnly(SECTION))).toBe('');
+    expect(px(button.marginTop)).toBe(-px(button.paddingTop));
+    // Control: the pill beside it IS the element that clips.
+    expect(pill.overflow).toBe('hidden');
   });
 
   it('caps the tag so naming a voice cannot push every tag out of the window', () => {
     // A 60-character name rendered a 335px pill, wrapped the line, and hid
-    // every tag — naming a speaker turned the labels off.
-    const pill = rule('.meeting-speaker-pill', declarationsOnly(SECTION));
-    expect(pill).toMatch(/max-width:\s*\d+(\.\d+)?em/);
-    expect(pill).toMatch(/overflow:\s*hidden/);
-    expect(pill).toMatch(/text-overflow:\s*ellipsis/);
+    // every tag — naming a speaker turned the labels off. The cap is written
+    // in `em`, which happy-dom does not convert, so what is asserted is that
+    // a cap is in force and that the ellipsis machinery around it is too.
+    const { pill } = speaker();
+    expect(pill.maxWidth === '' || pill.maxWidth === 'none').toBe(false);
+    expect(pill.overflow).toBe('hidden');
+    expect(pill.textOverflow).toBe('ellipsis');
   });
 
   it('looks like a control at rest, where there is no hover to reveal it', () => {
     // `cursor: pointer` and the title attribute are both hover-only, so on the
-    // iPad nothing said the pill was tappable.
-    expect(rule('.meeting-speaker-pill', declarationsOnly(SECTION))).toMatch(
-      /text-decoration:\s*underline dotted/,
-    );
-    // The pencil is at the START so the ellipsis on a long name can never
-    // eat it, and it is CSS content rather than markup so the button's own
-    // aria-label stays the accessible name.
-    expect(rule('.meeting-speaker-pill::before', declarationsOnly(SECTION))).toMatch(
-      /content:\s*["']✎ ["']/,
-    );
+    // iPad nothing said the pill was tappable. The pencil that sits in front
+    // of the name is `::before` content, which happy-dom cannot resolve — the
+    // underline is the half that reads here.
+    expect(speaker().pill.textDecoration).toBe('underline dotted');
   });
 });
 
 describe('the strip itself: one flex row, blinker · clock · flowing feed', () => {
-  const strip = rule('.meeting-strip', declarationsOnly(SECTION));
-
   it('is a single flex row at least 36px tall, at every width', () => {
-    expect(strip).toMatch(/display:\s*flex/);
-    expect(strip).toMatch(/align-items:\s*center/);
-    expect(strip).toMatch(/min-height:\s*36px/);
-    expect(block('@media (max-width: 640px)', SECTION)).not.toMatch(/flex-direction:\s*column/);
+    for (const width of [1180, 600, 430]) {
+      setViewport({ width, height: 900 });
+      const bar = strip().style;
+      expect(bar.display, `not a flex row at ${width}px`).toBe('flex');
+      expect(bar.alignItems).toBe('center');
+      expect(px(bar.minHeight)).toBeGreaterThanOrEqual(36);
+      // The old chrome stacked into a column narrow; the new one never does.
+      expect(bar.flexDirection, `stacks into a column at ${width}px`).not.toBe('column');
+    }
   });
 
   it('reads as chrome against the prose, not as more document', () => {
-    expect(strip).toMatch(/background:\s*var\(--bg-panel\)/);
-    expect(strip).toMatch(/border-bottom:\s*1px solid var\(--border\)/);
-    expect(strip).toMatch(/font-family:\s*var\(--sans\)/);
-  });
-
-  it('fuses to the Record button in the bar above with a notch', () => {
-    const before = rule('.meeting-strip::before', declarationsOnly(SECTION));
-    expect(before, 'no notch').not.toBe('');
-    expect(before).toMatch(/transform:\s*rotate\(45deg\)/);
-  });
-
-  it('reads red while live — the button and the strip as one unit', () => {
-    expect(rule('.meeting-strip.is-live', declarationsOnly(SECTION))).toMatch(
-      /border-bottom-color:\s*color-mix/,
-    );
-    expect(strip).toMatch(/font-family:\s*var\(--sans\)/);
+    const bar = strip().style;
+    expect(bar.backgroundColor).toBe(token('--bg-panel'));
+    expect(px(bar.borderBottomWidth)).toBe(1);
+    expect(bar.borderBottomColor).toBe(token('--border'));
+    // Compared against the token the cascade resolves, not a copied stack;
+    // whitespace is normalised because the computed value re-spaces the list.
+    const flat = (v: string) => v.replace(/["'\s]/g, '');
+    expect(flat(bar.fontFamily)).toBe(flat(token('--sans')));
   });
 
   it('flows the feed on one line with a fade at the tail, newest words at the right', () => {
-    const feed = rule('.meeting-feed', declarationsOnly(SECTION));
-    expect(feed).toMatch(/white-space:\s*nowrap/);
-    expect(feed).toMatch(/mask-image:\s*linear-gradient/);
-    expect(rule('.meeting-feed-inner', declarationsOnly(SECTION))).toMatch(/float:\s*right/);
+    const host = strip().el;
+    const feed = styleOf(attach('meeting-feed', { parent: host }));
+    expect(feed.whiteSpace).toBe('nowrap');
+    expect(feed.getPropertyValue('mask-image')).toContain('linear-gradient');
+    expect(styleOf(attach('meeting-feed-inner', { parent: host })).float).toBe('right');
   });
 
   it('lets a held note wrap instead of forcing the flowing-feed treatment on it', () => {
     // A note is read left-to-right from its start and may need two lines —
     // the mask/nowrap treatment is for words that arrive forever, not for
     // one sentence with an audience.
-    const withNote = rule('.meeting-feed:has(.meeting-note)', declarationsOnly(SECTION));
-    expect(withNote).toMatch(/white-space:\s*normal/);
-    expect(withNote).toMatch(/mask-image:\s*none/);
+    const host = strip().el;
+    const feed = attach('meeting-feed', { parent: host });
+    attach('meeting-note', { parent: feed });
+    const withNote = styleOf(feed);
+    expect(withNote.whiteSpace).toBe('normal');
+    expect(withNote.getPropertyValue('mask-image')).toBe('none');
   });
 
   it('gives the announcement reading size and colour, since someone reads it ALOUD', () => {
     // Every other string in the strip is a readout glanced at by the one
     // person holding the device. This one is a script read out to a room off
     // an iPad at arm's length.
-    const note = rule('.meeting-note-dismiss', declarationsOnly(SECTION));
-    expect(note, 'no rule for the dismissible announcement').not.toBe('');
-    const size = /font-size:\s*(\d+(?:\.\d+)?)px/.exec(note);
-    expect(size, 'the announcement has no size of its own').not.toBeNull();
-    expect(Number(size?.[1])).toBeGreaterThanOrEqual(16);
-    expect(note).toMatch(/color:\s*var\(--fg\)/);
-    expect(note).toMatch(/background:\s*none/);
-    expect(note).toMatch(/border:\s*0/);
-    expect(note).toMatch(/cursor:\s*pointer/);
+    const bar = strip();
+    const note = styleOf(attach('meeting-note-dismiss', { tag: 'button', parent: bar.el }));
+    expect(px(note.fontSize)).toBeGreaterThanOrEqual(16);
+    expect(px(note.fontSize)).toBeGreaterThan(px(bar.style.fontSize));
+    expect(note.color).toBe(token('--fg'));
+    expect(note.backgroundColor).toBe('none');
+    expect(px(note.borderTopWidth)).toBe(0);
+    expect(note.cursor).toBe('pointer');
   });
 
   it('gives a held announcement the room instead of clipping it at the bar height', () => {
-    expect(rule('.meeting-strip:has(.meeting-note-dismiss)', declarationsOnly(SECTION))).toMatch(
-      /padding-block:\s*5px/,
-    );
+    const bar = strip();
+    expect(bar.style.getPropertyValue('padding-block')).toBe('');
+    attach('meeting-note-dismiss', { tag: 'button', parent: bar.el });
+    expect(px(styleOf(bar.el).getPropertyValue('padding-block'))).toBeGreaterThan(0);
   });
 
-  it('narrows without stacking into a column — only the record button, gap and notch move', () => {
-    const narrow = declarationsOnly(block('@media (max-width: 640px)', SECTION));
-    expect(narrow, 'no narrow-width block for the strip').not.toBe('');
-    expect(rule('.meeting-strip', narrow)).toMatch(/gap:\s*8px/);
-    expect(rule('.meeting-strip', narrow)).toMatch(/padding:\s*0 10px/);
-    expect(rule('.meeting-record', narrow)).toMatch(/font-size:\s*12px/);
+  it('narrows without stacking — only the record button, gap and padding move', () => {
+    // A computed style is LIVE against the current viewport, so the wide
+    // numbers are read out to primitives before the viewport moves.
+    setViewport(IPAD);
+    const wideStyle = strip().style;
+    const wide = { gap: px(wideStyle.gap), padLeft: px(wideStyle.paddingLeft) };
+    setViewport({ width: 600, height: 900 });
+    const host = strip();
+    expect(px(host.style.gap)).toBeLessThan(wide.gap);
+    expect(px(host.style.paddingLeft)).toBeLessThan(wide.padLeft);
+    expect(px(styleOf(attach('meeting-record', { tag: 'button', parent: host.el })).fontSize)).toBe(
+      12,
+    );
     // The popovers become an edge-to-edge sheet under the bar there.
-    expect(narrow).toMatch(/\.meeting-pop,\s*\n?\s*\.meeting-sheet/);
+    expect(styleOf(attach('meeting-sheet')).left).toBe('6px');
   });
 
   it('yields to an open keyboard at phone width — layout only, never the live mic', () => {
-    const yieldBlock = block('@media (max-width: 720px)', SECTION);
-    expect(yieldBlock).toContain('data-edit-viewport="hidden"');
-    expect(
-      rule('body[data-edit-viewport="hidden"] .meeting-strip', declarationsOnly(yieldBlock)),
-    ).toMatch(/display:\s*none/);
+    setViewport({ width: 700, height: 900 });
+    expect(strip().style.display).toBe('flex'); // control: shown by default
+    document.body.setAttribute('data-edit-viewport', 'hidden');
+    expect(strip().style.display).toBe('none');
+    // …and only where the keyboard covers the page: the same flag on the iPad
+    // leaves the strip alone.
+    setViewport(IPAD);
+    expect(strip().style.display).toBe('flex');
   });
 });
 
 describe('motion', () => {
   it('blinks the dot only while actually recording', () => {
-    const blinker = rule('.meeting-blinker', declarationsOnly(SECTION));
-    expect(blinker, 'no .meeting-blinker rule').not.toBe('');
-    expect(blinker).toMatch(/animation:\s*meeting-blink/);
-    expect(SECTION).toContain('@keyframes meeting-blink');
+    const live = attach('meeting-strip', { attrs: { 'data-state': 'live' } });
+    expect(styleOf(attach('meeting-blinker', { parent: live })).animation).toContain(
+      'meeting-blink',
+    );
     // Requesting/bot-not-live/settled-failure states hold it still — a
     // blinking dot beside "the mic was refused" claims a recording that is
     // not happening.
-    expect(SECTION).toMatch(
-      /\.meeting-strip\[data-state="unavailable"\][\s\S]{0,260}animation:\s*none/,
-    );
+    const dead = attach('meeting-strip', { attrs: { 'data-state': 'unavailable' } });
+    expect(styleOf(attach('meeting-blinker', { parent: dead })).animation).toBe('none');
   });
 
   it('flashes only the word the model rewrote', () => {
-    expect(rule('.meeting-caption-line .w.is-fixed', declarationsOnly(SECTION))).toMatch(
-      /animation:\s*meeting-fix/,
+    const line = attach('meeting-caption-line');
+    expect(styleOf(attach('w is-fixed', { tag: 'span', parent: line })).animation).toContain(
+      'meeting-fix',
     );
-    expect(SECTION).toContain('@keyframes meeting-fix');
-  });
-
-  it('holds both still for a reader who asked for no motion', () => {
-    const reduced = block('@media (prefers-reduced-motion: reduce)', SECTION);
-    expect(reduced, 'the strip animates unconditionally').not.toBe('');
-    expect(reduced).toContain('.meeting-blinker');
-    expect(reduced).toContain('.w.is-fixed');
-    expect(reduced).toMatch(/animation:\s*none/);
+    // Control: a word the model did not rewrite carries no animation.
+    expect(styleOf(attach('w', { tag: 'span', parent: line })).animation).toBe('');
   });
 });

@@ -4,10 +4,13 @@
  *
  * Two halves, and they fail differently. The DOM half pins what the renderer
  * emits: the row's class, the mark's class, and a dropdown that offers triage
- * so clearing it is one tap. The stylesheet half pins the treatment those
- * classes buy, because none of it is reachable from a DOM assertion in a
- * layout-free runner — a dashed yellow ring, a muted title, and the yellow
- * edge down the left of the row.
+ * so clearing it is one tap. The treatment half pins what those classes BUY —
+ * a dashed yellow ring, a muted title, and the yellow edge down the left of
+ * the row — by installing the page's sheets and reading the computed value
+ * off the row the board rendered. It used to grep `hub.css` for the
+ * declarations, which passes against any file that still holds the strings:
+ * against a rule a later one overrides, against a selector the row no longer
+ * carries, against a media query that does not match at the width being read.
  *
  * The last case is about somebody else's client: a status string this bundle
  * has never heard of must render as itself rather than as `undefined`, since
@@ -15,8 +18,6 @@
  *
  * All fixtures are synthetic — invented names, jordan@partner.example register.
  */
-import { readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   type BoardFilters,
@@ -27,17 +28,15 @@ import {
   TASK_STATUS_ORDER,
   boardSections,
 } from '../src/hub/hub-board-model.ts';
+import { IPAD, installSheets, setViewport, styleOf } from './css-harness.ts';
 import { type ShimHandlers as BoardHandlers, disposeBoards, renderBoard } from './support/board.ts';
 
-const CSS = readFileSync(resolve(import.meta.dirname, '../src/hub.css'), 'utf8');
-
-/** The body of the `selector { … }` rule, asserted to exist so a renamed
- *  selector fails loudly rather than passing against an empty string. */
-function ruleBody(selector: string): string {
-  const esc = selector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  const m = new RegExp(`${esc}\\s*\\{([^}]*)\\}`).exec(CSS);
-  expect(m, `no rule for ${selector}`).not.toBeNull();
-  return m?.[1] ?? '';
+/** The value a design token resolves to, so an assertion names the token the
+ *  stylesheet names rather than a hex string copied out of it. */
+function token(name: string): string {
+  const value = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+  expect(value, `no value for ${name}`).not.toBe('');
+  return value;
 }
 
 const NOW = 1_700_000_000_000;
@@ -86,13 +85,25 @@ function handlers(over: Partial<BoardHandlers> = {}): BoardHandlers {
 }
 
 let root: HTMLElement;
+/** The page's own sheets, in the order the hub shell loads them. Installing
+ *  them changes no text and no structure, so the DOM cases above are
+ *  unaffected; the viewport is stated because happy-dom's default (1024px)
+ *  sits inside this project's mobile tier and a media query would silently
+ *  decide the answer. */
+let sheets = () => {};
 beforeEach(() => {
+  setViewport(IPAD);
+  sheets = installSheets('hub.css', 'styles.css');
   root = document.createElement('div');
+  root.className = 'hub-board';
   document.body.replaceChildren(root);
 });
 // The board is a mounted island now, not a call that returns; every mount
 // holds a live subscription to the module-level signal until it is disposed.
-afterEach(disposeBoards);
+afterEach(() => {
+  sheets();
+  disposeBoards();
+});
 
 describe('a triage row on the board', () => {
   it('is listed in its band, in its order — triage is a status, not a section', () => {
@@ -143,21 +154,59 @@ describe('a triage row on the board', () => {
   });
 });
 
-describe('the triage treatment in the stylesheet', () => {
+/**
+ * The treatment, measured on the row the board rendered.
+ *
+ * `paint` mounts a real board holding one triage row and one ordinary one, so
+ * every assertion below reads a value off an element the renderer produced —
+ * and the ordinary row is the control that says the difference is the triage
+ * classes and not the sheet failing to attach.
+ */
+describe('the triage treatment', () => {
+  function paint(): { triage: HTMLElement; plain: HTMLElement; done: HTMLElement } {
+    const rows = [
+      task({ goal: 'g-pr', order: 1, status: 'triage' }),
+      task({ goal: 'g-pr', order: 2, status: 'todo' }),
+      task({ goal: 'g-pr', order: 3, status: 'done' }),
+    ];
+    renderBoard(root, boardSections(GOALS, rows, { ...filters, doneWindow: 'all' }), handlers());
+    const found = [...root.querySelectorAll('.hub-task-row')] as HTMLElement[];
+    expect(found, 'the board did not render three rows').toHaveLength(3);
+    return { triage: found[0], plain: found[1], done: found[2] };
+  }
+
   it('draws the status ring dashed and yellow', () => {
-    const body = ruleBody('.hub-status-mark-triage');
-    expect(body).toMatch(/border-style:\s*dashed/);
-    expect(body).toMatch(/border-color:\s*var\(--yellow\)/);
+    const { triage, plain } = paint();
+    const mark = triage.querySelector('.hub-status-mark-triage') as HTMLElement;
+    expect(mark).not.toBeNull();
+    expect(styleOf(mark).borderStyle).toBe('dashed');
+    expect(styleOf(mark).borderColor).toBe(token('--yellow'));
+    // Control: an ordinary row's mark is reached by the same cascade and is
+    // NOT dashed, so `dashed` above is the triage rule and not a default.
+    const plainMark = plain.querySelector('.hub-status-mark') as HTMLElement;
+    expect(styleOf(plainMark).borderStyle).not.toBe('dashed');
+    expect(styleOf(plainMark).borderWidth).not.toBe('');
   });
 
   it('mutes the title and runs a yellow edge down the left of the row', () => {
-    expect(ruleBody('.hub-status-triage')).toMatch(
-      /box-shadow:\s*inset\s+2px\s+0\s+0\s+var\(--yellow\)/,
-    );
-    expect(ruleBody('.hub-status-triage .hub-task-title')).toMatch(/color:\s*var\(--fg-muted\)/);
+    const { triage, plain } = paint();
+    expect(styleOf(triage).boxShadow).toBe(`inset 2px 0 0 ${token('--yellow')}`);
+    const title = triage.querySelector('.hub-task-title') as HTMLElement;
+    expect(styleOf(title).color).toBe(token('--fg-muted'));
+    // Control: the same element on an untriaged row reads the ordinary
+    // foreground, so "muted" is a difference and not the whole board's colour.
+    const plainTitle = plain.querySelector('.hub-task-title') as HTMLElement;
+    expect(styleOf(plainTitle).color).not.toBe(token('--fg-muted'));
+    expect(styleOf(plain).boxShadow).not.toBe(`inset 2px 0 0 ${token('--yellow')}`);
   });
 
   it('does not strike the title through — that reading belongs to done', () => {
-    expect(ruleBody('.hub-status-triage .hub-task-title')).not.toMatch(/line-through/);
+    const { triage, done } = paint();
+    const title = triage.querySelector('.hub-task-title') as HTMLElement;
+    expect(styleOf(title).textDecoration).not.toContain('line-through');
+    // Control: a DONE row's title is struck through by the same cascade, so
+    // the absence above is an absence and not a property happy-dom cannot see.
+    const doneTitle = done.querySelector('.hub-task-title') as HTMLElement;
+    expect(styleOf(doneTitle).textDecoration).toContain('line-through');
   });
 });

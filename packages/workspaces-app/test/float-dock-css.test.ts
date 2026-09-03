@@ -11,26 +11,22 @@
  * Real cascade reads against the injected sheet; happy-dom does no layout
  * but resolves `display` and `position`, which is all this needs.
  */
-import { readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
 import type { User } from '@feedback/core';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { mountReviewFloat } from '../src/review-float.ts';
+import { installSheets } from './css-harness.ts';
 
-const CSS = readFileSync(resolve(import.meta.dirname, '../src/styles.css'), 'utf8');
 const JORDAN: User = { id: 'known-jordan', name: 'Jordan', kind: 'known', color: '#336699' };
 
 let root: HTMLElement;
-let sheet: HTMLStyleElement;
+let removeSheets = () => {};
 beforeEach(() => {
-  sheet = document.createElement('style');
-  sheet.textContent = CSS;
-  document.head.appendChild(sheet);
+  removeSheets = installSheets('styles.css');
   root = document.createElement('div');
   document.body.replaceChildren(root);
 });
 afterEach(() => {
-  sheet.remove();
+  removeSheets();
 });
 
 function mount(meta: { huddle?: boolean }, canWrite: boolean) {

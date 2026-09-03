@@ -1,153 +1,183 @@
 /**
- * The hub's SOURCE contracts: six facts that no rendered DOM can witness.
+ * The hub's contracts that no rendered DOM used to be able to witness.
  *
- * Each one asserts on the text of `hub.css` or a hub source file, because
- * the failure it guards against is silent — happy-dom does no layout, so a
- * percentage max-width, a missing safe-area inset or a second voice capture
- * all render identically to the correct thing and fail no DOM test. Several
- * were found by looking at a staging board at 430px, which is the only way
- * that class of defect is ever found.
+ * Every one of these was found by looking at a staging board at 430px, which
+ * is the only way this class of defect is ever found: the DOM is identical
+ * either way, so nothing in the render suite goes red. They were written as
+ * regexes over `hub.css` for that reason. They are computed reads now — the
+ * sheets are installed and the elements are built at the viewport the defect
+ * appeared on, so a rule overridden later in the cascade, moved into a query
+ * that no longer matches, or renamed off the element fails here.
  *
- * They lived at the bottom of `hub-render.test.ts` and touched neither its
- * `root` beforeEach nor any render function, which is what made that file
- * unreadable as one harness. Every assertion here is paired with a positive
- * control on the same read, so a renamed selector or a moved file fails loudly
- * rather than passing vacuously.
+ * The two SOURCE contracts at the bottom stay source reads: "which module
+ * mounts the voice capture" and "nothing renders the unplaced strip any more"
+ * are facts about files, and no element can be built to witness them.
+ *
+ * Every assertion is paired with a positive control on the same read, so a
+ * renamed selector or a sheet that failed to install fails loudly rather than
+ * passing vacuously.
  */
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { IPAD, PHONE, attach, installSheets, setViewport, styleOf } from './css-harness.ts';
+
+let cleanup = () => {};
+beforeEach(() => {
+  cleanup = installSheets('hub.css', 'styles.css');
+});
+afterEach(() => {
+  cleanup();
+  document.body.replaceChildren();
+  document.documentElement.style.cssText = '';
+});
+
+/**
+ * Publish the insets the running app publishes.
+ *
+ * `:root { --safe-bottom: env(safe-area-inset-bottom, 0px) }` never lands
+ * here — happy-dom drops `env()` — and its `var(--safe-bottom, 0px)` readers
+ * do not fall back either, so a `calc()` chain that mentions it is discarded
+ * whole and the property reads as if the rule did not exist. Setting the
+ * variable to the value a device with no home indicator resolves it to puts
+ * the chain back, unevaluated but readable.
+ */
+function publishInsets(safeBottom = '0px'): void {
+  document.documentElement.style.setProperty('--safe-bottom', safeBottom);
+}
+
+const px = (v: string) => Number.parseFloat(v);
 
 /**
  * A percentage max-width on a grid item resolves against its own grid AREA.
  * `.hub-task-badges` sits in an `auto` track — a track sized FROM the item —
  * so `max-width: 30%` meant "30% of yourself", and with `overflow: hidden`
- * the `decision` pill rendered as the two letters "de" on a phone. Nothing
- * else in this suite can see it: happy-dom has no layout, the DOM is
- * identical either way, and the row's grid template is already asserted
- * above and was correct the whole time. Found by looking at a staging board
- * at 430px, which is the only way this class of defect is ever found.
+ * the `decision` pill rendered as the two letters "de" on a phone.
  */
 describe('the row badges are capped against the viewport, not against themselves', () => {
-  it('never uses a percentage max-width on .hub-task-badges', async () => {
-    const { readFileSync } = await import('node:fs');
-    const { resolve } = await import('node:path');
-    // vitest runs from the repo root (vitest.config.ts lives there).
-    const css = readFileSync(resolve('packages/workspaces-app/src/hub.css'), 'utf8');
-    const rules = [...css.matchAll(/\.hub-task-badges\s*\{([^}]*)\}/g)].map((m) => m[1] ?? '');
-    // Positive control: the rules this asserts about really were found, and
-    // one of them really does cap the width.
-    expect(rules.length).toBeGreaterThan(1);
-    expect(rules.some((r) => /max-width/.test(r))).toBe(true);
-    for (const r of rules) expect(r).not.toMatch(/max-width:\s*[\d.]+%/);
+  function badgeCap(width: number): string {
+    setViewport({ width, height: 900 });
+    return styleOf(attach('hub-task-badges', { parent: attach('hub-task-row') })).maxWidth;
+  }
+
+  it('caps them at a share of the SCREEN, so the cap moves with the viewport', () => {
+    // The distinguishing observation: a self-relative cap is the same string
+    // at every width, and a viewport-relative one is not. 30vw resolves here;
+    // 30% would not move.
+    const at430 = badgeCap(430);
+    const at860 = badgeCap(860);
+    expect(px(at430)).toBeGreaterThan(0);
+    expect(px(at860)).toBeCloseTo(px(at430) * 2, 0);
+    expect(at430).toMatch(/px$/);
+  });
+
+  it('positive control: the cap is what the phone adds, and the clip it protects is on the base rule', () => {
+    // Without the cap the badges would still be `overflow: hidden` — which is
+    // the half that turned an over-wide pill into "de". Both halves read.
+    expect(badgeCap(1180)).toBe('');
+    setViewport(PHONE);
+    expect(styleOf(attach('hub-task-badges', { parent: attach('hub-task-row') })).overflow).toBe(
+      'hidden',
+    );
   });
 });
 
 /**
- * happy-dom does no layout, so nothing else in this suite can see a fixed
- * launcher painting over a button. What it CAN see is the invariant: the
- * phone media block that restyles the walkthrough must also reserve bottom
- * clearance in the card, or its last control ("Tell me more" on a decision
- * card) ends up under the bottom-docked mic/pencil launchers.
+ * The phone block that restyles the walkthrough must also reserve bottom
+ * clearance in the card, or its last control ends up under the bottom-docked
+ * mic/pencil launchers. The two travel together: the block that stacks the
+ * reply form is the block that owes the card its reserve.
  *
  * The anchor for "the phone block" has moved twice, each time because the
  * surface changed shape: first a sticky .hub-walk-nav, then a panel taken to
- * max-height: 100vh. It is now the stacked reply form, because the
- * walkthrough is a PAGE in the Home column (approved mockup) and no longer
- * goes full-screen at all — which is also why this file asserts, below, that
- * nothing puts it back on `position: fixed`.
+ * max-height: 100vh. The walkthrough is a PAGE in the Home column (approved
+ * mockup) and no longer goes full-screen at all — which is also why this file
+ * asserts, below, that nothing puts it back on `position: fixed`.
  */
 describe('the walkthrough page reserves launcher clearance on a phone', () => {
-  it('gives the card bottom clearance wherever the phone block restyles it', async () => {
-    const { readFileSync } = await import('node:fs');
-    const { resolve } = await import('node:path');
-    const css = readFileSync(resolve('packages/workspaces-app/src/hub.css'), 'utf8');
-    // The media blocks are the unit: sticky nav and card clearance have to
-    // travel together, so find the block and assert about that one text.
-    // Brace-scanned rather than regexed — a media block holds nested rules,
-    // and a pattern that assumes otherwise matches nothing and proves nothing.
-    const blocks: string[] = [];
-    for (const m of css.matchAll(/@media[^{]*\{/g)) {
-      let depth = 1;
-      let i = (m.index ?? 0) + m[0].length;
-      const start = i;
-      while (i < css.length && depth > 0) {
-        if (css[i] === '{') depth += 1;
-        else if (css[i] === '}') depth -= 1;
-        i += 1;
-      }
-      blocks.push(css.slice(start, i - 1));
-    }
-    const phone = blocks.filter((b) => /\.hub-walk-answer[^{]*\{/.test(b));
-    // Positive control: the block this asserts about exists and was matched.
-    expect(phone.length).toBeGreaterThan(0);
-    for (const b of phone) {
-      expect(b).toMatch(/\.hub-walk-card\s*\{[^}]*padding-bottom:\s*calc\([\d.]+px/);
-    }
+  it('stacks the reply form and reserves the card’s tail in the same breath', () => {
+    publishInsets();
+    setViewport(PHONE);
+    expect(styleOf(attach('hub-walk-answer', { tag: 'form' })).flexDirection).toBe('column');
+    const reserve = styleOf(attach('hub-walk-card')).paddingBottom;
+    // A launcher's worth of room, plus the home-indicator inset. happy-dom
+    // returns the calc unevaluated, so the number is read out of the chain.
+    expect(reserve).toContain('60px');
+
+    // Positive control and the point of the pairing: at 1180 the reply form
+    // is a row and the card carries only its ordinary padding, so the reserve
+    // is really something the phone block adds.
+    setViewport(IPAD);
+    expect(styleOf(attach('hub-walk-answer', { tag: 'form' })).flexDirection).not.toBe('column');
+    const ipadPad = styleOf(attach('hub-walk-card')).paddingBottom;
+    expect(ipadPad).not.toBe(reserve);
+    expect(px(ipadPad)).toBeLessThan(60);
+  });
+
+  it('keeps the walkthrough a page: nothing sticks the stepper or floats the panel', () => {
     // The stepper lives in the head now — nothing may make it sticky again
-    // without restoring the reserve that travelled with the old bar.
-    expect(css).not.toMatch(/\.hub-walk-nav\s*\{[^}]*position:\s*sticky/);
-    // And the page must stay a page: a fixed overlay over the board is the
-    // layout that got rejected, and it takes the Back-to-Home link's meaning
-    // with it.
-    expect(css).not.toMatch(/\.hub-walk(through|-panel)[^{]*\{[^}]*position:\s*fixed/);
+    // without restoring the reserve that travelled with the old bar. And a
+    // fixed overlay over the board is the layout that got rejected: it takes
+    // the Back-to-Home link's meaning with it.
+    for (const viewport of [PHONE, IPAD]) {
+      setViewport(viewport);
+      expect(styleOf(attach('hub-walk-nav', { tag: 'nav' })).position).not.toBe('sticky');
+      for (const cls of ['hub-walkthrough', 'hub-walk-panel']) {
+        expect(styleOf(attach(cls)).position, `.${cls} is positioned again`).not.toBe('fixed');
+      }
+    }
+    // Positive control: a `position` IS readable off this cascade — the task
+    // overlay on the same page is fixed — so the reads above are not blind.
+    expect(styleOf(attach('hub-detail')).position).toBe('fixed');
   });
 });
 
 /**
- * happy-dom does no layout, so what is checkable here is the rule that makes
- * the phone layout work. Measured in a real 430px frame: the kind badge takes
- * ~180px of the line, and a title free to shrink to zero comes out about
- * 110px wide — a one-line question stacked seven words tall. The floor is
- * what makes the head WRAP instead, which is what the mockup draws.
+ * Measured in a real 430px frame: the kind badge takes ~180px of the line,
+ * and a title free to shrink to zero comes out about 110px wide — a one-line
+ * question stacked seven words tall. The floor is what makes the head WRAP
+ * instead, which is what the mockup draws.
  */
 describe('the walkthrough card head keeps a readable title on a phone', () => {
-  it('gives the title a width floor rather than letting it shrink to nothing', async () => {
-    const { readFileSync } = await import('node:fs');
-    const { resolve } = await import('node:path');
-    const css = readFileSync(resolve('packages/workspaces-app/src/hub.css'), 'utf8');
-    const rule = css.match(/\.hub-walk-title\s*\{([^}]*)\}/)?.[1] ?? '';
-    // Positive control: the rule this asserts about was found and is the one
-    // that lays the title out.
-    expect(rule).toMatch(/flex:\s*1/);
-    const floor = rule.match(/min-width:\s*(\d+)px/)?.[1];
-    expect(Number(floor ?? 0)).toBeGreaterThanOrEqual(120);
+  it('gives the title a width floor rather than letting it shrink to nothing', () => {
+    setViewport(PHONE);
+    const title = styleOf(attach('hub-walk-title'));
+    // Positive control: this really is the element that lays the title out.
+    expect(title.flexGrow).toBe('1');
+    expect(px(title.minWidth)).toBeGreaterThanOrEqual(120);
     // The floor only works because a long unbroken token has its own escape.
-    expect(rule).toMatch(/overflow-wrap:\s*anywhere/);
+    expect(title.overflowWrap).toBe('anywhere');
   });
 });
 
-/**
- * happy-dom does no layout, so the popover and the 430px fit are pinned at
- * the rule level, the same way the walkthrough title floor is above: assert
- * the declarations that make the behaviour, with a presence check first so
- * a renamed selector fails loudly rather than passing vacuously.
- */
-describe('settings popover + presence visibility (CSS contract)', () => {
-  const css = readFileSync(resolve('packages/workspaces-app/src/hub.css'), 'utf8');
-
+describe('settings popover + presence visibility', () => {
   it('the settings panel floats instead of shifting the page', () => {
-    const rule = css.match(/\.hub-settings-panel\s*\{([^}]*)\}/)?.[1] ?? '';
-    expect(rule).toContain('background'); // positive control: found the rule
-    expect(rule).toMatch(/position:\s*absolute/);
+    setViewport(IPAD);
+    const panel = styleOf(attach('hub-settings-panel'));
+    expect(panel.backgroundColor).not.toBe(''); // positive control: rule found
+    expect(panel.position).toBe('absolute');
     // Anchored to the header, which must therefore be a positioned ancestor.
-    const topbar = css.match(/\.hub-topbar\s*\{([^}]*)\}/)?.[1] ?? '';
-    expect(topbar).toMatch(/position:\s*relative/);
+    expect(styleOf(attach('hub-topbar', { tag: 'header' })).position).toBe('relative');
   });
 
   it('no width band hides the circle presence strip any more', () => {
     // The old ≤560px rule was `.hub-presence.hub-people { display: none }`.
-    // The circles fit, so nothing may hide the strip at any width.
-    const peopleRules = [...css.matchAll(/\.hub-presence\.hub-people\s*\{([^}]*)\}/g)];
-    expect(peopleRules.length).toBeGreaterThan(0); // positive control
-    for (const [, body] of peopleRules) {
-      expect(body).not.toMatch(/display:\s*none/);
+    // The circles fit, so nothing may hide the strip at any width — read at
+    // the two verified viewports and at the width the old rule fired on.
+    for (const width of [1180, 560, 430]) {
+      setViewport({ width, height: 900 });
+      const strip = styleOf(attach('hub-presence hub-people'));
+      expect(strip.display, `the presence strip is hidden at ${width}px`).not.toBe('none');
+      // Positive control: the strip really is styled at this width, so the
+      // assertion is not reading an element no rule reaches.
+      expect(strip.display, `nothing styles the strip at ${width}px`).not.toBe('');
     }
   });
 });
 
 /**
- * Wiring, asserted against the source, because the failure is silent.
+ * Wiring, asserted against the source, because the failure is silent and no
+ * element can witness it.
  *
  * `hub-app.ts` mounts two voice captures on one page. Space is a singleton
  * gesture: if both bind it, one press starts both recognizers and each
@@ -184,29 +214,36 @@ describe('hub-app voice wiring', () => {
  * up top is taking out space and all of it's not useful."* The Backlog band
  * already holds every unplaced row, so the count said nothing the board did
  * not; `unplacedNotice` stays in the model for the lead's tools, and nothing
- * draws it. Asserted against the source because the failure is silent: a
- * strip that came back would render fine and fail no DOM test.
+ * draws it.
  */
 describe('the unplaced banner is gone from the board', () => {
-  function code(path: string): string {
-    return readFileSync(resolve(path), 'utf8')
+  it('hub-app neither hosts the strip nor renders it', () => {
+    const src = readFileSync(resolve('packages/workspaces-app/src/hub/hub-app.ts'), 'utf8')
       .split('\n')
       .filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l))
       .join('\n');
-  }
-
-  it('hub-app neither hosts the strip nor renders it', () => {
-    const src = code('packages/workspaces-app/src/hub/hub-app.ts');
     expect(src).not.toContain('hub-unplaced');
     expect(src).not.toContain('renderUnplacedStrip');
     // Positive control: the board host it used to sit above is still there.
     expect(src).toContain('id="hub-board"');
   });
 
-  it('the stylesheet carries no rule for it', () => {
-    const css = readFileSync(resolve('packages/workspaces-app/src/hub.css'), 'utf8');
-    expect(css).not.toMatch(/\.hub-unplaced/);
-    // Positive control: the board's own rules are still read from this file.
-    expect(css).toMatch(/\.hub-board-foot/);
+  it('the stylesheet reaches no element carrying its class', () => {
+    // Read as a computed style rather than as an absent string: a rule that
+    // came back under a different selector but still landed on this class
+    // would pass a text search for `.hub-unplaced` and fail here.
+    setViewport(IPAD);
+    const board = attach('hub-board');
+    const strip = styleOf(attach('hub-unplaced', { parent: board }));
+    const control = styleOf(attach('hub-none-of-the-above', { parent: board }));
+    const declared: string[] = [];
+    for (let i = 0; i < strip.length; i++) {
+      const prop = strip.item(i);
+      if (strip.getPropertyValue(prop) !== control.getPropertyValue(prop)) declared.push(prop);
+    }
+    expect(declared, 'something still styles the unplaced strip').toEqual([]);
+    // Positive control: the board's own rules ARE reaching this subtree — the
+    // foot that sits where the strip used to is styled.
+    expect(styleOf(attach('hub-board-foot', { parent: board })).display).toBe('flex');
   });
 });

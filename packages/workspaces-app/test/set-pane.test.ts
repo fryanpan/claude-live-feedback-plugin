@@ -24,12 +24,40 @@
  */
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { WIDE_SCREEN_QUERY, initialSetPaneOpen, wireSetPaneToggle } from '../src/review-chrome.ts';
+import { attach, installSheets, setViewport, styleOf } from './css-harness.ts';
 
 const ROOT = resolve(import.meta.dirname, '..');
 const HTML = readFileSync(resolve(ROOT, 'index.html'), 'utf8');
-const CSS = readFileSync(resolve(ROOT, 'src/styles.css'), 'utf8');
+
+/**
+ * The width the three sidebar rules agree on. Named once here and asserted
+ * against the CASCADE below, rather than restated from `styles.css`: a media
+ * query cannot read a custom property, so the number lives in three places in
+ * the sheet and nothing in CSS makes the copies agree.
+ */
+const PANE_TIER = 1101;
+
+/** The chrome the review page paints, at a stated width, with the reviewer's
+ *  stored choice applied to <body> the way `wireSetPaneToggle` applies it. */
+function chrome(width: number, open: boolean) {
+  setViewport({ width, height: 820 });
+  document.body.className = open ? 'has-set set-pane-open' : 'has-set';
+  document.body.replaceChildren();
+  const pane = attach('', { tag: 'aside', attrs: { id: 'set-pane' } });
+  const list = attach('', { tag: 'ul', attrs: { id: 'set-pane-list' }, parent: pane });
+  const handle = attach('set-resize', { parent: pane });
+  const main = attach('', { attrs: { id: 'main' } });
+  const toggle = attach('', { tag: 'button', attrs: { id: 'toggle-set-pane' } });
+  return {
+    pane: styleOf(pane).display,
+    list: styleOf(list).padding,
+    handle: styleOf(handle).display,
+    columns: styleOf(main).gridTemplateColumns,
+    toggle: styleOf(toggle).display,
+  };
+}
 
 describe('review-set sidebar', () => {
   it('renders no title row above the doc list', () => {
@@ -44,18 +72,47 @@ describe('review-set sidebar', () => {
   it('drops the header’s stylesheet rule with it', () => {
     // A rule for markup nobody emits is how the header comes back: the next
     // person to add a heading finds it already styled and assumes it is wanted.
-    expect(CSS).not.toContain('.set-pane-header');
-    expect(CSS).toContain('#set-pane-list'); // positive control
+    // Asked of the cascade rather than of the file's text — an element with
+    // that class must come out of the sheets carrying nothing.
+    const sheets = installSheets('styles.css');
+    setViewport({ width: PANE_TIER, height: 820 });
+    document.body.className = 'has-set set-pane-open';
+    document.body.replaceChildren();
+    const pane = attach('', { tag: 'aside', attrs: { id: 'set-pane' } });
+    const header = attach('set-pane-header', { parent: pane });
+    // A class the sheet has NEVER heard of, read the same way: the header must
+    // be indistinguishable from it. (Only properties a rule would set —
+    // inherited ones like `font-size` come down from `#set-pane` and say
+    // nothing about whether a `.set-pane-header` rule exists.)
+    const nonesuch = attach('set-pane-nonesuch', { parent: pane });
+    const props = ['padding', 'margin', 'borderBottom', 'minHeight', 'fontWeight'] as const;
+    const read = (el: HTMLElement) => {
+      const style = styleOf(el);
+      return props.map((k) => `${k}=${style[k]}`).join(' ');
+    };
+    expect(read(header)).toBe(read(nonesuch));
+    // Positive control: the pane around them IS styled, so the sameness above
+    // is the absence of a rule and not the absence of a stylesheet.
+    expect(styleOf(pane).display).toBe('block');
+    expect(styleOf(pane).overflowY).toBe('auto');
+    sheets();
+    document.body.className = '';
+    document.body.replaceChildren();
+    setViewport({ width: 1024, height: 768 });
   });
 
   it('gives the list the top gap the header used to supply', () => {
     // Without this the first doc sits flush against the topbar. The value is
     // deliberately smaller than the 14px the header had — the gap is now doing
     // one job (breathing room) instead of two (breathing room + a label).
-    const rule = CSS.match(/#set-pane-list\s*\{[^}]*\}/)?.[0] ?? '';
-    expect(rule, 'the #set-pane-list rule went missing').not.toBe('');
-    const padding = rule.match(/padding:\s*([^;]+);/)?.[1] ?? '';
-    expect(padding).not.toMatch(/^0[\s;]/);
+    const sheets = installSheets('styles.css');
+    const padding = chrome(PANE_TIER, true).list;
+    expect(padding, 'the #set-pane-list rule reached nothing').not.toBe('');
+    expect(Number.parseFloat(padding)).toBeGreaterThan(0);
+    sheets();
+    document.body.className = '';
+    document.body.replaceChildren();
+    setViewport({ width: 1024, height: 768 });
   });
 });
 
@@ -113,48 +170,75 @@ describe('initialSetPaneOpen', () => {
  * track that no longer exists.
  */
 describe('review-set sidebar visibility', () => {
-  const SHOW_GATE =
-    /@media\s*\(min-width:\s*(\d+)px\)\s*\{\s*body\.has-set\.set-pane-open\s+#set-pane/;
-  const GRID_GATE = /@media\s*\(min-width:\s*(\d+)px\)\s*\{\s*body\.has-set\.set-pane-open\s+#main/;
+  let sheets = () => {};
+  beforeEach(() => {
+    sheets = installSheets('styles.css');
+  });
+  afterEach(() => {
+    sheets();
+    document.body.className = '';
+    document.body.replaceChildren();
+    setViewport({ width: 1024, height: 768 });
+  });
 
   it('paints the sidebar only when the reviewer has opened it', () => {
-    const gate = CSS.match(SHOW_GATE);
-    expect(gate, 'the #set-pane show gate went missing or lost .set-pane-open').not.toBeNull();
+    // Two readings at the same width: the pane is a CHOICE, and the width
+    // gate below only decides whether the choice can be made. A text read
+    // could see the `.set-pane-open` in the selector; only the cascade can
+    // say the pane is dark without it.
+    expect(chrome(PANE_TIER, true).pane).toBe('block');
+    expect(chrome(PANE_TIER, false).pane).toBe('none');
   });
 
   it('reserves the grid column under exactly the same condition', () => {
-    const grid = CSS.match(GRID_GATE);
-    expect(
-      grid,
-      'the has-set #main column rule went missing or lost .set-pane-open',
-    ).not.toBeNull();
-    expect(Number(grid?.[1])).toBe(Number(CSS.match(SHOW_GATE)?.[1]));
+    // Gate only the pane and the grid still reserves a 320px column with
+    // nothing in it; gate only the grid and the sidebar renders into a track
+    // that no longer exists. Read as the two layouts a reader would get,
+    // one pixel either side of the boundary.
+    const wideOpen = chrome(PANE_TIER, true);
+    const narrowOpen = chrome(PANE_TIER - 1, true);
+    expect(wideOpen.pane).toBe('block');
+    expect(wideOpen.columns.startsWith('320px')).toBe(true);
+    expect(narrowOpen.pane).toBe('none');
+    expect(narrowOpen.columns.startsWith('320px')).toBe(false);
+    // …and a closed pane at the wide tier reserves no column either, which is
+    // the fall-through the sheet relies on rather than a rule of its own.
+    expect(chrome(PANE_TIER, false).columns).toBe(narrowOpen.columns);
   });
 
   it('offers the toggle only where the sidebar can actually open', () => {
-    const btn = CSS.match(
-      /@media\s*\(min-width:\s*(\d+)px\)\s*\{\s*body\.has-set\s+#toggle-set-pane/,
-    );
-    expect(btn, 'the #toggle-set-pane show rule went missing').not.toBeNull();
     // Same width as the pane itself: a toggle that flips a class no stylesheet
     // acts on is a dead control, and it appears in the one place — a phone —
     // where there is no room for what it would reveal.
-    expect(Number(btn?.[1])).toBe(Number(CSS.match(SHOW_GATE)?.[1]));
+    expect(chrome(PANE_TIER, false).toggle).toBe('inline-flex');
+    expect(chrome(PANE_TIER - 1, false).toggle).toBe('none');
+    // The toggle does not wait for the pane to be open — it is what opens it.
+    expect(chrome(PANE_TIER, true).toggle).toBe('inline-flex');
   });
 
   it('leaves no width gate that hides the sidebar on its own', () => {
     // The 1367px gate this replaces was defeated by pinch-zoom (see the file
-    // header). Any rule that re-derives visibility from width re-opens that
-    // hole, so the numbers themselves are what this asserts against.
-    expect(CSS).not.toMatch(/min-width:\s*1367px/);
-    expect(CSS).not.toMatch(/@media\s*\(max-width:\s*1366px\)/);
+    // header): a 1366px iPad at 85% zoom reports 1607px, so any gate high
+    // enough to exclude that iPad also excludes a 1512px MacBook. Asserted as
+    // the reading a zoomed-out reviewer actually gets, at every width the old
+    // gate would have cut, rather than as the absence of two numbers from the
+    // file — a third number would have satisfied that and not this.
+    for (const width of [PANE_TIER, 1366, 1512, 1607, 1920, 2560]) {
+      expect(chrome(width, true).pane, `hidden at ${width}px`).toBe('block');
+    }
   });
 
   it('keeps the resize handle inside the pane rather than gating it separately', () => {
     // wireResizeHandle appends the handle to #set-pane, so `display: none` on
     // the pane takes the handle with it. The old standalone media query was a
     // third copy of the breakpoint that had to be kept in step by hand.
-    expect(CSS).not.toMatch(/\{\s*\.set-resize\s*\{\s*display:\s*none/);
+    // happy-dom does not inherit a hidden parent's display, so what is
+    // asserted is that the handle has no width gate OF ITS OWN: its reading is
+    // the same either side of the boundary that moves the pane.
+    const wide = chrome(PANE_TIER, true);
+    const narrow = chrome(PANE_TIER - 1, true);
+    expect(wide.pane).not.toBe(narrow.pane); // control: the boundary is live
+    expect(narrow.handle).toBe(wide.handle);
   });
 });
 

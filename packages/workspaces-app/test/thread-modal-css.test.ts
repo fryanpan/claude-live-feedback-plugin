@@ -1,145 +1,127 @@
-import { readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { IPAD, PHONE, attach, installSheets, setViewport, styleOf } from './css-harness.ts';
 
 /**
- * The long-thread modal's geometry, asserted against the stylesheet.
+ * The long-thread modal's geometry, read off the cascade rather than out of
+ * the stylesheet's text.
  *
- * happy-dom resolves no layout, so nothing in the DOM suite can see whether
- * this dialog fits on the screen it was designed for. The screen is an iPad in
- * landscape — 1180x820, roughly 750px usable — and its scarce axis is HEIGHT,
- * not width. A dialog that grows with its content is exactly the failure the
- * balloon column already had: the reply box lands below the fold, and reaching
- * it scrolls the DOCUMENT, which moves the thing being reached for.
+ * The screen it was designed for is an iPad in landscape — 1180x820, roughly
+ * 750px usable — and its scarce axis is HEIGHT, not width. A dialog that
+ * grows with its content is exactly the failure the balloon column already
+ * had: the reply box lands below the fold, and reaching it scrolls the
+ * DOCUMENT, which moves the thing being reached for.
  *
- * So: real width, a cap under the viewport, and the scroll inside the body.
- * How it LOOKS at 1180x820 and at 430px is a browser check, not this.
+ * So: a cap under the viewport, and the scroll inside the body. Both are
+ * measured here at the two viewports the project verifies, with `vh`
+ * substituted against each — which is what the old regex over
+ * `max-height: min(84vh, 720px)` could not do, since which half of that pair
+ * binds depends on the screen.
+ *
+ * WHAT THIS FILE LOST, and it is the headline: the modal's WIDTH. It is
+ * `min(760px, calc(100vw - 64px))`, and happy-dom returns '' for any `width`
+ * built from `min()`/`calc()`/`var()` — so "far wider than the 300px column
+ * it replaces, and still fits 1180px" is no longer assertable here at all,
+ * nor is the phone's fallback. `bun run ui:shot` owns it; the PR body says
+ * so. Everything that follows is a cap or a flag, which happy-dom does
+ * resolve.
  */
 
-// The board's cascade is two files since the hub block moved to hub.css:
-// styles.css keeps the shared chrome, hub.css carries the board's own rules,
-// and the hub shell loads them in that order. A rule this suite pins may sit
-// in either, so read the pair the page actually loads. Two reads on purpose:
-// a one-line read is what `bun run test:audit` counts, and folding them into
-// a loop would hide a source-shape site rather than remove one.
-const CSS = [
-  readFileSync(resolve('packages/workspaces-app/src/styles.css'), 'utf8'),
-  readFileSync(resolve('packages/workspaces-app/src/hub.css'), 'utf8'),
-].join('\n');
+let cleanup = () => {};
+beforeEach(() => {
+  // The board's real cascade order — `renderHubShell`, packages/server/src/
+  // shells.ts loads hub.css BEFORE styles.css. tokens.css stays out: the
+  // served sheet is the vendored Open Props subset concatenated with
+  // src/tokens.css, and the mapping layer alone resolves to nothing.
+  cleanup = installSheets('hub.css', 'styles.css');
+});
+afterEach(() => {
+  cleanup();
+  document.body.replaceChildren();
+  document.body.className = '';
+});
 
-function declarationsOnly(css: string): string {
-  return css.replace(/\/\*[\s\S]*?\*\//g, '');
+/** The number a `min(a, b)` computed value settles on. happy-dom substitutes
+ *  `vh` against the current viewport but leaves the comparison unevaluated. */
+function px(value: string): number {
+  const inner = /^min\((.*)\)$/.exec(value.trim());
+  const terms = inner?.[1] ? inner[1].split(',') : [value];
+  return Math.min(...terms.map((t) => Number.parseFloat(t)));
 }
 
-/** The body of one rule, by exact selector. */
-function rule(selector: string): string {
-  const at = new RegExp(
-    `(^|\\n|\\})\\s*${selector.replace(/[.+*[\]()]/g, '\\$&')}\\s*\\{([^}]*)\\}`,
-  ).exec(declarationsOnly(CSS));
-  return at?.[2] ?? '';
-}
-
-const decl = (selector: string, prop: string): string =>
-  new RegExp(`(?:^|;)\\s*${prop}:\\s*([^;]+)`).exec(rule(selector))?.[1]?.trim() ?? '';
+const modalAt = (viewport: { width: number; height: number }) => {
+  setViewport(viewport);
+  return styleOf(attach('thread-modal'));
+};
 
 describe('the modal is sized for the tablet tier', () => {
   it('exists as its own rule rather than borrowing the phone sheet', () => {
-    expect(rule('.thread-modal')).not.toBe('');
-    expect(rule('.thread-modal-body')).not.toBe('');
-  });
-
-  it('is far wider than the 300px column it replaces, and still fits 1180px', () => {
-    const width = decl('.thread-modal', 'width');
-    // `min(760px, calc(100vw - 64px))` — the fixed term is the width being
-    // bought, the viewport term is what keeps it on a narrower screen.
-    const fixed = Number(/(\d+)px/.exec(width)?.[1] ?? 0);
-    expect(fixed).toBeGreaterThan(600);
-    expect(fixed).toBeLessThanOrEqual(1180 - 64);
-    expect(width).toContain('vw');
+    setViewport(IPAD);
+    expect(styleOf(attach('thread-modal')).maxHeight).not.toBe('');
+    expect(styleOf(attach('thread-modal-body')).overflowY).not.toBe('');
   });
 
   it('caps its height against the viewport, not against its content', () => {
-    const max = decl('.thread-modal', 'max-height');
-    expect(max).toContain('vh');
-    // At 820px of viewport the cap has to land clear of the ~750px usable —
-    // anything at or above 92vh is taller than the space that exists.
-    const vh = Number(/(\d+)vh/.exec(max)?.[1] ?? 100);
-    expect(vh).toBeLessThanOrEqual(88);
+    // Roughly 750px is usable once browser chrome is taken off an 820px
+    // viewport. The dialog has to finish inside that, with its own scroll.
+    expect(px(modalAt(IPAD).maxHeight)).toBeLessThan(750);
+    // …and the cap FOLLOWS the viewport rather than sitting at a constant: a
+    // shorter screen gets a shorter dialog. That is the half of the pair a
+    // 1180x820 measurement alone cannot see, because the px ceiling is the
+    // one that binds there.
+    const short = px(modalAt({ width: 1180, height: 600 }).maxHeight);
+    expect(short).toBeLessThan(px(modalAt(IPAD).maxHeight));
+    expect(short).toBeLessThanOrEqual(0.88 * 600);
+  });
+
+  it('a phone would still fit — the caller is not the only guard', () => {
+    // The chrome refuses to open this below 1100px, but a rule whose only
+    // protection is a caller is a rule one refactor away from overflowing.
+    expect(px(modalAt(PHONE).maxHeight)).toBeLessThan(PHONE.height);
   });
 
   it('scrolls inside the body, so the document behind it never moves', () => {
-    expect(decl('.thread-modal-body', 'overflow-y')).toBe('auto');
-    expect(decl('.thread-modal-body', 'overscroll-behavior')).toBe('contain');
+    setViewport(IPAD);
+    const body = styleOf(attach('thread-modal-body'));
+    expect(body.overflowY).toBe('auto');
+    expect(body.overscrollBehavior).toBe('contain');
     // Without this the flex item's content floor pushes the dialog past its
     // own max-height and the scrollbar ends up on the page instead.
-    expect(decl('.thread-modal-body', 'min-height')).toBe('0');
+    expect(Number.parseFloat(body.minHeight)).toBe(0);
   });
 
   it('sits above the scrim, and the scrim above everything else on the page', () => {
-    expect(Number(decl('.thread-modal', 'z-index'))).toBeGreaterThan(
-      Number(decl('.thread-modal-scrim', 'z-index')),
-    );
-    expect(Number(decl('.thread-modal-scrim', 'z-index'))).toBeGreaterThan(1000);
+    setViewport(IPAD);
+    const modal = Number(styleOf(attach('thread-modal')).zIndex);
+    const scrim = Number(styleOf(attach('thread-modal-scrim')).zIndex);
+    expect(modal).toBeGreaterThan(scrim);
+    expect(scrim).toBeGreaterThan(1000);
   });
 
   it('lets the decision options use the width, which is why they came here', () => {
-    expect(decl('.thread-modal-body .thread-item-options', 'flex-direction')).toBe('row');
+    setViewport(IPAD);
+    const body = attach('thread-modal-body');
+    const options = attach('thread-item-options', { parent: body });
+    expect(styleOf(options).flexDirection).toBe('row');
     // The base rule pins an option to `width: 100%`; left alone it would put
-    // one button per line and the row would buy nothing.
-    expect(decl('.thread-modal-body .thread-item-option', 'width')).toBe('auto');
+    // one button per line and the row would buy nothing. Read as a computed
+    // value, the override's win over that base rule is the assertion — the
+    // text version could only see that both declarations existed.
+    expect(styleOf(attach('thread-item-option', { tag: 'button', parent: options })).width).toBe(
+      'auto',
+    );
+    expect(styleOf(attach('thread-item-option', { tag: 'button' })).width).toBe('100%');
   });
 
   it('drops the card’s own frame — no border inside a bordered dialog', () => {
-    expect(decl('.thread-modal-body .thread', 'border')).toBe('0');
-    expect(decl('.thread-modal-body .thread', 'cursor')).toBe('default');
-  });
-});
-
-/**
- * Evaluate the small subset of CSS length arithmetic these two rules use —
- * `min(<a>px, calc(100vw - <b>px))` and `min(<a>vh, <b>px)` — against a given
- * viewport. Nothing here resolves layout; it resolves the DECLARATION, which
- * is the half a stylesheet assertion can actually be honest about. Whether the
- * result looks right on the glass is a browser check.
- */
-function evalLength(value: string, vw: number, vh: number): number {
-  const terms = (/min\(([^)]*\)?[^)]*)\)\s*$/.exec(value.trim())?.[1] ?? value)
-    .split(/,(?![^(]*\))/)
-    .map((t) => t.trim());
-  const one = (t: string): number => {
-    const calc = /calc\(\s*100vw\s*-\s*(\d+(?:\.\d+)?)px\s*\)/.exec(t);
-    if (calc) return vw - Number(calc[1]);
-    if (t.endsWith('vh')) return (Number(t.slice(0, -2)) / 100) * vh;
-    if (t.endsWith('vw')) return (Number(t.slice(0, -2)) / 100) * vw;
-    return Number(t.replace('px', ''));
-  };
-  return Math.min(...terms.map(one));
-}
-
-describe('the numbers, worked out for the two viewports that matter', () => {
-  const width = (vw: number, vh: number) => evalLength(decl('.thread-modal', 'width'), vw, vh);
-  const height = (vw: number, vh: number) =>
-    evalLength(decl('.thread-modal', 'max-height'), vw, vh);
-
-  it('sanity-checks its own arithmetic before trusting it', () => {
-    expect(evalLength('min(760px, calc(100vw - 64px))', 1180, 820)).toBe(760);
-    expect(evalLength('min(760px, calc(100vw - 64px))', 430, 930)).toBe(366);
-    expect(evalLength('min(84vh, 720px)', 1180, 820)).toBeCloseTo(688.8, 1);
-  });
-
-  it('iPad landscape, 1180x820: real width, and clear of the ~750px usable', () => {
-    expect(width(1180, 820)).toBeGreaterThanOrEqual(700);
-    expect(width(1180, 820)).toBeLessThanOrEqual(1180 - 48);
-    // Roughly 750px is usable once browser chrome is taken off an 820px
-    // viewport. The dialog has to finish inside that, with its own scroll.
-    expect(height(1180, 820)).toBeLessThan(750);
-  });
-
-  it('a phone at 430px would still fit — the caller is not the only guard', () => {
-    // The chrome refuses to open this below 1100px, but a rule whose only
-    // protection is a caller is a rule one refactor away from overflowing.
-    expect(width(430, 930)).toBeLessThanOrEqual(430);
-    expect(height(430, 930)).toBeLessThan(930);
+    setViewport(IPAD);
+    const inside = styleOf(attach('thread', { parent: attach('thread-modal-body') }));
+    expect(Number.parseFloat(inside.borderTopWidth)).toBe(0);
+    expect(inside.cursor).toBe('default');
+    // Control: the same card OUTSIDE the dialog keeps its frame and its
+    // pointer, so the two values above are the descendant rule's doing.
+    const outside = styleOf(attach('thread'));
+    expect(Number.parseFloat(outside.borderTopWidth) || 0).toBeGreaterThan(0);
+    expect(outside.cursor).not.toBe('default');
   });
 });
 
@@ -147,9 +129,15 @@ describe('the modal hides the way the rest of the app hides', () => {
   it('is not on the list of elements that override display:none', () => {
     // `.hidden` is `display: none !important`; a handful of animated surfaces
     // undo that so their transition still renders. This one is not animated,
-    // so if it ever joins that list it would sit invisible over the page.
-    const overrides = /\.hidden\s*\{[^}]*\}([\s\S]*?)\/\* =/.exec(declarationsOnly(CSS))?.[1] ?? '';
-    expect(overrides).not.toContain('.thread-modal');
+    // so if it ever joined that list it would sit invisible over the page —
+    // and this now measures the cascade's verdict rather than the source
+    // window after the `.hidden` rule.
+    setViewport(IPAD);
+    expect(styleOf(attach('thread-modal hidden')).display).toBe('none');
+    // Control: an element that DOES override it reads differently in the same
+    // pass, so `none` above is the absence of an override and not the absence
+    // of the `.hidden` rule itself.
+    expect(styleOf(attach('pointer-pill hidden')).display).toBe('inline-flex');
   });
 });
 
@@ -169,12 +157,19 @@ describe('the modal hides the way the rest of the app hides', () => {
  */
 describe('the mic no longer stands down under an open card', () => {
   it('has no thread-card-open hide left anywhere', () => {
-    expect(declarationsOnly(CSS)).not.toContain('thread-card-open');
-    // Positive control: the class name really would be findable if a rule
-    // still used it — this is the file the rule lived in.
-    expect(`${declarationsOnly(CSS)}\nbody.thread-card-open .voice-mic {}`).toContain(
-      'thread-card-open',
-    );
+    setViewport(PHONE);
+    const mic = attach('voice-mic', { tag: 'button' });
+    const free = styleOf(mic).display;
+    document.body.className = 'thread-card-open';
+    expect(styleOf(mic).display).toBe(free);
+    // Positive control: a rule keyed on that body class WOULD be visible to
+    // this measurement — so the equality above is the rule's absence and not
+    // the body class going unread.
+    const probe = document.createElement('style');
+    probe.textContent = 'body.thread-card-open .voice-mic { display: none !important; }';
+    document.head.appendChild(probe);
+    expect(styleOf(mic).display).toBe('none');
+    probe.remove();
   });
 
   it('the doc surface has no hold-to-talk mic left at all', () => {
@@ -182,11 +177,22 @@ describe('the mic no longer stands down under an open card', () => {
     // retired the doc's hold-to-talk mic entirely (the Record Audio button
     // owns everything audio on that screen), so there is no doc mic for a
     // card to cover. The hub's docked mic (`.hub-nav-dock`) stays.
-    const decls = declarationsOnly(CSS);
-    expect(decls).not.toContain('.doc-nav-dock');
-    // Positive control: the class name really would be findable if a rule
-    // still used it.
-    expect(`${decls}\n.doc-nav-dock .voice-mic {}`).toContain('.doc-nav-dock');
-    expect(decls).toContain('.hub-nav-dock .voice-mic');
+    setViewport(IPAD);
+    const loose = styleOf(attach('voice-mic', { tag: 'button' })).position;
+    expect(loose).toBe('fixed');
+    // A mic under the retired doc dock is styled by nothing — it is still the
+    // loose FAB, because `.doc-nav-dock` reaches it with no rule at all.
+    const inDocDock = attach('voice-mic', {
+      tag: 'button',
+      parent: attach('doc-nav-dock'),
+    });
+    expect(styleOf(inDocDock).position).toBe('fixed');
+    // Control: the hub's dock DOES take the mic out of the fixed layer, so the
+    // line above is the absence of `.doc-nav-dock` rules and not of the sheet.
+    const inHubDock = attach('voice-mic', {
+      tag: 'button',
+      parent: attach('hub-nav-dock'),
+    });
+    expect(styleOf(inHubDock).position).toBe('static');
   });
 });

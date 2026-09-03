@@ -1,6 +1,5 @@
-import { readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { IPAD, PHONE, attach, installSheets, setViewport, styleOf } from './css-harness.ts';
 
 /**
  * An expanded comment balloon must not be taller than the screen.
@@ -19,43 +18,86 @@ import { describe, expect, it } from 'vitest';
  * honours a max-height, so `layoutBalloons` stacks the clamped height and the
  * column stays correct.
  *
- * Layout is what no DOM test in this suite can see (happy-dom resolves none),
- * so this asserts the rule exists and is keyed off the classes the code
- * actually produces — `markup-margin.test.ts` pins that an open balloon
- * carries `.lf-balloon-comment` and `.expanded` on one element. How it LOOKS
- * at 1180x820 and at 430px is a browser check; see the report.
+ * This used to regex `max-height:` out of `styles.css` and check the value
+ * contained "vh", which passes on a file that still carries the string even
+ * where a later rule un-caps the balloon. The sheet is installed instead, so
+ * what is read here is the cap the cascade actually applies. happy-dom does
+ * not evaluate `min()` arithmetic, but it DOES resolve the `vh` inside it — so
+ * the cap comes back as two different strings at two viewport heights, and
+ * that difference is the whole claim: the ceiling is the SCREEN, not the
+ * content.
+ *
+ * `.lf-balloon-comment` + `.expanded` on one element is what an open balloon
+ * carries; `markup-margin.test.ts` pins that the code produces it. How the
+ * clamped card LOOKS at 1180x820 and at 430px stays a browser check.
+ *
+ * SHEETS: the review shell links `styles.css` (then `tokens.css`, left out
+ * here — the served file is a vendored Open Props subset plus `src/tokens.css`,
+ * and the mapping half alone re-points every remapped token at an undefined
+ * `var(--gray-N)`).
  */
 
-const CSS = readFileSync(resolve('packages/workspaces-app/src/styles.css'), 'utf8');
+let cleanup = () => {};
+beforeEach(() => {
+  cleanup = installSheets('styles.css');
+});
+afterEach(() => {
+  cleanup();
+  document.body.replaceChildren();
+});
 
-function declarationsOnly(css: string): string {
-  return css.replace(/\/\*[\s\S]*?\*\//g, '');
+/**
+ * The cap an open balloon gets at `vp`, as a STRING taken on the spot.
+ *
+ * happy-dom's computed style resolves lazily and stays live: hold the
+ * declaration across a `setViewport` and every property re-answers for the new
+ * viewport, so two "different" viewports compare equal. Read the value out
+ * before moving the window.
+ */
+function capAt(vp: { width: number; height: number }): string {
+  setViewport(vp);
+  return styleOf(attach('lf-balloon-comment expanded')).maxHeight;
 }
 
-/** The body of one rule, by exact selector. */
-function rule(selector: string): string {
-  const at = new RegExp(
-    `(^|\\n|\\})\\s*${selector.replace(/[.+*[\]()]/g, '\\$&')}\\s*\\{([^}]*)\\}`,
-  ).exec(declarationsOnly(CSS));
-  return at?.[2] ?? '';
+/** An open balloon at `vp`, for properties that do not depend on the viewport. */
+function expanded(vp: { width: number; height: number }) {
+  setViewport(vp);
+  return styleOf(attach('lf-balloon-comment expanded'));
 }
-
-const CLAMPED = '.lf-balloon-comment.expanded';
 
 describe('the expanded comment balloon clamps itself to the viewport', () => {
   it('caps its height against the viewport, not against its content', () => {
-    const body = rule(CLAMPED);
-    const max = /max-height:\s*([^;]+);/.exec(body)?.[1] ?? '';
-    expect(max).toContain('vh');
+    const tall = capAt(IPAD);
+    const short = capAt({ width: IPAD.width, height: 500 });
+    expect(tall).not.toBe('');
+    expect(tall).not.toBe('none');
+    // A content-derived or a fixed cap would read the same at both heights.
+    // A viewport-derived one cannot.
+    expect(tall).not.toBe(short);
+  });
+
+  it('keeps the cap on the phone too, where the fold is even closer', () => {
+    const phone = capAt(PHONE);
+    expect(phone).not.toBe('');
+    expect(phone).not.toBe('none');
   });
 
   it('scrolls INSIDE the balloon, so the composer is reachable without moving the doc', () => {
-    expect(rule(CLAMPED)).toMatch(/overflow-y:\s*auto/);
+    const open = expanded(IPAD);
+    expect(open.overflowY).toBe('auto');
+    // …and the scroll stops at the balloon's own edge rather than chaining to
+    // the document, which is the other half of "the anchor stays put".
+    expect(open.overscrollBehavior).toBe('contain');
   });
 
-  it('positive control: the same lookup finds a rule that has always been there', () => {
-    // Without this, a selector typo would return '' and every assertion above
-    // would pass by searching nothing.
-    expect(rule('.lf-balloon-comment')).toMatch(/cursor:\s*pointer/);
+  it('positive control: a CLOSED balloon is uncapped, and the sheet is live on it', () => {
+    // Without this, a renamed class would make every assertion above pass by
+    // measuring an element no rule reaches: an unstyled box reads '' for
+    // max-height and overflow-y, which is what "uncapped" looks like.
+    setViewport(IPAD);
+    const closed = styleOf(attach('lf-balloon-comment'));
+    expect(closed.cursor).toBe('pointer'); // the rule that predates the clamp
+    expect(closed.maxHeight === 'none' || closed.maxHeight === '').toBe(true);
+    expect(closed.overflowY === 'visible' || closed.overflowY === '').toBe(true);
   });
 });

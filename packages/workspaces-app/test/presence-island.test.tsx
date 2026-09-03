@@ -20,9 +20,7 @@
  *     long-form chip, and both drift notices. These are the renderPresence
  *     tests from hub-render.test.ts, re-aimed at the island.
  */
-import { readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   type DriftNotice,
   type PresenceChip,
@@ -36,6 +34,7 @@ import {
   mountPresenceIsland,
   presenceData,
 } from '../src/hub/presence-island.tsx';
+import { IPAD, installSheets, setViewport, styleOf } from './css-harness.ts';
 
 /** Component re-renders from a signal write are scheduled — settle them. */
 const tick = () => new Promise((r) => setTimeout(r, 0));
@@ -66,7 +65,18 @@ const agent = (id: string, over: Partial<PresenceChip> = {}): PresenceChip => ({
 const noop = (): PresenceHandlers => ({ onTap: vi.fn(), onLongPress: vi.fn() });
 
 let dispose: Array<() => void> = [];
+
+/** The page's own sheets, in the order the hub shell loads them, so any test
+ *  here may read a computed value. Installing a stylesheet changes no text and
+ *  no structure, so the behavioural cases either side are unaffected. */
+let sheets = () => {};
+beforeEach(() => {
+  setViewport(IPAD);
+  sheets = installSheets('hub.css', 'styles.css');
+});
+
 afterEach(() => {
+  sheets();
   for (const d of dispose) d();
   dispose = [];
   document.body.replaceChildren();
@@ -181,13 +191,31 @@ describe('presence island contract', () => {
   });
 
   it('the wrapper is out of layout, so circles stay direct flex items', () => {
-    // happy-dom does no layout, so this is pinned at the rule level: without
-    // `display: contents` the whole strip becomes ONE flex item and the
-    // 430px fit, the gap and `.hub-drift`'s own-line rule all stop applying.
-    const css = readFileSync(resolve('packages/workspaces-app/src/hub.css'), 'utf8');
-    const rule = css.match(/\.hub-presence\s*>\s*\[data-preact-island\]\s*\{([^}]*)\}/)?.[1] ?? '';
-    expect(rule).toContain('display'); // positive control: found the rule
-    expect(rule).toMatch(/display:\s*contents/);
+    // Without `display: contents` on the island's wrapper the whole strip
+    // becomes ONE flex item of `.hub-presence`, and the 430px fit, the gap and
+    // `.hub-drift`'s own-line rule all stop applying.
+    //
+    // Measured off the mounted island rather than read out of the stylesheet:
+    // the rule is `.hub-presence > [data-preact-island]`, so it only holds if
+    // the wrapper Preact creates is a DIRECT child of a `.hub-presence` host —
+    // which is the half a text read cannot see. happy-dom lays nothing out, so
+    // this is the `display` the browser would use, not the row it produces.
+    const { host } = mountPeople([person('Ana Reyes'), person('Ben Ito')]);
+    const wrapper = host.querySelector('[data-preact-island="presence"]') as HTMLElement;
+    expect(wrapper).not.toBeNull();
+    expect(styleOf(wrapper).display).toBe('contents');
+    // Positive control: the sheets are attached and the host really is the
+    // strip the rule is scoped to — an unstyled element reads `''` for every
+    // property, which would make "not a box" true of nothing.
+    //
+    // The circle is checked by VALUE for the same reason. `not.toBe('')` was
+    // satisfied by any rule at all reaching the element, including one that
+    // had stopped making it a circle; `50%` and `28px` are what
+    // `.hub-presence-circle` sets.
+    expect(styleOf(host).display).toBe('flex');
+    const circle = styleOf(host.querySelector('.hub-presence-circle') as HTMLElement);
+    expect(circle.borderRadius).toBe('50%');
+    expect(circle.width).toBe('28px');
   });
 });
 
