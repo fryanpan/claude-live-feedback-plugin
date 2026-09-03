@@ -137,3 +137,22 @@ describe('wireMeMenu', () => {
     });
   });
 });
+
+describe('a deployment with no sign-in page', () => {
+  it('says who you are commenting as, and offers no dead link', async () => {
+    wire({ authenticated: false, emailCodeSignIn: false });
+    button.click();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(menu.textContent).toContain('Commenting as');
+    expect(menu.querySelector('a')).toBeNull();
+  });
+
+  it('POSITIVE CONTROL: the same menu still links where sign-in exists', async () => {
+    wire({ authenticated: false, emailCodeSignIn: true });
+    button.click();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(menu.querySelector('a')?.getAttribute('href')).toBe('/signin?next=%2Fworkspaces%2Fw-1');
+  });
+});
