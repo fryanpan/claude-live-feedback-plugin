@@ -666,11 +666,16 @@ server up can reach an LLM.
 
 **Notes always land at the end of the doc** (owner, 2026-09-01: *"note always
 at the end of doc for now"*). `mergeNotesSection` treats the last "Meeting
-notes" heading as this meeting's section only while that section is the doc's
-tail. The moment a person types a same-level heading below it, the next tick
-starts a fresh section at the end, after their words, and later ticks grow
-that one; the section they wrote past keeps its lines and is never written
-into again. The composer's `previous` is only the newest section, so entries
+notes" heading as this meeting's section and keeps it as the ONE section for
+the meeting even when something lands below it: a Research placeholder pressed
+or spoken between two ticks appends after the notes, and the next tick grows
+the same section rather than opening a second one
+(`notes-one-section.test.ts` asserts this across a sequence of ticks). An
+earlier rule started a fresh section whenever the notes stopped being the
+doc's tail, which left two presses of Research with three sections and the
+meeting's points scattered across them; the transcript-section change that
+followed it (PR 643, transcript moved to the sister file) settled on one
+section. The composer's `previous` is only the newest section, so entries
 it re-lists that an earlier section already holds are dropped rather than
 said twice. An earlier rule kept a section the ledger still claimed items in
 as the target "once chosen", which put live notes above text typed below them.

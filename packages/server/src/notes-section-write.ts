@@ -114,9 +114,9 @@ export function appendResearchPlaceholder(
   } catch {
     return { ok: false, error: 'parse-failed' };
   }
-  // Above the raw transcript for the same reason the notes are: a placeholder
-  // appended past it would leave the meeting's own words in the middle of the
-  // doc — and appending past the NOTES is what used to split them in two.
+  // Through `sectionInsertIndex`, not straight at the end: appending past the
+  // NOTES is what used to split them in two, and the index also stops short of
+  // a legacy raw-transcript section on a doc that still carries one.
   ydoc.transact(() => {
     fragment.insert(sectionInsertIndex(fragment), blocks);
   }, 'agent');
