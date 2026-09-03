@@ -14,6 +14,7 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import { type ParallelismCap, mountParallelismCap } from '../src/hub/parallelism-cap.ts';
+import { HUB_BOOT_SOURCES } from './support/hub-boot-sources.ts';
 
 function dom() {
   document.body.innerHTML = `
@@ -198,7 +199,9 @@ describe('the parallelism cap field', () => {
  * not just that the field behaves correctly in isolation.
  */
 describe('the settings panel carries the field', () => {
-  const shell = readFileSync(resolve(import.meta.dirname, '../src/hub/hub-app.ts'), 'utf8');
+  const shell = HUB_BOOT_SOURCES.map((m) =>
+    readFileSync(resolve(import.meta.dirname, `../src/hub/${m}.ts`), 'utf8'),
+  ).join('\n');
 
   it('has the input, its note and both buttons inside the settings panel', () => {
     const panel = shell.slice(

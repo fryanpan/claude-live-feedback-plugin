@@ -42,6 +42,7 @@ import {
   mountWalkthroughIsland,
   walkthroughData,
 } from '../src/hub/walkthrough-island.tsx';
+import { HUB_BOOT_SOURCES } from './support/hub-boot-sources.ts';
 
 const NOW = 1_700_000_000_000;
 const DETAIL = 'The mockup shows one and the build ships the other. Which do we keep?';
@@ -620,7 +621,9 @@ describe('the walkthrough card: "I have a question" — asking without selecting
 // read rather than driven, and the behaviour — the card leaving on Send,
 // the toast — was verified headlessly against a built client; see the PR.
 describe('hub-app wires both asks to one POST and holds nothing back', () => {
-  const src = readFileSync(join(__dirname, '..', 'src', 'hub', 'hub-app.ts'), 'utf8');
+  const src = HUB_BOOT_SOURCES.map((m) =>
+    readFileSync(join(__dirname, '..', 'src', 'hub', `${m}.ts`), 'utf8'),
+  ).join('\n');
   // The asking verbs themselves live in the review controller; the entry keeps
   // the wiring that says which surface calls which.
   const controller = readFileSync(

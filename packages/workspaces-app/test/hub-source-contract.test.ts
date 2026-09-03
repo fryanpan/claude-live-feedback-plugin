@@ -21,6 +21,7 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { IPAD, PHONE, attach, installSheets, setViewport, styleOf } from './css-harness.ts';
+import { HUB_BOOT_SOURCES } from './support/hub-boot-sources.ts';
 
 let cleanup = () => {};
 beforeEach(() => {
@@ -218,7 +219,10 @@ describe('hub-app voice wiring', () => {
  */
 describe('the unplaced banner is gone from the board', () => {
   it('hub-app neither hosts the strip nor renders it', () => {
-    const src = readFileSync(resolve('packages/workspaces-app/src/hub/hub-app.ts'), 'utf8')
+    const src = HUB_BOOT_SOURCES.map((m) =>
+      readFileSync(resolve(`packages/workspaces-app/src/hub/${m}.ts`), 'utf8'),
+    )
+      .join('\n')
       .split('\n')
       .filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l))
       .join('\n');

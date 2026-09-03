@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { CLOSED_WALK, walkAimAfterOpen } from '../src/hub/hub-review-model';
+import { HUB_BOOT_SOURCES } from './support/hub-boot-sources.ts';
 
 /**
  * Back from a doc has to land where the reader was.
@@ -53,7 +54,9 @@ describe('walkAimAfterOpen', () => {
 // leaves the page, which a driven boot cannot follow. The behaviour itself was verified headlessly
 // at 430px against a built client — see the PR.
 describe('hub-app wires the return', () => {
-  const src = readFileSync(join(__dirname, '..', 'src', 'hub', 'hub-app.ts'), 'utf8');
+  const src = HUB_BOOT_SOURCES.map((m) =>
+    readFileSync(join(__dirname, '..', 'src', 'hub', `${m}.ts`), 'utf8'),
+  ).join('\n');
 
   it('both walkthrough openers route their aim through openFromWalk', () => {
     // Two handlers, one rule. `onOpenThread` reaches the same doc jump when
