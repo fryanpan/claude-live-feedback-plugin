@@ -6,6 +6,7 @@ import * as hubDetailRender from '../src/hub/hub-detail-render.ts';
 import * as hubRender from '../src/hub/hub-render.ts';
 import * as taskDetailIsland from '../src/hub/task-detail-island.tsx';
 import { IPAD, PHONE, attach, installSheets, setViewport, styleOf } from './css-harness.ts';
+import { HUB_BOOT_SOURCES } from './support/hub-boot-sources.ts';
 
 /**
  * The board's two side rails — "Docs" and "Open threads (N)" — are gone.
@@ -31,7 +32,13 @@ import { IPAD, PHONE, attach, installSheets, setViewport, styleOf } from './css-
  */
 
 const SRC = resolve(import.meta.dirname, '../src');
-const hubApp = readFileSync(resolve(SRC, 'hub/hub-app.ts'), 'utf8');
+// The hub's boot sources: `hub-app.ts` and the three modules split out of
+// it. Read as one string because these assertions are about the board's
+// shape, not about which file a line ended up in — a move must not fail
+// them, and an absence checked across all four is the stronger read.
+const hubApp = HUB_BOOT_SOURCES.map((m) => readFileSync(resolve(SRC, `hub/${m}.ts`), 'utf8')).join(
+  '\n',
+);
 
 /* The stylesheet layer is read by RENDERING it, not by grepping it: the
    board's sheets are installed and the classes are built, so "no rail is
