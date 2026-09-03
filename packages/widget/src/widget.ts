@@ -18,6 +18,16 @@ import {
   formatTime,
 } from '@feedback/core';
 import { widgetStyles } from './styles.ts';
+import {
+  askIfSignInRequired,
+  authedPost,
+  composerNote,
+  composerSignIn,
+  httpBase,
+  loadStoredAuth,
+  updateAuthUi,
+  validateStoredAuth,
+} from './widget-auth.ts';
 
 /**
  * The line a thread row shows above its latest comment.
@@ -104,28 +114,6 @@ export interface WidgetOpts {
   authOffer?: boolean;
 }
 
-/** localStorage keys for the popup-token handshake. Always under `cfw:` —
- *  the token belongs to the widget even when identityScope is 'host'.
- *  Host-page storage is readable by every script on that origin, which is
- *  why the handshake is a dev-server-only opt-in — see `authOffer`. */
-const AUTH_TOKEN_KEY = 'cfw:authToken';
-const AUTH_USER_KEY = 'cfw:authUser';
-
-/**
- * `true` when a 401 is the workspace saying "sign in first" rather than
- * "your token is dead". Read off a CLONE so the caller still gets an
- * unconsumed response, and false for anything unparseable — an unreadable
- * body must not turn a dead token into a sign-in prompt.
- */
-async function isSignInRequired(res: Response): Promise<boolean> {
-  try {
-    const body = (await res.clone().json()) as { error?: unknown };
-    return body?.error === 'sign_in_required';
-  } catch {
-    return false;
-  }
-}
-
 const TAG = 'claude-feedback-widget';
 const IGNORE_ATTR = 'data-feedback-widget';
 
@@ -151,12 +139,12 @@ function defaultServerUrl(): string {
   return `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}`;
 }
 
-class FeedbackWidgetEl extends HTMLElement {
-  private shadow: ShadowRoot;
+export class FeedbackWidgetEl extends HTMLElement {
+  shadow: ShadowRoot;
   private client: FeedbackClient | null = null;
-  private user: User | null = null;
+  user: User | null = null;
   private initialized = false;
-  private opts: WidgetOpts & { serverUrl: string; user: string | null } = {
+  opts: WidgetOpts & { serverUrl: string; user: string | null } = {
     serverUrl: '',
     docId: '',
     user: null,
@@ -182,16 +170,16 @@ class FeedbackWidgetEl extends HTMLElement {
   private vvHandler: (() => void) | null = null;
   private showResolved = false;
   /** The popup-token, when this embed offers auth and a person signed in. */
-  private authToken: string | null = null;
+  authToken: string | null = null;
   /** The workspace refuses unsigned writes — learned on load or from a 401. */
-  private signInToWrite = false;
+  signInToWrite = false;
   /** The post that sign-in interrupted, re-run once the token arrives. */
-  private retryAfterSignIn: (() => void) | null = null;
-  private authUser: User | null = null;
+  retryAfterSignIn: (() => void) | null = null;
+  authUser: User | null = null;
   /** The identity the browser had before sign-in — restored on sign-out. */
-  private anonUser: User | null = null;
-  private authPopup: Window | null = null;
-  private authMsgHandler: ((ev: MessageEvent) => void) | null = null;
+  anonUser: User | null = null;
+  authPopup: Window | null = null;
+  authMsgHandler: ((ev: MessageEvent) => void) | null = null;
 
   constructor() {
     super();
@@ -230,7 +218,7 @@ class FeedbackWidgetEl extends HTMLElement {
     });
     this.anonUser = this.user;
     this.opts.authOffer = opts.authOffer === true;
-    if (this.opts.authOffer) this.loadStoredAuth();
+    if (this.opts.authOffer) loadStoredAuth(this);
     this.showResolved = localStorage.getItem('cfw:showResolved') === '1';
     this.currentContext = {
       url: currentUrl(),
@@ -241,8 +229,8 @@ class FeedbackWidgetEl extends HTMLElement {
     this.renderShell();
     this.connect();
     this.startObserver();
-    if (this.opts.authOffer) void this.validateStoredAuth();
-    void this.askIfSignInRequired();
+    if (this.opts.authOffer) void validateStoredAuth(this);
+    void askIfSignInRequired(this);
   }
 
   // Auto-initialize from HTML attributes. Lets the canonical "drop in a tag +
@@ -440,7 +428,7 @@ class FeedbackWidgetEl extends HTMLElement {
     this.shadow.appendChild(panel);
 
     this.statusEl = panel.querySelector('.status') as HTMLElement;
-    this.updateAuthUi();
+    updateAuthUi(this);
 
     panel.querySelector('.close-panel')?.addEventListener('click', () => this.togglePanel(false));
     panel.querySelector('.pick-btn')?.addEventListener('click', () => this.enterFeedbackMode());
@@ -466,249 +454,6 @@ class FeedbackWidgetEl extends HTMLElement {
     const open = force ?? !this.panelOpen;
     this.panelOpen = open;
     panel.classList.toggle('open', open);
-  }
-
-  // --- Workspace sign-in (popup-token handshake) ---
-
-  private httpBase(): string {
-    return this.opts.serverUrl.replace(/^ws/, 'http');
-  }
-
-  /** The one origin the message listener will take a token from. */
-  private serverOrigin(): string {
-    return new URL(this.httpBase()).origin;
-  }
-
-  /**
-   * The cheap question on load: does this workspace refuse unsigned writes?
-   * One GET, no token, and a route that fails or is missing (an older
-   * server) reads as "open" — the 401 on the first write remains the
-   * backstop, so a wrong "open" costs one refused post, never a comment.
-   */
-  private async askIfSignInRequired(): Promise<void> {
-    try {
-      const res = await fetch(`${this.httpBase()}/api/auth/session`);
-      // The route is never gated and always 200s; anything else here is a
-      // proxy page, which is not JSON and lands in the catch.
-      const body = (await res.json()) as { signInToWrite?: unknown };
-      if (body.signInToWrite === true) this.requireSignIn();
-    } catch {}
-  }
-
-  /**
-   * The workspace needs a signed-in writer. Adopt the token a previous visit
-   * left in storage (validated before it is trusted with a post — a dead one
-   * clears and the offer returns), and put the offer in the panel. A plain
-   * embed on an OPEN workspace never reaches here, so it still adopts
-   * nothing and shows nothing — see WidgetOpts.authOffer.
-   */
-  private requireSignIn(): void {
-    if (this.signInToWrite) return;
-    this.signInToWrite = true;
-    if (!this.opts.authOffer) {
-      this.loadStoredAuth();
-      void this.validateStoredAuth();
-    }
-    this.updateAuthUi();
-    this.scheduleRender();
-  }
-
-  private loadStoredAuth(): void {
-    try {
-      this.authToken = localStorage.getItem(AUTH_TOKEN_KEY);
-      const raw = localStorage.getItem(AUTH_USER_KEY);
-      this.authUser = raw ? (JSON.parse(raw) as User) : null;
-    } catch {
-      this.authToken = null;
-      this.authUser = null;
-    }
-    if (this.authUser) this.user = this.authUser;
-  }
-
-  /**
-   * Ask the server whether the stored token still stands. The server 401s a
-   * dead one (revoked, expired, tampered) — that clears it and the offer
-   * returns; it never silently keeps a token the server would refuse.
-   */
-  private async validateStoredAuth(): Promise<void> {
-    if (!this.authToken) return;
-    try {
-      const res = await fetch(`${this.httpBase()}/api/auth/widget-session`, {
-        headers: { authorization: `Bearer ${this.authToken}` },
-      });
-      if (!res.ok) {
-        this.clearAuth();
-        return;
-      }
-      const body = (await res.json()) as { authenticated: boolean; user?: User };
-      if (!body.authenticated || !body.user) {
-        this.clearAuth();
-        return;
-      }
-      this.setAuth(this.authToken, body.user);
-    } catch {
-      // Offline is not signed-out: keep the token, the next post decides.
-    }
-  }
-
-  private setAuth(token: string, user: User): void {
-    this.authToken = token;
-    this.authUser = user;
-    this.user = user;
-    try {
-      localStorage.setItem(AUTH_TOKEN_KEY, token);
-      localStorage.setItem(AUTH_USER_KEY, JSON.stringify(user));
-    } catch {}
-    this.updateAuthUi();
-    this.scheduleRender();
-    // The post this sign-in was for. Rebuilt from the composer, so it goes
-    // out under the identity the widget now holds, token and name both. A
-    // second refusal re-arms it only after an await, so clearing here is safe.
-    this.retryAfterSignIn?.();
-    this.retryAfterSignIn = null;
-  }
-
-  /** Local only — the workspace session lives on, sign-out there revokes. */
-  private clearAuth(): void {
-    this.authToken = null;
-    this.authUser = null;
-    this.user = this.anonUser;
-    try {
-      localStorage.removeItem(AUTH_TOKEN_KEY);
-      localStorage.removeItem(AUTH_USER_KEY);
-    } catch {}
-    this.updateAuthUi();
-    this.scheduleRender();
-  }
-
-  private startSignIn(): void {
-    const url = `${this.httpBase()}/widget-auth?origin=${encodeURIComponent(location.origin)}`;
-    this.authPopup = window.open(url, 'cw-widget-auth', 'popup,width=420,height=560');
-    if (!this.authMsgHandler) {
-      this.authMsgHandler = (ev: MessageEvent) => {
-        // Both walls, independently: the token may only arrive FROM the
-        // workspace origin, and only from the window this widget opened.
-        if (ev.origin !== this.serverOrigin()) return;
-        if (!this.authPopup || ev.source !== this.authPopup) return;
-        const data = ev.data as { type?: string; token?: string; user?: User } | null;
-        if (!data || data.type !== 'cw-widget-auth') return;
-        if (typeof data.token !== 'string' || !data.user) return;
-        this.setAuth(data.token, data.user);
-      };
-      window.addEventListener('message', this.authMsgHandler);
-    }
-  }
-
-  private updateAuthUi(): void {
-    const actions = this.shadow.querySelector('.panel-actions') as HTMLElement | null;
-    if (!actions) return;
-    const me = actions.querySelector('.me') as HTMLElement | null;
-    if (!me) return;
-    actions.querySelector('.auth-signin')?.remove();
-    if (this.user) {
-      me.innerHTML = `<span class="swatch" style="background:${cssColor(this.user.color)}"></span>${escape(this.user.name)}`;
-    }
-    // Sign-in UI exists when this embed opted in, or when it has to.
-    if (!this.opts.authOffer && !this.signInToWrite) return;
-    if (this.authToken) {
-      const out = document.createElement('button');
-      out.className = 'auth-signout';
-      out.textContent = 'sign out';
-      out.addEventListener('click', () => this.clearAuth());
-      me.appendChild(out);
-    } else {
-      const btn = document.createElement('button');
-      btn.className = 'auth-signin';
-      btn.title = 'Sign in with your workspace session to comment as yourself';
-      btn.textContent = 'Sign in';
-      btn.addEventListener('click', () => this.startSignIn());
-      actions.appendChild(btn);
-    }
-  }
-
-  /**
-   * POST with the token when one is held. On a 401 the server has refused
-   * the token (revoked, expired) — sign out locally and retry once without
-   * it, so the comment lands as anonymous rather than vanishing.
-   *
-   * Takes a BUILDER, not a built request: the body names `this.user` as the
-   * claimed author, and the server trusts that claim on the local surface.
-   * A retry that re-sent the request built before `clearAuth()` would carry
-   * the revoked person's name without their token — exactly the attribution
-   * the 401 just refused. Rebuilding after the sign-out sends the anonymous
-   * identity the widget now actually holds.
-   */
-  private async authedPost(url: string, build: () => RequestInit): Promise<Response> {
-    const send = (): Promise<Response> => {
-      const init = build();
-      if (!this.authToken) return fetch(url, init);
-      return fetch(url, {
-        ...init,
-        headers: {
-          ...(init.headers as Record<string, string>),
-          authorization: `Bearer ${this.authToken}`,
-        },
-      });
-    };
-    const res = await send();
-    if (res.status !== 401) return res;
-    // TWO different 401s, and the old code could only see one of them.
-    //
-    // `sign_in_required` is the workspace refusing an UNSIGNED write
-    // (server/src/middleware/write-gate.ts). Clearing a token we do not hold
-    // and retrying anonymously produces the identical refusal, forever, and
-    // every caller here ignores the response — so the comment simply
-    // vanished, which is the exact failure the gate exists to replace.
-    if (await isSignInRequired(res)) {
-      this.requireSignIn();
-      return res;
-    }
-    // Anything else with a token is the token being refused (revoked,
-    // expired): sign out locally and retry once so the comment lands as
-    // anonymous rather than vanishing. Rebuilt after `clearAuth`, so the
-    // retry carries the identity the widget now actually holds.
-    if (!this.authToken) return res;
-    this.clearAuth();
-    return send();
-  }
-
-  /**
-   * Say, inside the composer and beside the draft it blocks, that posting
-   * needs a signed-in person — and arm the retry, so signing in finishes the
-   * post rather than asking for a second click.
-   *
-   * ALWAYS a control the person clicks — never an automatic `window.open`.
-   * After a refusal this runs past an awaited request and a parsed body, by
-   * which point the submit click's transient activation has expired, so a
-   * popup opened here is exactly what a popup blocker exists to stop. The
-   * click on this control carries its own activation.
-   *
-   * The retry checks the composer is still on the page: a draft cancelled
-   * while the popup was open must not be posted by the token arriving.
-   */
-  private composerSignIn(composer: HTMLElement, submit: HTMLButtonElement): void {
-    // No `type="button"` on any widget control: nothing in the shadow root
-    // is a form, so the default cannot submit — and each one shipped bytes.
-    const btn = document.createElement('button');
-    btn.className = 'auth-signin';
-    btn.textContent = 'Sign in';
-    btn.addEventListener('click', () => this.startSignIn());
-    this.composerNote(composer, 'Sign in to post. Your draft is kept. ').appendChild(btn);
-    this.retryAfterSignIn = () => {
-      if (composer.isConnected) submit.click();
-    };
-  }
-
-  /** The composer's one line of news, created on first use. */
-  private composerNote(composer: HTMLElement, text: string): HTMLElement {
-    let err = composer.querySelector('.composer-err') as HTMLElement | null;
-    if (!err) {
-      err = document.createElement('div');
-      err.className = 'composer-err';
-      composer.appendChild(err);
-    }
-    err.textContent = text;
-    return err;
   }
 
   // --- Feedback mode ---
@@ -870,7 +615,7 @@ class FeedbackWidgetEl extends HTMLElement {
     composer.querySelector('.cancel')?.addEventListener('click', () => composer.remove());
     const submit = composer.querySelector('.submit') as HTMLButtonElement;
     // Say it before the first attempt when the widget already knows.
-    if (this.signInToWrite && !this.authToken) this.composerSignIn(composer, submit);
+    if (this.signInToWrite && !this.authToken) composerSignIn(this, composer, submit);
     submit.addEventListener('click', async () => {
       const text = ta.value.trim();
       if (!text || !this.user) return;
@@ -889,8 +634,8 @@ class FeedbackWidgetEl extends HTMLElement {
         // Kept on failure, with the text still in it.
         submit.disabled = false;
         submit.textContent = 'Post';
-        if (this.signInToWrite && !this.authToken) this.composerSignIn(composer, submit);
-        else this.composerNote(composer, 'Couldn’t post — try again.');
+        if (this.signInToWrite && !this.authToken) composerSignIn(this, composer, submit);
+        else composerNote(composer, 'Couldn’t post — try again.');
         return;
       }
       composer.remove();
@@ -902,8 +647,9 @@ class FeedbackWidgetEl extends HTMLElement {
    *  Discarding it on a refusal would lose the very thing the sign-in prompt
    *  is asking the person to come back and finish. */
   private async postNewThread(anchor: ElementAnchor, text: string): Promise<boolean> {
-    const res = await this.authedPost(
-      `${this.httpBase()}/api/docs/${encodeURIComponent(this.opts.docId)}/threads`,
+    const res = await authedPost(
+      this,
+      `${httpBase(this)}/api/docs/${encodeURIComponent(this.opts.docId)}/threads`,
       () => ({
         method: 'POST',
         headers: { 'content-type': 'application/json' },
@@ -915,8 +661,9 @@ class FeedbackWidgetEl extends HTMLElement {
 
   /** `false` when the server refused it — see `postNewThread`. */
   private async postReply(threadId: string, text: string): Promise<boolean> {
-    const res = await this.authedPost(
-      `${this.httpBase()}/api/docs/${encodeURIComponent(this.opts.docId)}/threads/${encodeURIComponent(threadId)}/comments`,
+    const res = await authedPost(
+      this,
+      `${httpBase(this)}/api/docs/${encodeURIComponent(this.opts.docId)}/threads/${encodeURIComponent(threadId)}/comments`,
       () => ({
         method: 'POST',
         headers: { 'content-type': 'application/json' },
@@ -928,8 +675,9 @@ class FeedbackWidgetEl extends HTMLElement {
 
   private async setStatus(threadId: string, status: 'open' | 'resolved'): Promise<void> {
     const action = status === 'resolved' ? 'resolve' : 'reopen';
-    await this.authedPost(
-      `${this.httpBase()}/api/docs/${encodeURIComponent(this.opts.docId)}/threads/${encodeURIComponent(threadId)}/${action}`,
+    await authedPost(
+      this,
+      `${httpBase(this)}/api/docs/${encodeURIComponent(this.opts.docId)}/threads/${encodeURIComponent(threadId)}/${action}`,
       () => ({ method: 'POST' }),
     );
   }
@@ -1208,7 +956,7 @@ class FeedbackWidgetEl extends HTMLElement {
 
   private pendingRender = false;
 
-  private scheduleRender(): void {
+  scheduleRender(): void {
     if (this.pendingRender) return;
     this.pendingRender = true;
     requestAnimationFrame(() => {
