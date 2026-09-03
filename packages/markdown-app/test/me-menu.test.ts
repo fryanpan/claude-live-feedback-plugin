@@ -154,6 +154,54 @@ describe('wireMeMenu', () => {
     expect(menu.querySelector('#hub-me-name')).not.toBeNull();
   });
 
+  it('lets an unsigned browser rename itself locally, with no profile write', async () => {
+    const saveName = vi.fn(async () => true);
+    const storeName = vi.fn();
+    const onRenamed = vi.fn();
+    wire({ authenticated: false }, { saveName, storeName, onRenamed });
+    button.click();
+    await vi.waitFor(() => {
+      expect(menu.querySelector('.hub-me-rename')).not.toBeNull();
+    });
+    // Signing in is still offered beside it — renaming is not a substitute.
+    expect(menu.querySelector('a.hub-me-action')?.textContent).toBe('Sign in');
+    menu.querySelector<HTMLButtonElement>('.hub-me-rename')?.click();
+    expect(menu.classList.contains('hidden')).toBe(false);
+    const input = menu.querySelector<HTMLInputElement>('#hub-me-name');
+    // Seeded from the chip's local name, which is the only name this browser has.
+    expect(input?.value).toBe('Casey');
+    if (!input) throw new Error('no rename input');
+    input.value = 'Casey Jones';
+    menu.querySelector('form')?.dispatchEvent(new Event('submit', { cancelable: true }));
+    await vi.waitFor(() => {
+      expect(onRenamed).toHaveBeenCalled();
+    });
+    // The local store is the whole record: there is no session to write to,
+    // and posting to the profile route would just 401.
+    expect(saveName).not.toHaveBeenCalled();
+    expect(storeName).toHaveBeenCalledWith('Casey Jones');
+    expect(menu.classList.contains('hidden')).toBe(true);
+  });
+
+  it('rejects an empty name and keeps the form up', async () => {
+    const storeName = vi.fn();
+    const onRenamed = vi.fn();
+    wire({ authenticated: false }, { storeName, onRenamed });
+    button.click();
+    await vi.waitFor(() => {
+      expect(menu.querySelector('.hub-me-rename')).not.toBeNull();
+    });
+    menu.querySelector<HTMLButtonElement>('.hub-me-rename')?.click();
+    const input = menu.querySelector<HTMLInputElement>('#hub-me-name');
+    if (!input) throw new Error('no rename input');
+    input.value = '   ';
+    menu.querySelector('form')?.dispatchEvent(new Event('submit', { cancelable: true }));
+    expect(storeName).not.toHaveBeenCalled();
+    expect(onRenamed).not.toHaveBeenCalled();
+    expect(menu.querySelector('#hub-me-name')).not.toBeNull();
+    expect(menu.classList.contains('hidden')).toBe(false);
+  });
+
   it('falls back to the signed-out view when the session read fails', async () => {
     wire({ authenticated: false }, { fetchSession: async () => Promise.reject(new Error('down')) });
     button.click();
