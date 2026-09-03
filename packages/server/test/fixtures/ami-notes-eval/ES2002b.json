@@ -5,7 +5,7 @@
   "source": "https://groups.inf.ed.ac.uk/ami/corpus/",
   "window": {
     "fromSeconds": 420,
-    "seconds": 660
+    "seconds": 900
   },
   "board": [
     {
@@ -1227,6 +1227,758 @@
         {
           "speaker": "B",
           "text": "Okay"
+        },
+        {
+          "speaker": "D",
+          "text": "I I haven't brought out one specific marketing idea although my sense is that what we should try and think about is what are the current trends in materials and shapes and styles"
+        },
+        {
+          "speaker": "B",
+          "text": "Mm-hmm"
+        },
+        {
+          "speaker": "D",
+          "text": "and then use that But not let that confine us technologically"
+        }
+      ]
+    },
+    {
+      "turns": [
+        {
+          "speaker": "B",
+          "text": "Okay"
+        },
+        {
+          "speaker": "D",
+          "text": "So"
+        },
+        {
+          "speaker": "B",
+          "text": "Right"
+        },
+        {
+          "speaker": "D",
+          "text": "Alright Any um comments on all of that"
+        },
+        {
+          "speaker": "B",
+          "text": "Well um"
+        },
+        {
+          "speaker": "D",
+          "text": "That's"
+        },
+        {
+          "speaker": "B",
+          "text": "one"
+        },
+        {
+          "speaker": "D",
+          "text": "uh"
+        },
+        {
+          "speaker": "B",
+          "text": "of the things that we have to decide on by the end of the meeting is who we're gonna be um who's our our target audience our target market"
+        }
+      ]
+    },
+    {
+      "turns": [
+        {
+          "speaker": "D",
+          "text": "Yeah"
+        },
+        {
+          "speaker": "B",
+          "text": "Um so if we want something that that looks good and is easy to use but has y is fairly powerful product whatever who do we really want to aim that at"
+        },
+        {
+          "speaker": "D",
+          "text": "Okay"
+        },
+        {
+          "speaker": "B",
+          "text": "I mean"
+        },
+        {
+          "speaker": "D",
+          "text": "Where's the money maybe"
+        },
+        {
+          "speaker": "B",
+          "text": "Yeah who wou who would have the money to spend"
+        }
+      ]
+    },
+    {
+      "turns": [
+        {
+          "speaker": "D",
+          "text": "Yeah"
+        },
+        {
+          "speaker": "B",
+          "text": "Well i if"
+        },
+        {
+          "speaker": "D",
+          "text": "And who watches"
+        },
+        {
+          "speaker": "B",
+          "text": "if like"
+        },
+        {
+          "speaker": "D",
+          "text": "T_V_"
+        },
+        {
+          "speaker": "B",
+          "text": "twenty five Euro is our is our selling price"
+        },
+        {
+          "speaker": "D",
+          "text": "Mm-hmm"
+        },
+        {
+          "speaker": "B",
+          "text": "then you can imagine well I don't I'm not really sure how much that will"
+        },
+        {
+          "speaker": "D",
+          "text": "Mm"
+        },
+        {
+          "speaker": "B",
+          "text": "retail at But you want it's somebody who's not gonna just use the remote that comes with their telly I suppose"
+        },
+        {
+          "speaker": "D",
+          "text": "Mm-hmm"
+        },
+        {
+          "speaker": "B",
+          "text": "they're gonna actually go out and buy one"
+        },
+        {
+          "speaker": "D",
+          "text": "Yeah"
+        },
+        {
+          "speaker": "B",
+          "text": "So who do you think we're aiming this at"
+        }
+      ]
+    },
+    {
+      "turns": [
+        {
+          "speaker": "A",
+          "text": "Um I think it'll be the mid range to the high end market in terms of people 'Cause twenty five Euros for a remote how much is that lo locally in pounds"
+        },
+        {
+          "speaker": "B",
+          "text": "It's about sixteen seventeen pounds I think"
+        },
+        {
+          "speaker": "A",
+          "text": "Is that too is that a lot of money to buy an extra remote or a replacement"
+        },
+        {
+          "speaker": "B",
+          "text": "Yeah"
+        }
+      ]
+    },
+    {
+      "turns": [
+        {
+          "speaker": "A",
+          "text": "remote"
+        },
+        {
+          "speaker": "D",
+          "text": "Mm-hmm"
+        },
+        {
+          "speaker": "B",
+          "text": "okay"
+        },
+        {
+          "speaker": "A",
+          "text": "Right Um so maybe not the high end range but maybe middle middle up-ish"
+        },
+        {
+          "speaker": "B",
+          "text": "Okay"
+        },
+        {
+          "speaker": "A",
+          "text": "Kind of You know how much I dunno I guess you pay"
+        },
+        {
+          "speaker": "B",
+          "text": "Okay"
+        },
+        {
+          "speaker": "A",
+          "text": "what ten ten quid for a remote Like a simple replacement"
+        }
+      ]
+    },
+    {
+      "turns": [
+        {
+          "speaker": "B",
+          "text": "Yeah"
+        },
+        {
+          "speaker": "A",
+          "text": "right I mean if you lost your remote and the first thing"
+        },
+        {
+          "speaker": "B",
+          "text": "Yeah"
+        },
+        {
+          "speaker": "A",
+          "text": "you just wanna go"
+        },
+        {
+          "speaker": "D",
+          "text": "Yeah"
+        },
+        {
+          "speaker": "A",
+          "text": "out and get"
+        },
+        {
+          "speaker": "B",
+          "text": "yeah"
+        },
+        {
+          "speaker": "D",
+          "text": "This"
+        },
+        {
+          "speaker": "A",
+          "text": "would you"
+        },
+        {
+          "speaker": "D",
+          "text": "this"
+        },
+        {
+          "speaker": "A",
+          "text": "how much"
+        },
+        {
+          "speaker": "D",
+          "text": "kinda"
+        },
+        {
+          "speaker": "A",
+          "text": "would you"
+        },
+        {
+          "speaker": "D",
+          "text": "touches"
+        },
+        {
+          "speaker": "A",
+          "text": "pay"
+        },
+        {
+          "speaker": "D",
+          "text": "on your comments there David These are the age groups which we"
+        },
+        {
+          "speaker": "A",
+          "text": "Yeah"
+        },
+        {
+          "speaker": "D",
+          "text": "have information on and these are this is a table of h what people would pay more for a certain feature Just"
+        },
+        {
+          "speaker": "B",
+          "text": "Okay"
+        },
+        {
+          "speaker": "D",
+          "text": "gives us a rough idea of where the w the will to spend money on T_V_ equipment is"
+        }
+      ]
+    },
+    {
+      "turns": [
+        {
+          "speaker": "B",
+          "text": "Okay"
+        },
+        {
+          "speaker": "D",
+          "text": "Mostly focused around the twenty five age group"
+        },
+        {
+          "speaker": "B",
+          "text": "Yeah so do you think we're we're aiming at a fairly young market then"
+        },
+        {
+          "speaker": "A",
+          "text": "Yep"
+        },
+        {
+          "speaker": "D",
+          "text": "Sort of young professional kind"
+        },
+        {
+          "speaker": "B",
+          "text": "Yeah"
+        },
+        {
+          "speaker": "D",
+          "text": "of Mm-hmm"
+        },
+        {
+          "speaker": "B",
+          "text": "okay"
+        },
+        {
+          "speaker": "C",
+          "text": "Um"
+        },
+        {
+          "speaker": "B",
+          "text": "Um do you think then uh voice recognition is something we should really seriously consider"
+        }
+      ]
+    },
+    {
+      "turns": [
+        {
+          "speaker": "B",
+          "text": "What what do you think Craig"
+        },
+        {
+          "speaker": "C",
+          "text": "Well did you not say it was the the adults that were going for the the voice recognition Sort of the"
+        },
+        {
+          "speaker": "D",
+          "text": "Uh"
+        },
+        {
+          "speaker": "C",
+          "text": "the older"
+        },
+        {
+          "speaker": "D",
+          "text": "yeah"
+        },
+        {
+          "speaker": "C",
+          "text": "group"
+        },
+        {
+          "speaker": "D",
+          "text": "it's the"
+        },
+        {
+          "speaker": "D",
+          "text": "Yep"
+        },
+        {
+          "speaker": "C",
+          "text": "Uh"
+        },
+        {
+          "speaker": "D",
+          "text": "It"
+        },
+        {
+          "speaker": "C",
+          "text": "f"
+        },
+        {
+          "speaker": "D",
+          "text": "does it does fit with the market that we're sort of identifying"
+        },
+        {
+          "speaker": "B",
+          "text": "N yeah"
+        },
+        {
+          "speaker": "D",
+          "text": "in terms of"
+        },
+        {
+          "speaker": "B",
+          "text": "I think we are gonna have to narrow it down to say let's target these"
+        }
+      ]
+    },
+    {
+      "turns": [
+        {
+          "speaker": "D",
+          "text": "Okay"
+        },
+        {
+          "speaker": "B",
+          "text": "people and give them what they want and"
+        },
+        {
+          "speaker": "D",
+          "text": "Yeah"
+        },
+        {
+          "speaker": "B",
+          "text": "'cause you know"
+        },
+        {
+          "speaker": "D",
+          "text": "Sure"
+        },
+        {
+          "speaker": "B",
+          "text": "there needs to be some kind of"
+        },
+        {
+          "speaker": "D",
+          "text": "Sure"
+        },
+        {
+          "speaker": "B",
+          "text": "selling point to"
+        },
+        {
+          "speaker": "D",
+          "text": "Yeah"
+        },
+        {
+          "speaker": "B",
+          "text": "it So um anybody anything there to add Just kind of young professionals uh th like if we are going to include speech recognition it's kind of between fifteen and thirty five seems to be like a really high response to that"
+        }
+      ]
+    },
+    {
+      "turns": [
+        {
+          "speaker": "D",
+          "text": "Mm-hmm"
+        },
+        {
+          "speaker": "B",
+          "text": "So we could say"
+        },
+        {
+          "speaker": "A",
+          "text": "I"
+        },
+        {
+          "speaker": "B",
+          "text": "that"
+        },
+        {
+          "speaker": "A",
+          "text": "I"
+        },
+        {
+          "speaker": "B",
+          "text": "was"
+        },
+        {
+          "speaker": "A",
+          "text": "think"
+        },
+        {
+          "speaker": "B",
+          "text": "our target"
+        },
+        {
+          "speaker": "A",
+          "text": "twenty five to thirty five is is is fair to add that in as"
+        },
+        {
+          "speaker": "B",
+          "text": "Yeah"
+        },
+        {
+          "speaker": "A",
+          "text": "a group"
+        },
+        {
+          "speaker": "D",
+          "text": "Mm-hmm"
+        },
+        {
+          "speaker": "A",
+          "text": "as well because"
+        },
+        {
+          "speaker": "D",
+          "text": "Yeah"
+        },
+        {
+          "speaker": "A",
+          "text": "that's more than half your group of people who are willing to at least try"
+        },
+        {
+          "speaker": "D",
+          "text": "Yeah"
+        },
+        {
+          "speaker": "A",
+          "text": "and use your technology"
+        },
+        {
+          "speaker": "B",
+          "text": "Mm-hmm"
+        },
+        {
+          "speaker": "D",
+          "text": "yeah"
+        },
+        {
+          "speaker": "B",
+          "text": "Okay so fifteen to thirty five look fairly young"
+        },
+        {
+          "speaker": "D",
+          "text": "Yeah"
+        },
+        {
+          "speaker": "A",
+          "text": "Yeah"
+        },
+        {
+          "speaker": "B",
+          "text": "You know they have bit of expendable income to spend on this sort of thing"
+        }
+      ]
+    },
+    {
+      "turns": [
+        {
+          "speaker": "D",
+          "text": "Mm-hmm"
+        },
+        {
+          "speaker": "A",
+          "text": "I think perhaps that age group is significant as well because those are people who use the computer"
+        },
+        {
+          "speaker": "D",
+          "text": "Mm-hmm"
+        },
+        {
+          "speaker": "A",
+          "text": "who are familiar with their with computers in in their everyday work"
+        },
+        {
+          "speaker": "B",
+          "text": "Yeah"
+        },
+        {
+          "speaker": "D",
+          "text": "Mm-hmm"
+        },
+        {
+          "speaker": "A",
+          "text": "I think people who are maybe about"
+        },
+        {
+          "speaker": "D",
+          "text": "Mm-hmm"
+        },
+        {
+          "speaker": "A",
+          "text": "I wouldn't say thirty five but people who are about"
+        },
+        {
+          "speaker": "D",
+          "text": "Mm-hmm"
+        },
+        {
+          "speaker": "A",
+          "text": "forty-ish and above now"
+        }
+      ]
+    },
+    {
+      "turns": [
+        {
+          "speaker": "D",
+          "text": "Mm-hmm"
+        },
+        {
+          "speaker": "A",
+          "text": "would"
+        },
+        {
+          "speaker": "D",
+          "text": "But"
+        },
+        {
+          "speaker": "A",
+          "text": "not"
+        },
+        {
+          "speaker": "D",
+          "text": "yeah"
+        },
+        {
+          "speaker": "A",
+          "text": "be so dependent and reliant on a computer"
+        },
+        {
+          "speaker": "B",
+          "text": "Yeah"
+        },
+        {
+          "speaker": "A",
+          "text": "or"
+        },
+        {
+          "speaker": "D",
+          "text": "Yeah"
+        },
+        {
+          "speaker": "A",
+          "text": "a mobile"
+        },
+        {
+          "speaker": "D",
+          "text": "sure"
+        },
+        {
+          "speaker": "A",
+          "text": "phone or something like that"
+        },
+        {
+          "speaker": "B",
+          "text": "So"
+        },
+        {
+          "speaker": "D",
+          "text": "Mm-hmm"
+        },
+        {
+          "speaker": "A",
+          "text": "So these are people who are gadgety right People"
+        },
+        {
+          "speaker": "B",
+          "text": "Yeah"
+        },
+        {
+          "speaker": "A",
+          "text": "who are u growing up used to you know in schools and in universities when you go on to their working lives"
+        },
+        {
+          "speaker": "B",
+          "text": "Yeah"
+        },
+        {
+          "speaker": "A",
+          "text": "people who would"
+        },
+        {
+          "speaker": "B",
+          "text": "So"
+        },
+        {
+          "speaker": "A",
+          "text": "you"
+        },
+        {
+          "speaker": "B",
+          "text": "they'll"
+        },
+        {
+          "speaker": "A",
+          "text": "know regular"
+        },
+        {
+          "speaker": "B",
+          "text": "not sh not shy"
+        },
+        {
+          "speaker": "A",
+          "text": "Yeah"
+        }
+      ]
+    },
+    {
+      "turns": [
+        {
+          "speaker": "B",
+          "text": "away from something"
+        },
+        {
+          "speaker": "A",
+          "text": "Yeah"
+        },
+        {
+          "speaker": "B",
+          "text": "quite high-tech"
+        },
+        {
+          "speaker": "D",
+          "text": "Yeah"
+        },
+        {
+          "speaker": "B",
+          "text": "That that's"
+        },
+        {
+          "speaker": "A",
+          "text": "Mm"
+        },
+        {
+          "speaker": "B",
+          "text": "that's a good point Um okay so um so shall we make the decision uh to include speech recognition"
+        },
+        {
+          "speaker": "D",
+          "text": "If we can"
+        },
+        {
+          "speaker": "B",
+          "text": "if we can"
+        },
+        {
+          "speaker": "A",
+          "text": "I I think"
+        },
+        {
+          "speaker": "C",
+          "text": "Yeah"
+        },
+        {
+          "speaker": "A",
+          "text": "one thing we should try not to avoid is not to say we have to use speech recognition right now"
+        }
+      ]
+    },
+    {
+      "turns": [
+        {
+          "speaker": "D",
+          "text": "Yeah"
+        },
+        {
+          "speaker": "B",
+          "text": "Okay"
+        },
+        {
+          "speaker": "A",
+          "text": "because"
+        },
+        {
+          "speaker": "B",
+          "text": "Why is that"
         }
       ]
     }

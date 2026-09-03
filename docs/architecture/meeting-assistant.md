@@ -1381,7 +1381,7 @@ whether this intent is useful or a nuisance.
 Everything in the notetaking behaviour above is a property of what a MODEL
 wrote, and a unit test can only prove the instruction was SENT. So the
 instructions are checked the way a person would check them — run real meetings
-through the real pipeline and read the notes — except on 202 ticks rather than
+through the real pipeline and read the notes — except on 273 ticks rather than
 three (`scripts/notes-eval.ts`).
 
 **The corpus is AMI** (CC BY 4.0), the same one `room-labels-check.ts` scores
