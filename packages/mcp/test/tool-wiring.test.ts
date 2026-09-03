@@ -25,8 +25,13 @@ const SRC = readMcpSource();
 const declared = new Set(
   [...SRC.matchAll(/\n {6}name: '([a-z0-9_]+)',\n {6}description:/g)].map((m) => m[1] as string),
 );
+// Indentation is `{4,6}` rather than a fixed depth because the dispatch is
+// mid-move: an arm still in `mcp.ts` sits inside the request handler at six,
+// and one that has reached `tools/` sits inside its domain function at four.
+// It stays a bounded range rather than ` +` so that a `case` nested deeper —
+// inside a helper, inside another switch — cannot be counted as a tool.
 const dispatched = new Set(
-  [...SRC.matchAll(/\n {6}case '([a-z0-9_]+)': \{/g)].map((m) => m[1] as string),
+  [...SRC.matchAll(/\n {4,6}case '([a-z0-9_]+)': \{/g)].map((m) => m[1] as string),
 );
 
 describe('MCP tool wiring', () => {
@@ -59,7 +64,7 @@ describe('MCP tool wiring', () => {
       ['refresh_workspace', 'refresh_review'],
       ['set_workspace_groups', 'set_review_groups'],
     ] as const) {
-      expect(SRC, alias).toContain(`case '${alias}':\n      case '${now}': {`);
+      expect(SRC, alias).toMatch(new RegExp(`\\n( {4,6})case '${alias}':\\n\\1case '${now}': \\{`));
       // …and the old name is NOT advertised: an agent reading the tool list
       // should find one name for one thing.
       expect(declared.has(alias), alias).toBe(false);

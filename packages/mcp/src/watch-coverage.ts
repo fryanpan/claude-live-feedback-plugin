@@ -252,3 +252,31 @@ export function restoreNoticeContent(opts: {
   if (alert) lines.push(alert);
   return lines.length > 0 ? lines.join('\n') : null;
 }
+
+/**
+ * What this session's watch restore did, as `list_watched_docs` reports it
+ * and `restoreNoticeContent` narrates it.
+ *
+ * It lives here rather than in `mcp.ts` because both readers are now outside
+ * that file — the notice renderer below, and the document tools in
+ * `tools/docs.ts` — and `mcp.ts` is a bundle entry point nothing may import.
+ */
+export interface RestoreState {
+  /** `restored` — the server answered and its set is wired (possibly empty:
+   *  never watched anything under this identity). `session-only` — no stable
+   *  identity, nothing to restore from. `pending` — not tried yet. `failed` —
+   *  the server did not answer; retried on the next tool call. */
+  status: 'pending' | 'restored' | 'session-only' | 'failed';
+  from: 'server' | 'session';
+  /** Keys re-wired from the server's set on this process's restore. */
+  restored: string[];
+  /** Boards this session was re-ATTACHED to on restore — the half a
+   *  re-wired watch key does not cover, since every delivery gate asks for a
+   *  live attachment and the old record comes back stale. */
+  reattached?: string[];
+  /** Keys the server dropped as dead (their doc no longer exists). */
+  pruned: string[];
+  at?: string;
+  error?: string;
+  attempts: number;
+}
