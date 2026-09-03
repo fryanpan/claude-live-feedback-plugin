@@ -27,7 +27,7 @@ import { fileURLToPath } from 'node:url';
 const SRC_DIR = join(dirname(fileURLToPath(import.meta.url)), '../../src');
 
 /** Every file the dispatch and the registry live in, in source order. */
-export const MCP_SOURCE_FILES = ['tool-schemas.ts', 'mcp.ts'] as const;
+export const MCP_SOURCE_FILES = ['tool-schemas.ts', 'mcp.ts', 'tools/docs.ts'] as const;
 
 /** All of it, joined — the subject the source-shape tests are written about. */
 export function readMcpSource(): string {

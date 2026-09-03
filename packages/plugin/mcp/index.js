@@ -14392,34 +14392,6 @@ function projectTaskRows(tasks, fields) {
   });
 }
 
-// packages/mcp/src/thread-create.ts
-function threadCreateRequest(input, author) {
-  const doc2 = encodeURIComponent(input.docId);
-  if (input.find === undefined) {
-    return {
-      path: `/api/docs/${doc2}/threads`,
-      body: {
-        author,
-        text: input.text,
-        anchor: { kind: "subject" },
-        ...input.review !== undefined ? { review: input.review } : {}
-      }
-    };
-  }
-  return {
-    path: `/api/docs/${doc2}/threads/by_find`,
-    body: {
-      author,
-      text: input.text,
-      find: input.find,
-      ...input.contextBefore !== undefined ? { contextBefore: input.contextBefore } : {},
-      ...input.contextAfter !== undefined ? { contextAfter: input.contextAfter } : {},
-      ...input.occurrence !== undefined ? { occurrence: input.occurrence } : {},
-      ...input.review !== undefined ? { review: input.review } : {}
-    }
-  };
-}
-
 // packages/core/src/task-wire.ts
 var TASK_STATUSES = ["triage", "todo", "in-progress", "done"];
 
@@ -16155,6 +16127,527 @@ var TOOL_LIST = {
   ]
 };
 
+// packages/mcp/src/thread-create.ts
+function threadCreateRequest(input, author) {
+  const doc2 = encodeURIComponent(input.docId);
+  if (input.find === undefined) {
+    return {
+      path: `/api/docs/${doc2}/threads`,
+      body: {
+        author,
+        text: input.text,
+        anchor: { kind: "subject" },
+        ...input.review !== undefined ? { review: input.review } : {}
+      }
+    };
+  }
+  return {
+    path: `/api/docs/${doc2}/threads/by_find`,
+    body: {
+      author,
+      text: input.text,
+      find: input.find,
+      ...input.contextBefore !== undefined ? { contextBefore: input.contextBefore } : {},
+      ...input.contextAfter !== undefined ? { contextAfter: input.contextAfter } : {},
+      ...input.occurrence !== undefined ? { occurrence: input.occurrence } : {},
+      ...input.review !== undefined ? { review: input.review } : {}
+    }
+  };
+}
+
+// packages/mcp/src/tools/docs.ts
+async function handleDocsTool(name, a, ctx) {
+  const {
+    http,
+    ok,
+    err,
+    AUTHOR,
+    STATUS_TEXT_MAX,
+    suggestionAuthor,
+    resolveBaseUrl,
+    watchers,
+    watchDoc,
+    watchWorkspace,
+    unwatchDoc,
+    refreshCoverage,
+    watchPersistenceMode,
+    restoreState,
+    lastPersistError,
+    IDENTITY_IS_SHARED,
+    SHARED_IDENTITY_REASON
+  } = ctx;
+  switch (name) {
+    case "list_docs": {
+      const { workspaceId, kind, query, sourcePrefix, limit, cursor, full } = a;
+      const params = new URLSearchParams;
+      if (workspaceId)
+        params.set("workspaceId", workspaceId);
+      if (kind)
+        params.set("kind", kind);
+      if (query)
+        params.set("query", query);
+      if (sourcePrefix)
+        params.set("sourcePrefix", sourcePrefix);
+      params.set("limit", String(typeof limit === "number" && limit > 0 ? Math.min(Math.floor(limit), 500) : 50));
+      if (cursor)
+        params.set("cursor", cursor);
+      if (full)
+        params.set("full", "1");
+      const res = await http("GET", `/api/docs?${params.toString()}`);
+      return ok(res);
+    }
+    case "list_threads": {
+      const { docId, status } = a;
+      const qs = status ? `?status=${encodeURIComponent(status)}` : "";
+      const res = await http("GET", `/api/docs/${encodeURIComponent(docId)}/threads${qs}`);
+      return ok(res);
+    }
+    case "get_thread": {
+      const { docId, threadId } = a;
+      const res = await http("GET", `/api/docs/${encodeURIComponent(docId)}/threads/${encodeURIComponent(threadId)}`);
+      return ok(res);
+    }
+    case "post_reply": {
+      const { docId, threadId, text, review } = a;
+      const res = await http("POST", `/api/docs/${encodeURIComponent(docId)}/threads/${encodeURIComponent(threadId)}/comments`, { author: AUTHOR, text, ...review !== undefined ? { review } : {} });
+      return ok(res);
+    }
+    case "post_status": {
+      const { text, taskId } = a;
+      const body = typeof text === "string" ? text.trim() : "";
+      if (body === "")
+        return err("text is empty — say where the work stands");
+      if (body.length > STATUS_TEXT_MAX) {
+        return err(`text is over ${STATUS_TEXT_MAX} chars — a status is a line to a few sentences; the full report is already on the Activity tab from your end-of-turn message`);
+      }
+      const path = taskId !== undefined && taskId !== "" ? `/api/tasks/${encodeURIComponent(taskId)}/notes` : "/api/agent-notes";
+      const res = await http("POST", path, {
+        agent: AUTHOR.name,
+        kind: "status",
+        text: body,
+        at: Date.now()
+      });
+      return ok({
+        posted: true,
+        ...res.taskId !== undefined ? { taskId: res.taskId } : {},
+        ...res.workspaceId !== undefined ? { workspaceId: res.workspaceId } : {},
+        ...res.taskId === undefined ? {
+          note: "no in-progress task of yours to pin this to — kept on your own recent-activity list; pass taskId to put it on a row"
+        } : {}
+      });
+    }
+    case "create_thread": {
+      const { path, body } = threadCreateRequest(a, AUTHOR);
+      const res = await http("POST", path, body);
+      return ok(res);
+    }
+    case "resolve_thread": {
+      const { docId, threadId } = a;
+      const res = await http("POST", `/api/docs/${encodeURIComponent(docId)}/threads/${encodeURIComponent(threadId)}/resolve`);
+      return ok(res);
+    }
+    case "summarize_thread": {
+      const { docId, threadId, force } = a;
+      const res = await http("POST", `/api/docs/${encodeURIComponent(docId)}/threads/${encodeURIComponent(threadId)}/summary`, force ? { force: true } : undefined);
+      return ok(res);
+    }
+    case "reopen_thread": {
+      const { docId, threadId } = a;
+      const res = await http("POST", `/api/docs/${encodeURIComponent(docId)}/threads/${encodeURIComponent(threadId)}/reopen`);
+      return ok(res);
+    }
+    case "get_doc": {
+      const { docId } = a;
+      const res = await http("GET", `/api/docs/${encodeURIComponent(docId)}/content?reader=${encodeURIComponent(AUTHOR.id)}`);
+      return ok(res);
+    }
+    case "doc_status": {
+      const { docId } = a;
+      const res = await http("GET", `/api/docs/${encodeURIComponent(docId)}/status`);
+      return ok(res);
+    }
+    case "create_review_doc": {
+      const { docId, path, title, setId, hubWorkspaceId, producedBy } = a;
+      const res = await http("POST", "/api/docs", {
+        docId,
+        type: "markdown",
+        sourceUrl: path,
+        owner: process.cwd(),
+        ...title ? { title } : {},
+        ...setId ? { setId } : {},
+        ...hubWorkspaceId ? { hubWorkspaceId } : {},
+        ...producedBy ? { producedBy } : {}
+      });
+      return ok(res);
+    }
+    case "set_doc_content": {
+      const { docId, markdown, confirmOverwriteHumanEdits } = a;
+      const res = await http("POST", `/api/docs/${encodeURIComponent(docId)}/content`, {
+        markdown,
+        author: AUTHOR,
+        ...confirmOverwriteHumanEdits === true ? { confirmOverwriteHumanEdits: true } : {}
+      });
+      return ok(res);
+    }
+    case "reparse_from_disk": {
+      const { docId } = a;
+      const res = await http("POST", `/api/docs/${encodeURIComponent(docId)}/reparse_from_disk`);
+      return ok(res);
+    }
+    case "delete_doc": {
+      const { docId, force } = a;
+      const qs = force ? "?force=true" : "";
+      const res = await http("DELETE", `/api/docs/${encodeURIComponent(docId)}${qs}`);
+      return ok(res);
+    }
+    case "bind_mock": {
+      const { docId, sourceHtmlPath, title, hubWorkspaceId } = a;
+      const res = await http("POST", "/api/docs", {
+        docId,
+        type: "mockup",
+        owner: process.cwd(),
+        ...sourceHtmlPath ? { sourceUrl: sourceHtmlPath } : {},
+        ...title ? { title } : {},
+        ...hubWorkspaceId ? { hubWorkspaceId } : {}
+      });
+      return ok(res);
+    }
+    case "bind_folder": {
+      const {
+        folderPath,
+        workspaceId,
+        hubWorkspaceId,
+        title,
+        include,
+        exclude,
+        maxFiles,
+        subscribe,
+        producedBy
+      } = a;
+      const res = await http("POST", "/api/workspaces", {
+        folderPath,
+        owner: process.cwd(),
+        ...workspaceId ? { workspaceId } : {},
+        ...hubWorkspaceId ? { hubWorkspaceId } : {},
+        ...title ? { title } : {},
+        ...include ? { include } : {},
+        ...exclude ? { exclude } : {},
+        ...maxFiles !== undefined ? { maxFiles } : {},
+        ...producedBy ? { producedBy } : {}
+      });
+      if (subscribe !== false && res?.workspaceId) {
+        await watchWorkspace(res.workspaceId);
+      }
+      return ok(res);
+    }
+    case "create_diff_review": {
+      const {
+        repo,
+        base,
+        target,
+        reviewId,
+        hubWorkspaceId,
+        title,
+        exclude,
+        groups,
+        maxFiles,
+        subscribe,
+        producedBy
+      } = a;
+      const res = await http("POST", "/api/diffs", {
+        repo,
+        base,
+        ...target ? { target } : {},
+        owner: process.cwd(),
+        ...reviewId ? { reviewId } : {},
+        ...hubWorkspaceId ? { hubWorkspaceId } : {},
+        ...title ? { title } : {},
+        ...exclude ? { exclude } : {},
+        ...groups ? { groups } : {},
+        ...maxFiles !== undefined ? { maxFiles } : {},
+        ...producedBy ? { producedBy } : {}
+      });
+      if (subscribe !== false && res?.reviewId) {
+        await watchWorkspace(res.reviewId);
+      }
+      return ok(res);
+    }
+    case "delete_review": {
+      const { setId, force, purge } = a;
+      const params = [force ? "force=true" : "", purge ? "purge=true" : ""].filter(Boolean);
+      const qs = params.length > 0 ? `?${params.join("&")}` : "";
+      const res = await http("DELETE", `/api/reviews/${encodeURIComponent(setId)}${qs}`);
+      return ok(res);
+    }
+    case "archive_review": {
+      const { setId, reason } = a;
+      const res = await http("POST", `/api/reviews/${encodeURIComponent(setId)}/archive`, {
+        author: AUTHOR,
+        ...reason !== undefined ? { reason } : {}
+      });
+      return ok(res);
+    }
+    case "unarchive_review": {
+      const { setId } = a;
+      const res = await http("POST", `/api/reviews/${encodeURIComponent(setId)}/unarchive`, {
+        author: AUTHOR
+      });
+      return ok(res);
+    }
+    case "archive_doc": {
+      const { docId, reason } = a;
+      const res = await http("POST", `/api/docs/${encodeURIComponent(docId)}/archive`, {
+        author: AUTHOR,
+        ...reason !== undefined ? { reason } : {}
+      });
+      return ok(res);
+    }
+    case "unarchive_doc": {
+      const { docId } = a;
+      const res = await http("POST", `/api/docs/${encodeURIComponent(docId)}/unarchive`, {
+        author: AUTHOR
+      });
+      return ok(res);
+    }
+    case "list_archived_reviews": {
+      const res = await http("GET", "/api/reviews/archived");
+      return ok(res);
+    }
+    case "delete_workspace": {
+      const { workspaceId, force, purge } = a;
+      const params = [force ? "force=true" : "", purge ? "purge=true" : ""].filter(Boolean);
+      const qs = params.length > 0 ? `?${params.join("&")}` : "";
+      const res = await http("DELETE", `/api/workspaces/${encodeURIComponent(workspaceId)}${qs}`);
+      return ok(res);
+    }
+    case "refresh_workspace":
+    case "refresh_review": {
+      const { setId, workspaceId } = a;
+      const id = setId ?? workspaceId ?? "";
+      const res = await http("POST", `/api/reviews/${encodeURIComponent(id)}/refresh`, {});
+      return ok(res);
+    }
+    case "set_workspace_groups":
+    case "set_review_groups": {
+      const { setId, workspaceId, groups } = a;
+      const id = setId ?? workspaceId ?? "";
+      const res = await http("POST", `/api/reviews/${encodeURIComponent(id)}/groups`, {
+        groups
+      });
+      return ok(res);
+    }
+    case "find_and_replace": {
+      const {
+        docId,
+        find,
+        replace,
+        contextBefore,
+        contextAfter,
+        occurrence,
+        replaceAll,
+        parseInlineMarks,
+        suggest
+      } = a;
+      const res = await http("POST", `/api/docs/${encodeURIComponent(docId)}/find_and_replace`, {
+        find,
+        replace,
+        ...contextBefore !== undefined ? { contextBefore } : {},
+        ...contextAfter !== undefined ? { contextAfter } : {},
+        ...occurrence !== undefined ? { occurrence } : {},
+        ...replaceAll === true ? { replaceAll: true } : {},
+        ...parseInlineMarks === true ? { parseInlineMarks: true } : {},
+        ...suggest === true ? { suggest: true, author: suggestionAuthor() } : {}
+      });
+      return ok(res);
+    }
+    case "rewrite_thread_region": {
+      const { docId, threadId, replacement, parseInlineMarks, suggest } = a;
+      const res = await http("POST", `/api/docs/${encodeURIComponent(docId)}/threads/${encodeURIComponent(threadId)}/rewrite_region`, {
+        replacement,
+        ...parseInlineMarks === true ? { parseInlineMarks: true } : {},
+        ...suggest === true ? { suggest: true, author: suggestionAuthor() } : {}
+      });
+      return ok(res);
+    }
+    case "list_suggestions": {
+      const { docId } = a;
+      const res = await http("GET", `/api/docs/${encodeURIComponent(docId)}/suggestions`);
+      return ok(res);
+    }
+    case "accept_suggestion": {
+      const { docId, sid } = a;
+      const res = await http("POST", `/api/docs/${encodeURIComponent(docId)}/suggestions/${encodeURIComponent(sid)}/accept`);
+      return ok(res);
+    }
+    case "reject_suggestion": {
+      const { docId, sid } = a;
+      const res = await http("POST", `/api/docs/${encodeURIComponent(docId)}/suggestions/${encodeURIComponent(sid)}/reject`);
+      return ok(res);
+    }
+    case "resolve_all_suggestions": {
+      const { docId, action, authorId } = a;
+      const res = await http("POST", `/api/docs/${encodeURIComponent(docId)}/suggestions/resolve_all`, { action, ...authorId !== undefined ? { authorId } : {} });
+      return ok(res);
+    }
+    case "insert_after_thread": {
+      const { docId, threadId, text } = a;
+      const res = await http("POST", `/api/docs/${encodeURIComponent(docId)}/threads/${encodeURIComponent(threadId)}/insert_after`, { text });
+      return ok(res);
+    }
+    case "insert_blocks_after_thread": {
+      const { docId, threadId, markdown, placement } = a;
+      const res = await http("POST", `/api/docs/${encodeURIComponent(docId)}/threads/${encodeURIComponent(threadId)}/insert_blocks_after`, { markdown, ...placement !== undefined ? { placement } : {} });
+      return ok(res);
+    }
+    case "create_anchor": {
+      const { docId, find, contextBefore, contextAfter, occurrence, label } = a;
+      const res = await http("POST", `/api/docs/${encodeURIComponent(docId)}/agent_anchors`, {
+        find,
+        ...contextBefore !== undefined ? { contextBefore } : {},
+        ...contextAfter !== undefined ? { contextAfter } : {},
+        ...occurrence !== undefined ? { occurrence } : {},
+        ...label !== undefined ? { label } : {}
+      });
+      return ok(res);
+    }
+    case "edit_at_anchor": {
+      const { docId, anchorId, op } = a;
+      const res = await http("POST", `/api/docs/${encodeURIComponent(docId)}/agent_anchors/${encodeURIComponent(anchorId)}/edit`, op);
+      return ok(res);
+    }
+    case "insert_blocks_at_anchor": {
+      const { docId, anchorId, markdown, placement } = a;
+      const res = await http("POST", `/api/docs/${encodeURIComponent(docId)}/agent_anchors/${encodeURIComponent(anchorId)}/insert_blocks`, { markdown, ...placement !== undefined ? { placement } : {} });
+      return ok(res);
+    }
+    case "delete_anchor": {
+      const { docId, anchorId } = a;
+      const res = await http("DELETE", `/api/docs/${encodeURIComponent(docId)}/agent_anchors/${encodeURIComponent(anchorId)}`);
+      return ok(res);
+    }
+    case "delete_block_at_anchor": {
+      const { docId, threadId, anchorId } = a;
+      const res = await http("POST", `/api/docs/${encodeURIComponent(docId)}/delete_block_at_anchor`, {
+        ...threadId !== undefined ? { threadId } : {},
+        ...anchorId !== undefined ? { anchorId } : {}
+      });
+      return ok(res);
+    }
+    case "delete_blocks_in_range": {
+      const {
+        docId,
+        startFind,
+        endFind,
+        contextBefore,
+        contextAfter,
+        startOccurrence,
+        endOccurrence
+      } = a;
+      const res = await http("POST", `/api/docs/${encodeURIComponent(docId)}/delete_blocks_in_range`, {
+        startFind,
+        endFind,
+        ...contextBefore !== undefined ? { contextBefore } : {},
+        ...contextAfter !== undefined ? { contextAfter } : {},
+        ...startOccurrence !== undefined ? { startOccurrence } : {},
+        ...endOccurrence !== undefined ? { endOccurrence } : {}
+      });
+      return ok(res);
+    }
+    case "delete_section": {
+      const { docId, heading, level, occurrence } = a;
+      const res = await http("POST", `/api/docs/${encodeURIComponent(docId)}/delete_section`, {
+        heading,
+        ...level !== undefined ? { level } : {},
+        ...occurrence !== undefined ? { occurrence } : {}
+      });
+      return ok(res);
+    }
+    case "observe_url": {
+      const { docId } = a;
+      return ok({ sseUrl: `${resolveBaseUrl()}/events/${encodeURIComponent(docId)}` });
+    }
+    case "watch_doc": {
+      const { docId } = a;
+      const persisted = await watchDoc(docId);
+      return ok({
+        docId,
+        watching: Array.from(watchers.keys()),
+        persisted,
+        persistence: watchPersistenceMode()
+      });
+    }
+    case "unwatch_doc": {
+      const { docId } = a;
+      const persisted = await unwatchDoc(docId);
+      return ok({
+        docId,
+        watching: Array.from(watchers.keys()),
+        persisted,
+        persistence: watchPersistenceMode()
+      });
+    }
+    case "list_watched_docs": {
+      const coverage = await refreshCoverage();
+      return ok({
+        watching: Array.from(watchers.keys()),
+        persistence: {
+          mode: watchPersistenceMode(),
+          agentId: AUTHOR.id,
+          ...IDENTITY_IS_SHARED ? { reason: SHARED_IDENTITY_REASON } : {}
+        },
+        restore: restoreState,
+        ...coverage ? { coverage } : {},
+        ...lastPersistError ? { lastPersistError } : {}
+      });
+    }
+    case "share_workspace": {
+      const {
+        workspaceId,
+        allowDomains,
+        ttlSeconds,
+        name: slug
+      } = a;
+      const res = await http("POST", "/api/share/workspace", {
+        workspaceId,
+        allowDomains,
+        ttlSeconds,
+        name: slug
+      });
+      return ok(res);
+    }
+    case "share_link": {
+      const res = await http("POST", "/api/share/link", a);
+      return ok(res);
+    }
+    case "set_share_ttl": {
+      const { shareId, ttlSeconds } = a;
+      const res = await http("POST", `/api/share/${encodeURIComponent(shareId)}/ttl`, {
+        ttlSeconds
+      });
+      return ok(res);
+    }
+    case "list_shares": {
+      const res = await http("GET", "/api/share");
+      return ok(res);
+    }
+    case "unshare": {
+      const { shareId } = a;
+      const res = await http("DELETE", `/api/share/${encodeURIComponent(shareId)}`);
+      return ok(res);
+    }
+    case "set_sharing_enabled": {
+      const { enabled } = a;
+      if (typeof enabled !== "boolean") {
+        const res2 = await http("GET", "/api/share");
+        return ok(res2);
+      }
+      const res = await http("POST", "/api/share/enabled", { enabled });
+      return ok(res);
+    }
+  }
+  return;
+}
+
 // packages/mcp/src/voice-line.ts
 function truncate4(s, n) {
   return s.length > n ? `${s.slice(0, n - 1)}…` : s;
@@ -16432,6 +16925,27 @@ async function maybeAutoWatch(name, args) {
   await watchDoc(a.docId);
 }
 var deferredEmits = createDeferredEmitter();
+function toolContext() {
+  return {
+    http,
+    ok,
+    err,
+    AUTHOR,
+    STATUS_TEXT_MAX,
+    suggestionAuthor,
+    resolveBaseUrl,
+    watchers,
+    watchDoc,
+    watchWorkspace,
+    unwatchDoc,
+    refreshCoverage,
+    watchPersistenceMode,
+    restoreState,
+    lastPersistError,
+    IDENTITY_IS_SHARED,
+    SHARED_IDENTITY_REASON
+  };
+}
 server.setRequestHandler(CallToolRequestSchema, async (req) => {
   const { name, arguments: a = {} } = req.params;
   const endToolCall = deferredEmits.beginToolCall();
@@ -16439,474 +16953,10 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
     await ensureWatchesRestored();
     sendDueHeartbeats();
     await maybeAutoWatch(name, a);
+    const fromDocs = await handleDocsTool(name, a, toolContext());
+    if (fromDocs)
+      return fromDocs;
     switch (name) {
-      case "list_docs": {
-        const { workspaceId, kind, query, sourcePrefix, limit, cursor, full } = a;
-        const params = new URLSearchParams;
-        if (workspaceId)
-          params.set("workspaceId", workspaceId);
-        if (kind)
-          params.set("kind", kind);
-        if (query)
-          params.set("query", query);
-        if (sourcePrefix)
-          params.set("sourcePrefix", sourcePrefix);
-        params.set("limit", String(typeof limit === "number" && limit > 0 ? Math.min(Math.floor(limit), 500) : 50));
-        if (cursor)
-          params.set("cursor", cursor);
-        if (full)
-          params.set("full", "1");
-        const res = await http("GET", `/api/docs?${params.toString()}`);
-        return ok(res);
-      }
-      case "list_threads": {
-        const { docId, status } = a;
-        const qs = status ? `?status=${encodeURIComponent(status)}` : "";
-        const res = await http("GET", `/api/docs/${encodeURIComponent(docId)}/threads${qs}`);
-        return ok(res);
-      }
-      case "get_thread": {
-        const { docId, threadId } = a;
-        const res = await http("GET", `/api/docs/${encodeURIComponent(docId)}/threads/${encodeURIComponent(threadId)}`);
-        return ok(res);
-      }
-      case "post_reply": {
-        const { docId, threadId, text, review } = a;
-        const res = await http("POST", `/api/docs/${encodeURIComponent(docId)}/threads/${encodeURIComponent(threadId)}/comments`, { author: AUTHOR, text, ...review !== undefined ? { review } : {} });
-        return ok(res);
-      }
-      case "post_status": {
-        const { text, taskId } = a;
-        const body = typeof text === "string" ? text.trim() : "";
-        if (body === "")
-          return err("text is empty — say where the work stands");
-        if (body.length > STATUS_TEXT_MAX) {
-          return err(`text is over ${STATUS_TEXT_MAX} chars — a status is a line to a few sentences; the full report is already on the Activity tab from your end-of-turn message`);
-        }
-        const path = taskId !== undefined && taskId !== "" ? `/api/tasks/${encodeURIComponent(taskId)}/notes` : "/api/agent-notes";
-        const res = await http("POST", path, {
-          agent: AUTHOR.name,
-          kind: "status",
-          text: body,
-          at: Date.now()
-        });
-        return ok({
-          posted: true,
-          ...res.taskId !== undefined ? { taskId: res.taskId } : {},
-          ...res.workspaceId !== undefined ? { workspaceId: res.workspaceId } : {},
-          ...res.taskId === undefined ? {
-            note: "no in-progress task of yours to pin this to — kept on your own recent-activity list; pass taskId to put it on a row"
-          } : {}
-        });
-      }
-      case "create_thread": {
-        const { path, body } = threadCreateRequest(a, AUTHOR);
-        const res = await http("POST", path, body);
-        return ok(res);
-      }
-      case "resolve_thread": {
-        const { docId, threadId } = a;
-        const res = await http("POST", `/api/docs/${encodeURIComponent(docId)}/threads/${encodeURIComponent(threadId)}/resolve`);
-        return ok(res);
-      }
-      case "summarize_thread": {
-        const { docId, threadId, force } = a;
-        const res = await http("POST", `/api/docs/${encodeURIComponent(docId)}/threads/${encodeURIComponent(threadId)}/summary`, force ? { force: true } : undefined);
-        return ok(res);
-      }
-      case "reopen_thread": {
-        const { docId, threadId } = a;
-        const res = await http("POST", `/api/docs/${encodeURIComponent(docId)}/threads/${encodeURIComponent(threadId)}/reopen`);
-        return ok(res);
-      }
-      case "get_doc": {
-        const { docId } = a;
-        const res = await http("GET", `/api/docs/${encodeURIComponent(docId)}/content?reader=${encodeURIComponent(AUTHOR.id)}`);
-        return ok(res);
-      }
-      case "doc_status": {
-        const { docId } = a;
-        const res = await http("GET", `/api/docs/${encodeURIComponent(docId)}/status`);
-        return ok(res);
-      }
-      case "create_review_doc": {
-        const { docId, path, title, setId, hubWorkspaceId, producedBy } = a;
-        const res = await http("POST", "/api/docs", {
-          docId,
-          type: "markdown",
-          sourceUrl: path,
-          owner: process.cwd(),
-          ...title ? { title } : {},
-          ...setId ? { setId } : {},
-          ...hubWorkspaceId ? { hubWorkspaceId } : {},
-          ...producedBy ? { producedBy } : {}
-        });
-        return ok(res);
-      }
-      case "set_doc_content": {
-        const { docId, markdown, confirmOverwriteHumanEdits } = a;
-        const res = await http("POST", `/api/docs/${encodeURIComponent(docId)}/content`, {
-          markdown,
-          author: AUTHOR,
-          ...confirmOverwriteHumanEdits === true ? { confirmOverwriteHumanEdits: true } : {}
-        });
-        return ok(res);
-      }
-      case "reparse_from_disk": {
-        const { docId } = a;
-        const res = await http("POST", `/api/docs/${encodeURIComponent(docId)}/reparse_from_disk`);
-        return ok(res);
-      }
-      case "delete_doc": {
-        const { docId, force } = a;
-        const qs = force ? "?force=true" : "";
-        const res = await http("DELETE", `/api/docs/${encodeURIComponent(docId)}${qs}`);
-        return ok(res);
-      }
-      case "bind_mock": {
-        const { docId, sourceHtmlPath, title, hubWorkspaceId } = a;
-        const res = await http("POST", "/api/docs", {
-          docId,
-          type: "mockup",
-          owner: process.cwd(),
-          ...sourceHtmlPath ? { sourceUrl: sourceHtmlPath } : {},
-          ...title ? { title } : {},
-          ...hubWorkspaceId ? { hubWorkspaceId } : {}
-        });
-        return ok(res);
-      }
-      case "bind_folder": {
-        const {
-          folderPath,
-          workspaceId,
-          hubWorkspaceId,
-          title,
-          include,
-          exclude,
-          maxFiles,
-          subscribe,
-          producedBy
-        } = a;
-        const res = await http("POST", "/api/workspaces", {
-          folderPath,
-          owner: process.cwd(),
-          ...workspaceId ? { workspaceId } : {},
-          ...hubWorkspaceId ? { hubWorkspaceId } : {},
-          ...title ? { title } : {},
-          ...include ? { include } : {},
-          ...exclude ? { exclude } : {},
-          ...maxFiles !== undefined ? { maxFiles } : {},
-          ...producedBy ? { producedBy } : {}
-        });
-        if (subscribe !== false && res?.workspaceId) {
-          await watchWorkspace(res.workspaceId);
-        }
-        return ok(res);
-      }
-      case "create_diff_review": {
-        const {
-          repo,
-          base,
-          target,
-          reviewId,
-          hubWorkspaceId,
-          title,
-          exclude,
-          groups,
-          maxFiles,
-          subscribe,
-          producedBy
-        } = a;
-        const res = await http("POST", "/api/diffs", {
-          repo,
-          base,
-          ...target ? { target } : {},
-          owner: process.cwd(),
-          ...reviewId ? { reviewId } : {},
-          ...hubWorkspaceId ? { hubWorkspaceId } : {},
-          ...title ? { title } : {},
-          ...exclude ? { exclude } : {},
-          ...groups ? { groups } : {},
-          ...maxFiles !== undefined ? { maxFiles } : {},
-          ...producedBy ? { producedBy } : {}
-        });
-        if (subscribe !== false && res?.reviewId) {
-          await watchWorkspace(res.reviewId);
-        }
-        return ok(res);
-      }
-      case "delete_review": {
-        const { setId, force, purge } = a;
-        const params = [force ? "force=true" : "", purge ? "purge=true" : ""].filter(Boolean);
-        const qs = params.length > 0 ? `?${params.join("&")}` : "";
-        const res = await http("DELETE", `/api/reviews/${encodeURIComponent(setId)}${qs}`);
-        return ok(res);
-      }
-      case "archive_review": {
-        const { setId, reason } = a;
-        const res = await http("POST", `/api/reviews/${encodeURIComponent(setId)}/archive`, {
-          author: AUTHOR,
-          ...reason !== undefined ? { reason } : {}
-        });
-        return ok(res);
-      }
-      case "unarchive_review": {
-        const { setId } = a;
-        const res = await http("POST", `/api/reviews/${encodeURIComponent(setId)}/unarchive`, {
-          author: AUTHOR
-        });
-        return ok(res);
-      }
-      case "archive_doc": {
-        const { docId, reason } = a;
-        const res = await http("POST", `/api/docs/${encodeURIComponent(docId)}/archive`, {
-          author: AUTHOR,
-          ...reason !== undefined ? { reason } : {}
-        });
-        return ok(res);
-      }
-      case "unarchive_doc": {
-        const { docId } = a;
-        const res = await http("POST", `/api/docs/${encodeURIComponent(docId)}/unarchive`, {
-          author: AUTHOR
-        });
-        return ok(res);
-      }
-      case "list_archived_reviews": {
-        const res = await http("GET", "/api/reviews/archived");
-        return ok(res);
-      }
-      case "delete_workspace": {
-        const { workspaceId, force, purge } = a;
-        const params = [force ? "force=true" : "", purge ? "purge=true" : ""].filter(Boolean);
-        const qs = params.length > 0 ? `?${params.join("&")}` : "";
-        const res = await http("DELETE", `/api/workspaces/${encodeURIComponent(workspaceId)}${qs}`);
-        return ok(res);
-      }
-      case "refresh_workspace":
-      case "refresh_review": {
-        const { setId, workspaceId } = a;
-        const id = setId ?? workspaceId ?? "";
-        const res = await http("POST", `/api/reviews/${encodeURIComponent(id)}/refresh`, {});
-        return ok(res);
-      }
-      case "set_workspace_groups":
-      case "set_review_groups": {
-        const { setId, workspaceId, groups } = a;
-        const id = setId ?? workspaceId ?? "";
-        const res = await http("POST", `/api/reviews/${encodeURIComponent(id)}/groups`, {
-          groups
-        });
-        return ok(res);
-      }
-      case "find_and_replace": {
-        const {
-          docId,
-          find,
-          replace,
-          contextBefore,
-          contextAfter,
-          occurrence,
-          replaceAll,
-          parseInlineMarks,
-          suggest
-        } = a;
-        const res = await http("POST", `/api/docs/${encodeURIComponent(docId)}/find_and_replace`, {
-          find,
-          replace,
-          ...contextBefore !== undefined ? { contextBefore } : {},
-          ...contextAfter !== undefined ? { contextAfter } : {},
-          ...occurrence !== undefined ? { occurrence } : {},
-          ...replaceAll === true ? { replaceAll: true } : {},
-          ...parseInlineMarks === true ? { parseInlineMarks: true } : {},
-          ...suggest === true ? { suggest: true, author: suggestionAuthor() } : {}
-        });
-        return ok(res);
-      }
-      case "rewrite_thread_region": {
-        const { docId, threadId, replacement, parseInlineMarks, suggest } = a;
-        const res = await http("POST", `/api/docs/${encodeURIComponent(docId)}/threads/${encodeURIComponent(threadId)}/rewrite_region`, {
-          replacement,
-          ...parseInlineMarks === true ? { parseInlineMarks: true } : {},
-          ...suggest === true ? { suggest: true, author: suggestionAuthor() } : {}
-        });
-        return ok(res);
-      }
-      case "list_suggestions": {
-        const { docId } = a;
-        const res = await http("GET", `/api/docs/${encodeURIComponent(docId)}/suggestions`);
-        return ok(res);
-      }
-      case "accept_suggestion": {
-        const { docId, sid } = a;
-        const res = await http("POST", `/api/docs/${encodeURIComponent(docId)}/suggestions/${encodeURIComponent(sid)}/accept`);
-        return ok(res);
-      }
-      case "reject_suggestion": {
-        const { docId, sid } = a;
-        const res = await http("POST", `/api/docs/${encodeURIComponent(docId)}/suggestions/${encodeURIComponent(sid)}/reject`);
-        return ok(res);
-      }
-      case "resolve_all_suggestions": {
-        const { docId, action, authorId } = a;
-        const res = await http("POST", `/api/docs/${encodeURIComponent(docId)}/suggestions/resolve_all`, { action, ...authorId !== undefined ? { authorId } : {} });
-        return ok(res);
-      }
-      case "insert_after_thread": {
-        const { docId, threadId, text } = a;
-        const res = await http("POST", `/api/docs/${encodeURIComponent(docId)}/threads/${encodeURIComponent(threadId)}/insert_after`, { text });
-        return ok(res);
-      }
-      case "insert_blocks_after_thread": {
-        const { docId, threadId, markdown, placement } = a;
-        const res = await http("POST", `/api/docs/${encodeURIComponent(docId)}/threads/${encodeURIComponent(threadId)}/insert_blocks_after`, { markdown, ...placement !== undefined ? { placement } : {} });
-        return ok(res);
-      }
-      case "create_anchor": {
-        const { docId, find, contextBefore, contextAfter, occurrence, label } = a;
-        const res = await http("POST", `/api/docs/${encodeURIComponent(docId)}/agent_anchors`, {
-          find,
-          ...contextBefore !== undefined ? { contextBefore } : {},
-          ...contextAfter !== undefined ? { contextAfter } : {},
-          ...occurrence !== undefined ? { occurrence } : {},
-          ...label !== undefined ? { label } : {}
-        });
-        return ok(res);
-      }
-      case "edit_at_anchor": {
-        const { docId, anchorId, op } = a;
-        const res = await http("POST", `/api/docs/${encodeURIComponent(docId)}/agent_anchors/${encodeURIComponent(anchorId)}/edit`, op);
-        return ok(res);
-      }
-      case "insert_blocks_at_anchor": {
-        const { docId, anchorId, markdown, placement } = a;
-        const res = await http("POST", `/api/docs/${encodeURIComponent(docId)}/agent_anchors/${encodeURIComponent(anchorId)}/insert_blocks`, { markdown, ...placement !== undefined ? { placement } : {} });
-        return ok(res);
-      }
-      case "delete_anchor": {
-        const { docId, anchorId } = a;
-        const res = await http("DELETE", `/api/docs/${encodeURIComponent(docId)}/agent_anchors/${encodeURIComponent(anchorId)}`);
-        return ok(res);
-      }
-      case "delete_block_at_anchor": {
-        const { docId, threadId, anchorId } = a;
-        const res = await http("POST", `/api/docs/${encodeURIComponent(docId)}/delete_block_at_anchor`, {
-          ...threadId !== undefined ? { threadId } : {},
-          ...anchorId !== undefined ? { anchorId } : {}
-        });
-        return ok(res);
-      }
-      case "delete_blocks_in_range": {
-        const {
-          docId,
-          startFind,
-          endFind,
-          contextBefore,
-          contextAfter,
-          startOccurrence,
-          endOccurrence
-        } = a;
-        const res = await http("POST", `/api/docs/${encodeURIComponent(docId)}/delete_blocks_in_range`, {
-          startFind,
-          endFind,
-          ...contextBefore !== undefined ? { contextBefore } : {},
-          ...contextAfter !== undefined ? { contextAfter } : {},
-          ...startOccurrence !== undefined ? { startOccurrence } : {},
-          ...endOccurrence !== undefined ? { endOccurrence } : {}
-        });
-        return ok(res);
-      }
-      case "delete_section": {
-        const { docId, heading, level, occurrence } = a;
-        const res = await http("POST", `/api/docs/${encodeURIComponent(docId)}/delete_section`, {
-          heading,
-          ...level !== undefined ? { level } : {},
-          ...occurrence !== undefined ? { occurrence } : {}
-        });
-        return ok(res);
-      }
-      case "observe_url": {
-        const { docId } = a;
-        return ok({ sseUrl: `${resolveBaseUrl()}/events/${encodeURIComponent(docId)}` });
-      }
-      case "watch_doc": {
-        const { docId } = a;
-        const persisted = await watchDoc(docId);
-        return ok({
-          docId,
-          watching: Array.from(watchers.keys()),
-          persisted,
-          persistence: watchPersistenceMode()
-        });
-      }
-      case "unwatch_doc": {
-        const { docId } = a;
-        const persisted = await unwatchDoc(docId);
-        return ok({
-          docId,
-          watching: Array.from(watchers.keys()),
-          persisted,
-          persistence: watchPersistenceMode()
-        });
-      }
-      case "list_watched_docs": {
-        const coverage = await refreshCoverage();
-        return ok({
-          watching: Array.from(watchers.keys()),
-          persistence: {
-            mode: watchPersistenceMode(),
-            agentId: AUTHOR.id,
-            ...IDENTITY_IS_SHARED ? { reason: SHARED_IDENTITY_REASON } : {}
-          },
-          restore: restoreState,
-          ...coverage ? { coverage } : {},
-          ...lastPersistError ? { lastPersistError } : {}
-        });
-      }
-      case "share_workspace": {
-        const {
-          workspaceId,
-          allowDomains,
-          ttlSeconds,
-          name: slug
-        } = a;
-        const res = await http("POST", "/api/share/workspace", {
-          workspaceId,
-          allowDomains,
-          ttlSeconds,
-          name: slug
-        });
-        return ok(res);
-      }
-      case "share_link": {
-        const res = await http("POST", "/api/share/link", a);
-        return ok(res);
-      }
-      case "set_share_ttl": {
-        const { shareId, ttlSeconds } = a;
-        const res = await http("POST", `/api/share/${encodeURIComponent(shareId)}/ttl`, {
-          ttlSeconds
-        });
-        return ok(res);
-      }
-      case "list_shares": {
-        const res = await http("GET", "/api/share");
-        return ok(res);
-      }
-      case "unshare": {
-        const { shareId } = a;
-        const res = await http("DELETE", `/api/share/${encodeURIComponent(shareId)}`);
-        return ok(res);
-      }
-      case "set_sharing_enabled": {
-        const { enabled } = a;
-        if (typeof enabled !== "boolean") {
-          const res2 = await http("GET", "/api/share");
-          return ok(res2);
-        }
-        const res = await http("POST", "/api/share/enabled", { enabled });
-        return ok(res);
-      }
       case "create_workspace": {
         const {
           name: wsName,
