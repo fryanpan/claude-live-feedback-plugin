@@ -11,15 +11,16 @@ import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprot
 import { createAttachmentKeepalive } from './attachment-keepalive.ts';
 import { createAttachments } from './attachments.ts';
 import { resolveAgentAuthor } from './author.ts';
+import { type ToolContext, createCallToolHandler } from './call-tool.ts';
 import { createChannelMessages } from './channel-messages.ts';
 import { createDeferredEmitter } from './deferred-emit.ts';
 import { createFrameDedup } from './frame-dedup.ts';
 import { createFrameHandler } from './frame-handler.ts';
 import { type Watcher, createSseLoops } from './sse-loop.ts';
 import { TOOL_LIST } from './tool-schemas.ts';
-import { type DocsToolContext, handleDocsTool } from './tools/docs.ts';
-import { type TaskToolContext, handleTaskTool } from './tools/tasks.ts';
-import { type WorkspaceToolContext, handleWorkspaceTool } from './tools/workspace.ts';
+import { handleDocsTool } from './tools/docs.ts';
+import { handleTaskTool } from './tools/tasks.ts';
+import { handleWorkspaceTool } from './tools/workspace.ts';
 
 import { SHARED_IDENTITY_REASON, createWatchRegistry, isSharedIdentity } from './watch-registry.ts';
 import { createWatchRestore } from './watch-restore.ts';
@@ -226,47 +227,6 @@ const server = new Server(
 server.setRequestHandler(ListToolsRequestSchema, async () => TOOL_LIST);
 
 /**
- * Tools that take a `docId` but should NOT trigger implicit auto-watch.
- *
- * - `unwatch_doc`: by definition the user is opting OUT of events; don't
- *   reverse that intent.
- * - `watch_doc`: already wires the watcher itself; redundant.
- * - `observe_url`: returns the SSE URL but doesn't imply the caller is
- *   actually consuming the stream from this MCP session.
- */
-const NO_AUTO_WATCH_TOOLS = new Set([
-  'unwatch_doc',
-  'watch_doc',
-  'observe_url',
-  // attach_doc's docId may be a diff-review/folder workspaceId, which has no
-  // per-doc SSE channel — the hub watch is the WORKSPACE channel, wired by
-  // create_workspace / attach_agent instead.
-  'attach_doc',
-]);
-
-/**
- * Implicit auto-watch (path B). Any MCP tool call that names a docId is a
- * strong "I'm working on this doc" signal — almost always the caller
- * wants to be told when threads land on it. Today an agent has to
- * remember a separate `watch_doc(docId)` call after binding, and the
- * failure is silent (no events flow, doc looks fine). The wrapper closes
- * that gap by subscribing on the first docId touch.
- *
- * Idempotent (`watchDoc` returns immediately if the docId is already
- * watched). Callers can opt out per-call with `subscribe: false` in the
- * tool args. Explicit `watch_doc` / `unwatch_doc` semantics are
- * unaffected.
- */
-async function maybeAutoWatch(name: string, args: unknown): Promise<void> {
-  if (NO_AUTO_WATCH_TOOLS.has(name)) return;
-  if (!args || typeof args !== 'object') return;
-  const a = args as { docId?: unknown; subscribe?: unknown };
-  if (a.subscribe === false) return;
-  if (typeof a.docId !== 'string' || a.docId.length === 0) return;
-  await watchDoc(a.docId);
-}
-
-/**
  * Channel frames produced from inside a tool call, held until it has answered.
  *
  * The restore path is the one producer of those: `ensureWatchesRestored` is
@@ -290,7 +250,7 @@ const deferredEmits = createDeferredEmitter();
  * is what keeps the dependency one-way: this file connects a stdio transport
  * at the bottom, so anything that imports it runs that.
  */
-function toolContext(): DocsToolContext & TaskToolContext & WorkspaceToolContext {
+function toolContext(): ToolContext {
   return {
     http,
     ok,
@@ -316,46 +276,23 @@ function toolContext(): DocsToolContext & TaskToolContext & WorkspaceToolContext
   };
 }
 
-server.setRequestHandler(CallToolRequestSchema, async (req) => {
-  const { name, arguments: a = {} } = req.params;
-  // Released in the `finally` below, so a throwing handler still lets the
-  // held frames out.
-  const endToolCall = deferredEmits.beginToolCall();
-  try {
-    // Restore before anything else: a respawned child's first tool call is
-    // the moment its watch set has to be back, and if the server was down at
-    // initialize this is the retry. Never throws.
-    await ensureWatchesRestored();
-    // A tool call is this session proving it is alive AND working, which is
-    // exactly what an attachment's heartbeat asserts. Without this, an agent
-    // that followed "declare yourself lead and you are done" drifts out of
-    // the observed window on every board it is not actively touching, at
-    // which point Bryan's next goal edit queues with no channel emit and the
-    // session hears the silence this whole ticket is about. Fire-and-forget:
-    // liveness is not worth failing a tool call over. See
-    // attachment-keepalive.ts for why this rides real calls rather than a
-    // timer.
-    void sendDueHeartbeats();
-    await maybeAutoWatch(name, a);
-    // Documents answer from tools/docs.ts, board rows from tools/tasks.ts,
-    // and boards, agents and the operator verbs from tools/workspace.ts. A
-    // domain handler returns `undefined` for a name that is not its own, so
-    // the three families chain the way the server's route files do — and the
-    // last link is the answer for a name none of them claims, which is where
-    // the switch's `default` went.
-    const ctx = toolContext();
-    return (
-      (await handleDocsTool(name, a, ctx)) ??
-      (await handleTaskTool(name, a, ctx)) ??
-      (await handleWorkspaceTool(name, a, ctx)) ??
-      err(`unknown tool: ${name}`)
-    );
-  } catch (e) {
-    return err(e instanceof Error ? e.message : String(e));
-  } finally {
-    endToolCall();
-  }
-});
+/**
+ * The CallTool dispatcher, bound to this process. See call-tool.ts for what
+ * runs around every answer: the deferred emitter, the watch restore, the
+ * fire-and-forget heartbeat and the implicit auto-watch.
+ */
+server.setRequestHandler(
+  CallToolRequestSchema,
+  createCallToolHandler({
+    deferredEmits,
+    ensureWatchesRestored: () => ensureWatchesRestored(),
+    sendDueHeartbeats: () => sendDueHeartbeats(),
+    watchDoc: (docId) => watchDoc(docId),
+    toolContext,
+    handlers: [handleDocsTool, handleTaskTool, handleWorkspaceTool],
+    err,
+  }),
+);
 
 // ===========================================================================
 // CHANNEL — bridge the feedback server's SSE stream into Claude Code via
