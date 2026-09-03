@@ -142,9 +142,11 @@ Five layers, same downward rule. This is what makes the hub testable: the models
 
 ## Layers inside `core`
 
-Three tiers, bottom up: **wire types** (`types.ts`, `task-wire.ts`, `schema.ts`) carry the shapes both sides agree on; the **document model** (`prose.ts`, `suggest-ops.ts`, `anchor/**`, `redline.ts`) is the Yjs⇄markdown conversion and everything anchored into it; **domain rules** (`review-item.ts`, `goal-effort.ts`, `meeting-timing.ts`, `speaker-tags.ts`) are the calculations both server and browser must agree on. Prompts and machine-path helpers are leaves that import only the tier below them.
+Three tiers, bottom up: **wire types** (`types.ts`, `task-wire.ts`, `schema.ts`) carry the shapes both sides agree on; the **document model** (the `prose-*.ts` family, `suggest-ops.ts`, `anchor/**`, `redline.ts`) is the Yjs⇄markdown conversion and everything anchored into it; **domain rules** (the `review-item*.ts` and `effort-*.ts` families, `goal-effort.ts`, `meeting-timing.ts`, `speaker-tags.ts`) are the calculations both server and browser must agree on. Prompts and machine-path helpers are leaves that import only the tier below them.
 
-A rule lives in `core` when the browser and the server must reach the same answer. `goal-effort.ts` is the worked example: the board recomputes the goal bar in the browser from rows it already holds, so the arithmetic cannot live in the server.
+Three of those families were one file each until B5, and each is now internally layered the same way this page describes the whole package. `prose.ts` is a surface over four modules in dependency order — `prose-fragment.ts` (reach and walk the fragment, resolve an anchor), then `prose-markdown.ts`, then `prose-edit.ts`, then `prose-blocks.ts` — and it exports exactly what it exported as one module, so no consumer addresses the parts. The effort model reads bottom-up as `effort-task.ts` (what one ticket contributes), `effort-calibration.ts` (chunk 3, the ratios and their priors), `goal-effort.ts` (chunk 4, the rollup and the projected date) and `effort-format.ts` (the readouts, which nothing above imports). `review-item.ts` sits over `review-item-wire.ts` and `review-item-check.ts` and keeps the types the three share.
+
+A rule lives in `core` when the browser and the server must reach the same answer. The effort model is the worked example: the board recomputes the goal bar in the browser from rows it already holds, so the arithmetic cannot live in the server.
 
 ## The main flows
 
