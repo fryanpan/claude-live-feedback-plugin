@@ -32,6 +32,14 @@
  * line. A reviewer found the earlier version of this deleting a transcript
  * somebody had pasted in by hand, which is the failure every clause above is
  * paying for.
+ *
+ * Two residuals a structural check cannot see, both pinned by tests rather
+ * than hidden: in an UNBOUND doc, a person who types the writer's exact shape
+ * (an `## Raw transcript` over one `text` fence at the tail) is
+ * indistinguishable from the writer; and a line a person adds INSIDE the
+ * writer's own fence leaves the shape intact and goes with it. Separating
+ * those would mean diffing the fence against the folded transcript, which is
+ * more machinery than a one-release migration earns. Accepted 2026-09-03.
  */
 
 import { resolve, sep } from 'node:path';
