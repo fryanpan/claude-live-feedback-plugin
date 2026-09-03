@@ -16,7 +16,7 @@ import { type PresenceRow, claimWarning } from './claim-warning.ts';
 import { createDeferredEmitter } from './deferred-emit.ts';
 import { createFrameDedup } from './frame-dedup.ts';
 import { createFrameHandler } from './frame-handler.ts';
-import { type SseCursor, deliverThenCommit } from './sse-cursor.ts';
+import { type Watcher, createSseLoops } from './sse-loop.ts';
 import { TOOL_LIST } from './tool-schemas.ts';
 import { type DocsToolContext, handleDocsTool } from './tools/docs.ts';
 import { type TaskToolContext, handleTaskTool } from './tools/tasks.ts';
@@ -368,20 +368,6 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
 // connection to /events/<docId>; events are forwarded as channel messages.
 // ===========================================================================
 
-interface Watcher {
-  controller: AbortController;
-  docId: string;
-  /**
-   * Whether this watcher's stream is CURRENTLY connected — not whether a
-   * watcher object exists.
-   *
-   * The two used to be conflated, and that is how a tool could answer
-   * `subscribed: true` while its loop sat in backoff after a refused connect.
-   * The loop maintains this; a caller that needs to tell a live subscription
-   * from a registered intention reads it rather than the map's `has`.
-   */
-  open: boolean;
-}
 const watchers = new Map<string, Watcher>();
 
 // ---------------------------------------------------------------------------
@@ -786,128 +772,6 @@ async function unwatchDoc(docId: string): Promise<boolean> {
   return persistWatchChange({ remove: [docId] });
 }
 
-async function runSseLoop(
-  label: string,
-  path: string,
-  signal: AbortSignal,
-  onFirstAttempt?: (open: boolean) => void,
-): Promise<void> {
-  // Tight reconnect loop — the server sends keepalive comments every
-  // ~15s, so an abrupt close is almost always a transient network blip.
-  //
-  // `onFirstAttempt` fires once, after the first connect attempt has an
-  // outcome, and is HANDED that outcome: `true` only when headers came back
-  // 200 with a body, so the stream is live from here. It is
-  // what lets `watch_doc` return only once the stream is actually open, so a
-  // reply posted the moment the tool answers is not lost in the gap between
-  // "watcher registered" and "connection established". Not "on first
-  // success": the auto-watch fires BEFORE the tool that creates the doc, so a
-  // 404 on the first attempt is normal there and must not hold the tool call.
-  let first = onFirstAttempt;
-  const settleFirst = (open: boolean) => {
-    if (!first) return;
-    const f = first;
-    first = undefined;
-    f(open);
-  };
-  // The watcher record is the durable answer to "is this stream up right
-  // now", read by anything that must not claim a subscription it does not
-  // have. `settleFirst` only ever fires once; this keeps tracking.
-  const setOpen = (open: boolean) => {
-    const w = watchers.get(label);
-    if (w) w.open = open;
-  };
-  // The wire id of the last frame this loop DELIVERED, presented back on
-  // every reconnect. This loop is a hand-rolled fetch stream, not a native
-  // EventSource, so nothing sends `Last-Event-ID` for us — without this line
-  // the 1.5s retry below reconnects fast and resumes WITH A HOLE: everything
-  // broadcast inside the gap used to be lost permanently. Delivered, not
-  // seen: the cursor advances only after `handleFrame` resolves (see
-  // sse-cursor.ts for the loss that committing it early caused).
-  const cursor: SseCursor = { lastEventId: undefined };
-  while (!signal.aborted) {
-    try {
-      const res = await fetch(`${resolveBaseUrl()}${path}`, {
-        signal,
-        ...(cursor.lastEventId ? { headers: { 'Last-Event-ID': cursor.lastEventId } } : {}),
-      });
-      const live = res.ok && res.body !== null;
-      setOpen(live);
-      settleFirst(live);
-      if (!res.ok || !res.body) throw new Error(`sse ${path} → ${res.status}`);
-      const reader = res.body.getReader();
-      const decoder = new TextDecoder();
-      let buf = '';
-      while (!signal.aborted) {
-        const { value, done } = await reader.read();
-        if (done) break;
-        buf += decoder.decode(value, { stream: true });
-        // Split on blank-line boundaries per SSE framing.
-        let sep = buf.indexOf('\n\n');
-        while (sep >= 0) {
-          const frame = buf.slice(0, sep);
-          buf = buf.slice(sep + 2);
-          // Deliver, THEN advance the cursor — a frame whose delivery threw
-          // must be re-presented on reconnect, not skipped past. On a
-          // delivered gap the cursor drops (the held id points at nothing
-          // the server can replay) and the dedup window drops with it, since
-          // after a refetch-worthy gap every held key may collide with a
-          // genuinely new event.
-          await deliverThenCommit(frame, handleFrame, cursor, () => shouldForwardFrame.reset());
-          sep = buf.indexOf('\n\n');
-        }
-      }
-    } catch (err) {
-      setOpen(false);
-      settleFirst(false);
-      if (signal.aborted) return;
-      console.error(`[claude-workspaces-mcp] ${label} sse error, retrying:`, err);
-    }
-    // A clean end-of-stream lands here too, and it is just as much "not
-    // connected" as a throw is.
-    setOpen(false);
-    // Backoff before reconnect
-    await new Promise((r) => setTimeout(r, 1500));
-    // A reconnect is what a server restart looks like from in here, and a
-    // restart rebuilt every room with `seq` back at 0 — so every key the
-    // dedup is holding can now collide with a genuinely NEW event and
-    // silently swallow it. Drop the window: the cost is at most a duplicate
-    // of something in flight, and the cost of keeping it is a comment nobody
-    // ever hears about. (A current server also stamps a unique `eid`, which
-    // makes this belt-and-braces; the fallback key is what an un-restarted
-    // box still sends.)
-    shouldForwardFrame.reset();
-  }
-  setOpen(false);
-  settleFirst(false);
-}
-
-/**
- * Start an SSE loop and resolve once its first connect attempt has an outcome
- * — capped so a wedged connect never stalls a tool call. The loop itself keeps
- * running for the life of the watcher.
- *
- * Resolves to whether the stream is actually OPEN. `false` covers all three
- * ways it can fail to be: a throw, a non-200, and the 3s cap expiring with the
- * connect still in flight. A caller that reports a subscription to an agent
- * must branch on this rather than on the call having returned — "it returned"
- * was the old signal, and it is true in every one of those cases.
- */
-function startSseLoop(label: string, path: string, controller: AbortController): Promise<boolean> {
-  return new Promise<boolean>((resolve) => {
-    const cap = setTimeout(() => resolve(false), 3_000);
-    void runSseLoop(label, path, controller.signal, (open) => {
-      clearTimeout(cap);
-      resolve(open);
-    }).catch((err) => {
-      console.error(`[claude-workspaces-mcp] watcher ${label} crashed:`, err);
-      watchers.delete(label);
-      clearTimeout(cap);
-      resolve(false);
-    });
-  });
-}
-
 /** Shared across every SSE loop in this process — the whole point is to catch
  *  a frame arriving on the board stream that the review stream already
  *  delivered, so a per-loop instance would see nothing. See frame-dedup.ts
@@ -937,6 +801,25 @@ const handleFrame = createFrameHandler({
   emitChannelMessage: (event, payload) => channel.emitChannelMessage(event, payload),
   http: (method, path, body) => http(method, path, body),
   shouldForward: (event, payload) => shouldForwardFrame.shouldForward(event, payload),
+});
+
+/**
+ * The SSE loops, bound to this process. See sse-loop.ts — it owns the
+ * reconnect, the `open` flag on each watcher record, and the cursor's
+ * deliver-then-commit order.
+ */
+const { startSseLoop } = createSseLoops({
+  watchers,
+  resolveBaseUrl,
+  fetch: (url, init) => fetch(url, init),
+  handleFrame: (raw) => handleFrame(raw),
+  resetDedup: () => shouldForwardFrame.reset(),
+  log: (...args) => console.error(...args),
+  sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
+  timers: {
+    set: (fn, ms) => setTimeout(fn, ms),
+    clear: (h) => clearTimeout(h as ReturnType<typeof setTimeout>),
+  },
 });
 
 async function http(method: string, path: string, body?: unknown): Promise<unknown> {

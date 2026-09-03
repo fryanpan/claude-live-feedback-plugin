@@ -26,7 +26,6 @@
  */
 import { describe, expect, it } from 'vitest';
 import { createFrameDedup } from '../src/frame-dedup.ts';
-import { readMcpSource } from './harness/mcp-source.ts';
 
 /** A thread frame as `broadcastToRoom` stamps it. */
 function threadFrame(docId: string, seq: number) {
@@ -199,18 +198,11 @@ describe('createFrameDedup', () => {
       expect(shouldForward('thread.replied', frame)).toBe(false);
     });
 
-    /**
-     * A `reset()` nobody calls is a fix that ships disabled, and mcp.ts
-     * cannot be imported (it ends in a top-level `await server.connect`), so
-     * the wiring is asserted on its source. Anchored to the reconnect
-     * backoff, because resetting anywhere else would not be the fix.
-     */
-    it('is wired into the SSE reconnect in mcp.ts', () => {
-      const src = readMcpSource();
-      const backoff = src.indexOf('setTimeout(r, 1500)');
-      expect(backoff).toBeGreaterThan(-1);
-      const afterBackoff = src.slice(backoff, backoff + 900);
-      expect(afterBackoff).toContain('shouldForwardFrame.reset()');
-    });
+    // A `reset()` nobody calls is a fix that ships disabled. That the loop
+    // calls it — on every reconnect and on a delivered replay gap — is
+    // asserted where the loop now lives: sse-loop.test.ts scripts two
+    // connects and counts the resets. The regex that used to stand here was
+    // anchored to the literal `1500` in the backoff, which a rename of the
+    // constant would have quietly emptied.
   });
 });
