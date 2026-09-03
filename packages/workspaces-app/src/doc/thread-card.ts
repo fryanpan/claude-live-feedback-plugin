@@ -342,15 +342,20 @@ function body(
   const compact = itemComment?.review
     ? compactItemLine(host, t, itemComment, itemComment.review, pending !== null)
     : null;
-  // Line two of the FOLDED card is one thing or the other, never both plus a
-  // filler. "No replies yet" is true of most review items and worth no line:
-  // the mock shows the discussion summary on a conversation card and the way
-  // to answer on an item card. Conditioned on the answer row EXISTING, not on
-  // the kind, because a face with no children measures zero — and
-  // `sizeThreadSlots` refuses a zero, which would leave a card that opens and
-  // cannot close.
+  // Line two of the FOLDED card is one thing or the other, and sometimes
+  // neither. "No replies yet" is a fact about the card the reader can do
+  // nothing with, it is true of most review items and of every thread nobody
+  // has answered yet, and it lands on resolved cards too — where it is the
+  // last thing left to say about a thread that is finished. A card with
+  // nothing on line two folds to its head, which is the one line this
+  // redesign is named for.
+  //
+  // That makes an EMPTY summary face reachable, and `sizeThreadSlots` used to
+  // refuse every zero it measured. It now refuses a zero only from a face
+  // that has children — the case its guard was written for, a subtree not
+  // being laid out — so an empty face closes to nothing and still reopens.
   const summaryFace: HTMLElement[] = [];
-  if (!(compact && summary.discussionKind === 'none')) summaryFace.push(discussionLine(summary));
+  if (summary.discussionKind !== 'none') summaryFace.push(discussionLine(summary));
   if (compact) summaryFace.push(compact);
 
   // The opened card shows every reply in full below, so a summary of them is

@@ -1,4 +1,4 @@
-import { createThread, getContent } from '@feedback/core';
+import { createThread, getContent, postReply } from '@feedback/core';
 import { TextRange } from '@feedback/core/anchor';
 import { afterEach, describe, expect, it } from 'vitest';
 import * as Y from 'yjs';
@@ -259,6 +259,17 @@ describe('mountReviewChrome drawer default', () => {
       createdBy: { id: 'u2', name: 'Bob', kind: 'known', color: '#c0392b' },
       firstComment: { id: 'c1', text: 'Please clarify this.' },
     });
+    // A REPLY, so line two of the folded card has something to say and the
+    // summary face has children. That is what makes this test about the guard
+    // it is named for: a face with children measuring zero is not being laid
+    // out, and its zero is refused. A face with NO children measures zero
+    // truthfully and is written — see thread-card.test.ts, which covers the
+    // other side of the same rule.
+    postReply(ydoc, 't1', {
+      id: 'c2',
+      author: { id: 'u3', name: 'Cass', kind: 'known', color: '#2e7dd7' },
+      text: 'Clarified.',
+    });
     const chrome = mountReviewChrome(opts(new MountScope(), { ydoc, hasBalloonMargin: true }));
     expect(shellOpen()).toBe(false);
     chrome.redrawThreads();
@@ -285,7 +296,14 @@ describe('mountReviewChrome drawer default', () => {
     // Nothing believable was measurable while it was closed, so nothing was
     // written: a slot pinned to `0px` here would survive the class flip and
     // open the drawer on a card clipped to its head and its foot.
-    for (const s of slots) expect(s.style.height).toBe('');
+    for (const s of slots) {
+      // Positive control on the premise this test rests on: the face really
+      // does have children, so its zero is the not-laid-out case and not the
+      // deliberate-empty one.
+      const face = s.querySelector('.face-summary') as HTMLElement;
+      expect(face.childElementCount).toBeGreaterThan(0);
+      expect(s.style.height).toBe('');
+    }
 
     chrome.openDrawer();
     for (const s of slots) expect(s.style.height).toBe('24px');
