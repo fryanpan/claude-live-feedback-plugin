@@ -120,12 +120,15 @@ describe('TaskEventBus', () => {
       attachments: new Map([['agent-bryan', attachment('agent-bryan')]]),
     });
     const order: string[] = [];
-    bus.onEvent(() => order.push('listener'));
+    // Asserted from INSIDE the listener: by the time it runs, the audit file
+    // and the observed-work note must already exist. Asserting after `emit`
+    // returns would pass for any order, since the whole body is synchronous.
+    bus.onEvent(() => {
+      order.push('listener');
+      expect(existsSync(eventsLogPath(dataDir, 'ws-1'))).toBe(true);
+      expect(observedCalls).toHaveLength(1);
+    });
     bus.emit(renamedEvent());
-    // The audit file and the observed-work note both land synchronously
-    // inside `emit`, strictly before the listener runs.
-    expect(existsSync(eventsLogPath(dataDir, 'ws-1'))).toBe(true);
-    expect(observedCalls).toHaveLength(1);
     expect(order).toEqual(['listener']);
   });
 

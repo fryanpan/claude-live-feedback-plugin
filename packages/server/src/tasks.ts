@@ -1767,7 +1767,7 @@ export class TaskStore {
   /** The board registry, and this store seen through the contract it needs.
    *  Same shape as the review-item seam above: a named list of rows and
    *  writers, not a `this` that reaches the whole store. */
-  workspaceStore: WorkspaceStore = new WorkspaceStore(workspacePersistenceFor(this));
+  readonly workspaceStore: WorkspaceStore = new WorkspaceStore(workspacePersistenceFor(this));
 
   /** This store's event bus and audit trail — see `task-event-bus.ts`. */
   private readonly eventBus = new TaskEventBus({
