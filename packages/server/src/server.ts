@@ -1212,9 +1212,9 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
       ? withServerNotesSinks(opts.meetingNotes, {
           rooms: () => rooms,
           tasks: () => taskStore,
-          // Which docs may hold the meeting's own words. A huddle doc is
-          // unbound and its words sit beside its JSONL; a doc bound to a repo
-          // file gets notes and no verbatim record.
+          // Read by the legacy-transcript removal alone: it must not take a
+          // `Raw transcript` heading out of a doc bound into somebody's
+          // working tree, where the old note-taker never wrote one.
           dataDir,
           // The capture pipeline's board writes, and the "go do it" wake —
           // the same immediate addressed delivery an answered review item
