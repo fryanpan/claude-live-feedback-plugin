@@ -768,11 +768,10 @@ describe('the activity pane at 1180×820 spends a bounded number of lines', () =
       }),
     ]);
     expect(styleOf(pick('.hub-activity-note-denial .acti-shape')).fontFamily).toContain('mono');
-    // The tint itself is NOT asserted here: `hub.css` paints the shape with
-    // `background: var(--danger-bg)`, and no stylesheet in this app defines
-    // that custom property — so the browser paints no tint at all. A text read
-    // could not see that; this one could, and the rule is left alone and
-    // reported rather than quietly fixed by a test.
+    // The tint itself is asserted in its own `it.fails` below, because it does
+    // not hold: `hub.css` paints the shape with `background: var(--danger-bg)`
+    // and no stylesheet in this app defines that custom property, so the
+    // browser paints no tint at all. A text read could not see that.
     //
     // What still holds either way is that whatever the shape gets, the LINE
     // around it does not. Read as a difference between the two elements, with
@@ -783,6 +782,39 @@ describe('the activity pane at 1180×820 spends a bounded number of lines', () =
     const text = styleOf(pick('.hub-activity-note-denial .acti-text'));
     expect(text.background).toBe('');
     expect(text.fontFamily).not.toBe(shape.fontFamily);
+    unmount();
+    host.remove();
+  });
+
+  /**
+   * KNOWN BROKEN, recorded the way the See-thread floor is in
+   * review-item-comment-css.test.ts: the contract is stated, and the test
+   * says out loud that the product does not meet it.
+   *
+   * `.hub-activity-note-denial .acti-shape` (hub.css:2040) and
+   * `.hub-note-body .acti-shape` (hub.css:4339) both paint
+   * `background: var(--danger-bg)`. A repo-wide grep finds those two uses and
+   * no definition, so the shape is untinted in a real browser and the denial
+   * reads like any other note. This pass converts tests and does not change
+   * CSS, so the rule is left alone — and the day someone defines the token,
+   * THIS test goes red and gets promoted to a plain `it`.
+   *
+   * happy-dom returns `''` for an unresolved `var()` exactly as it does for a
+   * property nothing set, which is why the assertion is written against the
+   * mounted shape and paired with a control that the sheet reaches it at all.
+   */
+  it.fails('KNOWN BROKEN: a denial’s shape should carry a danger tint', async () => {
+    const { host, unmount, pick } = pane(IPAD, [
+      task({
+        id: 't-dn2',
+        notes: [note(12 * MIN, 'git rm in this repo', { kind: 'denial', agent: 'Bike Map' })],
+      }),
+    ]);
+    const shape = styleOf(pick('.hub-activity-note-denial .acti-shape'));
+    // Control: the shape IS reached by its rule, so the empty background below
+    // is the undefined token and not a selector that stopped matching.
+    expect(shape.fontFamily).toContain('mono');
+    expect(shape.background).not.toBe('');
     unmount();
     host.remove();
   });

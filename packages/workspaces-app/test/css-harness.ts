@@ -10,11 +10,19 @@
  * value instead. This module is the seam that makes that cheap.
  *
  * The four reads below are the only stylesheet reads the app's test suite
- * needs. They exist to INSTALL the sheets into the test document; no function
- * here returns CSS text, so nothing downstream can assert on source shape.
- * Consolidating them here is why the audit's `sourceShape` ceiling falls: the
- * reads did not move into a hiding place, they stopped being read sites in
- * files that assert on text.
+ * needs. They exist to INSTALL the sheets into the test document, and
+ * `TEXT` is module-private on purpose: no function here returns CSS text, so
+ * no test can reach a stylesheet's source through this module and assert on
+ * it. Export that map and the hole is open again.
+ *
+ * Be exact about why the audit does not count these four. It is NOT that they
+ * carry no text assertion. `scripts/test-audit.ts` enumerates
+ * `gitFiles('*.test.ts', '*.test.tsx')`, so a module like this one is never
+ * read by the audit at all, whatever it contains — the same blind spot that
+ * hides `shell-grid-placement.test.ts` and `list-indent-css.test.ts`, which
+ * do grep a stylesheet and go uncounted because they assert with `toBe`
+ * rather than `toContain`. The gap is ticketed separately. What keeps this
+ * module honest is the private map above it, not the audit.
  *
  * WHAT HAPPY-DOM CAN AND CANNOT RESOLVE. It runs the real cascade — author
  * specificity, `!important`, inheritance, custom properties, descendant,
