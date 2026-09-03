@@ -57,12 +57,15 @@ beforeEach(() => {
 
 describe('relatedDocLinks', () => {
   it('reads a doc or thread origin, and refuses everything else', () => {
+    // `origin: true` rides every entry that came from the row's own origin
+    // rather than from `links`, and it is what keeps the x off that entry —
+    // `DELETE /links` has nothing there to remove.
     expect(relatedDocLinks(task({ origin: { kind: 'doc', docId: 'd-plan' } }))).toEqual([
-      { docId: 'd-plan', held: false },
+      { docId: 'd-plan', held: false, origin: true },
     ]);
     expect(
       relatedDocLinks(task({ origin: { kind: 'thread', docId: 'd-plan', threadId: 'th-1' } })),
-    ).toEqual([{ docId: 'd-plan', held: false }]);
+    ).toEqual([{ docId: 'd-plan', held: false, origin: true }]);
     expect(relatedDocLinks(task())).toEqual([]);
     expect(relatedDocLinks(task({ origin: { kind: 'task', taskId: 't-9' } }))).toEqual([]);
     expect(relatedDocLinks(task({ origin: { kind: 'doc', docId: '' } }))).toEqual([]);
@@ -101,7 +104,7 @@ describe('relatedDocLinks', () => {
     const held = relatedDocLinks(
       task({ origin: { kind: 'doc', docId: 'd-plan' }, planHold: { docId: 'd-plan' } }),
     );
-    expect(held).toEqual([{ docId: 'd-plan', held: true }]);
+    expect(held).toEqual([{ docId: 'd-plan', held: true, origin: true }]);
 
     // A doc from `links` is never the held one — only the origin can be.
     const notHeld = relatedDocLinks(

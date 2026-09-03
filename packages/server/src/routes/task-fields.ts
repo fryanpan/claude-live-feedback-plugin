@@ -202,16 +202,28 @@ export async function handleTaskFields(
     if (!res.changed) taskProjection.ensureWorkspace(res.task.workspaceId);
     return j(200, res);
   }
-  // Park a row: move it to `triage` and leave a comment saying why and
-  // when to come back to it.
+  // Block a row on another ticket — and, on its old payload, park it.
   //
-  // The verb is older than its meaning. Parking used to be a state of
-  // its own (`parkedUntil` on the row) until the owner's 2026-08-27
-  // call that it duplicated triage — both say nobody is working this and
-  // nobody has agreed it is work. The state went; the route stayed,
-  // still on its old payload, because the shared server's REST callers
-  // cannot be restarted (CLAUDE.md: narrowing a verb keeps accepting the
-  // old shape).
+  // THE VERB MOVED AGAIN (2026-09-03). "Not now" had been spelled as a
+  // move to triage, which put deferred work in the same bucket as work
+  // nobody has vetted; triage is now for unvetted rows only, and the
+  // honest way to say "not now" is to name what it is waiting for. So
+  // this route's primary arm takes `blockedBy` — task ids — and ADDS
+  // them to the row's `after` edges. Nothing else happens: the row keeps
+  // its status, and Blocked is derived from those edges
+  // (`@feedback/core/task-blocked`), so setting a blocker IS what makes
+  // the ticket blocked and there is no second state to keep in step.
+  //
+  // Additive, not a replace, unlike `POST .../after`: "block this on
+  // that" is one more edge, and a caller naming one blocker must not
+  // silently drop the two already there. Removing an edge stays the
+  // dependencies route's job, which is the one that says "replace".
+  //
+  // The old payload still works, because the shared server's REST
+  // callers cannot be restarted (CLAUDE.md: narrowing a verb keeps
+  // accepting the old shape). A request with no `blockedBy` parks the
+  // row exactly as it did — moves it to `triage` and leaves a comment
+  // saying why and when to come back to it.
   //
   // Which makes `parkedUntil: null` the delicate arm. It used to mean
   // "un-park now", and an old bundle still sends it that way — so it
@@ -228,6 +240,39 @@ export async function handleTaskFields(
     if (!author) return j(400, { error: 'author required' });
     const task = taskStore.getTask(taskId);
     if (!task) return j(404, { ok: false, error: 'not-found' });
+    // The blocking arm. Read before the park arm, so a caller that sends
+    // both gets the meaning the verb now has rather than the one it used
+    // to have.
+    if (body !== null && typeof body === 'object' && 'blockedBy' in body) {
+      const raw = body.blockedBy;
+      const ids = Array.isArray(raw) ? raw : [raw];
+      if (ids.length === 0) return j(400, { error: 'blockedBy needs at least one task id' });
+      for (const id of ids) {
+        if (typeof id !== 'string' || id === '') {
+          return j(400, { error: 'blockedBy must be a task id, or an array of them' });
+        }
+      }
+      const after = [...new Set([...task.after, ...(ids as string[])])];
+      const res = taskStore.setDependencies(
+        taskId,
+        { after, ...(task.afterEnforce !== undefined ? { afterEnforce: task.afterEnforce } : {}) },
+        { actor: author },
+      );
+      if (!res.ok) return j(res.error === 'not-found' ? 404 : 400, res);
+      // `setDependencies` emits no store event (§3.6 has no row for an
+      // edge change), so the projection is refreshed by hand — the same
+      // contract the dependencies route above keeps.
+      taskProjection.ensureWorkspace(res.task.workspaceId);
+      return j(200, {
+        ok: true,
+        task: res.task,
+        changed: res.changed,
+        // What the row waits on NOW, read back off the store rather than
+        // echoed: a caller naming a blocker it already had has to be able
+        // to see that nothing moved.
+        after: res.task.after,
+      });
+    }
     const present = body !== null && typeof body === 'object' && 'parkedUntil' in body;
     const raw = body?.parkedUntil;
     // Same strictness the /due route keeps, and for a sharper reason
