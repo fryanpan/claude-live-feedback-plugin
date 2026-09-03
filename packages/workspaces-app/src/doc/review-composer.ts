@@ -46,6 +46,10 @@ export interface ComposerOptions {
   /** The chrome's scoped listener helper — every binding here is released
    *  with the mount that owns it. */
   on: (target: EventTarget, type: string, handler: (ev: Event) => void) => void;
+  /** The mount's teardown hook, when this mount has a scope. Listeners come
+   *  off with `on`; the timers below have to be cancelled by hand, and a
+   *  timer that fires after teardown reaches a document that is gone. */
+  onCleanup?: (fn: () => void) => void;
   surface: Pick<ReviewSurface, 'scrollToPos' | 'pulseRange'>;
   threadsPanel: Pick<ThreadPanel, 'setActive'>;
   collectThreads: () => Thread[];
@@ -113,6 +117,27 @@ export function wireReviewComposer(opts: ComposerOptions): ComposerHandle {
   let composerRequestId: string | null = null;
 
   /**
+   * The caret is put in the box 30ms after it opens, and the highlight is
+   * scrolled to 150ms after a comment posts. Both are timers that can outlive
+   * what they are aimed at — a composer the reader dismissed, or a whole mount
+   * the router disposed — so each is held and cancelled rather than left to
+   * fire into a dead document. The focus one is the sharp edge: Tiptap's focus
+   * command reaches for `requestAnimationFrame`, which a torn-down page no
+   * longer has, so a late focus throws where a late scroll would merely waste.
+   */
+  let focusTimer: ReturnType<typeof setTimeout> | null = null;
+  let postScrollTimer: ReturnType<typeof setTimeout> | null = null;
+  function cancelFocus(): void {
+    if (focusTimer !== null) clearTimeout(focusTimer);
+    focusTimer = null;
+  }
+  opts.onCleanup?.(() => {
+    cancelFocus();
+    if (postScrollTimer !== null) clearTimeout(postScrollTimer);
+    postScrollTimer = null;
+  });
+
+  /**
    * `prefill` seeds the box with words the person can edit or clear before
    * sending. It is a starting point, never a send: the spin-off menu's
    * "Answer a question" used to POST a fixed sentence nobody typed, which put
@@ -141,10 +166,16 @@ export function wireReviewComposer(opts: ComposerOptions): ComposerHandle {
     // Focusing without scrolling stops iOS's auto-scroll-to-focus from
     // yanking the page — what `preventScroll` bought while this was a
     // textarea.
-    setTimeout(() => focusMarkdownComposer(composerText, null, { scroll: false }), 30);
+    cancelFocus();
+    focusTimer = setTimeout(() => {
+      focusTimer = null;
+      focusMarkdownComposer(composerText, null, { scroll: false });
+    }, 30);
     opts.onComposerOpened?.();
   }
   function hideComposer(): void {
+    // The composer is going away; the caret must not follow it there.
+    cancelFocus();
     composer.classList.add('hidden');
     composerScrim.classList.add('hidden');
     document.body.classList.remove('composer-open');
@@ -194,7 +225,8 @@ export function wireReviewComposer(opts: ComposerOptions): ComposerHandle {
       showToast('✓ Comment posted');
       // Post-feedback: wait for the Yjs update to land the highlight, then
       // scroll it into view + pulse so the user sees where it landed.
-      setTimeout(() => {
+      postScrollTimer = setTimeout(() => {
+        postScrollTimer = null;
         const r = resolveThreadRange(body.thread.id);
         if (r) {
           surface.scrollToPos(r.from);

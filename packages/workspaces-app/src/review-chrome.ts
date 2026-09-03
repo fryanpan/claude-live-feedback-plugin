@@ -901,6 +901,7 @@ export function mountReviewChrome(opts: ChromeOpts): ReviewChrome {
       user,
       docId,
       on,
+      onCleanup: (fn) => opts.scope?.onCleanup(fn),
       surface,
       threadsPanel,
       collectThreads,
