@@ -126,7 +126,7 @@ describe('the audit enumerates untracked files', () => {
  * closing them from swallowing the whole suite.
  *
  * Everything below is planted under one throwaway directory inside an existing
- * test tree, run through the real script once, and removed. Four probes in a
+ * test tree, run through the real script once, and removed. Seven probes in a
  * SINGLE run on purpose: "the audit did not name the fixture reader" is worth
  * nothing unless the same run named something, and the counted and uncounted
  * probes differ by exactly the property under test.
@@ -280,6 +280,82 @@ const VIA_LIAR = [
   '',
 ].join('\n');
 
+/**
+ * A harness that only TALKS about the marker. Its importers must count: the
+ * marker is read on a line holding nothing else, so a paragraph quoting the
+ * phrase exempts nothing.
+ *
+ * This is the mutation that showed the first cut was hollow. The real marker
+ * was deleted from `css-harness.ts` and the count did not move, because the
+ * module's own header paragraph named the phrase and the regex matched it
+ * anywhere on a line.
+ */
+const HARNESS_PROSE = [
+  "import { readFileSync } from 'node:fs';",
+  "import { resolve } from 'node:path';",
+  '',
+  '/**',
+  ' * Nothing here hands back CSS text, which in an older check was written as',
+  ' * `// audit: no-text` and believed on sight.',
+  ' */',
+  '// This module is no-text in spirit: see `audit: no-text` in the audit docs.',
+  `const TEXT = readFileSync(resolve(import.meta.dirname, ${REAL_SOURCE}), 'utf8');`,
+  '',
+  'export function proseSheetLength(): number {',
+  '  return TEXT.length;',
+  '}',
+  '',
+].join('\n');
+
+/** Imports the prose-only harness. Must be counted. */
+const VIA_PROSE = [
+  "import { describe, expect, it } from 'vitest';",
+  "import { proseSheetLength } from './harness-prose.ts';",
+  '',
+  "describe('probe', () => {",
+  "  it('reads through a harness that only mentions the marker in prose', () => {",
+  '    expect(proseSheetLength() > 0).toBe(true);',
+  '  });',
+  '});',
+  '',
+].join('\n');
+
+/**
+ * A harness with a real marker line and one export whose type is inferred.
+ * Its importers must count: no annotation is not evidence that no text comes
+ * out, and `export const HUB_TEXT = TEXT['hub.css'];` appended to the real
+ * `css-harness.ts` is exactly this, a one-line hole.
+ */
+const HARNESS_UNANNOTATED = [
+  "import { readFileSync } from 'node:fs';",
+  "import { resolve } from 'node:path';",
+  '',
+  '// audit: no-text',
+  `const TEXT = readFileSync(resolve(import.meta.dirname, ${REAL_SOURCE}), 'utf8');`,
+  '',
+  'export function loneSheetLength(): number {',
+  '  return TEXT.length;',
+  '}',
+  '',
+  '// No annotation, so the audit has nothing to check and counts it.',
+  'export const SHEET_HEAD = TEXT.slice(0, 8);',
+  '',
+].join('\n');
+
+/** Imports the unannotated-export harness. Must be counted. */
+const VIA_UNANNOTATED = [
+  "import { describe, expect, it } from 'vitest';",
+  "import { SHEET_HEAD, loneSheetLength } from './harness-unannotated.ts';",
+  '',
+  "describe('probe', () => {",
+  "  it('reads through a harness with an unannotated export', () => {",
+  '    expect(loneSheetLength() > 0).toBe(true);',
+  '    expect(SHEET_HEAD.length).toBe(8);',
+  '  });',
+  '});',
+  '',
+].join('\n');
+
 /** The 1-based line a probe's read or harness import sits on. */
 function lineOf(source: string, needle: string): number {
   const i = source.split('\n').findIndex((l) => l.includes(needle));
@@ -294,6 +370,10 @@ function plantSourceProbes(): void {
   writeFileSync(join(PROBE_DIR_ABS, 'via-harness.test.ts'), VIA_HARNESS);
   writeFileSync(join(PROBE_DIR_ABS, 'via-computed.test.ts'), VIA_COMPUTED);
   writeFileSync(join(PROBE_DIR_ABS, 'harness-liar.ts'), HARNESS_MARKED_LIAR);
+  writeFileSync(join(PROBE_DIR_ABS, 'harness-prose.ts'), HARNESS_PROSE);
+  writeFileSync(join(PROBE_DIR_ABS, 'via-prose.test.ts'), VIA_PROSE);
+  writeFileSync(join(PROBE_DIR_ABS, 'harness-unannotated.ts'), HARNESS_UNANNOTATED);
+  writeFileSync(join(PROBE_DIR_ABS, 'via-unannotated.test.ts'), VIA_UNANNOTATED);
   writeFileSync(join(PROBE_DIR_ABS, 'via-liar.test.ts'), VIA_LIAR);
   writeFileSync(join(PROBE_DIR_ABS, 'to-be.test.ts'), TO_BE_READER);
   writeFileSync(join(PROBE_DIR_ABS, 'fixture.test.ts'), FIXTURE_READER);
@@ -305,7 +385,7 @@ afterEach(() => {
 });
 
 describe('the audit sees a source read one module away', () => {
-  it('counts a harness reader and a toBe reader, and neither of the two negatives', () => {
+  it('counts the five ways a test reaches source text, and neither of the two that do not', () => {
     // CONTROL: nothing from the probe directory is named before it exists, so
     // every "named" assertion below is this test's doing.
     expect(existsSync(PROBE_DIR_ABS)).toBe(false);
@@ -323,14 +403,27 @@ describe('the audit sees a source read one module away', () => {
       `${join(PROBE_DIR_REL, 'to-be.test.ts')}:${lineOf(TO_BE_READER, 'const CSS =')}`,
     );
 
-    // Counted despite `// audit: no-text`, because the module it imports
+    // Counted despite a real marker line, because the module it imports
     // exports a string. The marker is checked, not believed.
     expect(run.stdout).toContain(
       `${join(PROBE_DIR_REL, 'via-liar.test.ts')}:${lineOf(VIA_LIAR, 'harness-liar.ts')}`,
     );
 
+    // Counted, because the marker has to be a line of its own. A harness
+    // that merely quotes the phrase in a sentence exempts nothing.
+    expect(run.stdout).toContain(
+      `${join(PROBE_DIR_REL, 'via-prose.test.ts')}:${lineOf(VIA_PROSE, 'harness-prose.ts')}`,
+    );
+
+    // Counted, because one export's type is inferred. The exemption asks for
+    // evidence that no text comes out, and an unannotated export is none.
+    expect(run.stdout).toContain(
+      `${join(PROBE_DIR_REL, 'via-unannotated.test.ts')}:${lineOf(VIA_UNANNOTATED, 'harness-unannotated.ts')}`,
+    );
+
     // Not counted. Both read a real stylesheet; what keeps them out is the
-    // harness's `// audit: no-text` and the `fixtures/` path.
+    // harness's marker line over fully annotated exports, and the
+    // `fixtures/` path.
     expect(run.stdout).not.toContain(join(PROBE_DIR_REL, 'via-computed.test.ts'));
     expect(run.stdout).not.toContain(join(PROBE_DIR_REL, 'fixture.test.ts'));
   });

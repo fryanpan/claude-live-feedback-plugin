@@ -151,6 +151,20 @@ function fixedSleeps(): Check {
 //
 //    So a test now counts when it reads source directly OR imports a module
 //    that does. Moving the read one file away is not an escape.
+//
+//    What it still cannot see, so that nobody reads a clean table as proof:
+//
+//    - A read in a TEST file whose path literal is on a different line, or in
+//      a constant declared elsewhere. `packages/widget/test/css-minify.test.ts`
+//      wraps its `join(..., 'src', 'styles.ts')` onto the next line and goes
+//      uncounted; `review-item-tools.test.ts` reads a `BUNDLE` const the same
+//      way. The module-level form below is looser precisely because a harness
+//      always does this; test files are still matched per line, so the site
+//      list can point at one.
+//    - A support module outside a `test/` directory. The walk stops at the
+//      edge of the test tree on purpose, and a reader parked in `src/` or in
+//      a sibling `helpers/` is therefore invisible.
+//    - `require()`. Only `import` specifiers are followed.
 
 /** A read call. The path may be computed, so the literal is matched separately. */
 const READ_CALL = /(?:readFileSync|readFile|Bun\.file)\(/;
@@ -212,33 +226,47 @@ function stripImports(text: string): string {
 }
 
 /**
- * The types an exported VALUE can hand back: the return type of each exported
- * function, and the annotation or initialiser of each exported const. Exported
- * types and interfaces are skipped — `export type SheetName = 'hub.css' | …`
- * is a string union that hands no test any stylesheet text.
+ * Every exported VALUE, and whether its type is written down.
+ *
+ * `annotated` is the load-bearing half. An export with no annotation is not
+ * evidence that the module returns no text — it is the absence of evidence,
+ * and `export const HUB_TEXT = TEXT['hub.css'];` appended to a harness is a
+ * one-line hole that inference would happily fill with `string` while a
+ * regex sees nothing. So an unannotated export lapses the exemption on its
+ * own, and `export {`, `export *`, `export default` and `export class` all
+ * count as unannotated for the same reason: nothing on the line says what
+ * comes out.
+ *
+ * Exported types and interfaces are skipped. `export type SheetName =
+ * 'hub.css' | …` is a string union that hands no test any stylesheet text.
  */
-function exportedValueTypes(lines: string[]): string[] {
-  const out: string[] = [];
+type ExportedValue = { annotated: boolean; type: string };
+
+function exportedValues(lines: string[]): ExportedValue[] {
+  const out: ExportedValue[] = [];
+  const opaque: ExportedValue = { annotated: false, type: '' };
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i] ?? '';
     if (/^export\s+(?:type|interface)\b/.test(line)) continue;
+    if (/^export\s+(?:\*|\{|default\b|(?:abstract\s+)?class\b)/.test(line)) {
+      out.push(opaque);
+      continue;
+    }
     if (/^export\s+(?:async\s+)?function\b/.test(line)) {
       // Walk to the line that closes the signature: a multi-line signature
       // puts the return type on the `): T {` line, not the `export` line.
       for (let j = i; j < lines.length && j < i + 40; j++) {
         const end = (lines[j] ?? '').match(/\)\s*(?::\s*([^{]*?))?\s*\{\s*$/);
         if (end) {
-          out.push(end[1] ?? '');
+          out.push({ annotated: end[1] !== undefined, type: end[1] ?? '' });
           i = j;
           break;
         }
       }
       continue;
     }
-    const value = line.match(
-      /^export\s+(?:const|let|var)\s+[A-Za-z_$][\w$]*\s*(?::\s*([^=]+))?=(.*)$/,
-    );
-    if (value) out.push(value[1] ?? value[2] ?? '');
+    const value = line.match(/^export\s+(?:const|let|var)\s+[A-Za-z_$][\w$]*\s*(?::\s*([^=]+))?=/);
+    if (value) out.push({ annotated: value[1] !== undefined, type: value[1] ?? '' });
   }
   return out;
 }
@@ -250,27 +278,31 @@ function exportedValueTypes(lines: string[]): string[] {
  * `packages/workspaces-app/test/css-harness.ts` is the honest exception: it
  * reads four stylesheets only to INSTALL them in the test document, keeps the
  * text in a module-private map, and returns computed styles and elements. Its
- * forty-five importers assert behaviour and must not count.
+ * forty-six importers assert behaviour and must not count.
  *
- * Claiming the exemption takes TWO things that a reader can check
- * independently: the `// audit: no-text` marker, and no exported value typed
- * as a string. The marker alone cannot buy silence — write it over a
- * `function readSource(): string` and the check counts you anyway. That is
- * what stops the exemption from becoming the new hiding place, the way
- * "put the read in a helper" was the old one.
+ * Claiming the exemption takes three things, each of which a reader can check
+ * on its own:
  *
- * Residual hole, stated rather than papered over: an exported function
- * annotated with a named type that happens to contain a string, or a
- * `export { … } from './other'` re-export, is invisible here. Both need the
- * marker as well, so both are a deliberate act visible in a diff.
+ *  - a marker comment on a line of its own, holding nothing but the marker.
+ *    Prose that merely quotes the phrase does not exempt anything — the first
+ *    cut matched the phrase anywhere, so deleting the real marker from
+ *    `css-harness.ts` changed no count at all, because the module's header
+ *    paragraph said the words.
+ *  - every exported value annotated. No annotation is no evidence.
+ *  - no annotation naming `string`.
+ *
+ * So the marker cannot buy silence on its own: write it over a
+ * `function readSource(): string`, or over an export with no type at all, and
+ * the check counts you anyway. That is what stops the exemption from becoming
+ * the new hiding place, the way "put the read in a helper" was the old one.
  */
-const NO_TEXT_MARKER = /\/\/\s*audit:\s*no-text\b/;
+const NO_TEXT_MARKER = /^\s*\/\/\s*audit:\s*no-text\s*$/;
 
 function providesSourceText(rel: string): boolean {
   const lines = read(rel);
   if (!moduleReadsSource(lines)) return false;
   if (!lines.some((l) => NO_TEXT_MARKER.test(l))) return true;
-  return exportedValueTypes(lines).some((t) => /\bstring\b/.test(t));
+  return exportedValues(lines).some((v) => !v.annotated || /\bstring\b/.test(v.type));
 }
 
 /** Relative import specifiers: static, side-effect and dynamic. */
@@ -310,7 +342,7 @@ function resolveImport(fromRel: string, spec: string): string | undefined {
 /**
  * Does this module, or anything it imports, provide source text? Transitive,
  * so a harness that wraps another harness is still counted, and memoised
- * because forty-five test files ask about the same two modules.
+ * because forty-six test files ask about the same two modules.
  */
 const textProviderCache = new Map<string, boolean>();
 
@@ -375,8 +407,11 @@ function sourceShape(): Check {
       'in a test that asserts with toContain/toMatch/toBe/toEqual/toStrictEqual or an ordered comparison: ' +
       'a readFileSync/readFile/Bun.file whose call names a path under src/ or dist/, a .css/.js file or ' +
       'packages/plugin (fixtures/ excluded), OR an import of a test module that reads one. ' +
-      'A reading module is assumed to hand the text on; it is exempt only if it carries `// audit: no-text` ' +
-      'AND exports no string-typed value (packages/workspaces-app/test/css-harness.ts returns computed styles)',
+      'A reading module is assumed to hand the text on. It is exempt only when all three hold: a comment ' +
+      'line holding nothing but the marker `audit: no-text`, every exported value carrying an explicit ' +
+      'type or return annotation, and no annotation naming string. An unannotated export is not evidence, ' +
+      'so it counts (packages/workspaces-app/test/css-harness.ts returns computed styles and is the ' +
+      'module the exemption exists for)',
     sites,
   };
 }

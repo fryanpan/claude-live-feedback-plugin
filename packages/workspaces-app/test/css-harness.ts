@@ -19,11 +19,17 @@
  * longer an accident. `scripts/test-audit.ts` now follows a test's imports:
  * a module that reads source is assumed to hand that text to its importers,
  * and every one of them counts. This module claims the exemption with the
- * `// audit: no-text` marker below — and the marker alone does not buy it.
- * The check also requires that no exported value here is typed as a string,
- * so the day somebody adds `export function sheetText(): string` the marker
- * stops working and all forty-five importers start counting. The private map
- * and the audit now say the same thing, and the audit can tell.
+ * marker line above `TEXT` below.
+ *
+ * The marker does not buy the exemption on its own, and this paragraph is
+ * proof of why it must not: the check reads a marker only on a line holding
+ * nothing else, so prose like this one cannot exempt anything. Beyond the
+ * marker the check requires that every export here carry an explicit type or
+ * return annotation, and that none of those annotations name `string`. Add
+ * `export function sheetText(): string`, or an export with no annotation at
+ * all, and the exemption lapses and all forty-six importers start counting.
+ * The private map and the audit now say the same thing, and the audit can
+ * check it.
  *
  * WHAT HAPPY-DOM CAN AND CANNOT RESOLVE. It runs the real cascade — author
  * specificity, `!important`, inheritance, custom properties, descendant,
@@ -53,10 +59,13 @@ const SRC = resolve(import.meta.dirname, '../src');
 /** The sheets the app's pages load, in cascade order. */
 export type SheetName = 'tokens.css' | 'styles.css' | 'hub.css' | 'signin.css';
 
-// audit: no-text — nothing here returns CSS text. `TEXT` is module-private and
-// every export hands back a computed style, an element or a cleanup, so
-// `scripts/test-audit.ts` does not count this module's importers as source
-// readers. Export a string from this file and that exemption lapses.
+// audit: no-text
+//
+// The line above is the marker, and it has to stay a line of its own. Nothing
+// here returns CSS text: `TEXT` is module-private and every export hands back
+// a computed style, an element or a cleanup, so `scripts/test-audit.ts` does
+// not count this module's importers as source readers. Export a string from
+// this file, or an unannotated value of any kind, and that exemption lapses.
 const TEXT: Record<SheetName, string> = {
   'tokens.css': readFileSync(resolve(SRC, 'tokens.css'), 'utf8'),
   'styles.css': readFileSync(resolve(SRC, 'styles.css'), 'utf8'),
@@ -100,9 +109,18 @@ export function installSheets(...names: SheetName[]): () => void {
   };
 }
 
-/** The two viewports this project verifies — docs/product/design-mobile.md. */
-export const IPAD = { width: 1180, height: 820 } as const;
-export const PHONE = { width: 430, height: 932 } as const;
+/** A window size the media queries are evaluated against. */
+export type Viewport = { width: number; height: number };
+
+/**
+ * The two viewports this project verifies — docs/product/design-mobile.md.
+ *
+ * Annotated rather than `as const` because the audit's exemption for this
+ * module requires every export to say its own type: an inferred one is no
+ * evidence that nothing here hands back stylesheet text.
+ */
+export const IPAD: Viewport = { width: 1180, height: 820 };
+export const PHONE: Viewport = { width: 430, height: 932 };
 
 /**
  * Set the window size the media queries are evaluated against.
@@ -117,7 +135,7 @@ export const PHONE = { width: 430, height: 932 } as const;
  * already exists keeps the old viewport's answer. `styleOf` exists for the
  * cases where that ordering is not possible.
  */
-export function setViewport({ width, height }: { width: number; height: number }): void {
+export function setViewport({ width, height }: Viewport): void {
   (
     window as unknown as { happyDOM: { setViewport(v: { width: number; height: number }): void } }
   ).happyDOM.setViewport({ width, height });
