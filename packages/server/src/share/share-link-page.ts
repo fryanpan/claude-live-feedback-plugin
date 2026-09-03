@@ -11,6 +11,11 @@
  * It names no workspace, no board title and no owner — a visitor who reached
  * a revoked link learns only that it is not usable.
  *
+ * The heading says "no longer works" rather than "has been revoked" for the
+ * same reason there is only one page: three of the four cases it covers are
+ * not revocations, and a visitor whose link merely lapsed should not be told
+ * somebody withdrew it.
+ *
  * Rendered with no bundle, no session and no doc, like `renderLinkNotFound`
  * in the auth-share routes: the caller has no credential and the page has to
  * stand on its own. Kept in its own module rather than beside that one
@@ -23,7 +28,7 @@
 export function renderShareLinkUnavailable(): string {
   return `<!doctype html><html lang="en"><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Link revoked · Workspaces</title>
+<title>Link no longer works · Workspaces</title>
 <style>
 :root{color-scheme:light dark}
 body{font:16px/1.55 system-ui,-apple-system,"Segoe UI",sans-serif;color:#1c1c1e;background:#fff;
@@ -34,7 +39,7 @@ p{color:#5b5b60;margin:0}
 @media(prefers-color-scheme:dark){body{background:#131316;color:#ececf0}p{color:#a0a0a8}}
 </style>
 <main>
-<h1>This link has been revoked</h1>
-<p>It may have been revoked or expired. Ask whoever shared it for a new one.</p>
+<h1>This link no longer works</h1>
+<p>It may have been revoked, or it may have expired. Ask whoever shared it for a new one.</p>
 </main></html>`;
 }
