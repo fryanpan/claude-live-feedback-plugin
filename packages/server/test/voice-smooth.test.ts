@@ -26,13 +26,15 @@ import { join } from 'node:path';
 import { type ServerHandle, createServer } from '../src/server.ts';
 import { TaskStore } from '../src/tasks.ts';
 import {
-  CHOICE_WINDOW_MS,
   VOICE_STATUS_MAX_WORDS,
-  VoiceRouter,
-  answerBody,
   capWords,
   composeStatus,
   countWords,
+} from '../src/voice-status.ts';
+import {
+  CHOICE_WINDOW_MS,
+  VoiceRouter,
+  answerBody,
   navigationAsk,
   parseOrdinal,
   pickByLabel,

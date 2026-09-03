@@ -64,11 +64,8 @@ import {
 import {
   type HubDestination,
   type ScoredCandidate,
-  type StatusQueueRow,
-  type StatusTask,
   type TitleCandidate,
   answerBody,
-  composeStatus,
   goalOrdinalAsk,
   hubDestinationAsk,
   navigationAsk,
@@ -77,15 +74,13 @@ import {
   resolveByTitle,
   statusAsk,
 } from './voice-resolve.ts';
+import { type StatusQueueRow, type StatusTask, composeStatus } from './voice-status.ts';
 
 // The deterministic pieces live in voice-resolve.ts; re-exported so callers
-// and tests keep one import for "voice".
+// and tests keep one import for "voice". The spoken brief has its own file
+// (voice-status.ts) and its own importers.
 export {
-  VOICE_STATUS_MAX_WORDS,
   answerBody,
-  capWords,
-  composeStatus,
-  countWords,
   goalOrdinalAsk,
   hubDestinationAsk,
   navigationAsk,
