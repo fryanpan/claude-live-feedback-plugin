@@ -6571,56 +6571,6 @@ function resolveDiscoveryFile(home, exists) {
   return discoveryCandidates(home).find(exists);
 }
 
-// packages/core/src/review-item-id.ts
-var B64URL = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
-function decodeBase64Url(s) {
-  if (s.length === 0 || s.length % 4 === 1)
-    return;
-  const bytes = [];
-  let buffer = 0;
-  let bits = 0;
-  for (const ch of s) {
-    const v = B64URL.indexOf(ch);
-    if (v < 0)
-      return;
-    buffer = buffer << 6 | v;
-    bits += 6;
-    if (bits >= 8) {
-      bits -= 8;
-      bytes.push(buffer >> bits & 255);
-    }
-  }
-  return Uint8Array.from(bytes);
-}
-var THREAD_ID_PREFIX = "rt-";
-function parseThreadReviewItemId(id) {
-  if (!id.startsWith(THREAD_ID_PREFIX))
-    return;
-  const bytes = decodeBase64Url(id.slice(THREAD_ID_PREFIX.length));
-  if (!bytes)
-    return;
-  let payload;
-  try {
-    payload = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
-  } catch {
-    return;
-  }
-  const commentAt = payload.lastIndexOf(`
-`);
-  if (commentAt < 0)
-    return;
-  const threadAt = payload.lastIndexOf(`
-`, commentAt - 1);
-  if (threadAt < 0)
-    return;
-  const docId = payload.slice(0, threadAt);
-  const threadId = payload.slice(threadAt + 1, commentAt);
-  const commentId = payload.slice(commentAt + 1);
-  if (docId === "" || threadId === "" || commentId === "")
-    return;
-  return { docId, threadId, commentId };
-}
-
 // node_modules/.bun/zod@4.3.6/node_modules/zod/v4/core/core.js
 var NEVER = Object.freeze({
   status: "aborted"
@@ -14369,29 +14319,6 @@ async function deliverThenCommit(frame, deliver, cursor, onGap) {
   }
 }
 
-// packages/mcp/src/task-projection.ts
-function projectTaskRows(tasks, fields) {
-  const rows = tasks;
-  if (!fields || fields.length === 0) {
-    return rows.map(({ body: _body, transitions, ...rest }) => ({
-      ...rest,
-      transitionCount: transitions?.length ?? 0
-    }));
-  }
-  const picked = new Set(["id", ...fields]);
-  return rows.map((t) => {
-    const row = {};
-    for (const key of picked) {
-      if (key === "transitionCount") {
-        row.transitionCount = t.transitions?.length ?? 0;
-      } else if (key in t) {
-        row[key] = t[key];
-      }
-    }
-    return row;
-  });
-}
-
 // packages/core/src/task-wire.ts
 var TASK_STATUSES = ["triage", "todo", "in-progress", "done"];
 
@@ -16648,6 +16575,612 @@ async function handleDocsTool(name, a, ctx) {
   return;
 }
 
+// packages/core/src/review-item-id.ts
+var B64URL = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+function decodeBase64Url(s) {
+  if (s.length === 0 || s.length % 4 === 1)
+    return;
+  const bytes = [];
+  let buffer = 0;
+  let bits = 0;
+  for (const ch of s) {
+    const v = B64URL.indexOf(ch);
+    if (v < 0)
+      return;
+    buffer = buffer << 6 | v;
+    bits += 6;
+    if (bits >= 8) {
+      bits -= 8;
+      bytes.push(buffer >> bits & 255);
+    }
+  }
+  return Uint8Array.from(bytes);
+}
+var THREAD_ID_PREFIX = "rt-";
+function parseThreadReviewItemId(id) {
+  if (!id.startsWith(THREAD_ID_PREFIX))
+    return;
+  const bytes = decodeBase64Url(id.slice(THREAD_ID_PREFIX.length));
+  if (!bytes)
+    return;
+  let payload;
+  try {
+    payload = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+  } catch {
+    return;
+  }
+  const commentAt = payload.lastIndexOf(`
+`);
+  if (commentAt < 0)
+    return;
+  const threadAt = payload.lastIndexOf(`
+`, commentAt - 1);
+  if (threadAt < 0)
+    return;
+  const docId = payload.slice(0, threadAt);
+  const threadId = payload.slice(threadAt + 1, commentAt);
+  const commentId = payload.slice(commentAt + 1);
+  if (docId === "" || threadId === "" || commentId === "")
+    return;
+  return { docId, threadId, commentId };
+}
+
+// packages/mcp/src/task-projection.ts
+function projectTaskRows(tasks, fields) {
+  const rows = tasks;
+  if (!fields || fields.length === 0) {
+    return rows.map(({ body: _body, transitions, ...rest }) => ({
+      ...rest,
+      transitionCount: transitions?.length ?? 0
+    }));
+  }
+  const picked = new Set(["id", ...fields]);
+  return rows.map((t) => {
+    const row = {};
+    for (const key of picked) {
+      if (key === "transitionCount") {
+        row.transitionCount = t.transitions?.length ?? 0;
+      } else if (key in t) {
+        row[key] = t[key];
+      }
+    }
+    return row;
+  });
+}
+
+// packages/mcp/src/tools/tasks.ts
+function taskCreatedSummary(task, ignoredLinks, shapeGaps, placed) {
+  return {
+    taskId: task.id,
+    goal: task.goal,
+    order: task.order,
+    status: task.status,
+    assignee: task.assignee,
+    ...placed !== undefined ? { placed } : {},
+    ...shapeGaps !== undefined && shapeGaps.length > 0 ? { shapeGaps } : {},
+    ...ignoredLinks !== undefined && ignoredLinks.length > 0 ? { ignoredLinks } : {}
+  };
+}
+async function recordReviewAnswer(ctx, args) {
+  const { http, AUTHOR } = ctx;
+  const { taskId, text, reviewItemId, answeredWith } = args;
+  if (reviewItemId === undefined) {
+    return await http("POST", `/api/tasks/${encodeURIComponent(taskId)}/answer`, {
+      text,
+      ...answeredWith !== undefined ? { optionId: answeredWith } : {},
+      author: AUTHOR
+    });
+  }
+  return await http("POST", `/api/tasks/${encodeURIComponent(taskId)}/review-items/${encodeURIComponent(reviewItemId)}/answer`, {
+    text,
+    ...answeredWith !== undefined ? { answeredWith } : {},
+    author: AUTHOR
+  });
+}
+async function resolveReviewItemId(ctx, reviewItemId) {
+  const thread = parseThreadReviewItemId(reviewItemId);
+  if (thread)
+    return { kind: "doc-thread", ...thread };
+  const res = await ctx.http("GET", `/api/review-items/${encodeURIComponent(reviewItemId)}`);
+  return {
+    kind: "task-item",
+    taskId: res.taskId,
+    ...res.workspaceId !== undefined ? { workspaceId: res.workspaceId } : {}
+  };
+}
+function heldResult(res) {
+  if (res.held !== true)
+    return {};
+  return {
+    held: true,
+    ...res.heldReason !== undefined ? { heldReason: res.heldReason } : {},
+    ...res.message !== undefined ? { message: res.message } : {}
+  };
+}
+async function handleTaskTool(name, a, ctx) {
+  const { http, ok, err, AUTHOR, claimNoticeFor } = ctx;
+  switch (name) {
+    case "create_tasks": {
+      const { workspaceId, tasks, sourceDoc } = a;
+      const res = await http("POST", `/api/workspaces/${encodeURIComponent(workspaceId)}/tasks/batch`, { tasks, author: AUTHOR, ...sourceDoc !== undefined ? { sourceDoc } : {} });
+      const gapsFor = (taskId) => res.shapeGaps?.find((g) => g.taskId === taskId)?.gaps ?? undefined;
+      const adviceFor = (taskId) => res.reviewAdvice?.find((r) => r.taskId === taskId)?.advice ?? undefined;
+      const visibilityFor = (taskId) => res.visibility?.find((v) => v.taskId === taskId)?.note ?? undefined;
+      const droppedFor = (taskId) => res.ignoredLinks?.find((l) => l.taskId === taskId)?.ignored ?? undefined;
+      const heldFor = (taskId) => {
+        const h = res.held?.find((r) => r.taskId === taskId);
+        return h === undefined ? {} : { reviewItemId: h.reviewItemId, ...heldResult({ held: true, ...h }) };
+      };
+      const unplaced = new Set(res.placement?.unplaced ?? []);
+      return ok({
+        created: res.tasks.map((t) => ({
+          title: t.title,
+          ...taskCreatedSummary(t, droppedFor(t.id), gapsFor(t.id), !unplaced.has(t.id)),
+          ...adviceFor(t.id) !== undefined ? { reviewAdvice: adviceFor(t.id) } : {},
+          ...heldFor(t.id),
+          ...visibilityFor(t.id) !== undefined ? { visibility: visibilityFor(t.id) } : {}
+        })),
+        failures: res.failures,
+        ...res.placement !== undefined ? { placement: res.placement } : {},
+        ...res.sourceDoc !== undefined ? { sourceDoc: res.sourceDoc } : {}
+      });
+    }
+    case "promote_to_task": {
+      const {
+        docId,
+        threadId,
+        workspaceId,
+        title,
+        body,
+        assignee,
+        assigneeKind,
+        needs,
+        goal,
+        dueAt,
+        links
+      } = a;
+      const res = await http("POST", `/api/docs/${encodeURIComponent(docId)}/threads/${encodeURIComponent(threadId)}/promote`, {
+        workspaceId,
+        ...title !== undefined ? { title } : {},
+        ...body !== undefined ? { body } : {},
+        ...assignee !== undefined ? { assignee } : {},
+        ...assigneeKind !== undefined ? { assigneeKind } : {},
+        ...needs !== undefined ? { needs } : {},
+        ...goal !== undefined ? { goal } : {},
+        ...dueAt !== undefined ? { dueAt } : {},
+        ...links !== undefined ? { links } : {},
+        author: AUTHOR
+      });
+      return ok({
+        ...taskCreatedSummary(res.task, res.ignoredLinks, undefined, res.placement?.placed),
+        ...res.placement?.goals !== undefined ? { goals: res.placement.goals } : {},
+        title: res.task.title,
+        quote: res.task.quote
+      });
+    }
+    case "next_tasks": {
+      const { workspaceId, assignee, limit, includeBlocked, includeArchived } = a;
+      const qs = new URLSearchParams;
+      if (assignee !== undefined)
+        qs.set("assignee", assignee);
+      if (limit !== undefined)
+        qs.set("limit", String(limit));
+      if (includeBlocked === true)
+        qs.set("includeBlocked", "true");
+      if (includeArchived === true)
+        qs.set("includeArchived", "true");
+      const query = qs.size > 0 ? `?${qs.toString()}` : "";
+      const res = await http("GET", `/api/workspaces/${encodeURIComponent(workspaceId)}/next${query}`);
+      return ok({
+        workspaceId,
+        ...res.retired ? { retired: res.retired } : {},
+        tasks: res.tasks
+      });
+    }
+    case "list_tasks": {
+      const { workspaceId, goal, status, assignee, needs, fields, includeArchived } = a;
+      const qs = new URLSearchParams;
+      if (goal !== undefined)
+        qs.set("goal", goal);
+      if (status !== undefined)
+        qs.set("status", status);
+      if (assignee !== undefined)
+        qs.set("assignee", assignee);
+      if (needs !== undefined)
+        qs.set("needs", needs);
+      if (includeArchived === true)
+        qs.set("includeArchived", "true");
+      const query = qs.size > 0 ? `?${qs.toString()}` : "";
+      const res = await http("GET", `/api/workspaces/${encodeURIComponent(workspaceId)}/tasks${query}`);
+      return ok({
+        workspaceId,
+        tasks: projectTaskRows(res.tasks, fields)
+      });
+    }
+    case "task_transition": {
+      const { taskId, to, note, usage } = a;
+      const claimNotice = to === "in-progress" ? await claimNoticeFor(taskId) : undefined;
+      const res = await http("POST", `/api/tasks/${encodeURIComponent(taskId)}/transition`, {
+        to,
+        author: AUTHOR,
+        ...note !== undefined ? { note } : {},
+        ...usage !== undefined ? { usage } : {}
+      });
+      return ok({
+        taskId,
+        status: res.task.status,
+        blockers: res.blockers,
+        ...claimNotice !== undefined ? { warning: claimNotice } : {}
+      });
+    }
+    case "assign_task": {
+      const { taskId, assignee, assigneeKind } = a;
+      const res = await http("POST", `/api/tasks/${encodeURIComponent(taskId)}/assignee`, {
+        assignee,
+        ...assigneeKind !== undefined ? { assigneeKind } : {},
+        author: AUTHOR
+      });
+      return ok({
+        taskId,
+        assignee: res.task.assignee,
+        changed: res.changed,
+        ...res.ownerKind !== undefined ? { ownerKind: res.ownerKind } : {}
+      });
+    }
+    case "park_task": {
+      const { taskId, until, reason } = a;
+      let parkedUntil;
+      if (until === undefined) {
+        parkedUntil = undefined;
+      } else if (until === null) {
+        parkedUntil = null;
+      } else if (typeof until === "number") {
+        if (!Number.isFinite(until))
+          return err("until must be a date, or omitted");
+        parkedUntil = until;
+      } else {
+        const parsed = Date.parse(until);
+        if (Number.isNaN(parsed)) {
+          return err(`could not read "${until}" as a date — pass epoch ms, "YYYY-MM-DD", or a full ISO timestamp`);
+        }
+        parkedUntil = parsed;
+      }
+      const res = await http("POST", `/api/tasks/${encodeURIComponent(taskId)}/park`, {
+        ...parkedUntil !== undefined ? { parkedUntil } : {},
+        ...reason !== undefined ? { reason } : {},
+        author: AUTHOR
+      });
+      return ok({
+        taskId,
+        status: res.task.status,
+        moved: res.changed,
+        commented: res.commented,
+        ...res.message !== undefined ? { message: res.message } : {}
+      });
+    }
+    case "archive_task": {
+      const { taskId, reason } = a;
+      const res = await http("POST", `/api/tasks/${encodeURIComponent(taskId)}/archive`, {
+        ...reason !== undefined ? { reason } : {},
+        author: AUTHOR
+      });
+      return ok({
+        taskId,
+        archivedAt: res.task.archivedAt ?? null,
+        ...res.task.archiveReason !== undefined ? { archiveReason: res.task.archiveReason } : {},
+        changed: res.changed
+      });
+    }
+    case "unarchive_task": {
+      const { taskId } = a;
+      const res = await http("POST", `/api/tasks/${encodeURIComponent(taskId)}/restore`, {
+        author: AUTHOR
+      });
+      return ok({
+        taskId,
+        goal: res.task.goal,
+        status: res.task.status,
+        changed: res.changed
+      });
+    }
+    case "rewrite_task": {
+      const { taskId, title, body, reason } = a;
+      if (body === undefined && title === undefined) {
+        return err("nothing to rewrite — pass title, body, or both");
+      }
+      if (body !== undefined) {
+        const res2 = await http("POST", `/api/tasks/${encodeURIComponent(taskId)}/body`, {
+          markdown: body,
+          ...title !== undefined ? { title } : {},
+          ...reason !== undefined ? { reason } : {},
+          author: AUTHOR
+        });
+        return ok({
+          taskId,
+          title: res2.task?.title,
+          body: res2.task?.body,
+          quote: res2.task?.quote
+        });
+      }
+      const res = await http("POST", `/api/tasks/${encodeURIComponent(taskId)}/title`, {
+        title,
+        ...reason !== undefined ? { reason } : {},
+        author: AUTHOR
+      });
+      return ok({ taskId, title: res.task?.title, changed: res.changed ?? false });
+    }
+    case "set_task_goal": {
+      const { taskId, goal, position, batchId } = a;
+      const res = await http("POST", `/api/tasks/${encodeURIComponent(taskId)}/goal`, {
+        goal,
+        author: AUTHOR,
+        ...position !== undefined ? { position } : {},
+        ...batchId !== undefined ? { batchId } : {}
+      });
+      return ok({ taskId, goal: res.task.goal, order: res.task.order, changed: res.changed });
+    }
+    case "set_goal_list": {
+      const { workspaceId, goals, drop } = a;
+      const res = await http("PUT", `/api/workspaces/${encodeURIComponent(workspaceId)}/goals`, {
+        goals,
+        ...drop !== undefined ? { drop } : {},
+        author: AUTHOR
+      });
+      return ok({
+        workspaceId,
+        changed: res.changed,
+        created: res.created,
+        movedToChores: res.movedToChores,
+        strandedDone: res.strandedDone,
+        ...res.bucketReview ? { bucketReview: res.bucketReview } : {}
+      });
+    }
+    case "rename_goal": {
+      const { workspaceId, goal, title, dueAt } = a;
+      const res = await http("POST", `/api/workspaces/${encodeURIComponent(workspaceId)}/goals/rename`, {
+        goal,
+        title,
+        ...dueAt !== undefined ? { dueAt } : {},
+        author: AUTHOR
+      });
+      return ok({ workspaceId, goal: res.goal, changed: res.changed });
+    }
+    case "reorder_goals": {
+      const { workspaceId, order } = a;
+      const res = await http("POST", `/api/workspaces/${encodeURIComponent(workspaceId)}/goals/reorder`, { order, author: AUTHOR });
+      return ok({
+        workspaceId,
+        order: res.order,
+        changed: res.changed
+      });
+    }
+    case "add_review_item": {
+      const { taskId, review } = a;
+      const res = await http("POST", `/api/tasks/${encodeURIComponent(taskId)}/review-items`, {
+        review,
+        author: AUTHOR
+      });
+      return ok({
+        taskId,
+        reviewItemId: res.item?.id,
+        ...res.reviewAdvice !== undefined ? { reviewAdvice: res.reviewAdvice } : {},
+        ...heldResult(res)
+      });
+    }
+    case "answer_review_item": {
+      const { taskId, reviewItemId, text, answeredWith } = a;
+      let effectiveTaskId = taskId;
+      if (effectiveTaskId === undefined) {
+        if (reviewItemId === undefined) {
+          return err("which item? Pass its reviewItemId (from the queue row or the ticket), or taskId — alone for a ticket that is itself a decision, with reviewItemId for one of the items filed on it");
+        }
+        const address = await resolveReviewItemId(ctx, reviewItemId);
+        if (address.kind === "doc-thread") {
+          await http("POST", `/api/docs/${encodeURIComponent(address.docId)}/threads/${encodeURIComponent(address.threadId)}/answer`, {
+            text,
+            commentId: address.commentId,
+            ...answeredWith !== undefined ? { optionId: answeredWith } : {},
+            author: AUTHOR
+          });
+          return ok({
+            reviewItemId,
+            docId: address.docId,
+            threadId: address.threadId,
+            commentId: address.commentId,
+            recorded: true
+          });
+        }
+        effectiveTaskId = address.taskId;
+      }
+      const res = await recordReviewAnswer(ctx, {
+        taskId: effectiveTaskId,
+        text,
+        ...reviewItemId !== undefined ? { reviewItemId } : {},
+        ...answeredWith !== undefined ? { answeredWith } : {}
+      });
+      return ok({
+        taskId: effectiveTaskId,
+        ...reviewItemId !== undefined ? { reviewItemId } : {},
+        recorded: true,
+        links: res.task.links ?? []
+      });
+    }
+    case "revise_review_item": {
+      const {
+        taskId,
+        reviewItemId,
+        docId,
+        threadId,
+        commentId,
+        headline,
+        detail,
+        options,
+        reply,
+        revisedRange
+      } = a;
+      const patch = {
+        ...headline !== undefined ? { headline } : {},
+        ...detail !== undefined ? { detail } : {},
+        ...options !== undefined ? { options } : {},
+        ...revisedRange !== undefined ? { revisedRange } : {},
+        author: AUTHOR
+      };
+      if (docId !== undefined || threadId !== undefined || commentId !== undefined) {
+        if (taskId !== undefined || reviewItemId !== undefined) {
+          return err("two addresses in one call — pass taskId + reviewItemId for an item on a ticket, or docId + threadId + commentId for one raised on a doc thread, not both");
+        }
+        if (docId === undefined || threadId === undefined || commentId === undefined) {
+          return err("the doc-thread form needs all three of docId + threadId + commentId — commentId is the thread.comments[].id that create_thread / post_reply returned when you raised the item");
+        }
+        if (reply !== undefined) {
+          return err("`reply` is ticket-only — a doc-thread item already lives in its thread, so point at the change there with post_reply");
+        }
+        const docRes = await http("POST", `/api/docs/${encodeURIComponent(docId)}/threads/${encodeURIComponent(threadId)}/revise`, { ...patch, commentId });
+        return ok({ docId, threadId, commentId, revised: true, ...heldResult(docRes) });
+      }
+      let effectiveTaskId = taskId;
+      if (effectiveTaskId === undefined) {
+        if (reviewItemId === undefined) {
+          return err("which item? A bare reviewItemId (from the queue row or the ticket), taskId (+ reviewItemId for one of the items filed on the ticket), or docId + threadId + commentId for one raised on a doc thread");
+        }
+        const address = await resolveReviewItemId(ctx, reviewItemId);
+        if (address.kind === "doc-thread") {
+          if (reply !== undefined) {
+            return err("`reply` is ticket-only — a doc-thread item already lives in its thread, so point at the change there with post_reply");
+          }
+          const docRes = await http("POST", `/api/docs/${encodeURIComponent(address.docId)}/threads/${encodeURIComponent(address.threadId)}/revise`, { ...patch, commentId: address.commentId });
+          return ok({
+            reviewItemId,
+            docId: address.docId,
+            threadId: address.threadId,
+            commentId: address.commentId,
+            revised: true,
+            ...heldResult(docRes)
+          });
+        }
+        effectiveTaskId = address.taskId;
+      }
+      if (reviewItemId === undefined && reply !== undefined) {
+        return err("`reply` needs an item thread to land on, and a ticket's own decision has none — revise without `reply`, then point at the change with post_reply on the task");
+      }
+      const targetItemId = reviewItemId ?? "r-legacy";
+      const res = await http("POST", `/api/tasks/${encodeURIComponent(effectiveTaskId)}/review-items/${encodeURIComponent(targetItemId)}/revise`, { ...patch, ...reply !== undefined ? { reply } : {} });
+      return ok({
+        taskId: effectiveTaskId,
+        ...reviewItemId !== undefined ? { reviewItemId } : { decision: true },
+        revised: true,
+        ...res.threadId !== undefined ? { threadId: res.threadId } : {},
+        ...reply !== undefined && res.threadId !== undefined ? { replied: true } : {},
+        ...res.reviewAdvice !== undefined ? { reviewAdvice: res.reviewAdvice } : {},
+        ...heldResult(res)
+      });
+    }
+    case "withdraw_review_item": {
+      const { reviewItemId, taskId, docId, threadId, commentId, reason, undo } = a;
+      const body = { author: AUTHOR, ...reason !== undefined ? { reason } : {} };
+      const docWithdraw = async (address) => {
+        await http("POST", `/api/docs/${encodeURIComponent(address.docId)}/threads/${encodeURIComponent(address.threadId)}/withdraw${undo ? "/undo" : ""}`, { ...body, commentId: address.commentId });
+        return ok({
+          ...reviewItemId !== undefined ? { reviewItemId } : {},
+          ...address,
+          withdrawn: undo !== true
+        });
+      };
+      if (reviewItemId !== undefined) {
+        if (docId !== undefined || threadId !== undefined || commentId !== undefined) {
+          return err("two addresses in one call — pass reviewItemId alone (it carries its own address), or the docId + threadId + commentId triple, not both");
+        }
+        const address = taskId !== undefined ? { kind: "task-item", taskId } : await resolveReviewItemId(ctx, reviewItemId);
+        if (address.kind === "doc-thread")
+          return docWithdraw(address);
+        await http("POST", `/api/tasks/${encodeURIComponent(address.taskId)}/review-items/${encodeURIComponent(reviewItemId)}/withdraw${undo ? "/undo" : ""}`, body);
+        return ok({ taskId: address.taskId, reviewItemId, withdrawn: undo !== true });
+      }
+      if (docId === undefined || threadId === undefined || commentId === undefined) {
+        return err("which item? Pass its reviewItemId (from the queue row or the ticket), or the full docId + threadId + commentId triple for one raised on a doc thread");
+      }
+      return docWithdraw({ docId, threadId, commentId });
+    }
+    case "request_more_info": {
+      const { taskId, reviewItemId, question } = a;
+      let effectiveTaskId = taskId;
+      if (effectiveTaskId === undefined) {
+        if (reviewItemId === undefined) {
+          return err("which item? Pass its reviewItemId (from the queue row or the ticket), or taskId — alone for a ticket that is itself a decision, with reviewItemId for one of the items filed on it");
+        }
+        const address = await http("GET", `/api/review-items/${encodeURIComponent(reviewItemId)}`);
+        if (address.kind === "doc-thread") {
+          await http("POST", `/api/docs/${encodeURIComponent(address.docId)}/threads/${encodeURIComponent(address.threadId)}/comments`, { author: AUTHOR, text: question });
+          return ok({
+            reviewItemId,
+            docId: address.docId,
+            threadId: address.threadId,
+            asked: true
+          });
+        }
+        effectiveTaskId = address.taskId;
+      }
+      const path = reviewItemId === undefined ? `/api/tasks/${encodeURIComponent(effectiveTaskId)}/more-info` : `/api/tasks/${encodeURIComponent(effectiveTaskId)}/review-items/${encodeURIComponent(reviewItemId)}/more-info`;
+      const res = await http("POST", path, { question, author: AUTHOR });
+      return ok({
+        taskId: effectiveTaskId,
+        ...reviewItemId !== undefined ? { reviewItemId } : {},
+        asked: true,
+        links: res.task.links ?? []
+      });
+    }
+    case "answer_decision": {
+      const { taskId, text, optionId, reviewItemId } = a;
+      const res = await recordReviewAnswer(ctx, {
+        taskId,
+        text,
+        ...reviewItemId !== undefined ? { reviewItemId } : {},
+        ...optionId !== undefined ? { answeredWith: optionId } : {}
+      });
+      return ok({ taskId, recorded: true, links: res.task.links ?? [] });
+    }
+    case "set_task_dependencies": {
+      const { taskId, after, afterEnforce } = a;
+      const res = await http("POST", `/api/tasks/${encodeURIComponent(taskId)}/after`, {
+        after,
+        ...afterEnforce !== undefined ? { afterEnforce } : {},
+        author: AUTHOR
+      });
+      return ok({
+        taskId,
+        changed: res.changed,
+        after: res.task.after ?? [],
+        afterEnforce: res.task.afterEnforce ?? []
+      });
+    }
+    case "import_tasks_markdown": {
+      const { workspaceId, path, apply } = a;
+      const res = await http("POST", `/api/workspaces/${encodeURIComponent(workspaceId)}/import-tasks`, { path, ...apply !== undefined ? { apply } : {}, author: AUTHOR });
+      return ok(res);
+    }
+    case "link_refs": {
+      const { taskId, ref } = a;
+      const res = await http("POST", `/api/tasks/${encodeURIComponent(taskId)}/links`, {
+        ref
+      });
+      return ok({ taskId, changed: res.changed });
+    }
+    case "list_backlinks": {
+      const { ref } = a;
+      const res = await http("POST", "/api/refs/backlinks", { ref });
+      return ok({ ref, tasks: res.tasks });
+    }
+    case "unlink_refs": {
+      const { taskId, ref } = a;
+      const res = await http("DELETE", `/api/tasks/${encodeURIComponent(taskId)}/links`, {
+        ref
+      });
+      return ok({ taskId, changed: res.changed });
+    }
+  }
+  return;
+}
+
 // packages/mcp/src/voice-line.ts
 function truncate4(s, n) {
   return s.length > n ? `${s.slice(0, n - 1)}…` : s;
@@ -16874,44 +17407,6 @@ var NO_AUTO_WATCH_TOOLS = new Set([
   "observe_url",
   "attach_doc"
 ]);
-function taskCreatedSummary(task, ignoredLinks, shapeGaps, placed) {
-  return {
-    taskId: task.id,
-    goal: task.goal,
-    order: task.order,
-    status: task.status,
-    assignee: task.assignee,
-    ...placed !== undefined ? { placed } : {},
-    ...shapeGaps !== undefined && shapeGaps.length > 0 ? { shapeGaps } : {},
-    ...ignoredLinks !== undefined && ignoredLinks.length > 0 ? { ignoredLinks } : {}
-  };
-}
-async function recordReviewAnswer(args) {
-  const { taskId, text, reviewItemId, answeredWith } = args;
-  if (reviewItemId === undefined) {
-    return await http("POST", `/api/tasks/${encodeURIComponent(taskId)}/answer`, {
-      text,
-      ...answeredWith !== undefined ? { optionId: answeredWith } : {},
-      author: AUTHOR
-    });
-  }
-  return await http("POST", `/api/tasks/${encodeURIComponent(taskId)}/review-items/${encodeURIComponent(reviewItemId)}/answer`, {
-    text,
-    ...answeredWith !== undefined ? { answeredWith } : {},
-    author: AUTHOR
-  });
-}
-async function resolveReviewItemId(reviewItemId) {
-  const thread = parseThreadReviewItemId(reviewItemId);
-  if (thread)
-    return { kind: "doc-thread", ...thread };
-  const res = await http("GET", `/api/review-items/${encodeURIComponent(reviewItemId)}`);
-  return {
-    kind: "task-item",
-    taskId: res.taskId,
-    ...res.workspaceId !== undefined ? { workspaceId: res.workspaceId } : {}
-  };
-}
 async function maybeAutoWatch(name, args) {
   if (NO_AUTO_WATCH_TOOLS.has(name))
     return;
@@ -16940,6 +17435,7 @@ function toolContext() {
     unwatchDoc,
     refreshCoverage,
     watchPersistenceMode,
+    claimNoticeFor,
     restoreState,
     lastPersistError,
     IDENTITY_IS_SHARED,
@@ -16953,9 +17449,10 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
     await ensureWatchesRestored();
     sendDueHeartbeats();
     await maybeAutoWatch(name, a);
-    const fromDocs = await handleDocsTool(name, a, toolContext());
-    if (fromDocs)
-      return fromDocs;
+    const ctx = toolContext();
+    const delegated = await handleDocsTool(name, a, ctx) ?? await handleTaskTool(name, a, ctx);
+    if (delegated)
+      return delegated;
     switch (name) {
       case "create_workspace": {
         const {
@@ -17041,64 +17538,6 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
         });
         return ok({ ok: true, workspaceId, docIds: res.workspace?.docIds ?? [] });
       }
-      case "create_tasks": {
-        const { workspaceId, tasks, sourceDoc } = a;
-        const res = await http("POST", `/api/workspaces/${encodeURIComponent(workspaceId)}/tasks/batch`, { tasks, author: AUTHOR, ...sourceDoc !== undefined ? { sourceDoc } : {} });
-        const gapsFor = (taskId) => res.shapeGaps?.find((g) => g.taskId === taskId)?.gaps ?? undefined;
-        const adviceFor = (taskId) => res.reviewAdvice?.find((r) => r.taskId === taskId)?.advice ?? undefined;
-        const visibilityFor = (taskId) => res.visibility?.find((v) => v.taskId === taskId)?.note ?? undefined;
-        const droppedFor = (taskId) => res.ignoredLinks?.find((l) => l.taskId === taskId)?.ignored ?? undefined;
-        const heldFor = (taskId) => {
-          const h = res.held?.find((r) => r.taskId === taskId);
-          return h === undefined ? {} : { reviewItemId: h.reviewItemId, ...heldResult({ held: true, ...h }) };
-        };
-        const unplaced = new Set(res.placement?.unplaced ?? []);
-        return ok({
-          created: res.tasks.map((t) => ({
-            title: t.title,
-            ...taskCreatedSummary(t, droppedFor(t.id), gapsFor(t.id), !unplaced.has(t.id)),
-            ...adviceFor(t.id) !== undefined ? { reviewAdvice: adviceFor(t.id) } : {},
-            ...heldFor(t.id),
-            ...visibilityFor(t.id) !== undefined ? { visibility: visibilityFor(t.id) } : {}
-          })),
-          failures: res.failures,
-          ...res.placement !== undefined ? { placement: res.placement } : {},
-          ...res.sourceDoc !== undefined ? { sourceDoc: res.sourceDoc } : {}
-        });
-      }
-      case "promote_to_task": {
-        const {
-          docId,
-          threadId,
-          workspaceId,
-          title,
-          body,
-          assignee,
-          assigneeKind,
-          needs,
-          goal,
-          dueAt,
-          links
-        } = a;
-        const res = await http("POST", `/api/docs/${encodeURIComponent(docId)}/threads/${encodeURIComponent(threadId)}/promote`, {
-          workspaceId,
-          ...title !== undefined ? { title } : {},
-          ...body !== undefined ? { body } : {},
-          ...assignee !== undefined ? { assignee } : {},
-          ...assigneeKind !== undefined ? { assigneeKind } : {},
-          ...needs !== undefined ? { needs } : {},
-          ...goal !== undefined ? { goal } : {},
-          ...dueAt !== undefined ? { dueAt } : {},
-          ...links !== undefined ? { links } : {},
-          author: AUTHOR
-        });
-        return ok({
-          ...taskCreatedSummary(res.task, res.ignoredLinks, undefined, res.placement?.placed),
-          ...res.placement?.goals !== undefined ? { goals: res.placement.goals } : {},
-          title: res.task.title,
-          quote: res.task.quote
-        });
-      }
       case "get_workspace": {
         const { workspaceId } = a;
         const res = await http("GET", `/api/workspaces/${encodeURIComponent(workspaceId)}`);
@@ -17111,425 +17550,6 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
           ...res.retired ? { retired: res.retired } : {},
           goals: res.goalSummary
         });
-      }
-      case "next_tasks": {
-        const { workspaceId, assignee, limit, includeBlocked, includeArchived } = a;
-        const qs = new URLSearchParams;
-        if (assignee !== undefined)
-          qs.set("assignee", assignee);
-        if (limit !== undefined)
-          qs.set("limit", String(limit));
-        if (includeBlocked === true)
-          qs.set("includeBlocked", "true");
-        if (includeArchived === true)
-          qs.set("includeArchived", "true");
-        const query = qs.size > 0 ? `?${qs.toString()}` : "";
-        const res = await http("GET", `/api/workspaces/${encodeURIComponent(workspaceId)}/next${query}`);
-        return ok({
-          workspaceId,
-          ...res.retired ? { retired: res.retired } : {},
-          tasks: res.tasks
-        });
-      }
-      case "list_tasks": {
-        const { workspaceId, goal, status, assignee, needs, fields, includeArchived } = a;
-        const qs = new URLSearchParams;
-        if (goal !== undefined)
-          qs.set("goal", goal);
-        if (status !== undefined)
-          qs.set("status", status);
-        if (assignee !== undefined)
-          qs.set("assignee", assignee);
-        if (needs !== undefined)
-          qs.set("needs", needs);
-        if (includeArchived === true)
-          qs.set("includeArchived", "true");
-        const query = qs.size > 0 ? `?${qs.toString()}` : "";
-        const res = await http("GET", `/api/workspaces/${encodeURIComponent(workspaceId)}/tasks${query}`);
-        return ok({
-          workspaceId,
-          tasks: projectTaskRows(res.tasks, fields)
-        });
-      }
-      case "task_transition": {
-        const { taskId, to, note, usage } = a;
-        const claimNotice = to === "in-progress" ? await claimNoticeFor(taskId) : undefined;
-        const res = await http("POST", `/api/tasks/${encodeURIComponent(taskId)}/transition`, {
-          to,
-          author: AUTHOR,
-          ...note !== undefined ? { note } : {},
-          ...usage !== undefined ? { usage } : {}
-        });
-        return ok({
-          taskId,
-          status: res.task.status,
-          blockers: res.blockers,
-          ...claimNotice !== undefined ? { warning: claimNotice } : {}
-        });
-      }
-      case "assign_task": {
-        const { taskId, assignee, assigneeKind } = a;
-        const res = await http("POST", `/api/tasks/${encodeURIComponent(taskId)}/assignee`, {
-          assignee,
-          ...assigneeKind !== undefined ? { assigneeKind } : {},
-          author: AUTHOR
-        });
-        return ok({
-          taskId,
-          assignee: res.task.assignee,
-          changed: res.changed,
-          ...res.ownerKind !== undefined ? { ownerKind: res.ownerKind } : {}
-        });
-      }
-      case "park_task": {
-        const { taskId, until, reason } = a;
-        let parkedUntil;
-        if (until === undefined) {
-          parkedUntil = undefined;
-        } else if (until === null) {
-          parkedUntil = null;
-        } else if (typeof until === "number") {
-          if (!Number.isFinite(until))
-            return err("until must be a date, or omitted");
-          parkedUntil = until;
-        } else {
-          const parsed = Date.parse(until);
-          if (Number.isNaN(parsed)) {
-            return err(`could not read "${until}" as a date — pass epoch ms, "YYYY-MM-DD", or a full ISO timestamp`);
-          }
-          parkedUntil = parsed;
-        }
-        const res = await http("POST", `/api/tasks/${encodeURIComponent(taskId)}/park`, {
-          ...parkedUntil !== undefined ? { parkedUntil } : {},
-          ...reason !== undefined ? { reason } : {},
-          author: AUTHOR
-        });
-        return ok({
-          taskId,
-          status: res.task.status,
-          moved: res.changed,
-          commented: res.commented,
-          ...res.message !== undefined ? { message: res.message } : {}
-        });
-      }
-      case "archive_task": {
-        const { taskId, reason } = a;
-        const res = await http("POST", `/api/tasks/${encodeURIComponent(taskId)}/archive`, {
-          ...reason !== undefined ? { reason } : {},
-          author: AUTHOR
-        });
-        return ok({
-          taskId,
-          archivedAt: res.task.archivedAt ?? null,
-          ...res.task.archiveReason !== undefined ? { archiveReason: res.task.archiveReason } : {},
-          changed: res.changed
-        });
-      }
-      case "unarchive_task": {
-        const { taskId } = a;
-        const res = await http("POST", `/api/tasks/${encodeURIComponent(taskId)}/restore`, {
-          author: AUTHOR
-        });
-        return ok({
-          taskId,
-          goal: res.task.goal,
-          status: res.task.status,
-          changed: res.changed
-        });
-      }
-      case "rewrite_task": {
-        const { taskId, title, body, reason } = a;
-        if (body === undefined && title === undefined) {
-          return err("nothing to rewrite — pass title, body, or both");
-        }
-        if (body !== undefined) {
-          const res2 = await http("POST", `/api/tasks/${encodeURIComponent(taskId)}/body`, {
-            markdown: body,
-            ...title !== undefined ? { title } : {},
-            ...reason !== undefined ? { reason } : {},
-            author: AUTHOR
-          });
-          return ok({
-            taskId,
-            title: res2.task?.title,
-            body: res2.task?.body,
-            quote: res2.task?.quote
-          });
-        }
-        const res = await http("POST", `/api/tasks/${encodeURIComponent(taskId)}/title`, {
-          title,
-          ...reason !== undefined ? { reason } : {},
-          author: AUTHOR
-        });
-        return ok({ taskId, title: res.task?.title, changed: res.changed ?? false });
-      }
-      case "set_task_goal": {
-        const { taskId, goal, position, batchId } = a;
-        const res = await http("POST", `/api/tasks/${encodeURIComponent(taskId)}/goal`, {
-          goal,
-          author: AUTHOR,
-          ...position !== undefined ? { position } : {},
-          ...batchId !== undefined ? { batchId } : {}
-        });
-        return ok({ taskId, goal: res.task.goal, order: res.task.order, changed: res.changed });
-      }
-      case "set_goal_list": {
-        const { workspaceId, goals, drop } = a;
-        const res = await http("PUT", `/api/workspaces/${encodeURIComponent(workspaceId)}/goals`, {
-          goals,
-          ...drop !== undefined ? { drop } : {},
-          author: AUTHOR
-        });
-        return ok({
-          workspaceId,
-          changed: res.changed,
-          created: res.created,
-          movedToChores: res.movedToChores,
-          strandedDone: res.strandedDone,
-          ...res.bucketReview ? { bucketReview: res.bucketReview } : {}
-        });
-      }
-      case "rename_goal": {
-        const { workspaceId, goal, title, dueAt } = a;
-        const res = await http("POST", `/api/workspaces/${encodeURIComponent(workspaceId)}/goals/rename`, {
-          goal,
-          title,
-          ...dueAt !== undefined ? { dueAt } : {},
-          author: AUTHOR
-        });
-        return ok({ workspaceId, goal: res.goal, changed: res.changed });
-      }
-      case "reorder_goals": {
-        const { workspaceId, order } = a;
-        const res = await http("POST", `/api/workspaces/${encodeURIComponent(workspaceId)}/goals/reorder`, { order, author: AUTHOR });
-        return ok({
-          workspaceId,
-          order: res.order,
-          changed: res.changed
-        });
-      }
-      case "add_review_item": {
-        const { taskId, review } = a;
-        const res = await http("POST", `/api/tasks/${encodeURIComponent(taskId)}/review-items`, {
-          review,
-          author: AUTHOR
-        });
-        return ok({
-          taskId,
-          reviewItemId: res.item?.id,
-          ...res.reviewAdvice !== undefined ? { reviewAdvice: res.reviewAdvice } : {},
-          ...heldResult(res)
-        });
-      }
-      case "answer_review_item": {
-        const { taskId, reviewItemId, text, answeredWith } = a;
-        let effectiveTaskId = taskId;
-        if (effectiveTaskId === undefined) {
-          if (reviewItemId === undefined) {
-            return err("which item? Pass its reviewItemId (from the queue row or the ticket), or taskId — alone for a ticket that is itself a decision, with reviewItemId for one of the items filed on it");
-          }
-          const address = await resolveReviewItemId(reviewItemId);
-          if (address.kind === "doc-thread") {
-            await http("POST", `/api/docs/${encodeURIComponent(address.docId)}/threads/${encodeURIComponent(address.threadId)}/answer`, {
-              text,
-              commentId: address.commentId,
-              ...answeredWith !== undefined ? { optionId: answeredWith } : {},
-              author: AUTHOR
-            });
-            return ok({
-              reviewItemId,
-              docId: address.docId,
-              threadId: address.threadId,
-              commentId: address.commentId,
-              recorded: true
-            });
-          }
-          effectiveTaskId = address.taskId;
-        }
-        const res = await recordReviewAnswer({
-          taskId: effectiveTaskId,
-          text,
-          ...reviewItemId !== undefined ? { reviewItemId } : {},
-          ...answeredWith !== undefined ? { answeredWith } : {}
-        });
-        return ok({
-          taskId: effectiveTaskId,
-          ...reviewItemId !== undefined ? { reviewItemId } : {},
-          recorded: true,
-          links: res.task.links ?? []
-        });
-      }
-      case "revise_review_item": {
-        const {
-          taskId,
-          reviewItemId,
-          docId,
-          threadId,
-          commentId,
-          headline,
-          detail,
-          options,
-          reply,
-          revisedRange
-        } = a;
-        const patch = {
-          ...headline !== undefined ? { headline } : {},
-          ...detail !== undefined ? { detail } : {},
-          ...options !== undefined ? { options } : {},
-          ...revisedRange !== undefined ? { revisedRange } : {},
-          author: AUTHOR
-        };
-        if (docId !== undefined || threadId !== undefined || commentId !== undefined) {
-          if (taskId !== undefined || reviewItemId !== undefined) {
-            return err("two addresses in one call — pass taskId + reviewItemId for an item on a ticket, or docId + threadId + commentId for one raised on a doc thread, not both");
-          }
-          if (docId === undefined || threadId === undefined || commentId === undefined) {
-            return err("the doc-thread form needs all three of docId + threadId + commentId — commentId is the thread.comments[].id that create_thread / post_reply returned when you raised the item");
-          }
-          if (reply !== undefined) {
-            return err("`reply` is ticket-only — a doc-thread item already lives in its thread, so point at the change there with post_reply");
-          }
-          const docRes = await http("POST", `/api/docs/${encodeURIComponent(docId)}/threads/${encodeURIComponent(threadId)}/revise`, { ...patch, commentId });
-          return ok({ docId, threadId, commentId, revised: true, ...heldResult(docRes) });
-        }
-        let effectiveTaskId = taskId;
-        if (effectiveTaskId === undefined) {
-          if (reviewItemId === undefined) {
-            return err("which item? A bare reviewItemId (from the queue row or the ticket), taskId (+ reviewItemId for one of the items filed on the ticket), or docId + threadId + commentId for one raised on a doc thread");
-          }
-          const address = await resolveReviewItemId(reviewItemId);
-          if (address.kind === "doc-thread") {
-            if (reply !== undefined) {
-              return err("`reply` is ticket-only — a doc-thread item already lives in its thread, so point at the change there with post_reply");
-            }
-            const docRes = await http("POST", `/api/docs/${encodeURIComponent(address.docId)}/threads/${encodeURIComponent(address.threadId)}/revise`, { ...patch, commentId: address.commentId });
-            return ok({
-              reviewItemId,
-              docId: address.docId,
-              threadId: address.threadId,
-              commentId: address.commentId,
-              revised: true,
-              ...heldResult(docRes)
-            });
-          }
-          effectiveTaskId = address.taskId;
-        }
-        if (reviewItemId === undefined && reply !== undefined) {
-          return err("`reply` needs an item thread to land on, and a ticket's own decision has none — revise without `reply`, then point at the change with post_reply on the task");
-        }
-        const targetItemId = reviewItemId ?? "r-legacy";
-        const res = await http("POST", `/api/tasks/${encodeURIComponent(effectiveTaskId)}/review-items/${encodeURIComponent(targetItemId)}/revise`, { ...patch, ...reply !== undefined ? { reply } : {} });
-        return ok({
-          taskId: effectiveTaskId,
-          ...reviewItemId !== undefined ? { reviewItemId } : { decision: true },
-          revised: true,
-          ...res.threadId !== undefined ? { threadId: res.threadId } : {},
-          ...reply !== undefined && res.threadId !== undefined ? { replied: true } : {},
-          ...res.reviewAdvice !== undefined ? { reviewAdvice: res.reviewAdvice } : {},
-          ...heldResult(res)
-        });
-      }
-      case "withdraw_review_item": {
-        const { reviewItemId, taskId, docId, threadId, commentId, reason, undo } = a;
-        const body = { author: AUTHOR, ...reason !== undefined ? { reason } : {} };
-        const docWithdraw = async (address) => {
-          await http("POST", `/api/docs/${encodeURIComponent(address.docId)}/threads/${encodeURIComponent(address.threadId)}/withdraw${undo ? "/undo" : ""}`, { ...body, commentId: address.commentId });
-          return ok({
-            ...reviewItemId !== undefined ? { reviewItemId } : {},
-            ...address,
-            withdrawn: undo !== true
-          });
-        };
-        if (reviewItemId !== undefined) {
-          if (docId !== undefined || threadId !== undefined || commentId !== undefined) {
-            return err("two addresses in one call — pass reviewItemId alone (it carries its own address), or the docId + threadId + commentId triple, not both");
-          }
-          const address = taskId !== undefined ? { kind: "task-item", taskId } : await resolveReviewItemId(reviewItemId);
-          if (address.kind === "doc-thread")
-            return docWithdraw(address);
-          await http("POST", `/api/tasks/${encodeURIComponent(address.taskId)}/review-items/${encodeURIComponent(reviewItemId)}/withdraw${undo ? "/undo" : ""}`, body);
-          return ok({ taskId: address.taskId, reviewItemId, withdrawn: undo !== true });
-        }
-        if (docId === undefined || threadId === undefined || commentId === undefined) {
-          return err("which item? Pass its reviewItemId (from the queue row or the ticket), or the full docId + threadId + commentId triple for one raised on a doc thread");
-        }
-        return docWithdraw({ docId, threadId, commentId });
-      }
-      case "request_more_info": {
-        const { taskId, reviewItemId, question } = a;
-        let effectiveTaskId = taskId;
-        if (effectiveTaskId === undefined) {
-          if (reviewItemId === undefined) {
-            return err("which item? Pass its reviewItemId (from the queue row or the ticket), or taskId — alone for a ticket that is itself a decision, with reviewItemId for one of the items filed on it");
-          }
-          const address = await http("GET", `/api/review-items/${encodeURIComponent(reviewItemId)}`);
-          if (address.kind === "doc-thread") {
-            await http("POST", `/api/docs/${encodeURIComponent(address.docId)}/threads/${encodeURIComponent(address.threadId)}/comments`, { author: AUTHOR, text: question });
-            return ok({
-              reviewItemId,
-              docId: address.docId,
-              threadId: address.threadId,
-              asked: true
-            });
-          }
-          effectiveTaskId = address.taskId;
-        }
-        const path = reviewItemId === undefined ? `/api/tasks/${encodeURIComponent(effectiveTaskId)}/more-info` : `/api/tasks/${encodeURIComponent(effectiveTaskId)}/review-items/${encodeURIComponent(reviewItemId)}/more-info`;
-        const res = await http("POST", path, { question, author: AUTHOR });
-        return ok({
-          taskId: effectiveTaskId,
-          ...reviewItemId !== undefined ? { reviewItemId } : {},
-          asked: true,
-          links: res.task.links ?? []
-        });
-      }
-      case "answer_decision": {
-        const { taskId, text, optionId, reviewItemId } = a;
-        const res = await recordReviewAnswer({
-          taskId,
-          text,
-          ...reviewItemId !== undefined ? { reviewItemId } : {},
-          ...optionId !== undefined ? { answeredWith: optionId } : {}
-        });
-        return ok({ taskId, recorded: true, links: res.task.links ?? [] });
-      }
-      case "set_task_dependencies": {
-        const { taskId, after, afterEnforce } = a;
-        const res = await http("POST", `/api/tasks/${encodeURIComponent(taskId)}/after`, {
-          after,
-          ...afterEnforce !== undefined ? { afterEnforce } : {},
-          author: AUTHOR
-        });
-        return ok({
-          taskId,
-          changed: res.changed,
-          after: res.task.after ?? [],
-          afterEnforce: res.task.afterEnforce ?? []
-        });
-      }
-      case "import_tasks_markdown": {
-        const { workspaceId, path, apply } = a;
-        const res = await http("POST", `/api/workspaces/${encodeURIComponent(workspaceId)}/import-tasks`, { path, ...apply !== undefined ? { apply } : {}, author: AUTHOR });
-        return ok(res);
-      }
-      case "link_refs": {
-        const { taskId, ref } = a;
-        const res = await http("POST", `/api/tasks/${encodeURIComponent(taskId)}/links`, {
-          ref
-        });
-        return ok({ taskId, changed: res.changed });
-      }
-      case "list_backlinks": {
-        const { ref } = a;
-        const res = await http("POST", "/api/refs/backlinks", { ref });
-        return ok({ ref, tasks: res.tasks });
-      }
-      case "unlink_refs": {
-        const { taskId, ref } = a;
-        const res = await http("DELETE", `/api/tasks/${encodeURIComponent(taskId)}/links`, {
-          ref
-        });
-        return ok({ taskId, changed: res.changed });
       }
       case "attach_agent": {
         const { workspaceId, agentId, runtime, capabilities, subscribe } = a;
@@ -17942,15 +17962,6 @@ async function ackCommentRow(payload) {
   } catch {}
 }
 var HUB_EVENT_RE = /^(task|decision|workspace|agent|voice)\./;
-function heldResult(res) {
-  if (res.held !== true)
-    return {};
-  return {
-    held: true,
-    ...res.heldReason !== undefined ? { heldReason: res.heldReason } : {},
-    ...res.message !== undefined ? { message: res.message } : {}
-  };
-}
 async function emitHubChannelMessage(event, rawPayload) {
   const p = rawPayload ?? {};
   if (event === "agent.heartbeat")
