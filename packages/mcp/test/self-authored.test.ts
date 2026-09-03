@@ -19,7 +19,6 @@
  */
 import { describe, expect, it } from 'vitest';
 import { isSelfAuthoredEvent } from '../src/self-authored.ts';
-import { readMcpSource } from './harness/mcp-source.ts';
 
 const SELF = 'agent-live-feedback';
 const OTHER = 'known-bryan';
@@ -197,35 +196,12 @@ describe('garbage in never suppresses', () => {
 });
 
 /**
- * The gate is only worth anything if the renderer actually consults it.
- * Source-reading, like sync-error-channel.test.ts and tool-wiring.test.ts:
- * mcp.ts is a bundle entry point and exports nothing. The committed bundle is
- * deliberately not asserted here — CI's build:mcp diff gate already fails any
- * PR whose bundle does not match a fresh build of this source.
+ * That the RENDERER consults this gate is asserted where the renderer now
+ * lives: `channel-messages.test.ts` drives `createChannelMessages` with a
+ * frame this session authored and reads the notification sink, which is a
+ * question three regexes over `mcp.ts` could only approximate. They are gone
+ * rather than kept beside it — a source read passes on a handler that was
+ * deleted and fails on a rename that kept the feature working, and the two
+ * halves of the rule (the doc gate and the hub actor check) are both driven
+ * there now.
  */
-describe('emitChannelMessage consults the gate', () => {
-  const SRC = readMcpSource();
-
-  it('calls isSelfAuthoredEvent with this session own identity', () => {
-    const start = SRC.indexOf('async function emitChannelMessage(');
-    expect(start, 'emitChannelMessage not found').toBeGreaterThan(-1);
-    const renderer = SRC.slice(start, SRC.indexOf('\nfunction ', start));
-    expect(renderer).toContain('isSelfAuthoredEvent(event, rawPayload, AUTHOR.id)');
-  });
-
-  // Before the per-event rendering, not after: the point is to spend nothing
-  // on a frame that will not be delivered.
-  it('gates before it renders the comment body', () => {
-    const start = SRC.indexOf('async function emitChannelMessage(');
-    const renderer = SRC.slice(start, SRC.indexOf('\nfunction ', start));
-    expect(renderer.indexOf('isSelfAuthoredEvent')).toBeLessThan(
-      renderer.indexOf('server.notification'),
-    );
-  });
-
-  // The hub half of the same rule, which predates this and must not be lost
-  // in a later tidy-up of the two.
-  it('keeps the hub actor check that covers task/decision/voice frames', () => {
-    expect(SRC).toContain('if (p.actor?.id === AUTHOR.id) return;');
-  });
-});
