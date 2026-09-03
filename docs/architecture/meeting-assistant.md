@@ -1079,9 +1079,9 @@ it:
 
 | Said in the room | Read as | What happens |
 | --- | --- | --- |
-| "**Claude, can you** look into the retry loop" (also "could you", "would you") | an ask for NOW | acted on during the meeting — research, lookup or review |
-| "**Create a task** for the retry loop" (also "make a task", "file a ticket", "add a ticket") | an ask for LATER | a row is filed, quoting the words, and nothing is started |
-| "The retry loop wakes the sync every ninety seconds" | neither | a note, and only a note |
+| "**Claude, can you** look into the retry loop" — the wake word, then "can you" / "could you" / "would you" | an ask for NOW | acted on during the meeting — research, lookup or review |
+| "**Create a task** for the retry loop" opening the clause (also "make a task", "file a ticket", "add a ticket") | an ask for LATER | a row is filed, quoting the words, and nothing is started |
+| "Bob, can you pass the water" · "we can add tasks later" · "the retry loop wakes the sync" | neither | a note, and only a note |
 
 - **The prompt and the guard say the same thing, and the guard is the one
   that decides.** `ASK_CUE_PROMPT_RULE` teaches the convention; the phrase
@@ -1093,12 +1093,31 @@ it:
   recorded, not discarded.
 - **Later beats now.** "Claude, can you create a task for that" carries both
   and is a request: the speaker named the artefact they wanted.
-- **The cue is looked for across the whole capture window, not in the one
-  line an ask was quoted from.** The same boundary problem the overlap exists
-  for puts the cue and its subject in different ticks — "Claude, can you go
-  and" / boundary / "look into why the retry loop wakes the sync" — and a
-  per-quote guard would throw away exactly the asks the overlap was built to
-  rescue.
+- **The wake word is part of the now cue.** The convention is literally
+  "Claude, can you", and a bare "can you" is how people talk to each other:
+  "Bob, can you pass me the water", "can you believe they shipped that on a
+  Friday" and "sorry, could you repeat that" all read as asks to the assistant
+  without it. The transcriber's near-misses count — "cloud", "clod", "claud" —
+  because a convention that fails on a mis-hearing is one people stop trusting.
+- **The later cue has to OPEN a clause, and its noun has to END the object.**
+  So "we can add tasks to the sprint later" files nothing, and neither does
+  "add a ticket TYPE for design work" — the first is a fact about the sprint,
+  the second a sentence about the board's schema.
+- **One cue licenses ONE ask, and a spent cue stays spent.** The cue is a
+  property of the ask, matched against the line the ask was quoted from, so a
+  single "create a task for the retry loop" cannot license the tunnel and the
+  sidebar the room mentioned next. A line that has already produced a row is
+  consumed for the rest of the meeting, which is what stops the overlap
+  replaying it into the following tick.
+- **The cue line is still searched across the whole capture window.** The
+  boundary problem the overlap exists for puts the cue and its subject in
+  different ticks — "Claude, can you go and" / boundary / "look into why the
+  retry loop wakes the sync" — so a cue with no words in common with the ask
+  still qualifies. Spending, not adjacency, is what keeps that from being a
+  licence to reuse it.
+- **A PLURAL later cue stands.** "File tickets for the next few things I
+  mention" asks for however many rows follow it, and was measured doing
+  exactly that across a tick boundary, so it is not spent on its first ask.
 - **A reference and a correction need no cue.** Neither is an ask: one names
   work the board already tracks, the other fixes a note already written.
 - **What this deliberately gives up.** "Go look into that" and "ask the team
