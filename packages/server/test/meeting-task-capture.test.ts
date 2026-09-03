@@ -461,6 +461,9 @@ describe('createHaikuTaskCaptureExtractor', () => {
 const spokenTurns: NotesTurn[] = [
   { turn: 1, text: 'The strip covers the navbar on my phone.', speaker: 'Jordan' },
   { turn: 2, text: 'File a ticket for that one.', speaker: 'Speaker B' },
+  // A second ask, said out loud, because a second row needs a second cue —
+  // one "file a ticket" files one thing.
+  { turn: 3, text: 'And create a task for the second one.', speaker: 'Speaker B' },
 ];
 
 describe('who asked for the task', () => {

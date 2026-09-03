@@ -72,7 +72,12 @@
 
 import { readyToWork, spinoffBody, spinoffDocHref } from '@feedback/core';
 import { readRenamedEnv } from '@feedback/core/env-names';
-import { requestMatchesCandidate, spokenLineFor } from './meeting-capture-guards.ts';
+import {
+  type SpentCues,
+  captureWindow,
+  requestMatchesCandidate,
+  spokenLineFor,
+} from './meeting-capture-guards.ts';
 import {
   TITLE_MAX,
   buildTaskCapturePrompt,
@@ -209,6 +214,13 @@ export interface TaskCaptureInput {
   priorTurns?: readonly NotesTurn[];
   candidates: readonly TaskCaptureCandidate[];
   docTitle?: string;
+  /**
+   * The cue lines this meeting has already spent. Handed down so the guard
+   * can refuse to spend one twice — the marked overlap shows the previous
+   * tick's last lines again, and a cue that already acted must not act again
+   * on a new subject. Absent, each reply is guarded on its own.
+   */
+  spentCues?: SpentCues;
 }
 
 export interface TaskCaptureExtractor {
@@ -240,7 +252,7 @@ export const MAX_CAPTURE_CANDIDATES = 40;
  */
 export {
   captureWindow,
-  cueSpokenOnTick,
+  cueLineFor,
   normalizedTitle,
   OVERLAP_MAX_CHARS,
   OVERLAP_MAX_TURNS,
@@ -248,6 +260,7 @@ export {
   phraseSpokenOnTick,
   requestMatchesCandidate,
   speakerOnTick,
+  type SpentCues,
   spokenLineFor,
   tickMentionsCandidate,
 } from './meeting-capture-guards.ts';
@@ -391,6 +404,8 @@ export interface RunTaskCaptureInput {
   turns: readonly NotesTurn[];
   /** The previous tick's speech, for the boundary — see {@link overlapWindow}. */
   priorTurns?: readonly NotesTurn[];
+  /** This meeting's spent cue lines — see {@link TaskCaptureInput.spentCues}. */
+  spentCues?: SpentCues;
 }
 
 /**
@@ -424,6 +439,7 @@ export async function runTaskCapture(
       candidates,
       ...(input.priorTurns !== undefined ? { priorTurns: input.priorTurns } : {}),
       ...(input.docTitle !== undefined ? { docTitle: input.docTitle } : {}),
+      ...(input.spentCues !== undefined ? { spentCues: input.spentCues } : {}),
     });
   } catch (err) {
     deps.onError?.(err instanceof Error ? err.message : 'task capture failed');
@@ -529,10 +545,12 @@ function fileSpokenTask(
   item: CapturedRequest,
 ): { taskId: string; status: TaskStatus } | null {
   const actionable = item.actionable && readyToWork(item.title);
-  // Quoted from the NEW lines — the transcript's words, chosen here rather
-  // than by the model, so the row's body quotes what was actually said the
-  // way a pill spin-off quotes the selection.
-  const quote = spokenLineFor(input.turns, item.title);
+  // Quoted from the whole capture window, preferring the line that carried
+  // the cue — the transcript's words, chosen here rather than by the model,
+  // so the row's body quotes the sentence somebody actually asked in. Reading
+  // the new turns alone quoted "Alice: sure" when the subject had been said
+  // one line before the tick boundary.
+  const quote = spokenLineFor(captureWindow(input.turns, input.priorTurns), item.title, 'later');
   // The pill's placement, by the board's own rule: the top active goal and
   // the lead as owner, so the row is dispatched rather than sitting in
   // chores under the assistant's name (Bryan, 2026-09-01: "created in
@@ -621,7 +639,7 @@ function fileResearchAsk(
 ): { taskId: string; title: string; status: TaskStatus } | null {
   const title = researchTitle(item.topic);
   const board = deps.board.getWorkspace?.(input.workspaceId);
-  const quote = spokenLineFor(input.turns, item.topic);
+  const quote = spokenLineFor(captureWindow(input.turns, input.priorTurns), item.topic, 'now');
   // Placed like every other spin-off (the board's top active band), not
   // left to the store's chores default — which the board draws as Backlog,
   // the very column Bryan found his rows in.
@@ -796,7 +814,13 @@ export function createHaikuTaskCaptureExtractor(
         if (!res.ok) throw new Error(`task capture HTTP ${res.status}`);
         const body = (await res.json()) as { content?: Array<{ text?: string }> };
         const text = body.content?.map((b) => b.text ?? '').join('') ?? '';
-        return parseTaskCaptureReply(text, input.candidates, input.turns, input.priorTurns);
+        return parseTaskCaptureReply(
+          text,
+          input.candidates,
+          input.turns,
+          input.priorTurns,
+          input.spentCues,
+        );
       } finally {
         clearTimeout(timeout);
       }

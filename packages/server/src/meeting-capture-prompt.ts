@@ -13,9 +13,11 @@
  * `meeting-capture-guards.ts`.
  */
 
+import { type AskCue, laterCueIsPlural } from './meeting-ask-cues.ts';
 import {
+  type SpentCues,
   captureWindow,
-  cueSpokenOnTick,
+  cueLineFor,
   normalizedTitle,
   overlapWindow,
   phraseSpokenOnTick,
@@ -68,9 +70,9 @@ const QUERY_MAX = 120;
  */
 export const RESEARCH_PROMPT_RULE = [
   'A RESEARCH ask when a speaker uses the NOW cue to have something FOUND',
-  'OUT before it can be decided or built — "can you look into why it does',
-  'that", "could you find out what it would take", "Claude, can you research',
-  'X". They will rarely say the word "research". Wondering aloud is not an',
+  'OUT before it can be decided or built — "Claude, can you look into why it',
+  'does that", "Claude, could you find out what it would take". They will',
+  'rarely say the word "research". Wondering aloud is not an',
   'ask; somebody has to want it done. "topic": what to look into, in the',
   'words spoken; "question": what it should answer, omitted if unsaid.',
   'Prefer "request" when they asked for the WORK rather than for findings.',
@@ -85,8 +87,9 @@ export const RESEARCH_PROMPT_RULE = [
 export const REVIEW_PROMPT_RULE = [
   'A REVIEW ask when a speaker uses the NOW cue to have the agent or the',
   'team LOOK AT the notes or ANSWER a question they cannot settle in the',
-  'room — "can you ask the team whether we still need the tunnel", "could',
-  'you check these notes". "question": what to ask, in the words spoken. A',
+  'room — "Claude, can you ask the team whether we still need the tunnel",',
+  '"Claude, could you check these notes". "question": what to ask, in the',
+  'words spoken. A',
   'question the room goes on to answer itself is not an ask.',
 ] as const;
 
@@ -97,8 +100,9 @@ export const REVIEW_PROMPT_RULE = [
  */
 export const LOOKUP_PROMPT_RULE = [
   'A LOOKUP when a speaker uses the NOW cue to have material that ALREADY',
-  'EXISTS brought in — "can you pull up last week\'s notes", "could you link',
-  'the design doc for that". "query": what they asked for in their own',
+  'EXISTS brought in — "Claude, can you pull up last week\'s notes", "Claude,',
+  'could you link the design doc for that". "query": what they asked for in',
+  'their own',
   'words, KEEPING any "when" they said ("last week", "Tuesday").',
 ] as const;
 
@@ -141,13 +145,17 @@ export const CORRECTION_PROMPT_RULE = [
  * written — so neither has anything to be for now or for later.
  */
 export const ASK_CUE_PROMPT_RULE = [
-  'TWO CUES DECIDE NOW FROM LATER. NOW: "can you", "could you", "would you",',
-  'often after "Claude," — a research, lookup or review ask, acted on during',
-  'the meeting. LATER: "create a task", "make a task", "file a ticket", "add',
-  'a ticket" — a request, captured and not started. An ask carrying both',
-  '("can you create a task") is LATER. Speech with NEITHER cue asks for',
-  'nothing: no request, no research, no lookup, no review, however much it',
-  'sounds like one. References and corrections are not asks and need no cue.',
+  'TWO CUES DECIDE NOW FROM LATER, and each ask needs one of its own IN THE',
+  'LINE IT CAME FROM. NOW: the speaker says "Claude" (however transcribed)',
+  'and then "can you" / "could you" / "would you" — a research, lookup or',
+  'review ask, acted on during the meeting. A bare "can you" to another',
+  'person in the room is NOT it. LATER: a clause opening "create a task",',
+  '"make a task", "file a ticket", "add a ticket" — a request, captured and',
+  'not started. An ask carrying both ("Claude, can you create a task") is',
+  'LATER. Speech with NEITHER cue asks for nothing: no request, no research,',
+  'no lookup, no review, however much it sounds like one. Never return two',
+  'asks for one cued line. References and corrections are not asks and need',
+  'no cue.',
 ] as const;
 
 export const OVERLAP_PROMPT_RULE = [
@@ -180,8 +188,9 @@ export function buildTaskCapturePrompt(input: TaskCaptureInput): { system: strin
     '',
     'A REQUEST only when a speaker explicitly asks, in the LATER cue, for a',
     'task to be filed — "create a task", "make that a task", "file a ticket",',
-    '"add a ticket". Discussing a problem, complaining about a bug, or',
-    'agreeing something is broken is NOT a request. Title: short, specific,',
+    '"add a ticket". One such clause asks for ONE row, not for every problem',
+    'the room went on to mention. Discussing a problem, complaining about a',
+    'bug, or agreeing something is broken is NOT a request. Title: short, specific,',
     'in the words spoken.',
     'Mark a request "actionable": true only when it is clear enough to start',
     'without asking anything back — what to do and where — and nobody said',
@@ -244,6 +253,7 @@ export function parseTaskCaptureReply(
   candidates: readonly TaskCaptureCandidate[],
   turns: readonly NotesTurn[],
   priorTurns?: readonly NotesTurn[],
+  spentCues?: SpentCues,
 ): CapturedItem[] {
   // Vouch against exactly the lines the model was shown — see captureWindow.
   const window = captureWindow(turns, priorTurns);
@@ -259,16 +269,27 @@ export function parseTaskCaptureReply(
   const items = (parsed as { items?: unknown }).items;
   if (!Array.isArray(items)) return [];
 
-  // The two spoken conventions, read once off the same lines the model saw.
-  // This is the guard half of the contract the prompt states: whatever the
-  // model returns, an ask the speech did not cue is DOWNGRADED TO A NOTE —
+  // The guard half of the contract the prompt states. Whatever the model
+  // returns, an ask no line of the speech cued is DOWNGRADED TO A NOTE —
   // dropped here, so the tick's words reach the notes composer as ordinary
   // speech and nothing files, starts or is addressed to anybody. A request
-  // needs the later cue; the three intents that act during the meeting need
-  // the now cue. References and corrections are not asks and are not gated.
-  const cued = {
-    now: cueSpokenOnTick(window, 'now'),
-    later: cueSpokenOnTick(window, 'later'),
+  // needs a later-cue line; the three intents that act during the meeting
+  // need a now-cue line. References and corrections are not asks and are
+  // not gated.
+  //
+  // Spending is what keeps one cue to one ask, within this tick and across
+  // the boundary into the next — see `cueLineFor`. The caller owns the set
+  // for the meeting's life; without one, a fresh set still holds the line
+  // for the length of this reply.
+  const spent = spentCues ?? new Set<number>();
+  const licensed = (phrase: string, cue: AskCue): boolean => {
+    const line = cueLineFor(window, phrase, cue, spent);
+    if (!line) return false;
+    // A cue said of SEVERAL artefacts — "file tickets for the next few
+    // things I mention" — is a standing one and stays live for the rows that
+    // follow it. Every other cue is spent on the one ask it just licensed.
+    if (!(cue === 'later' && laterCueIsPlural(line.text))) spent.add(line.turn);
+    return true;
   };
 
   const out: CapturedItem[] = [];
@@ -287,14 +308,17 @@ export function parseTaskCaptureReply(
       seenTasks.add(candidate.id);
       out.push({ kind: 'reference', taskId: candidate.id });
     } else if (row.kind === 'request') {
-      // "create a task …" is what asks for a row. Without it the speech is a
-      // note, even when the model heard a perfectly good piece of work in it.
-      if (!cued.later) continue;
       if (typeof row.title !== 'string' || row.title.trim().length === 0) continue;
       const title = clipToWordBoundary(row.title.trim(), TITLE_MAX);
       const key = title.toLowerCase();
       if (seenTitles.has(key)) continue;
+      // Deduped BEFORE the cue is spent: the same ask returned twice must not
+      // cost the cue line that only the first copy needs.
       seenTitles.add(key);
+      // "create a task …" is what asks for a row. Without a line that said
+      // it, the speech is a note — even when the model heard a perfectly good
+      // piece of work in it.
+      if (!licensed(title, 'later')) continue;
       const requester =
         typeof row.requester === 'string' ? speakerOnTick(window, row.requester) : undefined;
       out.push({
@@ -304,8 +328,6 @@ export function parseTaskCaptureReply(
         ...(requester !== undefined ? { requester } : {}),
       });
     } else if (row.kind === 'research') {
-      // Acting during the meeting takes the now cue — see {@link cued}.
-      if (!cued.now) continue;
       if (typeof row.topic !== 'string') continue;
       const topic = clipToWordBoundary(row.topic.trim(), TITLE_MAX);
       if (topic.length === 0) continue;
@@ -315,6 +337,8 @@ export function parseTaskCaptureReply(
       const key = `research:${topic.toLowerCase()}`;
       if (seenTitles.has(key)) continue;
       seenTitles.add(key);
+      // Acting during the meeting takes a "Claude, can you" line of its own.
+      if (!licensed(topic, 'now')) continue;
       const question =
         typeof row.question === 'string' && row.question.trim().length > 0
           ? row.question.trim()
@@ -328,8 +352,6 @@ export function parseTaskCaptureReply(
         ...(requester !== undefined ? { requester } : {}),
       });
     } else if (row.kind === 'lookup') {
-      // Acting during the meeting takes the now cue — see {@link cued}.
-      if (!cued.now) continue;
       if (typeof row.query !== 'string') continue;
       const query = row.query.trim().slice(0, QUERY_MAX);
       if (query.length === 0) continue;
@@ -339,6 +361,7 @@ export function parseTaskCaptureReply(
       const key = `lookup:${query.toLowerCase()}`;
       if (seenTitles.has(key)) continue;
       seenTitles.add(key);
+      if (!licensed(query, 'now')) continue;
       out.push({ kind: 'lookup', query });
     } else if (row.kind === 'correction') {
       if (typeof row.wrong !== 'string' || typeof row.right !== 'string') continue;
@@ -361,8 +384,6 @@ export function parseTaskCaptureReply(
       seenTitles.add(key);
       out.push({ kind: 'correction', wrong, right });
     } else if (row.kind === 'review') {
-      // Acting during the meeting takes the now cue — see {@link cued}.
-      if (!cued.now) continue;
       if (typeof row.question !== 'string') continue;
       const question = row.question.trim().slice(0, QUESTION_MAX);
       if (question.length === 0) continue;
@@ -372,6 +393,7 @@ export function parseTaskCaptureReply(
       const key = `review:${normalizedTitle(question)}`;
       if (seenTitles.has(key)) continue;
       seenTitles.add(key);
+      if (!licensed(question, 'now')) continue;
       const requester =
         typeof row.requester === 'string' ? speakerOnTick(window, row.requester) : undefined;
       out.push({
