@@ -12,7 +12,7 @@
  * `now`, so "a link that lapsed" is a number, not a sleep.
  */
 import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, rmSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { ShareLinks } from '../src/share/share-links.ts';
@@ -249,6 +249,25 @@ describe('the share-link store', () => {
       const reopened = new ShareLinks({ dataDir });
       expect(reopened.isMember(BOARD, REVIEWER)).toBe(false);
       expect(reopened.state(link.linkId)).toBe('unknown');
+    });
+  });
+
+  describe('the file it keeps', () => {
+    it('is readable only by the owner, like the key files beside it', () => {
+      // A linkId is a bearer value and the member list is a roster of email
+      // addresses, so this is handled as a secret rather than as data.
+      links.redeem(mint().linkId, REVIEWER);
+      const mode = statSync(join(dataDir, 'share-links.json')).mode & 0o777;
+      expect(mode).toBe(0o600);
+    });
+
+    it('leaves no half-written registry behind after a save', () => {
+      // Written to a temporary file and renamed. A torn write reads as corrupt
+      // on the next boot, and this module fails closed on corrupt — so every
+      // member would lose access at once and the redemption history with them.
+      links.redeem(mint().linkId, REVIEWER);
+      expect(existsSync(join(dataDir, 'share-links.json.tmp'))).toBe(false);
+      expect(new ShareLinks({ dataDir }).isMember(BOARD, REVIEWER)).toBe(true);
     });
   });
 

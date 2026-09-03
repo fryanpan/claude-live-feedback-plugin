@@ -36,10 +36,11 @@
  *
  * Nothing here talks to Cloudflare, and nothing here needs an API token.
  */
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { normalizeEmail } from '@feedback/core';
 
+const SECRET_MODE = 0o600;
 const REGISTRY_FILENAME = 'share-links.json';
 
 /** One person coming through a link, the first time they came. */
@@ -324,11 +325,44 @@ export class ShareLinks {
     }
   }
 
+  /**
+   * Write the registry, mode 600, through a temporary file and a rename.
+   *
+   * Both halves matter and neither is about confidentiality of workspace
+   * content. A `linkId` is a bearer value — whoever reads one can walk up to
+   * an everyone-policy sign-in and become a member — and the member list is a
+   * roster of email addresses, so this file is handled like the sibling key
+   * files beside it rather than like data. The rename is what keeps a crash
+   * mid-write from leaving a half-written registry, which this module reads
+   * as corrupt and then fails closed on: every member would lose access at
+   * once, and the redemption history would be gone with them.
+   */
   private save(): void {
     const path = join(this.dataDir, REGISTRY_FILENAME);
     const state: Persisted = { links: this.links, members: this.members };
-    writeFileSync(path, JSON.stringify(state, null, 2));
+    const tmp = `${path}.tmp`;
+    writeFileSync(tmp, `${JSON.stringify(state, null, 2)}\n`, { mode: SECRET_MODE });
+    chmodSync(tmp, SECRET_MODE); // an existing tmp keeps its old mode otherwise
+    renameSync(tmp, path);
   }
+}
+
+/**
+ * The key a live connection carries so that ejecting a member can find it.
+ *
+ * A websocket and an SSE stream are authorized ONCE, at open, and then never
+ * again — so without something on the socket naming who opened it, removing a
+ * member left their `/y/<doc>` reading and writing until the connection
+ * happened to drop. The retired per-share mode had a `shareId` for this; a
+ * share-link visitor has no share, only a membership, so the membership is
+ * what gets stamped.
+ *
+ * Workspace AND email, because membership is per workspace: someone ejected
+ * from one board may still hold another, and closing both would be a bug in
+ * the other direction. The separator is a NUL, which neither part can contain.
+ */
+export function shareMemberKey(workspaceId: string, email: string): string {
+  return `${workspaceId}\u0000${normalizeEmail(email)}`;
 }
 
 /** `bytes` random bytes, hex-encoded — so 2*bytes characters. */

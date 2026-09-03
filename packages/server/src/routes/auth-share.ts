@@ -36,7 +36,7 @@ import { type OriginPolicy, isAllowedBrowserOrigin } from '../middleware/browser
 import { browserCannotOperateBody, isBrowserRequest } from '../middleware/write-gate.ts';
 import type { Rooms } from '../rooms.ts';
 import { readCookie } from '../share/link-session.ts';
-import type { ShareLinks } from '../share/share-links.ts';
+import { type ShareLinks, shareMemberKey } from '../share/share-links.ts';
 import { ACCESS_NOT_CONFIGURED, type Shares } from '../share/shares.ts';
 import type { SharingGate } from '../share/sharing-gate.ts';
 import { resolveTtl } from '../share/ttl.ts';
@@ -507,13 +507,23 @@ export async function handleAuthShareRoutes(
   // external access after the operator closed it; the routes' own
   // "local-only" comments are about the HOST class, which does not tell
   // a page on a local dev origin from the agent that is the only real
-  // caller. Keyed on METHOD rather than a route list, the same way
-  // `isGatedWrite` is: a share mutation added later is covered by
-  // construction, and the GET stays open because reading the share list
-  // is what the board's own settings pane does.
+  // caller.
+  //
+  // The READ is refused too, and used not to be. That exemption was written
+  // for "the board's own settings pane", which does not exist: nothing under
+  // `packages/workspaces-app/src` or `packages/widget/src` fetches this route,
+  // and every real caller is the MCP tool layer or a script from the box.
+  // What the open read handed a page on another local port was every
+  // `linkId` — the whole secret of a share URL, redeemable by anyone who can
+  // pass an everyone-policy sign-in — and every member's email address. The
+  // machine-local origin class gets readable CORS, so such a page could read
+  // the reply, not merely send the request.
+  //
+  // So the guard is keyed on the ROUTE now, not the method: everything under
+  // `/api/share` is an operator surface. A share read added later is covered
+  // by construction, the same way a mutation already was.
   if (
     (pathname === '/api/share' || pathname.startsWith('/api/share/')) &&
-    req.method !== 'GET' &&
     isBrowserRequest(req.headers)
   ) {
     return j(403, browserCannotOperateBody());
@@ -550,7 +560,13 @@ export async function handleAuthShareRoutes(
   // would otherwise keep syncing and keep receiving comments on a doc
   // that is no longer reachable. Same lesson as share revocation.
   if (pathname === '/api/share/enabled' && req.method === 'POST') {
-    if (!shares) return j(404, { error: 'sharing not enabled' });
+    // EITHER kind of sharing, for the same reason the GET above takes both.
+    // The gate refuses `share`, `share-link`, `collab` and `proxied-local`
+    // alike, so a deployment on the 2026-09-03 flow is one this switch still
+    // governs — and keyed on the retired registry alone, the only way to shut
+    // the outside door there was `CW_SHARING_DISABLED` plus a restart. That
+    // one is deliberately one-way, so the way back was a restart as well.
+    if (!shares && !shareLinkBaseHost) return j(404, { error: 'sharing not enabled' });
     const body = await safeJson(req);
     const enabled = body?.enabled;
     if (typeof enabled !== 'boolean') {
@@ -566,10 +582,16 @@ export async function handleAuthShareRoutes(
     let closedSockets = 0;
     let closedStreams = 0;
     if (!enabled) {
-      for (const share of shares.list()) {
+      for (const share of shares?.list() ?? []) {
         closedSockets += rooms.closeSocketsForShare(share.shareId);
         closedStreams += sse.closeForShare(share.shareId);
       }
+      // And every share-link visitor, who carries no Cloudflare shareId for
+      // the sweep above to match. Without this the switch closed the door to
+      // new requests while an already-open `/y/<doc>` kept reading AND
+      // writing, and an `/events/` stream kept delivering.
+      closedSockets += rooms.closeSocketsForShareMembers(() => true);
+      closedStreams += sse.closeForShareMembers(() => true);
     }
     return j(200, {
       ok: true,
@@ -910,12 +932,13 @@ export async function handleAuthShareRoutes(
   // everybody it ever admitted, which is the behaviour the "redeeming makes a
   // lasting member" decision exists to avoid.
   //
-  // Effective on the NEXT REQUEST, because the gate asks the membership store
-  // on every request rather than at the link. The one honest limit is the one
-  // the collaboration hostname has: a websocket is authorized once at its
-  // upgrade, so a removed member with the board already open keeps that
-  // socket until it drops. `sockets: 'unchanged'` says so on the reply rather
-  // than leaving a caller to assume otherwise.
+  // Effective on the NEXT REQUEST for HTTP, and immediately for what is
+  // already open. A websocket and an SSE stream are authorized once, at their
+  // upgrade, and never re-checked — so this used to answer `sockets:
+  // 'unchanged'` and mean it: a removed member with the board already open
+  // kept reading AND writing over `/y/<doc>` until the connection dropped.
+  // The membership is now stamped on both, so both can be found and hung up,
+  // and the reply says how many were.
   if (pathname === '/api/share/member/remove' && req.method === 'POST') {
     const body = await safeJson(req);
     const workspaceId = (body?.workspaceId as string) ?? '';
@@ -925,9 +948,13 @@ export async function handleAuthShareRoutes(
     }
     if (!email || typeof email !== 'string') return j(400, { error: 'email required' });
     const removed = shareLinks.removeMember(workspaceId, email);
-    return removed
-      ? j(200, { ok: true, sockets: 'unchanged' })
-      : j(404, { error: 'not a member', workspaceId });
+    if (!removed) return j(404, { error: 'not a member', workspaceId });
+    // Exactly this membership. Someone ejected from one board may still hold
+    // another, and their connections to that one must survive.
+    const key = shareMemberKey(workspaceId, email);
+    const closedSockets = rooms.closeSocketsForShareMembers((k) => k === key);
+    const closedStreams = sse.closeForShareMembers((k) => k === key);
+    return j(200, { ok: true, closedSockets, closedStreams });
   }
 
   const shareIdMatch = pathname.match(/^\/api\/share\/([^/]+)$/);

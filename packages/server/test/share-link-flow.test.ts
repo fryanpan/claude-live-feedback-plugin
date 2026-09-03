@@ -505,6 +505,59 @@ describe('share links over HTTP', () => {
       await probe.stop();
     });
 
+    it('can still shut the outside door, and open it again', async () => {
+      // The master switch used to be keyed on the retired Cloudflare registry
+      // alone, so on the deployment this flow is FOR it answered "sharing not
+      // enabled" — while the gate it controls went on refusing share-link
+      // requests. The only way to close the outside door was an env var plus a
+      // restart, and that one is deliberately one-way, so the way back was a
+      // restart too.
+      const probe = withoutOldMode();
+      const probeBase = `http://localhost:${probe.port}`;
+      const made = await fetch(`${probeBase}/api/workspaces`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ name: 'Switch board' }),
+      });
+      const probeBoard = ((await made.json()) as { workspace: { id: string } }).workspace.id;
+      const minted = await fetch(`${probeBase}/api/share/workspace`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ workspaceId: probeBoard }),
+      });
+      const { link } = (await minted.json()) as { link: { linkId: string } };
+
+      const flip = (enabled: boolean) =>
+        fetch(`${probeBase}/api/share/enabled`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ enabled }),
+        });
+      const visit = (path: string) =>
+        signJwt(SHARE_AUD, REVIEWER).then((jwt) =>
+          fetch(`${probeBase}${path}`, {
+            redirect: 'manual',
+            headers: { host: SHARE_HOST, ...CF_RAY, 'cf-access-jwt-assertion': jwt },
+          }),
+        );
+
+      expect((await visit(`/s/${link.linkId}`)).status).toBe(302);
+      const boardPath = `/api/workspaces/${encodeURIComponent(probeBoard)}`;
+      expect((await visit(boardPath)).status).toBe(200);
+
+      const off = await flip(false);
+      expect(off.status).toBe(200);
+      const refused = await visit(boardPath);
+      expect(refused.status).toBe(403);
+      expect(await refused.json()).toEqual({ error: 'sharing_disabled' });
+      // Redeeming is shut too, not merely the board behind it.
+      expect((await visit(`/s/${link.linkId}`)).status).toBe(403);
+
+      expect((await flip(true)).status).toBe(200);
+      expect((await visit(boardPath)).status).toBe(200);
+      await probe.stop();
+    });
+
     it('still serves the share hostname, and still refuses a stranger there', async () => {
       const probe = withoutOldMode();
       const probeBase = `http://localhost:${probe.port}`;
@@ -579,6 +632,113 @@ describe('share links over HTTP', () => {
         email: 'never-here@partner.example',
       });
       expect(r.status).toBe(404);
+    });
+  });
+
+  describe('hanging up what is already connected', () => {
+    /**
+     * A websocket and an SSE stream are authorized ONCE, at their upgrade, and
+     * never re-checked. So the two verbs that end access have to be able to
+     * find them: without the membership stamped on the connection, ejecting a
+     * member left their `/y/<doc>` reading AND writing until it dropped.
+     */
+    const openSocket = async (docPath: string, email: string) => {
+      const jwt = await signJwt(SHARE_AUD, email);
+      const ws = new WebSocket(`ws://localhost:${handle.port}/y/${docPath}`, {
+        headers: { host: SHARE_HOST, ...CF_RAY, 'cf-access-jwt-assertion': jwt },
+      } as unknown as string[]);
+      const opened = await new Promise<boolean>((resolve) => {
+        ws.addEventListener('open', () => resolve(true));
+        ws.addEventListener('error', () => resolve(false));
+        setTimeout(() => resolve(false), 3000);
+      });
+      return { ws, opened };
+    };
+
+    const closeCode = (ws: WebSocket) =>
+      new Promise<number>((resolve) => {
+        ws.addEventListener('close', (e) => resolve((e as CloseEvent).code));
+        setTimeout(() => resolve(-1), 5000);
+      });
+
+    /** The owner's own socket, which neither sweep may ever reach. */
+    const ownerSocket = async (docPath: string) => {
+      const jwt = await signJwt(OWNER_AUD, OWNER_EMAIL);
+      const ws = new WebSocket(`ws://localhost:${handle.port}/y/${docPath}`, {
+        headers: { host: OWNER_HOST, ...CF_RAY, 'cf-access-jwt-assertion': jwt },
+      } as unknown as string[]);
+      const opened = await new Promise<boolean>((resolve) => {
+        ws.addEventListener('open', () => resolve(true));
+        ws.addEventListener('error', () => resolve(false));
+        setTimeout(() => resolve(false), 3000);
+      });
+      return { ws, opened };
+    };
+
+    it('removing a member closes their socket, and leaves the owner’s open', async () => {
+      const who = 'hung-up@partner.example';
+      const { linkId } = await mintLink(board);
+      expect((await onShareHost(`/s/${linkId}`, who)).status).toBe(302);
+
+      const member = await openSocket(docId, who);
+      expect(member.opened).toBe(true);
+      const owner = await ownerSocket(docId);
+      expect(owner.opened).toBe(true);
+
+      const memberClosed = closeCode(member.ws);
+      const r = await postLocal('/api/share/member/remove', { workspaceId: board, email: who });
+      expect(r.status).toBe(200);
+      expect(await r.json()).toMatchObject({ ok: true, closedSockets: 1 });
+      // 1008 is policy violation, which is what an ended membership is.
+      expect(await memberClosed).toBe(1008);
+      // The positive control: the owner was connected to the same doc through
+      // the whole thing, and a sweep that reached them would be the real bug.
+      expect(owner.ws.readyState).toBe(WebSocket.OPEN);
+      owner.ws.close();
+    });
+
+    it('a member of another board keeps their socket when this one is ejected', async () => {
+      const staying = 'other-board@partner.example';
+      const { linkId } = await mintLink(otherBoard);
+      expect((await onShareHost(`/s/${linkId}`, staying)).status).toBe(302);
+      const held = await openSocket(otherDocId, staying);
+      expect(held.opened).toBe(true);
+
+      // Eject the SAME address from the other board. Membership is per
+      // workspace, so this connection is not theirs to close.
+      const { linkId: onBoard } = await mintLink(board);
+      expect((await onShareHost(`/s/${onBoard}`, staying)).status).toBe(302);
+      const r = await postLocal('/api/share/member/remove', {
+        workspaceId: board,
+        email: staying,
+      });
+      expect(r.status).toBe(200);
+      expect(held.ws.readyState).toBe(WebSocket.OPEN);
+      held.ws.close();
+    });
+
+    it('the master switch hangs up every share-link visitor, and not the owner', async () => {
+      const who = 'switched-off@partner.example';
+      const { linkId } = await mintLink(board);
+      expect((await onShareHost(`/s/${linkId}`, who)).status).toBe(302);
+      const member = await openSocket(docId, who);
+      expect(member.opened).toBe(true);
+      const owner = await ownerSocket(docId);
+      expect(owner.opened).toBe(true);
+
+      const memberClosed = closeCode(member.ws);
+      try {
+        const off = await postLocal('/api/share/enabled', { enabled: false });
+        expect(off.status).toBe(200);
+        expect((await off.json()) as { closedSockets?: number }).toMatchObject({
+          closedSockets: 1,
+        });
+        expect(await memberClosed).toBe(1008);
+        expect(owner.ws.readyState).toBe(WebSocket.OPEN);
+      } finally {
+        expect((await postLocal('/api/share/enabled', { enabled: true })).status).toBe(200);
+        owner.ws.close();
+      }
     });
   });
 
