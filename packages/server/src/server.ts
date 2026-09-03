@@ -5967,7 +5967,20 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           }
           let roster: { folded: boolean; mergedFrom: string[] } = { folded: false, mergedFrom: [] };
           if (!fromShared) {
-            const target = identities.get(into) ?? identities.upsertAgent(into);
+            // `get` follows `mergedInto`, which is right for a reader and
+            // wrong for this writer. On a MERGE-BACK — the reversal
+            // `mergeAgent` documents — `into` was folded into `from` by an
+            // earlier merge, so the resolved row IS `from`, and the fold
+            // came back as `self-merge` with the seat, the watch and the
+            // deliveries stranded on the wrong id. The caller means the id
+            // it named: take the raw row whenever resolution lands on
+            // `from`. Everything downstream (`taskStore.mergeAgent`,
+            // `agentWatches.rekey`) already works on the raw ids.
+            const resolved = identities.get(into);
+            const target =
+              resolved && resolved.id !== from
+                ? resolved
+                : (identities.rawAgent(into) ?? identities.upsertAgent(into));
             if (!target || target.kind !== 'agent') {
               return j(400, { error: 'into-not-agent', message: `${into} is not an agent` });
             }
@@ -5976,7 +5989,18 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
               if (!merged.ok) return j(400, { error: merged.error });
               roster = { folded: true, mergedFrom: merged.into.mergedFrom };
             } else {
-              roster = { folded: true, mergedFrom: [...new Set([...target.mergedFrom, from])] };
+              // The set the write WOULD leave, computed the way `mergeAgent`
+              // computes it — the target's ids, the source's, and `from`
+              // itself, minus the target. A dry run that reports a different
+              // fold than the write is worse than no dry run: on a
+              // merge-back it named the old survivor as still folded in.
+              const folded = new Set<string>([
+                ...target.mergedFrom,
+                from,
+                ...(identities.rawAgent(from)?.mergedFrom ?? []),
+              ]);
+              folded.delete(target.id);
+              roster = { folded: true, mergedFrom: [...folded] };
             }
           }
           const boards = taskStore.mergeAgent(from, into, { actor, dryRun });
