@@ -927,12 +927,19 @@ export function mountReviewChrome(opts: ChromeOpts): ReviewChrome {
     // On mobile the full path eats the topbar — show just the basename
     // truncated to ~32 chars, full path in `title` for tap-and-hold.
     const mobile = window.matchMedia('(max-width: 720px)').matches;
-    // The huddle pill beside the arrow already says "Huddle", and the title
-    // leads with the same word — "Huddle  Huddle 2026-09-01 14:40" read as a
-    // stutter at 1180px. The crumb's own text drops it; the tab and the
-    // tooltip keep the whole title, and on a phone (pill hidden) the crumb
-    // shows the clock's tail either way.
-    const shown = m.huddle === true ? full.replace(/^Huddle\s+/, '') : full;
+    // The kind pill beside the arrow already says "Plan" / "Meeting notes",
+    // and the server titles the doc with the same word — "Meeting notes
+    // Meeting notes 2026-09-01 14:40" read as a stutter at 1180px. The
+    // crumb's own text drops it; the tab and the tooltip keep the whole
+    // title, and on a phone (pill hidden) the crumb shows the clock's tail
+    // either way.
+    //
+    // Only ahead of the minted clock, so a doc somebody RENAMED to "Plan the
+    // offsite" keeps its first word.
+    const shown =
+      m.huddle === true
+        ? full.replace(/^(?:Plan|Meeting notes) (?=\d{4}-\d{2}-\d{2} \d{2}:\d{2}$)/, '')
+        : full;
     docTitleEl.textContent = mobile ? mobileLabel(shown) : shown;
     docTitleEl.title = full;
     // The browser tab names the DOC, not the product — otherwise every open
@@ -1053,7 +1060,8 @@ export function docLabel(opts: {
 }): string {
   return (
     (opts.type === 'diff' ? opts.relPath : undefined) ??
-    // A huddle is named by the clock — "Huddle 2026-09-01 14:40" — and its
+    // A live doc is named by its kind and the clock — "Plan 2026-09-01
+    // 14:40" — and its
     // file is a generated path under the data dir that nobody chose, so the
     // title is the name and the path is plumbing. Every other file-backed
     // doc keeps the path: there the file IS what the person opened.
