@@ -2,11 +2,11 @@
  * Run an unmerged branch as a second claude-workspaces instance, so peers and
  * people can review a build BEFORE it lands on main.
  *
- *   bun run staging [--port 8788] [--data-dir <path>]
+ *   bun run staging [--port 8788] [--data-dir <path>] [--host <addr>]
  *
  * Prod keeps running on 8787 with its own data the whole time. Nothing about
- * this touches it — which takes two specific guardrails, both of which are the
- * whole reason this script exists rather than a line in a doc:
+ * this touches it — which takes three specific guardrails, all of which are
+ * the whole reason this script exists rather than a line in a doc:
  *
  * 1. **It refuses to run from the primary checkout.** That checkout is prod's
  *    DEPLOY SOURCE: every prod start rebuilds the bundles there and publishes
@@ -22,6 +22,20 @@
  *    fleet at the staging build. `bin.ts` takes `--port` and `--data-dir` and
  *    publishes nothing.
  *
+ * 3. **It refuses any port another fleet service already owns** (see
+ *    `packages/server/src/reserved-ports.ts`) **and binds loopback by
+ *    default.** A dev/staging server that lands on another service's port
+ *    binds fine — there is no cross-process lock on a TCP port — and if it
+ *    also binds the wildcard, it silently inherits that service's traffic the
+ *    moment the real owner is down for even a moment. That combination is
+ *    exactly what happened on 2026-09-0x: a staging server bound the IPv6
+ *    wildcard on 8791 while the fleet's Notion webhook receiver held
+ *    `127.0.0.1:8791`, and the receiver's next restart handed every Notion
+ *    webhook to the staging build, which answered `unknown_host` — with a
+ *    green health check throughout, because the port itself was still
+ *    answering. `--host 0.0.0.0` opts back into the wildcard when a peer on
+ *    another machine genuinely needs to reach this staging instance.
+ *
  * Peers whose AGENT side needs staging relaunch with
  * `CW_BASE_URL=http://<host>:<port>`; the MCP checks that override first.
  * It's read once at session launch, so it needs a restart with the env set.
@@ -33,92 +47,116 @@ import { spawn, spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { reservedPortError } from '../packages/server/src/reserved-ports.ts';
 
-const args = process.argv.slice(2);
-const arg = (name: string): string | undefined => {
-  const i = args.indexOf(`--${name}`);
-  return i >= 0 && i + 1 < args.length ? args[i + 1] : undefined;
-};
+type ArgReader = (name: string) => string | undefined;
 
-const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
-
-function git(...a: string[]): string {
-  return spawnSync('git', a, { cwd: repoRoot, encoding: 'utf8' }).stdout?.trim() ?? '';
+/**
+ * Staging's bind address: loopback unless a caller explicitly widens it.
+ * Pure and exported so a test can assert the default without booting a
+ * server — the whole point of a safe default is that nobody has to remember
+ * to ask for it.
+ */
+export function resolveStagingHost(arg: ArgReader): string {
+  return arg('host') ?? '127.0.0.1';
 }
 
-const gitDir = resolve(repoRoot, git('rev-parse', '--git-dir'));
-const commonDir = resolve(repoRoot, git('rev-parse', '--git-common-dir'));
-const isPrimaryCheckout = gitDir === commonDir;
+function main(): void {
+  const args = process.argv.slice(2);
+  const arg: ArgReader = (name: string): string | undefined => {
+    const i = args.indexOf(`--${name}`);
+    return i >= 0 && i + 1 < args.length ? args[i + 1] : undefined;
+  };
 
-if (isPrimaryCheckout && !args.includes('--force')) {
-  console.error(
+  const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
+
+  function git(...a: string[]): string {
+    return spawnSync('git', a, { cwd: repoRoot, encoding: 'utf8' }).stdout?.trim() ?? '';
+  }
+
+  const gitDir = resolve(repoRoot, git('rev-parse', '--git-dir'));
+  const commonDir = resolve(repoRoot, git('rev-parse', '--git-common-dir'));
+  const isPrimaryCheckout = gitDir === commonDir;
+
+  if (isPrimaryCheckout && !args.includes('--force')) {
+    console.error(
+      [
+        '[staging] Refusing to run from the primary checkout.',
+        '',
+        `  ${repoRoot}`,
+        '',
+        "  This checkout is prod's deploy source: every prod start rebuilds the",
+        '  bundles here and publishes them as the client release the whole fleet',
+        '  loads. Bundles built here are staged to ship at the next restart — the',
+        '  "test build" would BE the deploy, which is the trap this exists to',
+        '  prevent.',
+        '',
+        '  Run it from a linked worktree instead, which has its own dist:',
+        '',
+        '    git worktree add .claude/worktrees/<branch> <branch>',
+        '    cd .claude/worktrees/<branch> && bun run staging',
+        '',
+        '  --force overrides, and you almost certainly do not want it.',
+      ].join('\n'),
+    );
+    process.exit(2);
+  }
+
+  const port = Number(arg('port') ?? '8788');
+  const dataDir = resolve(arg('data-dir') ?? join(repoRoot, 'data-staging'));
+  const host = resolveStagingHost(arg);
+
+  const portErr = reservedPortError(port);
+  if (portErr) {
+    console.error(`[staging] ${portErr}`);
+    process.exit(2);
+  }
+
+  mkdirSync(dataDir, { recursive: true });
+
+  // Build in THIS worktree. Both bundles, because a stale dist is exactly how a
+  // merged feature ends up invisible in the browser.
+  for (const script of ['build:widget', 'build:workspaces-app']) {
+    console.log(`[staging] ${script}…`);
+    const built = spawnSync('bun', ['run', script], { cwd: repoRoot, stdio: 'inherit' });
+    if (built.status !== 0) {
+      console.error(`[staging] ${script} failed — not starting a server on a stale bundle.`);
+      process.exit(1);
+    }
+  }
+
+  const bin = join(repoRoot, 'packages/server/src/bin.ts');
+  if (!existsSync(bin)) {
+    console.error(`[staging] no server entrypoint at ${bin}`);
+    process.exit(1);
+  }
+
+  const branch = git('rev-parse', '--abbrev-ref', 'HEAD') || '(detached)';
+  console.log(
     [
-      '[staging] Refusing to run from the primary checkout.',
       '',
-      `  ${repoRoot}`,
+      `[staging] branch:   ${branch}`,
+      `[staging] port:     ${port}   (prod stays on 8787)`,
+      `[staging] bind:     ${host}${host === '127.0.0.1' ? '   (this machine only — pass --host 0.0.0.0 to widen)' : ''}`,
+      `[staging] data dir: ${dataDir}   (throwaway — nothing here migrates)`,
+      '[staging] the MCP port file is untouched, so agents still point at prod.',
+      `[staging] for an agent on staging: CW_BASE_URL=http://<host>:${port} (needs a session restart)`,
       '',
-      "  This checkout is prod's deploy source: every prod start rebuilds the",
-      '  bundles here and publishes them as the client release the whole fleet',
-      '  loads. Bundles built here are staged to ship at the next restart — the',
-      '  "test build" would BE the deploy, which is the trap this exists to',
-      '  prevent.',
-      '',
-      '  Run it from a linked worktree instead, which has its own dist:',
-      '',
-      '    git worktree add .claude/worktrees/<branch> <branch>',
-      '    cd .claude/worktrees/<branch> && bun run staging',
-      '',
-      '  --force overrides, and you almost certainly do not want it.',
     ].join('\n'),
   );
-  process.exit(2);
-}
 
-const port = Number(arg('port') ?? '8788');
-const dataDir = resolve(arg('data-dir') ?? join(repoRoot, 'data-staging'));
-
-if (port === 8787) {
-  console.error('[staging] 8787 is prod. Pick another port.');
-  process.exit(2);
-}
-
-mkdirSync(dataDir, { recursive: true });
-
-// Build in THIS worktree. Both bundles, because a stale dist is exactly how a
-// merged feature ends up invisible in the browser.
-for (const script of ['build:widget', 'build:workspaces-app']) {
-  console.log(`[staging] ${script}…`);
-  const built = spawnSync('bun', ['run', script], { cwd: repoRoot, stdio: 'inherit' });
-  if (built.status !== 0) {
-    console.error(`[staging] ${script} failed — not starting a server on a stale bundle.`);
-    process.exit(1);
+  const server = spawn(
+    'bun',
+    ['run', bin, '--port', String(port), '--data-dir', dataDir, '--host', host],
+    {
+      cwd: repoRoot,
+      stdio: 'inherit',
+    },
+  );
+  server.on('exit', (code) => process.exit(code ?? 0));
+  for (const sig of ['SIGINT', 'SIGTERM'] as const) {
+    process.on(sig, () => server.kill(sig));
   }
 }
 
-const bin = join(repoRoot, 'packages/server/src/bin.ts');
-if (!existsSync(bin)) {
-  console.error(`[staging] no server entrypoint at ${bin}`);
-  process.exit(1);
-}
-
-const branch = git('rev-parse', '--abbrev-ref', 'HEAD') || '(detached)';
-console.log(
-  [
-    '',
-    `[staging] branch:   ${branch}`,
-    `[staging] port:     ${port}   (prod stays on 8787)`,
-    `[staging] data dir: ${dataDir}   (throwaway — nothing here migrates)`,
-    '[staging] the MCP port file is untouched, so agents still point at prod.',
-    `[staging] for an agent on staging: CW_BASE_URL=http://<host>:${port} (needs a session restart)`,
-    '',
-  ].join('\n'),
-);
-
-const server = spawn('bun', ['run', bin, '--port', String(port), '--data-dir', dataDir], {
-  cwd: repoRoot,
-  stdio: 'inherit',
-});
-server.on('exit', (code) => process.exit(code ?? 0));
-for (const sig of ['SIGINT', 'SIGTERM'] as const) {
-  process.on(sig, () => server.kill(sig));
-}
+if (import.meta.main) main();
