@@ -99,7 +99,11 @@ import {
   relabelNotesSection,
   retagSpeakerInNotes,
 } from './notes-section-write.ts';
-import { appendTranscriptTurns, relabelTranscriptSection } from './notes-transcript-section.ts';
+import {
+  appendTranscriptTurns,
+  relabelTranscriptSection,
+  transcriptAllowedIn,
+} from './notes-transcript-section.ts';
 
 /**
  * The section writers moved to `notes-section-write.ts`; the names stay on
@@ -127,6 +131,11 @@ export interface NotesDocRooms {
   get(
     docId: string,
   ): { ydoc: Y.Doc; meta: { type: DocType; title?: string; setId?: string } } | undefined;
+  /** The file this doc is bound to, when it is bound to one — the fact the
+   *  raw-transcript companion keys on, and the only thing separating a huddle
+   *  doc from a file in somebody's working tree. Optional so a test can hand
+   *  in a map; absent reads as unbound. */
+  boundPathOf?(docId: string): string | undefined;
 }
 
 /** The slice of `TaskStore` the context gatherer needs. */
@@ -380,6 +389,10 @@ export function withServerNotesSinks(
      *  only `createServer` holds the comment + stamp path. Deduped here per
      *  meeting so a question repeated across ticks opens one thread. */
     onReviewAsk?: (ask: ReviewAsk) => void | Promise<void>;
+    /** The server's data dir, so the transcript sink can tell a huddle doc
+     *  from a doc bound into somebody's working tree. Absent, every BOUND doc
+     *  is treated as outside it and gets no transcript section. */
+    dataDir?: string;
     /** Tests: an ownership ledger they can seed or read back. */
     ledger?: NotesLedger;
   },
@@ -499,7 +512,19 @@ export function withServerNotesSinks(
     },
     onTranscript: (input): void => {
       try {
-        if (!applyNotesTranscript(deps.rooms(), input)) {
+        const rooms = deps.rooms();
+        // Where the doc lives decides whether it may hold spoken words. Not a
+        // failure and not an error: a repo-bound doc still gets its notes, and
+        // the verbatim record is in the data dir either way.
+        if (!transcriptAllowedIn(rooms.boundPathOf?.(input.docId), deps.dataDir)) {
+          console.log(
+            `[meeting-notes] transcript section not written for ${input.docId}: ` +
+              'the doc is bound to a file outside the data dir',
+          );
+          options.onTranscript?.(input);
+          return;
+        }
+        if (!applyNotesTranscript(rooms, input)) {
           console.error(`[meeting-notes] transcript write skipped for ${input.docId}`);
         }
       } catch (err) {

@@ -19,6 +19,7 @@ import {
   TRANSCRIPT_LANGUAGE,
   appendTranscriptTurns,
   relabelTranscriptSection,
+  transcriptAllowedIn,
   transcriptLine,
 } from '../src/notes-transcript-section.ts';
 import { createNotesTickHarness } from './notes-tick-harness.ts';
@@ -173,6 +174,63 @@ describe('applyNotesTranscript', () => {
       applyNotesTranscript(room(ydoc, 'diff'), { docId: 'd1', lines: [{ text: 'hello' }] }),
     ).toBe(false);
     expect(applyNotesTranscript(room(ydoc), { docId: 'nope', lines: [{ text: 'x' }] })).toBe(false);
+  });
+});
+
+describe('where the doc lives decides whether it holds spoken words', () => {
+  const dataDir = '/srv/claude-workspaces/data';
+
+  it('says yes to an unbound doc and to one bound under the data dir', () => {
+    expect(transcriptAllowedIn(undefined, dataDir)).toBe(true);
+    expect(transcriptAllowedIn(`${dataDir}/docs/huddle-2026-09-03.md`, dataDir)).toBe(true);
+    // A trailing separator on either side is the same directory.
+    expect(transcriptAllowedIn(`${dataDir}/notes.md`, `${dataDir}/`)).toBe(true);
+  });
+
+  it('says no to a repo file, including one whose path merely starts the same way', () => {
+    expect(transcriptAllowedIn('/Users/someone/dev/project/docs/plan.md', dataDir)).toBe(false);
+    // `/srv/claude-workspaces/data-old` is not inside `/srv/claude-workspaces/data`.
+    expect(transcriptAllowedIn('/srv/claude-workspaces/data-old/notes.md', dataDir)).toBe(false);
+  });
+
+  it('says no when it cannot see the data dir at all', () => {
+    // Unknown means no: a bound doc this cannot place could be anywhere, and
+    // words written into a working tree cannot be taken back.
+    expect(transcriptAllowedIn('/anywhere/notes.md', undefined)).toBe(false);
+    // An unbound doc is still fine — there is no file to be wrong about.
+    expect(transcriptAllowedIn(undefined, undefined)).toBe(true);
+  });
+
+  it('a doc bound to a repo file gets its notes and no record, and no error', async () => {
+    const h = createNotesTickHarness({
+      doc: '# Plan\n',
+      dataDir: '/srv/claude-workspaces/data',
+      boundPath: '/Users/someone/dev/project/docs/plan.md',
+      compose: () => '## Meeting notes\n\n- measure first\n',
+    });
+    const shot = await h.speak('We should measure first.');
+    expect(shot.markdown).not.toContain(TRANSCRIPT_HEADING);
+    expect(shot.markdown).not.toContain('We should measure first.');
+    // The notes still land. Refusing the record is a placement rule, not a
+    // failure of the meeting.
+    expect(h.notes()).toContain('measure first');
+    expect(h.errors).toEqual([]);
+    await h.end();
+  });
+
+  it('a doc under the data dir gets both', async () => {
+    const h = createNotesTickHarness({
+      doc: '# Huddle\n',
+      dataDir: '/srv/claude-workspaces/data',
+      boundPath: '/srv/claude-workspaces/data/docs/huddle.md',
+      compose: () => '## Meeting notes\n\n- measure first\n',
+    });
+    const shot = await h.speak('We should measure first.');
+    expect(shot.markdown).toContain(TRANSCRIPT_HEADING);
+    expect(h.transcript()).toBe('We should measure first.');
+    expect(h.notes()).toContain('measure first');
+    expect(h.errors).toEqual([]);
+    await h.end();
   });
 });
 

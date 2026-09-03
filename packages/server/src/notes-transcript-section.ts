@@ -33,6 +33,7 @@
  * is a call for the owner rather than a detail of the plumbing.
  */
 
+import { resolve, sep } from 'node:path';
 import { prose } from '@feedback/core';
 import * as Y from 'yjs';
 import { extendsWord, replaceWholeToken } from './meeting-notes.ts';
@@ -222,4 +223,33 @@ function codeTextIn(
   block.insert(0, [text]);
   fragment.insert(span.start + 1, [block]);
   return text;
+}
+
+/**
+ * May this doc hold the meeting's spoken words?
+ *
+ * The same fact `meeting-raw.ts` keys on — whether the doc is bound to a file,
+ * and where that file is. The raw companion answers it by always writing under
+ * the data dir and never near the bound path; this answers it by declining to
+ * write at all.
+ *
+ * A huddle or meeting doc is unbound, or bound under the server's data dir,
+ * beside the `*-raw-transcript.md` that already holds these words: it gets the
+ * section. A doc bound to a repo file does not. Notes are a summary somebody
+ * chose to keep in their working tree; a verbatim record of everything said in
+ * the room is not the same thing, and a `git add -p` is the wrong place to
+ * discover the difference.
+ *
+ * Unknown means no. A bound doc whose data dir this cannot see could be
+ * anywhere, and the failure this exists to prevent is the irreversible one.
+ */
+export function transcriptAllowedIn(
+  boundPath: string | undefined,
+  dataDir: string | undefined,
+): boolean {
+  if (!boundPath) return true;
+  if (!dataDir) return false;
+  const file = resolve(boundPath);
+  const root = resolve(dataDir);
+  return file === root || file.startsWith(root.endsWith(sep) ? root : root + sep);
 }
