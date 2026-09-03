@@ -15864,22 +15864,18 @@ var TOOL_LIST = {
       }
     },
     {
-      name: "park_task",
-      description: 'Defer a task: "not now". Moves the row to triage and posts a comment recording why and when to come back to it. Reach for it instead of moving the row to in-progress or inventing a dependency to quiet the ready-work nudge — both make the board say something untrue. Write a reason: triage says a decision was made, and the comment is the only place that says what it was waiting for. There is no un-park — when the row is ready again, move it on with task_transition like any other triage row.',
+      name: "block_task",
+      description: 'Say what a task is waiting for: name the ticket or tickets that have to close first. The row reads as Blocked on the board from that moment — the edge IS the state, there is no status to set — it leaves next_tasks and the stall check, and it comes free by itself when the last blocker closes, with a note on its Activity tab saying what cleared it. A todo row and an in-progress row both read as Blocked; blocking one you are already working on is legitimate and says so on the board rather than silently dropping it from the queue. Adds to whatever the row already waits on; remove an edge with set_task_dependencies. This replaces park_task: "not now" belongs to whatever the work is waiting for, and triage is for rows nobody has vetted yet. A row waiting on a PERSON is not blocked — leave it in-progress and file the ask with add_review_item.',
       inputSchema: {
         type: "object",
         properties: {
           taskId: { type: "string" },
-          until: {
-            description: 'When to come back to it, if you know. An epoch-ms number, or a date string ("2026-09-02", or a full ISO timestamp for a specific hour — a bare date is read as UTC midnight). Omit it for "not now, and I do not know when" — the comment says so rather than inventing a date. `null` is the retired un-park: accepted, and it does nothing.',
-            type: ["number", "string", "null"]
-          },
-          reason: {
-            type: "string",
-            description: 'Why, in one line — e.g. "waiting on the index rebuild". It goes in the comment, which is the record a reader argues with weeks later.'
+          blockedBy: {
+            description: "The task id, or ids, this row waits on. Each must be a task on the same board; an unknown id is refused rather than recorded, because a dangling edge blocks nothing and says it does.",
+            oneOf: [{ type: "string" }, { type: "array", items: { type: "string" } }]
           }
         },
-        required: ["taskId"]
+        required: ["taskId", "blockedBy"]
       }
     },
     {
@@ -17146,35 +17142,21 @@ async function handleTaskTool(name, a, ctx) {
         ...res.ownerKind !== undefined ? { ownerKind: res.ownerKind } : {}
       });
     }
-    case "park_task": {
-      const { taskId, until, reason } = a;
-      let parkedUntil;
-      if (until === undefined) {
-        parkedUntil = undefined;
-      } else if (until === null) {
-        parkedUntil = null;
-      } else if (typeof until === "number") {
-        if (!Number.isFinite(until))
-          return err2("until must be a date, or omitted");
-        parkedUntil = until;
-      } else {
-        const parsed = Date.parse(until);
-        if (Number.isNaN(parsed)) {
-          return err2(`could not read "${until}" as a date — pass epoch ms, "YYYY-MM-DD", or a full ISO timestamp`);
-        }
-        parkedUntil = parsed;
+    case "block_task": {
+      const { taskId, blockedBy } = a;
+      const ids = Array.isArray(blockedBy) ? blockedBy : [blockedBy];
+      if (ids.length === 0 || ids.some((id) => typeof id !== "string" || id === "")) {
+        return err2("blockedBy must be a task id, or an array of them");
       }
       const res = await http("POST", `/api/tasks/${encodeURIComponent(taskId)}/park`, {
-        ...parkedUntil !== undefined ? { parkedUntil } : {},
-        ...reason !== undefined ? { reason } : {},
+        blockedBy: ids,
         author: AUTHOR
       });
       return ok2({
         taskId,
+        blockedBy: res.after,
         status: res.task.status,
-        moved: res.changed,
-        commented: res.commented,
-        ...res.message !== undefined ? { message: res.message } : {}
+        changed: res.changed
       });
     }
     case "archive_task": {
@@ -18144,7 +18126,7 @@ var STATUS_TEXT_MAX = 4000;
 function suggestionAuthor() {
   return { id: AUTHOR.id, name: AUTHOR.name, color: AUTHOR.color };
 }
-var PLUGIN_VERSION = "0.1.153";
+var PLUGIN_VERSION = "0.1.154";
 var PROCESS_ID = randomUUID();
 var server = new Server({
   name: "claude-workspaces",
