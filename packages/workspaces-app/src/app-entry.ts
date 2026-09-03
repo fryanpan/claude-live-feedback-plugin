@@ -13,5 +13,6 @@
  */
 import { connect } from '@feedback/core';
 import { bootApp } from './app.ts';
+import { browserStorage } from './boot-env.ts';
 
-void bootApp({ document, location, localStorage, window, connect });
+void bootApp({ document, location, localStorage: browserStorage, window, connect });

@@ -12,6 +12,7 @@
  * `bootHub`, where it can be tested.
  */
 import { connect } from '@feedback/core';
+import { browserStorage } from '../boot-env.ts';
 import { bootHub } from './hub-app.ts';
 
-void bootHub({ document, location, history, localStorage, window, connect });
+void bootHub({ document, location, history, localStorage: browserStorage, window, connect });

@@ -14,8 +14,9 @@
  */
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { type AppBootEnv, bootApp } from '../src/app.ts';
+import { SIGN_IN_REQUIRED } from '../src/signin/write-gate.ts';
 import {
   type FakeServer,
   type FakeSockets,
@@ -23,6 +24,7 @@ import {
   fakeLocation,
   fakeSockets,
   fakeStorage,
+  firstAt,
   installFakeBeacon,
   installFakeEventSource,
   installFakeServer,
@@ -261,31 +263,69 @@ describe('identity and the write gate are settled before anything connects', () 
     expect(state?.user?.name).toBeTypeOf('string');
   });
 
-  it('asks whether it may write BEFORE it opens the socket', async () => {
-    const asked: string[] = [];
-    server.reset();
-    server.on('/api/auth/session', { authenticated: false, canWrite: true });
-    server.on('/api/docs/', { meta: { type: 'markdown', relPath: 'notes.md' } });
-    const sockets = fakeSockets();
+  it('has the write answer IN HAND before it opens the socket', async () => {
+    server.on('/api/auth/session', { authenticated: false, canWrite: false });
     document.body.innerHTML = SHELL;
     history.replaceState(null, '', '/review/d-notes');
+    const sockets = fakeSockets();
+    // Read at the moment the room opens. Ordering in the request log alone
+    // cannot carry this claim: `ensureUserIdentity` asks the SAME endpoint,
+    // so a boot that opened its socket without ever awaiting the write
+    // answer still shows a session request sitting before the socket.
+    let barUpWhenSocketOpened = false;
     await bootApp({
       document,
       location: fakeLocation('https://docs.test/review/d-notes'),
       localStorage: fakeStorage({ [NAME_KEY]: 'Ada' }),
       window: new EventTarget(),
       connect: (url) => {
-        asked.push(`socket:${url}`);
+        barUpWhenSocketOpened = document.querySelector('.signin-bar') !== null;
         return sockets.connect(url);
       },
     });
     await settle();
-    const session = server.calls.findIndex((c) => c.url === '/api/auth/session');
+    expect(sockets.opened).toHaveLength(1);
+    expect(barUpWhenSocketOpened).toBe(true);
+    // And the request itself precedes the room, on one ordered log.
+    const session = firstAt('/api/auth/session');
+    const socket = firstAt('socket ');
     expect(session).toBeGreaterThanOrEqual(0);
-    expect(asked).toHaveLength(1);
-    // The session answer is in hand before the surface exists — the whole
-    // reason it rides the MountContext instead of each surface re-asking.
-    expect(server.calls[session]?.url).toBe('/api/auth/session');
+    expect(session).toBeLessThan(socket);
+  });
+
+  it('wraps fetch for the sign-in notice before it opens the socket', async () => {
+    // A FRESH module registry. `installWriteGateNotice` installs once per
+    // process and returns early ever after, so a boot later in this file
+    // would find the wrapper already there and pass without having asked for
+    // it — the test would hold on a boot that never made the call.
+    vi.resetModules();
+    const { bootApp: freshBoot } = await import('../src/app.ts');
+    const beforeBoot = globalThis.fetch;
+    const sockets = fakeSockets();
+    let wrappedWhenSocketOpened = false;
+    document.body.innerHTML = SHELL;
+    history.replaceState(null, '', '/review/d-notes');
+    await freshBoot({
+      document,
+      location: fakeLocation('https://docs.test/review/d-notes'),
+      localStorage: fakeStorage({ [NAME_KEY]: 'Ada' }),
+      window: new EventTarget(),
+      connect: (url) => {
+        wrappedWhenSocketOpened = globalThis.fetch !== beforeBoot;
+        return sockets.connect(url);
+      },
+    });
+    await settle();
+    expect(sockets.opened).toHaveLength(1);
+    expect(wrappedWhenSocketOpened).toBe(true);
+
+    // And it is the write gate's wrapper, not merely something new on the
+    // global: a refused write now raises the prompt on its own, which is the
+    // whole point of installing it before anything can write.
+    server.on('/api/probe-write', { error: SIGN_IN_REQUIRED }, 401);
+    await fetch('/api/probe-write', { method: 'POST' });
+    await settle();
+    expect(document.querySelector('.signin-required')).not.toBeNull();
   });
 
   it('raises the sign-in bar and locks the doc when the server refuses writes', async () => {

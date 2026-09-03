@@ -1,10 +1,11 @@
 /**
  * hub-app wires the address bar through the board-url codec.
  *
- * The codec itself is unit-tested in board-url.test.ts; hub-app has no boot
- * harness (main() runs on import against a real shell), so its wiring is
- * pinned by source text — the established shape for hub-app in this suite
- * (walk-handoff.test.ts, home-nav-reset.test.ts). All fixtures synthetic.
+ * The codec itself is unit-tested in board-url.test.ts, and the boot's own
+ * history writes are driven in hub-boot.test.ts. What is left here is which
+ * codec call each site makes, pinned by source text because two spellings
+ * that produce the same URL today diverge the moment the codec changes.
+ * All fixtures synthetic.
  */
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';

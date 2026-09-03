@@ -10,9 +10,10 @@
  *
  * All fixtures synthetic.
  */
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { type HubBootEnv, bootHub } from '../src/hub/hub-app.ts';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { type HubBootEnv, WALK_HANDOFF_DEADLINE_MS, bootHub } from '../src/hub/hub-app.ts';
 import { type HubGoal, type HubTask } from '../src/hub/hub-board-model.ts';
+import { SIGN_IN_REQUIRED } from '../src/signin/write-gate.ts';
 import {
   type FakeServer,
   type FakeSockets,
@@ -21,6 +22,7 @@ import {
   fakeLocation,
   fakeSockets,
   fakeStorage,
+  firstAt,
   installFakeBeacon,
   installFakeEventSource,
   installFakeServer,
@@ -233,11 +235,40 @@ describe('a deep-linked task opens on boot', () => {
     expect(document.getElementById('hub-detail')?.classList.contains('hidden')).toBe(true);
   });
 
-  it('says so instead of showing a blank panel for a task that is not there', async () => {
-    await boot(`https://board.test/workspaces/${WS}/tasks?task=t-gone`);
-    // The deadline denies an unresolvable claim rather than leaving it open.
-    const panel = document.getElementById('hub-detail');
-    expect(panel?.textContent).not.toContain('Order the hob');
+  it('says the link is outdated, and shuts the panel, once the deadline passes', async () => {
+    // "Not here yet" and "not here" are the same picture until the deadline:
+    // the projection lands after first paint, so the board waits before it
+    // calls a deep link unresolvable. Fake timers because the wait is the
+    // behaviour — a suite that slept for it would be timing the machine.
+    vi.useFakeTimers();
+    try {
+      const sockets = fakeSockets();
+      shell();
+      const running = bootHub({
+        document,
+        location: fakeLocation(`https://board.test/workspaces/${WS}/tasks?task=t-gone`),
+        history: fakeHistory(),
+        localStorage: fakeStorage({ [NAME_KEY]: 'Ada' }),
+        window: new EventTarget(),
+        connect: sockets.connect,
+      });
+      await vi.advanceTimersByTimeAsync(0);
+      seedProjection(sockets);
+      sockets.first().sync();
+      await running;
+      // No panel in the meantime — an unresolvable id never paints the empty
+      // frame this test is named for.
+      expect(document.getElementById('hub-detail')?.classList.contains('hidden')).toBe(true);
+      expect(document.getElementById('hub-toast')?.classList.contains('hidden')).toBe(true);
+      await vi.advanceTimersByTimeAsync(WALK_HANDOFF_DEADLINE_MS + 100);
+      // Then the board says so, in as many words.
+      expect(document.getElementById('hub-toast')?.textContent).toBe(
+        'Nothing on this board matches that link — it may be outdated.',
+      );
+      expect(document.getElementById('hub-detail')?.classList.contains('hidden')).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 
@@ -324,5 +355,77 @@ describe('a browser that may not write is told before it tries', () => {
   it('shows no bar when the server says this browser may write', async () => {
     await boot(`https://board.test/workspaces/${WS}/tasks`);
     expect(document.querySelector('.signin-bar')).toBeNull();
+  });
+
+  it('wraps fetch for the sign-in notice before it opens the board room', async () => {
+    // A FRESH module registry. `installWriteGateNotice` installs once per
+    // process and returns early ever after, so a boot later in this file
+    // would find the wrapper already there and pass without having asked for
+    // it — the test would hold on a boot that never made the call.
+    vi.resetModules();
+    const { bootHub: freshBoot } = await import('../src/hub/hub-app.ts');
+    const beforeBoot = globalThis.fetch;
+    const sockets = fakeSockets();
+    let wrappedWhenSocketOpened = false;
+    shell();
+    const running = freshBoot({
+      document,
+      location: fakeLocation(`https://board.test/workspaces/${WS}/tasks`),
+      history: fakeHistory(),
+      localStorage: fakeStorage({ [NAME_KEY]: 'Ada' }),
+      window: new EventTarget(),
+      connect: (url) => {
+        wrappedWhenSocketOpened = globalThis.fetch !== beforeBoot;
+        return sockets.connect(url);
+      },
+    });
+    await settle();
+    seedProjection(sockets);
+    sockets.first().sync();
+    await running;
+    await settle();
+    expect(sockets.opened).toHaveLength(1);
+    expect(wrappedWhenSocketOpened).toBe(true);
+
+    // And it is the write gate's wrapper, not merely something new on the
+    // global: the board's own `send()` reports a refusal as "Couldn't save",
+    // which a signed-out person cannot act on, so the wrapper is what turns
+    // that into something they can.
+    server.on('/api/probe-write', { error: SIGN_IN_REQUIRED }, 401);
+    await fetch('/api/probe-write', { method: 'POST' });
+    await settle();
+    expect(document.querySelector('.signin-required')).not.toBeNull();
+  });
+
+  it('has the write answer IN HAND before it opens the board room', async () => {
+    server.on('/api/auth/session', { authenticated: false, canWrite: false });
+    const sockets = fakeSockets();
+    shell();
+    // Read at the moment the room opens. The request log alone cannot carry
+    // this: `ensureUserIdentity` asks the SAME endpoint, so a boot that never
+    // awaited the write answer still shows a session request before the
+    // socket.
+    let barUpWhenSocketOpened = false;
+    const running = bootHub({
+      document,
+      location: fakeLocation(`https://board.test/workspaces/${WS}/tasks`),
+      history: fakeHistory(),
+      localStorage: fakeStorage({ [NAME_KEY]: 'Ada' }),
+      window: new EventTarget(),
+      connect: (url) => {
+        barUpWhenSocketOpened = document.querySelector('.signin-bar') !== null;
+        return sockets.connect(url);
+      },
+    });
+    await settle();
+    seedProjection(sockets);
+    sockets.first().sync();
+    await running;
+    await settle();
+    expect(barUpWhenSocketOpened).toBe(true);
+    const session = firstAt('/api/auth/session');
+    const socket = firstAt('socket ');
+    expect(session).toBeGreaterThanOrEqual(0);
+    expect(session).toBeLessThan(socket);
   });
 });
