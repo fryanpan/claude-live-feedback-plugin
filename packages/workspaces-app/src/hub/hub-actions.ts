@@ -16,7 +16,7 @@
  * `send`, `fetchJson` and `showToast` come along because every verb ends in
  * one of them — a write that lands, or a one-line report that it did not.
  */
-import type { CaptureMode, HuddleKind, User } from '@feedback/core';
+import { type CaptureMode, type HuddleKind, type User, parseWorkspaceLink } from '@feedback/core';
 import { HUDDLE_MODE_PARAM } from '../huddle-entry.ts';
 import {
   type BoardSection,
@@ -27,7 +27,7 @@ import {
   type ReorderTarget,
   cascadePhrase,
 } from './hub-board-model.ts';
-import type { TaskDiscussion } from './hub-detail-render.ts';
+import type { RelatedEntry, TaskDiscussion } from './hub-detail-render.ts';
 import type {
   ActivityEvent,
   ActivityFilter,
@@ -313,6 +313,113 @@ export function createHubActions(deps: HubActionDeps) {
     });
     if (!res.ok)
       showToast(dueAt === null ? 'Clearing the due date failed' : 'Setting the due date failed');
+  }
+
+  /**
+   * What to say when a Related Links write is refused.
+   *
+   * Two refusals carry more than "it failed" and both were being thrown away:
+   * a 401 is the SESSION, not the link (the row is fine, the reader is signed
+   * out, and telling them the link was bad sends them to fix the wrong thing),
+   * and a cycle refusal arrives with the ring already named, which no generic
+   * sentence can reconstruct.
+   */
+  function addFailureText(
+    res: { status: number; data: Record<string, unknown> | null },
+    fallback: string,
+  ): string {
+    if (res.status === 401) return 'Sign in again to change this board';
+    const said = typeof res.data?.message === 'string' ? res.data.message : '';
+    return said !== '' ? said : fallback;
+  }
+
+  /**
+   * Grow Related Links from a pasted address.
+   *
+   * What the URL NAMES decides the write, which is the whole reason there is
+   * one control rather than three:
+   *
+   *  - a **ticket on this workspace** becomes an `after` edge, which is how a
+   *    blocker gets set at all. Blocked is derived from those edges and no
+   *    status control offers it, so this is the panel's only door to it. It
+   *    goes through the same additive route `block_task` uses. A GOAL link is
+   *    not a ticket — a ticket waits on tickets — so it falls to the last arm
+   *    and is kept as a plain address.
+   *  - a **doc or mockup** becomes a doc ref, and the entry resolves to the
+   *    doc's title like every other Related Link.
+   *  - **anything else** is kept verbatim as a `url` ref and shown as itself.
+   *    The server refuses a scheme that is not http(s) — a `javascript:` link
+   *    in this list would become an href — and the toast says so.
+   */
+  async function addRelatedLink(task: HubTask, url: string): Promise<void> {
+    const parsed = parseWorkspaceLink(url);
+    // A TICKET only. A goal link used to come here too and could never
+    // succeed: goal rows are not in the workspace's task map, so the store
+    // answered `unknown-after` and the reader got "Adding the blocking ticket
+    // failed" for a link that was never going to be a blocker. A ticket waits
+    // on tickets (the owner's rule, upheld by the store); a goal link is
+    // "anything else" and falls through to the plain-URL arm below, which is
+    // what the ticket asks for.
+    if (parsed?.kind === 'task') {
+      const blockedBy = parsed.taskId;
+      // A row cannot wait on itself, and the server would refuse it — but the
+      // toast for a self-link should say what happened rather than repeat a
+      // validation message about ids.
+      if (blockedBy === task.id) {
+        showToast('A ticket cannot wait on itself');
+        return;
+      }
+      const res = await send(`/api/tasks/${encodeURIComponent(task.id)}/park`, 'POST', {
+        blockedBy: [blockedBy],
+        author,
+      });
+      if (!res.ok) showToast(addFailureText(res, 'Adding the blocking ticket failed'));
+      return;
+    }
+    const ref =
+      parsed?.kind === 'doc' || parsed?.kind === 'mockup'
+        ? { kind: 'doc', docId: parsed.docId }
+        : { kind: 'url', url };
+    const res = await send(`/api/tasks/${encodeURIComponent(task.id)}/links`, 'POST', {
+      ref,
+      author,
+    });
+    if (!res.ok) {
+      showToast(
+        res.status === 400
+          ? 'That is not a link we can store'
+          : addFailureText(res, 'Adding the link failed'),
+      );
+    }
+  }
+
+  /**
+   * Take one Related Links entry back off.
+   *
+   * A blocker is an `after` edge and comes off by rewriting the list without
+   * it — `afterEnforce` is rewritten alongside, because the route replaces
+   * what it is given and omitting the second list would quietly drop every
+   * enforced edge the row had.
+   */
+  async function removeRelatedLink(task: HubTask, entry: RelatedEntry): Promise<void> {
+    if (entry.kind === 'blocker') {
+      const res = await send(`/api/tasks/${encodeURIComponent(task.id)}/after`, 'POST', {
+        after: task.after.filter((id) => id !== entry.taskId),
+        ...(task.afterEnforce !== undefined
+          ? { afterEnforce: task.afterEnforce.filter((id) => id !== entry.taskId) }
+          : {}),
+        author,
+      });
+      if (!res.ok) showToast('Removing the blocking ticket failed');
+      return;
+    }
+    const ref =
+      entry.kind === 'doc' ? { kind: 'doc', docId: entry.docId } : { kind: 'url', url: entry.url };
+    const res = await send(`/api/tasks/${encodeURIComponent(task.id)}/links`, 'DELETE', {
+      ref,
+      author,
+    });
+    if (!res.ok) showToast('Removing the link failed');
   }
 
   /**
@@ -622,6 +729,8 @@ export function createHubActions(deps: HubActionDeps) {
     assignTask,
     setTaskGoal,
     setTaskDue,
+    addRelatedLink,
+    removeRelatedLink,
     archiveTask,
     restoreTask,
     goalCascadeCount,

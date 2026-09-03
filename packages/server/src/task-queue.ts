@@ -41,6 +41,7 @@ import {
   type TaskStatus,
   type WorkspaceGoal,
   goalStatusMeta,
+  isArchived,
 } from './tasks.ts';
 
 export interface QueueBlocker {
@@ -93,6 +94,23 @@ export interface QueueRow {
   /** No ENFORCED open blocker. Advisory (`after`-only) blockers leave this
    *  true, exactly as the transition gate treats them. */
   ready: boolean;
+  /**
+   * Waiting on at least one ticket that is not finished — the board's Blocked
+   * state, `@feedback/core/task-blocked`'s reading of the same `after` edges.
+   *
+   * A SECOND flag beside `ready` rather than a redefinition of it, because
+   * they answer different questions and both are needed. `ready` is transition
+   * -gate parity: may this row move forward, which only an ENFORCED edge
+   * refuses. `blocked` is dispatch: may an agent pick this up, which ANY open
+   * edge answers no to — a row whose dependency is unfinished is not work you
+   * can do, whether or not its author marked the edge enforcing.
+   *
+   * The default filter reads this one, so a blocked row leaves the queue. That
+   * is a widening: before this, an advisory edge was reported and then ignored
+   * by every dispatch read, which is how a row could be handed to an agent
+   * while the board drew it as waiting.
+   */
+  blocked: boolean;
   /** When the description above was written. Present on every row, because
    *  "how old is this measurement" is something a reader needs whether or
    *  not it has drifted — the body is written in the present tense about a
@@ -232,8 +250,11 @@ export function buildQueue(
       const dep = byId.get(depId);
       // A dangling id (the dep was deleted) can't gate — the same rule the
       // transition gate uses. Otherwise deleting a task wedges its dependants
-      // forever with a blocker nobody can clear.
-      if (!dep || dep.status === 'done') continue;
+      // forever with a blocker nobody can clear. An ARCHIVED dep is the same
+      // case one step softer: it is off the board, so nobody is going to
+      // finish it, and a row held by one is held by something its reader
+      // cannot even see. Same reading as `@feedback/core/task-blocked`.
+      if (!dep || dep.status === 'done' || isArchived(dep)) continue;
       blockedBy.push({
         taskId: dep.id,
         title: dep.title,
@@ -266,12 +287,17 @@ export function buildQueue(
       ...(task.needs !== undefined ? { needs: task.needs } : {}),
       blockedBy,
       ready: !blockedBy.some((b) => b.enforce),
+      blocked: blockedBy.length > 0,
       bodyWrittenAt,
       ...(premise ? { premise } : {}),
     };
   });
 
-  const kept = opts.includeBlocked ? rows : rows.filter((r) => r.ready);
+  // `blocked`, not `ready`: the queue is what you can DO, and a row waiting on
+  // an unfinished ticket is not it. `!ready` implies `blocked` (an enforced
+  // edge is an open edge), so this drops everything the old filter dropped and
+  // the advisory rows besides.
+  const kept = opts.includeBlocked ? rows : rows.filter((r) => !r.blocked);
   return opts.limit !== undefined ? kept.slice(0, Math.max(0, opts.limit)) : kept;
 }
 

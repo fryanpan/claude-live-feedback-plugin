@@ -22,6 +22,7 @@
     "./goal-effort": "./src/goal-effort.ts",
     "./identity": "./src/identity.ts",
     "./review-item-id": "./src/review-item-id.ts",
+    "./task-blocked": "./src/task-blocked.ts",
     "./task-wire": "./src/task-wire.ts",
     "./word-count": "./src/word-count.ts"
   },
