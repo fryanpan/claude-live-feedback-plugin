@@ -17,11 +17,9 @@
  * "nobody commented" — the exact failure class watches exist to close. So an
  * event whose author cannot be positively determined is forwarded.
  */
-import { readFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { isSelfAuthoredEvent } from '../src/self-authored.ts';
+import { readMcpSource } from './harness/mcp-source.ts';
 
 const SELF = 'agent-live-feedback';
 const OTHER = 'known-bryan';
@@ -206,7 +204,7 @@ describe('garbage in never suppresses', () => {
  * PR whose bundle does not match a fresh build of this source.
  */
 describe('emitChannelMessage consults the gate', () => {
-  const SRC = readFileSync(join(dirname(fileURLToPath(import.meta.url)), '../src/mcp.ts'), 'utf8');
+  const SRC = readMcpSource();
 
   it('calls isSelfAuthoredEvent with this session own identity', () => {
     const start = SRC.indexOf('async function emitChannelMessage(');

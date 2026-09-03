@@ -116,6 +116,7 @@ the shipped bundle is unchanged.
 | File | Lines | Verdict | Reason / seam |
 |---|---|---|---|
 | `packages/mcp/src/mcp.ts` | 5563 | Split | Two things bolted together at line 2396. The `ListToolsRequestSchema` handler (351–2395) is a declarative array of 94 tool schemas with no logic; the `CallToolRequestSchema` handler is a 94-case dispatch switch. Move the registry verbatim to `tool-schemas.ts` ~2045 — that piece genuinely is one cohesive table, it just does not belong beside the dispatcher — then split the switch by domain the way `routes/` did (~700–800 each). `PLUGIN_VERSION` must stay reachable from `mcp.ts`. **M** |
+| `packages/mcp/src/tool-schemas.ts` | 2012 | Exception | Declarative data, not code: the `tools/list` result — 94 tool schemas, names, descriptions and JSON Schema, with no logic and no branch in the file. The split that created it is what the `mcp.ts` row above asked for, and B6 accepted the size in advance: one table read top to bottom is what an agent picks a tool from, and cutting it into three would mean choosing which third a reader looks in. Splitting is possible the day a subset stops being read as one list. |
 | `packages/mcp/src/nudge-line.ts` | 510 | Exception | One responsibility, the wording of the hub's wake events. `readyIdleLine`, `stalledLine`, `reviewItemHeldLine` and `reviewAnsweredLine` share `truncate` and `humanDuration`, and the point is that the wording is asserted in one place. |
 
 ## packages/widget
