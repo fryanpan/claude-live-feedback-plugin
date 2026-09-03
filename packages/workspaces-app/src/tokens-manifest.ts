@@ -1,7 +1,7 @@
 /**
- * The Open Props files vendored into the served `/app/tokens.css` (board task
- * t-9Ujf8EcjSpbR — a bounded TRIAL of Open Props as the design-token layer,
- * not a wholesale migration).
+ * The Open Props files vendored into the served `/app/tokens.css`. A board
+ * task scoped this as a bounded TRIAL of Open Props as the design-token
+ * layer, not a wholesale migration.
  *
  * A subset on purpose: the full `open-props.min.css` is ~29.5KB and most of
  * it (animations, easings, gradients, masks, zindex, every unused hue) maps

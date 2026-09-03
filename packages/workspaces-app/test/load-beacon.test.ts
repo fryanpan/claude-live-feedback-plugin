@@ -2,12 +2,12 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
-// The board's load time was a memory ("10+ seconds on the iPad", t-scWMQmOZcpu1)
+// The board's load time was a memory ("10+ seconds on the iPad")
 // until the server grew /load-reports. This is the client half: after boot the
 // board reports how long its own first paint and first ydoc projection took,
 // once per page load, so slowness is a recorded fact with phase attribution.
 // hub-app has no boot harness — pins on the source, same as lazy-events.
-describe('the board reports its own load time (t-scWMQmOZcpu1)', () => {
+describe('the board reports its own load time', () => {
   const src = readFileSync(join(__dirname, '..', 'src', 'hub', 'hub-app.ts'), 'utf8');
 
   it('posts one report to the load-reports route', () => {
