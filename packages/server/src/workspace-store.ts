@@ -16,7 +16,7 @@
  */
 
 import type { Task, TaskActor } from '@feedback/core/task-wire';
-import { classifyActor } from './activity.ts';
+import { classifyActor } from './actor-identity.ts';
 import { cryptoId } from './task-fields.ts';
 import { AUTHOR_REQUIRED_MESSAGE, isCategoryAuthor } from './task-owner.ts';
 import type {

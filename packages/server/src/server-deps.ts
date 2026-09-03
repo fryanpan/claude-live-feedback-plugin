@@ -17,17 +17,17 @@
 import { resolvePostmarkCodeSender } from './auth/postmark-code-sender.ts';
 import { createDeployer } from './deploy.ts';
 import { effortEstimateEnabled, haikuEffortEstimator } from './effort-estimator.ts';
-import { stamped } from './log-stamp.ts';
-import { createHaikuNotesComposer } from './meeting-notes-composer.ts';
-import { createHaikuTaskCaptureExtractor } from './meeting-task-capture.ts';
-import { createPluginRefresher } from './plugin-refresh.ts';
 import {
   GOOGLE_OAUTH_KEYCHAIN_SERVICE,
   createGoogleOauthApp,
   createKeychainRefreshTokenVault,
-  createRecallCalendarClient,
   resolveGoogleOauthCreds,
-} from './recall-calendar.ts';
+} from './google-oauth.ts';
+import { stamped } from './log-stamp.ts';
+import { createHaikuNotesComposer } from './meeting-notes-composer.ts';
+import { createHaikuTaskCaptureExtractor } from './meeting-task-capture.ts';
+import { createPluginRefresher } from './plugin-refresh.ts';
+import { createRecallCalendarClient } from './recall-calendar.ts';
 import { createRecallClient, recallStatusWebhookUrl } from './recall.ts';
 import { haikuReviewJudge, reviewGateEnabled } from './review-judge.ts';
 import type { ServerConfig } from './server-config.ts';
