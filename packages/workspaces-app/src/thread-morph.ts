@@ -309,12 +309,21 @@ function slide(
   const leaving = faceOf(slot, !expanded);
   if (!arriving || !leaving) return;
   const to = arriving.offsetHeight;
-  // Same refusal as `sizeThreadSlots`: zero means this card is not being laid
-  // out, not that its face is empty. A card folds on EVERY copy at once, and
-  // one of those copies is routinely in a closed (`display: none`) drawer —
-  // writing that zero would outlive the fold and open the drawer on a card
-  // clipped to its head and its foot. The class flip above already landed.
-  if (to <= 0) return;
+  // Same refusal as `sizeThreadSlots`, and the same narrowing. A zero from a
+  // face that HAS children means this card is not being laid out: a card
+  // folds on EVERY copy at once, and one of those copies is routinely in a
+  // closed (`display: none`) drawer — writing that zero would outlive the
+  // fold and open the drawer on a card clipped to its head and its foot. The
+  // class flip above already landed.
+  //
+  // A face with no children is empty on purpose, and its zero is the height
+  // it should get. `sizeThreadSlots` learned that when line two stopped
+  // saying "No replies yet"; this function did not, and the gap it left
+  // outlived the fold in exactly the way the paragraph above describes. A
+  // resolved card folded to 33px on first paint, and after one open and
+  // close its slot stayed at 237px: a blank second row under a one-line
+  // card, which survived a resize because the remeasure agreed with it.
+  if (to <= 0 && arriving.childElementCount > 0) return;
   // The resting state lands immediately; the tween below replays the journey.
   slot.style.height = `${to}px`;
   if (!timing.duration || typeof slot.animate !== 'function') return;
