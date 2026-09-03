@@ -267,9 +267,9 @@ describe('the panel opens an untitled task with the title ready to type', () => 
 });
 
 /**
- * hub-app has no boot harness (main() runs on import against a real shell), so
- * its wiring is pinned by source text — the established shape for hub-app in
- * this suite (board-url-wiring.test.ts).
+ * Which button calls which verb, pinned by source text. The board's boot is
+ * driveable now (hub-boot.test.ts), but these two buttons open a route rather
+ * than change the page, so the wiring is easier to READ than to observe.
  */
 describe('hub-app wires the two buttons to the two routes', () => {
   const HUB_APP = readFileSync(resolve(import.meta.dirname, '../src/hub/hub-app.ts'), 'utf8');

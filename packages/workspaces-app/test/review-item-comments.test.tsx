@@ -616,8 +616,8 @@ describe('the walkthrough card: "I have a question" — asking without selecting
   });
 });
 
-// hub-app has no boot harness (the pin pattern of walk-return.test.ts): the
-// wiring is asserted in source, and the behaviour — the card leaving on Send,
+// Pinned on the source (the pattern of walk-return.test.ts): the wiring is
+// read rather than driven, and the behaviour — the card leaving on Send,
 // the toast — was verified headlessly against a built client; see the PR.
 describe('hub-app wires both asks to one POST and holds nothing back', () => {
   const src = readFileSync(join(__dirname, '..', 'src', 'hub', 'hub-app.ts'), 'utf8');
