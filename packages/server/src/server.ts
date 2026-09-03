@@ -200,7 +200,7 @@ import {
   relativeReviewUrl,
 } from './share/redact-meta.ts';
 import { renderShareLinkUnavailable } from './share/share-link-page.ts';
-import { ShareLinks } from './share/share-links.ts';
+import { ShareLinks, shareMemberKey } from './share/share-links.ts';
 import { Shares, audienceEntryAdmits } from './share/shares.ts';
 import { SharingGate } from './share/sharing-gate.ts';
 import type { Share, ShareConfig } from './share/types.ts';
@@ -5429,6 +5429,12 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
         /** The share that authorized this request, stamped onto any websocket
          *  it upgrades so revocation can find and close it later. */
         let visitorShareId: string | null = null;
+        /** The MEMBERSHIP that authorized this request, when it came in on the
+         *  share hostname. The same job as `visitorShareId` for the door that
+         *  has no Cloudflare share behind it: without it, ejecting a member or
+         *  shutting external access off left their open socket and stream
+         *  running, because both are authorized once and never re-checked. */
+        let visitorMemberKey: string | null = null;
         /**
          * The email Cloudflare Access verified for this request, if any.
          *
@@ -5606,6 +5612,13 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
             // metadata redacted, `visitor`-gated routes closed. No
             // `visitorShareId` — there is no Cloudflare share behind this.
             visitor = scope.target;
+            // What there IS instead: the membership. Stamped on whatever this
+            // request upgrades so that removing the member, or throwing the
+            // master switch, can hang it up.
+            visitorMemberKey =
+              accessEmail && scope.target?.workspaceId
+                ? shareMemberKey(scope.target.workspaceId, accessEmail)
+                : null;
           } else if (decision.kind === 'collab') {
             // The collaboration hostname: one stable public address, an
             // Access application in front of it, and the SHARE surface behind
@@ -5998,6 +6011,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
             data: {
               docId,
               ...(visitorShareId ? { shareId: visitorShareId } : {}),
+              ...(visitorMemberKey ? { shareMember: visitorMemberKey } : {}),
               ...(readOnly ? { readOnly: true } : {}),
             },
           });
@@ -6037,6 +6051,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
             visitor ? redactHubEventForVisitor : undefined,
             streamAgentId,
             sseLastEventId(req, url),
+            visitorMemberKey ?? undefined,
           );
         }
         // --- SSE ---
@@ -6055,6 +6070,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
             undefined,
             undefined,
             sseLastEventId(req, url),
+            visitorMemberKey ?? undefined,
           );
         }
 

@@ -76,7 +76,7 @@ A link that is revoked, expired, or never existed renders one page, and it is th
 
 The share hostname's Access application has its own audience, configured apart from the owner's. A token minted for the owner's address fails at the share hostname and a token minted at the share hostname fails at the owner's, because each is checked against the audience of its own application. That second direction is the one that matters: the share application admits anyone who can read email, so its token must be worth nothing anywhere else.
 
-Two verbs end access, and they are not the same act. Revoking a link stops anyone new from redeeming it and leaves the people who already did, because a link is often revoked simply because it has been passed around enough. Removing a member ends that person's access on their next request. Neither destroys anything: a revoked link keeps its record and its list of who redeemed it and when, which is the only account of who was ever let in.
+Two verbs end access, and they are not the same act. Revoking a link stops anyone new from redeeming it and leaves the people who already did, because a link is often revoked simply because it has been passed around enough. Removing a member ends that person's access at once: the next request is refused, and any live editing connection or event stream that membership had already opened is hung up rather than left running. That second half matters because a connection is authorized once, when it opens, and never asked again. Neither verb destroys anything: a revoked link keeps its record and its list of who redeemed it and when, which is the only account of who was ever let in.
 
 Membership on the share hostname and membership on the collaboration hostname are separate records on purpose. A redeemed share link does not make somebody a collaborator, and an address on the owner's list is not a member of anything on the share hostname. Two doors, two answers.
 
@@ -96,7 +96,7 @@ In code: programs on this machine pass `isTrustedLocalHost` with no sign-in; the
 
 Letting a visitor edit document text is on purpose: that is what a live review is. It happens over the live-editing connection, not over the normal API, and only for a visitor whose email Cloudflare confirmed.
 
-`SharingGate` (`share/sharing-gate.ts`) is the master switch above all of this. Turned off, every outside hostname is refused before any sign-in check runs, and a setting that cannot be read counts as off. It covers the share, collaboration and owner-through-the-tunnel groups. The meeting-bot hostname is deliberately outside it, because switching it off in the middle of a meeting would drop the transcript; that hostname serves two routes, and each one works only while its own credential is configured.
+`SharingGate` (`share/sharing-gate.ts`) is the master switch above all of this. Turned off, every outside hostname is refused before any sign-in check runs, every share-link visitor's open connection is hung up, and a setting that cannot be read counts as off. It covers the share, collaboration and owner-through-the-tunnel groups. The switch is thrown by an agent on this machine and works on any deployment that has either kind of sharing wired; a browser cannot throw it, and neither can it read the share list, because a link id is the whole secret of a share URL and the member list is a roster of addresses. The meeting-bot hostname is deliberately outside it, because switching it off in the middle of a meeting would drop the transcript; that hostname serves two routes, and each one works only while its own credential is configured.
 
 ## Changing anything from a browser needs a sign-in
 
@@ -132,6 +132,7 @@ Secrets are kept in the macOS Keychain or in files only the owner's account can 
 | Postmark server token                                        | Keychain, service `postmark-api-token`                       |
 | Cloudflare API token                                         | Keychain, service `cloudflare-api-token`                     |
 | Cookie signing key (sign-in cookie, share cookie, widget token) | `<dataDir>/share-cookie.key`, readable only by the owner's account |
+| Share links and their members                                | `<dataDir>/share-links.json`, readable only by the owner's account |
 | The key that signs browser notifications                     | `<dataDir>/push-vapid.json`, readable only by the owner's account |
 | Meeting webhook signing secret                               | `RECALL_WEBHOOK_SECRET` in the environment                   |
 

@@ -368,6 +368,12 @@ export function resolveServerConfig(opts: {
         'a board to anyone who can reach the tunnel. They will answer 403 unknown_host.',
     );
   }
+  // FATAL, not a warning. Everything else in this block degrades to a
+  // hostname that answers 403; this one degrades to the operator's own
+  // address accepting a token that anyone on the internet can mint by typing
+  // an email at the share sign-in. A warning on a boot log is not a control:
+  // the server would come up serving the misconfiguration, and the two
+  // audiences being equal is exactly the mistake a copy-paste makes.
   if (shareLinkHosts.length && cfAccessShareAud && cfAccessShareAud === cfAccessAud) {
     console.error(
       '[feedback] CF_ACCESS_SHARE_AUD equals CF_ACCESS_AUD: the share hostname and the ' +
@@ -375,6 +381,7 @@ export function resolveServerConfig(opts: {
         "who typed an email at the share sign-in would verify on the owner's hostname. " +
         'Create a SEPARATE Access application for the share hostname and use its audience.',
     );
+    process.exit(1);
   }
   const shareHostOverlap = shareLinkHosts.filter((h) =>
     [...accessTunnelHosts, ...proxiedTrustedHosts].some((c) => c.toLowerCase() === h.toLowerCase()),
