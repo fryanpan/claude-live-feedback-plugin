@@ -8,7 +8,8 @@
  * mutation goes through the REST gate — never by writing into the maps,
  * which the server would revert.
  */
-import { type ReviewPayload, type User, connect, escapeHtml } from '@feedback/core';
+import { type FeedbackClient, type ReviewPayload, type User, escapeHtml } from '@feedback/core';
+import type { BootHistory, BootLocation, BootStorage, BootWindow } from '../boot-env.ts';
 import { renderConnectionBanner, watchConnection } from '../connection-state.ts';
 import { MIC_ICON, SVG, SVG_ENDS } from '../icons.ts';
 import { ensureUserIdentity } from '../identity-prompt.ts';
@@ -130,9 +131,21 @@ import { GOAL_PLACEHOLDER_TEXT, createTaskBodyEditorHost } from './task-body-edi
 import { type DetailTab, mountTaskDetailIsland, taskDetailData } from './task-detail-island.tsx';
 import { mountWalkthroughIsland, walkthroughData } from './walkthrough-island.tsx';
 
-function workspaceIdFromPath(): string {
-  const m = location.pathname.match(/\/workspaces\/([^/?#]+)/);
-  return m?.[1] ? decodeURIComponent(m[1]) : '';
+/**
+ * Everything the board's boot reaches outside its own module.
+ *
+ * The page passes the real globals at the bottom of this file; a test passes a
+ * throwaway document, a synthetic address and a fake socket. Inside `bootHub`
+ * these are destructured under their own names, so the body reads exactly as it
+ * did when they were ambient — see the note on the destructure.
+ */
+export interface HubBootEnv {
+  document: Document;
+  location: BootLocation;
+  history: BootHistory;
+  localStorage: BootStorage;
+  window: BootWindow;
+  connect: (url: string) => FeedbackClient;
 }
 
 /** How long an armed ?walk=1 handoff waits for the board to produce a queue
@@ -141,27 +154,6 @@ function workspaceIdFromPath(): string {
  *  is still looking at it. */
 const WALK_HANDOFF_DEADLINE_MS = 4000;
 
-/**
- * The shareable address of one task: the deep link the app reads at start-up,
- * so the link a person pastes into a message opens the workspace AND the task,
- * and says which workspace it belongs to on its face rather than being an
- * opaque id. Always the canonical bare-path shape — `board-url.ts` owns it —
- * whatever nav page it is copied from, because that is the shape the link-chip
- * renderer resolves to a title.
- */
-function taskUrl(taskId: string): string {
-  return taskShareUrl(location.origin, workspaceIdFromPath(), taskId);
-}
-
-/** The same, for a band — `?goal=`. See `taskUrl`. */
-function goalUrl(goalId: string): string {
-  return goalShareUrl(location.origin, workspaceIdFromPath(), goalId);
-}
-
-function wsUrl(docId: string, type: string): string {
-  const proto = location.protocol === 'https:' ? 'wss' : 'ws';
-  return `${proto}://${location.host}/y/${encodeURIComponent(docId)}?type=${encodeURIComponent(type)}`;
-}
 /** Icons. The four nav glyphs are the approved mockup's (home-pane-mockup-v1);
  *  share and settings are new, for the top-right cluster. The shared
  *  attributes and the mic come from `../icons.ts`, because the mic is mounted
@@ -189,7 +181,12 @@ const NAV_ITEMS: ReadonlyArray<{ nav: HubNav; label: string; icon: string }> = [
 ];
 
 /** Static shell — built once; regions re-render into their containers. */
-function buildShell(root: HTMLElement, name: string, workspaceId: string): void {
+function buildShell(
+  document: Document,
+  root: HTMLElement,
+  name: string,
+  workspaceId: string,
+): void {
   root.innerHTML = `
     <header class="hub-topbar">
       <a href="/" class="back-link" title="All workspaces" aria-label="Back">←</a>
@@ -328,7 +325,46 @@ function buildShell(root: HTMLElement, name: string, workspaceId: string): void 
   doneSelect.value = DEFAULT_DONE_WINDOW;
 }
 
-async function main(): Promise<void> {
+/**
+ * The board's whole boot sequence, as a function of its environment.
+ *
+ * Nothing here runs on import any more: the one call at the bottom of this file
+ * is what starts the page, and a test calls this with its own document, address
+ * and socket instead. The destructure below deliberately re-binds each injected
+ * thing to the name it had as a global — `document`, `location`, `history`,
+ * `localStorage`, `window`, `connect` — so the two thousand lines that follow
+ * are the same lines, and what changed is only where those names come from.
+ */
+export async function bootHub(env: HubBootEnv): Promise<void> {
+  const { document, location, history, localStorage, window, connect } = env;
+
+  function workspaceIdFromPath(): string {
+    const m = location.pathname.match(/\/workspaces\/([^/?#]+)/);
+    return m?.[1] ? decodeURIComponent(m[1]) : '';
+  }
+
+  /**
+   * The shareable address of one task: the deep link the app reads at start-up,
+   * so the link a person pastes into a message opens the workspace AND the task,
+   * and says which workspace it belongs to on its face rather than being an
+   * opaque id. Always the canonical bare-path shape — `board-url.ts` owns it —
+   * whatever nav page it is copied from, because that is the shape the link-chip
+   * renderer resolves to a title.
+   */
+  function taskUrl(taskId: string): string {
+    return taskShareUrl(location.origin, workspaceIdFromPath(), taskId);
+  }
+
+  /** The same, for a band — `?goal=`. See `taskUrl`. */
+  function goalUrl(goalId: string): string {
+    return goalShareUrl(location.origin, workspaceIdFromPath(), goalId);
+  }
+
+  function wsUrl(docId: string, type: string): string {
+    const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+    return `${proto}://${location.host}/y/${encodeURIComponent(docId)}?type=${encodeURIComponent(type)}`;
+  }
+
   // A refused write raises a sign-in prompt wherever it happened. The board's
   // `send()` reports every failure as a toast, and "Couldn't save" is not
   // something a signed-out person can act on. See signin/write-gate.ts.
@@ -425,7 +461,7 @@ async function main(): Promise<void> {
     `/api/workspaces/${encodeURIComponent(workspaceId)}`,
   );
   if (initial) state.info = initial.workspace;
-  buildShell(root, state.info?.name ?? workspaceId, workspaceId);
+  buildShell(document, root, state.info?.name ?? workspaceId, workspaceId);
   // Now that there is a header to sit under. See signin/write-gate.ts.
   if (!writeAccess.canWrite) showSignInBar();
   // The Preact proving island (hidden; owns its own wrapper under root).
@@ -2534,5 +2570,3 @@ async function main(): Promise<void> {
   // A deep link straight to /home needs its payload without a nav tap.
   if (state.pane === 'home') void loadHome();
 }
-
-void main();
