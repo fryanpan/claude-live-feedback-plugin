@@ -39,6 +39,18 @@ const turns: NotesTurn[] = [
   { turn: 2, text: 'I am pretty sure we already have a ticket for that one on the board.' },
 ];
 
+/**
+ * The same speech with the LATER cue said out loud. A request needs it —
+ * "create a task …" is what asks for a row (Bryan, 2026-09-02) — so every
+ * fixture below that expects a request to survive the parse has to speak it,
+ * and `turns` above stays uncued on purpose: it is the control that a
+ * reference still needs no cue at all.
+ */
+const requestTurns: NotesTurn[] = [
+  { turn: 1, text: 'The comment popover still jumps when the doc scrolls underneath it.' },
+  { turn: 2, text: 'Create a task for the navbar strip while you are in there.' },
+];
+
 describe('buildTaskCapturePrompt', () => {
   it('carries the numbered candidates, the transcript, and the JSON contract', () => {
     const { system, user } = buildTaskCapturePrompt({ turns, candidates, docTitle: 'Demo prep' });
@@ -64,7 +76,7 @@ describe('parseTaskCaptureReply', () => {
         { kind: 'request', title: 'Strip overlaps navbar on short screens', actionable: true },
       ],
     });
-    const items = parseTaskCaptureReply(raw, candidates, turns);
+    const items = parseTaskCaptureReply(raw, candidates, requestTurns);
     expect(items).toEqual([
       { kind: 'reference', taskId: 't-pop' },
       { kind: 'request', title: 'Strip overlaps navbar on short screens', actionable: true },
@@ -94,7 +106,7 @@ describe('parseTaskCaptureReply', () => {
         { kind: 'request', title: 'A real new task about the navbar' },
       ],
     });
-    expect(parseTaskCaptureReply(raw, candidates, turns)).toEqual([
+    expect(parseTaskCaptureReply(raw, candidates, requestTurns)).toEqual([
       { kind: 'request', title: 'A real new task about the navbar', actionable: false },
     ]);
   });
@@ -115,14 +127,14 @@ describe('parseTaskCaptureReply', () => {
         { kind: 'request', title: 'strip overlaps NAVBAR' },
       ],
     });
-    expect(parseTaskCaptureReply(raw, candidates, turns)).toHaveLength(2);
+    expect(parseTaskCaptureReply(raw, candidates, requestTurns)).toHaveLength(2);
   });
 
   it('clips a runaway request title at a word boundary', () => {
     const raw = JSON.stringify({
       items: [{ kind: 'request', title: `Fix the ${'very '.repeat(40)}long problem` }],
     });
-    const items = parseTaskCaptureReply(raw, candidates, turns);
+    const items = parseTaskCaptureReply(raw, candidates, requestTurns);
     expect(items).toHaveLength(1);
     const item = items[0];
     if (item?.kind !== 'request') throw new Error('expected a request');
@@ -773,7 +785,7 @@ describe('the overlap window', () => {
 /** Speech that asks for research without ever using the word. */
 const researchTurns: NotesTurn[] = [
   { turn: 7, speaker: 'Priya', text: 'The offline queue keeps replaying the same batch.' },
-  { turn: 8, speaker: 'Priya', text: 'Can somebody go look into the offline queue replay?' },
+  { turn: 8, speaker: 'Priya', text: 'Claude, can you go look into the offline queue replay?' },
 ];
 
 describe('phraseSpokenOnTick', () => {
@@ -998,7 +1010,11 @@ describe("runTaskCapture — a research ask files the pill's Research row", () =
 
 describe('parsing a review ask', () => {
   const spoken: NotesTurn[] = [
-    { turn: 7, speaker: 'Priya', text: 'Ask the team whether we still need the tunnel at all.' },
+    {
+      turn: 7,
+      speaker: 'Priya',
+      text: 'Claude, can you ask the team whether we still need the tunnel at all.',
+    },
   ];
 
   it('keeps a review ask whose question was spoken, with who asked', () => {
@@ -1038,7 +1054,9 @@ describe('parsing a review ask', () => {
   it('an ask that began last tick and ended this one is still spoken', () => {
     // "Ask the team whether" landed on the previous tick; the subject
     // arrives on this one. The overlap is what makes the phrase findable.
-    const prior: NotesTurn[] = [{ turn: 7, speaker: 'Priya', text: 'Ask the team whether we' }];
+    const prior: NotesTurn[] = [
+      { turn: 7, speaker: 'Priya', text: 'Claude, can you ask the team whether we' },
+    ];
     const now: NotesTurn[] = [{ turn: 8, speaker: 'Priya', text: 'still need the tunnel at all.' }];
     const raw = JSON.stringify({
       items: [{ kind: 'review', question: 'whether we still need the tunnel', requester: 'Priya' }],

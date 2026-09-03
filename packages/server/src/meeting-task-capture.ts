@@ -50,6 +50,15 @@
  * A LOOKUP is still the odd one: it only reads, so a wrong one is a link
  * nobody wanted, dropped by the same guards the reference path uses.
  *
+ * AND SINCE 2026-09-02, THE SPEAKER SAYS WHICH KIND OF ASK IT IS. "Claude,
+ * can you …" is an ask for now — research, lookup, review, acted on while
+ * the meeting runs. "create a task …" is an ask for later — a request,
+ * captured and not started. Speech using neither phrasing is a note: it
+ * reaches the composer like any other words and files nothing. The prompt
+ * teaches the convention and `parseTaskCaptureReply` enforces it, so an ask
+ * the model finds without a cue is downgraded rather than acted on
+ * (`meeting-ask-cues.ts`, Bryan's huddle that day).
+ *
  * THE FIFTH INTENT DOES NOT BELONG TO THIS FILE'S SUBJECT AT ALL, AND RIDES
  * HERE ANYWAY. A CORRECTION — "no, I said Thursday" — touches no board row;
  * it fixes a note. It is extracted here for the one reason the decision gives:
@@ -231,6 +240,7 @@ export const MAX_CAPTURE_CANDIDATES = 40;
  */
 export {
   captureWindow,
+  cueSpokenOnTick,
   normalizedTitle,
   OVERLAP_MAX_CHARS,
   OVERLAP_MAX_TURNS,
@@ -248,6 +258,7 @@ export {
  * stays here.
  */
 export {
+  ASK_CUE_PROMPT_RULE,
   buildTaskCapturePrompt,
   CORRECTION_PROMPT_RULE,
   LOOKUP_PROMPT_RULE,
