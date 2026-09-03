@@ -1439,25 +1439,20 @@ export const TOOL_LIST: ListToolsResult = {
       },
     },
     {
-      name: 'park_task',
+      name: 'block_task',
       description:
-        'Defer a task: "not now". Moves the row to triage and posts a comment recording why and when to come back to it. Reach for it instead of moving the row to in-progress or inventing a dependency to quiet the ready-work nudge — both make the board say something untrue. Write a reason: triage says a decision was made, and the comment is the only place that says what it was waiting for. There is no un-park — when the row is ready again, move it on with task_transition like any other triage row.',
+        'Say what a task is waiting for: name the ticket or tickets that have to close first. The row reads as Blocked on the board from that moment — the edge IS the state, there is no status to set — it leaves next_tasks and the stall check, and it returns to todo by itself when the last blocker closes, with a note on its Activity tab saying what cleared it. Adds to whatever the row already waits on; remove an edge with set_task_dependencies. This replaces park_task: "not now" belongs to whatever the work is waiting for, and triage is for rows nobody has vetted yet. A row waiting on a PERSON is not blocked — leave it in-progress and file the ask with add_review_item.',
       inputSchema: {
         type: 'object',
         properties: {
           taskId: { type: 'string' },
-          until: {
+          blockedBy: {
             description:
-              'When to come back to it, if you know. An epoch-ms number, or a date string ("2026-09-02", or a full ISO timestamp for a specific hour — a bare date is read as UTC midnight). Omit it for "not now, and I do not know when" — the comment says so rather than inventing a date. `null` is the retired un-park: accepted, and it does nothing.',
-            type: ['number', 'string', 'null'],
-          },
-          reason: {
-            type: 'string',
-            description:
-              'Why, in one line — e.g. "waiting on the index rebuild". It goes in the comment, which is the record a reader argues with weeks later.',
+              'The task id, or ids, this row waits on. Each must be a task on the same board; an unknown id is refused rather than recorded, because a dangling edge blocks nothing and says it does.',
+            oneOf: [{ type: 'string' }, { type: 'array', items: { type: 'string' } }],
           },
         },
-        required: ['taskId'],
+        required: ['taskId', 'blockedBy'],
       },
     },
     {
