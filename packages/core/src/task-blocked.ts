@@ -24,11 +24,18 @@
  *  - `openBlockerIds` — which tickets is this one waiting on? Read by the
  *    queue (a row waiting on anything is not work you can pick up) and by the
  *    panel (the blocking tickets it lists in Related Links).
- *  - `isBlocked` — does the board draw this row as blocked? Only a `todo` row
- *    ever does. `in-progress` means somebody is on it anyway, `done` means it
- *    happened, and `triage` means nobody has agreed it is work — each of
- *    those is a louder fact about the row than what it waits on, and each
- *    already owns the row's mark.
+ *  - `isBlocked` — does the board draw this row as blocked? A `todo` or an
+ *    `in-progress` row does. `done` means it happened and `triage` means
+ *    nobody has agreed it is work yet: each of those is a louder fact about
+ *    the row than what it waits on, and each already owns the row's mark.
+ *
+ * `in-progress` is in that list because the queue has always been the third
+ * reader and it never agreed with a `todo`-only rule. `next_tasks` drops any
+ * row waiting on an open ticket, in-progress ones included — so a rule that
+ * showed blocked on `todo` alone let somebody block a row they were working
+ * on, watch it leave the ready queue, and see nothing anywhere saying why
+ * (found in review, 2026-09-03). One rule now: whatever leaves the queue for
+ * waiting says on both surfaces that it is waiting.
  */
 
 /** The two fields a blocked reading needs off a row, from any of the three
@@ -73,13 +80,23 @@ export function openBlockerIds(
   return out;
 }
 
+/**
+ * Whether a row of this status is ever DRAWN as blocked — the one place the
+ * rule lives, so the board, the panel and the queue cannot drift apart. The
+ * queue's own selection (`task-queue.ts`) already drops `done` and `triage`
+ * before it asks, which is the same two statuses this refuses.
+ */
+export function blockableStatus(status: string): boolean {
+  return status === 'todo' || status === 'in-progress';
+}
+
 /** True when the board should draw this row as blocked — see the module note
- *  for why `todo` is the only status that ever does. */
+ *  for which statuses can be, and why. */
 export function isBlocked(
   row: BlockableRow,
   lookup: (taskId: string) => BlockerLookupRow | undefined,
 ): boolean {
-  if (row.status !== 'todo') return false;
+  if (!blockableStatus(row.status)) return false;
   return openBlockerIds(row, lookup).length > 0;
 }
 

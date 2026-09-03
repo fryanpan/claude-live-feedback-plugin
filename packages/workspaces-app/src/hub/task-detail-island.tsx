@@ -830,7 +830,6 @@ function ActivityTab(props: { task: HubTask; handlers: DetailHandlers; hidden: b
   const { task, handlers, hidden } = props;
   const now = handlers.now ?? Date.now();
   const historyRef = useRef<HTMLUListElement | null>(null);
-  const metaRef = useRef<HTMLDListElement | null>(null);
   const linksRef = useRef<HTMLDivElement | null>(null);
   const feed = feedOf(task, handlers.activity);
   const hasFeed = feed.length > 0;
@@ -897,19 +896,6 @@ function ActivityTab(props: { task: HubTask; handlers: DetailHandlers; hidden: b
     setOpen((o) => (o ? { ...o, thread: t } : o));
     return true;
   };
-
-  // What is left of the old definition list: reference material. `Goal` and
-  // `Due` are not repeated here — they are in the fields row above.
-  const meta: [string, string][] = task.after.length > 0 ? [['After', task.after.join(', ')]] : [];
-  useFill(metaRef as RefObject<HTMLElement>, () =>
-    meta.flatMap(([k, v]) => {
-      const dt = document.createElement('dt');
-      dt.textContent = k;
-      const dd = document.createElement('dd');
-      dd.textContent = v;
-      return [dt, dd];
-    }),
-  );
 
   const links = renderTaskLinks(task, handlers.workspaceId);
   useFill(linksRef as RefObject<HTMLElement>, () => [
@@ -1000,7 +986,6 @@ function ActivityTab(props: { task: HubTask; handlers: DetailHandlers; hidden: b
           <blockquote class="hub-detail-quote">{task.quote}</blockquote>
         </details>
       )}
-      {meta.length > 0 && <dl ref={metaRef} class="hub-detail-meta" />}
       {links !== null && <div ref={linksRef} class="hub-detail-links" />}
       <p class="hub-detail-body-link">
         {/* A secondary way in, not the way to edit: the same room in the full

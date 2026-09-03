@@ -146,12 +146,29 @@ describe('the ring and the word', () => {
     expect(ringOf(waiting.id)).toBe('blocked');
   });
 
-  it('stays a todo reading: a row already in progress shows its own status', () => {
+  it('marks an IN-PROGRESS row too — the queue drops it, so the board says why', () => {
     const gate = task({ title: 'Ship the renderer' });
     const running = task({ title: 'Wire the panel', status: 'in-progress', after: [gate.id] });
     paint([gate, running]);
+    expect(ringOf(running.id)).toBe('blocked');
+    expect(noteOf(running.id)).toBe('blocked');
+    // Positive control: the same in-progress row with its blocker closed
+    // keeps its own mark, so the ring above is the edge and not the status.
+    paint([{ ...gate, status: 'done' }, running]);
     expect(ringOf(running.id)).toBe('in-progress');
     expect(noteOf(running.id)).toBe('');
+  });
+
+  it('a done or triage row keeps its own mark, whatever it waits on', () => {
+    const gate = task({ title: 'Ship the renderer' });
+    const finished = task({ title: 'Wire the panel', status: 'done', after: [gate.id] });
+    const unvetted = task({ title: 'Token spend chip', status: 'triage', after: [gate.id] });
+    paint([gate, finished, unvetted]);
+    expect(ringOf(finished.id)).toBe('done');
+    expect(noteOf(finished.id)).toBe('');
+    expect(ringOf(unvetted.id)).toBe('triage');
+    // Triage keeps the slot it already owned rather than being overwritten.
+    expect(noteOf(unvetted.id)).toBe('triage');
   });
 
   it('shares the one slot with triage, and leaves the due date beside it', () => {

@@ -316,15 +316,35 @@ export function createHubActions(deps: HubActionDeps) {
   }
 
   /**
+   * What to say when a Related Links write is refused.
+   *
+   * Two refusals carry more than "it failed" and both were being thrown away:
+   * a 401 is the SESSION, not the link (the row is fine, the reader is signed
+   * out, and telling them the link was bad sends them to fix the wrong thing),
+   * and a cycle refusal arrives with the ring already named, which no generic
+   * sentence can reconstruct.
+   */
+  function addFailureText(
+    res: { status: number; data: Record<string, unknown> | null },
+    fallback: string,
+  ): string {
+    if (res.status === 401) return 'Sign in again to change this board';
+    const said = typeof res.data?.message === 'string' ? res.data.message : '';
+    return said !== '' ? said : fallback;
+  }
+
+  /**
    * Grow Related Links from a pasted address.
    *
    * What the URL NAMES decides the write, which is the whole reason there is
    * one control rather than three:
    *
-   *  - a **ticket or goal on this workspace** becomes an `after` edge, which
-   *    is how a blocker gets set at all. Blocked is derived from those edges
-   *    and no status control offers it, so this is the panel's only door to
-   *    it. It goes through the same additive route `block_task` uses.
+   *  - a **ticket on this workspace** becomes an `after` edge, which is how a
+   *    blocker gets set at all. Blocked is derived from those edges and no
+   *    status control offers it, so this is the panel's only door to it. It
+   *    goes through the same additive route `block_task` uses. A GOAL link is
+   *    not a ticket — a ticket waits on tickets — so it falls to the last arm
+   *    and is kept as a plain address.
    *  - a **doc or mockup** becomes a doc ref, and the entry resolves to the
    *    doc's title like every other Related Link.
    *  - **anything else** is kept verbatim as a `url` ref and shown as itself.
@@ -333,8 +353,15 @@ export function createHubActions(deps: HubActionDeps) {
    */
   async function addRelatedLink(task: HubTask, url: string): Promise<void> {
     const parsed = parseWorkspaceLink(url);
-    if (parsed?.kind === 'task' || parsed?.kind === 'goal') {
-      const blockedBy = parsed.kind === 'task' ? parsed.taskId : parsed.goalId;
+    // A TICKET only. A goal link used to come here too and could never
+    // succeed: goal rows are not in the workspace's task map, so the store
+    // answered `unknown-after` and the reader got "Adding the blocking ticket
+    // failed" for a link that was never going to be a blocker. A ticket waits
+    // on tickets (the owner's rule, upheld by the store); a goal link is
+    // "anything else" and falls through to the plain-URL arm below, which is
+    // what the ticket asks for.
+    if (parsed?.kind === 'task') {
+      const blockedBy = parsed.taskId;
       // A row cannot wait on itself, and the server would refuse it — but the
       // toast for a self-link should say what happened rather than repeat a
       // validation message about ids.
@@ -346,7 +373,7 @@ export function createHubActions(deps: HubActionDeps) {
         blockedBy: [blockedBy],
         author,
       });
-      if (!res.ok) showToast('Adding the blocking ticket failed');
+      if (!res.ok) showToast(addFailureText(res, 'Adding the blocking ticket failed'));
       return;
     }
     const ref =
@@ -357,8 +384,13 @@ export function createHubActions(deps: HubActionDeps) {
       ref,
       author,
     });
-    if (!res.ok)
-      showToast(res.status === 400 ? 'That is not a link we can store' : 'Adding the link failed');
+    if (!res.ok) {
+      showToast(
+        res.status === 400
+          ? 'That is not a link we can store'
+          : addFailureText(res, 'Adding the link failed'),
+      );
+    }
   }
 
   /**

@@ -3659,15 +3659,21 @@ body.hub-body {
   height: 15px;
   border-width: 1.5px;
 }
-/* Take this entry off. Quiet until the row is hovered or the button itself is
-   focused, like every other secondary control on the panel — a permanent
-   column of × on a list you read by skimming is noise. It stays reachable by
-   keyboard at all times: focus is what reveals it. */
+/* Take this entry off. ALWAYS visible, at every width — it was hover-only
+   until 2026-09-03, which made it a 32px invisible target on the iPad this
+   board is mainly read on: a hardware keyboard is attached there but a finger
+   is the pointer, so there is no hover to reveal anything with
+   (design-mobile.md, "A hardware keyboard is attached"). A width query cannot
+   tell that iPad from a laptop of the same width, and per-device truth is not
+   a media query in this project, so the size below rides a POINTER query
+   instead — what the reader is pointing with is the thing actually being
+   asked. Muted, so a column of × on a list read by skimming stays quiet
+   without being absent. */
 .hub-related-link-x {
   margin-left: auto;
   flex: none;
-  width: 32px;
-  height: 32px;
+  width: 36px;
+  height: 36px;
   padding: 0;
   border: none;
   border-radius: var(--radius);
@@ -3677,13 +3683,9 @@ body.hub-body {
   font-size: 15px;
   line-height: 1;
   cursor: pointer;
-  opacity: 0;
 }
-.hub-related-links-list li:hover .hub-related-link-x,
+.hub-related-link-x:hover,
 .hub-related-link-x:focus-visible {
-  opacity: 1;
-}
-.hub-related-link-x:hover {
   background: var(--bg-hover);
   color: var(--fg);
 }
@@ -3726,6 +3728,23 @@ body.hub-body {
   color: var(--fg);
   font: inherit;
   font-size: 14px;
+}
+/* A finger is pointing: every Related Links control takes the 44px floor from
+   design-mobile.md. Keyed on the POINTER, not the viewport, because the iPad
+   that needs this is 1180px wide and sits in the same width band as a laptop
+   that does not. */
+@media (hover: none), (pointer: coarse) {
+  .hub-related-links-list li {
+    min-height: 44px;
+  }
+  .hub-related-link-x {
+    width: 44px;
+    height: 44px;
+  }
+  .hub-related-add-btn,
+  .hub-related-add-input {
+    min-height: 44px;
+  }
 }
 /* Link chips: what a `url` ref is FOR. Wraps rather than scrolls — the
    detail panel has vertical room and a hidden link is the bug this
@@ -5209,22 +5228,6 @@ a.hub-link-chip:hover {
   }
   .hub-band-tasks::before {
     left: 12px;
-  }
-  /* Related Links on a touch tier: every control takes the 44px floor from
-     design-mobile.md, and the x stops hiding — there is no hover to reveal it
-     with, so a control that only appears on hover is a control this reader
-     does not have. */
-  .hub-related-links-list li {
-    min-height: 44px;
-  }
-  .hub-related-link-x {
-    width: 44px;
-    height: 44px;
-    opacity: 1;
-  }
-  .hub-related-add-btn,
-  .hub-related-add-input {
-    min-height: 44px;
   }
 }
 
