@@ -23,6 +23,7 @@ import {
   formatEffortSeconds,
   ratioForGoal,
 } from '@feedback/core/goal-effort';
+import { blockableStatus } from '@feedback/core/task-blocked';
 import { renderCommentMarkdown } from '../comment-markdown.ts';
 import { cachedLinkTitle, fetchLinkInfos } from '../link-titles.ts';
 import {
@@ -628,6 +629,12 @@ export const BODY_LIVE_CLASS = 'hub-detail-body-live';
 export interface RelatedDocLink {
   docId: string;
   held?: boolean;
+  /** This entry is the row's ORIGIN — the doc or thread the task was promoted
+   *  out of — rather than a tie in `links`. It carries no x: origin is where
+   *  the row came from, a fact about its history, and `DELETE /links` has
+   *  nothing to take off (it answers 200 changed:false and the entry stays,
+   *  which is the silent no-op this flag exists to prevent). */
+  origin?: boolean;
 }
 
 /** One ticket this row is waiting on: an open `after` edge, resolved against
@@ -708,7 +715,7 @@ export function relatedDocLinks(row: {
       ref.docId !== ''
     ) {
       seen.add(ref.docId);
-      out.push({ docId: ref.docId, held: row.planHold?.docId === ref.docId });
+      out.push({ docId: ref.docId, held: row.planHold?.docId === ref.docId, origin: true });
     }
   }
   for (const raw of row.links ?? []) {
@@ -801,7 +808,8 @@ export function renderRelatedLinks(
       held.textContent = 'Draft — held until the plan is approved';
       li.append(held);
     }
-    remove(li, { kind: 'doc', docId: link.docId }, 'Remove this link');
+    // No x on the origin — see `RelatedDocLink.origin`.
+    if (!link.origin) remove(li, { kind: 'doc', docId: link.docId }, 'Remove this link');
     list.append(li);
     anchors.push(a);
   }
@@ -875,7 +883,7 @@ export function detailFields(
   // the row comes from — an open `after` edge — and the picker beside it still
   // reads "To do", because blocked is not a status and the way out of it is
   // closing the ticket this one waits on.
-  const blocked = task.status === 'todo' && (handlers.blockers?.length ?? 0) > 0;
+  const blocked = blockableStatus(task.status) && (handlers.blockers?.length ?? 0) > 0;
   mark.className = `hub-status-mark hub-status-mark-${blocked ? 'blocked' : task.status}`;
   mark.setAttribute('aria-hidden', 'true');
   const status = document.createElement('select');

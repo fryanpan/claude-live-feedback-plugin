@@ -17,7 +17,7 @@ import {
   formatGoalEffortSeconds,
   summarizeGoalEffort,
 } from '@feedback/core/goal-effort';
-import { blockerLookup, openBlockerIds } from '@feedback/core/task-blocked';
+import { blockableStatus, blockerLookup, openBlockerIds } from '@feedback/core/task-blocked';
 import {
   type DecisionOption,
   TASK_STATUSES,
@@ -696,8 +696,9 @@ export function boardSections(goals: HubGoal[], tasks: HubTask[], f: BoardFilter
  * Blocked is derived, never stored — the same derivation the server dispatch
  * reads use, imported from core rather than written twice, because a board
  * that disagreed with `next_tasks` about which rows are waiting would be
- * worse than a board that said nothing. A row is Blocked when it is `todo`
- * and at least one ticket in its `after` list is neither done nor archived.
+ * worse than a board that said nothing. A row is Blocked when its status can
+ * be (`todo` or `in-progress` — `blockableStatus` holds that rule) and at
+ * least one ticket in its `after` list is neither done nor archived.
  *
  * Ids naming a task this board has never seen are skipped rather than
  * treated as open: a `done` row that has aged out of the reader's done-window
@@ -708,7 +709,7 @@ export function boardBlockers(tasks: readonly HubTask[]): Map<string, string[]> 
   const lookup = blockerLookup(tasks);
   const out = new Map<string, string[]>();
   for (const task of tasks) {
-    if (task.status !== 'todo') continue;
+    if (!blockableStatus(task.status)) continue;
     if (isTaskArchived(task)) continue;
     const open = openBlockerIds(task, lookup);
     if (open.length > 0) out.set(task.id, open);

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { blockerLookup, isBlocked, openBlockerIds } from './task-blocked.ts';
+import { blockableStatus, blockerLookup, isBlocked, openBlockerIds } from './task-blocked.ts';
 
 interface Row {
   id: string;
@@ -58,13 +58,29 @@ describe('isBlocked', () => {
     expect(isBlocked(row, board({ ...dep, status: 'done' }, row))).toBe(false);
   });
 
-  it('only a todo row draws as blocked — every louder status keeps its own mark', () => {
+  it('an in-progress row draws as blocked too — the queue drops it either way', () => {
     const dep = { id: 't-dep', status: 'todo' };
-    for (const status of ['triage', 'in-progress', 'done']) {
+    const row = { id: 't-1', status: 'in-progress', after: [dep.id] };
+    expect(isBlocked(row, board(dep, row))).toBe(true);
+  });
+
+  it('done and triage keep their own mark — each is a louder fact than waiting', () => {
+    const dep = { id: 't-dep', status: 'todo' };
+    for (const status of ['triage', 'done']) {
       const row = { id: 't-1', status, after: [dep.id] };
       expect(isBlocked(row, board(dep, row))).toBe(false);
       // …and the edge is still reported, which is what the queue reads.
       expect(openBlockerIds(row, board(dep, row))).toEqual([dep.id]);
     }
+  });
+
+  it('blockableStatus is the whole rule, and says so for every status', () => {
+    expect(blockableStatus('todo')).toBe(true);
+    expect(blockableStatus('in-progress')).toBe(true);
+    expect(blockableStatus('triage')).toBe(false);
+    expect(blockableStatus('done')).toBe(false);
+    // A status this board has never heard of is not drawn as blocked: the
+    // rule names what it covers rather than excluding what it does not.
+    expect(blockableStatus('parked')).toBe(false);
   });
 });

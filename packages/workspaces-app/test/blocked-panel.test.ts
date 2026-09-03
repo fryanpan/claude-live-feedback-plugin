@@ -13,10 +13,11 @@
  *
  * Fixtures are synthetic.
  */
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { CHORES_ID, type HubTask } from '../src/hub/hub-board-model.ts';
 import { type DetailHandlers, type RelatedEntry } from '../src/hub/hub-detail-render.ts';
 import { _resetLinkTitlesForTest, primeLinkTitle } from '../src/link-titles.ts';
+import { IPAD, PHONE, installSheets, setViewport, styleOf } from './css-harness.ts';
 import { disposeTaskDetail, renderTaskDetail } from './support/task-detail.ts';
 
 const NOW = 1_700_000_000_000;
@@ -58,6 +59,7 @@ beforeEach(() => {
   // flight when happy-dom tears the window down — an aborted fetch prints a
   // stack that looks like a failure and is not one.
   primeLinkTitle('/workspaces/w-test/docs/d-plan', 'Sprint plan', null);
+  primeLinkTitle('/workspaces/w-test/docs/d-notes', 'Design notes', null);
   root = document.createElement('div');
   document.body.replaceChildren(root);
 });
@@ -104,13 +106,36 @@ describe('blocking tickets are Related Links entries', () => {
     expect(rows[1]?.querySelector('.hub-status-mark-blocked')).toBeNull();
   });
 
+  it('draws no x on the ORIGIN doc — there is nothing there to unlink', () => {
+    renderTaskDetail(
+      root,
+      task({
+        origin: { kind: 'doc', docId: 'd-plan' },
+        links: [{ kind: 'doc', docId: 'd-notes' }],
+      }),
+      handlers({ onRelatedRemove: vi.fn() }),
+    );
+    const rows = items();
+    expect(rows).toHaveLength(2);
+    // The origin is where the row came from. `DELETE /links` filters `links`,
+    // which never held it, so the button answered 200 changed:false and the
+    // entry stayed — a click that did nothing and said nothing.
+    expect(rows[0]?.querySelector('.hub-related-link-x')).toBeNull();
+    // Positive control: a doc in `links`, on the same panel and the same
+    // paint, does carry one — so the absence above is the origin and not a
+    // missing handler.
+    expect(rows[1]?.querySelector('.hub-related-link-x')).toBeTruthy();
+  });
+
   it('reports which entry the x was pressed on, for each of the three kinds', () => {
     const onRelatedRemove = vi.fn();
     renderTaskDetail(
       root,
       task({
-        origin: { kind: 'doc', docId: 'd-plan' },
-        links: [{ kind: 'url', url: 'https://example.invalid/spec' }],
+        links: [
+          { kind: 'doc', docId: 'd-plan' },
+          { kind: 'url', url: 'https://example.invalid/spec' },
+        ],
       }),
       handlers({
         blockers: [{ taskId: 't-gate', title: 'Split the huddle renderer' }],
@@ -130,14 +155,14 @@ describe('blocking tickets are Related Links entries', () => {
   it('draws no x at all on a surface that cannot remove — the goal panel', () => {
     renderTaskDetail(
       root,
-      task({ origin: { kind: 'doc', docId: 'd-plan' } }),
+      task({ links: [{ kind: 'doc', docId: 'd-plan' }] }),
       handlers({ blockers: [{ taskId: 't-gate', title: 'Gate' }] }),
     );
     expect(root.querySelector('.hub-related-link-x')).toBeNull();
     // Positive control: the same render WITH the handler draws them.
     renderTaskDetail(
       root,
-      task({ origin: { kind: 'doc', docId: 'd-plan' } }),
+      task({ links: [{ kind: 'doc', docId: 'd-plan' }] }),
       handlers({ blockers: [{ taskId: 't-gate', title: 'Gate' }], onRelatedRemove: vi.fn() }),
     );
     expect(root.querySelectorAll('.hub-related-link-x')).toHaveLength(2);
@@ -158,6 +183,49 @@ describe('blocking tickets are Related Links entries', () => {
     // No title to resolve to, so the address itself — not a guess at one.
     expect(links[1]?.textContent).toBe('https://example.invalid/spec');
     expect(links[1]?.getAttribute('href')).toBe('https://example.invalid/spec');
+  });
+
+  it('lists them on an IN-PROGRESS row, and marks it blocked', () => {
+    renderTaskDetail(
+      root,
+      task({ status: 'in-progress' }),
+      handlers({
+        blockers: [{ taskId: 't-gate', title: 'Split the huddle renderer' }],
+        onRelatedRemove: vi.fn(),
+      }),
+    );
+    expect(items()).toHaveLength(1);
+    expect(items()[0]?.textContent).toBe('Split the huddle renderer×');
+    const mark = root.querySelector('.hub-detail-fields .hub-status-mark');
+    expect(mark?.className).toContain('hub-status-mark-blocked');
+    // Positive control: the same in-progress row with nothing holding it
+    // keeps its own mark, so the ring above is the edge and not the status.
+    renderTaskDetail(root, task({ status: 'in-progress' }), handlers({ blockers: [] }));
+    expect(root.querySelector('.hub-detail-fields .hub-status-mark')?.className).toContain(
+      'hub-status-mark-in-progress',
+    );
+  });
+
+  it('never prints a raw task id — the blocker is a titled link or nothing', () => {
+    renderTaskDetail(
+      root,
+      task({ after: ['t-gate'] }),
+      handlers({
+        blockers: [{ taskId: 't-gate', title: 'Split the huddle renderer' }],
+        onRelatedRemove: vi.fn(),
+      }),
+    );
+    // The panel used to carry `After: t-gate` as a meta row as well, which was
+    // the same relationship told twice — the second time as an id a reader
+    // cannot follow, and one that kept printing after the blocker closed.
+    // Control that this assertion can fail: the Activity tab that used to
+    // carry the meta row IS rendered here (hidden, not absent), so its text is
+    // inside `root.textContent` and a surviving id would be seen.
+    expect(root.querySelector('.hub-detail-tabpanel-activity')).toBeTruthy();
+    expect(root.textContent ?? '').toContain('the first move, edit or note lands here');
+    expect(root.textContent ?? '').not.toContain('t-gate');
+    // …and the relationship IS on the panel, as a title.
+    expect(root.textContent ?? '').toContain('Split the huddle renderer');
   });
 
   it('offers no Blocked status anywhere on the panel', () => {
@@ -240,5 +308,66 @@ describe('the add box', () => {
     // And a row with nothing to show still renders no empty section.
     renderTaskDetail(root, task(), handlers());
     expect(root.querySelector('.hub-related-links-k')).toBeNull();
+  });
+});
+
+/**
+ * The x, as a reader on the owner's own device sees it.
+ *
+ * This is a COMPUTED-STYLE fact, not a DOM one: the button was in the markup
+ * at every width, and every DOM assertion above passed, while at 1180 it was
+ * `opacity: 0` and 32px — invisible and under the tap floor on the iPad the
+ * board is mainly read on, which has a hardware keyboard but no hover
+ * (found in review, 2026-09-03).
+ */
+describe('the x can be seen and hit', () => {
+  let sheets = () => {};
+  beforeEach(() => {
+    sheets = installSheets('tokens.css', 'hub.css', 'styles.css');
+  });
+  afterEach(() => {
+    sheets();
+  });
+
+  function paintOne(): HTMLElement {
+    renderTaskDetail(
+      root,
+      task({}),
+      handlers({
+        blockers: [{ taskId: 't-gate', title: 'Split the huddle renderer' }],
+        onRelatedRemove: vi.fn(),
+      }),
+    );
+    const x = root.querySelector<HTMLElement>('.hub-related-link-x');
+    if (!x) throw new Error('no x');
+    return x;
+  }
+
+  it('is visible without hovering, at the tablet width and at the phone one', () => {
+    for (const vp of [IPAD, PHONE]) {
+      setViewport(vp);
+      const x = paintOne();
+      // Positive control FIRST: a hidden-until-hover control from the same
+      // stylesheet, in the same document, reads 0 here. Without it, "the x is
+      // not hidden" would pass just as well on a harness that cannot resolve
+      // opacity at all — which is what this assertion looked like when the
+      // rule was simply deleted.
+      const hidden = document.createElement('button');
+      hidden.className = 'hub-drag-handle';
+      root.append(hidden);
+      expect(styleOf(hidden).opacity, `${vp.width}px control`).toBe('0');
+      expect(styleOf(x).opacity, `${vp.width}px`).not.toBe('0');
+      hidden.remove();
+    }
+  });
+
+  it('clears the 36px tap floor at the tablet width', () => {
+    setViewport(IPAD);
+    const style = styleOf(paintOne());
+    expect(style.width).toBe('36px');
+    expect(style.height).toBe('36px');
+    // The 44px bump rides `(hover: none), (pointer: coarse)`, which happy-dom
+    // resolves against the viewport rather than the pointer, so it cannot be
+    // asserted here. It is measured with touch emulation in the headless pass.
   });
 });

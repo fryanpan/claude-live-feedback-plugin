@@ -1441,7 +1441,7 @@ export const TOOL_LIST: ListToolsResult = {
     {
       name: 'block_task',
       description:
-        'Say what a task is waiting for: name the ticket or tickets that have to close first. The row reads as Blocked on the board from that moment — the edge IS the state, there is no status to set — it leaves next_tasks and the stall check, and it returns to todo by itself when the last blocker closes, with a note on its Activity tab saying what cleared it. Adds to whatever the row already waits on; remove an edge with set_task_dependencies. This replaces park_task: "not now" belongs to whatever the work is waiting for, and triage is for rows nobody has vetted yet. A row waiting on a PERSON is not blocked — leave it in-progress and file the ask with add_review_item.',
+        'Say what a task is waiting for: name the ticket or tickets that have to close first. The row reads as Blocked on the board from that moment — the edge IS the state, there is no status to set — it leaves next_tasks and the stall check, and it comes free by itself when the last blocker closes, with a note on its Activity tab saying what cleared it. A todo row and an in-progress row both read as Blocked; blocking one you are already working on is legitimate and says so on the board rather than silently dropping it from the queue. Adds to whatever the row already waits on; remove an edge with set_task_dependencies. This replaces park_task: "not now" belongs to whatever the work is waiting for, and triage is for rows nobody has vetted yet. A row waiting on a PERSON is not blocked — leave it in-progress and file the ask with add_review_item.',
       inputSchema: {
         type: 'object',
         properties: {
