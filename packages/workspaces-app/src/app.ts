@@ -1,4 +1,11 @@
-import { type User, connect, escapeHtml, readDocMeta, suggestOps } from '@feedback/core';
+import {
+  type FeedbackClient,
+  type User,
+  escapeHtml,
+  readDocMeta,
+  suggestOps,
+} from '@feedback/core';
+import type { BootLocation, BootStorage, BootWindow } from './boot-env.ts';
 import { mountCode } from './code/code-app.ts';
 import { mountCommentHints } from './comment-hints.ts';
 import { saveStateView, settlePending, watchConnection } from './connection-state.ts';
@@ -64,9 +71,6 @@ import { watchTaskLinkStatuses } from './task-link-chips.ts';
 import { threadCards } from './thread-morph.ts';
 import { renderWorkspaceTree } from './workspace-tree.ts';
 
-const DEFAULT_WS_PATH = (docId: string, type: string) =>
-  `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/y/${encodeURIComponent(docId)}?type=${encodeURIComponent(type)}`;
-
 interface Selection {
   start: Uint8Array;
   end: Uint8Array;
@@ -78,49 +82,75 @@ interface LegacyDocs {
 }
 
 /**
- * Wire the topbar doc-switcher dropdown ONCE (shell-level, doc-independent).
- * The dropdown's CONTENTS are repopulated per navigation by the sidebar
- * renderers; only the open/close behaviour lives here.
+ * Everything the document editor's boot reaches outside its own module.
+ *
+ * The page passes the real globals at the bottom of this file; a test passes a
+ * throwaway document, a synthetic address, a Map-backed store and a fake
+ * socket. `mountMarkdown` below is NOT part of this: it is a per-document mount
+ * the router runs, and it keeps reading the ambient DOM it renders into.
  */
-function wireDocSwitcher(): void {
-  const docMenu = document.getElementById('doc-menu');
-  const docSwitcher = document.getElementById('doc-switcher') as HTMLButtonElement | null;
-  if (!docSwitcher || !docMenu) return;
-  const close = () => {
-    docMenu.classList.add('hidden');
-    docMenu.setAttribute('aria-hidden', 'true');
-    docSwitcher.setAttribute('aria-expanded', 'false');
-  };
-  docSwitcher.addEventListener('click', (ev) => {
-    if (!document.body.classList.contains('has-set')) return;
-    ev.stopPropagation();
-    const isOpen = !docMenu.classList.contains('hidden');
-    docMenu.classList.toggle('hidden', isOpen);
-    docMenu.setAttribute('aria-hidden', String(isOpen));
-    docSwitcher.setAttribute('aria-expanded', String(!isOpen));
-  });
-  document.addEventListener('click', (ev) => {
-    if (docMenu.classList.contains('hidden')) return;
-    if (!docMenu.contains(ev.target as Node) && !docSwitcher.contains(ev.target as Node)) close();
-  });
-  document.addEventListener('keydown', (ev) => {
-    if (ev.key === 'Escape' && !docMenu.classList.contains('hidden')) close();
-  });
-  // Auto-close on scroll. The dropdown overlays the doc, and on mobile the
-  // user reaching the content is the strongest "I'm done with the nav" signal.
-  const closeOnScroll = () => {
-    if (!docMenu.classList.contains('hidden')) close();
-  };
-  document.getElementById('editor')?.addEventListener('scroll', closeOnScroll, { passive: true });
-  window.addEventListener('scroll', closeOnScroll, { passive: true });
+export interface AppBootEnv {
+  document: Document;
+  location: BootLocation;
+  localStorage: BootStorage;
+  window: BootWindow;
+  connect: (url: string) => FeedbackClient;
 }
 
 /**
  * One-time app bootstrap: the persistent shell (keyboard inset, doc-switcher)
  * plus the router. Everything document-specific is a per-doc mount the router
  * runs; navigation swaps mounts in place with no reload.
+ *
+ * Nothing here runs on import any more — the one call at the bottom of this
+ * file starts the page. The destructure re-binds each injected thing to the
+ * name it had as a global, so the sequence reads as it did and what changed is
+ * only where those names come from.
  */
-async function main(): Promise<void> {
+export async function bootApp(env: AppBootEnv): Promise<void> {
+  const { document, location, localStorage, window, connect } = env;
+
+  const DEFAULT_WS_PATH = (docId: string, type: string) =>
+    `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/y/${encodeURIComponent(docId)}?type=${encodeURIComponent(type)}`;
+
+  /**
+   * Wire the topbar doc-switcher dropdown ONCE (shell-level, doc-independent).
+   * The dropdown's CONTENTS are repopulated per navigation by the sidebar
+   * renderers; only the open/close behaviour lives here.
+   */
+  function wireDocSwitcher(): void {
+    const docMenu = document.getElementById('doc-menu');
+    const docSwitcher = document.getElementById('doc-switcher') as HTMLButtonElement | null;
+    if (!docSwitcher || !docMenu) return;
+    const close = () => {
+      docMenu.classList.add('hidden');
+      docMenu.setAttribute('aria-hidden', 'true');
+      docSwitcher.setAttribute('aria-expanded', 'false');
+    };
+    docSwitcher.addEventListener('click', (ev) => {
+      if (!document.body.classList.contains('has-set')) return;
+      ev.stopPropagation();
+      const isOpen = !docMenu.classList.contains('hidden');
+      docMenu.classList.toggle('hidden', isOpen);
+      docMenu.setAttribute('aria-hidden', String(isOpen));
+      docSwitcher.setAttribute('aria-expanded', String(!isOpen));
+    });
+    document.addEventListener('click', (ev) => {
+      if (docMenu.classList.contains('hidden')) return;
+      if (!docMenu.contains(ev.target as Node) && !docSwitcher.contains(ev.target as Node)) close();
+    });
+    document.addEventListener('keydown', (ev) => {
+      if (ev.key === 'Escape' && !docMenu.classList.contains('hidden')) close();
+    });
+    // Auto-close on scroll. The dropdown overlays the doc, and on mobile the
+    // user reaching the content is the strongest "I'm done with the nav" signal.
+    const closeOnScroll = () => {
+      if (!docMenu.classList.contains('hidden')) close();
+    };
+    document.getElementById('editor')?.addEventListener('scroll', closeOnScroll, { passive: true });
+    window.addEventListener('scroll', closeOnScroll, { passive: true });
+  }
+
   // Before anything can write: a refused write raises a sign-in prompt
   // wherever it happened, rather than a "try again" this person can never
   // satisfy. See signin/write-gate.ts.
@@ -1501,5 +1531,3 @@ function sentenceRangeAt(
 
   return { from: blockStart + start, to: blockStart + end };
 }
-
-void main();

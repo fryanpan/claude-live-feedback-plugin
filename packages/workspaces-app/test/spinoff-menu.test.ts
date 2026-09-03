@@ -6,10 +6,11 @@
  * fetch, so no server runs here. The pill that offers the two verbs is
  * `pointer-pill.ts`, tested beside this file.
  *
- * The branch that decides a huddle doc gets the pill at all lives in
- * `app.ts`, which runs `main()` on import and cannot be mounted from a test
- * (see doc-meta.ts's own note on that seam). It is verified in a browser at
- * 1180×820 and 430px instead, and reported with the PR.
+ * The branch that decides a huddle doc gets the pill at all lives in the
+ * per-doc markdown mount in `app.ts`, which the boot suite does not reach:
+ * `bootApp` is driveable, but `mountMarkdown` runs per doc rather than per
+ * page. It is verified in a browser at 1180×820 and 430px instead, and
+ * reported with the PR.
  *
  * Fixtures are synthetic (jordan@partner.example register).
  */
