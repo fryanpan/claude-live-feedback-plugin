@@ -15,14 +15,15 @@
  * no test can reach a stylesheet's source through this module and assert on
  * it. Export that map and the hole is open again.
  *
- * Be exact about why the audit does not count these four. It is NOT that they
- * carry no text assertion. `scripts/test-audit.ts` enumerates
- * `gitFiles('*.test.ts', '*.test.tsx')`, so a module like this one is never
- * read by the audit at all, whatever it contains — the same blind spot that
- * hides `shell-grid-placement.test.ts` and `list-indent-css.test.ts`, which
- * do grep a stylesheet and go uncounted because they assert with `toBe`
- * rather than `toContain`. The gap is ticketed separately. What keeps this
- * module honest is the private map above it, not the audit.
+ * Be exact about why the audit does not count these four, because it is no
+ * longer an accident. `scripts/test-audit.ts` now follows a test's imports:
+ * a module that reads source is assumed to hand that text to its importers,
+ * and every one of them counts. This module claims the exemption with the
+ * `// audit: no-text` marker below — and the marker alone does not buy it.
+ * The check also requires that no exported value here is typed as a string,
+ * so the day somebody adds `export function sheetText(): string` the marker
+ * stops working and all forty-five importers start counting. The private map
+ * and the audit now say the same thing, and the audit can tell.
  *
  * WHAT HAPPY-DOM CAN AND CANNOT RESOLVE. It runs the real cascade — author
  * specificity, `!important`, inheritance, custom properties, descendant,
@@ -52,6 +53,10 @@ const SRC = resolve(import.meta.dirname, '../src');
 /** The sheets the app's pages load, in cascade order. */
 export type SheetName = 'tokens.css' | 'styles.css' | 'hub.css' | 'signin.css';
 
+// audit: no-text — nothing here returns CSS text. `TEXT` is module-private and
+// every export hands back a computed style, an element or a cleanup, so
+// `scripts/test-audit.ts` does not count this module's importers as source
+// readers. Export a string from this file and that exemption lapses.
 const TEXT: Record<SheetName, string> = {
   'tokens.css': readFileSync(resolve(SRC, 'tokens.css'), 'utf8'),
   'styles.css': readFileSync(resolve(SRC, 'styles.css'), 'utf8'),
