@@ -18,8 +18,6 @@
  *
  * All fixtures are synthetic.
  */
-import { readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
 import { EFFORT_ESTIMATE_PROMPT_VERSION } from '@feedback/core/effort-estimate-prompt';
 import {
   type EffortCalibration,
@@ -43,6 +41,7 @@ import {
   goalEffortLabel,
 } from '../src/hub/hub-board-model.ts';
 import { effortComputationLines, effortFields } from '../src/hub/hub-detail-render.ts';
+import { IPAD, PHONE, installSheets, setViewport, styleOf } from './css-harness.ts';
 import { disposeBoards, renderBoard } from './support/board.ts';
 
 const NOW = Date.UTC(2026, 8, 1, 12, 0, 0);
@@ -631,37 +630,68 @@ describe('the board renders the readout and leaves the rows alone', () => {
   });
 });
 
-describe('the stylesheet pins the columns and folds to two rows', () => {
-  const CSS = readFileSync(resolve(import.meta.dirname, '../src/hub.css'), 'utf8');
+describe('the strip’s columns and its two-row fold, measured on the rendered board', () => {
+  let host: HTMLElement;
+  let sheets = () => {};
 
-  /** Every `@media <query> { … }` block's inner text, brace-matched. */
-  function mediaBlocks(query: string): string {
-    const out: string[] = [];
-    let idx = 0;
-    for (;;) {
-      const at = CSS.indexOf(`@media ${query}`, idx);
-      if (at === -1) break;
-      const open = CSS.indexOf('{', at);
-      let depth = 1;
-      let i = open + 1;
-      while (i < CSS.length && depth > 0) {
-        if (CSS[i] === '{') depth += 1;
-        else if (CSS[i] === '}') depth -= 1;
-        i += 1;
-      }
-      out.push(CSS.slice(open + 1, i - 1));
-      idx = i;
-    }
-    expect(out, `no @media ${query} block found`).not.toHaveLength(0);
-    return out.join('\n');
+  beforeEach(() => {
+    sheets = installSheets('hub.css', 'styles.css');
+    host = document.createElement('div');
+    host.className = 'hub-board';
+    document.body.appendChild(host);
+  });
+  afterEach(() => {
+    sheets();
+    disposeBoards();
+    host.remove();
+    setViewport({ width: 1024, height: 768 });
+  });
+
+  /**
+   * The strip the board renders for a scored goal, at a STATED viewport.
+   *
+   * The viewport is stated on every call because this whole block is about a
+   * tier boundary: happy-dom defaults to 1024px, which is inside this
+   * project's mobile tier (≤1100), so a test that says nothing reads the
+   * phone cascade while looking like it reads the tablet one. It is set
+   * before the board is mounted, since a computed style is cached on an
+   * element from its first read.
+   *
+   * This replaces a regex over `hub.css`. A text read passes against a
+   * declaration that survives in the file whatever the cascade then does with
+   * it — overridden later, on a class the strip never carries, or inside a
+   * media query that does not match at the width the reader is on. The last
+   * of those is exactly what this block is about.
+   */
+  function strip(viewport: { width: number; height: number }) {
+    setViewport(viewport);
+    disposeBoards();
+    host.replaceChildren();
+    const rows = [closed(DAY), closed(2 * DAY), closed(3 * DAY), task()];
+    renderBoard(host, boardSectionsWithEffort(GOALS, rows, filters(), NOW), {} as never);
+    const el = host.querySelector('.hub-goal-effort') as HTMLElement;
+    expect(el, 'the band rendered no effort strip').not.toBeNull();
+    const pick = (sel: string) => {
+      const found = el.querySelector(sel) as HTMLElement;
+      expect(found, `the strip rendered no ${sel}`).not.toBeNull();
+      return found;
+    };
+    return {
+      el,
+      style: styleOf(el),
+      progress: pick('.hub-goal-effort-progress'),
+      hands: pick('.hub-goal-effort-hands'),
+      fin: pick('.hub-goal-effort-fin'),
+      bar: pick('.hub-goal-bar'),
+      label: pick('.hub-goal-effort-k'),
+      value: pick('.hub-goal-effort-v'),
+      goalRow: host.querySelector('.hub-goal-row') as HTMLElement,
+    };
   }
 
-  function body(css: string, selector: string): string {
-    const esc = selector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    const m = new RegExp(`(?:^|[};])\\s*${esc}\\s*\\{([^}]*)\\}`, 'm').exec(css);
-    expect(m, `no rule for ${selector}`).not.toBeNull();
-    return m?.[1] ?? '';
-  }
+  /** The grid's tracks. `minmax(0, 1fr)` holds a space after its comma, so
+   *  the split ignores whitespace inside parentheses. */
+  const tracks = (cols: string) => cols.trim().split(/\s+(?![^(]*\))/);
 
   it('gives the two right-hand columns a FIXED width, which is what aligns them', () => {
     // Bryan's first correction: *"please align the PROGRESS label and
@@ -670,47 +700,63 @@ describe('the stylesheet pins the columns and folds to two rows', () => {
     // content and the labels land somewhere different in every band. Only a
     // px track pins them without the bands agreeing on a width first — this
     // assertion is the invariant the 0px measurement rests on.
-    const cols = body(CSS, '.hub-goal-effort').match(/grid-template-columns:([^;]*)/)?.[1] ?? '';
-    expect(cols).toMatch(/minmax\(0,\s*1fr\)\s+\d+px\s+\d+px/);
+    const wide = strip(IPAD);
+    expect(wide.style.display).toBe('grid'); // control: the sheet is live
+    const cols = tracks(wide.style.gridTemplateColumns);
+    expect(cols).toHaveLength(3);
     // …and the flexible track is the LEFT one, so nothing on the left can
     // move anything on the right.
-    expect(cols.trimStart().startsWith('minmax(0, 1fr)')).toBe(true);
+    expect(cols[0]).toBe('minmax(0, 1fr)');
+    expect(cols[1]).toMatch(/^\d+px$/);
+    expect(cols[2]).toMatch(/^\d+px$/);
   });
 
   it('holds the readability floor at both tiers: 12px labels, 16px values', () => {
     // The floor that got this variant through five rounds of mocks. It is
     // asserted at BOTH tiers because the cheapest way to win a row on a phone
-    // is to shrink type, and that trade is not one this branch may make.
-    expect(body(CSS, '.hub-goal-effort-k')).toContain('font-size: 12px');
-    expect(body(CSS, '.hub-goal-effort-v')).toContain('font-size: 16px');
-    const mobile = mediaBlocks('(max-width: 1100px)');
-    const strip = mobile.slice(mobile.indexOf('.hub-goal-effort'));
-    expect(strip).not.toMatch(/\.hub-goal-effort-[kv]\s*\{[^}]*font-size/);
+    // is to shrink type, and that trade is not one this branch may make. The
+    // phone reading is the half a text read could not make at all: it passed
+    // as long as no ≤1100px block MENTIONED a font-size, which says nothing
+    // about what the label actually resolves to there.
+    for (const viewport of [IPAD, PHONE]) {
+      const s = strip(viewport);
+      expect(styleOf(s.label).fontSize).toBe('12px');
+      expect(styleOf(s.value).fontSize).toBe('16px');
+    }
   });
 
   it('folds to exactly two rows below 1100px, progress first', () => {
     // Bryan's second correction: *"on mobile, put PROGRESS on the first row
     // and Hands-on on the second row"*. Two area rows, and `prog` is the
-    // first of them — the row count is asserted here in the template and
-    // measured in a real browser at 430px.
-    const mobile = mediaBlocks('(max-width: 1100px)');
-    const areas = body(mobile, '.hub-goal-effort').match(/grid-template-areas:([^;]*)/)?.[1] ?? '';
-    const rows = areas.match(/"[^"]*"/g) ?? [];
+    // first of them — the row count is read off the strip here and measured
+    // in a real browser at 430px.
+    const phone = strip(PHONE);
+    const rows = phone.style.gridTemplateAreas.match(/"[^"]*"/g) ?? [];
     expect(rows).toHaveLength(2);
     expect(rows[0]).toBe('"prog prog"');
     expect(rows[1]).toBe('"hands fin"');
-    expect(body(mobile, '.hub-goal-effort-progress')).toContain('grid-area: prog');
-    expect(body(mobile, '.hub-goal-effort-hands')).toContain('grid-area: hands');
+    expect(styleOf(phone.progress).gridArea).toBe('prog');
+    expect(styleOf(phone.hands).gridArea).toBe('hands');
     // The bar takes the first row's slack rather than a fixed width — that,
     // and not a smaller type size, is what buys the row.
-    expect(body(mobile, '.hub-goal-effort-progress .hub-goal-bar')).toContain('width: auto');
+    expect(styleOf(phone.bar).width).toBe('auto');
+
+    // Control, and the assertion a text read could never make: at the tablet
+    // tier the fold is NOT in force. The strip is three columns with no
+    // areas at all, and the bar is back to its fixed width.
+    const wide = strip(IPAD);
+    expect(wide.style.gridTemplateAreas).toBe('');
+    expect(styleOf(wide.bar).width).not.toBe('auto');
   });
 
   it('leaves the goal row a five-track grid — the strip takes no track', () => {
     // The strip is a SIBLING of the row, not a sixth child of it. A sixth
     // track here would knock the goal's owner avatar out of the column the
     // task rows' avatars sit in.
-    expect(body(CSS, '.hub-goal-row')).toContain('auto minmax(0, 1fr) auto auto auto');
+    const { goalRow } = strip(IPAD);
+    expect(goalRow, 'no goal row rendered').not.toBeNull();
+    expect(styleOf(goalRow).display).toBe('grid'); // control: the sheet is live
+    expect(styleOf(goalRow).gridTemplateColumns).toBe('auto minmax(0, 1fr) auto auto auto');
   });
 });
 

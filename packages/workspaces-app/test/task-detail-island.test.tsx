@@ -1,8 +1,6 @@
-import { readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
 import type { Thread, User } from '@feedback/core';
 import { options } from 'preact';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   CHORES_ID,
   type HubNote,
@@ -13,6 +11,7 @@ import {
 import type { DetailHandlers, TaskDiscussion } from '../src/hub/hub-detail-render.ts';
 import { type ActivityEvent } from '../src/hub/hub-presence-model.ts';
 import { mountTaskDetailIsland, taskDetailData } from '../src/hub/task-detail-island.tsx';
+import { IPAD, installSheets, setViewport, styleOf } from './css-harness.ts';
 import { frame, surfaceOf, typeInComposer } from './support/composer.ts';
 
 /**
@@ -90,7 +89,17 @@ function repaint(t: HubTask, discussion?: TaskDiscussion, extra?: Partial<Detail
   };
 }
 
+/** The page's own sheets, in the order the hub shell loads them, so any test
+ *  here may read a computed value. Installing a stylesheet changes no text and
+ *  no structure, so the behavioural cases either side are unaffected. */
+let sheets = () => {};
+beforeEach(() => {
+  setViewport(IPAD);
+  sheets = installSheets('hub.css', 'styles.css');
+});
+
 afterEach(() => {
+  sheets();
   live?.();
   live = null;
   taskDetailData.value = { task: null, handlers: handlers() };
@@ -146,15 +155,27 @@ describe('the task detail island’s mount contract', () => {
   });
 
   it('the wrapper is out of layout, so the panel stays a direct child of the backdrop', () => {
-    // happy-dom resolves no layout, so this is pinned at the rule level:
-    // `.hub-detail` is a centring flex container, and without
-    // `display: contents` the wrapper — not the panel — becomes the flex item,
-    // so the panel stretches to fill it and the `min(var(--hub-detail-w), …)`
-    // width above stops describing anything on screen.
-    const css = readFileSync(resolve('packages/workspaces-app/src/hub.css'), 'utf8');
-    const rule = css.match(/\.hub-detail\s*>\s*\[data-preact-island\]\s*\{([^}]*)\}/)?.[1] ?? '';
-    expect(rule).toContain('display'); // positive control: found the rule
-    expect(rule).toMatch(/display:\s*contents/);
+    // `.hub-detail` is a centring flex container, and without `display:
+    // contents` the wrapper — not the panel — becomes the flex item, so the
+    // panel stretches to fill it and the `min(var(--hub-detail-w), …)` width
+    // stops describing anything on screen.
+    //
+    // Measured off the mounted island rather than read out of the stylesheet:
+    // the rule is `.hub-detail > [data-preact-island]`, and only a real mount
+    // shows that the wrapper Preact creates is a DIRECT child of a
+    // `.hub-detail` host — the half a text read cannot see. happy-dom lays
+    // nothing out, so what is asserted is the `display` the browser would
+    // use, not the geometry that follows from it.
+    const host = mount();
+    repaint(task(), EMPTY);
+    const wrapper = host.querySelector('[data-preact-island="task-detail"]') as HTMLElement;
+    expect(wrapper).not.toBeNull();
+    expect(styleOf(wrapper).display).toBe('contents');
+    // Positive control: the sheets are attached and this host really is the
+    // backdrop the rule is scoped to. An unstyled element reads `''` for every
+    // property, which would satisfy an "is not a box" assertion vacuously.
+    expect(styleOf(host).position).toBe('fixed');
+    expect(styleOf(host.querySelector('.hub-detail-panel') as HTMLElement).display).not.toBe('');
   });
 
   it('closes on a backdrop tap, and stops listening once disposed', () => {

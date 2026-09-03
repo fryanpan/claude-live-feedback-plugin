@@ -1,7 +1,6 @@
-import { readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
-import { beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { renderWorkspaceIdentity } from '../src/hub/hub-render.ts';
+import { IPAD, PHONE, installSheets, setViewport, styleOf } from './css-harness.ts';
 
 /**
  * The topbar's two mutable facts: the board's NAME and whether it has been
@@ -18,12 +17,15 @@ import { renderWorkspaceIdentity } from '../src/hub/hub-render.ts';
  * the live one was to read both goal lists. A word in the header is the
  * cheapest form of that answer.
  *
- * The CSS half is read as TEXT, not measured: happy-dom has no layout engine,
- * so an assertion about a rendered pixel here would be an assertion about
- * nothing. What the rules have to guarantee is stated as rules — the badge
- * never grows the 48px topbar row (the iPad's scarce axis is HEIGHT), and the
- * NAME is what truncates when the row runs out of width at 430px, never the
- * badge.
+ * The CSS half is measured, not read as text. happy-dom lays nothing out, so
+ * the rendered pixel is still a browser check (`bun run ui:shot`) — but the
+ * DECLARED values the browser would lay out with are the cascade's answer,
+ * and reading them off the rendered badge catches what a text read cannot: a
+ * rule a later one overrides, a selector the badge no longer carries, a
+ * declaration inside a media query that does not match. What has to hold is
+ * that the badge never grows the 48px topbar row (the iPad's scarce axis is
+ * HEIGHT), and that the NAME is what truncates when the row runs out of width
+ * at 430px, never the badge.
  */
 describe('renderWorkspaceIdentity', () => {
   let nameEl: HTMLElement;
@@ -80,17 +82,49 @@ describe('renderWorkspaceIdentity', () => {
   });
 });
 
-const CSS = readFileSync(resolve('packages/workspaces-app/src/hub.css'), 'utf8');
-
-/** The declarations of the first rule whose selector list contains `sel`. */
-function block(sel: string): string {
-  const at = CSS.indexOf(sel);
-  expect(at, `no rule for ${sel}`).toBeGreaterThan(-1);
-  const open = CSS.indexOf('{', at);
-  return CSS.slice(open + 1, CSS.indexOf('}', open));
+/**
+ * The identity cluster the topbar actually paints, at a stated viewport.
+ *
+ * Both tiers are checked because the whole point of the badge rules is that
+ * they hold where width runs out: happy-dom's default is 1024px, which sits
+ * inside this project's MOBILE tier, so a test that never states a viewport is
+ * reading the phone cascade while looking like it reads the desktop one.
+ */
+function paintIdentity(viewport: { width: number; height: number }) {
+  setViewport(viewport);
+  document.body.innerHTML =
+    '<span class="hub-ws-name"><span id="n" class="hub-ws-name-text"></span>' +
+    '<span id="b" class="hub-retired-badge hidden">Retired</span></span>';
+  const name = document.getElementById('n') as HTMLElement;
+  const badge = document.getElementById('b') as HTMLElement;
+  renderWorkspaceIdentity(
+    name,
+    badge,
+    { name: 'harbor-relay', retiredAt: Date.UTC(2026, 7, 19), retiredReason: 'superseded' },
+    'w-fallback',
+  );
+  // The badge is only measurable once the renderer has shown it: `.hidden`
+  // carries `display: none !important`, so a hidden badge would answer every
+  // question below with the styles of a box nobody draws.
+  expect(badge.classList.contains('hidden')).toBe(false);
+  return {
+    row: document.querySelector('.hub-ws-name') as HTMLElement,
+    name,
+    badge,
+  };
 }
 
 describe('the retired badge cannot break the topbar', () => {
+  let sheets = () => {};
+  beforeEach(() => {
+    sheets = installSheets('hub.css', 'styles.css');
+  });
+  afterEach(() => {
+    sheets();
+    setViewport({ width: 1024, height: 768 });
+    document.body.replaceChildren();
+  });
+
   /**
    * The iPad in landscape has ~750px of usable height, about half a monitor,
    * so a row that grows by a few pixels is a real complaint there and
@@ -99,15 +133,20 @@ describe('the retired badge cannot break the topbar', () => {
    * own.
    */
   it('sits inside the existing row rather than adding a line to it', () => {
-    const badge = block('.hub-retired-badge {');
-    expect(badge).toMatch(/font-size:\s*11px/);
+    const { badge, name } = paintIdentity(IPAD);
+    const style = styleOf(badge);
+    expect(style.fontSize).toBe('11px');
     // 1px top/bottom against a 17px name in a 48px min-height row: the row's
     // height is set by the name and the 36px tap targets beside it, and this
     // is far below both.
-    expect(badge).toMatch(/padding:\s*1px\s+7px/);
-    expect(badge).not.toMatch(/display:\s*block/);
+    expect(style.padding).toBe('1px 7px');
     // A wrapped badge would push the row taller; it stays on the name's line.
-    expect(badge).toMatch(/white-space:\s*nowrap/);
+    expect(style.whiteSpace).toBe('nowrap');
+    // …and it claims no line box of its own. An unset `display` computes to
+    // `''` here, so this needs the controls: the name beside it IS 17px, and
+    // the badge's own 11px above proves the cascade reached this element.
+    expect(style.display).not.toBe('block');
+    expect(styleOf(name.parentElement as HTMLElement).fontSize).toBe('17px');
   });
 
   /**
@@ -116,23 +155,39 @@ describe('the retired badge cannot break the topbar', () => {
    * live — which is the failure, not a cosmetic one.
    */
   it('truncates the NAME and never the badge when width runs out', () => {
-    const row = block('.hub-ws-name {');
+    const { row, name, badge } = paintIdentity(PHONE);
     // The flex row can shrink below its content — without this the grid
     // column refuses to shrink and the whole cluster is pushed off-screen.
-    expect(row).toMatch(/display:\s*flex/);
-    expect(row).toMatch(/min-width:\s*0/);
-    // The ellipsis moved OFF the row and onto the name text, which is the
-    // half that makes the badge safe.
-    expect(row).not.toMatch(/text-overflow/);
-
-    const text = block('.hub-ws-name-text {');
-    expect(text).toMatch(/text-overflow:\s*ellipsis/);
-    expect(text).toMatch(/overflow:\s*hidden/);
-    expect(text).toMatch(/white-space:\s*nowrap/);
+    expect(styleOf(row).display).toBe('flex');
+    expect(Number.parseFloat(styleOf(row).minWidth)).toBe(0);
+    // The ellipsis lives on the name text, not on the row — that is the half
+    // that makes the badge safe. The row's own `text-overflow` is unset, and
+    // the name's value beside it is the control that says this reader can see
+    // the property at all.
+    expect(styleOf(row).textOverflow).not.toBe('ellipsis');
+    const text = styleOf(name);
+    expect(text.textOverflow).toBe('ellipsis');
+    expect(text.overflow).toBe('hidden');
+    expect(text.whiteSpace).toBe('nowrap');
 
     // `0 0 auto`: never grow, never SHRINK. The shrink half is the one that
     // matters — flex items default to shrinking, so without it the badge is
     // squeezed before the name is.
-    expect(block('.hub-retired-badge {')).toMatch(/flex:\s*0\s+0\s+auto/);
+    expect(styleOf(badge).flex).toBe('0 0 auto');
+  });
+
+  it('keeps both readings at the tablet tier too — no media query undoes them', () => {
+    // The pair above is deliberately split across the two viewports this
+    // project verifies, which leaves each rule unproven at the other. This is
+    // the crossing check, and it is exactly what a text read could never make:
+    // a `@media` block that un-shrinks the badge or moves the ellipsis back
+    // onto the row would still contain every string the old assertions looked
+    // for.
+    const ipad = paintIdentity(IPAD);
+    expect(styleOf(ipad.badge).flex).toBe('0 0 auto');
+    expect(styleOf(ipad.name).textOverflow).toBe('ellipsis');
+    const phone = paintIdentity(PHONE);
+    expect(styleOf(phone.badge).fontSize).toBe('11px');
+    expect(styleOf(phone.badge).whiteSpace).toBe('nowrap');
   });
 });
