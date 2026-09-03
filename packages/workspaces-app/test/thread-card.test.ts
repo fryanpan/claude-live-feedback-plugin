@@ -169,7 +169,7 @@ describe('thread card — the collapsed card is two lines', () => {
     expect(text(card.querySelector('.face-detail .thread-asked-meta'))).toContain('Alice');
   });
 
-  it('keeps both lines on a thread with no replies, with "No replies yet" on line two', () => {
+  it('drops line two on a thread with no replies rather than filling it', () => {
     const withReply = makeThread({
       id: 'has-reply',
       comments: [comment(alice, 'Question?'), comment(bob, 'Answer.')],
@@ -179,33 +179,68 @@ describe('thread card — the collapsed card is two lines', () => {
     panel.setThreads([withReply, alone]);
 
     // Positive control: a real discussion line does render when there IS a
-    // reply — so the fallback below means something.
+    // reply — so the absence below is the suppression and not a dead probe.
     const a = cardFor(withReply);
     expect(text(a.querySelector('.face-summary .thread-discussion'))).toContain('Answer.');
 
     const b = cardFor(alone);
     expect(b.querySelector('.thread-topic')).not.toBeNull();
-    const discussion = b.querySelector('.face-summary .thread-discussion') as HTMLElement;
-    expect(text(discussion)).toBe('No replies yet');
-    expect(discussion.classList.contains('none')).toBe(true);
+    expect(b.querySelector('.face-summary .thread-discussion')).toBeNull();
+    expect(b.textContent).not.toContain('No replies yet');
   });
 
-  it('never leaves the summary face empty — a zero measurement pins a card open', () => {
-    // `sizeThreadSlots` refuses a zero rather than writing it, so an empty
-    // summary face would open and never close again. Line two is what keeps
-    // the face populated on every thread, whatever its shape.
-    const shapes: Thread[] = [
+  it('folds to one line when there is nothing to put on line two', () => {
+    // Every one of these used to carry "No replies yet" — a plain comment
+    // nobody had answered, and a RESOLVED one, where it was the last thing
+    // said about a finished thread. An empty summary face is what makes the
+    // folded card one line, and `sizeThreadSlots` writes its zero (see
+    // below); the guard that refuses a zero is for a face WITH children.
+    const empty: Thread[] = [
       makeThread({ id: 's1', comments: [comment(alice, 'Alone.')] }),
-      makeThread({ id: 's2', comments: [comment(alice, 'A.'), comment(bob, 'B.')] }),
       makeThread({ id: 's3', status: 'resolved', comments: [comment(alice, 'Done.')] }),
     ];
+    const populated = makeThread({
+      id: 's2',
+      comments: [comment(alice, 'A.'), comment(bob, 'B.')],
+    });
     const { panel, cardFor } = mountPanel();
-    panel.setThreads(shapes);
+    panel.setThreads([...empty, populated]);
     panel.setTab('all');
-    for (const t of shapes) {
-      const face = cardFor(t).querySelector('.face-summary') as HTMLElement;
-      expect(face.children.length).toBeGreaterThan(0);
+    for (const t of empty) {
+      expect((cardFor(t).querySelector('.face-summary') as HTMLElement).childElementCount).toBe(0);
     }
+    // Control: a thread that HAS something to say still says it, so the zero
+    // above is about the content and not about the render.
+    expect(
+      (cardFor(populated).querySelector('.face-summary') as HTMLElement).childElementCount,
+    ).toBeGreaterThan(0);
+  });
+
+  it('sizes an empty summary face to zero, and still refuses a populated face’s zero', () => {
+    // The two halves of one rule. Before this, `sizeThreadSlots` refused
+    // every zero it measured, because the only zero it could ever see came
+    // from a subtree that was not being laid out. A card with nothing on line
+    // two now measures zero truthfully, and a slot left at its last good
+    // height would carry a blank second row under a one-line card.
+    const alone = makeThread({ id: 'z1', comments: [comment(alice, 'Alone.')] });
+    const withReply = makeThread({ id: 'z2', comments: [comment(alice, 'A.'), comment(bob, 'B.')] });
+    const { panel, cardFor } = mountPanel();
+    panel.setThreads([alone, withReply]);
+
+    // happy-dom has no layout, so every offsetHeight is already 0 — which is
+    // exactly the measurement both branches have to be told apart under.
+    const slotOf = (t: Thread) => cardFor(t).querySelector('.thread-slot') as HTMLElement;
+    const populated = slotOf(withReply);
+    populated.style.height = '24px';
+    sizeThreadSlots(document);
+
+    expect(slotOf(alone).style.height).toBe('0px');
+    // The original bug, rebuilt: this face HAS children, so its zero is the
+    // not-laid-out case and the last good height survives.
+    expect(populated.style.height).toBe('24px');
+    expect(
+      (cardFor(withReply).querySelector('.face-summary') as HTMLElement).childElementCount,
+    ).toBeGreaterThan(0);
   });
 });
 

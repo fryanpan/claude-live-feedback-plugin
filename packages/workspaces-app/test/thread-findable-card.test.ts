@@ -141,14 +141,24 @@ describe('what line two of a folded card is allowed to be', () => {
     expect(face(card)?.querySelector('.thread-options-compact')).not.toBe(null);
   });
 
-  it('a plain comment with no replies keeps its line, because nothing replaces it', () => {
-    // A face with no children measures zero, and `sizeThreadSlots` refuses a
-    // zero — which would leave a card that opens and cannot close. So the
-    // suppression is conditioned on the answer row existing.
-    const { card } = render(thread([comment('Looks fine.')]));
-    const line = face(card)?.querySelector('.thread-discussion');
-    expect(line).not.toBe(null);
-    expect(line?.textContent).toBeTruthy();
+  it('a plain comment with no replies folds to one line, and a resolved one too', () => {
+    // "No replies yet" is a fact the reader can do nothing with, and it was
+    // the whole of line two on every thread nobody had answered — including
+    // resolved ones, where it is the last word on a finished thread. Nothing
+    // to say means no line, which is the one-line card this redesign is for.
+    const shapes = [
+      thread([comment('Looks fine.')]),
+      thread([comment('Was this right?')], { status: 'resolved' }),
+    ];
+    for (const t of shapes) {
+      const { card } = render(t);
+      expect(face(card)?.querySelector('.thread-discussion')).toBe(null);
+      expect(face(card)?.childElementCount).toBe(0);
+      expect(card.textContent).not.toContain('No replies yet');
+      // Control: line one is still there, so the card folded to a line and
+      // did not vanish.
+      expect(card.querySelector('.thread-head .thread-topic')?.textContent).toBeTruthy();
+    }
   });
 });
 

@@ -159,14 +159,20 @@ function faceOf(slot: HTMLElement, expanded: boolean): HTMLElement | null {
  * whenever text metrics change underneath a measurement that has already been
  * taken (see `installSlotRemeasure`).
  *
- * A zero measurement is REFUSED, never written. The showing face always has
- * content (both lines render on every card, always), so zero can only mean
- * "this subtree isn't being laid out" — the drawer is `display: none` while
- * closed on desktop, and the cards inside it are rendered anyway. Writing
- * that zero pins every slot shut with nothing left to reopen it: the card
- * keeps its head and its foot and loses everything in between. Skipping
- * leaves the last good height in place until the drawer opens and someone
- * re-measures for real (`ReviewChrome.openDrawer`).
+ * A zero measured from a face THAT HAS CHILDREN is refused, never written.
+ * Such a zero can only mean "this subtree isn't being laid out" — the drawer
+ * is `display: none` while closed on desktop, and the cards inside it are
+ * rendered anyway. Writing that zero pins every slot shut with nothing left
+ * to reopen it: the card keeps its head and its foot and loses everything in
+ * between. Skipping leaves the last good height in place until the drawer
+ * opens and someone re-measures for real (`ReviewChrome.openDrawer`).
+ *
+ * A face with NO children is a different thing and its zero is the truth. A
+ * folded card whose line two would have said "No replies yet" renders no line
+ * two at all, and the guard used to read that deliberate emptiness as the
+ * not-laid-out case: the slot kept whatever height it was last given, so a
+ * one-line card carried a blank second row. The two are told apart by asking
+ * the face what is in it, which needs no layout and cannot be wrong.
  *
  * The pass repeats until the numbers stop moving, because WRITING the heights
  * can reflow the very faces it just measured: on a scroller whose content
@@ -186,7 +192,10 @@ export function sizeThreadSlots(root: ParentNode): void {
       const face = faceOf(slot, expanded);
       if (!face) continue;
       const h = face.offsetHeight;
-      if (h > 0 && slot.style.height !== `${h}px`) {
+      // See the note above: an empty face's zero is real, a populated face's
+      // zero is a measurement taken while nothing was being laid out.
+      const measured = h > 0 || face.childElementCount === 0;
+      if (measured && slot.style.height !== `${h}px`) {
         slot.style.height = `${h}px`;
         changed = true;
       }
