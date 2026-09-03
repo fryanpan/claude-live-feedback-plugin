@@ -8,15 +8,11 @@
  * mutation goes through the REST gate — never by writing into the maps,
  * which the server would revert.
  */
-import { type FeedbackClient, type ReviewPayload, type User, escapeHtml } from '@feedback/core';
+import type { FeedbackClient, ReviewPayload, User } from '@feedback/core';
 import type { BootHistory, BootLocation, BootStorage, BootWindow } from '../boot-env.ts';
 import { renderConnectionBanner, watchConnection } from '../connection-state.ts';
-import { MIC_ICON, SVG, SVG_ENDS } from '../icons.ts';
 import { ensureUserIdentity } from '../identity-prompt.ts';
 import { wireKeyboardInset } from '../keyboard-inset.ts';
-// Defines <meeting-banner>, rendered by buildShell at the top of the board
-// column. Import for the side effect; the element manages itself.
-import '../meeting-banner.ts';
 import { startReadingTracker } from '../reading-tracker.ts';
 import { pageSentry } from '../sentry-page.ts';
 import {
@@ -45,7 +41,6 @@ import { type HubState, createHubActions, fetchJson, send, showToast } from './h
 import {
   type BoardSection,
   DEFAULT_DONE_WINDOW,
-  DONE_WINDOWS,
   type DoneWindow,
   type HubGoal,
   type HubTask,
@@ -97,40 +92,35 @@ import {
 } from './hub-render.ts';
 import { createHubReviewController } from './hub-review-controller.ts';
 import {
-  CLOSED_WALK,
   type ReviewItem,
   type ReviewThreadItem,
-  type WalkAim,
   type WalkSources,
-  advanceWalk,
   applyRefresh,
   humanBlockerRows,
   panelAsks,
   refreshReviewItems,
   reviewQueue,
   reviewRow,
-  walkAimAfterOpen,
   walkHandoff,
   walkHandoffReady,
   walkNextUrl,
-  walkPosition,
 } from './hub-review-model.ts';
+import { wireHubSettingsPanel } from './hub-settings-panel.ts';
+import { NAV_ICONS, buildShell } from './hub-shell.ts';
 import { hubShortcutKeydown } from './hub-shortcuts.ts';
+import { createHubWalkthrough } from './hub-walkthrough.ts';
 import { mountIslandProbe } from './island-probe.tsx';
 import { wireMeMenu } from './me-menu.ts';
-import { mountParallelismCap } from './parallelism-cap.ts';
 import {
   driftData,
   mountDriftIsland,
   mountPresenceIsland,
   presenceData,
 } from './presence-island.tsx';
-import { mountPushToggle } from './push-toggle.ts';
 import { createRepaintGuard } from './repaint-guard.ts';
-import { mountReviewCriteria } from './review-criteria.ts';
 import { GOAL_PLACEHOLDER_TEXT, createTaskBodyEditorHost } from './task-body-editor.ts';
 import { type DetailTab, mountTaskDetailIsland, taskDetailData } from './task-detail-island.tsx';
-import { mountWalkthroughIsland, walkthroughData } from './walkthrough-island.tsx';
+import { mountWalkthroughIsland } from './walkthrough-island.tsx';
 
 /**
  * Everything the board's boot reaches outside its own module.
@@ -154,177 +144,6 @@ export interface HubBootEnv {
  *  sync; short enough that a truly cleared board hands off while the reader
  *  is still looking at it. */
 export const WALK_HANDOFF_DEADLINE_MS = 4000;
-
-/** Icons. The four nav glyphs are the approved mockup's (home-pane-mockup-v1);
- *  share and settings are new, for the top-right cluster. The shared
- *  attributes and the mic come from `../icons.ts`, because the mic is mounted
- *  by three surfaces and only one of them is a hub module. */
-const NAV_ICONS = {
-  home: `<svg ${SVG} ${SVG_ENDS}><path d="M3 10.5 12 3l9 7.5"/><path d="M5 9.5V21h14V9.5"/><path d="M9.5 21v-6h5v6"/></svg>`,
-  tasks: `<svg ${SVG} ${SVG_ENDS}><path d="M9 6h11M9 12h11M9 18h11"/><path d="M4 6h.01M4 12h.01M4 18h.01"/></svg>`,
-  mine: `<svg ${SVG} ${SVG_ENDS}><circle cx="12" cy="8" r="3.4"/><path d="M4.5 20a7.5 7.5 0 0 1 15 0"/></svg>`,
-  activity: `<svg ${SVG} ${SVG_ENDS}><path d="M3 12h4l3-7 4 14 3-7h4"/></svg>`,
-  collapse: `<svg ${SVG} ${SVG_ENDS}><polyline points="14 6 8 12 14 18"/></svg>`,
-  expand: `<svg ${SVG} ${SVG_ENDS}><polyline points="10 6 16 12 10 18"/></svg>`,
-  share: `<svg ${SVG} ${SVG_ENDS}><circle cx="18" cy="5" r="2.6"/><circle cx="6" cy="12" r="2.6"/><circle cx="18" cy="19" r="2.6"/><path d="m8.3 10.8 7.4-4.3M8.3 13.2l7.4 4.3"/></svg>`,
-  settings: `<svg ${SVG} ${SVG_ENDS}><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>`,
-};
-
-/** The nav, in the order it renders. `mine` sits beside `tasks` rather than
- *  inside it: "what is mine" is a place a person navigates to, and as a
- *  segmented filter on somebody else's list it had no URL and did not
- *  survive a reload. */
-const NAV_ITEMS: ReadonlyArray<{ nav: HubNav; label: string; icon: string }> = [
-  { nav: 'home', label: 'Home', icon: NAV_ICONS.home },
-  { nav: 'tasks', label: 'Tasks', icon: NAV_ICONS.tasks },
-  { nav: 'mine', label: 'My Tasks', icon: NAV_ICONS.mine },
-  { nav: 'activity', label: 'Activity', icon: NAV_ICONS.activity },
-];
-
-/** Static shell — built once; regions re-render into their containers. */
-function buildShell(
-  document: Document,
-  root: HTMLElement,
-  name: string,
-  workspaceId: string,
-): void {
-  root.innerHTML = `
-    <header class="hub-topbar">
-      <a href="/" class="back-link" title="All workspaces" aria-label="Back">←</a>
-      <span class="hub-ws-name"><span class="hub-ws-name-text" id="hub-ws-name-text">${escapeHtml(name)}</span><span id="hub-retired-badge" class="hub-retired-badge hidden">Retired</span></span>
-      <div class="hub-cluster">
-        <div id="hub-people" class="hub-presence hub-people hidden"></div>
-        <button type="button" id="hub-share" class="hub-icon-btn" title="Share workspace" aria-label="Share workspace">${NAV_ICONS.share}</button>
-        <button type="button" id="hub-settings" class="hub-icon-btn" title="Workspace settings" aria-label="Workspace settings" aria-expanded="false">${NAV_ICONS.settings}<span id="hub-settings-alarm" class="hub-alarm-dot hidden" aria-hidden="true"></span></button>
-        <button type="button" id="hub-me" class="hub-me" title="Signed in" aria-haspopup="true" aria-expanded="false"></button>
-      </div>
-      <div id="hub-me-menu" class="hub-me-menu hidden" role="region" aria-label="Your identity"></div>
-      <div id="hub-settings-panel" class="hub-settings-panel hidden" role="region" aria-label="Workspace settings">
-        <div id="hub-drift" class="hub-presence hidden"></div>
-        <div id="hub-lead" class="hub-lead"></div>
-        <label class="hub-settings-row" for="hub-done-filter">Show done tasks from
-          <select id="hub-done-filter" class="hub-select" aria-label="Done task visibility"></select>
-        </label>
-        <!-- Per DEVICE, not per account — a push subscription belongs to this
-             browser on this machine, so the row says so rather than reading
-             like a workspace-wide preference somebody set once. -->
-        <label class="hub-settings-row hub-settings-row--push" for="hub-push-toggle">
-          <span class="hub-settings-label">Notify me on this device
-            <small id="hub-push-note" class="hub-settings-note"></small>
-          </span>
-          <input type="checkbox" id="hub-push-toggle" class="hub-check" aria-describedby="hub-push-note" />
-        </label>
-        <!-- What the quality gate judges an agent's ask against, in the
-             owner's own words (Bryan, 2026-08-29: "Something we can change in
-             the settings. It's a natural language prompt."). A textarea and
-             not a rule table for that reason. It shows the DEFAULT when this
-             board has never written one, so the words are always readable
-             even when nobody has edited them — a criterion you cannot read is
-             one your agents are judged against in secret. -->
-        <div class="hub-settings-row hub-settings-row--criteria">
-          <label class="hub-settings-label" for="hub-review-criteria">What makes a good review item
-            <small id="hub-review-criteria-note" class="hub-settings-note"></small>
-          </label>
-          <textarea id="hub-review-criteria" class="hub-criteria" rows="5" aria-describedby="hub-review-criteria-note" placeholder="Plain English: what an agent’s ask has to do before it reaches you."></textarea>
-          <div class="hub-criteria-actions">
-            <button type="button" id="hub-review-criteria-save" class="hub-btn hub-btn-primary">Save</button>
-            <button type="button" id="hub-review-criteria-default" class="hub-btn">Use the default</button>
-          </div>
-        </div>
-        <!-- How many builders this board's lead may dispatch at once
-             (Bryan, by voice: "add support for limiting parallelism in the
-             workspace"). register_dispatch enforces the number server-side;
-             this is where it's read, changed, and shown alongside how many
-             slots are already spent. -->
-        <div class="hub-settings-row hub-settings-row--cap">
-          <label class="hub-settings-label" for="hub-parallelism-cap">Parallelism cap
-            <small id="hub-parallelism-cap-note" class="hub-settings-note"></small>
-          </label>
-          <input type="number" id="hub-parallelism-cap" class="hub-cap-input" min="1" step="1" aria-describedby="hub-parallelism-cap-note" />
-          <div class="hub-criteria-actions">
-            <button type="button" id="hub-parallelism-cap-save" class="hub-btn hub-btn-primary">Save</button>
-            <button type="button" id="hub-parallelism-cap-default" class="hub-btn">Use the default</button>
-          </div>
-        </div>
-      </div>
-    </header>
-    <div id="hub-connection" class="conn-banner hidden" role="status" aria-live="polite"></div>
-    <div class="hub-main" id="hub-main">
-      <nav id="hub-nav" class="hub-nav" aria-label="Workspace pages">
-        ${NAV_ITEMS.map(
-          (
-            n,
-          ) => `<button type="button" class="hub-nav-item" data-nav="${n.nav}" title="${escapeHtml(n.label)}">
-          <span class="hub-nav-icon" aria-hidden="true">${n.icon}</span><span class="hub-nav-label">${escapeHtml(n.label)}</span>
-        </button>`,
-        ).join('')}
-        <button type="button" id="hub-nav-collapse" class="hub-nav-item hub-nav-collapse" title="Collapse">
-          <span class="hub-nav-icon" aria-hidden="true">${NAV_ICONS.collapse}</span><span class="hub-nav-label">Collapse</span>
-        </button>
-        <div class="hub-nav-dock" role="group" aria-label="Voice">
-          <button type="button" id="hub-mic" class="voice-mic" title="Hold to talk (or hold Space)" aria-label="Hold to talk">${MIC_ICON}</button>
-          <div id="hub-voice" class="voice-indicator hidden" aria-live="polite"></div>
-        </div>
-      </nav>
-      <section id="hub-home" class="hub-home hidden">
-        <!-- The banner again, for the pane landing links open on: the board
-             column's copy is display:none here, and a live "Bot in call" —
-             the only pull-out surface — must not be. Its own instance with
-             its own poll; the two panes never show at once. -->
-        <meeting-banner workspace-id="${escapeHtml(workspaceId)}"></meeting-banner>
-        <div id="hub-home-page">
-          <div id="hub-home-review"></div>
-          <div id="hub-home-activity"></div>
-          <div id="hub-home-brief"></div>
-        </div>
-        <div id="hub-walkthrough" class="hub-walkthrough hidden"></div>
-      </section>
-      <section class="hub-board-col">
-        <!-- The calendar meeting offer, IN FLOW at the top of the content
-             (approved mockup, round 4): header bar, then this, then the New
-             task row — pushed-down content, never an overlay. Hidden with the
-             whole column on the Home pane. -->
-        <meeting-banner workspace-id="${escapeHtml(workspaceId)}"></meeting-banner>
-        <div id="hub-decisions" class="hub-decisions hidden"></div>
-        <div id="hub-quick" class="hub-quick"></div>
-        <div id="hub-board" class="hub-board"></div>
-        <div id="hub-archived" class="hub-board hidden"></div>
-        <div id="hub-activity" class="hub-activity hidden"></div>
-      </section>
-    </div>
-    <div id="hub-detail" class="hub-detail hidden"></div>
-    <!-- The GOAL panel's own container. It used to share #hub-detail with the
-         task panel and rebuild it with replaceChildren, which no vanilla code
-         may do to a node holding a live island — same resolution the archived
-         list got when the board became one. -->
-    <div id="hub-goal-detail" class="hub-detail hidden"></div>
-    <div id="hub-help" class="hub-help hidden">
-      <div class="hub-help-card">
-        <h2>Keyboard shortcuts</h2>
-        <dl>
-          <dt>j / k</dt><dd>next / previous task</dd>
-          <dt>o or Enter</dt><dd>open the focused task</dd>
-          <dt>s</dt><dd>open the focused task's status dropdown</dd>
-          <dt>a</dt><dd>open the focused task's assignee picker</dd>
-          <dt>e</dt><dd>archive the focused task — it leaves the board, and a 10-second Undo offers it back. Nothing is destroyed; the archived list restores it later</dd>
-          <dt>r or F2</dt><dd>rename the focused task in place — clicking its title does the same, with the cursor where you clicked</dd>
-          <dt>alt + ↑ / ↓</dt><dd>move the focused task up / down — past the ends of its goal it moves into the next one</dd>
-          <dt>tab to ⠿, then ↑ / ↓</dt><dd>the same move from the drag handle</dd>
-          <dt>c</dt><dd>new task — an empty row opens in the panel with the title ready to type</dd>
-          <dt>?</dt><dd>toggle this help</dd>
-        </dl>
-      </div>
-    </div>
-    <div id="hub-toast" class="hub-toast hidden"></div>`;
-  const doneSelect = document.getElementById('hub-done-filter') as HTMLSelectElement;
-  for (const w of DONE_WINDOWS) {
-    const opt = document.createElement('option');
-    opt.value = w.id;
-    opt.textContent = w.label;
-    doneSelect.append(opt);
-  }
-  doneSelect.value = DEFAULT_DONE_WINDOW;
-}
 
 /**
  * The board's whole boot sequence, as a function of its environment.
@@ -1633,152 +1452,32 @@ export async function bootHub(env: HubBootEnv): Promise<void> {
     return true;
   }
 
-  /**
-   * Put the walkthrough away and forget the sitting's tally.
-   *
-   * Does not render — the two callers render different amounts afterwards
-   * (`setNav` repaints every region anyway), and a render in here would run
-   * twice on the path that matters.
-   */
-  function closeWalkthrough(): void {
-    state.walkIndex = CLOSED_WALK.index;
-    state.walkKey = CLOSED_WALK.key;
-    state.walkProgress = { cleared: 0, last: null };
-  }
+  // ── The Home walkthrough ────────────────────────────────────────────────
+  //
+  // Where the reader stands in the review queue, and what answering does to
+  // that position: `hub-walkthrough.ts`. Built here rather than lower down
+  // because `renderWalkthrough` below is called from `setNav` and the review
+  // banner, and the three review writes it needs arrive as thunks — the
+  // controller that owns them takes `renderWalkthrough` as one of its own
+  // inputs, a cycle that predates the split.
+  const walkthrough = createHubWalkthrough({
+    state,
+    currentQueue,
+    el,
+    syncBoardUrl,
+    renderHomeRegion,
+    openReviewItem,
+    openReviewThread,
+    answerDecision: (task, text, optionId) => answerDecision(task, text, optionId),
+    askOnReviewItem: (item, phrase, question) => askOnReviewItem(item, phrase, question),
+    replyToReviewItem: (item, text, optionId) => replyToReviewItem(item, text, optionId),
+    onQueueDrained: () => chainWalkDrain?.(),
+  });
+  // Destructured rather than wrapped: a local `function renderWalkthrough`
+  // would shadow the real one for anybody — a reader or a source-shape test —
+  // looking for where the walk is drawn.
+  const { render: renderWalkthrough, close: closeWalkthrough } = walkthrough;
 
-  /**
-   * Open one of the walkthrough's own items, and leave the walk aimed for
-   * whichever way the reader then goes.
-   *
-   * Close-in-state first, but render the OPEN first: the close and the open
-   * are one user action, and they must reach `syncBoardUrl` as one step
-   * (walk → panel, a push). Rendering the close ahead of the open wrote a
-   * `close` step whose `history.back()` — an async traversal — landed after
-   * the open's `pushState`, and its popstate re-applied the old `?item=`
-   * entry: the tapped task closed itself and the reader bounced back to Home.
-   *
-   * When the item is a DOC the opener leaves the page instead, and the card
-   * repaint is skipped outright — a close-step `back()` queued beside
-   * `location.assign` races it. That is why the close is undone on that path
-   * (`walkAimAfterOpen`): nothing rendered, so it bought nothing, and the
-   * closed state is exactly what bfcache freezes for the trip back.
-   *
-   * The aim doubles as the return address handed to the opener, so the doc
-   * can point its back arrow at the queue. Only an OPEN walk has one to give.
-   */
-  function openFromWalk(open: (returnItem: string | null) => boolean): void {
-    const aim: WalkAim = { index: state.walkIndex, key: state.walkKey };
-    const back = aim.index >= 0 ? aim.key : null;
-    state.walkIndex = CLOSED_WALK.index;
-    state.walkKey = CLOSED_WALK.key;
-    const stillHere = open(back);
-    const next = walkAimAfterOpen(aim, stillHere);
-    state.walkIndex = next.index;
-    state.walkKey = next.key;
-    if (stillHere) renderWalkthrough();
-  }
-
-  /**
-   * The walkthrough re-derives its queue from the live projection on every
-   * render, and the position is an INDEX into that queue rather than a task
-   * id. So answering the card you're on drops it out of the queue and the
-   * same index lands on the next one — six answers without six navigations —
-   * and a decision another peer answers while you sit here simply isn't
-   * offered to you.
-   */
-  function renderWalkthrough(): void {
-    const queue = currentQueue();
-    // Resolve the aim before rendering, and write the result back: from here
-    // on the index is a cache of where the key IS, not an independent claim
-    // about where the reader stands.
-    const index = walkPosition(queue, state.walkIndex, state.walkKey);
-    state.walkIndex = index;
-    const current = queue.items[index] ?? null;
-    const next = queue.items[index + 1] ?? null;
-    // A PAGE inside Home, not an overlay over the board — so the Home content
-    // it replaces has to go away while it is up. One toggle rather than a
-    // class on each region: a region added to Home later is covered by it
-    // without anyone remembering this line exists.
-    el('hub-home-page').classList.toggle('hidden', index >= 0);
-    // The island's one input. A plain signal write, not a render call: the
-    // card re-renders itself, keyed on `ReviewItem.key`, so a repaint of the
-    // item the reader is working keeps its DOM — which is what carries the
-    // half-typed answer and the expansions they opened across it.
-    //
-    // The handlers ride along because they are NOT stable: each one closes
-    // over `current` / `next`, the item this paint drew and the one after it.
-    // A set bound once at mount would be answering about a queue several
-    // answers old.
-    walkthroughData.value = {
-      queue,
-      index,
-      progress: state.walkProgress,
-      now: Date.now(),
-      handlers: {
-        // `current` rather than a lookup by task id: it is the item this
-        // render drew, so the key that gets advanced past cannot be a
-        // different row that happens to share a task.
-        onAnswer: async (t, text, optionId) => {
-          // The write first, then the advance — and only an ANSWER advances.
-          // A question converted server-side leaves the decision open on the
-          // queue, so settling it would mark done a row still waiting.
-          const wrote = await answerDecision(t, text, optionId);
-          if (wrote === 'asked') return true;
-          return finishWalkItem(current, next, async () => wrote === 'answered');
-        },
-        // Not a finish either: nothing was answered. The item is the
-        // owner's now, so the queue drops it and the next card takes its
-        // place — the toast is what says the question went (Bryan,
-        // 2026-08-31: the card that stayed put read as "nothing happened").
-        onAskOnItem: (item, phrase, question) => askOnReviewItem(item, phrase, question),
-        onQuestionOnItem: (item, question) => askOnReviewItem(item, null, question),
-        onReply: async (item, text, optionId) => {
-          // Same split as `onAnswer`: a reply the server read as a question
-          // is an ask, not an answer — the item leaves the queue for its
-          // owner's turn without being counted as cleared.
-          const wrote = await replyToReviewItem(item, text, optionId);
-          if (wrote === 'asked') return true;
-          return finishWalkItem(item, next, async () => wrote === 'answered');
-        },
-        onOpenItem: (item) => openFromWalk((back) => openReviewItem(item, back)),
-        // Same one-step close-then-open as `onOpenItem`, aimed at the thread —
-        // and the same doc jump underneath when the item has no thread on a
-        // task to aim at, so it needs the same care on the way out.
-        onOpenThread: (item) => openFromWalk((back) => openReviewThread(item, back)),
-        onStep: (i) => {
-          // Skip and back are positional by nature — the reader is pointing at
-          // a place in the list they can see. Re-aim from that position so the
-          // next repaint follows the item rather than the number.
-          const to = Math.max(0, i);
-          // Aim by the KEY the reader can see at that position, so the step
-          // lands on the item pointed at even if the queue moved under it.
-          const target = queue.items[to]?.key ?? null;
-          state.walkKey = target;
-          const at = target ? queue.items.findIndex((it) => it.key === target) : -1;
-          state.walkIndex = at >= 0 ? at : Math.min(to, queue.items.length);
-          renderWalkthrough();
-        },
-        onClose: () => {
-          closeWalkthrough();
-          renderWalkthrough();
-        },
-      },
-    };
-    // The address names the item on screen (`?item=`): opening the
-    // walkthrough is a push, advancing through it rewrites in place, closing
-    // unwinds — `historyStep` sees one `walk` resource however far it steps.
-    syncBoardUrl();
-  }
-
-  /**
-   * Answering moves you on, and the surface says so.
-   *
-   * Order is the whole point: the write, THEN the advance. The advance is the
-   * confirmation that the answer landed, so a refused write has to leave the
-   * reader on the same card with their words still in the box — otherwise the
-   * queue moves and nothing recorded it, which is the one failure this flow
-   * cannot afford.
-   */
   // Filled in at boot from the landing-page handoff (see walkHandoff below):
   // when the queue drains mid-sitting, this hops to the next workspace still
   // holding items. Null until boot wires it; no-op without a chain.
@@ -1796,28 +1495,6 @@ export async function bootHub(env: HubBootEnv): Promise<void> {
   // ranked to the bottom — "Review all" from the landing page opened on
   // N of N. See `walkHandoffReady`.
   const walkSources: WalkSources = { reviewItems: false, projection: false };
-
-  async function finishWalkItem(
-    item: ReviewItem | null,
-    next: ReviewItem | null,
-    write: () => Promise<boolean>,
-  ): Promise<boolean> {
-    const ok = await write();
-    if (!ok || !item) return ok;
-    state.walkProgress = { cleared: state.walkProgress.cleared + 1, last: item };
-    // Answered items stay in the Home stack marked done (approved design)
-    // instead of vanishing — a per-sitting display ledger, not stored state.
-    state.homeSettled.set(item.key, item);
-    const queue = currentQueue();
-    state.walkIndex = advanceWalk(queue, state.walkIndex, item.key, next?.key ?? null);
-    state.walkKey = queue.items[state.walkIndex]?.key ?? null;
-    // This board's queue just drained: if the landing page handed over more
-    // boards (?then=), continue the sitting there instead of dead-ending.
-    if (queue.items.length === 0) chainWalkDrain?.();
-    renderWalkthrough();
-    renderHomeRegion();
-    return ok;
-  }
 
   function peopleFromAwareness(): PresencePerson[] {
     const people: PresencePerson[] = [];
@@ -2270,128 +1947,25 @@ export async function bootHub(env: HubBootEnv): Promise<void> {
       renderBoardRegion();
     },
   );
-  // Notifications for THIS device. Mounted once; its state is read from the
-  // browser rather than held here, because the browser is where it actually
-  // lives — a permission revoked in site settings has to show up on the row
-  // without the app being told.
-  const pushToggle = mountPushToggle({
-    toggle: document.getElementById('hub-push-toggle') as HTMLInputElement,
-    note: el('hub-push-note'),
-    author: () => ({ id: user.id, name: user.name }),
-  });
-  void pushToggle.refresh();
-
-  // What the quality gate judges an agent's ask against, in the owner's own
-  // words. Read on every open, because an agent can rewrite it from a tool
-  // while this tab sits here and a stale box that got saved would put the old
-  // words back.
-  const reviewCriteria = mountReviewCriteria({
-    box: document.getElementById('hub-review-criteria') as HTMLTextAreaElement,
-    note: el('hub-review-criteria-note'),
-    save: el('hub-review-criteria-save') as HTMLButtonElement,
-    useDefault: el('hub-review-criteria-default') as HTMLButtonElement,
-    read: async () => {
-      const data = await fetchJson<{
-        reviewItemCriteria?: { value?: string; isDefault?: boolean };
-      }>(`/api/workspaces/${encodeURIComponent(workspaceId)}/settings`);
-      const criteria = data?.reviewItemCriteria;
-      return typeof criteria?.value === 'string'
-        ? { value: criteria.value, isDefault: criteria.isDefault === true }
-        : null;
+  // The settings panel's three controls, the ways it opens and closes, and
+  // the share button beside it. `hub-settings-panel.ts`, called here so the
+  // document-level click and keydown listeners register in the same order
+  // relative to the ones around them.
+  wireHubSettingsPanel({
+    document,
+    el,
+    workspaceId,
+    author,
+    user,
+    fetchJson,
+    send,
+    showToast,
+    isOpen: () => state.settingsOpen,
+    setOpen: (open) => {
+      state.settingsOpen = open;
     },
-    write: async (value) => {
-      const res = await send(`/api/workspaces/${encodeURIComponent(workspaceId)}/settings`, 'PUT', {
-        reviewItemCriteria: value,
-        author,
-      });
-      return res.ok;
-    },
-    toast: showToast,
-  });
-
-  // How many builders this board's lead may dispatch at once, and how many
-  // of that are already spent. Read on every open for the same reason as the
-  // criteria above: an agent can change the cap or open a dispatch from a
-  // tool while this tab sits here, and a stale box that got saved would
-  // write the old number back over a change nobody here saw happen.
-  const parallelismCap = mountParallelismCap({
-    box: document.getElementById('hub-parallelism-cap') as HTMLInputElement,
-    note: el('hub-parallelism-cap-note'),
-    save: el('hub-parallelism-cap-save') as HTMLButtonElement,
-    useDefault: el('hub-parallelism-cap-default') as HTMLButtonElement,
-    read: async () => {
-      const data = await fetchJson<{
-        parallelismCap?: {
-          value?: number;
-          isDefault?: boolean;
-          lastChange?: { actor?: { name?: string }; ts?: number; from?: number; to?: number };
-        };
-        dispatchesInUse?: number;
-      }>(`/api/workspaces/${encodeURIComponent(workspaceId)}/settings`);
-      const cap = data?.parallelismCap;
-      const change = cap?.lastChange;
-      const lastChange =
-        typeof change?.actor?.name === 'string' &&
-        typeof change.ts === 'number' &&
-        typeof change.from === 'number' &&
-        typeof change.to === 'number'
-          ? { actorName: change.actor.name, ts: change.ts, from: change.from, to: change.to }
-          : undefined;
-      return typeof cap?.value === 'number'
-        ? {
-            value: cap.value,
-            isDefault: cap.isDefault === true,
-            ...(typeof data?.dispatchesInUse === 'number' ? { inUse: data.dispatchesInUse } : {}),
-            ...(lastChange ? { lastChange } : {}),
-          }
-        : null;
-    },
-    write: async (value) => {
-      const res = await send(`/api/workspaces/${encodeURIComponent(workspaceId)}/settings`, 'PUT', {
-        parallelismCap: value,
-        author,
-      });
-      return res.ok;
-    },
-    toast: showToast,
-  });
-
-  el('hub-settings').addEventListener('click', () => {
-    state.settingsOpen = !state.settingsOpen;
-    renderSettingsPanel();
-    // Re-read on open: permission can change in site settings while the tab
-    // sits here, and the row is only ever read at the moment it is opened.
-    // Same reason for the criteria, which an agent can rewrite from a tool.
-    if (state.settingsOpen) {
-      void pushToggle.refresh();
-      void reviewCriteria.refresh();
-      void parallelismCap.refresh();
-    }
-  });
-  // A popover that only closes by hitting the same small button again is one
-  // people leave open over the list they were trying to read.
-  document.addEventListener('click', (ev) => {
-    if (!state.settingsOpen) return;
-    const t = ev.target as Node | null;
-    if (!t) return;
-    if (el('hub-settings-panel').contains(t) || el('hub-settings').contains(t)) return;
-    state.settingsOpen = false;
-    renderSettingsPanel();
-  });
-  // Escape closes it too — it floats over the board now, and a floating panel
-  // that ignores Escape reads as stuck. Focus goes back to the button that
-  // opened it, so a keyboard user is not dropped at the top of the document.
-  document.addEventListener('keydown', (ev) => {
-    if (ev.key !== 'Escape' || !state.settingsOpen) return;
-    state.settingsOpen = false;
-    renderSettingsPanel();
-    el('hub-settings').focus();
-  });
-  el('hub-share').addEventListener('click', () => {
-    void navigator.clipboard?.writeText(location.href).then(
-      () => showToast('Workspace URL copied'),
-      () => showToast(location.href),
-    );
+    renderSettingsPanel,
+    href: () => location.href,
   });
 
   // Voice (§2.4/§3.8): hold Space or the mic button; the context object sent

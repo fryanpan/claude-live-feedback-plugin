@@ -10,8 +10,15 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
+import { HUB_BOOT_SOURCES } from './support/hub-boot-sources.ts';
 
-const HUB_APP = readFileSync(resolve(import.meta.dirname, '../src/hub/hub-app.ts'), 'utf8');
+// The hub's boot sources: `hub-app.ts` and the three modules split out of
+// it. Read as one string because these assertions are about the board's
+// shape, not about which file a line ended up in — a move must not fail
+// them, and an absence checked across all four is the stronger read.
+const HUB_APP = HUB_BOOT_SOURCES.map((m) =>
+  readFileSync(resolve(import.meta.dirname, `../src/hub/${m}.ts`), 'utf8'),
+).join('\n');
 
 describe('boot reads the whole address once', () => {
   it('parses the boot URL through the codec', () => {
