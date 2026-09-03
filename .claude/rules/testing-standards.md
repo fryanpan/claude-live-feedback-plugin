@@ -33,14 +33,29 @@ tail while the table stayed green. Moving a read one module away is not an
 escape.
 
 A reading module is assumed to hand that text to its importers. To be exempt
-it needs BOTH a `// audit: no-text` comment and no exported value typed
-`string` — the marker is a claim the check verifies rather than believes, so
-writing it over a `readSheet(): string` buys nothing.
+it needs three things, and the marker is only one of them:
+
+1. a comment line holding nothing but `audit: no-text`. Prose that quotes the
+   phrase exempts nothing — the first version matched it anywhere on a line,
+   so deleting the real marker from a harness moved no count at all because
+   the module's header paragraph said the words.
+2. every exported value carrying an explicit type or return annotation. No
+   annotation is no evidence: `export const HUB_TEXT = TEXT['hub.css'];` is a
+   one-line hole that inference fills with `string` while a regex sees
+   nothing.
+3. none of those annotations naming `string`.
+
+So the marker is a claim the check verifies rather than believes.
 `packages/workspaces-app/test/css-harness.ts` is the module the exemption
 exists for: it reads four stylesheets only to install them in the test
-document and returns computed styles, so its forty-five importers are
+document and returns computed styles, so its forty-six importers are
 asserting behaviour, not source shape. Reads under a `fixtures/` path are not
 counted at all — a parser driven over sample input is behaviour.
+
+Three things the check still cannot see, so a clean table is not proof: a read
+in a test file whose path literal sits on a different line or in a constant
+declared elsewhere, a support module outside a `test/` directory, and
+`require()`.
 
 ## 2. No fixed sleeps in the server suite
 
