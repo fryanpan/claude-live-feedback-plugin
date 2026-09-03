@@ -175,12 +175,11 @@ describe('doc homes through the binding', () => {
 
     const before = readFileSync(join(wt, REL), 'utf8');
     setProse(rooms, 'd1', '# Triage\n\nparked pass\n');
-    const bindings = (
-      rooms as unknown as { fileBindings: Map<string, { lastSyncError?: { message: string } }> }
-    ).fileBindings;
     // The park announces itself — wait for the reason, then check that the
-    // detoured checkout really was left alone.
-    await waitFor(() => (bindings.get('d1')?.lastSyncError?.message ?? '').includes('unplaced'), {
+    // detoured checkout really was left alone. Through `getSyncError`, the
+    // published verb for exactly this question: the binding map itself now
+    // lives in `file-binding.ts` and is nobody's field to reach into.
+    await waitFor(() => (rooms.getSyncError('d1')?.message ?? '').includes('unplaced'), {
       describe: 'the write-back to park itself as unplaced',
     });
     expect(readFileSync(join(wt, REL), 'utf8')).toBe(before);

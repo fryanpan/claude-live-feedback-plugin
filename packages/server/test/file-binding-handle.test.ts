@@ -20,14 +20,23 @@
  * Synthetic temp dirs. No server, no port, no production data.
  */
 import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
-import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  existsSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  statSync,
+  utimesSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { type DocMeta, type WebhookPayload, prose } from '@feedback/core';
 import * as Y from 'yjs';
-import { FileBindings, type FileBindingHost } from '../src/file-binding.ts';
-import type { DocRoom } from '../src/rooms.ts';
+import { type FileBindingHost, FileBindings } from '../src/file-binding.ts';
 import { ROOM_TIMINGS } from '../src/room-timings.ts';
+import type { DocRoom } from '../src/rooms.ts';
 import { waitFor } from './wait-for.ts';
 
 const DOC_ID = 'bound-doc';
@@ -94,6 +103,29 @@ function recorder(dataDir: string, room: DocRoom): Recorder {
       clock += ms;
     },
   };
+}
+
+/**
+ * Write a file the way something outside the server does — and make the
+ * mtime actually move.
+ *
+ * The poll detects change by `statSync().mtimeMs` and nothing else, and a
+ * write landing in the same filesystem timestamp tick as the attach is
+ * invisible to it forever. That is a real property of the mechanism, not a
+ * bug to hide: it is why the write-back stamps its own mtime. Bumping the
+ * stamp here (the same helper `doc-home-binding.test.ts` uses) is what makes
+ * the assertion about the SWEEP rather than about how fast this machine is.
+ */
+let mtimeBump = 0;
+function writeExternal(path: string, content: string): void {
+  const before = statSync(path).mtimeMs;
+  writeFileSync(path, content);
+  mtimeBump += 2;
+  const t = new Date(Date.now() + mtimeBump * 1000);
+  utimesSync(path, t, t);
+  // The premise the poll rests on. Without this the test could pass or fail
+  // on timestamp granularity and report neither.
+  if (statSync(path).mtimeMs === before) throw new Error('mtime did not move');
 }
 
 function proseText(room: DocRoom): string {
@@ -234,7 +266,7 @@ describe('a binding drives its room only through the host', () => {
 
     // An external write reaches the doc through the shared sweep, and the
     // poll's own promotion is another host stamp.
-    writeFileSync(filePath, '# Doc\n\nseen by the poll\n');
+    writeExternal(filePath, '# Doc\n\nseen by the poll\n');
     await waitFor(() => proseText(room).includes('seen by the poll'), {
       describe: 'the mtime poll to pull the external edit in',
       timeout: ROOM_TIMINGS.filePollMs + ROOM_TIMINGS.readDebounceMs + 4000,
