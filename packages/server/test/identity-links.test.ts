@@ -16,14 +16,14 @@ import { afterEach, describe, expect, test } from 'bun:test';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { eventsForDoc, runBackfill } from '../src/activity-backfill';
 import {
   identityLinks,
   isOwnerActor,
   linkIdentity,
   resetOwnerIdentities,
   resolveIdentityId,
-} from '../src/activity';
-import { eventsForDoc, runBackfill } from '../src/activity-backfill';
+} from '../src/actor-identity';
 import { identityLinksPath, loadIdentityLinks } from '../src/identity-links';
 
 const tmpDirs: string[] = [];

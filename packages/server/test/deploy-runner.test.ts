@@ -11,6 +11,7 @@ import { describe, expect, it } from 'bun:test';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { deployLogPath, readDeployLog, writeDeployLog } from '../src/deploy-log.ts';
 import type { DeploySource } from '../src/deploy-source.ts';
 import {
   BUSY_SETTLE_MS,
@@ -19,11 +20,8 @@ import {
   type DeployResult,
   Deployer,
   VERIFY_BOOT_TIMEOUT_MS,
-  deployLogPath,
-  readDeployLog,
   runDeploy,
   servedRefReader,
-  writeDeployLog,
 } from '../src/deploy.ts';
 
 /** A scripted git. The key is the joined argv; anything unscripted fails,

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'bun:test';
-import { classifyActor } from '../src/activity';
+import { classifyActor } from '../src/actor-identity';
 
 /**
  * `classifyActor` reads `author.id` and `author.name` off a value that the

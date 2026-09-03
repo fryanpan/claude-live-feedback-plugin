@@ -18,7 +18,7 @@
  */
 import type { GoalListEntry, Task, TaskActor, TaskStatus } from '@feedback/core/task-wire';
 import { byBoardOrder } from '@feedback/core/task-wire';
-import { classifyActor } from './activity.ts';
+import { classifyActor } from './actor-identity.ts';
 import { bumpWordsRevision, cryptoId } from './task-fields.ts';
 import type {
   AddGoalResult,
