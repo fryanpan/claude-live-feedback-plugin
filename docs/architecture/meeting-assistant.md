@@ -1051,17 +1051,80 @@ malformed one never costs the others. The module is still called
 **Detection is the capture call, not a keyword pass** (the approach written
 down before criterion 4 was built): every ask is classified by the one Haiku
 call the tick already makes, on the new lines plus the previous tick's marked
-tail, so an ask that straddles a tick boundary ("ask the team whether we" /
-boundary / "still need the tunnel") is read whole, and every returned phrase
-is vouched against the transcript before anything files. A regex over the
-words would catch "can you research X" and miss "go look into that", which
-is most of how people ask.
+tail, so an ask that straddles a tick boundary ("Claude, can you ask the team
+whether we" / boundary / "still need the tunnel") is read whole, and every
+returned phrase is vouched against the transcript before anything files. What
+the model is asked to read is the *shape* of an ask; what a phrase table
+decides is only whether the speaker used one of the two cues below.
+
+That division replaced an earlier one, and the earlier one is worth stating
+because this doc argued for it: detection used to be the model's alone, on the
+grounds that a regex "would catch 'can you research X' and miss 'go look into
+that', which is most of how people ask". It is — and being caught was not
+always wanted. The pass had no way to tell an ask from a thought said out
+loud, so it guessed, and a guess is either an ask dropped or work started
+before anybody asked for it. The convention below settles that in the room
+rather than in the model.
 
 **They are not symmetrical, and that is the design.** A LOOKUP only reads, so
 a wrong one costs a link nobody wanted. A RESEARCH ask and a REVIEW ask each
 address somebody — the lead — so each lands where that person reads. A
 CORRECTION does neither: it *changes something already written*, so it is
 the only intent whose guard cannot be finished in the capture pass at all.
+
+### Now, later, or neither — the two spoken cues (Bryan, 2026-09-02 huddle)
+
+The speaker says which kind of ask it is, and the assistant stops inferring
+it:
+
+| Said in the room | Read as | What happens |
+| --- | --- | --- |
+| "**Claude, can you** look into the retry loop" — the wake word, then "can you" / "could you" / "would you" | an ask for NOW | acted on during the meeting — research, lookup or review |
+| "**Create a task** for the retry loop" opening the clause (also "make a task", "file a ticket", "add a ticket") | an ask for LATER | a row is filed, quoting the words, and nothing is started |
+| "Bob, can you pass the water" · "we can add tasks later" · "the retry loop wakes the sync" | neither | a note, and only a note |
+
+- **The prompt and the guard say the same thing, and the guard is the one
+  that decides.** `ASK_CUE_PROMPT_RULE` teaches the convention; the phrase
+  tables and the matcher are `meeting-ask-cues.ts`, and
+  `parseTaskCaptureReply` re-checks every ask against them. A request the
+  speech never cued with "create a task" is **downgraded to a note**, and so
+  is a research, lookup or review ask with no "can you" behind it. The words
+  still reach the notes composer and land in the doc — downgraded is
+  recorded, not discarded.
+- **Later beats now.** "Claude, can you create a task for that" carries both
+  and is a request: the speaker named the artefact they wanted.
+- **The wake word is part of the now cue.** The convention is literally
+  "Claude, can you", and a bare "can you" is how people talk to each other:
+  "Bob, can you pass me the water", "can you believe they shipped that on a
+  Friday" and "sorry, could you repeat that" all read as asks to the assistant
+  without it. The transcriber's near-misses count — "cloud", "clod", "claud" —
+  because a convention that fails on a mis-hearing is one people stop trusting.
+- **The later cue has to OPEN a clause, and its noun has to END the object.**
+  So "we can add tasks to the sprint later" files nothing, and neither does
+  "add a ticket TYPE for design work" — the first is a fact about the sprint,
+  the second a sentence about the board's schema.
+- **One cue licenses ONE ask, and a spent cue stays spent.** The cue is a
+  property of the ask, matched against the line the ask was quoted from, so a
+  single "create a task for the retry loop" cannot license the tunnel and the
+  sidebar the room mentioned next. A line that has already produced a row is
+  consumed for the rest of the meeting, which is what stops the overlap
+  replaying it into the following tick.
+- **The cue line is still searched across the whole capture window.** The
+  boundary problem the overlap exists for puts the cue and its subject in
+  different ticks — "Claude, can you go and" / boundary / "look into why the
+  retry loop wakes the sync" — so a cue with no words in common with the ask
+  still qualifies. Spending, not adjacency, is what keeps that from being a
+  licence to reuse it.
+- **A PLURAL later cue stands.** "File tickets for the next few things I
+  mention" asks for however many rows follow it, and was measured doing
+  exactly that across a tick boundary, so it is not spent on its first ask.
+- **A reference and a correction need no cue.** Neither is an ask: one names
+  work the board already tracks, the other fixes a note already written.
+- **What this deliberately gives up.** "Go look into that" and "ask the team
+  whether we still need the tunnel" — the uncued phrasings the research and
+  review rules were originally written around — now become notes. That is the
+  convention working, not a regression, and it is the cost the owner accepted
+  for a pass that no longer guesses.
 
 ### "Can you research that" — a placeholder in the notes, and the lead's errand
 
@@ -1508,6 +1571,8 @@ keeps a person's writing) + `notes-ownership.ts` (the ownership ledger
 everything else asks) + `notes-section.ts` (what a section decomposes into) ·
 `packages/server/src/meeting-notes-correction.ts` (which note a spoken
 correction lands on, and whether it may) ·
+`packages/server/src/meeting-ask-cues.ts` (now, later or neither — the two
+spoken cues and the phrase tables behind them) ·
 `packages/core/src/speaker-tags.ts` (the tag grammar, its provenance, and the
 late correction) + `speaker-roster.ts` (the meeting's cast) ·
 `packages/workspaces-app/src/speaker-reassign.ts` +
