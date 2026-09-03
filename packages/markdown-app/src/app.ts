@@ -394,7 +394,7 @@ async function mountMarkdown(ctx: MountContext): Promise<void> {
   // same surface over a companion doc (that is what `navDocId` marks), and a
   // review of somebody's branch is not a place a meeting is recorded.
   //
-  // Opened by the Board's "Start a planning huddle": the address carries a
+  // Opened by the Board's "Make a plan" / "Have a meeting": the address carries a
   // flag, and the strip asks for the mic at once instead of waiting for a
   // press. Read once and taken back out of the address, so a reload or a
   // later Back into this entry does not open a mic nobody pressed for.

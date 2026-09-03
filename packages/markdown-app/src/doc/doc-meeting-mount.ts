@@ -112,7 +112,7 @@ export function mountDocMeeting(opts: DocMeetingOptions): DocMeetingMount {
     ...participant,
     // Which of the two entries this press was, read off the mode it
     // carries: a solo huddle ("Make a plan") opens the microphone, and a
-    // conversation ("Have a discussion") opens the chooser instead,
+    // conversation ("Have a meeting") opens the chooser instead,
     // because a room cannot be recorded until somebody presses the button
     // that tells it so. Nothing new on the address — the mode the Board
     // already sends is the whole difference between the two buttons.

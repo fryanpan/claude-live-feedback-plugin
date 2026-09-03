@@ -1,3 +1,4 @@
+import type { HuddleKind } from '@feedback/core';
 import type { DocMeta } from './mount-context.ts';
 
 /**
@@ -33,6 +34,7 @@ export async function fetchDocMeta(docId: string): Promise<DocMeta> {
         relPath?: string;
         diffTarget?: string;
         huddle?: boolean;
+        huddleKind?: HuddleKind;
       };
       // Top-level, NOT under `meta`: `meta.workspaceId` is the GROUPING id of
       // a diff review / folder browse, which is a different thing from the
@@ -52,6 +54,9 @@ export async function fetchDocMeta(docId: string): Promise<DocMeta> {
       // back to showing the id.
       ...(backId ? { backTo: { workspaceId: backId, name: data.backTo?.name ?? '' } } : {}),
       ...(data.meta?.huddle === true ? { huddle: true } : {}),
+      // The crumb's word — "Plan" or "Meeting notes" — comes off this, so a
+      // field dropped here silently mislabels every plan doc.
+      ...(data.meta?.huddleKind ? { huddleKind: data.meta.huddleKind } : {}),
     };
   } catch {
     return fallback;

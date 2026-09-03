@@ -85,12 +85,13 @@ describe('renderQuickActions — the buttons in the quick-add slot', () => {
     expect(newTask.textContent).toContain('New task');
     expect(newTask.classList.contains('hub-btn-primary')).toBe(true);
     // Round-4 mock (Bryan, 2026-09-01): verb-first, outcome-named — you
-    // leave with a plan doc, or with notes. The rename touches these entry
-    // buttons only; routes, params and doc titles keep the huddle name.
+    // leave with a plan doc, or with notes. The second became "Have a
+    // meeting" on 2026-09-02. The renames touch these entry buttons only;
+    // routes, params and class names keep the huddle name.
     expect(huddle.textContent).toContain('Make a plan');
     expect(huddle.classList.contains('hub-btn')).toBe(true);
     const conversation = root.querySelector('.hub-conversation-start') as HTMLButtonElement;
-    expect(conversation.textContent).toContain('Have a discussion');
+    expect(conversation.textContent).toContain('Have a meeting');
     expect(conversation.type).toBe('button');
     // Not a submit: there is no form here to submit, and a stray Enter must
     // not file anything.

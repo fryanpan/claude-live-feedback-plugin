@@ -72,6 +72,20 @@ describe('redactMetaForVisitor', () => {
     expect(out.diffGroup).toBe('Core');
   });
 
+  it('carries the doc kind so a shared plan doc is not labelled meeting notes', () => {
+    // The kind IS the word the editor's crumb shows. Dropping it here left a
+    // shared plan doc reading "Meeting notes" to the visitor and "Plan" to
+    // the owner, off the same doc. The negative control is the ordinary doc
+    // above: it has no kind, so nothing is invented for it.
+    const plan = redactMetaForVisitor(
+      { ...FULL, huddle: true, huddleKind: 'plan' },
+      { workspaceScoped: true },
+    ) as Record<string, unknown>;
+    expect(plan.huddle).toBe(true);
+    expect(plan.huddleKind).toBe('plan');
+    expect(out.huddleKind).toBeUndefined();
+  });
+
   it('is an ALLOWLIST — a field added later is redacted by default', () => {
     const withNewField = { ...FULL, someFutureSecret: '/Volumes/secret' } as unknown as DocMeta;
     const res = redactMetaForVisitor(res_in(withNewField), { workspaceScoped: true }) as Record<
