@@ -33,7 +33,7 @@ import {
   type TaskTransition,
   isTaskStatus,
 } from '@feedback/core/task-wire';
-import { classifyActor } from './activity.ts';
+import { classifyActor } from './actor-identity.ts';
 import {
   type DecisionShapeGap,
   checkDecisionShape,

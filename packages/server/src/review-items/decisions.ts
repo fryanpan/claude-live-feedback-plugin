@@ -20,7 +20,7 @@ import {
   latestThreadedQuestion,
 } from '@feedback/core';
 import type { DecisionOption, Task, TaskActor } from '@feedback/core/task-wire';
-import { classifyActor } from '../activity.ts';
+import { classifyActor } from '../actor-identity.ts';
 import { checkDecisionShape, decisionShapeMessage } from '../decision-shape.ts';
 import { bumpWordsRevision, cryptoId } from '../task-fields.ts';
 import { legacyDecisionItem } from './derive.ts';
