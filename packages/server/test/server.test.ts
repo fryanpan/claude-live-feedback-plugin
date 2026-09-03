@@ -351,7 +351,7 @@ describe('server REST', () => {
     // a Y.Map encodes via JSON-stringify, producing `{"0":..,"1":..}` on
     // the way out — which breaks the client's `new Uint8Array(anchor.startRel)`
     // reconstruction (empty array, no iteration). Editor-created threads use
-    // `Array.from(uint8array)` in packages/markdown-app/src/app.ts:976 and
+    // `Array.from(uint8array)` in packages/workspaces-app/src/app.ts:976 and
     // round-trip cleanly. Agent path must match.
     expect(Array.isArray(created.thread.anchor.startRel)).toBe(true);
     expect(Array.isArray(created.thread.anchor.endRel)).toBe(true);

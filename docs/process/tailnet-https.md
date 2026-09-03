@@ -66,7 +66,7 @@ answers `not-allowed` immediately, with no permission prompt, because on an
 insecure origin Chrome offers no such permission to grant. Telling someone to
 allow the mic for the site sends them looking for a control that is not there.
 
-`packages/markdown-app/src/voice-capture.ts` gates on exactly one thing,
+`packages/workspaces-app/src/voice-capture.ts` gates on exactly one thing,
 `window.isSecureContext`, so this is the whole story — not a permissions bug
 and not a code bug.
 
@@ -203,7 +203,7 @@ that no longer answers. Undo them together, frontend last.
 
 - **Agents.** The MCP resolves `http://localhost:<port>` from a file holding a
   port and a pid. No hostname is involved and no session needs restarting.
-- **The client's own URLs.** The markdown-app, the redline view, the hub and
+- **The client's own URLs.** The workspaces-app, the redline view, the hub and
   the widget all build their websocket URL as
   `location.protocol === 'https:' ? 'wss' : 'ws'`, so they follow the page.
   There was nothing to fix there.

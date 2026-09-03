@@ -3,7 +3,7 @@
  * machine-wide landing page.
  *
  * Reproduced on a running server before this existed: the review app's `←`
- * is a static `href="/"` in `packages/markdown-app/index.html`, so opening
+ * is a static `href="/"` in `packages/workspaces-app/index.html`, so opening
  * any doc from a board and tapping back lands on the list of everything on
  * the machine. The client cannot fix that alone — nothing in the page says
  * which board owns the doc, and `document.referrer` is empty for a URL that

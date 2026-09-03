@@ -86,7 +86,7 @@ mkdirSync(dataDir, { recursive: true });
 
 // Build in THIS worktree. Both bundles, because a stale dist is exactly how a
 // merged feature ends up invisible in the browser.
-for (const script of ['build:widget', 'build:markdown-app']) {
+for (const script of ['build:widget', 'build:workspaces-app']) {
   console.log(`[staging] ${script}…`);
   const built = spawnSync('bun', ['run', script], { cwd: repoRoot, stdio: 'inherit' });
   if (built.status !== 0) {

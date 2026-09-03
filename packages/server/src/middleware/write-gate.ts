@@ -70,7 +70,7 @@ export const SIGN_IN_REQUIRED_MESSAGE =
   'Sign in to comment or edit here — your name goes on what you write. Reading needs no account.';
 
 /** The JSON body of a refusal. Shape is part of the contract with the
- *  browser client (`markdown-app/src/signin/write-gate.ts`). */
+ *  browser client (`workspaces-app/src/signin/write-gate.ts`). */
 export function signInRequiredBody(): {
   error: string;
   message: string;

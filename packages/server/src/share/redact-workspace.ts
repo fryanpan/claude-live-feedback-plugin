@@ -17,7 +17,7 @@ import type { HubWorkspace } from '../tasks.ts';
  * A field added to `HubWorkspace` later is withheld by default rather than
  * shipped until somebody notices it went out. The set below is exactly what
  * the board client declares it reads (`HubWorkspaceInfo` in
- * `markdown-app/src/hub/hub-board-model.ts`), so widening it is a deliberate act
+ * `workspaces-app/src/hub/hub-board-model.ts`), so widening it is a deliberate act
  * with a surface asking for the field.
  *
  * `leadAgentId` STAYS: who is responsible for a board is workspace content,

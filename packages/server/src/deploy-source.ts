@@ -37,7 +37,7 @@
  * list grows:
  *
  * - Nothing builds or serves `docs/`. It is not read by either bundle build
- *   (`packages/{widget,markdown-app}/scripts/build.ts`) and no route reads it.
+ *   (`packages/{widget,workspaces-app}/scripts/build.ts`) and no route reads it.
  * - `demos/` **is** served, live, out of the deploy source — `bin.ts` resolves
  *   `join(repoRoot, 'demos')` and `server.ts` serves `/demos/*` per request. So
  *   an uncommitted demo genuinely changes what a browser gets, and `demos/`

@@ -100,7 +100,7 @@ push.
 
 | Gate | Catches what the others miss |
 | --- | --- |
-| `bunx vitest run` | unit + client suites (markdown-app, core, widget) |
+| `bunx vitest run` | unit + client suites (workspaces-app, core, widget) |
 | `bun test packages/server/test` | the server suite; vitest does not run it |
 | `bun run typecheck` | type errors; neither runner typechecks |
 | `bun run lint` | biome; nothing else formats |

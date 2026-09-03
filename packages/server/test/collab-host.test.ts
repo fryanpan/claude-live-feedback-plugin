@@ -283,7 +283,7 @@ describe('the collaboration hostname over HTTP', () => {
 
   describe('B. what a collaborator reaches', () => {
     it('opens the board it was linked to, and the docs filed on it', async () => {
-      // Not asserting 200 on the page routes — the markdown-app dist is not
+      // Not asserting 200 on the page routes — the workspaces-app dist is not
       // built in tests. What is under test is the gate.
       expect((await asCollaborator(`/workspaces/${encodeURIComponent(board)}`)).status).not.toBe(
         403,

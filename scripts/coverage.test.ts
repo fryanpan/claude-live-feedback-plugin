@@ -100,7 +100,7 @@ describe('summarize', () => {
     const packages = summarize({ vitest: '', bun: '' });
     expect(packages.map((p) => `${p.package}:${p.runner}`)).toEqual([
       'core:vitest',
-      'markdown-app:vitest',
+      'workspaces-app:vitest',
       'mcp:vitest',
       'widget:vitest',
       'server:bun',

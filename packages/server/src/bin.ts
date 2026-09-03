@@ -317,7 +317,7 @@ if (share?.config.baseHostname && share.config.cfAccountId) {
 if (!widgetDist)
   console.log('[feedback] (widget bundle not built yet — run: bun run build:widget)');
 if (!markdownAppDist)
-  console.log('[feedback] (markdown app not built yet — run: bun run build:markdown-app)');
+  console.log('[feedback] (markdown app not built yet — run: bun run build:workspaces-app)');
 
 // The summary backfill is NOT here any more.
 //

@@ -484,7 +484,7 @@ export function answerBody(transcript: string): string | null {
 
 /**
  * The hub's four places, as `HubNav` in the client names them
- * (`packages/markdown-app/src/hub/hub-presence-model.ts`): the URL suffix is the name,
+ * (`packages/workspaces-app/src/hub/hub-presence-model.ts`): the URL suffix is the name,
  * except `tasks`, which is the bare workspace path. Mirrored rather than
  * imported — the server does not depend on the client package — and pinned
  * by voice-nav.test.ts against the paths `home-routes.test.ts` proves served.

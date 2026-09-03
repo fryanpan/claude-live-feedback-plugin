@@ -44,10 +44,10 @@ that way and add new subsystem docs to the list here.
   exists that you cannot restart — the shared server's REST routes. Bryan
   waived compatibility shims for prototype-phase surfaces (2026-08-18).
 - **Don't append CSS at EOF of any stylesheet under
-  `packages/markdown-app/src/`** — put rules in the
+  `packages/workspaces-app/src/`** — put rules in the
   `/* ===== SECTION ===== */` banner they belong to. The board's rules live in
   `hub.css`, under the per-surface `/* ##### HUB · … ##### */` sub-banner that
-  names the surface (`grep -n '##### HUB' packages/markdown-app/src/hub.css`
+  names the surface (`grep -n '##### HUB' packages/workspaces-app/src/hub.css`
   lists them); `styles.css` keeps the review editor and the chrome every page
   shares. Parallel branches that both append at EOF conflict every time.
 - **Edit Bryan's bound docs directly; don't default to `suggest: true`.**

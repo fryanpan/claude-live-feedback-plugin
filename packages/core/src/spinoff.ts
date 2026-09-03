@@ -1,6 +1,6 @@
 /**
  * The rules a task spun off a line of talk is filed under — shared by the
- * pointer pill (markdown-app `spinoff-menu.ts`, a tap on a selection) and
+ * pointer pill (workspaces-app `spinoff-menu.ts`, a tap on a selection) and
  * the meeting assistant's capture pass (server `meeting-task-capture.ts`, a
  * request heard in the transcript).
  *
