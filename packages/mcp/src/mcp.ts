@@ -11,11 +11,11 @@ import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprot
 import { type BacklogCommentRow, deliverAttachBacklog } from './attach-backlog.ts';
 import { createAttachmentKeepalive } from './attachment-keepalive.ts';
 import { resolveAgentAuthor } from './author.ts';
-import { isChannelEvent } from './channel-gate.ts';
 import { createChannelMessages } from './channel-messages.ts';
 import { type PresenceRow, claimWarning } from './claim-warning.ts';
 import { createDeferredEmitter } from './deferred-emit.ts';
 import { createFrameDedup } from './frame-dedup.ts';
+import { createFrameHandler } from './frame-handler.ts';
 import { type SseCursor, deliverThenCommit } from './sse-cursor.ts';
 import { TOOL_LIST } from './tool-schemas.ts';
 import { type DocsToolContext, handleDocsTool } from './tools/docs.ts';
@@ -916,77 +916,6 @@ function startSseLoop(label: string, path: string, controller: AbortController):
  *  cannot identify is forwarded rather than dropped. */
 const shouldForwardFrame = createFrameDedup();
 
-async function handleFrame(raw: string): Promise<void> {
-  // Only forward data frames — ignore keepalive ':ok' comments.
-  const lines = raw.split('\n');
-  let ev = 'message';
-  const dataParts: string[] = [];
-  for (const line of lines) {
-    if (line.startsWith(':')) continue;
-    if (line.startsWith('event:')) ev = line.slice(6).trim();
-    else if (line.startsWith('data:')) dataParts.push(line.slice(5).trimStart());
-  }
-  if (dataParts.length === 0) return;
-  let payload: unknown;
-  try {
-    payload = JSON.parse(dataParts.join('\n'));
-  } catch {
-    return;
-  }
-  if (ev === 'replay.gap') {
-    // An explicit hole: the server is saying it CANNOT replay what this
-    // session missed while disconnected. Surface it as its own channel line —
-    // the doc-shaped formatter below would render it as a garbled comment —
-    // so the agent refetches (get_doc / list_threads / next_tasks) instead of
-    // trusting the stream to have been complete. No receipt: a gap notice
-    // carries no queue row, and acking one would claim delivery of the very
-    // frames it is reporting as missing.
-    const p = (payload ?? {}) as { docId?: string };
-    await server.notification({
-      method: 'notifications/claude/channel',
-      params: {
-        source: 'claude-workspaces',
-        sent_at: new Date().toISOString(),
-        content: `[replay.gap] events on ${p.docId ?? 'a watched channel'} may have been missed while this session was disconnected — refetch state (get_doc / list_threads / next_tasks) rather than assuming the stream was complete`,
-        meta: { event: 'replay.gap', ...(p.docId ? { doc_id: p.docId } : {}) },
-      },
-    });
-    return;
-  }
-  // The kind gate FIRST, then the dedup: a word-rate frame must never reach
-  // the dedup's window, let alone the channel (channel-gate.ts).
-  if (isChannelEvent(ev) && shouldForwardFrame.shouldForward(ev, payload)) {
-    await emitChannelMessage(ev, payload);
-  }
-  // The receipt for a durable comment row, AFTER the forward attempt (same
-  // ordering rationale as the voice ack below: an ack sent first would clear
-  // the durable copy on the strength of an intent). Deliberately OUTSIDE the
-  // dedup gate: a redelivered frame reuses the original event's eid — it IS
-  // the same event — so dedup rightly hides the duplicate from the session,
-  // but the receipt must still go back or the server re-offers the row after
-  // every grace window, forever. "The frame is in this process's hands" is
-  // exactly what the receipt asserts, forwarded or collapsed.
-  await ackCommentRow(payload);
-}
-
-/** POST the receipt for a frame that carries a durable comment-queue row id.
- *  Never throws: a failed ack leaves the row on the queue, so the cost is a
- *  redelivery after the grace window — late and duplicated beats silently
- *  dropped, and that asymmetry is why the receipt lives on this side. */
-async function ackCommentRow(payload: unknown): Promise<void> {
-  const p = payload as { commentQueueId?: unknown; workspaceId?: unknown };
-  if (typeof p?.commentQueueId !== 'string' || typeof p?.workspaceId !== 'string') return;
-  try {
-    await http(
-      'POST',
-      `/api/workspaces/${encodeURIComponent(p.workspaceId)}/comment-queue/${encodeURIComponent(p.commentQueueId)}/ack`,
-      {},
-    );
-  } catch {
-    // Left on the queue on purpose — see above.
-  }
-}
-
 /**
  * The channel renderers, bound to this process: the notification sink the SDK
  * gives us, the HTTP client above, and this session's identity. See
@@ -998,6 +927,17 @@ const channel = createChannelMessages({
   authorId: AUTHOR.id,
 });
 const emitChannelMessage = channel.emitChannelMessage;
+
+/**
+ * The SSE frame handler, bound to this process. See frame-handler.ts for the
+ * ordering it keeps between the kind gate, the dedup and the comment receipt.
+ */
+const handleFrame = createFrameHandler({
+  notify: (n) => server.notification(n),
+  emitChannelMessage: (event, payload) => channel.emitChannelMessage(event, payload),
+  http: (method, path, body) => http(method, path, body),
+  shouldForward: (event, payload) => shouldForwardFrame.shouldForward(event, payload),
+});
 
 async function http(method: string, path: string, body?: unknown): Promise<unknown> {
   const baseUrl = resolveBaseUrl();
