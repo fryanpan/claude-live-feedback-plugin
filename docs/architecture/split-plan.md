@@ -244,7 +244,7 @@ the rest of the family.
 | `voice-resolve.ts` (762) | `voice-status.ts` | `composeStatus`, `ago`, `quote`, `listTitles`, `capWords`, `countWords`, the status shapes | 187 (est. ~190) |
 | `review-queue.ts` (831) | `ask-detection.ts` | `asksPerson`, `findAsk`, `extractAsk`, `sentenceQuestion`, `codeSpans`, `stripEmphasis` | 249 (est. ~250) |
 
-Four commits, one per row. The three parents end at **1,323**, **588** and
+Four commits, one per row. The three parents end at **1,318**, **588** and
 **602**. Every extracted file is pure; `VoiceRouter` stays the service.
 
 **The ask matcher is now unsplittable, which was the point.** `extractAsk`
