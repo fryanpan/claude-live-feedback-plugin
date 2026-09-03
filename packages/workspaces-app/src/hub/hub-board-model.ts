@@ -17,6 +17,7 @@ import {
   formatGoalEffortSeconds,
   summarizeGoalEffort,
 } from '@feedback/core/goal-effort';
+import { blockableStatus, blockerLookup, openBlockerIds } from '@feedback/core/task-blocked';
 import {
   type DecisionOption,
   TASK_STATUSES,
@@ -565,6 +566,18 @@ export interface BoardSection {
   isChores: boolean;
   tasks: HubTask[];
   /**
+   * Which of this band's rows are Blocked, and by what: row id → the ids of
+   * the tickets it is still waiting on. A row absent from this map is not
+   * blocked. Empty on a section built before the map existed, which reads as
+   * "nothing is blocked" rather than throwing.
+   *
+   * Computed from the UNFILTERED task list, for the reason `boardEffort`
+   * gives at length: a blocker the reader's filter happens to hide is still
+   * holding the row, and deriving this from `section.tasks` would clear the
+   * ring the moment someone switched to the "Mine" tab.
+   */
+  blockedBy?: Map<string, string[]>;
+  /**
    * The band's effort rollup — the header bar, what is left, the finish date.
    *
    * Filled by `boardSectionsWithEffort`, and absent when the caller built its
@@ -664,8 +677,44 @@ export function boardSections(goals: HubGoal[], tasks: HubTask[], f: BoardFilter
     if (!taskVisible(task, f)) continue;
     (byId.get(task.goal) ?? chores).tasks.push(task);
   }
-  for (const s of sections) s.tasks.sort(byBoardOrder);
+  const blocked = boardBlockers(tasks);
+  for (const s of sections) {
+    s.tasks.sort(byBoardOrder);
+    const mine = new Map<string, string[]>();
+    for (const t of s.tasks) {
+      const on = blocked.get(t.id);
+      if (on) mine.set(t.id, on);
+    }
+    s.blockedBy = mine;
+  }
   return sections;
+}
+
+/**
+ * Which rows are Blocked, and by what.
+ *
+ * Blocked is derived, never stored — the same derivation the server dispatch
+ * reads use, imported from core rather than written twice, because a board
+ * that disagreed with `next_tasks` about which rows are waiting would be
+ * worse than a board that said nothing. A row is Blocked when its status can
+ * be (`todo` or `in-progress` — `blockableStatus` holds that rule) and at
+ * least one ticket in its `after` list is neither done nor archived.
+ *
+ * Ids naming a task this board has never seen are skipped rather than
+ * treated as open: a `done` row that has aged out of the reader's done-window
+ * is gone from the projection, and reading its absence as "still open" would
+ * leave a ring on a row nothing is holding.
+ */
+export function boardBlockers(tasks: readonly HubTask[]): Map<string, string[]> {
+  const lookup = blockerLookup(tasks);
+  const out = new Map<string, string[]>();
+  for (const task of tasks) {
+    if (!blockableStatus(task.status)) continue;
+    if (isTaskArchived(task)) continue;
+    const open = openBlockerIds(task, lookup);
+    if (open.length > 0) out.set(task.id, open);
+  }
+  return out;
 }
 
 /**

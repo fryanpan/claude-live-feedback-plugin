@@ -2463,6 +2463,29 @@ body.hub-body {
   border-radius: 2px;
   background: color-mix(in srgb, var(--accent) 28%, transparent);
 }
+/* The dependency curves, in the same gutter. They pass BEHIND the goal rail
+   above: the rail says "these rows belong to the goal above" and the curve
+   says "this row is waiting for that one", so the two must not fight for the
+   same 2px of x. `z-index` is what separates them — both are positioned
+   children of the same box, so without it the SVG would paint over the rail
+   simply for coming later in the tree.
+
+   `pointer-events: none` because the layer covers the whole band: a click on
+   a row must reach the row, not the drawing over it. `overflow: visible` so
+   a curve between two far-apart rows is not clipped by a viewBox rounded a
+   fraction short. */
+.hub-dep-layer {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  z-index: 0;
+  overflow: visible;
+  pointer-events: none;
+}
+.hub-band-tasks::before {
+  z-index: 1;
+}
 /* A collapsed band is the goal row and NOTHING else (decision: no hidden-N
    line, no summary) — the renderer emits nothing extra and this hides the
    tasks. */
@@ -2826,6 +2849,21 @@ body.hub-body {
   border-style: dashed;
   border-color: var(--yellow);
 }
+/* Blocked: a solid ring held open by a bar — a row that cannot start. It is
+   the muted grey of the default ring rather than a colour of its own, because
+   blocked is not an alarm and not a state anybody chose: the row is waiting,
+   and the gutter curve says what for. Deliberately not the dashed triage ring
+   (that says "unvetted"), not the filled dot, not the tick. */
+.hub-status-mark-blocked {
+  border-color: var(--fg-muted);
+}
+.hub-status-mark-blocked::after {
+  content: "";
+  width: 8px;
+  height: 2px;
+  border-radius: 1px;
+  background: var(--fg-muted);
+}
 .hub-status-mark-in-progress {
   border-color: var(--accent);
 }
@@ -3101,6 +3139,18 @@ body.hub-body {
   border: 1px solid var(--border);
   color: var(--fg-muted);
   white-space: nowrap;
+}
+/* The one right-hand state word — "blocked" or "triage", never both, since
+   blocked is a `todo` row. Plain muted text rather than a chip, matching the
+   goal band's own meta word, and sharing the due date's slot so a row grows no
+   extra column. It truncates rather than pushing the date off the row. */
+.hub-state-note {
+  font-size: 12px;
+  color: var(--fg-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  align-self: center;
 }
 .hub-badge-decision {
   border-color: var(--yellow);
@@ -3589,6 +3639,112 @@ body.hub-body {
   margin-left: 8px;
   color: var(--fg-muted);
   font-size: 12px;
+}
+/* An entry is a row: [ring] link … [x]. The list item became a flex row when
+   blocking tickets joined it — before that every entry was one anchor and
+   needed no layout at all. */
+.hub-related-links-list li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 32px;
+}
+/* A blocking ticket wears the board's own barred ring, in the place the board
+   wears it: at the head of the row. Nothing is written to say the entry is a
+   blocker — the ring says it, and a reader who has seen the board once has
+   already learnt it. Slightly smaller than the board's, to sit with text
+   rather than with rows. */
+.hub-related-mark {
+  width: 15px;
+  height: 15px;
+  border-width: 1.5px;
+}
+/* Take this entry off. ALWAYS visible, at every width — it was hover-only
+   until 2026-09-03, which made it a 32px invisible target on the iPad this
+   board is mainly read on: a hardware keyboard is attached there but a finger
+   is the pointer, so there is no hover to reveal anything with
+   (design-mobile.md, "A hardware keyboard is attached"). A width query cannot
+   tell that iPad from a laptop of the same width, and per-device truth is not
+   a media query in this project, so the size below rides a POINTER query
+   instead — what the reader is pointing with is the thing actually being
+   asked. Muted, so a column of × on a list read by skimming stays quiet
+   without being absent. */
+.hub-related-link-x {
+  margin-left: auto;
+  flex: none;
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  border: none;
+  border-radius: var(--radius);
+  background: none;
+  color: var(--fg-muted);
+  font: inherit;
+  font-size: 15px;
+  line-height: 1;
+  cursor: pointer;
+}
+.hub-related-link-x:hover,
+.hub-related-link-x:focus-visible {
+  background: var(--bg-hover);
+  color: var(--fg);
+}
+/* A pasted address that is not ours: shown as itself, muted rather than in
+   the accent, because there is no title behind it and it is not a place on
+   this board. */
+.hub-related-link-plain {
+  color: var(--fg-muted);
+}
+/* The add control: quiet until used, exactly like the board's "+ New goal"
+   row it is modelled on. No caption explains what a link becomes — paste one
+   and the entry says so. */
+.hub-related-add {
+  margin-top: 6px;
+}
+.hub-related-add-btn {
+  appearance: none;
+  padding: 0 12px;
+  min-height: 32px;
+  border: 1px dashed var(--border);
+  border-radius: var(--radius-pill);
+  background: none;
+  color: var(--fg-muted);
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+.hub-related-add-btn:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.hub-related-add-input {
+  width: 100%;
+  max-width: 420px;
+  min-height: 32px;
+  padding: 4px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg);
+  color: var(--fg);
+  font: inherit;
+  font-size: 14px;
+}
+/* A finger is pointing: every Related Links control takes the 44px floor from
+   design-mobile.md. Keyed on the POINTER, not the viewport, because the iPad
+   that needs this is 1180px wide and sits in the same width band as a laptop
+   that does not. */
+@media (hover: none), (pointer: coarse) {
+  .hub-related-links-list li {
+    min-height: 44px;
+  }
+  .hub-related-link-x {
+    width: 44px;
+    height: 44px;
+  }
+  .hub-related-add-btn,
+  .hub-related-add-input {
+    min-height: 44px;
+  }
 }
 /* Link chips: what a `url` ref is FOR. Wraps rather than scrolls — the
    detail panel has vertical room and a hidden link is the bug this
@@ -5292,6 +5448,13 @@ a.hub-link-chip:hover {
   .hub-task-badges .hub-badge {
     display: none;
   }
+  /* The state word is NOT a badge and stays. It was added to this strip when
+     Blocked arrived (2026-09-03), which makes the paragraph above no longer
+     true of the whole strip: a phone row is title-plus-state now, not
+     title-only. It stays because it is the one thing here that changes what
+     the reader does — a blocked row cannot be started — where a due date is a
+     fact they can read in the panel. The approved mock's phone frame keeps it
+     for the same reason. */
   /* The half that makes “whole or not at all” structural rather than
      arithmetic. The base rule's `min-width: 0` (with `overflow: hidden`) makes
      this grid track contribute a ZERO minimum, so the `minmax(0, 1fr)` title

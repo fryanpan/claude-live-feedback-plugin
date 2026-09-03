@@ -445,62 +445,40 @@ export async function handleTaskTool(
         ...(res.ownerKind !== undefined ? { ownerKind: res.ownerKind } : {}),
       });
     }
-    case 'park_task': {
-      const { taskId, until, reason } = a as {
-        taskId: string;
-        until?: number | string | null;
-        reason?: string;
-      };
-      // A date STRING is normalized here rather than at the route, which
-      // stays strict: this layer is where an agent's natural spelling
-      // ("2026-09-02") becomes the number, and where a typo becomes a
-      // refusal the caller can read instead of a park on the wrong day.
-      //
-      // Three cases, and the middle one is why they are told apart at all.
-      // `until: null` used to mean "un-park now" and older bundles still
-      // send it that way, so it is forwarded AS null and the route answers
-      // that it does nothing. Omitting `until` is the new spelling for
-      // "no revisit date" — a shape no old caller emits, because the old
-      // schema required the field.
-      let parkedUntil: number | null | undefined;
-      if (until === undefined) {
-        parkedUntil = undefined;
-      } else if (until === null) {
-        parkedUntil = null;
-      } else if (typeof until === 'number') {
-        if (!Number.isFinite(until)) return err('until must be a date, or omitted');
-        parkedUntil = until;
-      } else {
-        const parsed = Date.parse(until);
-        if (Number.isNaN(parsed)) {
-          return err(
-            `could not read "${until}" as a date — pass epoch ms, "YYYY-MM-DD", or a full ISO timestamp`,
-          );
-        }
-        parkedUntil = parsed;
+    case 'block_task': {
+      const { taskId, blockedBy } = a as { taskId: string; blockedBy: string | string[] };
+      const ids = Array.isArray(blockedBy) ? blockedBy : [blockedBy];
+      if (ids.length === 0 || ids.some((id) => typeof id !== 'string' || id === '')) {
+        return err('blockedBy must be a task id, or an array of them');
       }
       const res = (await http('POST', `/api/tasks/${encodeURIComponent(taskId)}/park`, {
-        ...(parkedUntil !== undefined ? { parkedUntil } : {}),
-        ...(reason !== undefined ? { reason } : {}),
+        blockedBy: ids,
         author: AUTHOR,
-      })) as {
-        task: TaskPayload;
-        changed: boolean;
-        commented: boolean;
-        message?: string;
-      };
-      // The STORED status back, not an echo of what was sent, and whether
-      // the comment actually landed — the comment IS the record now, so a
-      // park that moved the row and wrote nothing is a park that lost the
-      // reason, and the caller has to be able to see that.
+      })) as { task: TaskPayload; changed: boolean; after: string[] };
+      // What the row waits on NOW, read off the store rather than echoed
+      // back: naming a blocker the row already had is a no-op, and the
+      // caller has to be able to see that nothing moved.
       return ok({
         taskId,
+        blockedBy: res.after,
         status: res.task.status,
-        moved: res.changed,
-        commented: res.commented,
-        ...(res.message !== undefined ? { message: res.message } : {}),
+        changed: res.changed,
       });
     }
+    /* REMOVED 2026-09-03: `park_task`, replaced by `block_task` above.
+       "Not now" is spelled by naming what the row is waiting for, and triage
+       goes back to meaning "nobody has vetted this".
+
+       Removing the tool cannot break a peer: every session launches its own
+       MCP child from its own version-keyed bundle, so a session that has not
+       restarted still HAS park_task and still calls it. What it calls is
+       `POST /api/tasks/:id/park`, which keeps accepting the old payload and
+       still parks — that route is the compatibility surface, not this
+       switch. (See "Removing an MCP tool cannot break a peer" in
+       learnings.md.) An alias arm was tried and is wrong here: the two verbs
+       take different payloads and do different things, so they cannot share
+       a handler, and a second declared name would offer an agent two verbs
+       for one job. */
     case 'archive_task': {
       const { taskId, reason } = a as { taskId: string; reason?: string };
       const res = (await http('POST', `/api/tasks/${encodeURIComponent(taskId)}/archive`, {

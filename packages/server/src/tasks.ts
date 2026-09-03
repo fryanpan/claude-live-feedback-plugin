@@ -1112,6 +1112,36 @@ export interface TaskRegroupedEvent {
   ts: number;
 }
 
+/**
+ * A row came free: the last ticket it was waiting on closed.
+ *
+ * Blocked is DERIVED (`@feedback/core/task-blocked`), so nothing about the row
+ * changes here — it was `todo` while it was blocked and it is `todo` now, and
+ * the board simply stops drawing the barred ring. What is NOT free is the
+ * record that it happened: without this event, a ticket that spent four days
+ * waiting rejoins the queue with nothing on its Activity tab to say why, and
+ * the reader who wants to know what cleared it has to reconstruct it from the
+ * blocker's own trail. One row per dependant that came free, naming the ticket
+ * whose closure did it.
+ *
+ * Emitted per DEPENDANT rather than once per closure, because that is the
+ * grain the Activity tab reads: the tab filters by `taskId`, and a single
+ * event on the blocker would leave every row it freed silent.
+ */
+export interface TaskUnblockedEvent {
+  type: 'task.unblocked';
+  workspaceId: string;
+  /** The row that came free. */
+  taskId: string;
+  /** The ticket whose closure cleared the last edge. */
+  clearedBy: string;
+  /** …and its title, so the line survives that ticket being renamed. */
+  clearedByTitle: string;
+  /** Whoever closed the blocker — the actor on that transition. */
+  actor: TaskActor;
+  ts: number;
+}
+
 export interface DecisionAnsweredEvent {
   type: 'decision.answered';
   workspaceId: string;
@@ -1418,6 +1448,7 @@ export type TaskStoreEvent =
   | TaskArchivedEvent
   | TaskRestoredEvent
   | TaskRegroupedEvent
+  | TaskUnblockedEvent
   | TaskNotedEvent
   | DecisionAnsweredEvent
   | DecisionAnswerWithdrawnEvent
@@ -1477,6 +1508,15 @@ export type SetDependenciesResult =
   | {
       ok: false;
       error: 'not-found' | 'unknown-after' | 'unknown-after-enforce' | 'self-dependency';
+    }
+  | {
+      ok: false;
+      error: 'cycle';
+      /** The ring this edge would close, from the row being written round to
+       *  itself, so the refusal can NAME what it refused rather than say the
+       *  word "cycle" at somebody. */
+      cycle: string[];
+      message: string;
     };
 
 export type RenameTaskResult =
@@ -2534,6 +2574,9 @@ export class TaskStore {
     // The risk arm of the gate used to sit here — see the note where
     // `riskRefusal` was, below `openBlockers`. `opts.confirmed` is still read
     // off the wire and deliberately goes nowhere: older peers keep sending it.
+    // Whether this row was itself gating anything in the instant before the
+    // write — read here, because one line down its status is the new one.
+    const wasOpenBlocker = task.status !== 'done' && !isArchived(task);
     const entry: TaskTransition = {
       ts: Date.now(),
       from: task.status,
@@ -2559,7 +2602,69 @@ export class TaskStore {
       ...(opts.usage !== undefined ? { usage: opts.usage } : {}),
       ts: entry.ts,
     });
+    // Whatever was waiting on this row and is now waiting on nothing. AFTER
+    // the transition event, so the trail reads in the order it happened: the
+    // blocker closed, and then its dependants came free.
+    if (!isGoalRow(task) && to === 'done') {
+      this.announceUnblocked(task, by, entry.ts, wasOpenBlocker);
+    }
     return { ok: true, task, blockers };
+  }
+
+  /**
+   * Emit `task.unblocked` for every row `closed` was the last open blocker of.
+   *
+   * Called after a row leaves the open set — a move to `done`, and an archive,
+   * which takes it off the board and out of `openBlockers` just as finally.
+   * The check is the whole derivation re-run per dependant, not a decrement of
+   * a counter: a counter is exactly the stored state this feature was built
+   * without, and it would go wrong on the paths that never touch it (a
+   * restore, an edge removed by hand, a sidecar loaded from disk).
+   *
+   * The event is the TRANSITION from "waiting on something" to "waiting on
+   * nothing", which needs both ends checked, not just the second. Three ways
+   * it fired for a row that never came free, all found in review (2026-09-03)
+   * and all closed by `wasOpen`:
+   *
+   *  - archiving a blocker that was already `done` — the dependant was freed
+   *    when it closed, sometimes days earlier, and tidying it away said so
+   *    again;
+   *  - the same on the second of two finished blockers;
+   *  - an `after` edge pointed at an already-closed ticket, so the dependant
+   *    was never blocked at all, and the eventual archive announced its
+   *    release.
+   *
+   * `wasOpen` is what the caller knows and this cannot see: whether `closed`
+   * counted as an open blocker in the instant BEFORE the write. Both callers
+   * read it off the row's pre-write state.
+   *
+   * Silent when the dependant still waits on something else — coming free is
+   * the event, not one blocker of three closing — and silent for a dependant
+   * that is itself done or archived, which has no work left to be released to.
+   */
+  private announceUnblocked(closed: Task, actor: TaskActor, ts: number, wasOpen: boolean): void {
+    if (!wasOpen) return;
+    const state = this.workspaces.get(closed.workspaceId);
+    if (!state) return;
+    for (const dependant of state.tasks.values()) {
+      if (!dependant.after.includes(closed.id)) continue;
+      if (isArchived(dependant)) continue;
+      // A finished row is not released by anything: whatever it waited on, it
+      // went ahead without it.
+      if (dependant.status === 'done') continue;
+      // Re-read through the gate's own reader, so "is it still blocked" has
+      // exactly one implementation.
+      if (this.openBlockers(dependant).length > 0) continue;
+      this.emit({
+        type: 'task.unblocked',
+        workspaceId: dependant.workspaceId,
+        taskId: dependant.id,
+        clearedBy: closed.id,
+        clearedByTitle: closed.title,
+        actor,
+        ts,
+      });
+    }
   }
 
   /**
@@ -3009,6 +3114,28 @@ export class TaskStore {
       if (!after.includes(dep)) return { ok: false, error: 'unknown-after-enforce' };
     }
 
+    // A ring of edges is a row waiting on itself the long way round: every
+    // task in it is Blocked, none can ever clear, and `next_tasks` quietly
+    // empties. The self-edge check above is the length-one case of this one;
+    // this is every longer one. Walk each proposed blocker's own `after`
+    // transitively and refuse if the walk arrives back at the row being
+    // written.
+    for (const dep of after) {
+      const path = this.pathTo(dep, taskId, state);
+      if (path) {
+        // `path` runs from the proposed blocker back to this row, so the ring
+        // opens and closes on the row being written: A wait on B wait on A.
+        const ring = [taskId, ...path];
+        const named = ring.map((id) => `'${this.getTask(id)?.title ?? id}'`).join(' waiting on ');
+        return {
+          ok: false,
+          error: 'cycle',
+          cycle: ring,
+          message: `that edge would close a loop: ${named}`,
+        };
+      }
+    }
+
     const same =
       task.after.length === after.length &&
       task.after.every((d) => after.includes(d)) &&
@@ -3335,6 +3462,9 @@ export class TaskStore {
     if (isArchived(task)) return { ok: true, task, changed: false };
     const ts = Date.now();
     const reason = normalizeReason(opts.reason);
+    // Same reading as the transition path, taken before the write: a row that
+    // was already `done` was gating nothing, so archiving it frees nobody.
+    const wasOpenBlocker = task.status !== 'done';
     task.archivedAt = ts;
     task.archivedBy = opts.actor.name;
     task.archiveReason = reason;
@@ -3349,6 +3479,14 @@ export class TaskStore {
       actor: { id: opts.actor.id, name: opts.actor.name, kind: classifyActor(opts.actor) },
       ts,
     });
+    // An archive takes the row out of `openBlockers` exactly as finally as a
+    // close does, so whatever it was holding comes free and has to say so.
+    this.announceUnblocked(
+      task,
+      { id: opts.actor.id, name: opts.actor.name, kind: classifyActor(opts.actor) },
+      ts,
+      wasOpenBlocker,
+    );
     return { ok: true, task, changed: true };
   }
 
@@ -4043,12 +4181,48 @@ export class TaskStore {
     return out;
   }
 
+  /**
+   * The chain of `after` edges from `fromId` to `targetId`, or null when
+   * there is none — the cycle detector behind `setDependencies`.
+   *
+   * Depth-first with a seen set, so a ring that already exists in the store
+   * (written before this check did) cannot spin here forever. Ids naming rows
+   * this workspace does not hold are skipped, which is the same reading every
+   * other consumer of `after` takes: a dangling edge gates nothing, so it can
+   * close nothing either.
+   */
+  private pathTo(
+    fromId: string,
+    targetId: string,
+    state: { tasks: Map<string, Task> },
+  ): string[] | null {
+    const seen = new Set<string>();
+    const walk = (id: string): string[] | null => {
+      if (seen.has(id)) return null;
+      seen.add(id);
+      const row = state.tasks.get(id);
+      if (!row) return null;
+      if (id === targetId) return [id];
+      for (const next of row.after) {
+        const rest = walk(next);
+        if (rest) return [id, ...rest];
+      }
+      return null;
+    };
+    return walk(fromId);
+  }
+
   private openBlockers(task: Task): TransitionBlocker[] {
     const enforce = new Set(task.afterEnforce ?? []);
     const out: TransitionBlocker[] = [];
     for (const depId of task.after) {
       const dep = this.getTask(depId);
-      if (!dep || dep.status === 'done') continue;
+      // Deleted, finished, or archived — none of the three can gate. The
+      // archived arm joined the other two when Blocked became a state the
+      // board DRAWS: a row held by a ticket that is off the board is held by
+      // something its reader cannot see, and nobody is going to finish it.
+      // One reading, shared with `@feedback/core/task-blocked` and the queue.
+      if (!dep || dep.status === 'done' || isArchived(dep)) continue;
       const noun = dep.needs === 'decision' ? 'decision' : 'task';
       out.push({
         taskId: dep.id,

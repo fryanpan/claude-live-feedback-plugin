@@ -29,6 +29,7 @@
 import { signal } from '@preact/signals';
 import { type ComponentChildren, Fragment, type RefObject, render } from 'preact';
 import { useLayoutEffect, useRef, useState } from 'preact/hooks';
+import { type DepEdge, depCurves, depGutter } from './dep-curves.ts';
 import {
   type BoardSection,
   GENERIC_ASSIGNEE,
@@ -286,14 +287,26 @@ function useSelectValue(ref: RefObject<HTMLSelectElement | null>, value: string)
  * is the only way to keep the phone's native picker and the keyboard
  * behaviour while spending 22px instead of 96px of the row.
  */
-function StatusControl(props: { task: HubTask; onSet: (to: TaskStatus) => void }) {
+function StatusControl(props: {
+  task: HubTask;
+  blocked: boolean;
+  onSet: (to: TaskStatus) => void;
+}) {
   const { task } = props;
   const sel = useRef<HTMLSelectElement | null>(null);
   useSelectValue(sel, task.status);
-  const reads = `Status: ${statusLabel(task.status)}`;
+  // Blocked is not a status and never enters the picker: the row is `todo`
+  // and the picker says so, because the way OUT of blocked is closing the
+  // ticket it waits for, not choosing a different word here. What blocked
+  // changes is the ring — a solid ring held open by a bar — and the word in
+  // the right-hand slot.
+  const mark = props.blocked ? 'blocked' : task.status;
+  const reads = props.blocked
+    ? `Status: ${statusLabel(task.status)} — blocked`
+    : `Status: ${statusLabel(task.status)}`;
   return (
     <span class="hub-status-ctl">
-      <span class={`hub-status-mark hub-status-mark-${task.status}`} aria-hidden="true" />
+      <span class={`hub-status-mark hub-status-mark-${mark}`} aria-hidden="true" />
       {/* biome-ignore lint/a11y/useKeyWithClickEvents: a <select> is already a
           keyboard control, and this onClick adds no action — it only stops the
           click reaching the row's open handler. There is nothing for a key
@@ -388,9 +401,26 @@ function OwnerControl(props: {
  * no rows, which is the test a badge has to pass on a list whose job is
  * answering what to work on next.
  */
-function TaskBadges(props: { task: HubTask }) {
+function TaskBadges(props: { task: HubTask; blocked: boolean }) {
   const { task } = props;
   const badges: ComponentChildren[] = [];
+  // The state word, in the slot the due date already had. Triage and blocked
+  // share it because they never co-occur — blocked is a `todo` row — and
+  // because a second slot would be a second thing to scan on every row for
+  // the sake of two words that are each rare. Nothing is written beside the
+  // title; the ring and the gutter curve carry the rest.
+  //
+  // Plain muted text, NOT a `.hub-badge` pill, matching the word a goal band
+  // already puts in its own meta slot (decision 6: "explicitly not a chip,
+  // and no chip may return beside it").
+  const state = props.blocked ? 'blocked' : task.status === 'triage' ? 'triage' : '';
+  if (state !== '') {
+    badges.push(
+      <span key="state" class={`hub-state-note hub-state-${state}`}>
+        {state}
+      </span>,
+    );
+  }
   if (task.dueAt !== undefined) {
     const due = new Date(task.dueAt);
     const overdue = task.dueAt < Date.now() && task.status !== 'done';
@@ -477,6 +507,9 @@ function previewDrop(
  */
 function TaskRow(props: {
   task: HubTask;
+  /** Waiting on at least one open ticket — derived by `boardBlockers`, never
+   *  a status the row carries. */
+  blocked: boolean;
   handlers: BoardHandlers;
   knownAgentIds: string[];
   editable: boolean;
@@ -561,7 +594,9 @@ function TaskRow(props: {
   return (
     <div
       ref={row}
-      class={`hub-task-row hub-status-${task.status}${done ? ' hub-done' : ''}`}
+      class={`hub-task-row hub-status-${task.status}${done ? ' hub-done' : ''}${
+        props.blocked ? ' hub-blocked' : ''
+      }`}
       data-task-id={task.id}
       // biome-ignore lint/a11y/noNoninteractiveTabindex: see the note above — the row is the board's focusable unit.
       tabIndex={0}
@@ -628,7 +663,11 @@ function TaskRow(props: {
       >
         ⠿
       </button>
-      <StatusControl task={task} onSet={(to) => handlers.onStatusSet(task, to)} />
+      <StatusControl
+        task={task}
+        blocked={props.blocked}
+        onSet={(to) => handlers.onStatusSet(task, to)}
+      />
       <TitleWords
         cellClass="hub-task-title"
         wordsClass="hub-task-title-text"
@@ -643,7 +682,7 @@ function TaskRow(props: {
         guard={guard}
         begin={begin}
       />
-      <TaskBadges task={task} />
+      <TaskBadges task={task} blocked={props.blocked} />
       {/* The open caret. Asana's desktop affordance, asked for by name: it
           appears on hover and always opens the task. It needs no click handler
           — the row's own opens and this click bubbles into it. It sits at the
@@ -825,6 +864,95 @@ function setBandCollapsed(goalId: string, folded: boolean): void {
  * A done band is a muted title, the plain word `done` in the due date's slot,
  * and the attribution riding the row's tooltip.
  */
+/**
+ * The band's dependency curves, drawn in its left gutter.
+ *
+ * Measured from the rows' real boxes on every render and again whenever the
+ * container resizes, because everything that moves a row moves the curve: a
+ * title wrapping to two lines, the narrow tier's smaller padding, a band
+ * above this one folding, the window changing width.
+ *
+ * The SVG's children are written imperatively rather than as Preact nodes.
+ * The measurement can only happen after layout, so rendering them as children
+ * would mean setting state from a layout effect on every paint — a render
+ * loop whose fixed point is "the curves the last layout produced". The
+ * element itself is Preact's; what is inside it belongs to the effect.
+ *
+ * It is emitted for every band, including ones with no edges, so the resize
+ * observer is attached once and is already there when a row becomes blocked.
+ */
+function DepLayer(props: { section: BoardSection }): ComponentChildren {
+  const svg = useRef<SVGSVGElement | null>(null);
+  const edges: DepEdge[] = [];
+  const present = new Set(props.section.tasks.map((t) => t.id));
+  for (const task of props.section.tasks) {
+    for (const on of props.section.blockedBy?.get(task.id) ?? []) {
+      // Same band only. A blocker under another goal has nowhere in this
+      // gutter to start from, and a line leaving the band would be the
+      // vertical rail this design exists to avoid. The row still reads as
+      // blocked; it simply has no curve.
+      if (present.has(on)) edges.push({ from: on, to: task.id });
+    }
+  }
+  const live = useRef(edges);
+  live.current = edges;
+
+  // Every render: cheap, and the only way to be right after a reorder, a
+  // rename that rewraps, or a status change that clears a ring.
+  useLayoutEffect(() => {
+    paintDeps(svg.current, live.current);
+  });
+
+  // Once: the observer that catches the changes no render tells us about.
+  useLayoutEffect(() => {
+    const el = svg.current;
+    const box = el?.parentElement;
+    if (!el || !box || typeof ResizeObserver !== 'function') return;
+    const ro = new ResizeObserver(() => paintDeps(el, live.current));
+    ro.observe(box);
+    return () => ro.disconnect();
+  }, []);
+
+  return <svg class="hub-dep-layer" aria-hidden="true" ref={svg} />;
+}
+
+const SVG_NS = 'http://www.w3.org/2000/svg';
+
+/** Fills one band's layer. Separate from the component so the resize path and
+ *  the render path cannot drift apart. */
+function paintDeps(svg: SVGSVGElement | null, edges: readonly DepEdge[]): void {
+  const box = svg?.parentElement;
+  if (!svg || !box) return;
+  svg.replaceChildren();
+  if (edges.length === 0) return;
+  const frame = box.getBoundingClientRect();
+  // A folded band, a hidden pane and happy-dom all measure zero. Drawing into
+  // a zero viewBox puts every curve on the same point.
+  if (frame.width === 0 || frame.height === 0) return;
+  svg.setAttribute('viewBox', `0 0 ${frame.width} ${frame.height}`);
+  const rows = [...box.querySelectorAll<HTMLElement>('.hub-task-row')].map((el) => ({
+    id: el.dataset.taskId ?? '',
+    top: el.getBoundingClientRect().top - frame.top,
+    height: el.offsetHeight,
+  }));
+  const pad = Number.parseFloat(getComputedStyle(box).paddingLeft);
+  for (const curve of depCurves(rows, edges, depGutter(pad))) {
+    const line = document.createElementNS(SVG_NS, 'path');
+    line.setAttribute('d', curve.d);
+    // Through `style` rather than presentation attributes: `var()` resolves
+    // only in a real CSS declaration, and the colour has to follow the theme.
+    line.style.fill = 'none';
+    line.style.stroke = 'var(--border)';
+    line.style.strokeWidth = '1.5';
+    line.style.strokeLinecap = 'round';
+    svg.appendChild(line);
+    const head = document.createElementNS(SVG_NS, 'path');
+    head.setAttribute('d', curve.head);
+    head.style.fill = 'var(--border)';
+    svg.appendChild(head);
+  }
+}
+
 function GoalBand(props: {
   section: BoardSection;
   handlers: BoardHandlers;
@@ -1002,6 +1130,7 @@ function GoalBand(props: {
           above". A folded band hides this container in CSS and renders NOTHING
           in its place — a collapsed band shows nothing extra, by decision. */}
       <div class="hub-band-tasks">
+        <DepLayer section={section} />
         {section.tasks.length === 0 ? (
           <p class="hub-section-empty">
             {section.isChores ? 'Nothing in the backlog.' : 'No tasks yet.'}
@@ -1011,6 +1140,7 @@ function GoalBand(props: {
             <TaskRow
               key={task.id}
               task={task}
+              blocked={(section.blockedBy?.get(task.id)?.length ?? 0) > 0}
               handlers={handlers}
               knownAgentIds={props.knownAgentIds}
               editable={props.editable}
