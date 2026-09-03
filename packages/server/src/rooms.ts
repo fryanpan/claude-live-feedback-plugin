@@ -3535,7 +3535,28 @@ export class Rooms {
       // export) or re-armed one on the new binding; parked means the bytes
       // stay in the live doc.
       if (this.homeGuard(room, binding) !== 'ok') return;
-      // Guard (RC2): if disk moved since we last read or wrote it, we'd be
+      // Guard (RC2a): the poll has already SEEN an external change and is
+      // holding it behind the read debounce. It advanced `lastMtimeMs` the
+      // instant it saw the change, so the mtime guard below now compares disk
+      // against disk, reports "unchanged", and we write over bytes NOBODY HAS
+      // READ — no backup, no syncError, which is the one outcome the conflict
+      // arm exists to prevent. Reproduced under CPU load: a `git pull` landing
+      // inside the read debounce was overwritten in complete silence.
+      //
+      // `readTimer` is exactly "a reconcile is pending" (`bindingIsActive`
+      // reads it that way), so run that reconcile now rather than racing it.
+      // Its conflict arm backs the external version up and re-arms this
+      // flush; `flush()` sweeps until quiescent, so a shutdown still carries
+      // the live edits out.
+      if (binding.readTimer) {
+        clearTimeout(binding.readTimer);
+        binding.readTimer = null;
+        // 'in-sync' means the bytes never actually changed — an mtime touch,
+        // or a formatting-variant of our own last write. This flush's content
+        // still has to reach disk, so fall through instead of dropping it.
+        if (this.reconcileFromDisk(room, binding) !== 'in-sync') return;
+      }
+      // Guard (RC2b): if disk moved since we last read or wrote it, we'd be
       // overwriting bytes we have never seen — the poll just hasn't caught
       // up yet. Reconcile first; apply/conflict decides, and the conflict
       // path both backs up the external version and re-schedules our flush.
