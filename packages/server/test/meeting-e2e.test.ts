@@ -31,6 +31,7 @@ import {
   createStubNotesComposer,
 } from '../src/meeting-notes.ts';
 import { listMeetings, readTranscript } from '../src/meetings.ts';
+import { TRANSCRIPT_HEADING } from '../src/notes-section.ts';
 import { type ServerHandle, createServer } from '../src/server.ts';
 import { type MockScriptTurn, createMockTranscriptionEngine } from '../src/transcribe.ts';
 
@@ -143,6 +144,15 @@ describe('a meeting end to end: pauses become notes, stop/start stays consistent
     return prose.serializeFragmentToMarkdown(prose.getProseFragment(room.ydoc));
   };
 
+  /**
+   * The doc ABOVE the raw transcript — everything a reader meets before the
+   * verbatim record. A phrase said once appears twice in a meeting doc now,
+   * once as a note and once in the record, so a count over the whole markdown
+   * can no longer tell "the section was replaced" from "the section was
+   * doubled", which is the thing worth asserting.
+   */
+  const readerMarkdown = (): string => docMarkdown().split(`## ${TRANSCRIPT_HEADING}`)[0] ?? '';
+
   const meetingsList = async (): Promise<{
     meetings: Array<{
       meetingId: string;
@@ -228,7 +238,9 @@ describe('a meeting end to end: pauses become notes, stop/start stays consistent
     expect(v2).toContain('So the sync is the bottleneck.');
     expect(v2).toContain("Let's measure it first.");
     expect(v2.split('## Meeting notes').length).toBe(2);
-    expect(v2.split('So the sync is the bottleneck.').length).toBe(2);
+    expect(readerMarkdown().split('So the sync is the bottleneck.').length).toBe(2);
+    // And the record below carries the same words, once each, in order.
+    expect(docMarkdown()).toContain("So the sync is the bottleneck.\nLet's measure it first.");
 
     // The socket heard about both ticks as they happened — composing when
     // the pause fired, written when the note landed — carrying the same turn
@@ -317,7 +329,12 @@ describe('a meeting end to end: pauses become notes, stop/start stays consistent
     expect(md).toContain('then we');
     // The second meeting re-spoke the first sentence; the merge recognises
     // the line already in the doc rather than writing it twice.
-    expect(md.split('So the sync is the bottleneck.').length).toBe(2);
+    expect(readerMarkdown().split('So the sync is the bottleneck.').length).toBe(2);
+    // The RECORD is the other way round, and deliberately so: a sentence said
+    // in two meetings was said twice, and a verbatim record that deduplicated
+    // it would be lying about the second meeting.
+    const record = md.split(`## ${TRANSCRIPT_HEADING}`)[1] ?? '';
+    expect(record.split('So the sync is the bottleneck.').length).toBe(3);
 
     client.stop();
     await waitFor(() => client.frames.some((f) => f.type === 'stopped'), 'second stopped');
