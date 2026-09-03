@@ -72,12 +72,16 @@ export function createComposerEditor(opts: CreateComposerEditorOpts): ComposerEd
     },
     focus(sel: ComposerSelection | null, opts: ComposerFocusOpts = {}) {
       const scrollIntoView = opts.scroll !== false;
-      if (sel) {
-        editor.commands.setTextSelection({ from: clamp(sel.from), to: clamp(sel.to) });
-        editor.commands.focus(undefined, { scrollIntoView });
-      } else {
-        editor.commands.focus('end', { scrollIntoView });
-      }
+      if (sel) editor.commands.setTextSelection({ from: clamp(sel.from), to: clamp(sel.to) });
+      // Tiptap's focus command schedules the caret through
+      // `requestAnimationFrame` and never checks that there is one. Every
+      // browser has it; a torn-down test environment does not, because vitest
+      // deletes each window key from the global when a file finishes. A stray
+      // focus landing in that window took a whole 310-file run down with a
+      // `ReferenceError` that named nothing a person could act on. Nothing is
+      // lost by declining to move a caret on a page that no longer exists.
+      if (typeof requestAnimationFrame !== 'function') return;
+      editor.commands.focus(sel ? undefined : 'end', { scrollIntoView });
     },
     selection() {
       const { from, to } = editor.state.selection;
