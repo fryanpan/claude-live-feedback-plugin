@@ -63,6 +63,12 @@
 
 import { readyToWork, spinoffBody, spinoffDocHref } from '@feedback/core';
 import { readRenamedEnv } from '@feedback/core/env-names';
+import { requestMatchesCandidate, spokenLineFor } from './meeting-capture-guards.ts';
+import {
+  TITLE_MAX,
+  buildTaskCapturePrompt,
+  parseTaskCaptureReply,
+} from './meeting-capture-prompt.ts';
 import {
   type LookupDoc,
   docLookupUrl,
@@ -70,11 +76,6 @@ import {
   parseRecency,
   resolveLookup,
 } from './meeting-lookup.ts';
-import {
-  CORRECTION_PHRASE_MAX,
-  correctionPhraseUsable,
-  correctionSpokenOnTick,
-} from './meeting-notes-correction.ts';
 import type { NoteDocLink, NoteTaskLink, NotesTurn, SpokenCorrection } from './meeting-notes.ts';
 import { readKeychainPassword } from './share/keychain.ts';
 import { resolveKeyFrom } from './summarize.ts';
@@ -219,602 +220,47 @@ export const MEETING_CAPTURE_ACTOR = {
   kind: 'agent',
 } as const;
 
-/** Longest title a captured request may carry — the board's own title cap. */
-const TITLE_MAX = 80;
-
-/** Longest spoken line a row's body quotes — one sentence of talk, not a
- *  tick's worth; the transcript is the record for the rest. */
-const QUOTE_MAX = 240;
-
-/** Longest review question carried into a thread — a question, not a
- *  speech; the thread's own text says where it was heard. */
-const QUESTION_MAX = 240;
-
-/** Longest lookup query the resolver is asked to work with. Not a title —
- *  it is a spoken phrase, and past the first few words it stops narrowing
- *  and starts adding words the fuzzy matcher has to discount. */
-const QUERY_MAX = 120;
-
 /** How many board rows the extractor prompt may carry, mirroring the notes
  *  context cap: enough to match against, few enough that a thousand-row
  *  board cannot flood the prompt. */
 export const MAX_CAPTURE_CANDIDATES = 40;
 
 /**
- * Words too common to prove two texts are about the same thing. Includes the
- * meta-vocabulary of asking for tickets — "file a ticket for that task"
- * shares those words with EVERY candidate row.
+ * The guards moved to `meeting-capture-guards.ts`; they are still part of
+ * this module's surface, so nothing that reads them had to move with them.
  */
-const STOPWORDS = new Set([
-  'about',
-  'actually',
-  'after',
-  'again',
-  'also',
-  'been',
-  'before',
-  'board',
-  'could',
-  'demo',
-  'does',
-  'doing',
-  'file',
-  'fixed',
-  'from',
-  'going',
-  'gonna',
-  'have',
-  'into',
-  'just',
-  'know',
-  'like',
-  'last',
-  'made',
-  'make',
-  'makes',
-  'more',
-  'need',
-  'needs',
-  'next',
-  'okay',
-  'only',
-  'other',
-  'over',
-  'pretty',
-  'really',
-  'right',
-  'should',
-  'small',
-  'some',
-  'still',
-  'sure',
-  'task',
-  'that',
-  'them',
-  'then',
-  'there',
-  'they',
-  'thing',
-  'things',
-  'think',
-  'this',
-  'ticket',
-  'under',
-  'very',
-  'want',
-  'wants',
-  'week',
-  'were',
-  'what',
-  'when',
-  'where',
-  'which',
-  'while',
-  'will',
-  'with',
-  'would',
-  'yeah',
-  'your',
-]);
-
-function significantWords(text: string): Set<string> {
-  const out = new Set<string>();
-  for (const raw of text.toLowerCase().split(/[^a-z0-9]+/)) {
-    if (raw.length >= 4 && !STOPWORDS.has(raw)) out.add(raw);
-  }
-  return out;
-}
-
-function sharedWordCount(a: Set<string>, b: Set<string>): number {
-  let n = 0;
-  for (const w of a) if (b.has(w)) n++;
-  return n;
-}
+export {
+  captureWindow,
+  normalizedTitle,
+  OVERLAP_MAX_CHARS,
+  OVERLAP_MAX_TURNS,
+  overlapWindow,
+  phraseSpokenOnTick,
+  requestMatchesCandidate,
+  speakerOnTick,
+  spokenLineFor,
+  tickMentionsCandidate,
+} from './meeting-capture-guards.ts';
 
 /**
- * WHY EACH PASS ALSO SEES THE END OF THE ONE BEFORE IT.
- *
- * A tick boundary falls wherever the room went quiet for four seconds, which
- * is nowhere near where an ask ends. Measured live, both halves of it: "…and
- * that is the real cost" / boundary / "can you file a ticket for that one?"
- * filed a row titled *"file a ticket for that one, a small spike would do"* —
- * the pass saw a pointer with nothing to point at; and "we should file
- * tickets for the next few things I mention" / boundary / the things
- * themselves lost the ask entirely, because the pass that heard the subjects
- * never heard the request.
- *
- * So the window reaches back, and the overlap is MARKED: the prompt says
- * those lines were already read, and that every item must draw part of itself
- * from the new ones. Marking is what keeps the same request from being filed
- * twice, and it is belt and braces with the board's own find-or-create — a
- * re-file matches the row the previous pass created and becomes a link to it
- * (`requestMatchesCandidate`).
- *
- * The TAIL, not the whole tick. What "that one" refers to is the speech
- * adjacent to the boundary, and carrying a whole tick would grow every
- * prompt by a whole tick's transcript for the sake of one sentence.
+ * The prompt and its reader moved to `meeting-capture-prompt.ts`; the intent
+ * rules are read by the cost scripts under their old names, so the surface
+ * stays here.
  */
-export const OVERLAP_MAX_CHARS = 180;
-
-/** …and a turn ceiling, so a burst of two-word turns cannot spend the budget
- *  on line prefixes. */
-export const OVERLAP_MAX_TURNS = 6;
-
-/**
- * Keep the END of an over-long line: the referent of a pointer is what was
- * said last, so the tail is the half worth paying for.
- *
- * The leading ellipsis is part of what the line costs, so the tail is one
- * character shorter than the budget — a turn with no spaces in it at all (a
- * URL, an unbroken ASR token) would otherwise return `max + 1` and quietly
- * break the bound the prompt cost is measured against. Raised by review.
- */
-function clipToBudget(text: string, max: number): string {
-  if (text.length <= max) return text;
-  const tail = text.slice(text.length - (max - 1));
-  const space = tail.indexOf(' ');
-  return `…${space >= 0 ? tail.slice(space + 1) : tail}`;
-}
-
-/**
- * The slice of the previous tick this pass may see: its last turns, within
- * {@link OVERLAP_MAX_CHARS}, in spoken order.
- *
- * A turn the current tick already carries is never overlap — a tick whose
- * compose failed hands its turns to the next one, where they are new speech
- * again, and showing them in both halves would ask the model to read one
- * sentence as both already-noted and new.
- *
- * The last turn is always carried, clipped if it has to be: it is the one the
- * next sentence points at, and a window that drops it for being long is the
- * bug this exists to fix.
- */
-export function overlapWindow(
-  priorTurns: readonly NotesTurn[] | undefined,
-  turns: readonly NotesTurn[],
-): NotesTurn[] {
-  if (!priorTurns || priorTurns.length === 0) return [];
-  const inTick = new Set(turns.map((t) => t.turn));
-  const usable = priorTurns.filter((t) => !inTick.has(t.turn));
-  const out: NotesTurn[] = [];
-  let budget = OVERLAP_MAX_CHARS;
-  for (let i = usable.length - 1; i >= 0 && out.length < OVERLAP_MAX_TURNS; i--) {
-    const turn = usable[i];
-    if (!turn) continue;
-    // The speaker prefix is part of what the line costs the prompt.
-    const prefix = turn.speaker ? turn.speaker.length + 2 : 0;
-    if (turn.text.length + prefix > budget) {
-      // Only the newest line is worth clipping into what is left; anything
-      // older simply does not fit.
-      if (out.length === 0 && budget - prefix > 0) {
-        out.push({ ...turn, text: clipToBudget(turn.text, budget - prefix) });
-      }
-      break;
-    }
-    const cost = turn.text.length + prefix;
-    budget -= cost;
-    out.push(turn);
-  }
-  return out.reverse();
-}
-
-/**
- * The speech a guard may be vouched for by: this tick's, plus the marked
- * overlap. The overlap is transcript the meeting really carried, so a
- * reference to something said just before the boundary is as real as one said
- * after it — and the guard must ask about exactly the lines the model saw, or
- * it would reject the very matches the overlap exists to enable.
- */
-export function captureWindow(
-  turns: readonly NotesTurn[],
-  priorTurns?: readonly NotesTurn[],
-): NotesTurn[] {
-  return [...overlapWindow(priorTurns, turns), ...turns];
-}
-
-/**
- * Did the speech mention the candidate at all? One significant word in common
- * is the floor a model-claimed reference must clear — the model matches, this
- * proves the match came from the words rather than from the candidate list
- * itself. Callers hand it the whole {@link captureWindow}, marked overlap
- * included: those words were spoken, just one tick earlier.
- */
-export function tickMentionsCandidate(turns: readonly NotesTurn[], title: string): boolean {
-  const spoken = significantWords(turns.map((t) => t.text).join(' '));
-  return sharedWordCount(spoken, significantWords(title)) >= 1;
-}
-
-/**
- * Is a requested task the same work as a tracked row? Two significant words,
- * not one: one shared word is a mention ("popover styling" vs the popover
- * anchor bug), two is the same subject twice. Errs toward creating a
- * near-duplicate over silently folding distinct work into the wrong row —
- * a duplicate is visible and mergeable, a mislink is neither.
- */
-export function requestMatchesCandidate(title: string, candidateTitle: string): boolean {
-  // Word for word the same title is the same row whatever its words weigh:
-  // "count to ten" has one significant word to share, so the two-word rule
-  // alone would file it twice when it is asked for twice — the repeated
-  // mention that must not become a second card.
-  if (normalizedTitle(title) === normalizedTitle(candidateTitle)) return true;
-  return sharedWordCount(significantWords(title), significantWords(candidateTitle)) >= 2;
-}
-
-export function normalizedTitle(title: string): string {
-  return title
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, ' ')
-    .trim();
-}
-
-/**
- * Which spoken line an ask came from — the row's quote, chosen here rather
- * than asked of the model, so what the body quotes was said. The new line
- * sharing the most significant words with the ask; the last new line when
- * none shares any (a deictic "make that a task" points at the line before
- * it, which is the marked overlap, so the pointer itself is what is quoted).
- */
-export function spokenLineFor(turns: readonly NotesTurn[], phrase: string): string | undefined {
-  const want = significantWords(phrase);
-  let best: NotesTurn | undefined;
-  let bestShared = 0;
-  for (const turn of turns) {
-    const shared = sharedWordCount(significantWords(turn.text), want);
-    if (shared > bestShared) {
-      best = turn;
-      bestShared = shared;
-    }
-  }
-  const line = best ?? turns[turns.length - 1];
-  if (!line) return undefined;
-  const text = line.speaker ? `${line.speaker}: ${line.text}` : line.text;
-  return clipToWordBoundary(text, QUOTE_MAX);
-}
-
-/**
- * Was this phrase actually SPOKEN? The guard the two reading intents stand
- * on: a research topic and a lookup query are both supposed to be "in the
- * words spoken", so a model that answers with words the window never carried
- * has invented the ask, and an invented ask is dropped.
- *
- * Two significant words where the phrase has two — the
- * {@link requestMatchesCandidate} threshold, and for its reason: one word in
- * common is a coincidence between any two sentences about the same project.
- * A phrase with only one significant word to give must give it; one with
- * none at all ("pull that up", every word a stopword) can be vouched for by
- * nothing and is dropped rather than let through on an empty match.
- */
-export function phraseSpokenOnTick(turns: readonly NotesTurn[], phrase: string): boolean {
-  const want = significantWords(phrase);
-  if (want.size === 0) return false;
-  const spoken = significantWords(turns.map((t) => t.text).join(' '));
-  return sharedWordCount(spoken, want) >= Math.min(2, want.size);
-}
-
-/**
- * The transcript must vouch for a requester the same way it vouches for a
- * reference: the model may only name a voice the window actually carried —
- * this tick's speech or the marked overlap, since a request that begins
- * before the boundary is asked for by whoever spoke there.
- * Compared case-insensitively and answered with the transcript's own
- * spelling, so a model that lowercases a name still attributes it, and one
- * that invents a person attributes nobody.
- */
-export function speakerOnTick(turns: readonly NotesTurn[], claimed: string): string | undefined {
-  const want = claimed.trim().toLowerCase();
-  if (!want) return undefined;
-  for (const turn of turns) {
-    if (turn.speaker && turn.speaker.toLowerCase() === want) return turn.speaker;
-  }
-  return undefined;
-}
+export {
+  buildTaskCapturePrompt,
+  CORRECTION_PROMPT_RULE,
+  LOOKUP_PROMPT_RULE,
+  OVERLAP_PROMPT_RULE,
+  parseTaskCaptureReply,
+  RESEARCH_PROMPT_RULE,
+  REVIEW_PROMPT_RULE,
+} from './meeting-capture-prompt.ts';
 
 /** The board deep link `parseWorkspaceLink` reads back as `kind: 'task'` —
  *  root-relative, so it survives being read under any host the server has. */
 export function taskCaptureUrl(workspaceId: string, taskId: string): string {
   return `/workspaces/${encodeURIComponent(workspaceId)}?task=${encodeURIComponent(taskId)}`;
-}
-
-/**
- * The overlap's whole contract, in the fewest tokens that carry it: what the
- * earlier lines are for, in both directions, and the rule that stops last
- * pass's items being filed a second time. Standing text — it costs its tokens
- * on every tick, overlap or not, which is why it is this short and why
- * `scripts/capture-overlap-cost.ts` measures it separately.
- */
-/**
- * What research sounds like, and what separates it from the request intent
- * sitting beside it in the same reply. Exported, like the overlap rule, so
- * `scripts/intent-prompt-cost.ts` can price this intent by removing exactly
- * the text it added — an intent's cost is a measurement here, not an
- * estimate.
- *
- * "They will rarely say the word research" is the load-bearing line: the ask
- * this exists to catch is "go look into that", and a prompt that leaned on
- * the word would catch only the asks that needed no help.
- */
-export const RESEARCH_PROMPT_RULE = [
-  'A RESEARCH ask when a speaker wants something FOUND OUT before it can be',
-  'decided or built — "go look into that", "dig into why it does that",',
-  '"find out what it would take", or asked of the assistant directly: "can',
-  'you research X", "look that up for us". They will rarely say the word',
-  '"research". Wondering aloud is not an ask; somebody has to want it done.',
-  '"topic": what to look into, in the words spoken; "question": what it',
-  'should answer, omitted if unsaid. Prefer "request" when they asked for',
-  'the WORK rather than for findings.',
-] as const;
-
-/**
- * What a review ask sounds like — the Review float's press, spoken. The
- * shape is "somebody should look at this / answer this", addressed to the
- * agent or the team rather than to the room; the load-bearing line is the
- * one separating it from a question the room is answering for itself.
- */
-export const REVIEW_PROMPT_RULE = [
-  'A REVIEW ask when a speaker wants the agent or the team to LOOK AT the',
-  'notes or ANSWER a question they cannot settle in the room — "ask the',
-  'team whether we still need the tunnel", "can somebody check these',
-  'notes", "get the lead to review this". "question": what to ask, in the',
-  'words spoken. A question the room goes on to answer itself is not an',
-  'ask.',
-] as const;
-
-/**
- * What a lookup sounds like. The "keep any when" clause earns its tokens:
- * an earlier meeting has no title of its own, so the time phrase is often
- * the only part of the ask that identifies anything (`meeting-lookup.ts`).
- */
-export const LOOKUP_PROMPT_RULE = [
-  'A LOOKUP when a speaker asks for material that ALREADY EXISTS to be',
-  'brought in — "pull up last week\'s notes", "link the design doc for',
-  'that", "what did we decide on Tuesday". "query": what they asked for in',
-  'their own words, KEEPING any "when" they said ("last week", "Tuesday").',
-] as const;
-
-/**
- * What a correction sounds like, and — the load-bearing half — what
- * separates it from somebody simply saying something new.
- *
- * "Changing their mind is not a correction" earns its tokens: a meeting is
- * full of "actually, let's do Thursday", which OVERTURNS a note rather than
- * fixing it, and the composer already handles that by revising the notes it
- * writes. A correction is narrower: the note is WRONG, and two words of it
- * are wrong. Asking for the mistaken words verbatim is what makes it
- * resolvable — a paraphrase matches no note and is dropped.
- */
-export const CORRECTION_PROMPT_RULE = [
-  'A CORRECTION when a speaker fixes something the notes ALREADY SAY, rather',
-  'than saying anything new — "no, I said Thursday", "that was Priya, not',
-  'me", "sixty, not sixteen". "wrong": the mistaken words as the notes would',
-  'have them, quoted, not paraphrased; "right": what they should say, in the',
-  'words just spoken. Both short — a few words, never a sentence. Somebody',
-  'CHANGING THEIR MIND ("actually, let\'s do Thursday") is new speech, not a',
-  'correction. Omit the item unless both halves are clear.',
-] as const;
-
-export const OVERLAP_PROMPT_RULE = [
-  '"Earlier speech" was read last pass: use it to resolve what a new line',
-  'points at, or to finish a request it began. Every item must draw part of',
-  'itself from the new lines.',
-] as const;
-
-/**
- * Prompt building is pure and exported, same reason as the notes composer's:
- * what the transcript is asked to become is behaviour worth pinning without
- * a network in the test.
- */
-export function buildTaskCapturePrompt(input: TaskCaptureInput): { system: string; user: string } {
-  const system = [
-    'You listen to a live working meeting and extract six things: task',
-    'REQUESTS, task REFERENCES, RESEARCH asks, LOOKUP asks, CORRECTIONS and',
-    'REVIEW asks. Answer with JSON only, this shape:',
-    '{"items":[{"kind":"request","title":"...","actionable":true|false,',
-    '           "requester":"who asked, omitted if unclear"}',
-    '         |{"kind":"reference","match":<candidate number>}',
-    '         |{"kind":"research","topic":"...","question":"...",',
-    '           "requester":"who asked, omitted if unclear"}',
-    '         |{"kind":"lookup","query":"..."}',
-    '         |{"kind":"correction","wrong":"...","right":"..."}',
-    '         |{"kind":"review","question":"...",',
-    '           "requester":"who asked, omitted if unclear"}]}',
-    '',
-    'A REQUEST only when a speaker explicitly asks for work to be tracked or',
-    'filed — "file a ticket", "let\'s track that", "add it to the board",',
-    '"can you create a task", "make that a task", "add a todo to…".',
-    'Discussing a problem, complaining about a bug, or agreeing something is',
-    'broken is NOT a request. Title: short, specific, in the words spoken.',
-    'Mark a request "actionable": true only when it is clear enough to start',
-    'without asking anything back — what to do and where — and nobody said',
-    'to wait. When in doubt, false.',
-    '',
-    'Transcript lines may be prefixed with who said them. Set "requester" to',
-    'that speaker, copied exactly as the line spells it — including a label',
-    'like "Speaker B", which is a voice nobody has named yet. Omit',
-    '"requester" when the lines carry no speaker or you are unsure who asked;',
-    'never guess, and never name anyone the lines do not.',
-    '',
-    'A REFERENCE only when the speech clearly refers to work in the numbered',
-    'candidate list; "match" is that number. Never guess: no confident match',
-    'means no item.',
-    '',
-    ...RESEARCH_PROMPT_RULE,
-    '',
-    ...LOOKUP_PROMPT_RULE,
-    '',
-    ...CORRECTION_PROMPT_RULE,
-    '',
-    ...REVIEW_PROMPT_RULE,
-    '',
-    ...OVERLAP_PROMPT_RULE,
-    '',
-    'An empty items array is the normal answer for most speech.',
-  ].join('\n');
-
-  const parts: string[] = [];
-  if (input.docTitle) parts.push(`Meeting doc: ${input.docTitle}`);
-  if (input.candidates.length > 0) {
-    parts.push(
-      `Board tasks (candidates for "reference"):\n${input.candidates
-        .map((c, i) => `${i}. ${c.title}`)
-        .join('\n')}`,
-    );
-  }
-  const line = (t: NotesTurn): string => `- ${t.speaker ? `${t.speaker}: ` : ''}${t.text}`;
-  const earlier = overlapWindow(input.priorTurns, input.turns);
-  if (earlier.length > 0) {
-    parts.push(`Earlier speech (already read):\n${earlier.map(line).join('\n')}`);
-  }
-  parts.push(`New speech since the last update:\n${input.turns.map(line).join('\n')}`);
-  return { system, user: parts.join('\n\n') };
-}
-
-/**
- * A model reply → guarded items. Strict by construction: malformed rows,
- * out-of-range matches, and references the transcript cannot vouch for are
- * dropped row by row, never letting one bad row cost the good ones.
- */
-export function parseTaskCaptureReply(
-  raw: string,
-  candidates: readonly TaskCaptureCandidate[],
-  turns: readonly NotesTurn[],
-  priorTurns?: readonly NotesTurn[],
-): CapturedItem[] {
-  // Vouch against exactly the lines the model was shown — see captureWindow.
-  const window = captureWindow(turns, priorTurns);
-  let text = raw.trim();
-  const fenced = text.match(/^```[a-zA-Z]*\n([\s\S]*?)\n?```$/);
-  if (fenced?.[1] !== undefined) text = fenced[1].trim();
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(text);
-  } catch {
-    return [];
-  }
-  const items = (parsed as { items?: unknown }).items;
-  if (!Array.isArray(items)) return [];
-
-  const out: CapturedItem[] = [];
-  const seenTasks = new Set<string>();
-  const seenTitles = new Set<string>();
-  for (const entry of items) {
-    if (typeof entry !== 'object' || entry === null) continue;
-    const row = entry as Record<string, unknown>;
-    if (row.kind === 'reference') {
-      if (typeof row.match !== 'number' || !Number.isInteger(row.match)) continue;
-      const candidate = row.match >= 0 ? candidates[row.match] : undefined;
-      if (!candidate) continue;
-      // The transcript must vouch for the match — see tickMentionsCandidate.
-      if (!tickMentionsCandidate(window, candidate.title)) continue;
-      if (seenTasks.has(candidate.id)) continue;
-      seenTasks.add(candidate.id);
-      out.push({ kind: 'reference', taskId: candidate.id });
-    } else if (row.kind === 'request') {
-      if (typeof row.title !== 'string' || row.title.trim().length === 0) continue;
-      const title = clipToWordBoundary(row.title.trim(), TITLE_MAX);
-      const key = title.toLowerCase();
-      if (seenTitles.has(key)) continue;
-      seenTitles.add(key);
-      const requester =
-        typeof row.requester === 'string' ? speakerOnTick(window, row.requester) : undefined;
-      out.push({
-        kind: 'request',
-        title,
-        actionable: row.actionable === true,
-        ...(requester !== undefined ? { requester } : {}),
-      });
-    } else if (row.kind === 'research') {
-      if (typeof row.topic !== 'string') continue;
-      const topic = clipToWordBoundary(row.topic.trim(), TITLE_MAX);
-      if (topic.length === 0) continue;
-      // The words have to have been said — see phraseSpokenOnTick. This is
-      // the guard that stands between a mishearing and a research pass.
-      if (!phraseSpokenOnTick(window, topic)) continue;
-      const key = `research:${topic.toLowerCase()}`;
-      if (seenTitles.has(key)) continue;
-      seenTitles.add(key);
-      const question =
-        typeof row.question === 'string' && row.question.trim().length > 0
-          ? row.question.trim()
-          : undefined;
-      const requester =
-        typeof row.requester === 'string' ? speakerOnTick(window, row.requester) : undefined;
-      out.push({
-        kind: 'research',
-        topic,
-        ...(question !== undefined ? { question } : {}),
-        ...(requester !== undefined ? { requester } : {}),
-      });
-    } else if (row.kind === 'lookup') {
-      if (typeof row.query !== 'string') continue;
-      const query = row.query.trim().slice(0, QUERY_MAX);
-      if (query.length === 0) continue;
-      // Same vouching as research: a query nobody spoke points at nothing
-      // anyone asked for, whatever it happens to match on the board.
-      if (!phraseSpokenOnTick(window, query)) continue;
-      const key = `lookup:${query.toLowerCase()}`;
-      if (seenTitles.has(key)) continue;
-      seenTitles.add(key);
-      out.push({ kind: 'lookup', query });
-    } else if (row.kind === 'correction') {
-      if (typeof row.wrong !== 'string' || typeof row.right !== 'string') continue;
-      const wrong = row.wrong.trim();
-      const right = row.right.trim();
-      // Long enough to identify a note, short enough to be a correction
-      // rather than a rewrite of one. Same floor the doc side applies, asked
-      // here so a hopeless pair never reaches it.
-      if (!correctionPhraseUsable(wrong)) continue;
-      if (right.length === 0 || right.length > CORRECTION_PHRASE_MAX) continue;
-      if (wrong.toLowerCase() === right.toLowerCase()) continue;
-      // The corrected words must have been SAID. The MISTAKEN words are
-      // deliberately not checked against the transcript: the tick that
-      // carried the mishearing is usually outside this window by the time
-      // anybody corrects it, and the notes vouch for them far better than a
-      // transcript could — see `correctNotesSection`.
-      if (!correctionSpokenOnTick(window, right)) continue;
-      const key = `correction:${wrong.toLowerCase()}=>${right.toLowerCase()}`;
-      if (seenTitles.has(key)) continue;
-      seenTitles.add(key);
-      out.push({ kind: 'correction', wrong, right });
-    } else if (row.kind === 'review') {
-      if (typeof row.question !== 'string') continue;
-      const question = row.question.trim().slice(0, QUESTION_MAX);
-      if (question.length === 0) continue;
-      // Same vouching as research: a question nobody asked is not an ask,
-      // and this one files a thread a person will be paged about.
-      if (!phraseSpokenOnTick(window, question)) continue;
-      const key = `review:${normalizedTitle(question)}`;
-      if (seenTitles.has(key)) continue;
-      seenTitles.add(key);
-      const requester =
-        typeof row.requester === 'string' ? speakerOnTick(window, row.requester) : undefined;
-      out.push({
-        kind: 'review',
-        question,
-        ...(requester !== undefined ? { requester } : {}),
-      });
-    }
-  }
-  return out;
 }
 
 /** The slice of the task store the capture pipeline writes through. The real
