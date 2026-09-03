@@ -55,7 +55,7 @@ async function emit(buildId: string): Promise<boolean> {
   const define = { __LF_BUILD_ID__: JSON.stringify(buildId) };
 
   const result = await Bun.build({
-    entrypoints: [join(pkgRoot, 'src', 'app.ts')],
+    entrypoints: [join(pkgRoot, 'src', 'app-entry.ts')],
     outdir: dist,
     target: 'browser',
     format: 'esm',
