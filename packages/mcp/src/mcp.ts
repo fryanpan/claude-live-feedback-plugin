@@ -23,11 +23,11 @@ import { type TaskToolContext, handleTaskTool } from './tools/tasks.ts';
 import { type WorkspaceToolContext, handleWorkspaceTool } from './tools/workspace.ts';
 import {
   type RestoreState,
-  type WatchCoverage,
   boardsToReattach,
   parseCoverage,
   restoreNoticeContent,
 } from './watch-coverage.ts';
+import { SHARED_IDENTITY_REASON, createWatchRegistry, isSharedIdentity } from './watch-registry.ts';
 
 /**
  * Thin MCP server that proxies tool calls to a running feedback server
@@ -315,7 +315,7 @@ function toolContext(): DocsToolContext & TaskToolContext & WorkspaceToolContext
     watchPersistenceMode,
     claimNoticeFor,
     restoreState,
-    lastPersistError,
+    lastPersistError: registry.lastPersistError(),
     IDENTITY_IS_SHARED,
     SHARED_IDENTITY_REASON,
   };
@@ -370,35 +370,7 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
 
 const watchers = new Map<string, Watcher>();
 
-// ---------------------------------------------------------------------------
-// Durable watches. Everything above this line is SESSION-SCOPED: `watchers`
-// is a Map in this process, and this process is the MCP child Claude Code
-// spawns per session — it dies with the session, so a respawn (a token
-// switch, a /clear, a crash) came back with `watchers` empty and
-// `list_watched_docs` answering `[]`, which is exactly what a session that
-// never subscribed answers. Measured 2026-08-18 by two peers: 62 and 6
-// subscriptions, silently gone.
-//
-// The server keeps the SET under this agent's identity (AUTHOR.id — the same
-// id every other call carries; `/api/agents/<id>/watches`). This process
-// mirrors every watch/unwatch there and, once the client has initialized,
-// asks for the set back and re-wires it. Persistence is best-effort and never
-// fails a tool call: the local watch is what delivers events right now, and a
-// persist that could not land is reported (`persisted: false`,
-// `lastPersistError`) rather than thrown. Restore is single-flight, retried on
-// the next tool call if the server was down, and reported in full by
-// `list_watched_docs` so `[]` can no longer mean two things.
-//
-// The shared identity (`CW_AGENT_NAME` unset → `known-agent`) is not
-// persisted at all — every anonymous session resolves to it, so a set keyed
-// on it would restore everybody's watches into each of them. The server
-// refuses it too; this check just spares the round trip and says why.
-// ---------------------------------------------------------------------------
-
-const IDENTITY_IS_SHARED = AUTHOR.id === 'known-agent';
-const SHARED_IDENTITY_REASON =
-  'CW_AGENT_NAME is not set, so this session has no identity to key its watches on; ' +
-  'they will not survive a restart. Set it in the launch environment and restart the session.';
+const IDENTITY_IS_SHARED = isSharedIdentity(AUTHOR.id);
 
 let restoreState: RestoreState = IDENTITY_IS_SHARED
   ? { status: 'session-only', from: 'session', restored: [], pruned: [], attempts: 0 }
@@ -407,7 +379,6 @@ let restoreInFlight: Promise<void> | null = null;
 /** After a failed restore, don't hammer a down server from every tool call —
  *  back off (capped at 30s), then try again on the next call after that. */
 let restoreRetryAt = 0;
-let lastPersistError: string | undefined;
 
 /**
  * Which boards this session is attached to, and when it last proved it.
@@ -484,49 +455,6 @@ async function claimNoticeFor(taskId: string): Promise<string | undefined> {
 }
 
 /**
- * The server's last answer to "what am I MISSING?", or undefined for "not
- * known" — an older server, the shared-identity refusal, an unreachable box.
- * Deliberately not defaulted to an empty block: unknown rendered as empty
- * reads as "nothing is missing", which is exactly the confident wrong answer
- * this whole readout exists to replace.
- */
-let lastCoverage: WatchCoverage | undefined;
-
-/** Ask the server for a fresh coverage read. Never throws and never
- *  fabricates: an unreachable server leaves the previous answer alone rather
- *  than manufacturing an all-clear out of a failed request. */
-async function refreshCoverage(): Promise<WatchCoverage | undefined> {
-  if (IDENTITY_IS_SHARED) return undefined;
-  try {
-    lastCoverage = parseCoverage(await http('GET', watchesPath())) ?? lastCoverage;
-  } catch {
-    // Leave `lastCoverage` as it was; `list_watched_docs` omits the field
-    // entirely when it is undefined.
-  }
-  return lastCoverage;
-}
-
-function watchPersistenceMode(): 'server' | 'session-only' {
-  return IDENTITY_IS_SHARED ? 'session-only' : 'server';
-}
-
-const watchesPath = () => `/api/agents/${encodeURIComponent(AUTHOR.id)}/watches`;
-
-/** Mirror a local watch/unwatch to the server. Never throws. */
-async function persistWatchChange(change: { add?: string[]; remove?: string[] }): Promise<boolean> {
-  if (IDENTITY_IS_SHARED) return false;
-  try {
-    await http('POST', watchesPath(), { ...change, name: AUTHOR.name });
-    lastPersistError = undefined;
-    return true;
-  } catch (err) {
-    lastPersistError = err instanceof Error ? err.message : String(err);
-    console.error('[claude-workspaces-mcp] could not persist watch change:', lastPersistError);
-    return false;
-  }
-}
-
-/**
  * Ask the server what this identity was watching and re-wire it. Single
  * flight; a failure leaves `restoreState.status = 'failed'` and the next call
  * tries again. Once `restored`, further calls are no-ops — the server set
@@ -541,11 +469,11 @@ async function ensureWatchesRestored(): Promise<void> {
   restoreInFlight = (async () => {
     const attempts = restoreState.attempts + 1;
     try {
-      const res = (await http('GET', watchesPath())) as {
+      const res = (await http('GET', registry.watchesPath())) as {
         watches?: Array<{ key: string }>;
         pruned?: string[];
       };
-      lastCoverage = parseCoverage(res);
+      registry.setCoverage(parseCoverage(res));
       const keys = (res.watches ?? []).map((w) => w.key);
       const restored: string[] = [];
       for (const key of keys) {
@@ -564,7 +492,7 @@ async function ensureWatchesRestored(): Promise<void> {
       // extra steps. Only boards it already led or was already attached to;
       // see boardsToReattach.
       const reattached: string[] = [];
-      for (const workspaceId of boardsToReattach(lastCoverage)) {
+      for (const workspaceId of boardsToReattach(registry.coverage())) {
         try {
           const attachRes = (await http(
             'POST',
@@ -676,7 +604,7 @@ async function emitRestoreNotice(state: RestoreState): Promise<void> {
     reattached: state.reattached ?? [],
     pruned: state.pruned,
     agentName: AUTHOR.name,
-    coverage: lastCoverage,
+    coverage: registry.coverage(),
   });
   if (content === null) return;
   await server.notification({
@@ -689,87 +617,10 @@ async function emitRestoreNotice(state: RestoreState): Promise<void> {
         event: 'watches.restored',
         restored: state.restored,
         pruned: state.pruned,
-        ...(lastCoverage ? { unattachedBoards: lastCoverage.unattachedBoards } : {}),
+        ...(registry.coverage() ? { unattachedBoards: registry.coverage()?.unattachedBoards } : {}),
       },
     },
   });
-}
-
-/** Returns whether the watch was persisted on the server (false when this
- *  identity is shared, the server refused, or it was unreachable). */
-async function watchDoc(docId: string, persist = true): Promise<boolean> {
-  if (!watchers.has(docId)) {
-    const controller = new AbortController();
-    watchers.set(docId, { controller, docId, open: false });
-    await startSseLoop(docId, `/events/${encodeURIComponent(docId)}`, controller);
-  }
-  // Persist even when already locally watched: an earlier persist may have
-  // failed (server down at the time), and the POST is idempotent.
-  return persist ? persistWatchChange({ add: [docId] }) : false;
-}
-
-/**
- * Watch a whole workspace on ONE stream. Two things wear that word, and this
- * key covers both — but it did not always, and the comment here used to say
- * "every thread event on any member doc arrives" without saying which sense
- * it meant.
- *
- *  - A GROUPING (a diff review / folder bind): its member docs carry the
- *    review tag and `rooms.ts` has always double-broadcast on it. True from
- *    the start.
- *  - A hub BOARD: it holds docs through `workspace.docIds`, which is NOT that
- *    tag. Until the board fan-out landed in server.ts's `onDocRoomEvent`, a
- *    doc filed on a board reached this stream never — and nothing said so,
- *    which is the whole failure class here. Now it does, resolved at
- *    broadcast time, so docs created LATER are covered with no second call.
- *
- * What this key still does NOT do is attach you. Watching is listening;
- * attaching is being addressable. Every delivery gate asks the second
- * question, so a session with this key and no attachment hears comments while
- * voice notes queue for a lead it is not. `coverage`
- * on `list_watched_docs` is what reports that gap.
- */
-async function watchWorkspace(
-  workspaceId: string,
-  persist = true,
-): Promise<{ open: boolean; persisted: boolean }> {
-  const key = `ws:${workspaceId}`;
-  let open = watchers.get(key)?.open === true;
-  if (!watchers.has(key)) {
-    const controller = new AbortController();
-    watchers.set(key, { controller, docId: key, open: false });
-    // Name ourselves on the stream. This socket is held for the life of the
-    // session, so it is the most reliable evidence the server can have that a
-    // delivery to this agent will land — but only if the server can tell WHICH
-    // agent is on it. Without the id it is one more anonymous subscriber,
-    // indistinguishable from a browser tab, and the server falls back to
-    // asking how recently the model happened to call a tool. That clock
-    // expires under an agent doing local work: measured 2026-08-19 at a
-    // 19.1-minute grep-and-read gap against a 15-minute window, with this
-    // stream open throughout and a voice note queued instead of delivered.
-    open = await startSseLoop(
-      key,
-      `/events/workspace/${encodeURIComponent(workspaceId)}?agentId=${encodeURIComponent(AUTHOR.id)}`,
-      controller,
-    );
-  }
-  // Two failures, reported apart. A stream that did not open loses events NOW;
-  // a watch that did not persist loses them at the next respawn. Collapsing
-  // them into one boolean is how a caller ends up reassured about the half
-  // that worked.
-  const persisted = persist ? await persistWatchChange({ add: [key] }) : false;
-  return { open, persisted };
-}
-
-async function unwatchDoc(docId: string): Promise<boolean> {
-  const w = watchers.get(docId);
-  if (w) {
-    w.controller.abort();
-    watchers.delete(docId);
-  }
-  // Forget it on the server even if it was not locally wired — a sibling
-  // session may have recorded it, and an explicit unwatch means "stop".
-  return persistWatchChange({ remove: [docId] });
 }
 
 /** Shared across every SSE loop in this process — the whole point is to catch
@@ -821,6 +672,21 @@ const { startSseLoop } = createSseLoops({
     clear: (h) => clearTimeout(h as ReturnType<typeof setTimeout>),
   },
 });
+
+/**
+ * The watch registry, bound to this process. See watch-registry.ts — it owns
+ * the local subscriptions, the mirror of that set on the server, and the two
+ * failures (stream not open, watch not persisted) that must stay apart.
+ */
+const registry = createWatchRegistry({
+  watchers,
+  http: (method, path, body) => http(method, path, body),
+  author: AUTHOR,
+  startSseLoop,
+  identityIsShared: IDENTITY_IS_SHARED,
+  log: (...args) => console.error(...args),
+});
+const { watchDoc, watchWorkspace, unwatchDoc, refreshCoverage, watchPersistenceMode } = registry;
 
 async function http(method: string, path: string, body?: unknown): Promise<unknown> {
   const baseUrl = resolveBaseUrl();
