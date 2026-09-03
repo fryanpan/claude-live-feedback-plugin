@@ -12,7 +12,7 @@
  * was named — is a property of what a MODEL wrote, and a unit test can only
  * prove that the instruction was sent. So the instructions are checked the
  * way a person would check them: run a real meeting through the real pipeline
- * and read the notes. This does the reading, on 202 ticks instead of three.
+ * and read the notes. This does the reading, on 273 ticks instead of three.
  *
  * ON DEMAND ONLY. It spends money and it talks to the network, so nothing
  * runs it on a push except the `--smoke` slice, which is sized to cost cents.

@@ -74,14 +74,14 @@ export const FIXTURE_DIR = join(
  * no examples of anything. 900s is past the drawing and into the brief.
  */
 const MEETINGS: ReadonlyArray<{ meeting: string; fromSeconds: number; seconds: number }> = [
-  { meeting: 'ES2002a', fromSeconds: 900, seconds: 660 },
-  { meeting: 'ES2002b', fromSeconds: 420, seconds: 660 },
-  { meeting: 'ES2002c', fromSeconds: 420, seconds: 660 },
-  { meeting: 'ES2002d', fromSeconds: 300, seconds: 660 },
-  { meeting: 'ES2003a', fromSeconds: 900, seconds: 660 },
-  { meeting: 'ES2003b', fromSeconds: 420, seconds: 660 },
-  { meeting: 'ES2003c', fromSeconds: 420, seconds: 660 },
-  { meeting: 'ES2003d', fromSeconds: 300, seconds: 660 },
+  { meeting: 'ES2002a', fromSeconds: 900, seconds: 900 },
+  { meeting: 'ES2002b', fromSeconds: 420, seconds: 900 },
+  { meeting: 'ES2002c', fromSeconds: 420, seconds: 900 },
+  { meeting: 'ES2002d', fromSeconds: 300, seconds: 900 },
+  { meeting: 'ES2003a', fromSeconds: 900, seconds: 900 },
+  { meeting: 'ES2003b', fromSeconds: 420, seconds: 900 },
+  { meeting: 'ES2003c', fromSeconds: 420, seconds: 900 },
+  { meeting: 'ES2003d', fromSeconds: 300, seconds: 900 },
 ];
 
 /** One turn as the fixture stores it: a letter and what was said. */
