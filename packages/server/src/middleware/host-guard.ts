@@ -384,10 +384,7 @@ export function isProxiedTrustedHost(
  * grants only the chance to present a verified address. Everything after that
  * is the membership check.
  */
-export function isShareLinkHost(
-  host: string | null | undefined,
-  opts: TrustedHostOpts,
-): boolean {
+export function isShareLinkHost(host: string | null | undefined, opts: TrustedHostOpts): boolean {
   if (!opts.viaProxy) return false;
   if (!opts.shareLinkAccessFronted) return false;
   const h = normalizeHost(host);
