@@ -19,10 +19,11 @@ find packages \( -name '*.ts' -o -name '*.css' \) \
 ```
 
 Audited 2026-09-02 at `3a39db67`, and re-audited after A1 and A2 landed.
-**159 files** over 500 lines: 65 source and 94 test. A7 took `activity.ts`
+**160 files** over 500 lines: 66 source and 94 test. A7 took `activity.ts`
 (582 → 301) and `recall-calendar.ts` (721 → 470) off this list, and A8 took
 `voice-smooth.test.ts` (729 → 493); all three rows are gone rather than marked
-done.
+done. B5 took `prose.ts` (2847 → 83) and `goal-effort.ts` (1086 → 333) off it
+the same way, and added three rows for the files that came out of `prose.ts`.
 
 Test files are judged by a narrower rule, in their own table below: a long test
 file is an exception unless two *unrelated harnesses* share it. Many `describe`
@@ -101,9 +102,10 @@ the shipped bundle is unchanged.
 
 | File | Lines | Verdict | Reason / seam |
 |---|---|---|---|
-| `packages/core/src/prose.ts` | 2847 | Split | Markdown⇄Yjs conversion (`parseMarkdownBlocks`, `serializeFragmentToMarkdown`, `applyMarkdownToFragment`) → `prose-markdown.ts` ~1100; find/replace and range editing (`locateMatches`, `findAndReplace`, `rewriteRange`) → `prose-edit.ts` ~800; the anchor and block-deletion API already fenced by its own banner at 2540 (`createAgentAnchor`, `deleteBlocksInRange`, `autoReanchorDoc`) → `prose-blocks.ts` ~700. **M** |
-| `packages/core/src/review-item.ts` | 1769 | Split | Pure and import-free apart from `wordCount`, so the seams are cheap: input validation and its limits (`REVIEW_LIMITS`, `checkReviewPayload`, `reviewGapAdvice`) → `review-item-check.ts` ~400 and the wire readers (`readReviewPayload`, `readTaskReviewItem`) → `review-item-wire.ts` ~250, leaving the payload lifecycle (`applyReviewRevision`, `withdrawReview`, `reviewItemState`). **S** |
-| `packages/core/src/goal-effort.ts` | 1086 | Split | Its own header names the chunks. Calibration (`computeEffortRatios`, `computeEffortCalibration`, `shrinkEffortRatio`, `quantile`) → `effort-calibration.ts` ~400; display (`formatEffortSeconds`, `formatEffortDate`) → `effort-format.ts` ~70; the rollup `summarizeGoalEffort` and the per-task derivations stay ~600. **S** |
+| `packages/core/src/prose-markdown.ts` | 1183 | Exception | Markdown in and markdown out, out of `prose.ts` in B5, and deliberately one file rather than a parser and a serializer. They are one grammar: a mark the parser learns and the serializer does not emit is a doc that loses text on its next flush, so the two halves of that invariant must be readable together. `applyMarkdownToFragment` is the pair composed under an LCS diff, which is what makes a reparse touch only the blocks that changed. |
+| `packages/core/src/review-item.ts` | 1030 | Split | B5 took the quality gate to `review-item-check.ts` (471) and the defensive readers to `review-item-wire.ts` (333), both at roughly the estimated size. What is left is the payload lifecycle — `applyReviewRevision`, `withdrawReview` / `reinstateReview`, `answerFromReply`, `reviewItemState` — and the types all three files are written in terms of, `ReviewPayload` alone being ~147 documented lines. The remaining seam is those types, and taking it would put the contract in one file and the verbs that implement it in another; the two extracted files reach them as a type-only import instead, which erases at build time. **S** |
+| `packages/core/src/prose-edit.ts` | 857 | Exception | The two ways an agent edits prose without a cursor, out of `prose.ts` in B5: by what the text says (`locateMatches`, `findAndReplace`) and by a stored pair of relative positions (`rewriteRange`, `insertAfterRange`). One subject, not two — they share the covering-mark machinery, the near-miss hints a failed find returns, and the table-row path, and every one of them wraps its mutation in the same single transaction. |
+| `packages/core/src/prose-blocks.ts` | 712 | Exception | Whole-block edits and the agent anchors that name where, out of `prose.ts` in B5. Everything else in that family edits text inside a block; this is the file that changes the document's shape. Anchors ship with block deletion because they are one contract read from two ends — an anchor promises a place can be found again, deleting the block it names is the edit that breaks the promise, and `autoReanchorDoc` is what runs afterwards. |
 | `packages/core/src/task-wire.ts` | 759 | Exception | One wire contract, all data: `Task` alone is ~415 documented lines, plus `TASK_STATUSES`, `Ref`, `ArtifactCheck` and the single `byBoardOrder`. Splitting it would put one row's shape in two files, which is the drift the file exists to prevent. |
 | `packages/core/src/speaker-tags.ts` | 619 | Exception | One tag format end to end: `speakerTagHref` and `parseSpeakerTagHref` define it, and `findSpeakerTags` / `normalizeSpeakerTags` / `reattributeSpeakerTags` are the operations on it over a shared `SpeakerTagMatch`. |
 | `packages/core/src/suggest-ops.ts` | 572 | Exception | One registry and its mutations over a Y.Doc: `scanSuggestions` builds the read model that `acceptSuggestion` / `rejectSuggestion` / `resolveAllSuggestions` then act on, all through the shared `resolveOne`. |
@@ -263,8 +265,8 @@ months, so splitting it buys almost nothing.
 | 11 | `packages/markdown-app/src/review-chrome.ts` | 1080 | 24 | M |
 | 12 | `thread-card.ts` + `threads.ts` (was `threads.ts`, split in B3) | 1230 | 20 | done |
 | 13 | `meeting-protocol.ts` + `meeting-chooser.ts` + `meeting-strip.ts` (was `meeting-strip.ts`, split in B4) | 1953 | 18 | done |
-| 14 | `packages/core/src/review-item.ts` | 1769 | 18 | S |
-| 15 | `packages/core/src/prose.ts` | 2847 | 16 | M |
+| 14 | `review-item-check.ts` + `review-item-wire.ts` + `review-item.ts` (split in B5) | 1769 | 18 | done |
+| 15 | `prose-fragment.ts` + `prose-markdown.ts` + `prose-edit.ts` + `prose-blocks.ts` + `prose.ts` (was `prose.ts`, split in B5) | 2847 | 16 | done |
 | 16 | `review-queue.ts` + `ask-detection.ts` (split in A6) | 831 | 15 | done |
 | 17 | `packages/widget/src/widget.ts` | 1320 | 13 | M |
 | 18 | `packages/server/src/meeting-notes.ts` + `pause-ticker.ts` (split in A5) | 1039 | 12 | done |
@@ -275,7 +277,7 @@ months, so splitting it buys almost nothing.
 | 23 | `meeting-task-capture.ts` + `meeting-capture-prompt.ts` + `meeting-capture-guards.ts` (split in A5) | 1348 | 6 | done |
 | 24 | `meeting-notes-merge.ts` + `notes-ownership.ts` + `notes-section.ts` (split in A5) | 1067 | 5 | done |
 | 25 | `deploy.ts` + `deploy-log.ts` (split in A7) | 1058 | 4 | done |
-| 26 | `packages/core/src/goal-effort.ts` | 1086 | 4 | S |
+| 26 | `effort-task.ts` + `effort-calibration.ts` + `effort-format.ts` + `goal-effort.ts` (split in B5) | 1086 | 4 | done |
 | 27 | `voice-resolve.ts` + `voice-status.ts` (split in A6) | 762 | 2 | done |
 | 28 | `packages/plugin/hooks/lib/agent-notes.ts` | 653 | 2 | S |
 | 29 | `recall-calendar.ts` + `google-oauth.ts` (split in A7) | 721 | 1 | done |

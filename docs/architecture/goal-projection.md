@@ -1,14 +1,19 @@
 # Goal projection — the bar, the remainder and the date
 
 What a goal band prints: how far along it is, how much of Bryan's own
-attention is left, and roughly when it lands. The arithmetic is
-`packages/core/src/goal-effort.ts` — pure, in `core` rather than the server,
-because the board recomputes it in the browser off rows it already holds.
+attention is left, and roughly when it lands. The arithmetic is four files in
+`packages/core/src`, read bottom-up: `effort-task.ts` (what one ticket
+contributes), `effort-calibration.ts` (the ratios and their priors),
+`goal-effort.ts` (the rollup and the projected date) and `effort-format.ts`
+(the readouts). All pure, and in `core` rather than the server, because the
+board recomputes them in the browser off rows it already holds.
 
 This file is the **product rules**: the questions someone reading a date on
 the board would ask, answered once. The mechanics, the priors and the reasons
-for each design choice are in that module's own doc comments, which are long
-and stay long; nothing here repeats them.
+for each design choice are in those modules' own doc comments, which are long
+and stay long; nothing here repeats them. Each constant's argument sits beside
+the constant — the priors in `effort-calibration.ts`, the pace window in
+`effort-task.ts`, the projection horizon in `goal-effort.ts`.
 
 ## The chain
 
