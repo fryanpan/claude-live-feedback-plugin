@@ -13,13 +13,12 @@
  *  2. Layout at the two sizes the project verifies (1180×820 iPad landscape,
  *     where HEIGHT is the scarce axis; 430px phone, where thumbs are).
  *     happy-dom has no layout engine, so the DOM side asserts the line
- *     budget the pane may spend and the CSS side asserts the declarations
- *     that keep every line to one line and every row to 44px.
+ *     budget the pane may spend and the cascade side reads, off the mounted
+ *     pane at each width, the declarations that keep every line to one line
+ *     and every row to 44px.
  */
-import { readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
 import type { Thread, User } from '@feedback/core';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ACTIVITY_GROUP_CAP, ACTIVITY_NOTE_CAP } from '../src/hub/activity-model.ts';
 import {
   type ActivityHandlers,
@@ -27,6 +26,7 @@ import {
   mountHomeActivityIsland,
 } from '../src/hub/home-activity-island.tsx';
 import { CHORES_ID, type HubGoal, type HubNote, type HubTask } from '../src/hub/hub-board-model.ts';
+import { IPAD, PHONE, attach, installSheets, setViewport, styleOf } from './css-harness.ts';
 
 /** All fixtures are synthetic — invented agents, short fake ids. */
 
@@ -636,47 +636,67 @@ describe('commenting on a note like a doc', () => {
 
 /* ---------------------------------------------------------------------- */
 
-const CSS = readFileSync(resolve('packages/workspaces-app/src/hub.css'), 'utf8');
+/**
+ * The pane's LAYOUT, read off the cascade instead of out of `hub.css`.
+ *
+ * happy-dom lays nothing out, so the rendered height is still a browser check
+ * (`bun run ui:shot` at 1180×820 and 430px) — but the declarations the browser
+ * would lay out WITH are the cascade's answer, and asking the rendered pane
+ * for them catches three things a regex over the sheet cannot: a rule a later
+ * one overrides, a selector the pane no longer carries, and — the one this
+ * block is mostly about — a declaration inside a `@media` block that does not
+ * match at the width being read. The old version searched a ≤1100px extract
+ * for `white-space: normal` and would have passed just as well had the query
+ * said 1000px, or had the rule moved to a class the island stopped emitting.
+ *
+ * Every element below comes from a real mount, so what is measured is what
+ * `mountHomeActivityIsland` puts on the page.
+ */
 
-function declarationsOnly(css: string): string {
-  return css.replace(/\/\*[\s\S]*?\*\//g, '');
+/** The pane, mounted at a STATED viewport. The viewport is stated on every
+ *  call because this block is about a tier boundary and happy-dom's default
+ *  (1024px) sits inside this project's MOBILE tier — a test that says nothing
+ *  reads the phone cascade while looking like it reads the tablet one. */
+function pane(
+  viewport: { width: number; height: number },
+  tasks: HubTask[] = [busyTask()],
+): { host: HTMLElement; unmount: () => void; pick: (sel: string) => HTMLElement } {
+  setViewport(viewport);
+  const { host, unmount } = mount(tasks);
+  const pick = (sel: string) => {
+    const el = host.querySelector<HTMLElement>(sel);
+    expect(el, `the pane rendered no ${sel}`).not.toBeNull();
+    return el as HTMLElement;
+  };
+  return { host, unmount, pick };
 }
 
-/** The body of `selector`'s rule — top level unless `within` is a media
- *  extract, where the selector is indented. */
-function rule(selector: string, within?: string): string {
-  const escaped = selector.replace(/[.+*[\]()]/g, '\\$&');
-  const at = new RegExp(
-    within === undefined
-      ? `(^|\\n)${escaped}\\s*\\{([^}]*)\\}`
-      : `(^|\\n)\\s*${escaped}\\s*\\{([^}]*)\\}`,
-  ).exec(within ?? declarationsOnly(CSS));
-  return at?.[2] ?? '';
+/** A task with enough notes that the pane draws a header, lines and a "+N". */
+const busyTask = () =>
+  task({
+    id: 't-css',
+    title: 'Bryan can export a board as CSV',
+    notes: [1, 2, 3, 4, 5].map((n) => note(n * MIN, `Line ${n} of the run`)),
+  });
+
+/** Open the draft thread on `phrase`, the way a finger does — the state in
+ *  which the pane renders `.acti-group-wrap-open` and `.acti-thread`. */
+async function openDraft(host: HTMLElement, phrase: string): Promise<void> {
+  await select(host, phrase);
+  pillIn(host).click();
+  await tick();
 }
 
-/** Every `@media <query> { … }` block in the sheet, joined. */
-function media(query: string): string {
-  const src = declarationsOnly(CSS);
-  const blocks: string[] = [];
-  let from = 0;
-  for (;;) {
-    const start = src.indexOf(`@media ${query}`, from);
-    if (start < 0) break;
-    let depth = 0;
-    let end = -1;
-    for (let i = src.indexOf('{', start); i < src.length; i++) {
-      if (src[i] === '{') depth++;
-      else if (src[i] === '}' && --depth === 0) {
-        end = i + 1;
-        break;
-      }
-    }
-    if (end < 0) break;
-    blocks.push(src.slice(start, end));
-    from = end;
-  }
-  return blocks.join('\n');
-}
+let sheets = () => {};
+beforeEach(() => {
+  sheets = installSheets('hub.css', 'styles.css');
+});
+afterEach(() => {
+  sheets();
+  window.getSelection()?.removeAllRanges();
+  setViewport({ width: 1024, height: 768 });
+  document.body.replaceChildren();
+});
 
 describe('the activity pane at 1180×820 spends a bounded number of lines', () => {
   it('never draws more than 8 groups of a header plus 3 note lines', () => {
@@ -703,89 +723,172 @@ describe('the activity pane at 1180×820 spends a bounded number of lines', () =
   });
 
   it('the card takes no fixed height, and each title and note line is ONE line at the tablet tier', () => {
-    const card = rule('.hub-activity-card');
-    expect(card, '.hub-activity-card has no rule').not.toBe('');
-    expect(card).not.toMatch(/(^|[^-])height:/);
-    expect(card).not.toMatch(/min-height:/);
+    const { host, unmount, pick } = pane(IPAD);
+    const card = styleOf(pick('.hub-activity-card'));
+    // Positive control FIRST: the card IS styled, so the two absences below
+    // are absences and not an unstyled element answering `''` to everything.
+    expect(card.background).not.toBe('');
+    expect(card.padding).not.toBe('');
+    expect(card.height).toBe('');
+    expect(card.minHeight).toBe('');
     // A header is one line: the title clips with an ellipsis rather than
     // wrapping, so 8 groups cost 8 header lines, never 16.
-    const title = rule('.acti-title-text');
-    expect(title, '.acti-title-text has no rule').not.toBe('');
-    expect(title).toMatch(/white-space:\s*nowrap/);
-    expect(title).toMatch(/text-overflow:\s*ellipsis/);
+    const title = styleOf(pick('.acti-title-text'));
+    expect(title.whiteSpace).toBe('nowrap');
+    expect(title.textOverflow).toBe('ellipsis');
     // A note line is one line for the same reason.
-    const line = rule('.hub-activity-note');
-    expect(line, '.hub-activity-note has no rule').not.toBe('');
-    expect(line).toMatch(/white-space:\s*nowrap/);
-    expect(line).toMatch(/text-overflow:\s*ellipsis/);
-    expect(line).toMatch(/overflow:\s*hidden/);
+    const line = styleOf(pick('.hub-activity-note'));
+    expect(line.whiteSpace).toBe('nowrap');
+    expect(line.textOverflow).toBe('ellipsis');
+    expect(line.overflow).toBe('hidden');
+    unmount();
+    host.remove();
   });
 
-  it('the thread card sits BESIDE the group at the tablet tier, in a 300px column, and carries no second action', () => {
-    const wrap = rule('.acti-group-wrap-open');
-    expect(wrap, '.acti-group-wrap-open has no rule').not.toBe('');
-    expect(wrap).toMatch(/display:\s*grid/);
-    expect(wrap).toMatch(/grid-template-columns:[^;]*300px/);
+  it('the thread card sits BESIDE the group at the tablet tier, in a 300px column, and carries no second action', async () => {
+    const { host, unmount, pick } = pane(IPAD);
+    await openDraft(host, 'Line 1');
+    const wrap = styleOf(pick('.acti-group-wrap-open'));
+    expect(wrap.display).toBe('grid');
+    expect(wrap.gridTemplateColumns).toContain('300px');
     // One action only: the real card's Resolve foot is not offered here.
-    expect(rule('.acti-thread .thread-foot')).toMatch(/display:\s*none/);
+    expect(styleOf(pick('.acti-thread .thread-foot')).display).toBe('none');
     // The marked phrase gets the editor's range colours, which are scoped to
     // the editor and so have to be restated for the pane.
-    expect(rule('.acti-group .thread-range')).toMatch(/background:/);
+    expect(styleOf(pick('.acti-group mark.thread-range')).background).not.toBe('');
+    unmount();
+    host.remove();
   });
 
-  it('a denial’s mono/danger tint is on the shape, not the whole line', () => {
-    const shape = rule('.hub-activity-note-denial .acti-shape');
-    expect(shape, '.hub-activity-note-denial .acti-shape has no rule').not.toBe('');
-    expect(shape).toMatch(/font-family:\s*var\(--mono\)/);
-    expect(shape).toMatch(/background:\s*var\(--danger-bg\)/);
-    expect(rule('.hub-activity-note-denial .acti-text')).not.toMatch(/background:/);
+  it('a denial’s mono/danger tint is on the shape, not the whole line', async () => {
+    const { host, unmount, pick } = pane(IPAD, [
+      task({
+        id: 't-dn',
+        notes: [note(12 * MIN, 'git rm in this repo', { kind: 'denial', agent: 'Bike Map' })],
+      }),
+    ]);
+    expect(styleOf(pick('.hub-activity-note-denial .acti-shape')).fontFamily).toContain('mono');
+    // The tint itself is asserted in its own `it.fails` below, because it does
+    // not hold: `hub.css` paints the shape with `background: var(--danger-bg)`
+    // and no stylesheet in this app defines that custom property, so the
+    // browser paints no tint at all. A text read could not see that.
+    //
+    // What still holds either way is that whatever the shape gets, the LINE
+    // around it does not. Read as a difference between the two elements, with
+    // the shape's mono family above as the control that the pair really are
+    // reached by different rules.
+    await openDraft(host, 'git rm');
+    const shape = styleOf(pick('.acti-shape'));
+    const text = styleOf(pick('.hub-activity-note-denial .acti-text'));
+    expect(text.background).toBe('');
+    expect(text.fontFamily).not.toBe(shape.fontFamily);
+    unmount();
+    host.remove();
+  });
+
+  /**
+   * KNOWN BROKEN, recorded the way the See-thread floor is in
+   * review-item-comment-css.test.ts: the contract is stated, and the test
+   * says out loud that the product does not meet it.
+   *
+   * `.hub-activity-note-denial .acti-shape` (hub.css:2040) and
+   * `.hub-note-body .acti-shape` (hub.css:4339) both paint
+   * `background: var(--danger-bg)`. A repo-wide grep finds those two uses and
+   * no definition, so the shape is untinted in a real browser and the denial
+   * reads like any other note. This pass converts tests and does not change
+   * CSS, so the rule is left alone — and the day someone defines the token,
+   * THIS test goes red and gets promoted to a plain `it`.
+   *
+   * happy-dom returns `''` for an unresolved `var()` exactly as it does for a
+   * property nothing set, which is why the assertion is written against the
+   * mounted shape and paired with a control that the sheet reaches it at all.
+   */
+  it.fails('KNOWN BROKEN: a denial’s shape should carry a danger tint', async () => {
+    const { host, unmount, pick } = pane(IPAD, [
+      task({
+        id: 't-dn2',
+        notes: [note(12 * MIN, 'git rm in this repo', { kind: 'denial', agent: 'Bike Map' })],
+      }),
+    ]);
+    const shape = styleOf(pick('.hub-activity-note-denial .acti-shape'));
+    // Control: the shape IS reached by its rule, so the empty background below
+    // is the undefined token and not a selector that stopped matching.
+    expect(shape.fontFamily).toContain('mono');
+    expect(shape.background).not.toBe('');
+    unmount();
+    host.remove();
   });
 
   it('the notes sit indented under the title, past the status mark', () => {
-    const notes = rule('.acti-notes');
-    expect(notes, '.acti-notes has no rule').not.toBe('');
-    expect(notes).toMatch(/margin(-left)?:[^;]*17px/);
+    const { host, unmount, pick } = pane(IPAD);
+    expect(Number.parseFloat(styleOf(pick('.acti-notes')).marginLeft)).toBe(17);
+    unmount();
+    host.remove();
   });
 });
 
 describe('the activity pane at 430px is thumb-sized and lets the words wrap', () => {
   it('the header row keeps the queue row’s 44px floor on the phone tier', () => {
-    // The base row rule is the floor; the phone block must not lower it.
-    expect(rule('.hub-review-row')).toMatch(/min-height:\s*44px/);
-    const phone = media('(max-width: 1100px)');
-    expect(phone, 'no ≤1100px block').not.toBe('');
-    const phoneRow = rule('.hub-review-row', phone);
-    if (phoneRow !== '') expect(phoneRow).not.toMatch(/min-height:\s*([0-3]\d|4[0-3])px/);
-    const head = rule('.acti-head');
-    expect(head, '.acti-head has no rule').not.toBe('');
-    expect(head).not.toMatch(/min-height:/);
+    // The base row rule is the floor and the phone block must not lower it —
+    // which is now read AT the phone width rather than inferred from a
+    // ≤1100px extract that mentioned no `min-height`.
+    const { host, unmount, pick } = pane(PHONE);
+    expect(Number.parseFloat(styleOf(pick('.acti-group .hub-review-row')).minHeight)).toBe(44);
+    // …and the header adds no floor of its own on top of it. `.acti-head` is
+    // the same element, so the control is the 44px above.
+    expect(styleOf(pick('.acti-head')).minHeight).toBe('44px');
+    unmount();
+    host.remove();
   });
 
   it('on the phone tier a title and a note line may wrap — clipping is a tablet economy', () => {
-    const phone = media('(max-width: 1100px)');
-    const title = rule('.acti-title-text', phone);
-    expect(title, '.acti-title-text has no phone rule').not.toBe('');
-    expect(title).toMatch(/white-space:\s*normal/);
-    const line = rule('.hub-activity-note', phone);
-    expect(line, '.hub-activity-note has no phone rule').not.toBe('');
-    expect(line).toMatch(/white-space:\s*normal/);
+    const phone = pane(PHONE);
+    expect(styleOf(phone.pick('.acti-title-text')).whiteSpace).toBe('normal');
+    expect(styleOf(phone.pick('.hub-activity-note')).whiteSpace).toBe('normal');
+    phone.unmount();
+    phone.host.remove();
+    // Control, and the half a media-query extract could not make: at the
+    // tablet tier the SAME elements clip instead. Without this the phone
+    // reading would pass against a sheet that had stopped clipping anywhere.
+    const ipad = pane(IPAD);
+    expect(styleOf(ipad.pick('.acti-title-text')).whiteSpace).toBe('nowrap');
+    expect(styleOf(ipad.pick('.hub-activity-note')).whiteSpace).toBe('nowrap');
+    ipad.unmount();
+    ipad.host.remove();
   });
 
-  it('the thread card goes UNDER the group on the phone tier and the pill grows to a thumb', () => {
-    const phone = media('(max-width: 1100px)');
-    const wrap = rule('.acti-group-wrap-open', phone);
-    expect(wrap, '.acti-group-wrap-open has no phone rule').not.toBe('');
-    expect(wrap).toMatch(/display:\s*flex/);
-    expect(wrap).toMatch(/flex-direction:\s*column/);
-    const pill = rule('.acti-pill', phone);
-    expect(pill, '.acti-pill has no phone rule').not.toBe('');
-    expect(pill).toMatch(/min-width:\s*44px/);
-    expect(pill).toMatch(/min-height:\s*44px/);
+  it('the thread card goes UNDER the group on the phone tier and the pill grows to a thumb', async () => {
+    const { host, unmount, pick } = pane(PHONE);
+    await openDraft(host, 'Line 1');
+    const wrap = styleOf(pick('.acti-group-wrap-open'));
+    expect(wrap.display).toBe('flex');
+    expect(wrap.flexDirection).toBe('column');
+    unmount();
+    host.remove();
+
+    // The pill is only in the DOM while a phrase is selected, so it is read
+    // on a fresh pane rather than after the draft has taken it away.
+    const thumb = pane(PHONE);
+    const pill = styleOf(thumb.pick('.acti-pill'));
+    expect(Number.parseFloat(pill.minWidth)).toBeGreaterThanOrEqual(44);
+    expect(Number.parseFloat(pill.minHeight)).toBeGreaterThanOrEqual(44);
+    thumb.unmount();
+    thumb.host.remove();
   });
 
-  it('negative control: a selector the sheet does not have reads as empty', () => {
-    expect(rule('.acti-nonesuch')).toBe('');
-    expect(rule('.acti-nonesuch', media('(max-width: 1100px)'))).toBe('');
+  it('negative control: a class the sheets have never heard of is reached by nothing', () => {
+    const { host, unmount, pick } = pane(PHONE);
+    const nonesuch = document.createElement('div');
+    nonesuch.className = 'acti-nonesuch';
+    host.appendChild(nonesuch);
+    const style = styleOf(nonesuch);
+    for (const prop of ['padding', 'margin', 'minHeight', 'whiteSpace', 'textOverflow'] as const) {
+      expect(style[prop], `.acti-nonesuch is reached by a ${prop} rule`).toBe('');
+    }
+    // Control: a real class beside it IS reached, at this same width.
+    expect(styleOf(pick('.hub-activity-note')).whiteSpace).toBe('normal');
+    unmount();
+    host.remove();
   });
 });
 
@@ -799,28 +902,47 @@ describe('the activity pane at 430px is thumb-sized and lets the words wrap', ()
  */
 describe('Home’s sections are separated and its headings are labels, not a second bold', () => {
   it('each section after the first sits below a hairline with air above and below it', () => {
-    const stack = rule('#hub-home-page');
-    expect(stack, '#hub-home-page has no rule').not.toBe('');
-    expect(stack).toMatch(/gap:\s*\d+px/);
-    const next = rule('#hub-home-page > * + *');
-    expect(next, '#hub-home-page > * + * has no rule').not.toBe('');
-    expect(next).toMatch(/border-top:\s*1px solid var\(--border\)/);
-    expect(next).toMatch(/padding-top:\s*\d+px/);
+    // The page shell, in the shape `hub-app.ts` writes it: `#hub-home-page`
+    // holding the queue, this pane and the brief. Built here because the
+    // island renders the pane and not the page around it.
+    setViewport(IPAD);
+    const page = attach('', { attrs: { id: 'hub-home-page' } });
+    const first = attach('', { parent: page, attrs: { id: 'hub-home-review' } });
+    const second = attach('', { parent: page, attrs: { id: 'hub-home-activity' } });
+    expect(Number.parseFloat(styleOf(page).gap)).toBeGreaterThan(0);
+    // The hairline is on the SIBLINGS, not on the first child — a border on
+    // every section would draw a line above the topmost one too, and `* + *`
+    // is what expresses that. Both readings are needed: the first alone would
+    // pass against a sheet that drew no line anywhere.
+    const border = getComputedStyle(document.documentElement).getPropertyValue('--border').trim();
+    expect(styleOf(first).borderTop).toBe('');
+    expect(styleOf(second).borderTop).toBe(`1px solid ${border}`);
+    expect(Number.parseFloat(styleOf(second).paddingTop)).toBeGreaterThan(0);
   });
 
   it('the section heading is a small uppercase muted kicker, never a heavier bold', () => {
-    const heading = rule('.hub-home-heading');
-    expect(heading, '.hub-home-heading has no rule').not.toBe('');
-    expect(heading).toMatch(/text-transform:\s*uppercase/);
-    expect(heading).toMatch(/letter-spacing:/);
-    expect(heading).toMatch(/color:\s*var\(--fg-muted\)/);
-    expect(heading).toMatch(/font-weight:\s*(4|5|6)00\b/);
+    const { host, unmount, pick } = pane(IPAD);
+    const heading = styleOf(pick('.hub-home-heading'));
+    expect(heading.textTransform).toBe('uppercase');
+    expect(heading.letterSpacing).not.toBe('');
+    expect(heading.color).toBe(
+      getComputedStyle(document.documentElement).getPropertyValue('--fg-muted').trim(),
+    );
+    expect(Number(heading.fontWeight)).toBeLessThanOrEqual(600);
+    unmount();
+    host.remove();
   });
 
   it('a row title is medium at most; the one emphasis cue stays on the row’s marker', () => {
-    expect(rule('.hub-review-row-title')).toMatch(/font-weight:\s*(400|500)\b/);
-    // Positive control: the weight regex can see a bold when one is there —
+    // A row off its goal band wears the one badge this pane draws.
+    const { host, unmount, pick } = pane(IPAD, [
+      task({ id: 't-flag', goal: CHORES_ID, notes: [note(MIN, 'Picked this up')] }),
+    ]);
+    expect(Number(styleOf(pick('.hub-review-row-title')).fontWeight)).toBeLessThanOrEqual(500);
+    // Positive control: the weight reading can see a bold when one is there —
     // the flag badge keeps its 600, because it IS the row's one cue.
-    expect(rule('.acti-head .hub-badge')).toMatch(/font-weight:\s*600\b/);
+    expect(styleOf(pick('.acti-head .hub-badge')).fontWeight).toBe('600');
+    unmount();
+    host.remove();
   });
 });

@@ -39,8 +39,18 @@ const PROBE_ABS = join(REPO, PROBE_REL);
 const IGNORED_REL = join('packages', 'server', 'test', 'dist', 'zz-audit-ignored-probe.ts');
 const IGNORED_ABS = join(REPO, IGNORED_REL);
 
-/** A site the audit already counts, committed and tracked. */
-const TRACKED_SITE = join('packages', 'workspaces-app', 'test', 'back-link-tap-target-css.test.ts');
+/**
+ * A site the audit already counts, committed and tracked.
+ *
+ * It used to name a stylesheet read in `packages/workspaces-app/test`, and
+ * that whole class of site is gone — those tests install the sheets and read
+ * a computed value now. What is left is the MCP suite's reads of the built
+ * plugin bundle, which is a different subject and not on its way out. When
+ * this file stops being a site, point this at another one from
+ * `bun run test:audit --list` rather than deleting the assertion: it is the
+ * positive control for the two negative controls below.
+ */
+const TRACKED_SITE = join('packages', 'mcp', 'test', 'channel-gate.test.ts');
 
 /** A file the sleep check must object to: one fixed wait, well over the bar. */
 const PROBE_SOURCE = `import { sleep } from 'bun';\n\nexport async function wait(): Promise<void> {\n  await sleep(2500);\n}\n`;
