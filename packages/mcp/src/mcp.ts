@@ -3,40 +3,26 @@ import { randomUUID } from 'node:crypto';
 import { existsSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 
-import { readRenamedEnv } from '@feedback/core/env-names';
-import { discoveryCandidates, resolveDiscoveryFile } from '@feedback/core/machine-paths';
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
-import { type BacklogCommentRow, deliverAttachBacklog } from './attach-backlog.ts';
 import { createAttachmentKeepalive } from './attachment-keepalive.ts';
+import { createAttachments } from './attachments.ts';
 import { resolveAgentAuthor } from './author.ts';
-import { isChannelEvent } from './channel-gate.ts';
-import { type PresenceRow, claimWarning } from './claim-warning.ts';
-import { decisionAnsweredLine } from './decision-line.ts';
+import { type ToolContext, createCallToolHandler } from './call-tool.ts';
+import { createChannelMessages } from './channel-messages.ts';
 import { createDeferredEmitter } from './deferred-emit.ts';
 import { createFrameDedup } from './frame-dedup.ts';
-import {
-  readyIdleLine,
-  reviewAnsweredLine,
-  reviewItemHeldLine,
-  stalledLine,
-} from './nudge-line.ts';
-import type { HeldRowPayload, StalledRowPayload } from './nudge-line.ts';
-import { isSelfAuthoredEvent } from './self-authored.ts';
-import { type SseCursor, deliverThenCommit } from './sse-cursor.ts';
+import { createFrameHandler } from './frame-handler.ts';
+import { resolveBaseUrl as baseUrlFrom, createHttp, err, ok } from './http-client.ts';
+import { type Watcher, createSseLoops } from './sse-loop.ts';
 import { TOOL_LIST } from './tool-schemas.ts';
-import { type DocsToolContext, handleDocsTool } from './tools/docs.ts';
-import { type TaskToolContext, handleTaskTool } from './tools/tasks.ts';
-import { type WorkspaceToolContext, handleWorkspaceTool } from './tools/workspace.ts';
-import { voiceRequestLine } from './voice-line.ts';
-import {
-  type RestoreState,
-  type WatchCoverage,
-  boardsToReattach,
-  parseCoverage,
-  restoreNoticeContent,
-} from './watch-coverage.ts';
+import { handleDocsTool } from './tools/docs.ts';
+import { handleTaskTool } from './tools/tasks.ts';
+import { handleWorkspaceTool } from './tools/workspace.ts';
+
+import { SHARED_IDENTITY_REASON, createWatchRegistry, isSharedIdentity } from './watch-registry.ts';
+import { createWatchRestore } from './watch-restore.ts';
 
 /**
  * Thin MCP server that proxies tool calls to a running feedback server
@@ -60,33 +46,9 @@ import {
  *   CW_AUTHOR      — fallback author key/name (default: agent)
  */
 
-// Resolved per-request, not frozen at module load. The MCP stdio child runs
-// for the life of a Claude Code session — sometimes days. The supervisor may
-// not be running yet at child-start, may move ports on restart, or may not
-// have written server.json yet. Reading the discovery file on each http()
-// call is a single fs read of a tiny JSON blob and lets the child pick up
-// port changes without a restart.
-//
-// No silent default: port 8787 used to be the fallback, but it's squatted by
-// notion-channel-mcp on developer machines and silently routed every call to
-// the wrong server. If discovery is unavailable, fail loudly with a hint.
-function resolveBaseUrl(): string {
-  const override = readRenamedEnv(process.env, 'CW_BASE_URL');
-  if (override) return override;
-  const discovery = resolveDiscoveryFile(homedir(), existsSync);
-  if (discovery) {
-    try {
-      const j = JSON.parse(readFileSync(discovery, 'utf8')) as { port?: number };
-      if (j.port) return `http://localhost:${j.port}`;
-    } catch {
-      // fall through to throw — corrupt discovery file
-    }
-  }
-  throw new Error(
-    'claude-workspaces server not found — start it with `bun run dev` (or set CW_BASE_URL). ' +
-      `Looked for a discovery file at ${discoveryCandidates(homedir()).join(' and ')}.`,
-  );
-}
+/** Resolved per request, not frozen at module load — see http-client.ts. */
+const resolveBaseUrl = () => baseUrlFrom({ env: process.env, homedir, existsSync, readFileSync });
+
 const AUTHOR = resolveAgentAuthor(process.env);
 /** What `post_status` accepts — the server's `NOTE_TEXT_MAX`
  *  (packages/server/src/agent-notes.ts), which refuses anything longer.
@@ -111,7 +73,7 @@ function suggestionAuthor(): { id: string; name: string; color: string } {
  * bundle than the deploy source would install. A second literal would be a
  * fourth version site, and this file's history is that version sites drift.
  */
-const PLUGIN_VERSION = '0.1.152';
+const PLUGIN_VERSION = '0.1.153';
 
 /**
  * One nonce per PROCESS, minted at module load and sent on every attach.
@@ -240,47 +202,6 @@ const server = new Server(
 server.setRequestHandler(ListToolsRequestSchema, async () => TOOL_LIST);
 
 /**
- * Tools that take a `docId` but should NOT trigger implicit auto-watch.
- *
- * - `unwatch_doc`: by definition the user is opting OUT of events; don't
- *   reverse that intent.
- * - `watch_doc`: already wires the watcher itself; redundant.
- * - `observe_url`: returns the SSE URL but doesn't imply the caller is
- *   actually consuming the stream from this MCP session.
- */
-const NO_AUTO_WATCH_TOOLS = new Set([
-  'unwatch_doc',
-  'watch_doc',
-  'observe_url',
-  // attach_doc's docId may be a diff-review/folder workspaceId, which has no
-  // per-doc SSE channel — the hub watch is the WORKSPACE channel, wired by
-  // create_workspace / attach_agent instead.
-  'attach_doc',
-]);
-
-/**
- * Implicit auto-watch (path B). Any MCP tool call that names a docId is a
- * strong "I'm working on this doc" signal — almost always the caller
- * wants to be told when threads land on it. Today an agent has to
- * remember a separate `watch_doc(docId)` call after binding, and the
- * failure is silent (no events flow, doc looks fine). The wrapper closes
- * that gap by subscribing on the first docId touch.
- *
- * Idempotent (`watchDoc` returns immediately if the docId is already
- * watched). Callers can opt out per-call with `subscribe: false` in the
- * tool args. Explicit `watch_doc` / `unwatch_doc` semantics are
- * unaffected.
- */
-async function maybeAutoWatch(name: string, args: unknown): Promise<void> {
-  if (NO_AUTO_WATCH_TOOLS.has(name)) return;
-  if (!args || typeof args !== 'object') return;
-  const a = args as { docId?: unknown; subscribe?: unknown };
-  if (a.subscribe === false) return;
-  if (typeof a.docId !== 'string' || a.docId.length === 0) return;
-  await watchDoc(a.docId);
-}
-
-/**
  * Channel frames produced from inside a tool call, held until it has answered.
  *
  * The restore path is the one producer of those: `ensureWatchesRestored` is
@@ -304,7 +225,7 @@ const deferredEmits = createDeferredEmitter();
  * is what keeps the dependency one-way: this file connects a stdio transport
  * at the bottom, so anything that imports it runs that.
  */
-function toolContext(): DocsToolContext & TaskToolContext & WorkspaceToolContext {
+function toolContext(): ToolContext {
   return {
     http,
     ok,
@@ -323,53 +244,30 @@ function toolContext(): DocsToolContext & TaskToolContext & WorkspaceToolContext
     refreshCoverage,
     watchPersistenceMode,
     claimNoticeFor,
-    restoreState,
-    lastPersistError,
+    restoreState: restore.state(),
+    lastPersistError: registry.lastPersistError(),
     IDENTITY_IS_SHARED,
     SHARED_IDENTITY_REASON,
   };
 }
 
-server.setRequestHandler(CallToolRequestSchema, async (req) => {
-  const { name, arguments: a = {} } = req.params;
-  // Released in the `finally` below, so a throwing handler still lets the
-  // held frames out.
-  const endToolCall = deferredEmits.beginToolCall();
-  try {
-    // Restore before anything else: a respawned child's first tool call is
-    // the moment its watch set has to be back, and if the server was down at
-    // initialize this is the retry. Never throws.
-    await ensureWatchesRestored();
-    // A tool call is this session proving it is alive AND working, which is
-    // exactly what an attachment's heartbeat asserts. Without this, an agent
-    // that followed "declare yourself lead and you are done" drifts out of
-    // the observed window on every board it is not actively touching, at
-    // which point Bryan's next goal edit queues with no channel emit and the
-    // session hears the silence this whole ticket is about. Fire-and-forget:
-    // liveness is not worth failing a tool call over. See
-    // attachment-keepalive.ts for why this rides real calls rather than a
-    // timer.
-    void sendDueHeartbeats();
-    await maybeAutoWatch(name, a);
-    // Documents answer from tools/docs.ts, board rows from tools/tasks.ts,
-    // and boards, agents and the operator verbs from tools/workspace.ts. A
-    // domain handler returns `undefined` for a name that is not its own, so
-    // the three families chain the way the server's route files do — and the
-    // last link is the answer for a name none of them claims, which is where
-    // the switch's `default` went.
-    const ctx = toolContext();
-    return (
-      (await handleDocsTool(name, a, ctx)) ??
-      (await handleTaskTool(name, a, ctx)) ??
-      (await handleWorkspaceTool(name, a, ctx)) ??
-      err(`unknown tool: ${name}`)
-    );
-  } catch (e) {
-    return err(e instanceof Error ? e.message : String(e));
-  } finally {
-    endToolCall();
-  }
-});
+/**
+ * The CallTool dispatcher, bound to this process. See call-tool.ts for what
+ * runs around every answer: the deferred emitter, the watch restore, the
+ * fire-and-forget heartbeat and the implicit auto-watch.
+ */
+server.setRequestHandler(
+  CallToolRequestSchema,
+  createCallToolHandler({
+    deferredEmits,
+    ensureWatchesRestored: () => ensureWatchesRestored(),
+    sendDueHeartbeats: () => sendDueHeartbeats(),
+    watchDoc: (docId) => watchDoc(docId),
+    toolContext,
+    handlers: [handleDocsTool, handleTaskTool, handleWorkspaceTool],
+    err,
+  }),
+);
 
 // ===========================================================================
 // CHANNEL — bridge the feedback server's SSE stream into Claude Code via
@@ -377,545 +275,20 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
 // connection to /events/<docId>; events are forwarded as channel messages.
 // ===========================================================================
 
-interface Watcher {
-  controller: AbortController;
-  docId: string;
-  /**
-   * Whether this watcher's stream is CURRENTLY connected — not whether a
-   * watcher object exists.
-   *
-   * The two used to be conflated, and that is how a tool could answer
-   * `subscribed: true` while its loop sat in backoff after a refused connect.
-   * The loop maintains this; a caller that needs to tell a live subscription
-   * from a registered intention reads it rather than the map's `has`.
-   */
-  open: boolean;
-}
 const watchers = new Map<string, Watcher>();
 
-// ---------------------------------------------------------------------------
-// Durable watches. Everything above this line is SESSION-SCOPED: `watchers`
-// is a Map in this process, and this process is the MCP child Claude Code
-// spawns per session — it dies with the session, so a respawn (a token
-// switch, a /clear, a crash) came back with `watchers` empty and
-// `list_watched_docs` answering `[]`, which is exactly what a session that
-// never subscribed answers. Measured 2026-08-18 by two peers: 62 and 6
-// subscriptions, silently gone.
-//
-// The server keeps the SET under this agent's identity (AUTHOR.id — the same
-// id every other call carries; `/api/agents/<id>/watches`). This process
-// mirrors every watch/unwatch there and, once the client has initialized,
-// asks for the set back and re-wires it. Persistence is best-effort and never
-// fails a tool call: the local watch is what delivers events right now, and a
-// persist that could not land is reported (`persisted: false`,
-// `lastPersistError`) rather than thrown. Restore is single-flight, retried on
-// the next tool call if the server was down, and reported in full by
-// `list_watched_docs` so `[]` can no longer mean two things.
-//
-// The shared identity (`CW_AGENT_NAME` unset → `known-agent`) is not
-// persisted at all — every anonymous session resolves to it, so a set keyed
-// on it would restore everybody's watches into each of them. The server
-// refuses it too; this check just spares the round trip and says why.
-// ---------------------------------------------------------------------------
-
-const IDENTITY_IS_SHARED = AUTHOR.id === 'known-agent';
-const SHARED_IDENTITY_REASON =
-  'CW_AGENT_NAME is not set, so this session has no identity to key its watches on; ' +
-  'they will not survive a restart. Set it in the launch environment and restart the session.';
-
-let restoreState: RestoreState = IDENTITY_IS_SHARED
-  ? { status: 'session-only', from: 'session', restored: [], pruned: [], attempts: 0 }
-  : { status: 'pending', from: 'session', restored: [], pruned: [], attempts: 0 };
-let restoreInFlight: Promise<void> | null = null;
-/** After a failed restore, don't hammer a down server from every tool call —
- *  back off (capped at 30s), then try again on the next call after that. */
-let restoreRetryAt = 0;
-let lastPersistError: string | undefined;
+const IDENTITY_IS_SHARED = isSharedIdentity(AUTHOR.id);
 
 /**
- * Which boards this session is attached to, and when it last proved it.
- *
- * An attachment is a claim that expires unless the server keeps observing
- * this session, not a state — see attachment-keepalive.ts. Marked wherever
- * this process attaches
- * (`attach_agent`, declaring itself lead, the re-attach on restore) and
- * refreshed off real tool calls.
+ * This session's attachments, bound to this process. See attachments.ts — the
+ * heartbeat rides real tool calls because that is the only honest evidence
+ * this agent is alive AND working.
  */
-const keepalive = createAttachmentKeepalive();
-
-/** Record an attachment this session just made. */
-function markAttached(workspaceId: string): void {
-  keepalive.mark(workspaceId);
-}
-
-/** Prove liveness on any board whose heartbeat is due. Never throws: a
- *  keepalive that could fail a tool call would be worse than the staleness it
- *  prevents. */
-async function sendDueHeartbeats(): Promise<void> {
-  for (const workspaceId of keepalive.due()) {
-    try {
-      await http(
-        'POST',
-        `/api/workspaces/${encodeURIComponent(workspaceId)}/attachments/${encodeURIComponent(AUTHOR.id)}/heartbeat`,
-        { toolCallAt: Date.now() },
-      );
-    } catch {
-      // The board will read this session as away, and `coverage` reports
-      // exactly that — which is the honest outcome of a server we cannot
-      // reach, and better than pretending here.
-    }
-  }
-}
-/**
- * The presence line a pickup carries, or undefined when the row is free.
- *
- * READ FROM THE QUEUE, because the queue route is the only one that carries
- * both halves — `ownerSession` (the session behind the OWNER) and `claimedBy`
- * (the session that last moved the row into in-progress, which is the only
- * one that exists on a row nobody assigned). `/api/tasks/:id` does not exist
- * and this deliberately does not add it: the read already ships on a route
- * every attached session can already call.
- *
- * The workspace comes from the boards this session holds an attachment on —
- * `task_transition` takes a task id and nothing else, and requiring a
- * workspace argument would change the tool's shape for every caller to serve
- * an advisory. Usually one board, and the loop stops at the first row that
- * matches.
- *
- * NEVER THROWS. Every failure here — unreachable server, an older server that
- * returns rows without presence, a board this session never attached to —
- * produces silence, which is the same answer as "nobody is on it". That is a
- * miss, not a lie, and a warning that could fail a claim would be worse than
- * the collision it prevents.
- */
-async function claimNoticeFor(taskId: string): Promise<string | undefined> {
-  for (const workspaceId of keepalive.boards()) {
-    try {
-      const res = (await http(
-        'GET',
-        // includeBlocked so a row held by a dependency is still findable —
-        // its being blocked says nothing about whether somebody is on it.
-        `/api/workspaces/${encodeURIComponent(workspaceId)}/next?includeBlocked=true`,
-      )) as { tasks?: PresenceRow[] };
-      const row = res.tasks?.find((t) => t?.id === taskId);
-      if (row) return claimWarning(row, AUTHOR.id, Date.now());
-    } catch {
-      // Next board, then silence. See the contract above.
-    }
-  }
-  return undefined;
-}
-
-/**
- * The server's last answer to "what am I MISSING?", or undefined for "not
- * known" — an older server, the shared-identity refusal, an unreachable box.
- * Deliberately not defaulted to an empty block: unknown rendered as empty
- * reads as "nothing is missing", which is exactly the confident wrong answer
- * this whole readout exists to replace.
- */
-let lastCoverage: WatchCoverage | undefined;
-
-/** Ask the server for a fresh coverage read. Never throws and never
- *  fabricates: an unreachable server leaves the previous answer alone rather
- *  than manufacturing an all-clear out of a failed request. */
-async function refreshCoverage(): Promise<WatchCoverage | undefined> {
-  if (IDENTITY_IS_SHARED) return undefined;
-  try {
-    lastCoverage = parseCoverage(await http('GET', watchesPath())) ?? lastCoverage;
-  } catch {
-    // Leave `lastCoverage` as it was; `list_watched_docs` omits the field
-    // entirely when it is undefined.
-  }
-  return lastCoverage;
-}
-
-function watchPersistenceMode(): 'server' | 'session-only' {
-  return IDENTITY_IS_SHARED ? 'session-only' : 'server';
-}
-
-const watchesPath = () => `/api/agents/${encodeURIComponent(AUTHOR.id)}/watches`;
-
-/** Mirror a local watch/unwatch to the server. Never throws. */
-async function persistWatchChange(change: { add?: string[]; remove?: string[] }): Promise<boolean> {
-  if (IDENTITY_IS_SHARED) return false;
-  try {
-    await http('POST', watchesPath(), { ...change, name: AUTHOR.name });
-    lastPersistError = undefined;
-    return true;
-  } catch (err) {
-    lastPersistError = err instanceof Error ? err.message : String(err);
-    console.error('[claude-workspaces-mcp] could not persist watch change:', lastPersistError);
-    return false;
-  }
-}
-
-/**
- * Ask the server what this identity was watching and re-wire it. Single
- * flight; a failure leaves `restoreState.status = 'failed'` and the next call
- * tries again. Once `restored`, further calls are no-ops — the server set
- * only changes through this process's own watch/unwatch from then on (or
- * through a sibling session with the same name, whose additions reach this
- * process at ITS next respawn, not live).
- */
-async function ensureWatchesRestored(): Promise<void> {
-  if (restoreState.status === 'restored' || restoreState.status === 'session-only') return;
-  if (restoreInFlight) return restoreInFlight;
-  if (restoreState.status === 'failed' && Date.now() < restoreRetryAt) return;
-  restoreInFlight = (async () => {
-    const attempts = restoreState.attempts + 1;
-    try {
-      const res = (await http('GET', watchesPath())) as {
-        watches?: Array<{ key: string }>;
-        pruned?: string[];
-      };
-      lastCoverage = parseCoverage(res);
-      const keys = (res.watches ?? []).map((w) => w.key);
-      const restored: string[] = [];
-      for (const key of keys) {
-        if (watchers.has(key)) continue;
-        if (key.startsWith('ws:')) await watchWorkspace(key.slice('ws:'.length), false);
-        else await watchDoc(key, false);
-        restored.push(key);
-      }
-      // Re-ATTACH, not just re-subscribe. Restoring the keys puts the events
-      // back on the wire; it does nothing about the attachment record, which
-      // hydrates with the heartbeat from before the restart and is therefore
-      // `away` the moment the session comes back. Every lead-addressed
-      // delivery — voice notes above all — asks for a LIVE attachment, so
-      // without this a respawned lead is
-      // subscribed and still invisible, which is the original incident with
-      // extra steps. Only boards it already led or was already attached to;
-      // see boardsToReattach.
-      const reattached: string[] = [];
-      for (const workspaceId of boardsToReattach(lastCoverage)) {
-        try {
-          const attachRes = (await http(
-            'POST',
-            `/api/workspaces/${encodeURIComponent(workspaceId)}/attachments`,
-            {
-              agentId: AUTHOR.id,
-              agentName: AUTHOR.name,
-              runtime: 'claude-code-local',
-              pluginVersion: PLUGIN_VERSION,
-              processId: PROCESS_ID,
-            },
-          )) as {
-            queuedComments?: BacklogCommentRow[];
-            queuedVoice?: Array<{ transcript?: unknown }>;
-          };
-          markAttached(workspaceId);
-          reattached.push(workspaceId);
-          // This POST is the fourth attach site, and the only one whose
-          // response body no tool call reads — yet the server just drained
-          // the backlog into it (voice destructively; comment rows marked
-          // emitted). Dropping it here is the ticket's own failure mode one
-          // layer down: the respawned session the queue waited for arrives,
-          // and the arrival itself eats the delivery. So forward each row as
-          // the channel notification its SSE frame would have been, acking a
-          // comment row only after its emit succeeded — same order, same
-          // reason as handleFrame.
-          //
-          // Deferred as ONE unit rather than emit-by-emit: the restore runs
-          // inside the first tool call's await (see deferredEmits), and these
-          // frames go unread there exactly like the notice below did. Keeping
-          // the whole delivery together preserves emit-then-ack — a receipt
-          // must still follow the frame it acknowledges, not precede it.
-          deferredEmits.emitOutsideToolCall(() =>
-            deliverAttachBacklog(workspaceId, attachRes, {
-              emit: async (ev, payload) => {
-                if (shouldForwardFrame.shouldForward(ev, payload)) {
-                  await emitChannelMessage(ev, payload);
-                }
-              },
-              ackComment: async (rowId) => {
-                await http(
-                  'POST',
-                  `/api/workspaces/${encodeURIComponent(workspaceId)}/comment-queue/${encodeURIComponent(rowId)}/ack`,
-                  {},
-                );
-              },
-            }),
-          );
-        } catch {
-          // Best effort, exactly like the watch restore: the notice below
-          // reads the coverage AFTER this, so a failure shows up as a board
-          // still waiting rather than as a silent claim of success.
-        }
-      }
-      // Re-read, so the notice describes the state the session is actually
-      // in rather than the one it woke up in — otherwise a successful
-      // re-attach still prints an alarm about itself.
-      if (reattached.length > 0) await refreshCoverage();
-      const state: RestoreState = {
-        status: 'restored',
-        from: 'server',
-        restored,
-        reattached,
-        pruned: res.pruned ?? [],
-        at: new Date().toISOString(),
-        attempts,
-      };
-      restoreState = state;
-      // Unconditional now — `emitRestoreNotice` decides whether there is
-      // anything to say. It speaks on an EMPTY restore when a board is
-      // waiting on this session, which is the incident's own shape: the
-      // watches were wired by hand this run, so there was nothing to restore
-      // and nothing was said, while four items sat queued for a seat nobody
-      // held.
-      //
-      // Deferred, not awaited. This promise is what the first tool call awaits
-      // at the top of the CallTool handler, so emitting here wrote the notice
-      // into the window between that request and its response — measured
-      // 2026-08-20 as a respawn that read `restored` in a tool RESULT and
-      // never saw the frame. See deferred-emit.ts.
-      deferredEmits.emitOutsideToolCall(() => emitRestoreNotice(state));
-    } catch (err) {
-      restoreState = {
-        ...restoreState,
-        status: 'failed',
-        error: err instanceof Error ? err.message : String(err),
-        attempts,
-      };
-      restoreRetryAt = Date.now() + Math.min(30_000, 1_000 * 2 ** attempts);
-    } finally {
-      restoreInFlight = null;
-    }
-  })();
-  return restoreInFlight;
-}
-
-/**
- * One line into the session saying the feedback loop came back intact — and
- * naming any board that is waiting on this session but has no attachment from
- * it. Silent when there is nothing of either kind to report.
- *
- * The second half is the one that matters: an agent that does not know the
- * gap exists never runs the probe that would show it, so the report has to
- * arrive unprompted or it may as well not exist.
- */
-async function emitRestoreNotice(state: RestoreState): Promise<void> {
-  const content = restoreNoticeContent({
-    restored: state.restored,
-    reattached: state.reattached ?? [],
-    pruned: state.pruned,
-    agentName: AUTHOR.name,
-    coverage: lastCoverage,
-  });
-  if (content === null) return;
-  await server.notification({
-    method: 'notifications/claude/channel',
-    params: {
-      source: 'claude-workspaces',
-      sent_at: state.at ?? new Date().toISOString(),
-      content,
-      meta: {
-        event: 'watches.restored',
-        restored: state.restored,
-        pruned: state.pruned,
-        ...(lastCoverage ? { unattachedBoards: lastCoverage.unattachedBoards } : {}),
-      },
-    },
-  });
-}
-
-/** Returns whether the watch was persisted on the server (false when this
- *  identity is shared, the server refused, or it was unreachable). */
-async function watchDoc(docId: string, persist = true): Promise<boolean> {
-  if (!watchers.has(docId)) {
-    const controller = new AbortController();
-    watchers.set(docId, { controller, docId, open: false });
-    await startSseLoop(docId, `/events/${encodeURIComponent(docId)}`, controller);
-  }
-  // Persist even when already locally watched: an earlier persist may have
-  // failed (server down at the time), and the POST is idempotent.
-  return persist ? persistWatchChange({ add: [docId] }) : false;
-}
-
-/**
- * Watch a whole workspace on ONE stream. Two things wear that word, and this
- * key covers both — but it did not always, and the comment here used to say
- * "every thread event on any member doc arrives" without saying which sense
- * it meant.
- *
- *  - A GROUPING (a diff review / folder bind): its member docs carry the
- *    review tag and `rooms.ts` has always double-broadcast on it. True from
- *    the start.
- *  - A hub BOARD: it holds docs through `workspace.docIds`, which is NOT that
- *    tag. Until the board fan-out landed in server.ts's `onDocRoomEvent`, a
- *    doc filed on a board reached this stream never — and nothing said so,
- *    which is the whole failure class here. Now it does, resolved at
- *    broadcast time, so docs created LATER are covered with no second call.
- *
- * What this key still does NOT do is attach you. Watching is listening;
- * attaching is being addressable. Every delivery gate asks the second
- * question, so a session with this key and no attachment hears comments while
- * voice notes queue for a lead it is not. `coverage`
- * on `list_watched_docs` is what reports that gap.
- */
-async function watchWorkspace(
-  workspaceId: string,
-  persist = true,
-): Promise<{ open: boolean; persisted: boolean }> {
-  const key = `ws:${workspaceId}`;
-  let open = watchers.get(key)?.open === true;
-  if (!watchers.has(key)) {
-    const controller = new AbortController();
-    watchers.set(key, { controller, docId: key, open: false });
-    // Name ourselves on the stream. This socket is held for the life of the
-    // session, so it is the most reliable evidence the server can have that a
-    // delivery to this agent will land — but only if the server can tell WHICH
-    // agent is on it. Without the id it is one more anonymous subscriber,
-    // indistinguishable from a browser tab, and the server falls back to
-    // asking how recently the model happened to call a tool. That clock
-    // expires under an agent doing local work: measured 2026-08-19 at a
-    // 19.1-minute grep-and-read gap against a 15-minute window, with this
-    // stream open throughout and a voice note queued instead of delivered.
-    open = await startSseLoop(
-      key,
-      `/events/workspace/${encodeURIComponent(workspaceId)}?agentId=${encodeURIComponent(AUTHOR.id)}`,
-      controller,
-    );
-  }
-  // Two failures, reported apart. A stream that did not open loses events NOW;
-  // a watch that did not persist loses them at the next respawn. Collapsing
-  // them into one boolean is how a caller ends up reassured about the half
-  // that worked.
-  const persisted = persist ? await persistWatchChange({ add: [key] }) : false;
-  return { open, persisted };
-}
-
-async function unwatchDoc(docId: string): Promise<boolean> {
-  const w = watchers.get(docId);
-  if (w) {
-    w.controller.abort();
-    watchers.delete(docId);
-  }
-  // Forget it on the server even if it was not locally wired — a sibling
-  // session may have recorded it, and an explicit unwatch means "stop".
-  return persistWatchChange({ remove: [docId] });
-}
-
-async function runSseLoop(
-  label: string,
-  path: string,
-  signal: AbortSignal,
-  onFirstAttempt?: (open: boolean) => void,
-): Promise<void> {
-  // Tight reconnect loop — the server sends keepalive comments every
-  // ~15s, so an abrupt close is almost always a transient network blip.
-  //
-  // `onFirstAttempt` fires once, after the first connect attempt has an
-  // outcome, and is HANDED that outcome: `true` only when headers came back
-  // 200 with a body, so the stream is live from here. It is
-  // what lets `watch_doc` return only once the stream is actually open, so a
-  // reply posted the moment the tool answers is not lost in the gap between
-  // "watcher registered" and "connection established". Not "on first
-  // success": the auto-watch fires BEFORE the tool that creates the doc, so a
-  // 404 on the first attempt is normal there and must not hold the tool call.
-  let first = onFirstAttempt;
-  const settleFirst = (open: boolean) => {
-    if (!first) return;
-    const f = first;
-    first = undefined;
-    f(open);
-  };
-  // The watcher record is the durable answer to "is this stream up right
-  // now", read by anything that must not claim a subscription it does not
-  // have. `settleFirst` only ever fires once; this keeps tracking.
-  const setOpen = (open: boolean) => {
-    const w = watchers.get(label);
-    if (w) w.open = open;
-  };
-  // The wire id of the last frame this loop DELIVERED, presented back on
-  // every reconnect. This loop is a hand-rolled fetch stream, not a native
-  // EventSource, so nothing sends `Last-Event-ID` for us — without this line
-  // the 1.5s retry below reconnects fast and resumes WITH A HOLE: everything
-  // broadcast inside the gap used to be lost permanently. Delivered, not
-  // seen: the cursor advances only after `handleFrame` resolves (see
-  // sse-cursor.ts for the loss that committing it early caused).
-  const cursor: SseCursor = { lastEventId: undefined };
-  while (!signal.aborted) {
-    try {
-      const res = await fetch(`${resolveBaseUrl()}${path}`, {
-        signal,
-        ...(cursor.lastEventId ? { headers: { 'Last-Event-ID': cursor.lastEventId } } : {}),
-      });
-      const live = res.ok && res.body !== null;
-      setOpen(live);
-      settleFirst(live);
-      if (!res.ok || !res.body) throw new Error(`sse ${path} → ${res.status}`);
-      const reader = res.body.getReader();
-      const decoder = new TextDecoder();
-      let buf = '';
-      while (!signal.aborted) {
-        const { value, done } = await reader.read();
-        if (done) break;
-        buf += decoder.decode(value, { stream: true });
-        // Split on blank-line boundaries per SSE framing.
-        let sep = buf.indexOf('\n\n');
-        while (sep >= 0) {
-          const frame = buf.slice(0, sep);
-          buf = buf.slice(sep + 2);
-          // Deliver, THEN advance the cursor — a frame whose delivery threw
-          // must be re-presented on reconnect, not skipped past. On a
-          // delivered gap the cursor drops (the held id points at nothing
-          // the server can replay) and the dedup window drops with it, since
-          // after a refetch-worthy gap every held key may collide with a
-          // genuinely new event.
-          await deliverThenCommit(frame, handleFrame, cursor, () => shouldForwardFrame.reset());
-          sep = buf.indexOf('\n\n');
-        }
-      }
-    } catch (err) {
-      setOpen(false);
-      settleFirst(false);
-      if (signal.aborted) return;
-      console.error(`[claude-workspaces-mcp] ${label} sse error, retrying:`, err);
-    }
-    // A clean end-of-stream lands here too, and it is just as much "not
-    // connected" as a throw is.
-    setOpen(false);
-    // Backoff before reconnect
-    await new Promise((r) => setTimeout(r, 1500));
-    // A reconnect is what a server restart looks like from in here, and a
-    // restart rebuilt every room with `seq` back at 0 — so every key the
-    // dedup is holding can now collide with a genuinely NEW event and
-    // silently swallow it. Drop the window: the cost is at most a duplicate
-    // of something in flight, and the cost of keeping it is a comment nobody
-    // ever hears about. (A current server also stamps a unique `eid`, which
-    // makes this belt-and-braces; the fallback key is what an un-restarted
-    // box still sends.)
-    shouldForwardFrame.reset();
-  }
-  setOpen(false);
-  settleFirst(false);
-}
-
-/**
- * Start an SSE loop and resolve once its first connect attempt has an outcome
- * — capped so a wedged connect never stalls a tool call. The loop itself keeps
- * running for the life of the watcher.
- *
- * Resolves to whether the stream is actually OPEN. `false` covers all three
- * ways it can fail to be: a throw, a non-200, and the 3s cap expiring with the
- * connect still in flight. A caller that reports a subscription to an agent
- * must branch on this rather than on the call having returned — "it returned"
- * was the old signal, and it is true in every one of those cases.
- */
-function startSseLoop(label: string, path: string, controller: AbortController): Promise<boolean> {
-  return new Promise<boolean>((resolve) => {
-    const cap = setTimeout(() => resolve(false), 3_000);
-    void runSseLoop(label, path, controller.signal, (open) => {
-      clearTimeout(cap);
-      resolve(open);
-    }).catch((err) => {
-      console.error(`[claude-workspaces-mcp] watcher ${label} crashed:`, err);
-      watchers.delete(label);
-      clearTimeout(cap);
-      resolve(false);
-    });
-  });
-}
+const { markAttached, sendDueHeartbeats, claimNoticeFor } = createAttachments({
+  http: (method, path, body) => http(method, path, body),
+  author: AUTHOR,
+  keepalive: createAttachmentKeepalive(),
+});
 
 /** Shared across every SSE loop in this process — the whole point is to catch
  *  a frame arriving on the board stream that the review stream already
@@ -925,485 +298,86 @@ function startSseLoop(label: string, path: string, controller: AbortController):
  *  cannot identify is forwarded rather than dropped. */
 const shouldForwardFrame = createFrameDedup();
 
-async function handleFrame(raw: string): Promise<void> {
-  // Only forward data frames — ignore keepalive ':ok' comments.
-  const lines = raw.split('\n');
-  let ev = 'message';
-  const dataParts: string[] = [];
-  for (const line of lines) {
-    if (line.startsWith(':')) continue;
-    if (line.startsWith('event:')) ev = line.slice(6).trim();
-    else if (line.startsWith('data:')) dataParts.push(line.slice(5).trimStart());
-  }
-  if (dataParts.length === 0) return;
-  let payload: unknown;
-  try {
-    payload = JSON.parse(dataParts.join('\n'));
-  } catch {
-    return;
-  }
-  if (ev === 'replay.gap') {
-    // An explicit hole: the server is saying it CANNOT replay what this
-    // session missed while disconnected. Surface it as its own channel line —
-    // the doc-shaped formatter below would render it as a garbled comment —
-    // so the agent refetches (get_doc / list_threads / next_tasks) instead of
-    // trusting the stream to have been complete. No receipt: a gap notice
-    // carries no queue row, and acking one would claim delivery of the very
-    // frames it is reporting as missing.
-    const p = (payload ?? {}) as { docId?: string };
-    await server.notification({
-      method: 'notifications/claude/channel',
-      params: {
-        source: 'claude-workspaces',
-        sent_at: new Date().toISOString(),
-        content: `[replay.gap] events on ${p.docId ?? 'a watched channel'} may have been missed while this session was disconnected — refetch state (get_doc / list_threads / next_tasks) rather than assuming the stream was complete`,
-        meta: { event: 'replay.gap', ...(p.docId ? { doc_id: p.docId } : {}) },
-      },
-    });
-    return;
-  }
-  // The kind gate FIRST, then the dedup: a word-rate frame must never reach
-  // the dedup's window, let alone the channel (channel-gate.ts).
-  if (isChannelEvent(ev) && shouldForwardFrame.shouldForward(ev, payload)) {
-    await emitChannelMessage(ev, payload);
-  }
-  // The receipt for a durable comment row, AFTER the forward attempt (same
-  // ordering rationale as the voice ack below: an ack sent first would clear
-  // the durable copy on the strength of an intent). Deliberately OUTSIDE the
-  // dedup gate: a redelivered frame reuses the original event's eid — it IS
-  // the same event — so dedup rightly hides the duplicate from the session,
-  // but the receipt must still go back or the server re-offers the row after
-  // every grace window, forever. "The frame is in this process's hands" is
-  // exactly what the receipt asserts, forwarded or collapsed.
-  await ackCommentRow(payload);
-}
-
-/** POST the receipt for a frame that carries a durable comment-queue row id.
- *  Never throws: a failed ack leaves the row on the queue, so the cost is a
- *  redelivery after the grace window — late and duplicated beats silently
- *  dropped, and that asymmetry is why the receipt lives on this side. */
-async function ackCommentRow(payload: unknown): Promise<void> {
-  const p = payload as { commentQueueId?: unknown; workspaceId?: unknown };
-  if (typeof p?.commentQueueId !== 'string' || typeof p?.workspaceId !== 'string') return;
-  try {
-    await http(
-      'POST',
-      `/api/workspaces/${encodeURIComponent(p.workspaceId)}/comment-queue/${encodeURIComponent(p.commentQueueId)}/ack`,
-      {},
-    );
-  } catch {
-    // Left on the queue on purpose — see above.
-  }
-}
-
-interface ChannelPayload {
-  docId?: string;
-  threadId?: string;
-  /** A comment ON a review item: the item's id, stamped by the server at the
-   *  top level (also on `thread.anchor` for a `review-item` anchor). */
-  reviewItemId?: string;
-  thread?: {
-    anchor?: {
-      kind?: string;
-      reviewItemId?: string;
-      snippet?: { text?: string };
-      original?: { snippet?: { text?: string } };
-    };
-    status?: string;
-    comments?: Array<{ author?: { name?: string }; text?: string; ts?: number }>;
-  };
-  comment?: { author?: { name?: string }; text?: string; ts?: number };
-  /** Who performed a resolve/reopen — the frame's own attribution, present
-   *  on servers that stamp it. Comment events carry `comment.author`. */
-  actor?: { name?: string };
-  // Suggested edits (redline-suggestions phase 2): suggestion.created /
-  // suggestion.accepted / suggestion.rejected carry `sid` + `suggestion`
-  // instead of `threadId` + `thread`.
-  sid?: string;
-  suggestion?: { author?: { name?: string }; kind?: string; snippet?: string };
-  // doc.sync_error: a disk↔doc sync failure on a bound file. `message` names
-  // what happened and how to recover; `backupPath` is where the overwritten
-  // external bytes were saved, when a backup applied.
-  path?: string;
-  backupPath?: string;
-  message?: string;
-}
-
-/** Hub/workspace event families formatted by emitHubChannelMessage. Thread
- *  and suggestion events on the same workspace stream keep the doc-shaped
- *  path below. */
-const HUB_EVENT_RE = /^(task|decision|workspace|agent|voice)\./;
-
-interface HubEventPayload {
-  workspaceId?: string;
-  /** On `voice.request`: the durable queue row this frame came from. Sending
-   *  it back is what takes the row off the queue. Absent from a server older
-   *  than the durable queue, in which case the frame is all there is and
-   *  there is nothing to acknowledge. */
-  queueId?: string;
-  taskId?: string;
-  taskIds?: string[];
-  task?: { title?: string };
-  actor?: { id?: string; name?: string };
-  goal?: string;
-  assignee?: string;
-  from?: string;
-  to?: string;
-  note?: string;
-  fromGoal?: string;
-  toGoal?: string;
-  answer?: string;
-  /** `decision.answered` and `workspace.review_answered`: the answered task's
-   *  links, which decide whether the line offers a propagation checklist.
-   *  See decision-line.ts and nudge-line.ts. */
-  links?: unknown[];
-  newGoal?: string;
-  kind?: string;
-  movedToChores?: string[];
-  agentId?: string;
-  leadAgentId?: string;
-  batchId?: string;
-  riskTier?: string;
-  reason?: string;
-  titleFrom?: string;
-  titleTo?: string;
-  title?: string;
-  /** `workspace.ready_idle` only: how much was ready and how long the board
-   *  had stood still when the wake fired. See ready-nudge.ts. */
-  readyCount?: number;
-  idleMs?: number;
-  /** `workspace.ready_idle` only: the DENOMINATOR — how many open rows the
-   *  pass examined — plus what it withheld and why, and the rows it could not
-   *  evaluate at all. All three absent from a server older than the
-   *  dependency-state gate, which is why the line renders without them. */
-  consideredCount?: number;
-  held?: Record<string, number>;
-  undetermined?: { count?: number; reasons?: string[] };
-  /** `workspace.stalled` only: how many rows have stopped moving, the rows
-   *  themselves, and the rows waiting on a person nobody has actually asked.
-   *  See stall-nudge.ts and nudge-line.ts. */
-  stalledCount?: number;
-  rows?: StalledRowPayload[];
-  unfiled?: StalledRowPayload[];
-  /** `workspace.stalled`: review items the quality gate is holding past the
-   *  window. `workspace.review_item_held`: the one item this frame is about.
-   *  See nudge-line.ts. */
-  heldItems?: HeldRowPayload[];
-  reviewItemId?: string;
-  headline?: string;
-  overdue?: boolean;
-  heldMs?: number;
-  trigger?: string;
-  transcript?: string;
-  ack?: string;
-  route?: string;
-  context?: { surface?: string; docId?: string; taskId?: string; visibleHeading?: string };
-}
+/**
+ * The channel renderers, bound to this process: the notification sink the SDK
+ * gives us, the HTTP client above, and this session's identity. See
+ * channel-messages.ts — it holds every line an agent reads.
+ */
+const channel = createChannelMessages({
+  notify: (n) => server.notification(n),
+  http: (method, path, body) => http(method, path, body),
+  authorId: AUTHOR.id,
+});
 
 /**
- * Forward a workspace-hub event as a compact channel message. Two §3.7-style
- * suppressions, both deliberate: `agent.heartbeat` never forwards (a
- * clock tick every few minutes is pure context noise), and an event whose
- * actor is THIS agent never forwards (never deliver an author's own events
- * back to them — §3.10 companion rule).
+ * The SSE frame handler, bound to this process. See frame-handler.ts for the
+ * ordering it keeps between the kind gate, the dedup and the comment receipt.
  */
-async function emitHubChannelMessage(event: string, rawPayload: unknown): Promise<void> {
-  const p = (rawPayload ?? {}) as HubEventPayload;
-  if (event === 'agent.heartbeat') return;
-  // A per-turn note from another agent's Stop hook. The server keeps it off
-  // the workspace stream (server.ts, the broadcast listener); this is the
-  // belt to that suspender, so a replayed or older-server frame still does
-  // not cost this session a wake turn — and, relayed, its own Stop hook
-  // would post a note that wakes the first agent back.
-  if (event === 'task.noted') return;
-  if (p.actor?.id === AUTHOR.id) return;
+const handleFrame = createFrameHandler({
+  notify: (n) => server.notification(n),
+  emitChannelMessage: (event, payload) => channel.emitChannelMessage(event, payload),
+  http: (method, path, body) => http(method, path, body),
+  shouldForward: (event, payload) => shouldForwardFrame.shouldForward(event, payload),
+});
 
-  const by = p.actor?.name ? ` by ${p.actor.name}` : '';
-  let body: string;
-  switch (event) {
-    case 'task.created':
-      body = `[task.created] "${truncate(p.task?.title ?? p.taskId ?? '', 60)}" → ${p.goal ?? '?'}${
-        p.assignee ? ` (assignee ${p.assignee})` : ''
-      }`;
-      break;
-    case 'task.transitioned':
-      body = `[task.transitioned] ${p.taskId}: ${p.from} → ${p.to}${by}${
-        p.note ? ` — ${truncate(p.note, 80)}` : ''
-      }`;
-      break;
-    case 'task.assigned':
-      body = `[task.assigned] ${p.taskId}: ${p.from} → ${p.to}${by}`;
-      break;
-    case 'task.regrouped':
-      body = `[task.regrouped] ${p.taskId}: ${p.fromGoal} → ${p.toGoal}${by}`;
-      break;
-    // Both rewrite events lead with the OLD name when it moved — the only
-    // name a reader who filed the row would recognise.
-    case 'task.retitled':
-      body = `[task.retitled] "${truncate(p.titleFrom ?? '', 60)}" → "${truncate(p.titleTo ?? '', 60)}"${by}${
-        p.reason ? ` — ${truncate(p.reason, 80)}` : ''
-      }`;
-      break;
-    case 'task.body_edited':
-      body =
-        p.titleFrom && p.titleTo
-          ? `[task.body_edited] reshaped "${truncate(p.titleFrom, 60)}" → "${truncate(p.titleTo, 60)}"${by}${
-              p.reason ? ` — ${truncate(p.reason, 80)}` : ''
-            }`
-          : `[task.body_edited] ${p.taskId}${by}${p.reason ? ` — ${truncate(p.reason, 80)}` : ''}`;
-      break;
-    // Nothing emits this since the risk gate was removed (2026-08-18). Kept
-    // so a replayed or historical row still relays as a sentence rather than
-    // falling through to the bare-slug default.
-    case 'task.gate_refused':
-      body = `[task.gate_refused] ${p.taskId}: ${p.riskTier}-tier ${p.reason}${by} — → ${p.to} did NOT happen`;
-      break;
-    // The propagation clause is conditional on the task having links, so the
-    // wording is a decision that has to be assertable — see decision-line.ts.
-    case 'decision.answered':
-      body = decisionAnsweredLine(p);
-      break;
-    case 'workspace.lead_changed':
-      // Worth forwarding even though it is not a task: it changes WHO the
-      // board's lead-addressed asks go to, including when that is you.
-      body =
-        p.leadAgentId === AUTHOR.id
-          ? `[workspace.lead_changed]${by}: you are now the lead agent — this board's asks are addressed to you`
-          : `[workspace.lead_changed]${by}: lead agent is now ${p.leadAgentId ?? '?'}`;
-      break;
-    case 'workspace.goals_changed': {
-      const moved = p.movedToChores?.length ?? 0;
-      body = `[workspace.goals_changed] ${p.kind ?? 'edit'}${by}${
-        moved > 0 ? ` — ${moved} task(s) moved to Backlog, re-place with set_task_goal` : ''
-      }`;
-      break;
-    }
-    // The board waking its lead. Addressed rather than broadcast, and it costs
-    // the recipient a turn — so it must name what is waiting rather than fall
-    // through to the bare-slug default, which is where both of these landed
-    // until now. See nudge-line.ts.
-    case 'workspace.ready_idle':
-      body = readyIdleLine(p);
-      break;
-    case 'workspace.review_answered':
-      body = reviewAnsweredLine(p);
-      break;
-    // The third wake, and the one that names work somebody said they were
-    // doing. Its own case rather than a shape shared with ready_idle: the
-    // reader's next act is to drive a named list of rows, not to take the top
-    // of the queue.
-    case 'workspace.stalled':
-      body = stalledLine(p);
-      break;
-    // The quality gate holding one of THIS agent's items — addressed to the
-    // filer, so it is always about the reader's own filing. Rendered with the
-    // ids and the reason because the next act is one revise call.
-    case 'workspace.review_item_held':
-      body = reviewItemHeldLine(p);
-      break;
-    case 'agent.attached':
-    case 'agent.detached':
-      body = `[${event}] ${p.agentId ?? '?'}`;
-      break;
-    // Three routes, three different things to say — and one of them is "say
-    // nothing". An action the fast path already applied must NOT read as work
-    // to do; see voice-line.ts.
-    case 'voice.request': {
-      const line = voiceRequestLine(p);
-      if (line === null) return;
-      body = line;
-      break;
-    }
-    default:
-      body = `[${event}]${p.taskId ? ` task ${p.taskId}` : ''}`;
-  }
+/**
+ * The SSE loops, bound to this process. See sse-loop.ts — it owns the
+ * reconnect, the `open` flag on each watcher record, and the cursor's
+ * deliver-then-commit order.
+ */
+const { startSseLoop } = createSseLoops({
+  watchers,
+  resolveBaseUrl,
+  fetch: (url, init) => fetch(url, init),
+  handleFrame: (raw) => handleFrame(raw),
+  resetDedup: () => shouldForwardFrame.reset(),
+  log: (...args) => console.error(...args),
+  sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
+  timers: {
+    set: (fn, ms) => setTimeout(fn, ms),
+    clear: (h) => clearTimeout(h as ReturnType<typeof setTimeout>),
+  },
+});
 
-  await server.notification({
-    method: 'notifications/claude/channel',
-    params: {
-      source: 'claude-workspaces',
-      sent_at: new Date().toISOString(),
-      content: body,
-      meta: {
-        workspace_id: p.workspaceId ?? 'unknown',
-        ...(p.taskId ? { task_id: p.taskId } : {}),
-        event,
-        ...(p.actor?.name ? { author: p.actor.name } : {}),
-      },
-    },
-  });
+/**
+ * The watch registry, bound to this process. See watch-registry.ts — it owns
+ * the local subscriptions, the mirror of that set on the server, and the two
+ * failures (stream not open, watch not persisted) that must stay apart.
+ */
+const registry = createWatchRegistry({
+  watchers,
+  http: (method, path, body) => http(method, path, body),
+  author: AUTHOR,
+  startSseLoop,
+  identityIsShared: IDENTITY_IS_SHARED,
+  log: (...args) => console.error(...args),
+});
+const { watchDoc, watchWorkspace, unwatchDoc, refreshCoverage, watchPersistenceMode } = registry;
 
-  // The frame is now in this session's hands, so tell the server it can stop
-  // holding the row. Deliberately AFTER the notification and not before: an
-  // ack sent first would clear the durable copy on the strength of an intent,
-  // which is the same fire-and-forget the queue exists to replace.
-  //
-  // Never throws and never blocks the frame. A failed ack leaves the row on
-  // the queue, so the cost is that the utterance is offered again once the
-  // grace window lapses — late and duplicated beats silently dropped, and
-  // that asymmetry is the whole reason the receipt is on this side.
-  if (event === 'voice.request' && typeof p.queueId === 'string' && p.workspaceId) {
-    try {
-      await http(
-        'POST',
-        `/api/workspaces/${encodeURIComponent(p.workspaceId)}/voice-queue/${encodeURIComponent(p.queueId)}/ack`,
-        {},
-      );
-    } catch {
-      // Left on the queue on purpose — see above.
-    }
-  }
-}
+/**
+ * The watch restore, bound to this process. See watch-restore.ts — it asks
+ * the server for this identity's set, re-wires it, re-attaches to the boards
+ * that were already this session's, and forwards the backlog the attach
+ * response drains.
+ */
+const restore = createWatchRestore({
+  http: (method, path, body) => http(method, path, body),
+  registry,
+  watchers,
+  author: AUTHOR,
+  pluginVersion: PLUGIN_VERSION,
+  processId: PROCESS_ID,
+  markAttached,
+  notify: (n) => server.notification(n),
+  emitChannelMessage: (event, payload) => channel.emitChannelMessage(event, payload),
+  shouldForward: (event, payload) => shouldForwardFrame.shouldForward(event, payload),
+  deferredEmits,
+  identityIsShared: IDENTITY_IS_SHARED,
+});
+const { ensureWatchesRestored } = restore;
 
-async function emitChannelMessage(event: string, rawPayload: unknown): Promise<void> {
-  if (HUB_EVENT_RE.test(event)) {
-    await emitHubChannelMessage(event, rawPayload);
-    return;
-  }
-  // The doc-shaped companion to the actor check in emitHubChannelMessage:
-  // never deliver an author's own thread event back to them. The fan-out
-  // reaches the author's own watch stream by design (it is one subscriber
-  // among many), so the suppression belongs at the render point, where it
-  // covers the doc channel, every board channel, and the replay buffer with
-  // one gate — and where it cannot affect a browser, which must still watch
-  // its own comment appear. Fails OPEN on any ambiguity; see self-authored.ts.
-  if (isSelfAuthoredEvent(event, rawPayload, AUTHOR.id)) return;
-  const p = (rawPayload ?? {}) as ChannelPayload;
-  const docId = p.docId ?? 'unknown';
-
-  // A recorded syncError means somebody's write into the bound file just
-  // lost — rendered as a sentence naming the file, what happened, and where
-  // the overwritten bytes went, because the bare-slug fallback below would
-  // bury exactly the event whose whole point is being noticed.
-  if (event === 'doc.sync_error') {
-    const where = p.path ?? docId;
-    const body = `[sync error] ${where}: ${p.message ?? 'disk↔doc sync failed — call get_doc for details'}`;
-    await server.notification({
-      method: 'notifications/claude/channel',
-      params: {
-        source: 'claude-workspaces',
-        sent_at: new Date().toISOString(),
-        content: body,
-        meta: {
-          doc_id: docId,
-          event,
-          ...(p.path ? { path: p.path } : {}),
-          ...(p.backupPath ? { backup_path: p.backupPath } : {}),
-        },
-      },
-    });
-    return;
-  }
-
-  if (event.startsWith('suggestion.')) {
-    const sid = p.sid ?? '';
-    const action = event.slice('suggestion.'.length); // created | accepted | rejected
-    const author = p.suggestion?.author?.name ?? '';
-    const snippet = p.suggestion?.snippet ?? '';
-    const kind = p.suggestion?.kind ?? '';
-    const header = snippet ? `"${truncate(snippet, 60)}"` : sid;
-    const body = `[suggestion ${action}] ${author ? `${author}: ` : ''}${kind} ${header}`.trim();
-    await server.notification({
-      method: 'notifications/claude/channel',
-      params: {
-        source: 'claude-workspaces',
-        sent_at: new Date().toISOString(),
-        content: body,
-        meta: {
-          doc_id: docId,
-          sid,
-          event,
-          author,
-          anchor_text: snippet,
-        },
-      },
-    });
-    return;
-  }
-
-  const threadId = p.threadId ?? '';
-  const snippet =
-    p.thread?.anchor?.snippet?.text ?? p.thread?.anchor?.original?.snippet?.text ?? '';
-  // A comment ON one of this agent's review items. The server stamps the id
-  // at the top level; an older server sends only the anchor. Named in the
-  // readable line, not just the meta, because the line is what the agent
-  // reads — and "which item do they mean" is the lookup revise_review_item
-  // should not need.
-  const reviewItemId =
-    p.reviewItemId ??
-    (p.thread?.anchor?.kind === 'review-item' ? p.thread.anchor.reviewItemId : undefined);
-  // Resolve/reopen are STATUS changes, not speech: the person who clicked is
-  // `actor` on the frame, never any comment author. The old comments[0]
-  // fallback named the thread's CREATOR as the resolver, and the
-  // comments.at(-1) fallback put someone else's words in their mouth — 17
-  // resolves in the field, every one misattributed. An older server sends no
-  // actor; a blank author is honest there, a guessed one is the bug.
-  const statusChange = event === 'thread.resolved' || event === 'thread.reopened';
-  const author = statusChange
-    ? (p.actor?.name ?? '')
-    : (p.comment?.author?.name ?? p.thread?.comments?.[0]?.author?.name ?? '');
-  const text = statusChange ? '' : (p.comment?.text ?? p.thread?.comments?.at(-1)?.text ?? '');
-  const sentAt = new Date(p.comment?.ts ?? Date.now()).toISOString();
-
-  // Human-readable body — what the agent reads in their context.
-  const action = event.startsWith('thread.') ? event.slice('thread.'.length) : event;
-  const header = snippet ? `on "${truncate(snippet, 60)}"` : '';
-  const onItem = reviewItemId
-    ? ` on review item ${reviewItemId}${snippet ? ` "${truncate(snippet, 60)}"` : ''} —`
-    : '';
-  const body = text
-    ? `[${action}]${onItem} ${author ? `${author}: ` : ''}${text}`
-    : `[${action}]${onItem}${author ? ` by ${author} —` : ''} thread ${threadId} ${header}`.trim();
-
-  await server.notification({
-    method: 'notifications/claude/channel',
-    params: {
-      source: 'claude-workspaces',
-      sent_at: sentAt,
-      content: body,
-      meta: {
-        doc_id: docId,
-        thread_id: threadId,
-        ...(reviewItemId ? { review_item_id: reviewItemId } : {}),
-        event,
-        author,
-        anchor_text: snippet,
-      },
-    },
-  });
-}
-
-function truncate(s: string, n: number): string {
-  return s.length > n ? `${s.slice(0, n - 1)}…` : s;
-}
-
-async function http(method: string, path: string, body?: unknown): Promise<unknown> {
-  const baseUrl = resolveBaseUrl();
-  const res = await fetch(`${baseUrl}${path}`, {
-    method,
-    headers: body ? { 'content-type': 'application/json' } : {},
-    body: body ? JSON.stringify(body) : undefined,
-  });
-  const text = await res.text();
-  // Check status before parsing — the server's catch-all returns the bare
-  // string "not found" for unmatched routes, which would explode JSON.parse
-  // and bury the actual HTTP error.
-  if (!res.ok) throw new Error(`${method} ${path} → ${res.status}: ${text}`);
-  return text ? JSON.parse(text) : {};
-}
-
-function ok(data: unknown) {
-  return {
-    content: [{ type: 'text' as const, text: JSON.stringify(data, null, 2) }],
-  };
-}
-
-function err(message: string) {
-  return {
-    isError: true,
-    content: [{ type: 'text' as const, text: message }],
-  };
-}
+/** The REST call every tool goes through; throws on a non-2xx. */
+const http = createHttp(resolveBaseUrl);
 
 const transport = new StdioServerTransport();
 // Once the client has finished initializing (not merely connected — the MCP
