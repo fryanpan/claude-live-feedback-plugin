@@ -703,6 +703,29 @@ export function shareScopeAllows(
 const NO_WORKSPACE = '\u0000collab-no-workspace';
 
 /**
+ * What `collabScope` needs to answer, beyond the path itself.
+ *
+ * `isMember` is REQUIRED, and the options object exists so that it is. It
+ * used to be a third positional parameter list ending in an optional
+ * `workspacesOf`, and appending an optional membership check to that would
+ * have made "forgot to pass it" mean "admitted everybody" — the exact
+ * failure this predicate was added to remove.
+ */
+export interface CollabScopeOpts {
+  /** See the same parameter on `shareScopeAllows`. */
+  workspacesOf?: (id: string) => string[];
+  /**
+   * Is the request's Access-verified email a member of this workspace?
+   *
+   * The server owns the answer, because membership is recorded outside this
+   * module: the allow lists of the workspace's LIVE shares, plus the owner
+   * allowlist. This module owns only WHICH workspace is asked about, which is
+   * the half that has to agree with the scope verdict.
+   */
+  isMember: (workspaceId: string) => boolean;
+}
+
+/**
  * May a request on a COLLABORATION host touch this path?
  *
  * The surface is the share surface — read the docs, open the board, comment —
@@ -711,8 +734,21 @@ const NO_WORKSPACE = '\u0000collab-no-workspace';
  * a share hostname carries its scope, and a collaboration hostname is one
  * stable address whose scope is decided per request.
  *
- * It is ONE rule, not two. Everything is answered by `shareScopeAllows` with
- * the path's own workspace as the target, so the operator verbs a share
+ * TWO conditions, both required. The path must be in scope for the workspace
+ * it names, AND the visitor must be a member of that workspace. Passing
+ * Cloudflare Access proves only that the operator admitted this email to the
+ * HOSTNAME; it says nothing about which boards behind it that person was
+ * given, so without the second condition every admitted email reached every
+ * workspace on the server by id. `isMember` is that condition, and it is
+ * asked about the same workspace the scope verdict was made about — one
+ * derivation, so the two halves cannot answer about different boards.
+ *
+ * A path that names NO workspace — the app shell, the widget bundle, the
+ * favicon — is not membership-checked, because there is nothing to be a
+ * member of. That is the whole of what an admitted non-member reaches.
+ *
+ * It is ONE rule, not two. Everything else is answered by `shareScopeAllows`
+ * with the path's own workspace as the target, so the operator verbs a share
  * visitor is refused — the doc list, share administration, folder binds, diff
  * creation, DELETE, `content`, `reparse_from_disk`, the landing page — are
  * refused here by the same lines, and a route added to one is added to both.
@@ -726,8 +762,9 @@ const NO_WORKSPACE = '\u0000collab-no-workspace';
 export function collabScope(
   pathname: string,
   method: string,
-  workspacesOf?: (id: string) => string[],
+  opts: CollabScopeOpts,
 ): { allowed: false } | { allowed: true; target: ShareTarget } {
+  const { workspacesOf, isMember } = opts;
   const workspaceId = pathWorkspace(pathname, workspacesOf);
   const allowed = shareScopeAllows(
     pathname,
@@ -738,7 +775,9 @@ export function collabScope(
   if (!allowed) return { allowed: false };
   // A shell path names no workspace, so the visitor it creates is scoped to
   // none — `{}` rather than the sentinel, which must never escape this file.
-  return { allowed: true, target: workspaceId ? { workspaceId } : {} };
+  if (!workspaceId) return { allowed: true, target: {} };
+  if (!isMember(workspaceId)) return { allowed: false };
+  return { allowed: true, target: { workspaceId } };
 }
 
 /**
