@@ -61,6 +61,29 @@ describe('the decision option row', () => {
     expect(styleOf(option).flexBasis).toBe('240px');
   });
 
+  it('leaves the folded card’s chips at content width', () => {
+    // The compact row carries `.thread-item-option` too, for the frame and
+    // the tap target, so it inherited the 240px basis written for the open
+    // card and stretched a two-word option to 345px on line two of a folded
+    // card in the flow. Folded, these are chips beside a topic.
+    setViewport(IPAD);
+    const compact = attach('thread-options-compact');
+    const chip = styleOf(
+      attach('thread-item-option thread-item-option-compact', { tag: 'button', parent: compact }),
+    );
+    expect(chip.flexGrow).toBe('0');
+    expect(chip.flexBasis).toBe('auto');
+    expect(chip.maxWidth).toBe('100%');
+
+    // Control: the OPEN card's option still takes its share of the row, so
+    // the reset above is scoped and did not undo the row it sits beside.
+    const open = styleOf(
+      attach('thread-item-option', { tag: 'button', parent: attach('thread-item-options') }),
+    );
+    expect(open.flexGrow).toBe('1');
+    expect(open.flexBasis).toBe('240px');
+  });
+
   it('reads a real cascade, not an element nothing reaches', () => {
     // Control. Every assertion above is on a property the sheet sets, and a
     // bare div satisfies most of them by having no rule at all.
