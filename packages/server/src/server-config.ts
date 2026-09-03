@@ -40,6 +40,15 @@ export function resolveServerConfig(opts: {
   // to work around.
   const dataDir = arg('data-dir') ?? resolveDataDir(env, repoRoot);
 
+  // The bind address. Deliberately `undefined` unless a caller passes
+  // `--host` — Bun's own default (the wildcard, every interface) is what
+  // prod needs (tailnet + LAN reach it) and what this resolver must not
+  // change. `scripts/staging.ts` is the caller that passes a value,
+  // defaulting IT to loopback so a dev/staging instance is reachable only
+  // from this machine unless someone opts into the wildcard with
+  // `--host 0.0.0.0`.
+  const hostname = arg('host');
+
   // Which browser bundles to serve. PROD passes published release directories
   // (see client-release.ts) so the served client is NOT read out of a git
   // working tree someone may be editing or switching branches in. Unset — `bun
@@ -546,6 +555,7 @@ export function resolveServerConfig(opts: {
     markdownAppDist,
     accessShareConfigured,
     requestedPort,
+    hostname,
     dataDir,
     demosDir,
     publicBaseUrlOverride,
