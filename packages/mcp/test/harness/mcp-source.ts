@@ -32,6 +32,7 @@ export const MCP_SOURCE_FILES = [
   'mcp.ts',
   'tools/docs.ts',
   'tools/tasks.ts',
+  'tools/workspace.ts',
 ] as const;
 
 /** All of it, joined — the subject the source-shape tests are written about. */
