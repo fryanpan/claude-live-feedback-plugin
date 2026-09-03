@@ -13916,88 +13916,6 @@ function decisionAnsweredLine(p) {
   return `[decision.answered] ${p.taskId}${by}: "${truncate2(p.answer ?? "", 120)}"${walk}`;
 }
 
-// packages/mcp/src/declare-lead.ts
-async function declareWorkspaceLead(args, deps) {
-  const { workspaceId } = args;
-  const named = typeof args.leadAgentId === "string" ? args.leadAgentId.trim() : "";
-  const declaring = named.length === 0 || named === deps.self.id;
-  const leadAgentId = declaring ? deps.self.id : named;
-  const path = `/api/workspaces/${encodeURIComponent(workspaceId)}`;
-  if (declaring && deps.identityIsShared === true) {
-    return {
-      isError: true,
-      error: "author-required",
-      message: "This session has no identity: CW_AGENT_NAME is not set, so it resolves to the shared " + '"agent" category, which cannot lead a board or keep its watches across a restart. ' + "Set CW_AGENT_NAME in the launch environment, restart the session, and declare again. " + "No seat was changed."
-    };
-  }
-  let attached;
-  let subscription = { open: false, persisted: false };
-  if (declaring) {
-    attached = await deps.http("POST", `${path}/attachments`, {
-      agentId: deps.self.id,
-      agentName: deps.self.name,
-      runtime: deps.runtime,
-      pluginVersion: deps.pluginVersion,
-      processId: deps.processId
-    });
-    subscription = await deps.watchWorkspace(workspaceId);
-  }
-  const res = await deps.http("PUT", `${path}/lead`, {
-    leadAgentId,
-    author: deps.self,
-    ...args.takeover === true ? { takeover: true } : {}
-  });
-  const settledLead = res.workspace?.leadAgentId ?? leadAgentId;
-  const seat = {
-    workspaceId,
-    changed: res.changed,
-    leadAgentId: settledLead,
-    ...res.previousLeadAgentId !== undefined ? { previousLeadAgentId: res.previousLeadAgentId } : {},
-    ...res.declined !== undefined ? { declined: res.declined } : {}
-  };
-  if (!declaring)
-    return seat;
-  const a = attached ?? {};
-  for (const q of a.queuedComments ?? []) {
-    if (typeof q?.id !== "string")
-      continue;
-    try {
-      await deps.http("POST", `${path}/comment-queue/${encodeURIComponent(q.id)}/ack`, {});
-    } catch {}
-  }
-  const warnings = [];
-  if (!subscription.open) {
-    warnings.push("the event stream did not confirm it was open before the seat changed, so anything the " + "server delivered in that window may not have arrived — call list_watched_docs to check " + "coverage, and re-run this if it still looks wrong");
-  }
-  if (!subscription.persisted) {
-    warnings.push("this subscription was NOT persisted, so it will not come back after a respawn — the " + "server refused or did not answer the watch write; re-run this once the server is up " + "(a session with CW_AGENT_NAME unset is refused before this point)");
-  }
-  return {
-    ...subscription.persisted ? {} : { subscriptionPersisted: false, subscriptionWarning: warnings.join("; ") },
-    ...seat,
-    subscribed: subscription.open,
-    subscriptionPersisted: subscription.persisted,
-    ...warnings.length > 0 ? { subscriptionWarning: warnings.join("; ") } : {},
-    lead: settledLead === deps.self.id,
-    ...res.declined === "lead-held" ? {
-      note: `${settledLead} already leads this board and is live, so the seat was left alone — ` + "you are attached and subscribed, and everything on the board still reaches you. " + "Coordinate with them; pass takeover: true only if you mean to take the seat."
-    } : {},
-    ...a.retired ? { retired: a.retired } : {},
-    ...a.leadNameConflicts ? { leadNameConflicts: a.leadNameConflicts } : {},
-    gating: a.gating,
-    untriaged: a.untriaged ?? [],
-    queuedVoice: a.queuedVoice ?? [],
-    queuedComments: (a.queuedComments ?? []).map((q) => ({
-      docId: q.docId,
-      ...q.threadId !== undefined ? { threadId: q.threadId } : {},
-      event: q.event,
-      ...q.author !== undefined ? { author: q.author } : {},
-      text: q.text,
-      ts: q.ts
-    }))
-  };
-}
-
 // packages/mcp/src/deferred-emit.ts
 function createDeferredEmitter(schedule = (fn) => {
   setTimeout(fn, 0);
@@ -14244,18 +14162,6 @@ function reviewItemHeldLine(p) {
   const stood = p.overdue === true ? ` It has been held${p.heldMs === undefined ? "" : ` for ${humanDuration2(p.heldMs)}`} and the reader still cannot see it.` : "";
   const fix = p.revise ? `Fix the gap named and call ${p.revise} now; it is judged again on every revision.` : "Fix the gap named and call revise_review_item now; it is judged again on every revision.";
   return `[workspace.review_item_held] your review item ${ask}${on}${ids} was held off the queue by the quality gate${why}.${stood} ${fix}`;
-}
-
-// packages/mcp/src/parallelism-cap.ts
-function parseCapArg(raw) {
-  if (typeof raw === "number" && Number.isInteger(raw) && raw >= 1) {
-    return { ok: true, cap: raw };
-  }
-  const shown = typeof raw === "string" ? JSON.stringify(raw) : String(raw);
-  return {
-    ok: false,
-    error: `cap must be a positive integer — the most builders the board may have dispatched at once (got ${shown}). Pass a number of 1 or more, not a string.`
-  };
 }
 
 // packages/mcp/src/self-authored.ts
@@ -17181,6 +17087,330 @@ async function handleTaskTool(name, a, ctx) {
   return;
 }
 
+// packages/mcp/src/declare-lead.ts
+async function declareWorkspaceLead(args, deps) {
+  const { workspaceId } = args;
+  const named = typeof args.leadAgentId === "string" ? args.leadAgentId.trim() : "";
+  const declaring = named.length === 0 || named === deps.self.id;
+  const leadAgentId = declaring ? deps.self.id : named;
+  const path = `/api/workspaces/${encodeURIComponent(workspaceId)}`;
+  if (declaring && deps.identityIsShared === true) {
+    return {
+      isError: true,
+      error: "author-required",
+      message: "This session has no identity: CW_AGENT_NAME is not set, so it resolves to the shared " + '"agent" category, which cannot lead a board or keep its watches across a restart. ' + "Set CW_AGENT_NAME in the launch environment, restart the session, and declare again. " + "No seat was changed."
+    };
+  }
+  let attached;
+  let subscription = { open: false, persisted: false };
+  if (declaring) {
+    attached = await deps.http("POST", `${path}/attachments`, {
+      agentId: deps.self.id,
+      agentName: deps.self.name,
+      runtime: deps.runtime,
+      pluginVersion: deps.pluginVersion,
+      processId: deps.processId
+    });
+    subscription = await deps.watchWorkspace(workspaceId);
+  }
+  const res = await deps.http("PUT", `${path}/lead`, {
+    leadAgentId,
+    author: deps.self,
+    ...args.takeover === true ? { takeover: true } : {}
+  });
+  const settledLead = res.workspace?.leadAgentId ?? leadAgentId;
+  const seat = {
+    workspaceId,
+    changed: res.changed,
+    leadAgentId: settledLead,
+    ...res.previousLeadAgentId !== undefined ? { previousLeadAgentId: res.previousLeadAgentId } : {},
+    ...res.declined !== undefined ? { declined: res.declined } : {}
+  };
+  if (!declaring)
+    return seat;
+  const a = attached ?? {};
+  for (const q of a.queuedComments ?? []) {
+    if (typeof q?.id !== "string")
+      continue;
+    try {
+      await deps.http("POST", `${path}/comment-queue/${encodeURIComponent(q.id)}/ack`, {});
+    } catch {}
+  }
+  const warnings = [];
+  if (!subscription.open) {
+    warnings.push("the event stream did not confirm it was open before the seat changed, so anything the " + "server delivered in that window may not have arrived — call list_watched_docs to check " + "coverage, and re-run this if it still looks wrong");
+  }
+  if (!subscription.persisted) {
+    warnings.push("this subscription was NOT persisted, so it will not come back after a respawn — the " + "server refused or did not answer the watch write; re-run this once the server is up " + "(a session with CW_AGENT_NAME unset is refused before this point)");
+  }
+  return {
+    ...subscription.persisted ? {} : { subscriptionPersisted: false, subscriptionWarning: warnings.join("; ") },
+    ...seat,
+    subscribed: subscription.open,
+    subscriptionPersisted: subscription.persisted,
+    ...warnings.length > 0 ? { subscriptionWarning: warnings.join("; ") } : {},
+    lead: settledLead === deps.self.id,
+    ...res.declined === "lead-held" ? {
+      note: `${settledLead} already leads this board and is live, so the seat was left alone — ` + "you are attached and subscribed, and everything on the board still reaches you. " + "Coordinate with them; pass takeover: true only if you mean to take the seat."
+    } : {},
+    ...a.retired ? { retired: a.retired } : {},
+    ...a.leadNameConflicts ? { leadNameConflicts: a.leadNameConflicts } : {},
+    gating: a.gating,
+    untriaged: a.untriaged ?? [],
+    queuedVoice: a.queuedVoice ?? [],
+    queuedComments: (a.queuedComments ?? []).map((q) => ({
+      docId: q.docId,
+      ...q.threadId !== undefined ? { threadId: q.threadId } : {},
+      event: q.event,
+      ...q.author !== undefined ? { author: q.author } : {},
+      text: q.text,
+      ts: q.ts
+    }))
+  };
+}
+
+// packages/mcp/src/parallelism-cap.ts
+function parseCapArg(raw) {
+  if (typeof raw === "number" && Number.isInteger(raw) && raw >= 1) {
+    return { ok: true, cap: raw };
+  }
+  const shown = typeof raw === "string" ? JSON.stringify(raw) : String(raw);
+  return {
+    ok: false,
+    error: `cap must be a positive integer — the most builders the board may have dispatched at once (got ${shown}). Pass a number of 1 or more, not a string.`
+  };
+}
+
+// packages/mcp/src/tools/workspace.ts
+async function setBoardRetired(ctx, workspaceId, retired, reason) {
+  const { http, AUTHOR } = ctx;
+  const res = await http("PUT", `/api/workspaces/${encodeURIComponent(workspaceId)}/retired`, {
+    retired,
+    ...retired && reason !== undefined ? { reason } : {},
+    author: AUTHOR
+  });
+  return {
+    workspaceId,
+    name: res.workspace.name,
+    retired,
+    changed: res.changed,
+    ...res.workspace.retiredAt !== undefined ? { retiredAt: res.workspace.retiredAt } : {}
+  };
+}
+async function handleWorkspaceTool(name, a, ctx) {
+  const {
+    http,
+    ok,
+    err,
+    AUTHOR,
+    PLUGIN_VERSION,
+    PROCESS_ID,
+    IDENTITY_IS_SHARED,
+    markAttached,
+    watchWorkspace
+  } = ctx;
+  switch (name) {
+    case "create_workspace": {
+      const {
+        name: wsName,
+        leadAgentId,
+        subscribe
+      } = a;
+      const res = await http("POST", "/api/workspaces", {
+        name: wsName,
+        leadAgentId: leadAgentId ?? AUTHOR.id
+      });
+      if (subscribe !== false && res.workspace?.id) {
+        await watchWorkspace(res.workspace.id);
+      }
+      return ok({
+        workspaceId: res.workspace.id,
+        name: res.workspace.name,
+        leadAgentId: res.workspace.leadAgentId
+      });
+    }
+    case "rename_workspace": {
+      const { workspaceId, name: nextName } = a;
+      const res = await http("POST", `/api/workspaces/${encodeURIComponent(workspaceId)}/rename`, {
+        name: nextName,
+        author: AUTHOR
+      });
+      return ok({
+        workspaceId,
+        name: res.workspace.name,
+        changed: res.changed,
+        ...res.sameName ? { sameName: res.sameName } : {}
+      });
+    }
+    case "retire_workspace": {
+      const { workspaceId, reason } = a;
+      return ok(await setBoardRetired(ctx, workspaceId, true, reason));
+    }
+    case "unretire_workspace": {
+      const { workspaceId } = a;
+      return ok(await setBoardRetired(ctx, workspaceId, false));
+    }
+    case "set_workspace_lead": {
+      const { workspaceId, leadAgentId, takeover } = a;
+      const declared = await declareWorkspaceLead({
+        workspaceId,
+        ...leadAgentId !== undefined ? { leadAgentId } : {},
+        ...takeover === true ? { takeover: true } : {}
+      }, {
+        http,
+        watchWorkspace,
+        self: AUTHOR,
+        identityIsShared: IDENTITY_IS_SHARED,
+        runtime: "claude-code-local",
+        pluginVersion: PLUGIN_VERSION,
+        processId: PROCESS_ID
+      });
+      return declared.isError === true ? err(String(declared.message)) : ok(declared);
+    }
+    case "set_review_item_criteria": {
+      const { workspaceId, criteria, reviewItemId } = a;
+      let effectiveWorkspaceId = workspaceId;
+      if (effectiveWorkspaceId === undefined) {
+        if (reviewItemId === undefined) {
+          return err("which board? Pass workspaceId, or a reviewItemId — the criteria then land on the board that judges that item");
+        }
+        const res2 = await http("GET", `/api/review-items/${encodeURIComponent(reviewItemId)}`);
+        if (res2.workspaceId === undefined) {
+          return err("that item's doc is not attached to any workspace, so it names no board — pass workspaceId");
+        }
+        effectiveWorkspaceId = res2.workspaceId;
+      }
+      const res = await http("PUT", `/api/workspaces/${encodeURIComponent(effectiveWorkspaceId)}/settings`, {
+        reviewItemCriteria: criteria !== undefined && criteria.trim() !== "" ? criteria : null,
+        author: AUTHOR
+      });
+      return ok({
+        workspaceId: effectiveWorkspaceId,
+        criteria: res.reviewItemCriteria.value,
+        isDefault: res.reviewItemCriteria.isDefault
+      });
+    }
+    case "attach_doc": {
+      const { workspaceId, docId } = a;
+      const res = await http("POST", `/api/workspaces/${encodeURIComponent(workspaceId)}/docs`, {
+        docId
+      });
+      return ok({ ok: true, workspaceId, docIds: res.workspace?.docIds ?? [] });
+    }
+    case "get_workspace": {
+      const { workspaceId } = a;
+      const res = await http("GET", `/api/workspaces/${encodeURIComponent(workspaceId)}`);
+      return ok({
+        workspaceId: res.workspace.id,
+        name: res.workspace.name,
+        ...res.parallelismCap !== undefined ? { parallelismCap: res.parallelismCap } : {},
+        leadAgentId: res.workspace.leadAgentId,
+        ...res.workspace.reviewItemCriteria !== undefined ? { reviewItemCriteria: res.workspace.reviewItemCriteria } : {},
+        ...res.retired ? { retired: res.retired } : {},
+        goals: res.goalSummary
+      });
+    }
+    case "attach_agent": {
+      const { workspaceId, agentId, runtime, capabilities, subscribe } = a;
+      const res = await http("POST", `/api/workspaces/${encodeURIComponent(workspaceId)}/attachments`, {
+        agentId: agentId ?? AUTHOR.id,
+        ...agentId === undefined || agentId === AUTHOR.id ? { agentName: AUTHOR.name } : {},
+        runtime: runtime ?? "claude-code-local",
+        ...capabilities !== undefined ? { capabilities } : {},
+        pluginVersion: PLUGIN_VERSION,
+        processId: PROCESS_ID
+      });
+      if (agentId === undefined || agentId === AUTHOR.id)
+        markAttached(workspaceId);
+      if (subscribe !== false)
+        await watchWorkspace(workspaceId);
+      for (const q of res.queuedComments ?? []) {
+        if (typeof q?.id !== "string")
+          continue;
+        try {
+          await http("POST", `/api/workspaces/${encodeURIComponent(workspaceId)}/comment-queue/${encodeURIComponent(q.id)}/ack`, {});
+        } catch {}
+      }
+      return ok({
+        workspaceId,
+        agentId: res.attachment?.agentId ?? agentId ?? AUTHOR.id,
+        ...res.retired ? { retired: res.retired } : {},
+        ...res.leadNameConflicts ? { leadNameConflicts: res.leadNameConflicts } : {},
+        gating: res.gating,
+        lead: res.lead ?? false,
+        untriaged: res.untriaged ?? [],
+        queuedVoice: res.queuedVoice ?? [],
+        queuedComments: (res.queuedComments ?? []).map((q) => ({
+          docId: q.docId,
+          ...q.threadId !== undefined ? { threadId: q.threadId } : {},
+          event: q.event,
+          ...q.author !== undefined ? { author: q.author } : {},
+          text: q.text,
+          ts: q.ts
+        })),
+        ...res.notes !== undefined && res.notes.length > 0 ? { notes: res.notes } : {},
+        ...res.watching !== undefined ? { watching: res.watching } : {},
+        ...res.seat !== undefined ? { seat: res.seat } : {},
+        ...res.seatTakenFrom !== undefined ? { seatTakenFrom: res.seatTakenFrom } : {}
+      });
+    }
+    case "heartbeat": {
+      const { workspaceId, agentId, toolCallAt } = a;
+      const res = await http("POST", `/api/workspaces/${encodeURIComponent(workspaceId)}/attachments/${encodeURIComponent(agentId ?? AUTHOR.id)}/heartbeat`, { toolCallAt: toolCallAt ?? Date.now() });
+      if (agentId === undefined || agentId === AUTHOR.id)
+        markAttached(workspaceId);
+      return ok({ workspaceId, agentId: agentId ?? AUTHOR.id, state: res.attachment?.state });
+    }
+    case "get_unfiled_ask_count": {
+      const { agent } = a;
+      const who = agent?.trim() || AUTHOR.name;
+      return ok(await http("GET", `/api/chat-audit/${encodeURIComponent(who)}`));
+    }
+    case "publish_chat_audit": {
+      const { day, entries } = a;
+      return ok(await http("POST", "/api/chat-audit", {
+        ...day !== undefined ? { day } : {},
+        auditor: AUTHOR.name,
+        entries
+      }));
+    }
+    case "register_dispatch": {
+      const { taskId, worktreePath } = a;
+      return ok(await http("POST", "/api/dispatches", { taskId, worktreePath }));
+    }
+    case "close_dispatch": {
+      const { taskId } = a;
+      return ok(await http("DELETE", `/api/dispatches/${encodeURIComponent(taskId)}`));
+    }
+    case "set_parallelism_cap": {
+      const { workspaceId, cap: rawCap } = a;
+      const parsed = parseCapArg(rawCap);
+      if (!parsed.ok)
+        return err(parsed.error);
+      const res = await http("PUT", `/api/workspaces/${encodeURIComponent(workspaceId)}/parallelism-cap`, { cap: parsed.cap, author: AUTHOR });
+      return ok({
+        workspaceId,
+        cap: res.cap,
+        isDefault: res.isDefault,
+        default: res.default,
+        inUse: res.inUse,
+        free: res.free,
+        holders: res.holders,
+        lastChange: res.lastChange
+      });
+    }
+    case "request_plugin_refresh": {
+      return ok(await http("POST", "/api/plugin/refresh"));
+    }
+    case "list_attachments": {
+      const { workspaceId } = a;
+      const res = await http("GET", `/api/workspaces/${encodeURIComponent(workspaceId)}/attachments`);
+      return ok(res);
+    }
+  }
+  return;
+}
+
 // packages/mcp/src/voice-line.ts
 function truncate4(s, n) {
   return s.length > n ? `${s.slice(0, n - 1)}…` : s;
@@ -17426,6 +17656,9 @@ function toolContext() {
     ok,
     err,
     AUTHOR,
+    PLUGIN_VERSION,
+    PROCESS_ID,
+    markAttached,
     STATUS_TEXT_MAX,
     suggestionAuthor,
     resolveBaseUrl,
@@ -17450,207 +17683,7 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
     sendDueHeartbeats();
     await maybeAutoWatch(name, a);
     const ctx = toolContext();
-    const delegated = await handleDocsTool(name, a, ctx) ?? await handleTaskTool(name, a, ctx);
-    if (delegated)
-      return delegated;
-    switch (name) {
-      case "create_workspace": {
-        const {
-          name: wsName,
-          leadAgentId,
-          subscribe
-        } = a;
-        const res = await http("POST", "/api/workspaces", {
-          name: wsName,
-          leadAgentId: leadAgentId ?? AUTHOR.id
-        });
-        if (subscribe !== false && res.workspace?.id) {
-          await watchWorkspace(res.workspace.id);
-        }
-        return ok({
-          workspaceId: res.workspace.id,
-          name: res.workspace.name,
-          leadAgentId: res.workspace.leadAgentId
-        });
-      }
-      case "rename_workspace": {
-        const { workspaceId, name: nextName } = a;
-        const res = await http("POST", `/api/workspaces/${encodeURIComponent(workspaceId)}/rename`, { name: nextName, author: AUTHOR });
-        return ok({
-          workspaceId,
-          name: res.workspace.name,
-          changed: res.changed,
-          ...res.sameName ? { sameName: res.sameName } : {}
-        });
-      }
-      case "retire_workspace": {
-        const { workspaceId, reason } = a;
-        return ok(await setBoardRetired(workspaceId, true, reason));
-      }
-      case "unretire_workspace": {
-        const { workspaceId } = a;
-        return ok(await setBoardRetired(workspaceId, false));
-      }
-      case "set_workspace_lead": {
-        const { workspaceId, leadAgentId, takeover } = a;
-        const declared = await declareWorkspaceLead({
-          workspaceId,
-          ...leadAgentId !== undefined ? { leadAgentId } : {},
-          ...takeover === true ? { takeover: true } : {}
-        }, {
-          http,
-          watchWorkspace,
-          self: AUTHOR,
-          identityIsShared: IDENTITY_IS_SHARED,
-          runtime: "claude-code-local",
-          pluginVersion: PLUGIN_VERSION,
-          processId: PROCESS_ID
-        });
-        return declared.isError === true ? err(String(declared.message)) : ok(declared);
-      }
-      case "set_review_item_criteria": {
-        const { workspaceId, criteria, reviewItemId } = a;
-        let effectiveWorkspaceId = workspaceId;
-        if (effectiveWorkspaceId === undefined) {
-          if (reviewItemId === undefined) {
-            return err("which board? Pass workspaceId, or a reviewItemId — the criteria then land on the board that judges that item");
-          }
-          const res2 = await http("GET", `/api/review-items/${encodeURIComponent(reviewItemId)}`);
-          if (res2.workspaceId === undefined) {
-            return err("that item's doc is not attached to any workspace, so it names no board — pass workspaceId");
-          }
-          effectiveWorkspaceId = res2.workspaceId;
-        }
-        const res = await http("PUT", `/api/workspaces/${encodeURIComponent(effectiveWorkspaceId)}/settings`, {
-          reviewItemCriteria: criteria !== undefined && criteria.trim() !== "" ? criteria : null,
-          author: AUTHOR
-        });
-        return ok({
-          workspaceId: effectiveWorkspaceId,
-          criteria: res.reviewItemCriteria.value,
-          isDefault: res.reviewItemCriteria.isDefault
-        });
-      }
-      case "attach_doc": {
-        const { workspaceId, docId } = a;
-        const res = await http("POST", `/api/workspaces/${encodeURIComponent(workspaceId)}/docs`, {
-          docId
-        });
-        return ok({ ok: true, workspaceId, docIds: res.workspace?.docIds ?? [] });
-      }
-      case "get_workspace": {
-        const { workspaceId } = a;
-        const res = await http("GET", `/api/workspaces/${encodeURIComponent(workspaceId)}`);
-        return ok({
-          workspaceId: res.workspace.id,
-          name: res.workspace.name,
-          ...res.parallelismCap !== undefined ? { parallelismCap: res.parallelismCap } : {},
-          leadAgentId: res.workspace.leadAgentId,
-          ...res.workspace.reviewItemCriteria !== undefined ? { reviewItemCriteria: res.workspace.reviewItemCriteria } : {},
-          ...res.retired ? { retired: res.retired } : {},
-          goals: res.goalSummary
-        });
-      }
-      case "attach_agent": {
-        const { workspaceId, agentId, runtime, capabilities, subscribe } = a;
-        const res = await http("POST", `/api/workspaces/${encodeURIComponent(workspaceId)}/attachments`, {
-          agentId: agentId ?? AUTHOR.id,
-          ...agentId === undefined || agentId === AUTHOR.id ? { agentName: AUTHOR.name } : {},
-          runtime: runtime ?? "claude-code-local",
-          ...capabilities !== undefined ? { capabilities } : {},
-          pluginVersion: PLUGIN_VERSION,
-          processId: PROCESS_ID
-        });
-        if (agentId === undefined || agentId === AUTHOR.id)
-          markAttached(workspaceId);
-        if (subscribe !== false)
-          await watchWorkspace(workspaceId);
-        for (const q of res.queuedComments ?? []) {
-          if (typeof q?.id !== "string")
-            continue;
-          try {
-            await http("POST", `/api/workspaces/${encodeURIComponent(workspaceId)}/comment-queue/${encodeURIComponent(q.id)}/ack`, {});
-          } catch {}
-        }
-        return ok({
-          workspaceId,
-          agentId: res.attachment?.agentId ?? agentId ?? AUTHOR.id,
-          ...res.retired ? { retired: res.retired } : {},
-          ...res.leadNameConflicts ? { leadNameConflicts: res.leadNameConflicts } : {},
-          gating: res.gating,
-          lead: res.lead ?? false,
-          untriaged: res.untriaged ?? [],
-          queuedVoice: res.queuedVoice ?? [],
-          queuedComments: (res.queuedComments ?? []).map((q) => ({
-            docId: q.docId,
-            ...q.threadId !== undefined ? { threadId: q.threadId } : {},
-            event: q.event,
-            ...q.author !== undefined ? { author: q.author } : {},
-            text: q.text,
-            ts: q.ts
-          })),
-          ...res.notes !== undefined && res.notes.length > 0 ? { notes: res.notes } : {},
-          ...res.watching !== undefined ? { watching: res.watching } : {},
-          ...res.seat !== undefined ? { seat: res.seat } : {},
-          ...res.seatTakenFrom !== undefined ? { seatTakenFrom: res.seatTakenFrom } : {}
-        });
-      }
-      case "heartbeat": {
-        const { workspaceId, agentId, toolCallAt } = a;
-        const res = await http("POST", `/api/workspaces/${encodeURIComponent(workspaceId)}/attachments/${encodeURIComponent(agentId ?? AUTHOR.id)}/heartbeat`, { toolCallAt: toolCallAt ?? Date.now() });
-        if (agentId === undefined || agentId === AUTHOR.id)
-          markAttached(workspaceId);
-        return ok({ workspaceId, agentId: agentId ?? AUTHOR.id, state: res.attachment?.state });
-      }
-      case "get_unfiled_ask_count": {
-        const { agent } = a;
-        const who = agent?.trim() || AUTHOR.name;
-        return ok(await http("GET", `/api/chat-audit/${encodeURIComponent(who)}`));
-      }
-      case "publish_chat_audit": {
-        const { day, entries } = a;
-        return ok(await http("POST", "/api/chat-audit", {
-          ...day !== undefined ? { day } : {},
-          auditor: AUTHOR.name,
-          entries
-        }));
-      }
-      case "register_dispatch": {
-        const { taskId, worktreePath } = a;
-        return ok(await http("POST", "/api/dispatches", { taskId, worktreePath }));
-      }
-      case "close_dispatch": {
-        const { taskId } = a;
-        return ok(await http("DELETE", `/api/dispatches/${encodeURIComponent(taskId)}`));
-      }
-      case "set_parallelism_cap": {
-        const { workspaceId, cap: rawCap } = a;
-        const parsed = parseCapArg(rawCap);
-        if (!parsed.ok)
-          return err(parsed.error);
-        const res = await http("PUT", `/api/workspaces/${encodeURIComponent(workspaceId)}/parallelism-cap`, { cap: parsed.cap, author: AUTHOR });
-        return ok({
-          workspaceId,
-          cap: res.cap,
-          isDefault: res.isDefault,
-          default: res.default,
-          inUse: res.inUse,
-          free: res.free,
-          holders: res.holders,
-          lastChange: res.lastChange
-        });
-      }
-      case "request_plugin_refresh": {
-        return ok(await http("POST", "/api/plugin/refresh"));
-      }
-      case "list_attachments": {
-        const { workspaceId } = a;
-        const res = await http("GET", `/api/workspaces/${encodeURIComponent(workspaceId)}/attachments`);
-        return ok(res);
-      }
-      default:
-        return err(`unknown tool: ${name}`);
-    }
+    return await handleDocsTool(name, a, ctx) ?? await handleTaskTool(name, a, ctx) ?? await handleWorkspaceTool(name, a, ctx) ?? err(`unknown tool: ${name}`);
   } catch (e) {
     return err(e instanceof Error ? e.message : String(e));
   } finally {
@@ -18134,20 +18167,6 @@ async function emitChannelMessage(event, rawPayload) {
 }
 function truncate5(s, n) {
   return s.length > n ? `${s.slice(0, n - 1)}…` : s;
-}
-async function setBoardRetired(workspaceId, retired, reason) {
-  const res = await http("PUT", `/api/workspaces/${encodeURIComponent(workspaceId)}/retired`, {
-    retired,
-    ...retired && reason !== undefined ? { reason } : {},
-    author: AUTHOR
-  });
-  return {
-    workspaceId,
-    name: res.workspace.name,
-    retired,
-    changed: res.changed,
-    ...res.workspace.retiredAt !== undefined ? { retiredAt: res.workspace.retiredAt } : {}
-  };
 }
 async function http(method, path, body) {
   const baseUrl = resolveBaseUrl();
