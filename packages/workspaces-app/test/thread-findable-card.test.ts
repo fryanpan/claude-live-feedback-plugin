@@ -119,6 +119,67 @@ describe('the folded line of a declared thread', () => {
   });
 });
 
+describe('what line two of a folded card is allowed to be', () => {
+  const face = (card: HTMLElement) => card.querySelector('.slot-a > .face-summary');
+
+  it('an item card spends line two on the way to answer, not on "No replies yet"', () => {
+    // Measured on the built page: every open ask folded to a card whose
+    // second line said it had no replies — true of nearly every review item,
+    // and worth no line in a 260px column. The mock gives line two to the
+    // discussion on a conversation card and to the answer row on an item one.
+    const { card } = render(thread([comment('?', decision())]));
+    expect(face(card)?.querySelector('.thread-discussion')).toBe(null);
+    expect(face(card)?.querySelector('.thread-options-compact')).not.toBe(null);
+    expect(card.textContent).not.toContain('No replies yet');
+  });
+
+  it('keeps the discussion once there IS one, item or not', () => {
+    // The suppression is about an empty line, not about item cards: an ask
+    // people have replied to still says where the conversation got to.
+    const { card } = render(thread([comment('?', decision()), comment('Both, in the end.')]));
+    expect(face(card)?.querySelector('.thread-discussion')?.textContent).toBe('Both, in the end.');
+    expect(face(card)?.querySelector('.thread-options-compact')).not.toBe(null);
+  });
+
+  it('a plain comment with no replies keeps its line, because nothing replaces it', () => {
+    // A face with no children measures zero, and `sizeThreadSlots` refuses a
+    // zero — which would leave a card that opens and cannot close. So the
+    // suppression is conditioned on the answer row existing.
+    const { card } = render(thread([comment('Looks fine.')]));
+    const line = face(card)?.querySelector('.thread-discussion');
+    expect(line).not.toBe(null);
+    expect(line?.textContent).toBeTruthy();
+  });
+});
+
+describe('who started it, on line one', () => {
+  it('names the starter on a conversation card', () => {
+    const { card } = render(thread([comment('Looks fine.')]));
+    expect(card.querySelector('.thread-head .thread-who')?.textContent).toBe('Alice');
+  });
+
+  it('leaves the name off an ask, which needs the width for the ask', () => {
+    // "Induction ordering · Rota Assistant" clipped the name to about seven
+    // characters in a 260px balloon — the same failure that cost the old
+    // "Decision needed" flag its row. The asker is named directly under line
+    // one on the opened card, where the reader is deciding whether to answer.
+    const { card, panel } = render(thread([comment('?', decision())]));
+    expect(card.querySelector('.thread-head .thread-who')).toBe(null);
+    expect(card.querySelector('.thread-topic')?.textContent).toBe('What does 45 s mean?');
+    panel.setActive('t1');
+    expect(card.querySelector('.thread-asked-meta')?.textContent).toContain('Alice');
+  });
+
+  it('names them again once the ask is settled and the card is a record', () => {
+    // An answered item's line one is still the ask, so the same rule holds.
+    const { card } = render(
+      thread([comment('?', decision({ answeredAt: ts, answeredWith: 'a' }))]),
+    );
+    expect(card.querySelector('.thread-head .thread-who')).toBe(null);
+    expect(card.querySelector('.thread-answered-who')).not.toBe(null);
+  });
+});
+
 describe('answering from the folded face', () => {
   it('a decision offers its option labels, and tapping one answers with provenance', () => {
     const c = comment('?', decision());

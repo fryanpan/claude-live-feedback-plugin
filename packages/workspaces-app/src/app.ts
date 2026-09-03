@@ -6,6 +6,7 @@ import {
   suggestOps,
 } from '@feedback/core';
 import type { BootLocation, BootStorage, BootWindow } from './boot-env.ts';
+import { balloonMarginVisible } from './card-placement.ts';
 import { mountCode } from './code/code-app.ts';
 import { mountCommentHints } from './comment-hints.ts';
 import { saveStateView, settlePending, watchConnection } from './connection-state.ts';
@@ -14,6 +15,7 @@ import { fetchDocMeta } from './doc-meta.ts';
 import { docHref, workspaceIdFromPath } from './doc-path.ts';
 import { el, showToast } from './doc/chrome-dom.ts';
 import { wireThreadRangeClicks } from './doc/chrome-panels.ts';
+import { mountCommentFloat } from './doc/comment-float.ts';
 import { mountDocMeeting } from './doc/doc-meeting-mount.ts';
 import { wireDocModes } from './doc/doc-modes.ts';
 import { applyWidthPref, wireFormatBar } from './doc/editor-toolbar.ts';
@@ -400,7 +402,7 @@ async function mountMarkdown(ctx: MountContext): Promise<void> {
     onSeen: () => margin.scheduleRelayout(),
     onJump: jumpToThread,
     dockEl: () => document.querySelector<HTMLElement>('#editor-pane .plan-float'),
-    marginVisible: () => !window.matchMedia('(max-width: 1100px)').matches,
+    marginVisible: balloonMarginVisible,
     scope,
   });
   const onMarginTransaction = (): void => {
@@ -933,6 +935,40 @@ async function mountMarkdown(ctx: MountContext): Promise<void> {
       return;
     }
     reviewChrome.openComposer();
+  });
+
+  /**
+   * Start a comment from the always-in-view Comment float.
+   *
+   * Same three cases the selection pill handles, in the same order, because
+   * the reader has to be able to reach the composer from the button they can
+   * see rather than only from the one that appears: a live selection is the
+   * anchor; otherwise the SENTENCE at the caret is (the pill's "tap then
+   * comment" gesture, without needing the tap to have raised a pill); with
+   * neither, say what would make it work rather than opening an empty box.
+   */
+  function commentAtCaret(): void {
+    if (editor.getSelectionRel()) {
+      reviewChrome.openComposer();
+      return;
+    }
+    const { state } = editor.editor.view;
+    const range = caretParaRange ?? sentenceRangeAt(state, state.selection.from);
+    if (!range || range.from >= range.to) {
+      showToast('Tap the sentence you want to comment on, then Comment.');
+      return;
+    }
+    editor.editor.commands.focus();
+    editor.editor.commands.setTextSelection(range);
+    const sel = editor.getSelectionRel();
+    if (sel) selection = sel;
+    reviewChrome.openComposer();
+  }
+
+  mountCommentFloat({
+    anchor: editorMount.closest('#editor-pane') ?? editorMount,
+    onComment: commentAtCaret,
+    listen: (target, type, fn) => scope.listen(target, type, fn),
   });
 
   async function takeSpinoff(

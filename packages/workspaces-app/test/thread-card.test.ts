@@ -635,22 +635,30 @@ describe('thread card — a thread that carries a review item IS the review item
     expect(face.querySelector('.thread-meta')).toBeNull();
     // The answer composer is part of the item interface, inside the card.
     expect(face.querySelector('.thread-item-card .thread-reply textarea')).not.toBeNull();
+    // ...and the item card does not re-attribute an ask the line above it
+    // already attributed.
+    expect(face.querySelectorAll('.thread-item-meta')).toHaveLength(0);
   });
 
-  it('spells the head row: kind chip, headline, asked-by meta — and one markdown body', () => {
+  it('spells the head row: kind chip and one markdown body, nothing said twice', () => {
     const t = makeThread({ comments: [declaredComment(asked())] });
     const { panel, cardFor } = mountPanel();
     panel.setThreads([t]);
     panel.setActive(t.id);
 
-    const card = cardFor(t).querySelector('.thread-item-card') as HTMLElement;
+    const whole = cardFor(t);
+    const card = whole.querySelector('.thread-item-card') as HTMLElement;
     // New UI text says Question; the class token stays `review` (stored
     // vocabulary is unchanged by the rename in flight).
     const chip = card.querySelector('.thread-item-k') as HTMLElement;
     expect(text(chip)).toBe('Question');
     expect(chip.classList.contains('thread-item-k-review')).toBe(true);
+    // The headline is line one of the card, and the asked-by line sits under
+    // it — so the item card repeats neither. It used to print both, which put
+    // the ask in two sizes and the asker twice on one open card.
     expect(card.querySelector('.thread-item-headline')).toBeNull();
-    expect(text(card.querySelector('.thread-item-meta'))).toMatch(/^Asked by Bob .+ ago$/);
+    expect(card.querySelector('.thread-item-meta')).toBeNull();
+    expect(text(whole.querySelector('.thread-asked-meta'))).toMatch(/^Bob · \S/);
     // The ONE body, rendered as markdown.
     const body = card.querySelector('.thread-item-body') as HTMLElement;
     expect(text(body)).toContain('Ordering and missing stalls.');
