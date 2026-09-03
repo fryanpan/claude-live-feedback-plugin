@@ -23,10 +23,9 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { ElementAnchor, Thread, User } from '@feedback/core';
 import { type ServerHandle, createServer } from '../src/server.ts';
-import { SHARE_COOKIE } from '../src/share/link-session.ts';
 import { ThreadSummarizer } from '../src/summarize.ts';
+import { type AccessHarness, accessHarness, mintAccessShare } from './access-share.ts';
 
-const PUBLIC_HOST = 'feedback.example.com';
 const bryan: User = { id: 'known-bryan', name: 'Bryan', kind: 'known', color: '#2e7dd7' };
 const SNIPPET = 'the retry loop swallows the error';
 
@@ -57,7 +56,8 @@ describe('share visitors never spend the summary API key', () => {
   let dataDir: string;
   let base: string;
   let summarizer: ThreadSummarizer;
-  let cookie: string;
+  let visitorHeaders: Record<string, string>;
+  let access: AccessHarness;
   const priorEnv = process.env.LF_SUMMARIES;
   const DOC = 'gate-doc';
   const WS = 'ws-gate';
@@ -76,8 +76,7 @@ describe('share visitors never spend the summary API key', () => {
       redirect: 'manual',
       ...init,
       headers: {
-        host: PUBLIC_HOST,
-        cookie: `${SHARE_COOKIE}=${cookie}`,
+        ...visitorHeaders,
         ...((init.headers as Record<string, string>) ?? {}),
       },
     });
@@ -92,11 +91,12 @@ describe('share visitors never spend the summary API key', () => {
       fetchImpl: stubFetch,
       debounceMs: 5,
     });
+    access = await accessHarness();
     handle = createServer({
       port: 0,
       dataDir,
       summarizer,
-      share: { config: { publicHostname: PUBLIC_HOST } },
+      ...access.serverOptions,
     });
     base = `http://localhost:${handle.port}`;
 
@@ -126,23 +126,8 @@ describe('share visitors never spend the summary API key', () => {
     });
     expect(filed.status).toBe(200);
 
-    const mk = await local('/api/share/link', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ workspaceId: boardId, label: 'external review' }),
-    });
-    expect(mk.status).toBe(200);
-    const { share } = (await mk.json()) as { share: { url: string } };
-    const shareUrl = new URL(share.url);
-    const redeemed = await fetch(`${base}${shareUrl.pathname}${shareUrl.search}`, {
-      redirect: 'manual',
-      headers: { host: PUBLIC_HOST },
-    });
-    expect(redeemed.status).toBe(302);
-    cookie = (redeemed.headers.get('set-cookie') ?? '').match(
-      new RegExp(`${SHARE_COOKIE}=([^;]+)`),
-    )?.[1] as string;
-    expect(cookie).toBeTruthy();
+    visitorHeaders = (await mintAccessShare(base, access, boardId, { label: 'external review' }))
+      .headers;
   });
 
   afterAll(async () => {

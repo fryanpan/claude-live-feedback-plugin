@@ -82,9 +82,13 @@ interface Booted {
 
 function boot(requireSignInToWrite?: boolean): Booted {
   const dataDir = mkdtempSync(join(tmpdir(), 'write-gate-'));
+  // emailCodeSignIn: the server's own emailed-code sign-in is off by default now
+  // that every browser-facing hostname sits behind Cloudflare Access. These tests
+  // are about that flow, so they ask for it explicitly.
   const handle = createServer({
     port: 0,
     dataDir,
+    emailCodeSignIn: true,
     ...(requireSignInToWrite === undefined ? {} : { requireSignInToWrite }),
   });
   cleanups.push(async () => {

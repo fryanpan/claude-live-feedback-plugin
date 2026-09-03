@@ -1,13 +1,17 @@
 /**
- * Link-mode sharing, driven through the real route table.
+ * Share visitors, driven through the real route table.
  *
- * The threat model is different from Access mode: the signed URL IS the
- * credential (its HMAC signature — see signed-link-share.test.ts for the
- * signature's own suite), so the tests below care about (a) the URL being
- * exchanged for a session exactly once, (b) everything else on the public
- * host requiring that session, (c) the session being scoped identically to
- * an Access visitor, and (d) revocation and expiry taking effect immediately
- * rather than when a browser cookie happens to lapse.
+ * Every browser-facing hostname sits behind Cloudflare Access (2026-09-02),
+ * so a share's credential is a signed Access token for that share's own
+ * hostname — there is no URL a stranger can hold. This file is what that
+ * costs and buys: (a) minting validates before it creates anything, (b)
+ * nothing on a share hostname is served without a token, (c) the visitor is
+ * scoped to the board they were invited to, and (d) revocation and expiry
+ * take effect immediately, including on sockets already open.
+ *
+ * It was `link-share.test.ts` when the signed URL was the credential. The
+ * retirement of that mode has its own file (link-mode-retired.test.ts); what
+ * stayed here is everything that was never about the URL.
  *
  * **A BOARD is the unit of sharing** (2026-08-17), so every fixture here is a
  * board share. The file used to mint most of them with `{docId}` — a grant
@@ -27,19 +31,23 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { type ServerHandle, createServer } from '../src/server.ts';
-import { SHARE_COOKIE, signSession } from '../src/share/link-session.ts';
+import {
+  type AccessHarness,
+  type MintedShare,
+  accessHarness,
+  mintAccessShare,
+} from './access-share.ts';
 
-const PUBLIC_HOST = 'feedback.example.com';
-
-describe('link shares over HTTP', () => {
+describe('Access-mode shares over HTTP', () => {
   let handle: ServerHandle;
   let dataDir: string;
   let folder: string;
   let soloFolder: string;
   let base: string;
 
-  let soloShare: { shareId: string; url: string; expiresAt: number; slug?: string };
-  let wsShare: { shareId: string; url: string; slug?: string };
+  let access: AccessHarness;
+  let soloShare: MintedShare;
+  let wsShare: MintedShare;
   /** The board the multi-file folder bind is filed on — what `wsShare` covers. */
   let boardId: string;
   let workspaceId: string;
@@ -66,33 +74,23 @@ describe('link shares over HTTP', () => {
       },
     });
 
-  /** A request to the public share host, optionally carrying a session. */
-  const pub = (path: string, cookie?: string, init: RequestInit = {}) =>
+  /**
+   * A request to a share's own hostname, optionally carrying that share's
+   * Access token. With no visitor it is the caller who proves nothing, which
+   * is what every 401 below is about. `soloShare` supplies the hostname in
+   * that case, because a request has to name SOME share host to be a share
+   * request at all.
+   */
+  const pub = (path: string, visitor?: MintedShare, init: RequestInit = {}) =>
     fetch(`${base}${path}`, {
       redirect: 'manual',
       ...init,
       headers: {
-        host: PUBLIC_HOST,
-        ...(cookie ? { cookie: `${SHARE_COOKIE}=${cookie}` } : {}),
+        host: (visitor ?? soloShare).host,
+        ...(visitor ? { 'cf-access-jwt-assertion': visitor.jwt } : {}),
         ...((init.headers as Record<string, string>) ?? {}),
       },
     });
-
-  /** A share URL's path+query, as a visitor's browser sends it. */
-  const signedPath = (shareUrl: string): string => {
-    const u = new URL(shareUrl);
-    return `${u.pathname}${u.search}`;
-  };
-
-  /** Redeem a signed share URL and return the session cookie value. */
-  const redeem = async (shareUrl: string): Promise<string> => {
-    const r = await pub(signedPath(shareUrl));
-    expect(r.status).toBe(302);
-    const setCookie = r.headers.get('set-cookie') ?? '';
-    const m = setCookie.match(new RegExp(`${SHARE_COOKIE}=([^;]+)`));
-    expect(m).not.toBeNull();
-    return m?.[1] ?? '';
-  };
 
   beforeAll(async () => {
     dataDir = mkdtempSync(join(tmpdir(), 'link-share-data-'));
@@ -106,11 +104,11 @@ describe('link shares over HTTP', () => {
     soloFolder = mkdtempSync(join(tmpdir(), 'link-share-solo-'));
     writeFileSync(join(soloFolder, 'solo.md'), '# Solo\n\nBody.\n');
 
+    access = await accessHarness();
     handle = createServer({
       port: 0,
       dataDir,
-      // No cfAccess, no account id, no API token — link mode needs none.
-      share: { config: { publicHostname: PUBLIC_HOST } },
+      ...access.serverOptions,
     });
     base = `http://localhost:${handle.port}`;
 
@@ -163,21 +161,8 @@ describe('link shares over HTTP', () => {
     soloPath = encodeURIComponent(SOLO);
     expect(SOLO).not.toBe('');
 
-    const dr = await local('/api/share/link', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ workspaceId: soloBoardId, label: 'solo review' }),
-    });
-    expect(dr.status).toBe(200);
-    soloShare = ((await dr.json()) as { share: typeof soloShare }).share;
-
-    const wr = await local('/api/share/link', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ workspaceId: boardId }),
-    });
-    expect(wr.status).toBe(200);
-    wsShare = ((await wr.json()) as { share: typeof wsShare }).share;
+    soloShare = await mintAccessShare(base, access, soloBoardId, { label: 'solo review' });
+    wsShare = await mintAccessShare(base, access, boardId);
   });
 
   afterAll(async () => {
@@ -193,27 +178,33 @@ describe('link shares over HTTP', () => {
     local('/api/share/link', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ workspaceId: soloBoardId, ...extra }),
+      body: JSON.stringify({
+        workspaceId: soloBoardId,
+        allowDomains: ['@partner.example'],
+        ...extra,
+      }),
     });
 
   describe('minting', () => {
-    it('needs no Cloudflare credentials and defaults to a two-week TTL', () => {
+    it('defaults to a two-week TTL', () => {
       const days = (soloShare.expiresAt - Date.now()) / 86_400_000;
       expect(days).toBeGreaterThan(13.9);
       expect(days).toBeLessThan(14.1);
     });
 
-    it('mints a signed URL, not a slug — the signature is the credential', () => {
-      expect(soloShare.slug).toBeUndefined();
+    it('mints a hostname of its own — the URL carries no secret at all', () => {
       const u = new URL(soloShare.url);
-      expect(u.searchParams.get('sig')).toMatch(/^[0-9a-f]{64}$/);
-      expect(new URL(wsShare.url).searchParams.get('sig')).not.toBe(u.searchParams.get('sig'));
+      expect(u.hostname).toBe(soloShare.host);
+      expect(u.search).toBe('');
+      // Two shares of two boards are two hostnames and two audiences, which
+      // is what makes "a token for one share is refused at the other"
+      // possible below.
+      expect(wsShare.host).not.toBe(soloShare.host);
+      expect(wsShare.jwt).not.toBe(soloShare.jwt);
     });
 
-    it('points the URL at the public host', () => {
-      const u = new URL(soloShare.url);
-      expect(u.hostname).toBe(PUBLIC_HOST);
-      expect(u.pathname).toBe(`/share/${soloShare.shareId}`);
+    it('points the URL at the board it shares', () => {
+      expect(new URL(soloShare.url).pathname).toBe(`/workspaces/${soloBoardId}`);
     });
 
     it('honours a caller-supplied TTL', async () => {
@@ -262,7 +253,7 @@ describe('link shares over HTTP', () => {
       const ghost = await local('/api/share/link', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ workspaceId: 'ghost-ws' }),
+        body: JSON.stringify({ workspaceId: 'ghost-ws', allowDomains: ['@partner.example'] }),
       });
       expect(ghost.status).toBe(404);
       // Positive control: a real BOARD id on the same route mints.
@@ -276,7 +267,7 @@ describe('link shares over HTTP', () => {
       const r = await local('/api/share/link', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ workspaceId: soloWorkspaceId }),
+        body: JSON.stringify({ workspaceId: soloWorkspaceId, allowDomains: ['@partner.example'] }),
       });
       expect(r.status).toBe(410);
       const body = (await r.json()) as { error: string; hint: string };
@@ -331,7 +322,7 @@ describe('link shares over HTTP', () => {
         const r = await local('/api/share/link', {
           method: 'POST',
           headers: { 'content-type': 'application/json' },
-          body: JSON.stringify(body),
+          body: JSON.stringify({ ...body, allowDomains: ['@partner.example'] }),
         });
         expect(r.status, JSON.stringify(body)).toBe(410);
         expect(((await r.json()) as { error: string }).error).toBe('per_doc_sharing_removed');
@@ -344,7 +335,7 @@ describe('link shares over HTTP', () => {
       const r = await local('/api/share/link', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ label: 'no scope' }),
+        body: JSON.stringify({ label: 'no scope', allowDomains: ['@partner.example'] }),
       });
       expect(r.status).toBe(400);
       expect(((await r.json()) as { error: string }).error).toBe('workspaceId required');
@@ -364,33 +355,28 @@ describe('link shares over HTTP', () => {
     });
   });
 
-  describe('redemption', () => {
-    it('exchanges the signed URL for a session and lands ON THE BOARD', async () => {
+  describe('landing', () => {
+    it('the share URL opens the board, with the token Access already holds', async () => {
       // It used to land on `/review/<entry doc>`. A board share has no entry
-      // doc to resolve — that whole resolution step went with board-only
-      // sharing — so redemption lands on the board and the visitor navigates
-      // from there. The member doc is still reachable; the next suite opens it.
-      const r = await pub(signedPath(soloShare.url));
-      expect(r.status).toBe(302);
-      expect(r.headers.get('location')).toBe(`/workspaces/${encodeURIComponent(soloBoardId)}`);
-      const cookie = r.headers.get('set-cookie') ?? '';
-      expect(cookie).toContain('HttpOnly');
-      expect(cookie).toContain('SameSite=Lax');
-      // The signed URL must not ride out in a Referer to anything downstream.
-      expect(r.headers.get('referrer-policy')).toBe('no-referrer');
+      // doc to resolve — that resolution went with board-only sharing — so
+      // the URL IS the board page and the visitor navigates from there.
+      const u = new URL(soloShare.url);
+      expect(u.pathname).toBe(`/workspaces/${soloBoardId}`);
+      const r = await pub(u.pathname, soloShare);
+      expect(r.status).toBe(200);
     });
 
-    it('gives nothing away about which shares exist', async () => {
-      const unknown = await pub(`/share/${'0'.repeat(16)}?exp=99999999999&sig=${'0'.repeat(64)}`);
-      const malformed = await pub('/share/not-a-share');
-      expect(unknown.status).toBe(404);
-      expect(malformed.status).toBe(404);
-      expect(await unknown.text()).toBe(await malformed.text());
+    it('gives nothing away about which share hostnames exist', async () => {
+      const unknown = await fetch(`${base}/workspaces/${soloBoardId}`, {
+        headers: { host: `share-never-minted.${soloShare.host.split('.').slice(1).join('.')}` },
+      });
+      expect(unknown.status).toBe(403);
+      expect(((await unknown.json()) as { error: string }).error).toBe('unknown_host');
     });
   });
 
-  describe('the session is required', () => {
-    it('refuses every other path on the public host without one', async () => {
+  describe('the Access token is required', () => {
+    it('refuses every other path on a share host without one', async () => {
       for (const p of [
         `/review/${soloPath}`,
         `/api/docs/${soloPath}`,
@@ -402,11 +388,17 @@ describe('link shares over HTTP', () => {
       }
     });
 
-    it('refuses a forged cookie', async () => {
-      // Right shape, wrong key — the attacker doesn't have the HMAC secret.
-      const forged = signSession(soloShare.shareId, 'f'.repeat(64));
-      expect((await pub(`/api/docs/${soloPath}`, forged)).status).toBe(401);
-      expect((await pub(`/api/docs/${soloPath}`, `${soloShare.shareId}.`)).status).toBe(401);
+    it("refuses another share's token, and a token that is not a token", async () => {
+      // The audience is per-share, so a genuine token from the workspace
+      // share is refused here even though it is validly signed by the same
+      // Access team.
+      const wrongShare = { ...soloShare, jwt: wsShare.jwt };
+      expect((await pub(`/api/docs/${soloPath}`, wrongShare)).status).toBe(401);
+      const garbage = { ...soloShare, jwt: 'not.a.jwt' };
+      expect((await pub(`/api/docs/${soloPath}`, garbage)).status).toBe(401);
+      // Positive control: the share's OWN token reads that doc, so the
+      // refusals above are the token and not the path.
+      expect((await pub(`/api/docs/${soloPath}`, soloShare)).status).toBe(200);
     });
   });
 
@@ -417,9 +409,9 @@ describe('link shares over HTTP', () => {
     // always in scope" base case went away with per-doc sharing and the field
     // that expressed it went with board-only sharing, so a doc outside the
     // board is refused even here.
-    let cookie: string;
-    beforeAll(async () => {
-      cookie = await redeem(soloShare.url);
+    let cookie: MintedShare;
+    beforeAll(() => {
+      cookie = soloShare;
     });
 
     it('reaches the doc filed on its board', async () => {
@@ -448,7 +440,7 @@ describe('link shares over HTTP', () => {
       const ok = await local('/api/share/link', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ workspaceId: boardId }),
+        body: JSON.stringify({ workspaceId: boardId, allowDomains: ['@partner.example'] }),
       });
       expect(ok.status).toBe(200);
       const minted = ((await ok.json()) as { share: { shareId: string } }).share;
@@ -466,10 +458,10 @@ describe('link shares over HTTP', () => {
     });
   });
 
-  describe('a workspace link browses the whole set', () => {
-    let cookie: string;
-    beforeAll(async () => {
-      cookie = await redeem(wsShare.url);
+  describe('a workspace share browses the whole set', () => {
+    let cookie: MintedShare;
+    beforeAll(() => {
+      cookie = wsShare;
     });
 
     it('opens the entry doc and lists the tree', async () => {
@@ -513,23 +505,16 @@ describe('link shares over HTTP', () => {
      * workspace link that replaces it DOES carry the id, because it can
      * actually use it.
      */
-    let wsCookie: string;
+    let wsCookie: MintedShare;
     beforeAll(async () => {
-      const r = await local('/api/share/link', {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ workspaceId: boardId }),
-      });
-      expect(r.status).toBe(200);
-      const { share } = (await r.json()) as { share: { url: string } };
-      wsCookie = await redeem(share.url);
+      wsCookie = await mintAccessShare(base, access, boardId);
     });
 
     it('refuses to mint a link scoped to one member of a workspace', async () => {
       const r = await local('/api/share/link', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ docId: entryDocId }),
+        body: JSON.stringify({ docId: entryDocId, allowDomains: ['@partner.example'] }),
       });
       expect(r.status).toBe(410);
       expect(((await r.json()) as { error: string }).error).toBe('per_doc_sharing_removed');
@@ -539,7 +524,7 @@ describe('link shares over HTTP', () => {
       const ok = await local('/api/share/link', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ workspaceId: boardId }),
+        body: JSON.stringify({ workspaceId: boardId, allowDomains: ['@partner.example'] }),
       });
       expect(ok.status).toBe(200);
       await local(
@@ -572,26 +557,23 @@ describe('link shares over HTTP', () => {
   });
 
   describe('revocation and expiry are immediate', () => {
-    it('a revoked share kills a session already in a browser', async () => {
-      const mk = await mintSolo();
-      const { share } = (await mk.json()) as { share: { shareId: string; url: string } };
-      const cookie = await redeem(share.url);
-      expect((await pub(`/api/docs/${soloPath}`, cookie)).status).toBe(200);
+    it('a revoked share kills a visitor already in a browser', async () => {
+      const share = await mintAccessShare(base, access, soloBoardId);
+      expect((await pub(`/api/docs/${soloPath}`, share)).status).toBe(200);
 
       const del = await local(`/api/share/${share.shareId}`, { method: 'DELETE' });
       expect(del.status).toBe(200);
 
-      // Same cookie, same browser — refused on the very next request.
-      expect((await pub(`/api/docs/${soloPath}`, cookie)).status).toBe(401);
-      // And the signed URL no longer redeems.
-      expect((await pub(signedPath(share.url))).status).toBe(404);
+      // Same token, same browser — refused on the very next request, because
+      // the hostname no longer resolves to a share at all.
+      const after = await pub(`/api/docs/${soloPath}`, share);
+      expect(after.status).toBe(403);
+      expect(((await after.json()) as { error: string }).error).toBe('unknown_host');
     });
 
     it('an expired share stops working without anyone touching the browser', async () => {
-      const mk = await mintSolo({ ttlSeconds: 60 });
-      const { share } = (await mk.json()) as { share: { shareId: string; url: string } };
-      const cookie = await redeem(share.url);
-      expect((await pub(`/api/docs/${soloPath}`, cookie)).status).toBe(200);
+      const share = await mintAccessShare(base, access, soloBoardId, { ttlSeconds: 60 });
+      expect((await pub(`/api/docs/${soloPath}`, share)).status).toBe(200);
 
       // Wind the expiry into the past via the TTL route's own validation
       // path — negative TTLs are refused, so expire it by re-issuing at 1s
@@ -602,15 +584,13 @@ describe('link shares over HTTP', () => {
       expect(live).toBeDefined();
       if (live) live.expiresAt = Date.now() - 1000;
 
-      expect((await pub(`/api/docs/${soloPath}`, cookie)).status).toBe(401);
-      expect((await pub(signedPath(share.url))).status).toBe(404);
+      expect((await pub(`/api/docs/${soloPath}`, share)).status).toBe(403);
     });
   });
 
   describe('an expired share cannot be resurrected', () => {
-    it('refuses to extend it — a leaked URL must not come back to life', async () => {
-      const mk = await mintSolo();
-      const { share } = (await mk.json()) as { share: { shareId: string; url: string } };
+    it('refuses to extend it — a dead grant must not come back to life', async () => {
+      const share = await mintAccessShare(base, access, soloBoardId);
       const live = handle.shares?.list().find((s) => s.shareId === share.shareId);
       if (live) live.expiresAt = Date.now() - 1000;
 
@@ -620,8 +600,8 @@ describe('link shares over HTTP', () => {
         body: JSON.stringify({ ttlSeconds: 7 * 24 * 3600 }),
       });
       expect(r.status).toBe(404);
-      // The old URL stays dead.
-      expect((await pub(signedPath(share.url))).status).toBe(404);
+      // …and the hostname stays dead for the visitor holding its token.
+      expect((await pub(`/api/docs/${soloPath}`, share)).status).toBe(403);
     });
   });
 
@@ -643,12 +623,10 @@ describe('link shares over HTTP', () => {
       // HTTP request, but a websocket is authorized ONCE at its upgrade.
       // Probing the deployed server showed the socket stayed open and
       // WRITABLE after unshare while HTTP correctly returned 401.
-      const mint = await mintSolo();
-      const share = ((await mint.json()) as { share: { shareId: string; url: string } }).share;
-      const cookie = await redeem(share.url);
+      const share = await mintAccessShare(base, access, soloBoardId);
 
       const ws = new WebSocket(`ws://localhost:${handle.port}/y/${soloPath}`, {
-        headers: { host: PUBLIC_HOST, cookie: `${SHARE_COOKIE}=${cookie}` },
+        headers: share.headers,
       } as unknown as string[]);
       const opened = await new Promise<boolean>((resolve) => {
         ws.addEventListener('open', () => resolve(true));
@@ -672,11 +650,10 @@ describe('link shares over HTTP', () => {
       expect(await closedCode).toBe(1008);
     });
 
-    it('leaves a tailnet socket alone when a share is revoked', async () => {
-      // Bryan's own editor is not authorized by any share and must not be
-      // hung up on because someone else's link was revoked.
-      const mint = await mintSolo();
-      const share = ((await mint.json()) as { share: { shareId: string } }).share;
+    it('leaves the operator’s own socket alone when a share is revoked', async () => {
+      // The owner's editor is not authorized by any share and must not be
+      // hung up on because someone else's invitation was revoked.
+      const share = await mintAccessShare(base, access, soloBoardId);
 
       const ws = new WebSocket(`ws://localhost:${handle.port}/y/${soloPath}`);
       const opened = await new Promise<boolean>((resolve) => {
@@ -697,17 +674,17 @@ describe('link shares over HTTP', () => {
     });
   });
 
-  describe('guest identity is scoped to the SHARE', () => {
-    it('gives the same browser different guest ids on two links to one workspace', async () => {
-      // Two links to the same workspace are two audiences. Seeding the guest
-      // id from the doc (or from the workspace) would attribute comments on a
-      // freshly minted link to the previous link's visitor.
+  describe('identity comes from the proven email, not the share', () => {
+    it('gives one person the SAME id on two shares of one board', async () => {
+      // The inverse of what link mode did. A link visitor was anonymous, so
+      // each link had to mint its own `guest-` id to keep two strangers
+      // apart. Access proves an address, so the same person is the same
+      // author wherever they were invited — and the body they send cannot
+      // say otherwise.
       const ids: string[] = [];
       for (const label of ['first', 'second']) {
-        const mint = await mintSolo({ label });
-        const share = ((await mint.json()) as { share: { shareId: string; url: string } }).share;
-        const cookie = await redeem(share.url);
-        const r = await pub(`/api/docs/${soloPath}/threads/by_find`, cookie, {
+        const share = await mintAccessShare(base, access, soloBoardId, { label });
+        const r = await pub(`/api/docs/${soloPath}/threads/by_find`, share, {
           method: 'POST',
           headers: { 'content-type': 'application/json' },
           body: JSON.stringify({
@@ -723,9 +700,9 @@ describe('link shares over HTTP', () => {
         ids.push(thread.comments[0]?.author.id ?? '');
         await local(`/api/share/${share.shareId}`, { method: 'DELETE' });
       }
-      expect(ids[0]).toStartWith('guest-');
-      expect(ids[1]).toStartWith('guest-');
-      expect(ids[0]).not.toBe(ids[1]);
+      expect(ids[0]).toBeTruthy();
+      expect(ids[0]).not.toBe('same-browser'); // never the claimed id
+      expect(ids[1]).toBe(ids[0]);
     });
   });
 });

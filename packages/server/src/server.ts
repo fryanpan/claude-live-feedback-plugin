@@ -185,7 +185,7 @@ import {
 } from './routes/workspaces.ts';
 import { captureServerError, routePatternForSpan, withRouteSpan } from './sentry.ts';
 import { CfApi } from './share/cf-api.ts';
-import { SHARE_COOKIE, loadCookieKey, readCookie, verifySession } from './share/link-session.ts';
+import { loadCookieKey, readCookie } from './share/link-session.ts';
 import { redactHubEventForVisitor } from './share/redact-hub-events.ts';
 import {
   redactMetaForVisitor,
@@ -340,6 +340,33 @@ export interface ServerOptions {
    * agents are outside the gate and what that boundary is worth.
    */
   requireSignInToWrite?: boolean;
+  /**
+   * ACCESS-ONLY browser hosts. Defaults to TRUE — every hostname that is not
+   * loopback is browser-facing and must carry a verified Cloudflare Access
+   * identity, so the tailnet name, this machine's LAN names and
+   * `trustedHosts` stop being an unauthenticated door (Bryan, 2026-09-02:
+   * *"No internal hole."*). See rule 3 in middleware/host-guard.ts for what
+   * the rule is and what it closes.
+   *
+   * `false` restores the pre-2026-09-02 classification. The tests that
+   * exercise the LAN-alias grant pass it explicitly, the same way the tests
+   * of other gates pass `requireSignInToWrite: false`; the deployment switch
+   * is `CW_ACCESS_ONLY_BROWSER_HOSTS`.
+   */
+  accessOnlyBrowserHosts?: boolean;
+  /**
+   * Whether this server offers its OWN emailed-code sign-in: the `/signin`
+   * page and the `/api/auth/start` + `/api/auth/verify` routes.
+   *
+   * Defaults to the inverse of `accessOnlyBrowserHosts`. Under access-only
+   * every browser has already proven an address at Cloudflare Access, so a
+   * second sign-in is a second authentication for the same person and a
+   * "you are not signed in" dead end on a surface where nobody can be
+   * un-signed-in. Nothing else changes: sessions minted before it was turned
+   * off are still honoured, and `/api/auth/session`, `/api/auth/profile` and
+   * `/api/auth/logout` all stay open.
+   */
+  emailCodeSignIn?: boolean;
   /**
    * Sentry DSN for the BROWSER apps (`CW_SENTRY_DSN`). Server config on the
    * box, never the public repo: a DSN is a public client key, but committing
@@ -1032,20 +1059,14 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
     envLocked: opts.sharingEnvLocked ?? false,
   });
 
-  // HMAC key for link-mode session cookies. Generated on first use, mode
-  // 600 — whoever can read it can mint a session for any share.
+  // Root HMAC key for this server's own tokens — the email session cookie and
+  // the widget popup token derive from it. Generated on first use, mode 600.
+  // It used to sign share session cookies too; link-mode shares are retired
+  // and a share visitor is now proven by Cloudflare Access instead.
   let cookieKeyCache: string | null = null;
   const cookieKey = (): string => {
     cookieKeyCache ??= loadCookieKey(dataDir);
     return cookieKeyCache;
-  };
-
-  /** The shareId behind a link-mode session cookie, or null. */
-  const linkSessionShareId = (req: Request): string | null => {
-    if (!shares) return null;
-    const shareId = verifySession(readCookie(req.headers.get('cookie'), SHARE_COOKIE), cookieKey());
-    if (!shareId) return null;
-    return shares.findLive(shareId)?.shareId ?? null;
   };
 
   /**
@@ -1069,18 +1090,6 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
     if (!share?.workspaceId) return null;
     if (!taskStore.getWorkspace(share.workspaceId)) return null;
     return { workspaceId: share.workspaceId };
-  };
-
-  /** Resolve a link-mode session cookie to what it may reach, or null. */
-  const linkSessionTarget = (req: Request): ShareTarget | null => {
-    if (!shares) return null;
-    const shareId = verifySession(readCookie(req.headers.get('cookie'), SHARE_COOKIE), cookieKey());
-    if (!shareId) return null;
-    // Re-checked every request, so revoking or expiring a share takes
-    // effect immediately rather than when a browser's cookie lapses.
-    const share = shares.findLive(shareId);
-    if (!share || share.mode !== 'link') return null;
-    return boardShareTarget(share);
   };
 
   // When shares is wired, automatically derive the cf-access audience from
@@ -4522,6 +4531,10 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
   // OTHER gates that write from a browser pass `false` explicitly; the
   // deployment switch is `CW_REQUIRE_SIGNIN_TO_WRITE` in bin.ts.
   const requireSignInToWrite = opts.requireSignInToWrite ?? true;
+  // ON by default (Bryan, 2026-09-02). Off restores the tailnet/LAN grant;
+  // the deployment switch is `CW_ACCESS_ONLY_BROWSER_HOSTS` in bin.ts.
+  const accessOnlyBrowserHosts = opts.accessOnlyBrowserHosts ?? true;
+  const emailCodeSignIn = opts.emailCodeSignIn ?? !accessOnlyBrowserHosts;
   /** Which signed Recall webhook ids have already been accepted. */
   const webhookReplayGuard = new WebhookReplayGuard();
   // Teach the owner check the owner's email identity. Without this the check
@@ -4808,12 +4821,14 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
     codeSender,
     requireEmailAuth,
     requireSignInToWrite,
+    emailCodeSignIn,
     defaultHubWorkspaceName: DEFAULT_HUB_WORKSPACE_NAME,
+    // The operator allowlist doubles as the audience a `share_link` with no
+    // `allowDomains` admits. Same list, same source; see the field's doc.
+    defaultShareAudience: [...proxiedTrustedEmails],
     j,
     safeJson,
-    boardShareTarget,
     clientKeyFor,
-    cookieKey,
     emailSessionKey,
     widgetTokenKey,
     isSecureRequest,
@@ -5081,8 +5096,10 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
          *     verified one is believed (Bryan, 2026-08-29 — a verified name
          *     is never worse than a typed one).
          *  2. A share visitor with nothing proven stays a `guest-` — that
-         *     path is the template this work copies, not a thing it replaces,
-         *     and link mode keeps minting guests.
+         *     path is the template this work copies, not a thing it replaces.
+         *     Since every share host sits behind Cloudflare Access, a visitor
+         *     reaching this rung is a deployment with no verifier wired, not a
+         *     normal anonymous reviewer.
          *  3. Otherwise the claimed body, exactly as today. This is the rung
          *     every agent, every MCP call and every un-authenticated browser
          *     lands on, so a request with no session behaves identically
@@ -5210,13 +5227,21 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
             // applies to it — see the field on TrustedHostOpts for why both
             // absences are deliberate.
             recallCallbackHost,
+            // Access on every browser-facing hostname (rule 3 in host-guard).
+            // `loopbackPeer` is the half the Host header cannot fake: both of
+            // this deployment's proxies dial us over loopback, so it does not
+            // separate a tunnel visitor from the box on its own — the Host
+            // and the `cf-ray` veto do that — but it does stop a LAN or
+            // tailnet client typing `Host: localhost` and being served the
+            // product with no identity at all.
+            accessOnly: accessOnlyBrowserHosts,
+            loopbackPeer: isLoopbackAddress(server.requestIP(req)?.address),
             lookupShare: (h) => {
               // LIVE, not merely known: an expired share's hostname must stop
               // being a share hostname, or expiry never takes effect for
               // Access mode (see Shares.findLiveByHostname).
               return boardShareTarget(shares?.findLiveByHostname(h));
             },
-            linkHost: shares?.publicHostname ?? null,
           });
           if (decision.kind === 'deny') {
             return j(403, { error: 'unknown_host' });
@@ -5258,7 +5283,6 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           // mean.
           if (
             (decision.kind === 'share' ||
-              decision.kind === 'link' ||
               decision.kind === 'collab' ||
               decision.kind === 'proxied-local') &&
             !sharingGate.isEnabled()
@@ -5284,25 +5308,6 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
             visitor = decision.target;
             visitorShareId =
               shares?.findLiveByHostname(req.headers.get('host') ?? '')?.shareId ?? null;
-          } else if (decision.kind === 'link') {
-            // Redeeming a link is the ONLY thing reachable here without a
-            // session — that request is what mints one. `/s/<slug>` is the
-            // RETIRED unsigned form: it must stay reachable to answer its
-            // not-found page, and answers nothing else.
-            // Matched with the SAME regexes the routes use. A `startsWith`
-            // prefix let any GET under the redeem path skip the session check
-            // — inert today because nothing else is mounted there and URL
-            // normalizes `..`, but it becomes a hole the moment something is.
-            const redeeming = req.method === 'GET' && /^\/(?:share|s)\/[^/]+$/.test(pathname);
-            if (!redeeming) {
-              const target = linkSessionTarget(req);
-              if (!target) return j(401, { error: 'no_share_session' });
-              if (!shareScopeAllows(pathname, req.method, target, shareWorkspacesOf)) {
-                return j(403, { error: 'out_of_share_scope' });
-              }
-              visitor = target;
-              visitorShareId = linkSessionShareId(req);
-            }
           } else if (decision.kind === 'collab') {
             // The collaboration hostname: one stable public address, an
             // Access application in front of it, and the SHARE surface behind
@@ -5419,8 +5424,8 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
         //
         // They sit AFTER the host decision on purpose, so a share visitor
         // reaches them only if `shareScopeAllows` lets them, and it does not:
-        // link mode keeps minting `guest-` identities and this is not a way
-        // around that.
+        // a share visitor is already proven by Cloudflare Access, and this is
+        // not a second way to claim an identity on a share host.
         // --- Widget popup-token gate ---
         // Resolve a presented token ONCE for the whole request, and fail
         // loudly: an invalid token 401s rather than silently downgrading the
@@ -6669,6 +6674,11 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
         // the tailnet reaches everything signed out; this page only lets a
         // person claim who they are (`/api/auth/*` above).
         if (pathname === '/signin' && req.method === 'GET') {
+          // Turned off under access-only: the page's whole job is to prove an
+          // address, and Access proved one before the request arrived. 404
+          // rather than a redirect, so nothing links here and nothing lands
+          // here — a dead end is exactly what this removes.
+          if (!emailCodeSignIn) return j(404, { error: 'not_found' });
           return new Response(
             renderSigninShell(browserSentry, readAppAssetManifest(markdownAppDist)),
             { headers: HTML_SHELL_HEADERS },

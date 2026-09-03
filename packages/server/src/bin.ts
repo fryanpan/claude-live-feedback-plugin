@@ -37,6 +37,8 @@ const {
   sharingEnvLocked,
   requireEmailAuth,
   requireSignInToWrite,
+  accessOnlyBrowserHosts,
+  emailCodeSignIn,
   ownerEmail,
   trustedHosts,
   cfAccess,
@@ -180,6 +182,8 @@ while (!handle) {
       sharingEnvLocked,
       requireEmailAuth,
       requireSignInToWrite,
+      accessOnlyBrowserHosts,
+      emailCodeSignIn,
       ...(ownerEmail ? { ownerEmail } : {}),
       // Browser Sentry DSN — box config, never the repo (see ServerOptions).
       ...(sentryDsn ? { sentryDsn } : {}),
@@ -303,11 +307,6 @@ if (share) {
     `[feedback]   sharing:    ${st.enabled ? 'ON — external share hosts are served' : 'OFF — every external host gets 403'}` +
       `${st.locked ? ' (LOCKED by CW_SHARING_DISABLED)' : ''}` +
       `${st.loadError ? ` (failed closed: ${st.loadError})` : ''}`,
-  );
-}
-if (share?.config.publicHostname) {
-  console.log(
-    `[feedback]   share-link: https://${share.config.publicHostname}/share/<id>?exp=…&sig=…`,
   );
 }
 if (share?.config.baseHostname && share.config.cfAccountId) {

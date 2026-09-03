@@ -129,6 +129,12 @@ describe('POST /api/deploy over a real socket', () => {
       // the LAN probe below would be refused as an unknown host and the test
       // would pass for the wrong reason.
       trustedHosts: nonLoopbackAddresses(),
+      // This file's subject is the DEPLOY route's own loopback rule, which
+      // now sits behind the access-only browser gate. With the gate on, every
+      // probe below would be refused one layer earlier and this file would
+      // assert the outer gate twice over instead of the route. The outer gate
+      // has its own file (access-only-browser-hosts.test.ts).
+      accessOnlyBrowserHosts: false,
       deployer: new Deployer({
         run: async () => {
           runs.n++;

@@ -85,14 +85,23 @@ describe('the served shells carry the Sentry DSN and page type only when configu
     srcDir = mkdtempSync(join(tmpdir(), 'sentry-src-'));
     appDistA = fakeAppDist();
     appDistB = fakeAppDist();
+    // emailCodeSignIn: the server's own emailed-code sign-in is off by default now
+    // that every browser-facing hostname sits behind Cloudflare Access. These tests
+    // are about that flow, so they ask for it explicitly.
     withDsn = createServer({
       port: 0,
       dataDir: dirA,
       markdownAppDistDir: appDistA,
       sentryDsn: FAKE_DSN,
       sentryRelease: FAKE_RELEASE,
+      emailCodeSignIn: true,
     });
-    without = createServer({ port: 0, dataDir: dirB, markdownAppDistDir: appDistB });
+    without = createServer({
+      port: 0,
+      dataDir: dirB,
+      markdownAppDistDir: appDistB,
+      emailCodeSignIn: true,
+    });
     baseA = `http://localhost:${withDsn.port}`;
     baseB = `http://localhost:${without.port}`;
     wsA = await seed(baseA);

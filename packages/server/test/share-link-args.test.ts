@@ -10,7 +10,7 @@
  * the server half — whatever a bundle forwards, the route either honours
  * it or names it in a 4xx.
  *
- * Link mode only: no Cloudflare credentials, no network.
+ * Access mode: the Cloudflare REST client is faked, so no network.
  */
 import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
 import { mkdtempSync, rmSync } from 'node:fs';
@@ -18,8 +18,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { type ServerHandle, createServer } from '../src/server.ts';
 import type { Share, ShareConfig } from '../src/share/types.ts';
+import { type AccessHarness, accessHarness } from './access-share.ts';
 
-const PUBLIC_HOST = 'feedback.example.test';
 const TWO_WEEKS = 14 * 24 * 3600;
 
 describe('share_link arguments are honoured or refused, never dropped', () => {
@@ -43,10 +43,15 @@ describe('share_link arguments are honoured or refused, never dropped', () => {
 
   const start = async (config: Partial<ShareConfig> = {}) => {
     dataDir = mkdtempSync(join(tmpdir(), 'share-link-args-'));
+    const access: AccessHarness = await accessHarness();
     handle = createServer({
       port: 0,
       dataDir,
-      share: { config: { publicHostname: PUBLIC_HOST, ...config } },
+      ...access.serverOptions,
+      share: {
+        ...access.serverOptions.share,
+        config: { ...access.serverOptions.share.config, ...config },
+      },
     });
     base = `http://localhost:${handle.port}`;
     const board = await local('/api/workspaces', { name: 'Args board' });
@@ -67,7 +72,10 @@ describe('share_link arguments are honoured or refused, never dropped', () => {
     beforeEach(() => start());
 
     it('a no-args call still mints a two-week board share (the pre-fix behaviour)', async () => {
-      const r = await local('/api/share/link', { workspaceId: boardId });
+      const r = await local('/api/share/link', {
+        allowDomains: ['@partner.example'],
+        workspaceId: boardId,
+      });
       expect(r.status).toBe(200);
       const body = (await r.json()) as { share: Share; ttlClamped?: unknown };
       expect(body.share.surface).toBe('workspace');
@@ -84,7 +92,11 @@ describe('share_link arguments are honoured or refused, never dropped', () => {
         ['1w', 7 * 86400],
         ['90s', 90],
       ] as const) {
-        const r = await local('/api/share/link', { workspaceId: boardId, ttl });
+        const r = await local('/api/share/link', {
+          allowDomains: ['@partner.example'],
+          workspaceId: boardId,
+          ttl,
+        });
         expect(r.status, ttl).toBe(200);
         const body = (await r.json()) as { share: Share; ttlClamped?: unknown };
         expect(ttlOf(body.share), ttl).toBeGreaterThan(seconds - 5);
@@ -94,7 +106,11 @@ describe('share_link arguments are honoured or refused, never dropped', () => {
     });
 
     it('still honours ttlSeconds', async () => {
-      const r = await local('/api/share/link', { workspaceId: boardId, ttlSeconds: 900 });
+      const r = await local('/api/share/link', {
+        allowDomains: ['@partner.example'],
+        workspaceId: boardId,
+        ttlSeconds: 900,
+      });
       expect(r.status).toBe(200);
       const { share } = (await r.json()) as { share: Share };
       expect(ttlOf(share)).toBeGreaterThan(895);
@@ -103,7 +119,11 @@ describe('share_link arguments are honoured or refused, never dropped', () => {
 
     it('refuses an unparsable ttl by value, and mints nothing', async () => {
       for (const ttl of ['fortnight', '15 minutes', '', '1.5h', '-15m', '15M']) {
-        const r = await local('/api/share/link', { workspaceId: boardId, ttl });
+        const r = await local('/api/share/link', {
+          allowDomains: ['@partner.example'],
+          workspaceId: boardId,
+          ttl,
+        });
         expect(r.status, JSON.stringify(ttl)).toBe(400);
         const body = (await r.json()) as { error: string; hint?: string };
         expect(body.error, JSON.stringify(ttl)).toBe('bad_ttl');
@@ -113,20 +133,42 @@ describe('share_link arguments are honoured or refused, never dropped', () => {
     });
 
     it('refuses a zero ttl in either spelling — below the minimum is not a share', async () => {
-      expect((await local('/api/share/link', { workspaceId: boardId, ttl: '0m' })).status).toBe(
-        400,
-      );
-      expect((await local('/api/share/link', { workspaceId: boardId, ttlSeconds: 0 })).status).toBe(
-        400,
-      );
       expect(
-        (await local('/api/share/link', { workspaceId: boardId, ttlSeconds: -1 })).status,
+        (
+          await local('/api/share/link', {
+            allowDomains: ['@partner.example'],
+            workspaceId: boardId,
+            ttl: '0m',
+          })
+        ).status,
+      ).toBe(400);
+      expect(
+        (
+          await local('/api/share/link', {
+            allowDomains: ['@partner.example'],
+            workspaceId: boardId,
+            ttlSeconds: 0,
+          })
+        ).status,
+      ).toBe(400);
+      expect(
+        (
+          await local('/api/share/link', {
+            allowDomains: ['@partner.example'],
+            workspaceId: boardId,
+            ttlSeconds: -1,
+          })
+        ).status,
       ).toBe(400);
       expect(await listShares()).toEqual([]);
     });
 
     it('refuses a ttlSeconds that is not a number instead of falling back to the default', async () => {
-      const r = await local('/api/share/link', { workspaceId: boardId, ttlSeconds: '900' });
+      const r = await local('/api/share/link', {
+        allowDomains: ['@partner.example'],
+        workspaceId: boardId,
+        ttlSeconds: '900',
+      });
       expect(r.status).toBe(400);
       expect(((await r.json()) as { error: string }).error).toBe('bad_ttl');
       expect(await listShares()).toEqual([]);
@@ -134,6 +176,7 @@ describe('share_link arguments are honoured or refused, never dropped', () => {
 
     it('refuses ttl and ttlSeconds together rather than picking one', async () => {
       const r = await local('/api/share/link', {
+        allowDomains: ['@partner.example'],
         workspaceId: boardId,
         ttl: '15m',
         ttlSeconds: 3600,
@@ -145,6 +188,7 @@ describe('share_link arguments are honoured or refused, never dropped', () => {
 
     it('refuses docId by name (a doc-scoped share is not a board share), and mints nothing', async () => {
       const r = await local('/api/share/link', {
+        allowDomains: ['@partner.example'],
         workspaceId: boardId,
         docId: 'security-review',
         ttl: '15m',
@@ -155,7 +199,11 @@ describe('share_link arguments are honoured or refused, never dropped', () => {
     });
 
     it('refuses any argument it does not know, naming it', async () => {
-      const r = await local('/api/share/link', { workspaceId: boardId, expiresIn: '15m' });
+      const r = await local('/api/share/link', {
+        allowDomains: ['@partner.example'],
+        workspaceId: boardId,
+        expiresIn: '15m',
+      });
       expect(r.status).toBe(400);
       const body = (await r.json()) as { error: string; argument: string; hint: string };
       expect(body.error).toBe('unsupported_argument');
@@ -164,7 +212,14 @@ describe('share_link arguments are honoured or refused, never dropped', () => {
       expect(await listShares()).toEqual([]);
 
       // Positive control: the same call without the stray key mints.
-      expect((await local('/api/share/link', { workspaceId: boardId })).status).toBe(200);
+      expect(
+        (
+          await local('/api/share/link', {
+            allowDomains: ['@partner.example'],
+            workspaceId: boardId,
+          })
+        ).status,
+      ).toBe(200);
       expect((await listShares()).length).toBe(1);
     });
   });
@@ -173,7 +228,11 @@ describe('share_link arguments are honoured or refused, never dropped', () => {
     beforeEach(() => start({ maxTtlSeconds: 3600 }));
 
     it('clamps a longer ttl to the max and says so in the response', async () => {
-      const r = await local('/api/share/link', { workspaceId: boardId, ttl: '3d' });
+      const r = await local('/api/share/link', {
+        allowDomains: ['@partner.example'],
+        workspaceId: boardId,
+        ttl: '3d',
+      });
       expect(r.status).toBe(200);
       const body = (await r.json()) as {
         share: Share;
@@ -189,7 +248,10 @@ describe('share_link arguments are honoured or refused, never dropped', () => {
     });
 
     it('clamps the default too — a no-args call cannot exceed the max', async () => {
-      const r = await local('/api/share/link', { workspaceId: boardId });
+      const r = await local('/api/share/link', {
+        allowDomains: ['@partner.example'],
+        workspaceId: boardId,
+      });
       expect(r.status).toBe(200);
       const body = (await r.json()) as { share: Share; ttlClamped?: { requestedSeconds: number } };
       expect(ttlOf(body.share)).toBeLessThanOrEqual(3600);
@@ -197,7 +259,11 @@ describe('share_link arguments are honoured or refused, never dropped', () => {
     });
 
     it('a ttl within the max is applied as asked, with no clamp note', async () => {
-      const r = await local('/api/share/link', { workspaceId: boardId, ttl: '15m' });
+      const r = await local('/api/share/link', {
+        allowDomains: ['@partner.example'],
+        workspaceId: boardId,
+        ttl: '15m',
+      });
       expect(r.status).toBe(200);
       const body = (await r.json()) as { share: Share; ttlClamped?: unknown };
       expect(ttlOf(body.share)).toBeLessThanOrEqual(900);
@@ -206,7 +272,11 @@ describe('share_link arguments are honoured or refused, never dropped', () => {
     });
 
     it('set_share_ttl cannot extend a live share past the max either', async () => {
-      const minted = await local('/api/share/link', { workspaceId: boardId, ttl: '15m' });
+      const minted = await local('/api/share/link', {
+        allowDomains: ['@partner.example'],
+        workspaceId: boardId,
+        ttl: '15m',
+      });
       const { share } = (await minted.json()) as { share: Share };
       const r = await local(`/api/share/${share.shareId}/ttl`, { ttlSeconds: 3 * 86400 });
       expect(r.status).toBe(200);
