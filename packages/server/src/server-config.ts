@@ -338,6 +338,56 @@ export function resolveServerConfig(opts: {
     );
   }
   /**
+   * The SHARE hostname(s) — `share.<domain>` — that share links open on, and
+   * the audience of the ONE Cloudflare Access application in front of them.
+   *
+   * `CW_SHARE_LINK_HOSTS` is a comma-separated list, matched exactly like
+   * every other host list here. The FIRST entry is the one share URLs are
+   * built from, because a URL has to name one hostname; the rest are accepted
+   * so a rename can be rolled out without breaking the links already sent.
+   *
+   * `CF_ACCESS_SHARE_AUD` is deliberately its OWN variable rather than a
+   * reuse of `CF_ACCESS_AUD`. The share application's policy is "everyone,
+   * one-time PIN" and the owner's is not, so a deployment that pointed both
+   * hostnames at one audience would accept an any-email token on the
+   * operator's own address. Honoured only with `CF_ACCESS_TEAM_DOMAIN` AND
+   * this audience set — without an application to verify against, the list is
+   * ignored and the hostname answers 403 unknown_host.
+   */
+  const shareLinkHosts = (env.CW_SHARE_LINK_HOSTS ?? '')
+    .split(',')
+    .map((h) => h.trim())
+    .filter((h) => h !== '');
+  const cfAccessShareAud = env.CF_ACCESS_SHARE_AUD?.trim() || '';
+  const shareLinkReady = Boolean(cfAccessTeam && cfAccessShareAud);
+  if (shareLinkHosts.length && !shareLinkReady) {
+    console.error(
+      `[feedback] IGNORING CW_SHARE_LINK_HOSTS (${shareLinkHosts.join(', ')}): ` +
+        'CF_ACCESS_TEAM_DOMAIN and CF_ACCESS_SHARE_AUD must BOTH be set, or there is no ' +
+        'Access application in front of the share hostname and share links would open ' +
+        'a board to anyone who can reach the tunnel. They will answer 403 unknown_host.',
+    );
+  }
+  if (shareLinkHosts.length && cfAccessShareAud && cfAccessShareAud === cfAccessAud) {
+    console.error(
+      '[feedback] CF_ACCESS_SHARE_AUD equals CF_ACCESS_AUD: the share hostname and the ' +
+        "owner's hostname would be one Access application, so a token minted by anyone " +
+        "who typed an email at the share sign-in would verify on the owner's hostname. " +
+        'Create a SEPARATE Access application for the share hostname and use its audience.',
+    );
+  }
+  const shareHostOverlap = shareLinkHosts.filter((h) =>
+    [...accessTunnelHosts, ...proxiedTrustedHosts].some((c) => c.toLowerCase() === h.toLowerCase()),
+  );
+  if (shareHostOverlap.length) {
+    console.error(
+      `[feedback] CW_SHARE_LINK_HOSTS overlaps another host list (${shareHostOverlap.join(', ')}): ` +
+        'a hostname on both is served as a SHARE host — any-email Access application, and ' +
+        'reach decided by share-link membership. Remove it from one list to say which you meant.',
+    );
+  }
+
+  /**
    * The DEDICATED hostname Recall.ai's backend dials this deployment on — a
    * first-level name (`recall.<domain>`) pointed at the same tunnel, with NO
    * Cloudflare Access application in front of it.
@@ -411,7 +461,8 @@ export function resolveServerConfig(opts: {
   // fails.
   const anyAccessHostConfigured =
     (accessTunnelHosts.length > 0 && accessTunnelReady) ||
-    (proxiedTrustedHosts.length > 0 && proxiedTrustedReady);
+    (proxiedTrustedHosts.length > 0 && proxiedTrustedReady) ||
+    (shareLinkHosts.length > 0 && shareLinkReady);
   if (accessOnlyBrowserHosts && !anyAccessHostConfigured) {
     console.error(
       '[feedback] ACCESS-ONLY is on and no Cloudflare Access hostname is configured: ' +
@@ -503,6 +554,9 @@ export function resolveServerConfig(opts: {
     accessTunnelHosts,
     accessTunnelReady,
     proxiedTrustedHosts,
+    shareLinkHosts,
+    cfAccessShareAud,
+    shareLinkReady,
     recallCallbackHost,
     proxiedTrustedEmails,
     proxiedTrustedReady,
