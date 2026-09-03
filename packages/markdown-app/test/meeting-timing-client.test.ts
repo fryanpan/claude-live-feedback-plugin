@@ -15,7 +15,8 @@ import {
   type MeetingTimingMark,
 } from '@feedback/core';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { type MeetingSocket, mountMeetingStrip, parseTimingMark } from '../src/meeting-strip.ts';
+import { parseTimingMark } from '../src/meeting-protocol.ts';
+import { type MeetingSocket, mountMeetingStrip } from '../src/meeting-strip.ts';
 import { createTimingSession, wantsLatencyTiming } from '../src/meeting-timing-client.ts';
 
 const cleanups: Array<() => void> = [];
