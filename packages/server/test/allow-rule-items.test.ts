@@ -24,11 +24,38 @@ import {
 } from '../src/allow-rules.ts';
 import { normalizeAgent } from '../src/chat-audit.ts';
 import { type ServerHandle, createServer } from '../src/server.ts';
+import { waitFor } from './wait-for.ts';
 
 const PERSON = { id: 'known-sam', name: 'Sam Reviewer', kind: 'person' };
 const LEAD = { id: 'agent-beacon-bot', name: 'Beacon Bot', kind: 'agent' };
 
+/**
+ * A denial is accepted with 202 and filed off the request path, so "has it
+ * been filed yet" is a poll, never a nap. `settle` remains ONLY for the
+ * assertions that something must NOT appear: those cannot be polled, because
+ * the observable they wait on is the absence of one.
+ *
+ * The distinction is not cosmetic. A too-short sleep before a POSITIVE
+ * assertion is a red suite on a loaded machine (this file failed exactly
+ * that way on run 4 of a ten-run sweep, reading 1 item where 2 were due);
+ * before a negative one it can only produce a vacuous pass, which is a
+ * weaker test but never a false alarm.
+ */
+// timed: proving no item is filed — the wait IS the assertion.
 const settle = (ms = 150) => new Promise((r) => setTimeout(r, ms));
+
+/** Poll until the task holds exactly `n` review items, then return them. */
+const untilItems = (
+  read: () => ReturnType<ServerHandle['tasks']['listReviewItems']>,
+  n: number,
+): Promise<ReturnType<ServerHandle['tasks']['listReviewItems']>> =>
+  waitFor(
+    () => {
+      const got = read();
+      return got.length === n ? got : false;
+    },
+    { describe: `${n} review item(s) to be filed` },
+  );
 
 function filesUnder(dir: string): string[] {
   const out: string[] = [];
@@ -55,8 +82,13 @@ describe('allow-rule review items', () => {
     expect(res.ok, `${res.status} ${await res.clone().text()}`).toBe(true);
     return res.json() as Promise<T>;
   };
-  const deny = async (shape: string, agent = LEAD.name) => {
-    const r = await post('/api/agent-notes', { agent, kind: 'denial', text: shape });
+  const deny = async (shape: string, agent = LEAD.name, at?: number) => {
+    const r = await post('/api/agent-notes', {
+      agent,
+      kind: 'denial',
+      text: shape,
+      ...(at === undefined ? {} : { at }),
+    });
     expect(r.status).toBe(202);
     return r;
   };
@@ -130,14 +162,12 @@ describe('allow-rule review items', () => {
     await deny('git push');
     expect(items(taskId)).toHaveLength(0);
     await deny('git push');
-    await settle();
+    const filed = await untilItems(() => items(taskId), 1);
 
     // The denials themselves still reach the pane — the item is in addition.
     const notes = handle.tasks.getTask(taskId)?.notes ?? [];
     expect(notes.filter((n) => n.kind === 'denial' && n.text === 'git push')).toHaveLength(3);
 
-    const filed = items(taskId);
-    expect(filed).toHaveLength(1);
     const item = filed[0];
     expect(item?.review.shape).toBe('decision');
     expect(item?.review.headline).toBe('Allow "git push" for Beacon Bot without asking?');
@@ -178,8 +208,7 @@ describe('allow-rule review items', () => {
     const taskId = await inProgressRow(wsId, 'Wire the index');
 
     for (let i = 0; i < 4; i++) await deny('git push');
-    await settle();
-    expect(items(taskId)).toHaveLength(1);
+    await untilItems(() => items(taskId), 1);
     const itemId = items(taskId)[0]?.id ?? '';
 
     await jj(
@@ -194,7 +223,7 @@ describe('allow-rule review items', () => {
     expect(items(taskId)).toHaveLength(1);
     // A different shape from the same agent is still proposed.
     for (let i = 0; i < 3; i++) await deny('gh pr');
-    await settle();
+    await untilItems(() => items(taskId), 2);
     expect(items(taskId).map((i) => i.review.headline)).toEqual([
       'Allow "git push" for Beacon Bot without asking?',
       'Allow "gh pr" for Beacon Bot without asking?',
@@ -206,8 +235,7 @@ describe('allow-rule review items', () => {
     const taskId = await inProgressRow(wsId, 'Wire the index');
 
     for (let i = 0; i < 3; i++) await deny('git push');
-    await settle();
-    const first = items(taskId)[0];
+    const first = (await untilItems(() => items(taskId), 1))[0];
     await jj(
       await post(`/api/tasks/${taskId}/review-items/${first?.id}/answer`, {
         text: 'Keep blocking',
@@ -215,13 +243,20 @@ describe('allow-rule review items', () => {
         author: PERSON,
       }),
     );
-    await deny('git push');
-    await deny('git push');
+    // Freshness is `denial.ts > answer.ts`, STRICTLY. A denial landing in the
+    // same millisecond as the answer is therefore not fresh, and it is
+    // dropped for good — the tally then needs a fourth block to reach three,
+    // and the second item never arrives at any budget. Racing that boundary
+    // on the wall clock cost this test ~2 runs in 30 under load (measured; at
+    // a 25s budget the item still never came). The fresh denials carry
+    // explicit timestamps instead, so the boundary is stated, not gambled.
+    const fresh = Date.now() + 1_000;
+    await deny('git push', LEAD.name, fresh);
+    await deny('git push', LEAD.name, fresh + 1);
     await settle();
     expect(items(taskId)).toHaveLength(1);
-    await deny('git push');
-    await settle();
-    expect(items(taskId)).toHaveLength(2);
+    await deny('git push', LEAD.name, fresh + 2);
+    await untilItems(() => items(taskId), 2);
   });
 
   it('a non-Bash tool shape proposes the tool name; an unshaped Bash denial proposes nothing', async () => {
@@ -233,9 +268,7 @@ describe('allow-rule review items', () => {
     expect(items(taskId)).toHaveLength(0);
 
     for (let i = 0; i < 3; i++) await deny('WebFetch');
-    await settle();
-    const filed = items(taskId);
-    expect(filed).toHaveLength(1);
+    const filed = await untilItems(() => items(taskId), 1);
     expect(filed[0]?.review.headline).toBe('Allow "WebFetch" for Beacon Bot without asking?');
     expect(filed[0]?.review.detail).toContain('"WebFetch"');
     expect(filed[0]?.review.detail).not.toContain('Bash(');
@@ -245,7 +278,18 @@ describe('allow-rule review items', () => {
     const wsId = await boardWithLead();
     const older = await inProgressRow(wsId, 'Older row');
     await deny('git push');
-    await settle(5);
+    // Wait for the tally to name the older row, not for 5ms: this denial has
+    // to be filed under `older` BEFORE the row closes, and that is a fact
+    // about the sidecar, not about the clock.
+    await waitFor(
+      async () => {
+        const raw = await Bun.file(join(dataDir, ALLOW_RULES_FILENAME))
+          .text()
+          .catch(() => '');
+        return raw.includes(older);
+      },
+      { describe: 'the denial to be tallied against the older row' },
+    );
     // The older row closes before the newer opens: an agent holding two rows
     // at once would have its denial left unfiled rather than guessed onto
     // one of them (see agent-notes-routes.test.ts), and this test is about
@@ -278,11 +322,9 @@ describe('allow-rule review items', () => {
     await settle();
     expect(items(newer)).toHaveLength(0);
     await deny('git push');
-    await settle();
+    const filed = await untilItems(() => items(newer), 1);
 
     expect(items(older)).toHaveLength(0);
-    const filed = items(newer);
-    expect(filed).toHaveLength(1);
     expect(filed[0]?.review.detail).toContain('on Older row and Newer row');
   });
 
@@ -290,8 +332,7 @@ describe('allow-rule review items', () => {
     const wsId = await boardWithLead();
     const taskId = await inProgressRow(wsId, 'Wire the index');
     for (let i = 0; i < 5; i++) await deny('git push');
-    await settle();
-    expect(items(taskId)).toHaveLength(1);
+    await untilItems(() => items(taskId), 1);
     await jj(
       await post(`/api/tasks/${taskId}/review-items/${items(taskId)[0]?.id}/answer`, {
         text: 'Keep blocking',
@@ -309,8 +350,7 @@ describe('allow-rule review items', () => {
     const wsId = await boardWithLead();
     const taskId = await inProgressRow(wsId, 'Wire the index');
     for (let i = 0; i < 3; i++) await deny('git push');
-    await settle();
-    expect(items(taskId)).toHaveLength(1);
+    await untilItems(() => items(taskId), 1);
 
     await handle.stop();
     handle = createServer({ port: 0, dataDir });
