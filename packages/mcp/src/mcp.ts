@@ -112,7 +112,7 @@ function suggestionAuthor(): { id: string; name: string; color: string } {
  * bundle than the deploy source would install. A second literal would be a
  * fourth version site, and this file's history is that version sites drift.
  */
-const PLUGIN_VERSION = '0.1.148';
+const PLUGIN_VERSION = '0.1.149';
 
 /**
  * One nonce per PROCESS, minted at module load and sent on every attach.
@@ -1471,7 +1471,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           sourceDoc: {
             type: 'object',
             description:
-              "The doc these rows were derived from — set it whenever you are filing tasks out of a doc, and every row gets a structured origin ref back to it (no separate link call). `mode` says what kind of doc: 'plan' (the default for a non-huddle doc) files the rows as DRAFTS — visible on the board, in no dispatch read, held in triage until a person approves the plan on the doc page, which releases them; 'discussion' (the default for a huddle/meeting doc) files them live immediately. A later edit to the doc flags still-open derived rows as possibly stale.",
+              "The doc these rows were derived from — set it whenever you are filing tasks out of a doc, and every row gets a structured origin ref back to it (no separate link call). `mode` says what kind of doc: 'plan' (the default for an ordinary doc) files the rows as DRAFTS — visible on the board, in no dispatch read, held in triage until a person approves the plan on the doc page, which releases them; 'discussion' (the default for a meeting notes doc) files them live immediately. A later edit to the doc flags still-open derived rows as possibly stale.",
             properties: {
               docId: { type: 'string' },
               mode: { type: 'string', enum: ['plan', 'discussion'] },

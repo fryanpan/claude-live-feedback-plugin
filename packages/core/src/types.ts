@@ -44,6 +44,24 @@ export type DiffFileStatus = 'added' | 'modified' | 'deleted' | 'renamed';
 export type HuddleKind = 'plan' | 'discussion';
 
 /**
+ * What a doc of this kind is CALLED wherever a person reads it — the title
+ * the server mints for a new one, and the crumb the editor paints beside the
+ * back arrow.
+ *
+ * The product's words are "Plan" and "Meeting notes" (Bryan, 2026-09-02:
+ * *"Drop it from the UI. We can have plans and meeting notes."*). The
+ * identifiers underneath still say huddle; only the words a person reads
+ * changed. An absent kind is a caller from before the split and reads as
+ * meeting notes, which is what an untyped live doc has always been.
+ *
+ * One function, in core, because the server writes the title and the client
+ * writes the crumb: two copies of this word would drift.
+ */
+export function docKindLabel(kind?: HuddleKind): string {
+  return kind === 'plan' ? 'Plan' : 'Meeting notes';
+}
+
+/**
  * A doc's declared repo home: where its on-disk copy belongs, as
  * repo + branch + path-within-the-repo. `repoRoot` may be any checkout of
  * the repo — the server resolves the repo's identity (git common dir) from
@@ -158,7 +176,7 @@ export interface DocMeta {
   /**
    * Which of the Board's two entry flows made this huddle: `'plan'` ("Make a
    * plan" — the doc opens goal-shaped and grows a Plan section) or
-   * `'discussion'` ("Have a discussion" — live notes). Absent on huddles
+   * `'discussion'` ("Have a meeting" — live notes). Absent on huddles
    * from before the split and on docs a caller created without declaring
    * one; every reader must treat absent as "plain huddle" and dress nothing.
    * Beside `huddle` in the CRDT meta for the same reason it is: it describes

@@ -1,4 +1,4 @@
-import type { FeedbackClient, User } from '@feedback/core';
+import type { FeedbackClient, HuddleKind, User } from '@feedback/core';
 import type { BackTarget } from './back-link.ts';
 import type { MountScope } from './mount-scope.ts';
 
@@ -25,6 +25,10 @@ export interface DocMeta {
    *  before there is a task. The crumb names it; nothing else about the
    *  surface changes. */
   huddle?: boolean;
+  /** Which kind it is, which is the word the crumb shows — "Plan" or
+   *  "Meeting notes". Absent on docs from before the split, which read as
+   *  meeting notes. */
+  huddleKind?: HuddleKind;
 }
 
 /**

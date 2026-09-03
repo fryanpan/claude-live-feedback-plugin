@@ -29,8 +29,14 @@ import { UNTITLED_TASK_TITLE } from '../src/tasks.ts';
 import { type AccessHarness, accessHarness, mintAccessShare } from './access-share.ts';
 
 const PERSON: User = { id: 'known-jordan', name: 'Jordan', kind: 'known', color: '#2e7dd7' };
-/** "Huddle 2026-08-29 14:05" — the clock, to the minute, in local time. */
-const HUDDLE_TITLE = /^Huddle \d{4}-\d{2}-\d{2} \d{2}:\d{2}$/;
+/**
+ * The doc's KIND, then the clock to the minute in local time — "Meeting notes
+ * 2026-08-29 14:05" / "Plan 2026-08-29 14:05". The word is what a person
+ * reads, so the two kinds are asserted apart: a plan titled "Meeting notes"
+ * is the bug this pair exists to catch.
+ */
+const MEETING_TITLE = /^Meeting notes \d{4}-\d{2}-\d{2} \d{2}:\d{2}$/;
+const PLAN_TITLE = /^Plan \d{4}-\d{2}-\d{2} \d{2}:\d{2}$/;
 
 interface HuddleResponse {
   docId: string;
@@ -118,7 +124,7 @@ describe('POST /api/workspaces/:id/huddles and the empty task', () => {
       // Where the Board opens it: the SPA doc route under this board.
       expect(r.url).toBe(`/workspaces/${workspaceId}/docs/${r.docId}`);
       expect(r.meta.type).toBe('markdown');
-      expect(r.meta.title).toMatch(HUDDLE_TITLE);
+      expect(r.meta.title).toMatch(MEETING_TITLE);
       expect(r.meta.huddle).toBe(true);
 
       // Genuinely empty: no seeded blocks, nothing on disk to be read back.
@@ -181,7 +187,7 @@ describe('POST /api/workspaces/:id/huddles and the empty task', () => {
       expect(plainRow?.huddle).toBeUndefined();
       expect(huddleRow).toBeDefined();
       expect(huddleRow?.huddle).toBe(true);
-      expect(huddleRow?.title).toMatch(HUDDLE_TITLE);
+      expect(huddleRow?.title).toMatch(MEETING_TITLE);
       // And it is NOT on any other board.
       expect((await boardDocs(workspaceId)).some((d) => d.docId === huddle.docId)).toBe(false);
     });
@@ -199,7 +205,7 @@ describe('POST /api/workspaces/:id/huddles and the empty task', () => {
       // Block text is rendered markdown, so the heading keeps its marker.
       expect(doc.blocks[0]?.text).toBe('# Onboarding flow');
       // The title is still the clock — the topic is content, not a name.
-      expect(r.meta.title).toMatch(HUDDLE_TITLE);
+      expect(r.meta.title).toMatch(MEETING_TITLE);
     });
 
     it('kind "plan" stamps huddleKind and seeds the Goal heading', async () => {
@@ -210,7 +216,7 @@ describe('POST /api/workspaces/:id/huddles and the empty task', () => {
       const r = await jj<HuddleResponse>(await startHuddle(workspaceId, { kind: 'plan' }));
       expect(r.meta.huddleKind).toBe('plan');
       expect(r.meta.huddle).toBe(true);
-      expect(r.meta.title).toMatch(HUDDLE_TITLE);
+      expect(r.meta.title).toMatch(PLAN_TITLE);
       const doc = await jj<{
         blocks: Array<{ type: string | null; headingLevel?: number; text: string }>;
       }>(await local(`/api/docs/${r.docId}/content`));
@@ -232,6 +238,10 @@ describe('POST /api/workspaces/:id/huddles and the empty task', () => {
     it('kind "discussion" stamps huddleKind and stays empty like today', async () => {
       const r = await jj<HuddleResponse>(await startHuddle(workspaceId, { kind: 'discussion' }));
       expect(r.meta.huddleKind).toBe('discussion');
+      // The other half of the pair above: the same route, the other kind,
+      // the other word. "Huddle" is gone from every title the server mints.
+      expect(r.meta.title).toMatch(MEETING_TITLE);
+      expect(r.meta.title).not.toContain('Huddle');
       const doc = await jj<{ plainText: string }>(await local(`/api/docs/${r.docId}/content`));
       expect(doc.plainText.trim()).toBe('');
     });
