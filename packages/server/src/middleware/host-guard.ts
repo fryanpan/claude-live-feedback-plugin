@@ -2,7 +2,8 @@
  * Host-based access control for a server that is reachable over a public
  * tunnel.
  *
- * Two rules live here, both learned from a security review (2026-08-05):
+ * Three rules live here. The first two were learned from a security review
+ * (2026-08-05); the third is the owner's 2026-09-02 call, below.
  *
  * 1. **Default-deny by host.** The cloudflared ingress forwards EVERY
  *    hostname under the share wildcard to this process. The old gate only
@@ -49,8 +50,8 @@
  *    What it does NOT close: a process already running on the box. That is
  *    inside the trust boundary either way — it can read this server's memory.
  *
- * Both are pure predicates so they can be unit-tested without a server, and
- * are additionally exercised at the HTTP layer — the route layer is the part
+ * All three are pure predicates so they can be unit-tested without a server,
+ * and are additionally exercised at the HTTP layer — the route layer is the part
  * nothing type-checks (see docs/process/learnings.md).
  */
 
