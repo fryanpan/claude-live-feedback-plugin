@@ -151,7 +151,7 @@ describe('a shared board reaches the reviews filed on it — and no others', () 
   /**
    * The visitor gets exactly what the OWNER gets on this path.
    *
-   * `/review/<id>` is served only when the markdown-app bundle has been
+   * `/review/<id>` is served only when the workspaces-app bundle has been
    * built, which a test worktree has not, so a bare `toBe(200)` would assert
    * the bundler rather than the guard. Comparing to the owner's own status
    * keeps the assertion on the one thing under test — the gate — and still

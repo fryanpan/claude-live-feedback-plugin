@@ -21,7 +21,7 @@
    line neither branch cared about. Put a rule under the `##### HUB`
    sub-banner named for the surface it paints:
 
-       grep -n '##### HUB' packages/markdown-app/src/hub.css
+       grep -n '##### HUB' packages/workspaces-app/src/hub.css
 
    Appending at the end is what starts that up again. */
 
@@ -35,7 +35,7 @@
    This banner runs all the way to VOICE and is roughly half the
    stylesheet, so every surface inside it carries a sub-banner of its own:
 
-       grep -n '##### HUB' packages/markdown-app/src/styles.css
+       grep -n '##### HUB' packages/workspaces-app/src/styles.css
 
    Put a rule under the sub-banner named for the surface it paints.
    Appending at the end of the hub region — or at the end of the file —

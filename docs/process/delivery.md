@@ -18,7 +18,7 @@ who has your change and who does not — and who has to do what about it.
 |---|---|---|---|
 | Plugin (commands, skills, hooks, MCP bundle) | Version-keyed copy from the GitHub marketplace | Prod refreshes the cache on its own, ≤30 min after the merge | **The peer**, by restarting its own session |
 | MCP server code | `packages/plugin/mcp/index.js`, **tracked in git** | Same as the plugin | Same |
-| Browser client (markdown app + widget) | `packages/markdown-app/dist` / `packages/widget/dist`, **untracked**, published at server start | Prod restart | **You** — pull the deploy source, then restart prod (or `POST /api/deploy`, which is those two steps as one); the reader only reloads |
+| Browser client (markdown app + widget) | `packages/workspaces-app/dist` / `packages/widget/dist`, **untracked**, published at server start | Prod restart | **You** — pull the deploy source, then restart prod (or `POST /api/deploy`, which is those two steps as one); the reader only reloads |
 | Server code | The checkout the service runs from | Prod restart | Same |
 
 Exactly one row needs a person, and it is not the one people assume. **A peer's
@@ -136,7 +136,7 @@ committed copy differs from a fresh build, which is also why CI pins its Bun
 version — bundler output moves between releases. (`packages/mcp/dist/` is
 gitignored and ships nothing.)
 
-**`packages/markdown-app/dist` and `packages/widget/dist` are UNTRACKED.** They
+**`packages/workspaces-app/dist` and `packages/widget/dist` are UNTRACKED.** They
 are built on the machine that serves them, at server start. Nothing about them
 travels through git, and grepping them proves little — they are minified, so
 look for string literals or read `BUILD_INFO.txt`.
@@ -291,7 +291,7 @@ not serving prod's client.
 
 ### Where the served client lives (and why not in the checkout)
 
-Prod used to serve `packages/markdown-app/dist` *out of the primary checkout,
+Prod used to serve `packages/workspaces-app/dist` *out of the primary checkout,
 per request*. That made building bundles anywhere in that checkout a deploy to
 everyone, and made the served client silently track whichever commit that
 working tree was parked on.
@@ -301,7 +301,7 @@ immutable, numbered release:
 
 ```
 <state root>/live-feedback/client/
-  releases/<timestamp>-<seq>/{markdown-app,widget}/   ← never written to again
+  releases/<timestamp>-<seq>/{workspaces-app,widget}/   ← never written to again
   current -> releases/<timestamp>-<seq>               ← symlink, for operators
 ```
 
@@ -322,7 +322,7 @@ Consequences worth holding onto:
   go out at the next restart. That is why `bun run staging` still refuses to
   run from it.
 - `bun run dev` and `bun run staging` are unaffected: they serve the local
-  `dist` directly (the server takes `--widget-dist` / `--markdown-app-dist`,
+  `dist` directly (the server takes `--widget-dist` / `--workspaces-app-dist`,
   and without them falls back to the checkout's own `dist`).
 
 ## The one step a person still has to take

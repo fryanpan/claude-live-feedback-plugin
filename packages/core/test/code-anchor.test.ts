@@ -6,7 +6,7 @@ import { getContent } from '../src/schema.ts';
 /**
  * Seed a code doc: raw source in the flat `content` Y.Text, with a single
  * text-range thread anchored to a byte range. Mirrors how the read-only
- * code surface (markdown-app/src/code/code-editor.ts) builds anchors.
+ * code surface (workspaces-app/src/code/code-editor.ts) builds anchors.
  */
 function seedCodeDoc(source: string): { doc: Y.Doc; content: Y.Text } {
   const doc = new Y.Doc();

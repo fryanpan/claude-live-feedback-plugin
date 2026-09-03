@@ -256,7 +256,7 @@ export function renderHubShell(
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=1" />
     <title>${safeName} · Workspaces</title>
-    <!-- Two shells, two copies. Kept in step with packages/markdown-app/index.html
+    <!-- Two shells, two copies. Kept in step with packages/workspaces-app/index.html
          on purpose: an install started from the board and one started from a
          review doc have to produce the same web app, and on iOS the Home
          Screen install is what makes push available at all. -->
@@ -271,7 +271,7 @@ export function renderHubShell(
     <link rel="stylesheet" href="${hubCss}" />
     <link rel="stylesheet" href="${stylesCss}" />
     <!-- Open Props trial layer — after styles.css on purpose; see
-         packages/markdown-app/index.html. -->
+         packages/workspaces-app/index.html. -->
     <link rel="stylesheet" href="${tokensCss}" />
   </head>
   <body class="hub-body">

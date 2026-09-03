@@ -308,7 +308,7 @@ function matchesRouteTemplate(segments: readonly string[], template: readonly st
 
 /**
  * Static-asset roots server.ts serves with a `pathname.startsWith('/<root>/')`
- * prefix match (widgetDist, markdown-app's dist, the demos dir, the
+ * prefix match (widgetDist, workspaces-app's dist, the demos dir, the
  * project-card assets) — arbitrary depth beneath the root (an asset can sit
  * in a subdirectory), so no fixed-length ROUTE_TEMPLATES entry can name it:
  * a template matches on exact segment COUNT, and these routes have none.

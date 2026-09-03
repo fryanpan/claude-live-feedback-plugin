@@ -499,7 +499,7 @@ describe('the mobile sheet rides the keyboard', () => {
     const { readFileSync } = await import('node:fs');
     const { resolve } = await import('node:path');
     // vitest runs from the repo root (vitest.config.ts lives there).
-    const css = readFileSync(resolve('packages/markdown-app/src/styles.css'), 'utf8');
+    const css = readFileSync(resolve('packages/workspaces-app/src/styles.css'), 'utf8');
     const phone = css.slice(
       css.indexOf('/* ========== Over-doc bottom sheet on mobile =========='),
     );

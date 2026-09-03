@@ -60,7 +60,7 @@ export interface WidgetOpts {
    * site's keys.
    *
    * `'host'` reads the UNPREFIXED keys — the ones `ensureUserIdentity` in the
-   * markdown-app/hub uses. Set it only when the widget is embedded in one of
+   * workspaces-app/hub uses. Set it only when the widget is embedded in one of
    * OUR OWN surfaces, where the page has already asked the person who they are:
    * there, two namespaces mean one page holds two identities for one human, and
    * the widget posts as "Anonymous <animal>" on a board that greets the same

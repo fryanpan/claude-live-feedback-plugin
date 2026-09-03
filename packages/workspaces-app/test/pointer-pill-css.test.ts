@@ -17,7 +17,7 @@ import { describe, expect, it } from 'vitest';
  * How it actually reads at 1180×820 and 430px is measured in a browser and
  * reported with the PR.
  */
-const CSS = readFileSync(resolve('packages/markdown-app/src/styles.css'), 'utf8');
+const CSS = readFileSync(resolve('packages/workspaces-app/src/styles.css'), 'utf8');
 
 function declarationsOnly(css: string): string {
   return css.replace(/\/\*[\s\S]*?\*\//g, '');

@@ -26,7 +26,7 @@ import { describe, expect, it } from 'vitest';
  * at 1180x820 and at 430px is a browser check; see the report.
  */
 
-const CSS = readFileSync(resolve('packages/markdown-app/src/styles.css'), 'utf8');
+const CSS = readFileSync(resolve('packages/workspaces-app/src/styles.css'), 'utf8');
 
 function declarationsOnly(css: string): string {
   return css.replace(/\/\*[\s\S]*?\*\//g, '');

@@ -462,7 +462,7 @@ export interface Task {
    * Cumulative HUMAN attention on this task's body room (`task:<id>`) —
    * the sum of interaction-bounded `read_session` durations the reading
    * tracker reports (idle time and agent traffic already excluded before
-   * this ever sees them; see `packages/markdown-app/src/reading-tracker.ts`
+   * this ever sees them; see `packages/workspaces-app/src/reading-tracker.ts`
    * and `recordReadingTime` below). Seconds, not milliseconds — Bryan's
    * call (2026-08-30): this is a number a person looks at, not a wire
    * format that benefits from sub-second precision.

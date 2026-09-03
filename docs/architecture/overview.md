@@ -39,7 +39,7 @@ There are lots of similarities between this tool and [Claude Desktop](https://cl
 ```mermaid
 flowchart TB
   subgraph browser[Browser]
-    app["markdown-app<br/>5 bundles: doc · hub · signin · landing · sentry"]
+    app["workspaces-app<br/>5 bundles: doc · hub · signin · landing · sentry"]
     wid["widget<br/>injectable web component"]
   end
   subgraph agent[Agent session]
@@ -67,7 +67,7 @@ flowchart TB
 | -------------- | ------------------------------------------------------------ | ------------------------------------------------------------ |
 | `core`         | Pure shared library: wire types, the Yjs⇄markdown document model, anchors, review-item rules, goal arithmetic, prompts, path resolution. | Imports no other workspace package. No `node:` I/O beyond path math, no DOM. |
 | `server`       | The one process. Owns the data directory, the Yjs rooms, the board, meetings, auth, sharing, deploys. | The only writer of durable state. Everything else asks it.   |
-| `markdown-app` | The browser client, built into five separate bundles by `scripts/build.ts`. | Ships as static assets the server publishes as a numbered release. |
+| `workspaces-app` | The browser client, built into five separate bundles by `scripts/build.ts`. | Ships as static assets the server publishes as a numbered release. |
 | `mcp`          | The stdio MCP server agents talk to. It is a **client** of the server's REST and SSE, not a second backend. | No business logic that the server does not also enforce.     |
 | `widget`       | The injectable comment widget for mockups and dev servers. Vanilla JS + web components. | 40 KB gzipped, enforced by `check:widget-size`. No framework deps. |
 | `plugin`       | The Claude Code plugin: skills, hooks, and a bundled copy of `mcp`. | Version bumped in three places; see CLAUDE.md.               |
@@ -126,7 +126,7 @@ Four layers, the shared core package beneath them, and a composition root that i
 
 The `routes/`, `review-items/`, `share/` and `auth/` directories are the existing proof that this works. `routes/` handlers are `handleXRoutes(ctx, rq) => Response | undefined`, chained by `??`, with their dependencies named in an explicit context type rather than captured from a closure. `review-items/store.ts` declares a nine-member persistence interface so a test can hand it a plain object. Follow those shapes; do not invent a new one.
 
-## Layers inside `markdown-app`
+## Layers inside `workspaces-app`
 
 Five layers, same downward rule. This is what makes the hub testable: the models are DOM-free, so `hub-model.test.ts` runs without a document.
 

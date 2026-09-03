@@ -106,7 +106,7 @@ describe('security docs are wired together', () => {
     const unrelated = [
       'docs/architecture/security.md',
       'packages/widget/src/widget.ts',
-      'packages/markdown-app/src/styles.css',
+      'packages/workspaces-app/src/styles.css',
       'packages/server/src/summarize.ts',
       'README.md',
     ];

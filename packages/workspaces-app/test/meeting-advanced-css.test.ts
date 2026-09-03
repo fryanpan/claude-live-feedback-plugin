@@ -24,7 +24,7 @@ import { describe, expect, it } from 'vitest';
 // Comments are stripped before anything is parsed: a selector is read as the
 // text before a rule's `{`, and prose commas inside a preceding comment would
 // otherwise split that text and hide the selector.
-const CSS = readFileSync(resolve('packages/markdown-app/src/styles.css'), 'utf8').replace(
+const CSS = readFileSync(resolve('packages/workspaces-app/src/styles.css'), 'utf8').replace(
   /\/\*[\s\S]*?\*\//g,
   '',
 );

@@ -58,7 +58,7 @@ export const TARGET_PCT = 80;
 type Runner = 'vitest' | 'bun';
 const PACKAGES: Record<string, Runner> = {
   core: 'vitest',
-  'markdown-app': 'vitest',
+  'workspaces-app': 'vitest',
   mcp: 'vitest',
   widget: 'vitest',
   server: 'bun',

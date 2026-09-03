@@ -11,7 +11,7 @@ import { describe, expect, it } from 'vitest';
  * whole gap), and the label floats into the corner instead of taking a row
  * above the words.
  */
-const CSS = readFileSync(resolve('packages/markdown-app/src/styles.css'), 'utf8');
+const CSS = readFileSync(resolve('packages/workspaces-app/src/styles.css'), 'utf8');
 
 function rule(selector: string): string {
   const css = CSS.replace(/\/\*[\s\S]*?\*\//g, '');

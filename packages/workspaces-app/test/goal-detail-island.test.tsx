@@ -114,7 +114,7 @@ describe('the goal detail island’s mount contract', () => {
     // happy-dom resolves no layout, so this is pinned at the rule level:
     // `.hub-detail` centres with flex, and without `display: contents` the
     // wrapper — not the panel — becomes the flex item.
-    const css = readFileSync(resolve('packages/markdown-app/src/hub.css'), 'utf8');
+    const css = readFileSync(resolve('packages/workspaces-app/src/hub.css'), 'utf8');
     const rule = css.match(/\.hub-detail\s*>\s*\[data-preact-island\]\s*\{([^}]*)\}/)?.[1] ?? '';
     expect(rule).toContain('display'); // positive control: the rule was found
     expect(rule).toMatch(/display:\s*contents/);

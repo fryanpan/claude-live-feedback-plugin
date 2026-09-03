@@ -1,7 +1,7 @@
 /**
  * Whether a meeting doc's asks have a live lead agent to land on — the
  * server's answer (`lead-presence.ts` there) and the doc page's banner
- * (`lead-banner.ts` in markdown-app) share this shape. It rides the doc's
+ * (`lead-banner.ts` in workspaces-app) share this shape. It rides the doc's
  * event stream under `LEAD_PRESENCE_EVENT`, change-only, no replay.
  */
 export const LEAD_PRESENCE_EVENT = 'lead.presence';

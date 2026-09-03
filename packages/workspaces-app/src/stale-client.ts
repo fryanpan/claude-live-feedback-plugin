@@ -15,7 +15,7 @@
 import type { ConnectionStatus } from '@feedback/core';
 
 /**
- * Stamped into the bundle at build time (see packages/markdown-app/scripts/
+ * Stamped into the bundle at build time (see packages/workspaces-app/scripts/
  * build.ts). Empty in an unbuilt/dev context, which disarms the check — a
  * `bun dev` tab has no release to be stale against.
  */

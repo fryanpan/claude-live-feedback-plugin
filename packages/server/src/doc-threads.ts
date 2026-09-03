@@ -639,9 +639,9 @@ export class DocThreads {
     // client produces an empty array. Anchor resolution then returns null,
     // the editor renders no decoration, and clicks miss entirely. The editor
     // serializes the same way it sends over JSON: as a number[]. Match it.
-    // See packages/markdown-app/src/app.ts:976 (`Array.from(selection.start)`).
+    // See packages/workspaces-app/src/app.ts:976 (`Array.from(selection.start)`).
     // `Anchor.startRel`/`endRel` is typed as Uint8Array, but the editor's
-    // own thread-create path (`packages/markdown-app/src/app.ts:976`)
+    // own thread-create path (`packages/workspaces-app/src/app.ts:976`)
     // sends a number[] — and that's what survives Yjs's encoder cleanly
     // inside a plain object. A Uint8Array nested in a plain object gets
     // JSON-stringified to `{"0":2,"1":251,...}` on the way out, with no
