@@ -5,14 +5,16 @@
  * about. The model's answer is never trusted on its own — a reference must
  * name a candidate the speech actually mentioned, a research topic and a
  * lookup query must be phrases somebody said, a requester must be a voice the
- * lines carried. See `meeting-task-capture.ts` for why a wrong link costs
- * more than a missing one.
+ * lines carried, and an ask must have used one of the two spoken cues. See
+ * `meeting-task-capture.ts` for why a wrong link costs more than a missing
+ * one.
  *
  * These are pure functions over turns and strings: no board, no model, no
  * clock. That is what lets the thresholds be argued about in a unit test
  * rather than in a live meeting, which is where they were all set.
  */
 
+import { type AskCue, hasAskCue } from './meeting-ask-cues.ts';
 import type { NotesTurn } from './meeting-notes.ts';
 import { clipToWordBoundary } from './task-title.ts';
 
@@ -249,16 +251,35 @@ export function normalizedTitle(title: string): string {
 
 /**
  * Which spoken line an ask came from — the row's quote, chosen here rather
- * than asked of the model, so what the body quotes was said. The new line
- * sharing the most significant words with the ask; the last new line when
- * none shares any (a deictic "make that a task" points at the line before
- * it, which is the marked overlap, so the pointer itself is what is quoted).
+ * than asked of the model, so what the body quotes was said.
+ *
+ * THE CUE LINE FIRST, when the caller says which cue this ask needed. It is
+ * the sentence in which somebody asked, which is what a row should quote, and
+ * choosing by word overlap alone got this wrong in the way that matters: a
+ * request whose subject had been said before the tick boundary shared no
+ * words with any new line and quoted "Alice: sure". Among several cue lines
+ * the one sharing most with the ask wins.
+ *
+ * Otherwise, and for asks with no cue of their own, the line sharing the most
+ * significant words with the ask; the last line when none shares any (a
+ * deictic "make that a task" points at the line before it, so the pointer
+ * itself is what is quoted).
+ *
+ * Callers hand it the whole {@link captureWindow}. Quoting only the new
+ * turns is what produced "Alice: sure": the words the ask was about were one
+ * line the other side of the boundary.
  */
-export function spokenLineFor(turns: readonly NotesTurn[], phrase: string): string | undefined {
+export function spokenLineFor(
+  turns: readonly NotesTurn[],
+  phrase: string,
+  cue?: AskCue,
+): string | undefined {
+  const cued = cue ? turns.filter((t) => hasAskCue(t.text, cue)) : [];
+  const pool = cued.length > 0 ? cued : turns;
   const want = significantWords(phrase);
   let best: NotesTurn | undefined;
-  let bestShared = 0;
-  for (const turn of turns) {
+  let bestShared = cued.length > 0 ? -1 : 0;
+  for (const turn of pool) {
     const shared = sharedWordCount(significantWords(turn.text), want);
     if (shared > bestShared) {
       best = turn;
@@ -307,4 +328,59 @@ export function speakerOnTick(turns: readonly NotesTurn[], claimed: string): str
     if (turn.speaker && turn.speaker.toLowerCase() === want) return turn.speaker;
   }
   return undefined;
+}
+
+/**
+ * WHICH LINE licensed this ask — the cue is a property of the ASK, never of
+ * the tick.
+ *
+ * The first version of this guard read two booleans off the whole window and
+ * every item checked the same flag, so one "create a task for the retry loop"
+ * licensed a row for the tunnel and a row for the sidebar as well: three rows
+ * from one cue. A cue is one person asking for one thing, so it is spent on
+ * one thing.
+ *
+ * Which ask a cue line belongs to is decided by the words they share, and a
+ * line sharing none can still be the one: "Claude, can you go and" / tick
+ * boundary / "look into why the retry loop wakes the sync" is the ask
+ * {@link overlapWindow} exists to rescue, and its cue line names no subject
+ * at all. That is why the window is searched rather than the quoted line.
+ *
+ * SPENT LINES STAY SPENT, and that is what stops the overlap from licensing
+ * twice. A cue line the previous pass already acted on sits in `spent`, so
+ * the tick that sees it again in the marked overlap cannot spend it on a new
+ * subject — while a cue line that licensed nothing last pass is still live,
+ * which is exactly the straddling ask. The caller owns one set per meeting;
+ * a `Set<number>` of turn numbers satisfies it.
+ */
+/**
+ * The cue lines a meeting has already spent, by turn number. A plain
+ * `Set<number>` satisfies it; the meeting session owns one per doc so a cue
+ * cannot be spent again when it reappears in the next tick's marked overlap.
+ */
+export interface SpentCues {
+  has(turn: number): boolean;
+  add(turn: number): void;
+}
+
+export function cueLineFor(
+  turns: readonly NotesTurn[],
+  phrase: string,
+  cue: AskCue,
+  spent?: { has(turn: number): boolean },
+): NotesTurn | undefined {
+  const want = significantWords(phrase);
+  let best: NotesTurn | undefined;
+  let bestShared = -1;
+  for (const turn of turns) {
+    if (spent?.has(turn.turn)) continue;
+    if (!hasAskCue(turn.text, cue)) continue;
+    const shared = sharedWordCount(significantWords(turn.text), want);
+    // Earliest wins a tie: an ask is cued before it is elaborated.
+    if (shared > bestShared) {
+      best = turn;
+      bestShared = shared;
+    }
+  }
+  return best;
 }
