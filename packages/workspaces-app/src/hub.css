@@ -2463,6 +2463,29 @@ body.hub-body {
   border-radius: 2px;
   background: color-mix(in srgb, var(--accent) 28%, transparent);
 }
+/* The dependency curves, in the same gutter. They pass BEHIND the goal rail
+   above: the rail says "these rows belong to the goal above" and the curve
+   says "this row is waiting for that one", so the two must not fight for the
+   same 2px of x. `z-index` is what separates them — both are positioned
+   children of the same box, so without it the SVG would paint over the rail
+   simply for coming later in the tree.
+
+   `pointer-events: none` because the layer covers the whole band: a click on
+   a row must reach the row, not the drawing over it. `overflow: visible` so
+   a curve between two far-apart rows is not clipped by a viewBox rounded a
+   fraction short. */
+.hub-dep-layer {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  z-index: 0;
+  overflow: visible;
+  pointer-events: none;
+}
+.hub-band-tasks::before {
+  z-index: 1;
+}
 /* A collapsed band is the goal row and NOTHING else (decision: no hidden-N
    line, no summary) — the renderer emits nothing extra and this hides the
    tasks. */
@@ -2826,6 +2849,21 @@ body.hub-body {
   border-style: dashed;
   border-color: var(--yellow);
 }
+/* Blocked: a solid ring held open by a bar — a row that cannot start. It is
+   the muted grey of the default ring rather than a colour of its own, because
+   blocked is not an alarm and not a state anybody chose: the row is waiting,
+   and the gutter curve says what for. Deliberately not the dashed triage ring
+   (that says "unvetted"), not the filled dot, not the tick. */
+.hub-status-mark-blocked {
+  border-color: var(--fg-muted);
+}
+.hub-status-mark-blocked::after {
+  content: "";
+  width: 8px;
+  height: 2px;
+  border-radius: 1px;
+  background: var(--fg-muted);
+}
 .hub-status-mark-in-progress {
   border-color: var(--accent);
 }
@@ -3101,6 +3139,18 @@ body.hub-body {
   border: 1px solid var(--border);
   color: var(--fg-muted);
   white-space: nowrap;
+}
+/* The one right-hand state word — "blocked" or "triage", never both, since
+   blocked is a `todo` row. Plain muted text rather than a chip, matching the
+   goal band's own meta word, and sharing the due date's slot so a row grows no
+   extra column. It truncates rather than pushing the date off the row. */
+.hub-state-note {
+  font-size: 12px;
+  color: var(--fg-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  align-self: center;
 }
 .hub-badge-decision {
   border-color: var(--yellow);

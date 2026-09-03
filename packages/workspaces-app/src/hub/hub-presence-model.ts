@@ -227,7 +227,8 @@ export function describeEvent(ev: ActivityEvent, titleOf: (taskId: string) => st
     // The blocker's title comes off the EVENT: it may be renamed or archived
     // later, and this is what was cleared on that day.
     case 'task.unblocked': {
-      const by = typeof ev.clearedByTitle === 'string' && ev.clearedByTitle ? ev.clearedByTitle : '';
+      const by =
+        typeof ev.clearedByTitle === 'string' && ev.clearedByTitle ? ev.clearedByTitle : '';
       return `${title()} is no longer blocked${by ? ` — “${by}” closed` : ''}`;
     }
     case 'task.due_set': {
