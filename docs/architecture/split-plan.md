@@ -550,24 +550,86 @@ two packages is survivable but worth a header comment on each saying so.
 
 Layers: transport, then controller. Final directory: `meeting/`.
 
-## B5 · `core`
+## B5 · `core` — DONE
 
-| File | Becomes | Moves | Importers | Effort |
-|---|---|---|---|---|
-| `prose.ts` (2,847) | `prose-markdown.ts` (~1100) | `parseMarkdownBlocks`, `serializeFragmentToMarkdown`, `applyMarkdownToFragment` | re-export from `prose.ts`; `rooms.ts` calls these through `prose.` | M |
-| | `prose-edit.ts` (~800) | `locateMatches`, `findAndReplace`, `rewriteRange` | same | |
-| | `prose-blocks.ts` (~700) | `createAgentAnchor`, `deleteBlocksInRange`, `autoReanchorDoc` | same | |
-| `review-item.ts` (1,769) | `review-item-check.ts` (~400) | `REVIEW_LIMITS`, `checkReviewPayload`, `reviewGapAdvice` | `core/index.ts` re-export | S |
-| | `review-item-wire.ts` (~250) | `readReviewPayload`, `readTaskReviewItem` | same | |
-| `goal-effort.ts` (1,086) | `effort-calibration.ts` (~400) | `computeEffortRatios`, `computeEffortCalibration`, `shrinkEffortRatio`, `quantile` | same | S |
-| | `effort-format.ts` (~70) | `formatEffortSeconds`, `formatEffortDate` | same | |
+Nine extraction commits and a docs commit, in one PR. The plan asked for
+seven; the two extra are leaf modules that had to come out first, and both
+are the same move `bind-meta.ts` made in A3.
 
-Seven commits. `core` is imported by every other package, so keep
-`core/src/index.ts` and the `prose` namespace object exporting exactly what
-they export today. If a consumer's import line has to change, the split is
-wrong. `goal-effort.ts` names its own chunks in its header, so use those
-names; the doc comments explaining the priors stay with the arithmetic and are
-what [goal-projection.md](goal-projection.md) points at.
+| File | Became | Moved | Measured |
+|---|---|---|---|
+| `prose.ts` (2,847) | `prose-fragment.ts` | `getProseFragment`, `walkProse`, `TextSegment`, `headingLevelOf`, `preview`, the relative-position resolvers | 188 (not planned) |
+| | `prose-markdown.ts` | `parseMarkdownBlocks`, `serializeFragmentToMarkdown`, `applyMarkdownToFragment` and the whole block/inline grammar | 1,183 (est. ~1100) |
+| | `prose-edit.ts` | `locateMatches`, `findAndReplace`, `rewriteRange`, `insertAfterRange` and the mark machinery | 857 (est. ~800) |
+| | `prose-blocks.ts` | `createAgentAnchor`, `deleteBlocksInRange`, `autoReanchorDoc` and the rest of the anchor and block-deletion API | 712 (est. ~700) |
+| `review-item.ts` (1,772) | `review-item-wire.ts` | `readReviewPayload`, `readTaskReviewItem`, `normalizeReviewType`, `foldLegacyBody` | 333 (est. ~250) |
+| | `review-item-check.ts` | `REVIEW_LIMITS`, `checkReviewPayload`, `reviewGapAdvice`, `reviewPayloadMessage` | 471 (est. ~400) |
+| `goal-effort.ts` (1,086) | `effort-task.ts` | every per-ticket derivation: `estimateNumbers`, `effortClosedAt`, the two actuals, `goalPaceWindowDays` | 361 (not planned) |
+| | `effort-calibration.ts` | `computeEffortRatios`, `computeEffortCalibration`, `shrinkEffortRatio`, `quantile`, the priors and the trusted band | 442 (est. ~400) |
+| | `effort-format.ts` | `formatEffortSeconds`, `formatGoalEffortSeconds`, `formatEffortDate` | 97 (est. ~70) |
+
+`prose.ts` ends at **83**, `review-item.ts` at **1,030** and `goal-effort.ts`
+at **333**. No import line anywhere outside `packages/core/src` changed — the
+diff touches twelve files and every one of them is in that directory.
+
+**The hard constraint decided the shape, and it costs an extra file each
+time.** `core` is imported by every other package, so `prose.ts` has to
+re-export everything it exported as one module. That makes it import the
+files it was split into — and any primitive left behind in it would then be
+imported BACK by them, which is the cycle A2 and A3 both hit. So the shared
+primitives go out first, into a leaf nothing in the family may import:
+`prose-fragment.ts` for the fragment walk and the position resolvers, and
+`effort-task.ts` for the per-ticket derivations that chunk 3 and chunk 4 both
+read. Neither was in the plan and neither was avoidable: `computeEffortCalibration`
+calls six of `effort-task.ts`'s functions and `summarizeGoalEffort` calls
+seven.
+
+**`prose.ts` is now a surface and nothing else.** Once the primitives left,
+there was no remainder — which is the one outcome A3 avoided for `binds.ts`
+and the right one here, because the alternative was picking a family to leave
+behind and pointing the other three at it. The file is a header naming the
+dependency order plus re-exports written out **by name**. Not `export *`:
+four private helpers (`preview`, `textContent`, `insertDeltaInto`,
+`splitTableRow`) had to be exported from their own modules so their siblings
+could reach them, and `export *` would have put all four into the `prose`
+namespace, where they have never been. Asserted rather than assumed — 32
+runtime exports on `prose.ts` and 32 on `index.ts`'s `prose` object, name for
+name identical to the pre-split module, checked after every commit.
+
+**`review-item.ts` keeps its types and hands them back as a type-only
+import.** Both extracted files are written in terms of `ReviewPayload` and its
+neighbours, and `ReviewPayload` alone is ~147 lines of contract documentation
+sitting next to the verbs that implement it. `import type` erases under
+`verbatimModuleSyntax`, so at runtime both files are leaves and nothing
+imports the file that imports it. The alternative — a third file holding ~600
+lines of type declarations — is a bigger change than the split it would
+enable.
+
+**The two review-item commits are in the reverse of the plan's order.** The
+gate reads a payload with the same two coercions the readers do
+(`isPlainObject`, `normalizeReviewType`), so extracting the gate first would
+have left it importing them from the file that imports it — a cycle for the
+length of one commit. Extracted second, it imports a module that already
+exists.
+
+**`formatGoalEffortSeconds` moved with the other two formatters** though the
+row names only `formatEffortSeconds` and `formatEffortDate`. It is the coarse
+sibling, it calls `formatEffortSeconds`, and it is a second function rather
+than a flag precisely because the two roundings answer different questions —
+leaving it behind would have split that argument across two files.
+
+**What the row got wrong about the seams was small and in one direction.**
+`findAndReplace` reads as a dependency of the block-deletion family in a grep
+and is not one: every hit is a doc comment, and the compiler confirmed it by
+refusing the import as unused. The same was true of `rewriteRange` and
+`insertBlocksAfterAnchor` in each other's headers. Grep over a file this
+heavily commented finds the prose, not the calls.
+
+Moved code is byte-identical apart from import headers and added `export`
+keywords, verified by diffing each extracted slab against the same line range
+of the parent's previous commit. One line differs beyond that:
+`insertDeltaInto`'s signature, which biome rewrapped because the `export`
+keyword pushed it past the line width.
 
 Layers: document model and domain rules. Final directory: `core/src/` — no
 move.
