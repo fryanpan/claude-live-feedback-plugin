@@ -36,7 +36,7 @@ import {
   registerOwnerIdentity,
   resolveIdentityId,
   setIdentityRoster,
-} from './activity.ts';
+} from './actor-identity.ts';
 import { AgentNoteRing } from './agent-notes.ts';
 import {
   AgentWatches,

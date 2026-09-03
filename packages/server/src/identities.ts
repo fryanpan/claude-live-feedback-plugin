@@ -53,7 +53,7 @@ import {
   isEmailLike,
   normalizeEmail,
 } from '@feedback/core';
-import { ownerDisplayNames } from './activity.ts';
+import { ownerDisplayNames } from './actor-identity.ts';
 import { SHARED_AGENT_IDS } from './agent-watches.ts';
 
 const FILENAME = 'identities.json';

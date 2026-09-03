@@ -38,8 +38,8 @@ import {
  * a doc nobody has open should not page it in.
  */
 import * as Y from 'yjs';
-import { classifyActor } from './activity.ts';
 import type { ActivityType } from './activity.ts';
+import { classifyActor } from './actor-identity.ts';
 import type { DocRoom } from './rooms.ts';
 
 export function randomId(): string {
