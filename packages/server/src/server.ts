@@ -781,19 +781,6 @@ const ROOT_ALIASED_ASSETS = new Set([
 ]);
 
 /**
- * The watch-coverage shapes the watches route reports back, re-exported from
- * `board-membership.ts` where the readout that builds them now lives. Kept
- * exported here because this is the module name they have always been
- * importable under.
- */
-export type {
-  CoverageQueue,
-  CoverageUnattachedBoard,
-  CoverageWorkspaceRow,
-  WatchCoverage,
-} from './board-membership.ts';
-
-/**
  * `revisedRange` off a request body: the offsets into the NEW detail that a
  * caller says changed.
  *
