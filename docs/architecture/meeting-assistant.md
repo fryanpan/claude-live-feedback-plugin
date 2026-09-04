@@ -1176,7 +1176,8 @@ it:
   tables and the matcher are `meeting-ask-cues.ts`, and
   `parseTaskCaptureReply` re-checks every ask against them. A request the
   speech never cued with "create a task" is **downgraded to a note**, and so
-  is a research, lookup or review ask with no "can you" behind it. The words
+  is a research, lookup or review ask with no "Claude, can you" behind it —
+  the wake word is part of the rule, exactly as the table states it. The words
   still reach the notes composer and land in the doc — downgraded is
   recorded, not discarded.
 - **Later beats now.** "Claude, can you create a task for that" carries both
@@ -1191,21 +1192,34 @@ it:
   So "we can add tasks to the sprint later" files nothing, and neither does
   "add a ticket TYPE for design work" — the first is a fact about the sprint,
   the second a sentence about the board's schema.
-- **One cue licenses ONE ask, and a spent cue stays spent.** The cue is a
-  property of the ask, matched against the line the ask was quoted from, so a
-  single "create a task for the retry loop" cannot license the tunnel and the
-  sidebar the room mentioned next. A line that has already produced a row is
-  consumed for the rest of the meeting, which is what stops the overlap
-  replaying it into the following tick.
+- **A cue licenses as many asks as its line asked for, and then stays
+  spent.** The cue is a property of the ask, matched against the line the ask
+  was quoted from, so a single "create a task for the retry loop" cannot
+  license the tunnel and the sidebar the room mentioned next. A line that has
+  given everything it carries is consumed for the rest of the meeting, which
+  is what stops the overlap replaying it into the following tick. What a line
+  carries is usually one thing and sometimes two: "Claude, can you look at the
+  retry loop **and pull up** last week's notes" is two asks said in one
+  breath, and counting only the first dropped the second in silence.
+  `nowCueAskCount` counts them, and only a coordinator followed by a VERB
+  raises the count — "look at the retry loop and the sync worker" is one ask
+  about two things.
 - **The cue line is still searched across the whole capture window.** The
   boundary problem the overlap exists for puts the cue and its subject in
   different ticks — "Claude, can you go and" / boundary / "look into why the
   retry loop wakes the sync" — so a cue with no words in common with the ask
   still qualifies. Spending, not adjacency, is what keeps that from being a
   licence to reuse it.
-- **A PLURAL later cue stands.** "File tickets for the next few things I
-  mention" asks for however many rows follow it, and was measured doing
-  exactly that across a tick boundary, so it is not spent on its first ask.
+- **A PLURAL later cue stands, and its rows must name something SPOKEN.**
+  "File tickets for the next few things I mention" asks for however many rows
+  follow it, and was measured doing exactly that across a tick boundary, so it
+  is not spent on its first ask. Spending is therefore not what bounds it, and
+  for a while nothing was: in review one such cue licensed four requests, two
+  of whose subjects nobody had said. So a request filed under a standing cue
+  must clear `phraseSpokenOnTick` — the same spoken-subject guard research,
+  lookup and review have always stood on, and the one intent that lacked it. A
+  singular cue is exempt: it is spent on its one row, and a deictic "make that
+  a task" names its subject nowhere.
 - **A reference and a correction need no cue.** Neither is an ask: one names
   work the board already tracks, the other fixes a note already written.
 - **What this deliberately gives up.** "Go look into that" and "ask the team
