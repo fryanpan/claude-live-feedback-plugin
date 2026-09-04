@@ -37,11 +37,11 @@ import { ReviewItemStore } from '../src/review-items/store.ts';
 import { HELD_ITEM_DEFAULT_MS, overdueHeldItems } from '../src/stall-gate.ts';
 import {
   REVIEW_ITEM_HELD_EVENT,
-  STALL_EVENT,
   type ReviewItemHeldFrame,
+  STALL_EVENT,
   type StallNudgeFrame,
-  type StallSnapshot,
   StallNudger,
+  type StallSnapshot,
 } from '../src/stall-nudge.ts';
 import type { HubWorkspace } from '../src/tasks.ts';
 
@@ -75,7 +75,7 @@ function fake() {
     assignee: 'Almanac Agent',
     goal: 'chores',
     order: 1,
-    status: 'in_progress',
+    status: 'in-progress',
     after: [],
     links: [],
     transitions: [],
@@ -188,15 +188,13 @@ describe('a withdrawn review item leaves the held index', () => {
     const first = nudger(f);
     first.nudger.tick();
 
-    expect(first.toFilers.map((frm) => frm.reviewItemId).sort()).toEqual(
-      [kept, takenBack].sort(),
-    );
+    expect(first.toFilers.map((frm) => frm.reviewItemId).sort()).toEqual([kept, takenBack].sort());
     expect(first.toFilers.every((frm) => frm.event === REVIEW_ITEM_HELD_EVENT)).toBe(true);
     expect(first.stalls).toHaveLength(1);
     expect(first.stalls[0]?.event).toBe(STALL_EVENT);
-    expect(
-      (first.stalls[0]?.heldItems ?? []).map((item) => item.reviewItemId).sort(),
-    ).toEqual([kept, takenBack].sort());
+    expect((first.stalls[0]?.heldItems ?? []).map((item) => item.reviewItemId).sort()).toEqual(
+      [kept, takenBack].sort(),
+    );
 
     // The asker takes one back. Nothing else about the board changes.
     const withdrawn = f.store.withdrawReviewItem(TASK, takenBack, {
