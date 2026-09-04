@@ -547,3 +547,110 @@ describe('the dialog keeps its slots sized to their faces', () => {
     }
   });
 });
+
+/**
+ * The promote: the dialog grows out of the bubble the reader tapped and
+ * shrinks back into it.
+ *
+ * happy-dom resolves no layout and implements no Web Animations, so what is
+ * assertable here is the END STATES and the shape of the journey — which is
+ * the part that has to be right anyway: the resting state is written before
+ * the keyframes, so an interrupted, unsupported or reduced-motion animation
+ * still leaves the dialog correct. The visual tween itself is verified in a
+ * real browser.
+ */
+describe('the promote grows out of the bubble and shrinks back into it', () => {
+  const bubbleRect = (): DOMRect =>
+    ({
+      left: 906,
+      top: 240,
+      right: 1166,
+      bottom: 330,
+      width: 260,
+      height: 90,
+      x: 906,
+      y: 240,
+      toJSON() {},
+    }) as DOMRect;
+
+  it('mounts the card FOLDED and unfolds it once the box has arrived', () => {
+    const h = mount();
+    const t = thread('t1', [comment('Which cache?', decisionPayload)]);
+    h.panel.setThreads([t]);
+    h.modal.open(t, bubbleRect());
+    // Without a real animation the promote settles synchronously, so by the
+    // time open() returns the morph has already run — which is the same end
+    // state a finished tween produces, and the one that matters.
+    const card = h.card() as HTMLElement;
+    expect(card.classList.contains('expanded')).toBe(true);
+    for (const face of Array.from(card.querySelectorAll('.face-detail'))) {
+      expect(face.hasAttribute('inert')).toBe(false);
+    }
+  });
+
+  it('hands its inline sizing back to the stylesheet when the journey settles', () => {
+    const h = mount();
+    const t = thread('t1', [comment('Which cache?', decisionPayload)]);
+    h.panel.setThreads([t]);
+    h.modal.open(t, bubbleRect());
+    const root = h.root();
+    const inner = document.querySelector('.thread-modal-inner') as HTMLElement;
+    // Left pinned, a resize would move the viewport and leave the dialog
+    // parked wherever it was born.
+    expect(root.getAttribute('style')).toBeFalsy();
+    expect(inner.getAttribute('style')).toBeFalsy();
+  });
+
+  it('closes cleanly whether or not it grew out of anything', () => {
+    const h = mount();
+    const t = thread('t1', [comment('Which cache?', decisionPayload)]);
+    h.panel.setThreads([t]);
+
+    h.modal.open(t, bubbleRect());
+    h.modal.close();
+    expect(isShown(h.root())).toBe(false);
+    expect(h.modal.openThreadId()).toBe(null);
+    expect(h.closed).toBe(1);
+
+    // No origin — the drawer, a keyboard, a phone. The dialog simply appears
+    // and simply goes, and nothing here may depend on a rect it never got.
+    h.modal.open(t);
+    expect(isShown(h.root())).toBe(true);
+    h.modal.close();
+    expect(isShown(h.root())).toBe(false);
+    expect(h.closed).toBe(2);
+  });
+
+  it('a click through the scrim onto another thread replaces without a shrink', () => {
+    const scope = new MountScope();
+    cleanups.push(() => scope.dispose());
+    const container = document.createElement('div');
+    document.body.appendChild(container);
+    cleanups.push(() => container.remove());
+    const panel = new ThreadPanel({
+      container,
+      currentUser: alice,
+      onThreadClick: () => {},
+      onReply: () => {},
+      onResolve: () => {},
+      onReopen: () => {},
+      onReanchor: () => {},
+    });
+    const switched: string[] = [];
+    const modal = mountThreadModal({
+      scope,
+      renderCard: (t, pendingReply) => panel.renderThread(t, pendingReply),
+      onClose: () => {},
+      threadUnderPoint: () => 't2',
+      onSwitchThread: (id) => switched.push(id),
+    });
+    const t1 = thread('t1', [comment('First', decisionPayload)]);
+    panel.setThreads([t1]);
+    modal.open(t1, bubbleRect());
+    click(document.querySelector('.thread-modal-scrim') as HTMLElement);
+    // Replaced, not dismissed: the next thread's own promote is about to run
+    // out of a different bubble, and a shrink-then-grow reads as a flinch.
+    expect(switched).toEqual(['t2']);
+    expect(modal.openThreadId()).toBe(null);
+  });
+});
