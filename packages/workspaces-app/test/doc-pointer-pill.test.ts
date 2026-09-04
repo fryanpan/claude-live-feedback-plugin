@@ -2,10 +2,10 @@ import { prose } from '@feedback/core';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { Awareness } from 'y-protocols/awareness';
 import * as Y from 'yjs';
+import type { ChromeSelection } from '../src/doc/anchor-body.ts';
 import { mountPointerPillLayer } from '../src/doc/doc-pointer-pill.ts';
 import { type EditorHandle, createEditor } from '../src/editor.ts';
 import { MountScope } from '../src/mount-scope.ts';
-import type { ChromeSelection } from '../src/review-chrome.ts';
 
 /**
  * The pointer pill layer over a document (doc/doc-pointer-pill.ts).

@@ -1,12 +1,4 @@
-import {
-  SUMMARY_PENDING_WINDOW_MS,
-  type Thread,
-  type User,
-  readDocMeta,
-  readReviewPayload,
-  readStoredSummary,
-  summaryPending,
-} from '@feedback/core';
+import { type Thread, type User, readDocMeta } from '@feedback/core';
 import type * as Y from 'yjs';
 import {
   applyPlacement,
@@ -19,61 +11,44 @@ import {
   setCardPlacement,
 } from './card-placement.ts';
 import { type SeenTracker, createSeenTracker } from './comment-seen.ts';
-import { el, showToast } from './doc/chrome-dom.ts';
+import type { ChromeSelection } from './doc/anchor-body.ts';
+import { el } from './doc/chrome-dom.ts';
 import { wireResizeHandle } from './doc/chrome-panels.ts';
 import { wireReviewComposer } from './doc/review-composer.ts';
+import { createThreadActions } from './doc/thread-actions.ts';
+import { createThreadProjection } from './doc/thread-projection.ts';
+import {
+  initialDrawerOpen,
+  readDrawerPref,
+  wireSetPaneToggle,
+  writeDrawerPref,
+} from './doc/view-prefs.ts';
 import { threadNeedsModal } from './long-thread.ts';
 import { type MobileReview, mountMobileReview } from './mobile-review.ts';
 import type { MountScope } from './mount-scope.ts';
 import type { ReviewSurface } from './review-surface.ts';
 import { setTabTitle, tabName } from './tab-title.ts';
-import { threadKind } from './thread-kind.ts';
 import { type ThreadModalHandle, mountThreadModal } from './thread-modal.ts';
-import { installSlotRemeasure, sizeThreadSlots, threadCards } from './thread-morph.ts';
+import { installSlotRemeasure, sizeThreadSlots } from './thread-morph.ts';
 import { ThreadPanel, type ThreadTab } from './threads.ts';
 
 /**
  * The review "chrome" — everything around the editor that is identical for
- * every SPA surface (markdown / code / diff): the threads drawer + tabs +
- * panel callbacks, the composer sheet, the mobile full-screen thread view,
- * thread collection/decoration plumbing, the doc-title label, hotkeys, and
- * the small DOM helpers. Extracted from app.ts / code-app.ts, which had
- * forked ~450 duplicated lines of this wiring; each boot now supplies only
- * its genuinely surface-specific parts via `ChromeOpts`.
- */
-
-export interface ChromeSelection {
-  start: Uint8Array;
-  end: Uint8Array;
-  snippet: string;
-  /**
-   * Set by the redline surface when the selection was entirely base-only
-   * (struck-through) text, which has no position in `content`. The anchor
-   * snaps to the nearest following retained line; this records what the
-   * comment was actually about.
-   */
-  deletedSnippet?: string;
-}
-
-/**
- * Build the wire anchor for a selection.
+ * every SPA surface (markdown / code / diff): the threads drawer + tabs, the
+ * panel and modal it renders into, the mobile sheet, the doc-title label and
+ * the hotkeys. Extracted from app.ts / code-app.ts, which had forked ~450
+ * duplicated lines of this wiring; each boot now supplies only its genuinely
+ * surface-specific parts via `ChromeOpts`.
  *
- * ONE place on purpose. Every anchor body here is hand-built field by field,
- * so a new field added to ChromeSelection but not copied is silently dropped —
- * the server accepts it, returns 200, and the data is gone. That is exactly
- * how `deletedSnippet` first shipped broken (and how `groups` did before it;
- * see docs/process/learnings.md). Add new anchor fields HERE, not at the call
- * sites.
+ * What is NOT here, and why: the ydoc → Thread[] projection and its
+ * decorations live in `doc/thread-projection.ts`, the five server writes a
+ * card can make in `doc/thread-actions.ts`, the two writing surfaces in
+ * `doc/review-composer.ts`, the per-device view preferences in
+ * `doc/view-prefs.ts`, the selection → wire-anchor build in
+ * `doc/anchor-body.ts`, the resize handles in `doc/chrome-panels.ts` and the
+ * DOM helpers in `doc/chrome-dom.ts`. What is left is the WIRING: which
+ * surface repaints when, and which callback each panel gets.
  */
-export function anchorBody(sel: ChromeSelection) {
-  return {
-    kind: 'text-range' as const,
-    startRel: Array.from(sel.start),
-    endRel: Array.from(sel.end),
-    snippet: { text: sel.snippet },
-    ...(sel.deletedSnippet ? { deletedSnippet: sel.deletedSnippet } : {}),
-  };
-}
 
 export interface ChromeOpts {
   docId: string;
@@ -136,84 +111,6 @@ export interface ChromeOpts {
    * it required turns "did I wire all three" into a compile error.
    */
   canWrite: boolean;
-}
-
-/**
- * Should the threads drawer start open for this mount? Pure so the
- * drawer-default policy is unit-testable without a DOM.
- *  - mobile: never (it's an overlay there)
- *  - user toggled it this session: their choice wins
- *  - an always-on surface is showing (balloon margin, or inline cards):
- *    closed, because that surface already shows every comment and the drawer
- *    would be a second copy of the same threads
- *  - otherwise (a code doc above 1100px, which has neither): open
- */
-export function initialDrawerOpen(opts: {
-  isDesktop: boolean;
-  marginVisible: boolean;
-  /** Inline cards are this device's chosen surface — see `card-placement.ts`. */
-  inlineVisible: boolean;
-  stored: string | null;
-}): boolean {
-  if (!opts.isDesktop) return false;
-  if (opts.stored === 'open') return true;
-  if (opts.stored === 'closed') return false;
-  return !opts.marginVisible && !opts.inlineVisible;
-}
-
-const DRAWER_PREF_KEY = 'lf:drawer';
-
-/** Above this, a 320px doc list costs the prose nothing — Bryan's 4K monitor.
- *  Every phone, tablet and laptop is one tier below it and shares one answer.
- *  Deliberately NOT an attempt to identify a device: pinch-zoom scales the
- *  layout viewport (a 1366px iPad at 85% reports 1607px), so width cannot say
- *  what hardware this is. It can still say how much room there is. */
-export const WIDE_SCREEN_QUERY = '(min-width: 1921px)';
-
-const SET_PANE_PREF_KEY = 'lf:set-pane';
-
-/** Whether the review-set sidebar starts open. A stored choice wins in both
- *  directions; with nothing stored, only a 4K-class screen opens it. */
-export function initialSetPaneOpen(stored: string | null, isWide: boolean): boolean {
-  if (stored === 'open') return true;
-  if (stored === 'closed') return false;
-  return isWide;
-}
-
-/** Wire the topbar's doc-list toggle. Shell-level and doc-independent, so it
- *  runs once per page rather than per navigation — `mountReviewChrome` runs on
- *  every doc change, and a second listener here would flip the pane twice per
- *  click. The button's own visibility is CSS (`body.has-set` + the 1101px
- *  floor); this only owns the open/closed state. */
-export function wireSetPaneToggle(): void {
-  const btn = document.getElementById('toggle-set-pane');
-  if (!btn || btn.dataset.wired === '1') return;
-  btn.dataset.wired = '1';
-  const apply = (open: boolean) => {
-    document.body.classList.toggle('set-pane-open', open);
-    btn.setAttribute('aria-pressed', String(open));
-    btn.title = open ? 'Hide doc list' : 'Show doc list';
-    btn.setAttribute(
-      'aria-label',
-      open ? 'Hide the list of docs in this review' : 'Show the list of docs in this review',
-    );
-  };
-  let stored: string | null = null;
-  try {
-    stored = localStorage.getItem(SET_PANE_PREF_KEY);
-  } catch {
-    // storage unavailable — the tier default still applies.
-  }
-  apply(initialSetPaneOpen(stored, window.matchMedia(WIDE_SCREEN_QUERY).matches));
-  btn.addEventListener('click', () => {
-    const next = !document.body.classList.contains('set-pane-open');
-    apply(next);
-    try {
-      localStorage.setItem(SET_PANE_PREF_KEY, next ? 'open' : 'closed');
-    } catch {
-      // storage unavailable — the choice holds for this page only.
-    }
-  });
 }
 
 /**
@@ -363,25 +260,14 @@ export function mountReviewChrome(opts: ChromeOpts): ReviewChrome {
     toggleThreads.setAttribute('aria-pressed', 'false');
     document.getElementById('threads-pane')?.setAttribute('aria-hidden', 'true');
   }
-  // Explicit open/close via the toggle or the ✕ is a stated preference —
-  // remember it so per-file navigation in a diff review doesn't keep
-  // re-applying the balloon default the user just overrode. Session-scoped
-  // on purpose: a fresh visit re-evaluates the default.
-  function rememberDrawerPref(open: boolean): void {
-    try {
-      sessionStorage.setItem(DRAWER_PREF_KEY, open ? 'open' : 'closed');
-    } catch {
-      // storage unavailable — default logic reapplies per mount
-    }
-  }
   on(toggleThreads, 'click', () => {
     const open = !shell.classList.contains('threads-open');
     open ? openDrawer() : closeDrawer();
-    rememberDrawerPref(open);
+    writeDrawerPref(open);
   });
   on(closeThreads, 'click', () => {
     closeDrawer();
-    rememberDrawerPref(false);
+    writeDrawerPref(false);
   });
   on(scrim, 'click', closeDrawer);
 
@@ -416,12 +302,7 @@ export function mountReviewChrome(opts: ChromeOpts): ReviewChrome {
   });
   // Desktop layout shows the drawer inline. Default open — EXCEPT when a
   // balloon margin is visible, where the drawer duplicates the balloons.
-  let storedPref: string | null = null;
-  try {
-    storedPref = sessionStorage.getItem(DRAWER_PREF_KEY);
-  } catch {
-    // storage unavailable
-  }
+  const storedPref = readDrawerPref();
   const marginVisible =
     (opts.hasBalloonMargin ?? false) && window.matchMedia('(min-width: 1101px)').matches;
   // Enforce (not just apply-when-open): the `threads-open` class lives on the
@@ -448,141 +329,33 @@ export function mountReviewChrome(opts: ChromeOpts): ReviewChrome {
   }
 
   // --- thread data plumbing --------------------------------------------------
-  function resolveThreadRange(threadId: string): { from: number; to: number } | null {
-    const doc = ydoc.getMap('threads').get(threadId) as Y.Map<unknown> | undefined;
-    if (!doc) return null;
-    const anchor = doc.get('anchor') as
-      | { kind: 'text-range'; startRel: Uint8Array | number[]; endRel: Uint8Array | number[] }
-      | { kind: 'element' | 'orphan' }
-      | undefined;
-    if (!anchor || anchor.kind !== 'text-range') return null;
-    const startRel =
-      anchor.startRel instanceof Uint8Array ? anchor.startRel : new Uint8Array(anchor.startRel);
-    const endRel =
-      anchor.endRel instanceof Uint8Array ? anchor.endRel : new Uint8Array(anchor.endRel);
-    return surface.resolveRel(startRel, endRel);
-  }
-
-  function collectThreads(): Thread[] {
-    const threadsMap = ydoc.getMap('threads');
-    const out: Thread[] = [];
-    threadsMap.forEach((entry, id) => {
-      const threadMap = entry as Y.Map<unknown>;
-      const anchorRaw = threadMap.get('anchor') as Thread['anchor'] | undefined;
-      const status = threadMap.get('status') as Thread['status'] | undefined;
-      const createdBy = threadMap.get('createdBy') as User | undefined;
-      const commentsArr = threadMap.get('comments') as Y.Array<Y.Map<unknown>> | undefined;
-      if (!anchorRaw || !status || !createdBy) return;
-      const comments = [];
-      if (commentsArr) {
-        for (const c of commentsArr) {
-          const cid = c.get('id') as string | undefined;
-          const author = c.get('author') as User | undefined;
-          const text = c.get('text') as string | undefined;
-          const ts = c.get('ts') as number | undefined;
-          if (cid && author && text != null && ts != null) {
-            // The review payload is what makes a thread CARRY an item — drop
-            // it here and the panel renders a plain conversation: no item
-            // card, no Answer routing, no answered record. This reader is the
-            // panel's only source (see the summary note below), so the doc
-            // half of answering worked in every panel unit test and not at
-            // all through the mounted chrome until the glue tests posted
-            // through it.
-            const review = readReviewPayload(c.get('review'));
-            comments.push({ id: cid, author, text, ts, ...(review ? { review } : {}) });
-          }
-        }
-      }
-      // A text-range anchor that no longer resolves displays as orphaned so
-      // the panel offers the recover flow (the persisted anchor is untouched).
-      let displayAnchor: Thread['anchor'] = anchorRaw;
-      if (anchorRaw.kind === 'text-range') {
-        const r = resolveThreadRange(id);
-        if (!r) displayAnchor = { kind: 'orphan', original: anchorRaw, lastSeenAt: Date.now() };
-      }
-      // The generated summary is part of the thread, not a decoration on top
-      // of it: `threadLines` reads `t.summary`, so a Thread built without it
-      // silently renders the deterministic lines forever. This reader is the
-      // ONLY source of threads for the panel, the balloons and the mobile
-      // cards — the widget gets the lift for free via core's `readThread`,
-      // this surface does not. Same shape as the "route layer silently drops
-      // params" class in docs/process/learnings.md.
-      const summary = readStoredSummary(threadMap.get('summary'));
-      const pendingTsRaw = threadMap.get('summaryPendingTs');
-      const t: Thread = {
-        id,
-        status,
-        anchor: displayAnchor,
-        createdBy,
-        commentCount: comments.length,
-        lastActivity: comments.length > 0 ? (comments[comments.length - 1]?.ts ?? 0) : 0,
-        comments,
-        ...(summary ? { summary } : {}),
-        ...(typeof pendingTsRaw === 'number' ? { summaryPendingTs: pendingTsRaw } : {}),
-      };
-      // "A summary is being generated" is a server-written fact, not a guess:
-      // `summaryPendingTs` is stamped when a generation is QUEUED (gated
-      // visitor writes never stamp), and `summaryPending` time-bounds it so a
-      // failed call degrades to the deterministic lines.
-      if (summaryPending(t, { now: Date.now() })) {
-        t.summaryPending = true;
-        schedulePendingExpiry((t.summaryPendingTs ?? 0) + SUMMARY_PENDING_WINDOW_MS);
-      }
-      out.push(t);
-    });
-    return out;
-  }
-
-  // A pending card's ONLY exits are a summary syncing in (repaints via the
-  // ydoc observer) or its window expiring — and expiry is a clock event, not
-  // a doc event, so nothing would repaint the card without this timer. One
-  // timer, always armed for the EARLIEST expiry seen: a later `collect` may
-  // find a thread that expires sooner, so an earlier deadline retimes the
-  // timer rather than being swallowed by "one is already scheduled".
-  let pendingExpiryTimer: ReturnType<typeof setTimeout> | null = null;
-  let pendingExpiryAt = Number.POSITIVE_INFINITY;
-  function schedulePendingExpiry(expiresAt: number): void {
-    const fireAt = expiresAt + 250; // small slack so the redraw lands after expiry
-    if (fireAt >= pendingExpiryAt) return;
-    if (pendingExpiryTimer != null) clearTimeout(pendingExpiryTimer);
-    pendingExpiryAt = fireAt;
-    pendingExpiryTimer = setTimeout(
-      () => {
-        clearPendingExpiry();
-        redrawThreads();
-      },
-      Math.max(0, fireAt - Date.now()),
-    );
-  }
-  function clearPendingExpiry(): void {
-    if (pendingExpiryTimer != null) clearTimeout(pendingExpiryTimer);
-    pendingExpiryTimer = null;
-    pendingExpiryAt = Number.POSITIVE_INFINITY;
-  }
+  // The ydoc → Thread[] projection, the anchor decorations, the seen tracker's
+  // in-place dot removal and the pending-summary expiry timer live in
+  // doc/thread-projection.ts with the state they own. The chrome keeps only
+  // the fan-out below: which surfaces get repainted when that projection
+  // changes.
 
   // Per doc, per browser: which threads this reader has looked at. Drives the
   // red "new" dot on the card, the highlight and the off-screen hints.
   const seen = createSeenTracker({ docId });
-  function markSeen(threadId: string): boolean {
-    const t = collectThreads().find((x) => x.id === threadId);
-    if (!t) return false;
-    if (!seen.markSeen(t)) return false;
-    for (const el of threadCards(threadId)) {
-      el.classList.remove('is-new');
-      // The dot rides the glyph rather than a "NEW" tag beside it — one of
-      // the chips this card round removed, so there is nothing left to strip
-      // out of the head; clearing the class takes the dot with it.
-      el.querySelector('.thread-glyph')?.classList.remove('is-new');
-    }
-    refreshThreadDecorations(activeThreadId);
-    return true;
-  }
+  const projection = createThreadProjection({
+    ydoc,
+    surface,
+    seen,
+    onPendingExpiry: () => redrawThreads(),
+  });
+  const {
+    collect: collectThreads,
+    resolveRange: resolveThreadRange,
+    refreshDecorations: refreshThreadDecorations,
+    lineLabel: threadLineLabel,
+    markSeen,
+  } = projection;
 
-  let activeThreadId: string | null = null;
   function redrawThreads(): void {
     const all = collectThreads();
     threadsPanel.setThreads(all);
-    refreshThreadDecorations(activeThreadId);
+    refreshThreadDecorations(projection.activeThreadId());
     const counts = threadsPanel.countByStatus();
     const openCount = counts.open + counts.orphan;
     threadsCount.textContent = String(openCount);
@@ -597,39 +370,17 @@ export function mountReviewChrome(opts: ChromeOpts): ReviewChrome {
     const modalId = threadModal.openThreadId();
     if (modalId) threadModal.refresh(all.find((t) => t.id === modalId) ?? null);
   }
-  function refreshThreadDecorations(activeId: string | null): void {
-    activeThreadId = activeId;
-    const ranges = collectThreads()
-      .filter((t) => t.anchor.kind === 'text-range')
-      .map((t) => {
-        const r = resolveThreadRange(t.id);
-        if (!r) return null;
-        return {
-          id: t.id,
-          from: r.from,
-          to: r.to,
-          status: t.status,
-          kind: threadKind(t),
-          isNew: seen.isNew(t),
-        };
-      })
-      .filter((x): x is NonNullable<typeof x> => x != null);
-    surface.setThreadRanges(ranges, activeId);
-  }
-
-  // "L293" / "L293–301" for line-oriented surfaces (code/diff); null on
-  // prose. Recomputed at render time so labels track live edits.
-  function threadLineLabel(threadId: string): string | null {
-    if (!surface.lineForPos) return null;
-    const r = resolveThreadRange(threadId);
-    if (!r) return null;
-    const a = surface.lineForPos(r.from);
-    const b = surface.lineForPos(Math.max(r.from, r.to - 1));
-    if (a == null) return null;
-    return b != null && b > a ? `L${a}–${b}` : `L${a}`;
-  }
-
   // --- thread panel ------------------------------------------------------
+  // Every write a card can make. Stateless and DOM-free — see
+  // doc/thread-actions.ts for why the failure contract is the reason they are
+  // one module.
+  const actions = createThreadActions({
+    docId,
+    user,
+    getSelection: opts.getSelection,
+    reanchorHint: opts.reanchorHint,
+  });
+
   // The wide modal a thread too big for the column opens in. Built BEFORE the
   // panel it renders from: the two reference each other, so one of them has to
   // be named first, and every reference here is inside a closure that does not
@@ -764,109 +515,25 @@ export function mountReviewChrome(opts: ChromeOpts): ReviewChrome {
     },
     onThreadClick: (id) => engageThread(id),
     isNew: (t) => seen.isNew(t),
-    onReply: async (id, text, answersCommentId, optionId) => {
-      // Two routes, one reply. `/answer` posts the SAME comment and
-      // additionally stamps `answeredAt` on the declaring comment, which is
-      // what takes the item off the Home queue. The panel decides which by
-      // handing back an id or not; sending one the server did not declare is
-      // refused rather than invented, so there is nothing to guess here.
-      //
-      // Until this branch existed, every doc reply went to `/comments`, so a
-      // review item could be read in the doc, answered in the person's own
-      // words, and stay queued — which is exactly what happened four times on
-      // `board-review-2026-08-19`.
-      const base = `/api/docs/${encodeURIComponent(docId)}/threads/${encodeURIComponent(id)}`;
-      let res: Response;
-      try {
-        res = await fetch(answersCommentId ? `${base}/answer` : `${base}/comments`, {
-          method: 'POST',
-          headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({
-            author: user,
-            text,
-            ...(answersCommentId ? { commentId: answersCommentId } : {}),
-            // Provenance for a tapped option — records WHICH offered candidate
-            // the verbatim words came from. Typed answers send none.
-            ...(answersCommentId && optionId ? { optionId } : {}),
-          }),
-        });
-      } catch {
-        if (answersCommentId) showToast('Answer failed to post — try again');
-        return false;
-      }
-      // A failed answer must not read as a posted one: the toast says try
-      // again, and the returned `false` is what makes trying again possible —
-      // the panel puts the typed words back in the box.
-      if (!res.ok && answersCommentId) {
-        showToast('Answer failed to post — try again');
-      }
-      return res.ok;
+    // The five server writes a card can make — reply / answer, undo-answer,
+    // resolve, reopen, re-anchor — live in doc/thread-actions.ts with the
+    // failure contract they share. Nothing repaints from their return value:
+    // the server writes the thread, the CRDT syncs it, and the observer below
+    // redraws. The one exception is `reply`, whose `false` is what lets the
+    // panel put the typed words back in the box.
+    onReply: (id, text, answersCommentId, optionId) =>
+      actions.reply(id, text, answersCommentId, optionId),
+    onUndoAnswer: (id, commentId) => {
+      void actions.undoAnswer(id, commentId);
     },
-    onUndoAnswer: async (id, commentId) => {
-      // Soft delete on the server: the stamps move into `answerHistory` and
-      // the reply comment stays. The doc's own websocket repaint is what
-      // re-renders the thread as pending again, so success needs no client
-      // state here.
-      const res = await fetch(
-        `/api/docs/${encodeURIComponent(docId)}/threads/${encodeURIComponent(id)}/answer/undo`,
-        {
-          method: 'POST',
-          headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({ author: user, commentId }),
-        },
-      );
-      if (!res.ok) {
-        // "not-answered" means somebody else took it back first — the live
-        // repaint is already showing that, and a failure toast over an
-        // already-done undo would read as a broken button.
-        const err = (await res.json().catch(() => undefined)) as { error?: string } | undefined;
-        if (err?.error !== 'not-answered') showToast('Undo failed — try again');
-      }
+    onResolve: (id) => {
+      void actions.resolve(id);
     },
-    onResolve: async (id) => {
-      try {
-        const res = await fetch(
-          `/api/docs/${encodeURIComponent(docId)}/threads/${encodeURIComponent(id)}/resolve`,
-          { method: 'POST' },
-        );
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        showToast('✓ Resolved');
-      } catch {
-        showToast('Failed to resolve — try again');
-      }
+    onReopen: (id) => {
+      void actions.reopen(id);
     },
-    onReopen: async (id) => {
-      try {
-        const res = await fetch(
-          `/api/docs/${encodeURIComponent(docId)}/threads/${encodeURIComponent(id)}/reopen`,
-          { method: 'POST' },
-        );
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        showToast('✓ Reopened');
-      } catch {
-        showToast('Failed to reopen — try again');
-      }
-    },
-    onReanchor: async (id) => {
-      const sel = opts.getSelection();
-      if (!sel) {
-        showToast(opts.reanchorHint);
-        return;
-      }
-      try {
-        const res = await fetch(
-          `/api/docs/${encodeURIComponent(docId)}/threads/${encodeURIComponent(id)}/reanchor`,
-          {
-            method: 'POST',
-            headers: { 'content-type': 'application/json' },
-            body: JSON.stringify({ anchor: anchorBody(sel) }),
-          },
-        );
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        showToast('✓ Re-anchored');
-      } catch {
-        showToast('Failed to re-anchor — try again');
-      }
+    onReanchor: (id) => {
+      void actions.reanchor(id);
     },
   });
 
@@ -1085,7 +752,7 @@ export function mountReviewChrome(opts: ChromeOpts): ReviewChrome {
       // chrome and fire `redrawThreads` for the document we just left —
       // repainting the previous doc's threads over the next mount, which
       // reuses the same DOM.
-      clearPendingExpiry();
+      projection.clearPendingExpiry();
       threadsListEl.innerHTML = '';
       hideComposer();
       closeThreadView();
@@ -1155,7 +822,3 @@ export function mobileLabel(full: string): string {
   const base = parts[parts.length - 1] ?? s;
   return base.length <= 32 ? base : `…${base.slice(-31)}`;
 }
-
-/** Exposed for unit tests — this is the layer that silently drops anchor
- *  fields, so it needs a test of its own. Not part of the public surface. */
-export const __testing = { anchorBody };
