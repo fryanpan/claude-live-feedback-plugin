@@ -327,8 +327,8 @@ export function insertTextWithMarks(
     insert?: string;
     attributes?: Record<string, unknown>;
   }> = offset > 0 ? [{ retain: offset }, ...delta] : [...delta];
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  node.applyDelta(positioned as any);
+  // `applyDelta` takes `Array<any>`, so the typed array above needs no cast.
+  node.applyDelta(positioned);
 }
 
 /**

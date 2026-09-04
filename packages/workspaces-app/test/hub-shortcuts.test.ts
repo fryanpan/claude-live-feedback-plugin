@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { hubShortcutKeydown } from '../src/hub/hub-shortcuts.ts';
+import { hubShortcutKeydown, wireHubShortcuts } from '../src/hub/hub-shortcuts.ts';
 
 // The regression this file pins: opening a task detail moves focus INTO the
 // panel (deliberately — hold-to-talk needs a focus target), which left the
@@ -288,5 +288,75 @@ describe('modifier chords pass through (the Cmd+C steal)', () => {
     const f = fixture(null);
     press('?', f.handler, { shiftKey: true });
     expect(f.help.classList.contains('hidden')).toBe(false);
+  });
+});
+
+/**
+ * `wireHubShortcuts` — the boot half: which document hears the keys, and the
+ * one rule that only exists at the wiring seam. The handler's own decisions
+ * are driven above; what is left here is that the listener is registered at
+ * all, and that `e` cannot archive a row the board has already archived (the
+ * restore list is the one place such a row is still reachable by keyboard).
+ */
+describe('wireHubShortcuts', () => {
+  function wire(over: Partial<Parameters<typeof wireHubShortcuts>[0]> = {}) {
+    const help = document.createElement('div');
+    help.id = 'hub-help';
+    help.classList.add('hidden');
+    document.body.replaceChildren(help);
+    const archived = new Set<string>();
+    const archiveTask = vi.fn();
+    const renderDetail = vi.fn();
+    const state = {
+      detailTaskId: null as string | null,
+      detailGoalId: null as string | null,
+      detailThreadId: null as string | null,
+      tasks: {
+        get: (id: string) => (id === 't-1' ? { id: 't-1' } : undefined),
+      },
+    };
+    wireHubShortcuts({
+      document,
+      state,
+      el: () => help,
+      renderDetail,
+      archiveTask,
+      isArchived: (t) => archived.has(t.id),
+      ...over,
+    });
+    return { state, archiveTask, renderDetail, archived, help };
+  }
+
+  function press(key: string): void {
+    document.dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true }));
+  }
+
+  it('hears keys on the document it was given', () => {
+    const w = wire();
+    press('?');
+    expect(w.help.classList.contains('hidden')).toBe(false);
+  });
+
+  it('closes both overlays on Escape, not just the task panel', () => {
+    const w = wire();
+    w.state.detailTaskId = 't-1';
+    w.state.detailGoalId = 'g-1';
+    w.state.detailThreadId = 'th-1';
+    press('Escape');
+    expect(w.state.detailTaskId).toBeNull();
+    expect(w.state.detailGoalId).toBeNull();
+    expect(w.state.detailThreadId).toBeNull();
+    expect(w.renderDetail).toHaveBeenCalled();
+  });
+
+  it('refuses to archive a row that is already archived', () => {
+    const w = wire();
+    w.archived.add('t-1');
+    const row = document.createElement('div');
+    row.className = 'hub-task-row';
+    row.dataset.taskId = 't-1';
+    document.body.append(row);
+    press('e');
+    expect(w.archiveTask).not.toHaveBeenCalled();
   });
 });

@@ -295,7 +295,14 @@ export async function handleDocsTool(
       const res = await http('DELETE', `/api/docs/${encodeURIComponent(docId)}${qs}`);
       return ok(res);
     }
-    case 'bind_mock': {
+    // COMPAT: `bind_mock` and `bind_folder` are the names these two had
+    // before Attachment became the product's word for what they do. A peer
+    // still running last week's bundle, or an agent working from a stale
+    // skill, calls the old name; it lands on the same arm and the log says so
+    // once (deprecated-aliases.ts). The tool LIST advertises the new names
+    // only — one name for one thing in the table an agent reads.
+    case 'bind_mock':
+    case 'attach_mockup': {
       const { docId, sourceHtmlPath, title, hubWorkspaceId } = a as {
         docId: string;
         sourceHtmlPath?: string;
@@ -315,7 +322,8 @@ export async function handleDocsTool(
       });
       return ok(res);
     }
-    case 'bind_folder': {
+    case 'bind_folder':
+    case 'attach_folder': {
       const {
         folderPath,
         workspaceId,

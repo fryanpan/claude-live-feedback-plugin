@@ -63,6 +63,13 @@ describe('MCP tool wiring', () => {
     for (const [alias, now] of [
       ['refresh_workspace', 'refresh_review'],
       ['set_workspace_groups', 'set_review_groups'],
+      // The 2026-09 pass that made the verbs match the product's own words.
+      // Their once-per-session deprecation line and the prose sweep that went
+      // with them are asserted in deprecated-aliases.test.ts.
+      ['bind_folder', 'attach_folder'],
+      ['bind_mock', 'attach_mockup'],
+      ['promote_to_task', 'spin_off_task'],
+      ['retire_workspace', 'archive_workspace'],
     ] as const) {
       expect(SRC, alias).toMatch(new RegExp(`\\n( {4,6})case '${alias}':\\n\\1case '${now}': \\{`));
       // …and the old name is NOT advertised: an agent reading the tool list

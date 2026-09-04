@@ -300,7 +300,7 @@ Every count that went wrong had one.
 
 ## Diff review (type='diff') — immutable content changes the rules
 
-- **A diff review is "bind_folder where the file list comes from `git diff`
+- **A diff review is "attach_folder where the file list comes from `git diff`
   and the bytes come from `git show target:path`".** One doc per changed
   file grouped under workspaceId = reviewId buys the tree UI, thread stack,
   SSE watch, delete_workspace, and cleanup for free. Content pinned to a
@@ -2561,9 +2561,12 @@ kernel-wide socket CREATION failing, and its cause is still unknown.**
   memory**, which on one day briefed a fan-out of parallel agents with an
   incomplete set. CLAUDE.md now carries the canonical block ("The four gates —
   run all of them before you push", landed in #170). Read it, don't recall it.
-- The pre-existing `noExplicitAny` output is **warnings**, and `biome check`
-  exits 0 over warnings — don't chase them, and don't read a trailing
-  "Found 2 warnings" as a failure.
+- The pre-existing `noExplicitAny` output was **warnings**, and `biome check`
+  exits 0 over warnings — so a trailing "Found 2 warnings" was not a failure.
+  Superseded 2026-09-04: both warnings were redundant `as any` casts over yjs
+  APIs already typed `any`, so they are gone and `noExplicitAny` is an
+  **error**. A `biome check` warning count above zero is now a thing to look
+  at, and a cast you cannot avoid takes a `biome-ignore` line with a reason.
 - **A worktree with no `node_modules` fails typecheck with a wall of TS2307 /
   TS7006 that reads exactly like a real regression.** `bun install
   --frozen-lockfile` first. And check the EXIT CODE, not the tail of the
@@ -3321,7 +3324,7 @@ the claim needed and the one the probe never made.
 ### The bug the vacuous check was hiding
 
 Chasing the same links turned up why one of them was really broken, and it is
-worth its own note: **`bind_mock`'s tool description documents behaviour that
+worth its own note: **`attach_mockup`'s tool description documents behaviour that
 has no implementation.** It says *"Idempotent — calling twice on the same docId
 is safe; just updates the bound source path."* Rebinding an existing docId to a
 new path returns `200` with the OLD `sourceUrl` still in the response, and goes
@@ -3413,7 +3416,7 @@ write-once in practice, and the repair verb for a moved file cannot repair it.
   left theirs behind.
 - **0.1.93 adds the single-doc half**: `Rooms.archiveDoc` / `unarchiveDoc`,
   reached from `archive_doc` / `unarchive_doc`, for the few hundred
-  free-standing docs (a `create_review_doc` markdown doc, a `bind_mock`
+  free-standing docs (a `create_review_doc` markdown doc, an `attach_mockup`
   mockup) that belong to no review and so had no soft path at all. Manifest
   at `_archive/<docId>.doc.json` — a different suffix from a review's, so
   each listing enumerates its own kind. It REFUSES a doc that carries a

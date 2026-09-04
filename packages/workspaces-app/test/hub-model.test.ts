@@ -56,6 +56,7 @@ import {
   reviewReplyRequest,
   reviewRow,
 } from '../src/hub/hub-review-model.ts';
+import { HUB_BOOT_SOURCES } from './support/hub-boot-sources.ts';
 
 /** All fixtures are synthetic — invented names, jordan@partner.example register. */
 
@@ -2223,7 +2224,9 @@ describe('unplacedNotice — the quiet bucket says how many and how long', () =>
  * empty file cannot read as a clean result.
  */
 describe('the detail panel takes its asks through panelAsks', () => {
-  const hubApp = readFileSync(resolve(import.meta.dirname, '../src/hub/hub-app.ts'), 'utf8');
+  const hubApp = HUB_BOOT_SOURCES.map((m) =>
+    readFileSync(resolve(import.meta.dirname, `../src/hub/${m}.ts`), 'utf8'),
+  ).join('\n');
 
   it('calls panelAsks and no longer filters reviewItems by taskId inline', () => {
     // Positive control: the read found the real file.
