@@ -382,9 +382,7 @@ describe("a linked doc's discussion counts too", () => {
   }
 
   /** Ask a question ON the doc, as `create_thread(review=…)` does. */
-  async function askOnDoc(
-    docId: string,
-  ): Promise<{ threadId: string; commentId: string }> {
+  async function askOnDoc(docId: string): Promise<{ threadId: string; commentId: string }> {
     const { thread } = await jj<{ thread: { id: string; comments: Array<{ id: string }> } }>(
       await post(`/api/docs/${encodeURIComponent(docId)}/threads`, {
         text: 'Does this round read the way you wanted?',

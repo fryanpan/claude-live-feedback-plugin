@@ -244,6 +244,31 @@ export interface StallNudgeFrame {
    */
   heldItems?: readonly HeldItemRow[];
   /**
+   * What is new since the last wake this board was sent — the reason the
+   * lead is being woken again rather than the whole state of the board.
+   *
+   * Beside `rows` rather than instead of it. Driving every finding is the
+   * frame's job, so the list stays uncapped; but a repeat that re-lists four
+   * rows when one of them moved makes the reader diff two frames in their
+   * head to find out why they were woken, which is the lookup this frame
+   * exists to save.
+   *
+   * Absent on a board's FIRST wake, where everything in it is new and a
+   * second copy of the same list would be noise.
+   */
+  changed?: {
+    /** Rows named here that this board's lead has not been told about, or
+     *  that came back under a different bucket. */
+    rows?: readonly StalledRow[];
+    /** Ids of rows the pass could not read that it could read last time. */
+    undetermined?: readonly string[];
+    /** Holds placed since the last wake. */
+    heldItems?: readonly HeldItemRow[];
+    /** The board's worst row crossed another repeat window. Present only when
+     *  true, so its absence is "nothing got older", not "false". */
+    escalated?: true;
+  };
+  /**
    * The lead this wake was ADDRESSED to, when it was delivered to somebody
    * else because the lead could not be reached. Absent on the ordinary wake,
    * so its presence is the whole signal: the reader is a stand-in, and the
@@ -299,13 +324,46 @@ export interface StallNudgerOptions {
 }
 
 /** The stamp file's shape. Versioned so a later format change can recognise an
- *  older file rather than treating it as corrupt. */
+ *  older file rather than treating it as corrupt. `told` is additive: a file
+ *  written before it existed simply has none, and `loadStamps` seeds it from
+ *  the stamp so the upgrade costs no board a wake. */
 interface StampFile {
   version: number;
   stamps: Record<string, string>;
+  /** workspaceId → rowId → the bucket the row was last named under. */
+  told?: Record<string, Record<string, string>>;
 }
 
 const STAMP_FORMAT_VERSION = 1;
+
+/**
+ * The bucket recorded for a row remembered from a stamp written before this
+ * memory existed. It compares equal to every bucket, so such a row is not
+ * news until it leaves and stays gone — the alternative is one wake per board
+ * on the first tick after this deploys, over rows their leads had been told
+ * about already.
+ */
+const UNKNOWN_BUCKET = '?';
+
+/**
+ * How many rows a board may remember. The memory exists so a row that laps
+ * its quiet window is not re-said; it must not become a list of every row
+ * ever named on a long-lived board. Rows fall out by age first (a whole
+ * repeat window without being a finding), and this is the backstop for a
+ * board churning faster than that.
+ */
+const TOLD_ROWS_PER_BOARD = 200;
+
+/** One row this board's lead has already been told about. */
+interface ToldRow {
+  /** The bucket it was named under. A row coming back under a DIFFERENT one
+   *  is news: the lead's next move differs per bucket. */
+  bucket: string;
+  /** When it was last SEEN as a finding — refreshed every tick it is on the
+   *  list, wake or no wake, because the question this answers is how long the
+   *  row has been off the list, not how long since anyone was told. */
+  seenAt: number;
+}
 
 /** The distinct reasons a pass could not evaluate rows, sorted so the same
  *  condition renders the same way twice. */
@@ -349,6 +407,24 @@ export class StallNudger {
   private readonly report: (message: string) => void;
   /** The stamp each workspace was last woken for. */
   private readonly armed = new Map<string, string>();
+  /**
+   * Which rows each board's lead has already been told about, and when each
+   * was last seen on the list.
+   *
+   * Separate from `armed`, and the reason this exists: the stamp is the
+   * board's CURRENT set, so a row leaving it was forgotten, and the row
+   * lapping its quiet window again read as a brand-new stall. On a board
+   * whose owner posts a status every turn that is one wake per window
+   * forever — measured 2026-09-04 as five wakes in sixty-five minutes over
+   * two rows that were being actively worked, one of them with an open
+   * question sitting on the reader's queue the whole time.
+   *
+   * Deliberately NOT cleared when a board goes wholly clean, which is where
+   * the obvious version puts it: on a one-row board every wake is followed by
+   * a clean board the moment the owner posts anything, and forgetting there
+   * would restore the exact loop this removes.
+   */
+  private readonly told = new Map<string, Map<string, ToldRow>>();
   /** The unevaluable condition each workspace was last REPORTED for. Separate
    *  from `armed` because the two fire on different rules: a wake is owed once
    *  per board stamp, while the report is owed once per distinct condition
@@ -400,6 +476,7 @@ export class StallNudger {
     // The pruning has to reach the FILE too, or the durable copy grows for the
     // life of the install while the in-memory one stays bounded.
     for (const key of this.armed.keys()) if (!live.has(key)) this.armed.delete(key);
+    for (const key of this.told.keys()) if (!live.has(key)) this.told.delete(key);
     for (const key of this.reported.keys()) if (!live.has(key)) this.reported.delete(key);
     for (const key of this.filersTold) {
       if (!live.has(key.slice(0, key.indexOf('|')))) this.filersTold.delete(key);
@@ -472,10 +549,12 @@ export class StallNudger {
     // unevaluable board would otherwise leave no trace anywhere. It dedupes on
     // the condition itself, so a tick that says nothing costs no line.
     this.reportUnevaluable(board);
-    if (!this.growsOn(this.armed.get(key), stamp)) {
+    const memory = this.rememberSeen(key, board, now);
+    const change = this.changeOn(this.armed.get(key), stamp, board, memory.before);
+    if (!change) {
       // Silent, but RECORDED. A shrink that left the old stamp standing would
-      // keep naming rows that are no longer on the list, and the row coming
-      // back would then read as unchanged and never fire.
+      // keep naming rows that are no longer on the list, so the board's
+      // escalation bucket would be read against a set it no longer has.
       this.armed.set(key, stamp);
       return;
     }
@@ -510,10 +589,73 @@ export class StallNudger {
             },
           }
         : {}),
+      // Omitted on a board this process has never woken: there everything is
+      // new, and a second copy of the same list says nothing.
+      ...(memory.firstWake ? {} : { changed: change }),
       ...(to.escalatedFrom !== undefined ? { escalatedFrom: to.escalatedFrom } : {}),
       ts: now,
     });
     this.armed.set(key, stamp);
+    // Recorded only now, after a delivered wake — a row named while the lead
+    // held no stream must stay news, or the lead comes back to a board that
+    // has decided it told them.
+    for (const row of [...board.stalled, ...board.unfiled]) {
+      memory.rows.set(row.id, { bucket: row.bucket, seenAt: now });
+    }
+    // A held item's TICKET counts as told, under no bucket in particular:
+    // the lead has been handed that ticket, so the same ticket later going
+    // quiet or reading as unfiled over the same held ask is not a second
+    // wake. That was the stamp's job when held ids lived in it beside the
+    // row ids; it is this memory's now, and it must not be dropped in the
+    // move.
+    for (const item of held) {
+      if (!memory.rows.has(item.id))
+        memory.rows.set(item.id, { bucket: UNKNOWN_BUCKET, seenAt: now });
+    }
+    this.capTold(memory.rows);
+  }
+
+  /**
+   * Refresh how recently each finding row was SEEN, drop rows that have been
+   * off the list for a whole repeat window, and hand back what the board
+   * remembered BEFORE this tick — which is what the news is measured against.
+   *
+   * The age is measured from last seen rather than from last told on purpose:
+   * a row that sits on the list untouched would otherwise be forgotten one
+   * repeat window after its wake and re-fire, which is a repeat keyed on the
+   * clock — the shape this whole file refuses. Escalation is the only clock
+   * that may re-say a row, and it is the board's, not the row's.
+   */
+  private rememberSeen(
+    key: string,
+    board: StallSnapshot,
+    now: number,
+  ): { rows: Map<string, ToldRow>; before: Map<string, ToldRow>; firstWake: boolean } {
+    let rows = this.told.get(key);
+    if (!rows) {
+      rows = new Map<string, ToldRow>();
+      this.told.set(key, rows);
+    }
+    const before = new Map(rows);
+    for (const [id, seen] of rows) {
+      if (now - seen.seenAt > this.repeatMs) rows.delete(id);
+    }
+    for (const id of [
+      ...board.stalled.map((r) => r.id),
+      ...board.unfiled.map((r) => r.id),
+      ...(board.held ?? []).map((r) => r.id),
+    ]) {
+      const seen = rows.get(id);
+      if (seen) seen.seenAt = now;
+    }
+    return { rows, before, firstWake: before.size === 0 };
+  }
+
+  /** Keep the newest `TOLD_ROWS_PER_BOARD` — see the constant. */
+  private capTold(rows: Map<string, ToldRow>): void {
+    if (rows.size <= TOLD_ROWS_PER_BOARD) return;
+    const oldestFirst = [...rows.entries()].sort((a, b) => a[1].seenAt - b[1].seenAt);
+    for (const [id] of oldestFirst.slice(0, rows.size - TOLD_ROWS_PER_BOARD)) rows.delete(id);
   }
 
   /**
@@ -684,15 +826,57 @@ export class StallNudger {
    *
    * An absent stamp is a board this process has never woken, which is news by
    * definition.
+   *
+   * ── What "a NEW thing stuck" means, and why it is not the stamp ────────
+   *
+   * It used to be a row id absent from the previous stamp, and the previous
+   * stamp is the board's CURRENT set — so a row that left the list was
+   * forgotten and its next quiet window read as a brand-new stall. See
+   * `told`: that is one wake per window, forever, on any board whose owner
+   * keeps reporting. A row is news now when the board has never been woken
+   * about it, or when it comes back under a different BUCKET — which is the
+   * case the id-only rule was protecting, a dispatched row whose builder then
+   * died coming back as `builder-silent` rather than as the same row.
+   *
+   * The bucket is compared out here rather than being folded back into the
+   * stamp, and that distinction is load-bearing: a row changing bucket while
+   * it stays on the list is most often the lead's OWN action landing, and a
+   * stamp token that moved would wake them to announce it.
+   *
+   * Returns what changed, or `undefined` for "say nothing" — one value, so
+   * the decision to wake and the account of why cannot disagree.
    */
-  private growsOn(prior: string | undefined, next: string): boolean {
-    if (prior === undefined) return true;
-    const before = parseStamp(prior);
+  private changeOn(
+    prior: string | undefined,
+    next: string,
+    board: StallSnapshot,
+    told: Map<string, ToldRow>,
+  ): StallNudgeFrame['changed'] | undefined {
+    const before = prior === undefined ? undefined : parseStamp(prior);
     const after = parseStamp(next);
-    if (after.bucket > before.bucket) return true;
-    for (const id of after.ids) if (!before.ids.has(id)) return true;
-    for (const row of after.undetermined) if (!before.undetermined.has(row)) return true;
-    return false;
+    const escalated = before !== undefined && after.bucket > before.bucket;
+    const rows = [...board.stalled, ...board.unfiled].filter((row) => {
+      const seen = told.get(row.id);
+      if (seen === undefined) return true;
+      // A row remembered from a stamp written before this memory existed
+      // carries no bucket to compare — see UNKNOWN_BUCKET.
+      return seen.bucket !== UNKNOWN_BUCKET && seen.bucket !== row.bucket;
+    });
+    const undetermined = board.undetermined
+      .map((u) => `${u.id}:${u.reason}`)
+      .filter((token) => before === undefined || !before.undetermined.has(token))
+      .map((token) => token.slice(0, token.lastIndexOf(':')));
+    const heldItems = (board.held ?? []).filter(
+      (item) => before === undefined || !before.ids.has(`held:${item.reviewItemId}@${item.heldAt}`),
+    );
+    if (!escalated && rows.length === 0 && undetermined.length === 0 && heldItems.length === 0)
+      return undefined;
+    return {
+      ...(rows.length > 0 ? { rows } : {}),
+      ...(undetermined.length > 0 ? { undetermined } : {}),
+      ...(heldItems.length > 0 ? { heldItems } : {}),
+      ...(escalated ? { escalated: true as const } : {}),
+    };
   }
 
   /**
@@ -783,6 +967,33 @@ export class StallNudger {
         // entry must not cost every other board its arming.
         if (typeof stamp === 'string') this.armed.set(workspaceId, stamp);
       }
+      // The rows each board has been told about. Seen-times are NOT stored —
+      // every remembered row is given a fresh window at boot, so a restart can
+      // extend a row's memory but never cut it short. That keeps the file
+      // byte-stable between ticks, which is what lets `saveStamps` write only
+      // when something actually changed rather than once a minute forever.
+      const now = this.now();
+      const told = parsed.told;
+      if (told && typeof told === 'object') {
+        for (const [workspaceId, rows] of Object.entries(told)) {
+          if (!rows || typeof rows !== 'object') continue;
+          const map = new Map<string, ToldRow>();
+          for (const [id, bucket] of Object.entries(rows)) {
+            if (typeof bucket === 'string') map.set(id, { bucket, seenAt: now });
+          }
+          if (map.size > 0) this.told.set(workspaceId, map);
+        }
+      }
+      // A file written before this memory existed: seed it from the stamp, so
+      // the upgrade costs no board the one wake it would otherwise re-fire
+      // over rows their leads had already been told about.
+      for (const [workspaceId, stamp] of this.armed) {
+        if (this.told.has(workspaceId)) continue;
+        const map = new Map<string, ToldRow>();
+        for (const id of parseStamp(stamp).ids)
+          map.set(id, { bucket: UNKNOWN_BUCKET, seenAt: now });
+        if (map.size > 0) this.told.set(workspaceId, map);
+      }
       this.lastPersisted = this.serializeStamps();
     } catch {
       this.armed.clear();
@@ -797,7 +1008,15 @@ export class StallNudger {
     for (const key of Array.from(this.armed.keys()).sort()) {
       stamps[key] = this.armed.get(key) as string;
     }
-    const file: StampFile = { version: STAMP_FORMAT_VERSION, stamps };
+    const told: Record<string, Record<string, string>> = {};
+    for (const key of Array.from(this.told.keys()).sort()) {
+      const rows = this.told.get(key);
+      if (!rows || rows.size === 0) continue;
+      const out: Record<string, string> = {};
+      for (const id of Array.from(rows.keys()).sort()) out[id] = (rows.get(id) as ToldRow).bucket;
+      told[key] = out;
+    }
+    const file: StampFile = { version: STAMP_FORMAT_VERSION, stamps, told };
     return `${JSON.stringify(file, null, 2)}\n`;
   }
 
