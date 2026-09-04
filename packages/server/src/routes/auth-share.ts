@@ -717,6 +717,51 @@ export async function handleAuthShareRoutes(
     if (body?.label !== undefined && typeof body.label !== 'string') {
       return j(400, { error: 'bad_label', hint: 'label must be a string' });
     }
+    // --- THE PER-SHARE APPLICATION MINT IS RETIRED WHERE THE 2026-09-03
+    // --- FLOW IS CONFIGURED ---
+    //
+    // Two machineries answered one product question. This one asks Cloudflare
+    // to create an Access APPLICATION, a policy and a hostname per share, so
+    // who may open a board is a policy held in Cloudflare and minting needs an
+    // API token on the box. The other — `share_workspace`, the flow Bryan
+    // chose on 2026-09-03 — writes a membership row behind the ONE Access
+    // application covering the share hostname, so the same question is
+    // answered by this server's own record and `remove_share_member` can
+    // eject somebody from it.
+    //
+    // Neither was an unauthenticated hole: a per-share application verified a
+    // token like everything else, which is why this is a tidying rather than
+    // a security fix. What it ends is a deployment running BOTH, where "who
+    // can open this board" has two answers that drift.
+    //
+    // Keyed on `shareLinkBaseHost` — the share hostname — because that is what
+    // says this deployment is on the new flow. A deployment that configured no
+    // share hostname has no replacement to be sent to, and refusing there
+    // would leave it unable to publish a board at all, so it keeps the mint
+    // below. Prod configures the share hostname, so prod mints nothing here.
+    //
+    // BELOW every payload and board check, and that placement is the same
+    // decision the sibling route's own configuration refusal documents: a
+    // caller sharing something that could never be shared — the Unfiled
+    // board, a diff review, a doc — must hear WHICH, rather than be told to
+    // go use a verb that would refuse it for the same reason. Above the
+    // audience and TTL resolution, because those are mint mechanics and there
+    // is no mint left to feed.
+    //
+    // 410 with the replacement named, and the ROUTE STAYS: older bundles keep
+    // calling the shared server with the payload theirs sends long after this
+    // one stopped sending it (CLAUDE.md), and the useful reply names
+    // `share_workspace` rather than reading as "your server is broken".
+    //
+    // Records already minted this way are UNTOUCHED. `list_shares` lists
+    // them, `set_share_ttl` shortens one, `unshare` revokes one, and their
+    // hostnames still classify `share` and still verify an Access token.
+    if (shareLinkBaseHost) {
+      return j(410, {
+        error: 'link_share_mint_retired',
+        hint: 'share_link no longer mints on this deployment. Publish the board with share_workspace: it records the board against the share hostname and returns https://share.<domain>/s/<id>, and whoever opens it signs in through Cloudflare Access and becomes a member of that board. Shares already minted by share_link keep working — list_shares lists them, unshare revokes one.',
+      });
+    }
     // WHO the Access application admits. A caller that names an audience gets
     // it; one that does not — every older bundle, whose `share_link` had no
     // such argument because a link admitted the world — falls back to the

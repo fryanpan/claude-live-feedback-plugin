@@ -764,51 +764,135 @@ describe('share links over HTTP', () => {
   });
 
   describe('the retired per-share-application mode', () => {
-    it('still mints and still serves, so records already out there keep working', async () => {
-      // Criterion: shares minted under the old mode keep working until they
-      // expire. `/api/share/link` is the mint that still makes one, and the
-      // per-share HOSTNAME with its own audience is how it is served.
-      const r = await postLocal('/api/share/link', {
-        workspaceId: board,
+    /**
+     * Two machineries answered "who may open this board", and this describe is
+     * about the seam between them. A per-share Access APPLICATION carries its
+     * own hostname, audience and Cloudflare policy; a share LINK is a row in
+     * this server's own file. Prod runs the second, so the first stops
+     * minting — and the records it already made keep serving until they lapse.
+     *
+     * The fixture is a MIGRATION rather than a mock: one data directory, first
+     * served by a deployment with no share hostname (which still mints), then
+     * by one with a share hostname (which does not). That is the only way to
+     * get an old record onto a new-flow server without hand-writing the
+     * registry file, and it is also exactly what the operator does.
+     */
+    let migratedDir: string;
+    let oldBoard: string;
+    let oldShare: { hostname: string; audience: string };
+
+    beforeAll(async () => {
+      migratedDir = mkdtempSync(join(tmpdir(), 'share-link-migrate-'));
+      // Phase one: the OLD deployment. No share hostname configured, so the
+      // per-share mint is the only way to publish and still answers.
+      const oldOpts = { ...serverOptions(), dataDir: migratedDir };
+      // biome-ignore lint/performance/noDelete: the absence IS the fixture
+      delete (oldOpts as { shareLinkHosts?: unknown }).shareLinkHosts;
+      const before = createServer(oldOpts);
+      const beforeBase = `http://localhost:${before.port}`;
+      const post = (path: string, body: unknown) =>
+        fetch(`${beforeBase}${path}`, {
+          method: 'POST',
+          headers: { host: `localhost:${before.port}`, 'content-type': 'application/json' },
+          body: JSON.stringify(body),
+        });
+      const created = await post('/api/workspaces', { name: 'Board shared the old way' });
+      expect(created.status).toBe(200);
+      oldBoard = ((await created.json()) as { workspace: { id: string } }).workspace.id;
+      const minted = await post('/api/share/link', {
+        workspaceId: oldBoard,
         allowDomains: ['@partner.example'],
       });
-      expect(r.status).toBe(200);
-      const { share } = (await r.json()) as {
-        share: { hostname: string; audience: string };
-      };
-      const visitor = await req(`/api/workspaces/${encodeURIComponent(board)}`, share.hostname, {
-        headers: {
-          ...CF_RAY,
-          'cf-access-jwt-assertion': await signJwt(share.audience, REVIEWER),
-        },
+      // POSITIVE CONTROL for every refusal below: on a deployment with no
+      // share hostname the same call still mints, so the 410s are the share
+      // hostname's doing and not a route that stopped working everywhere.
+      expect(minted.status, await minted.clone().text()).toBe(200);
+      oldShare = ((await minted.json()) as { share: { hostname: string; audience: string } }).share;
+      await before.stop();
+    });
+
+    afterAll(() => rmSync(migratedDir, { recursive: true, force: true }));
+
+    /** The same data directory, now served by a deployment on the new flow. */
+    const migrated = () => createServer({ ...serverOptions(), dataDir: migratedDir });
+
+    it('mints nothing once the share hostname is configured', async () => {
+      const after = migrated();
+      const r = await fetch(`http://localhost:${after.port}/api/share/link`, {
+        method: 'POST',
+        headers: { host: `localhost:${after.port}`, 'content-type': 'application/json' },
+        body: JSON.stringify({ workspaceId: oldBoard, allowDomains: ['@partner.example'] }),
       });
+      expect(r.status).toBe(410);
+      expect(((await r.json()) as { error: string }).error).toBe('link_share_mint_retired');
+      // …and nothing was written: the registry still holds the one record
+      // phase one made. A 410 that minted on its way out would be worse than
+      // a 200.
+      const listed = await fetch(`http://localhost:${after.port}/api/share`, {
+        headers: { host: `localhost:${after.port}` },
+      });
+      const { shares } = (await listed.json()) as { shares: unknown[] };
+      expect(shares).toHaveLength(1);
+      await after.stop();
+    });
+
+    it('still serves the record it already made, on its own hostname', async () => {
+      // Criterion: shares minted under the old mode keep working until they
+      // expire. The per-share HOSTNAME with its own audience is how one is
+      // served, and the mint being gone does not touch that.
+      const after = migrated();
+      const visitor = await fetch(
+        `http://localhost:${after.port}/api/workspaces/${encodeURIComponent(oldBoard)}`,
+        {
+          headers: {
+            host: oldShare.hostname,
+            ...CF_RAY,
+            'cf-access-jwt-assertion': await signJwt(oldShare.audience, REVIEWER),
+          },
+        },
+      );
       expect(visitor.status).toBe(200);
+      await after.stop();
     });
 
     it('does not redeem a share link on a per-share hostname', async () => {
-      // Redemption belongs to the share hostname alone. An old-mode visitor
-      // holds one board and a path allowlist that has no `/s/` in it, so the
-      // id below — a real one, for a board they were never given — is refused
-      // by the scope check before any registry is consulted. That is the seam:
-      // one hostname redeems, and it is not this one.
-      const { linkId } = await mintLink(otherBoard);
-      const old = await postLocal('/api/share/link', {
-        workspaceId: board,
-        allowDomains: ['@partner.example'],
+      // Redemption belongs to the share hostname alone, and this is the
+      // non-vacuous form of that: the link is REAL, minted on this very
+      // server, and it names the very board this visitor already holds. It is
+      // still refused, because `/s/<id>` is not on a share visitor's path
+      // allowlist and the scope check runs before any registry is consulted.
+      // One hostname redeems, and it is not this one.
+      const after = migrated();
+      const port = after.port;
+      const minted = await fetch(`http://localhost:${port}/api/share/workspace`, {
+        method: 'POST',
+        headers: { host: `localhost:${port}`, 'content-type': 'application/json' },
+        body: JSON.stringify({ workspaceId: oldBoard }),
       });
-      const { share } = (await old.json()) as { share: { hostname: string; audience: string } };
-      const r = await req(`/s/${linkId}`, share.hostname, {
+      expect(minted.status, await minted.clone().text()).toBe(200);
+      const { link } = (await minted.json()) as { link: { linkId: string } };
+      const r = await fetch(`http://localhost:${port}/s/${link.linkId}`, {
+        redirect: 'manual',
         headers: {
+          host: oldShare.hostname,
           ...CF_RAY,
-          'cf-access-jwt-assertion': await signJwt(share.audience, STRANGER),
+          'cf-access-jwt-assertion': await signJwt(oldShare.audience, STRANGER),
         },
       });
       expect(r.status).toBe(403);
       expect(r.headers.get('location')).toBeNull();
-      // …and nobody became a member of the board that link names.
-      expect(
-        (await onShareHost(`/api/workspaces/${encodeURIComponent(otherBoard)}`, STRANGER)).status,
-      ).toBe(403);
+      // POSITIVE CONTROL: the same id on the SHARE hostname does redeem, so
+      // the refusal above is the hostname and not a dead link.
+      const good = await fetch(`http://localhost:${port}/s/${link.linkId}`, {
+        redirect: 'manual',
+        headers: {
+          host: SHARE_HOST,
+          ...CF_RAY,
+          'cf-access-jwt-assertion': await signJwt(SHARE_AUD, STRANGER),
+        },
+      });
+      expect(good.status).toBe(302);
+      await after.stop();
     });
   });
 
