@@ -319,7 +319,7 @@ months, so splitting it buys almost nothing.
 | 6 | `hub-board-model.ts` + `hub-review-model.ts` + `hub-presence-model.ts` (was `hub-model.ts`, split in B1) | 3645 | 89 | M |
 | 7 | `packages/server/src/tasks.ts` | 4714 | 87 | M |
 | 8 | `rooms.ts` + `file-binding.ts` (split in A10) | 4801 | 71 | M |
-| 9 | `app.ts` + the nine phase modules under `src/doc/` (split for the markdown mount) | 1505 | 55 | done |
+| 9 | `app.ts` + the nine phase modules under `src/doc/` (split for the markdown mount) | 1959 | 55 | done |
 | 10 | `packages/server/src/task-projection.ts` | 743 | 43 | done |
 | 11 | `packages/workspaces-app/src/review-chrome.ts` | 1080 | 24 | M |
 | 12 | `thread-card.ts` + `threads.ts` (was `threads.ts`, split in B3) | 1230 | 20 | done |
