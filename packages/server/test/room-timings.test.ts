@@ -23,6 +23,8 @@ describe('room timings', () => {
       persistMs: 200,
       revisionSettleMs: 1000,
       reanchorMs: 250,
+      boundReadDeadlineMs: 3000,
+      boundReadRetryMs: 60000,
     });
   });
 
@@ -65,12 +67,19 @@ describe('room timings', () => {
       persistMs: 20,
       revisionSettleMs: 100,
       reanchorMs: 25,
+      boundReadDeadlineMs: 300,
+      boundReadRetryMs: 6000,
     });
     // The ORDER is the load-bearing part: the .ydoc persist has to still land
     // before the .md write-back, which is what makes "a crash inside the flush
     // window" a state the tests can build.
     expect(t.persistMs).toBeLessThan(t.writeBackMs);
     expect(t.readDebounceMs).toBeLessThan(t.filePollMs);
+    // A bound file gets longer to answer than the poll's whole tick, and the
+    // backoff outlasts the deadline by a wide margin — one doomed read per
+    // path, not one per reconnect.
+    expect(t.boundReadDeadlineMs).toBeGreaterThan(t.filePollMs);
+    expect(t.boundReadRetryMs).toBeGreaterThan(t.boundReadDeadlineMs);
   });
 
   it('floors every cadence so an extreme scale cannot collapse two into one', () => {
