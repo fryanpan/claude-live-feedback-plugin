@@ -14734,6 +14734,7 @@ function inactiveWatches(watchers) {
 
 // packages/mcp/src/mux-loop.ts
 var DEFAULT_CONNECT_CAP_MS2 = 3000;
+var MUX_CURSOR_MAX_KEYS = 512;
 function muxPath(agentId) {
   return `/events/agent/${encodeURIComponent(agentId)}`;
 }
@@ -14751,7 +14752,11 @@ function createMuxLoop(deps) {
     stop: () => stop(deps, rt),
     isOpen: () => rt.open,
     unsupported: () => rt.unsupported,
-    loopCount: () => rt.running ? 1 : 0
+    loopCount: () => rt.running ? 1 : 0,
+    dropCursor: (key) => {
+      rt.cursors.delete(key);
+    },
+    cursorCount: () => rt.cursors.size
   };
 }
 function stop(deps, rt) {
@@ -14910,6 +14915,12 @@ async function deliverThenCommitMux(frame, deliver, cursors, onGap) {
     return;
   cursors.delete(key);
   cursors.set(key, meta2.id);
+  while (cursors.size > MUX_CURSOR_MAX_KEYS) {
+    const oldest = cursors.keys().next();
+    if (oldest.done)
+      break;
+    cursors.delete(oldest.value);
+  }
 }
 
 // packages/core/src/task-wire.ts
@@ -18266,6 +18277,7 @@ async function unwatchDoc(deps, state, docId) {
     w.controller.abort();
     deps.watchers.delete(docId);
   }
+  deps.mux.dropCursor(docId);
   if (usesMux(deps) && deps.watchers.size === 0)
     deps.mux.stop();
   return persistWatchChange(deps, state, { remove: [docId] });
