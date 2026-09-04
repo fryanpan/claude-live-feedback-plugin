@@ -28,6 +28,7 @@ import { STALL_EVENT } from '../src/stall-nudge.ts';
 
 const PERSON = { id: 'known-jordan', name: 'Jordan', kind: 'person' };
 const LEAD = { id: 'agent-cartographer', name: 'Cartographer', kind: 'agent' };
+const BUILDER = { id: 'agent-millwright', name: 'Millwright', kind: 'agent' };
 
 /** Rows must out-quiet this window before a doc edit can matter. */
 const QUIET_MS = 250;
@@ -336,12 +337,14 @@ describe("a linked doc's discussion counts too", () => {
     const { workspace } = await jj<{ workspace: { id: string } }>(
       await post('/api/workspaces', { name: 'search-revamp', leadAgentId: LEAD.id }),
     );
-    await jj(
-      await post(`/api/workspaces/${workspace.id}/attachments`, {
-        agentId: LEAD.id,
-        runtime: 'claude-code-local',
-      }),
-    );
+    for (const agent of [LEAD, BUILDER]) {
+      await jj(
+        await post(`/api/workspaces/${workspace.id}/attachments`, {
+          agentId: agent.id,
+          runtime: 'claude-code-local',
+        }),
+      );
+    }
     const leadRes = await fetch(
       `${base}/events/workspace/${workspace.id}?agentId=${encodeURIComponent(LEAD.id)}`,
       { headers: { accept: 'text/event-stream' } },
@@ -349,12 +352,17 @@ describe("a linked doc's discussion counts too", () => {
     return { workspaceId: workspace.id, lead: listenFrames(leadRes) };
   }
 
-  async function inProgressRow(workspaceId: string, title: string): Promise<string> {
+  async function inProgressRow(
+    workspaceId: string,
+    title: string,
+    owner: { id: string; name: string; kind: string } = LEAD,
+  ): Promise<string> {
     const { task } = await jj<{ task: { id: string } }>(
       await post(`/api/workspaces/${workspaceId}/tasks`, {
         title,
         body: `Agent can ${title.toLowerCase()} so that the queue keeps moving.`,
-        assignee: LEAD.name,
+        assignee: owner.name,
+        assigneeId: owner.id,
         assigneeKind: 'agent',
         author: LEAD,
       }),
@@ -382,11 +390,14 @@ describe("a linked doc's discussion counts too", () => {
   }
 
   /** Ask a question ON the doc, as `create_thread(review=…)` does. */
-  async function askOnDoc(docId: string): Promise<{ threadId: string; commentId: string }> {
+  async function askOnDoc(
+    docId: string,
+    asker: { id: string; name: string; kind: string } = LEAD,
+  ): Promise<{ threadId: string; commentId: string }> {
     const { thread } = await jj<{ thread: { id: string; comments: Array<{ id: string }> } }>(
       await post(`/api/docs/${encodeURIComponent(docId)}/threads`, {
         text: 'Does this round read the way you wanted?',
-        author: LEAD,
+        author: asker,
         anchor: { kind: 'subject' },
         review: { shape: 'question', headline: 'Does this round read the way you wanted?' },
       }),
@@ -495,6 +506,27 @@ describe("a linked doc's discussion counts too", () => {
     expect(got).toHaveLength(1);
     expect(namedRows(got[0])).toContain(quiet);
     expect(namedRows(got[0])).not.toContain(busy);
+    await ctx.lead.stop();
+  });
+
+  it('parks only the row whose owner asked, not every row linking that doc', async () => {
+    const ctx = await boardWithLead();
+    // Two rows, two different owners, ONE shared design doc — the shape a
+    // spec or a mock actually has on a live board.
+    const asker = await inProgressRow(ctx.workspaceId, 'Rank results by recency', LEAD);
+    const bystander = await inProgressRow(ctx.workspaceId, 'Cache the facet counts', BUILDER);
+    const docId = await linkedDoc(asker, 'shared-design-doc');
+    await jj(await post(`/api/tasks/${bystander}/links`, { ref: { kind: 'doc', docId } }));
+    // The question is the LEAD's, so it says nothing about whether the
+    // Millwright's row is moving.
+    await askOnDoc(docId, LEAD);
+    await settle(QUIET_MS + 100);
+
+    handle.nudgeStalls();
+    const got = await waitForFrames(ctx.lead.frames, STALL_EVENT, 1);
+
+    expect(got).toHaveLength(1);
+    expect(namedRows(got[0])).toEqual([bystander]);
     await ctx.lead.stop();
   });
 });

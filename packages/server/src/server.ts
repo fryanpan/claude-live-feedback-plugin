@@ -1943,7 +1943,11 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
      * the bug. Two copies of "is this ask still open" is how one of them
      * comes to disagree with the Home queue.
      */
-    const readDiscussion = (docId: string, taskId: string): number => {
+    const readDiscussion = (
+      docId: string,
+      taskId: string,
+      askCounts?: (askedBy: string | undefined) => boolean,
+    ): number => {
       let newest = 0;
       for (const thread of rooms.listThreads(docId)) {
         if (thread.lastActivity > newest) newest = thread.lastActivity;
@@ -1953,7 +1957,9 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
         // legitimately waiting on a person — it is waiting on its own filer
         // to revise, which is exactly what the loop should keep saying.
         if (declaring?.review && !isReviewPayloadGated(declaring.review)) {
-          commentAsks.push({ taskId, askedAt: declaring.ts });
+          if (askCounts === undefined || askCounts(declaring.author?.id)) {
+            commentAsks.push({ taskId, askedAt: declaring.ts });
+          }
         }
       }
       return newest;
@@ -1998,7 +2004,9 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
       // the moment one agent holds two rows, which is the direction that
       // turns the watchdog off rather than merely making it noisy. Removing
       // the link requirement is a ranked decision, not a cleanup.
-      for (const ref of taskStore.getTask(row.id)?.links ?? []) {
+      const task = taskStore.getTask(row.id);
+      const ownerId = task === undefined ? undefined : taskStore.ownerIdOf(task);
+      for (const ref of task?.links ?? []) {
         if (ref.kind !== 'doc' && ref.kind !== 'thread') continue;
         const editedAt = rooms.lastContentChangeFor(ref.docId);
         if (editedAt !== undefined && editedAt > newest) newest = editedAt;
@@ -2011,7 +2019,21 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
         // doc, a diff — left the row reading as quiet with nobody waiting.
         // Measured 2026-09-04: five wakes in sixty-five minutes over two
         // rows, one of them a mock round sitting on the reader's queue.
-        const discussed = readDiscussion(ref.docId, row.id);
+        //
+        // The ask half is scoped to the row whose OWNER asked it, because a
+        // doc is a shared surface: a design doc linked by four rows would
+        // otherwise park all four, indefinitely, on one unanswered question
+        // that only one of them is actually waiting on. The row's own
+        // `task:<id>` room needs no such scoping — a task-body thread belongs
+        // to exactly one row by construction. An ask by a person, or by an
+        // agent the roster cannot place, counts for nobody here; it is still
+        // MOVEMENT on the doc, which is the `newest` half below and stays
+        // unscoped, because that exoneration expires with the quiet window
+        // rather than lasting as long as the question does.
+        const discussed = readDiscussion(ref.docId, row.id, (askedBy) => {
+          if (ownerId === undefined || askedBy === undefined) return false;
+          return (taskStore.resolveAgentId(askedBy) ?? askedBy) === ownerId;
+        });
         if (discussed > newest) newest = discussed;
       }
       if (newest > 0) threadActivity.set(row.id, newest);
