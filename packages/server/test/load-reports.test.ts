@@ -5,8 +5,8 @@ import { join } from 'node:path';
 import { type ServerHandle, createServer } from '../src/server.ts';
 
 /**
- * The monitoring half of t-scWMQmOZcpu1: Bryan measured a 10+ second board
- * load on his iPad and nothing recorded where the time went. Each browser
+ * The monitoring half of the slow-board-load ticket: Bryan measured a 10+
+ * second board load on his iPad and nothing recorded where the time went. Each browser
  * boot posts one timing report; the server keeps them per workspace and
  * hands back the recent ones, so "how slow was it, and in which phase" is a
  * read instead of a guess. No external service — the decision on Sentry is
