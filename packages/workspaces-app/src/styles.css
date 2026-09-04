@@ -6113,26 +6113,41 @@ body.redline-mode #toggle-suggest-mode {
   border-color: var(--red-strong);
 }
 
-/* Balloons are desktop-only. Below 1100px the column and leader lines
-   disappear; `.lf-del-chip` (built in live-markup.ts, one per deletion group
-   — same grouping as the balloon) and `.lf-suggest-chip` (suggestion-chips.ts,
-   one per sid) take over as the mobile fallback, shown only in this
-   breakpoint. `display: block` restores the single-column flow — no 300px
-   track means no horizontal scroll at 430px. */
-@media (max-width: 1100px) {
-  #editor.redline-layout {
-    display: block;
-  }
+/* Balloons ride the margin only when the reader has ASKED for them there.
+   `body[data-cards]` is written by card-placement.ts and carries the surface
+   in force — `balloon`, `inline`, or `sheet` when balloons were chosen on a
+   screen too narrow to hold a column. This used to be `@media (max-width:
+   1100px)`, which made the surface a property of the window rather than of
+   the reader: page zoom moves a 1366px iPad to 1607px, so width could say how
+   much room there was and never what device this was.
 
-  .markup-margin,
-  .lf-leader-overlay {
-    display: none;
-  }
+   Everywhere the margin is not in force, the column and leader lines
+   disappear and `.lf-del-chip` (live-markup.ts, one per deletion group — same
+   grouping as the balloon) and `.lf-suggest-chip` (suggestion-chips.ts, one
+   per sid) take over as the fallback. `display: block` restores the
+   single-column flow — no 260px track means no horizontal scroll at 430px. */
+body:not([data-cards="balloon"]) #editor.redline-layout {
+  display: block;
+}
 
-  .lf-del-chip,
-  .lf-suggest-chip {
-    display: inline-flex;
-  }
+body:not([data-cards="balloon"]) .markup-margin,
+body:not([data-cards="balloon"]) .lf-leader-overlay {
+  display: none;
+}
+
+body:not([data-cards="balloon"]) .lf-del-chip,
+body:not([data-cards="balloon"]) .lf-suggest-chip {
+  display: inline-flex;
+}
+
+/* Cards in the flow are as wide as the prose, so the prose has to keep a
+   measure a card reads well at. Without this, moving the cards inline handed
+   the freed margin column to the paragraph: an 1180px iPad went from an 890px
+   measure to 1100px, about 110 characters at 18px, and a two-option decision
+   grew buttons the width of the pane. Yields to the Aa toolbar's
+   reading-width mode, which is the reader asking for something narrower. */
+body[data-cards="inline"]:not(.is-reading-width) #editor.redline-layout > .ProseMirror {
+  max-width: min(100%, 900px);
 }
 
 /* Mobile deletion chip (`.lf-del-chip`, live-markup.ts widget decoration) —
@@ -6384,15 +6399,13 @@ body.redline-mode #toggle-suggest-mode {
     outline: 2px solid var(--accent);
   }
 }
-/* Above 1100px the balloon margin owns the comments; inline cards are not
-   produced there, but belt-and-braces so a stale card left over from a
-   resize can never sit in the middle of desktop prose. The boundary matches
-   `INLINE_CARDS_QUERY` and the margin's own — exactly one always-on comment
-   surface at every width. */
-@media (min-width: 1101px) {
-  .lf-inline-card {
-    display: none;
-  }
+/* Inline cards render only where the reader put them. `mobile-review.ts`
+   builds none on the other surfaces, but belt-and-braces so a stale card left
+   over from a placement flip can never sit in the middle of the prose. Keyed
+   on `body[data-cards]` — the same attribute the margin reads — so exactly one
+   comment surface is on screen at a time, whatever the width. */
+body:not([data-cards="inline"]) .lf-inline-card {
+  display: none;
 }
 
 /* ================= SIGN-IN REQUIRED (the standing read-only notice) =======
