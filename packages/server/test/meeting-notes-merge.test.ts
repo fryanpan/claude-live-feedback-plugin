@@ -9,7 +9,7 @@
  * All fixtures are synthetic. The repo is public.
  */
 import { describe, expect, it } from 'bun:test';
-import { prose, suggestOps } from '@feedback/core';
+import { SUGGEST_INSERT_MARK, prose, suggestOps } from '@feedback/core';
 import * as Y from 'yjs';
 import {
   type IncomingItem,
@@ -793,5 +793,118 @@ describe('a stop-and-restart never replaces what is already written', () => {
     expect(span).not.toBeNull();
     const items = itemsInSection(fragment, span!);
     expect(items.map((i) => i.md)).toEqual(['live note']);
+  });
+});
+
+/* ===== Relayout must not be a back door through the invariant ===== */
+
+/**
+ * The relayout path rewrites the whole section body, which is safe ONLY when
+ * everything in it is the agent's own and nothing is pending on it. Both
+ * tests below fail on the first version of that gate: it asked the merge PLAN
+ * whether it was proposing a suggestion this tick, and never asked the DOC
+ * what was already pending in it.
+ */
+describe('mergeNotesSection — relayout and pending proposals', () => {
+  /** Two agent bullets, then a compose that groups them under headings —
+   *  the shape that needs a heading between two list items, which is the
+   *  only thing the relayout path exists for. */
+  const GROUPED =
+    '## Meeting notes\n\n### Cost\n\n- Agent bullet one\n\n### Scope\n\n- Agent bullet two\n';
+
+  const twoAgentBullets = (): { ydoc: Y.Doc; own: NotesOwnership; basedOn: string[] } => {
+    const ydoc = docFrom('# Huddle\n');
+    const own = createNotesOwnership();
+    mergeNotesSection(
+      ydoc,
+      '## Meeting notes\n\n- Agent bullet one\n- Agent bullet two\n',
+      HEADING,
+      {
+        ownership: own,
+      },
+    );
+    const read = readNotesSection(ydoc, HEADING, own)!;
+    return { ydoc, own, basedOn: read.items };
+  };
+
+  it('refuses to relayout over a proposal already pending in the section', () => {
+    const { ydoc, own, basedOn } = twoAgentBullets();
+    // A person proposes a change to one of the agent's bullets. The ACCEPTED
+    // text is still the agent's, so the ownership ledger says the section is
+    // all the agent's — which is exactly why the plan-only gate let relayout
+    // through and deleted the proposal with it.
+    const proposed = suggestOps.suggestReplace(ydoc, {
+      find: 'Agent bullet two',
+      replace: 'Agent bullet two, corrected',
+      author: { id: 'u-1', name: 'A Person', color: '#333' },
+    });
+    expect(proposed.ok).toBe(true);
+    expect(suggestOps.listSuggestions(ydoc)).toHaveLength(1);
+
+    const merged = mergeNotesSection(ydoc, GROUPED, HEADING, { ownership: own, basedOn });
+
+    // The proposal is still there to accept or reject. That is the assertion;
+    // where the heading landed is secondary and deliberately not pinned.
+    expect(suggestOps.listSuggestions(ydoc)).toHaveLength(1);
+    expect(merged.ok).toBe(true);
+  });
+
+  it('refuses when the pending proposal is a whole bullet nothing else can see', () => {
+    const { ydoc, own, basedOn } = twoAgentBullets();
+    // A listItem whose every character is a pending insert serializes to
+    // nothing, so it never becomes a NoteItem and never reaches the ownership
+    // check. Invisible to the plan, invisible to `allAgent` — and destroyed
+    // by a relayout that asks neither.
+    const list = (prose.getProseFragment(ydoc).toArray() as Y.XmlElement[]).find(
+      (el) => el.nodeName === 'bulletList',
+    );
+    if (!list) throw new Error('fixture has no list');
+    const li = new Y.XmlElement('listItem');
+    const p = new Y.XmlElement('paragraph');
+    const t = new Y.XmlText();
+    li.insert(0, [p]);
+    p.insert(0, [t]);
+    ydoc.transact(() => {
+      list.insert(list.length, [li]);
+      t.insert(0, 'A whole bullet somebody proposed', {
+        [SUGGEST_INSERT_MARK]: {
+          sid: 's-1',
+          authorId: 'u-1',
+          authorName: 'A Person',
+          authorColor: '#333',
+          ts: 1,
+        },
+      });
+    });
+    expect(sectionItems(ydoc)).toHaveLength(2); // the proposed bullet is not one
+    expect(suggestOps.listSuggestions(ydoc)).toHaveLength(1);
+
+    mergeNotesSection(ydoc, GROUPED, HEADING, { ownership: own, basedOn });
+
+    // Still there to accept. Not in the ACCEPTED markdown, and never was —
+    // a pending insert contributes nothing until somebody takes it, which is
+    // the very property that hid it from every other check.
+    const pending = suggestOps.listSuggestions(ydoc);
+    expect(pending).toHaveLength(1);
+    expect(pending[0]!.insertedText).toBe('A whole bullet somebody proposed');
+  });
+
+  it('does not resurrect a bullet the person deleted while the compose was in flight', () => {
+    const { ydoc, own, basedOn } = twoAgentBullets();
+    // `basedOn` was read BEFORE the deletion, which is the real race: the
+    // compose was already running with both bullets in its prompt.
+    const list = (prose.getProseFragment(ydoc).toArray() as Y.XmlElement[]).find(
+      (el) => el.nodeName === 'bulletList',
+    );
+    if (!list) throw new Error('fixture has no list');
+    ydoc.transact(() => list.delete(1, 1));
+    expect(markdownOf(ydoc)).not.toContain('Agent bullet two');
+
+    const merged = mergeNotesSection(ydoc, GROUPED, HEADING, { ownership: own, basedOn });
+
+    // The ordinary merge path drops a vanished item rather than writing it
+    // back; relayout wrote `incoming` wholesale and put it back.
+    expect(merged.dropped).toBe(1);
+    expect(markdownOf(ydoc)).not.toContain('Agent bullet two');
   });
 });
