@@ -6,6 +6,7 @@ import {
   suggestOps,
 } from '@feedback/core';
 import type { BootLocation, BootStorage, BootWindow } from './boot-env.ts';
+import { balloonMarginVisible } from './card-placement.ts';
 import { mountCode } from './code/code-app.ts';
 import { mountCommentHints } from './comment-hints.ts';
 import { saveStateView, settlePending, watchConnection } from './connection-state.ts';
@@ -400,7 +401,7 @@ async function mountMarkdown(ctx: MountContext): Promise<void> {
     onSeen: () => margin.scheduleRelayout(),
     onJump: jumpToThread,
     dockEl: () => document.querySelector<HTMLElement>('#editor-pane .plan-float'),
-    marginVisible: () => !window.matchMedia('(max-width: 1100px)').matches,
+    marginVisible: balloonMarginVisible,
     scope,
   });
   const onMarginTransaction = (): void => {
