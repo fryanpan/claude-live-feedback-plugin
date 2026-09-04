@@ -11,15 +11,26 @@
  *
  * Pure and total: unknown events pass through untouched, so this can sit in
  * every visitor stream's write path without a maintained event list. Only
- * hub-shaped events (task.* / decision.* / workspace.* / agent.* /
- * triage.* / voice.*) are rewritten. Two fields carry ids — `actor`
+ * hub-shaped events (task.* / decision.* / review_item.* / workspace.* /
+ * agent.* / triage.* / voice.*) are rewritten. Two fields carry ids — `actor`
  * (TaskActor) and `task` (a full Task) — and `voice.request` carries the
  * one field the §3.3 enumeration never granted: the utterance itself.
  */
 import { projectTask } from '../task-projection.ts';
 import type { Task } from '../tasks.ts';
 
-const HUB_EVENT = /^(task|decision|workspace|agent|triage|voice)\./;
+/**
+ * The prefixes this rewrites. It is the whole of what `events.jsonl` holds —
+ * `TaskEventBus.appendAudit` writes every `TaskStoreEvent` and nothing else —
+ * so a prefix missing here is a row the Activity tab (`GET …/events`) and the
+ * board's SSE feed both hand a visitor unredacted.
+ *
+ * `review_item` was the one that was missing. Its three events carry the
+ * asker as a full `TaskActor`, whose `id` is derived from an email, and they
+ * were passing through untouched while `decision.*` beside them — the answer
+ * to the very same ask — was reduced to name and kind.
+ */
+const HUB_EVENT = /^(task|decision|review_item|workspace|agent|triage|voice)\./;
 
 /**
  * Fields dropped outright from a visitor's copy of a `voice.*` event.

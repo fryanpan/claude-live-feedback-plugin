@@ -539,9 +539,39 @@ const BOARD_MEMBER_ROUTES: Readonly<Record<string, readonly string[]>> = {
   // The Home pane and its per-person "caught up" marker.
   home: ['GET'],
   'home/read': ['POST'],
-  // The goal bands: naming one, and renaming one.
+  // The Home brief's own recipe — how this board's summary is written. Board
+  // content in the owner's words, edited from the Home pane's own control.
+  'home/instructions': ['PUT'],
+  // The goal bands: naming one, renaming one, and ranking them. Reorder is
+  // the same organising act as the other two and was the gap in it — a member
+  // could add a band and rename it, and not say which came first.
   'goals/add': ['POST'],
   'goals/rename': ['POST'],
+  'goals/reorder': ['POST'],
+  // Filing a doc on this board. The route additionally requires the target to
+  // be one the member can ALREADY open here (`workspace-content.ts`), because
+  // attaching is what makes a doc readable on a board — so an unrestricted
+  // attach would be a read of somebody else's doc wearing a write's clothes.
+  // What is left is the verb's real subject: a file inside a folder bind or a
+  // diff review already filed here, which has no row of its own.
+  docs: ['POST'],
+  // "Make a plan" and "Have a meeting". One call mints a board-tied doc and
+  // files it here; the mic is the browser's own. The reply's doc metadata is
+  // redacted for a visitor at the route — a huddle's `sourceUrl` is a path in
+  // the owner's data directory.
+  huddles: ['POST'],
+  // The board's settings panel: the review-item criteria, the effort prompt
+  // and the parallelism cap. `notesHome` is withheld from a member's read and
+  // refused on a member's write — it is a checkout path on the owner's
+  // machine, and validating one would answer "does this path exist" besides.
+  settings: ['GET', 'PUT'],
+  // The Activity tab. Rows are passed through the same visitor redaction the
+  // board's live event stream uses, so actor ids do not arrive here by the
+  // one door nothing was checking.
+  events: ['GET'],
+  // The board client's own boot report — one line per page load, written by
+  // the page that just painted and read back on the same tab.
+  'load-reports': ['GET', 'POST'],
 };
 
 /** The per-task verbs, under `/api/tasks/<taskId>/`. See BOARD_MEMBER_ROUTES. */
@@ -676,6 +706,18 @@ export function shareScopeAllows(
    * is no second sign-in behind Access to start or finish.
    */
   if (pathname === '/api/auth/session' && method.toUpperCase() === 'GET') return true;
+  /**
+   * Which transcription engines this server can run — `GET /api/meeting-engines`.
+   *
+   * Names no workspace, so it sits with the shell allowances rather than
+   * behind the board check. The meeting chooser reads it before a meeting
+   * starts, and refused it offered engines that answer `unavailable`.
+   *
+   * What it carries is a list of engine names and which is the default.
+   * Nothing about a key beyond the fact that one is set, which the button it
+   * draws would announce anyway the first time somebody pressed it.
+   */
+  if (pathname === '/api/meeting-engines' && method.toUpperCase() === 'GET') return true;
 
   /**
    * Is this id INSIDE the shared workspace? The one rule, and the only place
@@ -786,25 +828,32 @@ export function shareScopeAllows(
     // workspace, and every id nested under it still goes through
     // `insideSharedWorkspace`.
     //
-    // Four classes stay off the table deliberately, and each would be a way
-    // out of the shared board rather than a way to work in it:
-    //   `docs`          attaches ANY doc id on the server to this board, and
-    //                   a doc filed here is a doc this member may then read —
-    //                   so it is a read of somebody else's board wearing a
-    //                   write's clothes.
-    //   `settings`      stores and returns `notesHome.repoRoot`, a path on
-    //                   the owner's machine. Host paths never reach a visitor.
-    //   `import-tasks`  reads a file off the owner's disk by path.
-    //   `events`        the Activity audit log names actors by ID. The board
-    //                   room's own event stream is redacted to display names
-    //                   for a visitor (`redactHubEventForVisitor`) and this
-    //                   log is not, so admitting it would undo that in the
-    //                   one place nothing checks.
-    //   `attachments` POST, `agent-heartbeat`, `dispatches`, `agent-notes`
-    //                   the agent roster's own verbs — a seat on the board,
-    //                   not work on it.
-    // Board lifecycle (`DELETE`, `rename`, `retired`, `lead`) stays closed
-    // too: a member was given a board to work on, not to retire.
+    // Four of those entries used to be reasons NOT to admit a route, and each
+    // named a leak rather than a permission. Bryan's 2026-09-03 call is that a
+    // share link means full access to the board, so each leak was closed where
+    // it lives and the route admitted:
+    //   `docs`          the route refuses a target another board holds, so
+    //                   attaching cannot be a read of somebody else's board.
+    //   `settings`      `notesHome` — a checkout path on the owner's machine —
+    //                   is withheld from a member's read and refused on a
+    //                   member's write, at the route.
+    //   `events`        every row is passed through the same redaction the
+    //                   board's live stream uses, so the audit log cannot say
+    //                   more about an actor than the stream already does.
+    // `import-tasks` is the one that STAYS refused, and it was reconsidered
+    // rather than carried over: it reads a file off the owner's disk by the
+    // path in the request body and answers with what it parsed, so admitting
+    // it would be an arbitrary file read on the owner's machine for anyone
+    // holding a share link. The browser gate in front of it is not the answer
+    // either — it refuses pages, and a member's non-browser client is not a
+    // page. Nothing names a host path on a member's behalf.
+    // What stays off the table is the agent roster's own verbs — `attachments`
+    // POST, `agent-heartbeat`, `dispatches`, `agent-notes`: a seat on the
+    // board, not work on it. `voice` stays off too — it routes an utterance to
+    // the owner's agents, which is spending the owner's machine rather than
+    // working the board. Board lifecycle (`DELETE`, `rename`, `retired`,
+    // `lead`) stays closed: a member was given a board to work on, not to
+    // retire.
     if (pathname.startsWith('/api/workspaces/')) {
       const rest = pathname.slice('/api/workspaces/'.length);
       const slash = rest.indexOf('/');
@@ -815,6 +864,23 @@ export function shareScopeAllows(
       }
     }
   }
+
+  /**
+   * A meeting's live audio socket, for a doc inside the shared board.
+   *
+   * The other half of "have a meeting": the button mints the doc, this is
+   * where the microphone goes. Scoped by exactly the same `inScope` the
+   * doc's own text socket is, so a member can hold a meeting on their board
+   * and on no other.
+   *
+   * It spends money while it is open — a transcription engine session per
+   * meeting — which is the honest cost of the grant and not a reason to
+   * withhold it: a member can already spend the same engine by being in the
+   * room while the owner records. Two things the socket still checks for
+   * itself, unchanged by this line: the browser's Origin, and the sign-in
+   * (a websocket upgrade is a GET, so the write gate cannot see it).
+   */
+  if (pathname.startsWith('/audio/')) return inScope(pathname.slice('/audio/'.length));
 
   // Review page / Yjs websocket / SSE for an in-scope doc.
   if (pathname.startsWith('/review/')) return inScope(pathname.slice('/review/'.length));
@@ -1087,7 +1153,16 @@ function pathWorkspaces(pathname: string, workspacesOf?: (id: string) => string[
 
   // Paths that name a DOC — every workspace it belongs to, most specific
   // first, which is the order `collabScope` then prefers between them.
-  const doc = seg('/review/') ?? room ?? seg('/events/') ?? seg('/api/docs/');
+  //
+  // `/audio/` sits here beside `/y/` because it is the same doc by another
+  // transport: the meeting's microphone socket for the doc the text socket
+  // syncs. `shareScopeAllows` has admitted it since the member-rights
+  // change, but on the collaboration hostname this function runs FIRST — and
+  // while it named no candidate for `/audio/`, `collabScope` had nothing to
+  // ask membership about and judged the path against the shell allowances,
+  // which refuse it. So a member could open every tab of their board and not
+  // the meeting they had just started on it.
+  const doc = seg('/review/') ?? room ?? seg('/audio/') ?? seg('/events/') ?? seg('/api/docs/');
   if (!doc) return [];
   const owners = workspacesOf?.(doc);
   // `Array.isArray` for the reason `shareScopeAllows` gives at its own use of
@@ -1126,9 +1201,43 @@ function docSubrouteAllowed(sub: string, method: string): boolean {
   if (sub === 'diff' || sub === 'content' || sub === 'status') return method === 'GET';
   if (sub === 'tasks') return method === 'GET'; // task chips, visitor-safe shape
   if (sub === 'activity') return method === 'POST'; // reading tracker
-  if (sub === 'threads' || sub.startsWith('threads/')) {
-    return !/\/(rewrite_region|insert_after|insert_blocks_after)$/.test(sub);
-  }
+  // Who is holding this doc open — the banner every reader of it sees.
+  if (sub === 'lead-presence') return method === 'GET';
+  /**
+   * The meeting the doc carries, and what was said in it. Reads only: the
+   * transcript is the least reconstructible thing this server holds, because
+   * the audio is already gone.
+   *
+   * `meetings/<id>/speakers` is NOT admitted by this line — it is a POST, and
+   * the route refuses a visitor on its own besides. Naming a voice after the
+   * fact rewrites notes already written, and only the session that wrote them
+   * can keep its own memory of them straight.
+   */
+  if (sub === 'meetings' || /^meetings\/[^/]+$/.test(sub)) return method === 'GET';
+  /**
+   * Is a meeting bot even set up on this server? A read of two booleans and
+   * whatever bot is already on this doc, which is what lets the meeting panel
+   * say "bots are not configured here" instead of offering a button that
+   * always fails.
+   *
+   * POST and DELETE stay refused, and this is the one place a member is
+   * deliberately narrower than the board. Inviting a bot spends the owner's
+   * money at a vendor the moment it is created and sends a participant into a
+   * call outside this server; leaving it dials that bot back out again.
+   * Neither is a way to work THIS board, which is what the grant is for.
+   */
+  if (sub === 'meeting-bot') return method === 'GET';
+  /**
+   * Thread verbs, INCLUDING the three region-edit ones this used to exclude.
+   *
+   * The exclusion protected nothing it was written for: a member already has
+   * the doc's live-editing socket (`/y/<id>` below), which is unrestricted
+   * text editing on the same document. Refusing the REST spelling of an edit
+   * a member can make by typing left an inconsistency, not a boundary. What
+   * still bounds all of them is the same line as ever — the doc has to be
+   * inside the shared board.
+   */
+  if (sub === 'threads' || sub.startsWith('threads/')) return true;
   if (sub === 'suggestions' || sub.startsWith('suggestions/')) return true;
   return false;
 }
