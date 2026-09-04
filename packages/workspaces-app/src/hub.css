@@ -3404,8 +3404,10 @@ body.hub-body {
    the key fields. Two states, and the difference between them is the whole
    point of the row: an OFFER is a button, and a RECEIPT is not. The panel
    used to render "Plan requested" as a disabled button — button-shaped, so
-   readers kept pressing it — which is why the receipt below is a span with
-   no border, no background and no pointer. */
+   readers kept pressing it — which is why the receipt below is an <output>
+   with no border, no background and no pointer. It is an <output> rather
+   than a span so a screen reader announces the swap: the element's implicit
+   ARIA role is `status`. */
 .hub-task-asks {
   display: flex;
   flex-wrap: wrap;
