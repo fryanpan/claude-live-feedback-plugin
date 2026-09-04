@@ -756,6 +756,20 @@ describe('shareScopeAllows (workspace-hub surfaces — §3.12 commit 8)', () => 
    * 2026-09-03: "Let's allow everything for now"). These are the acts, named
    * one by one, and every one of them is a route the board's own UI calls.
    */
+  it('admits the session read — the bundle asks who it is before it paints', () => {
+    // Refused, the board bundle fell back to "nobody is signed in" and opened
+    // the name prompt `main()` awaits, so a member saw a modal and no board
+    // behind it (measured in headless Chromium, 2026-09-03). The payload is
+    // the caller's own identity, which Access already proved to get here.
+    expect(shareScopeAllows('/api/auth/session', 'GET', HUB, workspaceOf)).toBe(true);
+    // Read only, and the rest of the sign-in flow stays out — there is no
+    // second sign-in behind Access to start or finish.
+    expect(shareScopeAllows('/api/auth/session', 'POST', HUB, workspaceOf)).toBe(false);
+    expect(shareScopeAllows('/api/auth/start', 'POST', HUB, workspaceOf)).toBe(false);
+    expect(shareScopeAllows('/api/auth/verify', 'POST', HUB, workspaceOf)).toBe(false);
+    expect(shareScopeAllows('/api/auth/profile', 'POST', HUB, workspaceOf)).toBe(false);
+  });
+
   it('admits the board-participation routes on the shared workspace', () => {
     const cases: Array<[string, string]> = [
       ['/api/workspaces/hub-1/tasks', 'GET'],

@@ -639,6 +639,23 @@ export function shareScopeAllows(
   if (pathname === '/widget.js' || pathname === '/widget.iife.js') return true;
   if (pathname === '/widget.esm.js' || pathname.startsWith('/widget/')) return true;
   if (pathname === '/favicon.ico') return true;
+  /**
+   * Who am I, and may I write? — `GET /api/auth/session`.
+   *
+   * The board's bundle asks this before it paints anything. Refused, it fell
+   * back to "nobody is signed in" and opened the "Who's reviewing?" name
+   * prompt, which `main()` awaits — so a member landing on their board saw a
+   * modal asking them to type a name and NO BOARD BEHIND IT until they
+   * dismissed it. Measured in headless Chromium on 2026-09-03.
+   *
+   * It carries the caller's own identity and nothing else: the email
+   * Cloudflare Access already proved to reach this hostname, the display name
+   * derived from it, and whether this deployment demands a sign-in to write.
+   * Telling somebody who they are cannot tell them anything they did not
+   * bring. `GET` only, and the sign-in flow's other routes stay out — there
+   * is no second sign-in behind Access to start or finish.
+   */
+  if (pathname === '/api/auth/session' && method.toUpperCase() === 'GET') return true;
 
   /**
    * Is this id INSIDE the shared workspace? The one rule, and the only place
