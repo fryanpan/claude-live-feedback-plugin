@@ -38,20 +38,20 @@ const WIDGET_GOAL: RelatedWorkCandidate = {
 
 const NOTES_PLAN_DOC: RelatedWorkCandidate = {
   kind: 'doc',
-  id: 'd-notes-plan',
+  id: 'doc-notes-plan',
   title: 'Meeting notes UX plan',
   path: 'docs/product/plans/meeting-notes-ux-plan.md',
   body: 'How the notes strip behaves during a huddle, and what the agent writes when the room falls quiet.',
-  url: '/review/d-notes-plan',
+  url: '/review/doc-notes-plan',
 };
 
 const HUDDLE_NOTES: RelatedWorkCandidate = {
   kind: 'doc',
-  id: 'd-huddle-0902',
+  id: 'doc-huddle',
   title: 'Huddle notes',
   path: 'data/huddles/2026-09-02.md',
   body: 'Bryan asked why planning ignored the board.',
-  url: '/review/d-huddle-0902',
+  url: '/review/doc-huddle',
 };
 
 const BOARD = [MEETING_GOAL, WIDGET_GOAL, NOTES_PLAN_DOC, HUDDLE_NOTES];
@@ -85,7 +85,7 @@ describe('readsAsPlan', () => {
 describe('scoreRelatedWork', () => {
   it('ranks the goal and the plan doc that line up above everything else', () => {
     const matches = scoreRelatedWork('Plan the meeting notes UX so notes are worth keeping', BOARD);
-    expect(matches.map((m) => m.id)).toEqual(['g-meeting', 'd-notes-plan']);
+    expect(matches.map((m) => m.id)).toEqual(['g-meeting', 'doc-notes-plan']);
     // The goal is where the plan would land, so it leads.
     expect(matches[0]?.kind).toBe('goal');
     expect(matches[0]?.score).toBeGreaterThan(matches[1]?.score ?? 1);
@@ -107,7 +107,7 @@ describe('scoreRelatedWork', () => {
   it('drops a near miss instead of ranking it last', () => {
     const query = 'meeting notes capture';
     const matches = scoreRelatedWork(query, BOARD);
-    expect(matches.map((m) => m.id)).toEqual(['g-meeting', 'd-notes-plan']);
+    expect(matches.map((m) => m.id)).toEqual(['g-meeting', 'doc-notes-plan']);
     for (const m of matches) expect(m.score).toBeGreaterThanOrEqual(DEFAULT_THRESHOLD);
 
     // The dropped rows are dropped BY THE THRESHOLD, which is the claim this
@@ -116,8 +116,8 @@ describe('scoreRelatedWork', () => {
     // a scoring boundary rather than an empty candidate set.
     const unfiltered = scoreRelatedWork(query, BOARD, { threshold: 0 });
     const scoreOf = (id: string) => unfiltered.find((m) => m.id === id)?.score ?? -1;
-    expect(scoreOf('d-huddle-0902')).toBeGreaterThan(0);
-    expect(scoreOf('d-huddle-0902')).toBeLessThan(DEFAULT_THRESHOLD);
+    expect(scoreOf('doc-huddle')).toBeGreaterThan(0);
+    expect(scoreOf('doc-huddle')).toBeLessThan(DEFAULT_THRESHOLD);
     expect(scoreOf('g-widget')).toBe(0);
   });
 
