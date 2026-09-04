@@ -171,6 +171,88 @@ describe('the review-item stores over a fake persistence', () => {
     expect(f.queries.reviewState('t-cache')).toEqual({ open: 0, unreadable: 0, held: 1 });
   });
 
+  /**
+   * `reviewState.open` is what the stall clock reads to decide a row is
+   * legitimately waiting on a person, so it has to agree with the Home
+   * queue's own filter item for item. Where the two disagree the row parks on
+   * an ask nobody can see: off the queue, so never answerable, so never
+   * cleared, and the watchdog stays off that row for good.
+   *
+   * Each case below is a state the queue drops (review-queue.ts) that the
+   * count used to keep. The first `it` is the positive control and must stay
+   * first: without it, three assertions that a number is zero would all pass
+   * against a counter that had simply stopped counting.
+   */
+  it('counts an ordinary open ask — the control the three exclusions below need', () => {
+    const f = fake();
+    const added = f.store.addReviewItem('t-cache', payload(), { actor: AGENT });
+    if (!added.ok) throw new Error('unreachable');
+    expect(f.queries.reviewState('t-cache')).toEqual({ open: 1, unreadable: 0, held: 0 });
+  });
+
+  it('stops counting an ask its filer WITHDREW — off the queue, so not parking the row', () => {
+    const f = fake();
+    const added = f.store.addReviewItem('t-cache', payload(), { actor: AGENT });
+    if (!added.ok) throw new Error('unreachable');
+    expect(f.queries.reviewState('t-cache')?.open).toBe(1);
+
+    const gone = f.store.withdrawReviewItem('t-cache', added.item.id, {
+      actor: AGENT,
+      reason: 'answered itself once the cache was measured',
+    });
+    expect(gone.ok).toBe(true);
+    expect(f.queries.reviewState('t-cache')).toEqual({ open: 0, unreadable: 0, held: 0 });
+  });
+
+  it("stops counting an ask the reader asked BACK on — that is the owner's turn", () => {
+    const f = fake();
+    const added = f.store.addReviewItem('t-cache', payload(), { actor: AGENT });
+    if (!added.ok) throw new Error('unreachable');
+    expect(f.queries.reviewState('t-cache')?.open).toBe(1);
+
+    // `threadId` is load-bearing, not decoration: `reviewItemState` reads
+    // `waiting` off the latest THREADED question, so a doc-style ask back is
+    // the shape the queue drops. A typed question without one leaves the item
+    // `open` on both surfaces, which is the next case.
+    const asked = f.store.requestMoreInfoOnReview(
+      't-cache',
+      added.item.id,
+      'Which reads actually hit both caches?',
+      { actor: PERSON, threadId: 'th-cache-q1' },
+    );
+    expect(asked.ok).toBe(true);
+    expect(f.queries.reviewState('t-cache')).toEqual({ open: 0, unreadable: 0, held: 0 });
+  });
+
+  it('keeps counting a TYPED question — the queue keeps that one too, so they agree', () => {
+    const f = fake();
+    const added = f.store.addReviewItem('t-cache', payload(), { actor: AGENT });
+    if (!added.ok) throw new Error('unreachable');
+
+    const asked = f.store.requestMoreInfoOnReview(
+      't-cache',
+      added.item.id,
+      'Which reads actually hit both caches?',
+      { actor: PERSON },
+    );
+    expect(asked.ok).toBe(true);
+    expect(f.queries.reviewState('t-cache')?.open).toBe(1);
+  });
+
+  it('stops counting an ANSWERED ask', () => {
+    const f = fake();
+    const added = f.store.addReviewItem('t-cache', payload(), { actor: AGENT });
+    if (!added.ok) throw new Error('unreachable');
+    expect(f.queries.reviewState('t-cache')?.open).toBe(1);
+
+    const answered = f.store.answerTaskReview('t-cache', added.item.id, 'Keep disk.', {
+      actor: PERSON,
+      answeredWith: 'o-7f3a',
+    });
+    expect(answered.ok).toBe(true);
+    expect(f.queries.reviewState('t-cache')).toEqual({ open: 0, unreadable: 0, held: 0 });
+  });
+
   it('reports a held item to the stall monitor with its filer', () => {
     const f = fake();
     const added = f.store.addReviewItem('t-cache', payload(), { actor: AGENT });

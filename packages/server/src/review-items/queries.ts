@@ -11,6 +11,8 @@ import {
   isReviewItemHeld,
   isReviewItemOpen,
   readTaskReviewItem,
+  reviewItemState,
+  reviewWithdrawn,
 } from '@feedback/core';
 import { DEFAULT_REVIEW_ITEM_CRITERIA } from '@feedback/core/review-judge-prompt';
 import { isArchived } from '../task-fields.ts';
@@ -22,6 +24,37 @@ import type {
   ReviewStateCounts,
   SetReviewItemCriteriaResult,
 } from './types.ts';
+
+/**
+ * Is this item an ask the READER can actually see and act on?
+ *
+ * The stall clock parks a row while `reviewState.open` is above zero, on the
+ * reading that the row is legitimately waiting on a person. That is only true
+ * of items the person has in front of them, so this predicate has to agree
+ * with the Home queue's own filter (`review-queue.ts`) item for item. When the
+ * two drift, the row parks forever on an ask that is off the queue: nobody can
+ * answer it, so nothing ever clears it, and the watchdog stays off the row.
+ *
+ * Four exclusions, and each one is the queue's:
+ *
+ *  - ANSWERED (`isReviewItemOpen`) — settled.
+ *  - GATED — held or still being judged; the reader was never shown it.
+ *  - WITHDRAWN — its asker took it back, so no decision was ever needed.
+ *  - WAITING — the reader asked back and it is the OWNER's turn; the row is
+ *    the one holding things up, which is the opposite of waiting on a person.
+ *
+ * The predicates are reused rather than re-derived for exactly that reason: a
+ * second spelling of "on the queue" is free to disagree with the first, and
+ * this bug is what that disagreement costs.
+ */
+function isCountedOpen(item: TaskReviewItem): boolean {
+  return (
+    isReviewItemOpen(item) &&
+    !isReviewItemGated(item) &&
+    !reviewWithdrawn(item.review) &&
+    reviewItemState(item) !== 'waiting'
+  );
+}
 
 export class ReviewItemQueries {
   constructor(private readonly p: ReviewItemPersistence) {}
@@ -99,7 +132,7 @@ export class ReviewItemQueries {
     // reader was never shown.
     const items = this.listReviewItems(taskId);
     const held = items.filter(isReviewItemHeld).length;
-    const open = items.filter((i) => isReviewItemOpen(i) && !isReviewItemGated(i)).length;
+    const open = items.filter(isCountedOpen).length;
     let unreadable = 0;
     for (const raw of task.reviews ?? []) {
       if (!readTaskReviewItem(raw)) unreadable++;
