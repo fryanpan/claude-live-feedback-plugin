@@ -1584,6 +1584,12 @@ export class FileBindings {
             this.p.clearPendingFileWrite(room.docId);
           })
           .finally(() => {
+            // Always reached, and the flag's correctness depends on it: a
+            // binding stuck `writeInFlight` would never write again and would
+            // hold the poll down with it. `boundFiles.write` awaits `race`,
+            // which resolves on a `Promise.race` against a deadline timer, so
+            // it settles within `boundReadDeadlineMs` even when the syscall
+            // underneath never returns.
             binding.writeInFlight = false;
           });
         return;
@@ -1595,7 +1601,15 @@ export class FileBindings {
       // saves nothing there either way, and the `.ydoc` is the durable record
       // the doc comes back from. It stays a failed write, so a restart
       // reasserts it once the file answers again.
-      if (boundFiles.quarantined(binding.path)) {
+      //
+      // `busy` is skipped for the same reason and matters more here than at
+      // shutdown, because EVICTION runs this on a live server: a doc leaving
+      // memory while the pool holds unreturned threads would put a blocking
+      // write on the main thread of a process that is still serving. `busy`
+      // is also the state that leaves no mark on the path, so the quarantine
+      // check alone cannot see it — a merely slow file reaches the sync
+      // write with nothing to stop it.
+      if (boundFiles.quarantined(binding.path) || boundFiles.busy()) {
         this.failedWrites.add(room.docId);
         return;
       }
