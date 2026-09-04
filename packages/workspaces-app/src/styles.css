@@ -365,7 +365,7 @@ body.view-mode #toggle-format {
   display: inline-block;
 }
 
-/* "N questions for you" — every open review item on the doc, behind the one
+/* "N waiting on you" — every open review item on the doc, behind the one
    amber glyph the highlight and the card also carry (comments mock 3). A
    pill, not an icon button: it is a sentence on a wide screen and a glyph
    plus a count on a phone (`.w` is the wordy part; see INLINE THREAD CARDS
@@ -1200,20 +1200,6 @@ body.threads-resizing {
   border-color: var(--accent);
   box-shadow: 0 0 0 2px rgba(46, 125, 215, 0.2);
 }
-.thread .status-dot {
-  display: inline-block;
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  background: var(--accent);
-  flex: 0 0 auto;
-}
-.thread.resolved .status-dot {
-  background: var(--green);
-}
-.thread.orphan .status-dot {
-  background: var(--yellow);
-}
 
 /* ---------- one glyph per state, everywhere a thread appears ----------
    The three icons are CSS-only data URIs so the highlight in the prose (a
@@ -1221,7 +1207,8 @@ body.threads-resizing {
    the top-bar chip and the off-screen hints. Blue bubble: comment. Amber
    question mark: an open review item — question OR decision, one glyph
    (Bryan, 2026-09-01). Green tick: answered or resolved. The status dot the
-   head used to lead with is superseded by the glyph and hidden. */
+   head used to lead with said the same thing in a colour with no name; the
+   card stopped building one (thread-card.ts) rather than hiding it here. */
 :root {
   --ic-comment: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M2.5 3.5h11v7h-6l-3 2.5v-2.5h-2z' fill='none' stroke='%232e7dd7' stroke-width='1.6' stroke-linejoin='round'/%3E%3C/svg%3E");
   --ic-question: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Ccircle cx='8' cy='8' r='7.5' fill='%23b25e09'/%3E%3Ctext x='8' y='11.6' text-anchor='middle' font-family='-apple-system,Helvetica,Arial,sans-serif' font-weight='700' font-size='10.5' fill='%23fff'%3E?%3C/text%3E%3C/svg%3E");
@@ -1259,44 +1246,46 @@ body.threads-resizing {
   background: var(--red);
   box-shadow: 0 0 0 1.5px var(--bg);
 }
-.thread-head .status-dot {
-  display: none;
-}
 .thread.is-new {
   box-shadow: 0 0 0 2px rgba(215, 58, 73, 0.35);
 }
-.thread-new-tag {
-  flex: 0 0 auto;
-  font-size: 10px;
-  font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-  color: #fff;
-  background: var(--red);
+/* The folded face of a declared thread answers in place, and the field IS how
+   the reader knows it is a question — no chip says so. One line, because it
+   has to fit under two lines of summary inside a 260px margin bubble; the
+   fold is where a longer answer goes. */
+.thread-answer-field {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 6px;
+  min-width: 0;
+}
+.thread-answer-input {
+  flex: 1 1 auto;
+  min-width: 0;
+  font: inherit;
+  font-size: 12.5px;
+  font-family: var(--sans);
+  min-height: 30px;
+  padding: 4px 8px;
+  border: 1px solid var(--border-strong, var(--border));
   border-radius: var(--radius-sm);
-  padding: 1px 5px;
+  background: var(--bg);
+  color: var(--fg);
 }
-/* A review item's disclosure is words — "Details ▾" / "Less ▴" — because its
-   folded face already holds the ask and the ways to answer it; the fold
-   only adds the why and each option's reasoning. */
-.thread-caret-words {
-  font-size: 11px;
-  font-weight: 600;
-  color: var(--accent);
-  transform: none !important;
-  padding: 2px 0 2px 6px;
+.thread-answer-input:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -1px;
 }
-/* The folded face of a declared thread answers in place (comments mock 3). */
-.thread-answer-cta {
-  display: inline-block;
-  margin-top: 4px;
+.thread-answer-send {
+  flex: 0 0 auto;
+  font: inherit;
   font-size: 12px;
   font-weight: 600;
-  color: var(--warn-fg, #b25e09);
-  border: 1px solid var(--warn-fg, #b25e09);
+  min-height: 30px;
+  padding: 4px 12px;
   border-radius: var(--radius-sm);
-  padding: 3px 10px;
-  background: var(--bg);
+  cursor: pointer;
 }
 .thread-options-compact {
   display: flex;
@@ -1338,24 +1327,34 @@ body.threads-resizing {
   font-size: 11px;
   color: var(--fg-muted);
 }
-/* A resolved thread folds to ONE faded line — the head and the topic — until
-   it is opened (comments mock 3). The slots keep their measured heights (the
-   morph needs them); clipping is what hides them, so opening still measures
-   real faces. */
-.thread.resolved:not(.expanded) {
-  opacity: 0.55;
-  padding-top: 5px;
-  padding-bottom: 5px;
+/* A closed-out thread keeps its two lines and its shape — it just recedes
+   (mock round 4, superseding mock 3's fold to a single faded line). The line
+   it used to hide is the one that says what was settled: the tick, the outcome
+   and who chose it live on slot B's summary face, so clipping slot B left a
+   resolved card marked by nothing but its own dimness.
+
+   Withdrawn recedes the same way and adds the one thing a strike-through
+   cannot: the reason, on the row under it. Neither state wears a word on the
+   head — see `.thread-tag`. */
+.thread.resolved:not(.expanded),
+.thread.withdrawn:not(.expanded) {
+  opacity: 0.6;
 }
-.thread.resolved:not(.expanded) .slot-b,
-.thread.resolved:not(.expanded) .thread-foot {
-  max-height: 0;
-  overflow: hidden;
-  margin: 0;
-  padding: 0;
+.thread.withdrawn {
+  background: var(--bg-panel);
 }
-.thread.resolved:not(.expanded) .thread-topic {
+.thread.withdrawn .thread-topic {
+  text-decoration: line-through;
+  text-decoration-color: var(--fg-muted);
+}
+/* Why the ask was taken back. Muted and one step down in size: it is the
+   footnote to a card that has already said its piece. */
+.thread-gone {
+  margin-top: 7px;
   font-size: 12px;
+  line-height: 1.45;
+  color: var(--fg-muted);
+  overflow-wrap: anywhere;
 }
 
 /* ---------- the card: head, two folding slots, foot ---------- */
@@ -1384,24 +1383,13 @@ body.threads-resizing {
 .thread-who .name {
   font-weight: 600;
 }
+/* The ONE chip left on a head, and only for an orphan. Every other state is
+   marked by what the card offers you to press or by what it shows: a row of
+   options IS a decision, a field with a send button IS a question, a tick over
+   the outcome IS resolved, a struck line on a dimmed card IS withdrawn. That
+   is why "DECIDE", "ANSWER" and "RESOLVED" are all gone. An orphan has no
+   control and no line of its own — its anchor is what went missing. */
 .thread-tag {
-  color: var(--fg-muted);
-}
-/* "Decision needed", on its own row above the head — outside both folding
-   slots, so a reader scanning the column sees it without opening anything.
-
-   Its own row and not a chip beside the name: the head is a flex row in a
-   300px column, and sharing it clipped the author to about seven characters at
-   1180px, which is where two different askers stopped being distinguishable.
-   ~18px, and only on the cards that carry a decision. */
-.thread-flag-row {
-  display: flex;
-  margin-bottom: 4px;
-}
-/* The same amber tone tokens as `.thread-item-k-decision` inside the opened
-   item card, because it is the same fact stated one fold earlier. Sized to its
-   text rather than to the row, so it reads as a chip and not as a banner. */
-.thread-decision-flag {
   flex: 0 0 auto;
   font-size: 10px;
   font-weight: 700;
@@ -1410,26 +1398,18 @@ body.threads-resizing {
   border-radius: var(--radius-sm);
   padding: 2px 6px;
   white-space: nowrap;
-  color: var(--warn-fg, #b25e09);
-  background: var(--warn-wash, #fff4e5);
-}
-/* Answered: the same fact, no longer a request. Muted so an open decision is
-   the only amber thing in the column. */
-.thread-decision-flag.is-answered {
   color: var(--fg-muted);
   background: var(--bg-hover);
 }
-/* WHAT was decided, beside the chip that says something was. Not uppercase and
-   not a chip: these are a person's words, and shouting them would make the row
-   compete with the author line under it. Shrinks and ellipsizes (`.clip`) —
-   the chip beside it is fixed and this is the part that can afford to lose
-   characters. */
-.thread-decision-outcome {
-  flex: 0 1 auto;
-  margin-left: 6px;
+/* When this started, top right — one fact about the opening message, sitting
+   with the attribution for it. Never shrinks and never wraps: the author name
+   beside it is the part that can afford to lose characters. */
+.thread-time {
+  flex: 0 0 auto;
   font-size: 11px;
   color: var(--fg-muted);
-  align-self: center;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
 }
 /* Lines truncate rather than wrap, so a card cannot exceed its rows at any
    width. Shared by every one-line row on the card. */
@@ -1600,26 +1580,40 @@ body.threads-resizing {
   }
 }
 
-/* Row 4: how much conversation there is, and the one resolve control. Lives
-   outside both slots, so expanding never rebuilds or moves it. */
+/* The last row of an EXPANDED thread, inside slot B's detail face — so a
+   folded card carries no destructive control at all, and ✓ Resolve is the
+   last thing an open one offers. `margin-left: auto` on the button puts it
+   at the right edge now that the reply count that used to fill the row is
+   gone. */
 .thread-foot {
   display: flex;
   align-items: center;
   gap: 8px;
   margin-top: 9px;
 }
-.thread-meta {
-  font-size: 12px;
-  color: var(--fg-muted);
-  flex: 1;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-family: var(--sans);
+.thread-foot .thread-resolve {
+  margin-left: auto;
 }
 /* The same element with the same colour in both states — not icon-only, and
    not a control that only turns green once the thread is resolved. It reads
    as an action before you take it. */
+/* Read-only (`ThreadPanelOpts.canWrite === false`). Every posting control on
+   a card is `disabled` there, and this is what makes that visible: a button
+   that looks pressable and is not is worse than one that looks unavailable.
+   The controls STAY on the card rather than being hidden, because what a
+   thread is asking of you is worth reading even when you cannot answer it —
+   the banner above the doc already says why. One rule for the lot: the tag
+   varies (button, input, textarea) but the reason never does. */
+.thread button:disabled,
+.thread input:disabled,
+.thread textarea:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+.thread button:disabled:hover {
+  border-color: var(--border);
+  color: var(--fg-muted);
+}
 .thread-resolve {
   flex: 0 0 auto;
   display: inline-flex;
@@ -1723,25 +1717,10 @@ body.threads-resizing {
   flex-wrap: wrap;
   margin: 0 0 6px;
 }
-.thread-item-k {
-  font-size: 10px;
-  font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-  border-radius: var(--radius-sm);
-  padding: 2px 7px;
-  white-space: nowrap;
-}
-/* Same tone tokens as the hub (`decision` amber, `review` accent) — the
-   class token stays `review` while the UI text says Question. */
-.thread-item-k-decision {
-  color: var(--warn-fg, #b25e09);
-  background: var(--warn-wash, #fff4e5);
-}
-.thread-item-k-review {
-  color: var(--accent, #2e7dd7);
-  background: var(--accent-wash, rgba(59, 111, 212, 0.07));
-}
+/* `.thread-item-k*` lived here — the item card's DECISION / QUESTION chip.
+   Deleted with the chip itself: no face of a doc card names its kind now,
+   because the option buttons and the answer box below already do. The hub's
+   own item cards are a different component and keep theirs. */
 .thread-item-headline {
   margin: 0;
   flex: 1;
@@ -2586,14 +2565,15 @@ body.composer-open #editor > .ProseMirror ::selection {
   overflow-wrap: anywhere;
 }
 
-/* The mobile half of the ≤1100px block doc.css keeps for `.lf-del-chip` —
-   split across the two files because the chip is minted by a base extension
-   and the deletion chip is not. */
-@media (max-width: 1100px) {
-  .lf-suggest-chip {
-    display: inline-flex;
-  }
-}
+/* The reveal for this chip is NOT here. It lives in doc.css beside
+   `.lf-del-chip`'s, keyed on `body[data-cards]` rather than on a width: the
+   board mints this chip too (SuggestionChips is a base extension) and writes
+   no `data-cards`, so a placement-keyed reveal in this file would fire on the
+   board at every width and show a chip the product has never shown. PR 669
+   measured that the chip computes `none` on the board and left it there
+   deliberately; keeping the reveal in the editor's own sheet is what holds
+   it. The shape below stays here because the board still has to style the
+   chip it mints. */
 
 /* Mobile suggestion chip (`.lf-suggest-chip`, suggestion-chips.ts widget
    decoration) — same shape and sizing as doc.css's `.lf-del-chip`,
