@@ -49,6 +49,19 @@ no transaction origin, `lastContentChangeFor` refuses an unnamed one, so a
 question asked on a mock or a design doc left its row reading as quiet with
 nobody waiting while the reader had it on their queue.
 
+On a LINKED doc the ask counts only for the row whose owner asked it, resolved
+through `taskStore.ownerIdOf`. A doc is a shared surface: without that scope
+one unanswered question on a design doc would park every row linking it, for
+as long as the question stayed open. The row's own `task:<id>` room needs no
+such scope, because a task-body thread belongs to exactly one row. Two
+consequences to know: an ask by a person, or by an agent the roster cannot
+place, parks nobody through a linked doc, and a linked doc's plain COMMENTS
+and edits still count for every row that links it — that exoneration expires
+with the quiet window rather than lasting as long as a question does. Reading
+those threads goes through `rooms.listThreads`, which hydrates an evicted room
+from disk rather than peeking, so a board whose rows link many cold docs pulls
+them back into memory on the loop's schedule.
+
 **Task notes count as movement.** A row's quiet time is measured from the
 newest of: its status change, its last workspace event, its last thread
 activity, and its newest note in `task.notes` — the end-of-turn message the
