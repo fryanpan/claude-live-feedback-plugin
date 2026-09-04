@@ -1933,9 +1933,19 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
     // nothing.
     const threadActivity = new Map<string, number>();
     const commentAsks: Array<{ taskId: string; askedAt: number }> = [];
-    for (const row of suspect) {
+    /**
+     * One room's discussion, read for both things a discussion can say about
+     * a row: that somebody is talking on it, and that somebody is waiting on
+     * an answer. Returns the newest comment time it saw.
+     *
+     * Factored out because the row's own `task:<id>` room and each doc the
+     * row LINKS are read by exactly the same rules — and were not, which is
+     * the bug. Two copies of "is this ask still open" is how one of them
+     * comes to disagree with the Home queue.
+     */
+    const readDiscussion = (docId: string, taskId: string): number => {
       let newest = 0;
-      for (const thread of rooms.listThreads(taskBodyDocId(row.id))) {
+      for (const thread of rooms.listThreads(docId)) {
         if (thread.lastActivity > newest) newest = thread.lastActivity;
         const declaring = pendingDeclaration(thread);
         // A HELD ask exonerates nothing. The whole point of a hold is that
@@ -1943,9 +1953,13 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
         // legitimately waiting on a person — it is waiting on its own filer
         // to revise, which is exactly what the loop should keep saying.
         if (declaring?.review && !isReviewPayloadGated(declaring.review)) {
-          commentAsks.push({ taskId: row.id, askedAt: declaring.ts });
+          commentAsks.push({ taskId, askedAt: declaring.ts });
         }
       }
+      return newest;
+    };
+    for (const row of suspect) {
+      let newest = readDiscussion(taskBodyDocId(row.id), row.id);
       // A registered builder's worktree churn is the row moving, exactly as
       // a comment is — the builder works in a checkout the board cannot see,
       // and without this the loop woke leads over its silence (8 of 9 wakes
@@ -1988,6 +2002,17 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
         if (ref.kind !== 'doc' && ref.kind !== 'thread') continue;
         const editedAt = rooms.lastContentChangeFor(ref.docId);
         if (editedAt !== undefined && editedAt > newest) newest = editedAt;
+        // …and that doc's DISCUSSION, on the same opt-in gesture and by the
+        // same rules as the row's own room. The prose fold above could never
+        // have covered it: `schema.ts` writes threads with no transaction
+        // origin, and `lastContentChangeFor` refuses an unnamed origin on
+        // purpose (see doc-activity-stall.test.ts's origins pair), so a
+        // question asked where the work actually is — on a mock, a design
+        // doc, a diff — left the row reading as quiet with nobody waiting.
+        // Measured 2026-09-04: five wakes in sixty-five minutes over two
+        // rows, one of them a mock round sitting on the reader's queue.
+        const discussed = readDiscussion(ref.docId, row.id);
+        if (discussed > newest) newest = discussed;
       }
       if (newest > 0) threadActivity.set(row.id, newest);
     }
