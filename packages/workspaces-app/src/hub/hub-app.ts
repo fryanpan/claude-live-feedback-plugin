@@ -118,6 +118,12 @@ import {
   presenceData,
 } from './presence-island.tsx';
 import { createRepaintGuard } from './repaint-guard.ts';
+import {
+  type TaskAskKind,
+  type TaskAskState,
+  taskAskRequestPath,
+  taskAskStatePath,
+} from './task-asks.ts';
 import { GOAL_PLACEHOLDER_TEXT, createTaskBodyEditorHost } from './task-body-editor.ts';
 import { type DetailTab, mountTaskDetailIsland, taskDetailData } from './task-detail-island.tsx';
 import { mountWalkthroughIsland } from './walkthrough-island.tsx';
@@ -1002,6 +1008,13 @@ export async function bootHub(env: HubBootEnv): Promise<void> {
   /** Which task the panel has already fetched audit rows for — one fetch per
    *  open, and the guard that keeps the fetch's own re-render from looping. */
   let detailEventsFor: string | null = null;
+  /** Which task the panel has already read the two ask stamps for, and what
+   *  they said. Same one-fetch-per-open shape as `detailEventsFor`: the read
+   *  re-renders, and the id guard is what stops that re-render coming back
+   *  round here. Undefined until the read lands, which the controls render as
+   *  "not yet asked" — see `TaskAskState`. */
+  let detailAsksFor: string | null = null;
+  let detailAsks: TaskAskState | undefined;
   /** Which GOAL the shared container is currently showing, so open, repaint
    *  and close are distinguishable — the goal panel's `renderedDetailId`. */
   let renderedGoalId: string | null = null;
@@ -1196,6 +1209,18 @@ export async function bootHub(env: HubBootEnv): Promise<void> {
       void loadEvents();
     }
     if (!task) detailEventsFor = null;
+    // Who has already asked this ticket for a plan or a review. Read on open
+    // for the same reason the audit rows are — four ways in, and the miss
+    // would look like a control offering an ask somebody already made.
+    if (task && detailAsksFor !== task.id) {
+      detailAsksFor = task.id;
+      detailAsks = undefined;
+      void loadTaskAsks(task.id);
+    }
+    if (!task) {
+      detailAsksFor = null;
+      detailAsks = undefined;
+    }
     // Only pass a discussion that belongs to the task on screen. An in-flight
     // load for a task the reader has left must not paint under this one.
     const discussion =
@@ -1278,6 +1303,12 @@ export async function bootHub(env: HubBootEnv): Promise<void> {
         blockers: task ? openBlockersOf(task) : [],
         onRelatedAdd: (t, url) => void addRelatedLink(t, url),
         onRelatedRemove: (t, entry) => void removeRelatedLink(t, entry),
+        // The ticket's two one-tap asks. The write is a doc route, not a task
+        // route, because a ticket's comments live in its body doc — which is
+        // exactly what makes the ask reach the seated lead on the board
+        // subscription it already holds.
+        onAsk: (t, kind) => askOnTask(t, kind),
+        ...(detailAsks !== undefined ? { taskAsks: detailAsks } : {}),
         // The workspace's audit rows; the panel takes this task's out of them.
         // The same list the Activity view reads — one log, two surfaces.
         activity: state.events,
@@ -1448,6 +1479,47 @@ export async function bootHub(env: HubBootEnv): Promise<void> {
       showToast('Posting the comment failed — your text is still in the box');
       return false;
     }
+    await loadDiscussion(task);
+    return true;
+  }
+
+  /**
+   * What this ticket's two ask stamps say — who asked for a plan or a review,
+   * and when. Read from the ticket's body doc, which is where the ask routes
+   * write them, so a reload and another tab's press both show the receipt
+   * without the panel tracking anything.
+   *
+   * A read that fails leaves the controls offering. That is the right way
+   * round: an offer costs one extra press at worst, where a receipt invented
+   * from a failed read hides the control for an ask nobody made.
+   */
+  async function loadTaskAsks(taskId: string): Promise<void> {
+    const body = await fetchJson<{ meta?: TaskAskState }>(taskAskStatePath(taskId));
+    // The reader may have moved on while this was in flight.
+    if (detailAsksFor !== taskId) return;
+    detailAsks = body?.meta ?? {};
+    renderDetail();
+  }
+
+  /**
+   * Ask the board's agent to plan this ticket, or to review it.
+   *
+   * The route is the doc one the meeting floats press (`taskAskRequestPath`),
+   * aimed at the ticket's body doc: it files the ask as a subject thread from
+   * this reader and stamps who asked. Resolves to whether it LANDED — the
+   * control puts itself back on a refusal rather than showing a receipt for
+   * an ask no agent received.
+   */
+  async function askOnTask(task: HubTask, kind: TaskAskKind): Promise<boolean> {
+    const res = await send(taskAskRequestPath(task.id, kind), 'POST', { author });
+    if (!res.ok) {
+      showToast(kind === 'plan' ? 'Asking for a plan failed' : 'Asking for a review failed');
+      return false;
+    }
+    // Both halves of what just changed: the stamp the receipt is built from,
+    // and the comment the ask actually IS — it belongs in the discussion the
+    // reader is looking at, not only in the agent's inbox.
+    await loadTaskAsks(task.id);
     await loadDiscussion(task);
     return true;
   }
