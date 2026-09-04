@@ -636,10 +636,12 @@ export class StallNudger {
       rows = new Map<string, ToldRow>();
       this.told.set(key, rows);
     }
-    const before = new Map(rows);
-    for (const [id, seen] of rows) {
-      if (now - seen.seenAt > this.repeatMs) rows.delete(id);
-    }
+    // Refresh BEFORE pruning, and the order is the whole point: pruning first
+    // would drop a row that is a finding on this very tick the moment its
+    // window elapsed, and the next tick would then read it as brand new. That
+    // is a repeat keyed on the clock — one wake per row per window, which is
+    // the amortisation `stampFor` refuses on the escalation bucket for exactly
+    // the same reason.
     for (const id of [
       ...board.stalled.map((r) => r.id),
       ...board.unfiled.map((r) => r.id),
@@ -648,6 +650,12 @@ export class StallNudger {
       const seen = rows.get(id);
       if (seen) seen.seenAt = now;
     }
+    for (const [id, seen] of rows) {
+      if (now - seen.seenAt > this.repeatMs) rows.delete(id);
+    }
+    // Snapshot AFTER both, so what the news is measured against is what the
+    // board still remembers rather than what it remembered a moment ago.
+    const before = new Map(rows);
     return { rows, before, firstWake: before.size === 0 };
   }
 

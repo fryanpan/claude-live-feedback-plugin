@@ -296,6 +296,29 @@ describe('a set that shrinks is not news', () => {
    * followed by a clean board the moment the owner posts anything, so
    * forgetting there would restore the exact loop this rule removes.
    */
+  /**
+   * The row that never left. Forgetting is keyed on how long a row has been
+   * OFF the list, so a row that has been on it the whole time must never age
+   * out — otherwise the next tick reads it as brand new and the memory
+   * becomes a clock, firing one wake per row per window. That is the same
+   * amortisation `stampFor` refuses on the escalation bucket, arriving
+   * through a different door.
+   */
+  it('does not forget a row that has stayed on the list the whole window', () => {
+    const { world, sent, nudger } = harness({ repeatMs: 60 * MIN });
+    world.boards[0]!.stalled = [];
+    world.boards[0]!.unfiled = [unfiled('t-a')];
+    nudger.tick();
+    expect(sent).toHaveLength(1);
+
+    world.now += 61 * MIN;
+    nudger.tick();
+    world.now += 61 * MIN;
+    nudger.tick();
+
+    expect(sent).toHaveLength(1);
+  });
+
   it('forgets a row that has not been a finding for a whole repeat window', () => {
     const { world, sent, nudger } = harness({ repeatMs: 60 * MIN });
     world.boards[0]!.stalled = [];
