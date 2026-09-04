@@ -18,6 +18,12 @@
  *      `authorFor`, on the one surface where Access IS the identity.
  *   E. Retiring a board admits and revokes nobody. That was written down
  *      backwards; this pins what actually happens.
+ *   F. A dependency edge LOOKS like A with no `Ref` around it — `after` and
+ *      the `blockedBy` arm of `park` take task ids straight out of the body.
+ *      It is not: the store refuses a cross-board edge to everybody, in one
+ *      word that tells a foreign id and a made-up one apart from nothing.
+ *      Both halves are pinned here, because the reason the transition gate's
+ *      report is safe lives three modules from the route that sends it.
  *
  * Each suite carries its own positive control: the same call, inside the
  * member's own board, still working. A refusal test with no control passes
@@ -594,6 +600,133 @@ describe('the member boundary, on the surfaces a path check cannot see', () => {
         { authorization: `Bearer ${token}` },
       );
       expect(bare.status).toBe(401);
+    });
+  });
+
+  // A dependency edge reads like the `links` hole with no `Ref` around it:
+  // two member-allowed writes take task ids straight out of the body, and
+  // the transition gate then READS the row at the other end and reports its
+  // id, title, status and `needs` back to whoever moved the pointing row.
+  // The reason it is not that hole is the store, which refuses a
+  // cross-board edge to everybody — pinned below, because a route test that
+  // only showed the 403 would not say why the 409 is safe.
+  describe('F. a dependency edge cannot reach off the board either', () => {
+    const afterPath = (taskId: string) => `/api/tasks/${encodeURIComponent(taskId)}/after`;
+    const parkPath = (taskId: string) => `/api/tasks/${encodeURIComponent(taskId)}/park`;
+    /** Not spelled like a real row id: the pre-push leak scanner reads
+     *  `t-<slug>` as one wherever it appears. */
+    const MADE_UP = 'no-such-row-anywhere';
+
+    /** Put the row back to no edges at all, as the owner, between tests. */
+    const clearEdges = async (taskId: string) => {
+      const res = await asOwnerJson(afterPath(taskId), 'POST', {
+        after: [],
+        afterEnforce: [],
+        author: { id: 'known-owner', name: 'Owner', kind: 'known' },
+      });
+      expect(res.status, await res.clone().text()).toBe(200);
+    };
+
+    it('refuses `after` naming a row on a board they were never given', async () => {
+      const res = await asMemberJson(afterPath(ownTask), 'POST', { after: [foreignTask] });
+      expect(res.status).toBe(403);
+      expect(await res.json()).toEqual({ error: 'out_of_share_scope' });
+    });
+
+    it('refuses it in `afterEnforce` too — the arm that actually gates', async () => {
+      const res = await asMemberJson(afterPath(ownTask), 'POST', {
+        after: [],
+        afterEnforce: [foreignTask],
+      });
+      expect(res.status).toBe(403);
+      expect(await res.json()).toEqual({ error: 'out_of_share_scope' });
+    });
+
+    it('answers a MADE-UP id in the same words, so it is not an existence oracle', async () => {
+      const res = await asMemberJson(afterPath(ownTask), 'POST', { after: [MADE_UP] });
+      expect(res.status).toBe(403);
+      expect(await res.json()).toEqual({ error: 'out_of_share_scope' });
+    });
+
+    it('CONTROL: the same edge inside their own board still lands', async () => {
+      const sibling = await createTask(board, 'A sibling on the shared board');
+      const res = await asMemberJson(afterPath(ownTask), 'POST', { after: [sibling] });
+      expect(res.status, await res.clone().text()).toBe(200);
+      expect((await res.json()) as { task: { after: string[] } }).toMatchObject({
+        task: { after: [sibling] },
+      });
+      await clearEdges(ownTask);
+    });
+
+    it('refuses `blockedBy` on the park verb naming another board’s row', async () => {
+      const res = await asMemberJson(parkPath(ownTask), 'POST', { blockedBy: [foreignTask] });
+      expect(res.status).toBe(403);
+      expect(await res.json()).toEqual({ error: 'out_of_share_scope' });
+    });
+
+    it('answers a MADE-UP id on the park verb in the same words', async () => {
+      const res = await asMemberJson(parkPath(ownTask), 'POST', { blockedBy: MADE_UP });
+      expect(res.status).toBe(403);
+      expect(await res.json()).toEqual({ error: 'out_of_share_scope' });
+    });
+
+    it('CONTROL: blocking on a row of their own board still lands', async () => {
+      const sibling = await createTask(board, 'Another sibling on the shared board');
+      const res = await asMemberJson(parkPath(ownTask), 'POST', { blockedBy: [sibling] });
+      expect(res.status, await res.clone().text()).toBe(200);
+      expect((await res.json()) as { after: string[] }).toMatchObject({ after: [sibling] });
+      await clearEdges(ownTask);
+    });
+
+    // The write refusals above are the boundary's words on a door the STORE
+    // already holds shut: `setDependencies` and `createTask` both check the
+    // dependency against the board's own task map, so no route can build a
+    // cross-board edge for anybody — which is also why the transition gate's
+    // report cannot name a foreign row. Pinned here because the whole reason
+    // the 409 body is safe is this refusal, and it is three modules away.
+    it('the STORE refuses a cross-board edge to the OWNER too, in one word', async () => {
+      const res = await asOwnerJson(afterPath(ownTask), 'POST', {
+        after: [foreignTask],
+        author: { id: 'known-owner', name: 'Owner', kind: 'known' },
+      });
+      expect(res.status).toBe(400);
+      expect(await res.json()).toEqual({ ok: false, error: 'unknown-after' });
+    });
+
+    it('…and answers a made-up id with that same one word, so it tells nothing apart', async () => {
+      const res = await asOwnerJson(afterPath(ownTask), 'POST', {
+        after: [MADE_UP],
+        author: { id: 'known-owner', name: 'Owner', kind: 'known' },
+      });
+      expect(res.status).toBe(400);
+      expect(await res.json()).toEqual({ ok: false, error: 'unknown-after' });
+    });
+
+    it('CONTROL: an edge on their own board still gates, and still names itself', async () => {
+      const blocker = await createTask(board, 'The row that holds the other one');
+      const wired = await asOwnerJson(afterPath(ownTask), 'POST', {
+        after: [blocker],
+        afterEnforce: [blocker],
+        author: { id: 'known-owner', name: 'Owner', kind: 'known' },
+      });
+      expect(wired.status, await wired.clone().text()).toBe(200);
+      const res = await asMemberJson(
+        `/api/tasks/${encodeURIComponent(ownTask)}/transition`,
+        'POST',
+        { to: 'in-progress' },
+      );
+      expect(res.status).toBe(409);
+      const body = (await res.json()) as {
+        error: string;
+        blockers: Array<{ taskId: string; title: string }>;
+      };
+      expect(body.error).toBe('blocked');
+      expect(body.blockers).toHaveLength(1);
+      expect(body.blockers[0]).toMatchObject({
+        taskId: blocker,
+        title: 'The row that holds the other one',
+      });
+      await clearEdges(ownTask);
     });
   });
 

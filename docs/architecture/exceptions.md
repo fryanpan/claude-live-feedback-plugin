@@ -289,7 +289,7 @@ The remaining 93 are exceptions. Each row names the one harness its cases share.
 | `packages/core/test/thread-summary.test.ts` | 599 | Every describe builds its subject with the module-scope `makeThread()` ydoc builder. |
 | `packages/server/test/meeting-e2e.test.ts` | 588 | One describe over the `ManualScheduler` / `AudioClient` / `waitFor` harness. |
 | `packages/server/test/doc-eviction.test.ts` | 587 | Both describes drive the same injected-clock Rooms eviction fixture and the shared `onDisk()` reader. |
-| `packages/server/test/member-boundary-lows.test.ts` | 630 | Five describes over ONE Access-fronted server, two boards, a doc, a thread and a row on each — the fixture IS the subject (a member of board A doing things about board B), and a second copy of it in a second file would be the thing most likely to drift out of agreement with the first. |
+| `packages/server/test/member-boundary-lows.test.ts` | 765 | Six describes over ONE Access-fronted server, two boards, a doc, a thread and a row on each — the fixture IS the subject (a member of board A doing things about board B), and a second copy of it in a second file would be the thing most likely to drift out of agreement with the first. |
 | `packages/server/test/collab-host.test.ts` | 582 | All three describes depend on the module-scope `jwks` / `signJwt` `beforeAll` and boot the same server shape. |
 | `packages/server/test/task-review-queue.test.ts` | 581 | Module-scope `handle` / `base` plus `seedWorkspace` / `seedDecision` feed every describe. |
 | `packages/server/test/task-review-item-routes.test.ts` | 579 | A single describe and one `beforeAll` server; every case is a write route read back over HTTP. |
