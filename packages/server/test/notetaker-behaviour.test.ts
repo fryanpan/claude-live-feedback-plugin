@@ -323,10 +323,16 @@ describe('the programmatic judges', () => {
     expect(allBullets(notes)).toHaveLength(5);
   });
 
-  it('count a link by its label and a speaker tag as one word', () => {
+  it('count a link by its label and a speaker tag not at all', () => {
+    // The instructions promise the tag is free of the twenty-word budget, so
+    // the judge that enforces the budget must not charge for it. Counting it
+    // failed a nineteen-word bullet at 21 words on the first real eval run,
+    // for carrying the attribution those same instructions demand.
     expect(bulletWords('[@Priya](speaker:A) The sync wakes on a ninety-second retry loop.')).toBe(
-      9,
+      8,
     );
+    expect(bulletWords('The sync wakes on a ninety-second retry loop.')).toBe(8);
+    // A citation still costs its title, and never its URL.
     expect(bulletWords('Fixed in [Retry loop wakes the sync](/workspaces/w-1?task=t-3).')).toBe(7);
   });
 
