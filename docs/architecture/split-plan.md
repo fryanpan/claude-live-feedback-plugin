@@ -471,14 +471,14 @@ Landed as planned: `hub.css` (5,364) and `signin.css` (185), leaving
   `test:audit` rather than removed them.
 
 **The third file was taken on 2026-09-03**, and the measurement above held.
-`doc.css` (3,977) carries the seventeen blocks the editor alone reaches and
-`styles.css` drops to 2,669 — more than the estimated 2,459 because three
+`doc.css` (3,942) carries the seventeen blocks the editor alone reaches and
+`styles.css` drops to 2,672 — more than the estimated 2,459 because three
 blocks B2 did not count (the format bar, the thread highlights and the
 long-thread modal) measure editor-only too. What the work added to B2's
 lesson:
 
 - **The order question is answerable rather than arguable.** Splitting an
-  interleaved block reorders pairs of rules — 71,591 of them here — and a
+  interleaved block reorders pairs of rules — 72,575 of them here — and a
   pair can only change a value when it agrees on specificity, importance,
   property, element and pseudo-element box. Loading `doc.css` after the base
   leaves zero such pairs; loading it first leaves twenty, and they are not
@@ -492,7 +492,7 @@ lesson:
   discussion. Checking every moved selector's class and id tokens against
   `hub.js` and `signin.js` found it; it stayed in the base.
 - **Two pages get lighter this time, and they are the other two.** The board
-  and the sign-in page stop downloading 3,977 lines of editor CSS; the editor
+  and the sign-in page stop downloading 3,942 lines of editor CSS; the editor
   downloads what it always did, in two files.
 
 | Becomes | Moves | Importers to update |
