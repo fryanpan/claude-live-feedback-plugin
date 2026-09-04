@@ -37,7 +37,7 @@ the private tailnet — hence the public-URL dependency below.
 Ships as the plugin skill `live-review-meeting`; that SKILL.md is the
 authoritative version. Summary:
 
-**Pre-meeting:** bind the doc set (`bind_folder`, or `create_review_doc`
+**Pre-meeting:** bind the doc set (`attach_folder`, or `create_review_doc`
 per doc with a shared `setId`); add a bound `meeting-notes.md` with
 `## Agenda`, `## Tasks`, `## Requests`, `## Doc durability`; watch every
 doc; **prime** by reading every doc and the key source files before the

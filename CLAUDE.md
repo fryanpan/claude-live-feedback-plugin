@@ -66,7 +66,7 @@ that way and add new subsystem docs to the list here.
 - PR after each task is done; a cohesive feature is ONE PR with ordered
   commits, not a fragment per file.
 - **Mockups and sketches never enter the repo** — write the HTML outside the
-  working tree and serve it with `bind_mock(docId, sourceHtmlPath)`.
+  working tree and serve it with `attach_mockup(docId, sourceHtmlPath)`.
 
 ## The four gates — run all of them before you push
 
@@ -82,10 +82,13 @@ don't recite it from memory. What a test has to do to be worth its runtime —
 behaviour not source shape, poll-until not sleep, no wall-clock assertions —
 is [.claude/rules/testing-standards.md](.claude/rules/testing-standards.md),
 whose mechanical half is `bun run test:audit` (ratcheted, runs in CI).
-`bunx biome check --write` fixes formatting; pre-existing `noExplicitAny`
-warnings stay. Per diff: `packages/mcp/src/**` → `bun run build:mcp` + commit
-the bundle; `packages/plugin/**` → version bump (below); touching neither
-adds nothing.
+The other bars — 500-line files, strict types, the security-review trigger —
+are [.claude/rules/code-health.md](.claude/rules/code-health.md), one
+enforcing command named per bar.
+`bunx biome check --write` fixes formatting; `any` and unused imports are
+lint errors, at zero today. Per diff: `packages/mcp/src/**` → `bun run
+build:mcp` + commit the bundle; `packages/plugin/**` → version bump (below);
+touching neither adds nothing.
 
 ## Releasing the plugin
 

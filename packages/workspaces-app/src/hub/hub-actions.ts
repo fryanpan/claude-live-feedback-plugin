@@ -235,9 +235,9 @@ export interface HubActionDeps {
 }
 
 /**
- * Bind the verbs to one set of dependencies. The entry destructures the result,
- * so every call site reads exactly as it did when these were declarations in
- * `main()` — including the ones that pass a verb as a handler value.
+ * Bind the verbs to one set of dependencies. The entry passes the result down
+ * to the region modules whole, so a region's dependency list says "the board's
+ * writes" once rather than naming twenty verbs — see `HubActions`.
  */
 export function createHubActions(deps: HubActionDeps) {
   const { workspaceId, author, state, renderAll, renderDetail, renderLead, focusTitle } = deps;
@@ -747,3 +747,12 @@ export function createHubActions(deps: HubActionDeps) {
     startHuddle,
   };
 }
+
+/**
+ * Every verb `createHubActions` hands back, as one type.
+ *
+ * Derived from the factory rather than declared beside it: a verb added to the
+ * return object is reachable from the regions without a second edit, and a
+ * signature changed in one place cannot disagree with a hand-written copy.
+ */
+export type HubActions = ReturnType<typeof createHubActions>;

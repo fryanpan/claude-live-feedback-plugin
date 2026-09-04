@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
+import { HUB_BOOT_SOURCES } from './support/hub-boot-sources.ts';
 
 // The activity log is ~1000 rows (~590KB decompressed on the live hub board)
 // and only two surfaces read it: the Activity view and an open detail panel.
@@ -9,7 +10,9 @@ import { describe, expect, it } from 'vitest';
 // on his iPad. What these pin is the ABSENCE of a fetch on paths that must
 // not make one, which a driven boot can only show for the paths it takes.
 describe('the activity log loads only when something reads it', () => {
-  const src = readFileSync(join(__dirname, '..', 'src', 'hub', 'hub-app.ts'), 'utf8');
+  const src = HUB_BOOT_SOURCES.map((m) =>
+    readFileSync(join(__dirname, '..', 'src', 'hub', `${m}.ts`), 'utf8'),
+  ).join('\n');
 
   it('loadEvents gates on an active consumer', () => {
     expect(src).toMatch(
