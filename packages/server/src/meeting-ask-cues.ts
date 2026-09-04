@@ -66,6 +66,122 @@ export const WAKE_WORDS = ['claude', 'claud', 'clod', 'cloud'] as const;
 /** Greetings that may precede the wake word. */
 const WAKE_GREETINGS = ['hey', 'hi', 'ok', 'okay'] as const;
 
+/**
+ * The verbs a NOW ask opens with — the openings the three now intents were
+ * written around ("look into", "find out", "pull up", "link", "check", "ask
+ * the team") and their near neighbours. Consulted only AFTER a coordinator,
+ * and never on its own: every word here is also a noun, so it takes
+ * {@link NOW_VERB_FOLLOWERS} as well to tell a second ask from the rest of
+ * the first one's object. See {@link nowCueAskCount}.
+ */
+const NOW_ASK_VERBS = [
+  'look',
+  'find',
+  'pull',
+  'link',
+  'check',
+  'ask',
+  'dig',
+  'see',
+  'get',
+  'open',
+  'show',
+  'bring',
+  'read',
+  'search',
+  'review',
+  'confirm',
+  'figure',
+  'tell',
+  'share',
+  'summarize',
+  'summarise',
+  'list',
+  'compare',
+  'investigate',
+  'explain',
+] as const;
+
+/** What joins two asks said in one breath. Longest-first alternation matters
+ *  here: "and" alone would consume the joint and leave "then" to fail the
+ *  verb test that follows it. */
+const NOW_JOINERS = ['and then', 'and also', 'and', 'then', 'also', 'plus'] as const;
+
+/**
+ * What a coordinated VERB must be followed by to count as a second ask: the
+ * start of an object, or the particle that finishes the verb.
+ *
+ * Every word in {@link NOW_ASK_VERBS} is also a noun — "and **search
+ * results** ordering", "and **share** settings", "and **review** comments" —
+ * so the verb alone counted a second ask in four measured phrases where the
+ * truth was one. What separates them is what comes NEXT: an imperative takes
+ * an object ("pull up **the** notes", "look into **why** it does that") or a
+ * particle ("pull **up**", "find **out**"), while a compound noun takes
+ * another noun. Erring high is not free — a cue left live is replayed into
+ * the next tick's overlap, where the line that cued it vouches for it again.
+ */
+const NOW_VERB_FOLLOWERS = [
+  // The object's determiner.
+  'a',
+  'an',
+  'the',
+  'that',
+  'this',
+  'these',
+  'those',
+  'my',
+  'our',
+  'your',
+  'their',
+  'its',
+  'some',
+  'any',
+  'all',
+  'both',
+  'each',
+  'every',
+  'another',
+  'other',
+  'one',
+  'two',
+  'last',
+  'next',
+  // The particle that finishes the verb, or the preposition that opens the
+  // object.
+  'up',
+  'out',
+  'into',
+  'in',
+  'on',
+  'at',
+  'over',
+  'through',
+  'back',
+  'down',
+  'off',
+  'around',
+  'together',
+  'with',
+  'for',
+  'from',
+  'about',
+  'against',
+  'under',
+  'to',
+  'by',
+  'via',
+  // The clause an ask often takes instead of a noun phrase.
+  'whether',
+  'why',
+  'what',
+  'how',
+  'when',
+  'where',
+  'if',
+  'who',
+  'which',
+] as const;
+
 /** The verb half of the later cue — "**create** a task". */
 const LATER_VERBS = ['create', 'make', 'file', 'add'] as const;
 
@@ -222,6 +338,15 @@ const NOW_RE = new RegExp(
   'g',
 );
 
+/** A coordinator, a verb, and the word that proves the verb was one — the
+ *  joint between two asks in one now-cue line. Global: a line may carry
+ *  several. */
+const NOW_JOINT_RE = new RegExp(
+  `\\b(?:${alternation(NOW_JOINERS)})\\s+(?:${alternation(NOW_ASK_VERBS)})` +
+    `\\s+(?:${alternation(NOW_VERB_FOLLOWERS)})\\b`,
+  'g',
+);
+
 function laterRe(nouns: readonly string[]): RegExp {
   return new RegExp(
     `^(?:${alternation(LATER_VERBS)})\\s+(?:(?:${alternation(LATER_DETERMINERS)})\\s+){0,2}` +
@@ -310,6 +435,52 @@ export function askCuesIn(text: string): { now: boolean; later: boolean } {
  */
 export function laterCueIsPlural(text: string): boolean {
   return clausesIn(normalize(text)).some((clause) => LATER_MANY_RE.test(stripLeadIns(clause)));
+}
+
+/**
+ * How many asks one NOW-cue line carries.
+ *
+ * A cue is spent on the one ask it licensed, which was right until somebody
+ * said both halves in one breath: "Claude, can you look at the retry loop and
+ * pull up last week's notes" is two asks, and the second was dropped in
+ * silence because the line that cued it had already been consumed. So a
+ * line's capacity is counted rather than assumed to be one.
+ *
+ * Two things raise it and nothing else does: the speaker said the wake word
+ * again ("…and Claude, could you…"), or a coordinator is followed by a VERB
+ * AND the word that proves it was one. Both halves are needed. The verb
+ * separates a second ask from a longer object — "look at the retry loop and
+ * the sync worker" is one ask about two things, and "the" is not a verb —
+ * but every verb here is also a noun, so "and search results ordering" and
+ * "and review comments" counted two until the follower test was added.
+ *
+ * Neither direction of error is free. Erring low drops an ask somebody
+ * spoke. Erring high leaves the cue live for a second ask that never comes,
+ * and the line that cued it vouches for it again when the overlap replays it
+ * into the next tick.
+ *
+ * Zero for a line with no now cue at all, so a caller may use it as the
+ * capacity without asking twice.
+ */
+export function nowCueAskCount(text: string): number {
+  const normalized = normalize(text);
+  let cues = 0;
+  let firstEnd = -1;
+  NOW_RE.lastIndex = 0;
+  for (let m = NOW_RE.exec(normalized); m !== null; m = NOW_RE.exec(normalized)) {
+    const end = m.index + m[0].length;
+    // The same carve-out askCuesIn makes: a now cue whose own remainder opens
+    // the later cue asked for a row, not for an action.
+    if (LATER_RE.test(stripLeadIns(normalized.slice(end)))) continue;
+    cues++;
+    if (firstEnd < 0) firstEnd = end;
+  }
+  if (cues === 0) return 0;
+  let joints = 0;
+  const rest = normalized.slice(firstEnd);
+  NOW_JOINT_RE.lastIndex = 0;
+  while (NOW_JOINT_RE.exec(rest) !== null) joints++;
+  return Math.max(cues, 1 + joints);
 }
 
 /** Did this line use the given convention? */
