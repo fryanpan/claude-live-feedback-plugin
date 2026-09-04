@@ -10,7 +10,7 @@
  * All fixtures are synthetic — invented names in the jordan@partner.example
  * register. The repo is public.
  */
-import { afterAll, beforeAll, describe, expect, it } from 'bun:test';
+import { afterAll, beforeAll, describe, expect, it, setDefaultTimeout } from 'bun:test';
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -24,6 +24,16 @@ import { listMeetings, meetingTranscriptPath } from '../src/meetings.ts';
 import { type ShareTarget, shareScopeAllows } from '../src/middleware/host-guard.ts';
 import { type ServerHandle, createServer } from '../src/server.ts';
 import { createMockTranscriptionEngine } from '../src/transcribe.ts';
+
+// bun's per-test timeout defaults to 5000ms, and a wait budget above the
+// runner's cap can never produce its own diagnostic: the test dies as a bare
+// "timed out after 5000ms" and the `no "stopped" frame; got [...]` message —
+// the whole reason waitFor reports what DID arrive — never prints. The waits
+// below are sized for a machine under a full parallel agent load, so the cap
+// is lifted above them rather than the budgets cut below it: a 4s budget
+// would fit the default, and a test that waits twice would still be killed
+// before either wait could speak.
+setDefaultTimeout(30_000);
 
 interface ServerFrame {
   type: string;

@@ -65,15 +65,26 @@ describe('the CI server gate', () => {
   const yaml = readFileSync(WORKFLOW, 'utf8');
   const verify = jobBlock(yaml, 'verify');
 
-  it('runs the server suite in the verify job', () => {
+  it('runs the server suite in a step of its own', () => {
     const runs = runPayloads(verify);
-    const server = runs.filter((r) => /bun run test(:server)?\b/.test(r));
     expect(
-      server.length,
-      'no step in `verify` runs the server suite — `bun run test:server` (or the ' +
-        '`bun run test` script that chains it) must appear, or nothing in CI reads ' +
-        'packages/server/test at all',
-    ).toBeGreaterThan(0);
+      runs.filter((r) => /\bbun run test:server\b/.test(r)).length,
+      'no step in `verify` runs `bun run test:server`, so nothing in CI reads ' +
+        'packages/server/test on its own terms',
+    ).toBe(1);
+  });
+
+  it('does not reach the server suite through the chained `bun run test`', () => {
+    // The shape this branch was written to reject, and the one it used to
+    // accept: a single `run: bun run test` step. That script is
+    // `test:vitest && test:server`, so a red client suite short-circuits the
+    // server suite out of the run and CI reports nothing about it. A guard
+    // that treats the regression as a legal alternative is not a guard.
+    for (const run of runPayloads(verify)) {
+      expect(run, 'CI must not run the chained `bun run test`').not.toMatch(
+        /\bbun run test\s*(?:$|[\r\n])/,
+      );
+    }
   });
 
   it('does not swallow the suite exit code', () => {
@@ -94,21 +105,16 @@ describe('the CI server gate', () => {
 
   it('reaches the server suite even when the client suite is already red', () => {
     const serverLine = verify.findIndex((l) => /run:.*bun run test:server\b/.test(l));
-    if (serverLine === -1) {
-      // Single chained `bun run test` step: the server suite is inside the
-      // same process, so there is no separate step for a failure to skip.
-      // Its own short-circuit is the cost this test documents, not a skip.
-      expect(verify.join('\n')).toMatch(/run:\s*bun run test\s*$/m);
-      return;
-    }
-    const clientLine = verify.findIndex((l) => /run:.*bun run test:vitest\b/.test(l));
-    if (clientLine === -1 || clientLine > serverLine) return; // nothing ahead of it
+    expect(
+      serverLine,
+      'no dedicated `bun run test:server` step to check — see the test above',
+    ).toBeGreaterThanOrEqual(0);
     const step = stepOf(verify, serverLine).join('\n');
     expect(
       step,
-      'the server suite runs after the client suite in its own step, so a failing ' +
-        'client suite would skip it by default. It needs `if: ${{ !cancelled() }}` ' +
-        '(or always()) so one CI run still reports on both.',
+      'the server suite must run even when an earlier step failed, or a red ' +
+        'client suite skips it and one CI run reports on only half the tests. ' +
+        'It needs `if: ${{ !cancelled() }}` (or always()).',
     ).toMatch(/if:.*(!\s*cancelled\(\)|always\(\))/);
   });
 });
