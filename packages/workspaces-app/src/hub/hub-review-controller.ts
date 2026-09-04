@@ -472,3 +472,12 @@ export function createHubReviewController(deps: HubReviewControllerDeps) {
     replyToReviewItem,
   };
 }
+
+/**
+ * Every verb `createHubReviewController` hands back, as one type.
+ *
+ * Derived from the factory for the same reason `HubActions` is: the regions
+ * that answer, ask back and undo take the controller whole, so a verb added
+ * here reaches them without a second declaration to keep in step.
+ */
+export type HubReviewController = ReturnType<typeof createHubReviewController>;

@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { CHORES_ID, type HubTask } from '../src/hub/hub-board-model.ts';
 import { type DetailHandlers } from '../src/hub/hub-detail-render.ts';
 import { renderQuickActions } from '../src/hub/hub-render.ts';
+import { HUB_BOOT_SOURCES } from './support/hub-boot-sources.ts';
 import { disposeTaskDetail, renderTaskDetail } from './support/task-detail.ts';
 
 /**
@@ -272,7 +273,9 @@ describe('the panel opens an untitled task with the title ready to type', () => 
  * than change the page, so the wiring is easier to READ than to observe.
  */
 describe('hub-app wires the two buttons to the two routes', () => {
-  const HUB_APP = readFileSync(resolve(import.meta.dirname, '../src/hub/hub-app.ts'), 'utf8');
+  const HUB_APP = HUB_BOOT_SOURCES.map((m) =>
+    readFileSync(resolve(import.meta.dirname, `../src/hub/${m}.ts`), 'utf8'),
+  ).join('\n');
   // The REST verbs themselves moved to `hub-actions.ts`; what stays in the
   // entry is which button calls which verb, so the two reads are split.
   const HUB_ACTIONS = readFileSync(
