@@ -264,9 +264,24 @@ export interface HubReviewItem {
   judge?: { at: number; verdict: 'ok' | 'held' | 'unavailable' | 'pending'; reason: string };
 }
 
-/** Review items the quality gate is holding — on the ticket, off the queue. */
+/**
+ * Review items the quality gate is holding — on the ticket, off the queue.
+ *
+ * Two facts retire an item and BOTH have to be read here: an `answer`, and a
+ * `withdrawnAt` stamp from its asker taking it back. A withdrawal deliberately
+ * leaves the standing verdict in place (core's `withdrawReview` keeps it, so a
+ * reinstated item is still held), so a filter on the verdict alone kept a
+ * taken-back ask on the ticket card under a Held note with a release button —
+ * an item the reader could act on that nobody was asking about any more. Same
+ * omission, same cause, as the one core's `isReviewItemHeld` carried; the
+ * predicate is spelled again here because the hub reads the PROJECTION, which
+ * is a wire shape rather than a `TaskReviewItem`.
+ */
 export function heldReviewItems(task: HubTask): HubReviewItem[] {
-  return (task.reviews ?? []).filter((r) => r.answer === undefined && r.judge?.verdict === 'held');
+  return (task.reviews ?? []).filter(
+    (r) =>
+      r.answer === undefined && r.review.withdrawnAt === undefined && r.judge?.verdict === 'held',
+  );
 }
 
 export interface HubGoal {
