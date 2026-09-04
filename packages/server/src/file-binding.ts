@@ -52,6 +52,7 @@ import { gitConflictHint } from './git-provenance.ts';
 import { ROOM_TIMINGS } from './room-timings.ts';
 import type { DocRoom } from './rooms.ts';
 import { isWithinRoot } from './safe-path.ts';
+import { boundFiles } from './slow-fs.ts';
 
 /**
  * Per-room binding to a markdown file on disk. Maintained by
@@ -73,8 +74,25 @@ import { isWithinRoot } from './safe-path.ts';
  * reverted a live edit with the file's stale copy — the doc-home-binding and
  * doc-eviction reds of 2026-08-31/09-01 — and read as a bare timeout.
  */
+/**
+ * A bound file's bytes, already read by somebody else.
+ *
+ * Hydration reads the file through `boundFiles` (off the main thread, under a
+ * deadline) and hands the result down, so the attach itself performs no
+ * blocking syscall on the path. `exists: false` covers both "not there" and
+ * "would not answer" — the attach treats them the same way it has always
+ * treated a missing file, which is why there is no third state here.
+ */
+export interface PrereadFile {
+  exists: boolean;
+  text?: string;
+  mtimeMs?: number;
+}
+
 export interface AttachOpts {
   liveWins?: boolean;
+  /** Bytes read ahead of the attach; see `PrereadFile`. */
+  preread?: PrereadFile;
 }
 
 interface FileBinding {
@@ -88,6 +106,8 @@ interface FileBinding {
    * binding whose doc is active, plus a rotating slice of the idle ones.
    */
   pollArmed?: boolean;
+  /** A poll stat is on the thread pool right now — see `pollBinding`. */
+  statInFlight?: boolean;
   /** Last file mtime (ms) we observed, so the poll reacts only to changes. */
   lastMtimeMs?: number;
   /** The serialized markdown we last wrote or last read from disk.
@@ -311,10 +331,16 @@ export class FileBindings {
     if (!room) return { ok: false, error: 'not-found' };
     const abs = filePath.startsWith('/') ? filePath : join(process.cwd(), filePath);
     const fragment = prose.getProseFragment(room.ydoc);
+    // Either the caller already read the file for us (hydration does, off the
+    // main thread) or we read it here. Both branches go through these two so
+    // no path below can reach the filesystem behind the preread's back.
+    const pre = opts.preread;
+    const fileExists = () => (pre ? pre.exists : existsSync(abs));
+    const readFile = () => (pre ? (pre.text ?? '') : readFileSync(abs, 'utf8'));
     let seeded = false;
-    if (fragment.length === 0 && existsSync(abs)) {
+    if (fragment.length === 0 && fileExists()) {
       try {
-        const md = readFileSync(abs, 'utf8');
+        const md = readFile();
         const blocks = prose.parseMarkdownBlocks(md);
         if (blocks.length > 0) {
           room.ydoc.transact(() => fragment.push(blocks), 'file-seed');
@@ -346,9 +372,9 @@ export class FileBindings {
     // create_review_doc): honor the sync contract's "the file is the source
     // of truth at rest". Without this, an edit made while the server was down
     // was never picked up — and the next flush overwrote it on disk.
-    if (!seeded && existsSync(abs)) {
+    if (!seeded && fileExists()) {
       try {
-        const md = readFileSync(abs, 'utf8');
+        const md = readFile();
         const currentSerialized = prose.serializeFragmentToMarkdown(fragment);
         const prior = existing?.lastWritten;
         if (md !== currentSerialized) {
@@ -436,7 +462,7 @@ export class FileBindings {
     }
 
     // disk → doc: poll for external edits (see armFileWatcher).
-    this.armFileWatcher(room, binding);
+    this.armFileWatcher(room, binding, pre);
 
     return { ok: true, seeded, resolvedPath: abs };
   }
@@ -473,10 +499,14 @@ export class FileBindings {
     if (!room) return { ok: false, error: 'not-found' };
     const abs = filePath.startsWith('/') ? filePath : join(process.cwd(), filePath);
     const content = room.ydoc.getText('content');
+    // See `attachFile`: hydration reads off the main thread and hands the
+    // bytes down, so nothing below opens the bound path itself.
+    const pre = opts.preread;
+    const fileExists = () => (pre ? pre.exists : existsSync(abs));
     let text = '';
-    if (existsSync(abs)) {
+    if (fileExists()) {
       try {
-        text = readFileSync(abs, 'utf8');
+        text = pre ? (pre.text ?? '') : readFileSync(abs, 'utf8');
       } catch (err) {
         console.error(`[rooms] read failed for ${abs}:`, err);
         return { ok: false, error: 'read-failed' };
@@ -494,7 +524,7 @@ export class FileBindings {
     // The 'file-watch' origin routes a disk apply through the same reanchor
     // sweep as a live edit.
     let reassertDoc = false;
-    if (existsSync(abs) && text !== content.toString()) {
+    if (fileExists() && text !== content.toString()) {
       if (
         opts.writeBack &&
         content.length > 0 &&
@@ -539,7 +569,7 @@ export class FileBindings {
       binding.contentObserver = observer;
       content.observe(observer);
     }
-    this.armFileWatcher(room, binding);
+    this.armFileWatcher(room, binding, pre);
     // Doc won the attach-time arbitration above: push its state back out
     // through the normal debounced writer (which also stamps the poll
     // baseline so the reassert isn't misread as an external edit).
@@ -672,20 +702,29 @@ export class FileBindings {
     // arms nothing for a missing path). A copy the checkout DOES hold is
     // arbitrated by the attach — by the caller's knowledge when it has any
     // (`opts.liveWins`), by mtime otherwise.
-    if (!existsSync(absPath)) {
+    // A preread already answered "is it there" off the main thread; asking
+    // the filesystem again here would put the blocking call straight back.
+    const absent = opts.preread ? !opts.preread.exists : !existsSync(absPath);
+    let attachOpts = opts;
+    if (absent) {
       const md = prose.serializeFragmentToMarkdown(prose.getProseFragment(room.ydoc));
       try {
         mkdirSync(dirname(absPath), { recursive: true });
         const tmp = `${absPath}.lf-write~`;
         writeFileSync(tmp, md);
         renameSync(tmp, absPath);
+        // The export just changed the answer the preread carried, and a
+        // preread saying "not there" would leave the attach unbound and the
+        // poll unarmed. Drop it: the path has answered a write, so the
+        // attach's own read is not the syscall this guard exists for.
+        attachOpts = { ...opts, preread: undefined };
       } catch (err) {
         console.error(`[rooms] ${docId}: could not export doc to its home ${absPath}:`, err);
       }
     }
     // attachFile only records sourceUrl when absent; a retarget must repoint.
     room.meta.sourceUrl = absPath;
-    this.attachFile(docId, absPath, opts);
+    this.attachFile(docId, absPath, attachOpts);
     this.p.schedulePersist(room);
     console.log(`[rooms] ${docId}: home binding now at ${absPath}`);
   }
@@ -793,8 +832,18 @@ export class FileBindings {
    * which visits active docs every tick and idle docs on a budget. Same
    * mechanism, same immunity, a constant number of timers.
    */
-  private armFileWatcher(_room: DocRoom, binding: FileBinding): void {
+  private armFileWatcher(_room: DocRoom, binding: FileBinding, preread?: PrereadFile): void {
     binding.pollArmed = false;
+    // A preread already paid for the stat on the thread pool. Re-stat'ing
+    // here would put the blocking syscall back on the main thread and undo
+    // the whole point of hydrating off it.
+    if (preread) {
+      if (!preread.exists) return;
+      binding.lastMtimeMs = preread.mtimeMs;
+      binding.pollArmed = true;
+      this.ensureFilePollTicker();
+      return;
+    }
     if (!existsSync(binding.path)) return;
     try {
       binding.lastMtimeMs = statSync(binding.path).mtimeMs;
@@ -843,21 +892,34 @@ export class FileBindings {
    * on-access edge check run byte-identical logic.
    */
   private pollBinding(docId: string, binding: FileBinding): void {
+    if (!this.p.residentRoom(docId)) return;
+    // One stat, and it runs on the thread pool. The sweep visits every bound
+    // file, so a single path whose provider has stopped answering used to be
+    // enough to park the event loop for the whole server — see slow-fs. A
+    // stat still in flight is not re-issued: a stalled one never returns, and
+    // re-issuing it every tick is how the inflight bound would be exhausted.
+    if (binding.statInFlight) return;
+    binding.statInFlight = true;
+    void boundFiles
+      .statMtime(binding.path)
+      .then((res) => {
+        if (res.status !== 'ok') return; // quarantined, busy, or never answered
+        if (!res.exists) return; // the ordinary case: a deleted worktree
+        this.applyPolledMtime(docId, binding, res.mtimeMs);
+      })
+      .finally(() => {
+        binding.statInFlight = false;
+      });
+  }
+
+  /**
+   * The rest of `pollBinding`, once the stat has come back. Split out only so
+   * the stat can be awaited; the decisions below are unchanged.
+   */
+  private applyPolledMtime(docId: string, binding: FileBinding, mtimeMs: number): void {
     const room = this.p.residentRoom(docId);
     if (!room) return;
-    let mtimeMs: number;
-    try {
-      // One syscall, not `existsSync` + `statSync`: the sweep runs this for
-      // every bound file, so the second stat was half the cost of the poll.
-      // A file that has gone is the ordinary case (a deleted worktree), and
-      // it is silent — only a real error is worth a line.
-      mtimeMs = statSync(binding.path).mtimeMs;
-    } catch (err) {
-      if ((err as NodeJS.ErrnoException)?.code !== 'ENOENT') {
-        console.error(`[rooms] stat failed for ${binding.path}:`, err);
-      }
-      return;
-    }
+    if (this.bindings.get(docId) !== binding) return;
     if (mtimeMs === binding.lastMtimeMs) return;
     binding.lastMtimeMs = mtimeMs;
     // An external write IS somebody reaching for the doc — the editor or the
@@ -876,7 +938,14 @@ export class FileBindings {
       // fast lane for the life of the process. `writeTimer` has always nulled
       // itself here for the same reason.
       binding.readTimer = null;
-      this.reconcileFromDisk(room, binding);
+      // The read the reconcile needs also goes through the pool. This is the
+      // syscall the outage actually wedged on (`openat`, not `stat`), so a
+      // guarded stat above with a blocking read here would guard nothing.
+      void boundFiles.read(binding.path).then((res) => {
+        if (this.bindings.get(docId) !== binding) return;
+        if (res.status !== 'ok') return;
+        this.reconcileFromDisk(room, binding, res);
+      });
     }, READ_DEBOUNCE_MS);
   }
 
@@ -1017,6 +1086,9 @@ export class FileBindings {
     }
     const binding = this.bindings.get(docId);
     if (!binding) return { ok: false, error: 'no-binding' };
+    // A path that has already refused to answer is not force-readable either
+    // — this read is synchronous and would park the whole server (slow-fs).
+    if (boundFiles.quarantined(binding.path)) return { ok: false, error: 'missing' };
     if (!existsSync(binding.path)) return { ok: false, error: 'missing' };
     // The caller is declaring disk the winner. A pending write-back holds a
     // PRE-reparse serialization — letting it fire would rewrite the file the
@@ -1071,19 +1143,31 @@ export class FileBindings {
   private reconcileFromDisk(
     room: DocRoom,
     binding: FileBinding,
+    preread?: PrereadFile,
   ): 'in-sync' | 'catch-up' | 'apply' | 'conflict' | 'missing' {
     // The disk→doc side of the home gate. Without it, `git checkout` under a
     // pinned doc's old path rewrites the file, the poll sees an mtime change,
     // and the OTHER branch's copy gets applied into the live doc — the read
     // half of the same incident the write half guards against.
     if (this.homeGuard(room, binding) !== 'ok') return 'missing';
-    if (!existsSync(binding.path)) return 'missing';
     let md: string;
-    try {
-      md = readFileSync(binding.path, 'utf8');
-    } catch (err) {
-      console.error(`[rooms] read failed for ${binding.path}:`, err);
-      return 'missing';
+    if (preread) {
+      if (!preread.exists) return 'missing';
+      md = preread.text ?? '';
+    } else {
+      // No preread means a SYNCHRONOUS caller — a flush guard, an explicit
+      // "sync now". Those still block, so they must not touch a path that has
+      // already proved it will not answer (see slow-fs). Reporting 'missing'
+      // is the same answer they get for a file that has gone, and the poll
+      // retries once the backoff lapses.
+      if (boundFiles.quarantined(binding.path)) return 'missing';
+      if (!existsSync(binding.path)) return 'missing';
+      try {
+        md = readFileSync(binding.path, 'utf8');
+      } catch (err) {
+        console.error(`[rooms] read failed for ${binding.path}:`, err);
+        return 'missing';
+      }
     }
     // Code and working-tree diff docs are flat text — replace the whole
     // `content` Y.Text on change. Read-only bindings can't hold live edits,
@@ -1283,7 +1367,11 @@ export class FileBindings {
       // overwriting bytes we have never seen — the poll just hasn't caught
       // up yet. Reconcile first; apply/conflict decides, and the conflict
       // path both backs up the external version and re-schedules our flush.
-      if (binding.lastMtimeMs !== undefined && existsSync(binding.path)) {
+      if (
+        binding.lastMtimeMs !== undefined &&
+        !boundFiles.quarantined(binding.path) &&
+        existsSync(binding.path)
+      ) {
         try {
           const mtimeMs = statSync(binding.path).mtimeMs;
           if (mtimeMs !== binding.lastMtimeMs) {
@@ -1459,6 +1547,7 @@ export class FileBindings {
     const binding = room ? this.bindings.get(room.docId) : undefined;
     if (!room || !binding) return 'no-binding';
     this.touchDoc(room.docId);
+    if (boundFiles.quarantined(binding.path)) return 'missing';
     if (!existsSync(binding.path)) return 'missing';
     // Advance the poll baseline the same way the poll itself would, so this
     // manual reconcile doesn't get replayed on the next tick.
