@@ -13,9 +13,9 @@
  * fold, and the `question` / `review` mapping — because a read is the one
  * step every stored payload passes through on its way to a reader.
  *
- * The types come back from `review-item.ts` as a type-only import, which
- * erases at build time: this module is a leaf at runtime and `review-item.ts`
- * re-exports it.
+ * The types come from `review-item-types.ts`, which emits nothing: this
+ * module is a leaf at runtime, and `review-item.ts` re-exports both it and
+ * the contract.
  */
 import type {
   ReviewAnswerUndone,
@@ -29,7 +29,7 @@ import type {
   ReviewPayload,
   ReviewShape,
   TaskReviewItem,
-} from './review-item.ts';
+} from './review-item-types.ts';
 
 export function isPlainObject(v: unknown): v is Record<string, unknown> {
   return typeof v === 'object' && v !== null && !Array.isArray(v);
