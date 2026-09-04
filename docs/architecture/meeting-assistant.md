@@ -559,7 +559,9 @@ bot is scheduled.
 
 ## Persistence
 
-Append-only under `<dataDir>/meetings/<safeDocId>/`: one
+Append-only under `<dataDir>/meetings/<safeDocId>/` — with one deliberate
+exception, `notes-ledger.json`, which is rewritten whole (the table below
+says why): one
 `<meetingId>.jsonl` of settled turns (`{turn, text, ts, speaker?}`; a later
 `{turn, speaker, ts}` line with no text relabels a turn already written, and
 `speaker: null` there un-labels it; a later line WITH text revises the words
@@ -598,6 +600,7 @@ note back to what was said, in the same folder as the JSONL —
 | `segment-<N>-<stream>.pcm` | the audio exactly as it reached the server: 16 kHz PCM16LE, no container, no transcode | frame by frame while live |
 | `meeting.json` | the tie back to the doc — doc id, bound path and title as of the last meeting, per-segment engine/mode/audio | at start (the tie) and stop (the segment) |
 | `<docname>-raw-transcript-replay-<stamp>.md` | a re-run of the audio through a chosen engine, same grammar | by `bun run meeting:replay` |
+| `notes-ledger.json` | which "Meeting notes" section is the note-taker's: the markdown of the body items it wrote, its meeting id, and when. **The one file here that is not a record of what happened**, so the one rewritten whole rather than appended — it is a snapshot of what the notes currently SAY, and only the latest reading is ever wanted. Temp-file-and-rename, because a tick can land while a restarting server is reading. Headings are excluded on purpose (`notes-ownership.ts`); a claim has to be evidence, and every meeting's `### Decisions` reads alike | on each tick that writes a line the ledger has not seen before |
 
 `<docname>` is the bound file's own name (`q3-plan.md` → `q3-plan-raw-transcript.md`),
 else a slug of the title, else the doc id; `meeting.json` is what makes the
@@ -806,9 +809,20 @@ typed since the last one. Now (`meeting-notes-merge.ts`):
   twinning PR 637 had already fixed. Recognising a section by text grants
   nothing INSIDE it: every replace and delete still goes through `claims`,
   so the restarted server adds and suggests there and rewrites nothing.
+  **A heading is not evidence, so headings are not persisted.** A sub-heading
+  is an ordinary item to the merge and the agent goes on owning the ones it
+  wrote, but the composer emits the same small vocabulary every meeting and a
+  person organising their own notes reaches for the same words; one
+  `### Decisions` in common would hand the note-taker a section it never
+  wrote a word of. Length is not the test — structure is, and the node says
+  so.
   The record names its meeting and is adopted only while the sitting that
   wrote it is still going on (`NOTES_LEDGER_CONTINUATION_MS`, 30 min), which
   is what keeps a genuinely new meeting starting its own section at the end.
+  **The window is a sitting, not a process**, and that is deliberate: a boot
+  id would make it restart-only and leave a stop-and-start falling back to
+  the position test — which twins only when something happens to sit below
+  the notes, an arbitrary rule rather than a safe one.
   Per DOC rather than per meeting id, because a restart mid-meeting does not
   resume the meeting — the browser reports the connection lost and the next
   recording is minted a new id. Nothing in the store throws: a missing file,
