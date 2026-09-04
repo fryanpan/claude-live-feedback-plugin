@@ -298,6 +298,21 @@ describe('nowCueAskCount \u2014 how many asks one now-cue line carries', () => {
     expect(nowCueAskCount('Claude, could you pull up last week\u2019s notes')).toBe(1);
   });
 
+  it('counts one when the coordinated word is a NOUN that spells a verb', () => {
+    // Every word in the verb table is also a noun, and these four were
+    // measured counting two. What separates a second ask from a compound
+    // noun is what comes next: an object or a particle, never another noun.
+    const asks = 'Claude, can you look at the invite flow';
+    expect(nowCueAskCount(`${asks} and search results ordering`)).toBe(1);
+    expect(nowCueAskCount(`${asks} and share settings`)).toBe(1);
+    expect(nowCueAskCount(`${asks} and check-in flow`)).toBe(1);
+    expect(nowCueAskCount(`${asks} and review comments`)).toBe(1);
+    // The controls, one word away: the same verbs taking an object or a
+    // particle are second asks.
+    expect(nowCueAskCount(`${asks} and search the release notes`)).toBe(2);
+    expect(nowCueAskCount(`${asks} and review the settings we changed`)).toBe(2);
+  });
+
   it('counts the wake word said twice as two', () => {
     expect(
       nowCueAskCount('Claude, can you check the notes, Claude could you open the design doc'),
@@ -496,6 +511,33 @@ describe('parseTaskCaptureReply licenses each ask on its own cue line', () => {
       turns,
     );
     expect(items.map((i) => i.kind)).toEqual(['research', 'lookup']);
+  });
+
+  it('does not let a part-used line file the same ask again next tick', () => {
+    // The counting that let one line cue two asks left a gap: a capacity-two
+    // line that licensed only one stayed unspent, so the next tick found it
+    // in the marked overlap and filed the same ask a second time.
+    const spent = new Set<number>();
+    const cued: NotesTurn = {
+      turn: 1,
+      speaker: 'Bryan',
+      text:
+        'Claude, can you look into why the retry loop wakes the sync ' +
+        'and pull up last week\u2019s notes',
+    };
+    const research = { kind: 'research', topic: 'why the retry loop wakes the sync' };
+    const first = parseTaskCaptureReply(reply([research]), candidates, [cued], undefined, spent);
+    expect(first.map((i) => i.kind)).toEqual(['research']);
+    // Next tick: new speech, the cue line back in the marked overlap, and a
+    // model that returns the ask it already returned.
+    const second = parseTaskCaptureReply(
+      reply([research]),
+      candidates,
+      [{ turn: 2, speaker: 'Alice', text: 'Honestly that is the real cost of the whole thing.' }],
+      [cued],
+      spent,
+    );
+    expect(second).toEqual([]);
   });
 
   it('does not stretch one line into two asks when the "and" joins objects', () => {
