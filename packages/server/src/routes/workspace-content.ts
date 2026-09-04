@@ -63,8 +63,6 @@ export async function handleWorkspaceContent(
     // nothing to resolve it to.
     const attachRoom = rooms.get(addressed);
     const docId = attachRoom?.docId ?? addressed;
-    const exists = attachRoom !== undefined || rooms.list().some((m) => reviewIdOf(m) === docId);
-    if (!exists) return j(404, { error: 'doc not found', docId });
     /**
      * A member may file onto their board something they can ALREADY see.
      * They may not pull something in from outside it.
@@ -98,6 +96,15 @@ export async function handleWorkspaceContent(
           workspacesOfDoc(addressed).includes(visitor.workspaceId));
       if (!reachable) return j(403, { error: 'out_of_share_scope' });
     }
+    // AFTER the scope check, and only for that reason. This answers "is
+    // there such a doc" — a fact about the whole server, not about this
+    // board — so running it first made the route an existence oracle: a doc
+    // on somebody else's board came back 403 and a made-up id came back 404,
+    // which is the doc LIST one id at a time. A member now gets the same
+    // out-of-board refusal either way, and the miss reaches only callers who
+    // could have attached the doc had it been there.
+    const exists = attachRoom !== undefined || rooms.list().some((m) => reviewIdOf(m) === docId);
+    if (!exists) return j(404, { error: 'doc not found', docId });
     const res = taskStore.attachDoc(workspaceId, docId);
     if (!res.ok) return j(404, res);
     // A doc filed here is no longer unfiled.
