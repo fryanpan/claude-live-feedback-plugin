@@ -32,7 +32,7 @@ beforeEach(() => {
   // shells.ts loads hub.css BEFORE styles.css. tokens.css stays out: the
   // served sheet is the vendored Open Props subset concatenated with
   // src/tokens.css, and the mapping layer alone resolves to nothing.
-  cleanup = installSheets('hub.css', 'styles.css');
+  cleanup = installSheets('hub.css', 'styles.css', 'doc.css');
 });
 afterEach(() => {
   cleanup();
