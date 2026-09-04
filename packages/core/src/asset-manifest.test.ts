@@ -51,6 +51,7 @@ describe('hashedAssetName', () => {
         'signin.js',
         'sentry.js',
         'styles.css',
+        'doc.css',
         'tokens.css',
       ]),
     );

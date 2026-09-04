@@ -94,6 +94,12 @@ import {
   runTaskCapture,
   taskCaptureUrl,
 } from './meeting-task-capture.ts';
+import {
+  type NotesLedgerRecord,
+  type NotesLedgerStore,
+  continuesSitting,
+  createNotesLedgerStore,
+} from './notes-ledger-store.ts';
 import { dropLegacyTranscriptSection } from './notes-legacy-transcript.ts';
 import { type NoteReference, referenceDate } from './notes-references.ts';
 import {
@@ -172,30 +178,104 @@ export interface NotesContextTasks {
  * and may only SUGGEST on them (owner's call, 2026-08-31: "a stop-and-restart
  * never replaces what is already written").
  *
- * In memory only, so a restarted server claims nothing — which the merge
- * reads as "everything in this section is somebody else's". That is the safe
- * direction: after a restart the note-taker adds and stops replacing, rather
- * than guessing that prose it has never seen is its own.
+ * WHAT MAY BE REPLACED IS IN MEMORY ONLY, so a restarted server claims
+ * nothing — which the merge reads as "everything in this section is somebody
+ * else's". That is the safe direction: after a restart the note-taker adds and
+ * stops replacing, rather than guessing that prose it has never seen is its
+ * own.
+ *
+ * WHICH SECTION THE NOTES ARE IN IS NOT THAT QUESTION, and it is the one a
+ * restart used to get wrong. A tick extends the "Meeting notes" it recognises
+ * as its own and otherwise opens a second one, so an empty ledger put the
+ * doc's twinning back every time a deploy landed mid-meeting: a Research
+ * placeholder or a heading a person typed below the notes is enough. So the
+ * TEXT of the items written is kept in a store beside the doc's meetings
+ * (`notes-ledger-store.ts`) and read back at the next recording's first turn.
+ * Recognising a section grants nothing inside it — the element-keyed half is
+ * still empty, so the restarted server can only add and suggest there.
+ *
+ * The store is optional: with none, a ledger behaves exactly as it did when
+ * it was memory alone.
  */
 export interface NotesLedger {
   forDoc(docId: string): NotesOwnership;
-  /** A new meeting is starting on this doc: release every claim, so nothing
-   *  a previous recording wrote can be replaced by this one. */
-  beginMeeting(docId: string): void;
+  /**
+   * A new meeting is starting on this doc: drop every claim on what may be
+   * REPLACED, so nothing a previous recording wrote can be overwritten by
+   * this one.
+   *
+   * The section claim is re-read from the store here and kept only when the
+   * recording it belongs to was going on moments ago — a restart, or a stop
+   * and start in the same sitting. A meeting that opens on a doc whose notes
+   * were written long ago claims no section and starts its own at the end,
+   * which is the owner's 2026-09-01 rule.
+   *
+   * THE WINDOW IS NOT RESTART-ONLY, AND THAT IS THE INTENT. A boot id would
+   * make it restart-only, and was considered and rejected: it would leave a
+   * stop-and-start in the same sitting falling back to the position test,
+   * which is the twinning #637 exists to prevent. Note what that fallback
+   * actually does — with nothing under the notes it extends the same section
+   * anyway, and only a heading landing below (a Research placeholder, a line
+   * a person typed) makes it open a second one. So restart-only would not
+   * give "a new recording gets a new section"; it would give "a new
+   * recording gets a new section IF something happens to sit below the
+   * notes", which is the arbitrary rule, not the safe one. Continuing the
+   * sitting is the same answer in both cases.
+   *
+   * What bounds it is the sitting rather than the process, because the
+   * sitting is what the person experiences: they are still at the same
+   * table, still on the same subject. Half an hour later they are not, and
+   * the claim lapses.
+   */
+  beginMeeting(docId: string, meetingId?: string, now?: number): void;
 }
 
-export function createNotesLedger(): NotesLedger {
+export function createNotesLedger(store?: NotesLedgerStore): NotesLedger {
   const byDoc = new Map<string, NotesOwnership>();
+  const meetings = new Map<string, string>();
+
+  /** A doc's ownership, seeded with the section claim when the record the
+   *  caller already read is the sitting still going on. Taking the record as
+   *  an argument rather than re-reading it is not only a saved file read:
+   *  it is what makes the freshness verdict and the claim it admits come
+   *  from the same reading of the file. */
+  const build = (docId: string, prior: NotesLedgerRecord | null, now: number): NotesOwnership => {
+    const adopt = continuesSitting(prior, now);
+    const created = createNotesOwnership({
+      ...(adopt && prior ? { written: prior.items } : {}),
+      ...(store
+        ? {
+            onWrite: (written) =>
+              store.write(docId, {
+                meetingId: meetings.get(docId) ?? prior?.meetingId ?? '',
+                writtenAt: Date.now(),
+                items: [...written],
+              }),
+          }
+        : {}),
+    });
+    byDoc.set(docId, created);
+    return created;
+  };
+
   return {
     forDoc(docId) {
       const existing = byDoc.get(docId);
       if (existing) return existing;
-      const created = createNotesOwnership();
-      byDoc.set(docId, created);
-      return created;
+      // No meeting has begun on this doc in this process — the notes tools
+      // and the tests that write one update. Read the claim under the same
+      // freshness rule a recording would.
+      return build(docId, store?.read(docId) ?? null, Date.now());
     },
-    beginMeeting(docId) {
+    beginMeeting(docId, meetingId, now = Date.now()) {
+      // Released AND rebuilt, and both are needed. The release reaches an
+      // ownership object a caller took out of `forDoc` before this call and
+      // is still holding; the rebuild is how the TEXT claim gets seeded,
+      // since that half is read once at construction and is exactly what
+      // must not carry into a meeting that does not continue the last one.
+      if (meetingId !== undefined) meetings.set(docId, meetingId);
       byDoc.get(docId)?.release();
+      build(docId, store?.read(docId) ?? null, now);
     },
   };
 }
@@ -426,7 +506,9 @@ export function withServerNotesSinks(
   const captureBoard = deps.captureBoard;
   // One ledger per wiring, i.e. per server: it is keyed by doc and meeting,
   // and a meeting is the life of one notes section.
-  const ledger = deps.ledger ?? createNotesLedger();
+  const ledger =
+    deps.ledger ??
+    createNotesLedger(deps.dataDir ? createNotesLedgerStore(deps.dataDir) : undefined);
   const boardOf = (docId: string): string | undefined => {
     const room = deps.rooms().get(docId);
     return room?.meta.setId ?? deps.boardOf?.(docId);
@@ -519,7 +601,7 @@ export function withServerNotesSinks(
       // A new recording on this doc: whatever the previous one wrote is
       // finished writing. Releasing the claims is what makes stop-and-restart
       // append instead of replace — the reported data-loss bug.
-      ledger.beginMeeting(ids.docId);
+      ledger.beginMeeting(ids.docId, ids.meetingId);
       reviewAsked.delete(ids.docId);
       spentCues.delete(ids.docId);
       options.onSessionStart?.(ids);

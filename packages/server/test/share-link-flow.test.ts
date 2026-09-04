@@ -432,8 +432,10 @@ describe('share links over HTTP', () => {
       for (const [path, init] of [
         ['/api/docs', {}],
         ['/api/share', {}],
-        [`/api/workspaces/${encodeURIComponent(board)}/settings`, {}],
-        [`/api/workspaces/${encodeURIComponent(board)}/events`, {}],
+        [`/api/workspaces/${encodeURIComponent(board)}/rename`, { method: 'POST' }],
+        [`/api/workspaces/${encodeURIComponent(board)}/retired`, { method: 'PUT' }],
+        [`/api/workspaces/${encodeURIComponent(board)}/lead`, { method: 'PUT' }],
+        [`/api/workspaces/${encodeURIComponent(board)}/voice`, { method: 'POST' }],
       ] as Array<[string, RequestInit]>) {
         const r = await onShareHost(path, member, init);
         expect(r.status, path).toBe(403);
@@ -527,6 +529,474 @@ describe('share links over HTTP', () => {
       expect(
         (await onShareHost(`/api/workspaces/${encodeURIComponent(board)}`, member)).status,
       ).toBe(200);
+    });
+  });
+
+  /**
+   * FULL ACCESS to the board a link was given (Bryan, 2026-09-03: "We want
+   * users that have the share link to have full access to the board").
+   *
+   * The four acts a member used to be refused — filing a doc on the board,
+   * holding a meeting on it, opening its settings, reading its Activity tab —
+   * plus the roster the strip is drawn from. Each one is asserted twice: once
+   * on the board this member holds, and once on the board they do not, so a
+   * test cannot pass by reaching nothing.
+   *
+   * Three of the four were refused for a REASON rather than out of caution,
+   * and each reason is a leak that had to be closed somewhere else for the
+   * route to open. Those closures are the second half of this describe.
+   */
+  describe('what full access to the shared board means', () => {
+    let member: string;
+    /** What the store kept for the notes home — the value the member's read
+     *  must not contain. Filled by the settings test, which sets it. */
+    let storedRepoRoot = '';
+    beforeAll(async () => {
+      member = 'full-access-member@partner.example';
+      const { linkId } = await mintLink(board);
+      expect((await onShareHost(`/s/${linkId}`, member)).status).toBe(302);
+    });
+
+    const asMember = (path: string, init: RequestInit = {}) => onShareHost(path, member, init);
+    const postAsMember = (path: string, body: unknown) =>
+      asMember(path, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+
+    it('starts a meeting on its own board, and is refused one on another', async () => {
+      const started = await postAsMember(`/api/workspaces/${encodeURIComponent(board)}/huddles`, {
+        kind: 'discussion',
+        topic: 'Member meeting',
+      });
+      expect(started.status, await started.clone().text()).toBe(200);
+      const body = (await started.json()) as {
+        docId: string;
+        hubWorkspaceId: string;
+        meta: Record<string, unknown>;
+      };
+      expect(body.hubWorkspaceId).toBe(board);
+      // The doc it minted is on this board, so the member can now open it.
+      expect((await asMember(`/api/docs/${body.docId}`)).status).toBe(200);
+
+      // …and the reply says nothing about the machine. A huddle is seeded
+      // into a file under the owner's data directory, and this route answers
+      // with the room's own meta — the second door beside `GET /api/docs/<id>`.
+      expect(body.meta.sourceUrl).toBeUndefined();
+      expect(body.meta.owner).toBeUndefined();
+      expect(body.meta.workspaceRoot).toBeUndefined();
+      expect(JSON.stringify(body.meta)).not.toContain(dataDir);
+
+      const elsewhere = await postAsMember(
+        `/api/workspaces/${encodeURIComponent(otherBoard)}/huddles`,
+        { kind: 'discussion' },
+      );
+      expect(elsewhere.status).toBe(403);
+      expect(await elsewhere.json()).toEqual({ error: 'out_of_share_scope' });
+    });
+
+    it('files onto its board a doc it can already see, and cannot pull one in', async () => {
+      // What attaching does is make a doc readable HERE — share scoping
+      // answers on the boards holding a doc, and this call adds one. So the
+      // question the route asks a member is the guard's own: can you already
+      // open this? Its real subject is a file inside a folder bind filed on
+      // the board, which a member can open but which has no row of its own;
+      // this fixture has no folder bind, so the reachable case is asserted on
+      // the board's own doc, where the call is a no-op that still has to be
+      // ALLOWED for the boundary below to mean anything.
+      const reachable = await postAsMember(`/api/workspaces/${encodeURIComponent(board)}/docs`, {
+        docId,
+      });
+      expect(reachable.status, await reachable.clone().text()).toBe(200);
+
+      // The private board's doc is what this must never reach. The path names
+      // the member's own board, so the scope check says yes; what refuses it
+      // is the target.
+      const stolen = await postAsMember(`/api/workspaces/${encodeURIComponent(board)}/docs`, {
+        docId: otherDocId,
+      });
+      expect(stolen.status).toBe(403);
+      expect(await stolen.json()).toEqual({ error: 'out_of_share_scope' });
+      // …and nothing landed: the doc is still refused, which the status alone
+      // does not establish.
+      expect((await asMember(`/api/docs/${otherDocId}`)).status).toBe(403);
+
+      // The 200 above is this refusal's control: one route, one member, two
+      // targets, two answers — so the 403 is the target and not an attach
+      // that never works. The board is deliberately left as it was; nothing
+      // here files the private doc anywhere, because later tests in this file
+      // read `otherDocId` as the doc this member cannot see.
+
+      // Refused a board it was never given, whatever the target.
+      const elsewhere = await postAsMember(
+        `/api/workspaces/${encodeURIComponent(otherBoard)}/docs`,
+        { docId },
+      );
+      expect(elsewhere.status).toBe(403);
+      expect(await elsewhere.json()).toEqual({ error: 'out_of_share_scope' });
+    });
+
+    it('answers a doc id it may not have the same way whether or not it exists', async () => {
+      // The route checked EXISTENCE before scope, so a member learned which
+      // doc ids are real on the whole server: a doc on somebody else's board
+      // came back 403 and a made-up id came back 404. Doc ids are readable
+      // slugs, and the doc LIST is refused precisely to stop that
+      // enumeration — answering it one id at a time is the same disclosure
+      // through a narrower window.
+      const real = await postAsMember(`/api/workspaces/${encodeURIComponent(board)}/docs`, {
+        docId: otherDocId,
+      });
+      const invented = await postAsMember(`/api/workspaces/${encodeURIComponent(board)}/docs`, {
+        docId: 'no-such-doc-anywhere',
+      });
+      expect(real.status).toBe(403);
+      expect(invented.status).toBe(real.status);
+      const inventedBody = await invented.json();
+      expect(inventedBody).toEqual(await real.json());
+      // Named, so a future change that made both 404 would still fail here:
+      // the answer a member gets is the out-of-board refusal, not the miss.
+      expect(inventedBody).toEqual({ error: 'out_of_share_scope' });
+
+      // The owner is unaffected — a typo from the box still says what went
+      // wrong, which is what makes the member's answer a redaction rather
+      // than a route that stopped working.
+      const owner = await postLocal(`/api/workspaces/${encodeURIComponent(board)}/docs`, {
+        docId: 'no-such-doc-anywhere',
+      });
+      expect(owner.status).toBe(404);
+      expect(await owner.json()).toEqual({ error: 'doc not found', docId: 'no-such-doc-anywhere' });
+    });
+
+    it('opens board settings without being told anything about the machine', async () => {
+      // A notes home is `repoRoot` on the owner's disk. Set from the box, so
+      // the member's read below is measured against a board that really has
+      // one — without this the assertion passes on an absent field.
+      const wrote = await local(`/api/workspaces/${encodeURIComponent(board)}/settings`, {
+        method: 'PUT',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          notesHome: { repoRoot: process.cwd(), branch: 'main', dir: 'docs' },
+          author: { id: 'owner', name: 'Owner', kind: 'person' },
+        }),
+      });
+      expect(wrote.status, await wrote.clone().text()).toBe(200);
+      const owner = await local(`/api/workspaces/${encodeURIComponent(board)}/settings`);
+      expect(owner.status).toBe(200);
+      const ownerView = (await owner.json()) as { notesHome?: { repoRoot?: string } };
+      // Read back rather than compared to what was sent: the store keeps the
+      // MAIN checkout's root, so a linked worktree's path is not what lands.
+      storedRepoRoot = ownerView.notesHome?.repoRoot ?? '';
+      expect(storedRepoRoot.length).toBeGreaterThan(0);
+
+      const read = await asMember(`/api/workspaces/${encodeURIComponent(board)}/settings`);
+      expect(read.status, await read.clone().text()).toBe(200);
+      const view = (await read.json()) as {
+        reviewItemCriteria?: { value?: string };
+        notesHome?: unknown;
+      };
+      // The panel's own fields arrive…
+      expect(typeof view.reviewItemCriteria?.value).toBe('string');
+      // …and the machine's does not.
+      expect(view.notesHome).toBeUndefined();
+      expect(JSON.stringify(view)).not.toContain(storedRepoRoot);
+    });
+
+    it('shows who moved the parallelism cap by name, on both doors that say so', async () => {
+      // The settings panel says "set by X". The actor behind it is a full
+      // `TaskActor`, and the settings read handed a member the whole record —
+      // id included — while `GET /api/workspaces/<id>`, the other door onto
+      // the same fact, had been reducing it to name and kind since the cap
+      // shipped. Two doors onto one fact cannot answer differently.
+      const moverId = 'agent-cap-mover-probe';
+      const moved = await local(`/api/workspaces/${encodeURIComponent(board)}/settings`, {
+        method: 'PUT',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          parallelismCap: 3,
+          author: { id: moverId, name: 'Cap Mover', kind: 'agent' },
+        }),
+      });
+      expect(moved.status, await moved.clone().text()).toBe(200);
+
+      // Positive control: the id IS on the owner's read, so the member's read
+      // below is measured against a payload that has something to hide.
+      const owner = await local(`/api/workspaces/${encodeURIComponent(board)}/settings`);
+      expect(owner.status).toBe(200);
+      const ownerText = await owner.text();
+      expect(ownerText).toContain('lastChange');
+      expect(ownerText).toContain(moverId);
+
+      type CapView = {
+        parallelismCap?: {
+          value?: number;
+          lastChange?: { from?: number; to?: number; actor?: Record<string, unknown> };
+        };
+      };
+      const read = await asMember(`/api/workspaces/${encodeURIComponent(board)}/settings`);
+      expect(read.status, await read.clone().text()).toBe(200);
+      const settingsText = await read.clone().text();
+      const settingsView = (await read.json()) as CapView;
+      // A real read, not an empty one: the cap and the move both survive.
+      expect(settingsView.parallelismCap?.value).toBe(3);
+      expect(settingsView.parallelismCap?.lastChange?.to).toBe(3);
+      expect(settingsView.parallelismCap?.lastChange?.actor).toEqual({
+        name: 'Cap Mover',
+        kind: 'agent',
+      });
+      expect(settingsText).not.toContain(moverId);
+
+      // The board record answers the same fact the same way.
+      const record = await asMember(`/api/workspaces/${encodeURIComponent(board)}`);
+      expect(record.status, await record.clone().text()).toBe(200);
+      const recordText = await record.clone().text();
+      const recordView = (await record.json()) as CapView;
+      expect(recordView.parallelismCap?.lastChange?.actor).toEqual({
+        name: 'Cap Mover',
+        kind: 'agent',
+      });
+      expect(recordText).not.toContain(moverId);
+    });
+
+    it('edits the board settings it can see, and is refused the one field it cannot', async () => {
+      const saved = await asMember(`/api/workspaces/${encodeURIComponent(board)}/settings`, {
+        method: 'PUT',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ reviewItemCriteria: 'Written by a member.' }),
+      });
+      expect(saved.status, await saved.clone().text()).toBe(200);
+      const after = await local(`/api/workspaces/${encodeURIComponent(board)}/settings`);
+      expect(
+        ((await after.json()) as { reviewItemCriteria: { value: string } }).reviewItemCriteria
+          .value,
+      ).toBe('Written by a member.');
+
+      // `notesHome` names a path on the owner's machine, and validating one
+      // would answer "does this path exist there" besides. Refused BEFORE
+      // that validation runs, so the refusal is the same for a real path and
+      // an invented one — no oracle either way.
+      for (const repoRoot of [process.cwd(), '/definitely/not/a/checkout']) {
+        const r = await asMember(`/api/workspaces/${encodeURIComponent(board)}/settings`, {
+          method: 'PUT',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ notesHome: { repoRoot, branch: 'main', dir: 'docs' } }),
+        });
+        expect(r.status, repoRoot).toBe(403);
+        expect((await r.json()) as { error: string }).toMatchObject({
+          error: 'not available to share visitors',
+        });
+      }
+      // …and the stored value did not move.
+      const unchanged = await local(`/api/workspaces/${encodeURIComponent(board)}/settings`);
+      const home = ((await unchanged.json()) as { notesHome?: { repoRoot?: string } }).notesHome;
+      expect(home?.repoRoot).toBe(storedRepoRoot);
+
+      // Refused on the board it was not given, whatever the field.
+      const elsewhere = await asMember(
+        `/api/workspaces/${encodeURIComponent(otherBoard)}/settings`,
+        {
+          method: 'PUT',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ reviewItemCriteria: 'Not yours.' }),
+        },
+      );
+      expect(elsewhere.status).toBe(403);
+      expect(await elsewhere.json()).toEqual({ error: 'out_of_share_scope' });
+    });
+
+    it('reads the Activity tab with actors named the way the live feed names them', async () => {
+      // An actor id is what the board's live event stream refuses to send a
+      // visitor. The audit log is the same bytes modulo transport, so it has
+      // to refuse the same thing — this is the door nothing was checking.
+      const actorId = 'agent-activity-probe';
+      const filed = await postLocal(`/api/workspaces/${encodeURIComponent(board)}/tasks`, {
+        title: 'Row that writes an audit line',
+        assignee: 'human',
+        author: { id: actorId, name: 'Activity Probe', kind: 'agent' },
+      });
+      expect(filed.status, await filed.clone().text()).toBe(200);
+
+      const owner = await local(`/api/workspaces/${encodeURIComponent(board)}/events`);
+      expect(owner.status).toBe(200);
+      // The positive control: the id IS in the log, so the member's read
+      // below is measured against a payload that has something to hide.
+      expect(await owner.text()).toContain(actorId);
+
+      const read = await asMember(`/api/workspaces/${encodeURIComponent(board)}/events`);
+      expect(read.status, await read.clone().text()).toBe(200);
+      const text = await read.clone().text();
+      expect(text).not.toContain(actorId);
+      // …and it is a real read, not an empty one: the display name survives.
+      expect(text).toContain('Activity Probe');
+      const { events } = (await read.json()) as { events: unknown[] };
+      expect(events.length).toBeGreaterThan(0);
+
+      const elsewhere = await asMember(`/api/workspaces/${encodeURIComponent(otherBoard)}/events`);
+      expect(elsewhere.status).toBe(403);
+      expect(await elsewhere.json()).toEqual({ error: 'out_of_share_scope' });
+    });
+
+    it('reads a review_item row on the Activity tab without the asker\u2019s id', async () => {
+      // The row above covers `task.*`. `review_item.*` was outside the
+      // redaction's prefix set entirely, so those three events crossed to a
+      // member with the asker's full actor on them — while `decision.*`, the
+      // answer to the very same ask, was reduced to name and kind.
+      const askerId = 'agent-review-item-probe';
+      const asker = { id: askerId, name: 'Review Item Probe', kind: 'agent' };
+      const filed = await postLocal(`/api/workspaces/${encodeURIComponent(board)}/tasks`, {
+        title: 'Row that carries a review item',
+        assignee: 'human',
+        author: asker,
+      });
+      expect(filed.status, await filed.clone().text()).toBe(200);
+      const taskId = ((await filed.json()) as { task: { id: string } }).task.id;
+
+      const headline = 'Which of the two goal orders do you want?';
+      const raised = await postLocal(`/api/tasks/${encodeURIComponent(taskId)}/review-items`, {
+        review: {
+          shape: 'review',
+          headline,
+          detail: 'Both orders ship the same work; they differ in what lands first.',
+        },
+        author: asker,
+      });
+      expect(raised.status, await raised.clone().text()).toBe(200);
+
+      // Positive control: the id IS in the log, so the member's read below is
+      // measured against a payload that has something to hide.
+      const owner = await local(`/api/workspaces/${encodeURIComponent(board)}/events`);
+      expect(owner.status).toBe(200);
+      const ownerText = await owner.text();
+      expect(ownerText).toContain('review_item.added');
+      expect(ownerText).toContain(askerId);
+
+      const read = await asMember(`/api/workspaces/${encodeURIComponent(board)}/events`);
+      expect(read.status, await read.clone().text()).toBe(200);
+      const text = await read.text();
+      expect(text).not.toContain(askerId);
+      // A real read, not an empty one: the row, the ask and the display name
+      // all survive — the ask is board content, and the member may see it.
+      expect(text).toContain('review_item.added');
+      expect(text).toContain(headline);
+      expect(text).toContain('Review Item Probe');
+    });
+
+    it('reads the agent roster of its own board, and no other', async () => {
+      const roster = await asMember(`/api/workspaces/${encodeURIComponent(board)}/attachments`);
+      expect(roster.status, await roster.clone().text()).toBe(200);
+      // The roster's host-machine field never rides to a visitor.
+      expect(await roster.text()).not.toContain('"endpoint"');
+      expect(
+        (await asMember(`/api/workspaces/${encodeURIComponent(otherBoard)}/attachments`)).status,
+      ).toBe(403);
+    });
+
+    it('is still refused a tracker import — it names a path on the owner’s disk', async () => {
+      // The one act on this board a member does NOT gain. The route reads the
+      // file named in the request body and answers with what it parsed, so
+      // admitting it would be an arbitrary file read on the owner's machine
+      // for anyone holding a link. The browser gate in front of it refuses
+      // pages, and a member's non-browser client is not a page — so the board
+      // gate is what has to refuse, and does.
+      const path = join(dataDir, 'tracker.md');
+      writeFileSync(
+        path,
+        '# Tracker\n\n## Now\n\n| Task | Status | Owner |\n| --- | --- | --- |\n',
+      );
+      const asClient = await postAsMember(
+        `/api/workspaces/${encodeURIComponent(board)}/import-tasks`,
+        { path },
+      );
+      expect(asClient.status).toBe(403);
+      expect(await asClient.json()).toEqual({ error: 'out_of_share_scope' });
+
+      // Positive control on the same client shape and the same board: a
+      // route the member DOES hold answers, so the refusal is the route.
+      const allowed = await asMember(`/api/workspaces/${encodeURIComponent(board)}/settings`);
+      expect(allowed.status).toBe(200);
+
+      // …and the owner, over loopback, still imports.
+      const byOwner = await postLocal(`/api/workspaces/${encodeURIComponent(board)}/import-tasks`, {
+        path,
+        author: { id: 'owner', name: 'Owner', kind: 'person' },
+      });
+      expect(byOwner.status, await byOwner.clone().text()).toBe(200);
+    });
+
+    it('edits a doc filed on the board through the region verbs, and no other doc', async () => {
+      // Anchored by FINDING its text, so the region the rewrite targets
+      // really resolves in the doc — a hand-built fingerprint orphans, and a
+      // 409 would let this test pass without the guard ever being asked.
+      const th = await postLocal(`/api/docs/${docId}/threads/by_find`, {
+        author: { id: 'owner', name: 'Owner', kind: 'person' },
+        text: 'Tighten this',
+        find: 'Body.',
+      });
+      expect(th.status, await th.clone().text()).toBe(200);
+      const tid = ((await th.json()) as { thread: { id: string } }).thread.id;
+
+      const edited = await postAsMember(`/api/docs/${docId}/threads/${tid}/rewrite_region`, {
+        replacement: 'Body, rewritten by a member.',
+      });
+      expect(edited.status, await edited.clone().text()).toBe(200);
+
+      // The same verb on the private board's doc is refused by the same line
+      // that refuses reading it.
+      const elsewhere = await postAsMember(
+        `/api/docs/${otherDocId}/threads/${tid}/rewrite_region`,
+        { replacement: 'Not yours.' },
+      );
+      expect(elsewhere.status).toBe(403);
+      expect(await elsewhere.json()).toEqual({ error: 'out_of_share_scope' });
+    });
+
+    it('reads the meeting surface of its own board’s doc, and cannot dial a bot out', async () => {
+      expect((await asMember('/api/meeting-engines')).status).toBe(200);
+      expect((await asMember(`/api/docs/${docId}/meetings`)).status).toBe(200);
+      const bot = await asMember(`/api/docs/${docId}/meeting-bot`);
+      expect(bot.status).toBe(200);
+      // Inviting one spends money at a vendor and sends a participant into a
+      // call outside this server. Not a way to work THIS board.
+      const invite = await postAsMember(`/api/docs/${docId}/meeting-bot`, {
+        meetingUrl: 'https://meet.example.com/abc',
+      });
+      expect(invite.status).toBe(403);
+      expect(await invite.json()).toEqual({ error: 'out_of_share_scope' });
+      // …and the same reads on the private board's doc.
+      expect((await asMember(`/api/docs/${otherDocId}/meetings`)).status).toBe(403);
+      expect((await asMember(`/api/docs/${otherDocId}/meeting-bot`)).status).toBe(403);
+    });
+
+    it('is still refused everything outside the board it was given', async () => {
+      const cases: Array<[string, RequestInit]> = [
+        // The list of boards, and every other board's rows.
+        ['/api/workspaces', {}],
+        [`/api/workspaces/${encodeURIComponent(otherBoard)}/tasks`, {}],
+        // Share administration: minting, revoking, the member list, the switch.
+        ['/api/share', {}],
+        ['/api/share/workspace', { method: 'POST' }],
+        ['/api/share/enabled', { method: 'POST' }],
+        // Deploy and the operator surface.
+        ['/api/deploy', { method: 'POST' }],
+        ['/api/plugin/refresh', { method: 'POST' }],
+        // Anything that names a path on the owner's machine.
+        ['/api/workspaces', { method: 'POST' }],
+        ['/api/docs', { method: 'POST' }],
+        ['/api/diffs', { method: 'POST' }],
+        // This board's own lifecycle: it was given to work on, not to retire.
+        [`/api/workspaces/${encodeURIComponent(board)}/retired`, { method: 'PUT' }],
+        [`/api/workspaces/${encodeURIComponent(board)}`, { method: 'DELETE' }],
+      ];
+      for (const [path, init] of cases) {
+        const r = await asMember(path, {
+          ...init,
+          headers: { 'content-type': 'application/json' },
+          ...(init.method && init.method !== 'GET' ? { body: '{}' } : {}),
+        });
+        expect(r.status, `${init.method ?? 'GET'} ${path}`).toBe(403);
+      }
+      // The board is still there, which a status code alone does not say.
+      expect((await asMember(`/api/workspaces/${encodeURIComponent(board)}`)).status).toBe(200);
     });
   });
 

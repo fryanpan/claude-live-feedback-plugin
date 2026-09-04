@@ -85,10 +85,11 @@ export type ReviseReviewItemResult =
         | 'answered'
         | 'withdrawn'
         | 'empty-patch'
+        | 'no-change'
         | 'bad-review'
         | 'bad-range';
-      /** The verbatim refusal, present for 'bad-review', 'answered', 'withdrawn'
-       *  and 'bad-range'. */
+      /** The verbatim refusal, present for 'bad-review', 'answered', 'withdrawn',
+       *  'no-change' and 'bad-range'. */
       message?: string;
     };
 
@@ -123,7 +124,13 @@ export type ReviseTaskDecisionResult =
   | { ok: true; task: Task; item: TaskReviewItem }
   | {
       ok: false;
-      error: 'not-found' | 'not-a-decision' | 'answered' | 'empty-patch' | 'bad-review';
+      error:
+        | 'not-found'
+        | 'not-a-decision'
+        | 'answered'
+        | 'empty-patch'
+        | 'no-change'
+        | 'bad-review';
       message?: string;
     };
 

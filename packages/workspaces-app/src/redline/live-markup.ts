@@ -19,7 +19,7 @@ import * as Y from 'yjs';
  * they're extracted as a list (`pos` in the live doc + the deleted markdown)
  * for the margin balloons (markup-margin.ts) to consume, AND rendered as a
  * grouped, compact "⌫ N lines" widget decoration (`buildDeletionChip`) that
- * only styles.css shows — hidden ≥1100px, where the balloon carries the same
+ * only doc.css shows — hidden ≥1100px, where the balloon carries the same
  * content; visible ≤1100px, where the balloon column collapses.
  *
  * Reuses `computeRedline` from @feedback/core: the live doc is serialized
@@ -266,7 +266,7 @@ interface LiveMarkupState {
 export const liveMarkupKey = new PluginKey<LiveMarkupState>('lf-live-markup');
 
 /**
- * The mobile chip's DOM (styles.css: `.lf-del-chip`, shown only ≤1100px —
+ * The mobile chip's DOM (doc.css: `.lf-del-chip`, shown only ≤1100px —
  * the balloon margin shows the same content on wide screens). Always built
  * regardless of viewport, same as every other decoration here — CSS alone
  * decides which of the two (balloon vs chip) is visible, so there's no JS
