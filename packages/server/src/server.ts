@@ -4021,6 +4021,15 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
     async fetch(req, server) {
       const startedAt = performance.now();
       const pathname = new URL(req.url).pathname;
+      // A docId-addressed request may HYDRATE that doc, and hydration reads
+      // the doc's bound file. That read used to run on the main thread, where
+      // a cloud-sync folder that had stopped answering parked the whole
+      // server — every route, not just this one (see slow-fs.ts). Doing it
+      // here, on the thread pool and under a deadline, means the synchronous
+      // hydrate inside the route either finds the bytes already in hand or
+      // finds the path quarantined and parks the doc without touching it.
+      const prewarmDocId = docIdAddressedBy(pathname);
+      if (prewarmDocId) await rooms.prewarmHydration(prewarmDocId);
       // Server-side Sentry (a no-op passthrough when unconfigured — see
       // sentry.ts): one span per request, named by route PATTERN never raw
       // path, continuing the browser's trace when it sent one so a page load
@@ -6083,6 +6092,30 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
       saveReplayMarks(dataDir, sse.marks());
     },
   };
+}
+
+/**
+ * Routes whose first path segment after the prefix is a docId, and which can
+ * therefore pull a doc in from disk. Kept as a list rather than derived from
+ * the route bodies because it feeds ONE thing — the hydration prewarm — and a
+ * prefix missing from it costs a slow hydrate, never a wrong answer.
+ */
+const DOC_ADDRESSED_PREFIXES = ['/events/', '/y/', '/review/', '/audio/', '/mockup/'] as const;
+
+/** The docId a request addresses, when its route is one that can hydrate. */
+function docIdAddressedBy(pathname: string): string | undefined {
+  for (const prefix of DOC_ADDRESSED_PREFIXES) {
+    if (!pathname.startsWith(prefix)) continue;
+    const rest = pathname.slice(prefix.length);
+    if (!rest || rest.includes('/')) return undefined;
+    try {
+      const decoded = decodeURIComponent(rest);
+      return isValidDocId(decoded) ? decoded : undefined;
+    } catch {
+      return undefined;
+    }
+  }
+  return undefined;
 }
 
 function isValidDocId(s: string): boolean {

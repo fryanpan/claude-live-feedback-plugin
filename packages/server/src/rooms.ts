@@ -33,7 +33,12 @@ import * as awarenessProtocol from 'y-protocols/awareness';
 import * as Y from 'yjs';
 import { DocEditOps, type DocEditPersistence } from './doc-edit-ops.ts';
 import { type DocThreadPersistence, DocThreads } from './doc-threads.ts';
-import { type AttachOpts, type FileBindingHost, FileBindings } from './file-binding.ts';
+import {
+  type AttachOpts,
+  type FileBindingHost,
+  FileBindings,
+  type PrereadFile,
+} from './file-binding.ts';
 import { type RoomsWorkspacePersistence, RoomsWorkspaces } from './rooms-workspaces.ts';
 
 /** Moved to `room-fanout.ts` with the presence ticker it drives — re-exported
@@ -101,6 +106,7 @@ import {
 import { type ArchivedDoc, type ArchivedReview } from './review-archive.ts';
 import { CONTENT_REVISION_ORIGIN, RoomFanout, type RoomFanoutHost } from './room-fanout.ts';
 import { ROOM_TIMINGS } from './room-timings.ts';
+import { boundFiles } from './slow-fs.ts';
 import type { SseHub } from './sse.ts';
 import type { ScheduleArgs, ThreadSummarizer } from './summarize.ts';
 import type { WebhookDispatcher } from './webhooks.ts';
@@ -1243,12 +1249,21 @@ export class Rooms {
         );
         return false;
       }
-      this.bindings.retargetHomeBinding(room, placement.absPath, { liveWins });
+      const homePre = this.prereadFor(docId, placement.absPath);
+      if (homePre === 'unavailable') return false;
+      this.bindings.retargetHomeBinding(room, placement.absPath, {
+        liveWins,
+        ...(homePre ? { preread: homePre } : {}),
+      });
       return this.bindings.has(docId);
     }
-    if (!src || !existsSync(src)) return false;
+    if (!src) return false;
+    const preread = this.prereadFor(docId, src);
+    if (preread === 'unavailable') return false;
+    if (preread ? !preread.exists : !existsSync(src)) return false;
+    const attachOpts: AttachOpts = { liveWins, ...(preread ? { preread } : {}) };
     if (contentKind(room.meta.type) === 'prose') {
-      return this.attachFile(docId, src, { liveWins }).ok;
+      return this.attachFile(docId, src, attachOpts).ok;
     }
     if (contentKind(room.meta.type) === 'flat') {
       // Working-tree diff docs have a sourceUrl and re-arm their live
@@ -1261,9 +1276,68 @@ export class Rooms {
         room.meta.type === 'diff' &&
         !room.meta.diffTarget &&
         !(room.meta.relPath ?? '').toLowerCase().endsWith('.md');
-      return this.attachFlatFile(docId, src, { writeBack, liveWins }).ok;
+      return this.attachFlatFile(docId, src, { ...attachOpts, writeBack }).ok;
     }
     return false;
+  }
+
+  /**
+   * The bytes `prewarmHydration` read for this path, or a verdict.
+   *
+   * `undefined` means nobody prewarmed and the path is not known-hostile, so
+   * the caller may read it the old synchronous way — that is every non-request
+   * hydrate (boot, unarchive, a workspace move), which is not on the path of a
+   * request the whole server is waiting on.
+   *
+   * `'unavailable'` means the path has already refused to answer inside the
+   * deadline. The doc parks exactly like an unplaced doc home: content stays
+   * in the `.ydoc`, no binding, and the next hydrate after the backoff tries
+   * again. Nothing here opens the file.
+   */
+  private prereadFor(docId: string, path: string): PrereadFile | 'unavailable' | undefined {
+    const fresh = boundFiles.takeFresh(path);
+    if (fresh) {
+      return fresh.exists
+        ? { exists: true, text: fresh.text, mtimeMs: fresh.mtimeMs }
+        : { exists: false };
+    }
+    if (!boundFiles.quarantined(path)) return undefined;
+    console.warn(`[rooms] ${docId}: bound file is not answering; writes parked (${path})`);
+    return 'unavailable';
+  }
+
+  /**
+   * Read a doc's bound file off the main thread, ahead of the hydrate that
+   * will need it.
+   *
+   * Request handlers call this before they reach `get`. Hydration itself is
+   * synchronous and stays that way — dozens of callers depend on `get`
+   * answering in one turn — so the fix is to have the only blocking syscall
+   * already done by the time it runs. A file that answers lands in
+   * `boundFiles.takeFresh` and the attach uses those bytes; a file that does
+   * not is quarantined, and the hydrate parks the doc without touching it.
+   *
+   * Cheap and safe to call on any docId: a resident doc, an unknown id, or a
+   * doc with no bound file all return without doing anything.
+   */
+  async prewarmHydration(docId: string): Promise<void> {
+    const target = this.aliases.get(docId) ?? docId;
+    if (this.rooms.has(target)) return; // resident: no hydrate ahead of us
+    if (isHubOwnedRoom(target)) return; // never file-bound (§3.3)
+    // The index row carries the whole DocMeta, so the bound path is known
+    // WITHOUT loading the `.ydoc` — which is the point: nothing about this
+    // may pull the doc into memory as a side effect.
+    const meta = this.docIndex.get(target)?.meta;
+    if (!meta) return;
+    let path: string | undefined;
+    if (meta.docHome && contentKind(meta.type) === 'prose') {
+      const placement = resolveHomeCheckout(meta.docHome);
+      path = placement.placed ? placement.absPath : undefined;
+    } else {
+      path = meta.sourceUrl;
+    }
+    if (!path) return;
+    await boundFiles.read(path);
   }
 
   getOrCreate(
