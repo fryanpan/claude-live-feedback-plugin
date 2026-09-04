@@ -2561,9 +2561,12 @@ kernel-wide socket CREATION failing, and its cause is still unknown.**
   memory**, which on one day briefed a fan-out of parallel agents with an
   incomplete set. CLAUDE.md now carries the canonical block ("The four gates —
   run all of them before you push", landed in #170). Read it, don't recall it.
-- The pre-existing `noExplicitAny` output is **warnings**, and `biome check`
-  exits 0 over warnings — don't chase them, and don't read a trailing
-  "Found 2 warnings" as a failure.
+- The pre-existing `noExplicitAny` output was **warnings**, and `biome check`
+  exits 0 over warnings — so a trailing "Found 2 warnings" was not a failure.
+  Superseded 2026-09-04: both warnings were redundant `as any` casts over yjs
+  APIs already typed `any`, so they are gone and `noExplicitAny` is an
+  **error**. A `biome check` warning count above zero is now a thing to look
+  at, and a cast you cannot avoid takes a `biome-ignore` line with a reason.
 - **A worktree with no `node_modules` fails typecheck with a wall of TS2307 /
   TS7006 that reads exactly like a real regression.** `bun install
   --frozen-lockfile` first. And check the EXIT CODE, not the tail of the
