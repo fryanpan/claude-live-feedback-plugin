@@ -10,12 +10,15 @@ import { MountScope } from '../src/mount-scope.ts';
 /**
  * The pointer pill layer over a document (doc/doc-pointer-pill.ts).
  *
- * The pill exists only on a huddle doc, and the selection it acts on is
- * CAPTURED when it appears — iOS blurs the editor before the tap on a button
- * lands, and by then there is nothing left to write the task's link beside.
- * That capture, and the fact that picking a spin-off drops the selection
- * before the pill can grow back over words that have already become a row,
- * are what these tests drive.
+ * The pill exists only on a huddle doc, and it offers exactly one action:
+ * Comment. It offered three until 2026-09-04 (Comment / Research / Create
+ * Task) and the other two filed work straight from the selection, which is
+ * why this file used to be mostly about a captured selection surviving the
+ * tap that spent it. None of that is here any more — a comment leaves the
+ * selection standing, because the composer anchors to it.
+ *
+ * What the pill hands to the composer is proved in `pill-comment-focus.test.ts`,
+ * which wires this layer to the real chrome rather than a spy.
  */
 
 const open: Array<() => void> = [];
@@ -29,6 +32,7 @@ beforeEach(() => {
 });
 
 const pillEl = () => document.querySelector<HTMLElement>('.pointer-pill');
+const buttons = () => [...document.querySelectorAll<HTMLButtonElement>('.pointer-pill button')];
 const button = (id: string) =>
   document.querySelector<HTMLButtonElement>(`.pointer-pill button[data-action="${id}"]`);
 
@@ -46,7 +50,6 @@ function mount(opts: { huddle: boolean; selection?: ChromeSelection | null }) {
   const scope = new MountScope();
   const hideAll = vi.fn();
   const openComposer = vi.fn();
-  const takeSpinoff = vi.fn();
   const layer = mountPointerPillLayer({
     huddle: opts.huddle,
     editor,
@@ -55,13 +58,12 @@ function mount(opts: { huddle: boolean; selection?: ChromeSelection | null }) {
     getSelection: () => selection,
     hideAll,
     openComposer,
-    takeSpinoff,
   });
   open.push(() => {
     scope.dispose();
     editor.destroy();
   });
-  return { layer, scope, editor, selection, hideAll, openComposer, takeSpinoff };
+  return { layer, scope, editor, selection, hideAll, openComposer };
 }
 
 describe('off a huddle doc', () => {
@@ -75,14 +77,17 @@ describe('off a huddle doc', () => {
 });
 
 describe('on a huddle doc', () => {
-  it('offers a comment and the two spin-offs, in that order', () => {
+  it('offers one action, and it is Comment', () => {
     const { layer } = mount({ huddle: true });
     // Built at mount, hidden until a selection asks for it.
     expect(pillEl()?.classList.contains('hidden')).toBe(true);
     layer.show(1, 24);
     expect(pillEl()?.classList.contains('hidden')).toBe(false);
-    const labels = [...document.querySelectorAll('.pointer-pill button')].map((b) => b.textContent);
-    expect(labels).toEqual(['Comment', 'Research', 'Create Task']);
+    expect(buttons().map((b) => b.textContent)).toEqual(['Comment']);
+    // The two that went are gone from the pill, not merely relabelled: a
+    // rename would still leave a button that files work on one tap.
+    expect(button('research')).toBeNull();
+    expect(button('task')).toBeNull();
   });
 
   it('stays down when there is no selection to act on', () => {
@@ -92,34 +97,14 @@ describe('on a huddle doc', () => {
   });
 
   it('sends Comment to the composer, and files nothing', () => {
-    const { layer, openComposer, takeSpinoff, hideAll } = mount({ huddle: true });
+    const { layer, openComposer, hideAll } = mount({ huddle: true });
     layer.show(1, 24);
     button('comment')?.click();
     expect(openComposer).toHaveBeenCalledTimes(1);
-    expect(takeSpinoff).not.toHaveBeenCalled();
     expect(hideAll).toHaveBeenCalledTimes(1);
   });
 
-  it('hands a spin-off the selection captured when the pill appeared', () => {
-    const { layer, takeSpinoff, openComposer, selection } = mount({ huddle: true });
-    layer.show(1, 24);
-    button('task')?.click();
-    expect(openComposer).not.toHaveBeenCalled();
-    expect(takeSpinoff).toHaveBeenCalledTimes(1);
-    const [action, sel, range] = takeSpinoff.mock.calls[0];
-    expect(action).toBe('task');
-    expect(sel).toBe(selection);
-    expect(range).toEqual({ from: 1, to: 24 });
-  });
-
-  it('carries no range when the pill was grown over a caret', () => {
-    const { layer, takeSpinoff } = mount({ huddle: true });
-    layer.show(5, 5);
-    button('research')?.click();
-    expect(takeSpinoff.mock.calls[0]?.[2]).toBeNull();
-  });
-
-  it('drops the standing selection once a spin-off has taken it', () => {
+  it('leaves the standing selection alone — the composer anchors to it', () => {
     const { layer } = mount({ huddle: true });
     const range = document.createRange();
     range.selectNodeContents(document.getElementById('editor') as HTMLElement);
@@ -128,18 +113,19 @@ describe('on a huddle doc', () => {
     expect(window.getSelection()?.rangeCount).toBe(1);
 
     layer.show(1, 24);
-    button('task')?.click();
-    // Left standing, the next positioning pass would grow the pill straight
-    // back over words that have already become a row.
-    expect(window.getSelection()?.rangeCount).toBe(0);
+    button('comment')?.click();
+    // A spin-off used to drop it here, so the pill could not grow back over
+    // words that had already become a row. A comment files nothing, and the
+    // composer needs those words to anchor its thread to.
+    expect(window.getSelection()?.rangeCount).toBe(1);
   });
 
   it('ignores a click on a pill that is already down', () => {
-    const { layer, takeSpinoff } = mount({ huddle: true });
+    const { layer, openComposer } = mount({ huddle: true });
     layer.show(1, 24);
     layer.hide();
-    button('task')?.click();
-    expect(takeSpinoff).not.toHaveBeenCalled();
+    button('comment')?.click();
+    expect(openComposer).not.toHaveBeenCalled();
   });
 
   it('takes the pill off the page when the mount is torn down', () => {
