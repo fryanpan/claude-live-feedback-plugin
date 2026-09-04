@@ -28,11 +28,9 @@ import {
 import { handleDocsTool } from '../src/tools/docs.ts';
 import { handleTaskTool } from '../src/tools/tasks.ts';
 import { handleWorkspaceTool } from '../src/tools/workspace.ts';
-import { readMcpSource } from './harness/mcp-source.ts';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO = join(HERE, '../../..');
-const SRC = readMcpSource();
 
 const PAIRS = Object.entries(DEPRECATED_TOOL_ALIASES);
 
@@ -46,18 +44,13 @@ describe('the alias table is the one place the pairs are written down', () => {
     });
   });
 
-  it.each(PAIRS)('%s and %s share one dispatch arm', (alias, now) => {
-    // The old name is a bare `case` label above the block, so it dispatches
-    // without being a second advertised tool. Same shape `tool-wiring.test.ts`
-    // reads for the two earlier renames.
-    expect(SRC).toMatch(new RegExp(`\\n( {4,6})case '${alias}':\\n\\1case '${now}': \\{`));
-  });
-
-  it.each(PAIRS)('tools/list advertises %s… no it does not: only %s', (alias, now) => {
-    // One name for one thing in the table an agent picks from.
-    expect(SRC).not.toContain(`name: '${alias}',`);
-    expect(SRC).toContain(`name: '${now}',`);
-  });
+  // That each pair really is ONE fall-through `case` arm, and that only the
+  // new name reaches `tools/list`, is asserted in `tool-wiring.test.ts` —
+  // where the same four pairs are listed beside the two earlier renames. Both
+  // of those read the MCP source text, and one copy of a source-shape read is
+  // the most this rename should cost (see .claude/rules/testing-standards.md
+  // §1). What lives here is the half that shape cannot show: that both names
+  // reach the same REST call, and that the log says so once.
 });
 
 describe('the deprecation line is said once per session', () => {
@@ -255,9 +248,16 @@ describe('the prose names the new verbs only', () => {
     // most likely to have and least likely to announce.
     expect(PROSE.length).toBeGreaterThan(20);
     expect(PROSE.some(([, text]) => text.includes('attach_folder'))).toBe(true);
-    const table = readFileSync(join(HERE, '../src/deprecated-aliases.ts'), 'utf8');
+    // …and the matcher below can see an old verb: run it over a synthetic
+    // page that contains every one of them, and it must report all four.
+    const planted: Array<[string, string]> = [
+      ['synthetic.md', Object.keys(DEPRECATED_TOOL_ALIASES).join(' and ')],
+    ];
     for (const alias of Object.keys(DEPRECATED_TOOL_ALIASES)) {
-      expect(table, `alias table names ${alias}`).toContain(alias);
+      expect(
+        planted.filter(([, text]) => text.includes(alias)).map(([path]) => path),
+        `matcher blind to ${alias}`,
+      ).toEqual(['synthetic.md']);
     }
   });
 
