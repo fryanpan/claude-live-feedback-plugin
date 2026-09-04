@@ -127,11 +127,119 @@ describe('the review-item hold loop', () => {
     return { workspaceId: workspace.id, taskId: task.id };
   }
 
+  /** A judge that never passes anything and never repeats itself — the
+   *  behaviour the peer met eight times over. */
+  function contradictoryJudge(): ReviewJudge {
+    const reasons = [
+      'The detail does not say what waits on this.',
+      'The headline is not in the reader’s own words.',
+      'No option says what choosing it costs.',
+      'The links are not inline on the words they explain.',
+    ];
+    let n = 0;
+    return async () => ({ ok: false, reason: reasons[n++ % reasons.length] as string });
+  }
+
+  describe('after two holds the gate stops holding', () => {
+    async function heldTwice(): Promise<{
+      workspaceId: string;
+      taskId: string;
+      itemId: string;
+      first: string;
+      second: Held;
+    }> {
+      const { workspaceId, taskId } = await board();
+      judge = contradictoryJudge();
+      const filed = await jj<Held>(
+        await post(`/api/tasks/${taskId}/review-items`, {
+          author: FILER,
+          review: COSTS_IN_OPTIONS,
+        }),
+      );
+      expect(filed.held).toBe(true);
+      const itemId = filed.item?.id as string;
+      const first = filed.heldReason as string;
+      const second = await jj<Held>(
+        await post(`/api/tasks/${taskId}/review-items/${itemId}/revise`, {
+          author: FILER,
+          detail: 'The rollout waits on this: nothing ships until the size is picked.',
+        }),
+      );
+      expect(second.held).toBe(true);
+      return { workspaceId, taskId, itemId, first, second };
+    }
+
+    it('accepts the third revision instead of holding it a third time', async () => {
+      const { taskId, itemId } = await heldTwice();
+      const third = await jj<Held>(
+        await post(`/api/tasks/${taskId}/review-items/${itemId}/revise`, {
+          author: FILER,
+          detail: 'Picking a size unblocks the rollout, which is otherwise stopped.',
+        }),
+      );
+      expect(third.held ?? false).toBe(false);
+      expect(third.item?.judge?.verdict).toBe('ok');
+    });
+
+    it('puts the item on the reader’s queue rather than leaving it in limbo', async () => {
+      const { workspaceId, taskId, itemId } = await heldTwice();
+      await jj(
+        await post(`/api/tasks/${taskId}/review-items/${itemId}/revise`, {
+          author: FILER,
+          detail: 'Picking a size unblocks the rollout, which is otherwise stopped.',
+        }),
+      );
+      const { items } = await jj<{ items: Array<{ reviewItemId?: string }> }>(
+        await fetch(`${base}/api/workspaces/${workspaceId}/review-items`),
+      );
+      expect(items.some((i) => i.reviewItemId === itemId)).toBe(true);
+    });
+
+    it('tells the reader why in ONE sentence, and it is the standing concern rather than a fresh one', async () => {
+      const { taskId, itemId, first } = await heldTwice();
+      const third = await jj<Held>(
+        await post(`/api/tasks/${taskId}/review-items/${itemId}/revise`, {
+          author: FILER,
+          detail: 'Picking a size unblocks the rollout, which is otherwise stopped.',
+        }),
+      );
+      const reason = third.item?.judge?.reason as string;
+      // The FIRST hold's words, not a fourth invention — that is what
+      // "never a fresh contradictory reason" means.
+      expect(reason).toContain(first.replace(/\.$/, ''));
+      expect(reason.split('.').filter((s) => s.trim() !== '')).toHaveLength(1);
+    });
+
+    it('counts the holds on the item itself, so the cap outlives this request', async () => {
+      const { second } = await heldTwice();
+      expect(second.item?.judge?.heldFor).toEqual([
+        'The detail does not say what waits on this.',
+        'The headline is not in the reader’s own words.',
+      ]);
+    });
+
+    it('shows the judge every reason it has already held this item for', async () => {
+      const { taskId, itemId } = await heldTwice();
+      expect(calls[0]?.item.priorHolds ?? []).toEqual([]);
+      expect(calls[1]?.item.priorHolds).toEqual(['The detail does not say what waits on this.']);
+      await jj(
+        await post(`/api/tasks/${taskId}/review-items/${itemId}/revise`, {
+          author: FILER,
+          detail: 'Picking a size unblocks the rollout, which is otherwise stopped.',
+        }),
+      );
+      expect(calls[2]?.item.priorHolds).toHaveLength(2);
+    });
+  });
+
   describe('costs stated only in the options', () => {
     it('is not held for missing costs — the option details reach the judge', async () => {
       const { taskId } = await board();
       const out = await jj<Held>(
-        await post(`/api/tasks/${taskId}/review-items`, { author: FILER, review: COSTS_IN_OPTIONS }),
+        await post(`/api/tasks/${taskId}/review-items`, {
+          author: FILER,
+          review: COSTS_IN_OPTIONS,
+        }),
       );
       expect(out.held ?? false).toBe(false);
       expect(calls[0]?.item.options?.map((o) => o.detail)).toEqual([
@@ -161,7 +269,10 @@ describe('the review-item hold loop', () => {
     it('keeps the costs in front of the judge across a revision that leaves the options alone', async () => {
       const { taskId } = await board();
       const filed = await jj<Held>(
-        await post(`/api/tasks/${taskId}/review-items`, { author: FILER, review: COSTS_IN_OPTIONS }),
+        await post(`/api/tasks/${taskId}/review-items`, {
+          author: FILER,
+          review: COSTS_IN_OPTIONS,
+        }),
       );
       const itemId = filed.item?.id as string;
       const out = await jj<Held>(
