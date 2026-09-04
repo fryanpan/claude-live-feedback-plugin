@@ -29,8 +29,9 @@
  * file descriptor, no red in this run means anything.
  *
  * Wired into every test via fd-contention.preload.ts (bunfig.toml). The
- * darwin FSEvents smoke test in dispatch-registry.test.ts also consults
- * these helpers directly to pick its timeout wording.
+ * darwin FSEvents smoke test in dispatch-registry.test.ts also calls
+ * fdContentionError and otherTestRunnerCount directly to pick its timeout
+ * wording.
  */
 import { execSync } from 'node:child_process';
 import { closeSync, openSync } from 'node:fs';
