@@ -1,6 +1,7 @@
 #!/usr/bin/env bun
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { enableDatalessMaterialization } from './dataless-policy.ts';
 import { confirmDeployBoot, deployLogPath } from './deploy-log.ts';
 import { installLogSquelch } from './log-squelch.ts';
 import { acquirePort, classifyBindError, probeLocalPort, shouldWalkPorts } from './port-bind.ts';
@@ -10,6 +11,13 @@ import { captureServerError, flushServerSentry, initServerSentry } from './sentr
 import { resolveServerConfig } from './server-config.ts';
 import { createServerDeps } from './server-deps.ts';
 import { createServer } from './server.ts';
+
+// Before anything else, because it only governs opens that come after it and
+// the first bound-file read is not far behind. Under launchd the default is
+// off, so without this a doc bound to an online-only cloud file gets EDEADLK
+// instead of its contents. See dataless-policy.ts for why that is now the
+// preferred trade.
+await enableDatalessMaterialization();
 
 const here = dirname(fileURLToPath(import.meta.url));
 const repoRoot = join(here, '..', '..', '..');

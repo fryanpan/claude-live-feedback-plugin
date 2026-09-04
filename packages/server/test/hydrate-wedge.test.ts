@@ -16,7 +16,7 @@
  * The doc, the paths and the content here are invented.
  */
 import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
-import { mkdtempSync, rmSync, unlinkSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, rmSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { type ServerHandle, createServer } from '../src/server.ts';
@@ -95,10 +95,40 @@ describe('a bound file that never answers', () => {
     // starting the same doomed read.
     expect(handle.rooms.boundPathOf(DOC_ID)).toBeUndefined();
     expect(boundFiles.quarantined(boundPath)).toBe(true);
+    // And the file itself is untouched. This is the half that matters most:
+    // a doc that binds without having read its file will overwrite that file
+    // on its next write-back, so "no binding" and "the bytes on disk survive"
+    // are the same guarantee seen from two sides.
+    expect(statSync(boundPath).isFIFO()).toBe(true);
     // The read is parked, not abandoned: `afterEach` hands it end-of-file and
     // gets the pool thread back, and fails loudly by name if it cannot. The
     // count itself is process-wide (one runner process, every test file), so
     // it is not something this test can assert an exact number for.
+  });
+
+  it('parks the doc on an /api route too, not just the five prewarmed prefixes', async () => {
+    // The prewarm used to be a list of five path prefixes — `/events/`,
+    // `/y/`, `/review/`, `/audio/`, `/mockup/`. Every other way of naming a
+    // doc went the unprewarmed way and hydrated on the main thread, which is
+    // most of the surface: this route, and the canonical
+    // `/workspaces/<ws>/docs/<docId>` address with it. `GET /api/docs/<id>`
+    // reaches the same `rooms.get` the SSE route does, so on a build that
+    // only prewarms by prefix this request parks the whole server and the
+    // unrelated one below never answers.
+    handle = createServer({ port: 0, dataDir, requireSignInToWrite: false });
+    const base = `http://localhost:${handle.port}`;
+
+    const viaApi = fetch(`${base}/api/docs/${DOC_ID}`);
+    const unrelated = fetch(`${base}/api/docs`).then((r) => `answered:${r.status}`);
+    const tooSlow = new Promise<string>((resolve) => setTimeout(() => resolve('wedged'), 1_000));
+    expect(await Promise.race([unrelated, tooSlow])).toBe('answered:200');
+
+    const res = await viaApi;
+    expect(res.status).toBeLessThan(500);
+    await res.body?.cancel();
+
+    expect(handle.rooms.boundPathOf(DOC_ID)).toBeUndefined();
+    expect(boundFiles.quarantined(boundPath)).toBe(true);
   });
 
   it('positive control: the same doc on a readable file binds as before', async () => {

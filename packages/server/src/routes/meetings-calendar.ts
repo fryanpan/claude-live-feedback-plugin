@@ -457,7 +457,7 @@ export async function handleMeetingCalendarRoutes(
         console.error(`[calendar] could not write ${file}:`, err);
         return j(500, { error: 'doc-file-failed' });
       }
-      const attached = rooms.attachFile(docId, file);
+      const attached = await rooms.attachFileAsync(docId, file);
       if (!attached.ok) return j(409, { error: 'attach_failed', attached });
       const requestedWs = typeof body?.workspaceId === 'string' ? body.workspaceId : undefined;
       fileUnderHubWorkspace(docId, requestedWs);
