@@ -36,36 +36,38 @@
  * consumed on first use, never served twice.
  */
 import { readFile, stat } from 'node:fs/promises';
+import { ROOM_TIMINGS } from './room-timings.ts';
 
 /**
- * How long a bound file gets to answer before the caller gives up on it.
+ * The deadline and the backoff live in `room-timings.ts` with every other
+ * cadence a bound doc runs on, and for the same reason: the suite would
+ * otherwise spend its wall clock waiting them out. Production values are
+ * three seconds and one minute.
  *
  * Three seconds is far above any healthy local or network read (a warm
- * Dropbox file answers in single-digit milliseconds) and far below the
+ * cloud-sync file answers in single-digit milliseconds) and far below the
  * supervisor's own patience, so a stalled file parks its doc without ever
- * looking like a dead server.
+ * looking like a dead server. The minute is aimed at the client that
+ * reconnects immediately: without a backoff, every reconnect starts another
+ * doomed read and leaks another pool thread.
  */
-export const BOUND_READ_DEADLINE_MS = 3_000;
+const DEADLINE_MS = ROOM_TIMINGS.boundReadDeadlineMs;
+const RETRY_MS = ROOM_TIMINGS.boundReadRetryMs;
 
 /**
- * Minimum gap between attempts on a path that already blew the deadline.
- *
- * The failure mode this exists for is a client that reconnects immediately:
- * without a backoff, every reconnect starts another doomed read and leaks
- * another pool thread. One attempt per minute per path is enough to notice a
- * provider that woke up, and cheap enough that a folder full of stalled files
- * costs nothing.
- */
-export const BOUND_READ_RETRY_MS = 60_000;
-
-/**
- * How many bound-file reads may be outstanding at once.
+ * How many bound-file operations of ONE kind may be outstanding at once.
  *
  * This is the leak bound. A read the provider never answers holds its thread
  * pool slot forever, so the worst case for a permanently stalled folder is
- * four parked pool threads — not the whole pool. Healthy reads finish in
- * microseconds and never approach the limit; when it is reached, callers get
- * `unavailable` and retry later rather than queueing.
+ * four parked reads plus four parked stats — not the whole pool. Healthy
+ * calls finish in microseconds and never approach the limit; when it is
+ * reached, callers get `unavailable` and retry later rather than queueing.
+ *
+ * Reads and stats are counted SEPARATELY, and that separation is load
+ * bearing. The mtime poll stats every active binding on every tick, so a busy
+ * corpus keeps stat slots occupied more or less continuously; sharing one
+ * budget let that background traffic refuse the hydrate read a request was
+ * waiting on, which is the one call that must not be starved.
  */
 export const BOUND_READ_MAX_INFLIGHT = 4;
 
@@ -99,8 +101,14 @@ class BoundFileReader {
   /** Paths that blew the deadline, and the time they may be tried again. */
   private readonly stalledUntil = new Map<string, number>();
   /** Reads whose pool thread has not come back yet. Bounded, see above. */
-  private inflight = 0;
-  /** Reads that never returned at all — reported by `stats()` for the log. */
+  private inflightRead = 0;
+  /** Stats whose pool thread has not come back yet. Bounded separately. */
+  private inflightStat = 0;
+  /**
+   * Calls we stopped waiting for and which have not come back — the number of
+   * pool threads a hostile path is holding right now. Counts up on a missed
+   * deadline and back down if the call ever does land.
+   */
   private leaked = 0;
   /** Just-completed reads, waiting to be consumed by the hydrate that asked. */
   private readonly fresh = new Map<
@@ -123,9 +131,9 @@ class BoundFileReader {
 
   /** Read a bound file off the main thread, or report why we did not. */
   async read(path: string): Promise<BoundReadResult> {
-    const blocked = this.gate(path);
+    const blocked = this.gate('read', path);
     if (blocked) return blocked;
-    const raced = await this.race(path, async () => {
+    const raced = await this.race('read', path, async () => {
       const [text, st] = await Promise.all([readFile(path, 'utf8'), stat(path)]);
       return { text, mtimeMs: st.mtimeMs };
     });
@@ -181,9 +189,9 @@ class BoundFileReader {
 
   /** The mtime half of `read`, for the poll's change detection. */
   async statMtime(path: string): Promise<BoundStatResult> {
-    const blocked = this.gate(path);
+    const blocked = this.gate('stat', path);
     if (blocked) return blocked;
-    const raced = await this.race(path, () => stat(path));
+    const raced = await this.race('stat', path, () => stat(path));
     if (raced.kind === 'late') return { status: 'unavailable', reason: 'timeout' };
     if (raced.kind === 'failed') {
       if (isEnoent(raced.err)) return { status: 'ok', exists: false };
@@ -195,31 +203,47 @@ class BoundFileReader {
 
   /** Counters for the periodic stats line, so a stall is visible in the log. */
   stats(): { inflight: number; leaked: number; quarantined: number } {
-    return { inflight: this.inflight, leaked: this.leaked, quarantined: this.stalledUntil.size };
+    return {
+      inflight: this.inflightRead + this.inflightStat,
+      leaked: this.leaked,
+      quarantined: this.stalledUntil.size,
+    };
   }
 
-  /** Tests only: forget every quarantine and counter. */
+  /**
+   * Tests only: forget the quarantine, the held bytes and the leak counter.
+   *
+   * `inflight` is deliberately NOT cleared. A read still parked in `open`
+   * owns its pool thread whatever this map says, so zeroing the count here
+   * would let the next caller start `BOUND_READ_MAX_INFLIGHT` more — the
+   * exact drain the bound exists to prevent, hidden behind a counter that
+   * reads as healthy. Tests release their own blocked reads and assert the
+   * count is genuinely back to zero (see test/fifo.ts).
+   */
   reset(): void {
     this.fresh.clear();
     this.stalledUntil.clear();
-    this.inflight = 0;
     this.leaked = 0;
   }
 
-  private gate(path: string): { status: 'unavailable'; reason: 'backoff' | 'busy' } | undefined {
+  private gate(
+    kind: 'read' | 'stat',
+    path: string,
+  ): { status: 'unavailable'; reason: 'backoff' | 'busy' } | undefined {
     if (this.quarantined(path)) return { status: 'unavailable', reason: 'backoff' };
-    if (this.inflight >= BOUND_READ_MAX_INFLIGHT) return { status: 'unavailable', reason: 'busy' };
+    const held = kind === 'read' ? this.inflightRead : this.inflightStat;
+    if (held >= BOUND_READ_MAX_INFLIGHT) return { status: 'unavailable', reason: 'busy' };
     return undefined;
   }
 
   private markStalled(path: string, err?: unknown): void {
     const first = !this.stalledUntil.has(path);
-    this.stalledUntil.set(path, Date.now() + BOUND_READ_RETRY_MS);
+    this.stalledUntil.set(path, Date.now() + RETRY_MS);
     // Once per stall, not once per attempt: the reconnect loop that exposed
     // this bug would otherwise write a log line per second per subscriber.
     if (first) {
       console.error(
-        `[slow-fs] ${path} did not answer within ${BOUND_READ_DEADLINE_MS}ms; parking it for ${Math.round(BOUND_READ_RETRY_MS / 1000)}s`,
+        `[slow-fs] ${path} did not answer within ${DEADLINE_MS}ms; parking it for ${Math.round(RETRY_MS / 1000)}s`,
         err ?? '',
       );
     }
@@ -232,23 +256,35 @@ class BoundFileReader {
    * race ends: a syscall we walked away from still owns its pool thread, and
    * pretending otherwise is how the bound above would stop bounding anything.
    */
-  private async race<T>(path: string, work: () => Promise<T>): Promise<Raced<T>> {
-    this.inflight++;
+  private async race<T>(
+    kind: 'read' | 'stat',
+    path: string,
+    work: () => Promise<T>,
+  ): Promise<Raced<T>> {
+    const release = () => {
+      if (kind === 'read') this.inflightRead--;
+      else this.inflightStat--;
+    };
+    if (kind === 'read') this.inflightRead++;
+    else this.inflightStat++;
     let landed = false;
+    // Whether THIS call was counted against `leaked`. Only the call that was
+    // counted may uncount itself — decrementing on any landing would let a
+    // healthy read cancel out another path's genuine leak.
+    let counted = false;
     const running = work();
-    void running.then(
-      () => {
-        landed = true;
-        this.inflight--;
-      },
-      () => {
-        landed = true;
-        this.inflight--;
-      },
-    );
+    const settle = () => {
+      landed = true;
+      release();
+      if (counted) {
+        counted = false;
+        this.leaked--;
+      }
+    };
+    void running.then(settle, settle);
     let timer: ReturnType<typeof setTimeout> | undefined;
     const deadline = new Promise<Raced<T>>((resolve) => {
-      timer = setTimeout(() => resolve({ kind: 'late' }), BOUND_READ_DEADLINE_MS);
+      timer = setTimeout(() => resolve({ kind: 'late' }), DEADLINE_MS);
       // Never a reason to hold the process open; a stalled read must not be
       // able to stop the server exiting.
       (timer as unknown as { unref?: () => void }).unref?.();
@@ -262,7 +298,12 @@ class BoundFileReader {
     ]);
     if (timer) clearTimeout(timer);
     if (outcome.kind === 'late') {
-      if (!landed) this.leaked++;
+      // `landed` is set synchronously by `settle`, so a call that came back in
+      // the same turn the timer fired is correctly not counted as parked.
+      if (!landed) {
+        counted = true;
+        this.leaked++;
+      }
       this.markStalled(path);
     }
     return outcome;

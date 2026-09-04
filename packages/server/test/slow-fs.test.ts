@@ -10,16 +10,13 @@
  * ever does. Paths and contents are invented.
  */
 import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
-import { execFileSync } from 'node:child_process';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import {
-  BOUND_READ_DEADLINE_MS,
-  BOUND_READ_MAX_INFLIGHT,
-  BOUND_READ_RETRY_MS,
-  boundFiles,
-} from '../src/slow-fs.ts';
+import { DEFAULT_ROOM_TIMINGS, ROOM_TIMINGS } from '../src/room-timings.ts';
+import { BOUND_READ_MAX_INFLIGHT, boundFiles } from '../src/slow-fs.ts';
+import { makeFifo, releaseFifo, releaseFifosIn } from './fifo.ts';
+import { waitFor } from './wait-for.ts';
 
 describe('boundFiles', () => {
   let scratch: string;
@@ -31,11 +28,16 @@ describe('boundFiles', () => {
     scratch = mkdtempSync(join(tmpdir(), 'slow-fs-'));
     stalled = join(scratch, 'stalled.md');
     readable = join(scratch, 'readable.md');
-    execFileSync('mkfifo', [stalled]);
+    makeFifo(stalled);
     writeFileSync(readable, '# Readable\n');
   });
 
-  afterEach(() => {
+  afterEach(async () => {
+    // Every test here parks at least one read in `open`, and each holds a
+    // pool thread until it is released. Release them while the pipes still
+    // exist — an unlinked pipe cannot be opened, so the reader would stay
+    // parked for the life of the process and could stop the runner exiting.
+    await releaseFifosIn(scratch);
     boundFiles.reset();
     rmSync(scratch, { recursive: true, force: true });
   });
@@ -81,8 +83,7 @@ describe('boundFiles', () => {
     // take every other async read in the process down with it.
     const paths = Array.from({ length: BOUND_READ_MAX_INFLIGHT + 3 }, (_, i) => {
       const p = join(scratch, `stall-${i}.md`);
-      execFileSync('mkfifo', [p]);
-      return p;
+      return makeFifo(p);
     });
     const results = await Promise.all(paths.map((p) => boundFiles.read(p)));
     const busy = results.filter((r) => r.status === 'unavailable' && r.reason === 'busy');
@@ -99,10 +100,35 @@ describe('boundFiles', () => {
     expect(good).toMatchObject({ status: 'ok', exists: true });
   });
 
-  it('states its constants, because callers reason about them', () => {
-    // Not decoration: `hydrate-wedge.test.ts` waits under the deadline and the
-    // backoff is the difference between one doomed read and one per reconnect.
-    expect(BOUND_READ_DEADLINE_MS).toBe(3_000);
-    expect(BOUND_READ_RETRY_MS).toBe(60_000);
+  it('gives the pool thread back when the file finally answers', async () => {
+    // The cleanup every test in this file depends on, asserted directly so a
+    // platform where it stops working fails here by name rather than by
+    // hanging the runner somewhere else.
+    const res = await boundFiles.read(stalled);
+    expect(res).toEqual({ status: 'unavailable', reason: 'timeout' });
+    expect(boundFiles.stats().leaked).toBe(1);
+    // A reader is holding the pipe open, which is what `releaseFifo` reports.
+    expect(releaseFifo(stalled)).toBe(true);
+
+    // One end-of-file is not always enough: a reader that was still in `open`
+    // when the writer closed goes on to block in `read()`. Keep handing it EOF
+    // until nothing holds the read end — that is what `releaseFifosIn` does.
+    await waitFor(() => (releaseFifo(stalled) ? false : 'nobody is reading it'), {
+      describe: 'the parked read to let go of the pipe',
+    });
+    // And slow-fs agrees the pool thread came back.
+    await waitFor(() => (boundFiles.stats().leaked === 0 ? 'given back' : false), {
+      describe: 'slow-fs to stop counting the read as parked',
+    });
+  });
+
+  it('runs on the scaled room cadences, at three seconds and a minute in production', () => {
+    // The deadline is a cadence like the write-back and the poll, so it rides
+    // the same `CW_TEST_TIMING_SCALE` — otherwise every test here would pay
+    // three real seconds and sit two seconds under the runner's own timeout.
+    expect(DEFAULT_ROOM_TIMINGS.boundReadDeadlineMs).toBe(3_000);
+    expect(DEFAULT_ROOM_TIMINGS.boundReadRetryMs).toBe(60_000);
+    // And the suite is genuinely running the scaled ones, not the defaults.
+    expect(ROOM_TIMINGS.boundReadDeadlineMs).toBeLessThan(DEFAULT_ROOM_TIMINGS.boundReadDeadlineMs);
   });
 });
