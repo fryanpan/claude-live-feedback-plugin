@@ -51,7 +51,7 @@ const decision = (over: Partial<ReviewPayload> = {}): ReviewPayload => ({
 });
 
 const question = (over: Partial<ReviewPayload> = {}): ReviewPayload => ({
-  shape: 'question',
+  shape: 'review',
   headline: 'Should the strip stay after the meeting ends?',
   ...over,
 });
