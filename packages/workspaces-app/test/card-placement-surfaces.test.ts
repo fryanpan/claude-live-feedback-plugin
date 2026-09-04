@@ -15,7 +15,7 @@ import { IPAD, PHONE, attach, installSheets, setViewport, styleOf } from './css-
 let cleanupSheets: (() => void) | null = null;
 
 beforeEach(() => {
-  cleanupSheets = installSheets('styles.css');
+  cleanupSheets = installSheets('styles.css', 'doc.css');
 });
 
 afterEach(() => {

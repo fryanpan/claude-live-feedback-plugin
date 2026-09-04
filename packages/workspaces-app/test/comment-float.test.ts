@@ -22,7 +22,7 @@ function listen(target: EventTarget, type: string, fn: (ev: Event) => void): voi
 }
 
 beforeEach(() => {
-  cleanupSheets = installSheets('styles.css');
+  cleanupSheets = installSheets('styles.css', 'doc.css');
 });
 
 afterEach(() => {

@@ -49,7 +49,7 @@ const HUB_RENDER = readFileSync(resolve(SRC, 'hub/hub-render.ts'), 'utf8');
 
 let cleanup = () => {};
 beforeEach(() => {
-  cleanup = installSheets('hub.css', 'styles.css');
+  cleanup = installSheets('hub.css', 'styles.css', 'doc.css');
   setViewport(IPAD);
 });
 afterEach(() => {
