@@ -70,8 +70,9 @@ const WAKE_GREETINGS = ['hey', 'hi', 'ok', 'okay'] as const;
  * The verbs a NOW ask opens with — the openings the three now intents were
  * written around ("look into", "find out", "pull up", "link", "check", "ask
  * the team") and their near neighbours. Consulted only AFTER a coordinator,
- * where a verb is what tells a second ask from the rest of the first one's
- * object. See {@link nowCueAskCount}.
+ * and never on its own: every word here is also a noun, so it takes
+ * {@link NOW_VERB_FOLLOWERS} as well to tell a second ask from the rest of
+ * the first one's object. See {@link nowCueAskCount}.
  */
 const NOW_ASK_VERBS = [
   'look',
@@ -105,6 +106,81 @@ const NOW_ASK_VERBS = [
  *  here: "and" alone would consume the joint and leave "then" to fail the
  *  verb test that follows it. */
 const NOW_JOINERS = ['and then', 'and also', 'and', 'then', 'also', 'plus'] as const;
+
+/**
+ * What a coordinated VERB must be followed by to count as a second ask: the
+ * start of an object, or the particle that finishes the verb.
+ *
+ * Every word in {@link NOW_ASK_VERBS} is also a noun — "and **search
+ * results** ordering", "and **share** settings", "and **review** comments" —
+ * so the verb alone counted a second ask in four measured phrases where the
+ * truth was one. What separates them is what comes NEXT: an imperative takes
+ * an object ("pull up **the** notes", "look into **why** it does that") or a
+ * particle ("pull **up**", "find **out**"), while a compound noun takes
+ * another noun. Erring high is not free — a cue left live is replayed into
+ * the next tick's overlap, where the line that cued it vouches for it again.
+ */
+const NOW_VERB_FOLLOWERS = [
+  // The object's determiner.
+  'a',
+  'an',
+  'the',
+  'that',
+  'this',
+  'these',
+  'those',
+  'my',
+  'our',
+  'your',
+  'their',
+  'its',
+  'some',
+  'any',
+  'all',
+  'both',
+  'each',
+  'every',
+  'another',
+  'other',
+  'one',
+  'two',
+  'last',
+  'next',
+  // The particle that finishes the verb, or the preposition that opens the
+  // object.
+  'up',
+  'out',
+  'into',
+  'in',
+  'on',
+  'at',
+  'over',
+  'through',
+  'back',
+  'down',
+  'off',
+  'around',
+  'together',
+  'with',
+  'for',
+  'from',
+  'about',
+  'against',
+  'under',
+  'to',
+  'by',
+  'via',
+  // The clause an ask often takes instead of a noun phrase.
+  'whether',
+  'why',
+  'what',
+  'how',
+  'when',
+  'where',
+  'if',
+  'who',
+  'which',
+] as const;
 
 /** The verb half of the later cue — "**create** a task". */
 const LATER_VERBS = ['create', 'make', 'file', 'add'] as const;
@@ -262,10 +338,12 @@ const NOW_RE = new RegExp(
   'g',
 );
 
-/** A coordinator followed by a verb — the joint between two asks in one
- *  now-cue line. Global: a line may carry several. */
+/** A coordinator, a verb, and the word that proves the verb was one — the
+ *  joint between two asks in one now-cue line. Global: a line may carry
+ *  several. */
 const NOW_JOINT_RE = new RegExp(
-  `\\b(?:${alternation(NOW_JOINERS)})\\s+(?:${alternation(NOW_ASK_VERBS)})\\b`,
+  `\\b(?:${alternation(NOW_JOINERS)})\\s+(?:${alternation(NOW_ASK_VERBS)})` +
+    `\\s+(?:${alternation(NOW_VERB_FOLLOWERS)})\\b`,
   'g',
 );
 
@@ -369,13 +447,17 @@ export function laterCueIsPlural(text: string): boolean {
  * line's capacity is counted rather than assumed to be one.
  *
  * Two things raise it and nothing else does: the speaker said the wake word
- * again ("…and Claude, could you…"), or a coordinator is followed by a VERB.
- * The verb is the whole test, because it is what separates a second ask from
- * a longer object — "look at the retry loop and the sync worker" is one ask
- * about two things, and "the" is not a verb. Erring high costs nothing on its
- * own: a cue left live still has to be claimed by an ask the subject guards
- * vouch for. Erring low drops an ask somebody spoke, which is the failure
- * this exists to end.
+ * again ("…and Claude, could you…"), or a coordinator is followed by a VERB
+ * AND the word that proves it was one. Both halves are needed. The verb
+ * separates a second ask from a longer object — "look at the retry loop and
+ * the sync worker" is one ask about two things, and "the" is not a verb —
+ * but every verb here is also a noun, so "and search results ordering" and
+ * "and review comments" counted two until the follower test was added.
+ *
+ * Neither direction of error is free. Erring low drops an ask somebody
+ * spoke. Erring high leaves the cue live for a second ask that never comes,
+ * and the line that cued it vouches for it again when the overlap replays it
+ * into the next tick.
  *
  * Zero for a line with no now cue at all, so a caller may use it as the
  * capacity without asking twice.
