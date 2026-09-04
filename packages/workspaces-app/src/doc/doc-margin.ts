@@ -15,6 +15,7 @@
  */
 import { suggestOps } from '@feedback/core';
 import type * as Y from 'yjs';
+import { balloonMarginVisible } from '../card-placement.ts';
 import { mountCommentHints } from '../comment-hints.ts';
 import type { EditorHandle } from '../editor.ts';
 import type { MountScope } from '../mount-scope.ts';
@@ -63,7 +64,7 @@ export function mountDocMargin(opts: DocMarginOptions): DocMarginHandle {
   // across every author) — per-suggestion Accept/Reject lives on the
   // balloon/chip card the margin just wired above.
   const suggestionsSummary = mountSuggestionsSummary({ docId, ydoc, scope });
-  // Off-screen comment counts + the "N questions for you" chip — the
+  // Off-screen comment counts + the "N waiting on you" chip — the
   // information scent for what the reader cannot see (comment-hints.ts).
   // Jumping goes the same route a tap on the highlight takes: scroll, pulse,
   // and open the card where it lives (balloon above 1100px, inline below).
@@ -112,7 +113,7 @@ export function mountDocMargin(opts: DocMarginOptions): DocMarginHandle {
     onSeen: () => margin.scheduleRelayout(),
     onJump: jumpToThread,
     dockEl: () => document.querySelector<HTMLElement>('#editor-pane .plan-float'),
-    marginVisible: () => !window.matchMedia('(max-width: 1100px)').matches,
+    marginVisible: balloonMarginVisible,
     scope,
   });
   const onMarginTransaction = (): void => {

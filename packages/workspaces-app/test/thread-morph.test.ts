@@ -266,14 +266,16 @@ describe('morphCard — the animations it schedules', () => {
       if (animatesHeight) expect(a.el.classList.contains('thread-slot')).toBe(true);
       if (animatesOpacity) expect(a.el.classList.contains('thread-face')).toBe(true);
     }
-    // Nothing above or beside the slots is touched.
+    // Nothing above the slots is touched.
     const head = card.querySelector('.thread-head') as HTMLElement;
-    const foot = card.querySelector('.thread-foot') as HTMLElement;
-    expect(log.some((a) => a.el === head || a.el === foot || a.el === card)).toBe(false);
-    // …and the head and foot really do sit OUTSIDE both slots, which is why
-    // the resolve control never moves or rebuilds.
+    expect(log.some((a) => a.el === head || a.el === card)).toBe(false);
+    // …and the head really does sit OUTSIDE both slots, which is why the
+    // author, the clock and the caret never move or rebuild. The foot no
+    // longer joins it there: ✓ Resolve rides slot B's DETAIL face now, so a
+    // folded card carries no destructive control at all.
     expect(head.closest('.thread-slot')).toBeNull();
-    expect(foot.closest('.thread-slot')).toBeNull();
+    const foot = card.querySelector('.thread-foot') as HTMLElement;
+    expect(foot.closest('.face-detail')).not.toBeNull();
   });
 
   it('reduced motion lands the final state with no animation at all', () => {
