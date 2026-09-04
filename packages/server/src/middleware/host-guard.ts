@@ -885,6 +885,12 @@ export function shareScopeAllows(
   // Review page / Yjs websocket / SSE for an in-scope doc.
   if (pathname.startsWith('/review/')) return inScope(pathname.slice('/review/'.length));
   if (pathname.startsWith('/y/')) return inScope(pathname.slice('/y/'.length));
+  // The agent-multiplexed feed is never a share surface: one stream carries
+  // every channel that agent watches, which is by construction wider than any
+  // board a share covers. Refused by name rather than left to `inScope`
+  // failing on the slash — a doc id has none today, and this must not become
+  // reachable if that ever changes.
+  if (pathname.startsWith('/events/agent/')) return false;
   if (pathname.startsWith('/events/')) return inScope(pathname.slice('/events/'.length));
 
   // Doc REST surface: /api/docs/<id> and the subroutes the review UI uses.

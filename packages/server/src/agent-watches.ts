@@ -111,6 +111,16 @@ export class AgentWatches {
   private readonly path: string;
   private readonly now: () => number;
   private state: FileShape;
+  /**
+   * agentId → listeners told when that agent's set changed.
+   *
+   * The multiplexed event stream (`sse-mux.ts`) derives its channel set from
+   * this store, so a `watch_doc` has to reach an already-open stream. Without
+   * this hook the only way to pick up a new key would be to hang the stream
+   * up and reconnect — trading the socket-per-key storm this store's reader
+   * exists to end for a reconnect-per-watch one.
+   */
+  private readonly listeners = new Map<string, Set<() => void>>();
   /** Set when the file on disk was unreadable and moved aside. */
   readonly loadError: string | null = null;
 
@@ -155,6 +165,41 @@ export class AgentWatches {
   }
 
   /**
+   * Be told when this agent's set changes. Returns an unsubscribe.
+   *
+   * Fires on a real change only — an `update` that added or removed nothing
+   * is silent, so a re-watch of a key the agent already holds (the persist is
+   * idempotent and callers repeat it deliberately) does not churn a live
+   * stream's registrations.
+   */
+  onChange(agentId: string, cb: () => void): () => void {
+    let set = this.listeners.get(agentId);
+    if (!set) {
+      set = new Set();
+      this.listeners.set(agentId, set);
+    }
+    set.add(cb);
+    return () => {
+      const live = this.listeners.get(agentId);
+      if (!live) return;
+      live.delete(cb);
+      if (live.size === 0) this.listeners.delete(agentId);
+    };
+  }
+
+  /** Never lets one listener's throw stop the others, or the write that
+   *  triggered it — the set is already on disk by the time this runs. */
+  private emitChange(agentId: string): void {
+    for (const cb of this.listeners.get(agentId) ?? []) {
+      try {
+        cb();
+      } catch (err) {
+        console.error('[agent-watches] change listener failed:', err);
+      }
+    }
+  }
+
+  /**
    * The agent's live watch set, with dead keys dropped. `exists` decides
    * liveness — the server passes "is there a room / workspace by this key",
    * because the store itself knows nothing about docs.
@@ -172,6 +217,7 @@ export class AgentWatches {
     if (pruned.length > 0) {
       rec.updatedAt = this.now();
       this.save();
+      this.emitChange(agentId);
     }
     return {
       agentId,
@@ -209,6 +255,9 @@ export class AgentWatches {
       this.state.agents[agentId] = rec;
       this.save();
     }
+    // Only a membership change moves a live stream's registrations; a bare
+    // rename does not.
+    if (added.length > 0 || removed.length > 0) this.emitChange(agentId);
     return { agentId, watches: this.entries(rec), added, removed };
   }
 
@@ -237,6 +286,10 @@ export class AgentWatches {
     this.state.agents[into] = dst;
     delete this.state.agents[from];
     this.save();
+    // Both identities moved: the source lost its whole set, the destination
+    // gained one. A stream open on either has to re-read.
+    this.emitChange(from);
+    this.emitChange(into);
     return { moved: moved.sort() };
   }
 
