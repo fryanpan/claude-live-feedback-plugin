@@ -237,6 +237,7 @@ The remaining 93 are exceptions. Each row names the one harness its cases share.
 | `packages/server/test/goal-reorder.test.ts` | 692 | Store and route describes both seed goals with `bands()` / `seededGoalList()`. |
 | `packages/server/test/stall-nudge-routes.test.ts` | 689 | A single describe over one real board plus `listenFrames` / `waitForFrames`. |
 | `packages/server/test/home-brief.test.ts` | 687 | Every describe feeds `ev()` / `input()` rows into the brief pipeline, store included. |
+| `packages/server/test/meeting-ask-cues.test.ts` | 662 | The detector describes and the `parseTaskCaptureReply` describes are the two halves of one convention, and the second reads the first: every licensing case is built from the same phrase tables the first half asserts, over the shared `candidates` / `reply()` fixture. |
 | `packages/server/test/sse-replay.test.ts` | 660 | Every describe exercises an `SseHub` stream through the shared `listenFrames()` and `settle()`. |
 | `packages/server/test/refresh-workspace.test.ts` | 658 | All three describes build a `Rooms` through the module-scope `makeRooms(dataDir)` and `git()` helpers. |
 | `packages/server/test/auth-write-gate.test.ts` | 656 | Every case, HTTP and y-sync socket alike, boots through the one `boot(requireSignInToWrite)` harness. |
@@ -245,7 +246,6 @@ The remaining 93 are exceptions. Each row names the one harness its cases share.
 | `packages/workspaces-app/test/hub-detail-css.test.ts` | 632 | Every describe parses the same `CSS` string through the shared `rule()` / `media()` helpers. |
 | `packages/server/test/task-import.test.ts` | 629 | The parser describes and the route describe both exercise `parseTrackerMarkdown` on the same synthetic tracker fixture. |
 | `packages/server/test/goal-rename.test.ts` | 627 | Store and route describes share the `bands()` / `boardFor()` goal-id fixture builders. |
-| `packages/server/test/meeting-ask-cues.test.ts` | 620 | The detector describes and the `parseTaskCaptureReply` describes are the two halves of one convention, and the second reads the first: every licensing case is built from the same phrase tables the first half asserts, over the shared `candidates` / `reply()` fixture. |
 | `packages/server/test/sentry-server.test.ts` | 617 | All describes drive `src/sentry.ts` against the module-scope `startCaptureServer()` harness. |
 | `packages/server/test/agent-watches.test.ts` | 615 | Store and route describes share the `AgentWatches` data-dir fixture. |
 | `packages/server/test/comment-durability.test.ts` | 610 | Both describes use the shared `listenFrames()` / `settle()` SSE harness against the agent comment queue. |
