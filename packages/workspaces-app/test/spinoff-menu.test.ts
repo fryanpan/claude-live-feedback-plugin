@@ -3,8 +3,11 @@
  * doc leaves the doc as work.
  *
  * `runSpinoff` is the verb chain and is driven entirely through an injected
- * fetch, so no server runs here. The pill that offers the two verbs is
- * `pointer-pill.ts`, tested beside this file.
+ * fetch, so no server runs here. NOTHING IN THE UI CALLS IT as of 2026-09-04:
+ * the pill that offered Research and Create Task offers only Comment now, and
+ * the ask is made in the comment. The verbs and their routes were not
+ * withdrawn, so they are still driven here — a later ticket decides whether
+ * they come back behind something else.
  *
  * The branch that decides a huddle doc gets the pill at all lives in the
  * per-doc markdown mount in `app.ts`, which the boot suite does not reach:
@@ -75,29 +78,31 @@ function created(calls: Call[]): Call | undefined {
   return calls.find((c) => c.method === 'POST');
 }
 
-describe('the two actions', () => {
-  it('are exactly Research and Create Task, in that order, as plain text', () => {
-    // Bryan's round-4 call (2026-09-01): two text buttons and nothing else.
-    // "Start now" went because it was "Create a task" under another name;
-    // "Answer a question" and "Leave a comment" went with the menu they
-    // lived in, since both only ever opened the composer.
+describe('the actions', () => {
+  it('the two verbs are still Research and Create Task, as plain text', () => {
+    // The verbs outlived their buttons: `runSpinoff` and the routes it posts
+    // to are untouched by the 2026-09-04 cut, and this list is what a caller
+    // that brings either one back would read.
     expect(SPINOFF_ACTIONS.map((a) => a.id)).toEqual(['research', 'task']);
     expect(SPINOFF_ACTIONS.map((a) => a.label)).toEqual(['Research', 'Create Task']);
     for (const a of SPINOFF_ACTIONS) expect(Object.keys(a).sort()).toEqual(['id', 'label']);
   });
 
-  it('the pointer pill offers Comment ahead of the two spin-offs, with Research in the accent', () => {
-    // Owner (2026-09-01): "keep a comment option available" — the first cut
-    // of the pill carried only the spin-offs.
-    expect(POINTER_PILL_ACTIONS.map((a) => a.id)).toEqual(['comment', 'research', 'task']);
-    expect(POINTER_PILL_ACTIONS.map((a) => a.label)).toEqual([
-      'Comment',
-      'Research',
-      'Create Task',
-    ]);
-    expect(POINTER_PILL_ACTIONS.filter((a) => a.primary === true).map((a) => a.id)).toEqual([
-      'research',
-    ]);
+  it('the pointer pill offers Comment and nothing else', () => {
+    // Bryan, 2026-09-04: "Change Research / Comment / Add Task to just
+    // comment". What the other two did is asked for in the comment itself.
+    expect(POINTER_PILL_ACTIONS.map((a) => a.id)).toEqual(['comment']);
+    expect(POINTER_PILL_ACTIONS.map((a) => a.label)).toEqual(['Comment']);
+  });
+
+  it('does not read its one action off the spin-off list', () => {
+    // The pill's list used to be built by spreading `SPINOFF_ACTIONS`, so
+    // anything added there appeared on the pill. That coupling is what this
+    // asserts is gone: a third verb tomorrow is a button only if somebody
+    // writes the button.
+    for (const spun of SPINOFF_ACTIONS) {
+      expect(POINTER_PILL_ACTIONS.map((a) => String(a.id))).not.toContain(spun.id);
+    }
   });
 });
 
