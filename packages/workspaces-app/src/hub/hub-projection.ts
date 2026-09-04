@@ -31,8 +31,8 @@ import { renderWorkspaceIdentity } from './hub-render.ts';
  * they resolve against arrives after the first paint, and the deep-link
  * deadline is what finally decides a claim was stale.
  */
-export function initialHubState(boot: BoardLocation): HubState {
-  const nav = boot.nav;
+export function initialHubState(bootLoc: BoardLocation): HubState {
+  const nav = bootLoc.nav;
   return {
     seat: null,
     info: null,
@@ -47,17 +47,17 @@ export function initialHubState(boot: BoardLocation): HubState {
     tab: tabForNav(nav) ?? 'all',
     doneWindow: DEFAULT_DONE_WINDOW,
     view: nav === 'activity' ? 'activity' : 'board',
-    showArchived: boot.archived,
+    showArchived: bootLoc.archived,
     activityFilter: 'all',
     events: [],
     uptime: null,
     agents: [],
     pluginRelease: null,
     clientRelease: null,
-    detailTaskId: boot.task,
+    detailTaskId: bootLoc.task,
     detailTab: 'comments',
-    detailGoalId: boot.goal,
-    detailThreadId: boot.thread,
+    detailGoalId: bootLoc.goal,
+    detailThreadId: bootLoc.thread,
     discussion: { loading: false, threads: [] },
     discussionTaskId: null,
     reviewItems: [],
