@@ -870,10 +870,13 @@ export class StallNudger {
       // carries no bucket to compare — see UNKNOWN_BUCKET.
       return seen.bucket !== UNKNOWN_BUCKET && seen.bucket !== row.bucket;
     });
+    // The token is only ever the LOOKUP; the id comes off the row it came
+    // from. Building the token and then cutting the reason back off it made
+    // the id depend on neither reason nor id containing the separator, which
+    // is a promise about two unrelated vocabularies rather than a fact.
     const undetermined = board.undetermined
-      .map((u) => `${u.id}:${u.reason}`)
-      .filter((token) => before === undefined || !before.undetermined.has(token))
-      .map((token) => token.slice(0, token.lastIndexOf(':')));
+      .filter((u) => before === undefined || !before.undetermined.has(`${u.id}:${u.reason}`))
+      .map((u) => u.id);
     const heldItems = (board.held ?? []).filter(
       (item) => before === undefined || !before.ids.has(`held:${item.reviewItemId}@${item.heldAt}`),
     );
