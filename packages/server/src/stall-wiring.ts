@@ -12,14 +12,17 @@
  * told", and the snapshots exist only to be handed to the nudgers.
  *
  * The context is explicit, the same shape `routes/task-routes-context.ts`
- * uses. Three of its members are FUNCTIONS rather than values —
- * `hubBoardsForDoc`, `backTargetFor` and `reviseCallFor` — because all three
- * are built further down `createServer` than this wiring is, and every one of
- * them is only ever called from a request or an event. Passing them as
- * functions is what keeps the caller's declaration order free: reordering
- * `createServer` to hoist them would move code whose position is load-bearing
- * (the review gate needs `resolveWorkspaceForDoc` and the projection, and
- * says so where it is built).
+ * uses. One of its members is a FUNCTION rather than a value —
+ * `reviseCallFor` — because the review gate is built further down
+ * `createServer` than this wiring is, and is only ever called from a request
+ * or an event. Passing it as a function is what keeps the caller's
+ * declaration order free: reordering `createServer` to hoist the gate would
+ * move code whose position is load-bearing (it needs `resolveWorkspaceForDoc`
+ * and the projection, and says so where it is built).
+ *
+ * `hubBoardsForDoc` and `backTargetFor` were thunks for the same reason until
+ * they moved into `board-membership.ts`, which `createServer` now composes
+ * above this wiring. They arrive as plain values.
  *
  * `createStallWiring` has one side effect beyond building objects: it installs
  * `sse.onAgentStreams`, because a lead's own stream opening is what makes the
@@ -121,11 +124,11 @@ export interface StallWiringContext {
     lastChange?: ParallelismCapChange;
   }) => CapSummary;
 
-  /** Every hub board a doc's discussion actually reaches. A function because
-   *  it is declared below this wiring in `createServer`. */
+  /** Every hub board a doc's discussion actually reaches —
+   *  `board-membership.ts`, composed above this wiring. */
   hubBoardsForDoc: (docId: string) => Set<string>;
   /** The board a doc belongs back to, for the lead-presence monitor. Same
-   *  reason it is a function. */
+   *  module, same reason it can be a value. */
   backTargetFor: (docId: string, reviewId?: string) => { id: string; name: string } | null;
   /** The paste-ready call that ends a hold, per surface — the review gate's
    *  own spelling, so the lead's report cannot name a different verb from
