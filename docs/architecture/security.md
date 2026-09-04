@@ -1,196 +1,139 @@
 # Security model
 
-Claude Workspaces runs on one person's own computer. That person is the owner. The owner's Claude Code agents talk to the server from the same machine. Anyone else reaches it only through a Cloudflare tunnel the owner set up. There is no shared service and no shared database: the security boundary is the owner's machine.
+Three sentences say most of it:
 
-One server holds many workspaces, so every outside hostname asks two questions rather than one. Cloudflare Access answers the first: which email is this? The server answers the second: was this email given the workspace being asked for? Neither answer is worth anything without the other, and no hostname is a workspace by itself.
+1. **Cloudflare proves who you are.** Every browser signs in through Cloudflare Access before a request reaches the server.
+2. **A workspace gate checks that your email has been given access to the workspace you asked for.** Whether you arrived by share link or by the owner's own address, the server asks this on every request.
+3. **Inside a workspace there are no roles yet.** Everyone who is in has everything. Finer permissions come later.
 
-A share link opens exactly one workspace, fixed when the link is made. The link is an invitation, not a credential: following it proves nothing on its own, because a visitor arrives at the share hostname only after Cloudflare Access has confirmed an email. The server records that email as a member of the workspace the link names, and from then on the membership is what admits them. The collaboration hostname asks the same second question and answers it from the live shares of that workspace, their email and domain lists, plus the owner's own emails. A workspace nobody has shared admits nobody at either address.
+This document says where the trust boundary is, what layers stand between the internet and a workspace, and what each layer does. It describes the design as it is, not a promise that nothing was missed. File names and settings are collected at the end. Every check named there has a comment at the top of its own file saying why it exists; read that before changing it.
 
-This document describes how the server decides who gets in, what each kind of caller can read and write, and where secrets are kept. It describes the design as it is; it is not a promise that nothing was missed. Every check named below has a comment at the top of its own file explaining why it exists. Read that before changing it.
+## The trust boundary
 
-## Who can reach the server
+Claude Workspaces runs on one person's computer. That person is the owner. There is no shared service and no shared database; the boundary is the owner's machine, and the only way across it from outside is a Cloudflare tunnel the owner set up.
+
+**Trusted:**
+
+- The owner's machine and the programs on it: their Claude Code agents, hooks and shell, talking to the server over `localhost`.
+- Cloudflare Access's verdict on who a visitor is. The server never checks a password itself.
+- Cloudflare's own marker on every request it forwards (`cf-ray`). That marker alone proves a request came through the tunnel, so a tunnel visitor who claims to be `localhost` is not believed.
+- Signed messages from the meeting-bot service that delivers transcripts. Its hostname sits outside the sharing master switch on purpose, so switching sharing off mid-meeting does not drop a transcript; each of its two routes works only while its own credential is set.
+
+**Not trusted:**
+
+- Anything else that arrives through the tunnel, until it has passed the layers below.
+- What a request says about itself: a header naming an identity, a body naming an author, a `Host` of `localhost`. Identity comes from Cloudflare's stamp, never from the request's own claims.
+- Any name that happens to point at this machine other than `localhost`: a Tailscale name, a local-network alias. These are refused outright.
+- Web pages running on other local ports. A dev server on this machine is not the owner, even though the owner's browser session would travel with its requests.
+
+It is a vulnerability if anyone outside the boundary can read or change a workspace they were not given, or reach the machine's files, secrets, or deploy controls. Something a member does inside a board they were given is not one, because for now everyone in a workspace has everything.
+
+## The layers
 
 ```mermaid
 flowchart LR
-  visitor[Invited collaborator]
-  bot[Meeting-bot service]
-  world[Everyone else]
-  tunnel[Cloudflare tunnel]
-  agents[Owner's agents and shell]
-  browser[Owner's browser]
-  gate{Which caller is this?}
-  routes[Boards, docs and everything else]
-  secrets[(Keychain and key files)]
-  refused[Refused]
-
-  visitor --> tunnel
-  bot --> tunnel
-  world --> tunnel
-  tunnel --> gate
-  agents --> gate
-  browser --> gate
-  gate -->|known caller| routes
-  gate -->|unknown| refused
-  routes --> secrets
+  world[Anyone on the internet]
+  access[Layer 1: Cloudflare Access<br/>which email is this?]
+  gate[Layer 2: workspace gate<br/>was this email given this workspace?]
+  ws[Layer 3: the workspace<br/>everyone has everything]
+  agents[Owner's agents on this machine]
+  world --> access -->|tunnel| gate --> ws
+  agents -->|localhost| ws
 ```
 
-The tunnel is the only way in from outside the owner's machine. Every request, whether it came through the tunnel or from the machine itself, is sorted into one of these groups before anything else happens.
+| Layer                | Question it answers                                    | Who answers it                                    | When the answer is no                         |
+| -------------------- | ------------------------------------------------------ | ------------------------------------------------- | --------------------------------------------- |
+| 1. Cloudflare Access | Which email is this?                                   | Cloudflare, before the request reaches the server | A sign-in page. Nothing reaches the server.   |
+| 2. Workspace gate    | Was this email given the workspace this request names? | The server, on every request                      | Refused, in the same words an unknown id gets |
+| 3. The workspace     | What may they do here?                                 | Nobody yet: everything is allowed                 | Not applicable until roles exist              |
 
-| Group                    | Who is in it                                                 | How the server knows                                         |
-| ------------------------ | ------------------------------------------------------------ | ------------------------------------------------------------ |
-| Programs on this machine | The owner's agents, hooks and shell                          | The request is addressed to `localhost` **and** the connection starts on this machine. Both must be true. |
-| The owner in a browser   | The owner, using their own hostname through the tunnel       | The hostname is on the owner's list, and Cloudflare Access has confirmed the owner's email |
-| Invited collaborator     | Someone the owner shared a workspace with                    | The share hostname, an email Cloudflare Access has confirmed, and a membership of the workspace being asked for |
-| Meeting-bot service      | Recall.ai, delivering transcripts                            | Its own hostname, and a signed message                       |
-| Everyone else            | The rest of the internet, and any local-network or Tailscale name | Not recognized. Refused before any page or API runs.         |
+The owner's own programs enter at layer 3 directly. Two things must both be true for a caller to count as a program on this machine: the request is addressed to `localhost`, and the connection starts on this machine. The tunnel connects from this machine too, and anyone can type `localhost`, so either one alone can be faked.
 
-There is one level of access. A signed-in person reads and writes as the email Cloudflare confirmed, and everything they write is attributed to that email, whatever the request claims.
+### Layer 1: Cloudflare proves who you are
 
-One function makes the sorting decision, `classifyHost` in `packages/server/src/middleware/host-guard.ts`, and every page and API sits behind it, so the answer cannot depend on which URL someone tried. Each outside group has its own list of hostnames, and a hostname on one list never counts for another. Cloudflare stamps every request it forwards with a marker of its own, and that marker alone proves a request came through the tunnel, so a tunnel visitor who claims to be `localhost` is not believed.
+Every hostname a browser can use sits behind a Cloudflare Access application. There are two applications, and they answer the same question for different crowds:
 
-Two questions are kept apart: may this caller talk to the server at all, and who are they? The groups above answer the first. A sign-in cookie, a Cloudflare Access identity, or a widget token answers the second. A program on this machine skips the first question and still has to answer the second before it may change anything.
+- **The owner's application** fronts the owner's own hostname and the collaboration hostname. It admits the owner's emails and the people the owner's identity provider allows.
+- **The share application** fronts the share hostname. It admits anyone willing to receive a one-time code by email, because its only job is to establish an email. Getting through it proves nothing about workspaces.
 
-## Every browser signs in through Cloudflare Access
+Each application has its own audience, so a token minted for one hostname is worthless at the other. That matters most in one direction: the share application lets in anyone who can read email, so its token must open nothing at the owner's address.
 
-The rule: **programs running on this machine get in without signing in. Nobody else does.** There is no exception for the local network, for Tailscale, or for a hostname the owner wrote into a config file. Listing a name is not the same as signing in.
+There is no other way in from a browser. The server's own emailed-code sign-in is switched off. A hostname listed in configuration without an Access application behind it is ignored and refused, and the server says so at boot. A hostname on no list at all is refused before any page or API runs.
 
-Two details make the rule hold. First, "on this machine" means both things at once: the request names `localhost`, and the connection itself starts on this machine. The tunnel and the local proxy both connect to the server from this machine, so the connection alone cannot tell a visitor from an agent, and the name `localhost` alone can be typed by anyone. Second, any name that happens to point at this machine, such as a Tailscale name or a local-network alias, is refused.
+A name that is on two lists resolves to the narrower grant, never the wider one.
 
-The only thing that reaches the server without a Cloudflare sign-in is a program on this machine calling `http://localhost:8787`. That is the same port the tunnel connects to. Agents and hooks learn that address from a small file the server writes when it starts (`~/.claude/claude-workspaces/server.json`). Everything a person opens in a browser (the board, a document, its attachments, a folder listing, a diff review, live editing, live updates) requires a confirmed identity.
+### Layer 2: a workspace gate checks the email
 
-Because Cloudflare confirms the person's email before the page loads, the server's own emailed-code sign-in is switched off. (`CW_EMAIL_CODE_SIGNIN=1` switches it on.) The `/signin` page and its two helper routes answer "not found". Reading your session, changing your display name, and signing out still work, and `/api/auth/session` tells the page which mode it is in, so no page shows a link to a sign-in that is not there.
+An email gets a workspace in one of two ways:
 
-If the rule is on and no Access hostname is configured, the server prints a clear warning when it starts, because then the only browser that can reach it is one on this machine.
+- **The owner's emails** have every workspace, at the owner's hostname.
+- **A share link** gives one workspace, fixed when the link is made. The link is an invitation, not a credential. On the first visit, after Cloudflare has confirmed an email, the server checks the link is still live and records that email as a member of the workspace the link names. From then on the membership admits them, and the link is incidental. The collaboration hostname answers the same question from the workspace's own share records, which list emails and domains.
 
-### The hostnames, and which application fronts each
+The gate runs on every request, against the workspace named in that request's own path. A request that names no workspace is refused rather than answered, so an admitted stranger learns nothing about what else exists. A link that is revoked, expired, or never existed shows one page, the same page in all three cases, naming no workspace and no owner.
 
-Every name below is a placeholder. The real ones live in the launchd configuration and nowhere in this repository.
+Two verbs end access. Revoking a link stops new redemptions but leaves existing members; a link is usually revoked for having been passed around, not to remove the people who used it. Removing a member ends that person's access at once, including any live connection they already had open. Neither destroys anything: a revoked link keeps its record of who redeemed it and when.
 
-| Hostname | Named by | Access application | What a visitor gets |
-| --- | --- | --- | --- |
-| `localhost:<port>` | nothing — it is the loopback name | none, and none is possible | Everything, and only to a process whose socket peer is also loopback |
-| `workspaces.<domain>` | `CW_PROXIED_TRUSTED_HOSTS` | the owner's, `CF_ACCESS_AUD` | Everything, for a confirmed email on `CW_PROXIED_TRUSTED_EMAILS` |
-| `collab.<domain>` | `CF_ACCESS_TUNNEL_HOSTS` | the owner's, `CF_ACCESS_AUD` | The workspaces that email is a member of |
-| `share.<domain>` | `CW_SHARE_LINK_HOSTS` | its own, `CF_ACCESS_SHARE_AUD` | The workspaces that email redeemed a link for |
-| `share-<slug>.<domain>` | retired; records only | one per share, its own audience | The one board that record names |
-| `recall.<domain>` | `CW_RECALL_CALLBACK_HOST` | none, deliberately | Two routes, each armed only while its own credential is set |
-| anything else | nothing | — | 403, before any page or API runs |
+Above all of this is a master switch. Off, every outside hostname is refused before any sign-in check runs and every visitor's open connection is dropped. Only a program on this machine can throw it.
 
-Two rules hold across the whole table. A hostname listed without an Access audience configured for it is **ignored**, so it falls to the last row and answers 403; the server says which hostname at boot, and never prints the audience. And a name that is on two lists resolves to the narrower grant, never the wider one.
+### Layer 3: inside a workspace, everyone has everything
 
-## A share link invites a person; a membership lets them back in
+A member is a participant, not a reader. They can file and edit tasks, move status, answer review items and decisions, comment anywhere, edit any document filed on the board, rename goal bands, and turn a comment into a task. Every write is attributed to the email Cloudflare confirmed; whatever the request claims about its author is ignored.
 
-One Cloudflare Access application covers one hostname, `share.<domain>`, with a policy that admits everyone and a login method that emails a one-time code. That application answers exactly one question: which email is this? It decides nothing about workspaces, and it is not meant to. Anyone willing to receive a code can get through it, which is why the server never treats reaching that hostname as permission to open anything.
+"Everything" means everything on that board. What is outside the board is refused in the same words a guessed id gets: other boards, the list of boards, share administration (minting or revoking links, reading the member list, the master switch), the board's own lifecycle, and anything that names a path on the owner's machine or acts on the machine itself. Each route a member may call is written out by name, so a route added later is closed until someone opens it. A request reached through a task or goal id is resolved to its own board first, and the gate is asked about that board and no other.
 
-Sharing a workspace mints a record and nothing else: an unguessable id, the workspace it opens, who made it, when, and an expiry if one was asked for. Links do not expire by default, because a review that goes quiet for three weeks should still open on the fourth. Nothing is created in Cloudflare, no DNS record is added, and the server needs no Cloudflare credential to share a board. The link is `https://share.<domain>/s/<id>`.
+Document text is edited over the live-editing connection, and that is what a review is for. The board's own live room is different: its contents are a projection the server owns, so a write arriving on it from any peer is reverted, and a member changes the board through the named routes instead.
 
-The first visit is the whole flow. Cloudflare confirms an email, the server checks the link is still live, records that email as a member of the workspace the link names, and sends the visitor to the board. Visiting a second time adds nothing: the same email is already a member. From then on the link is incidental. Every later request is judged on the membership, per request, against the workspace named in that request's own path. A path that names no workspace, the site root included, is refused rather than answered, so the hostname tells an admitted stranger nothing about what exists behind it.
+Roles, and finer control than "everything", are not built yet. When they are, they belong in this layer.
 
-The workspace comes off the record, never off the request, so nothing a visitor sends can move a redemption onto a board the link does not name.
+## Rules that guard the machine itself
 
-A link that is revoked, expired, or never existed renders one page, and it is the same page in all three cases. Four different answers would turn the address into a way to test whether a guessed id is real. The page names no workspace and no owner.
+**A browser may never name a path on this machine.** Binding a file or folder, importing a task list, starting a diff review, deploying, and refreshing the plugin all refuse every browser, signed in or not. They exist for the owner's agents, over `localhost`. The danger is a page on another local port riding the owner's session.
 
-The share hostname's Access application has its own audience, configured apart from the owner's. A token minted for the owner's address fails at the share hostname and a token minted at the share hostname fails at the owner's, because each is checked against the audience of its own application. That second direction is the one that matters: the share application admits anyone who can read email, so its token must be worth nothing anywhere else.
+**Changing anything from a browser needs a sign-in, decided by read-versus-write, not by a route list.** The gate looks at whether a request asks to change something, so a new route that writes is covered without anyone adding it. The hole is a live connection, because opening one looks like a read: the document-editing socket and the meeting-audio socket each check the sign-in themselves when they open and keep that answer for as long as the connection lasts. A third live connection has to do the same; nothing will catch it for you.
 
-Two verbs end access, and they are not the same act. Revoking a link stops anyone new from redeeming it and leaves the people who already did, because a link is often revoked simply because it has been passed around enough. Removing a member ends that person's access at once: the next request is refused, and any live editing connection or event stream that membership had already opened is hung up rather than left running. That second half matters because a connection is authorized once, when it opens, and never asked again. Neither verb destroys anything: a revoked link keeps its record and its list of who redeemed it and when, which is the only account of who was ever let in.
+**A shared folder shows only what git lists.** A reviewer can open a file from a shared folder or diff review only if `git ls-files` lists it, so ignored files and anything under `.git` never appear. Files whose names look like credentials (`.env`, `*.pem`, `*.key`, `id_*` and their relatives) are refused even when untracked. Outside a git checkout, every dotfile is hidden.
 
-## What a member may do on the board they were given
-
-A member is a participant on that board, not a reader of it (Bryan, 2026-09-03: *"Let's allow everything for now."*). They may file a task and edit one, move its status, answer a review item or a decision, ask a question back, take back an ask they filed, name and rename a goal band, comment anywhere, edit the text of any document filed on the board over the live-editing connection, and turn a comment into a task on that board. Every one of those writes is attributed to the address Cloudflare Access confirmed; the identity in the request body is ignored, exactly as it is for a comment.
-
-Two of those acts name their subject somewhere other than the address they are sent to, and both are checked against the member's own board rather than left to the address. Turning a comment into a task names the destination board in the request body, so the body is held to the same board the path was: a member promotes onto the board they hold and is refused any other, and a refusal comes before the destination is looked up so that a real board id and an invented one read the same. Reading a row's cross-references answers with the rows that point AT it, which is a question the server can only answer by looking at every board, so a member is answered with the pointers from their own board and none from anywhere else. Both are places where a route the member is entitled to call would otherwise have reached across the boundary the hostname exists to draw.
-
-What that does not stretch to is anything that is not work on that board. Another board's rows, the list of boards, the list of documents, and the resolver that finds a review item anywhere on the server all stay refused, in the same words a guessed id gets, so the hostname is not a way to find out what else exists. Share administration is refused: a member cannot mint a link, revoke one, read who else was let in, or throw the master switch. So are the routes that name a path on the owner's machine — attaching an existing document to the board, the board's settings (which store and return a checkout path), importing a task list from a file — and the routes that act on the machine itself, deploy and the plugin refresh. So is the board's own lifecycle: renaming it, retiring it, deleting it, or handing the lead seat to somebody. The activity log stays closed too, because it names actors by internal id where the board's live feed names them by display name.
-
-One read outside the board is allowed, and it is about the reader rather than about the board: the page asks the server who it is signed in as before it paints. Telling somebody the address they already presented cannot tell them anything they did not bring, and without it the board opened a name prompt over an empty page. Each allowed route is written out by name in the guard rather than admitted by prefix, so a route added later is closed until someone decides otherwise. A route reached through a task or goal id resolves that row to its own board first, and the membership question is asked about that board and no other.
-
-Membership on the share hostname and membership on the collaboration hostname are separate records on purpose. A redeemed share link does not make somebody a collaborator, and an address on the owner's list is not a member of anything on the share hostname. Two doors, two answers.
-
-Workspaces used to be shared by creating a Cloudflare Access application and a DNS record for each individual share. That is retired, and the sentence is now true of the code as well as of the intent: on a deployment that has a share hostname configured, the route that still minted one answers "retired" and names `share_workspace` instead, and the `share_link` tool that called it is gone from the plugin. A deployment with no share hostname has no replacement to be sent to, so it keeps the old mint rather than losing the ability to publish a board at all.
-
-Records already minted that way keep working until they expire, and that is deliberate rather than an oversight. They are listed, their expiry can still be shortened, and they can still be revoked; their hostnames still resolve and still verify a token against their own audience. Retiring a mint is not deleting what it made.
-
-## What each caller can read and write
-
-| Caller                                                   | Reads                                                        | Writes                                                       |
-| -------------------------------------------------------- | ------------------------------------------------------------ | ------------------------------------------------------------ |
-| Program on this machine                                  | Everything                                                   | Everything                                                   |
-| Owner in a browser                                       | Everything, after Cloudflare confirms an email on the owner's list | Everything, except binding a path on this machine (see below) |
-| Share-link or collaboration visitor                      | Only the workspaces their confirmed email is a member of. On the share hostname that membership comes from a share link they redeemed; on the collaboration hostname it comes from that workspace's live shares plus the owner's own emails | Everything a member does on that board — tasks, review-item answers, goal bands, comments, suggestions, the reading tracker, and the text of documents through live editing. See "What a member may do on the board they were given" |
-| Meeting-bot service                                      | Two routes                                                   | One incoming message                                         |
-| Anyone else, including local-network and Tailscale names | Nothing                                                      | Nothing                                                      |
-
-In code: programs on this machine pass `isTrustedLocalHost` with no sign-in; the owner's browser passes `isProxiedTrustedHost`; a visitor is held to `shareScopeAllows` and `collabScope`, which list what is allowed and refuse everything else; the meeting bot passes `middleware/recall-callback-gate.ts`; everyone else is refused by `classifyHost`. On the share hostname the membership question is asked per request, against the workspace that request's own path names.
-
-Letting a visitor edit document text is on purpose: that is what a live review is. It happens over the live-editing connection, not over the normal API, and only for a visitor whose email Cloudflare confirmed. The board's own room is different: its contents are a projection the server owns, so a write arriving on it from any peer is reverted, and a member changes the board through the named routes instead.
-
-`SharingGate` (`share/sharing-gate.ts`) is the master switch above all of this. Turned off, every outside hostname is refused before any sign-in check runs, every share-link visitor's open connection is hung up, and a setting that cannot be read counts as off. It covers the share, collaboration and owner-through-the-tunnel groups. The switch is thrown by an agent on this machine and works on any deployment that has either kind of sharing wired; a browser cannot throw it, and neither can it read the share list, because a link id is the whole secret of a share URL and the member list is a roster of addresses. The meeting-bot hostname is deliberately outside it, because switching it off in the middle of a meeting would drop the transcript; that hostname serves two routes, and each one works only while its own credential is configured.
-
-## Changing anything from a browser needs a sign-in
-
-`CW_REQUIRE_SIGNIN_TO_WRITE` is on by default, and only an explicit `0`, `false`, `no` or `off` turns it off. The check (`isGatedWrite` in `middleware/write-gate.ts`) looks at whether a request is asking to read or asking to change something, not at a list of routes, so a new route that changes data is covered without anyone remembering to add it. The one place that does not hold is a live connection, because opening one looks like a read: the document-editing connection and the meeting-audio connection each check the sign-in themselves when the connection opens and keep that answer for as long as the connection lasts. Anyone adding a third live connection has to do the same; nothing will catch it for them.
-
-The exceptions to the check are reads to let through, not writes to catch, so a mistake shows up as a refused read rather than as a silent gap. The sign-in flow itself is exempt, because otherwise nobody could ever sign in.
-
-Agents are not affected, because the check keys on markers only browsers attach to a request. That tells the server who made a change; it is not what keeps strangers out. The sorting above is what keeps strangers out.
-
-Four routes turn a path on this machine into content the server reads and serves: binding a file, binding a folder, importing a task list, and starting a diff review. All four refuse every browser, signed in or not. The danger is a web page running on this same machine, such as a dev server on another local port: the browser would treat it as coming from the owner, and the owner's signed-in session would come with it. The deploy, plugin-refresh, agent-merge and share-management routes refuse browsers for the same reason.
-
-## What a reviewer can open from a shared folder
-
-Sharing a folder or a diff review exposes a whole checkout, so one rule decides what a reviewer can open (`isListedFile` in `fs-scan.ts`): the file must appear in the folder listing, and the listing is `git ls-files --cached --others --exclude-standard`. A file that git ignores never appears, and anything under `.git/` is refused before the listing is even consulted.
-
-Ignore rules are not the whole story, because the listing includes untracked files and a checkout may never have had an ignore rule for one of them. So the listing also refuses files whose names look like credentials: `.env` and its variants, `.npmrc`, `.netrc`, `.pgpass`, `.htpasswd`, `.pypirc`, `*.pem`, `*.key`, `*.p12`, `*.pfx`, `*.keystore` and `id_*`.
-
-Outside a git checkout, the server reads the directory directly. There is no ignore file to follow there, so it also hides every file whose name starts with a dot. That wider rule is deliberately not used inside a repository, where such files are committed content a reviewer has to see.
-
-What a visitor is sent is built from a list of allowed fields, not a list of forbidden ones: `share/redact-meta.ts` rewrites review links to the visitor's own workspace and removes paths on this machine, and the record of which agents are present names exactly the fields a visitor gets. A field added later is withheld until someone decides otherwise.
+**What a visitor is sent is built from a list of allowed fields, not forbidden ones.** Review links are rewritten to the visitor's own workspace, paths on this machine are removed, and the record of which agents are present names exactly the fields a visitor gets. A field added later is withheld until someone adds it to the list.
 
 ## Where secrets live
 
-Secrets are kept in the macOS Keychain or in files only the owner's account can read, and none is checked into this repository or written into the launchd configuration by design. This table says where the server looks for each one.
+Secrets are kept in the macOS Keychain or in files only the owner's account can read. None is checked into this repository, and none is written into the launchd configuration, which holds hostnames and feature switches only.
 
-| Secret                                                       | Where                                                        |
-| ------------------------------------------------------------ | ------------------------------------------------------------ |
-| LLM API key (summaries, notes, judging)                      | Keychain, service `claude-workspaces-summary-api-key`        |
-| AssemblyAI key                                               | Keychain, service `assemblyai-api-key`                       |
-| Soniox key                                                   | Keychain, service `claude-workspaces-soniox-api-key`         |
-| Recall.ai key                                                | Keychain, service `claude-workspaces-recall-api-key`         |
-| Google OAuth client and refresh token                        | Keychain, service `claude-workspaces-google-oauth`, three accounts |
-| Postmark server token                                        | Keychain, service `postmark-api-token`                       |
-| Cloudflare API token                                         | Keychain, service `cloudflare-api-token`                     |
-| Cookie signing key (sign-in cookie, share cookie, widget token) | `<dataDir>/share-cookie.key`, readable only by the owner's account |
-| Share links and their members                                | `<dataDir>/share-links.json`, readable only by the owner's account |
-| The key that signs browser notifications                     | `<dataDir>/push-vapid.json`, readable only by the owner's account |
-| Meeting webhook signing secret                               | `RECALL_WEBHOOK_SECRET` in the environment                   |
+| Secret                                                       | Where                                    |
+| ------------------------------------------------------------ | ---------------------------------------- |
+| API keys (LLM, transcription, meeting bot, mail, Cloudflare) and the Google OAuth credentials | Keychain, one service each               |
+| The key that signs cookies and widget tokens                 | `<dataDir>/share-cookie.key`, owner-only |
+| Share links and their members                                | `<dataDir>/share-links.json`, owner-only |
+| The key that signs browser notifications                     | `<dataDir>/push-vapid.json`, owner-only  |
+| The meeting webhook signing secret                           | The environment                          |
 
-The server creates the two key files itself on first use and resets their permissions if they already exist. The launchd configuration holds hostnames and feature switches only; no API key is set there.
-
-When the emailed-code sign-in is on, login codes are never stored in the clear. They are kept scrambled with a per-code salt, in memory only, behind rate limits per code, per email and per network address. The fallback that prints a code to the console hides it unless a development flag is set.
-
-Signed tokens (the share cookie, the sign-in cookie and the widget token) all go through one module, `auth/signed-token.ts`: each token is stamped with a signature made from the secret key, and a token whose signature does not match is rejected. Each kind of token contributes only its own purpose, its contents and its expiry, so none of them has its own copy of the signing code.
+The server creates its own key files on first use and resets their permissions if they already exist. All signed tokens go through one module, so there is one place a signature is checked.
 
 ## Reporting a vulnerability
 
-Please do not open a public issue. Report privately through GitHub's [private vulnerability reporting](https://github.com/fryanpan/claude-workspaces-plugin/security/advisories/new) on this repository. Include what you did, what you saw, and the version or commit you tested. This is a personal project with no bug bounty and no response-time promise, but reports are read and acted on.
+Please do not open a public issue. Report privately through GitHub's [private vulnerability reporting](https://github.com/fryanpan/claude-workspaces-plugin/security/advisories/new) on this repository, with what you did, what you saw, and the version or commit you tested. This is a personal project with no bug bounty and no response-time promise, but reports are read and acted on.
 
 ## Changing any of this
 
-Run the checklist in [`.claude/rules/security-review.md`](../../.claude/rules/security-review.md) before opening a pull request that adds or changes a route, a token, a share surface, a webhook, or a sign-in default. The `ship-it` skill runs it automatically when the changed files touch those areas. Independent reviews of this document against the code run from time to time, and their fixes land through normal pull requests.
+Run the checklist in [`.claude/rules/security-review.md`](../../.claude/rules/security-review.md) before a pull request that adds or changes a route, a token, a share surface, a webhook, or a sign-in default. The `ship-it` skill runs it when the changed files touch those areas.
 
-## Settings, by name
+## Where to look
 
-Which hostnames face a browser is configuration, read once in `server-config.ts`:
+Every hostname below is a placeholder; the real ones live in the launchd configuration, not in this repository.
 
-| Setting                                  | What it means                                                |
-| ---------------------------------------- | ------------------------------------------------------------ |
-| `CW_ACCESS_ONLY_BROWSER_HOSTS`           | The rule itself. On by default; only `0`, `false`, `no` or `off` turns it off, so a typo leaves it on. |
-| `CW_PROXIED_TRUSTED_HOSTS`               | The owner's own hostname(s) through the tunnel. Behind Access, they see the whole product. |
-| `CW_PROXIED_TRUSTED_EMAILS`              | Which confirmed emails those hostnames admit. Defaults to `CW_OWNER_EMAIL`. |
-| `CF_ACCESS_TUNNEL_HOSTS`                 | Hostnames for collaborators. They see the shared surfaces, not the owner's controls. |
-| `CW_SHARE_LINK_HOSTS`                    | The hostname share links are served from, `share.<domain>`. Comma-separated if there is more than one. Ignored unless the two settings below are both set. |
-| `CF_ACCESS_SHARE_AUD`                    | The Cloudflare Access application covering that hostname. Its own audience, deliberately not `CF_ACCESS_AUD`, which is what makes a token for one address worthless at the other. |
-| `CF_SHARE_BASE_HOSTNAME`                 | Retired. The parent domain each workspace share used to get its own hostname under. Still read, so records minted under it keep resolving; nothing new is minted where `CW_SHARE_LINK_HOSTS` is set. |
-| `CF_ACCESS_TEAM_DOMAIN`, `CF_ACCESS_AUD` | The Cloudflare Access team and application that the owner and collaborator hostnames are checked against. |
-| `CW_EMAIL_CODE_SIGNIN`                   | Turns the server's own emailed-code sign-in on.              |
-| `CW_REQUIRE_SIGNIN_TO_WRITE`             | Whether a browser must be signed in to change anything. On by default. |
+| Layer                                    | Code                                                         | Configuration                                                |
+| ---------------------------------------- | ------------------------------------------------------------ | ------------------------------------------------------------ |
+| Sorting callers by hostname              | `classifyHost`, `packages/server/src/middleware/host-guard.ts` | `CW_ACCESS_ONLY_BROWSER_HOSTS` (the rule; on by default)     |
+| Owner's hostname `workspaces.<domain>`   | `isProxiedTrustedHost`                                       | `CW_PROXIED_TRUSTED_HOSTS`, `CW_PROXIED_TRUSTED_EMAILS`, `CF_ACCESS_TEAM_DOMAIN`, `CF_ACCESS_AUD` |
+| Collaboration hostname `collab.<domain>` | `collabScope`                                                | `CF_ACCESS_TUNNEL_HOSTS`, same Access application as the owner's |
+| Share hostname `share.<domain>`          | `isShareLinkHost`, `shareScopeAllows`                        | `CW_SHARE_LINK_HOSTS`, `CF_ACCESS_SHARE_AUD` (its own audience) |
+| Member route tables                      | `memberRouteAllows`, `host-guard.ts`                         | none                                                         |
+| Master switch                            | `share/sharing-gate.ts`                                      | set from an agent, not from a browser                        |
+| Meeting-bot hostname `recall.<domain>`   | `middleware/recall-callback-gate.ts`                         | `CW_RECALL_CALLBACK_HOST`, `RECALL_WEBHOOK_SECRET`           |
+| Browser write gate                       | `isGatedWrite`, `middleware/write-gate.ts`                   | `CW_REQUIRE_SIGNIN_TO_WRITE` (on by default)                 |
+| Fields sent to a visitor                 | `share/redact-meta.ts`                                       | none                                                         |
+| Shared-folder listing                    | `isListedFile`, `fs-scan.ts`                                 | none                                                         |
+| Signed tokens                            | `auth/signed-token.ts`                                       | none                                                         |
+| Emailed-code sign-in                     | off                                                          | `CW_EMAIL_CODE_SIGNIN=1` turns it on                         |
+
+One retired mechanism remains readable: workspaces used to be shared by creating a Cloudflare Access application and hostname per share (`share-<slug>.<domain>`, `CF_SHARE_BASE_HOSTNAME`). Nothing new is minted that way where a share hostname is configured; records already minted keep resolving until they expire and can still be revoked.
