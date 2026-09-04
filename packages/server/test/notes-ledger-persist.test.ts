@@ -25,6 +25,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
 import { prose } from '@feedback/core';
 import type * as Y from 'yjs';
 import { createNotesLedger } from '../src/meeting-notes-doc.ts';
+import { createNotesOwnership } from '../src/notes-ownership.ts';
 import {
   NOTES_LEDGER_CONTINUATION_MS,
   createNotesLedgerStore,
@@ -140,5 +141,60 @@ describe('a deploy mid-meeting keeps the notes in one section', () => {
     // nothing was written down for it to read.
     ledger.beginMeeting(DOC_ID, 'm-2');
     expect(ledger.forDoc(DOC_ID).wroteAnyOf(['a note'])).toBe(false);
+  });
+});
+
+describe('the ledger’s written half, driven directly', () => {
+  it('reports the claim to its keeper only when the claim grows', () => {
+    // The store is rewritten from this callback, and a tick that re-records
+    // the same lines is the ordinary case: the composer returns the WHOLE
+    // notes every time. Firing on every record would rewrite the file once
+    // per item per tick for the length of a meeting.
+    const seen: string[][] = [];
+    const ownership = createNotesOwnership({ onWrite: (written) => seen.push([...written]) });
+    const first = element();
+    ownership.record([{ el: first, md: 'we should measure first' }]);
+    expect(seen).toEqual([['we should measure first']]);
+
+    ownership.record([{ el: first, md: 'we should measure first' }]);
+    expect(seen).toHaveLength(1);
+
+    ownership.record([{ el: element(), md: 'Devi owns the rollout' }]);
+    expect(seen).toHaveLength(2);
+    expect(seen.at(-1)).toEqual(['we should measure first', 'Devi owns the rollout']);
+  });
+
+  it('never claims an empty item, so a blank line cannot identify a section', () => {
+    // `wroteAnyOf` decides which section a tick extends. An empty item is
+    // what a person leaves behind pressing return in their own notes, and a
+    // claim on the empty string would hand the note-taker every section that
+    // has one.
+    const seen: string[][] = [];
+    const ownership = createNotesOwnership({ onWrite: (written) => seen.push([...written]) });
+    ownership.record([{ el: element(), md: '' }]);
+    expect(ownership.wroteAnyOf([''])).toBe(false);
+    expect(seen).toEqual([]);
+  });
+
+  it('seeds a claim it can recognise but may not replace', () => {
+    // The whole shape of the restart: the text half comes back, the element
+    // half cannot and must not.
+    const ownership = createNotesOwnership({ written: ['a line from before the restart'] });
+    expect(ownership.wroteAnyOf(['a line from before the restart'])).toBe(true);
+    expect(ownership.claims(element(), 'a line from before the restart')).toBe(false);
+  });
+
+  it('a release drops what may be replaced and keeps which section it is', () => {
+    // The two halves have different lives. Releasing is how a new recording
+    // stops overwriting the last one's notes; it is not a statement about
+    // where those notes are.
+    const ownership = createNotesOwnership();
+    const el = element();
+    ownership.record([{ el, md: 'a note' }]);
+    expect(ownership.claims(el, 'a note')).toBe(true);
+
+    ownership.release();
+    expect(ownership.claims(el, 'a note')).toBe(false);
+    expect(ownership.wroteAnyOf(['a note'])).toBe(true);
   });
 });
