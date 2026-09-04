@@ -28,6 +28,27 @@ owner — their Home queue is the surface), and the **backlog** on boards
 with goal bands. Boards without goal bands carry whole columns as
 stall-eligible; structure the board to scope the watcher.
 
+**A row already named is not named again until it changes.** The stamp is the
+board's CURRENT finding set, so a row that left it was forgotten and its next
+quiet window read as a brand-new stall — one wake per window on any board
+whose owner keeps reporting (measured 2026-09-04: five wakes in sixty-five
+minutes over two rows that were being worked the whole time). `stall-nudge.ts`
+now remembers which rows a board's lead has been told about, across the row's
+own absence and across a restart, and forgets a row that has not been a
+finding for a whole repeat window. A remembered row is news again only when it
+comes back under a different BUCKET — a dispatched row whose builder then died
+returns as `builder-silent`, which is a different ask. Every repeat wake
+carries `changed`: the rows, holds, unreadable rows and escalation that are
+new since the last one, rendered ahead of the full lists.
+
+**An open question counts wherever it was asked.** A row's own `task:<id>`
+room is read for both things a discussion can say — somebody is talking,
+somebody is waiting on an answer — and so is every doc the row LINKS. Reading
+a linked doc for its prose alone missed the common case: thread writes carry
+no transaction origin, `lastContentChangeFor` refuses an unnamed one, so a
+question asked on a mock or a design doc left its row reading as quiet with
+nobody waiting while the reader had it on their queue.
+
 **Task notes count as movement.** A row's quiet time is measured from the
 newest of: its status change, its last workspace event, its last thread
 activity, and its newest note in `task.notes` — the end-of-turn message the
