@@ -18,18 +18,15 @@
  * All fixtures are synthetic. The repo is public.
  */
 
+import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
 import { prose } from '@feedback/core';
 import type * as Y from 'yjs';
 import { createNotesLedger } from '../src/meeting-notes-doc.ts';
+import { NOTES_LEDGER_CONTINUATION_MS, createNotesLedgerStore } from '../src/notes-ledger-store.ts';
 import { createNotesOwnership } from '../src/notes-ownership.ts';
-import {
-  NOTES_LEDGER_CONTINUATION_MS,
-  createNotesLedgerStore,
-} from '../src/notes-ledger-store.ts';
 import { MEETING_NOTES_HEADING, sectionInsertIndex } from '../src/notes-section.ts';
 import { createNotesTickHarness } from './notes-tick-harness.ts';
 

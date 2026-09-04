@@ -94,12 +94,12 @@ import {
   runTaskCapture,
   taskCaptureUrl,
 } from './meeting-task-capture.ts';
-import { dropLegacyTranscriptSection } from './notes-legacy-transcript.ts';
 import {
   type NotesLedgerStore,
   continuesSitting,
   createNotesLedgerStore,
 } from './notes-ledger-store.ts';
+import { dropLegacyTranscriptSection } from './notes-legacy-transcript.ts';
 import { type NoteReference, referenceDate } from './notes-references.ts';
 import {
   MEETING_NOTES_HEADINGS,
