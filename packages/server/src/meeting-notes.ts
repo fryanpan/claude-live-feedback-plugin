@@ -495,6 +495,16 @@ export interface MeetingNotesSession {
   nameSpeaker(speaker: string, name: string): void;
   /** Flush the tail delta and wait for every compose in flight. */
   end(): Promise<void>;
+  /**
+   * What this meeting lost. Read after `end()` for the whole meeting, or
+   * during it for what has happened so far.
+   *
+   * `refusedTooLong` is the one worth watching: those ticks are the notes
+   * falling behind the room, they cluster in the second half of a long
+   * meeting, and nothing about them is visible in the doc — the words carry
+   * forward and the notes just stop growing.
+   */
+  stats(): { composeFailures: number; refusedTooLong: number };
 }
 
 /**
@@ -599,6 +609,22 @@ export function beginNotesSession(
           // knows both halves of a voice's identity at once.
           speakerLabel: turn.speaker,
         };
+
+  /**
+   * Composes this meeting lost, and how many of them were refused for being
+   * too long.
+   *
+   * A whole-notes reply grows with the MEETING, so the ticks that overrun the
+   * composer's output ceiling are the late ones — and the failure is silent
+   * by construction: the turns carry into the next tick, nothing is lost, and
+   * the notes simply stop keeping up. `bun run notes:eval` measured about a
+   * tenth of ticks refused this way across its corpus, all in the second half
+   * of the longer meetings. Nothing in production could see that, because the
+   * only report was an `onError` nobody supplied. Counted here so the meeting
+   * can say it out loud when it ends.
+   */
+  let composeFailures = 0;
+  let refusedTooLong = 0;
 
   const lifecycle = (phase: 'composing' | 'written' | 'failed', tick: number, turns: number[]) =>
     deps.onTickLifecycle?.({ docId: ids.docId, meetingId: ids.meetingId, tick, phase, turns });
@@ -759,7 +785,13 @@ export function beginNotesSession(
           tick.tick,
           raw.map((t) => t.turn),
         );
-        deps.onError?.(err instanceof Error ? err.message : 'notes composer failed');
+        const reason = err instanceof Error ? err.message : 'notes composer failed';
+        composeFailures++;
+        if (/max_tokens/.test(reason)) refusedTooLong++;
+        // The ids and the tick, not just the reason. "notes compose hit
+        // max_tokens" in a log with several meetings running says nothing
+        // about which meeting stopped keeping up, or how far into it.
+        deps.onError?.(`${ids.docId} meeting ${ids.meetingId} tick ${tick.tick}: ${reason}`);
       }
     });
   };
@@ -896,6 +928,13 @@ export function beginNotesSession(
         composeTick({ tick: lastTickNo + 1, reason: 'end', turns: [] });
         await chain;
       }
+      if (refusedTooLong > 0) {
+        deps.onError?.(
+          `${ids.docId} meeting ${ids.meetingId}: ${refusedTooLong} of this meeting's ` +
+            'notes composes were refused as too long — the notes stopped keeping up',
+        );
+      }
     },
+    stats: () => ({ composeFailures, refusedTooLong }),
   };
 }

@@ -810,6 +810,21 @@ typed since the last one. Now (`meeting-notes-merge.ts`):
   of the agent's bullets orphans into the outdated-comment flow — which is
   why it fires on the tick that MOVES the furniture and never on a tick that
   merely adds a bullet under a heading that already exists.
+- **"No proposal is pending" is a question for the DOC, not for the plan.**
+  The first version of that gate asked `plan.suggestions.length === 0`, which
+  counts only what THIS tick proposes. A proposal already sitting in the
+  section was invisible to it — and can be invisible to everything else here
+  too: a list item whose every character is a pending insert serializes to the
+  empty string, so it never becomes a `NoteItem` and never reaches the
+  ownership check. Relayout would delete the span and the proposal with it,
+  reporting `suggested: 0` and leaving no trace. `spanHasPendingSuggestion`
+  now walks the span for either suggestion mark, and any pending mark anywhere
+  in the section refuses the relayout.
+- **Relayout obeys the plan's drop list.** It writes the composer's items
+  wholesale, which bypassed the filter that withholds an item whose person's
+  line is newer than the compose that produced it — so a bullet somebody
+  deleted while the compose was in flight came back. The same filter now
+  applies on both paths, and both report the same `dropped` count.
 
 ### What a note may link: the board, searched per tick
 
@@ -1448,6 +1463,13 @@ The structural guarantees — a person's line, one heading per topic, notes
 under topics — are the 100%s, and they are the ones the pipeline enforces
 rather than asks for. Everything the PROMPT asks for sits between 74% and 99%,
 which is the honest shape of instructing a model.
+
+**A refused compose is now visible in production.** It reports through
+`onError` with the doc, the meeting and the tick, and the meeting counts the
+refusals and says how many it lost when it ends (`session.stats()`). Nothing
+supplied `onError` before, so the quietest failure in the subsystem — the
+turns carry forward, nothing is lost, the notes simply stop growing — reached
+no log at all.
 
 **The run's own biggest finding is not in the table.** About a tenth of ticks
 never composed at all: the reply hit the composer's 2000-token ceiling and was

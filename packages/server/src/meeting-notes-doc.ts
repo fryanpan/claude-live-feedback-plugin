@@ -505,6 +505,16 @@ export function withServerNotesSinks(
   return {
     ...options,
     ...(captureIntents ? { captureIntents } : {}),
+    // NOTHING SUPPLIED THIS BEFORE, so every compose failure the pipeline
+    // reported went nowhere — including the one that matters most, a reply
+    // refused for running past the composer's output ceiling. Those ticks are
+    // the notes falling behind a long meeting, and they were invisible in
+    // production while the eval was measuring them at about a tenth of ticks.
+    // A caller that wants its own handling still gets it: theirs runs too.
+    onError: (message): void => {
+      console.error(`[meeting-notes] ${message}`);
+      options.onError?.(message);
+    },
     onSessionStart: (ids): void => {
       // A new recording on this doc: whatever the previous one wrote is
       // finished writing. Releasing the claims is what makes stop-and-restart
