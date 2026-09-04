@@ -15,6 +15,7 @@ import { createDeferredEmitter } from './deferred-emit.ts';
 import { createFrameDedup } from './frame-dedup.ts';
 import { createFrameHandler } from './frame-handler.ts';
 import { resolveBaseUrl as baseUrlFrom, createHttp, err, ok } from './http-client.ts';
+import { createMuxLoop } from './mux-loop.ts';
 import { type Watcher, createSseLoops } from './sse-loop.ts';
 import { TOOL_LIST } from './tool-schemas.ts';
 import { handleDocsTool } from './tools/docs.ts';
@@ -243,6 +244,7 @@ function toolContext(): ToolContext {
     unwatchDoc,
     refreshCoverage,
     watchPersistenceMode,
+    streamMode: registry.streamMode,
     claimNoticeFor,
     restoreState: restore.state(),
     lastPersistError: registry.lastPersistError(),
@@ -325,6 +327,10 @@ const handleFrame = createFrameHandler({
  * reconnect, the `open` flag on each watcher record, and the cursor's
  * deliver-then-commit order.
  */
+const loopTimers = {
+  set: (fn: () => void, ms: number) => setTimeout(fn, ms),
+  clear: (h: unknown) => clearTimeout(h as ReturnType<typeof setTimeout>),
+};
 const { startSseLoop } = createSseLoops({
   watchers,
   resolveBaseUrl,
@@ -333,10 +339,24 @@ const { startSseLoop } = createSseLoops({
   resetDedup: () => shouldForwardFrame.reset(),
   log: (...args) => console.error(...args),
   sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
-  timers: {
-    set: (fn, ms) => setTimeout(fn, ms),
-    clear: (h) => clearTimeout(h as ReturnType<typeof setTimeout>),
-  },
+  timers: loopTimers,
+});
+
+/**
+ * This session's ONE event stream, bound to this process. See mux-loop.ts —
+ * every watched key rides it, which is what keeps a session with two hundred
+ * watches from holding two hundred sockets against the shared server.
+ */
+const muxLoop = createMuxLoop({
+  watchers,
+  agentId: AUTHOR.id,
+  resolveBaseUrl,
+  fetch: (url, init) => fetch(url, init),
+  handleFrame: (raw) => handleFrame(raw),
+  resetDedup: () => shouldForwardFrame.reset(),
+  log: (...args) => console.error(...args),
+  sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
+  timers: loopTimers,
 });
 
 /**
@@ -349,6 +369,7 @@ const registry = createWatchRegistry({
   http: (method, path, body) => http(method, path, body),
   author: AUTHOR,
   startSseLoop,
+  mux: muxLoop,
   identityIsShared: IDENTITY_IS_SHARED,
   log: (...args) => console.error(...args),
 });
