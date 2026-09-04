@@ -16,7 +16,7 @@
  * The doc, the paths and the content here are invented.
  */
 import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
-import { mkdtempSync, rmSync, unlinkSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, rmSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { type ServerHandle, createServer } from '../src/server.ts';
@@ -95,6 +95,11 @@ describe('a bound file that never answers', () => {
     // starting the same doomed read.
     expect(handle.rooms.boundPathOf(DOC_ID)).toBeUndefined();
     expect(boundFiles.quarantined(boundPath)).toBe(true);
+    // And the file itself is untouched. This is the half that matters most:
+    // a doc that binds without having read its file will overwrite that file
+    // on its next write-back, so "no binding" and "the bytes on disk survive"
+    // are the same guarantee seen from two sides.
+    expect(statSync(boundPath).isFIFO()).toBe(true);
     // The read is parked, not abandoned: `afterEach` hands it end-of-file and
     // gets the pool thread back, and fails loudly by name if it cannot. The
     // count itself is process-wide (one runner process, every test file), so

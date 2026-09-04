@@ -342,7 +342,9 @@ export class FileBindings {
     filePath: string,
     opts: AttachOpts = {},
   ): Promise<ReturnType<FileBindings['attachFile']>> {
-    return this.attachFile(docId, filePath, await this.withPreread(filePath, opts));
+    const ready = await this.withPreread(filePath, opts);
+    if (ready === 'unreadable') return { ok: false, error: 'read-failed' };
+    return this.attachFile(docId, filePath, ready);
   }
 
   /** `attachFlatFile`'s async door — same contract as `attachFileAsync`. */
@@ -351,8 +353,10 @@ export class FileBindings {
     filePath: string,
     opts: AttachOpts & { writeBack?: boolean } = {},
   ): Promise<ReturnType<FileBindings['attachFlatFile']>> {
+    const ready = await this.withPreread(filePath, opts);
+    if (ready === 'unreadable') return { ok: false, error: 'read-failed' };
     return this.attachFlatFile(docId, filePath, {
-      ...(await this.withPreread(filePath, opts)),
+      ...ready,
       ...(opts.writeBack === undefined ? {} : { writeBack: opts.writeBack }),
     });
   }
@@ -360,16 +364,27 @@ export class FileBindings {
   /**
    * Fill in `opts.preread` from a pool read, unless the caller brought one.
    *
-   * A read that fails or never answers leaves the preread unset on purpose:
-   * the attach then hits its own quarantine check and refuses, which is the
-   * same outcome by a shorter route than inventing an empty file here.
+   * A read that fails or never answers returns `'unreadable'`, and the async
+   * doors above refuse the attach on it. Falling through to the synchronous
+   * read instead — which is what this did first — reopens the hazard the
+   * whole change exists to close, and reopens it in its worst form: a file
+   * that is present but unreadable (an un-materialized cloud file failing
+   * with EDEADLK) is not quarantined, so the fallback read runs, and on the
+   * prose path a throw inside the attach-time reconcile is logged and
+   * swallowed. The doc binds with `.ydoc` content it never checked against
+   * disk, and the next write-back overwrites the file. Refusing to bind is
+   * what keeps the bytes on disk safe: the doc still comes back, from its
+   * `.ydoc`, with writes parked.
    */
-  private async withPreread<T extends AttachOpts>(filePath: string, opts: T): Promise<T> {
+  private async withPreread<T extends AttachOpts>(
+    filePath: string,
+    opts: T,
+  ): Promise<T | 'unreadable'> {
     if (opts.preread) return opts;
     if (!filePath || filePath.trim() === '') return opts;
     const abs = filePath.startsWith('/') ? filePath : join(process.cwd(), filePath);
     const res = await boundFiles.read(abs, { keep: false });
-    if (res.status !== 'ok') return opts;
+    if (res.status !== 'ok') return 'unreadable';
     return {
       ...opts,
       preread: res.exists
