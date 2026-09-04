@@ -196,39 +196,68 @@ describe('doc.css loads AFTER styles.css, and the phone proves it', () => {
   });
 });
 
-describe('the two surfaces agree about the chip, at both widths', () => {
+describe('the mobile chip: the board is unmoved, the editor follows placement', () => {
   /**
-   * The chip's rules are split across the two files — the ≤1100px entry and
-   * the base rule are in `styles.css` (both pages get them), the matching
-   * `.lf-del-chip` pair stays in `doc.css` — so "does the board read what the
-   * editor reads" is a question with two answers to compare, not one value to
-   * assert. This is the case that stays honest if the ordering below is ever
-   * changed on purpose.
+   * The chip's rules are split across the two files — the base
+   * `display: none` is in `styles.css` (both pages get it), the reveal is in
+   * `doc.css` beside `.lf-del-chip`'s (only the editor gets it) — so "does the
+   * board read what the editor reads" is a question with two answers to
+   * compare, not one value to assert.
    *
-   * What it reads TODAY is `none` at both widths, on both pages. That is what
-   * `origin/main` served from the single file and it is deliberate here: the
-   * ≤1100px `display: inline-flex` is authored BEFORE the base
-   * `display: none`, same specificity, so the base wins everywhere and the
-   * mobile chip never appears. `.lf-del-chip` has the identical shape in
-   * `doc.css`. Revealing either one is a product change; this split does not
-   * make it.
+   * The board's answer is `none` at both widths and must stay there. That is
+   * what `origin/main` served from the single file, and PR 669 declined to
+   * change it: revealing a chip the product has never shown is a decision to
+   * take on its own ticket.
+   *
+   * The editor's answer moved on purpose. The ≤1100px entry became
+   * `body:not([data-cards="balloon"])` when the comment surface stopped being
+   * a width rule — the chips are what stands in for a balloon, so they appear
+   * exactly where the margin does not. Keeping that rule in the EDITOR sheet
+   * is what holds the board still: the board writes no `data-cards`, so the
+   * same rule in the base would have matched there at every width. It did,
+   * for one commit, and this case is what caught it.
    */
-  const readChip = (sheets: Parameters<typeof installSheets>) => {
+  const readChip = (sheets: Parameters<typeof installSheets>, cards?: string) => {
     cleanup = installSheets(...sheets);
+    if (cards) document.body.dataset.cards = cards;
+    else document.body.removeAttribute('data-cards');
     setViewport(IPAD);
     const ipad = styleOf(attach('lf-suggest-chip', { tag: 'button' })).display;
     setViewport(PHONE);
     const phone = styleOf(attach('lf-suggest-chip', { tag: 'button' })).display;
     cleanup();
     cleanup = () => {};
+    document.body.removeAttribute('data-cards');
     document.body.replaceChildren();
     return { ipad, phone };
   };
 
-  it('reads the same on the board as on the review editor', () => {
-    const board = readChip(['hub.css', 'styles.css']);
-    const editor = readChip(['styles.css', 'doc.css']);
-    expect(board).toEqual(editor);
-    expect(board).toEqual({ ipad: 'none', phone: 'none' });
+  it('the board never shows it, whatever the body says', () => {
+    expect(readChip(['hub.css', 'styles.css'])).toEqual({ ipad: 'none', phone: 'none' });
+    // The attribute the editor keys on, on a page whose sheets do not carry
+    // the rule that reads it. This is the case that fails if the reveal is
+    // ever moved back into the base stylesheet.
+    expect(readChip(['hub.css', 'styles.css'], 'inline')).toEqual({
+      ipad: 'none',
+      phone: 'none',
+    });
+  });
+
+  it('the editor shows it wherever the balloon margin is not in force', () => {
+    expect(readChip(['styles.css', 'doc.css'], 'inline')).toEqual({
+      ipad: 'inline-flex',
+      phone: 'inline-flex',
+    });
+    expect(readChip(['styles.css', 'doc.css'], 'sheet')).toEqual({
+      ipad: 'inline-flex',
+      phone: 'inline-flex',
+    });
+  });
+
+  it('and hides it again once balloons are the surface', () => {
+    expect(readChip(['styles.css', 'doc.css'], 'balloon')).toEqual({
+      ipad: 'none',
+      phone: 'none',
+    });
   });
 });

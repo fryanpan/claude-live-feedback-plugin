@@ -260,6 +260,7 @@ export async function mountRedline(ctx: MountContext): Promise<void> {
     // doc that has already arrived (and vice versa).
     whenSynced: (cb) => (companion ? companion.client : client).onReady(cb),
     scope,
+    canWrite: ctx.canWrite,
     labelHint: ctx.sourceUrl || ctx.relPath || undefined,
     selectHint: 'Select some text first to leave a comment.',
     reanchorHint: 'Select new text first, then click Re-anchor.',
