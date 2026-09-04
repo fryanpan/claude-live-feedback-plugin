@@ -4942,6 +4942,21 @@ body.composer-open #editor > .ProseMirror ::selection {
   box-shadow: var(--shadow-lg);
   overflow: hidden;
 }
+/* The promote transition's moving part. The dialog's BOX grows out of the
+   bubble's rectangle while this wrapper is pinned at the dialog's final size,
+   so the box is a widening window onto content that is already laid out where
+   it will end up. Nothing reflows and nothing is scaled: a transform tween
+   from a 260px bubble to a 760px dialog would squash every glyph to a third of
+   its width on the way, and a width tween with fluid content rewraps the whole
+   card on every frame. thread-modal.ts owns the inline sizes and hands them
+   back when the journey settles. */
+.thread-modal-inner {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
+  width: 100%;
+}
 .thread-modal-header {
   display: flex;
   align-items: center;

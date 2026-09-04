@@ -244,6 +244,12 @@ export function wireCardPlacementToggle(): void {
   });
 }
 
+/** `CSS.escape` guarded — happy-dom (and very old browsers) may not have it.
+ *  Same guard thread-morph.ts carries, for the same lookup. */
+function cssEscape(id: string): string {
+  return typeof CSS !== 'undefined' && CSS.escape ? CSS.escape(id) : id;
+}
+
 export interface ReviewChrome {
   threadsPanel: ThreadPanel;
   openDrawer: () => void;
@@ -690,8 +696,17 @@ export function mountReviewChrome(opts: ChromeOpts): ReviewChrome {
     if (inlineCardsVisible()) return false;
     const t = collectThreads().find((x) => x.id === id);
     if (!t || !threadNeedsModal(t)) return false;
+    // The rectangle the dialog grows out of, measured BEFORE anything folds:
+    // the margin bubble this thread is showing in. Null on every other route
+    // (the drawer, a keyboard, a phone), and the modal simply appears there —
+    // growing out of a row in a panel the dialog is about to cover would point
+    // the gesture at nothing the reader is looking at.
+    const bubble = document
+      .querySelector('.markup-margin')
+      ?.querySelector<HTMLElement>(`.thread[data-thread-id="${cssEscape(id)}"]`);
+    const origin = bubble?.getBoundingClientRect() ?? null;
     threadsPanel.setExpandedElsewhere(id);
-    threadModal.open(t);
+    threadModal.open(t, origin);
     threadsPanel.setActive(id);
     return true;
   }
