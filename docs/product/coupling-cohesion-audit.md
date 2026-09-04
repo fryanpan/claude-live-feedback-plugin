@@ -31,7 +31,7 @@ What live-feedback shares across its surfaces today, what's implemented twice, a
 | Composer / pill                     | SPA (app.ts)                           | **duplicated in code-app.ts** | =code                               | **widget's own**                         | widget's      | —                      |
 | WS client                           | workspaces-app/client.ts                 | same                          | same                                | **widget/client.ts (admitted copy)**     | same          | —                      |
 | Multi-page context (url/view)       | n/a                                    | n/a                           | n/a                                 | AnchorContext                            | AnchorContext | —                      |
-| Grouping                            | setId                                  | workspace (bind_folder)       | workspace (bindDiff)                | none                                     | none          | —                      |
+| Grouping                            | setId                                  | workspace (attach_folder)       | workspace (bindDiff)                | none                                     | none          | —                      |
 | Agent edit tools                    | find_and_replace + thread-region tools | none (edit via repo)          | none                                | none                                     | none          | —                      |
 | Agent find→thread                   | prose resolver                         | flat-text resolver (new)      | flat-text                           | n/a (element)                            | n/a           | —                      |
 
