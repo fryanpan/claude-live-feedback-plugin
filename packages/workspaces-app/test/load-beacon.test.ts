@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
+import { HUB_BOOT_SOURCES } from './support/hub-boot-sources.ts';
 
 // The board's load time was a memory ("10+ seconds on the iPad")
 // until the server grew /load-reports. This is the client half: after boot the
@@ -10,7 +11,9 @@ import { describe, expect, it } from 'vitest';
 // but what this asserts is which PHASES the beacon reports, and a report
 // that names them is easier to read off the call than to reconstruct.
 describe('the board reports its own load time', () => {
-  const src = readFileSync(join(__dirname, '..', 'src', 'hub', 'hub-app.ts'), 'utf8');
+  const src = HUB_BOOT_SOURCES.map((m) =>
+    readFileSync(join(__dirname, '..', 'src', 'hub', `${m}.ts`), 'utf8'),
+  ).join('\n');
 
   it('posts one report to the load-reports route', () => {
     expect(src).toMatch(
