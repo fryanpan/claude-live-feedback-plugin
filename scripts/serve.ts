@@ -43,7 +43,10 @@ import { resolveDataDir } from '../packages/server/src/data-dir.ts';
 import { readDeploySource } from '../packages/server/src/deploy-source.ts';
 import {
   type BindErrorKind,
+  type ListenProbeVerdict,
   acquirePort,
+  bindHealthStep,
+  classifyConnectError,
   probeLocalPort,
   shouldWalkPorts,
 } from '../packages/server/src/port-bind.ts';
@@ -82,24 +85,34 @@ async function pickFreePort(start: number): Promise<number> {
   );
 }
 
-/** Can we open a TCP connection to the port? This answers "is the server
- *  actually LISTENING", which is different from "is the process alive" —
- *  the exact gap that let an unbound-but-alive server escape launchd's
- *  KeepAlive. Resolves false on refusal/timeout. */
-function isPortListening(port: number, host = '127.0.0.1'): Promise<boolean> {
+/**
+ * Can we open a TCP connection to the port? This answers "is the server
+ * actually LISTENING", which is different from "is the process alive" — the
+ * exact gap that let an unbound-but-alive server escape launchd's KeepAlive.
+ *
+ * THREE answers, not two. A connect that fails because this host has no
+ * socket to give (ENOBUFS and its neighbours) says nothing about the server,
+ * and on 2026-09-04 reading it as `false` is what turned a socket-memory
+ * shortage into twenty restarts: the fleet's SSE connections exhausted the
+ * kernel's buffers, this probe could not connect, the watchdog declared a
+ * healthy bound server unbound, and every client then reconnected at once and
+ * made the shortage worse. A refusal and a timeout are still evidence about
+ * the server and still count. See `classifyConnectError`.
+ */
+function probePortListening(port: number, host = '127.0.0.1'): Promise<ListenProbeVerdict> {
   return new Promise((resolve) => {
     const socket = netConnect({ port, host });
     let settled = false;
-    const done = (ok: boolean) => {
+    const done = (verdict: ListenProbeVerdict) => {
       if (settled) return;
       settled = true;
       socket.destroy();
-      resolve(ok);
+      resolve(verdict);
     };
     socket.setTimeout(2000);
-    socket.once('connect', () => done(true));
-    socket.once('timeout', () => done(false));
-    socket.once('error', () => done(false));
+    socket.once('connect', () => done('listening'));
+    socket.once('timeout', () => done('not-listening'));
+    socket.once('error', (err) => done(classifyConnectError(err)));
   });
 }
 
@@ -455,13 +468,23 @@ if (noWatch) {
   setTimeout(() => {
     const timer = setInterval(async () => {
       if (cleaningUp) return;
-      if (await isPortListening(port)) {
-        fails = 0;
+      const verdict = await probePortListening(port);
+      const step = bindHealthStep(fails, verdict, MAX_FAILS);
+      fails = step.fails;
+      if (step.action === 'ok') return;
+      if (verdict === 'inconclusive') {
+        // Say it out loud. This branch is the one that used to be silently
+        // counted as an unbound server, and the log line is how the next
+        // socket shortage gets diagnosed as a socket shortage.
+        console.error(
+          `[supervisor] health: cannot open a socket to probe :${port} — this host is out of ` +
+            'network resources, which says nothing about the server; not counting it ' +
+            `(${fails}/${MAX_FAILS})`,
+        );
         return;
       }
-      fails += 1;
       console.error(`[supervisor] health: :${port} not listening (${fails}/${MAX_FAILS})`);
-      if (fails >= MAX_FAILS) {
+      if (step.action === 'restart') {
         clearInterval(timer);
         console.error('[supervisor] server alive-but-unbound — restarting via launchd');
         cleanup(1);
