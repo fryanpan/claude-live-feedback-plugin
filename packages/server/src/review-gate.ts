@@ -425,7 +425,8 @@ export function createReviewGate(ctx: ReviewGateContext) {
     // Every reason this item has been held for already. Read off the ROW, so
     // it survives the revision that produced this call: the gate is a check
     // and not a wall precisely because this number stops growing.
-    const heldFor = target.judgement(row)?.heldFor ?? [];
+    const priorJudgement = target.judgement(row);
+    const heldFor = priorJudgement?.heldFor ?? [];
     // Off the queue from THIS moment, not from the verdict: the item is
     // already in the store, and the seconds the judge takes were seconds the
     // reader could see — and answer — an item about to be held (codex
@@ -465,6 +466,19 @@ export function createReviewGate(ctx: ReviewGateContext) {
     }
     const at = Date.now();
     const carried = heldFor.length > 0 ? { heldFor } : {};
+    /**
+     * A judge that could not answer must not ADMIT a held item.
+     *
+     * Fail-open is Bryan's rule and it stands: an item nobody has judged
+     * goes through when the judge is down. But an item already HELD is a
+     * different fact, and releasing it on a failed call made every hold
+     * clearable by revising until a call timed out or a reply truncated.
+     * So a failure keeps the standing verdict, stamp and history exactly as
+     * they were — the hold's own clock does not restart either, or a judge
+     * failing repeatedly would hide the item from the stall monitor forever.
+     */
+    const restoredHold =
+      verdict === null && priorJudgement?.verdict === 'held' ? priorJudgement : undefined;
     // The cap. A third hold is not placed: the item goes to the reader with
     // the concern the gate has been making all along, and the reader decides
     // whether it is answerable. Two rounds is a check; a third is the wall
@@ -473,19 +487,26 @@ export function createReviewGate(ctx: ReviewGateContext) {
     const admitAfterHolds =
       verdict !== null && !verdict.ok && heldFor.length >= REVIEW_GATE_MAX_HOLDS;
     const judgement: ReviewItemJudgement =
-      verdict === null
-        ? { at, verdict: 'unavailable' as const, reason: 'the judge could not answer', ...carried }
-        : admitAfterHolds
-          ? { at, verdict: 'ok' as const, reason: admittedReason(heldFor), ...carried }
-          : verdict.ok
-            ? { at, verdict: 'ok' as const, reason: verdict.reason, ...carried }
-            : {
-                at,
-                verdict: 'held' as const,
-                reason: verdict.reason,
-                heldFor: [...heldFor, verdict.reason],
-                ...(verdict.add !== undefined ? { add: verdict.add } : {}),
-              };
+      restoredHold !== undefined
+        ? { ...restoredHold }
+        : verdict === null
+          ? {
+              at,
+              verdict: 'unavailable' as const,
+              reason: 'the judge could not answer',
+              ...carried,
+            }
+          : admitAfterHolds
+            ? { at, verdict: 'ok' as const, reason: admittedReason(heldFor), ...carried }
+            : verdict.ok
+              ? { at, verdict: 'ok' as const, reason: verdict.reason, ...carried }
+              : {
+                  at,
+                  verdict: 'held' as const,
+                  reason: verdict.reason,
+                  heldFor: [...heldFor, verdict.reason],
+                  ...(verdict.add !== undefined ? { add: verdict.add } : {}),
+                };
     const recorded = target.record(judgement, {
       forVersion,
       // Also refused if the reader overruled the gate while we were out: a
@@ -545,12 +566,14 @@ export function createReviewGate(ctx: ReviewGateContext) {
       held: true,
       row: recorded.row,
       reason: judgement.reason,
-      message: heldMessage(
-        address,
-        judgement.reason,
-        judgement.add,
-        judgement.heldFor?.length ?? 0,
-      ),
+      message:
+        // A restored hold is not a new verdict on the new words, and saying
+        // so is the difference between "you did not fix it" and "nobody
+        // looked". The filer's next act is the same call either way.
+        (restoredHold
+          ? 'The judge could not answer, so this stays held on its standing verdict. '
+          : '') +
+        heldMessage(address, judgement.reason, judgement.add, judgement.heldFor?.length ?? 0),
     };
   }
 
