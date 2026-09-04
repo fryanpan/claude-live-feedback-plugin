@@ -41,7 +41,7 @@ import * as Y from 'yjs';
 import { newEventId } from './event-id.ts';
 import { isPrivateMetaKey } from './private-meta.ts';
 import { ROOM_TIMINGS } from './room-timings.ts';
-import type { DocRoom, FeedbackWs } from './rooms.ts';
+import type { DocRoom, FeedbackWs, ShareAuthorizedSocket } from './rooms.ts';
 import type { SseHub } from './sse.ts';
 import type { ThreadSummarizer } from './summarize.ts';
 import type { WebhookDispatcher } from './webhooks.ts';
@@ -291,6 +291,59 @@ export class RoomFanout {
   }
 
   /**
+   * Share-authorized sockets that no room's `conns` holds.
+   *
+   * The three sweeps below used to walk `conns` alone, which is the yjs
+   * editing sockets and nothing else. A meeting's `/audio/<docId>` socket is
+   * authorized by the same share at its own upgrade, opens a microphone and
+   * a billed transcription session, and lives in `MeetingRelay`'s WeakMap —
+   * which cannot be enumerated. So revoking a share, removing a member or
+   * throwing the sharing master switch closed the editor and left the
+   * microphone running against a doc the person may no longer read.
+   *
+   * Registered from the websocket `open` handler and dropped from `close`
+   * (server.ts, via `Rooms`), so this holds exactly the live ones.
+   */
+  private readonly trackedShareSockets = new Set<ShareAuthorizedSocket>();
+
+  /**
+   * Put a non-room socket in front of the sweeps below.
+   *
+   * Sockets carrying NO share and NO membership are not tracked at all: the
+   * owner's own audio socket is never offered to a matcher, which is the
+   * same guarantee `conns` gives by carrying an absent `shareId`.
+   *
+   * A third long-lived transport authorized by a share belongs here too —
+   * nothing else will catch it, because a sweep can only close what it can
+   * enumerate.
+   */
+  trackShareSocket(ws: ShareAuthorizedSocket): void {
+    if (!ws.data?.shareId && !ws.data?.shareMember) return;
+    this.trackedShareSockets.add(ws);
+  }
+
+  /** Drop a tracked socket — its `close` handler, whatever closed it. */
+  untrackShareSocket(ws: ShareAuthorizedSocket): void {
+    this.trackedShareSockets.delete(ws);
+  }
+
+  /**
+   * Every socket a share authorized: the rooms' editing sockets, then the
+   * tracked ones beside them.
+   *
+   * Straight over the room map. `list()` + `get()` walked the same rooms but
+   * built a fresh DocMeta for every one of them and then looked each back up
+   * by id — and `get` marks a doc ACCESSED, which is what put the whole
+   * corpus in the file poll's fast lane. See `closeSocketsForDeadShares`.
+   */
+  private *shareAuthorizedSockets(): Generator<ShareAuthorizedSocket> {
+    for (const room of this.host.rooms()) {
+      for (const ws of room.conns) yield ws;
+    }
+    for (const ws of this.trackedShareSockets) yield ws;
+  }
+
+  /**
    * Close every websocket a given share opened. Revocation and expiry are
    * enforced per HTTP request, but a websocket is authorized ONCE at its
    * upgrade — so an already-connected visitor kept reading and writing the
@@ -301,20 +354,14 @@ export class RoomFanout {
    */
   closeSocketsForShare(shareId: string): number {
     let closed = 0;
-    // Straight over the room map. `list()` + `get()` walked the same rooms
-    // but built a fresh DocMeta for every one of them and then looked each
-    // back up by id — and `get` marks a doc ACCESSED, which is what put the
-    // whole corpus in the file poll's fast lane. See `closeSocketsForDeadShares`.
-    for (const room of this.host.rooms()) {
-      for (const ws of room.conns) {
-        if (ws.data?.shareId !== shareId) continue;
-        try {
-          ws.close(1008, 'share revoked');
-        } catch {
-          // Already gone — the close handler does the bookkeeping.
-        }
-        closed += 1;
+    for (const ws of this.shareAuthorizedSockets()) {
+      if (ws.data?.shareId !== shareId) continue;
+      try {
+        ws.close(1008, 'share revoked');
+      } catch {
+        // Already gone — the close handler does the bookkeeping.
       }
+      closed += 1;
     }
     return closed;
   }
@@ -330,17 +377,15 @@ export class RoomFanout {
    */
   closeSocketsForShareMembers(match: (memberKey: string) => boolean): number {
     let closed = 0;
-    for (const room of this.host.rooms()) {
-      for (const ws of room.conns) {
-        const key = ws.data?.shareMember;
-        if (!key || !match(key)) continue;
-        try {
-          ws.close(1008, 'share access ended');
-        } catch {
-          // Already gone — the close handler does the bookkeeping.
-        }
-        closed += 1;
+    for (const ws of this.shareAuthorizedSockets()) {
+      const key = ws.data?.shareMember;
+      if (!key || !match(key)) continue;
+      try {
+        ws.close(1008, 'share access ended');
+      } catch {
+        // Already gone — the close handler does the bookkeeping.
       }
+      closed += 1;
     }
     return closed;
   }
@@ -366,12 +411,10 @@ export class RoomFanout {
     //
     // The room map is the same set `list()` maps over, so coverage is
     // unchanged.
-    for (const room of this.host.rooms()) {
-      for (const ws of room.conns) {
-        const id = ws.data?.shareId;
-        if (!id || isLive(id)) continue;
-        dead.add(id);
-      }
+    for (const ws of this.shareAuthorizedSockets()) {
+      const id = ws.data?.shareId;
+      if (!id || isLive(id)) continue;
+      dead.add(id);
     }
     for (const id of dead) this.closeSocketsForShare(id);
     return Array.from(dead);

@@ -161,6 +161,20 @@ export type WsCtx = {
 
 export type FeedbackWs = ServerWebSocket<WsCtx>;
 
+/**
+ * The slice of a websocket the share sweeps need: what authorized it, and how
+ * to hang it up.
+ *
+ * A type rather than `FeedbackWs` because not every socket a share authorized
+ * is a room's editing socket. `trackShareSocket` takes this so the meeting's
+ * audio socket — a different upgrade, a different handler, and no member of
+ * any `conns` — can be swept by the same three functions.
+ */
+export interface ShareAuthorizedSocket {
+  readonly data?: { shareId?: string; shareMember?: string };
+  close(code?: number, reason?: string): void;
+}
+
 export interface DocRoom {
   docId: string;
   ydoc: Y.Doc;
@@ -2139,6 +2153,20 @@ export class Rooms {
   /** Bind a git diff (working-tree or pinned) for review — see binds.ts. */
   bindDiff(opts: BindDiffOpts): BindDiffResult {
     return bindDiffImpl(this, opts);
+  }
+
+  /**
+   * Track a share-authorized socket that no room's `conns` holds — the
+   * meeting's `/audio/<docId>` socket — so the sweeps below can close it.
+   * The set lives with the walk, in the fan-out.
+   */
+  trackShareSocket(ws: ShareAuthorizedSocket): void {
+    this.fanout.trackShareSocket(ws);
+  }
+
+  /** Drop a tracked socket — its `close` handler, whatever closed it. */
+  untrackShareSocket(ws: ShareAuthorizedSocket): void {
+    this.fanout.untrackShareSocket(ws);
   }
 
   /**
