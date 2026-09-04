@@ -30,9 +30,17 @@ import {
 const HEADING = 'Meeting notes';
 
 /** An ownership record that claims whatever markdown is listed, whichever
- *  element carries it — for the pure-plan tests, which hold no real doc. */
+ *  element carries it — for the pure-plan tests, which hold no real doc.
+ *
+ *  `wroteAnyOf` is deliberately false rather than the same list. It is the
+ *  DURABLE half of the ledger, read back from disk after a restart, and these
+ *  tests are about what a live process may replace — a stub that answered
+ *  both questions with one list would make every section here the
+ *  note-taker's and quietly stop exercising the position test. The restart is
+ *  driven where it belongs, in `notes-ledger-persist.test.ts`. */
 const claimsText = (mds: readonly string[]): NotesOwnership => ({
   claims: (_el, md) => mds.includes(md),
+  wroteAnyOf: () => false,
   record: () => {},
   release: () => {},
 });

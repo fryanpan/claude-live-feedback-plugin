@@ -364,25 +364,40 @@ describe('POST /api/workspaces/:id/huddles and the empty task', () => {
   });
 
   describe('share members', () => {
-    it('files an empty task on the board, but does not start a huddle', async () => {
+    it('starts a huddle on the board, and is told nothing about the machine', async () => {
       const visitor = await mintAccessShare(base, access, workspaceId, { label: 'hub share' });
       const visitorHeaders = { ...visitor.headers, 'content-type': 'application/json' };
       // Presence: the cookie DOES reach the hub page.
       const page = await fetch(`${base}/workspaces/${workspaceId}`, { headers: visitorHeaders });
       expect(page.status).toBe(200);
       const before = (await boardDocs(workspaceId)).length;
-      // A huddle is a MEETING on the owner's machine — it opens a recording
-      // surface and binds a notes doc — so it is not on the member's table,
-      // and it must not have created a board doc on the way to being refused.
+      // "Make a plan" / "Have a meeting" is a member's, since 2026-09-03: a
+      // share link means full access to the board, and holding a meeting is
+      // one of the things a board is for.
       const huddle = await fetch(`${base}/api/workspaces/${workspaceId}/huddles`, {
         method: 'POST',
         headers: visitorHeaders,
         body: JSON.stringify({}),
       });
-      expect(huddle.status).toBe(403);
-      expect((await boardDocs(workspaceId)).length).toBe(before);
-      // Filing a row IS a member's, since 2026-09-03 — the positive control
-      // that makes the refusal above about the huddle rather than the gate.
+      expect(huddle.status, await huddle.clone().text()).toBe(200);
+      const made = (await huddle.json()) as {
+        docId: string;
+        hubWorkspaceId: string;
+        meta: Record<string, unknown>;
+      };
+      expect(made.hubWorkspaceId).toBe(workspaceId);
+      // The doc really landed on the board.
+      expect((await boardDocs(workspaceId)).length).toBe(before + 1);
+      // A huddle is seeded into a file under the owner's data directory, and
+      // this route answers with the room's own meta — so it is a second door
+      // beside `GET /api/docs/<id>`, and it is redacted the same way.
+      expect(made.meta.sourceUrl).toBeUndefined();
+      expect(made.meta.owner).toBeUndefined();
+      expect(made.meta.workspaceRoot).toBeUndefined();
+      expect(JSON.stringify(made.meta)).not.toContain(dataDir);
+
+      // Positive control on the same visitor: filing a row still answers, so
+      // nothing above passed because the member had stopped working.
       const task = await fetch(`${base}/api/workspaces/${workspaceId}/tasks`, {
         method: 'POST',
         headers: visitorHeaders,
