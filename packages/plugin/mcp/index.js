@@ -14531,6 +14531,44 @@ function err(message) {
   };
 }
 
+// packages/mcp/src/backoff.ts
+var RECONNECT_BASE_MS = 1500;
+var RECONNECT_CAP_MS = 30000;
+function reconnectDelayMs(attempt, random = Math.random, base = RECONNECT_BASE_MS, cap = RECONNECT_CAP_MS) {
+  const window = reconnectWindowMs(attempt, base, cap);
+  return Math.floor(Math.max(0, Math.min(1, random())) * window);
+}
+function reconnectWindowMs(attempt, base = RECONNECT_BASE_MS, cap = RECONNECT_CAP_MS) {
+  if (!Number.isFinite(attempt) || attempt <= 1)
+    return Math.min(base, cap);
+  return Math.min(cap, base * 2 ** (attempt - 1));
+}
+
+// packages/mcp/src/mux-cursor.ts
+var MUX_CURSOR_PREFIX = "mux1:";
+var MUX_CURSOR_MAX_BYTES = 6000;
+function formatMuxCursor(cursors, maxBytes = MUX_CURSOR_MAX_BYTES) {
+  const parts = [];
+  const dropped = [];
+  let length = MUX_CURSOR_PREFIX.length;
+  for (const [key, id] of cursors) {
+    if (key.length === 0 || id.length === 0)
+      continue;
+    const pair = `${key}=${id}`;
+    const cost = pair.length + (parts.length > 0 ? 1 : 0);
+    if (length + cost > maxBytes) {
+      dropped.push(key);
+      continue;
+    }
+    parts.push(pair);
+    length += cost;
+  }
+  return {
+    value: parts.length > 0 ? `${MUX_CURSOR_PREFIX}${parts.join(",")}` : undefined,
+    dropped
+  };
+}
+
 // packages/mcp/src/sse-cursor.ts
 function frameMeta(raw) {
   const meta2 = {};
@@ -14554,9 +14592,181 @@ async function deliverThenCommit(frame, deliver, cursor, onGap) {
   }
 }
 
-// packages/mcp/src/sse-loop.ts
-var RECONNECT_BACKOFF_MS = 1500;
+// packages/mcp/src/mux-loop.ts
 var DEFAULT_CONNECT_CAP_MS = 3000;
+function muxPath(agentId) {
+  return `/events/agent/${encodeURIComponent(agentId)}`;
+}
+function createMuxLoop(deps) {
+  const rt = {
+    controller: null,
+    running: false,
+    open: false,
+    unsupported: false,
+    cursors: new Map,
+    starting: null
+  };
+  return {
+    ensureOpen: () => ensureOpen(deps, rt),
+    stop: () => stop(deps, rt),
+    isOpen: () => rt.open,
+    unsupported: () => rt.unsupported,
+    loopCount: () => rt.running ? 1 : 0
+  };
+}
+function stop(deps, rt) {
+  rt.controller?.abort();
+  rt.controller = null;
+  rt.running = false;
+  rt.starting = null;
+  setOpen(deps, rt, false);
+}
+function ensureOpen(deps, rt) {
+  if (rt.unsupported)
+    return Promise.resolve(false);
+  if (rt.running)
+    return rt.starting ?? Promise.resolve(rt.open);
+  rt.running = true;
+  const controller = new AbortController;
+  rt.controller = controller;
+  const started = new Promise((resolve) => {
+    let settled = false;
+    const settle = (open) => {
+      if (settled)
+        return;
+      settled = true;
+      deps.timers.clear(cap);
+      resolve(open);
+    };
+    const cap = deps.timers.set(() => {
+      if (settled)
+        return;
+      settled = true;
+      resolve(false);
+    }, deps.connectCapMs ?? DEFAULT_CONNECT_CAP_MS);
+    runMuxLoop(deps, rt, controller.signal, settle).catch((err2) => {
+      deps.log("[claude-workspaces-mcp] mux loop crashed:", err2);
+      rt.running = false;
+      rt.open = false;
+      settle(false);
+    });
+  });
+  rt.starting = started;
+  started.then(() => {
+    if (rt.starting === started)
+      rt.starting = null;
+  });
+  return started;
+}
+function setOpen(deps, rt, open) {
+  rt.open = open;
+  for (const w of deps.watchers.values())
+    w.open = open;
+}
+async function runMuxLoop(deps, rt, signal, onFirstAttempt) {
+  const path = muxPath(deps.agentId);
+  let attempt = 0;
+  while (!signal.aborted) {
+    try {
+      const { value, dropped } = formatMuxCursor([...rt.cursors].reverse());
+      if (dropped.length > 0) {
+        deps.log(`[claude-workspaces-mcp] mux cursor over budget — ${dropped.length} key(s) reconnect without a position`);
+        deps.resetDedup();
+      }
+      const res = await deps.fetch(`${deps.resolveBaseUrl()}${path}`, {
+        signal,
+        ...value ? { headers: { "Last-Event-ID": value } } : {}
+      });
+      if (res.status === 404) {
+        rt.unsupported = true;
+        rt.running = false;
+        setOpen(deps, rt, false);
+        onFirstAttempt(false);
+        deps.log("[claude-workspaces-mcp] server has no multiplexed event route — falling back to one stream per watch");
+        return;
+      }
+      const live = res.ok && res.body !== null;
+      setOpen(deps, rt, live);
+      onFirstAttempt(live);
+      if (!live)
+        throw new Error(`sse ${path} → ${res.status}`);
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder;
+      let buf = "";
+      let framesRead = 0;
+      while (!signal.aborted) {
+        const { value: chunk, done } = await reader.read();
+        if (done)
+          break;
+        buf += decoder.decode(chunk, { stream: true });
+        let sep = buf.indexOf(`
+
+`);
+        while (sep >= 0) {
+          const frame = buf.slice(0, sep);
+          buf = buf.slice(sep + 2);
+          framesRead += 1;
+          if (framesRead > 1)
+            attempt = 0;
+          await deliverThenCommitMux(frame, deps.handleFrame, rt.cursors, deps.resetDedup);
+          sep = buf.indexOf(`
+
+`);
+        }
+      }
+    } catch (err2) {
+      setOpen(deps, rt, false);
+      onFirstAttempt(false);
+      if (signal.aborted)
+        break;
+      deps.log("[claude-workspaces-mcp] mux sse error, retrying:", err2);
+    }
+    if (signal.aborted)
+      break;
+    setOpen(deps, rt, false);
+    attempt += 1;
+    await deps.sleep(reconnectDelayMs(attempt, deps.random));
+    if (signal.aborted)
+      break;
+    deps.resetDedup();
+  }
+  rt.running = false;
+  setOpen(deps, rt, false);
+  onFirstAttempt(false);
+}
+function frameWatchKey(raw) {
+  for (const line of raw.split(`
+`)) {
+    if (!line.startsWith("data:"))
+      continue;
+    try {
+      const parsed = JSON.parse(line.slice(5).trim());
+      return typeof parsed.watchKey === "string" ? parsed.watchKey : undefined;
+    } catch {
+      return;
+    }
+  }
+  return;
+}
+async function deliverThenCommitMux(frame, deliver, cursors, onGap) {
+  await deliver(frame);
+  const meta2 = frameMeta(frame);
+  const key = frameWatchKey(frame);
+  if (key === undefined)
+    return;
+  if (meta2.event === "replay.gap") {
+    cursors.delete(key);
+    onGap();
+    return;
+  }
+  if (meta2.id === undefined)
+    return;
+  cursors.delete(key);
+  cursors.set(key, meta2.id);
+}
+
+// packages/mcp/src/sse-loop.ts
+var DEFAULT_CONNECT_CAP_MS2 = 3000;
 function createSseLoops(deps) {
   return {
     runSseLoop: (label, path, signal, onFirstAttempt) => runSseLoop(deps, label, path, signal, onFirstAttempt),
@@ -14572,12 +14782,13 @@ async function runSseLoop(deps, label, path, signal, onFirstAttempt) {
     first = undefined;
     f(open);
   };
-  const setOpen = (open) => {
+  const setOpen2 = (open) => {
     const w = deps.watchers.get(label);
     if (w)
       w.open = open;
   };
   const cursor = { lastEventId: undefined };
+  let attempt = 0;
   while (!signal.aborted) {
     try {
       const res = await deps.fetch(`${deps.resolveBaseUrl()}${path}`, {
@@ -14585,10 +14796,11 @@ async function runSseLoop(deps, label, path, signal, onFirstAttempt) {
         ...cursor.lastEventId ? { headers: { "Last-Event-ID": cursor.lastEventId } } : {}
       });
       const live = res.ok && res.body !== null;
-      setOpen(live);
+      setOpen2(live);
       settleFirst(live);
       if (!res.ok || !res.body)
         throw new Error(`sse ${path} → ${res.status}`);
+      attempt = 0;
       const reader = res.body.getReader();
       const decoder = new TextDecoder;
       let buf = "";
@@ -14610,22 +14822,23 @@ async function runSseLoop(deps, label, path, signal, onFirstAttempt) {
         }
       }
     } catch (err2) {
-      setOpen(false);
+      setOpen2(false);
       settleFirst(false);
       if (signal.aborted)
         return;
       deps.log(`[claude-workspaces-mcp] ${label} sse error, retrying:`, err2);
     }
-    setOpen(false);
-    await deps.sleep(RECONNECT_BACKOFF_MS);
+    setOpen2(false);
+    attempt += 1;
+    await deps.sleep(reconnectDelayMs(attempt, deps.random));
     deps.resetDedup();
   }
-  setOpen(false);
+  setOpen2(false);
   settleFirst(false);
 }
 function startSseLoop(deps, label, path, controller) {
   return new Promise((resolve) => {
-    const cap = deps.timers.set(() => resolve(false), deps.connectCapMs ?? DEFAULT_CONNECT_CAP_MS);
+    const cap = deps.timers.set(() => resolve(false), deps.connectCapMs ?? DEFAULT_CONNECT_CAP_MS2);
     runSseLoop(deps, label, path, controller.signal, (open) => {
       deps.timers.clear(cap);
       resolve(open);
@@ -16420,6 +16633,7 @@ async function handleDocsTool(name, a, ctx) {
     unwatchDoc,
     refreshCoverage,
     watchPersistenceMode,
+    streamMode,
     restoreState,
     lastPersistError,
     IDENTITY_IS_SHARED,
@@ -16844,6 +17058,7 @@ async function handleDocsTool(name, a, ctx) {
           agentId: AUTHOR.id,
           ...IDENTITY_IS_SHARED ? { reason: SHARED_IDENTITY_REASON } : {}
         },
+        streamMode: streamMode(),
         restore: restoreState,
         ...coverage ? { coverage } : {},
         ...lastPersistError ? { lastPersistError } : {}
@@ -17910,7 +18125,8 @@ function createWatchRegistry(deps) {
     },
     watchPersistenceMode: () => watchPersistenceMode(deps),
     lastPersistError: () => state.lastPersistError,
-    watchesPath: () => watchesPath(deps)
+    watchesPath: () => watchesPath(deps),
+    streamMode: () => usesMux(deps) ? "multiplexed" : "per-key"
   };
 }
 function isSharedIdentity(authorId) {
@@ -17941,24 +18157,45 @@ async function persistWatchChange(deps, state, change) {
     return false;
   }
 }
+function usesMux(deps) {
+  return !deps.identityIsShared && !deps.mux.unsupported();
+}
+async function wireKey(deps, key, path) {
+  if (usesMux(deps)) {
+    const open = await deps.mux.ensureOpen();
+    if (!deps.mux.unsupported()) {
+      const rec = deps.watchers.get(key);
+      if (rec)
+        rec.open = open;
+      return open;
+    }
+  }
+  const w = deps.watchers.get(key);
+  if (!w)
+    return false;
+  return deps.startSseLoop(key, path, w.controller);
+}
 async function watchDoc(deps, state, docId, persist = true) {
+  const persisted = persist ? await persistWatchChange(deps, state, { add: [docId] }) : false;
   if (!deps.watchers.has(docId)) {
     const controller = new AbortController;
     deps.watchers.set(docId, { controller, docId, open: false });
-    await deps.startSseLoop(docId, `/events/${encodeURIComponent(docId)}`, controller);
+    await wireKey(deps, docId, `/events/${encodeURIComponent(docId)}`);
   }
-  return persist ? persistWatchChange(deps, state, { add: [docId] }) : false;
+  return persisted;
 }
 async function watchWorkspace(deps, state, workspaceId, persist = true) {
   const key = `ws:${workspaceId}`;
+  const persisted = persist ? await persistWatchChange(deps, state, { add: [key] }) : false;
   let open = deps.watchers.get(key)?.open === true;
   if (!deps.watchers.has(key)) {
     const controller = new AbortController;
     deps.watchers.set(key, { controller, docId: key, open: false });
-    open = await deps.startSseLoop(key, `/events/workspace/${encodeURIComponent(workspaceId)}?agentId=${encodeURIComponent(deps.author.id)}`, controller);
+    open = await wireKey(deps, key, `/events/workspace/${encodeURIComponent(workspaceId)}?agentId=${encodeURIComponent(deps.author.id)}`);
+  } else if (usesMux(deps)) {
+    open = deps.mux.isOpen();
   }
-  const persisted = persist ? await persistWatchChange(deps, state, { add: [key] }) : false;
-  return { open, persisted };
+  return { open: usesMux(deps) && persist ? open && persisted : open, persisted };
 }
 async function unwatchDoc(deps, state, docId) {
   const w = deps.watchers.get(docId);
@@ -17966,6 +18203,8 @@ async function unwatchDoc(deps, state, docId) {
     w.controller.abort();
     deps.watchers.delete(docId);
   }
+  if (usesMux(deps) && deps.watchers.size === 0)
+    deps.mux.stop();
   return persistWatchChange(deps, state, { remove: [docId] });
 }
 
@@ -18104,7 +18343,7 @@ async function ensureWatchesRestored(deps, rt) {
         error: err2 instanceof Error ? err2.message : String(err2),
         attempts
       };
-      rt.retryAt = now2(deps) + Math.min(30000, 1000 * 2 ** attempts);
+      rt.retryAt = now2(deps) + reconnectDelayMs(attempts + 1, deps.random, 1000, 30000);
     } finally {
       rt.inFlight = null;
     }
@@ -18144,7 +18383,7 @@ var STATUS_TEXT_MAX = 4000;
 function suggestionAuthor() {
   return { id: AUTHOR.id, name: AUTHOR.name, color: AUTHOR.color };
 }
-var PLUGIN_VERSION = "0.1.157";
+var PLUGIN_VERSION = "0.1.162";
 var PROCESS_ID = randomUUID();
 var server = new Server({
   name: "claude-workspaces",
@@ -18272,6 +18511,7 @@ function toolContext() {
     unwatchDoc: unwatchDoc2,
     refreshCoverage: refreshCoverage2,
     watchPersistenceMode: watchPersistenceMode2,
+    streamMode: registry2.streamMode,
     claimNoticeFor: claimNoticeFor2,
     restoreState: restore.state(),
     lastPersistError: registry2.lastPersistError(),
@@ -18307,6 +18547,10 @@ var handleFrame2 = createFrameHandler({
   http: (method, path, body) => http(method, path, body),
   shouldForward: (event, payload) => shouldForwardFrame.shouldForward(event, payload)
 });
+var loopTimers = {
+  set: (fn, ms) => setTimeout(fn, ms),
+  clear: (h) => clearTimeout(h)
+};
 var { startSseLoop: startSseLoop2 } = createSseLoops({
   watchers,
   resolveBaseUrl: resolveBaseUrl2,
@@ -18315,16 +18559,25 @@ var { startSseLoop: startSseLoop2 } = createSseLoops({
   resetDedup: () => shouldForwardFrame.reset(),
   log: (...args) => console.error(...args),
   sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
-  timers: {
-    set: (fn, ms) => setTimeout(fn, ms),
-    clear: (h) => clearTimeout(h)
-  }
+  timers: loopTimers
+});
+var muxLoop = createMuxLoop({
+  watchers,
+  agentId: AUTHOR.id,
+  resolveBaseUrl: resolveBaseUrl2,
+  fetch: (url, init) => fetch(url, init),
+  handleFrame: (raw) => handleFrame2(raw),
+  resetDedup: () => shouldForwardFrame.reset(),
+  log: (...args) => console.error(...args),
+  sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
+  timers: loopTimers
 });
 var registry2 = createWatchRegistry({
   watchers,
   http: (method, path, body) => http(method, path, body),
   author: AUTHOR,
   startSseLoop: startSseLoop2,
+  mux: muxLoop,
   identityIsShared: IDENTITY_IS_SHARED,
   log: (...args) => console.error(...args)
 });
