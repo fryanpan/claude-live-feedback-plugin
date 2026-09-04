@@ -84,6 +84,16 @@ export interface WorkspaceRoutesContext {
   fileUnderHubWorkspace: (attachmentId: string, requested?: string) => string;
   /** Take a doc back off the default holding board once a real one has it. */
   unfileFromDefault: (attachmentId: string, keptHubWorkspaceId: string) => void;
+  /**
+   * EVERY workspace an id belongs to, most specific first — the same resolver
+   * the host guard's share scoping reads (`shareWorkspacesOf`).
+   *
+   * It is here so a route asking "may this member reach this doc?" asks the
+   * question the GUARD would ask, rather than a second rule of its own. Two
+   * rules that agree today drift apart later, and the one that drifts open is
+   * a breach.
+   */
+  workspacesOfDoc: (docId: string) => string[];
   /** Whether a watch key still names something on this server. */
   watchKeyExists: (key: string) => boolean;
 }
