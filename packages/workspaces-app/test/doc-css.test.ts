@@ -121,6 +121,37 @@ describe('the board never loads doc.css, and loses nothing by it', () => {
     expect(banner.fontWeight).toBe('600');
   });
 
+  it('paints a pending suggestion, because the board mounts the same editor', () => {
+    // The converse of the negatives above, and the check that would have
+    // caught this: the board's task-body editor IS `createEditor` over the
+    // `task:<id>` room (hub/task-body-editor.ts), and editor.ts registers
+    // SuggestInsert, SuggestDelete and SuggestionChips in the BASE extension
+    // list with no review-surface condition. So an agent's pending suggestion
+    // on a task description renders here, and its rules have to be in the
+    // board's cascade. Send them to doc.css and the proposal reads as plain
+    // accepted prose — indistinguishable from text Bryan already agreed to.
+    //
+    // The underline and the strikethrough are what this asserts, not the
+    // tint: color never carries the meaning alone here, and the tint is a
+    // `color-mix()` happy-dom cannot resolve anyway. happy-dom does not
+    // expand the shorthand, so `textDecoration` is the property that answers
+    // — `textDecorationLine` reads `''` even when the rule applies.
+    const editor = attach('ProseMirror');
+    const ins = attach('lf-suggest-ins', { tag: 'span', parent: editor });
+    expect(styleOf(ins).textDecoration).toBe('underline');
+    const del = attach('lf-suggest-del', { tag: 'span', parent: editor });
+    expect(styleOf(del).textDecoration).toBe('line-through');
+  });
+
+  it('hides the ✎ suggestion chip, which is the half that must not go missing', () => {
+    // SuggestionChips always builds the chip; CSS alone decides whether it
+    // shows, so the DEFAULT is what the board cannot do without. Lose it and
+    // an unstyled `<button>✎ suggestion</button>` appears in the task detail
+    // panel at every width — the failure inverts rather than disappearing,
+    // which is why the negatives above do not cover this.
+    expect(styleOf(attach('lf-suggest-chip', { tag: 'button' })).display).toBe('none');
+  });
+
   it('keeps .thread-line in the shared base, because the board renders it too', () => {
     // The chip is authored beside the diff nav that mints it, so the obvious
     // split sends it to doc.css. The board puts the same chip on a task
@@ -162,5 +193,42 @@ describe('doc.css loads AFTER styles.css, and the phone proves it', () => {
     cleanup = installSheets('styles.css', 'doc.css');
     setViewport(IPAD);
     expect(styleOf(attach('threads-close', { tag: 'button' })).display).toBe('none');
+  });
+});
+
+describe('the two surfaces agree about the chip, at both widths', () => {
+  /**
+   * The chip's rules are split across the two files — the ≤1100px entry and
+   * the base rule are in `styles.css` (both pages get them), the matching
+   * `.lf-del-chip` pair stays in `doc.css` — so "does the board read what the
+   * editor reads" is a question with two answers to compare, not one value to
+   * assert. This is the case that stays honest if the ordering below is ever
+   * changed on purpose.
+   *
+   * What it reads TODAY is `none` at both widths, on both pages. That is what
+   * `origin/main` served from the single file and it is deliberate here: the
+   * ≤1100px `display: inline-flex` is authored BEFORE the base
+   * `display: none`, same specificity, so the base wins everywhere and the
+   * mobile chip never appears. `.lf-del-chip` has the identical shape in
+   * `doc.css`. Revealing either one is a product change; this split does not
+   * make it.
+   */
+  const readChip = (sheets: Parameters<typeof installSheets>) => {
+    cleanup = installSheets(...sheets);
+    setViewport(IPAD);
+    const ipad = styleOf(attach('lf-suggest-chip', { tag: 'button' })).display;
+    setViewport(PHONE);
+    const phone = styleOf(attach('lf-suggest-chip', { tag: 'button' })).display;
+    cleanup();
+    cleanup = () => {};
+    document.body.replaceChildren();
+    return { ipad, phone };
+  };
+
+  it('reads the same on the board as on the review editor', () => {
+    const board = readChip(['hub.css', 'styles.css']);
+    const editor = readChip(['styles.css', 'doc.css']);
+    expect(board).toEqual(editor);
+    expect(board).toEqual({ ipad: 'none', phone: 'none' });
   });
 });
