@@ -88,7 +88,7 @@ export async function handleWorkspaceRelated(
   if (query.length === 0) {
     return j(400, {
       error: 'q required',
-      hint: "Pass ?q=<the request in the words it was asked in>. The match is over the board's goal titles, goal prose and plan docs, so a whole sentence matches better than a keyword.",
+      hint: "Pass ?q=<the request in the words it was asked in>. The match is over the board's goal titles, goal prose and plan docs; scoring does not depend on how long the request is, so paste the whole ask rather than boiling it down to a keyword.",
     });
   }
   // The doc the request came out of, when the caller has one. Used only to

@@ -121,6 +121,44 @@ describe('scoreRelatedWork', () => {
     expect(scoreOf('g-widget')).toBe(0);
   });
 
+  it('still matches when the request is a paragraph rather than a phrase', () => {
+    // The failure this pins: scoring both signals against the SIZE of the
+    // request made every score fall as the request grew, so pasting what
+    // somebody actually wrote scored lower than typing two words of it. Past
+    // about forty words nothing cleared the threshold at all — and an empty
+    // answer is what tells the caller to plan from scratch, so a verbose
+    // request became a silent licence to duplicate the board.
+    const paragraph =
+      "I'd like a plan for the meeting notes experience. Right now the notes a live huddle " +
+      'produces are not worth keeping the next morning, and the capture step drops corrections. ' +
+      'Figure out what the notes strip should do while the room is quiet, and what the agent ' +
+      'writes into the notes doc afterwards, so somebody reading it the next day gets the ' +
+      'decisions without replaying the audio.';
+    expect(relatedWorkTerms(paragraph).size).toBeGreaterThan(30);
+
+    const matches = scoreRelatedWork(paragraph, BOARD);
+    expect(matches.map((m) => m.id)).toContain('g-meeting');
+    expect(matches.map((m) => m.id)).toContain('doc-notes-plan');
+
+    // Length must not cost a candidate its score: the paragraph names more of
+    // this goal's words than the phrase does, so it may not score lower.
+    const phrase = scoreRelatedWork('meeting notes', BOARD, { threshold: 0 });
+    const scoreIn = (list: typeof matches, id: string) =>
+      list.find((m) => m.id === id)?.score ?? -1;
+    expect(scoreIn(matches, 'g-meeting')).toBeGreaterThanOrEqual(scoreIn(phrase, 'g-meeting'));
+
+    // The control: a request of the same length about work this board has
+    // never held still answers nothing, so the run above is a real boundary
+    // and not a threshold that now admits any long text.
+    const unrelated =
+      'The Postmark sending credentials have not been rotated since the account was set up, ' +
+      'and the key is sitting in a plain file on the box rather than in the keychain. Work out ' +
+      'what has to change in the mailer so a rotation does not take the outbound queue down, ' +
+      'then write the runbook for doing it.';
+    expect(relatedWorkTerms(unrelated).size).toBeGreaterThan(20);
+    expect(scoreRelatedWork(unrelated, BOARD)).toEqual([]);
+  });
+
   it('returns a candidate whose only relation is a link, with the link as its reason', () => {
     const linkOnly: RelatedWorkCandidate = {
       kind: 'goal',
