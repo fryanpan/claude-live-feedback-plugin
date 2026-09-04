@@ -3,73 +3,35 @@ import { basename, extname, join } from 'node:path';
 import {
   type DocMeta,
   type DocType,
-  type ReviewItemJudgement,
-  type ReviewPayload,
-  type TaskReviewItem,
   type Thread,
   type User,
   type WebhookPayload,
   agentIdCandidates,
   agentIdForName,
   contentKind,
-  emailIdentityId,
   isEmailLike,
-  isReviewItemHeld,
   isReviewPayloadGated,
   isReviewPayloadHeld,
-  judgeReasonSentence,
-  latestThreadedQuestion,
-  locateReviewItemRange,
   normalizeEmail,
   pendingDeclaration,
-  readTaskReviewItem,
   reviewIdOf,
   reviewItemState,
-  reviewPayloadVersion,
 } from '@feedback/core';
-import { EFFORT_ESTIMATE_PROMPT_VERSION } from '@feedback/core/effort-estimate-prompt';
 import type { Server as BunServer } from 'bun';
-import { acquireActivityLock, releaseActivityLock } from './activity-lock.ts';
-import {
-  identityLinks,
-  ownerIdentityIds,
-  registerOwnerIdentity,
-  resolveIdentityId,
-  setIdentityRoster,
-} from './actor-identity.ts';
+import { createAccessDeps } from './access-deps.ts';
+import { releaseActivityLock } from './activity-lock.ts';
 import { AgentNoteRing } from './agent-notes.ts';
-import {
-  AgentWatches,
-  SHARED_AGENT_IDS,
-  SHARED_IDENTITY_ERROR,
-  SHARED_IDENTITY_MESSAGE,
-  isValidAgentId,
-  isValidWatchKey,
-} from './agent-watches.ts';
+import { AgentWatches } from './agent-watches.ts';
 import { AllowRuleProposals } from './allow-rules.ts';
 import { ARTIFACT_CHECK_ACTOR, ArtifactChecker } from './artifact-check.ts';
-import { type CodeSender, createLogCodeSender } from './auth/code-sender.ts';
-import { EmailCodes } from './auth/email-code.ts';
-import { SessionRevocations } from './auth/session-revocations.ts';
-import {
-  SESSION_COOKIE,
-  sessionKey as deriveSessionKey,
-  sessionCookieHeader as emailSessionCookieHeader,
-  refreshedSession,
-  sessionNeedsRefresh,
-  verifySession as verifyEmailSession,
-} from './auth/session.ts';
-import { widgetTokenKey as deriveWidgetTokenKey, verifyWidgetToken } from './auth/widget-token.ts';
+import type { CodeSender } from './auth/code-sender.ts';
 import { type BrowserSentryConfig, type PageType, injectSentryHead } from './browser-sentry.ts';
 import { ChatAudit, isSharedAgentName, localDay } from './chat-audit.ts';
 import { maybeCompress, maybeNotModified } from './compress.ts';
 import type { Deployer } from './deploy.ts';
 import { DispatchRegistry, type WatchFactory } from './dispatch-registry.ts';
-import {
-  EFFORT_ESTIMATE_MODEL,
-  type EffortEstimateVerdict,
-  type EffortEstimator,
-} from './effort-estimator.ts';
+import { type EffortEstimator } from './effort-estimator.ts';
+import { createEffortScoring } from './effort-scoring.ts';
 import { type GoogleOauthApp, type RefreshTokenVault } from './google-oauth.ts';
 import {
   type BriefCoverage,
@@ -88,7 +50,7 @@ import {
 } from './home-brief.ts';
 import { spokenReviewComment } from './huddle.ts';
 import { Identities, type IdentityRecord, userForIdentity } from './identities.ts';
-import { loadIdentityLinks } from './identity-links.ts';
+import { createIdentitySetup } from './identity-setup.ts';
 import { buildLandingModel } from './landing.ts';
 import { createLeadPresenceMonitor } from './lead-presence.ts';
 import { type LookupDoc, boardLookupDocs } from './meeting-lookup.ts';
@@ -102,8 +64,7 @@ import {
   corsHeadersFor,
   isAllowedBrowserOrigin,
 } from './middleware/browser-origin.ts';
-import { type CfAccessOptions, createCfAccessVerifier } from './middleware/cf-access.ts';
-import { clientAddressKey } from './middleware/client-address.ts';
+import type { CfAccessOptions } from './middleware/cf-access.ts';
 import {
   type ShareTarget,
   classifyHost,
@@ -114,12 +75,7 @@ import {
   shareScopeAllows,
 } from './middleware/host-guard.ts';
 import { RECALL_STATUS_PATH, recallCallbackAllows } from './middleware/recall-callback-gate.ts';
-import {
-  browserCannotOperateBody,
-  isBrowserRequest,
-  isGatedWrite,
-  signInRequiredBody,
-} from './middleware/write-gate.ts';
+import { isBrowserRequest, isGatedWrite, signInRequiredBody } from './middleware/write-gate.ts';
 import {
   captureMockup,
   isHtmlMockupSource,
@@ -135,8 +91,8 @@ import {
 import { parkNoteText } from './park-note.ts';
 import type { PluginRefresher } from './plugin-refresh.ts';
 import { localHostnames, publicBaseUrl } from './public-host.ts';
-import { type PushFetch, PushNotifier, reviewItemNotification } from './push-notify.ts';
-import { PushStore, loadOrCreateVapidKeys } from './push-store.ts';
+import { createPushAnnounce } from './push-announce.ts';
+import type { PushFetch } from './push-notify.ts';
 import { evaluateReadyWork } from './ready-gate.ts';
 import {
   type NudgeTally,
@@ -154,18 +110,23 @@ import {
 } from './recall-calendar.ts';
 import { RecallMeetingRelay } from './recall-meeting.ts';
 import { parseBotStatusWebhook } from './recall-status.ts';
-import { WebhookReplayGuard, svixHeadersFrom, verifySvixSignature } from './recall-webhook-auth.ts';
+import { svixHeadersFrom, verifySvixSignature } from './recall-webhook-auth.ts';
 import { type RecallClient, unreachableCallbackReason } from './recall.ts';
 import { scanSettledDocRefs } from './refs-backfill.ts';
-import { listArchivedDocs, listArchivedReviews, readDocArchiveManifest } from './review-archive.ts';
+import { listArchivedReviews, readDocArchiveManifest } from './review-archive.ts';
 import { backfillReviewFiling } from './review-backfill.ts';
-import { type ReviewJudge, type ReviewJudgeVerdict } from './review-judge.ts';
+import { createReviewGate } from './review-gate.ts';
+import { type ReviewJudge } from './review-judge.ts';
 import { type ReviewItemRow, type ReviewThreadItem, reviewItemRows } from './review-queue.ts';
 import { type FeedbackWs, Rooms } from './rooms.ts';
+import {
+  type AgentIdentityRoutesContext,
+  handleAgentIdentityRoutes,
+} from './routes/agent-identity.ts';
+import { type ArchiveRoutesContext, createArchiveRoutes } from './routes/archive.ts';
 import { type AuthShareRoutesContext, handleAuthShareRoutes } from './routes/auth-share.ts';
 import {
   type DocRoutesContext,
-  type ThreadReviewGate,
   handleDocCreateListRoutes,
   handleDocPromoteRoute,
   handleDocResourceRoutes,
@@ -176,7 +137,6 @@ import {
 } from './routes/meetings-calendar.ts';
 import { type OpsRoutesContext, handleOpsMetricsRoute, handleOpsRoutes } from './routes/ops.ts';
 import {
-  type ReviewGate,
   type TaskRoutesContext,
   handleDispatchAndNoteRoutes,
   handleTaskRoutes,
@@ -190,7 +150,6 @@ import {
 } from './routes/workspaces.ts';
 import { captureServerError, routePatternForSpan, withRouteSpan } from './sentry.ts';
 import { CfApi } from './share/cf-api.ts';
-import { loadCookieKey, readCookie } from './share/link-session.ts';
 import { redactHubEventForVisitor } from './share/redact-hub-events.ts';
 import {
   redactMetaForVisitor,
@@ -200,10 +159,10 @@ import {
   relativeReviewUrl,
 } from './share/redact-meta.ts';
 import { renderShareLinkUnavailable } from './share/share-link-page.ts';
-import { ShareLinks, shareMemberKey } from './share/share-links.ts';
+import { shareMemberKey } from './share/share-links.ts';
 import { Shares, audienceEntryAdmits } from './share/shares.ts';
 import { SharingGate } from './share/sharing-gate.ts';
-import type { Share, ShareConfig } from './share/types.ts';
+import type { ShareConfig } from './share/types.ts';
 import { sanitizeVisitorAuthor } from './share/visitor-identity.ts';
 import { claimReplayMarks, saveReplayMarks } from './sse-marks.ts';
 import { HTTP_IDLE_TIMEOUT_SEC, SseHub, openSseStream } from './sse.ts';
@@ -214,13 +173,7 @@ import {
   evaluateStalls,
   overdueHeldItems,
 } from './stall-gate.ts';
-import {
-  REVIEW_ITEM_HELD_EVENT,
-  type ReviewItemHeldFrame,
-  STALL_NUDGE_STAMP_FILENAME,
-  StallNudger,
-  type StallSnapshot,
-} from './stall-nudge.ts';
+import { STALL_NUDGE_STAMP_FILENAME, StallNudger, type StallSnapshot } from './stall-nudge.ts';
 import { ThreadSummarizer } from './summarize.ts';
 import { AUTHOR_REQUIRED_ERROR, AUTHOR_REQUIRED_MESSAGE } from './task-owner.ts';
 import { TaskProjection, taskBodyDocId, taskIdOfBodyDoc } from './task-projection.ts';
@@ -231,12 +184,9 @@ import {
   LEGACY_REVIEW_ITEM_ID,
   type ParallelismCapChange,
   type Task,
-  type TaskEffortEstimate,
   TaskStore,
   legacyDecisionItem,
-  reviewItemVersion,
   taskChip,
-  wordsRevisionOf,
 } from './tasks.ts';
 import { ThreadRequestDedup } from './thread-request-dedup.ts';
 import type { TranscriptionEngine } from './transcribe.ts';
@@ -1058,9 +1008,6 @@ const REVIEW_API = {
   contextFile: reviewApi('context-file'),
   editableFile: reviewApi('editable-file'),
 } as const;
-/** Review-only delete. `DELETE /api/workspaces/<id>` still fronts both. */
-const REVIEW_DELETE = /^\/api\/reviews\/([^/]+)$/;
-
 export function createServer(opts: ServerOptions = {}): ServerHandle {
   const port = opts.port ?? DEFAULT_PORT;
   const hostname = opts.hostname;
@@ -1080,176 +1027,34 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
     : null;
   const demosDir = opts.demosDir ?? null;
 
-  let shares: Shares | null = null;
-  if (opts.share) {
-    // Only build a Cloudflare client when Access mode is actually
-    // configured. Link-mode sharing needs no Cloudflare credentials at all.
-    const accountId = opts.share.config.cfAccountId;
-    const cfApi =
-      opts.share.cfApi ??
-      (accountId ? new CfApi({ accountId, token: opts.share.cfApiToken ?? '' }) : undefined);
-    shares = new Shares({
-      dataDir,
-      cfApi,
-      config: opts.share.config,
-    });
-  }
-
-  /**
-   * Share links and the workspace membership redeeming one creates.
-   *
-   * Built ALWAYS, not only when `opts.share` is set, and the difference
-   * matters: a `Shares` registry exists to talk to Cloudflare, so a
-   * deployment with no Cloudflare wiring has none. A share link needs no
-   * Cloudflare API at all — only an Access application the operator made by
-   * hand — so the store that answers "is this email a member of this
-   * workspace" must exist wherever the gate can be asked, and a null one
-   * would have to be read as "nobody is a member" at exactly the place that
-   * decides who gets in.
-   */
-  const shareLinks = new ShareLinks({ dataDir });
-
-  /**
-   * The hostname share URLs are built from — the first configured share host.
-   * Empty when the deployment has none, which is what the mint route refuses
-   * on: a link whose URL names no hostname is a link nobody can open.
-   */
-  const shareLinkHosts = opts.shareLinkHosts ?? [];
-  const shareLinkBaseHost = shareLinkHosts[0] ?? '';
-
-  /**
-   * The Access verifier for the SHARE hostname — its own application, its own
-   * audience, built from `shareLinkAudience` and never from `cfAccess`.
-   *
-   * This is the audience cross-check, and it is one line because it is
-   * structural rather than a comparison somewhere: a token minted for the
-   * owner's application carries the owner's AUD and simply fails `jwtVerify`
-   * here, and a token minted at the everyone-policy share sign-in fails at
-   * the owner's verifier for the mirror reason. Neither check can be
-   * forgotten, because neither is a check.
-   *
-   * Null — and the whole host list ignored — unless BOTH a team domain and
-   * the share audience are configured. `server-config.ts` warns at boot; this
-   * is the half in the request path, for an embedded caller that never goes
-   * through bin.ts.
-   */
-  const shareLinkVerifier =
-    opts.cfAccess?.teamDomain && opts.shareLinkAudience
-      ? createCfAccessVerifier({
-          teamDomain: opts.cfAccess.teamDomain,
-          audience: opts.shareLinkAudience,
-          ...(opts.cfAccess.jwks ? { jwks: opts.cfAccess.jwks } : {}),
-        })
-      : null;
-
-  /**
-   * The master switch for external access. Consulted on every request whose
-   * Host is a share or link host, AHEAD of authentication — see the host
-   * decision block below.
-   */
-  const sharingGate = new SharingGate({
+  // Who may reach this server, over which hostname: the sharing registry,
+  // the share-link store, the master switch and the three Access verifiers,
+  // built from the settings `server-config.ts` resolved. See server-deps.ts —
+  // `createServer` composes them, it does not derive them.
+  const {
+    shares,
+    shareLinks,
+    shareLinkHosts,
+    shareLinkBaseHost,
+    shareLinkVerifier,
+    sharingGate,
+    cookieKey,
+    boardShareTarget,
+    cfAccessVerifier,
+    staticAccessVerifier,
+    accessTunnelHosts,
+    collabAccessVerifier,
+    proxiedTrustedEmails,
+    proxiedTrustedVerifier,
+    proxiedTrustedHosts,
+    recallCallbackHost,
+  } = createAccessDeps({
     dataDir,
-    envLocked: opts.sharingEnvLocked ?? false,
+    opts,
+    // Forward reference on purpose: the task store is built below, and
+    // `boardShareTarget` is only ever asked at request time.
+    isBoard: (workspaceId) => taskStore.getWorkspace(workspaceId) !== undefined,
   });
-
-  // Root HMAC key for this server's own tokens — the email session cookie and
-  // the widget popup token derive from it. Generated on first use, mode 600.
-  // It used to sign share session cookies too; link-mode shares are retired
-  // and a share visitor is now proven by Cloudflare Access instead.
-  let cookieKeyCache: string | null = null;
-  const cookieKey = (): string => {
-    cookieKeyCache ??= loadCookieKey(dataDir);
-    return cookieKeyCache;
-  };
-
-  /**
-   * What a share may reach — or null, when it may reach nothing.
-   *
-   * A BOARD is the unit of sharing (Bryan, 2026-08-17). Minting a share of a
-   * folder bind or diff review is refused at the route, but a record written
-   * BEFORE that keeps its slug and its already-signed session cookies, so the
-   * mint guard alone would retire the grant everywhere except where it is
-   * actually exercised. This is that place: every serving path resolves a
-   * share through here, and a share whose workspace is not a board resolves
-   * to nothing.
-   *
-   * Deliberately not a drop in `Shares.load`, which is how the per-doc
-   * removal did it. Two reasons: `Shares` has no way to ask what a board is
-   * (only `taskStore` knows), and a load-time drop would destroy a row an
-   * operator can still want to list and revoke. Removing a capability is not
-   * deleting user content.
-   */
-  const boardShareTarget = (share: Share | null | undefined): ShareTarget | null => {
-    if (!share?.workspaceId) return null;
-    if (!taskStore.getWorkspace(share.workspaceId)) return null;
-    return { workspaceId: share.workspaceId };
-  };
-
-  // When shares is wired, automatically derive the cf-access audience from
-  // the registry so each share-<slug> host can use its own AUD. Callers
-  // can still override by passing cfAccess.audience explicitly.
-  const cfAccessConfig =
-    opts.cfAccess && shares
-      ? { ...opts.cfAccess, audience: shares.audienceResolver }
-      : opts.cfAccess;
-  const cfAccessVerifier = cfAccessConfig ? createCfAccessVerifier(cfAccessConfig) : null;
-
-  /**
-   * The Access verifier for the collaboration hostnames — its OWN verifier,
-   * built from the static env audience rather than the share registry's
-   * per-hostname resolver.
-   *
-   * That separation is not tidiness, it is the only thing that makes the
-   * feature work beside link sharing. When `shares` is wired, the resolver
-   * above answers `null` for any host that is not a live share hostname, and
-   * a collaboration host is by definition not one — so a shared verifier
-   * would refuse every collab request with `no_share_for_host`. Cloudflare
-   * issues one AUD per Access application, and the collaboration hostname has
-   * its own application, so the static `CF_ACCESS_AUD` is the right tag for it.
-   *
-   * Null — and therefore the whole opt-in list ignored — unless BOTH a
-   * hostname is listed and `cfAccess` carries a string audience. This is the
-   * server-side half of the refusal; bin.ts also warns at boot. Two checks
-   * because only this one is in the request path: an embedded caller that
-   * never goes through bin.ts must fail closed too.
-   */
-  const staticAccessVerifier =
-    opts.cfAccess && typeof opts.cfAccess.audience === 'string'
-      ? createCfAccessVerifier(opts.cfAccess)
-      : null;
-  const accessTunnelHosts = opts.accessTunnelHosts ?? [];
-  const collabAccessVerifier = accessTunnelHosts.length > 0 ? staticAccessVerifier : null;
-  /**
-   * The verifier for the operator's own proxied hostnames — the same static
-   * audience verifier, for the same reason: the hostname has its own Access
-   * application, and the per-share resolver cannot answer for it. Null, and
-   * the whole list ignored, unless Access really is configured AND somebody
-   * is named as the operator; bin.ts also refuses at boot, but this check is
-   * the one in the request path.
-   */
-  const proxiedTrustedEmails = new Set(
-    (opts.proxiedTrustedEmails ?? []).map((e) => normalizeEmail(e)).filter((e) => e !== ''),
-  );
-  const proxiedTrustedVerifier =
-    (opts.proxiedTrustedHosts ?? []).length > 0 && proxiedTrustedEmails.size > 0
-      ? staticAccessVerifier
-      : null;
-  // The list as the gate and the origin policy see it: EMPTY unless everything
-  // needed to honour it exists, so a half-configured deployment answers
-  // 403 unknown_host rather than reaching a branch that then has to refuse.
-  const proxiedTrustedHosts = proxiedTrustedVerifier ? (opts.proxiedTrustedHosts ?? []) : [];
-  /**
-   * Recall's dedicated callback hostname, or null.
-   *
-   * Deliberately NOT conditioned on a verifier the way the list above is:
-   * there is no Access application in front of this name and there cannot be
-   * one (Recall's backend has no browser). What arms it is the credential
-   * each of its two routes carries, checked per request in
-   * `recallCallbackAllows` — so a server with no Recall key and no webhook
-   * secret answers 404 to everything on the hostname rather than serving a
-   * route with nothing behind it.
-   */
-  const recallCallbackHost = opts.recallCallbackHost?.trim() || null;
 
   const sse = new SseHub();
   // Pick up where the last clean shutdown left off, so a deploy is silent on
@@ -1670,874 +1475,24 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
     console.error(`[chat-audit] ${chatAudit.loadError}`);
   }
 
-  // --- Push notifications ---------------------------------------------
-  //
-  // Devices enrolled for "a review item just landed". The store is cheap and
-  // synchronous; the VAPID identity is not (it may have to mint a keypair),
-  // so the notifier is built once, lazily, behind a cached promise. Building
-  // it eagerly would make `createServer` async for a feature nobody has
-  // necessarily turned on.
-  const pushStore = new PushStore({ dataDir });
-  if (pushStore.loadError) {
-    console.error(`[push] ${pushStore.loadError}`);
-  }
-  let pushNotifierPromise: Promise<PushNotifier | null> | null = null;
+  // The push announcement and the review-item quality gate are built LATER,
+  // once `resolveWorkspaceForDoc` and the task projection exist — see
+  // `createPushAnnounce` / `createReviewGate` further down. Their functions
+  // are only ever called from a route or a hook, so the callers above that
+  // name one (`proposeAllowRule`, `stallVerdict`) reach it at request time.
 
-  /**
-   * The RFC 8292 `sub` claim: who a push service should contact about this
-   * sender. This server's own origin is the standard non-email answer.
-   *
-   * Returns undefined on a plain-HTTP origin, and that disables the whole
-   * feature rather than papering over it — a service worker cannot register
-   * outside a secure context, so there is nothing on the other end to deliver
-   * to. Prod sets CW_PUBLIC_BASE_URL to the HTTPS tailnet name for exactly
-   * the reason `public-host.ts` gives about the microphone; the same override
-   * is what makes push reachable.
-   */
-  function pushSubject(): string | undefined {
-    const override = process.env.CW_PUSH_SUBJECT?.trim();
-    if (override) return override;
-    const base = externalBaseUrl();
-    return base.startsWith('https://') ? base : undefined;
-  }
-
-  function pushNotifier(): Promise<PushNotifier | null> {
-    pushNotifierPromise ??= (async () => {
-      const subject = pushSubject();
-      if (!subject) return null;
-      try {
-        return new PushNotifier({
-          store: pushStore,
-          keys: await loadOrCreateVapidKeys(dataDir),
-          subject,
-          log: (message) => console.error(`[push] ${message}`),
-          ...(opts.pushFetch ? { fetch: opts.pushFetch } : {}),
-        });
-      } catch (err) {
-        // A corrupt or unreadable key file. Say so once; the feature stays
-        // off rather than re-minting and invalidating every enrolled device.
-        console.error(`[push] disabled: ${(err as Error).message}`);
-        return null;
-      }
-    })();
-    return pushNotifierPromise;
-  }
-
-  /**
-   * Announce a review item to every enrolled device.
-   *
-   * Deliberately fire-and-forget. The review item is already written by the
-   * time this runs, and the caller is a route about to answer 200; making
-   * that response wait on several third-party push services — or fail
-   * because one of them is down — would trade the durable thing for the
-   * announcement of it.
-   */
-  function announceReviewItem(input: {
-    ask: string;
-    context: string;
-    askedBy: string;
-    url: string | undefined;
-    key: string;
-  }): void {
-    // No link, nothing to click. Criterion 2 of this feature is the click
-    // landing on the item, so a notification without one is not worth sending.
-    if (!input.url) return;
-    void (async () => {
-      try {
-        const notifier = await pushNotifier();
-        if (!notifier) return;
-        await notifier.send(
-          reviewItemNotification({ ...input, url: input.url as string, now: Date.now() }),
-        );
-      } catch (err) {
-        console.error(`[push] announce failed: ${(err as Error).message}`);
-      }
-    })();
-  }
-
-  /** Where a comment-borne review item opens. A task discussion opens the
-   *  TICKET — the board reveals the thread from its own state — while a doc
-   *  thread opens the doc at the comment rather than at its top. */
-  function reviewThreadLink(docId: string, threadId: string): string | undefined {
-    const base = threadUrl(docId, false);
-    if (!base) return undefined;
-    if (docId.startsWith('task:')) return base;
-    return `${base}?thread=${encodeURIComponent(threadId)}`;
-  }
-
-  /** What the reader is being asked ABOUT: the ticket's title for a task
-   *  discussion, the doc's label otherwise. Same choice `reviewThreadItems`
-   *  makes when it builds the queue row. */
-  function reviewThreadContext(docId: string): string {
-    if (docId.startsWith('task:')) {
-      const task = taskStore.getTask(docId.slice('task:'.length));
-      if (task) return task.title;
-    }
-    return rooms.peekMeta(docId)?.title ?? 'A document';
-  }
-
-  /** One spelling of "a declaration just landed on a comment", for the three
-   *  routes that can carry one. */
-  function announceThreadReview(
-    docId: string,
-    threadId: string,
-    review: ReviewPayload,
-    author: User,
-  ): void {
-    announceReviewItem({
-      ask: review.headline,
-      context: reviewThreadContext(docId),
-      askedBy: author.name,
-      url: reviewThreadLink(docId, threadId),
-      key: `${docId}:${threadId}`,
+  // Effort scoring — see effort-scoring.ts. Built ABOVE the subscription
+  // that calls it, so `scoreEffortEstimate` is declared before its first
+  // use: on main it was a hoisted function declaration and the order could
+  // not bite, and a `const` in the temporal dead zone would throw if a task
+  // event ever fired during init. The projection it re-projects through is
+  // built further down, so it arrives as a thunk.
+  const { scoreEffortEstimate, rescoreStaleEffortEstimates, stopEffortRescore } =
+    createEffortScoring({
+      taskStore,
+      refreshWorkspace: (workspaceId) => taskProjection.refresh(workspaceId),
+      opts,
     });
-  }
-
-  /**
-   * The comment a just-written declaration landed on.
-   *
-   * The write routes hand back the whole THREAD, not the comment, so the id
-   * the gate addresses has to be recovered from it. Newest-first and matched
-   * on the payload's own identity — a thread can already carry other
-   * declarations, and holding the wrong one would take somebody else's live
-   * ask off the queue.
-   */
-  function commentBearing(thread: Thread, review: ReviewPayload): string | undefined {
-    for (let i = thread.comments.length - 1; i >= 0; i--) {
-      const c = thread.comments[i];
-      if (c?.review === review || (c?.review && c.review.headline === review.headline)) {
-        return c.id;
-      }
-    }
-    return undefined;
-  }
-
-  /**
-   * The hold on a declaration, read back off what is STORED.
-   *
-   * For the deduplicated request, which never ran the filing closure and so
-   * holds no gate of its own while the first request's verdict is already on
-   * the comment. Answering that request without `held` would tell a retrying
-   * client its filing was accepted and leave it waiting on a reader who
-   * cannot see the item (codex review). Both callers await the same closure,
-   * so by the time this runs the verdict is recorded.
-   *
-   * `undefined` for anything that is not a live hold — no declaration, no
-   * recoverable comment, a verdict that passed.
-   */
-  function recordedThreadHold(
-    docId: string,
-    thread: Thread,
-    review: ReviewPayload | undefined,
-  ): ThreadReviewGate | undefined {
-    if (!review) return undefined;
-    const commentId = commentBearing(thread, review);
-    if (commentId === undefined) return undefined;
-    const stored = thread.comments.find((c) => c.id === commentId)?.review;
-    if (!stored || !isReviewPayloadHeld(stored) || stored.judge === undefined) return undefined;
-    const reason = stored.judge.reason;
-    return {
-      held: true,
-      review: stored,
-      reason,
-      message: heldMessage({ kind: 'thread', docId, threadId: thread.id, commentId }, reason),
-    };
-  }
-
-  /**
-   * File a comment-borne declaration through the gate, then announce it only
-   * if it passed.
-   *
-   * ONE funnel for the routes that can write one — `create_thread`,
-   * `threads/by_find`, `post_reply` — because "judged, then announced, in
-   * that order" is the rule that keeps a held item off every surface at
-   * once. A push whose title is the item's headline says "here is something
-   * to review"; sending it for an item the reader's queue omits is the exact
-   * lie the gate exists to prevent.
-   *
-   * A comment whose id cannot be recovered is announced unjudged, which is
-   * the same fail-open answer every other judge failure gets.
-   */
-  async function gateThreadDeclaration(
-    docId: string,
-    thread: Thread,
-    review: ReviewPayload,
-    author: User,
-  ): Promise<ThreadReviewGate> {
-    const commentId = commentBearing(thread, review);
-    if (commentId === undefined) {
-      announceThreadReview(docId, thread.id, review, author);
-      return { held: false, review };
-    }
-    const gate = await judgeThreadReview(docId, thread.id, commentId, review, author);
-    if (!gate.held) announceThreadReview(docId, thread.id, gate.review, author);
-    return gate;
-  }
-
-  /** The same, for a declaration that hangs on a TICKET rather than a
-   *  comment. Both land in the reviewer's queue, so both are announced. */
-  function announceTaskReview(task: Task, item: TaskReviewItem, author: User): void {
-    announceReviewItem({
-      ask: item.review.headline,
-      context: task.title,
-      askedBy: author.name,
-      url: `${externalBaseUrl()}${taskDeepLink(task.workspaceId, task.id)}`,
-      key: `${task.id}:${item.id}`,
-    });
-  }
-
-  /**
-   * WHERE a held item lives, and therefore how its filer addresses the fix.
-   *
-   * Two surfaces file review items and both are gated, so the hold has to be
-   * able to name either address. A hold whose message points at the wrong
-   * verb is a dead end — the item sits off the queue, the stall loop
-   * complains at five minutes, and the filer cannot comply — which is
-   * exactly the objection that kept the thread path ungated until
-   * `revise_review_item` grew its doc form.
-   */
-  type ReviewGateAddress =
-    | { kind: 'task'; taskId: string; reviewItemId: string }
-    | { kind: 'thread'; docId: string; threadId: string; commentId: string }
-    // The ticket's OWN decision — a row that IS the question rather than one
-    // carrying it. It has no item id to name (`legacyReviewItem` derives it
-    // at read time under the fixed `r-legacy`, which is the same string on
-    // every such ticket), so the address is the ticket, and
-    // `revise_review_item` takes it with `reviewItemId` omitted — the shape
-    // `answer_decision` has always used for the same row.
-    | { kind: 'decision'; taskId: string };
-
-  /** The paste-ready call that ends a hold, per surface. One spelling, used by
-   *  the tool result, the filer's wake and the stall report alike — three
-   *  copies of an address is how one of them ends up naming a verb that
-   *  refuses. */
-  function reviseCallFor(address: ReviewGateAddress): string {
-    switch (address.kind) {
-      case 'task':
-        return `revise_review_item(taskId="${address.taskId}", reviewItemId="${address.reviewItemId}")`;
-      case 'decision':
-        return `revise_review_item(taskId="${address.taskId}")`;
-      default:
-        return `revise_review_item(docId="${address.docId}", threadId="${address.threadId}", commentId="${address.commentId}")`;
-    }
-  }
-
-  /** What a filing route says when the gate held the item. Points at the
-   *  fix rather than only at the verdict: the filer's next act is one call. */
-  function heldMessage(address: ReviewGateAddress, reason: string): string {
-    return (
-      `Held off the reader's queue — ${judgeReasonSentence(reason)} ` +
-      `It is on the ${address.kind === 'thread' ? 'thread' : 'ticket'}; revise it with ${reviseCallFor(address)}. ` +
-      'Every revision is judged again, and the item reaches the queue when it passes.'
-    );
-  }
-
-  /** Process-wide: a judge that throws is named once, not once per filing. */
-  let warnedJudgeThrew = false;
-
-  /**
-   * One review item as the gate needs to see and write it — the seam that
-   * lets a TICKET item and a COMMENT-borne one run the same gate.
-   *
-   * It exists because "gated" must not become two rules. The gate shipped for
-   * the ticket form alone, and the fleet rule tells every peer to file asks
-   * with `create_thread(review=…)` — so the documented path reached the
-   * reader's queue with the judge called zero times, and the confidence the
-   * gate produced was confidence it had not earned. A second implementation
-   * for the second surface would have re-created that gap one drift at a
-   * time; this way there is one order of operations, one failure policy, and
-   * one shape of hold, and a route only says where the words live.
-   *
-   * `T` is the surface's own row — a `TaskReviewItem` or a bare
-   * `ReviewPayload` — so a caller gets back the thing it already holds.
-   */
-  interface ReviewGateTarget<T> {
-    workspaceId: string;
-    /** How the filer addresses the fix. See `ReviewGateAddress`. */
-    address: ReviewGateAddress;
-    /** The ticket's or the doc's name — what the wake calls the thing the
-     *  item hangs on. */
-    title: string;
-    /** The row as it stands NOW, re-read from the store. `undefined` means it
-     *  has gone. */
-    current: () => T | undefined;
-    words: (row: T) => ReviewPayload;
-    version: (row: T) => number;
-    held: (row: T) => boolean;
-    judgement: (row: T) => ReviewItemJudgement | undefined;
-    /** Conditionally stamp a verdict — refuses on `stale`, on an answered
-     *  row, and on a row that has gone. */
-    record: (
-      judgement: ReviewItemJudgement,
-      opts: { forVersion?: number; forPendingAt?: number },
-    ) => { ok: true; row: T } | { ok: false };
-    /** Whatever the surface must do once a verdict is durable — refresh the
-     *  projection, broadcast, both. Called only on a write that landed. */
-    settled: (row: T) => void;
-  }
-
-  type GateOutcome<T> =
-    | { held: false; row: T }
-    | { held: true; row: T; reason: string; message: string };
-
-  /**
-   * Put a filed or revised review item through the quality gate — the ONE
-   * implementation, whichever surface the item was filed on.
-   *
-   * ONE call, no retries, and every failure is a pass: no judge configured,
-   * a judge that answers `null`, a judge that throws — the item goes through
-   * and the record says `unavailable` (Bryan, 2026-08-29: don't refuse; never
-   * block on the judge being down). A hold records the verdict on the item,
-   * keeps it off the queue (`review-queue.ts` skips a gated row on either
-   * surface), and wakes the FILER — addressed, the way `review_answered`
-   * wakes the lead — with which item, why, and the exact call that lifts it.
-   * The lead is not told here: an item held for five minutes reaches the lead
-   * through the stall loop.
-   *
-   * Returns the row as recorded, so a route hands back the verdict it just
-   * made rather than the pre-judgement row.
-   */
-  async function runReviewGate<T>(
-    target: ReviewGateTarget<T>,
-    row: T,
-    author: { id: string; name: string; kind?: string },
-  ): Promise<GateOutcome<T>> {
-    const judge = opts.reviewJudge;
-    const criteria = taskStore.reviewItemCriteria(target.workspaceId);
-    if (!judge || !criteria) {
-      // Gate off. An UNHELD item is left unjudged, as before the gate
-      // existed. A held one — held by a judge that has since been turned
-      // off or lost its key — is released on this revision, or it would
-      // stay off the reader's queue with nothing left that could clear it
-      // (codex review).
-      if (!target.held(row)) return { held: false, row };
-      const released = target.record(
-        { at: Date.now(), verdict: 'unavailable', reason: 'the judge is off' },
-        {},
-      );
-      if (released.ok) target.settled(released.row);
-      return { held: false, row: released.ok ? released.row : row };
-    }
-    // The words this verdict will be about. A revision landing while the
-    // judge is out gets its own call; this one's verdict must not be
-    // stamped onto words it never read (codex review).
-    const forVersion = target.version(row);
-    // Off the queue from THIS moment, not from the verdict: the item is
-    // already in the store, and the seconds the judge takes were seconds the
-    // reader could see — and answer — an item about to be held (codex
-    // review). `pending` is what the queue reads meanwhile; the ticket says
-    // nothing about it.
-    const pendingAt = Date.now();
-    target.record({ at: pendingAt, verdict: 'pending', reason: 'being judged' }, { forVersion });
-    const words = target.words(row);
-    let verdict: ReviewJudgeVerdict | null = null;
-    try {
-      verdict = await judge({
-        criteria: criteria.value,
-        item: {
-          headline: words.headline,
-          ...(words.detail !== undefined ? { detail: words.detail } : {}),
-          ...(words.options !== undefined ? { options: words.options } : {}),
-        },
-      });
-    } catch (err) {
-      if (!warnedJudgeThrew) {
-        warnedJudgeThrew = true;
-        console.error(
-          '[review-gate] judge threw; items pass through:',
-          err instanceof Error ? err.message : err,
-        );
-      }
-      verdict = null;
-    }
-    const at = Date.now();
-    const judgement =
-      verdict === null
-        ? { at, verdict: 'unavailable' as const, reason: 'the judge could not answer' }
-        : { at, verdict: verdict.ok ? ('ok' as const) : ('held' as const), reason: verdict.reason };
-    const recorded = target.record(judgement, {
-      forVersion,
-      // Also refused if the reader overruled the gate while we were out: a
-      // release does not change the item's words, so the version still
-      // matches and only the pending stamp tells us the row moved under us
-      // (codex review).
-      forPendingAt: pendingAt,
-    });
-    // A row the store would not stamp (answered under us, revised under us,
-    // or the derived legacy row) is left exactly as it was. For a stale
-    // verdict the revision's own judgement is the one that stands — so the
-    // gate state handed back is read off the row as it is NOW, which may be
-    // a hold the newer call just placed (codex review): saying "passed"
-    // here would announce to the reader an item the queue still omits.
-    if (!recorded.ok) {
-      const current = target.current();
-      if (current !== undefined && target.held(current)) {
-        const reason = target.judgement(current)?.reason ?? '';
-        return {
-          held: true,
-          row: current,
-          reason,
-          message: heldMessage(target.address, reason),
-        };
-      }
-      return { held: false, row: current ?? row };
-    }
-    // The projection carries `judge`, so the card can say "Held: …".
-    target.settled(recorded.row);
-    if (judgement.verdict !== 'held') return { held: false, row: recorded.row };
-    const address = target.address;
-    const frame: ReviewItemHeldFrame = {
-      event: REVIEW_ITEM_HELD_EVENT,
-      workspaceId: target.workspaceId,
-      ...(address.kind === 'thread'
-        ? { docId: address.docId, threadId: address.threadId, commentId: address.commentId }
-        : { taskId: address.taskId }),
-      revise: reviseCallFor(address),
-      title: target.title,
-      reviewItemId:
-        address.kind === 'task'
-          ? address.reviewItemId
-          : address.kind === 'decision'
-            ? LEGACY_REVIEW_ITEM_ID
-            : address.commentId,
-      headline: words.headline,
-      reason: judgement.reason,
-      ts: at,
-    };
-    sse.sendToAgent(`ws~${target.workspaceId}`, author.id, { ...frame });
-    return {
-      held: true,
-      row: recorded.row,
-      reason: judgement.reason,
-      message: heldMessage(address, judgement.reason),
-    };
-  }
-
-  /**
-   * The gate for an item filed on a TICKET — `add_review_item`, a `review`
-   * on `create_tasks`, and every `revise_review_item` that follows.
-   */
-  async function judgeReviewItem(
-    task: Task,
-    item: TaskReviewItem,
-    author: { id: string; name: string; kind?: string },
-  ): Promise<ReviewGate> {
-    const out = await runReviewGate<TaskReviewItem>(
-      {
-        workspaceId: task.workspaceId,
-        address: { kind: 'task', taskId: task.id, reviewItemId: item.id },
-        title: task.title,
-        current: () => {
-          const raw = taskStore.getTask(task.id)?.reviews?.find((r) => r.id === item.id);
-          return raw ? readTaskReviewItem(raw) : undefined;
-        },
-        words: (row) => row.review,
-        version: (row) => reviewItemVersion(row),
-        held: (row) => isReviewItemHeld(row),
-        judgement: (row) => row.judge,
-        record: (judgement, o) => {
-          const res = taskStore.recordReviewJudgement(task.id, item.id, judgement, {
-            actor: author,
-            ...(o.forVersion !== undefined ? { forVersion: o.forVersion } : {}),
-            ...(o.forPendingAt !== undefined ? { forPendingAt: o.forPendingAt } : {}),
-          });
-          return res.ok ? { ok: true, row: res.item } : { ok: false };
-        },
-        settled: () => taskProjection.ensureWorkspace(task.workspaceId),
-      },
-      item,
-      author,
-    );
-    return out.held
-      ? { held: true, item: out.row, reason: out.reason, message: out.message }
-      : { held: false, item: out.row };
-  }
-
-  /**
-   * The gate for a ticket that IS the decision — `needs: 'decision'` with the
-   * question in its own title and body, filed by `create_tasks` (single or
-   * batch) and rewritten by every door that moves those words.
-   *
-   * The third surface, and the one the ticket for this work was written
-   * about: a decision ticket reaches the reader's queue as the derived
-   * `r-legacy` row, so before this it was the one filing path that put a row
-   * in front of Bryan with the judge never called.
-   *
-   * Identical to the other two in everything a filer can observe — same
-   * judge, same criteria, same fail-open policy, same `held` / `heldReason` /
-   * `message`, same `workspace.review_item_held` wake. Two things differ, and
-   * both follow from the row having no item of its own:
-   *
-   *  - the address is the TICKET (`revise_review_item(taskId=…)`), because
-   *    there is no `reviewItemId` — minting one would make the ticket's own
-   *    decision a second, competing row beside itself;
-   *  - the version is `wordsRevisionOf`, not a count of revisions, because
-   *    the words being judged are the row's own and every writer of them
-   *    (the title route, the body route, this revise door) already moves it.
-   */
-  async function judgeTaskDecision(
-    task: Task,
-    author: { id: string; name: string; kind?: string },
-  ): Promise<ReviewGate | undefined> {
-    const derived = taskStore.listReviewItems(task.id).find((r) => r.id === LEGACY_REVIEW_ITEM_ID);
-    // Not a decision — no derived row, so nothing is on the queue to hold.
-    // `undefined` rather than a synthesised pass, so a caller cannot report
-    // "judged and fine" about a ticket the judge was never asked about.
-    if (!derived) return undefined;
-    const out = await runReviewGate<TaskReviewItem>(
-      {
-        workspaceId: task.workspaceId,
-        address: { kind: 'decision', taskId: task.id },
-        title: task.title,
-        current: () =>
-          taskStore.listReviewItems(task.id).find((r) => r.id === LEGACY_REVIEW_ITEM_ID),
-        words: (row) => row.review,
-        version: () => wordsRevisionOf(taskStore.getTask(task.id) ?? task),
-        held: (row) => isReviewItemHeld(row),
-        judgement: (row) => row.judge,
-        record: (judgement, o) => {
-          const res = taskStore.recordDecisionJudgement(task.id, judgement, {
-            actor: author,
-            ...(o.forVersion !== undefined ? { forVersion: o.forVersion } : {}),
-            ...(o.forPendingAt !== undefined ? { forPendingAt: o.forPendingAt } : {}),
-          });
-          return res.ok ? { ok: true, row: res.item } : { ok: false };
-        },
-        settled: () => taskProjection.ensureWorkspace(task.workspaceId),
-      },
-      derived,
-      author,
-    );
-    return out.held
-      ? { held: true, item: out.row, reason: out.reason, message: out.message }
-      : { held: false, item: out.row };
-  }
-
-  /**
-   * The gate for an item filed as a `review` payload ON A COMMENT —
-   * `create_thread`, `threads/by_find`, `post_reply`, and the doc form of
-   * `revise_review_item`.
-   *
-   * Identical to the ticket form in every respect a filer can observe: the
-   * same judge, the same criteria, the same fail-open policy, the same
-   * `held` / `heldReason` / `message` on the result, and the same
-   * `workspace.review_item_held` wake. What differs is only the address the
-   * hold names — `revise_review_item(docId=…, threadId=…, commentId=…)`,
-   * which is why this could not be gated until that form existed.
-   *
-   * The item is addressed by `(docId, threadId, commentId)`, the identity the
-   * queue already keys a doc-thread row on.
-   */
-  async function judgeThreadReview(
-    docId: string,
-    threadId: string,
-    commentId: string,
-    review: ReviewPayload,
-    author: User,
-  ): Promise<ThreadReviewGate> {
-    const workspaceId = resolveWorkspaceForDoc(docId);
-    // A doc no board claims has no criteria to judge against and no queue to
-    // be held off. Passing it through is the same answer "gate off" gives.
-    if (!workspaceId) return { held: false, review };
-    const out = await runReviewGate<ReviewPayload>(
-      {
-        workspaceId,
-        address: { kind: 'thread', docId, threadId, commentId },
-        title: reviewThreadContext(docId),
-        current: () =>
-          rooms.getThread(docId, threadId)?.comments.find((c) => c.id === commentId)?.review,
-        words: (row) => row,
-        version: (row) => reviewPayloadVersion(row),
-        held: (row) => isReviewPayloadHeld(row),
-        judgement: (row) => row.judge,
-        record: (judgement, o) => {
-          const res = rooms.judgeCommentReview(docId, threadId, commentId, judgement, o);
-          return res.ok ? { ok: true, row: res.review } : { ok: false };
-        },
-        // Nothing to project: the payload lives in the doc's own CRDT, and
-        // `setCommentReview` has already broadcast it to everyone in the room.
-        settled: () => {},
-      },
-      review,
-      author,
-    );
-    return out.held
-      ? { held: true, review: out.row, reason: out.reason, message: out.message }
-      : { held: false, review: out.row };
-  }
-
-  /**
-   * One create can put TWO things through the gate: the ticket's own decision
-   * and a `review` payload filed with it. Both are judged — never one instead
-   * of the other — and this is how both are reported through a response shape
-   * that carries a single hold.
-   *
-   * The explicitly filed item leads, because it is the thing the caller wrote
-   * a payload for. A second hold is not dropped: its own paste-ready call is
-   * appended, so a caller that fixes only what the first sentence names is
-   * still told the row has not arrived.
-   */
-  function mergedHold(
-    filed: ReviewGate | undefined,
-    decision: ReviewGate | undefined,
-  ): ReviewGate | undefined {
-    if (!filed?.held) return decision?.held ? decision : (filed ?? decision);
-    if (!decision?.held) return filed;
-    return {
-      ...filed,
-      message: `${filed.message} The ticket's own decision is held as well: ${decision.message}`,
-    };
-  }
-
-  /**
-   * Re-judge a ticket's own decision after its WORDS moved.
-   *
-   * The decision's words are the row's title, body and options, so every
-   * door that rewrites those is a revision of it — `rewrite_task` most of
-   * all. Without this a filer who fixed a held decision the obvious way
-   * would leave the stale verdict standing and the row off the queue
-   * forever: the hold is keyed on the item, and nothing else would ever ask
-   * the judge again. That is the dead end the whole gate is written to avoid,
-   * arriving through a different door.
-   *
-   * A no-op on a row that is not a decision. Announces the row exactly when
-   * this edit is what released it, the same rule the revise door follows.
-   */
-  async function regateDecisionWords(taskId: string, author: User): Promise<void> {
-    const task = taskStore.getTask(taskId);
-    if (!task || task.needs !== 'decision') return;
-    const wasHeld = taskStore
-      .listReviewItems(taskId)
-      .some((r) => r.id === LEGACY_REVIEW_ITEM_ID && isReviewItemHeld(r));
-    const gate = await judgeTaskDecision(task, author);
-    if (wasHeld && gate && !gate.held) announceTaskReview(task, gate.item, author);
-  }
-
-  /** The response fields a filing route adds when the gate held the item. */
-  function heldFields(gate: ReviewGate | ThreadReviewGate | undefined): Record<string, unknown> {
-    return gate?.held ? { held: true, heldReason: gate.reason, message: gate.message } : {};
-  }
-
-  /**
-   * A person's QUESTION typed where an answer goes, turned into the ask it
-   * is: a thread on the task doc anchored to the item, recorded on the item
-   * WITH that thread — which is what takes the item off the reader's queue
-   * (`reviewItemState` reads a threaded question as `waiting`) until the
-   * owner revises it. ONE implementation for the two answer routes — the
-   * review-item route and the task's own `/answer` — so a question typed
-   * into a stored item's card and one typed into the ticket's own decision
-   * card make the same thread and leave the queue by the same rule. `item`
-   * may be the derived `r-legacy` row: its `id` addresses it on the store,
-   * and its `detail` is the task body.
-   *
-   * The caller has already refused an ANSWERED item, which it can see on its
-   * own row; everything else about the conversion is here.
-   */
-  async function askBackOnItem(
-    task: Task,
-    item: TaskReviewItem,
-    text: string,
-    author: User,
-    visitor: boolean,
-  ): Promise<Response> {
-    // One open question at a time, the anchored ask's own rule: a second
-    // would orphan the first, because revise only answers the newest
-    // threaded question (`latestThreadedQuestion`).
-    if (reviewItemState(item) === 'waiting') {
-      const openThreadId = latestThreadedQuestion(item)?.threadId;
-      const owner = item.createdBy.trim() || 'the owner';
-      return j(409, {
-        error: 'waiting',
-        message: `Already waiting on ${owner} — add to the open thread instead`,
-        ...(openThreadId !== undefined ? { threadId: openThreadId } : {}),
-      });
-    }
-    // The question becomes a real thread on the item, exactly as a
-    // phrase-anchored ask does — the thread is where the owner replies, and
-    // what the card opens onto. It is about the WHOLE item, so the anchor
-    // quotes the headline (offsets only if those words happen to sit
-    // uniquely in the detail) and the recorded question carries no range:
-    // there is no phrase to mark.
-    const headlineRange = locateReviewItemRange(item.review.detail, {
-      text: item.review.headline,
-    });
-    const created = await rooms.postComment(
-      taskProjection.ensureBodyRoom(task),
-      null,
-      author,
-      text,
-      {
-        kind: 'review-item',
-        reviewItemId: item.id,
-        snippet: { text: item.review.headline },
-        ...(headlineRange?.start !== undefined && headlineRange?.end !== undefined
-          ? { start: headlineRange.start, end: headlineRange.end }
-          : {}),
-      },
-      { generate: !visitor },
-    );
-    if (!created) return j(500, { error: 'could not create thread' });
-    // Re-checked in the same synchronous stretch as the record — the
-    // `onlyIfUnanswered` discipline the fold path uses. The waiting check
-    // above is a claim about a moment before the thread write's await, and
-    // two readers can both pass it; recording both would bury the first
-    // question where revise can never answer it (`latestThreadedQuestion`
-    // reads only the newest). The loser is refused like any late asker; its
-    // thread stays on the item as an ordinary comment — the reader's words
-    // are user content, and this project does not delete those to tidy a
-    // race (codex review).
-    const now = taskStore.listReviewItems(task.id).find((r) => r.id === item.id);
-    if (now && reviewItemState(now) === 'answered') {
-      return j(409, {
-        error: 'answered',
-        message:
-          'this item was answered while your question was being posted — it stands as a comment on the item; undo the answer first, or ask on the item’s thread',
-      });
-    }
-    if (now && reviewItemState(now) === 'waiting') {
-      const openThreadId = latestThreadedQuestion(now)?.threadId;
-      const owner = now.createdBy.trim() || 'the owner';
-      return j(409, {
-        error: 'waiting',
-        message: `Already waiting on ${owner} — your question was posted as a comment on the item; add to the open thread instead`,
-        ...(openThreadId !== undefined ? { threadId: openThreadId } : {}),
-      });
-    }
-    const asked = taskStore.requestMoreInfoOnReview(task.id, item.id, text, {
-      actor: author,
-      threadId: created.id,
-    });
-    if (!asked.ok) return j(asked.error === 'not-found' ? 404 : 400, asked);
-    taskProjection.ensureWorkspace(asked.task.workspaceId);
-    return j(200, {
-      asked: true,
-      task: asked.task,
-      item: asked.item,
-      threadId: created.id,
-    });
-  }
-
-  /**
-   * The words a goal id resolves to, for the scorer's prompt — a small
-   * local copy of `task-queue.ts`'s private `goalTitleOf` (not exported,
-   * and not worth widening its module's surface for one more caller).
-   * Falls back to the raw id, the same as an unresolved `after` edge
-   * elsewhere: an id nothing can spell out is still something to hand the
-   * prompt rather than nothing, and `CHORES_GOAL_ID` — Backlog — is never
-   * in `workspace.goals` at all, so this is also how a backlogged ticket's
-   * goal renders as "chores" rather than empty.
-   */
-  function goalTitleFor(workspaceId: string, goalId: string): string {
-    const goals = taskStore.getWorkspace(workspaceId)?.goals ?? [];
-    for (const g of goals) {
-      if (g.id === goalId) return g.title;
-    }
-    return goalId;
-  }
-
-  /** Process-wide, so a thrown estimator is named once, not once per ticket. */
-  let warnedEstimatorThrew = false;
-
-  /**
-   * Score one ticket's effort in the background (chunk 2 of the effort
-   * model). Fire-and-forget, the same contract as
-   * `announceReviewItem`: the write that triggered this is already durable
-   * and its route has already answered by the time this runs, so nothing
-   * here may block or slow an edit.
-   *
-   * A produced estimate and a recorded failure are BOTH written — the
-   * positive control this feature was built under: a bad prompt must say
-   * so on the row, not read as data nobody tried to fetch. Only "no
-   * estimator wired at all" (no key, or `CW_EFFORT_ESTIMATE=0`) leaves the
-   * row untouched, the "gate off" contract `judgeReviewItem` also uses.
-   *
-   * Reads the row's provenance BEFORE the await, not after — it describes
-   * the words this run is ABOUT, and `recordEffortEstimate` refuses the
-   * write if the ticket has moved on by the time the call returns, so a
-   * slow answer to old words can never overwrite a newer run's answer.
-   *
-   * `wordsRevision` is the token that decision is made on; the three
-   * timestamps ride along as the human-readable half. Every mutator bumps
-   * the counter before emitting the event that lands here, so this read
-   * sees the post-edit value and the run it overtook holds a smaller one.
-   */
-  function scoreEffortEstimate(task: Task): void {
-    void runEffortEstimate(task);
-  }
-
-  /**
-   * The same run, awaitable — for the boot pass, which must space its calls
-   * out rather than firing one per open ticket at once.
-   *
-   * Resolves once the record has been written (or refused). The event-driven
-   * caller above throws the promise away, which is the fire-and-forget
-   * contract it has always had; only the backfill awaits it.
-   */
-  async function runEffortEstimate(task: Task): Promise<void> {
-    const estimator = opts.effortEstimator;
-    if (!estimator) return;
-    const prompt = taskStore.effortEstimatePrompt(task.workspaceId);
-    if (!prompt) return; // workspace gone
-    const forTitleWrittenAt = task.titleWrittenAt ?? task.createdAt;
-    const forBodyWrittenAt = task.bodyWrittenAt;
-    const forGoal = task.goal;
-    const forWordsRevision = wordsRevisionOf(task);
-    {
-      let verdict: EffortEstimateVerdict | null = null;
-      try {
-        verdict = await estimator({
-          prompt: prompt.value,
-          ticket: {
-            title: task.title,
-            ...(task.body !== undefined ? { body: task.body } : {}),
-            goal: goalTitleFor(task.workspaceId, task.goal),
-          },
-        });
-      } catch (err) {
-        if (!warnedEstimatorThrew) {
-          warnedEstimatorThrew = true;
-          console.error(
-            '[effort-estimate] estimator threw; row marked failed:',
-            err instanceof Error ? err.message : err,
-          );
-        }
-        verdict = null;
-      }
-      const base = {
-        model: EFFORT_ESTIMATE_MODEL,
-        promptVersion: EFFORT_ESTIMATE_PROMPT_VERSION,
-        estimatedAt: Date.now(),
-        forTitleWrittenAt,
-        ...(forBodyWrittenAt !== undefined ? { forBodyWrittenAt } : {}),
-        forGoal,
-        forWordsRevision,
-      };
-      const record: TaskEffortEstimate =
-        verdict === null
-          ? { status: 'failed', reason: 'the scorer could not produce an estimate', ...base }
-          : {
-              status: 'ok',
-              handsOnSeconds: verdict.handsOnSeconds,
-              wallClockSeconds: verdict.wallClockSeconds,
-              ...base,
-            };
-      // A `stale` refusal here is expected under concurrent edits, not a
-      // bug — see the doc comment above — so it is silently dropped rather
-      // than logged.
-      const written = taskStore.recordEffortEstimate(task.id, record);
-      // Re-project the board, because NOTHING ELSE WILL. `recordEffortEstimate`
-      // is deliberately quiet — no store event, no `updatedAt` bump, or the
-      // write would re-trigger its own scorer forever — and the projection
-      // refreshes off store events. So an estimate landed in the store and the
-      // board kept drawing the goal it drew before, until some unrelated edit
-      // happened to refresh the workspace. The bar is the only surface these
-      // numbers appear on; a score nobody can see is a score that did not
-      // happen. Refresh is diff-aware, so a projection already in step is a
-      // no-op transaction.
-      if (written.ok) taskProjection.refresh(task.workspaceId);
-    }
-  }
-
   // Effort-estimate scoring: re-score a ticket in the background whenever
   // its words — or its goal — change. `task.created`, `task.retitled` and
   // `task.body_edited` are the three doors a title or a body move through —
@@ -2636,76 +1591,6 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
       taskProjection.ensureWorkspace(workspaceId);
     }
   };
-
-  /**
-   * Re-score every OPEN ticket whose estimate predates the current ask.
-   *
-   * Scoring is otherwise event-driven — it fires on create, on a retitle, on
-   * a body edit and on a re-triage — and none of those events happen when
-   * the PROMPT changes. Without this pass a prompt bump reaches only tickets
-   * somebody happens to edit afterwards, so a board keeps forecasting from
-   * answers to a question nobody is asking any more, indefinitely and
-   * silently. `EFFORT_ESTIMATE_PROMPT_VERSION` is the token that makes the
-   * staleness decidable; this is the thing that acts on it.
-   *
-   * Open rows only. A closed ticket's estimate is HISTORY — it is one half
-   * of a calibration sample whose other half already happened, and
-   * re-scoring it under a new prompt would be scoring a ticket whose outcome
-   * is known, which is the one thing the effort plan's backfill section says
-   * never to do ("blind scoring is the whole point"). The calibrator drops
-   * old-generation samples instead (`isCurrentGenerationEstimate`), which
-   * costs the board its learned factors and is why the priors exist.
-   *
-   * SEQUENTIAL, with a gap between calls. A hundred open rows is a hundred
-   * API calls, and firing them together on boot would spend the rate limit
-   * that live edits need on work nobody is waiting for. Nothing is waiting
-   * on this loop, so it can afford to be slow.
-   *
-   * Never blocks startup and never fails one: the promise is thrown away,
-   * every call already records its own failure on the row, and a server with
-   * no estimator wired does nothing here at all.
-   */
-  const EFFORT_RESCORE_GAP_MS = 250;
-  let effortRescoreStopped = false;
-  async function rescoreStaleEffortEstimates(): Promise<void> {
-    if (!opts.effortEstimator) return;
-    const stale: Task[] = [];
-    for (const ws of taskStore.listWorkspaces()) {
-      for (const task of taskStore.listTasks(ws.id)) {
-        if (task.status === 'done') continue;
-        // Absent AND older-generation, both. A never-scored open ticket is
-        // the same problem from the other side — it contributes nothing to
-        // its goal's bar and says "not scored" forever unless somebody edits
-        // it — and this loop is already walking past it.
-        if (task.effortEstimate?.promptVersion === EFFORT_ESTIMATE_PROMPT_VERSION) continue;
-        stale.push(task);
-      }
-    }
-    if (stale.length === 0) return;
-    console.log(
-      `[effort-estimate] re-scoring ${stale.length} open ticket${stale.length === 1 ? '' : 's'} under prompt version ${EFFORT_ESTIMATE_PROMPT_VERSION}`,
-    );
-    for (const task of stale) {
-      if (effortRescoreStopped) return;
-      // Re-read: the row may have been edited, archived or closed since the
-      // list was taken, and a rescore of a row that moved on is wasted at
-      // best — `recordEffortEstimate` would refuse it as stale anyway.
-      const current = taskStore.getTask(task.id);
-      if (!current || current.status === 'done' || current.archivedAt !== undefined) continue;
-      // And re-ask the question this loop exists to answer. A row queued
-      // behind a hundred others can be edited while it waits, and an edit
-      // triggers its own scoring — so by the time the loop reaches it the row
-      // may already carry a current-generation estimate. Without this check
-      // the pass spends a second call and can land its answer on top of the
-      // newer one, which `recordEffortEstimate`'s guard does not catch
-      // because no words changed between the two reads.
-      if (current.effortEstimate?.promptVersion === EFFORT_ESTIMATE_PROMPT_VERSION) continue;
-      await runEffortEstimate(current);
-      if (effortRescoreStopped) return;
-      await new Promise((r) => setTimeout(r, EFFORT_RESCORE_GAP_MS));
-    }
-    console.log('[effort-estimate] re-scoring pass done');
-  }
 
   // The done-artifact check (artifact-check.ts): a move to done gets the
   // row's links verified after the transition commits — a dead PR link or a
@@ -4444,6 +3329,43 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
   const resolveWorkspaceForDoc = (docId: string): string | null =>
     backTargetFor(docId, reviewIdOf(rooms.peekMeta(docId) ?? {}))?.id ?? null;
 
+  // Browser push, and the review-item quality gate that decides whether an
+  // item may be announced at all. Built HERE rather than beside the other
+  // stores because the gate needs `resolveWorkspaceForDoc` and the task
+  // projection, and the gate takes `announceReviewItem` rather than the
+  // routes calling it — so "judged, then announced" is the wiring rather
+  // than a rule two callers have to remember. See review-gate.ts.
+  const { pushStore, pushNotifier, announceReviewItem } = createPushAnnounce({
+    dataDir,
+    externalBaseUrl,
+    opts,
+  });
+  const {
+    announceTaskReview,
+    announceThreadReview,
+    recordedThreadHold,
+    gateThreadDeclaration,
+    reviseCallFor,
+    judgeReviewItem,
+    judgeTaskDecision,
+    judgeThreadReview,
+    mergedHold,
+    regateDecisionWords,
+    heldFields,
+    askBackOnItem,
+  } = createReviewGate({
+    rooms,
+    taskStore,
+    taskProjection,
+    sse,
+    opts,
+    j,
+    externalBaseUrl,
+    threadUrl,
+    resolveWorkspaceForDoc,
+    announceReviewItem,
+  });
+
   /**
    * The workspace to send THIS caller to for a doc.
    *
@@ -4709,262 +3631,39 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
     };
   };
 
-  // --- Email-keyed identity ---------------------------------------------
-  // The roster and the challenge store. Both are cheap to construct and
-  // neither reads anything at boot beyond `identities.json`, so they exist
-  // whether or not `CW_REQUIRE_EMAIL_AUTH` is set — the flag governs what a
-  // session MEANS, not whether a person can create one. See ServerOptions.
-  const identities = new Identities({ dataDir });
-  if (identities.loadError) {
-    console.error(`[identities] ${identities.loadError}`);
-  }
-  // Agents are roster rows too: an attach writes one, and the seat claim
-  // names the lead by it. See identities.ts. The activity readers resolve
-  // through the same roster, so an old actor id reads as the identity it
-  // was merged into.
-  taskStore.setAgentRoster(identities);
-  setIdentityRoster(identities);
-  // Teach the owner check which anonymous session ids belong to a known
-  // person. Logged either way: a link file that failed to parse and one that
-  // was never written both leave the map empty, and the difference is
-  // invisible everywhere downstream — it shows up only as an activity stream
-  // that under-attributes, months later. See identity-links.ts.
-  // Advertise that this process appends to `<dataDir>/activity.jsonl`, so the
-  // repair tool can verify the log has no live writer instead of trusting an
-  // operator to have stopped us. BEST EFFORT on purpose: a leftover lock file
-  // must never be able to stop the server from booting — that would turn a
-  // stray file into an outage. The refusal lives on the repair side, where
-  // refusing means "changed nothing". See activity-lock.ts.
-  const activityLock = acquireActivityLock(dataDir, 'server');
-  if (!activityLock.ok) {
-    console.error(
-      `[activity] ${activityLock.path} is held by pid ${activityLock.heldBy?.pid} ` +
-        `(${activityLock.heldBy?.holder}); starting anyway. A repair running now cannot see us.`,
-    );
-  }
-  const identityLinkLoad = loadIdentityLinks(dataDir);
-  if (identityLinkLoad.error) {
-    console.error(`[identities] ${identityLinkLoad.error}`);
-  } else if (identityLinkLoad.loaded > 0) {
-    console.log(`[identities] ${identityLinkLoad.loaded} identity link(s) loaded`);
-  }
-  const emailCodes = new EmailCodes(opts.authCeilings ?? {});
-  const sessionRevocations = new SessionRevocations({ dataDir });
-  if (sessionRevocations.loadError) {
-    console.error(`[auth] revoked-sessions file was unreadable: ${sessionRevocations.loadError}`);
-    // Fail closed, then self-heal (Bryan + security review, 2026-08-28): a
-    // revoked id could be hiding in the unreadable file, so end EVERY
-    // outstanding session via the roster watermark — after which an empty
-    // denylist resurrects nothing and the store can restart. Order matters:
-    // the bump must be durable before the store reopens.
-    const bumped = identities.revokeAllSessions();
-    if (sessionRevocations.resetAfterWatermarkBump()) {
-      console.error(
-        `[auth] self-healed: sessions for ${bumped} identities ended via the sessionsValidFrom watermark; denylist restarted empty (broken file kept aside) — everyone signs in again`,
-      );
-    } else {
-      // The broken file would not even move aside. The store stays failed
-      // closed, which sessionIdentityFor turns into "nobody is signed in".
-      console.error(
-        '[auth] could not move the broken revoked-sessions file aside — REFUSING ALL SESSIONS until it is restored or deleted',
-      );
-    }
-  }
-  const codeSender = opts.codeSender ?? createLogCodeSender();
-  const requireEmailAuth = opts.requireEmailAuth ?? false;
-  // ON by default (owner decision on the security row, 2026-09-02). Tests of
-  // OTHER gates that write from a browser pass `false` explicitly; the
-  // deployment switch is `CW_REQUIRE_SIGNIN_TO_WRITE` in bin.ts.
-  const requireSignInToWrite = opts.requireSignInToWrite ?? true;
-  // ON by default (Bryan, 2026-09-02). Off restores the tailnet/LAN grant;
-  // the deployment switch is `CW_ACCESS_ONLY_BROWSER_HOSTS` in bin.ts.
-  const accessOnlyBrowserHosts = opts.accessOnlyBrowserHosts ?? true;
-  const emailCodeSignIn = opts.emailCodeSignIn ?? !accessOnlyBrowserHosts;
-  /** Which signed Recall webhook ids have already been accepted. */
-  const webhookReplayGuard = new WebhookReplayGuard();
-  // Teach the owner check the owner's email identity. Without this the check
-  // keeps matching only `known-bryan` / "Bryan", and the day the owner's
-  // identity becomes `user-<hash>` the owner-activity view quietly reads
-  // empty with nothing anywhere reporting it. See activity.ts.
-  if (opts.ownerEmail && isEmailLike(opts.ownerEmail)) {
-    const ownerId = emailIdentityId(opts.ownerEmail);
-    registerOwnerIdentity(ownerId);
-    // Named so the identity exists in the roster before its first write,
-    // rather than appearing the first time the owner happens to log in.
-    identities.upsertByEmail(opts.ownerEmail);
-    // The owner's legacy spellings fold into the owner's roster row: the
-    // pre-email id, and every link-file id whose target is an owner id. So
-    // every reader that resolves through the roster — activity rows, the
-    // home brief, the weekly-review projections — lands on ONE identity for
-    // the owner. Read-time only; nothing on disk is rewritten.
-    const owners = new Set(ownerIdentityIds());
-    identities.addMergedFrom(ownerId, 'known-bryan');
-    for (const [from, to] of Object.entries(identityLinks())) {
-      if (owners.has(to) || owners.has(resolveIdentityId(to))) {
-        identities.addMergedFrom(ownerId, from);
-      }
-    }
-  } else if (opts.ownerEmail) {
-    console.error(`[identities] CW_OWNER_EMAIL is not an address: ${opts.ownerEmail}`);
-  }
-  let emailSessionKeyCache: string | null = null;
-  const emailSessionKey = (): string => {
-    emailSessionKeyCache ??= deriveSessionKey(cookieKey());
-    return emailSessionKeyCache;
-  };
-  let widgetTokenKeyCache: string | null = null;
-  const widgetTokenKey = (): string => {
-    widgetTokenKeyCache ??= deriveWidgetTokenKey(cookieKey());
-    return widgetTokenKeyCache;
-  };
-
-  /**
-   * The widget popup-token off a request's Authorization header, or null.
-   *
-   * Only `Bearer wt1.…` is ours — any other Authorization value is somebody
-   * else's protocol and must stay invisible here, so presenting one can
-   * never trip the widget-token 401.
-   */
-  const widgetBearerOf = (req: Request): string | null => {
-    const header = req.headers.get('authorization');
-    if (!header) return null;
-    const m = header.match(/^Bearer\s+(wt1\..+)$/i);
-    return m?.[1] ?? null;
-  };
-
-  /**
-   * The identity a widget token attests to, or null. The mirror of
-   * `sessionIdentityFor`: the token names a session, so every liveness rule
-   * a cookie faces — the failed-closed denylist, the per-session revocation
-   * logout writes, roster status, the `sessionsValidFrom` watermark —
-   * applies to the token on every use. Remove any of these and a revoked
-   * session keeps commenting through its token.
-   *
-   * `presentedOrigin` is the request's `Origin` header. The token was
-   * minted for exactly one page origin (signed in), and only a request the
-   * browser stamped with that origin may use it: absent (curl, a server-
-   * side replay), `null` (an opaque origin), or any other origin is a 401.
-   * The widget's every use is a cross-origin fetch, which always carries
-   * the header — this costs the real caller nothing and a thief everything.
-   */
-  const widgetTokenIdentityFor = (
-    raw: string,
-    presentedOrigin: string | null,
-  ): IdentityRecord | null => {
-    // Belt-and-braces, deliberately: `isRevoked` below already answers true
-    // while the denylist is failed closed, and a widget token always
-    // carries a session id (verifyWidgetToken refuses one without), so this
-    // line is never the only thing refusing. It mirrors sessionIdentityFor,
-    // where a v1 cookie has no session id and WOULD skip `isRevoked`; kept
-    // so the two gates read the same and a future edit to one is obviously
-    // a change to both. Mutation-tested: removing it turns nothing red.
-    if (sessionRevocations.failedClosed()) return null;
-    const claims = verifyWidgetToken(raw, widgetTokenKey());
-    if (!claims) return null;
-    if (presentedOrigin === null || presentedOrigin !== claims.origin) return null;
-    if (sessionRevocations.isRevoked(claims.sessionId)) return null;
-    const rec = identities.get(claims.identityId);
-    // Status is load-bearing on its own, not only via the watermark:
-    // `archive()` bumps sessionsValidFrom, but a roster row hand-edited to
-    // `archived` (the file is meant to be editable) carries no bump, and
-    // only this check refuses its tokens. Pinned in the routes test.
-    if (!rec || rec.status !== 'active') return null;
-    if (claims.sessionIssuedAt < rec.sessionsValidFrom) return null;
-    return rec;
-  };
-
-  /**
-   * Which client the login rate limits count this request against.
-   *
-   * NOT `server.requestIP(req)` on its own: both of this deployment's reverse
-   * proxies run on this machine and dial the server over loopback, so that
-   * call answers `127.0.0.1` for every remote reviewer and collapsed all of
-   * them into one shared budget. See middleware/client-address.ts for the
-   * measurements and for why the header is read only from a loopback socket
-   * and only from its rightmost entry.
-   */
-  const clientKeyFor = (req: Request): string =>
-    clientAddressKey({
-      socketAddress: server.requestIP(req)?.address,
-      forwardedFor: req.headers.get('x-forwarded-for'),
-    });
-
-  /**
-   * Whether this request really reached us over https.
-   *
-   * Read off `policyFor`, which is the ONE place that derives a scheme from
-   * an allowlisted `x-forwarded-proto` — the server's own socket is always
-   * plain http, so `new URL(req.url).protocol` would answer "http" for every
-   * https visitor and strip `Secure` from every cookie they get. Reusing that
-   * derivation also inherits its defence against header injection.
-   */
-  const isSecureRequest = (req: Request): boolean =>
-    policyFor(req).requestOrigin.startsWith('https://');
-
-  /**
-   * The identity a request's session cookie attests to, or null.
-   *
-   * Six ways to be null and they are deliberately indistinguishable to the
-   * caller: no cookie, a cookie that does not verify (or, old format, has
-   * expired), an identity the roster does not hold, an identity whose
-   * sessions have been revoked or archived, a session that was logged out,
-   * and a revocation list in its failed-closed state (unhealable at boot,
-   * or deleted at runtime). Every one of them means "not signed in".
-   */
-  const sessionIdentityFor = (req: Request): IdentityRecord | null => {
-    // Fail closed on a broken revocation list — with it gone, nothing can
-    // tell a live session from a logged-out one. Checked here and not only
-    // inside `isRevoked` because a surviving v1 cookie has no session id
-    // and would skip that call entirely.
-    if (sessionRevocations.failedClosed()) return null;
-    const claims = verifyEmailSession(
-      readCookie(req.headers.get('cookie'), SESSION_COOKIE),
-      emailSessionKey(),
-    );
-    if (!claims) return null;
-    // Per-session revocation — what logout writes. This is the only thing
-    // that ends a v2 cookie, which carries no expiry of its own.
-    if (claims.sessionId !== null && sessionRevocations.isRevoked(claims.sessionId)) return null;
-    const rec = identities.get(claims.identityId);
-    if (!rec || rec.status !== 'active') return null;
-    // Identity-wide revocation: a cookie minted before the watermark is dead
-    // however long it says it lives.
-    if (claims.issuedAt < rec.sessionsValidFrom) return null;
-    return rec;
-  };
-
-  /**
-   * Re-issue a live session's cookie in place. The session itself never
-   * expires; what slides is the browser's own cap on cookie retention (and,
-   * for surviving old-format cookies, their baked-in 90-day expiry — this is
-   * where they upgrade to the revocable format).
-   *
-   * Done in the response wrapper rather than per route because "on use" means
-   * every request, and a session that lapsed while somebody was reviewing
-   * daily would be the one failure this design exists to avoid. Skipped when
-   * the response already sets the cookie (login and logout own it), and
-   * cheap: the refresh only fires once a day of the session has been spent.
-   */
-  const refreshSession = (req: Request, res: Response): Response => {
-    const raw = readCookie(req.headers.get('cookie'), SESSION_COOKIE);
-    if (!raw) return res;
-    const claims = verifyEmailSession(raw, emailSessionKey());
-    if (!claims || !sessionNeedsRefresh(claims)) return res;
-    if (res.headers.get('set-cookie')?.includes(`${SESSION_COOKIE}=`)) return res;
-    const rec = sessionIdentityFor(req);
-    if (!rec) return res;
-    const headers = new Headers(res.headers);
-    headers.append(
-      'set-cookie',
-      // NOT a fresh mint: the refresh keeps the session id, so a later
-      // logout on this device revokes the session it has had all along.
-      // (An old-format cookie gains its id here — the upgrade path.)
-      emailSessionCookieHeader(refreshedSession(claims), emailSessionKey(), {
-        secure: isSecureRequest(req),
-      }),
-    );
-    return new Response(res.body, { status: res.status, statusText: res.statusText, headers });
-  };
+  // --- Email-keyed identity --- see identity-setup.ts. The roster, the
+  // sign-in stores and the four predicates that answer "who is this
+  // request" — one module because a session cookie and a widget token name
+  // the same session and every liveness rule has to apply to both.
+  const {
+    identities,
+    activityLock,
+    emailCodes,
+    sessionRevocations,
+    codeSender,
+    requireEmailAuth,
+    requireSignInToWrite,
+    accessOnlyBrowserHosts,
+    emailCodeSignIn,
+    webhookReplayGuard,
+    emailSessionKey,
+    widgetTokenKey,
+    widgetBearerOf,
+    widgetTokenIdentityFor,
+    clientKeyFor,
+    isSecureRequest,
+    sessionIdentityFor,
+    refreshSession,
+  } = createIdentitySetup({
+    dataDir,
+    opts,
+    cookieKey,
+    setTaskStoreAgentRoster: (roster) => taskStore.setAgentRoster(roster),
+    // Forward reference on purpose: `server` is bound below, and every
+    // predicate here is only ever asked during a request.
+    requestAddress: (req) => server.requestIP(req)?.address,
+    policyFor,
+  });
 
   const applyCors = (req: Request, res: Response): Response => {
     const headers = corsHeadersFor(req.headers.get('origin'), policyFor(req));
@@ -4990,6 +3689,34 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
     j,
     safeJson,
     requestAddress: (req) => server.requestIP(req)?.address,
+  };
+
+  /** The archive family — the four archive/unarchive routes and the
+   *  review-only delete the board delete two positions below still calls. */
+  const archiveRoutesCtx: ArchiveRoutesContext = {
+    rooms,
+    taskStore,
+    taskProjection,
+    dataDir,
+    j,
+    safeJson,
+    unlinkFromEveryHubWorkspace,
+    canonicalDocId,
+  };
+  const { deleteReview, handleArchiveRoutes } = createArchiveRoutes(archiveRoutesCtx);
+
+  /** What the two agent-id-keyed routes read instead of this closure's
+   *  scope — the watch set, the roster and the store a merge moves. */
+  const agentIdentityRoutesCtx: AgentIdentityRoutesContext = {
+    agentWatches,
+    identities,
+    taskStore,
+    j,
+    safeJson,
+    requestAddress: (req) => server.requestIP(req)?.address,
+    watchKeyExists,
+    watchCoverageFor,
+    canonicalDocId,
   };
 
   /**
@@ -6209,181 +4936,17 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           });
           if (handled) return handled;
         }
-        // --- REST: durable agent watches ---
-        // The MCP child's watch set, remembered here per agent identity so a
-        // respawned child can ask for it back. The server never opens the
-        // streams — it holds the list. GET is the restore path (prunes keys
-        // whose doc is gone and says so); POST unions `add` / deletes
-        // `remove`, never replaces, so two live sessions sharing one name
-        // cannot clobber each other. See agent-watches.ts.
-        const agentWatchesMatch = pathname.match(/^\/api\/agents\/([^/]+)\/watches$/);
-        if (agentWatchesMatch) {
-          // Same defense-in-depth posture as the plugin routes below: a share
-          // host never reaches here today (`shareScopeAllows` is a closed
-          // allowlist), and this keeps a later allowlisting from exposing one
-          // agent's subscription list to an external reviewer.
-          if (visitor) return j(403, { error: 'not available to share visitors' });
-          const agentId = decodeURIComponent(agentWatchesMatch[1] ?? '');
-          if (!isValidAgentId(agentId)) return j(400, { error: 'bad agentId' });
-          if (SHARED_AGENT_IDS.has(agentId)) {
-            return j(400, { error: SHARED_IDENTITY_ERROR, message: SHARED_IDENTITY_MESSAGE });
-          }
-          if (req.method === 'GET') {
-            const listed = agentWatches.list(agentId, watchKeyExists);
-            // ADDITIVE. `coverage` is a new key on an existing 200 body, so a
-            // bundle built before it ignores it and behaves exactly as it did
-            // — which matters here specifically because this is the restore
-            // path every respawned child calls before it can do anything else.
-            return j(200, {
-              ...listed,
-              coverage: watchCoverageFor(
-                agentId,
-                listed.watches.map((w) => w.key),
-              ),
-            });
-          }
-          if (req.method === 'POST') {
-            const body = await safeJson(req);
-            const rawAdd = Array.isArray(body?.add) ? (body?.add as unknown[]) : [];
-            const rawRemove = Array.isArray(body?.remove) ? (body?.remove as unknown[]) : [];
-            const badKey = [...rawAdd, ...rawRemove].find((k) => !isValidWatchKey(k));
-            if (badKey !== undefined) {
-              return j(400, { error: 'bad watch key', key: String(badKey) });
-            }
-            const name = typeof body?.name === 'string' ? body.name : undefined;
-            // Store the doc's own id, whichever spelling the caller watched
-            // by. A watch is DURABLE and its key is matched against board
-            // membership to answer "is this agent covering that board" — so a
-            // key stored as a readable alias would leave the board looking
-            // unwatched, which is the alarm going quiet rather than the alarm
-            // saying no. `ws:` keys resolve to themselves and pass through.
-            const canonicalKeys = (keys: unknown[]): string[] =>
-              (keys as string[]).map((k) => canonicalDocId(k));
-            const res = agentWatches.update(agentId, {
-              add: canonicalKeys(rawAdd),
-              // Removal accepts either spelling for the same reason a read
-              // does: the caller may only ever have held the readable one.
-              remove: canonicalKeys(rawRemove),
-              ...(name ? { name } : {}),
-            });
-            return j(200, res);
-          }
-          return j(405, { error: 'method not allowed' });
-        }
-        // Fold one agent id into another — the rename verb. The roster
-        // records the merge (old ids resolve forever), every board the old
-        // id led hands its seat over, the attachment records re-key, and
-        // the durable watch set moves so deliveries follow the new id.
-        // `dryRun` answers what WOULD move and touches nothing. Never
-        // rewrites activity.jsonl or a ydoc: history resolves at read.
-        const agentMergeMatch = pathname.match(/^\/api\/agents\/([^/]+)\/merge$/);
-        if (agentMergeMatch && req.method === 'POST') {
-          if (visitor) return j(403, { error: 'not available to share visitors' });
-          // Loopback only, on the PEER ADDRESS — the deploy route's gate and
-          // its reasoning (the Host header is client-controlled). A merge
-          // moves lead seats and re-keys an agent's deliveries fleet-wide;
-          // that is an operator action run from the box, not something any
-          // tailnet client should be able to do to a board it can see.
-          if (!isLoopbackAddress(server.requestIP(req)?.address)) {
-            return j(403, {
-              error:
-                'agent merges must be run from this machine (loopback only) — a merge moves lead seats and re-keys deliveries',
-            });
-          }
-          // The same two refusals the deploy and plugin-refresh routes
-          // carry (routes/ops.ts), for the same reasons: cloudflared runs
-          // on this box, so a tunnelled request also has a loopback peer
-          // address and only `cf-ray` says it crossed the edge; and a
-          // page served from this machine also has a loopback peer
-          // address and rides the owner's session cookie — see
-          // browserCannotOperateBody. (Security review pass 3, 2026-09-02.)
-          if (req.headers.has('cf-ray')) {
-            return j(403, {
-              error:
-                'agent merges cannot be run through the edge (proxied request) — run them from the box',
-            });
-          }
-          if (isBrowserRequest(req.headers)) return j(403, browserCannotOperateBody());
-          const from = decodeURIComponent(agentMergeMatch[1] ?? '');
-          const body = await safeJson(req);
-          const into = typeof body?.into === 'string' ? body.into.trim() : '';
-          if (!isValidAgentId(from) || !isValidAgentId(into)) {
-            return j(400, { error: 'bad agentId', message: 'both ids must be agent ids' });
-          }
-          if (from === into) return j(400, { error: 'self-merge' });
-          if (SHARED_AGENT_IDS.has(into)) {
-            return j(400, { error: SHARED_IDENTITY_ERROR, message: SHARED_IDENTITY_MESSAGE });
-          }
-          const dryRun = body?.dryRun === true;
-          const actor = authorFor(body?.author) ?? { id: into, name: into, kind: 'known' };
-          // The roster half is skipped for the SHARED id on purpose: the
-          // seat and attachments move (a board led by "Agent" gets a real
-          // lead), but the old comments signed by it stay unattributed —
-          // there is no proof who wrote them.
-          const fromShared = SHARED_AGENT_IDS.has(from);
-          // A `from` that resolves to a PERSON — `known-bryan`, the owner's
-          // own id, an anon id the link file folded — is refused on the dry
-          // run too, so the report never promises a fold the write refuses.
-          const fromResolved = identities.get(from);
-          if (fromResolved && fromResolved.kind !== 'agent') {
-            return j(400, {
-              error: 'from-not-agent',
-              message: `${from} resolves to a person (${fromResolved.id}); only agent ids merge`,
-            });
-          }
-          let roster: { folded: boolean; mergedFrom: string[] } = { folded: false, mergedFrom: [] };
-          if (!fromShared) {
-            // `get` follows `mergedInto`, which is right for a reader and
-            // wrong for this writer. On a MERGE-BACK — the reversal
-            // `mergeAgent` documents — `into` was folded into `from` by an
-            // earlier merge, so the resolved row IS `from`, and the fold
-            // came back as `self-merge` with the seat, the watch and the
-            // deliveries stranded on the wrong id. The caller means the id
-            // it named: take the raw row whenever resolution lands on
-            // `from`. Everything downstream (`taskStore.mergeAgent`,
-            // `agentWatches.rekey`) already works on the raw ids.
-            const resolved = identities.get(into);
-            const target =
-              resolved && resolved.id !== from
-                ? resolved
-                : (identities.rawAgent(into) ?? identities.upsertAgent(into));
-            if (!target || target.kind !== 'agent') {
-              return j(400, { error: 'into-not-agent', message: `${into} is not an agent` });
-            }
-            if (!dryRun) {
-              const merged = identities.mergeAgent(from, target.id);
-              if (!merged.ok) return j(400, { error: merged.error });
-              roster = { folded: true, mergedFrom: merged.into.mergedFrom };
-            } else {
-              // The set the write WOULD leave, computed the way `mergeAgent`
-              // computes it — the target's ids, the source's, and `from`
-              // itself, minus the target. A dry run that reports a different
-              // fold than the write is worse than no dry run: on a
-              // merge-back it named the old survivor as still folded in.
-              const folded = new Set<string>([
-                ...target.mergedFrom,
-                from,
-                ...(identities.rawAgent(from)?.mergedFrom ?? []),
-              ]);
-              folded.delete(target.id);
-              roster = { folded: true, mergedFrom: [...folded] };
-            }
-          }
-          const boards = taskStore.mergeAgent(from, into, { actor, dryRun });
-          const watches = dryRun
-            ? agentWatches.list(from, () => true).watches.map((w) => w.key)
-            : agentWatches.rekey(from, into).moved;
-          return j(200, {
-            from,
-            into,
-            dryRun,
-            roster,
-            seats: boards.seats,
-            seatsSkipped: boards.seatsSkipped,
-            attachments: boards.attachments,
-            comments: boards.comments,
-            watches,
+        // --- REST: durable agent watches, and the agent merge --- see
+        // ./routes/agent-identity.ts. Same chain position as before the
+        // split: after the promote route, before the builder dispatches.
+        {
+          const handled = await handleAgentIdentityRoutes(agentIdentityRoutesCtx, {
+            req,
+            pathname,
+            visitor,
+            authorFor,
           });
+          if (handled) return handled;
         }
         // --- REST: builder dispatches, and a session's notes on the row it
         // holds --- see ./routes/dispatch-and-notes.ts. Same chain position
@@ -6472,167 +5035,12 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           });
           if (handled) return handled;
         }
-        /** Boards that link this review, so an archive can put them back. */
-        const boardsLinking = (attachmentId: string): string[] =>
-          taskStore
-            .listWorkspaces()
-            .filter((w) => w.docIds?.includes(attachmentId))
-            .map((w) => w.id);
-        /**
-         * Retire a review WITHOUT destroying it: its members' `.ydoc` files
-         * move to `data/_archive/`, out of the top level `hydrateFromDisk`
-         * reads and into the directory `activity-backfill` scans. Open threads
-         * do not block it — a review is usually retired precisely because the
-         * threads it still shows have stopped mattering.
-         */
-        const archiveReview = (setId: string, by: string, reason: string | undefined): Response => {
-          const res = rooms.archiveReview(setId, {
-            archivedBy: by,
-            ...(reason !== undefined ? { reason } : {}),
-            linkedWorkspaces: boardsLinking(setId),
-          });
-          if (!res.ok) return j(res.error === 'not-found' ? 404 : 409, res);
-          // A board row pointing at a review that no longer loads is a dead
-          // end, so archiving takes the row too — and the manifest remembers
-          // which boards, so unarchiving puts it back rather than orphaning it.
-          unlinkFromEveryHubWorkspace(setId);
-          return j(200, res);
-        };
-        // Delete a REVIEW as one unit (all-or-nothing open-thread guardrail;
-        // ?force=true to override). Member SOURCE files are left untouched,
-        // same as DELETE /api/docs/:id.
-        //
-        // SOFT BY DEFAULT since 0.1.92. The guardrail and the response shape
-        // are unchanged — what changed is what happens to the files once it
-        // commits: they are archived, not purged. The old payload still works
-        // and still means "retire this review"; `?purge=true` is the way to
-        // ask for the destructive half, and asking is the point. The project
-        // rule is that the `.ydoc` is the durable record the Weekly Review
-        // analyses are rebuilt from, so purging is a decision, never a default.
-        const deleteReview = (setId: string, force: boolean, purge: boolean): Response => {
-          if (!purge) {
-            // Apply the SAME open-thread guardrail before archiving, so a
-            // caller that passed no `force` gets the refusal it has always
-            // got rather than a surprise retirement.
-            if (!force) {
-              const blocked = rooms
-                .list()
-                .filter((m) => reviewIdOf(m) === setId)
-                .map((m) => ({
-                  docId: m.docId,
-                  openThreads: rooms.listThreads(m.docId, { status: 'open' }).length,
-                }))
-                .filter((f) => f.openThreads > 0);
-              if (blocked.length > 0) {
-                return j(409, { ok: false, error: 'has-open-threads', files: blocked });
-              }
-            }
-            return archiveReview(setId, 'delete_review', undefined);
-          }
-          const res = rooms.deleteWorkspace(setId, { force });
-          if (res.ok) {
-            // The review was one row on a board; deleting it must take the
-            // row with it, the same way a deleted doc does.
-            unlinkFromEveryHubWorkspace(setId);
-            return j(200, res);
-          }
-          return j(res.error === 'has-open-threads' ? 409 : 404, res);
-        };
-        // Everything currently parked in `data/_archive/` with a manifest.
-        // Read-only, and the answer to "what can I bring back".
-        //
-        // Both kinds, under separate keys. `docs` is ADDITIVE: an older bundle
-        // reading `archived` still gets reviews and only reviews, so nothing
-        // it already reads changes meaning — which is the rule for this
-        // server's REST routes, where the caller is a plugin nobody can
-        // restart. Keys rather than one merged list with a discriminator,
-        // because the two manifests genuinely differ (a review has `docIds`
-        // and a `root`; a doc is one id) and a caller almost always wants one
-        // kind or the other.
-        if (pathname === '/api/reviews/archived' && req.method === 'GET') {
-          if (visitor) return j(403, { error: 'not available to share visitors' });
-          return j(200, {
-            archived: listArchivedReviews(dataDir),
-            docs: listArchivedDocs(dataDir),
-          });
-        }
-        const reviewArchiveMatch = pathname.match(/^\/api\/reviews\/([^/]+)\/archive$/);
-        if (reviewArchiveMatch && req.method === 'POST') {
-          if (visitor) return j(403, { error: 'not available to share visitors' });
-          const setId = decodeURIComponent(reviewArchiveMatch[1] ?? '');
-          const body = await safeJson(req);
-          const author = body?.author as { name?: string } | undefined;
-          const reason = typeof body?.reason === 'string' ? (body.reason as string) : undefined;
-          return archiveReview(setId, author?.name ?? 'unknown', reason);
-        }
-        const reviewUnarchiveMatch = pathname.match(/^\/api\/reviews\/([^/]+)\/unarchive$/);
-        if (reviewUnarchiveMatch && req.method === 'POST') {
-          if (visitor) return j(403, { error: 'not available to share visitors' });
-          const setId = decodeURIComponent(reviewUnarchiveMatch[1] ?? '');
-          const body = await safeJson(req);
-          const author = body?.author as { name?: string } | undefined;
-          const res = rooms.unarchiveReview(setId, { archivedBy: author?.name ?? 'unknown' });
-          if (!res.ok) return j(res.error === 'not-found' ? 404 : 409, res);
-          // Put the review back on every board it was on when it was archived.
-          for (const workspaceId of res.manifest.linkedWorkspaces) {
-            if (taskStore.attachDoc(workspaceId, setId).ok)
-              taskProjection.ensureWorkspace(workspaceId);
-          }
-          return j(200, res);
-        }
-        // The same pair for ONE free-standing doc. They sit HERE rather than in
-        // the `/api/docs/:id/...` block below because that block opens with
-        // `rooms.get(docId)` and 404s without a room — which is precisely the
-        // state an archived doc is in, so an unarchive route inside it could
-        // never be reached.
-        const docArchiveMatch = pathname.match(/^\/api\/docs\/([^/]+)\/archive$/);
-        if (docArchiveMatch && req.method === 'POST') {
-          if (visitor) return j(403, { error: 'not available to share visitors' });
-          const docId = canonicalDocId(decodeURIComponent(docArchiveMatch[1] ?? ''));
-          const body = await safeJson(req);
-          const author = body?.author as { name?: string } | undefined;
-          const reason = typeof body?.reason === 'string' ? (body.reason as string) : undefined;
-          const res = rooms.archiveDoc(docId, {
-            archivedBy: author?.name ?? 'unknown',
-            ...(reason !== undefined ? { reason } : {}),
-            linkedWorkspaces: boardsLinking(docId),
-          });
-          if (!res.ok) return j(res.error === 'not-found' ? 404 : 409, res);
-          // A board row pointing at a doc that no longer loads is a dead end,
-          // so archiving takes the row too — and the manifest remembers which
-          // boards, so unarchiving puts it back rather than orphaning it.
-          unlinkFromEveryHubWorkspace(docId);
-          return j(200, res);
-        }
-        const docUnarchiveMatch = pathname.match(/^\/api\/docs\/([^/]+)\/unarchive$/);
-        if (docUnarchiveMatch && req.method === 'POST') {
-          if (visitor) return j(403, { error: 'not available to share visitors' });
-          // Deliberately NOT canonicalized: an archived doc has no room, so
-          // there is nothing for an alias to resolve against. The canonical
-          // id is what `list_archived_reviews` hands back, which is where a
-          // caller gets one. Asserted in doc-id-routes.test.ts so the
-          // asymmetry is a decision on the record rather than a surprise.
-          const docId = decodeURIComponent(docUnarchiveMatch[1] ?? '');
-          const body = await safeJson(req);
-          const author = body?.author as { name?: string } | undefined;
-          const res = rooms.unarchiveDoc(docId, { archivedBy: author?.name ?? 'unknown' });
-          if (!res.ok) return j(res.error === 'not-found' ? 404 : 409, res);
-          for (const workspaceId of res.manifest.linkedWorkspaces) {
-            if (taskStore.attachDoc(workspaceId, docId).ok)
-              taskProjection.ensureWorkspace(workspaceId);
-          }
-          return j(200, res);
-        }
-        const reviewDeleteMatch = pathname.match(REVIEW_DELETE);
-        if (reviewDeleteMatch && req.method === 'DELETE') {
-          // Review-only, and that is the point of the separate verb: a BOARD
-          // id here answers not-found rather than being destroyed by a call
-          // that meant to clean up a diff review.
-          return deleteReview(
-            decodeURIComponent(reviewDeleteMatch[1] ?? ''),
-            url.searchParams.get('force') === 'true',
-            url.searchParams.get('purge') === 'true',
-          );
+        // --- REST: archive and unarchive, for a review and for one doc ---
+        // see ./routes/archive.ts. Same chain position as before the split:
+        // after the agent attachments, before the board delete.
+        {
+          const handled = await handleArchiveRoutes({ req, pathname, url, visitor });
+          if (handled) return handled;
         }
         // --- REST: the board delete --- see ./routes/workspace-delete.ts.
         // It stays BELOW `DELETE /api/reviews/:id`, which is the whole reason
@@ -7426,7 +5834,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
       // a short-lived server (every test) can still be mid-loop here. Setting
       // the flag is enough: the loop checks it either side of each call, so
       // it stops before the next write rather than being torn out mid-write.
-      effortRescoreStopped = true;
+      stopEffortRescore();
       // Close the worktree watchers with the loop that read them; the
       // persisted dispatch set survives for the next process to re-arm.
       dispatches.stop();
