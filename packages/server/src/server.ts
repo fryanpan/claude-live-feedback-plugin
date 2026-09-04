@@ -21,7 +21,13 @@ import type { Server as BunServer } from 'bun';
 import { createAccessDeps } from './access-deps.ts';
 import { releaseActivityLock } from './activity-lock.ts';
 import { AgentNoteRing } from './agent-notes.ts';
-import { AgentWatches } from './agent-watches.ts';
+import {
+  AgentWatches,
+  SHARED_AGENT_IDS,
+  SHARED_IDENTITY_ERROR,
+  SHARED_IDENTITY_MESSAGE,
+  isValidAgentId,
+} from './agent-watches.ts';
 import { AllowRuleProposals } from './allow-rules.ts';
 import { ARTIFACT_CHECK_ACTOR, ArtifactChecker } from './artifact-check.ts';
 import type { CodeSender } from './auth/code-sender.ts';
@@ -83,6 +89,7 @@ import {
   readMockupHtml,
 } from './mockup-capture.ts';
 import { injectWidget } from './mockup-widget.ts';
+import { parseMuxCursor } from './mux-cursor.ts';
 import {
   PARK_MIGRATION_ACTOR,
   type ParkMigrationResult,
@@ -165,6 +172,7 @@ import { SharingGate } from './share/sharing-gate.ts';
 import type { ShareConfig } from './share/types.ts';
 import { sanitizeVisitorAuthor } from './share/visitor-identity.ts';
 import { claimReplayMarks, saveReplayMarks } from './sse-marks.ts';
+import { channelForWatchKey, openAgentMuxStream } from './sse-mux.ts';
 import { HTTP_IDLE_TIMEOUT_SEC, SseHub, openSseStream } from './sse.ts';
 import {
   HELD_ITEM_DEFAULT_MS,
@@ -4778,6 +4786,45 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           });
           if (!upgraded) return new Response('upgrade required', { status: 426 });
           return undefined;
+        }
+
+        // --- SSE (agent-level): every key ONE agent watches, on ONE socket. ---
+        //
+        // The route that ends the socket-per-watch storm. An MCP child used to
+        // open a TCP connection per watched key, so a lead holding 214 watches
+        // held 214 sockets; on 2026-09-04 the fleet exhausted this machine's
+        // kernel socket memory and the supervisor read the resulting connect
+        // failures as an unbound server, restarting it twenty times. The
+        // per-key routes below are untouched — a session on the previous
+        // bundle keeps using them through the rollout.
+        //
+        // The channel set is the agent's DURABLE watch set, so this route
+        // needs no key list from the caller: the same set a respawn restores
+        // from is the one the stream fans out, and `watch_doc` reaches an open
+        // stream through the store's change hook rather than a reconnect.
+        const agentEventsMatch = pathname.match(/^\/events\/agent\/([^/]+)$/);
+        if (agentEventsMatch) {
+          // A share visitor never opens one. The same posture the watches REST
+          // route takes, and for a stronger reason: this stream carries every
+          // channel one agent watches, which is a superset of any one board.
+          if (visitor) return j(403, { error: 'not available to share visitors' });
+          const streamAgentId = decodeURIComponent(agentEventsMatch[1] ?? '');
+          if (!isValidAgentId(streamAgentId)) return j(400, { error: 'bad agentId' });
+          if (SHARED_AGENT_IDS.has(streamAgentId)) {
+            // Same refusal the watch store makes: a set keyed on the shared
+            // identity is every anonymous session's watches at once, so a
+            // stream over it would deliver everybody's events into each of
+            // them. Those sessions keep the per-key routes.
+            return j(400, { error: SHARED_IDENTITY_ERROR, message: SHARED_IDENTITY_MESSAGE });
+          }
+          return openAgentMuxStream({
+            hub: sse,
+            agentId: streamAgentId,
+            keys: () => agentWatches.list(streamAgentId, watchKeyExists).watches.map((w) => w.key),
+            channelFor: (key) => channelForWatchKey(key, canonicalDocId),
+            cursors: parseMuxCursor(sseLastEventId(req, url)),
+            onWatchSetChanged: (cb) => agentWatches.onChange(streamAgentId, cb),
+          });
         }
 
         // --- SSE (workspace-level): every thread event on any member doc of a

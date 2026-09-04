@@ -12,6 +12,7 @@
  * the next respawn. Collapsing them into one boolean is how a caller ends up
  * reassured about the half that worked.
  */
+import type { MuxLoop } from './mux-loop.ts';
 import type { Watcher } from './sse-loop.ts';
 import { type WatchCoverage, parseCoverage } from './watch-coverage.ts';
 
@@ -22,8 +23,18 @@ export interface WatchRegistryDeps {
   http: (method: string, path: string, body?: unknown) => Promise<unknown>;
   /** This session's identity — the key the server files the watch set under. */
   author: { id: string; name: string };
-  /** Opens one stream and answers whether it is actually connected. */
+  /**
+   * Opens ONE stream per key — the pre-multiplex path, still used for the two
+   * cases the mux route cannot serve: a shared identity (the server refuses to
+   * key a watch set on it, so there is no set to fan out) and a server older
+   * than the route. Nothing else should reach it.
+   */
   startSseLoop: (label: string, path: string, controller: AbortController) => Promise<boolean>;
+  /**
+   * The session's single multiplexed stream. N watches ride one socket; see
+   * mux-loop.ts for the outage that made that mandatory.
+   */
+  mux: MuxLoop;
   /** Whether every peer collapsed into one shared identity, in which case
    *  nothing is persisted at all. */
   identityIsShared: boolean;
@@ -40,6 +51,10 @@ interface RegistryState {
 
 export interface WatchRegistry {
   watchDoc(docId: string, persist?: boolean): Promise<boolean>;
+  /** Which transport this session's watches ride: one multiplexed stream, or
+   *  a socket per key. Reported so a silent session can be diagnosed without
+   *  reading the log. */
+  streamMode(): 'multiplexed' | 'per-key';
   watchWorkspace(
     workspaceId: string,
     persist?: boolean,
@@ -77,6 +92,7 @@ export function createWatchRegistry(deps: WatchRegistryDeps): WatchRegistry {
     watchPersistenceMode: () => watchPersistenceMode(deps),
     lastPersistError: () => state.lastPersistError,
     watchesPath: () => watchesPath(deps),
+    streamMode: () => (usesMux(deps) ? 'multiplexed' : 'per-key'),
   };
 }
 
@@ -162,20 +178,74 @@ async function persistWatchChange(
 
 /** Returns whether the watch was persisted on the server (false when this
  *  identity is shared, the server refused, or it was unreachable). */
+/**
+ * Whether this session's watches ride the ONE multiplexed stream.
+ *
+ * Two cases still take a socket per key, and both are cases where there is no
+ * server-side set to fan out:
+ *
+ *  - **A shared identity.** `known-agent` is every anonymous session at once,
+ *    so the server refuses to key a watch set on it — and a stream over that
+ *    set would deliver everybody's events into each of them.
+ *  - **A server older than the route.** The plugin cache and the server deploy
+ *    move independently, so a new bundle against a not-yet-deployed server is
+ *    an ordinary state during a rollout, not a bug. The mux loop learns it
+ *    from a 404 and says so once; from then on this answers false.
+ */
+function usesMux(deps: WatchRegistryDeps): boolean {
+  return !deps.identityIsShared && !deps.mux.unsupported();
+}
+
+/**
+ * Wire one key's local subscription and answer whether the stream carrying it
+ * is up.
+ *
+ * In multiplexed mode this starts nothing after the first key: the server
+ * derives the channel set from the DURABLE watch set, so the work of adding a
+ * key is the persist, and the open stream picks the change up without a
+ * reconnect. That is also why a failed persist means this key is not being
+ * delivered NOW, not merely that it will not survive a respawn — the caller
+ * gets both facts and `watchWorkspace` keeps them apart.
+ */
+async function wireKey(deps: WatchRegistryDeps, key: string, path: string): Promise<boolean> {
+  if (usesMux(deps)) {
+    const open = await deps.mux.ensureOpen();
+    // A server that turned out to predate the route answers 404 on the first
+    // attempt; fall through to the per-key stream in the same call rather
+    // than leaving this session silent until something else retries.
+    if (!deps.mux.unsupported()) {
+      // The loop stamps `open` on every record when the connection CHANGES
+      // state, which leaves a key watched while the stream is already up
+      // reading `open: false` until the next drop — a live subscription
+      // reporting itself dead, which is the mirror image of the bug the flag
+      // was added for. So the new record takes the current state here.
+      const rec = deps.watchers.get(key);
+      if (rec) rec.open = open;
+      return open;
+    }
+  }
+  const w = deps.watchers.get(key);
+  if (!w) return false;
+  return deps.startSseLoop(key, path, w.controller);
+}
+
 async function watchDoc(
   deps: WatchRegistryDeps,
   state: RegistryState,
   docId: string,
   persist = true,
 ): Promise<boolean> {
+  // Persist BEFORE the stream in multiplexed mode: the server fans out the
+  // set it has, so a key that is not in it yet is a key the stream will not
+  // carry. The POST is idempotent, so doing it first costs nothing when the
+  // key is already there.
+  const persisted = persist ? await persistWatchChange(deps, state, { add: [docId] }) : false;
   if (!deps.watchers.has(docId)) {
     const controller = new AbortController();
     deps.watchers.set(docId, { controller, docId, open: false });
-    await deps.startSseLoop(docId, `/events/${encodeURIComponent(docId)}`, controller);
+    await wireKey(deps, docId, `/events/${encodeURIComponent(docId)}`);
   }
-  // Persist even when already locally watched: an earlier persist may have
-  // failed (server down at the time), and the POST is idempotent.
-  return persist ? persistWatchChange(deps, state, { add: [docId] }) : false;
+  return persisted;
 }
 
 /**
@@ -206,6 +276,9 @@ async function watchWorkspace(
   persist = true,
 ): Promise<{ open: boolean; persisted: boolean }> {
   const key = `ws:${workspaceId}`;
+  // Persist first in multiplexed mode, for the reason `watchDoc` gives: the
+  // server fans out the set it holds, so the persist IS the subscribe.
+  const persisted = persist ? await persistWatchChange(deps, state, { add: [key] }) : false;
   let open = deps.watchers.get(key)?.open === true;
   if (!deps.watchers.has(key)) {
     const controller = new AbortController();
@@ -219,18 +292,28 @@ async function watchWorkspace(
     // expires under an agent doing local work: measured 2026-08-19 at a
     // 19.1-minute grep-and-read gap against a 15-minute window, with this
     // stream open throughout and a voice note queued instead of delivered.
-    open = await deps.startSseLoop(
+    open = await wireKey(
+      deps,
       key,
       `/events/workspace/${encodeURIComponent(workspaceId)}?agentId=${encodeURIComponent(deps.author.id)}`,
-      controller,
     );
+  } else if (usesMux(deps)) {
+    open = deps.mux.isOpen();
   }
   // Two failures, reported apart. A stream that did not open loses events NOW;
   // a watch that did not persist loses them at the next respawn. Collapsing
   // them into one boolean is how a caller ends up reassured about the half
   // that worked.
-  const persisted = persist ? await persistWatchChange(deps, state, { add: [key] }) : false;
-  return { open, persisted };
+  //
+  // Multiplexed mode adds one wrinkle worth stating: the stream's channel set
+  // IS the persisted set, so a persist that did not land also means this key
+  // is not being delivered right now. `open` therefore reports the connection
+  // AND the coverage, and a `persist: false` caller (the restore path) is
+  // exempt because its keys came out of that set to begin with.
+  // ...and only on the multiplexed transport. A per-key stream carries this
+  // key whatever the server remembers, so narrowing `open` there would report
+  // a working subscription as dead.
+  return { open: usesMux(deps) && persist ? open && persisted : open, persisted };
 }
 
 async function unwatchDoc(
@@ -240,9 +323,24 @@ async function unwatchDoc(
 ): Promise<boolean> {
   const w = deps.watchers.get(docId);
   if (w) {
+    // Aborts this key's own loop in per-key mode and is a no-op in
+    // multiplexed mode, where the controller was never handed to a fetch.
     w.controller.abort();
     deps.watchers.delete(docId);
   }
+  // The multiplexed stream carries the whole set, so unwatching ONE key must
+  // not hang it up — the server drops that channel when the persist below
+  // lands. Only the last key closes the socket.
+  //
+  // The replay position goes with it. An unwatched key's cursor is a position
+  // on a channel the server will no longer send, and it kept spending the
+  // reconnect header's byte budget — which is finite — on a key that can
+  // never advance again. Caveat: the cursor map is keyed by the CANONICAL id
+  // the server stamps on each frame, and a caller may have watched by alias,
+  // in which case this misses and the bound in `deliverThenCommitMux`
+  // eventually evicts it instead.
+  deps.mux.dropCursor(docId);
+  if (usesMux(deps) && deps.watchers.size === 0) deps.mux.stop();
   // Forget it on the server even if it was not locally wired — a sibling
   // session may have recorded it, and an explicit unwatch means "stop".
   return persistWatchChange(deps, state, { remove: [docId] });

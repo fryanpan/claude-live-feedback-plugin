@@ -48,6 +48,8 @@ function harness(
     coverage?: WatchCoverage;
     identityIsShared?: boolean;
     now?: () => number;
+    /** Pins the retry backoff's jitter draw, so the schedule is readable. */
+    random?: () => number;
     alreadyWatched?: string[];
     deferredEmits?: DeferredEmitter;
   } = {},
@@ -75,6 +77,7 @@ function harness(
       return { open: true, persisted: true };
     },
     unwatchDoc: async () => true,
+    streamMode: () => 'multiplexed',
     refreshCoverage: async () => {
       refreshes += 1;
       return coverage;
@@ -111,6 +114,7 @@ function harness(
     deferredEmits,
     identityIsShared: opts.identityIsShared ?? false,
     now: opts.now,
+    ...(opts.random ? { random: opts.random } : {}),
   };
   return {
     restore: createWatchRestore(deps),
@@ -317,9 +321,14 @@ describe('a server that did not answer is retried, on a backoff', () => {
 
   it('makes no request again until the backoff has lapsed', async () => {
     let clock = 0;
-    const h = harness({ respond: () => new Error('down'), now: () => clock });
+    // Full jitter with the draw pinned at the top of the window: the first
+    // failure's window is 2s, so this waits just under it.
+    const h = harness({
+      respond: () => new Error('down'),
+      now: () => clock,
+      random: () => 0.999,
+    });
     await h.restore.ensureWatchesRestored();
-    // First failure backs off 2s; a call one second in must not reach out.
     clock = 1_000;
     await h.restore.ensureWatchesRestored();
     expect(h.sent).toHaveLength(1);
@@ -327,6 +336,35 @@ describe('a server that did not answer is retried, on a backoff', () => {
     await h.restore.ensureWatchesRestored();
     expect(h.sent).toHaveLength(2);
     expect(h.restore.state().attempts).toBe(2);
+  });
+
+  it('draws the retry delay from the whole window, so restarts do not reconverge', async () => {
+    // Restore-on-attach is the one call every session makes at the same
+    // moment after a server restart. An unjittered schedule puts the whole
+    // fleet back on one instant — the herd that turned a single restart into
+    // twenty. A low draw retries immediately; a high one waits nearly the
+    // full window.
+    let clock = 0;
+    const eager = harness({
+      respond: () => new Error('down'),
+      now: () => clock,
+      random: () => 0,
+    });
+    await eager.restore.ensureWatchesRestored();
+    clock = 1;
+    await eager.restore.ensureWatchesRestored();
+    expect(eager.sent).toHaveLength(2);
+
+    clock = 0;
+    const patient = harness({
+      respond: () => new Error('down'),
+      now: () => clock,
+      random: () => 0.999,
+    });
+    await patient.restore.ensureWatchesRestored();
+    clock = 1;
+    await patient.restore.ensureWatchesRestored();
+    expect(patient.sent).toHaveLength(1);
   });
 
   it('succeeds on a later attempt and stops retrying', async () => {

@@ -19,6 +19,7 @@
  * clock — so the whole restore, including its backoff, is drivable.
  */
 import { type BacklogCommentRow, deliverAttachBacklog } from './attach-backlog.ts';
+import { reconnectDelayMs } from './backoff.ts';
 import type { ChannelNotification } from './channel-messages.ts';
 import type { DeferredEmitter } from './deferred-emit.ts';
 import type { Watcher } from './sse-loop.ts';
@@ -61,6 +62,8 @@ export interface WatchRestoreDeps {
   identityIsShared: boolean;
   /** Injectable so the backoff and the notice timestamp are assertable. */
   now?: () => number;
+  /** Injectable so the retry backoff's jitter draw is assertable. */
+  random?: () => number;
 }
 
 /** Everything one restore run carries between calls. */
@@ -227,7 +230,14 @@ async function ensureWatchesRestored(deps: WatchRestoreDeps, rt: RestoreRuntime)
         error: err instanceof Error ? err.message : String(err),
         attempts,
       };
-      rt.retryAt = now(deps) + Math.min(30_000, 1_000 * 2 ** attempts);
+      // Jittered, not just capped. Restore-on-attach is the one call every
+      // session makes at the same moment after a server restart, so an
+      // unjittered retry schedule reconverges the whole fleet on one instant
+      // — the herd that turned a single restart into twenty. See backoff.ts.
+      // `attempts + 1` keeps the ceiling this line has always had — the old
+      // schedule was `1_000 * 2 ** attempts`, and `reconnectWindowMs` counts
+      // from the base at attempt 1. Only the draw inside the window is new.
+      rt.retryAt = now(deps) + reconnectDelayMs(attempts + 1, deps.random, 1_000, 30_000);
     } finally {
       rt.inFlight = null;
     }
