@@ -286,12 +286,23 @@ export function parseTaskCaptureReply(
   // for the length of this reply.
   const spent = spentCues ?? new Set<number>();
   /**
-   * How many asks each cue line has licensed so far in THIS reply. A line is
-   * only handed to `spent` — where it is consumed for the rest of the meeting
-   * — once it has given everything it carries, so a line that asked for two
-   * things gets to license two.
+   * How many asks each cue line has licensed so far in THIS reply, so a line
+   * that asked for two things gets to license two.
    */
   const used = new Map<number, number>();
+  /**
+   * The bounded cue lines this reply spent — everything but a standing plural
+   * one. They are handed to `spent` when the reply ends, whether or not they
+   * gave everything they carry.
+   *
+   * Counting alone did not do that, and the gap was a REPLAY: a line with
+   * capacity two that licensed one ask stayed out of `spent`, so the next
+   * tick found it again in the marked overlap and filed the same ask a second
+   * time. Nothing legitimate is lost by closing it, because both asks of one
+   * line are in one window by construction — the line names them both, and
+   * the pass that reads the line reads the rest of it too.
+   */
+  const bounded = new Set<number>();
   /**
    * What one line may license. A LATER cue said of SEVERAL artefacts — "file
    * tickets for the next few things I mention" — is a standing one and never
@@ -306,9 +317,11 @@ export function parseTaskCaptureReply(
   const cueLine = (phrase: string, cue: AskCue): NotesTurn | undefined =>
     cueLineFor(window, phrase, cue, spent);
   const spendCue = (line: NotesTurn, cue: AskCue): void => {
+    const capacity = capacityOf(line, cue);
+    if (Number.isFinite(capacity)) bounded.add(line.turn);
     const count = (used.get(line.turn) ?? 0) + 1;
     used.set(line.turn, count);
-    if (count >= capacityOf(line, cue)) spent.add(line.turn);
+    if (count >= capacity) spent.add(line.turn);
   };
   const licensed = (phrase: string, cue: AskCue): boolean => {
     const line = cueLine(phrase, cue);
@@ -438,5 +451,8 @@ export function parseTaskCaptureReply(
       });
     }
   }
+  // Every bounded line this reply drew on is now done, including one that
+  // licensed fewer asks than it carried — see `bounded`.
+  for (const turn of bounded) spent.add(turn);
   return out;
 }
