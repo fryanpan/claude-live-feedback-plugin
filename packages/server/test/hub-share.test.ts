@@ -552,6 +552,17 @@ describe('workspace-hub minimal share (§3.12 commit 8)', () => {
   });
 
   describe('the board page a member is served', () => {
+    it('tells the member who they are, so the board paints instead of prompting', async () => {
+      // Without this the bundle read "nobody is signed in", opened the
+      // "Who's reviewing?" prompt that `main()` awaits, and never built the
+      // topbar at all.
+      const r = await pub('/api/auth/session', hubCookie);
+      expect(r.status).toBe(200);
+      const body = (await r.json()) as { authenticated: boolean; user?: { name: string } };
+      expect(body.authenticated).toBe(true);
+      expect(body.user?.name).toBe(emailDisplayName(VISITOR_EMAIL));
+    });
+
     it('leaves out the all-workspaces arrow — `/` is not a page on this host', async () => {
       const seen = await (await pub(`/workspaces/${hubId}`, hubCookie)).text();
       expect(seen).toContain('id="hub-root"');
