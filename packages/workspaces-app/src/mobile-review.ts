@@ -66,8 +66,8 @@ export const NAV_FLASH_MS = 900;
 export interface MobileReviewOpts {
   /** Phone-width, i.e. the viewport where inline + sheet replace the drawer. */
   /** Do inline cards apply at this width? NOT "is this a phone" — the cards
-   *  cover every width the balloon margin doesn't (see `INLINE_CARDS_QUERY`),
-   *  which includes the 901–1100px band where the drawer is still a column. */
+   *  are the reader's chosen surface (see `card-placement.ts`), which is a
+   *  stored per-device preference rather than anything about this width. */
   inlineVisible: () => boolean;
   /** Every thread on this doc, as the chrome already reads them. */
   threads: () => Thread[];
@@ -199,7 +199,14 @@ export function mountMobileReview(opts: MobileReviewOpts): MobileReview {
     // are actually in the document, or every inline card renders as a header
     // and a footer with nothing between them.
     for (const c of cards) if (c.el.isConnected) sizeThreadSlots(c.el);
-    syncNavButtons(cards.length);
+    // Count the ANCHORED THREADS, not the cards built. The two used to be the
+    // same number; they stop being the same the moment a reader picks
+    // balloons on a screen too narrow to hold a margin, where no inline card
+    // is built and the sheet is the comment surface. Counting cards there
+    // disabled ‹ › on a doc full of comments — and stepping is exactly how
+    // you reach a thread whose only copy is in the sheet, which `showThread`
+    // already opens for it.
+    syncNavButtons(inlineThreads().length);
   }
 
   function flash(el: HTMLElement): void {

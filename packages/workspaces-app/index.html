@@ -17,7 +17,13 @@
     <link rel="manifest" href="/manifest.webmanifest" />
     <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
     <meta name="theme-color" content="#2e7dd7" />
+    <!-- The chrome every page shares, then this page's own surfaces. The
+         order is measured, not tidy: doc.css was interleaved through
+         styles.css, and loading it second reorders ~72,600 pairs of rules
+         without letting any of them decide a value differently. Loading it
+         FIRST flips twenty pairs that do — see the header of doc.css. -->
     <link rel="stylesheet" href="/app/styles.css" />
+    <link rel="stylesheet" href="/app/doc.css" />
     <!-- Open Props trial layer — MUST come after styles.css: it remaps the
          same :root tokens at equal specificity, so document order is what
          lets it win. Removing this link reverts the trial. -->
@@ -112,9 +118,9 @@
           >
             ›
           </button>
-          <!-- "N questions for you": every open review item on this doc, one
-               amber glyph, tap to jump to the first. Hidden when nothing is
-               waiting (comment-hints.ts owns it). -->
+          <!-- "N waiting on you": every open review item on this doc, one
+               amber glyph, tapped repeatedly to step through them. Hidden
+               when nothing is waiting (comment-hints.ts owns it). -->
           <button type="button" id="doc-asks" class="doc-asks" hidden></button>
           <button
             type="button"
@@ -126,6 +132,25 @@
           >
             💬
             <span id="threads-count" class="badge">0</span>
+          </button>
+          <!-- Where comment cards sit: in the flow under the phrase they are
+               about, in the right margin beside it, or — where there is room
+               for neither — in a sheet over the doc. A stored per-device
+               choice, not a width rule: page zoom moves the width, so it can
+               never say what device this is. card-placement.ts owns the
+               state and wireCardPlacementToggle paints the glyph and both
+               labels for the surface in force.
+
+               The static markup names the CONTROL and not a surface, because
+               only script can know which surface this device resolved to. -->
+          <button
+            type="button"
+            id="toggle-cards"
+            class="icon-btn"
+            title="Where comment cards sit"
+            aria-label="Change where comment cards sit"
+          >
+            ▤
           </button>
           <!-- Doc-level pending-suggestions affordance (redline-suggestions
                Phase 2). Hidden by default; mountSuggestionsSummary shows it

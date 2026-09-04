@@ -547,3 +547,275 @@ describe('the dialog keeps its slots sized to their faces', () => {
     }
   });
 });
+
+/**
+ * The promote: the dialog grows out of the bubble the reader tapped and
+ * shrinks back into it.
+ *
+ * happy-dom resolves no layout and implements no Web Animations, so what is
+ * assertable here is the END STATES and the shape of the journey — which is
+ * the part that has to be right anyway: the resting state is written before
+ * the keyframes, so an interrupted, unsupported or reduced-motion animation
+ * still leaves the dialog correct. The visual tween itself is verified in a
+ * real browser.
+ */
+describe('the promote grows out of the bubble and shrinks back into it', () => {
+  const bubbleRect = (): DOMRect =>
+    ({
+      left: 906,
+      top: 240,
+      right: 1166,
+      bottom: 330,
+      width: 260,
+      height: 90,
+      x: 906,
+      y: 240,
+      toJSON() {},
+    }) as DOMRect;
+
+  it('mounts the card FOLDED and unfolds it once the box has arrived', () => {
+    const h = mount();
+    const t = thread('t1', [comment('Which cache?', decisionPayload)]);
+    h.panel.setThreads([t]);
+    h.modal.open(t, bubbleRect());
+    // Without a real animation the promote settles synchronously, so by the
+    // time open() returns the morph has already run — which is the same end
+    // state a finished tween produces, and the one that matters.
+    const card = h.card() as HTMLElement;
+    expect(card.classList.contains('expanded')).toBe(true);
+    for (const face of Array.from(card.querySelectorAll('.face-detail'))) {
+      expect(face.hasAttribute('inert')).toBe(false);
+    }
+  });
+
+  it('hands its inline sizing back to the stylesheet when the journey settles', () => {
+    const h = mount();
+    const t = thread('t1', [comment('Which cache?', decisionPayload)]);
+    h.panel.setThreads([t]);
+    h.modal.open(t, bubbleRect());
+    const root = h.root();
+    const inner = document.querySelector('.thread-modal-inner') as HTMLElement;
+    // Left pinned, a resize would move the viewport and leave the dialog
+    // parked wherever it was born.
+    expect(root.getAttribute('style')).toBeFalsy();
+    expect(inner.getAttribute('style')).toBeFalsy();
+  });
+
+  it('closes cleanly whether or not it grew out of anything', () => {
+    const h = mount();
+    const t = thread('t1', [comment('Which cache?', decisionPayload)]);
+    h.panel.setThreads([t]);
+
+    h.modal.open(t, bubbleRect());
+    h.modal.close();
+    expect(isShown(h.root())).toBe(false);
+    expect(h.modal.openThreadId()).toBe(null);
+    expect(h.closed).toBe(1);
+
+    // No origin — the drawer, a keyboard, a phone. The dialog simply appears
+    // and simply goes, and nothing here may depend on a rect it never got.
+    h.modal.open(t);
+    expect(isShown(h.root())).toBe(true);
+    h.modal.close();
+    expect(isShown(h.root())).toBe(false);
+    expect(h.closed).toBe(2);
+  });
+
+  it('a click through the scrim onto another thread replaces without a shrink', () => {
+    const scope = new MountScope();
+    cleanups.push(() => scope.dispose());
+    const container = document.createElement('div');
+    document.body.appendChild(container);
+    cleanups.push(() => container.remove());
+    const panel = new ThreadPanel({
+      container,
+      currentUser: alice,
+      onThreadClick: () => {},
+      onReply: () => {},
+      onResolve: () => {},
+      onReopen: () => {},
+      onReanchor: () => {},
+    });
+    const switched: string[] = [];
+    const modal = mountThreadModal({
+      scope,
+      renderCard: (t, pendingReply) => panel.renderThread(t, pendingReply),
+      onClose: () => {},
+      threadUnderPoint: () => 't2',
+      onSwitchThread: (id) => switched.push(id),
+    });
+    const t1 = thread('t1', [comment('First', decisionPayload)]);
+    panel.setThreads([t1]);
+    modal.open(t1, bubbleRect());
+    click(document.querySelector('.thread-modal-scrim') as HTMLElement);
+    // Replaced, not dismissed: the next thread's own promote is about to run
+    // out of a different bubble, and a shrink-then-grow reads as a flinch.
+    expect(switched).toEqual(['t2']);
+    expect(modal.openThreadId()).toBe(null);
+  });
+});
+
+/**
+ * The promote's teardown, with a recording stand-in for Web Animations.
+ *
+ * happy-dom implements none, so the production path — where three animations
+ * run at once and an interruption has to take all three down — is invisible to
+ * every other test in this file: `promote` sees no `animate` and settles
+ * synchronously. The stub below is the smallest thing that makes the real
+ * branch run: it records what was started and what was cancelled, and nothing
+ * else.
+ */
+describe('an interrupted promote takes its fade partners down with it', () => {
+  interface FakeAnim {
+    cancelled: boolean;
+    target: string;
+    listeners: Record<string, Array<() => void>>;
+    cancel(): void;
+    addEventListener(type: string, fn: () => void): void;
+  }
+
+  let started: FakeAnim[] = [];
+  let restore: (() => void) | null = null;
+
+  function installFakeAnimations(): void {
+    started = [];
+    const proto = Element.prototype as unknown as { animate?: unknown };
+    const had = Object.hasOwn(proto, 'animate');
+    const prior = proto.animate;
+    proto.animate = function (this: Element): FakeAnim {
+      const a: FakeAnim = {
+        cancelled: false,
+        target: this.className || this.tagName,
+        listeners: {},
+        cancel() {
+          if (a.cancelled) return;
+          a.cancelled = true;
+          for (const fn of a.listeners.cancel ?? []) fn();
+        },
+        addEventListener(type, fn) {
+          (a.listeners[type] ??= []).push(fn);
+        },
+      };
+      started.push(a);
+      return a;
+    };
+    restore = () => {
+      // Put back exactly what was there. `undefined` rather than `delete` so
+      // the prototype's shape does not change; the code under test asks
+      // `typeof root.animate !== 'function'`, which either answer satisfies.
+      proto.animate = had ? prior : undefined;
+    };
+  }
+
+  // Layout, which happy-dom has none of: the promote refuses a zero box.
+  function giveLayout(el: Element, box: { w: number; h: number }): void {
+    el.getBoundingClientRect = () =>
+      ({
+        left: 40,
+        top: 60,
+        right: 40 + box.w,
+        bottom: 60 + box.h,
+        width: box.w,
+        height: box.h,
+        x: 40,
+        y: 60,
+        toJSON() {},
+      }) as DOMRect;
+  }
+
+  const rect = (): DOMRect =>
+    ({
+      left: 906,
+      top: 240,
+      right: 1166,
+      bottom: 330,
+      width: 260,
+      height: 90,
+      x: 906,
+      y: 240,
+      toJSON() {},
+    }) as DOMRect;
+
+  afterEach(() => {
+    restore?.();
+    restore = null;
+  });
+
+  it('a reopen mid-shrink cancels the box AND both fades', () => {
+    const h = mount();
+    const t1 = thread('t1', [comment('First', decisionPayload)]);
+    const t2 = thread('t2', [comment('Second', decisionPayload)]);
+    h.panel.setThreads([t1, t2]);
+    giveLayout(h.root(), { w: 760, h: 520 });
+    installFakeAnimations();
+
+    h.modal.open(t1, rect());
+    expect(started.length).toBe(3); // box, inner fade, scrim fade
+    started = [];
+
+    h.modal.close();
+    const shrink = started.slice();
+    expect(shrink.length).toBe(3);
+    expect(shrink.every((a) => !a.cancelled)).toBe(true);
+
+    // The reader changes their mind while the dialog is still on its way down.
+    h.modal.open(t2, rect());
+    // Every one of the three, not just the box: a fade-to-zero left running
+    // underneath the reopen empties the dialog the reader just asked for.
+    expect(shrink.map((a) => a.cancelled)).toEqual([true, true, true]);
+  });
+
+  it('the cancelled close does not go on to close the dialog that replaced it', () => {
+    const h = mount();
+    const t1 = thread('t1', [comment('First', decisionPayload)]);
+    const t2 = thread('t2', [comment('Second', decisionPayload)]);
+    h.panel.setThreads([t1, t2]);
+    giveLayout(h.root(), { w: 760, h: 520 });
+    installFakeAnimations();
+
+    h.modal.open(t1, rect());
+    h.modal.close();
+    h.modal.open(t2, rect());
+    expect(h.modal.openThreadId()).toBe('t2');
+    expect(isShown(h.root())).toBe(true);
+    // `onClose` rides the END of the shrink, and this shrink never ended — the
+    // dialog was replaced, not closed. Announcing it would hand the column its
+    // selection back while a different thread is up in front of the reader,
+    // and the card behind would fold underneath the dialog showing it.
+    expect(h.closed).toBe(0);
+    expect(h.card()).not.toBe(null);
+  });
+});
+
+describe('the dialog offers a keyboard one close, not two', () => {
+  it('the card’s caret is out of the tab order inside the modal', () => {
+    const h = mount();
+    const t = thread('t1', [comment('First', decisionPayload)]);
+    h.panel.setThreads([t]);
+    h.modal.open(t);
+    const caret = h.card()?.querySelector('.thread-caret');
+    expect(caret).not.toBe(null);
+    // Not removed and not disabled — a screen reader still reads it as part of
+    // the card. It just no longer takes a tab stop that lands on a second
+    // close beside the real one.
+    expect(caret?.getAttribute('tabindex')).toBe('-1');
+    expect((caret as HTMLButtonElement).disabled).toBe(false);
+  });
+
+  it('and keeps its tab stop on a card in the column, where it is the only one', () => {
+    const h = mount();
+    const t = thread('t1', [comment('First', decisionPayload)]);
+    h.panel.setThreads([t]);
+    const columnCard = h.panel.renderThread(t);
+    expect(columnCard.querySelector('.thread-caret')?.hasAttribute('tabindex')).toBe(false);
+  });
+
+  it('the dialog’s own close button is still the focused control', () => {
+    const h = mount();
+    const t = thread('t1', [comment('First', decisionPayload)]);
+    h.panel.setThreads([t]);
+    h.modal.open(t);
+    const close = h.root().querySelector('.thread-modal-close') as HTMLElement;
+    expect(close.getAttribute('tabindex')).not.toBe('-1');
+  });
+});

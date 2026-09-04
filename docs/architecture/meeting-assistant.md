@@ -559,7 +559,9 @@ bot is scheduled.
 
 ## Persistence
 
-Append-only under `<dataDir>/meetings/<safeDocId>/`: one
+Append-only under `<dataDir>/meetings/<safeDocId>/` — with one deliberate
+exception, `notes-ledger.json`, which is rewritten whole (the table below
+says why): one
 `<meetingId>.jsonl` of settled turns (`{turn, text, ts, speaker?}`; a later
 `{turn, speaker, ts}` line with no text relabels a turn already written, and
 `speaker: null` there un-labels it; a later line WITH text revises the words
@@ -598,6 +600,7 @@ note back to what was said, in the same folder as the JSONL —
 | `segment-<N>-<stream>.pcm` | the audio exactly as it reached the server: 16 kHz PCM16LE, no container, no transcode | frame by frame while live |
 | `meeting.json` | the tie back to the doc — doc id, bound path and title as of the last meeting, per-segment engine/mode/audio | at start (the tie) and stop (the segment) |
 | `<docname>-raw-transcript-replay-<stamp>.md` | a re-run of the audio through a chosen engine, same grammar | by `bun run meeting:replay` |
+| `notes-ledger.json` | which "Meeting notes" section is the note-taker's: the markdown of the body items it wrote, its meeting id, and when. **The one file here that is not a record of what happened**, so the one rewritten whole rather than appended — it is a snapshot of what the notes currently SAY, and only the latest reading is ever wanted. Temp-file-and-rename, because a tick can land while a restarting server is reading. Headings are excluded on purpose (`notes-ownership.ts`); a claim has to be evidence, and every meeting's `### Decisions` reads alike | on each tick that writes a line the ledger has not seen before |
 
 `<docname>` is the bound file's own name (`q3-plan.md` → `q3-plan-raw-transcript.md`),
 else a slug of the title, else the doc id; `meeting.json` is what makes the
@@ -757,7 +760,8 @@ typed since the last one. Now (`meeting-notes-merge.ts`):
   a bullet list is a single block and block granularity would hand the
   agent's whole list to the person who fixed one bullet.
 - Ownership is a **ledger keyed by the Yjs element**, holding the markdown
-  the agent left in it, held per doc in memory. An item is the agent's only
+  the agent left in it, held per doc in memory (the section claim alone is
+  also written down — see below). An item is the agent's only
   if the agent wrote that element AND it still reads exactly as the agent
   left it. Both halves matter: text alone hands a person's element to the
   agent the moment they type a line matching one of its own, and element
@@ -790,6 +794,41 @@ typed since the last one. Now (`meeting-notes-merge.ts`):
 - **A ledger that claims nothing means "everything here is somebody
   else's"**, so a restarted server adds and stops replacing rather than
   claiming prose it has never seen.
+- **The ledger answers two questions and only one of them is written down.**
+  "May I replace this item?" is element AND text, so it cannot survive a
+  process and must not: a restarted server that claimed items it has never
+  seen would delete a person's writing on its first from-scratch compose.
+  "Is this section the note-taker's?" — the question that decides whether a
+  tick extends the "Meeting notes" it finds or opens a second one — is
+  answered by TEXT alone, and that half is persisted
+  (`notes-ledger-store.ts`, `<dataDir>/meetings/<docId>/notes-ledger.json`,
+  a whole-file snapshot written via temp-and-rename). Without it a deploy
+  mid-meeting emptied the ledger, the position test below took over, and any
+  heading appended under the notes — a Research placeholder, a heading a
+  person typed — twinned the section on the very next tick, which is the
+  twinning PR 637 had already fixed. Recognising a section by text grants
+  nothing INSIDE it: every replace and delete still goes through `claims`,
+  so the restarted server adds and suggests there and rewrites nothing.
+  **A heading is not evidence, so headings are not persisted.** A sub-heading
+  is an ordinary item to the merge and the agent goes on owning the ones it
+  wrote, but the composer emits the same small vocabulary every meeting and a
+  person organising their own notes reaches for the same words; one
+  `### Decisions` in common would hand the note-taker a section it never
+  wrote a word of. Length is not the test — structure is, and the node says
+  so.
+  The record names its meeting and is adopted only while the sitting that
+  wrote it is still going on (`NOTES_LEDGER_CONTINUATION_MS`, 30 min), which
+  is what keeps a genuinely new meeting starting its own section at the end.
+  **The window is a sitting, not a process**, and that is deliberate: a boot
+  id would make it restart-only and leave a stop-and-start falling back to
+  the position test — which twins only when something happens to sit below
+  the notes, an arbitrary rule rather than a safe one.
+  Per DOC rather than per meeting id, because a restart mid-meeting does not
+  resume the meeting — the browser reports the connection lost and the next
+  recording is minted a new id. Nothing in the store throws: a missing file,
+  a torn one, a folder that cannot be made all read as no claim, which is
+  the behaviour it replaces. `notes-ledger-persist.test.ts` drives the
+  restart end to end; `notes-ledger-store.test.ts` drives the file.
 - **An in-place agent edit has to tell the ledger.** The speaker rename below
   rewrites characters inside the agent's own lines rather than replacing
   them, so the ledger would stop recognising them and hand each one to the
@@ -1792,7 +1831,8 @@ doc sink) + `pause-ticker.ts` (the two clocks, in `createPauseTicker`) +
 `notes-section-write.ts` (every write into a live section) ·
 `packages/server/src/meeting-notes-merge.ts` (the merge that
 keeps a person's writing) + `notes-ownership.ts` (the ownership ledger
-everything else asks) + `notes-section.ts` (what a section decomposes into) ·
+everything else asks) + `notes-ledger-store.ts` (the half of that ledger that
+survives a restart) + `notes-section.ts` (what a section decomposes into) ·
 `packages/server/src/meeting-notes-correction.ts` (which note a spoken
 correction lands on, and whether it may) ·
 `packages/server/src/meeting-ask-cues.ts` (now, later or neither — the two
@@ -1802,7 +1842,9 @@ late correction) + `speaker-roster.ts` (the meeting's cast) ·
 `packages/workspaces-app/src/speaker-reassign.ts` +
 `speaker-reassign-menu.ts` (correcting one mention) ·
 `packages/workspaces-app/src/meeting-strip.ts`
-(UI) · `meeting-solo.ts` (who else is on the doc — the one-tap predicate) ·
+(the socket state machine and the surface it drives) + `meeting-chooser.ts`
+(the start form) + `meeting-feed.ts` (the transcript line and the notes that
+stand in for it) + `meeting-menu.ts` (the running meeting's report) · `meeting-solo.ts` (who else is on the doc — the one-tap predicate) ·
 `packages/workspaces-app/src/meeting-audio.ts` (capture + the room's
 microphone config) · `packages/server/src/recall.ts` (vendor
 client) · `recall-turns.ts` (frames → turns, naming) · `recall-status.ts` +

@@ -616,13 +616,79 @@ describe('shareScopeAllows — a visitor is a reviewer, not an operator', () => 
     ).toBe(false);
   });
 
-  it('BLOCKS the agent-side document-surgery verbs hung off a thread', () => {
+  it('allows the region-edit verbs hung off a thread — the doc socket already grants more', () => {
+    // These were refused while a share admitted a READER. A member of the
+    // board this doc is filed on holds `/y/auth-rfc`, which is unrestricted
+    // text editing on the same document, so refusing the REST spelling of an
+    // edit they can make by typing was an inconsistency and not a boundary.
     for (const verb of ['rewrite_region', 'insert_after', 'insert_blocks_after']) {
       expect(
         shareScopeAllows(`/api/docs/auth-rfc/threads/t1/${verb}`, 'POST', WS_A, workspaceOf),
         verb,
+      ).toBe(true);
+    }
+  });
+
+  it('refuses those same verbs on a doc filed on ANOTHER board', () => {
+    // The control for the test above: what bounds an edit is the board the
+    // doc is on, and `auth-rfc` is on `ws-a` alone. A share scoped to `ws-1`
+    // must not reach it by any spelling.
+    for (const verb of ['rewrite_region', 'insert_after', 'insert_blocks_after']) {
+      expect(
+        shareScopeAllows(`/api/docs/auth-rfc/threads/t1/${verb}`, 'POST', WS_1, workspaceOf),
+        verb,
       ).toBe(false);
     }
+  });
+
+  it('allows reading a doc’s meetings, and refuses them on another board’s doc', () => {
+    expect(shareScopeAllows('/api/docs/auth-rfc/meetings', 'GET', WS_A, workspaceOf)).toBe(true);
+    expect(shareScopeAllows('/api/docs/auth-rfc/meetings/m-1', 'GET', WS_A, workspaceOf)).toBe(
+      true,
+    );
+    expect(shareScopeAllows('/api/docs/auth-rfc/meeting-bot', 'GET', WS_A, workspaceOf)).toBe(true);
+    expect(shareScopeAllows('/api/docs/auth-rfc/lead-presence', 'GET', WS_A, workspaceOf)).toBe(
+      true,
+    );
+    // Cross-board: the same four paths, a share that does not cover the doc.
+    for (const sub of ['meetings', 'meetings/m-1', 'meeting-bot', 'lead-presence']) {
+      expect(shareScopeAllows(`/api/docs/auth-rfc/${sub}`, 'GET', WS_1, workspaceOf), sub).toBe(
+        false,
+      );
+    }
+  });
+
+  it('keeps a meeting read read-only, and keeps bot invites off a member’s hands', () => {
+    // Naming a speaker afterwards rewrites notes already written, which only
+    // the session that wrote them can keep straight; inviting a bot spends
+    // money at a vendor and sends a participant into a call outside this
+    // server. Neither is a way to work THIS board.
+    expect(
+      shareScopeAllows('/api/docs/auth-rfc/meetings/m-1/speakers', 'POST', WS_A, workspaceOf),
+    ).toBe(false);
+    expect(shareScopeAllows('/api/docs/auth-rfc/meeting-bot', 'POST', WS_A, workspaceOf)).toBe(
+      false,
+    );
+    expect(shareScopeAllows('/api/docs/auth-rfc/meeting-bot', 'DELETE', WS_A, workspaceOf)).toBe(
+      false,
+    );
+    // Positive control on the same doc: the read still answers, so the three
+    // refusals are the verb and not a fixture that reaches nothing.
+    expect(shareScopeAllows('/api/docs/auth-rfc/meeting-bot', 'GET', WS_A, workspaceOf)).toBe(true);
+  });
+
+  it('opens the meeting audio socket for a doc on the board, and no other', () => {
+    expect(shareScopeAllows('/audio/auth-rfc', 'GET', WS_A, workspaceOf)).toBe(true);
+    expect(shareScopeAllows('/audio/auth-rfc', 'GET', WS_1, workspaceOf)).toBe(false);
+    expect(shareScopeAllows('/audio/some-other-doc', 'GET', WS_A, workspaceOf)).toBe(false);
+  });
+
+  it('lets the meeting chooser ask which engines exist, and nothing more', () => {
+    expect(shareScopeAllows('/api/meeting-engines', 'GET', WS_A, workspaceOf)).toBe(true);
+    expect(shareScopeAllows('/api/meeting-engines', 'POST', WS_A, workspaceOf)).toBe(false);
+    // A target with no workspace reaches the shell and nothing else, this
+    // included — the share is a board, so a request naming none gets nothing.
+    expect(shareScopeAllows('/api/meeting-engines', 'GET', {}, workspaceOf)).toBe(false);
   });
 
   it('BLOCKS a doc subroute added later (closed by default)', () => {
@@ -778,6 +844,18 @@ describe('shareScopeAllows (workspace-hub surfaces — §3.12 commit 8)', () => 
       ['/api/workspaces/hub-1/home/read', 'POST'],
       ['/api/workspaces/hub-1/goals/add', 'POST'],
       ['/api/workspaces/hub-1/goals/rename', 'POST'],
+      ['/api/workspaces/hub-1/goals/reorder', 'POST'],
+      ['/api/workspaces/hub-1/home/instructions', 'PUT'],
+      // Full access to the board (Bryan, 2026-09-03): a doc filed on it, a
+      // meeting started on it, its settings, its Activity tab and the boot
+      // report the page itself writes.
+      ['/api/workspaces/hub-1/docs', 'POST'],
+      ['/api/workspaces/hub-1/huddles', 'POST'],
+      ['/api/workspaces/hub-1/settings', 'GET'],
+      ['/api/workspaces/hub-1/settings', 'PUT'],
+      ['/api/workspaces/hub-1/events', 'GET'],
+      ['/api/workspaces/hub-1/load-reports', 'GET'],
+      ['/api/workspaces/hub-1/load-reports', 'POST'],
       ['/api/tasks/t-1/transition', 'POST'],
       ['/api/tasks/t-1/evidence', 'POST'],
       ['/api/tasks/t-1/title', 'POST'],
@@ -825,17 +903,37 @@ describe('shareScopeAllows (workspace-hub surfaces — §3.12 commit 8)', () => 
     }
   });
 
-  it('keeps the board out of a member’s hands, and the owner’s machine with it', () => {
+  it('refuses every one of those on a board this share does not cover', () => {
+    // The mirror of the list above, path for path, against a share scoped to
+    // a DIFFERENT board. Each is a route a member holds, so a `false` here is
+    // the board boundary and nothing else — and the positive test above is
+    // the control that these paths can be reached at all.
     const cases: Array<[string, string]> = [
-      // Filing somebody else's doc onto this board would be a read of their
-      // board wearing a write's clothes.
+      ['/api/workspaces/hub-1/tasks', 'GET'],
+      ['/api/workspaces/hub-1/tasks', 'POST'],
+      ['/api/workspaces/hub-1/home', 'GET'],
+      ['/api/workspaces/hub-1/home/read', 'POST'],
+      ['/api/workspaces/hub-1/home/instructions', 'PUT'],
+      ['/api/workspaces/hub-1/goals/add', 'POST'],
+      ['/api/workspaces/hub-1/goals/rename', 'POST'],
+      ['/api/workspaces/hub-1/goals/reorder', 'POST'],
       ['/api/workspaces/hub-1/docs', 'POST'],
-      // Names a path on the owner's machine, both ways.
+      ['/api/workspaces/hub-1/huddles', 'POST'],
       ['/api/workspaces/hub-1/settings', 'GET'],
       ['/api/workspaces/hub-1/settings', 'PUT'],
-      ['/api/workspaces/hub-1/import-tasks', 'POST'],
-      // The audit log names actors by id; the board room's feed redacts them.
       ['/api/workspaces/hub-1/events', 'GET'],
+      ['/api/workspaces/hub-1/load-reports', 'GET'],
+      ['/api/workspaces/hub-1/load-reports', 'POST'],
+      ['/api/workspaces/hub-1/attachments', 'GET'],
+      ['/api/workspaces/hub-1/review-items', 'GET'],
+    ];
+    for (const [p, m] of cases) {
+      expect(shareScopeAllows(p, m, OTHER_WS, workspaceOf), `${m} ${p}`).toBe(false);
+    }
+  });
+
+  it('keeps the board’s lifecycle out of a member’s hands, and the roster with it', () => {
+    const cases: Array<[string, string]> = [
       // The agent roster's own verbs — a seat on the board, not work on it.
       ['/api/workspaces/hub-1/attachments', 'POST'],
       // Board lifecycle.
@@ -845,6 +943,14 @@ describe('shareScopeAllows (workspace-hub surfaces — §3.12 commit 8)', () => 
       ['/api/workspaces/hub-1/lead', 'PUT'],
       ['/api/workspaces/hub-1/goal', 'PUT'],
       ['/api/workspaces/hub-1/goals', 'PUT'],
+      // Routing an utterance to the owner's agents is spending the owner's
+      // machine, not working this board.
+      ['/api/workspaces/hub-1/voice', 'POST'],
+      // Reads a file off the owner's disk by the path in the request body and
+      // answers with what it parsed. A member never names a host path.
+      ['/api/workspaces/hub-1/import-tasks', 'POST'],
+      // A board route added later is closed until somebody names it.
+      ['/api/workspaces/hub-1/some-route-added-later', 'POST'],
       // A row route this table does not name stays closed.
       ['/api/tasks/t-1', 'GET'],
       ['/api/tasks/t-1/reopen', 'POST'],
@@ -1412,6 +1518,9 @@ describe('collabScope', () => {
     // Filed on two boards at once — the shape a review filed on a hub has,
     // and the one a single-answer lookup got wrong.
     if (id === 'two-board-doc') return ['ws-a', 'ws-b'];
+    // A colon in the id, because a huddle doc's is spelled `hub-<n>:<file>`
+    // and reaches the guard percent-encoded.
+    if (id === 'hub-1:plan.md') return ['ws-a'];
     return [];
   };
   /** Path scope only: everybody is a member, so a `false` here is the path. */
@@ -1470,6 +1579,28 @@ describe('collabScope', () => {
     });
   });
 
+  it('reaches a meeting audio socket on the same terms as the doc socket beside it', () => {
+    // `/audio/<docId>` is the other half of "have a meeting": the button
+    // mints the doc, this is where the microphone goes. `shareScopeAllows`
+    // has admitted it since the member-rights change, but the collaboration
+    // host asks `pathWorkspaces` FIRST — and with no `/audio/` case there it
+    // proposed zero candidates, so the scope check was never reached and a
+    // member on the collab hostname could open every board tab except the
+    // meeting they had just started.
+    expect(allows('/audio/design-doc')).toBe(true);
+    expect(allows('/audio/two-board-doc')).toBe(true);
+    // Percent-encoded, the way a huddle doc's id actually arrives.
+    expect(allows('/audio/hub-1%3Aplan.md')).toBe(true);
+    // The verdict names the board, so the request is served scoped to it.
+    expect(collabScope('/audio/design-doc', 'GET', { workspacesOf, isMember: () => true })).toEqual(
+      { allowed: true, target: { workspaceId: 'ws-a' } },
+    );
+    // Membership still decides: proposing the candidate opens nothing.
+    expect(allowsFor(['ws-b'], '/audio/design-doc')).toBe(false);
+    // And a doc on no board is still refused.
+    expect(allows('/audio/loose-doc')).toBe(false);
+  });
+
   it('refuses a doc filed on no workspace — reach is workspace membership', () => {
     expect(allows('/api/docs/loose-doc')).toBe(false);
     expect(allows('/review/loose-doc')).toBe(false);
@@ -1506,7 +1637,10 @@ describe('collabScope', () => {
     expect(allows('/api/docs/design-doc', 'DELETE')).toBe(false);
     expect(allows('/api/docs/design-doc/content', 'POST')).toBe(false);
     expect(allows('/api/docs/design-doc/reparse_from_disk', 'POST')).toBe(false);
-    expect(allows('/api/docs/design-doc/threads/t-1/rewrite_region', 'POST')).toBe(false);
+    // `rewrite_region` is deliberately NOT here any more: a member holds the
+    // doc's own editing socket, which is unrestricted text editing on the
+    // same document, so refusing the REST spelling of an edit they can make
+    // by typing was an inconsistency rather than a boundary.
     // `promote` is deliberately NOT here any more: a member files tasks on
     // the board this doc is filed on, so turning a comment into one is the
     // same act by a shorter route (Bryan, 2026-09-03).
