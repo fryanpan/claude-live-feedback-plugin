@@ -722,22 +722,74 @@ describe('workspace-hub minimal share (§3.12 commit 8)', () => {
       }
     });
 
-    it('refuses everything that is not work on this board', async () => {
-      const author = PERSON;
-      const cases: Array<[string, RequestInit]> = [
-        // Filing somebody else's doc here would be a read of their board.
-        [
-          `/api/workspaces/${hubId}/docs`,
-          { method: 'POST', body: JSON.stringify({ docId: ATTACHED }) },
-        ],
-        // Names, and returns, a path on the owner's machine.
+    it('works this board’s own surfaces — settings, activity and a meeting', async () => {
+      // Bryan, 2026-09-03: a share link means full access to the board. Each
+      // of these was refused while a member was a reader, and each is the
+      // positive control for the same path on a board they were not given
+      // (the describe above) — one route, two members, two answers.
+      const readSettings = await pub(`/api/workspaces/${hubId}/settings`, hubCookie, {
+        method: 'GET',
+      });
+      expect(readSettings.status, await readSettings.clone().text()).toBe(200);
+      const wrote = await pub(`/api/workspaces/${hubId}/settings`, hubCookie, {
+        method: 'PUT',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ reviewItemCriteria: 'Written by a member.' }),
+      });
+      expect(wrote.status, await wrote.clone().text()).toBe(200);
+      const activity = await pub(`/api/workspaces/${hubId}/events`, hubCookie, { method: 'GET' });
+      expect(activity.status).toBe(200);
+      const meeting = await pub(`/api/workspaces/${hubId}/huddles`, hubCookie, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ kind: 'discussion' }),
+      });
+      expect(meeting.status, await meeting.clone().text()).toBe(200);
+      // Filing a doc this member can already open onto the same board.
+      const filed = await pub(`/api/workspaces/${hubId}/docs`, hubCookie, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ docId: ATTACHED }),
+      });
+      expect(filed.status, await filed.clone().text()).toBe(200);
+
+      // …and every one of them is refused on the board this member was NOT
+      // given, which is what makes the four answers above a grant on ONE
+      // board rather than on the server.
+      for (const [path, init] of [
         [`/api/workspaces/${hubId}/settings`, { method: 'GET' }],
         [
           `/api/workspaces/${hubId}/settings`,
-          { method: 'PUT', body: JSON.stringify({ reviewItemCriteria: 'anything', author }) },
+          { method: 'PUT', body: JSON.stringify({ reviewItemCriteria: 'X' }) },
         ],
-        // The audit log names actors by id.
         [`/api/workspaces/${hubId}/events`, { method: 'GET' }],
+        [`/api/workspaces/${hubId}/huddles`, { method: 'POST', body: '{}' }],
+      ] as Array<[string, RequestInit]>) {
+        const r = await pub(path, otherCookie, {
+          ...init,
+          headers: { 'content-type': 'application/json' },
+        });
+        expect(r.status, `${init.method} ${path}`).toBe(403);
+      }
+    });
+
+    it('refuses everything that is not work on this board', async () => {
+      const author = PERSON;
+      const cases: Array<[string, RequestInit]> = [
+        // Filing a doc this member cannot already open would be a read of
+        // somebody else's board wearing a write's clothes. `PRIVATE` is on no
+        // board this share covers; filing `ATTACHED`, which is on this one,
+        // is allowed and asserted in the test above — so this row is the
+        // TARGET rule and not the verb.
+        [
+          `/api/workspaces/${hubId}/docs`,
+          { method: 'POST', body: JSON.stringify({ docId: PRIVATE }) },
+        ],
+        // Reads a file off the owner's disk by the path in the body.
+        [
+          `/api/workspaces/${hubId}/import-tasks`,
+          { method: 'POST', body: JSON.stringify({ path: '/etc/hosts', author }) },
+        ],
         // The agent roster's own verbs.
         [
           `/api/workspaces/${hubId}/attachments`,
@@ -810,7 +862,7 @@ describe('workspace-hub minimal share (§3.12 commit 8)', () => {
       expect(again.status).toBe(200);
     });
 
-    it('promotes a thread to a task, and still refuses document surgery', async () => {
+    it('promotes a thread to a task, and edits the region it is anchored to', async () => {
       const mk = await post(`/api/docs/${attachedId}/threads/by_find`, {
         author: PERSON,
         text: 'This paragraph needs a task.',
@@ -824,18 +876,31 @@ describe('workspace-hub minimal share (§3.12 commit 8)', () => {
         body: JSON.stringify({ workspaceId: hubId, author: PERSON }),
       });
       expect(r.status, await r.clone().text()).toBe(200);
-      // The verbs beside it are agent-side document surgery, not a review
-      // action, and stay refused.
       const surgery = await pub(
         `/api/docs/${attachedId}/threads/${threadId}/rewrite_region`,
         hubCookie,
         {
           method: 'POST',
           headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({ markdown: 'Replaced.', author: PERSON }),
+          body: JSON.stringify({ replacement: 'Replaced by a member.', author: PERSON }),
         },
       );
-      expect(surgery.status).toBe(403);
+      // A member holds this doc's own editing socket, which is unrestricted
+      // text editing on the same document — so the REST spelling of an edit
+      // they can make by typing is no longer refused.
+      expect(surgery.status, await surgery.clone().text()).toBe(200);
+      // …and the same verb on a doc THIS member cannot open stays refused,
+      // which is the boundary that was ever doing the work.
+      const elsewhere = await pub(
+        `/api/docs/${privateId}/threads/${threadId}/rewrite_region`,
+        hubCookie,
+        {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ replacement: 'Replaced.', author: PERSON }),
+        },
+      );
+      expect(elsewhere.status).toBe(403);
       // And the member can reply on the same thread.
       const reply = await pub(`/api/docs/${attachedId}/threads/${threadId}/comments`, hubCookie, {
         method: 'POST',

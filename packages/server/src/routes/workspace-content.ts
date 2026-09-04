@@ -16,6 +16,7 @@ import {
   parseHuddleTopic,
 } from '../huddle.ts';
 import { browserCannotBindBody, isBrowserRequest } from '../middleware/write-gate.ts';
+import { redactMetaForVisitor, relativeReviewUrl } from '../share/redact-meta.ts';
 import {
   applyImport,
   importBanner,
@@ -46,8 +47,9 @@ export async function handleWorkspaceContent(
     withReviewUrl,
     fileUnderHubWorkspace,
     unfileFromDefault,
+    workspacesOfDoc,
   } = ctx;
-  const { req, pathname, authorFor } = rq;
+  const { req, pathname, authorFor, visitor } = rq;
   // attach_doc: link an existing doc or review to a hub workspace.
   const wsAttachMatch = pathname.match(/^\/api\/workspaces\/([^/]+)\/docs$/);
   if (wsAttachMatch && req.method === 'POST') {
@@ -61,6 +63,46 @@ export async function handleWorkspaceContent(
     // nothing to resolve it to.
     const attachRoom = rooms.get(addressed);
     const docId = attachRoom?.docId ?? addressed;
+    /**
+     * A member may file onto their board something they can ALREADY see.
+     * They may not pull something in from outside it.
+     *
+     * The path names the shared board, so the guard's scope check says yes;
+     * what decides where this write REACHES is the `docId` in the body, which
+     * the guard never read. Attaching is what makes a doc readable here —
+     * share scoping answers on the boards holding a doc, and this call adds
+     * one — so an unrestricted attach would be a read of any doc on the
+     * server, wearing a write's clothes. Doc ids are readable slugs, so
+     * guessing one is not a stretch, and the doc LIST is refused precisely to
+     * stop that enumeration.
+     *
+     * So the test is the guard's own: is the target already inside the shared
+     * board's scope? That still leaves the verb its real subject — a file
+     * inside a folder bind or diff review filed here, which a member can open
+     * but which has no row of its own — and it leaves out everything the
+     * member could not open a second ago.
+     *
+     * `workspacesOfDoc` is `shareWorkspacesOf`, the resolver the host guard
+     * reads, rather than a second membership rule written here.
+     *
+     * The owner is unaffected: `visitor` is null for a request from the box.
+     * Refused in the words every out-of-board refusal uses, so the reply does
+     * not say which guessed doc ids are real.
+     */
+    if (visitor) {
+      const reachable =
+        visitor.workspaceId !== undefined &&
+        (workspacesOfDoc(docId).includes(visitor.workspaceId) ||
+          workspacesOfDoc(addressed).includes(visitor.workspaceId));
+      if (!reachable) return j(403, { error: 'out_of_share_scope' });
+    }
+    // AFTER the scope check, and only for that reason. This answers "is
+    // there such a doc" — a fact about the whole server, not about this
+    // board — so running it first made the route an existence oracle: a doc
+    // on somebody else's board came back 403 and a made-up id came back 404,
+    // which is the doc LIST one id at a time. A member now gets the same
+    // out-of-board refusal either way, and the miss reaches only callers who
+    // could have attached the doc had it been there.
     const exists = attachRoom !== undefined || rooms.list().some((m) => reviewIdOf(m) === docId);
     if (!exists) return j(404, { error: 'doc not found', docId });
     const res = taskStore.attachDoc(workspaceId, docId);
@@ -177,8 +219,9 @@ export async function handleWorkspaceContent(
   // is (so `list_docs`, the hub's docs list and the board fan-out see
   // it with no new verb), flagged `huddle`, and answered with where to
   // open it. The mic is the browser's to start; the server's part ends
-  // at the doc. A share visitor never reaches this — the host guard
-  // refuses every mutation under /api/workspaces it has not named.
+  // at the doc. A member of this board reaches it too (Bryan, 2026-09-03:
+  // a share link means full access), which is why the reply's doc metadata
+  // below is redacted rather than returned raw.
   const wsHuddlesMatch = pathname.match(/^\/api\/workspaces\/([^/]+)\/huddles$/);
   if (wsHuddlesMatch && req.method === 'POST') {
     const workspaceId = decodeURIComponent(wsHuddlesMatch[1] ?? '');
@@ -264,14 +307,32 @@ export async function handleWorkspaceContent(
       // link-refs route does.
       if (linked.ok) taskProjection.ensureWorkspace(linked.task.workspaceId);
     }
-    const meta = withReviewUrl(room.meta, hubWorkspaceId);
+    const decorated = withReviewUrl(room.meta, hubWorkspaceId);
+    /**
+     * The reply's doc metadata, as this caller may see it.
+     *
+     * A huddle's `sourceUrl` is the file it was just seeded into, under the
+     * owner's data directory — an absolute path on the machine. The doc read
+     * this reply stands in for (`GET /api/docs/<id>`) has run every visitor's
+     * metadata through `redactMetaForVisitor` since the first share; a route
+     * that mints a doc and answers with its raw meta is the second door.
+     */
+    const meta = visitor
+      ? {
+          ...redactMetaForVisitor(decorated, { workspaceScoped: true }),
+          ...(relativeReviewUrl(decorated.reviewUrl, visitor.workspaceId) !== undefined
+            ? { reviewUrl: relativeReviewUrl(decorated.reviewUrl, visitor.workspaceId) }
+            : {}),
+        }
+      : decorated;
+    const reviewUrl = (meta as { reviewUrl?: string }).reviewUrl;
     return j(200, {
       docId,
       ...(typeof huddleTaskId === 'string' ? { taskId: huddleTaskId } : {}),
       // Where the Board opens it — the SPA doc route under THIS board,
       // relative so the client navigates within its own origin.
       url: `/workspaces/${encodeURIComponent(hubWorkspaceId)}/docs/${encodeURIComponent(docId)}`,
-      ...(meta.reviewUrl !== undefined ? { reviewUrl: meta.reviewUrl } : {}),
+      ...(reviewUrl !== undefined ? { reviewUrl } : {}),
       hubWorkspaceId,
       meta,
       ...(parsedTopic.topic !== undefined ? { topic: parsedTopic.topic } : {}),
