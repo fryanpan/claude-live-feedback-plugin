@@ -209,4 +209,18 @@ describe('shell link order', () => {
     expect(tokens).toBeGreaterThan(-1);
     expect(tokens).toBeGreaterThan(styles);
   });
+
+  it('links doc.css between the shared base and the token layer', () => {
+    // Same argument, one file later. `doc.css` carries the editor-only
+    // surfaces and used to sit interleaved through `styles.css`: after it,
+    // every equal-specificity tie lands where it landed before; before it,
+    // twenty change hands (test/doc-css.test.ts reads two of them at 430px).
+    // And tokens.css still has to be last of the three.
+    const styles = INDEX.indexOf('/app/styles.css');
+    const doc = INDEX.indexOf('/app/doc.css');
+    const tokens = INDEX.indexOf('/app/tokens.css');
+    expect(doc).toBeGreaterThan(-1);
+    expect(doc).toBeGreaterThan(styles);
+    expect(tokens).toBeGreaterThan(doc);
+  });
 });
