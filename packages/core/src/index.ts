@@ -8,6 +8,7 @@ export * from './meeting-tuning.ts';
 export * from './meeting-bot.ts';
 export * from './meeting-timing.ts';
 export * from './redline.ts';
+export * from './related-work.ts';
 export * from './review.ts';
 export * from './review-item.ts';
 export * from './review-item-id.ts';
