@@ -290,6 +290,44 @@ export async function handleWorkspaceTool(
         goals: res.goalSummary,
       });
     }
+    // The look-before-you-plan step. A READ, so no AUTHOR and no body: the
+    // whole call is a query string, and the server answers with the goals
+    // and plan docs that line up plus how many rows it weighed.
+    //
+    // `considered` is forwarded rather than dropped because it is what makes
+    // an empty answer readable. `matches: []` alone cannot tell "this board
+    // holds nothing like your request" from "this board holds nothing" — and
+    // only the first of those means plan from scratch.
+    case 'find_related_work': {
+      const { workspaceId, text, docId, limit } = a as {
+        workspaceId: string;
+        text: string;
+        docId?: string;
+        limit?: number;
+      };
+      if (typeof text !== 'string' || text.trim().length === 0) {
+        return err('text is required: the plan request in the words it was asked in.');
+      }
+      const params = new URLSearchParams({ q: text });
+      if (typeof docId === 'string' && docId.length > 0) params.set('docId', docId);
+      if (typeof limit === 'number' && Number.isFinite(limit)) params.set('limit', String(limit));
+      const res = (await http(
+        'GET',
+        `/api/workspaces/${encodeURIComponent(workspaceId)}/related-work?${params.toString()}`,
+      )) as { considered: number; matches: unknown[] };
+      return ok({
+        workspaceId,
+        considered: res.considered,
+        matches: res.matches,
+        // Said in the reply rather than left to the caller's memory of a tool
+        // description read once at session start: this verb's whole value is
+        // the branch it feeds, and the branch is easy to skip.
+        next:
+          res.matches.length > 0
+            ? 'Something already covers this. File ONE decision review item on the task — options along the lines of "Extend that plan" / "Replace it" / "New plan", each with a cost line, and the matches named as inline relative links in the detail — then WAIT for the answer.'
+            : 'Nothing on this board lines up. Plan from scratch, and give the goal you create a description and a link to the doc the request came from.',
+      });
+    }
     case 'attach_agent': {
       const { workspaceId, agentId, runtime, capabilities, subscribe } = a as {
         workspaceId: string;
