@@ -16,8 +16,9 @@ Two smaller grants used to exist, and both are gone:
 
 | What you had | What it minted | What you get now |
 |---|---|---|
-| `share_doc`, or `share_link({docId})` | a share scoped to one doc | `410 per_doc_sharing_removed` |
-| `share_link` / `share_workspace` with a folder-bind or diff-review id | a share scoped to that grouping | `410 grouping_sharing_removed` |
+| `share_doc`, or a `docId` in a share body | a share scoped to one doc | `410 per_doc_sharing_removed` |
+| `share_workspace` with a folder-bind or diff-review id | a share scoped to that grouping | `410 grouping_sharing_removed` |
+| `share_link` | a Cloudflare Access application per share | `410 link_share_mint_retired` |
 
 So the id you pass is always a hub board id — the one `create_workspace`
 returned, or the `hubWorkspaceId` that `bind_folder` / `create_diff_review`
@@ -295,13 +296,15 @@ The agent will:
 6. Watch the docs so external comments arrive on the same channel as
    yours.
 
-For a link share with no sign-in at all, `share_link({ workspaceId })` mints an
-unguessable URL instead. The slug IS the credential, so keep the TTL short:
-`share_link({ workspaceId, ttl: '15m' })` (`s`/`m`/`h`/`d`/`w`), or
-`ttlSeconds`. Default two weeks. Every argument is honoured or refused by
-name — a `docId` answers 410, an unknown key 400 — never dropped and widened
-to a longer, broader share. `CF_SHARE_MAX_TTL` (same grammar, e.g. `30d`)
-caps every mint and extension; a clamped reply carries `ttlClamped`.
+There is no share without a sign-in. `share_link` used to mint an unguessable
+URL whose slug WAS the credential; that is retired, and so is the per-share
+Cloudflare Access application the verb minted after it. One verb remains, and
+whoever opens its link signs in through Cloudflare Access before they reach
+anything. Links do not expire by default — pass `ttl` (`'15m'`, `s`/`m`/`h`/
+`d`/`w`) or `ttlSeconds` when a window is wanted. `CF_SHARE_MAX_TTL` (same
+grammar, e.g. `30d`) caps a mint or an extension, and a clamped reply carries
+`ttlClamped`. Shares already minted the old way keep working until they lapse:
+`list_shares` lists them, `set_share_ttl` shortens one, `unshare` revokes one.
 
 You can also drive it manually with the CLI:
 

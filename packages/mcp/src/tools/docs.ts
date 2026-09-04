@@ -774,18 +774,6 @@ export async function handleDocsTool(
       const res = await http('POST', '/api/share/member/remove', { workspaceId, email });
       return ok(res);
     }
-    case 'share_link': {
-      // Forward the call AS SENT. This handler used to destructure three
-      // named keys and forward those, so `share_link(docId, ttl: '15m')`
-      // reached the server as a bare board share and came back 200 —
-      // the whole board, for two weeks, to a caller who asked for one doc
-      // for fifteen minutes. The SDK does not reject an argument the
-      // schema does not name; it just never makes the wire. The server
-      // now refuses every key it does not honour by name, and the only
-      // way that refusal reaches the caller is if every key gets there.
-      const res = await http('POST', '/api/share/link', a);
-      return ok(res);
-    }
     case 'set_share_ttl': {
       const { shareId, ttlSeconds } = a as { shareId: string; ttlSeconds: number };
       const res = await http('POST', `/api/share/${encodeURIComponent(shareId)}/ttl`, {

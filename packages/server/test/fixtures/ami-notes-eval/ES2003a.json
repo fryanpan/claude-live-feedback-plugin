@@ -1,0 +1,350 @@
+{
+  "meeting": "ES2003a",
+  "corpus": "AMI Meeting Corpus",
+  "licence": "CC BY 4.0",
+  "source": "https://groups.inf.ed.ac.uk/ami/corpus/",
+  "window": {
+    "fromSeconds": 900,
+    "seconds": 900
+  },
+  "board": [
+    {
+      "kind": "task",
+      "title": "Remote control design",
+      "url": "/workspaces/w-eval?task=t-1"
+    },
+    {
+      "kind": "task",
+      "title": "Corporate colour scheme",
+      "url": "/workspaces/w-eval?task=t-2"
+    },
+    {
+      "kind": "task",
+      "title": "Volume buttons",
+      "url": "/workspaces/w-eval?task=t-3"
+    },
+    {
+      "kind": "task",
+      "title": "Channel buttons",
+      "url": "/workspaces/w-eval?task=t-4"
+    },
+    {
+      "kind": "task",
+      "title": "Speech recognition",
+      "url": "/workspaces/w-eval?task=t-5"
+    },
+    {
+      "kind": "task",
+      "title": "Production cost target",
+      "url": "/workspaces/w-eval?task=t-6"
+    },
+    {
+      "kind": "task",
+      "title": "Target age group",
+      "url": "/workspaces/w-eval?task=t-7"
+    },
+    {
+      "kind": "task",
+      "title": "LCD screen",
+      "url": "/workspaces/w-eval?task=t-8"
+    }
+  ],
+  "ticks": [
+    {
+      "turns": [
+        {
+          "speaker": "B",
+          "text": "Okay"
+        },
+        {
+          "speaker": "C",
+          "text": "perhaps one that was more um"
+        },
+        {
+          "speaker": "C",
+          "text": "specialised for game playing or interactive television They they've recently brought out this new remote control for people to set their favourite channels or um to record things Instead of people entering in what time things start you simply stri slide a bar to say what time it begins and slide"
+        }
+      ]
+    },
+    {
+      "turns": [
+        {
+          "speaker": "B",
+          "text": "Okay"
+        },
+        {
+          "speaker": "C",
+          "text": "another bar to say what time it ends you know that's"
+        },
+        {
+          "speaker": "B",
+          "text": "Yeah I've heard I've seen the"
+        },
+        {
+          "speaker": "D",
+          "text": "Mm"
+        },
+        {
+          "speaker": "B",
+          "text": "bar-code design before yeah"
+        },
+        {
+          "speaker": "A",
+          "text": "Mm-hmm"
+        },
+        {
+          "speaker": "C",
+          "text": "Yeah it's it's taken out the"
+        },
+        {
+          "speaker": "C",
+          "text": "Y you don't have to be uh really clever to use a remote control I think for gaming you know you want you want some big buttons for up down left and right shoot"
+        }
+      ]
+    },
+    {
+      "turns": [
+        {
+          "speaker": "C",
+          "text": "Uh you wanna be able to change angles in interactive television so you need buttons to change the television angle the camera angles and stuff like that"
+        },
+        {
+          "speaker": "B",
+          "text": "Okay"
+        },
+        {
+          "speaker": "D",
+          "text": "'Kay"
+        },
+        {
+          "speaker": "B",
+          "text": "well we're beginning to run out of time now so"
+        },
+        {
+          "speaker": "C",
+          "text": "Yeah"
+        },
+        {
+          "speaker": "B",
+          "text": "we've got a couple of ideas we can we'll have to work fast um alright as you can see we've got thirty minutes until the next meeting so we'll have to try and decide on some of the basic functionality um how the user interface might work that'll be a key aspect especially if the idea of um some kind of macros facility because you have to program it you have to have a lot of response back or at least some kind"
+        }
+      ]
+    },
+    {
+      "turns": [
+        {
+          "speaker": "A",
+          "text": "Mm-hmm"
+        },
+        {
+          "speaker": "B",
+          "text": "Um"
+        },
+        {
+          "speaker": "B",
+          "text": "And we're gonna maybe n try and have to figure out"
+        },
+        {
+          "speaker": "C",
+          "text": "What the user wants"
+        },
+        {
+          "speaker": "B",
+          "text": "what"
+        },
+        {
+          "speaker": "C",
+          "text": "uh"
+        },
+        {
+          "speaker": "B",
+          "text": "the user wants yes"
+        },
+        {
+          "speaker": "C",
+          "text": "Okay"
+        },
+        {
+          "speaker": "B",
+          "text": "Um right Has anybody got anything they'd like to add at this stage anything they think that might have been missed so far"
+        }
+      ]
+    },
+    {
+      "turns": [
+        {
+          "speaker": "D",
+          "text": "Well when you're talking about gaming and stuff do you think they should have some sort of"
+        },
+        {
+          "speaker": "D",
+          "text": "stick on it rather than"
+        },
+        {
+          "speaker": "C",
+          "text": "Oh"
+        },
+        {
+          "speaker": "D",
+          "text": "buttons"
+        },
+        {
+          "speaker": "C",
+          "text": "Okay"
+        },
+        {
+          "speaker": "D",
+          "text": "Like uh control pads you know of games but"
+        },
+        {
+          "speaker": "C",
+          "text": "Mm-hmm"
+        },
+        {
+          "speaker": "D",
+          "text": "or is that a bit ridiculous"
+        },
+        {
+          "speaker": "B",
+          "text": "I I don't see why not almost everybody is probably used to a console by now and all of them incorporate small keypads on them in fact even the mobile phones these days are beginning to use them as well so"
+        }
+      ]
+    },
+    {
+      "turns": [
+        {
+          "speaker": "D",
+          "text": "Yeah"
+        },
+        {
+          "speaker": "B",
+          "text": "it's probably an interface that most people are used to Um"
+        },
+        {
+          "speaker": "B",
+          "text": "and that could allow n easy navigation used as a joystick as well"
+        }
+      ]
+    },
+    {
+      "turns": [
+        {
+          "speaker": "A",
+          "text": "Mm-hmm The other key feature that uh that would be a good idea built into it is t is is to make something you know fairly sort of ergonomic something that just fits fits as comfortably as possible into the hand But of course uh al al also allows for the possibility of a more sort of"
+        }
+      ]
+    },
+    {
+      "turns": [
+        {
+          "speaker": "A",
+          "text": "slightly unconventional or attractive uh"
+        },
+        {
+          "speaker": "A",
+          "text": "sha"
+        },
+        {
+          "speaker": "B",
+          "text": "Okay"
+        },
+        {
+          "speaker": "A",
+          "text": "shape for it overall"
+        },
+        {
+          "speaker": "B",
+          "text": "So small"
+        },
+        {
+          "speaker": "A",
+          "text": "A"
+        },
+        {
+          "speaker": "B",
+          "text": "stylish"
+        },
+        {
+          "speaker": "A",
+          "text": "curve mm-hmm"
+        },
+        {
+          "speaker": "B",
+          "text": "and something that's"
+        },
+        {
+          "speaker": "A",
+          "text": "Something"
+        },
+        {
+          "speaker": "B",
+          "text": "just"
+        },
+        {
+          "speaker": "A",
+          "text": "sort"
+        },
+        {
+          "speaker": "B",
+          "text": "a little"
+        },
+        {
+          "speaker": "A",
+          "text": "of"
+        },
+        {
+          "speaker": "B",
+          "text": "different"
+        },
+        {
+          "speaker": "A",
+          "text": "sort of sl slightly sort of biomorphic in form uh which it would need to be to sort of conform to the shape of the hand more efficiently anyway"
+        }
+      ]
+    },
+    {
+      "turns": [
+        {
+          "speaker": "B",
+          "text": "Okay That's definitely something that we should be able to do quite easily"
+        },
+        {
+          "speaker": "B",
+          "text": "I would I would have hoped so anyway Um right"
+        },
+        {
+          "speaker": "B",
+          "text": "I'd say we finish this one up we get started I'll get in I'll write up what we've um kind of quickly done and I'll get that out to everybody"
+        }
+      ]
+    },
+    {
+      "turns": [
+        {
+          "speaker": "C",
+          "text": "'Kay"
+        },
+        {
+          "speaker": "B",
+          "text": "Yeah"
+        },
+        {
+          "speaker": "C",
+          "text": "So"
+        },
+        {
+          "speaker": "B",
+          "text": "Okay"
+        }
+      ]
+    },
+    {
+      "turns": [
+        {
+          "speaker": "B",
+          "text": "Um as far as I'm aware we leave the microphones here um unless we get told otherwise and just take the laptops with us"
+        }
+      ]
+    }
+  ]
+}

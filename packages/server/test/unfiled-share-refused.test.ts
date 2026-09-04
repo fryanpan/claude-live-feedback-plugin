@@ -33,7 +33,6 @@ import { join } from 'node:path';
 import { type ServerHandle, createServer } from '../src/server.ts';
 import type { CfAccessApp, CfAccessPolicy } from '../src/share/cf-api.ts';
 import { CfApi } from '../src/share/cf-api.ts';
-import type { Share } from '../src/share/types.ts';
 
 const PUBLIC_HOST = 'feedback.example.test';
 const BASE_HOST = 'example.test';
@@ -141,13 +140,16 @@ describe('the Unfiled board cannot be shared', () => {
     expect(body.hint).toContain('share that board');
     expect(body.hint).toContain('hubWorkspaceId');
 
-    // Positive control, same server, same route: the named board mints.
+    // Positive control, same server, same route: the named board gets PAST
+    // the Unfiled check to the retirement refusal that sits below it. A
+    // different error, so the 403 above is this board's verdict rather than
+    // a route that refuses everything.
     const minted = await local('/api/share/link', {
       allowDomains: ['@partner.example'],
       workspaceId: boardId,
     });
-    expect(minted.status).toBe(200);
-    expect(((await minted.json()) as { share: Share }).share.workspaceId).toBe(boardId);
+    expect(minted.status).toBe(410);
+    expect(((await minted.json()) as { error: string }).error).toBe('link_share_mint_retired');
   });
 
   it('refuses share_workspace the same way — both mints refuse the catch-all board', async () => {

@@ -45,12 +45,7 @@ import { join } from 'node:path';
 import { type ServerHandle, createServer } from '../src/server.ts';
 import { SHARE_COOKIE, loadCookieKey, signSession } from '../src/share/link-session.ts';
 import type { ListedShare, Share } from '../src/share/types.ts';
-import {
-  ACCESS_BASE_HOSTNAME,
-  type AccessHarness,
-  accessHarness,
-  mintAccessShare,
-} from './access-share.ts';
+import { ACCESS_BASE_HOSTNAME, type AccessHarness, accessHarness } from './access-share.ts';
 
 /** The hostname the retired link mode served every share from. */
 const PUBLIC_HOST = 'feedback.example.test';
@@ -152,6 +147,57 @@ describe('a grouping cannot be shared on its own', () => {
     for (const d of [dataDir, folder, repo]) rmSync(d, { recursive: true, force: true });
   });
 
+  /**
+   * A LIVE per-share Access record for the BOARD, written by hand for the
+   * same reason the grouping one above is: `/api/share/link` mints nothing
+   * on a deployment that has a share hostname, and every test here is about
+   * records that already exist. Hand-writing it also makes the control
+   * independent of the mint — a positive control that goes through the
+   * route under test proves less than one that does not.
+   */
+  const boardShare = (workspaceId: string, n: string): Share => ({
+    shareId: `legacyboard${n}`,
+    surface: 'workspace',
+    docId: '',
+    workspaceId,
+    hostname: `share-legacy-board-${n}.${BASE_HOST}`,
+    url: `https://share-legacy-board-${n}.${BASE_HOST}/workspaces/${encodeURIComponent(workspaceId)}`,
+    label: 'board share already on disk',
+    createdAt: Date.now(),
+    expiresAt: Date.now() + 86_400_000,
+    audience: `aud-legacy-board-${n}`,
+    appId: `app-legacy-board-${n}`,
+    policyId: `policy-legacy-board-${n}`,
+    allowDomains: ['@partner.example'],
+  });
+
+  /** What a visitor holding one of those records sends: its own hostname
+   *  and a token minted for its own audience. */
+  const visitorFor = async (rec: Share) => ({
+    shareId: rec.shareId,
+    host: rec.hostname,
+    headers: {
+      host: rec.hostname,
+      'cf-access-jwt-assertion': await access.signJwt(rec.audience ?? ''),
+    },
+  });
+
+  /** Restart onto the same dataDir with `extra` prepended to the registry. */
+  const restartWith = async (extra: Share[]): Promise<void> => {
+    const listed = await fetch(`${base}/api/share`, {
+      headers: { host: `localhost:${handle.port}` },
+    });
+    const existing = ((await listed.json()) as { shares: Share[] }).shares;
+    await handle.stop();
+    writeFileSync(join(dataDir, 'shares.json'), JSON.stringify([...extra, ...existing], null, 2));
+    handle = createServer({
+      port: 0,
+      dataDir,
+      ...access.serverOptions,
+    });
+    base = `http://localhost:${handle.port}`;
+  };
+
   describe('an older bundle calling the shared routes', () => {
     it('refuses share_link for a folder bind, while the same call for a board mints', async () => {
       // Verbatim from the 0.1.80 bundle's `case "share_link"`, which
@@ -173,8 +219,12 @@ describe('a grouping cannot be shared on its own', () => {
       expect(body.hint).toContain('create_workspace');
 
       // Positive control, same server, same pass, same payload shape: the
-      // board id works. An older peer sharing a BOARD sends the identical
-      // body with entryDocId undefined, which JSON.stringify drops.
+      // BOARD id gets past the grouping check and lands on the retirement
+      // refusal below it. Two different 410s, and that is what makes this a
+      // control — the grouping's answer came from the grouping check, not
+      // from a route that has one reply for everything. An older peer
+      // sharing a BOARD sends the identical body with entryDocId undefined,
+      // which JSON.stringify drops.
       const board = await local('/api/share/link', {
         allowDomains: ['@partner.example'],
         workspaceId: boardId,
@@ -182,10 +232,8 @@ describe('a grouping cannot be shared on its own', () => {
         ttlSeconds: undefined,
         label: 'board review',
       });
-      expect(board.status).toBe(200);
-      const share = ((await board.json()) as { share: Share }).share;
-      expect(share.workspaceId).toBe(boardId);
-      expect(share.surface).toBe('workspace');
+      expect(board.status).toBe(410);
+      expect(((await board.json()) as { error: string }).error).toBe('link_share_mint_retired');
     });
 
     it('refuses share_link for a diff review, the most-used grouping', async () => {
@@ -199,15 +247,15 @@ describe('a grouping cannot be shared on its own', () => {
       expect(res.status).toBe(410);
       expect(((await res.json()) as { error: string }).error).toBe('grouping_sharing_removed');
 
-      // Positive control: the board the review is filed on shares fine.
-      expect(
-        (
-          await local('/api/share/link', {
-            allowDomains: ['@partner.example'],
-            workspaceId: boardId,
-          })
-        ).status,
-      ).toBe(200);
+      // Positive control: the board the review is filed on gets PAST the
+      // grouping check, to the retirement refusal under it. A different error
+      // from the same status, so the 410 above is the grouping's.
+      const control = await local('/api/share/link', {
+        allowDomains: ['@partner.example'],
+        workspaceId: boardId,
+      });
+      expect(control.status).toBe(410);
+      expect(((await control.json()) as { error: string }).error).toBe('link_share_mint_retired');
     });
 
     it('refuses share_workspace for a grouping, while a board mints', async () => {
@@ -267,15 +315,15 @@ describe('a grouping cannot be shared on its own', () => {
       expect(res.status).toBe(400);
       expect(((await res.json()) as { error: string }).error).toContain('entryDocId');
 
-      // Positive control: drop the field and the same call mints.
-      expect(
-        (
-          await local('/api/share/link', {
-            allowDomains: ['@partner.example'],
-            workspaceId: boardId,
-          })
-        ).status,
-      ).toBe(200);
+      // Positive control: drop the field and the same call gets past this
+      // check to the retirement refusal under it, so the 400 above is the
+      // entryDocId's own answer.
+      const control = await local('/api/share/link', {
+        allowDomains: ['@partner.example'],
+        workspaceId: boardId,
+      });
+      expect(control.status).toBe(410);
+      expect(((await control.json()) as { error: string }).error).toBe('link_share_mint_retired');
     });
   });
 
@@ -300,27 +348,11 @@ describe('a grouping cannot be shared on its own', () => {
       expiresAt: Date.now() + 86_400_000,
     });
 
-    /** Restart onto the same dataDir with `extra` prepended to the registry. */
-    const restartWith = async (extra: Share[]): Promise<void> => {
-      const listed = await fetch(`${base}/api/share`, {
-        headers: { host: `localhost:${handle.port}` },
-      });
-      const existing = ((await listed.json()) as { shares: Share[] }).shares;
-      await handle.stop();
-      writeFileSync(join(dataDir, 'shares.json'), JSON.stringify([...extra, ...existing], null, 2));
-      handle = createServer({
-        port: 0,
-        dataDir,
-        ...access.serverOptions,
-      });
-      base = `http://localhost:${handle.port}`;
-    };
-
     it('is listed as retired and redeems nowhere, where a board share still works', async () => {
-      const board = await mintAccessShare(base, access, boardId);
-
       const legacySlug = 'e'.repeat(32);
-      await restartWith([groupingShare(diffGroupingId, legacySlug, diffMemberDocId)]);
+      const boardRec = boardShare(boardId, 'a');
+      await restartWith([groupingShare(diffGroupingId, legacySlug, diffMemberDocId), boardRec]);
+      const board = await visitorFor(boardRec);
 
       // The record is still on disk (this removes a capability, not user
       // content, so an operator can still see and revoke it) and the list
@@ -359,8 +391,9 @@ describe('a grouping cannot be shared on its own', () => {
       // link mode is retired, so a signed cookie is no longer a credential at
       // all, whichever share minted it.
       const legacySlug = 'f'.repeat(32);
-      const board = await mintAccessShare(base, access, boardId);
-      await restartWith([groupingShare(diffGroupingId, legacySlug, diffMemberDocId)]);
+      const boardRec = boardShare(boardId, 'b');
+      await restartWith([groupingShare(diffGroupingId, legacySlug, diffMemberDocId), boardRec]);
+      const board = await visitorFor(boardRec);
 
       const key = loadCookieKey(dataDir);
       const withCookie = (shareId: string, path: string) =>
@@ -415,18 +448,16 @@ describe('a grouping cannot be shared on its own', () => {
        * layers, which is what makes this a control rather than two flavours
        * of the same failure.
        */
-      // `/api/share/link` rather than `/api/share/workspace`: this seam is
-      // about a per-share HOSTNAME, and that is the mint that still makes one.
-      const mint = await local('/api/share/link', {
-        workspaceId: boardId,
-        allowDomains: ['@partner.example'],
-      });
-      expect(mint.status).toBe(200);
-      const boardHost = ((await mint.json()) as { share: Share }).share.hostname;
+      // A per-share record for the BOARD, written by hand: this seam is about
+      // a per-share HOSTNAME, and no route mints one on a deployment with a
+      // share hostname any more.
+      const boardRec = boardShare(boardId, 'c');
+      const boardHost = boardRec.hostname;
       expect(boardHost).toContain(BASE_HOST);
 
       const legacyHost = `share-legacy-grouping.${BASE_HOST}`;
       await restartWith([
+        boardRec,
         {
           shareId: 'legacy03',
           surface: 'workspace',
@@ -465,8 +496,10 @@ describe('a grouping cannot be shared on its own', () => {
 
   describe('what replaces it', () => {
     it('reaches the filed diff review through a share of the board', async () => {
-      const share = await mintAccessShare(base, access, boardId);
-      expect(new URL(share.url).pathname).toBe(`/workspaces/${encodeURIComponent(boardId)}`);
+      const boardRec = boardShare(boardId, 'd');
+      await restartWith([boardRec]);
+      const share = await visitorFor(boardRec);
+      expect(new URL(boardRec.url).pathname).toBe(`/workspaces/${encodeURIComponent(boardId)}`);
 
       const asVisitor = (path: string) => fetch(`${base}${path}`, { headers: share.headers });
 
@@ -509,12 +542,10 @@ describe('a grouping cannot be shared on its own', () => {
       expect(bound.status).toBe(200);
       expect(((await bound.json()) as { hubWorkspaceId: string }).hubWorkspaceId).toBe(freshBoard);
 
-      // 3. The share.
-      const mint = await local('/api/share/link', {
-        allowDomains: ['@partner.example'],
-        workspaceId: freshBoard,
-      });
-      expect(mint.status).toBe(200);
+      // 3. The share — `share_workspace`, which is what replaces every mint
+      //    this file is about.
+      const mint = await local('/api/share/workspace', { workspaceId: freshBoard });
+      expect(mint.status, await mint.clone().text()).toBe(200);
 
       const elapsed = Date.now() - started;
       // Generous on purpose: this is a regression guard against the flow

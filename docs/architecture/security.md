@@ -62,6 +62,22 @@ Because Cloudflare confirms the person's email before the page loads, the server
 
 If the rule is on and no Access hostname is configured, the server prints a clear warning when it starts, because then the only browser that can reach it is one on this machine.
 
+### The hostnames, and which application fronts each
+
+Every name below is a placeholder. The real ones live in the launchd configuration and nowhere in this repository.
+
+| Hostname | Named by | Access application | What a visitor gets |
+| --- | --- | --- | --- |
+| `localhost:<port>` | nothing — it is the loopback name | none, and none is possible | Everything, and only to a process whose socket peer is also loopback |
+| `workspaces.<domain>` | `CW_PROXIED_TRUSTED_HOSTS` | the owner's, `CF_ACCESS_AUD` | Everything, for a confirmed email on `CW_PROXIED_TRUSTED_EMAILS` |
+| `collab.<domain>` | `CF_ACCESS_TUNNEL_HOSTS` | the owner's, `CF_ACCESS_AUD` | The workspaces that email is a member of |
+| `share.<domain>` | `CW_SHARE_LINK_HOSTS` | its own, `CF_ACCESS_SHARE_AUD` | The workspaces that email redeemed a link for |
+| `share-<slug>.<domain>` | retired; records only | one per share, its own audience | The one board that record names |
+| `recall.<domain>` | `CW_RECALL_CALLBACK_HOST` | none, deliberately | Two routes, each armed only while its own credential is set |
+| anything else | nothing | — | 403, before any page or API runs |
+
+Two rules hold across the whole table. A hostname listed without an Access audience configured for it is **ignored**, so it falls to the last row and answers 403; the server says which hostname at boot, and never prints the audience. And a name that is on two lists resolves to the narrower grant, never the wider one.
+
 ## A share link invites a person; a membership lets them back in
 
 One Cloudflare Access application covers one hostname, `share.<domain>`, with a policy that admits everyone and a login method that emails a one-time code. That application answers exactly one question: which email is this? It decides nothing about workspaces, and it is not meant to. Anyone willing to receive a code can get through it, which is why the server never treats reaching that hostname as permission to open anything.
@@ -88,7 +104,9 @@ One read outside the board is allowed, and it is about the reader rather than ab
 
 Membership on the share hostname and membership on the collaboration hostname are separate records on purpose. A redeemed share link does not make somebody a collaborator, and an address on the owner's list is not a member of anything on the share hostname. Two doors, two answers.
 
-Workspaces used to be shared by creating a Cloudflare Access application and a DNS record for each individual share. That is retired. Records already minted that way keep working until they expire, and nothing new is made that way.
+Workspaces used to be shared by creating a Cloudflare Access application and a DNS record for each individual share. That is retired, and the sentence is now true of the code as well as of the intent: on a deployment that has a share hostname configured, the route that still minted one answers "retired" and names `share_workspace` instead, and the `share_link` tool that called it is gone from the plugin. A deployment with no share hostname has no replacement to be sent to, so it keeps the old mint rather than losing the ability to publish a board at all.
+
+Records already minted that way keep working until they expire, and that is deliberate rather than an oversight. They are listed, their expiry can still be shortened, and they can still be revoked; their hostnames still resolve and still verify a token against their own audience. Retiring a mint is not deleting what it made.
 
 ## What each caller can read and write
 
@@ -170,7 +188,7 @@ Which hostnames face a browser is configuration, read once in `server-config.ts`
 | `CF_ACCESS_TUNNEL_HOSTS`                 | Hostnames for collaborators. They see the shared surfaces, not the owner's controls. |
 | `CW_SHARE_LINK_HOSTS`                    | The hostname share links are served from, `share.<domain>`. Comma-separated if there is more than one. Ignored unless the two settings below are both set. |
 | `CF_ACCESS_SHARE_AUD`                    | The Cloudflare Access application covering that hostname. Its own audience, deliberately not `CF_ACCESS_AUD`, which is what makes a token for one address worthless at the other. |
-| `CF_SHARE_BASE_HOSTNAME`                 | Retired. The parent domain each workspace share used to get its own hostname under. |
+| `CF_SHARE_BASE_HOSTNAME`                 | Retired. The parent domain each workspace share used to get its own hostname under. Still read, so records minted under it keep resolving; nothing new is minted where `CW_SHARE_LINK_HOSTS` is set. |
 | `CF_ACCESS_TEAM_DOMAIN`, `CF_ACCESS_AUD` | The Cloudflare Access team and application that the owner and collaborator hostnames are checked against. |
 | `CW_EMAIL_CODE_SIGNIN`                   | Turns the server's own emailed-code sign-in on.              |
 | `CW_REQUIRE_SIGNIN_TO_WRITE`             | Whether a browser must be signed in to change anything. On by default. |

@@ -709,7 +709,11 @@ describe('notes session', () => {
     await Promise.resolve();
     session.onTurn({ turn: 1, text: 'Found.', final: true });
     await session.end();
-    expect(errors).toEqual(['composer refused']);
+    // The reason, now prefixed with which meeting and which tick — a bare
+    // reason names none of the meetings that might be running.
+    expect(errors).toHaveLength(1);
+    expect(errors[0]).toContain('composer refused');
+    expect(errors[0]).toContain('tick 1');
     expect(updates.length).toBe(1);
     // The failed tick's words rode the next one — nothing dropped.
     expect(updates[0]?.notes).toBe('Lost? | Found.');
@@ -2041,5 +2045,99 @@ describe('speaker tags only in multi-speaker sessions', () => {
     await session.end();
     expect(updates[0]?.notes).not.toContain('speaker:A');
     expect(updates[0]?.notes).toContain('said it.');
+  });
+});
+
+/**
+ * A refused compose is the quietest failure in this subsystem: the turns
+ * carry into the next tick, nothing is lost, and the notes simply stop
+ * growing. `bun run notes:eval` measured it at about a tenth of ticks, all
+ * late in the longer meetings — and production could not see any of it,
+ * because the only report was an `onError` no caller supplied.
+ */
+describe('a compose refused for running past the output ceiling', () => {
+  const ids = { docId: 'd-refuse', meetingId: 'm-refuse' };
+
+  const refusingSession = (
+    errors: string[],
+  ): ReturnType<typeof beginNotesSession> & { fire: () => void } => {
+    const schedule = new ManualScheduler();
+    const composer: NotesComposer = {
+      name: 'refuses',
+      compose(): Promise<string> {
+        return Promise.reject(
+          new Error('notes compose hit max_tokens; refusing a truncated section'),
+        );
+      },
+    };
+    const session = beginNotesSession(
+      {
+        composer,
+        quietMs: 1000,
+        schedule,
+        onNotes: () => {},
+        onError: (message) => errors.push(message),
+      },
+      ids,
+    );
+    return Object.assign(session, { fire: () => schedule.fire() });
+  };
+
+  it('names the meeting and the tick, so a log can say which notes fell behind', async () => {
+    const errors: string[] = [];
+    const session = refusingSession(errors);
+    session.onTurn({ turn: 0, text: 'A point worth writing down.', final: true });
+    session.fire();
+    await session.end();
+
+    // The reason alone is what used to be reported, and with several meetings
+    // running it names none of them.
+    const first = errors[0] ?? '';
+    expect(first).toContain('d-refuse');
+    expect(first).toContain('m-refuse');
+    expect(first).toContain('tick 1');
+    expect(first).toContain('max_tokens');
+  });
+
+  it('is counted, so the meeting can say how much it lost', async () => {
+    const errors: string[] = [];
+    const session = refusingSession(errors);
+    session.onTurn({ turn: 0, text: 'First point.', final: true });
+    session.fire();
+    session.onTurn({ turn: 1, text: 'Second point.', final: true });
+    session.fire();
+    await session.end();
+
+    const stats = session.stats();
+    expect(stats.refusedTooLong).toBeGreaterThanOrEqual(2);
+    expect(stats.composeFailures).toBe(stats.refusedTooLong);
+    // And the meeting says so once when it ends, rather than only per tick.
+    expect(errors.some((e) => /refused as too long/.test(e))).toBe(true);
+  });
+
+  it('counts an ordinary compose failure without calling it a length refusal', async () => {
+    const errors: string[] = [];
+    const schedule = new ManualScheduler();
+    const composer: NotesComposer = {
+      name: 'breaks',
+      compose: () => Promise.reject(new Error('notes compose HTTP 503')),
+    };
+    const session = beginNotesSession(
+      {
+        composer,
+        quietMs: 1000,
+        schedule,
+        onNotes: () => {},
+        onError: (message) => errors.push(message),
+      },
+      ids,
+    );
+    session.onTurn({ turn: 0, text: 'A point.', final: true });
+    schedule.fire();
+    await session.end();
+
+    expect(session.stats().composeFailures).toBeGreaterThan(0);
+    expect(session.stats().refusedTooLong).toBe(0);
+    expect(errors.some((e) => /refused as too long/.test(e))).toBe(false);
   });
 });

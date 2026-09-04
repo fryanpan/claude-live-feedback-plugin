@@ -71,8 +71,16 @@ export interface TickSnapshot {
   /** Every top-level heading, in order — the cheapest way to assert that a
    *  section did not move, get a twin, or gain a sibling. */
   headings: string[];
-  /** What the fake model was handed for this tick. */
-  input: NotesComposeInput;
+  /**
+   * What the model was handed for this tick — UNDEFINED when no compose ran
+   * for it.
+   *
+   * Optional because it really is optional: a tick whose compose was skipped
+   * or coalesced settles with a doc and no input, and this field used to be
+   * cast to non-null, which typechecked and then crashed a whole eval run
+   * twelve minutes in. A caller reading it must handle the absence.
+   */
+  input?: NotesComposeInput;
   /** What it answered. */
   composed: string;
 }
@@ -98,6 +106,24 @@ export interface NotesTickHarnessOptions {
   boundPath?: string;
   /** The server's data dir, as that placement rule reads it. */
   dataDir?: string;
+  /**
+   * The board this meeting's doc belongs to. Wiring it is what turns on the
+   * two stages that need a board: the task titles in the composer's context,
+   * and the per-tick reference search. Absent, both are empty, which is the
+   * huddle-with-no-board case every other script here runs in.
+   */
+  workspaceId?: string;
+  /** The board's rows, as the task store would list them. */
+  tasks?: Array<{ id?: string; title: string; status: string; kind?: 'task' | 'goal' }>;
+  /** The board's other docs, as the lookup would list them. */
+  boardDocs?: Array<{ docId: string; title: string; meetingAt?: number }>;
+  /**
+   * How long `tick()` waits for the write. The default suits a scripted
+   * composer, which answers in microseconds; `notes-eval.ts` drives a REAL
+   * model whose reply grows with the notes, and five seconds is not enough
+   * by the twentieth tick of a meeting.
+   */
+  tickTimeoutMs?: number;
 }
 
 export interface NotesTickHarness {
@@ -166,7 +192,9 @@ export function createNotesTickHarness(opts: NotesTickHarnessOptions): NotesTick
     },
     {
       rooms: () => rooms,
-      tasks: () => ({ listTasks: () => [] }),
+      tasks: () => ({ listTasks: () => opts.tasks ?? [] }),
+      ...(opts.workspaceId ? { boardOf: () => opts.workspaceId } : {}),
+      ...(opts.boardDocs ? { lookup: { docs: () => opts.boardDocs ?? [] } } : {}),
       ...(opts.dataDir ? { dataDir: opts.dataDir } : {}),
       ...(opts.ledger ? { ledger: opts.ledger } : {}),
     },
@@ -204,7 +232,7 @@ export function createNotesTickHarness(opts: NotesTickHarnessOptions): NotesTick
       markdown: markdown(),
       notes: sectionBody(MEETING_NOTES_HEADINGS),
       headings: headings(),
-      input: seen?.input as NotesComposeInput,
+      ...(seen?.input ? { input: seen.input } : {}),
       composed: seen?.composed ?? '',
     };
   };
@@ -236,7 +264,10 @@ export function createNotesTickHarness(opts: NotesTickHarnessOptions): NotesTick
     async tick() {
       const n = ++tickNo;
       schedule.fire();
-      await waitFor(() => done.has(n), { describe: `notes tick ${n} to be written` });
+      await waitFor(() => done.has(n), {
+        describe: `notes tick ${n} to be written`,
+        ...(opts.tickTimeoutMs !== undefined ? { timeout: opts.tickTimeoutMs } : {}),
+      });
       const shot = snapshot(n);
       snapshots.push(shot);
       return shot;

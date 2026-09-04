@@ -1,0 +1,1094 @@
+{
+  "meeting": "ES2003d",
+  "corpus": "AMI Meeting Corpus",
+  "licence": "CC BY 4.0",
+  "source": "https://groups.inf.ed.ac.uk/ami/corpus/",
+  "window": {
+    "fromSeconds": 300,
+    "seconds": 900
+  },
+  "board": [
+    {
+      "kind": "task",
+      "title": "Remote control design",
+      "url": "/workspaces/w-eval?task=t-1"
+    },
+    {
+      "kind": "task",
+      "title": "Corporate colour scheme",
+      "url": "/workspaces/w-eval?task=t-2"
+    },
+    {
+      "kind": "task",
+      "title": "Volume buttons",
+      "url": "/workspaces/w-eval?task=t-3"
+    },
+    {
+      "kind": "task",
+      "title": "Channel buttons",
+      "url": "/workspaces/w-eval?task=t-4"
+    },
+    {
+      "kind": "task",
+      "title": "Speech recognition",
+      "url": "/workspaces/w-eval?task=t-5"
+    },
+    {
+      "kind": "task",
+      "title": "Production cost target",
+      "url": "/workspaces/w-eval?task=t-6"
+    },
+    {
+      "kind": "task",
+      "title": "Target age group",
+      "url": "/workspaces/w-eval?task=t-7"
+    },
+    {
+      "kind": "task",
+      "title": "LCD screen",
+      "url": "/workspaces/w-eval?task=t-8"
+    }
+  ],
+  "ticks": [
+    {
+      "turns": [
+        {
+          "speaker": "B",
+          "text": "Um"
+        },
+        {
+          "speaker": "C",
+          "text": "Yeah I've got a if you load up my evaluation"
+        },
+        {
+          "speaker": "B",
+          "text": "Yeah okay"
+        },
+        {
+          "speaker": "C",
+          "text": "document"
+        },
+        {
+          "speaker": "A",
+          "text": "Okay"
+        },
+        {
+          "speaker": "B",
+          "text": "Excellent work"
+        },
+        {
+          "speaker": "C",
+          "text": "Mm"
+        }
+      ]
+    },
+    {
+      "turns": [
+        {
+          "speaker": "B",
+          "text": "Um"
+        }
+      ]
+    },
+    {
+      "turns": [
+        {
+          "speaker": "C",
+          "text": "Uh evaluation"
+        }
+      ]
+    },
+    {
+      "turns": [
+        {
+          "speaker": "C",
+          "text": "Basic point uh have a list of criteria that we need to rate the prototype by Um then we will it's a seven s um seven"
+        },
+        {
+          "speaker": "C",
+          "text": "seven step kinda evaluation process So um not seven steps seven scale So after we've finished doing all the ratings for each criteria we average that and that will give us some type of uh confidence in our prototype And uh the criteria based on Real Reactions' kinda goals and policies marketing strategies and also those I put together from the user requirements phase 'Kay Um if you flip the"
+        }
+      ]
+    },
+    {
+      "turns": [
+        {
+          "speaker": "C",
+          "text": "So those are the criteria And uh perhaps I could have put 'em a bit better but you notice a few things that we've totally abandoned which means that uh the product will score very badly on some of those points Put it mildly So we have um true"
+        }
+      ]
+    },
+    {
+      "turns": [
+        {
+          "speaker": "C",
+          "text": "One t"
+        }
+      ]
+    },
+    {
+      "turns": [
+        {
+          "speaker": "C",
+          "text": "Seven eight oh"
+        },
+        {
+          "speaker": "C",
+          "text": "Fourth Okay so we have to go through each point If we imagine it's actually straight and just give it a a score So um how well would you say the prototype is uh how well have we realised the dream of being able to stop remotes from from being lost or to be able to find them once they are lost I mean uh is the homing thing still the locator is that still"
+        }
+      ]
+    },
+    {
+      "turns": [
+        {
+          "speaker": "A",
+          "text": "Yeah that's still part of the design"
+        },
+        {
+          "speaker": "C",
+          "text": "Sure And Adam we can keep that in"
+        },
+        {
+          "speaker": "B",
+          "text": "Yeah I believe so So"
+        },
+        {
+          "speaker": "C",
+          "text": "Okay"
+        },
+        {
+          "speaker": "B",
+          "text": "I mean I don't think anybody could actually stop a remote being lost 'cause that would mean doing something about the human"
+        },
+        {
+          "speaker": "C",
+          "text": "Sure"
+        },
+        {
+          "speaker": "B",
+          "text": "element but I'd like"
+        },
+        {
+          "speaker": "C",
+          "text": "T"
+        },
+        {
+          "speaker": "B",
+          "text": "to think that we've done something about finding"
+        }
+      ]
+    },
+    {
+      "turns": [
+        {
+          "speaker": "A",
+          "text": "Mm"
+        },
+        {
+          "speaker": "B",
+          "text": "the damn thing once we have"
+        },
+        {
+          "speaker": "C",
+          "text": "Sure"
+        },
+        {
+          "speaker": "A",
+          "text": "Mm And making it a bright colour helps with the personally I would have gone for purple"
+        },
+        {
+          "speaker": "C",
+          "text": "Mm Bright colour So we still have that noise thing yeah"
+        },
+        {
+          "speaker": "A",
+          "text": "Mm-hmm"
+        },
+        {
+          "speaker": "C",
+          "text": "Os on a scale of one to seven how would you guys rate it for finding finding it once it's lost"
+        }
+      ]
+    },
+    {
+      "turns": [
+        {
+          "speaker": "A",
+          "text": "I'd say number one"
+        },
+        {
+          "speaker": "C",
+          "text": "Number"
+        },
+        {
+          "speaker": "D",
+          "text": "One"
+        },
+        {
+          "speaker": "C",
+          "text": "one"
+        },
+        {
+          "speaker": "D",
+          "text": "Yeah"
+        },
+        {
+          "speaker": "C",
+          "text": "Okay Number number one for the first criteria"
+        },
+        {
+          "speaker": "A",
+          "text": "I think w if it was just the sounder then th I mean something I've found with uh w w with say tr trying to find uh a cordless phone or a m mobile you can hear it but you can't quite pin it dow pin down where it is"
+        }
+      ]
+    },
+    {
+      "turns": [
+        {
+          "speaker": "C",
+          "text": "Yeah you can tell what room the mobile is"
+        },
+        {
+          "speaker": "D",
+          "text": "What about"
+        },
+        {
+          "speaker": "A",
+          "text": "Bu"
+        },
+        {
+          "speaker": "D",
+          "text": "what if the the volume on the T_V_'s turned up massively and uh you just wanna turn down the volume can't find remote"
+        },
+        {
+          "speaker": "D",
+          "text": "Suppose you have to go to the T_V_ and"
+        }
+      ]
+    },
+    {
+      "turns": [
+        {
+          "speaker": "C",
+          "text": "Yeah"
+        },
+        {
+          "speaker": "D",
+          "text": "do it manually"
+        },
+        {
+          "speaker": "A",
+          "text": "Yeah"
+        },
+        {
+          "speaker": "D",
+          "text": "Mm"
+        },
+        {
+          "speaker": "B",
+          "text": "Mm"
+        },
+        {
+          "speaker": "C",
+          "text": "Yeah"
+        },
+        {
+          "speaker": "D",
+          "text": "Like"
+        },
+        {
+          "speaker": "B",
+          "text": "Um"
+        },
+        {
+          "speaker": "D",
+          "text": "y you wouldn't hear the speaker"
+        },
+        {
+          "speaker": "C",
+          "text": "Mm-hmm"
+        },
+        {
+          "speaker": "B",
+          "text": "just before we go through all of the steps"
+        },
+        {
+          "speaker": "C",
+          "text": "You wanna say something"
+        },
+        {
+          "speaker": "B",
+          "text": "here um well what we'll do is"
+        },
+        {
+          "speaker": "B",
+          "text": "um if we can look at the criteria you're gonna evaluate and then we'll come back to the product evaluation if that's alright"
+        }
+      ]
+    },
+    {
+      "turns": [
+        {
+          "speaker": "C",
+          "text": "That's fine"
+        },
+        {
+          "speaker": "B",
+          "text": "Yeah is that"
+        },
+        {
+          "speaker": "C",
+          "text": "Oh that's that's fine"
+        },
+        {
+          "speaker": "B",
+          "text": "Um so is there anything here that you"
+        },
+        {
+          "speaker": "B",
+          "text": "that you wanted to cover as in the criteria that you've covered And then we'll come back pretty much promptly to this"
+        }
+      ]
+    },
+    {
+      "turns": [
+        {
+          "speaker": "C",
+          "text": "What do you mean cr is there anything I"
+        },
+        {
+          "speaker": "B",
+          "text": "I"
+        },
+        {
+          "speaker": "C",
+          "text": "wanna"
+        },
+        {
+          "speaker": "B",
+          "text": "is there any of these criteria that need any explaining Or is there anything that yous thought tha really would stand out compared to the others"
+        },
+        {
+          "speaker": "C",
+          "text": "Um a few"
+        },
+        {
+          "speaker": "C",
+          "text": "Something I neglected from my initial research is that Real Reactions has a a goal strategy that all of the products be inspired by material fashion and clothing fashion That is why fruit and veg being popular in the home and in clothing was important and they want all their products to be somehow inspired by current trends in fashion So they say we put the fashion in electronics well they really mean it they they're very big on fashion so"
+        }
+      ]
+    },
+    {
+      "turns": [
+        {
+          "speaker": "B",
+          "text": "Okay"
+        },
+        {
+          "speaker": "C",
+          "text": "That's this bit right here And uh this bit is this one easy to use for visitors or for anybody I guess it's just the same as saying easy to use interface so it's kinda condensed into one And we can come back to it you said So"
+        }
+      ]
+    },
+    {
+      "turns": [
+        {
+          "speaker": "B",
+          "text": "Okay No and which we will do very very shortly"
+        },
+        {
+          "speaker": "B",
+          "text": "Um"
+        },
+        {
+          "speaker": "B",
+          "text": "Okay Slight problem we had was that we have an amazing four Euros over budget for what we were hoping to do Um most of it stems from the use of the L_C_D_ which I think in the end accounted for about half of our expenditure because of course we required a chip as well Um the only way to get this down was either to ditch the a L_C_D_ at which point we've removed a large part of how we were gonna interface require more buttons etcetera"
+        }
+      ]
+    },
+    {
+      "turns": [
+        {
+          "speaker": "B",
+          "text": "Or what we did was that we um we as in I as I was quickly going over it was altering the actual structure Um changing it to plastic and a solid unit with a single curve design would allow us to come back into the um proposed costs and we're just scraping it in we've got point two of a Euro left over there So we're just managing it really Even then as well um there was no criteria technically defined for a joystick so I've used what I think's appropriate With any luck that won't mean that we've incurred more cost than we can actually afford to"
+        }
+      ]
+    },
+    {
+      "turns": [
+        {
+          "speaker": "B",
+          "text": "It blows a lot of our really good ideas kind of slightly to one side for example the possibility of having a U_S_B_ connection is definitely not viable now Um"
+        },
+        {
+          "speaker": "C",
+          "text": "Different languages"
+        },
+        {
+          "speaker": "B",
+          "text": "That should still be viable We've got an advanced chip we've got the use of the L_C_D_ So being able"
+        }
+      ]
+    },
+    {
+      "turns": [
+        {
+          "speaker": "C",
+          "text": "Yeah"
+        },
+        {
+          "speaker": "B",
+          "text": "to communicate in multiple languages is still very much a possibility Um but what's something we need to decide on is how we're gonna go from here We do need to try and come up with an idea which could be continued with other people if need be Um"
+        }
+      ]
+    },
+    {
+      "turns": [
+        {
+          "speaker": "B",
+          "text": "We can I can bring the excel up sheet up and uh show you if you wish um I really think as m much as it pains me is that we might have to go with plastic and some kind of solid design possibly meaning that the L_C_D_ wouldn't be in this perfect place It might be s stuck like slightly between what would be good for left handed and what would be good for a right handed person"
+        }
+      ]
+    },
+    {
+      "turns": [
+        {
+          "speaker": "A",
+          "text": "Mm-hmm I suppose o one thing that could be done is h is have it um circular and have it s so that the uh the pink actually goes a bit over the pinkie finger"
+        },
+        {
+          "speaker": "B",
+          "text": "Okay"
+        },
+        {
+          "speaker": "A",
+          "text": "Mm"
+        },
+        {
+          "speaker": "C",
+          "text": "Mm"
+        },
+        {
+          "speaker": "A",
+          "text": "So that uh th"
+        },
+        {
+          "speaker": "B",
+          "text": "It very much is about making concessions unfortunately Um"
+        }
+      ]
+    },
+    {
+      "turns": [
+        {
+          "speaker": "A",
+          "text": "Mm"
+        },
+        {
+          "speaker": "C",
+          "text": "Do you have any data on how much um different prints cost I mean can you get the entire thing printed with a design um"
+        },
+        {
+          "speaker": "B",
+          "text": "Um b b b da is you mean on the plastic or Let's have a look You now have as much information as I do"
+        }
+      ]
+    },
+    {
+      "turns": [
+        {
+          "speaker": "C",
+          "text": "Yeah yeah"
+        },
+        {
+          "speaker": "B",
+          "text": "Um"
+        },
+        {
+          "speaker": "B",
+          "text": "So as you can see here for example the battery"
+        },
+        {
+          "speaker": "B",
+          "text": "really not very little choice in that one We've gone for one of the cheaper options as well Unfortunately we require the advanced chip if we're gonna do what we're needing to"
+        },
+        {
+          "speaker": "B",
+          "text": "I've said single curved We really do need it to be that way for the ergonomics of it Um plastic for some reason incurs no cost which I've had to very much make advantage of despite the fact that rubber's only got a value of two Euros per unit Problem comes here as you can see in the interface Um"
+        }
+      ]
+    },
+    {
+      "turns": [
+        {
+          "speaker": "B",
+          "text": "if I've read this thing correctly then we can save point five of a Euro here in that it's not per push button That might make sense because then a numeric keypad would come in at um what four point five Euros which is an awful lot so that could well be wrong Even if we save point five there it would just mean that we're most likely placing it in actually just gaining a colour for the unit which has had to be put to one side As you can see the use of an L_C_ display um advanced chip and what would determine the scroll wheel here as well because it's an integrated scroll scroll wheel push button that wasn't quite what I think they had in mind with a joystick"
+        }
+      ]
+    },
+    {
+      "turns": [
+        {
+          "speaker": "C",
+          "text": "Why would why would that be more expensive than an individual push button and scroll wheel together"
+        },
+        {
+          "speaker": "C",
+          "text": "That's quite significantly expensive"
+        },
+        {
+          "speaker": "B",
+          "text": "I that's something you'll have to take up with the bean counters Um"
+        },
+        {
+          "speaker": "A",
+          "text": "Mm yeah"
+        }
+      ]
+    },
+    {
+      "turns": [
+        {
+          "speaker": "B",
+          "text": "as you can see I mean that's taken up well over half of the price"
+        },
+        {
+          "speaker": "C",
+          "text": "Yeah"
+        },
+        {
+          "speaker": "B",
+          "text": "So um I'm very much open to suggestions of where we go but because we need to shed what was four Euros off of the um the price of for what we really desired this one comes in under price as you can see but this was the one that sacrificed the material for the case and for the actual case design"
+        }
+      ]
+    },
+    {
+      "turns": [
+        {
+          "speaker": "C",
+          "text": "We don't even have uh speakers here The like uh we uh what about speakers and transmitters and stuff like that Have we factored that in"
+        },
+        {
+          "speaker": "D",
+          "text": "Mm"
+        },
+        {
+          "speaker": "B",
+          "text": "Uh no we haven't"
+        },
+        {
+          "speaker": "C",
+          "text": "Transmitter"
+        },
+        {
+          "speaker": "B",
+          "text": "not"
+        },
+        {
+          "speaker": "C",
+          "text": "receiver speakers Plus the extra device itself that's gonna be on a T_V_ Is that gonna be a button or"
+        }
+      ]
+    },
+    {
+      "turns": [
+        {
+          "speaker": "B",
+          "text": "That'll it literally would just be a button"
+        },
+        {
+          "speaker": "C",
+          "text": "Yeah"
+        },
+        {
+          "speaker": "D",
+          "text": "That's"
+        },
+        {
+          "speaker": "B",
+          "text": "We might have to"
+        },
+        {
+          "speaker": "D",
+          "text": "too expensive isn't it"
+        },
+        {
+          "speaker": "B",
+          "text": "It looks like almost nothing"
+        },
+        {
+          "speaker": "B",
+          "text": "Mm Oh good call I missed that"
+        },
+        {
+          "speaker": "C",
+          "text": "I I mean it's not on here but um"
+        }
+      ]
+    },
+    {
+      "turns": [
+        {
+          "speaker": "B",
+          "text": "that's a very valid point"
+        },
+        {
+          "speaker": "C",
+          "text": "Did they s do we have to use an advanced chip for the L_C_D_"
+        },
+        {
+          "speaker": "D",
+          "text": "Yeah"
+        },
+        {
+          "speaker": "C",
+          "text": "Okay Well that's"
+        },
+        {
+          "speaker": "B",
+          "text": "So"
+        },
+        {
+          "speaker": "C",
+          "text": "yeah"
+        },
+        {
+          "speaker": "B",
+          "text": "if we're gonna go with the L_C_ display then that's"
+        },
+        {
+          "speaker": "C",
+          "text": "What's a hand dyna dynamo You have to wind it up"
+        }
+      ]
+    },
+    {
+      "turns": [
+        {
+          "speaker": "B",
+          "text": "I believe so yeah"
+        },
+        {
+          "speaker": "B",
+          "text": "That would probably not be in keeping with the um"
+        },
+        {
+          "speaker": "C",
+          "text": "Technology"
+        },
+        {
+          "speaker": "B",
+          "text": "the fashion"
+        },
+        {
+          "speaker": "D",
+          "text": "Fashion"
+        },
+        {
+          "speaker": "B",
+          "text": "statement"
+        },
+        {
+          "speaker": "C",
+          "text": "Yeah"
+        },
+        {
+          "speaker": "B",
+          "text": "and such yeah"
+        },
+        {
+          "speaker": "C",
+          "text": "Okay"
+        },
+        {
+          "speaker": "D",
+          "text": "So basically the only new thing is the L_C_D_ on the"
+        },
+        {
+          "speaker": "B",
+          "text": "Being"
+        }
+      ]
+    },
+    {
+      "turns": [
+        {
+          "speaker": "D",
+          "text": "remote"
+        },
+        {
+          "speaker": "B",
+          "text": "manipulated"
+        },
+        {
+          "speaker": "D",
+          "text": "now"
+        },
+        {
+          "speaker": "B",
+          "text": "by the joystick yeah"
+        },
+        {
+          "speaker": "D",
+          "text": "Oh and joystick yeah"
+        },
+        {
+          "speaker": "B",
+          "text": "Which I'm defining as scroll wheel Um"
+        },
+        {
+          "speaker": "C",
+          "text": "And we couldn't replace the joystick right Because we would need four extra buttons to replace it up down left and right and that would be more expensive than a but is a scroll wheel"
+        }
+      ]
+    },
+    {
+      "turns": [
+        {
+          "speaker": "A",
+          "text": "Mm"
+        },
+        {
+          "speaker": "C",
+          "text": "not just back and forward"
+        },
+        {
+          "speaker": "B",
+          "text": "Yeah it's just because there was no actual definition for what a joystick might be that"
+        },
+        {
+          "speaker": "B",
+          "text": "that's what I've labelled it for"
+        },
+        {
+          "speaker": "D",
+          "text": "So"
+        },
+        {
+          "speaker": "B",
+          "text": "the purposes of this evaluation"
+        },
+        {
+          "speaker": "D",
+          "text": "The L_C_D_ basically is the big selling point of"
+        },
+        {
+          "speaker": "B",
+          "text": "If we remove the L_C_ display"
+        }
+      ]
+    },
+    {
+      "turns": [
+        {
+          "speaker": "D",
+          "text": "the remote"
+        },
+        {
+          "speaker": "B",
+          "text": "we could save ourselves"
+        },
+        {
+          "speaker": "B",
+          "text": "a fair amount"
+        },
+        {
+          "speaker": "B",
+          "text": "Which you could"
+        },
+        {
+          "speaker": "D",
+          "text": "But that's what makes it uh original though isn't"
+        },
+        {
+          "speaker": "A",
+          "text": "Mm"
+        },
+        {
+          "speaker": "D",
+          "text": "it"
+        },
+        {
+          "speaker": "C",
+          "text": "Yeah"
+        },
+        {
+          "speaker": "A",
+          "text": "I think if we remove the the L_C_ display then there was absolutely no point to any of these meetings and we just we could just put our branding on any other remote control"
+        }
+      ]
+    },
+    {
+      "turns": [
+        {
+          "speaker": "C",
+          "text": "Yeah Yeah Um Uh k"
+        },
+        {
+          "speaker": "B",
+          "text": "It's a shame We should possibly have"
+        },
+        {
+          "speaker": "B",
+          "text": "If we could've increased the price we could've manufactured that and we could've got something far closer to what we were"
+        },
+        {
+          "speaker": "C",
+          "text": "Does this"
+        }
+      ]
+    },
+    {
+      "turns": [
+        {
+          "speaker": "B",
+          "text": "hoping to"
+        },
+        {
+          "speaker": "C",
+          "text": "does this bear in mind that I mean it's a bit ridiculous that they're gonna charge us"
+        },
+        {
+          "speaker": "C",
+          "text": "what is it like this much money for three million if we're gonna buy three million components you know"
+        },
+        {
+          "speaker": "B",
+          "text": "Again you'll have to argue with the accountants on that"
+        }
+      ]
+    },
+    {
+      "turns": [
+        {
+          "speaker": "C",
+          "text": "Mm"
+        },
+        {
+          "speaker": "B",
+          "text": "one Um but for the purposes of this meeting I'm we're gonna have to stick with these figures"
+        },
+        {
+          "speaker": "C",
+          "text": "'Kay"
+        },
+        {
+          "speaker": "B",
+          "text": "So"
+        },
+        {
+          "speaker": "B",
+          "text": "I would say that it would seem like the general opinion is we're gonna keep the L_C_ display 'cause it's about what really separates us"
+        }
+      ]
+    },
+    {
+      "turns": [
+        {
+          "speaker": "C",
+          "text": "I"
+        },
+        {
+          "speaker": "B",
+          "text": "despite"
+        },
+        {
+          "speaker": "C",
+          "text": "think so"
+        },
+        {
+          "speaker": "B",
+          "text": "the cost it's gonna incur Um"
+        },
+        {
+          "speaker": "B",
+          "text": "are people maybe not happy with but are willing to go ahead with this in going for a plastic solid case to keep the L_C_D_"
+        },
+        {
+          "speaker": "A",
+          "text": "Mm-hmm Um yeah I mean one thing I mean ho uh how much extra would it be to to keep I mean keep the um the articulation"
+        }
+      ]
+    },
+    {
+      "turns": [
+        {
+          "speaker": "B",
+          "text": "It's hard to tell Um I would say"
+        },
+        {
+          "speaker": "A",
+          "text": "This is"
+        },
+        {
+          "speaker": "B",
+          "text": "that"
+        },
+        {
+          "speaker": "A",
+          "text": "what I'm wondering"
+        },
+        {
+          "speaker": "B",
+          "text": "you're at least gonna take double curved and even then I'm not quite sure if that's incorporating the idea of articulation"
+        },
+        {
+          "speaker": "C",
+          "text": "Yeah"
+        },
+        {
+          "speaker": "A",
+          "text": "Oh no I think I I it d that it needn't require it to be double"
+        }
+      ]
+    },
+    {
+      "turns": [
+        {
+          "speaker": "D",
+          "text": "It can"
+        },
+        {
+          "speaker": "A",
+          "text": "curved"
+        },
+        {
+          "speaker": "D",
+          "text": "be s yeah it can still be single curved but"
+        },
+        {
+          "speaker": "A",
+          "text": "It's uh it's"
+        },
+        {
+          "speaker": "D",
+          "text": "You just"
+        },
+        {
+          "speaker": "B",
+          "text": "Single"
+        },
+        {
+          "speaker": "A",
+          "text": "just it's"
+        },
+        {
+          "speaker": "B",
+          "text": "curved with"
+        },
+        {
+          "speaker": "A",
+          "text": "just"
+        },
+        {
+          "speaker": "B",
+          "text": "articulation"
+        },
+        {
+          "speaker": "A",
+          "text": "it's just that the case would come in t would be made in two parts and then joined together with an articulation"
+        },
+        {
+          "speaker": "C",
+          "text": "Could we could we not get rid of the curvy the curvous the curvaceousness and focus on the menu being the best interface 'Cause like we do we have re restrictions on software"
+        }
+      ]
+    },
+    {
+      "turns": [
+        {
+          "speaker": "D",
+          "text": "That's what we need for the joystick I think though"
+        },
+        {
+          "speaker": "C",
+          "text": "Oh but"
+        },
+        {
+          "speaker": "A",
+          "text": "Mm"
+        },
+        {
+          "speaker": "C",
+          "text": "there has to"
+        },
+        {
+          "speaker": "A",
+          "text": "Yeah"
+        },
+        {
+          "speaker": "C",
+          "text": "be"
+        },
+        {
+          "speaker": "A",
+          "text": "I mean and I mean the uh I mean if you look uh if you look closer at the uh at the prototype here the lines here along the grip are actually quite straight Um I mean yeah"
+        }
+      ]
+    },
+    {
+      "turns": [
+        {
+          "speaker": "B",
+          "text": "But"
+        },
+        {
+          "speaker": "A",
+          "text": "on the"
+        },
+        {
+          "speaker": "B",
+          "text": "the curves all o over"
+        },
+        {
+          "speaker": "A",
+          "text": "on"
+        },
+        {
+          "speaker": "B",
+          "text": "hand is it"
+        },
+        {
+          "speaker": "A",
+          "text": "the L_C_D_ I mean although we've done it with a curve it could just as easily be done um without curves The curve that's really needed is up here"
+        },
+        {
+          "speaker": "C",
+          "text": "joystick"
+        },
+        {
+          "speaker": "A",
+          "text": "to put uh to keep the joystick in a good ergonomic position for it to have it rest on the top of the hand"
+        }
+      ]
+    },
+    {
+      "turns": [
+        {
+          "speaker": "C",
+          "text": "Okay Sure Okay my bad"
+        },
+        {
+          "speaker": "B",
+          "text": "We wouldn't actually save a lot by reducing it anyway so I mean for the purposes of this meeting maybe we can state that single curve still allows articulation"
+        },
+        {
+          "speaker": "A",
+          "text": "Mm"
+        },
+        {
+          "speaker": "B",
+          "text": "Um unless we hear otherwise we could go ahead with that proposal"
+        }
+      ]
+    },
+    {
+      "turns": [
+        {
+          "speaker": "C",
+          "text": "So I think the product is not gonna perform so well for my criteria"
+        }
+      ]
+    }
+  ]
+}
