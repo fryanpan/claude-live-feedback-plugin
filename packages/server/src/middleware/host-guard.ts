@@ -1153,7 +1153,16 @@ function pathWorkspaces(pathname: string, workspacesOf?: (id: string) => string[
 
   // Paths that name a DOC — every workspace it belongs to, most specific
   // first, which is the order `collabScope` then prefers between them.
-  const doc = seg('/review/') ?? room ?? seg('/events/') ?? seg('/api/docs/');
+  //
+  // `/audio/` sits here beside `/y/` because it is the same doc by another
+  // transport: the meeting's microphone socket for the doc the text socket
+  // syncs. `shareScopeAllows` has admitted it since the member-rights
+  // change, but on the collaboration hostname this function runs FIRST — and
+  // while it named no candidate for `/audio/`, `collabScope` had nothing to
+  // ask membership about and judged the path against the shell allowances,
+  // which refuse it. So a member could open every tab of their board and not
+  // the meeting they had just started on it.
+  const doc = seg('/review/') ?? room ?? seg('/audio/') ?? seg('/events/') ?? seg('/api/docs/');
   if (!doc) return [];
   const owners = workspacesOf?.(doc);
   // `Array.isArray` for the reason `shareScopeAllows` gives at its own use of

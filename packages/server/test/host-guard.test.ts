@@ -1518,6 +1518,9 @@ describe('collabScope', () => {
     // Filed on two boards at once — the shape a review filed on a hub has,
     // and the one a single-answer lookup got wrong.
     if (id === 'two-board-doc') return ['ws-a', 'ws-b'];
+    // A colon in the id, because a huddle doc's is spelled `hub-<n>:<file>`
+    // and reaches the guard percent-encoded.
+    if (id === 'hub-1:plan.md') return ['ws-a'];
     return [];
   };
   /** Path scope only: everybody is a member, so a `false` here is the path. */
@@ -1574,6 +1577,28 @@ describe('collabScope', () => {
       allowed: true,
       target: { workspaceId: 'ws-b' },
     });
+  });
+
+  it('reaches a meeting audio socket on the same terms as the doc socket beside it', () => {
+    // `/audio/<docId>` is the other half of "have a meeting": the button
+    // mints the doc, this is where the microphone goes. `shareScopeAllows`
+    // has admitted it since the member-rights change, but the collaboration
+    // host asks `pathWorkspaces` FIRST — and with no `/audio/` case there it
+    // proposed zero candidates, so the scope check was never reached and a
+    // member on the collab hostname could open every board tab except the
+    // meeting they had just started.
+    expect(allows('/audio/design-doc')).toBe(true);
+    expect(allows('/audio/two-board-doc')).toBe(true);
+    // Percent-encoded, the way a huddle doc's id actually arrives.
+    expect(allows('/audio/hub-1%3Aplan.md')).toBe(true);
+    // The verdict names the board, so the request is served scoped to it.
+    expect(collabScope('/audio/design-doc', 'GET', { workspacesOf, isMember: () => true })).toEqual(
+      { allowed: true, target: { workspaceId: 'ws-a' } },
+    );
+    // Membership still decides: proposing the candidate opens nothing.
+    expect(allowsFor(['ws-b'], '/audio/design-doc')).toBe(false);
+    // And a doc on no board is still refused.
+    expect(allows('/audio/loose-doc')).toBe(false);
   });
 
   it('refuses a doc filed on no workspace — reach is workspace membership', () => {
