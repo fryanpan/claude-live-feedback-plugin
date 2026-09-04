@@ -10,10 +10,10 @@
  * All fixtures are synthetic. The repo is public.
  */
 
+import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
 import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
 import { meetingDirPath } from '../src/meetings.ts';
 import {
   NOTES_LEDGER_CONTINUATION_MS,
@@ -110,7 +110,9 @@ describe('createNotesLedgerStore', () => {
     const blocked = join(dataDir, 'not-a-dir');
     writeFileSync(blocked, 'x');
     const store = createNotesLedgerStore(blocked);
-    expect(() => store.write(DOC_ID, { meetingId: 'm-1', writtenAt: 1, items: ['a'] })).not.toThrow();
+    expect(() =>
+      store.write(DOC_ID, { meetingId: 'm-1', writtenAt: 1, items: ['a'] }),
+    ).not.toThrow();
     expect(store.read(DOC_ID)).toBeNull();
   });
 });
