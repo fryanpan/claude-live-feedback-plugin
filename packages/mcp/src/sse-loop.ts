@@ -15,11 +15,8 @@
  * cursor is committed only after a frame is DELIVERED — see sse-cursor.ts for
  * the loss that advancing it first caused.
  */
+import { reconnectDelayMs } from './backoff.ts';
 import { type SseCursor, deliverThenCommit } from './sse-cursor.ts';
-
-/** Backoff before a reconnect. The server sends keepalive comments every
- *  ~15s, so an abrupt close is almost always a transient blip. */
-const RECONNECT_BACKOFF_MS = 1_500;
 
 /** How long `startSseLoop` waits for a first connect outcome before
  *  answering `false`, so a wedged connect never stalls a tool call. */
@@ -64,6 +61,8 @@ export interface SseLoopDeps {
   /** The reconnect backoff. Injectable so a test does not wait 1.5s. */
   sleep: (ms: number) => Promise<void>;
   timers: LoopTimers;
+  /** Injectable so a test can pin the backoff's jitter draw. */
+  random?: () => number;
   connectCapMs?: number;
 }
 
@@ -126,6 +125,9 @@ async function runSseLoop(
   // seen: the cursor advances only after `handleFrame` resolves (see
   // sse-cursor.ts for the loss that committing it early caused).
   const cursor: SseCursor = { lastEventId: undefined };
+  /** Consecutive failed attempts, reset on every successful connect — the
+   *  input to the jittered backoff below. */
+  let attempt = 0;
   while (!signal.aborted) {
     try {
       const res = await deps.fetch(`${deps.resolveBaseUrl()}${path}`, {
@@ -136,6 +138,7 @@ async function runSseLoop(
       setOpen(live);
       settleFirst(live);
       if (!res.ok || !res.body) throw new Error(`sse ${path} → ${res.status}`);
+      attempt = 0;
       const reader = res.body.getReader();
       const decoder = new TextDecoder();
       let buf = '';
@@ -167,8 +170,12 @@ async function runSseLoop(
     // A clean end-of-stream lands here too, and it is just as much "not
     // connected" as a throw is.
     setOpen(false);
-    // Backoff before reconnect
-    await deps.sleep(RECONNECT_BACKOFF_MS);
+    // Backoff before reconnect — GROWING and FULLY JITTERED. It used to be a
+    // flat 1.5s, which is how one server restart became twenty: every session
+    // redialled every key at the same instant, and the herd is what kept the
+    // box from coming back. See backoff.ts.
+    attempt += 1;
+    await deps.sleep(reconnectDelayMs(attempt, deps.random));
     // A reconnect is what a server restart looks like from in here, and a
     // restart rebuilt every room with `seq` back at 0 — so every key the
     // dedup is holding can now collide with a genuinely NEW event and
