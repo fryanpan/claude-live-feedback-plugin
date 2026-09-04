@@ -637,6 +637,37 @@ describe('share links over HTTP', () => {
       expect(await elsewhere.json()).toEqual({ error: 'out_of_share_scope' });
     });
 
+    it('answers a doc id it may not have the same way whether or not it exists', async () => {
+      // The route checked EXISTENCE before scope, so a member learned which
+      // doc ids are real on the whole server: a doc on somebody else's board
+      // came back 403 and a made-up id came back 404. Doc ids are readable
+      // slugs, and the doc LIST is refused precisely to stop that
+      // enumeration — answering it one id at a time is the same disclosure
+      // through a narrower window.
+      const real = await postAsMember(`/api/workspaces/${encodeURIComponent(board)}/docs`, {
+        docId: otherDocId,
+      });
+      const invented = await postAsMember(`/api/workspaces/${encodeURIComponent(board)}/docs`, {
+        docId: 'no-such-doc-anywhere',
+      });
+      expect(real.status).toBe(403);
+      expect(invented.status).toBe(real.status);
+      const inventedBody = await invented.json();
+      expect(inventedBody).toEqual(await real.json());
+      // Named, so a future change that made both 404 would still fail here:
+      // the answer a member gets is the out-of-board refusal, not the miss.
+      expect(inventedBody).toEqual({ error: 'out_of_share_scope' });
+
+      // The owner is unaffected — a typo from the box still says what went
+      // wrong, which is what makes the member's answer a redaction rather
+      // than a route that stopped working.
+      const owner = await postLocal(`/api/workspaces/${encodeURIComponent(board)}/docs`, {
+        docId: 'no-such-doc-anywhere',
+      });
+      expect(owner.status).toBe(404);
+      expect(await owner.json()).toEqual({ error: 'doc not found', docId: 'no-such-doc-anywhere' });
+    });
+
     it('opens board settings without being told anything about the machine', async () => {
       // A notes home is `repoRoot` on the owner's disk. Set from the box, so
       // the member's read below is measured against a board that really has
