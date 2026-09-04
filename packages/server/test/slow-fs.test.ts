@@ -14,7 +14,7 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { DEFAULT_ROOM_TIMINGS, ROOM_TIMINGS } from '../src/room-timings.ts';
-import { BOUND_READ_MAX_INFLIGHT, boundFiles } from '../src/slow-fs.ts';
+import { BOUND_READ_MAX_OVERDUE, boundFiles } from '../src/slow-fs.ts';
 import { makeFifo, releaseFifo, releaseFifosIn } from './fifo.ts';
 import { waitFor } from './wait-for.ts';
 
@@ -77,20 +77,38 @@ describe('boundFiles', () => {
     expect(boundFiles.stats().leaked).toBe(1);
   });
 
-  it('leaks at most BOUND_READ_MAX_INFLIGHT pool threads to a stalled folder', async () => {
+  it('stops starting calls once BOUND_READ_MAX_OVERDUE are parked', async () => {
     // Distinct paths, so the quarantine cannot be what stops them — the
-    // inflight bound has to. Without it a folder full of stalled files would
+    // overdue bound has to. Without it a folder full of stalled files would
     // take every other async read in the process down with it.
-    const paths = Array.from({ length: BOUND_READ_MAX_INFLIGHT + 3 }, (_, i) => {
-      const p = join(scratch, `stall-${i}.md`);
-      return makeFifo(p);
-    });
-    const results = await Promise.all(paths.map((p) => boundFiles.read(p)));
-    const busy = results.filter((r) => r.status === 'unavailable' && r.reason === 'busy');
-    const timedOut = results.filter((r) => r.status === 'unavailable' && r.reason === 'timeout');
-    expect(timedOut.length).toBe(BOUND_READ_MAX_INFLIGHT);
-    expect(busy.length).toBe(3);
-    expect(boundFiles.stats().leaked).toBe(BOUND_READ_MAX_INFLIGHT);
+    const first = Array.from({ length: BOUND_READ_MAX_OVERDUE }, (_, i) =>
+      makeFifo(join(scratch, `stall-${i}.md`)),
+    );
+    const results = await Promise.all(first.map((p) => boundFiles.read(p)));
+    expect(results.every((r) => r.status === 'unavailable' && r.reason === 'timeout')).toBe(true);
+    expect(boundFiles.stats().leaked).toBe(BOUND_READ_MAX_OVERDUE);
+
+    // The pool now holds the bound's worth of threads that will never come
+    // back, so the next path is refused before it can take one more.
+    const extra = makeFifo(join(scratch, 'stall-extra.md'));
+    expect(await boundFiles.read(extra)).toEqual({ status: 'unavailable', reason: 'busy' });
+    expect(boundFiles.stats().leaked).toBe(BOUND_READ_MAX_OVERDUE);
+  });
+
+  it('never refuses a healthy file, however many calls are outstanding', async () => {
+    // The regression this exists for: the bound used to count calls IN
+    // FLIGHT, and `sweepFilePolls` issues one stat per armed binding in a
+    // single synchronous loop. Nothing can settle until that loop yields, so
+    // on a corpus of any size every binding past the fourth was refused
+    // `busy` by its position in a Map — and an external edit to those files
+    // went unseen. A healthy call resolves and gives its thread straight
+    // back, so nothing about it is worth capping.
+    const fanOut = 32;
+    const results = await Promise.all(
+      Array.from({ length: fanOut }, () => boundFiles.statMtime(readable)),
+    );
+    expect(results.filter((r) => r.status === 'unavailable')).toEqual([]);
+    expect(boundFiles.stats().leaked).toBe(0);
   });
 
   it('leaves a healthy file readable while another path is stalled', async () => {
