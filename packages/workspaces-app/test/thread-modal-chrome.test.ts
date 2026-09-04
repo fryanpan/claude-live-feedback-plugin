@@ -84,6 +84,7 @@ function opts(extra?: Partial<ChromeOpts>): ChromeOpts {
     ydoc: new Y.Doc(),
     surface: fakeSurface(),
     whenSynced: (cb) => cb(),
+    canWrite: true,
     selectHint: '',
     reanchorHint: '',
     getSelection: () => null,

@@ -90,10 +90,13 @@ describe('the words', () => {
     ]);
   });
 
-  it('the chip says how many questions are for you', () => {
-    expect(chipSentence(1)).toBe('1 question for you');
-    expect(chipSentence(3)).toBe('3 questions for you');
+  it('the chip says how many are waiting on you, naming no kind', () => {
+    // It counts questions AND decisions under one glyph, so saying "questions"
+    // was a kind-chip in the top bar — the marking the cards themselves lost.
+    expect(chipSentence(1)).toBe('1 waiting on you');
+    expect(chipSentence(3)).toBe('3 waiting on you');
     expect(chipSentence(0)).toBe('Nothing waiting on you');
+    expect(chipSentence(3)).not.toMatch(/question/i);
   });
 });
 
@@ -230,7 +233,7 @@ describe('mountCommentHints', () => {
     expect(h.jumps).toEqual(['b', 'c']);
   });
 
-  it('the chip counts every open ask on the doc and jumps to the first', () => {
+  it('the chip counts every open ask on the doc and starts at the first', () => {
     const h = harness(
       [
         thread('a', [comment('?', q())]),
@@ -240,11 +243,53 @@ describe('mountCommentHints', () => {
       { a: 900, b: 100 },
     );
     expect(h.chip.hidden).toBe(false);
-    expect(h.chip.title).toBe('2 questions for you');
+    expect(h.chip.title).toBe('2 waiting on you');
     expect(h.chip.querySelector('.lf-ic-question')).not.toBe(null);
     h.chip.click();
     // First in DOCUMENT order, not in thread order — `b` sits higher.
     expect(h.jumps).toEqual(['b']);
+  });
+
+  it('every further tap steps to the next open ask, and the last wraps', () => {
+    // The chip used to jump to the first ask on every tap, which put three of
+    // this reader's four asks out of reach of the only control that told them
+    // the asks existed.
+    const h = harness(
+      [
+        thread('a', [comment('?', q())]),
+        thread('b', [comment('?', q())]),
+        thread('c', [comment('?', q())]),
+        thread('d', [comment('.')]),
+      ],
+      { a: 300, b: 100, c: 500, d: 200 },
+    );
+    h.chip.click();
+    h.chip.click();
+    h.chip.click();
+    h.chip.click();
+    expect(h.jumps).toEqual(['b', 'a', 'c', 'b']);
+    expect(h.chip.getAttribute('aria-label')).toBe('3 waiting on you — step through them');
+  });
+
+  it('a single ask says jump, not step', () => {
+    const h = harness([thread('a', [comment('?', q())])], { a: 100 });
+    expect(h.chip.getAttribute('aria-label')).toBe('1 waiting on you — jump to it');
+    h.chip.click();
+    h.chip.click();
+    // One ask taps to itself; the walk never runs off the end.
+    expect(h.jumps).toEqual(['a', 'a']);
+  });
+
+  it('an ask with no highlight is still in the walk, after the anchored ones', () => {
+    // A subject-anchored thread has nothing on the page to scroll to, and is
+    // exactly the ask a reader is least likely to find on their own.
+    const h = harness([thread('subject', [comment('?', q())]), thread('a', [comment('?', q())])], {
+      a: 100,
+    });
+    h.chip.click();
+    h.chip.click();
+    h.chip.click();
+    expect(h.jumps).toEqual(['a', 'subject', 'a']);
   });
 
   it('the chip hides when nothing is waiting', () => {

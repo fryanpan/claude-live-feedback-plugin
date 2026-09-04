@@ -6,6 +6,7 @@ import {
   suggestOps,
 } from '@feedback/core';
 import type { BootLocation, BootStorage, BootWindow } from './boot-env.ts';
+import { balloonMarginVisible } from './card-placement.ts';
 import { mountCode } from './code/code-app.ts';
 import { mountCommentHints } from './comment-hints.ts';
 import { saveStateView, settlePending, watchConnection } from './connection-state.ts';
@@ -290,6 +291,7 @@ async function mountMarkdown(ctx: MountContext): Promise<void> {
     surface: editor,
     whenSynced: (cb) => client.onReady(cb),
     scope,
+    canWrite,
     labelHint: ctx.sourceUrl || ctx.relPath || undefined,
     selectHint: 'Select some text first to leave a comment.',
     reanchorHint: 'Select new text first, then click Re-anchor.',
@@ -351,7 +353,7 @@ async function mountMarkdown(ctx: MountContext): Promise<void> {
   // across every author) — per-suggestion Accept/Reject lives on the
   // balloon/chip card the margin just wired above.
   const suggestionsSummary = mountSuggestionsSummary({ docId, ydoc, scope });
-  // Off-screen comment counts + the "N questions for you" chip — the
+  // Off-screen comment counts + the "N waiting on you" chip — the
   // information scent for what the reader cannot see (comment-hints.ts).
   // Jumping goes the same route a tap on the highlight takes: scroll, pulse,
   // and open the card where it lives (balloon above 1100px, inline below).
@@ -400,7 +402,7 @@ async function mountMarkdown(ctx: MountContext): Promise<void> {
     onSeen: () => margin.scheduleRelayout(),
     onJump: jumpToThread,
     dockEl: () => document.querySelector<HTMLElement>('#editor-pane .plan-float'),
-    marginVisible: () => !window.matchMedia('(max-width: 1100px)').matches,
+    marginVisible: balloonMarginVisible,
     scope,
   });
   const onMarginTransaction = (): void => {

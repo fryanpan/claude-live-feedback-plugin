@@ -148,11 +148,6 @@ export function syncFaceVisibility(card: HTMLElement, expanded: boolean): void {
   // line to the whole conversation with no state change announced at all.
   const caret = card.querySelector('.thread-caret');
   caret?.setAttribute('aria-expanded', String(expanded));
-  // A review item's caret is words, and the words have to say which way the
-  // card is folded — "Details" to open, "Less" to close.
-  if (caret?.classList.contains('thread-caret-words')) {
-    caret.textContent = expanded ? 'Less ▴' : 'Details ▾';
-  }
   const showing = expanded ? 'face-detail' : 'face-summary';
   for (const face of Array.from(card.querySelectorAll<HTMLElement>('.thread-face'))) {
     if (face.classList.contains(showing)) {
