@@ -6,6 +6,7 @@ import { join } from 'node:path';
  * Lifted verbatim out of `createServer`'s request closure; the handlers
  * read their collaborators off `WorkspaceRoutesContext` instead of the scope.
  */
+import { redactHubEventForVisitor } from '../share/redact-hub-events.ts';
 import { buildQueue } from '../task-queue.ts';
 import { eventsLogPath, isRetired, retiredNotice } from '../tasks.ts';
 import { SERVER_TICK_EVENT, analyzeUptime } from '../uptime.ts';
@@ -17,7 +18,7 @@ export async function handleWorkspaceNext(
   rq: WorkspaceRouteRequest,
 ): Promise<Response | undefined> {
   const { taskStore, taskProjection, dataDir, opts, j, safeJson, parallelismCapView } = ctx;
-  const { req, pathname, url } = rq;
+  const { req, pathname, url, visitor } = rq;
   // The work queue: priority order, dependency-aware, grouped into
   // waves that can run at once (§3.9 agent side).
   const wsNextMatch = pathname.match(/^\/api\/workspaces\/([^/]+)\/next$/);
@@ -230,6 +231,26 @@ export async function handleWorkspaceNext(
     let events: unknown[] = rows.filter((r) => r.event !== SERVER_TICK_EVENT);
     // Cap the payload: the newest rows are the review's working set.
     if (events.length > 1000) events = events.slice(-1000);
+    /**
+     * A member reads the Activity tab, through the SAME redaction the board's
+     * live event stream already applies (`redactHubEventForVisitor`): actors
+     * reduced to display name and kind, tasks to the visitor projection, a
+     * voice utterance's transcript dropped.
+     *
+     * ONE rule for both doors, deliberately. The log and the stream are the
+     * same bytes modulo transport (`TaskEventBus.appendAudit` writes exactly
+     * what subscribers receive), so a second redaction written for this route
+     * would agree today and drift later — and the one that drifts open is a
+     * breach. It is applied AFTER the cap for no reason but cost: redacting a
+     * thousand rows beats redacting a year of them.
+     */
+    if (visitor) {
+      events = events.map((row) =>
+        typeof (row as { event?: unknown })?.event === 'string'
+          ? redactHubEventForVisitor(row as { event: string })
+          : row,
+      );
+    }
     return j(200, { workspaceId, events, uptime });
   }
   return undefined;
