@@ -346,6 +346,31 @@ describe('stalledLine', () => {
     expect(line).toContain('t-b1');
   });
 
+  /**
+   * A repeat wake has to answer "why am I being told this again" before it
+   * asks for anything, or the reader diffs two frames in their head to find
+   * the one row that moved.
+   */
+  it('leads a repeat with what changed, and still lists everything to drive', () => {
+    const line = stalledLine({
+      ...STALL,
+      changed: { rows: [STALL.rows[1] as (typeof STALL)['rows'][number]] },
+    });
+    expect(line.indexOf('NEW since the last wake')).toBeLessThan(line.indexOf('stopped moving'));
+    expect(line).toContain('Cache the facet counts');
+    // The full list survives beside it: driving every row is still the job.
+    expect(line).toContain('Rank results by recency');
+  });
+
+  it('says so when the board escalated rather than gained a row', () => {
+    const line = stalledLine({ ...STALL, changed: { escalated: true } });
+    expect(line).toContain('crossed another repeat window');
+  });
+
+  it('says nothing about change on a first wake', () => {
+    expect(stalledLine(STALL)).not.toContain('NEW since');
+  });
+
   it('says how long the quietest row has been silent', () => {
     expect(stalledLine(STALL)).toContain('1h 35m');
   });

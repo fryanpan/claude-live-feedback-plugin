@@ -14008,6 +14008,25 @@ function stalledRowsClause(rows) {
   const rest = rows.length - shown.length;
   return rest > 0 ? `${shown.join("; ")}; and ${rest} more` : shown.join("; ");
 }
+function changedClause(changed) {
+  if (!changed)
+    return "";
+  const bits = [];
+  const rows = changed.rows ?? [];
+  if (rows.length > 0)
+    bits.push(`${stalledRowsClause(rows)}`);
+  const unread = changed.undetermined ?? [];
+  if (unread.length > 0)
+    bits.push(`${unread.join(", ")} became unreadable`);
+  const held = changed.heldItems ?? [];
+  if (held.length > 0)
+    bits.push(`${held.length} review item(s) newly held`);
+  if (changed.escalated === true)
+    bits.push("the board’s quietest row crossed another repeat window");
+  if (bits.length === 0)
+    return "";
+  return `NEW since the last wake: ${bits.join("; ")}.`;
+}
 function stalledLine(p) {
   const parts = [];
   const rows = p.rows ?? [];
@@ -14034,6 +14053,9 @@ function stalledLine(p) {
     const noun = held.length === 1 ? "review item is" : "review items are";
     parts.push(`${held.length} ${noun} HELD by the quality gate and off the reader's queue — ` + `${heldRowsClause(held)}. Get each filer to revise_review_item; nobody can answer a held ask.`);
   }
+  const changed = changedClause(p.changed);
+  if (changed)
+    parts.unshift(changed);
   const body = parts.join(" ") || "the board reported a stall with no rows on it — treat this as a bug in the wake, not as a clear board.";
   if (p.escalatedFrom !== undefined && p.escalatedFrom !== "") {
     return `[workspace.stalled] You are not this board's lead — ${p.escalatedFrom} holds the seat and ` + "is not reachable, so this came to you instead. Nothing addressed to that seat is arriving: " + "take it (attach_agent) or hand it to a session that is here. Then, on the board itself: " + body;
@@ -18144,7 +18166,7 @@ var STATUS_TEXT_MAX = 4000;
 function suggestionAuthor() {
   return { id: AUTHOR.id, name: AUTHOR.name, color: AUTHOR.color };
 }
-var PLUGIN_VERSION = "0.1.157";
+var PLUGIN_VERSION = "0.1.161";
 var PROCESS_ID = randomUUID();
 var server = new Server({
   name: "claude-workspaces",
