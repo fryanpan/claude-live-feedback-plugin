@@ -159,6 +159,31 @@ export function mountThreadModal(opts: ThreadModalOpts): ThreadModalHandle {
   let promoteFrom: DOMRect | null = null;
   /** The box tween in flight, so an interrupting one can tear it down. */
   let promoting: Animation | null = null;
+  /** The fade partners of the box tween. Held so an interrupted promote takes
+   *  them down WITH it: cancelling the box alone left a shrink's fade-to-zero
+   *  running underneath the reopen that replaced it, which emptied the dialog
+   *  the reader had just asked for. */
+  let promoteExtra: Animation[] = [];
+
+  /**
+   * Take down whatever promote is in flight, and hand the dialog's inline
+   * sizes back on the way out.
+   *
+   * Cancelling BEFORE anything measures is the point: a dialog halfway through
+   * a shrink reports the rect it is passing through, so a reopen that measured
+   * first would grow out of a phantom box that was never on screen.
+   */
+  function cancelPromote(): void {
+    for (const a of promoteExtra) {
+      try {
+        a.cancel();
+      } catch {
+        // A finished animation can refuse; there is nothing left to stop.
+      }
+    }
+    promoteExtra = [];
+    promoting?.cancel();
+  }
 
   function draft(): string | undefined {
     return bodyEl.querySelector<HTMLTextAreaElement>('textarea')?.value || undefined;
@@ -228,6 +253,10 @@ export function mountThreadModal(opts: ThreadModalOpts): ThreadModalHandle {
    * leave it parked wherever it was born.
    */
   function promote(rect: DOMRect | null, grow: boolean, done?: () => void): void {
+    // Whatever was in flight is superseded — and its completion callback with
+    // it, so a cancelled close can never finish closing a dialog that has
+    // since been reopened. Ahead of the measurement below, deliberately.
+    cancelPromote();
     let finish: (() => void) | undefined = done;
     const settle = (): void => {
       root.style.cssText = '';
@@ -274,14 +303,16 @@ export function mountThreadModal(opts: ThreadModalOpts): ThreadModalHandle {
     promoting = root.animate([from, to], timing);
     // The content fades with the box rather than being revealed as a
     // hard-clipped fragment of itself.
-    innerEl.animate(grow ? [{ opacity: 0 }, { opacity: 1 }] : [{ opacity: 1 }, { opacity: 0 }], {
-      ...timing,
-      duration: MORPH_MS * 0.8,
-    });
-    scrim.animate(
-      grow ? [{ opacity: 0 }, { opacity: 1 }] : [{ opacity: 1 }, { opacity: 0 }],
-      timing,
-    );
+    promoteExtra = [
+      innerEl.animate(grow ? [{ opacity: 0 }, { opacity: 1 }] : [{ opacity: 1 }, { opacity: 0 }], {
+        ...timing,
+        duration: MORPH_MS * 0.8,
+      }),
+      scrim.animate(
+        grow ? [{ opacity: 0 }, { opacity: 1 }] : [{ opacity: 1 }, { opacity: 0 }],
+        timing,
+      ),
+    ];
     promoting?.addEventListener('finish', settle);
     // A cancelled journey still has to hand the styles back, but must NOT run
     // the callback of the journey that replaced it.
@@ -296,7 +327,7 @@ export function mountThreadModal(opts: ThreadModalOpts): ThreadModalHandle {
       returnFocus = document.activeElement as HTMLElement | null;
     }
     openId = t.id;
-    promoting?.cancel();
+    cancelPromote();
     // Visible BEFORE painted: paint measures the card's slots, and a subtree
     // under `display: none` measures 0 everywhere. Same tick, so no frame is
     // ever shown between the two.
@@ -336,7 +367,7 @@ export function mountThreadModal(opts: ThreadModalOpts): ThreadModalHandle {
     renderedKey = '';
     faceWatch?.disconnect();
     faceWatch = null;
-    promoting?.cancel();
+    cancelPromote();
 
     const finish = (): void => {
       bodyEl.textContent = '';

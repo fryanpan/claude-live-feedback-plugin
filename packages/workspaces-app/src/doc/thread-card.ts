@@ -118,6 +118,13 @@ export function renderThreadCard(
   // headline and the why in full.
   const pending = pendingDeclaration(t);
   const itemComment = pending ?? latestDeclaredComment(t.comments);
+  // An ask its own asker took back. `latestDeclaredComment` steps over a
+  // withdrawn declaration on purpose — a retracted ask is not a record to put
+  // in the item card — so a thread whose every declaration was withdrawn
+  // arrives here with no item at all and used to render as the plain
+  // conversation it now is, saying nothing about the ask that was there.
+  const withdrawn = itemComment ? undefined : withdrawnDeclaration(t.comments);
+  if (withdrawn) el.classList.add('withdrawn');
 
   el.appendChild(head(host, t, status, kind));
   // A declared thread's folded line is the ASK, not the sentence it hangs
@@ -125,7 +132,9 @@ export function renderThreadCard(
   // that repeated it said nothing about what was wanted.
   const topic = itemComment?.review?.headline ?? summary.topic;
   el.appendChild(slotA(t, topic, itemComment?.id));
-  el.appendChild(slotB(host, t, summary, status, { pending, itemComment, pendingReply }));
+  el.appendChild(
+    slotB(host, t, summary, status, { pending, itemComment, withdrawn, pendingReply }),
+  );
   syncFaceVisibility(el, host.activeId() === t.id && !shownElsewhere);
 
   // The whole card is the tap target; the caret is a hint, not the hit
@@ -187,12 +196,17 @@ function head(
     chip.textContent = lineLabel;
     head.appendChild(chip);
   }
-  // The only chips left. A resolved or orphaned thread is the one state with
-  // no control to read it off — every other kind is marked by what you can
-  // press. `is-new` rides the glyph as a dot rather than as a third word.
-  if (status !== 'open') {
+  // The ONE chip left, and only for the one state the card cannot show any
+  // other way. Resolved lost its badge with mock round 4: the head's glyph is
+  // already the green tick, the card recedes, the settled line carries the
+  // outcome and the foot says "✓ Resolved" — four sayings of one fact, and the
+  // word was the only one adding nothing. An orphan has none of that. Its
+  // anchor is gone, which is a fact about a thing no longer on the page, so
+  // there is no control to read it off and no colour that would mean it.
+  // `is-new` rides the glyph as a dot rather than as a second word.
+  if (status === 'orphan') {
     const tag = span('thread-tag');
-    tag.textContent = status === 'resolved' ? 'Resolved' : 'Orphaned';
+    tag.textContent = 'Orphaned';
     head.appendChild(tag);
   }
   if (host.opts.isNew?.(t)) glyph.classList.add('is-new');
@@ -279,10 +293,12 @@ function slotB(
     pending: Comment | null;
     /** Whose declaration the item card carries, pending or settled. */
     itemComment: Comment | undefined;
+    /** The retracted declaration, when nothing live replaced it. */
+    withdrawn?: Comment | undefined;
     pendingReply?: string;
   },
 ): HTMLElement {
-  const { pending, itemComment, pendingReply } = item;
+  const { pending, itemComment, withdrawn, pendingReply } = item;
   const summaryFace: HTMLElement[] = [];
   // Both rows come and go now. With nobody but the author in the thread there
   // is nobody to list — and with no replies there is no discussion to
@@ -306,6 +322,20 @@ function slotB(
   if (itemComment?.review) {
     const compact = compactItemLine(host, t, itemComment, itemComment.review, pending !== null);
     if (compact) summaryFace.push(compact);
+  } else if (withdrawn?.review) {
+    // The card is already saying it was withdrawn — dimmed, with the ask
+    // struck through. This line is the one thing the strike cannot say: why.
+    // No word repeating "Withdrawn", for the same reason the kind chips went.
+    // No `clip`: that class is `white-space: nowrap`, which put an ellipsis
+    // through the middle of the reason at 260px. The reason wraps like the
+    // thread-summary line it stands in for.
+    const gone = div('thread-gone');
+    gone.textContent =
+      withdrawn.review.withdrawnReason?.replace(/\s+/g, ' ').trim() ||
+      (withdrawn.review.withdrawnBy
+        ? `Taken back by ${withdrawn.review.withdrawnBy}.`
+        : 'Taken back.');
+    summaryFace.push(gone);
   }
 
   const comments = div('comments');
@@ -813,6 +843,25 @@ function btn(label: string, cls: string, on: () => void): HTMLButtonElement {
   b.textContent = label;
   b.addEventListener('click', on);
   return b;
+}
+
+/**
+ * The retracted ask, when nothing live has replaced it.
+ *
+ * Only the NEWEST declaration decides. A withdrawn ask sitting under a later
+ * live one is history — the card's state is whatever the newest declaration
+ * says — which is the same rule `pendingDeclaration` and
+ * `latestDeclaredComment` read, applied to the one outcome neither of them
+ * returns.
+ */
+function withdrawnDeclaration(comments: ReadonlyArray<Comment>): Comment | undefined {
+  const byTime = [...comments].sort((a, b) => a.ts - b.ts);
+  for (let i = byTime.length - 1; i >= 0; i -= 1) {
+    const c = byTime[i];
+    if (!c?.review) continue;
+    return reviewWithdrawn(c.review) ? c : undefined;
+  }
+  return undefined;
 }
 
 /**

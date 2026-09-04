@@ -654,3 +654,135 @@ describe('the promote grows out of the bubble and shrinks back into it', () => {
     expect(modal.openThreadId()).toBe(null);
   });
 });
+
+/**
+ * The promote's teardown, with a recording stand-in for Web Animations.
+ *
+ * happy-dom implements none, so the production path — where three animations
+ * run at once and an interruption has to take all three down — is invisible to
+ * every other test in this file: `promote` sees no `animate` and settles
+ * synchronously. The stub below is the smallest thing that makes the real
+ * branch run: it records what was started and what was cancelled, and nothing
+ * else.
+ */
+describe('an interrupted promote takes its fade partners down with it', () => {
+  interface FakeAnim {
+    cancelled: boolean;
+    target: string;
+    listeners: Record<string, Array<() => void>>;
+    cancel(): void;
+    addEventListener(type: string, fn: () => void): void;
+  }
+
+  let started: FakeAnim[] = [];
+  let restore: (() => void) | null = null;
+
+  function installFakeAnimations(): void {
+    started = [];
+    const proto = Element.prototype as unknown as { animate?: unknown };
+    const had = Object.hasOwn(proto, 'animate');
+    const prior = proto.animate;
+    proto.animate = function (this: Element): FakeAnim {
+      const a: FakeAnim = {
+        cancelled: false,
+        target: this.className || this.tagName,
+        listeners: {},
+        cancel() {
+          if (a.cancelled) return;
+          a.cancelled = true;
+          for (const fn of a.listeners.cancel ?? []) fn();
+        },
+        addEventListener(type, fn) {
+          (a.listeners[type] ??= []).push(fn);
+        },
+      };
+      started.push(a);
+      return a;
+    };
+    restore = () => {
+      // Put back exactly what was there. `undefined` rather than `delete` so
+      // the prototype's shape does not change; the code under test asks
+      // `typeof root.animate !== 'function'`, which either answer satisfies.
+      proto.animate = had ? prior : undefined;
+    };
+  }
+
+  // Layout, which happy-dom has none of: the promote refuses a zero box.
+  function giveLayout(el: Element, box: { w: number; h: number }): void {
+    el.getBoundingClientRect = () =>
+      ({
+        left: 40,
+        top: 60,
+        right: 40 + box.w,
+        bottom: 60 + box.h,
+        width: box.w,
+        height: box.h,
+        x: 40,
+        y: 60,
+        toJSON() {},
+      }) as DOMRect;
+  }
+
+  const rect = (): DOMRect =>
+    ({
+      left: 906,
+      top: 240,
+      right: 1166,
+      bottom: 330,
+      width: 260,
+      height: 90,
+      x: 906,
+      y: 240,
+      toJSON() {},
+    }) as DOMRect;
+
+  afterEach(() => {
+    restore?.();
+    restore = null;
+  });
+
+  it('a reopen mid-shrink cancels the box AND both fades', () => {
+    const h = mount();
+    const t1 = thread('t1', [comment('First', decisionPayload)]);
+    const t2 = thread('t2', [comment('Second', decisionPayload)]);
+    h.panel.setThreads([t1, t2]);
+    giveLayout(h.root(), { w: 760, h: 520 });
+    installFakeAnimations();
+
+    h.modal.open(t1, rect());
+    expect(started.length).toBe(3); // box, inner fade, scrim fade
+    started = [];
+
+    h.modal.close();
+    const shrink = started.slice();
+    expect(shrink.length).toBe(3);
+    expect(shrink.every((a) => !a.cancelled)).toBe(true);
+
+    // The reader changes their mind while the dialog is still on its way down.
+    h.modal.open(t2, rect());
+    // Every one of the three, not just the box: a fade-to-zero left running
+    // underneath the reopen empties the dialog the reader just asked for.
+    expect(shrink.map((a) => a.cancelled)).toEqual([true, true, true]);
+  });
+
+  it('the cancelled close does not go on to close the dialog that replaced it', () => {
+    const h = mount();
+    const t1 = thread('t1', [comment('First', decisionPayload)]);
+    const t2 = thread('t2', [comment('Second', decisionPayload)]);
+    h.panel.setThreads([t1, t2]);
+    giveLayout(h.root(), { w: 760, h: 520 });
+    installFakeAnimations();
+
+    h.modal.open(t1, rect());
+    h.modal.close();
+    h.modal.open(t2, rect());
+    expect(h.modal.openThreadId()).toBe('t2');
+    expect(isShown(h.root())).toBe(true);
+    // `onClose` rides the END of the shrink, and this shrink never ended — the
+    // dialog was replaced, not closed. Announcing it would hand the column its
+    // selection back while a different thread is up in front of the reader,
+    // and the card behind would fold underneath the dialog showing it.
+    expect(h.closed).toBe(0);
+    expect(h.card()).not.toBe(null);
+  });
+});

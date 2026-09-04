@@ -1,6 +1,7 @@
 import type { Comment, ReviewPayload, Thread, User } from '@feedback/core';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ThreadPanel } from '../src/threads.ts';
+import { PHONE, attach, installSheets, setViewport, styleOf } from './css-harness.ts';
 
 /**
  * The compact comment card (Bryan, 2026-09-04, on mock round 4).
@@ -60,6 +61,15 @@ const cleanups: Array<() => void> = [];
 afterEach(() => {
   for (const f of cleanups.splice(0)) f();
 });
+
+/** Build the card through the panel, so `statusOf` is the real derivation. */
+function renderVia(t: Thread, over: Record<string, unknown> = {}) {
+  const r = render(t, over);
+  r.panel.setThreads([t]);
+  const card = r.panel.renderThread(t);
+  r.card.replaceWith(card);
+  return { ...r, card };
+}
 
 function render(t: Thread, over: Record<string, unknown> = {}) {
   const container = document.createElement('div');
@@ -280,5 +290,128 @@ describe('the expanded faces carry no summary text', () => {
     // The compact field belongs to the folded face and must not be duplicated
     // into the open one, where the composer is already the way to answer.
     expect(detail?.querySelector('.thread-answer-field')).toBe(null);
+  });
+});
+
+describe('a closed-out card recedes and keeps the row that says why', () => {
+  const resolved = (over: Partial<Thread> = {}) =>
+    thread([comment('Two c’s, one r.'), comment('Fixed.')], { status: 'resolved', ...over });
+
+  it('carries no word on the head — the tick, the dimming and the foot already say it', () => {
+    const { card } = renderVia(resolved());
+    // Four sayings of one fact, and the badge was the only one adding nothing:
+    // the glyph is the green tick, the card recedes, the settled line carries
+    // the outcome, and the foot reads "✓ Resolved".
+    expect(card.querySelector('.thread-tag')).toBe(null);
+    expect(foldedText(card)).not.toMatch(/resolved/i);
+    expect(card.querySelector('.thread-head .lf-ic-done')).not.toBe(null);
+    expect(card.querySelector('.thread-foot .thread-resolve')?.textContent).toBe('✓ Resolved');
+  });
+
+  it('an orphan keeps its badge — nothing else on the card can say it', () => {
+    const t = thread([comment('Still relevant?')], {
+      anchor: { kind: 'orphan', original: { kind: 'element' }, lastSeenAt: ts } as Thread['anchor'],
+    });
+    const { card } = renderVia(t);
+    expect(card.querySelector('.thread-tag')?.textContent).toBe('Orphaned');
+  });
+
+  it('a resolved review item still shows its tick and outcome on the folded face', () => {
+    // Mock 3 folded a resolved card to one faded line by clipping slot B. Slot
+    // B's summary face is where the outcome lives, so the state whose whole
+    // point is "here is what was settled" was the one hiding it.
+    const { card } = renderVia(
+      resolved({
+        comments: [
+          comment('Which clock?', decision({ answeredAt: ts, answeredWith: 'a' })),
+          comment('Done.'),
+        ],
+      }),
+    );
+    const line = card.querySelector('.slot-b .face-summary .thread-answered-line');
+    expect(line?.querySelector('.thread-answered-words')?.textContent).toBe('Cadence ceiling');
+  });
+
+  it('the stylesheet recedes the card without clipping the face that carries it', () => {
+    const off = installSheets('styles.css');
+    cleanups.push(off);
+    setViewport(PHONE);
+    const card = attach('thread resolved');
+    const slot = attach('thread-slot slot-b', { parent: card });
+    expect(styleOf(card).opacity).toBe('0.6');
+    expect(styleOf(slot).maxHeight).not.toBe('0px');
+  });
+});
+
+describe('a withdrawn ask is a dimmed card and one line saying why', () => {
+  const withdrawn = (over: Partial<ReviewPayload> = {}) =>
+    question({ withdrawnAt: ts, withdrawnBy: 'Workspaces', ...over });
+
+  it('states the reason, and no word repeating "withdrawn"', () => {
+    const { card } = renderVia(
+      thread([
+        comment(
+          'Cache the system prompt?',
+          withdrawn({
+            withdrawnReason:
+              'It sits under the 4096-token cache floor, so there is nothing to cache.',
+          }),
+        ),
+      ]),
+    );
+    expect(card.classList.contains('withdrawn')).toBe(true);
+    const gone = card.querySelector('.thread-gone');
+    expect(gone?.textContent).toBe(
+      'It sits under the 4096-token cache floor, so there is nothing to cache.',
+    );
+    // Not `clip`: that class is `white-space: nowrap`, and it put an ellipsis
+    // through the middle of the reason at 260px — the one row on this card
+    // whose whole job is to be read.
+    expect(gone?.classList.contains('clip')).toBe(false);
+    // The strike-through and the dimming already say it was taken back.
+    expect(foldedText(card)).not.toMatch(/withdrawn/i);
+    // And it is not still offering the field, which would be an ask again.
+    expect(card.querySelector('.thread-answer-field')).toBe(null);
+  });
+
+  it('names who took it back when no reason was given', () => {
+    const { card } = renderVia(thread([comment('Never mind.', withdrawn())]));
+    expect(card.querySelector('.thread-gone')?.textContent).toBe('Taken back by Workspaces.');
+  });
+
+  it('a LIVE ask above a withdrawn one wins — the card is a question again', () => {
+    // Only the newest declaration decides. A retracted ask under a live one is
+    // history, and dimming the card would retire an ask still waiting on
+    // somebody.
+    const first = comment('Cache the prompt?', withdrawn());
+    const second = comment('Cache the transcript instead?', question());
+    second.ts = first.ts + 60_000;
+    const { card } = renderVia(thread([first, second]));
+    expect(card.classList.contains('withdrawn')).toBe(false);
+    expect(card.querySelector('.thread-gone')).toBe(null);
+    expect(card.querySelector('.slot-b .face-summary .thread-answer-field')).not.toBe(null);
+  });
+});
+
+describe('the head shows the author’s colour everywhere the row can afford it', () => {
+  it('the swatch is built into every card', () => {
+    const { card } = render(thread([comment('Hi')]));
+    const swatch = card.querySelector<HTMLElement>('.thread-head > .swatch');
+    expect(swatch).not.toBe(null);
+    expect(swatch?.style.background).not.toBe('');
+  });
+
+  it('and the 260px margin column is the one place it stands down', () => {
+    const off = installSheets('styles.css');
+    cleanups.push(off);
+    setViewport({ width: 1180, height: 820 });
+    const margin = attach('markup-margin');
+    const marginCard = attach('thread', { parent: margin });
+    const marginHead = attach('thread-head', { parent: marginCard });
+    const hidden = attach('swatch', { tag: 'span', parent: marginHead });
+    const looseHead = attach('thread-head');
+    const shown = attach('swatch', { tag: 'span', parent: looseHead });
+    expect(styleOf(hidden).display).toBe('none');
+    expect(styleOf(shown).display).toBe('inline-block');
   });
 });
