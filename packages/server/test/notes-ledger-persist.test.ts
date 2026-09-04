@@ -24,10 +24,22 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
 import { prose } from '@feedback/core';
 import type * as Y from 'yjs';
+import { createNotesLedger } from '../src/meeting-notes-doc.ts';
+import {
+  NOTES_LEDGER_CONTINUATION_MS,
+  createNotesLedgerStore,
+} from '../src/notes-ledger-store.ts';
 import { MEETING_NOTES_HEADING, sectionInsertIndex } from '../src/notes-section.ts';
 import { createNotesTickHarness } from './notes-tick-harness.ts';
 
 const DOC_ID = 'd-huddle';
+
+/** A stand-in for one item's Yjs element. The ledger only ever uses it as a
+ *  WeakMap key, and a fresh object per call is what a doc reloaded from disk
+ *  hands back: the same words in objects nothing has seen before. */
+function element(): Y.XmlElement {
+  return {} as unknown as Y.XmlElement;
+}
 
 /** The heading a Research press leaves below the notes — the writer whose
  *  placeholder triggered the original report. */
@@ -82,5 +94,51 @@ describe('a deploy mid-meeting keeps the notes in one section', () => {
     expect(shot.markdown.match(/we should measure first/g)).toHaveLength(1);
     expect(after.errors).toEqual([]);
     await after.end();
+  });
+
+  it('a section holding none of the note-taker’s lines is not claimed after a restart', () => {
+    // The negative control for the test above: the claim recognises a section
+    // by lines this note-taker WROTE, never by its heading. A "Meeting notes"
+    // a person opened themselves — or one whose every note they have since
+    // rewritten — is not adopted, and the position test decides it as before.
+    const written = createNotesLedger(createNotesLedgerStore(dataDir));
+    written.beginMeeting(DOC_ID, 'm-1');
+    written.forDoc(DOC_ID).record([
+      { el: element(), md: 'we should measure first' },
+      { el: element(), md: 'Devi owns the rollout' },
+    ]);
+
+    const restarted = createNotesLedger(createNotesLedgerStore(dataDir));
+    restarted.beginMeeting(DOC_ID, 'm-2');
+    const ownership = restarted.forDoc(DOC_ID);
+    expect(ownership.wroteAnyOf(['we should measure first'])).toBe(true);
+    expect(ownership.wroteAnyOf(['my own heading’s first line', 'and its second'])).toBe(false);
+    // And recognising the section grants nothing inside it: the restarted
+    // server may add and suggest there, never replace.
+    expect(ownership.claims(element(), 'we should measure first')).toBe(false);
+  });
+
+  it('a meeting long after the last note starts its own section again', () => {
+    // The owner's 2026-09-01 rule, unchanged: a NEW meeting does not grow an
+    // old meeting's notes above everything a person has written since. The
+    // claim is adopted only while the sitting that wrote it is still going on.
+    const written = createNotesLedger(createNotesLedgerStore(dataDir));
+    written.beginMeeting(DOC_ID, 'm-1');
+    written.forDoc(DOC_ID).record([{ el: element(), md: 'last week’s note' }]);
+
+    const later = createNotesLedger(createNotesLedgerStore(dataDir));
+    later.beginMeeting(DOC_ID, 'm-2', Date.now() + NOTES_LEDGER_CONTINUATION_MS + 1);
+    expect(later.forDoc(DOC_ID).wroteAnyOf(['last week’s note'])).toBe(false);
+  });
+
+  it('a ledger with no store behaves exactly as memory alone did', () => {
+    const ledger = createNotesLedger();
+    ledger.beginMeeting(DOC_ID, 'm-1');
+    ledger.forDoc(DOC_ID).record([{ el: element(), md: 'a note' }]);
+    expect(ledger.forDoc(DOC_ID).wroteAnyOf(['a note'])).toBe(true);
+    // A new recording in the same process carries nothing forward, because
+    // nothing was written down for it to read.
+    ledger.beginMeeting(DOC_ID, 'm-2');
+    expect(ledger.forDoc(DOC_ID).wroteAnyOf(['a note'])).toBe(false);
   });
 });
