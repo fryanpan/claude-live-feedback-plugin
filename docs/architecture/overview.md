@@ -133,7 +133,7 @@ Five layers, same downward rule. This is what makes the hub testable: the models
 | Layer                    | Where it lives                                               | Responsibility                                               |
 | ------------------------ | ------------------------------------------------------------ | ------------------------------------------------------------ |
 | **Entries**              | `app.ts`, `hub/hub-app.ts`, `signin/signin-app.ts`, `landing-app.ts`, `sentry-boot.ts` | One per bundle. The only files that call `main()` and own the top-level state object. |
-| **Controllers / mounts** | `review-chrome.ts`, `meeting-strip.ts`, `meeting-chooser.ts`, `redline/markup-margin.ts`, `threads.ts` | Owns a DOM subtree and, sometimes, a socket. Takes its dependencies as arguments. |
+| **Controllers / mounts** | `review-chrome.ts`, `meeting-strip.ts`, `meeting-chooser.ts`, `meeting-feed.ts`, `meeting-menu.ts`, `redline/markup-margin.ts`, `threads.ts` | Owns a DOM subtree and, sometimes, a socket. Takes its dependencies as arguments. |
 | **Views**                | `hub/hub-render.ts`, `editor.ts`, `redline/redline-html.ts`  | Data in, elements out. No fetch, no socket, no timers.       |
 | **Models**               | `hub/hub-model.ts`, `meeting-banner-model.ts`, `hub/activity-model.ts` | Pure functions over wire types. Import `core` and nothing else in this package. |
 | **Transport**            | `push-client.ts`, `core`'s `ws-client.ts`, `meeting-protocol.ts` | Speaks a protocol. Returns values; never touches the DOM.    |
