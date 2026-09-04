@@ -238,6 +238,7 @@ The remaining 93 are exceptions. Each row names the one harness its cases share.
 | `packages/server/test/goal-reorder.test.ts` | 692 | Store and route describes both seed goals with `bands()` / `seededGoalList()`. |
 | `packages/server/test/stall-nudge-routes.test.ts` | 689 | A single describe over one real board plus `listenFrames` / `waitForFrames`. |
 | `packages/server/test/home-brief.test.ts` | 687 | Every describe feeds `ev()` / `input()` rows into the brief pipeline, store included. |
+| `packages/server/test/meeting-ask-cues.test.ts` | 662 | The detector describes and the `parseTaskCaptureReply` describes are the two halves of one convention, and the second reads the first: every licensing case is built from the same phrase tables the first half asserts, over the shared `candidates` / `reply()` fixture. |
 | `packages/server/test/sse-replay.test.ts` | 660 | Every describe exercises an `SseHub` stream through the shared `listenFrames()` and `settle()`. |
 | `packages/server/test/refresh-workspace.test.ts` | 658 | All three describes build a `Rooms` through the module-scope `makeRooms(dataDir)` and `git()` helpers. |
 | `packages/server/test/auth-write-gate.test.ts` | 656 | Every case, HTTP and y-sync socket alike, boots through the one `boot(requireSignInToWrite)` harness. |

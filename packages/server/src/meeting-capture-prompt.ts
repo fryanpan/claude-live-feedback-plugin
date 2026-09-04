@@ -13,7 +13,7 @@
  * `meeting-capture-guards.ts`.
  */
 
-import { type AskCue, laterCueIsPlural } from './meeting-ask-cues.ts';
+import { type AskCue, laterCueIsPlural, nowCueAskCount } from './meeting-ask-cues.ts';
 import {
   type SpentCues,
   captureWindow,
@@ -153,9 +153,10 @@ export const ASK_CUE_PROMPT_RULE = [
   '"make a task", "file a ticket", "add a ticket" — a request, captured and',
   'not started. An ask carrying both ("Claude, can you create a task") is',
   'LATER. Speech with NEITHER cue asks for nothing: no request, no research,',
-  'no lookup, no review, however much it sounds like one. Never return two',
-  'asks for one cued line. References and corrections are not asks and need',
-  'no cue.',
+  'no lookup, no review, however much it sounds like one. One cued line asks',
+  'for as many things as it NAMES: "Claude, can you look at the retry loop',
+  'and pull up last week\'s notes" is two asks, and a line naming one thing is',
+  'one. References and corrections are not asks and need no cue.',
 ] as const;
 
 export const OVERLAP_PROMPT_RULE = [
@@ -189,7 +190,9 @@ export function buildTaskCapturePrompt(input: TaskCaptureInput): { system: strin
     'A REQUEST only when a speaker explicitly asks, in the LATER cue, for a',
     'task to be filed — "create a task", "make that a task", "file a ticket",',
     '"add a ticket". One such clause asks for ONE row, not for every problem',
-    'the room went on to mention. Discussing a problem, complaining about a',
+    'the room went on to mention; a PLURAL one ("file tickets for the next few',
+    'things I mention") asks for a row per thing they THEN NAME, and for',
+    'nothing they did not. Discussing a problem, complaining about a',
     'bug, or agreeing something is broken is NOT a request. Title: short, specific,',
     'in the words spoken.',
     'Mark a request "actionable": true only when it is clear enough to start',
@@ -282,13 +285,48 @@ export function parseTaskCaptureReply(
   // for the meeting's life; without one, a fresh set still holds the line
   // for the length of this reply.
   const spent = spentCues ?? new Set<number>();
+  /**
+   * How many asks each cue line has licensed so far in THIS reply, so a line
+   * that asked for two things gets to license two.
+   */
+  const used = new Map<number, number>();
+  /**
+   * The bounded cue lines this reply spent — everything but a standing plural
+   * one. They are handed to `spent` when the reply ends, whether or not they
+   * gave everything they carry.
+   *
+   * Counting alone did not do that, and the gap was a REPLAY: a line with
+   * capacity two that licensed one ask stayed out of `spent`, so the next
+   * tick found it again in the marked overlap and filed the same ask a second
+   * time. Nothing legitimate is lost by closing it, because both asks of one
+   * line are in one window by construction — the line names them both, and
+   * the pass that reads the line reads the rest of it too.
+   */
+  const bounded = new Set<number>();
+  /**
+   * What one line may license. A LATER cue said of SEVERAL artefacts — "file
+   * tickets for the next few things I mention" — is a standing one and never
+   * runs out; every other later cue asks for exactly one row. A NOW cue
+   * carries as many asks as its line names, so "look at X and pull up Y" is
+   * not spent on X alone.
+   */
+  const capacityOf = (line: NotesTurn, cue: AskCue): number => {
+    if (cue === 'later') return laterCueIsPlural(line.text) ? Number.POSITIVE_INFINITY : 1;
+    return Math.max(1, nowCueAskCount(line.text));
+  };
+  const cueLine = (phrase: string, cue: AskCue): NotesTurn | undefined =>
+    cueLineFor(window, phrase, cue, spent);
+  const spendCue = (line: NotesTurn, cue: AskCue): void => {
+    const capacity = capacityOf(line, cue);
+    if (Number.isFinite(capacity)) bounded.add(line.turn);
+    const count = (used.get(line.turn) ?? 0) + 1;
+    used.set(line.turn, count);
+    if (count >= capacity) spent.add(line.turn);
+  };
   const licensed = (phrase: string, cue: AskCue): boolean => {
-    const line = cueLineFor(window, phrase, cue, spent);
+    const line = cueLine(phrase, cue);
     if (!line) return false;
-    // A cue said of SEVERAL artefacts — "file tickets for the next few
-    // things I mention" — is a standing one and stays live for the rows that
-    // follow it. Every other cue is spent on the one ask it just licensed.
-    if (!(cue === 'later' && laterCueIsPlural(line.text))) spent.add(line.turn);
+    spendCue(line, cue);
     return true;
   };
 
@@ -318,7 +356,17 @@ export function parseTaskCaptureReply(
       // "create a task …" is what asks for a row. Without a line that said
       // it, the speech is a note — even when the model heard a perfectly good
       // piece of work in it.
-      if (!licensed(title, 'later')) continue;
+      const cue = cueLine(title, 'later');
+      if (!cue) continue;
+      // A PLURAL cue is never spent, so spending is not what bounds it —
+      // nothing was, and one "file tickets for the next few things I mention"
+      // licensed four rows of which two named subjects nobody had said. So a
+      // row filed under a standing cue must have its SUBJECT in the window,
+      // the guard research, lookup and review have always stood on. A
+      // singular cue still needs no subject check: it is spent on its one
+      // row, and a deictic "make that a task" names its subject nowhere.
+      if (laterCueIsPlural(cue.text) && !phraseSpokenOnTick(window, title)) continue;
+      spendCue(cue, 'later');
       const requester =
         typeof row.requester === 'string' ? speakerOnTick(window, row.requester) : undefined;
       out.push({
@@ -403,5 +451,8 @@ export function parseTaskCaptureReply(
       });
     }
   }
+  // Every bounded line this reply drew on is now done, including one that
+  // licensed fewer asks than it carried — see `bounded`.
+  for (const turn of bounded) spent.add(turn);
   return out;
 }
