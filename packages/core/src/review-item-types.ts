@@ -351,6 +351,33 @@ export interface ReviewItemJudgement {
   verdict: ReviewJudgeVerdictKind;
   /** The judge's one sentence — on a hold, the gap to fix. May be empty. */
   reason: string;
+  /**
+   * Every reason this item has ALREADY been held for, oldest first — so its
+   * length is the hold count and its contents are what the judge is shown
+   * before it rules again.
+   *
+   * Kept on the item rather than in the request that made it, because both
+   * things it is for outlive the request: the gate stops holding after
+   * `REVIEW_GATE_MAX_HOLDS` of these, and the judge is handed them so a
+   * revision that closed the gap it was told about is not held for a
+   * different one it could have been told about the first time. A peer met
+   * that loop eight times over (2026-09-04) and gave up on the gate.
+   *
+   * Absent on an item never held, and never rewritten by a later verdict: a
+   * hold that happened is a fact, and an item admitted after two of them
+   * still carries both.
+   */
+  heldFor?: string[];
+  /**
+   * On a hold: the sentence the judge wants added, written out.
+   *
+   * Stored beside the reason rather than folded into it, because the two do
+   * different jobs — the reason says what is wrong, this says what to write —
+   * and every surface that repeats a hold (the tool result, the filer's wake,
+   * the stall report, the card's "Held: …") should be able to offer the draft
+   * without re-deriving it from prose.
+   */
+  add?: string;
 }
 
 /**

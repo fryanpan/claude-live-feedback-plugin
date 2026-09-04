@@ -2,7 +2,9 @@ import type { Thread } from '@feedback/core';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   LEAVING_FRACTION,
+  MORPH_LAG_MS,
   MORPH_MS,
+  MORPH_SPAN_MS,
   installSlotRemeasure,
   isFoldingTap,
   morphCard,
@@ -85,12 +87,11 @@ function fakeLayout(card: HTMLElement, faceHeights: Record<string, number>): voi
   }
 }
 
-/* The card has ONE slot since the collapsed redesign: its head — glyph,
-   topic, who, chevron — stays put across the fold instead of cross-fading
-   into anything, so there is one disclosure to animate. */
 const HEIGHTS = {
   '.slot-a > .face-summary': 22,
-  '.slot-a > .face-detail': 222,
+  '.slot-a > .face-detail': 45,
+  '.slot-b > .face-summary': 35,
+  '.slot-b > .face-detail': 222,
 };
 
 function thread(overrides: Partial<Thread> = {}): Thread {
@@ -156,15 +157,29 @@ function stubReducedMotion(reduce: boolean): void {
 // ---------------------------------------------------------------------------
 
 describe('morphTiming', () => {
-  it('is one phase spanning the whole gesture', () => {
-    expect(morphTiming(false)).toEqual({ duration: MORPH_MS, delay: 0 });
+  it('spans 150ms in two 93ms phases offset by 57ms', () => {
+    expect(MORPH_SPAN_MS + MORPH_LAG_MS).toBe(MORPH_MS);
+    const open = morphTiming(true, false);
+    expect(open.a).toEqual({ duration: MORPH_SPAN_MS, delay: 0 });
+    expect(open.b).toEqual({ duration: MORPH_SPAN_MS, delay: MORPH_LAG_MS });
+    // Phase 1 runs 0→93, phase 2 runs 57→150.
+    expect(open.b.delay + open.b.duration).toBe(MORPH_MS);
   });
 
-  it('reduced motion zeroes the duration, not the layout', () => {
-    expect(morphTiming(true)).toEqual({ duration: 0, delay: 0 });
-    // Positive control: the two answers really are different, so the zero
-    // above is a result and not the only thing this function can say.
-    expect(morphTiming(true)).not.toEqual(morphTiming(false));
+  it('collapse reverses the phase order — slot B leads', () => {
+    const shut = morphTiming(false, false);
+    expect(shut.b.delay).toBe(0);
+    expect(shut.a.delay).toBe(MORPH_LAG_MS);
+    // Positive control: the two orders really are different.
+    expect(shut.a.delay).not.toBe(morphTiming(true, false).a.delay);
+  });
+
+  it('reduced motion zeroes duration AND delay, not the layout', () => {
+    expect(morphTiming(true, true)).toEqual({
+      a: { duration: 0, delay: 0 },
+      b: { duration: 0, delay: 0 },
+    });
+    expect(morphTiming(false, true)).toEqual(morphTiming(true, true));
   });
 });
 
@@ -173,42 +188,46 @@ describe('morphTiming', () => {
 // ---------------------------------------------------------------------------
 
 describe('morphCard — the animations it schedules', () => {
-  it('tweens the slot from its measured old height to its measured new one', () => {
+  it('tweens each slot from its measured old height to its measured new one', () => {
     stubReducedMotion(false);
     const { card } = mountCard();
-    const slot = card.querySelector<HTMLElement>('.slot-a') as HTMLElement;
+    const slotA = card.querySelector<HTMLElement>('.slot-a') as HTMLElement;
+    const slotB = card.querySelector<HTMLElement>('.slot-b') as HTMLElement;
 
     // POSITIVE CONTROL: the resting heights differ, so there is a journey to
     // make. Without this every zero below would pass vacuously.
-    const resting = slot.style.height;
-    expect(resting).toBe('22px');
+    const restingA = slotA.style.height;
+    const restingB = slotB.style.height;
+    expect(restingA).toBe('22px');
+    expect(restingB).toBe('35px');
 
     const log = recordAnimations(card);
     morphCard(card, true);
 
-    expect(slot.style.height).toBe('222px');
-    expect(slot.style.height).not.toBe(resting);
+    expect(slotA.style.height).toBe('45px');
+    expect(slotB.style.height).toBe('222px');
+    expect(slotA.style.height).not.toBe(restingA);
+    expect(slotB.style.height).not.toBe(restingB);
 
     const heightOf = (el: HTMLElement) =>
       log.find((a) => a.el === el && 'height' in (a.keyframes[0] ?? {}));
-    expect(heightOf(slot)?.keyframes).toEqual([{ height: '22px' }, { height: '222px' }]);
+    expect(heightOf(slotA)?.keyframes).toEqual([{ height: '22px' }, { height: '45px' }]);
+    expect(heightOf(slotB)?.keyframes).toEqual([{ height: '35px' }, { height: '222px' }]);
   });
 
-  it('fills backwards, so the tween replays the journey the class flip already landed', () => {
+  it("holds the lagging slot with fill:'backwards' so it travels intact", () => {
     stubReducedMotion(false);
     const { card } = mountCard();
-    const slot = card.querySelector<HTMLElement>('.slot-a') as HTMLElement;
+    const slotB = card.querySelector<HTMLElement>('.slot-b') as HTMLElement;
     const log = recordAnimations(card);
     morphCard(card, true);
 
-    // The resting state lands immediately and the keyframes only replay it.
-    // Without a backwards fill the slot would sit at its FINAL height for
-    // the whole delay instead of starting where it was.
+    // Every keyframe set in the morph must fill backwards. Without it the
+    // lagging slot jumps to its final height at t=0 instead of riding the
+    // leading slot's growth.
     expect(log.length).toBeGreaterThan(0);
     for (const a of log) expect(a.opts.fill).toBe('backwards');
-    // One phase: nothing waits for anything else.
-    expect(log.find((a) => a.el === slot)?.opts.delay).toBe(0);
-    expect(log.find((a) => a.el === slot)?.opts.duration).toBe(MORPH_MS);
+    expect(log.find((a) => a.el === slotB)?.opts.delay).toBe(MORPH_LAG_MS);
   });
 
   it('cross-fades the two faces, the leaving one faster', () => {
@@ -223,21 +242,22 @@ describe('morphCard — the animations it schedules', () => {
     const leaving = log.find((a) => a.el === summary);
     expect(arriving?.keyframes).toEqual([{ opacity: 0 }, { opacity: 1 }]);
     expect(leaving?.keyframes).toEqual([{ opacity: 1 }, { opacity: 0 }]);
-    expect(leaving?.opts.duration).toBe(MORPH_MS * LEAVING_FRACTION);
+    expect(leaving?.opts.duration).toBe(MORPH_SPAN_MS * LEAVING_FRACTION);
     expect(leaving?.opts.duration).toBeLessThan(arriving?.opts.duration as number);
     expect(leaving?.opts.delay).toBe(arriving?.opts.delay);
   });
 
-  it('animates ONLY the slot height and face opacity — nothing that could move the head', () => {
+  it('animates ONLY slot heights and face opacity — nothing that could move a slot top', () => {
     stubReducedMotion(false);
     const { card } = mountCard();
     const log = recordAnimations(card);
     morphCard(card, true);
 
-    // This is what makes the invariants below true rather than hopeful: if
-    // the only thing that changes is the slot's own height, then neither the
-    // card's top nor the head's can move.
-    expect(log.length).toBe(3); // 1 slot × (height + arriving + leaving)
+    // This is what makes invariants 1, 2 and 4 true rather than hopeful: in
+    // normal flow, if the only thing that changes is a slot's own height,
+    // then the card's top cannot move, slot A's offset cannot move, and slot
+    // B's top is BY CONSTRUCTION `slotA.top + slotA.height`.
+    expect(log.length).toBe(6); // 2 slots × (height + arriving + leaving)
     for (const a of log) {
       const props = new Set(a.keyframes.flatMap((k) => Object.keys(k)));
       const animatesHeight = props.has('height') && props.size === 1;
@@ -246,30 +266,32 @@ describe('morphCard — the animations it schedules', () => {
       if (animatesHeight) expect(a.el.classList.contains('thread-slot')).toBe(true);
       if (animatesOpacity) expect(a.el.classList.contains('thread-face')).toBe(true);
     }
-    // Nothing above or beside the slot is touched.
+    // Nothing above the slots is touched.
     const head = card.querySelector('.thread-head') as HTMLElement;
     expect(log.some((a) => a.el === head || a.el === card)).toBe(false);
-    // …and the head really does sit OUTSIDE the slot, which is why the topic,
-    // the glyph and the chevron never move or rebuild when the card opens.
+    // …and the head really does sit OUTSIDE both slots, which is why the
+    // author, the clock and the caret never move or rebuild. The foot no
+    // longer joins it there: ✓ Resolve rides slot B's DETAIL face now, so a
+    // folded card carries no destructive control at all.
     expect(head.closest('.thread-slot')).toBeNull();
-    // The resolve control, by contrast, is now INSIDE the fold: a folded card
-    // does not carry it at all.
     const foot = card.querySelector('.thread-foot') as HTMLElement;
-    expect(foot.closest('.thread-face.face-detail')).not.toBeNull();
+    expect(foot.closest('.face-detail')).not.toBeNull();
   });
 
   it('reduced motion lands the final state with no animation at all', () => {
     stubReducedMotion(true);
     const { card } = mountCard();
-    const slot = card.querySelector<HTMLElement>('.slot-a') as HTMLElement;
+    const slotA = card.querySelector<HTMLElement>('.slot-a') as HTMLElement;
+    const slotB = card.querySelector<HTMLElement>('.slot-b') as HTMLElement;
     const log = recordAnimations(card);
     morphCard(card, true);
 
     expect(log).toHaveLength(0);
     // …but the card is fully expanded, not merely un-animated.
     expect(card.classList.contains('expanded')).toBe(true);
-    expect(slot.style.height).toBe('222px');
-    expect(card.querySelector('.slot-a > .face-detail')?.hasAttribute('aria-hidden')).toBe(false);
+    expect(slotA.style.height).toBe('45px');
+    expect(slotB.style.height).toBe('222px');
+    expect(card.querySelector('.slot-b > .face-detail')?.hasAttribute('aria-hidden')).toBe(false);
 
     // POSITIVE CONTROL: the same fixture DOES animate without the media
     // query, so "no animations" above is a real result, not a dead recorder.
@@ -324,49 +346,71 @@ function heightAt(anim: RecordedAnimation, t: number): number {
 }
 
 function sampleMorph(card: HTMLElement, open: boolean) {
-  const slot = card.querySelector<HTMLElement>('.slot-a') as HTMLElement;
+  const slotA = card.querySelector<HTMLElement>('.slot-a') as HTMLElement;
+  const slotB = card.querySelector<HTMLElement>('.slot-b') as HTMLElement;
   const log = recordAnimations(card);
   morphCard(card, open);
-  const anim = log.find((a) => a.el === slot && 'height' in a.keyframes[0]) as RecordedAnimation;
-  // The head is outside the slot and never animates, so its contribution to
-  // the card's height is a constant; any constant will do.
+  const animA = log.find((a) => a.el === slotA && 'height' in a.keyframes[0]) as RecordedAnimation;
+  const animB = log.find((a) => a.el === slotB && 'height' in a.keyframes[0]) as RecordedAnimation;
+  // Head and foot are outside both slots and never animate, so their
+  // contribution to the card's height is a constant; any constant will do.
   const CHROME = 40;
   const frames = [];
   for (let t = 0; t <= MORPH_MS; t += 1) {
-    const h = heightAt(anim, t);
+    const hA = heightAt(animA, t);
+    const hB = heightAt(animB, t);
     frames.push({
       t,
-      h,
-      // The head's top is the card's top: constant, because nothing animates
-      // above the slot.
-      headTop: 0,
-      // The slot sits directly under the head in normal flow.
-      slotTop: 0,
-      cardHeight: CHROME + h,
+      hA,
+      hB,
+      // Slot A's top is the card top plus the (unanimated) head: constant.
+      slotATop: 0,
+      // Slot B sits directly under slot A in normal flow.
+      slotBTop: hA,
+      cardHeight: CHROME + hA + hB,
     });
   }
-  return { frames, anim };
+  return { frames, animA, animB };
 }
 
 describe('morph invariants', () => {
-  it('the head holds its top for the whole journey', () => {
+  it('slot A holds its top; slot B travels exactly slot A’s growth', () => {
     stubReducedMotion(false);
     const { card } = mountCard();
     const { frames } = sampleMorph(card, true);
 
     const first = frames[0];
     const last = frames[frames.length - 1];
-    // POSITIVE CONTROL: the slot really does change height across the morph,
-    // so the constancy below is not measured on a morph that never fired.
-    expect(last.h - first.h).toBeCloseTo(200, 6);
+    // POSITIVE CONTROL: the slots really do change height across the morph,
+    // so the deltas below are not all zero on a morph that never fired.
+    expect(last.hA - first.hA).toBeCloseTo(23, 6);
+    expect(last.hB - first.hB).toBeCloseTo(187, 6);
 
     for (const f of frames) {
-      expect(f.headTop).toBe(first.headTop);
-      expect(f.slotTop).toBe(first.slotTop);
+      expect(f.slotATop).toBe(first.slotATop);
+      expect(f.slotBTop - first.slotBTop).toBeCloseTo(f.hA - first.hA, 9);
     }
   });
 
-  it('card height is monotonic, never dips, and lands on the resting height', () => {
+  it('slot B sits still AT ITS OLD HEIGHT while slot A is still growing', () => {
+    stubReducedMotion(false);
+    const { card } = mountCard();
+    const slotB = card.querySelector<HTMLElement>('.slot-b') as HTMLElement;
+    const restingB = Number.parseFloat(slotB.style.height);
+    expect(restingB).toBe(35);
+    const { frames } = sampleMorph(card, true);
+
+    const held = frames.filter((f) => f.t < MORPH_LAG_MS);
+    // POSITIVE CONTROL: slot A is demonstrably moving during that window.
+    expect(held[held.length - 1].hA).toBeGreaterThan(held[0].hA);
+    // …and slot B is not: it rides down intact on slot A's growth, still at
+    // the height it had before the tap. Asserting mere CONSTANCY here would
+    // pass without `fill: 'backwards'` too — the slot would just be pinned at
+    // its FINAL height instead, which is the bug.
+    for (const f of held) expect(f.hB).toBeCloseTo(restingB, 9);
+  });
+
+  it('card height is monotonic, never dips, and lands on the resting sum', () => {
     stubReducedMotion(false);
     const { card } = mountCard();
     const { frames } = sampleMorph(card, true);
@@ -378,19 +422,22 @@ describe('morph invariants', () => {
       expect(f.cardHeight).toBeGreaterThanOrEqual(prev - 1e-9);
       prev = f.cardHeight;
     }
-    // At t = 150ms the card is exactly the measured resting height.
-    const slot = card.querySelector<HTMLElement>('.slot-a') as HTMLElement;
-    expect(frames[frames.length - 1].h).toBeCloseTo(Number.parseFloat(slot.style.height), 6);
+    // At t = 150ms the card is exactly the sum of the measured resting
+    // heights — both phases have landed.
+    const slotA = card.querySelector<HTMLElement>('.slot-a') as HTMLElement;
+    const slotB = card.querySelector<HTMLElement>('.slot-b') as HTMLElement;
+    expect(frames[frames.length - 1].hA).toBeCloseTo(Number.parseFloat(slotA.style.height), 6);
+    expect(frames[frames.length - 1].hB).toBeCloseTo(Number.parseFloat(slotB.style.height), 6);
   });
 
-  it('collapse is monotonic downward and starts immediately', () => {
+  it('collapse is monotonic downward and reverses the lead', () => {
     stubReducedMotion(false);
     const { card } = mountCard();
     morphCard(card, true);
-    const { frames, anim } = sampleMorph(card, false);
+    const { frames, animA, animB } = sampleMorph(card, false);
 
-    // One slot has nothing to lag behind, so it leads in both directions.
-    expect(anim.opts.delay).toBe(0);
+    expect(animB.opts.delay).toBe(0);
+    expect(animA.opts.delay).toBe(MORPH_LAG_MS);
     // POSITIVE CONTROL: it really shrinks.
     expect(frames[frames.length - 1].cardHeight).toBeLessThan(frames[0].cardHeight);
     let prev = Number.POSITIVE_INFINITY;
@@ -400,14 +447,17 @@ describe('morph invariants', () => {
     }
   });
 
-  /* The two assertions that used to sit here — that the lagging slot holds
-     its OLD height through the delay, and that the sampler can see a missing
-     `fill: 'backwards'` — went with the second slot. One phase has no delay,
-     so a backwards fill has nothing to hold across and neither assertion
-     could fail any more. What they were really protecting is now covered
-     above by the recorded keyframes, which start at the height measured
-     BEFORE the class flip: that is what lets an interrupted fold replay from
-     wherever it had got to rather than from its resting state. */
+  it("the sampler can SEE a missing fill:'backwards' — it is not a rubber stamp", () => {
+    stubReducedMotion(false);
+    const { card } = mountCard();
+    const { animB } = sampleMorph(card, true);
+    const broken: RecordedAnimation = { ...animB, opts: { ...animB.opts, fill: 'forwards' } };
+    // With no backwards fill the lagging slot is already at its final height
+    // at t=0 — the "travels intact" invariant fails, which is exactly what
+    // the passing test above is asserting the absence of.
+    expect(heightAt(broken, 0)).not.toBeCloseTo(heightAt(animB, 0), 6);
+    expect(heightAt(broken, 0)).toBeCloseTo(222, 6);
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -427,7 +477,7 @@ describe('morphThread', () => {
     // POSITIVE CONTROL first: both were collapsed a line ago.
     expect(inline.card.classList.contains('expanded')).toBe(true);
     expect(sheet.card.classList.contains('expanded')).toBe(true);
-    expect(sheet.card.querySelector('.slot-a')?.getAttribute('style')).toContain('222px');
+    expect(sheet.card.querySelector('.slot-b')?.getAttribute('style')).toContain('222px');
 
     morphThread('t1', false);
     expect(inline.card.classList.contains('expanded')).toBe(false);
@@ -626,87 +676,6 @@ describe('sizeThreadSlots refuses a zero measurement', () => {
   });
 });
 
-describe('a card with nothing on line two refolds to nothing', () => {
-  /* The other half of the same rule, in the other function that writes a
-     slot height. `sizeThreadSlots` learned to tell a deliberately empty face
-     from an unmeasurable one; `slide` — the one that runs on the FOLD — did
-     not, so its `if (to <= 0) return` left the open height in place. Measured
-     in a browser: a resolved card folded to 33px on first paint, and after
-     one open and close its slot stayed at 237px. A blank second row under a
-     one-line card, and a resize remeasure agreed with it. */
-
-  /** A plain comment nobody has replied to: line two has nothing to say. */
-  function loneComment(): Thread {
-    const alice = { id: 'u1', name: 'Alice', kind: 'known' as const, color: '#2e7dd7' };
-    return thread({
-      status: 'resolved',
-      commentCount: 1,
-      comments: [{ id: 'c1', author: alice, text: 'The opening message.', ts: 1_699_999_000_000 }],
-    });
-  }
-
-  function mountEmptyFaced(): { card: HTMLElement; slot: HTMLElement } {
-    const container = document.createElement('div');
-    document.body.appendChild(container);
-    const panel = new ThreadPanel({
-      container,
-      currentUser: { id: 'me', name: 'Bryan', kind: 'known', color: '#0a0' },
-      onThreadClick: () => {},
-      onReply: () => {},
-      onResolve: () => {},
-      onReopen: () => {},
-      onReanchor: () => {},
-    });
-    const card = panel.renderThread(loneComment());
-    container.appendChild(card);
-    fakeLayout(card, { '.slot-a > .face-summary': 0, '.slot-a > .face-detail': 222 });
-    sizeThreadSlots(container);
-    return { card, slot: card.querySelector<HTMLElement>('.slot-a') as HTMLElement };
-  }
-
-  it('returns the slot to zero on every fold, not only on first paint', () => {
-    const { card, slot } = mountEmptyFaced();
-    // The premise: this really is the empty-face card, not a card whose
-    // summary happens to measure zero.
-    const summary = card.querySelector<HTMLElement>('.slot-a > .face-summary') as HTMLElement;
-    expect(summary.childElementCount).toBe(0);
-    expect(slot.style.height).toBe('0px');
-
-    // Twice, because the reported failure needed one full round trip: the
-    // first fold is what wrote the height that then outlived it.
-    for (let round = 0; round < 2; round++) {
-      morphCard(card, true);
-      expect(slot.style.height).toBe('222px');
-      morphCard(card, false);
-      expect(slot.style.height).toBe('0px');
-    }
-  });
-
-  it('still leaves a populated face alone when it cannot be measured', () => {
-    // The original guard, rebuilt. A card folding inside a closed drawer
-    // measures zero on a face that HAS children, and the fold must not write
-    // that zero — which is what pinned a card to its head and its foot.
-    const { card } = mountCard();
-    const slot = card.querySelector<HTMLElement>('.slot-a') as HTMLElement;
-    const summary = card.querySelector<HTMLElement>('.slot-a > .face-summary') as HTMLElement;
-    morphCard(card, true);
-    expect(slot.style.height).toBe('222px');
-
-    expect(summary.childElementCount).toBeGreaterThan(0);
-    Object.defineProperty(summary, 'offsetHeight', { get: () => 0, configurable: true });
-    morphCard(card, false);
-    expect(slot.style.height).toBe('222px');
-
-    // POSITIVE CONTROL: the same fold lands once the face can be measured,
-    // so the assertion above is about the zero and not about a fold that
-    // stopped writing anything.
-    Object.defineProperty(summary, 'offsetHeight', { get: () => 22, configurable: true });
-    morphCard(card, true);
-    morphCard(card, false);
-    expect(slot.style.height).toBe('22px');
-  });
-});
-
 describe('sizeThreadSlots converges when its own writes change layout', () => {
   /* Writing slot heights can itself reflow the cards it just measured: on a
      scroller whose content crosses its height only once the slots are tall,
@@ -717,8 +686,8 @@ describe('sizeThreadSlots converges when its own writes change layout', () => {
      re-read after writing and keep going until the numbers stop moving. */
   it('re-measures after writing, so a rewrap caused by the write still lands', () => {
     const { card, container } = mountCard();
-    const slotB = card.querySelector<HTMLElement>('.slot-a') as HTMLElement;
-    const face = card.querySelector<HTMLElement>('.slot-a > .face-summary') as HTMLElement;
+    const slotB = card.querySelector<HTMLElement>('.slot-b') as HTMLElement;
+    const face = card.querySelector<HTMLElement>('.slot-b > .face-summary') as HTMLElement;
     // Emulate the scrollbar feedback: while the slot is unset the scroller
     // does not overflow and the face measures 35; the moment a height ≥35 is
     // written the scroller overflows, the face narrows, and it rewraps to 84.
@@ -733,8 +702,8 @@ describe('sizeThreadSlots converges when its own writes change layout', () => {
 
   it('gives up on an oscillating layout instead of looping forever', () => {
     const { card, container } = mountCard();
-    const slotB = card.querySelector<HTMLElement>('.slot-a') as HTMLElement;
-    const face = card.querySelector<HTMLElement>('.slot-a > .face-summary') as HTMLElement;
+    const slotB = card.querySelector<HTMLElement>('.slot-b') as HTMLElement;
+    const face = card.querySelector<HTMLElement>('.slot-b > .face-summary') as HTMLElement;
     slotB.style.height = '';
     // Pathological: every re-read disagrees with the last write.
     let reads = 0;

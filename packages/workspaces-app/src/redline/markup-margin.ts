@@ -501,6 +501,11 @@ export function mountMarkupMargin(opts: MarkupMarginOpts): MarkupMarginHandle {
     const anchorX = proseRect.right - editorRect.left - overlayOffsetX;
     const balloonX = marginRect.left - editorRect.left - overlayOffsetX + 4;
 
+    // Which thread the reader is on, if any — the panel's selection, which is
+    // the one authority for it (a balloon promoted into the modal stays folded
+    // and SELECTED, so this is not the same question as "which is expanded").
+    const selectedId = opts.chrome?.threadsPanel.getActive() ?? null;
+
     let maxBottom = 0;
     for (let i = 0; i < rendered.length; i++) {
       const y = Math.max(0, ys[i]);
@@ -509,14 +514,26 @@ export function mountMarkupMargin(opts: MarkupMarginOpts): MarkupMarginHandle {
 
       const leaderKind = rendered[i].kind;
       const line = document.createElementNS(SVG_NS, 'line');
-      line.setAttribute(
-        'class',
+      const classes =
         leaderKind === 'comment'
-          ? 'lf-leader lf-leader-comment'
+          ? ['lf-leader', 'lf-leader-comment']
           : leaderKind === 'suggestion'
-            ? 'lf-leader lf-leader-suggestion'
-            : 'lf-leader',
-      );
+            ? ['lf-leader', 'lf-leader-suggestion']
+            : ['lf-leader'];
+      // Word's rule: tapping a balloon brings it forward and pushes the rest
+      // back, and its leader comes with it. The CARDS dim in CSS (the margin
+      // reads `:has(.thread.active)`), but a line in a detached SVG overlay
+      // has no ancestor that knows which thread is selected — so the emphasis
+      // is written here, on the pass that draws them.
+      const b = rendered[i];
+      if (selectedId !== null && b.kind === 'comment') {
+        classes.push(b.thread.id === selectedId ? 'lf-leader-on' : 'lf-leader-dim');
+      }
+      line.setAttribute('class', classes.join(' '));
+      // The visible leg starts where the PROSE ends, never inside it: `anchorX`
+      // is the right edge of `view.dom`, so a connector runs out of the text
+      // block and across the gutter rather than over a word. The one geometry
+      // rule this column has, and the reason the line is straight.
       line.setAttribute('x1', String(anchorX));
       line.setAttribute('y1', String(items[i].anchorY - overlayOffsetY));
       line.setAttribute('x2', String(balloonX));

@@ -34,7 +34,9 @@ import { IPAD, PHONE, attach, installSheets, setViewport, styleOf } from './css-
  * is a browser check: measured rects at 430x932 and 1180x820 are in the PR
  * body, and `bun run ui:shot` is how it is re-measured.
  *
- * SHEETS: the review shell links `styles.css` (then `tokens.css`, left out
+ * SHEETS: the review shell links `styles.css` then `doc.css` — the meeting
+ * strip is one of the editor-only surfaces in the second, and the tokens and
+ * the top bar it sits under are in the first (then `tokens.css`, left out
  * here — the served file is a vendored Open Props subset plus `src/tokens.css`,
  * and the mapping half alone re-points every remapped token at an undefined
  * `var(--gray-N)`).
@@ -42,7 +44,7 @@ import { IPAD, PHONE, attach, installSheets, setViewport, styleOf } from './css-
 
 let cleanup = () => {};
 beforeEach(() => {
-  cleanup = installSheets('styles.css');
+  cleanup = installSheets('styles.css', 'doc.css');
 });
 afterEach(() => {
   cleanup();
