@@ -7,6 +7,7 @@ import { DEFAULT_REVIEW_ITEM_CRITERIA } from '@feedback/core/review-judge-prompt
  * read their collaborators off `WorkspaceRoutesContext` instead of the scope.
  */
 import { canonicalRepoRoot, normalizeDocHome } from '../doc-home.ts';
+import { redactCapChangeForVisitor } from '../share/redact-workspace.ts';
 import { PARALLELISM_CAP_MAX, PARALLELISM_CAP_MIN, type WorkspaceNotesHome } from '../tasks.ts';
 import { parseVoiceContext } from '../voice.ts';
 import type { WorkspaceRouteRequest, WorkspaceRoutesContext } from './workspace-routes-context.ts';
@@ -315,7 +316,19 @@ export async function handleWorkspaceSettings(
         value: capView.cap,
         isDefault: capView.isDefault,
         default: capView.default,
-        ...(capView.lastChange !== undefined ? { lastChange: capView.lastChange } : {}),
+        // Who moved it, given to a member the way every other visitor
+        // surface gives an actor: name and kind, no id. This route used to
+        // pass the record through verbatim, and it carries a full
+        // `TaskActor` whose id is derived from an email — the same field the
+        // board record beside it (`GET /api/workspaces/<id>`) has been
+        // reducing since the cap shipped. The local surface keeps it whole.
+        ...(capView.lastChange !== undefined
+          ? {
+              lastChange: visitor
+                ? redactCapChangeForVisitor(capView.lastChange)
+                : capView.lastChange,
+            }
+          : {}),
       },
       dispatchesInUse: capView.inUse,
       // Withheld from a member, for the reason the refusal above gives: it is

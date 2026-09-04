@@ -671,6 +671,62 @@ describe('share links over HTTP', () => {
       expect(JSON.stringify(view)).not.toContain(storedRepoRoot);
     });
 
+    it('shows who moved the parallelism cap by name, on both doors that say so', async () => {
+      // The settings panel says "set by X". The actor behind it is a full
+      // `TaskActor`, and the settings read handed a member the whole record —
+      // id included — while `GET /api/workspaces/<id>`, the other door onto
+      // the same fact, had been reducing it to name and kind since the cap
+      // shipped. Two doors onto one fact cannot answer differently.
+      const moverId = 'agent-cap-mover-probe';
+      const moved = await local(`/api/workspaces/${encodeURIComponent(board)}/settings`, {
+        method: 'PUT',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          parallelismCap: 3,
+          author: { id: moverId, name: 'Cap Mover', kind: 'agent' },
+        }),
+      });
+      expect(moved.status, await moved.clone().text()).toBe(200);
+
+      // Positive control: the id IS on the owner's read, so the member's read
+      // below is measured against a payload that has something to hide.
+      const owner = await local(`/api/workspaces/${encodeURIComponent(board)}/settings`);
+      expect(owner.status).toBe(200);
+      const ownerText = await owner.text();
+      expect(ownerText).toContain('lastChange');
+      expect(ownerText).toContain(moverId);
+
+      type CapView = {
+        parallelismCap?: {
+          value?: number;
+          lastChange?: { from?: number; to?: number; actor?: Record<string, unknown> };
+        };
+      };
+      const read = await asMember(`/api/workspaces/${encodeURIComponent(board)}/settings`);
+      expect(read.status, await read.clone().text()).toBe(200);
+      const settingsText = await read.clone().text();
+      const settingsView = (await read.json()) as CapView;
+      // A real read, not an empty one: the cap and the move both survive.
+      expect(settingsView.parallelismCap?.value).toBe(3);
+      expect(settingsView.parallelismCap?.lastChange?.to).toBe(3);
+      expect(settingsView.parallelismCap?.lastChange?.actor).toEqual({
+        name: 'Cap Mover',
+        kind: 'agent',
+      });
+      expect(settingsText).not.toContain(moverId);
+
+      // The board record answers the same fact the same way.
+      const record = await asMember(`/api/workspaces/${encodeURIComponent(board)}`);
+      expect(record.status, await record.clone().text()).toBe(200);
+      const recordText = await record.clone().text();
+      const recordView = (await record.json()) as CapView;
+      expect(recordView.parallelismCap?.lastChange?.actor).toEqual({
+        name: 'Cap Mover',
+        kind: 'agent',
+      });
+      expect(recordText).not.toContain(moverId);
+    });
+
     it('edits the board settings it can see, and is refused the one field it cannot', async () => {
       const saved = await asMember(`/api/workspaces/${encodeURIComponent(board)}/settings`, {
         method: 'PUT',
