@@ -891,6 +891,16 @@ export interface ReviewItemJudgement {
    * still carries both.
    */
   heldFor?: string[];
+  /**
+   * On a hold: the sentence the judge wants added, written out.
+   *
+   * Stored beside the reason rather than folded into it, because the two do
+   * different jobs — the reason says what is wrong, this says what to write —
+   * and every surface that repeats a hold (the tool result, the filer's wake,
+   * the stall report, the card's "Held: …") should be able to offer the draft
+   * without re-deriving it from prose.
+   */
+  add?: string;
 }
 
 /**
@@ -910,6 +920,7 @@ export function storedJudgement(judgement: ReviewItemJudgement): ReviewItemJudge
     ...(judgement.heldFor && judgement.heldFor.length > 0
       ? { heldFor: [...judgement.heldFor] }
       : {}),
+    ...(judgement.add !== undefined && judgement.add !== '' ? { add: judgement.add } : {}),
   };
 }
 

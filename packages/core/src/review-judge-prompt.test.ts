@@ -152,3 +152,45 @@ describe('an item the judge has already held', () => {
     expect(system).not.toContain('Judge the words as they stand NOW');
   });
 });
+
+describe('a hold names the sentence it wants added, not a category', () => {
+  it('asks for that sentence by name in the reply contract', () => {
+    const { system } = buildReviewJudgePrompt(DEFAULT_REVIEW_ITEM_CRITERIA, { headline: 'x' });
+    expect(system).toContain('"add"');
+    expect(system).toContain('the sentence you want ADDED');
+    expect(system).toContain('not the name of a category');
+  });
+
+  it('reads the sentence off the verdict', () => {
+    const out = parseReviewJudgeResponse(
+      '{"ok": false, "reason": "The detail never says what waits on this.", "add": "The rollout is blocked until this is picked."}',
+    );
+    expect(out).toEqual({
+      ok: false,
+      reason: 'The detail never says what waits on this.',
+      add: 'The rollout is blocked until this is picked.',
+    });
+  });
+
+  it('leaves it off when the judge gave none, and ignores one that is not a sentence', () => {
+    expect(parseReviewJudgeResponse('{"ok": false, "reason": "No costs."}')).toEqual({
+      ok: false,
+      reason: 'No costs.',
+    });
+    expect(parseReviewJudgeResponse('{"ok": false, "reason": "No costs.", "add": 7}')).toEqual({
+      ok: false,
+      reason: 'No costs.',
+    });
+    expect(parseReviewJudgeResponse('{"ok": false, "reason": "No costs.", "add": "  "}')).toEqual({
+      ok: false,
+      reason: 'No costs.',
+    });
+  });
+
+  it('clips a runaway sentence the way it clips a runaway reason', () => {
+    const out = parseReviewJudgeResponse(
+      JSON.stringify({ ok: false, reason: 'x', add: 'b '.repeat(400) }),
+    );
+    expect(out?.add?.length).toBeLessThanOrEqual(REVIEW_JUDGE_REASON_MAX);
+  });
+});

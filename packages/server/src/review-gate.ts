@@ -308,9 +308,12 @@ export function createReviewGate(ctx: ReviewGateContext) {
 
   /** What a filing route says when the gate held the item. Points at the
    *  fix rather than only at the verdict: the filer's next act is one call. */
-  function heldMessage(address: ReviewGateAddress, reason: string): string {
+  function heldMessage(address: ReviewGateAddress, reason: string, add?: string): string {
     return (
       `Held off the reader's queue — ${judgeReasonSentence(reason)} ` +
+      // The draft, when the judge wrote one. A hold that names the words is
+      // one edit away from passing; a hold that names a category is a guess.
+      (add ? `Add this sentence: “${add}” ` : '') +
       `It is on the ${address.kind === 'thread' ? 'thread' : 'ticket'}; revise it with ${reviseCallFor(address)}. ` +
       'Every revision is judged again, and the item reaches the queue when it passes.'
     );
@@ -468,6 +471,7 @@ export function createReviewGate(ctx: ReviewGateContext) {
                 verdict: 'held' as const,
                 reason: verdict.reason,
                 heldFor: [...heldFor, verdict.reason],
+                ...(verdict.add !== undefined ? { add: verdict.add } : {}),
               };
     const recorded = target.record(judgement, {
       forVersion,
@@ -491,7 +495,7 @@ export function createReviewGate(ctx: ReviewGateContext) {
           held: true,
           row: current,
           reason,
-          message: heldMessage(target.address, reason),
+          message: heldMessage(target.address, reason, target.judgement(current)?.add),
         };
       }
       return { held: false, row: current ?? row };
@@ -523,7 +527,7 @@ export function createReviewGate(ctx: ReviewGateContext) {
       held: true,
       row: recorded.row,
       reason: judgement.reason,
-      message: heldMessage(address, judgement.reason),
+      message: heldMessage(address, judgement.reason, judgement.add),
     };
   }
 

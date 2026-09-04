@@ -316,6 +316,7 @@ function readJudgement(value: unknown): ReviewItemJudgement | undefined {
     verdict: value.verdict as ReviewJudgeVerdictKind,
     reason: str(value.reason, ''),
     ...(heldFor.length > 0 ? { heldFor } : {}),
+    ...(typeof value.add === 'string' && value.add.trim() !== '' ? { add: value.add } : {}),
   };
 }
 
