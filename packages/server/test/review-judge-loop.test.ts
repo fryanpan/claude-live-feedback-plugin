@@ -13,7 +13,7 @@
  * invented; the repo is public.
  */
 import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { buildReviewJudgePrompt } from '@feedback/core/review-judge-prompt';
@@ -142,6 +142,58 @@ describe('the review-item hold loop', () => {
     let n = 0;
     return async () => ({ ok: false, reason: reasons[n++ % reasons.length] as string });
   }
+
+  describe('a server death mid-judge', () => {
+    it('leaves the hold history intact, so the cap is not reset by a crash', async () => {
+      const { workspaceId, taskId } = await board();
+      judge = contradictoryJudge();
+      const filed = await jj<Held>(
+        await post(`/api/tasks/${taskId}/review-items`, {
+          author: FILER,
+          review: COSTS_IN_OPTIONS,
+        }),
+      );
+      const itemId = filed.item?.id as string;
+      await jj(
+        await post(`/api/tasks/${taskId}/review-items/${itemId}/revise`, {
+          author: FILER,
+          detail: 'The rollout waits on this: nothing ships until the size is picked.',
+        }),
+      );
+      // The state a process death mid-judge leaves on disk: a `pending`
+      // stamp nobody will ever replace, on top of two real holds. The
+      // sidecar is written on shutdown, so the server goes down first.
+      await handle.stop();
+      const file = join(dataDir, 'workspaces', `${workspaceId}.tasks.json`);
+      const disk = JSON.parse(readFileSync(file, 'utf8')) as {
+        tasks: Array<{
+          id: string;
+          reviews?: Array<{ id: string; judge?: Record<string, unknown> }>;
+        }>;
+      };
+      const stored = disk.tasks
+        .find((t) => t.id === taskId)
+        ?.reviews?.find((r) => r.id === itemId) as { judge?: Record<string, unknown> };
+      expect(stored.judge?.heldFor).toHaveLength(2);
+      stored.judge = { ...stored.judge, verdict: 'pending', reason: 'being judged' };
+      writeFileSync(file, JSON.stringify(disk));
+
+      // Boot a second server on the same data dir — the recovery path.
+      // `afterEach` stops whatever `handle` names, so it names this one now.
+      handle = createServer({ port: 0, dataDir, heldReviewItemMs: 0 });
+      const listed = (await (
+        await fetch(`http://localhost:${handle.port}/api/workspaces/${workspaceId}/tasks`)
+      ).json()) as {
+        tasks: Array<{
+          id: string;
+          reviews?: Array<{ id: string; judge?: { verdict: string; heldFor?: string[] } }>;
+        }>;
+      };
+      const back = listed.tasks.find((t) => t.id === taskId)?.reviews?.find((r) => r.id === itemId);
+      expect(back?.judge?.verdict).toBe('unavailable');
+      expect(back?.judge?.heldFor).toHaveLength(2);
+    });
+  });
 
   describe('a hold names the sentence it wants added', () => {
     const ADD = 'Nothing ships until the cache size is picked.';
@@ -286,7 +338,10 @@ describe('the review-item hold loop', () => {
       // The FIRST hold's words, not a fourth invention — that is what
       // "never a fresh contradictory reason" means.
       expect(reason).toContain(first.replace(/\.$/, ''));
-      expect(reason.split('.').filter((s) => s.trim() !== '')).toHaveLength(1);
+      // One sentence, enforced where it is produced rather than counted
+      // here: a verdict is cut to its first sentence on the way in, so the
+      // sentence built around it has exactly one terminator.
+      expect(reason.match(/[.?!]\s+\S/)).toBeNull();
     });
 
     it('counts the holds on the item itself, so the cap outlives this request', async () => {
