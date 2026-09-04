@@ -103,6 +103,11 @@ describe('security docs are wired together', () => {
       // split would have quietly taken the sign-in chain off the trigger.
       'packages/server/src/access-deps.ts',
       'packages/server/src/identity-setup.ts',
+      // …and the third: the agent-merge route's loopback / cf-ray / browser
+      // refusals came out of server.ts with it. A merge moves lead seats and
+      // re-keys an agent's deliveries fleet-wide, which is exactly the kind
+      // of change the security pass exists to catch.
+      'packages/server/src/routes/agent-identity.ts',
     ];
     for (const path of security) expect(pattern.test(path)).toBe(true);
 

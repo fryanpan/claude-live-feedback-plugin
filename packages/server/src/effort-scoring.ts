@@ -23,16 +23,22 @@ import {
   type EffortEstimateVerdict,
   type EffortEstimator,
 } from './effort-estimator.ts';
-import type { TaskProjection } from './task-projection.ts';
 import type { Task, TaskEffortEstimate, TaskStore } from './tasks.ts';
 import { wordsRevisionOf } from './tasks.ts';
 
 export interface EffortScoringContext {
   /** The hub store — the rows scored, and where a verdict is recorded. */
   taskStore: TaskStore;
-  /** The ydoc projection. Refreshed by hand after every recorded estimate,
-   *  because `recordEffortEstimate` emits no store event on purpose. */
-  taskProjection: TaskProjection;
+  /**
+   * Re-project one board. Called by hand after every recorded estimate,
+   * because `recordEffortEstimate` emits no store event on purpose.
+   *
+   * A thunk rather than the projection itself, so this factory can be built
+   * BEFORE the projection is — which is what lets `scoreEffortEstimate` be
+   * declared above the store subscription that calls it. Only ever invoked
+   * from a scoring run, long after the projection exists.
+   */
+  refreshWorkspace: (workspaceId: string) => void;
   /**
    * The one `ServerOptions` field this module reads. Structural rather than
    * importing `ServerOptions`, which lives in server.ts and imports this
@@ -51,7 +57,7 @@ export function createEffortScoring(ctx: EffortScoringContext): {
    *  closing server does not keep a hundred API calls in flight. */
   stopEffortRescore: () => void;
 } {
-  const { taskStore, taskProjection, opts } = ctx;
+  const { taskStore, refreshWorkspace, opts } = ctx;
   /**
    * The words a goal id resolves to, for the scorer's prompt — a small
    * local copy of `task-queue.ts`'s private `goalTitleOf` (not exported,
@@ -169,7 +175,7 @@ export function createEffortScoring(ctx: EffortScoringContext): {
       // numbers appear on; a score nobody can see is a score that did not
       // happen. Refresh is diff-aware, so a projection already in step is a
       // no-op transaction.
-      if (written.ok) taskProjection.refresh(task.workspaceId);
+      if (written.ok) refreshWorkspace(task.workspaceId);
     }
   }
 
