@@ -5140,6 +5140,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
     resolveWorkspaceForDoc,
     fileUnderHubWorkspace,
     unfileFromDefault,
+    workspacesOfDoc: shareWorkspacesOf,
     watchKeyExists,
   };
 
