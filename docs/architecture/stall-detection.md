@@ -28,6 +28,48 @@ owner — their Home queue is the surface), and the **backlog** on boards
 with goal bands. Boards without goal bands carry whole columns as
 stall-eligible; structure the board to scope the watcher.
 
+**A row already named is not named again until it changes.** The stamp is the
+board's CURRENT finding set, so a row that left it was forgotten and its next
+quiet window read as a brand-new stall — one wake per window on any board
+whose owner keeps reporting (measured 2026-09-04: five wakes in sixty-five
+minutes over two rows that were being worked the whole time). `stall-nudge.ts`
+now remembers which rows a board's lead has been told about, across the row's
+own absence and across a restart, and forgets a row that has not been a
+finding for a whole repeat window. A remembered row is news again only when it
+comes back under a different BUCKET — a dispatched row whose builder then died
+returns as `builder-silent`, which is a different ask. Every repeat wake
+carries `changed`: the rows, holds, unreadable rows and escalation that are
+new since the last one, rendered ahead of the full lists.
+
+**An open question counts wherever it was asked.** A row's own `task:<id>`
+room is read for both things a discussion can say — somebody is talking,
+somebody is waiting on an answer — and so is every doc the row LINKS. Reading
+a linked doc for its prose alone missed the common case: thread writes carry
+no transaction origin, `lastContentChangeFor` refuses an unnamed one, so a
+question asked on a mock or a design doc left its row reading as quiet with
+nobody waiting while the reader had it on their queue.
+
+On a LINKED doc the ask is SCOPED, because a doc is a shared surface: without
+a scope one unanswered question on a design doc would park every row linking
+it, for as long as the question stayed open. Two ways an ask can count for a
+row. **Nothing else links the doc** — then the question cannot be about any
+other row, whoever typed it, so a builder's ask on a lead-owned row parks it.
+**Otherwise the asker must be the row's owner**, resolved through
+`taskStore.ownerIdOf`, which is the only signal separating the rows of a
+shared design doc from each other. Owner-matching alone was the first rule and
+missed the first case, leaving a row waking while a person owed it an answer;
+matching the row's ASSIGNEE instead is rejected on purpose, because it
+over-exonerates the moment one agent holds two rows. The row's own `task:<id>`
+room needs no scope at all, because a task-body thread belongs to exactly one
+row. Two consequences to know: on a doc several rows link, an ask by a person
+or by an agent the roster cannot place parks nobody, and a linked doc's plain
+COMMENTS
+and edits still count for every row that links it — that exoneration expires
+with the quiet window rather than lasting as long as a question does. Reading
+those threads goes through `rooms.listThreads`, which hydrates an evicted room
+from disk rather than peeking, so a board whose rows link many cold docs pulls
+them back into memory on the loop's schedule.
+
 **Task notes count as movement.** A row's quiet time is measured from the
 newest of: its status change, its last workspace event, its last thread
 activity, and its newest note in `task.notes` — the end-of-turn message the
@@ -43,6 +85,17 @@ on the owner's queue. That is a different signal (ask-aging, not
 row-stalling) and gets its own design if it proves needed. The one kind of
 review item the loop DOES age is the held one, below — an ask the reader
 cannot see is not waiting on the reader.
+
+**An ask only excuses a row while the reader can still act on it.** The count
+the loop reads (`reviewState.open`) has to agree, item for item, with the Home
+queue's own filter — so it drops the same four: answered, held or still being
+judged, WITHDRAWN by its asker, and WAITING because the reader asked back and
+it is now the owner's turn. When the two disagree the row parks forever: the
+ask is off the queue, so nobody can answer it, so nothing ever clears it and
+the watchdog stays off that row. Withdrawn and waiting were exactly that bug.
+Both surfaces call the same predicates rather than re-deriving the rule, for
+the reason the bug demonstrates — a second spelling of "on the queue" is free
+to disagree with the first.
 
 **A held review item is a finding of its own.** Every filing path that can
 put a row on the reader's queue passes a quality gate: a Haiku judge reads the board's
