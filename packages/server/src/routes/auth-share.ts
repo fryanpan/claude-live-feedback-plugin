@@ -62,7 +62,7 @@ import { widgetAuthPage } from '../widget-auth-page.ts';
  */
 const GROUPING_SHARING_REMOVED = {
   error: 'grouping_sharing_removed',
-  hint: 'A board is the unit of sharing. A folder bind or diff review cannot be shared on its own — file it on a board and share the board instead. Use the hubWorkspaceId that create_diff_review / bind_folder returns, or make a fresh board with create_workspace.',
+  hint: 'A board is the unit of sharing. A folder bind or diff review cannot be shared on its own — file it on a board and share the board instead. Use the hubWorkspaceId that create_diff_review / attach_folder returns, or make a fresh board with create_workspace.',
 } as const;
 
 /**
@@ -80,7 +80,7 @@ const GROUPING_SHARING_REMOVED = {
  */
 const UNFILED_SHARING_REFUSED = {
   error: 'unfiled_board_not_shareable',
-  hint: 'The Unfiled board collects every review bound without a board, from every agent — sharing it would share them all. So: file the review on a real board first, then share that board. Pass hubWorkspaceId when you bind (create_diff_review / bind_folder), or make a board with create_workspace and attach_doc the review to it.',
+  hint: 'The Unfiled board collects every review bound without a board, from every agent — sharing it would share them all. So: file the review on a real board first, then share that board. Pass hubWorkspaceId when you bind (create_diff_review / attach_folder), or make a board with create_workspace and attach_doc the review to it.',
 } as const;
 
 /**
@@ -608,7 +608,7 @@ export async function handleAuthShareRoutes(
   if (pathname === '/api/share/doc' && req.method === 'POST') {
     return j(410, {
       error: 'per_doc_sharing_removed',
-      hint: 'A workspace is the unit of sharing. File the doc on a workspace (attach_doc / bind_folder / create_diff_review) and call share_workspace or share_link with workspaceId.',
+      hint: 'A workspace is the unit of sharing. File the doc on a workspace (attach_doc / attach_folder / create_diff_review) and call share_workspace or share_link with workspaceId.',
     });
   }
   // --- The RETIRED link-share redemption ---

@@ -94,7 +94,7 @@ export function refreshWorkspace(host: BindHost, setId: string): RefreshWorkspac
     ok: false,
     error: 'not-found',
     detail:
-      'no bound members for this workspace — re-run bind_folder / create_diff_review on the folder. It is idempotent and derives the same setId, so shares and threads survive.',
+      'no bound members for this workspace — re-run attach_folder / create_diff_review on the folder. It is idempotent and derives the same setId, so shares and threads survive.',
   } as const;
   if (members.length === 0) return noRoot;
   const root = members.find((m) => m.workspaceRoot)?.workspaceRoot;

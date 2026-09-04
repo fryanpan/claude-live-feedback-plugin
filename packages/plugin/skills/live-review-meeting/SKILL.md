@@ -17,7 +17,7 @@ unrelated work for the duration of the meeting.
 
 ## Pre-meeting (do this as soon as the meeting is announced)
 
-1. **Bind the docs.** `bind_folder` over the folder holding the main doc
+1. **Bind the docs.** `attach_folder` over the folder holding the main doc
    and its secondary research docs (all-files sidebar, lazy open), or
    `create_review_doc` per doc with one shared `setId`.
 2. **Create `meeting-notes.md`** next to the docs and bind it into the
