@@ -59,6 +59,10 @@ export interface DocsToolContext {
   restoreState: RestoreState;
   lastPersistError: string | undefined;
   watchPersistenceMode: () => 'server' | 'session-only';
+  /** Which transport this session's watches ride — one multiplexed stream, or
+   *  a socket per key. Reported so a silent session can be diagnosed without
+   *  reading the child's stderr. */
+  streamMode: () => 'multiplexed' | 'per-key';
   /** Whether every peer collapsed into one shared identity. */
   IDENTITY_IS_SHARED: boolean;
   SHARED_IDENTITY_REASON: string;
@@ -84,6 +88,7 @@ export async function handleDocsTool(
     unwatchDoc,
     refreshCoverage,
     watchPersistenceMode,
+    streamMode,
     restoreState,
     lastPersistError,
     IDENTITY_IS_SHARED,
@@ -749,6 +754,12 @@ export async function handleDocsTool(
           agentId: AUTHOR.id,
           ...(IDENTITY_IS_SHARED ? { reason: SHARED_IDENTITY_REASON } : {}),
         },
+        // `multiplexed` is one socket for the whole set; `per-key` is the old
+        // one-socket-per-watch transport, which now happens only for a shared
+        // identity or against a server older than the mux route. A session
+        // that is unexpectedly on `per-key` is a session whose host is one
+        // deploy behind, and that is worth being able to read.
+        streamMode: streamMode(),
         restore: restoreState,
         ...(coverage ? { coverage } : {}),
         ...(lastPersistError ? { lastPersistError } : {}),
