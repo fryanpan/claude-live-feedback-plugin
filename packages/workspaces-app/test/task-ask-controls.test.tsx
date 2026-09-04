@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { CHORES_ID, type HubTask } from '../src/hub/hub-board-model.ts';
 import type { DetailHandlers } from '../src/hub/hub-detail-render.ts';
 import {
+  type TaskAskKind,
   type TaskAskState,
   taskAskFace,
   taskAskReceipt,
@@ -118,7 +119,9 @@ describe('the ticket’s Plan and Review controls', () => {
 
   it('files the ask for the kind that was pressed', async () => {
     const host = mount();
-    const onAsk = vi.fn(async () => true);
+    // Typed arguments, so the assertions below read the real pair rather than
+    // an empty tuple the compiler cannot index.
+    const onAsk = vi.fn(async (_t: HubTask, _kind: TaskAskKind) => true);
     const t = task();
     show(t, { onAsk });
 
@@ -126,7 +129,7 @@ describe('the ticket’s Plan and Review controls', () => {
     await Promise.resolve();
 
     expect(onAsk).toHaveBeenCalledTimes(1);
-    expect(onAsk.mock.calls[0]?.[0]?.id).toBe(t.id);
+    expect(onAsk.mock.calls[0]?.[0].id).toBe(t.id);
     expect(onAsk.mock.calls[0]?.[1]).toBe('review');
   });
 
