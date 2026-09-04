@@ -33,6 +33,7 @@ const HASHED = [
   'sentry.js',
   'sw.js',
   'styles.css',
+  'doc.css',
   'hub.css',
   'signin.css',
   'tokens.css',
@@ -207,6 +208,8 @@ async function emit(buildId: string): Promise<boolean> {
   }
 
   cpSync(join(pkgRoot, 'src', 'styles.css'), join(dist, 'styles.css'));
+  // The review editor's own rules, loaded by index.html AFTER styles.css.
+  cpSync(join(pkgRoot, 'src', 'doc.css'), join(dist, 'doc.css'));
   // The board's own rules, loaded by the hub shell on top of styles.css.
   // Copied rather than bundled for the same reason styles.css is: a
   // stylesheet the shells name by URL has to exist under that name.
