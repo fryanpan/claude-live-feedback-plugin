@@ -17,6 +17,39 @@ Goals describe **real-world outcomes** and say what is in scope. Ambitious, spec
 
 **A goal starts in triage, and stays there until somebody agrees to it.** A band in `triage` is not ready to work on: nothing under it reaches `next_tasks` or the ready nudge, and the stall check does not judge its rows. `task_transition(taskId: <goal id>, to: "todo")` releases the band; the same call with `to: "triage"` holds it again when a goal turns out not to be agreed. The board's goal panel offers the same states. Triage is for goals and rows nobody has agreed to yet — never a holding pen for a row that is waiting on the primary user; that row stays `in-progress` with a review item (the general skill says how).
 
+### Before you plan, ask the board what it already covers
+
+A plan request is not a blank page. Call `find_related_work(workspaceId,
+text, docId?)` BEFORE writing any plan, goal or task — `text` is the request
+in the words it was asked in, `docId` the doc, notes or thread it came out
+of. It answers with the goals and plan docs that line up, each with a reason
+and a link, and with an empty list when nothing does.
+
+Then take the branch its answer names:
+
+- **Something came back.** File ONE review item — `review_type: "decision"`,
+  options along the lines of "Extend that plan" / "Replace it" / "New plan",
+  each carrying what it costs — on the task the request came from, or as a
+  thread on the doc it came from. Name every match in the payload's `detail`
+  as an inline relative link (see "Use Links Effectively" in
+  `claude-workspaces:working-in-a-workspace`), because the Home card renders
+  the payload and nothing around it. Then WAIT for the answer. One item, not
+  one per match: the reader is choosing a way forward, not judging five rows.
+- **Nothing came back.** Plan from scratch.
+
+Either way, the goal you create or update carries both of these before the
+turn ends:
+
+1. a **description** — the outcome, and what is in scope;
+2. a **link** to the doc the request came from (`link_refs`), so the next
+   reader gets from the band to the conversation that produced it.
+
+A band with neither is the failure this step exists for. On 2026-09-02 a
+planning pass wrote a fresh goal beside work that was already on the board,
+with no description and no link to the huddle notes it came out of — and
+nobody could tell it from a duplicate, because there was nothing on it to
+tell them with.
+
 ## 2. Make every task clear, and ranked
 
 Every task you create — and every task you *see* — is yours to check against the standard in the general skill. Where the standard is not met, rewrite it with `rewrite_task`, or add a review item asking the primary user what they meant. Nothing asks you to do this row by row: the `task.created` events you already receive are the trigger, and `attach_agent` hands you the rows still waiting for a goal.

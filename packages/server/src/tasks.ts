@@ -1,32 +1,24 @@
-import {
-  type ReviewItemJudgement,
-  type ReviewItemRange,
-  type ReviewPayload,
-  type TaskReviewItem,
-  agentIdForName,
+import type {
+  ReviewItemJudgement,
+  ReviewItemRange,
+  ReviewPayload,
+  TaskReviewItem,
 } from '@feedback/core';
 import { DEFAULT_EFFORT_ESTIMATE_PROMPT } from '@feedback/core/effort-estimate-prompt';
-import {
-  type ArtifactCheck,
-  type DecisionOption,
-  type GoalListEntry,
-  type Ref,
-  TASK_NOTES_STORE_CAP,
-  type Task,
-  type TaskActor,
-  type TaskEffortEstimate,
-  type TaskNote,
-  type TaskReadingTime,
-  type TaskStatus,
-  type TaskTransition,
-  isTaskStatus,
+import type {
+  ArtifactCheck,
+  GoalListEntry,
+  Ref,
+  Task,
+  TaskActor,
+  TaskEffortEstimate,
+  TaskNote,
+  TaskReadingTime,
+  TaskStatus,
+  TaskTransition,
 } from '@feedback/core/task-wire';
 import { classifyActor } from './actor-identity.ts';
-import {
-  type DecisionShapeGap,
-  checkDecisionShape,
-  decisionShapeMessage,
-} from './decision-shape.ts';
+import type { DecisionShapeGap } from './decision-shape.ts';
 import { TaskDecisionStore } from './review-items/decisions.ts';
 import { ReviewJudgementStore } from './review-items/judgements.ts';
 import { ReviewItemQueries } from './review-items/queries.ts';
@@ -48,15 +40,16 @@ import type {
   WithdrawAnswerResult,
   WithdrawReviewItemResult,
 } from './review-items/types.ts';
+import { TaskArchiveStore } from './task-archive.ts';
+import { TaskAuthoringStore } from './task-authoring.ts';
 import { TaskEventBus } from './task-event-bus.ts';
-import { bumpWordsRevision, cryptoId, isArchived, wordsRevisionOf } from './task-fields.ts';
+import { isArchived } from './task-fields.ts';
 import type { AttachmentRuntime } from './task-helpers.ts';
-import {
-  type DeclaredOwnerKind,
-  GENERIC_ASSIGNEE,
-  HUMAN_ASSIGNEE,
-  declaredAssigneeKind,
-} from './task-owner.ts';
+import { isValidRef } from './task-helpers.ts';
+import { TaskLifecycleStore } from './task-lifecycle.ts';
+import { TaskLinksStore } from './task-links.ts';
+import { TaskNotesStore } from './task-notes.ts';
+import { type DeclaredOwnerKind, GENERIC_ASSIGNEE, HUMAN_ASSIGNEE } from './task-owner.ts';
 import {
   agentPersistenceFor,
   goalPersistenceFor,
@@ -66,7 +59,6 @@ import {
   reviewItemPersistenceFor,
   workspacePersistenceFor,
 } from './task-persistence.ts';
-import { bodyHead } from './task-title.ts';
 
 /**
  * The hub task store: server-owned state for Workspace Hub workspaces and
@@ -88,6 +80,23 @@ import { bodyHead } from './task-title.ts';
  * DocMeta is only a review tag minted by folder binds / diff reviews.
  * `attachDoc` LINKS existing docs and reviews to a hub workspace — nothing
  * is migrated, and docs keep working at their current URLs.
+ *
+ * WHAT IS STILL HERE. The row verbs themselves are not: they moved to five
+ * modules, one per family, each taking a named slice of this store rather
+ * than a `this` that reaches all of it —
+ *
+ *   - `task-authoring.ts`  create, rename, body edits
+ *   - `task-lifecycle.ts`  the status gate, assignee, due date
+ *   - `task-archive.ts`    archive / unarchive, task and band
+ *   - `task-links.ts`      `after` edges and cross-references
+ *   - `task-notes.ts`      notes, estimates, artifact checks, reading time
+ *
+ * — beside the four seams that were already out (`ReviewItemStore`,
+ * `GoalStore`, `AgentStore`, `WorkspaceStore`) and the disk layer in
+ * `task-persistence.ts`. What is left in this file is the state those verbs
+ * write (the four `Map`s), the wire contract they are stated in (every
+ * `…Result` and `…Event` type below), the wiring that hands each family its
+ * slice, and one thin forwarder per verb so no caller had to change.
  */
 
 /* The wire contract lives in @feedback/core/task-wire; re-exported here so
@@ -223,74 +232,12 @@ export { isRetired, normalizeWorkspaceName, retiredNotice, retiredRefusal };
    share them without importing this file. */
 export { isArchived, taskAskedBy, wordsRevisionOf } from './task-fields.ts';
 
-/** Schemes a `url` ref may carry. A ref is rendered as a clickable chip, so
- *  the value becomes an href — `javascript:` and `data:` are script injection
- *  and `file:` reads the host. Every other kind is an internal id and cannot
- *  express a scheme at all, which is why this check has no analogue there. */
-function isSafeHttpUrl(value: string): boolean {
-  // No trimming first, deliberately: a leading space would make `new URL`
-  // parse `  javascript:…` fine in some runtimes, and a caller sending
-  // padded input is not a caller whose padding we should silently fix.
-  if (value !== value.trim()) return false;
-  let parsed: URL;
-  try {
-    parsed = new URL(value);
-  } catch {
-    return false;
-  }
-  // `URL.protocol` is already lowercased by the parser, so a mixed-case
-  // scheme can't slip past this comparison.
-  return parsed.protocol === 'http:' || parsed.protocol === 'https:';
-}
-
-/** Structural validity of a caller-supplied Ref: known kind, every field a
- *  non-empty string. Existence of the target is deliberately NOT checked
- *  (same stance as createTask's `links`): a dangling annotation is visible
- *  and harmless, where a dangling `after` edge would silently never block.
- *  `url` is the one kind with a value constraint beyond non-emptiness — not
- *  because we check that it resolves (we don't, same stance) but because it
- *  is the only kind that reaches the DOM as an href. */
-export function isValidRef(ref: unknown): ref is Ref {
-  if (typeof ref !== 'object' || ref === null) return false;
-  const r = ref as Record<string, unknown>;
-  const str = (v: unknown): v is string => typeof v === 'string' && v.length > 0;
-  switch (r.kind) {
-    case 'doc':
-      return str(r.docId);
-    case 'thread':
-      return str(r.docId) && str(r.threadId);
-    case 'task':
-      return str(r.taskId);
-    case 'diff':
-      return str(r.workspaceId);
-    case 'url':
-      return str(r.url) && isSafeHttpUrl(r.url);
-    default:
-      return false;
-  }
-}
-
-/** Canonical identity of a Ref — two refs are the same link iff their keys
- *  match. Field order can't leak in (each kind lists its fields explicitly). */
-export function refKey(ref: Ref): string {
-  switch (ref.kind) {
-    case 'doc':
-      return `doc|${ref.docId}`;
-    case 'thread':
-      return `thread|${ref.docId}|${ref.threadId}`;
-    case 'task':
-      return `task|${ref.taskId}`;
-    case 'diff':
-      return `diff|${ref.workspaceId}`;
-    case 'url':
-      // Identity IS the URL string — that is what makes "which tasks point at
-      // this pull request" answerable. No normalisation (no case folding, no
-      // trailing-slash trimming): two spellings of the same page staying
-      // distinct is a missed grouping, whereas collapsing two genuinely
-      // different URLs would merge unrelated work.
-      return `url|${ref.url}`;
-  }
-}
+/* `isValidRef`, `refKey` and the `isSafeHttpUrl` scheme check behind them
+   live in `task-helpers.ts` now — `task-links.ts` is the only verb family
+   that reads them, and a leaf module lets it do that without importing the
+   file that imports it. Re-exported here because every caller outside this
+   package addresses them at this path. */
+export { isValidRef, refKey } from './task-helpers.ts';
 
 /** How many builders a board may run at once when nobody has set a number
  *  for it — four (Bryan, 2026-08-31: *"Let's make it default 4, but Team
@@ -464,45 +411,13 @@ export interface LegacyParkFields {
   parkedReason?: string;
 }
 
-/** How long a park or archive reason may run. A reason is a line on a chip and
- *  a line in the audit trail, not a place to restate the ticket. */
-const REASON_MAX = 200;
+/* `REASON_MAX` and `normalizeReason` moved with the archive verbs to
+   `task-archive.ts`, their only readers. */
 
-/** Trimmed, capped, and `undefined` when there is nothing left — so an empty
- *  string never becomes a reason the board renders as a blank chip title. */
-function normalizeReason(raw: unknown): string | undefined {
-  if (typeof raw !== 'string') return undefined;
-  const text = raw.trim().slice(0, REASON_MAX).trim();
-  return text === '' ? undefined : text;
-}
-
-/**
- * The status a create lands on: `triage` when an AGENT filed it, `todo` when
- * a person did.
- *
- * `classifyActor` is the same line the transition trail and `assigneeKind`
- * already draw, reused rather than reinvented — a second predicate for
- * person-or-agent is a second thing that can disagree with the first.
- *
- * The one place this deliberately departs from it is the ABSENT actor.
- * `classifyActor` resolves "declares nothing" to `agent`, and that direction
- * is right where it lives (it keeps a person out of a strip built to stay
- * short). Here the same direction would take a row OUT of every dispatch read
- * on the strength of an absence — work silently missing, with nothing
- * anywhere saying so. Every creation ROUTE resolves an author before it gets
- * here (task-owner.ts), so the only caller this covers is a direct in-process
- * create that named nobody, and leaving that visible is the safe half.
- *
- * A GOAL row never comes through here — `syncGoalRows` mints those, and it
- * decides their status on a different rule (who is adding versus migrating,
- * not person versus agent). A new goal does start in `triage`, but that is
- * that method's answer, not this one's.
- */
-export function initialTaskStatus(
-  actor: { id: string; name: string; kind?: string } | undefined,
-): TaskStatus {
-  return actor !== undefined && classifyActor(actor) === 'agent' ? 'triage' : 'todo';
-}
+/* `initialTaskStatus` lives in `task-helpers.ts` now — `task-authoring.ts`
+   is its only caller. Re-exported for the routes and suites that read it
+   here. */
+export { initialTaskStatus } from './task-helpers.ts';
 
 /**
  * The title an UNNAMED row carries. A placeholder, not a name: the board
@@ -632,14 +547,10 @@ export function goalStatusMeta(row: GoalRow): GoalStatusMeta {
   return { status: 'done' };
 }
 
-/**
- * Whether a row is a goal. The ONE place the discriminator is read, so an
- * absent `kind` resolves to "task" in exactly one spot rather than at every
- * call site — see the field's note on Task.
- */
-export function isGoalRow(row: { kind?: 'task' | 'goal' }): row is GoalRow & { kind: 'goal' } {
-  return row.kind === 'goal';
-}
+/* `isGoalRow` lives in `task-helpers.ts` now, beside the other pure row
+   predicates. Imported back below and re-exported, because it is read by the
+   routes, the projections and half the suites at this path. */
+export { isGoalRow } from './task-helpers.ts';
 
 export interface CreateTaskOpts {
   title: string;
@@ -1804,6 +1715,64 @@ export class TaskStore {
    *  `task-agents.ts` never restates them. */
   private readonly agents = new AgentStore(agentPersistenceFor(this));
 
+  /**
+   * The five verb families, each over the narrow slice of this store it may
+   * reach — the same seam `ReviewItemStore` / `GoalStore` / `AgentStore` /
+   * `WorkspaceStore` already use, applied to the row verbs that used to be
+   * methods here. The adapters are written out rather than built by a
+   * `…PersistenceFor(this)` helper because each is five or six lines and
+   * reading them here is how you see, in one place, exactly what a verb
+   * family is allowed to touch.
+   */
+  private readonly authoring = new TaskAuthoringStore({
+    state: (workspaceId) => this.workspaces.get(workspaceId),
+    getTask: (taskId) => this.getTask(taskId),
+    goalIdExists: (workspace, goalId) => this.goalIdExists(workspace, goalId),
+    rosterIdFor: (assignee) => this.rosterIdFor(assignee),
+    docRevisionFor: (docId) => this.docRevisionFor?.(docId),
+    registerTask: (taskId, workspaceId) => {
+      this.taskIndex.set(taskId, workspaceId);
+    },
+    scheduleSave: (workspaceId) => this.scheduleSave(workspaceId),
+    emit: (event) => this.emit(event),
+  });
+
+  /** Where a row is, and who holds it. */
+  private readonly lifecycle = new TaskLifecycleStore({
+    state: (workspaceId) => this.workspaces.get(workspaceId),
+    getTask: (taskId) => this.getTask(taskId),
+    getGoalRow: (goalId) => this.getGoalRow(goalId),
+    rosterIdFor: (assignee) => this.rosterIdFor(assignee),
+    scheduleSave: (workspaceId) => this.scheduleSave(workspaceId),
+    emit: (event) => this.emit(event),
+  });
+
+  /** Reversible removal, for a row and for a band. */
+  private readonly archive = new TaskArchiveStore({
+    state: (workspaceId) => this.workspaces.get(workspaceId),
+    getTask: (taskId) => this.getTask(taskId),
+    getGoalRow: (goalId) => this.getGoalRow(goalId),
+    scheduleSave: (workspaceId) => this.scheduleSave(workspaceId),
+    emit: (event) => this.emit(event),
+  });
+
+  /** Dependency edges and cross-references. */
+  private readonly links = new TaskLinksStore({
+    state: (workspaceId) => this.workspaces.get(workspaceId),
+    states: () => this.workspaces.values(),
+    getTask: (taskId) => this.getTask(taskId),
+    getGoalRow: (goalId) => this.getGoalRow(goalId),
+    scheduleSave: (workspaceId) => this.scheduleSave(workspaceId),
+    transition: (taskId, to, opts) => this.transition(taskId, to, opts),
+  });
+
+  /** The quiet records — notes, estimates, artifact checks, reading time. */
+  private readonly notes = new TaskNotesStore({
+    getTask: (taskId) => this.getTask(taskId),
+    scheduleSave: (workspaceId) => this.scheduleSave(workspaceId),
+    emit: (event) => this.emit(event),
+  });
+
   /** The board registry, and this store seen through the contract it needs.
    *  Same shape as the review-item seam above: a named list of rows and
    *  writers, not a `this` that reaches the whole store. */
@@ -2023,187 +1992,7 @@ export class TaskStore {
   // ── Tasks ────────────────────────────────────────────────────────────────
 
   createTask(workspaceId: string, opts: CreateTaskOpts): CreateTaskResult {
-    const state = this.workspaces.get(workspaceId);
-    if (!state) return { ok: false, error: 'workspace-not-found' };
-    // A retired board takes no new work. Checked before anything else is
-    // validated so the caller gets the reason it can act on rather than a
-    // goal-id complaint about a board it should not be filing to at all.
-    if (isRetired(state.workspace)) {
-      return { ok: false, error: 'workspace-retired', message: retiredRefusal(state.workspace) };
-    }
-
-    const goal = opts.goal ?? CHORES_GOAL_ID;
-    if (!this.goalIdExists(state.workspace, goal)) {
-      return { ok: false, error: 'unknown-goal' };
-    }
-    // Dangling `after` edges would silently never block (the gate skips ids
-    // it can't resolve), so refuse them at creation where the caller can fix
-    // the reference.
-    // Deduped for the same reason `setTaskDependencies` dedupes: `openBlockers`
-    // walks this array, so a repeated id is a second visit to one task and the
-    // reader is told twice that the same thing blocks them. Batch-local refs
-    // are what make that reachable by accident — `"#warm"` and the index of the
-    // row that declared it are two spellings of ONE edge, so a caller can write
-    // the duplicate without repeating themselves.
-    const after = [...new Set(opts.after ?? [])];
-    for (const dep of after) {
-      if (!state.tasks.has(dep)) return { ok: false, error: 'unknown-after' };
-    }
-    // `afterEnforce` is a SUBSET of `after`: openBlockers walks `after` and
-    // consults afterEnforce only as a lookup set, so an id in one array and
-    // not the other is never visited and hard-blocks NOTHING. Refusing beats
-    // quietly widening `after`, which would change the blocker list the
-    // caller sees without saying so.
-    const afterEnforce = [...new Set(opts.afterEnforce ?? [])];
-    for (const dep of afterEnforce) {
-      if (!after.includes(dep)) return { ok: false, error: 'unknown-after-enforce' };
-    }
-
-    // ── Decision shape ────────────────────────────────────────────────────
-    // Options only mean something where an answer can be recorded from them,
-    // so they belong to `needs: 'decision'` and nowhere else — accepting them
-    // on an action task would store a control nothing can operate.
-    const rawOptions = opts.options ?? [];
-    if (rawOptions.length > 0 && opts.needs !== 'decision') {
-      return { ok: false, error: 'options-need-decision' };
-    }
-    for (const o of rawOptions) {
-      if (typeof o?.label !== 'string' || o.label.trim().length === 0) {
-        return { ok: false, error: 'bad-option', message: 'every option needs a non-empty label' };
-      }
-    }
-    const options: DecisionOption[] = rawOptions.map((o) => ({
-      id: cryptoId('o'),
-      label: o.label.trim(),
-      ...(o.detail !== undefined ? { detail: o.detail } : {}),
-    }));
-
-    // The gate this whole feature rests on: a decision nobody can decide from
-    // is worse than no decision task, because it LOOKS answerable. Refuse the
-    // one thing that makes it unanswerable — no question — and report the
-    // rest. Applied in the STORE so promote_to_task is held to it too; the
-    // route is the layer that would otherwise quietly not check.
-    let shapeGaps: DecisionShapeGap[] | undefined;
-    if (opts.needs === 'decision') {
-      const check = checkDecisionShape(opts.body, options);
-      if (!check.ok) {
-        return {
-          ok: false,
-          error: 'decision-body-required',
-          message: decisionShapeMessage(check),
-        };
-      }
-      shapeGaps = check.gaps;
-    }
-
-    const now = Date.now();
-    // Where the row came from, as a revision it can later be measured
-    // against. Asked of the injected reader HERE — the one place every
-    // create path converges — and settled on the reader's side, so words
-    // typed just before this create stamp the post-edit revision rather
-    // than flagging the row they produced.
-    const originDocId =
-      opts.origin !== undefined && (opts.origin.kind === 'doc' || opts.origin.kind === 'thread')
-        ? opts.origin.docId
-        : undefined;
-    const originDocRevision =
-      originDocId !== undefined ? this.docRevisionFor?.(originDocId) : undefined;
-    const assigneeKind = declaredAssigneeKind(opts.assignee ?? '', opts.assigneeKind, opts.actor);
-    const assigneeId = this.rosterIdFor(opts.assignee ?? 'agent');
-    const inGoal = Array.from(state.tasks.values()).filter((t) => t.goal === goal);
-    const order = opts.order ?? Math.max(0, ...inGoal.map((t) => t.order)) + 1;
-    const task: Task = {
-      id: cryptoId('t'),
-      workspaceId,
-      title: opts.title,
-      ...(opts.body !== undefined ? { body: opts.body } : {}),
-      // The last-resort default. Every creation ROUTE resolves a real owner
-      // before it gets here (task-owner.ts), so this only covers a direct
-      // in-process call that named nobody.
-      assignee: opts.assignee ?? 'agent',
-      ...(assigneeKind !== undefined ? { assigneeKind } : {}),
-      ...(assigneeId !== undefined ? { assigneeId } : {}),
-      ...(opts.needs !== undefined ? { needs: opts.needs } : {}),
-      ...(options.length > 0 ? { options } : {}),
-      goal,
-      order,
-      // A plan draft is triage WHOEVER filed it: the batch declared its rows
-      // drafts of an unapproved plan, and a person's rows are not exempt from
-      // their own declaration. `fileToTriage` is the same shape of claim made
-      // about the row's CONTENT rather than its provenance.
-      status:
-        opts.planHold !== undefined || opts.fileToTriage === true
-          ? 'triage'
-          : initialTaskStatus(opts.actor),
-      after,
-      ...(afterEnforce.length > 0 ? { afterEnforce } : {}),
-      ...(opts.dueAt !== undefined ? { dueAt: opts.dueAt } : {}),
-      links: opts.links ?? [],
-      ...(opts.origin !== undefined ? { origin: opts.origin } : {}),
-      ...(opts.planHold !== undefined ? { planHold: opts.planHold } : {}),
-      ...(originDocRevision !== undefined ? { originDocRevision } : {}),
-      ...(opts.quote !== undefined ? { quote: opts.quote } : {}),
-      transitions: [],
-      createdAt: now,
-      // The display name, like every other projected `by` (§3.3 visitor
-      // contract). An author-less create (the routes predate the field)
-      // stamps nothing rather than the bare word "agent".
-      ...(opts.actor?.name ? { createdBy: opts.actor.name } : {}),
-      updatedAt: now,
-    };
-    state.tasks.set(task.id, task);
-    this.taskIndex.set(task.id, workspaceId);
-    // Through the choke point like every other write of a title, so a created
-    // row carries the same marks a renamed one does. Without this a task
-    // would be measured for staleness against a body-head nobody ever
-    // recorded, and the head clause would be dead for the whole life of every
-    // task that was never renamed — which is most of them.
-    this.applyTitle(task, task.title);
-    // The create is the ONE title write that is not a naming: it stamps the
-    // placeholder. Flagged after the choke point, which clears the flag on
-    // every write it sees, so the create is the only door that can set it.
-    if (opts.untitled) task.untitled = true;
-
-    // An OMITTED goal means "needs placing": the task lands at the bottom of
-    // Backlog (the resting state; the human is never blocked on placement)
-    // and records that it is waiting. An explicit goal — even an explicit
-    // 'chores' — is a placement by the caller and stamps nothing.
-    //
-    // The record is DURABLE and nothing else is. The server used to also
-    // emit a `triage.requested` ask at this moment and mark the row pending
-    // against whether it was delivered; that flow is gone (2026-08-24). The
-    // lead learns a row needs placing from the events it already receives —
-    // `task.created` on the workspace channel while it is attached, and the
-    // `untriaged` list in its next attach payload otherwise — so a marker
-    // grounded in one in-flight send bought nothing a restart did not erase.
-    if (opts.goal === undefined) task.unplacedSince = now;
-
-    this.scheduleSave(workspaceId);
-    this.emit({
-      type: 'task.created',
-      workspaceId,
-      taskId: task.id,
-      task,
-      goal: task.goal,
-      assignee: task.assignee,
-      ...(task.triagedAgainst !== undefined ? { triagedAgainst: task.triagedAgainst } : {}),
-      ...(opts.actor !== undefined
-        ? {
-            actor: {
-              id: opts.actor.id,
-              name: opts.actor.name,
-              kind: classifyActor(opts.actor),
-            },
-          }
-        : {}),
-      ts: now,
-    });
-    return {
-      ok: true,
-      task,
-      placement: { placed: opts.goal !== undefined },
-      ...(shapeGaps !== undefined ? { shapeGaps } : {}),
-    };
+    return this.authoring.createTask(workspaceId, opts);
   }
 
   /**
@@ -2470,38 +2259,6 @@ export class TaskStore {
     return tasks.sort((a, b) => a.order - b.order || a.createdAt - b.createdAt);
   }
 
-  /**
-   * The single gate for status changes (§3.10). Every change is attributed
-   * (`classifyActor` decides person vs agent — the same line the reply-reopens
-   * rule draws, reused rather than reinvented) and appended to the task's
-   * audit trail.
-   *
-   * Gate semantics, in order:
-   *  - unknown task / unknown status / no-op same-status → validation errors.
-   *  - a GOAL row holds `triage` on the same terms a task does, and this gate
-   *    is the only door into it. It used to be refused here
-   *    (`goal-not-triageable`) on the reasoning that triage is a claim about a
-   *    TASK and a goal is "neither filed by an agent nor dispatched". The
-   *    second half was wrong: a band is dispatched transitively, because every
-   *    task in it inherits its priority — so an un-agreed band hands its rows
-   *    to a dispatcher on the strength of an agreement nobody made. Triage on
-   *    a goal closes that one level up, and `buildQueue` is where it bites.
-   *  - moving FORWARD (to in-progress or done) consults `after`: open
-   *    dependencies come back as `blockers` in the result; an edge marked
-   *    enforce refuses outright. Moving back to todo never consults the gate
-   *    (undoing work must not be blockable).
-   *  - moving OUT of triage is not a special case and gets no special verb:
-   *    it is an ordinary move, attributed like any other, and the trail entry
-   *    the gate already writes (`from: 'triage'`, plus who and when) IS the
-   *    record that somebody vetted the row. `to: 'todo'` is a backward move
-   *    and therefore unblockable; `to: 'in-progress'` is forward and consults
-   *    `after` like any other forward move, which is correct — starting work
-   *    a dependency holds back is the thing that gate exists to stop.
-   *  - there is no longer a risk arm. `riskTier` gated an agent's forward
-   *    move (red refused, yellow needed `confirmed: true`) until 2026-08-18;
-   *    the reasoning for removing it, and what is deliberately still accepted
-   *    on the wire, is in the note where `riskRefusal` used to be.
-   */
   transition(
     taskId: string,
     to: TaskStatus,
@@ -2522,192 +2279,14 @@ export class TaskStore {
       evidence?: unknown;
     },
   ): TransitionResult {
-    // Resolves a goal row as readily as a task, which is the whole of what
-    // this feature needed on the wire: a goal moves through THIS gate, so
-    // `POST /api/tasks/:id/transition` already reaches one and no new
-    // shared-server route had to be added for old bundles to miss.
-    const task = this.findRow(taskId);
-    if (!task) return { ok: false, error: 'not-found' };
-    if (!isTaskStatus(to)) return { ok: false, error: 'bad-status' };
-    if (task.status === to) {
-      return {
-        ok: false,
-        error: 'same-status',
-        message: `${task.title} is already ${to}. Nothing to do — a status change is the only thing this gate records, and the row is already there.`,
-      };
-    }
-
-    // A plan draft may not leave triage by ANY door — that is the whole of
-    // what the hold means. The release is the plan's approval
-    // (`POST /api/docs/:id/plan`), which clears the hold and moves the row
-    // itself; archiving stays available (it is not a status). Goals never
-    // carry the field, so `isGoalRow` rows pass untouched.
-    if (!isGoalRow(task) && task.planHold !== undefined) {
-      return {
-        ok: false,
-        error: 'plan-unapproved',
-        message:
-          `${task.title} is a draft derived from a plan doc (${task.planHold.docId}) that has not been approved. ` +
-          'It stays in triage until the plan is approved — which releases it — or the row is archived.',
-      };
-    }
-
-    const forward = to === 'in-progress' || to === 'done';
-    // A task's open dependencies; a goal's open children. Different question,
-    // same answer shape, and deliberately the same advisory/enforcing split
-    // rather than a second notion of blocked.
-    const blockers = forward
-      ? isGoalRow(task)
-        ? this.openChildren(task)
-        : this.openBlockers(task)
-      : [];
-    const enforced = blockers.filter((b) => b.enforce);
-    if (enforced.length > 0) {
-      return { ok: false, error: 'blocked', blockers };
-    }
-
-    const by: TaskActor = {
-      id: opts.actor.id,
-      name: opts.actor.name,
-      kind: classifyActor(opts.actor),
-    };
-    // The risk arm of the gate used to sit here — see the note where
-    // `riskRefusal` was, below `openBlockers`. `opts.confirmed` is still read
-    // off the wire and deliberately goes nowhere: older peers keep sending it.
-    // Whether this row was itself gating anything in the instant before the
-    // write — read here, because one line down its status is the new one.
-    const wasOpenBlocker = task.status !== 'done' && !isArchived(task);
-    const entry: TaskTransition = {
-      ts: Date.now(),
-      from: task.status,
-      to,
-      by,
-      ...(opts.note !== undefined ? { note: opts.note } : {}),
-      ...(opts.usage !== undefined ? { usage: opts.usage } : {}),
-    };
-    task.transitions.push(entry);
-    task.status = to;
-    task.updatedAt = entry.ts;
-    this.scheduleSave(task.workspaceId);
-
-    this.emit({
-      type: 'task.transitioned',
-      workspaceId: task.workspaceId,
-      taskId: task.id,
-      ...(isGoalRow(task) ? { kind: 'goal' as const } : {}),
-      from: entry.from,
-      to,
-      actor: by,
-      ...(opts.note !== undefined ? { note: opts.note } : {}),
-      ...(opts.usage !== undefined ? { usage: opts.usage } : {}),
-      ts: entry.ts,
-    });
-    // Whatever was waiting on this row and is now waiting on nothing. AFTER
-    // the transition event, so the trail reads in the order it happened: the
-    // blocker closed, and then its dependants came free.
-    if (!isGoalRow(task) && to === 'done') {
-      this.announceUnblocked(task, by, entry.ts, wasOpenBlocker);
-    }
-    return { ok: true, task, blockers };
+    return this.lifecycle.transition(taskId, to, opts);
   }
 
-  /**
-   * Emit `task.unblocked` for every row `closed` was the last open blocker of.
-   *
-   * Called after a row leaves the open set — a move to `done`, and an archive,
-   * which takes it off the board and out of `openBlockers` just as finally.
-   * The check is the whole derivation re-run per dependant, not a decrement of
-   * a counter: a counter is exactly the stored state this feature was built
-   * without, and it would go wrong on the paths that never touch it (a
-   * restore, an edge removed by hand, a sidecar loaded from disk).
-   *
-   * The event is the TRANSITION from "waiting on something" to "waiting on
-   * nothing", which needs both ends checked, not just the second. Three ways
-   * it fired for a row that never came free, all found in review (2026-09-03)
-   * and all closed by `wasOpen`:
-   *
-   *  - archiving a blocker that was already `done` — the dependant was freed
-   *    when it closed, sometimes days earlier, and tidying it away said so
-   *    again;
-   *  - the same on the second of two finished blockers;
-   *  - an `after` edge pointed at an already-closed ticket, so the dependant
-   *    was never blocked at all, and the eventual archive announced its
-   *    release.
-   *
-   * `wasOpen` is what the caller knows and this cannot see: whether `closed`
-   * counted as an open blocker in the instant BEFORE the write. Both callers
-   * read it off the row's pre-write state.
-   *
-   * Silent when the dependant still waits on something else — coming free is
-   * the event, not one blocker of three closing — and silent for a dependant
-   * that is itself done or archived, which has no work left to be released to.
-   */
-  private announceUnblocked(closed: Task, actor: TaskActor, ts: number, wasOpen: boolean): void {
-    if (!wasOpen) return;
-    const state = this.workspaces.get(closed.workspaceId);
-    if (!state) return;
-    for (const dependant of state.tasks.values()) {
-      if (!dependant.after.includes(closed.id)) continue;
-      if (isArchived(dependant)) continue;
-      // A finished row is not released by anything: whatever it waited on, it
-      // went ahead without it.
-      if (dependant.status === 'done') continue;
-      // Re-read through the gate's own reader, so "is it still blocked" has
-      // exactly one implementation.
-      if (this.openBlockers(dependant).length > 0) continue;
-      this.emit({
-        type: 'task.unblocked',
-        workspaceId: dependant.workspaceId,
-        taskId: dependant.id,
-        clearedBy: closed.id,
-        clearedByTitle: closed.title,
-        actor,
-        ts,
-      });
-    }
-  }
-
-  /**
-   * Pin an agent's one-liner to a row. No status change and no gate: the
-   * note records what the session said or was refused, not where the row
-   * is. Bounded at `TASK_NOTES_STORE_CAP` from the old end, emitted as
-   * `task.noted` so the board re-projects, the audit log has it, and the
-   * actor's work clock moves — but NOT broadcast on the workspace stream
-   * (server.ts keeps it off), because one frame per turn would wake every
-   * other attached agent.
-   */
   appendNote(
     taskId: string,
     input: { kind: TaskNote['kind']; text: string; agent: string; ts: number; sessionId?: string },
   ): { ok: true; task: Task; note: TaskNote } | { ok: false; error: 'not-found' } {
-    // Tasks only: `resolveNoteTarget` never hands this a goal row, and a
-    // goal's trail is its children's, not a session's one-liners.
-    const task = this.getTask(taskId);
-    if (!task) return { ok: false, error: 'not-found' };
-    const note: TaskNote = {
-      ts: input.ts,
-      kind: input.kind,
-      text: input.text,
-      agent: input.agent,
-      ...(input.sessionId !== undefined ? { sessionId: input.sessionId } : {}),
-    };
-    const notes = task.notes ?? [];
-    notes.push(note);
-    if (notes.length > TASK_NOTES_STORE_CAP) notes.splice(0, notes.length - TASK_NOTES_STORE_CAP);
-    task.notes = notes;
-    const now = Date.now();
-    task.updatedAt = now;
-    this.scheduleSave(task.workspaceId);
-    this.emit({
-      type: 'task.noted',
-      workspaceId: task.workspaceId,
-      taskId: task.id,
-      actor: { id: agentIdForName(input.agent), name: input.agent, kind: 'agent' },
-      kind: note.kind,
-      text: note.text,
-      ts: now,
-    });
-    return { ok: true, task, note };
+    return this.notes.appendNote(taskId, input);
   }
 
   // ── Review items ─────────────────────────────────────────────────────────
@@ -3028,249 +2607,29 @@ export class TaskStore {
     };
   }
 
-  /**
-   * Record one scoring run's read on a ticket — a produced estimate or a
-   * recorded failure. Quiet like `recordReadingTime`: no store event, no
-   * `updatedAt` bump, and for the same class of reason — a score is
-   * metadata ABOUT the ticket, not an edit OF it — plus one that reading
-   * time does not have: scoring itself is triggered off `task.created` /
-   * `task.retitled` / `task.body_edited` (server.ts), so a write here that
-   * emitted one of those would re-trigger its own scorer forever.
-   *
-   * Refused as `stale` when the words (or the goal) this run read are no
-   * longer the ticket's current words: `estimate.forWordsRevision` must
-   * still equal the row's `wordsRevision`. Guards against a slow call
-   * landing after a NEWER edit — or a re-triage to a different goal, which
-   * changes the goal title the scorer weighed — already started (or
-   * finished) its own re-score: that newer run's answer must stand, not be
-   * overwritten by a late answer to older words or an old goal.
-   *
-   * ONE token, and a monotonic one. This used to compare the three
-   * timestamps the estimate still carries — `forTitleWrittenAt` /
-   * `forBodyWrittenAt` / `forGoal` against `titleWrittenAt` /
-   * `bodyWrittenAt` / `goal` — and a millisecond is not fine enough to
-   * separate a create from the rename that follows it: land both in one
-   * tick and the older run's captured token still equals the row's current
-   * one, the guard reads "not stale", and the stale answer wins. See
-   * `forWordsRevision`. The timestamps are kept on the record as
-   * provenance a person reads; they are no longer asked a question they
-   * cannot answer.
-   *
-   * A record that somehow carries no revision at all compares `undefined`
-   * against a number and is REFUSED, which is the safe direction: an
-   * estimate whose provenance cannot be established must not overwrite one
-   * whose provenance can.
-   */
   recordEffortEstimate(
     taskId: string,
     estimate: TaskEffortEstimate,
   ): { ok: true; task: Task } | { ok: false; error: 'not-found' | 'stale' } {
-    const task = this.getTask(taskId);
-    if (!task) return { ok: false, error: 'not-found' };
-    if (estimate.forWordsRevision !== wordsRevisionOf(task)) {
-      return { ok: false, error: 'stale' };
-    }
-    task.effortEstimate = estimate;
-    this.scheduleSave(task.workspaceId);
-    return { ok: true, task };
+    return this.notes.recordEffortEstimate(taskId, estimate);
   }
 
-  /**
-   * Replace a task's dependency edges after it was created.
-   *
-   * This did not exist, and its absence is what made urgency underivable:
-   * "this decision is blocking work now" is the same fact as "something
-   * depends on it", `after` already records that, and `after` could only ever
-   * be set at creation — when the decision being waited on often doesn't
-   * exist yet. Every decision on the real board therefore had an empty
-   * `after`, and nothing could tell blocking from merely deferred.
-   *
-   * Replaces rather than appends, so an edge can be REMOVED — a dependency
-   * that turned out not to exist is exactly as misleading as a missing one.
-   * No store event fires (§3.6's table has no row for it), so the route
-   * refreshes the projection by hand, the same contract as renameTask.
-   */
   setDependencies(
     taskId: string,
     edges: { after: string[]; afterEnforce?: string[] },
     _opts: { actor: { id: string; name: string; kind?: string } },
   ): SetDependenciesResult {
-    const task = this.getTask(taskId);
-    if (!task) return { ok: false, error: 'not-found' };
-    const state = this.workspaces.get(task.workspaceId);
-    if (!state) return { ok: false, error: 'not-found' };
-
-    const after = [...new Set(edges.after)];
-    for (const dep of after) {
-      // Self first: `state.tasks.has(task.id)` is true, so a self-edge would
-      // pass the existence check and then block the task on itself forever.
-      if (dep === taskId) return { ok: false, error: 'self-dependency' };
-      // Same workspace only — a cross-workspace id resolves in `getTask` but
-      // not in this board's `tasks` map, so the gate would skip it silently.
-      if (!state.tasks.has(dep)) return { ok: false, error: 'unknown-after' };
-    }
-    const afterEnforce = [...new Set(edges.afterEnforce ?? [])];
-    for (const dep of afterEnforce) {
-      if (!after.includes(dep)) return { ok: false, error: 'unknown-after-enforce' };
-    }
-
-    // A ring of edges is a row waiting on itself the long way round: every
-    // task in it is Blocked, none can ever clear, and `next_tasks` quietly
-    // empties. The self-edge check above is the length-one case of this one;
-    // this is every longer one. Walk each proposed blocker's own `after`
-    // transitively and refuse if the walk arrives back at the row being
-    // written.
-    for (const dep of after) {
-      const path = this.pathTo(dep, taskId, state);
-      if (path) {
-        // `path` runs from the proposed blocker back to this row, so the ring
-        // opens and closes on the row being written: A wait on B wait on A.
-        const ring = [taskId, ...path];
-        const named = ring.map((id) => `'${this.getTask(id)?.title ?? id}'`).join(' waiting on ');
-        return {
-          ok: false,
-          error: 'cycle',
-          cycle: ring,
-          message: `that edge would close a loop: ${named}`,
-        };
-      }
-    }
-
-    const same =
-      task.after.length === after.length &&
-      task.after.every((d) => after.includes(d)) &&
-      (task.afterEnforce ?? []).length === afterEnforce.length &&
-      (task.afterEnforce ?? []).every((d) => afterEnforce.includes(d));
-    if (same) return { ok: true, task, changed: false };
-
-    task.after = after;
-    if (afterEnforce.length > 0) task.afterEnforce = afterEnforce;
-    else task.afterEnforce = undefined;
-    task.updatedAt = Date.now();
-    this.scheduleSave(task.workspaceId);
-    return { ok: true, task, changed: true };
+    return this.links.setDependencies(taskId, edges, _opts);
   }
 
-  /**
-   * THE CHOKE POINT for "this row got a name" — the ONLY assignment of
-   * `task.title` in the store, and every door into a title converges on it.
-   *
-   * There were three assignment sites before this: the `createTask` object
-   * literal, `renameTask`, and `noteBodyEdited`. Seven doors sit above them
-   * (`create_tasks` single and batch, `promote_to_task`,
-   * `import_tasks_markdown`, the board's inline rename, `rewrite_task`,
-   * and `set_doc_content` on a `task:<id>` room), and no two of them share a
-   * reading — `parseTaskCreate` fronts two, promote and import build their
-   * own. So a title standard enforced at any one door would be a guarantee
-   * for that door's callers only, which is exactly how the `quote`
-   * preservation came to be skipped by the one caller that mattered.
-   *
-   * What it stamps is the pair of marks a reviewer reads a rename against:
-   * WHEN the row was named, and WHAT the description said at the time. Both
-   * reset here and nowhere else, so "the title has been re-authored" has one
-   * writer and cannot disagree with itself. The marks are part of the
-   * capture record — the soft-delete guarantee — not a format check.
-   *
-   * Deliberately NOT a validator. Nothing is refused, rewritten, or
-   * normalized on the way through — the standard's judgment lives in the
-   * lead's reviewing pass, which the row's own `task.created` /
-   * `task.retitled` / `task.body_written` event is what summons — so a raw
-   * capture still lands.
-   */
-  private applyTitle(task: Task, title: string): void {
-    // A named row is no longer untitled — UNCONDITIONALLY. A person naming
-    // the row is the signal, whatever text they gave; the placeholder
-    // literal is never compared against. This used to clear only when the
-    // text differed from the stored title, and an unnamed row's stored
-    // title IS the placeholder, so naming it "Untitled task" kept the flag
-    // — and a flagged row's rename box shows blank, so it could never be
-    // named again. The create (the one write that is a stamp, not a naming)
-    // flags the row after this returns.
-    task.untitled = undefined;
-    task.title = title;
-    task.titleWrittenAt = Date.now();
-    task.titleHead = bodyHead(task.body);
-    bumpWordsRevision(task);
-  }
-
-  /**
-   * Rename a task — the board's in-place title edit (§3.9: tap the title
-   * text, Enter commits). No event fires: §3.6's exhaustive table has no
-   * task.renamed row, so callers (the route) must refresh the projection by
-   * hand, the same pattern as attachDoc and a triage confirm-in-place.
-   */
   renameTask(
     taskId: string,
     title: string,
     opts: { actor: { id: string; name: string; kind?: string }; reason?: string },
   ): RenameTaskResult {
-    const task = this.getTask(taskId);
-    if (!task) return { ok: false, error: 'not-found' };
-    // A same-text rename is a no-op — UNLESS the row is unnamed, where the
-    // stored title is only the placeholder and the write is the person
-    // naming it. That write must reach the choke point to clear the flag.
-    if (task.title === title && !task.untitled) return { ok: true, task, changed: false };
-    const titleFrom = task.title;
-    this.applyTitle(task, title);
-    const ts = Date.now();
-    task.updatedAt = ts;
-    this.scheduleSave(task.workspaceId);
-    // Naming an unnamed row with its own placeholder text changed the flag,
-    // not the title: nothing to retitle in the feed.
-    if (titleFrom === task.title) return { ok: true, task, changed: true };
-    // Attributed, with both ends: after a rename the old title — the only
-    // name the person who filed the row would recognise — survives nowhere
-    // else on the board. “changed: false” returns above emit nothing.
-    this.emit({
-      type: 'task.retitled',
-      workspaceId: task.workspaceId,
-      taskId: task.id,
-      actor: { id: opts.actor.id, name: opts.actor.name, kind: classifyActor(opts.actor) },
-      titleFrom,
-      titleTo: task.title,
-      ...(opts.reason ? { reason: opts.reason } : {}),
-      ts,
-    });
-    return { ok: true, task, changed: true };
+    return this.authoring.renameTask(taskId, title, opts);
   }
 
-  /**
-   * Record that somebody replaced a task's description — and, when the same
-   * act gave the row a new title, retitle it here rather than in a second
-   * call. The markdown itself lives in the `task:<id>` doc room and reaches
-   * this store as a snapshot, so this does not take it; what this provides is
-   * the half `set_doc_content` on the body room never could (a doc edit knows
-   * nothing about tasks): an attributed audit row, the body clock, the
-   * preserved original, and the title.
-   *
-   * The title rides along because SHAPING is one act. A capture arrives with a
-   * machine-clipped fragment for a title and its whole utterance for a body,
-   * and triage turns both into a task worth picking up; splitting that across
-   * `/title` (which deliberately emits nothing — it is the board's inline
-   * edit) and `/body` would leave the half a reader most notices invisible in
-   * the activity feed. Passing no `title` leaves the title alone, so every
-   * existing caller keeps its meaning.
-   *
-   * This does NOT preserve the row's prior words — `updateBodySnapshot` does,
-   * at the choke point every writer of a body passes through. It used to
-   * happen here, taking the pre-rewrite title and body as a required
-   * parameter so a new call site could not quietly skip it. That guard worked
-   * exactly as far as it could reach and no further: `set_doc_content` on the
-   * `task:<id>` room never called this method at all, so it destroyed the
-   * capture with nothing preserved and nothing recorded, and the caller and
-   * the board both saw success. A parameter can only bind the callers who
-   * call you. So `quote` now has ONE writer, sitting where the body actually
-   * changes, and this method is left with the half only a route can do:
-   * saying WHO, and when.
-   *
-   * The predicate over there is `quote` being empty and NOTHING else. The
-   * obvious second clause — "and this row has never been rewritten", i.e.
-   * `bodyWrittenAt === undefined` — is unusable and looks correct:
-   * `updateBodySnapshot` stamps `bodyWrittenAt` on every real body change, so
-   * the clause is false by the time anything downstream reads it. It silently
-   * preserved nothing, ever. Emptiness of `quote` is the honest question
-   * anyway — "does anything hold this row's own words yet".
-   */
   noteBodyEdited(
     taskId: string,
     opts: {
@@ -3281,40 +2640,9 @@ export class TaskStore {
       reason?: string;
     },
   ): boolean {
-    const task = this.getTask(taskId);
-    if (!task) return false;
-    const ts = Date.now();
-    const titleFrom = task.title;
-    const nextTitle = opts.title?.trim();
-    // An unnamed row's stored title is the placeholder; a shaping pass that
-    // hands back the same text is still the row being named.
-    if (nextTitle && (nextTitle !== titleFrom || task.untitled)) this.applyTitle(task, nextTitle);
-    task.updatedAt = ts;
-    task.bodyWrittenAt = ts;
-    bumpWordsRevision(task);
-    this.scheduleSave(task.workspaceId);
-    this.emit({
-      type: 'task.body_edited',
-      workspaceId: task.workspaceId,
-      taskId: task.id,
-      actor: { id: opts.actor.id, name: opts.actor.name, kind: classifyActor(opts.actor) },
-      // Both ends, only when the title actually moved. A reader of the trail
-      // needs the old one to recognise the row they filed: "rewrote X" says
-      // nothing when X is a title they have never seen.
-      ...(task.title !== titleFrom ? { titleFrom, titleTo: task.title } : {}),
-      ...(opts.reason ? { reason: opts.reason } : {}),
-      ts,
-    });
-    return true;
+    return this.authoring.noteBodyEdited(taskId, opts);
   }
 
-  /**
-   * Hand a task to someone else — 'human', 'agent', or a named identity.
-   * Emits `task.assigned` (§3.6) with BOTH ends, because the reviewable fact
-   * is the direction of the hand-off. Deliberately does NOT touch status:
-   * re-assigning is not progress, and conflating the two would let a hand-off
-   * slip past the transition gate.
-   */
   setAssignee(
     taskId: string,
     assignee: string,
@@ -3327,403 +2655,51 @@ export class TaskStore {
       assigneeKind?: unknown;
     },
   ): SetAssigneeResult {
-    const task = this.getTask(taskId);
-    if (!task) return { ok: false, error: 'not-found' };
-    const from = task.assignee;
-    const declared = declaredAssigneeKind(assignee, opts.assigneeKind, opts.actor);
-    // Re-stating the SAME owner without saying what they are must not erase
-    // what somebody already declared. Every caller that predates this field
-    // sends no `assigneeKind`, so without this an ordinary re-assign would
-    // silently downgrade a declared person to "not recorded" — a write that
-    // changes nothing a caller asked to change. A hand-over to a DIFFERENT
-    // name still clears it: the new owner's kind is genuinely unknown, and
-    // inheriting the old one would assert something nobody said.
-    const kind = declared ?? (from === assignee ? task.assigneeKind : undefined);
-    // A kind-only change is a real change. Without the second clause,
-    // declaring that the person who already holds this task IS a person
-    // would be swallowed as a no-op, and the one call that closes the gap
-    // for an existing row would do nothing while answering ok:true.
-    if (from === assignee && task.assigneeKind === kind) return { ok: true, task, changed: false };
-    const ts = Date.now();
-    task.assignee = assignee;
-    // Re-resolved from the NEW name, never carried over: the previous
-    // owner's id on a row handed to somebody the roster cannot place would
-    // keep routing their queue reads to the old owner.
-    const assigneeId = this.rosterIdFor(assignee);
-    if (assigneeId === undefined) task.assigneeId = undefined;
-    else task.assigneeId = assigneeId;
-    if (kind === undefined) task.assigneeKind = undefined;
-    else task.assigneeKind = kind;
-    task.updatedAt = ts;
-    this.scheduleSave(task.workspaceId);
-    this.emit({
-      type: 'task.assigned',
-      workspaceId: task.workspaceId,
-      taskId: task.id,
-      from,
-      to: assignee,
-      actor: { id: opts.actor.id, name: opts.actor.name, kind: classifyActor(opts.actor) },
-      ts,
-    });
-    return { ok: true, task, changed: true };
+    return this.lifecycle.setAssignee(taskId, assignee, opts);
   }
 
-  /**
-   * Set, move, or clear a task's due date.
-   *
-   * Bryan, 2026-08-18: *"All fields must be human editable. But I expect
-   * they'll be mostly set by agents going forward. Trust but verify… sometimes
-   * having me edit a thing is the fastest way to fix."* `dueAt` was writable
-   * only at creation, so the detail panel rendered a field nobody could
-   * correct — the same gap `setAssignee` closed for the owner.
-   *
-   * `null` clears. An unchanged value returns `changed: false` and emits
-   * nothing: a repaint that re-sends the date already on the row is not an
-   * edit, and an audit row saying so is noise in every feed.
-   */
   setDueAt(
     taskId: string,
     dueAt: number | null,
     opts: { actor: { id: string; name: string; kind?: string } },
   ): SetAssigneeResult {
-    const task = this.getTask(taskId);
-    if (!task) return { ok: false, error: 'not-found' };
-    const from = task.dueAt ?? null;
-    if (from === dueAt) return { ok: true, task, changed: false };
-    const ts = Date.now();
-    if (dueAt === null) task.dueAt = undefined;
-    else task.dueAt = dueAt;
-    task.updatedAt = ts;
-    this.scheduleSave(task.workspaceId);
-    this.emit({
-      type: 'task.due_set',
-      workspaceId: task.workspaceId,
-      taskId: task.id,
-      from,
-      to: dueAt,
-      actor: { id: opts.actor.id, name: opts.actor.name, kind: classifyActor(opts.actor) },
-      ts,
-    });
-    return { ok: true, task, changed: true };
+    return this.lifecycle.setDueAt(taskId, dueAt, opts);
   }
 
-  /**
-   * Drop the two fields a row carried while `parked` was a state, once the
-   * startup migration has lifted them into a comment.
-   *
-   * The ONLY writer of `LegacyParkFields`, and it only ever unsets them. The
-   * park metadata is not destroyed by this call — the comment the migration
-   * wrote is where it now lives, which is what makes the clear safe to run
-   * and what keeps the project's never-hard-delete rule true for it.
-   *
-   * Returns what it cleared, so the caller can report a migration honestly
-   * rather than counting rows it hoped it touched.
-   */
   clearLegacyPark(taskId: string): LegacyParkFields | null {
-    const task = this.getTask(taskId) as (Task & LegacyParkFields) | undefined;
-    if (!task) return null;
-    const had: LegacyParkFields = {
-      ...(task.parkedUntil !== undefined ? { parkedUntil: task.parkedUntil } : {}),
-      ...(task.parkedReason !== undefined ? { parkedReason: task.parkedReason } : {}),
-    };
-    if (had.parkedUntil === undefined && had.parkedReason === undefined) return null;
-    // Assignment rather than `delete` (biome noDelete); JSON.stringify drops
-    // an undefined-valued key entirely, so the sidecar comes back without it.
-    task.parkedUntil = undefined;
-    task.parkedReason = undefined;
-    this.scheduleSave(task.workspaceId);
-    return had;
+    return this.lifecycle.clearLegacyPark(taskId);
   }
 
-  /**
-   * Take a row off the board, reversibly — the SOFT delete, and the only
-   * removal this store offers a task.
-   *
-   * Three fields and one event. Nothing moves, nothing is rewritten, and the
-   * id keeps resolving through `getTask`, which is what lets the task's body
-   * room, its comment threads and every `after` edge pointing at it go on
-   * working while it is gone from the lanes. `unarchiveTask` clears the same
-   * three fields, so a restore has nothing to reconstruct and no half-state to
-   * crash in.
-   *
-   * Idempotent by construction: archiving an archived row reports
-   * `changed: false` and emits nothing, the same rule `setDueAt` and
-   * `parkTask` follow. A re-send that produced an audit row would put a line
-   * in the trail for a decision nobody made twice. Note what this costs — a
-   * reason cannot be EDITED by re-archiving; restore and archive again, which
-   * is honest, because the second reason is a second decision.
-   */
   archiveTask(
     taskId: string,
     opts: { actor: { id: string; name: string; kind?: string }; reason?: string },
   ): SetAssigneeResult {
-    const task = this.getTask(taskId);
-    if (!task) return { ok: false, error: 'not-found' };
-    if (isArchived(task)) return { ok: true, task, changed: false };
-    const ts = Date.now();
-    const reason = normalizeReason(opts.reason);
-    // Same reading as the transition path, taken before the write: a row that
-    // was already `done` was gating nothing, so archiving it frees nobody.
-    const wasOpenBlocker = task.status !== 'done';
-    task.archivedAt = ts;
-    task.archivedBy = opts.actor.name;
-    task.archiveReason = reason;
-    task.updatedAt = ts;
-    this.scheduleSave(task.workspaceId);
-    this.emit({
-      type: 'task.archived',
-      workspaceId: task.workspaceId,
-      taskId: task.id,
-      title: task.title,
-      ...(reason !== undefined ? { reason } : {}),
-      actor: { id: opts.actor.id, name: opts.actor.name, kind: classifyActor(opts.actor) },
-      ts,
-    });
-    // An archive takes the row out of `openBlockers` exactly as finally as a
-    // close does, so whatever it was holding comes free and has to say so.
-    this.announceUnblocked(
-      task,
-      { id: opts.actor.id, name: opts.actor.name, kind: classifyActor(opts.actor) },
-      ts,
-      wasOpenBlocker,
-    );
-    return { ok: true, task, changed: true };
+    return this.archive.archiveTask(taskId, opts);
   }
 
-  /** Put an archived row back. The undo half, and the reason the archive is
-   *  safe to reach for: everything it did was three field writes. */
   unarchiveTask(
     taskId: string,
     opts: { actor: { id: string; name: string; kind?: string } },
   ): SetAssigneeResult {
-    const task = this.getTask(taskId);
-    if (!task) return { ok: false, error: 'not-found' };
-    if (!isArchived(task)) return { ok: true, task, changed: false };
-    const ts = Date.now();
-    // The reason is read BEFORE it is cleared — the restored event carries it
-    // so the pair reads as one story in the trail.
-    const reason = task.archiveReason;
-    // Assignment rather than `delete` (biome noDelete); JSON.stringify drops
-    // an undefined from the sidecar, which is what keeps a row that was never
-    // archived free of the keys entirely.
-    task.archivedAt = undefined;
-    task.archivedBy = undefined;
-    task.archiveReason = undefined;
-    // The cascade marker goes with them. A row put back by hand is no longer
-    // part of the band's archive, so restoring that band later must not claim
-    // it a second time — and archiving the band again re-stamps it anyway.
-    task.archivedWithGoal = undefined;
-    task.updatedAt = ts;
-    this.scheduleSave(task.workspaceId);
-    this.emit({
-      type: 'task.restored',
-      workspaceId: task.workspaceId,
-      taskId: task.id,
-      title: task.title,
-      ...(reason !== undefined ? { reason } : {}),
-      actor: { id: opts.actor.id, name: opts.actor.name, kind: classifyActor(opts.actor) },
-      ts,
-    });
-    return { ok: true, task, changed: true };
+    return this.archive.unarchiveTask(taskId, opts);
   }
 
-  /**
-   * Every row a goal's archive would take with it: the band itself, and every
-   * task standing under it that is not already archived.
-   *
-   * Public because the CONFIRMATION needs it before the write. "Archive this
-   * goal and its 14 tasks?" is the whole point of the dialog — the blast
-   * radius is the part a reader cannot see from a band header — and a count
-   * the client derived for itself would be a second implementation of this
-   * walk, free to disagree with the one that actually runs.
-   *
-   * Already-archived rows are deliberately absent: the cascade does not touch
-   * them, so counting them would promise a removal that does not happen, and
-   * — worse — the restore would then bring back a row somebody had put away
-   * on its own.
-   *
-   * What the board shows under the band is what goes — nothing off it.
-   */
   goalCascade(goalId: string): { taskIds: string[] } {
-    const empty = { taskIds: [] };
-    const row = this.getGoalRow(goalId);
-    if (!row) return empty;
-    const state = this.workspaces.get(row.workspaceId);
-    if (!state) return empty;
-    const taskIds = Array.from(state.tasks.values())
-      .filter((t) => t.goal === goalId && !isArchived(t))
-      .sort((a, b) => a.order - b.order || a.createdAt - b.createdAt)
-      .map((t) => t.id);
-    return { taskIds };
+    return this.archive.goalCascade(goalId);
   }
 
-  /**
-   * Take a BAND off the board, reversibly, with everything standing under it.
-   *
-   * The cascade is the decision (Bryan, 2026-08-30: archiving a goal archives
-   * its tasks too). The alternative — archive the band and leave its tasks
-   * behind — either strands them under a header nobody can see or silently
-   * dumps them into Backlog, and both are a bigger surprise than the one the
-   * reader asked for. Soft on every row it touches, so the whole gesture is
-   * still nothing but field writes, and `unarchiveGoal` is still a field
-   * clear.
-   *
-   * Each cascaded row is stamped with `archivedWithGoal`, which is what makes
-   * the restore exact rather than a guess from `task.goal` — see the field.
-   *
-   * Events: the band's own `task.archived` carries `kind: 'goal'`, the
-   * `batchId` and the task count; every member carries `partOf: batchId`. The
-   * trail therefore reads as one decision with its consequences attached
-   * rather than as fifteen unexplained removals, and a per-row feed still
-   * gets the line it needs. Same shape `workspace.goals_changed` already uses
-   * for the moves a goal-list edit fans out.
-   *
-   * Idempotent, like `archiveTask`: re-archiving an archived band reports
-   * `changed: false`, writes nothing and emits nothing.
-   */
   archiveGoal(
     goalId: string,
     opts: { actor: { id: string; name: string; kind?: string }; reason?: string },
   ): ArchiveGoalResult {
-    const goal = this.getGoalRow(goalId);
-    if (!goal) return { ok: false, error: 'not-found' };
-    if (isArchived(goal)) return { ok: true, goal, changed: false, taskIds: [] };
-    const { taskIds } = this.goalCascade(goalId);
-    const ts = Date.now();
-    const reason = normalizeReason(opts.reason);
-    const by: TaskActor = {
-      id: opts.actor.id,
-      name: opts.actor.name,
-      kind: classifyActor(opts.actor),
-    };
-    const batchId = cryptoId('ga');
-
-    const stamp = (row: { archivedAt?: number; archivedBy?: string; updatedAt: number }): void => {
-      row.archivedAt = ts;
-      row.archivedBy = by.name;
-      row.updatedAt = ts;
-    };
-    stamp(goal);
-    goal.archiveReason = reason;
-
-    for (const id of taskIds) {
-      const task = this.getTask(id);
-      if (!task) continue;
-      stamp(task);
-      task.archiveReason = reason;
-      task.archivedWithGoal = goalId;
-    }
-    this.scheduleSave(goal.workspaceId);
-
-    this.emit({
-      type: 'task.archived',
-      workspaceId: goal.workspaceId,
-      taskId: goal.id,
-      kind: 'goal',
-      title: goal.title,
-      ...(reason !== undefined ? { reason } : {}),
-      batchId,
-      cascadeTasks: taskIds.length,
-      actor: by,
-      ts,
-    });
-    for (const id of taskIds) {
-      const row = this.getTask(id);
-      if (!row) continue;
-      this.emit({
-        type: 'task.archived',
-        workspaceId: goal.workspaceId,
-        taskId: id,
-        title: row.title,
-        ...(reason !== undefined ? { reason } : {}),
-        partOf: batchId,
-        actor: by,
-        ts,
-      });
-    }
-    return { ok: true, goal, changed: true, taskIds };
+    return this.archive.archiveGoal(goalId, opts);
   }
 
-  /**
-   * Put an archived band back, with exactly the rows its archive removed.
-   *
-   * "Exactly" is `archivedWithGoal`: a row somebody archived on its own before
-   * the band went is not part of this restore and stays where they put it.
-   * That asymmetry is the reason the marker exists at all — see the field.
-   */
   unarchiveGoal(
     goalId: string,
     opts: { actor: { id: string; name: string; kind?: string } },
   ): ArchiveGoalResult {
-    const goal = this.getGoalRow(goalId);
-    if (!goal) return { ok: false, error: 'not-found' };
-    if (!isArchived(goal)) return { ok: true, goal, changed: false, taskIds: [] };
-    const state = this.workspaces.get(goal.workspaceId);
-    if (!state) return { ok: false, error: 'not-found' };
-    const ts = Date.now();
-    // Read before it is cleared, so the pair reads as one story in the trail.
-    const reason = goal.archiveReason;
-    const by: TaskActor = {
-      id: opts.actor.id,
-      name: opts.actor.name,
-      kind: classifyActor(opts.actor),
-    };
-    const batchId = cryptoId('ga');
-
-    const clear = (row: {
-      archivedAt?: number;
-      archivedBy?: string;
-      archiveReason?: string;
-      archivedWithGoal?: string;
-      updatedAt: number;
-    }): void => {
-      // Assignment rather than `delete` (biome noDelete); JSON.stringify drops
-      // an undefined-valued key, so the sidecar comes back without it.
-      row.archivedAt = undefined;
-      row.archivedBy = undefined;
-      row.archiveReason = undefined;
-      // Only a TASK carries this; a goal row has no `archivedWithGoal` of its
-      // own, so the clear is a no-op on the band itself.
-      row.archivedWithGoal = undefined;
-      row.updatedAt = ts;
-    };
-    clear(goal);
-
-    const taskIds: string[] = [];
-    for (const task of state.tasks.values()) {
-      if (task.archivedWithGoal !== goalId) continue;
-      taskIds.push(task.id);
-      clear(task);
-    }
-    this.scheduleSave(goal.workspaceId);
-
-    this.emit({
-      type: 'task.restored',
-      workspaceId: goal.workspaceId,
-      taskId: goal.id,
-      kind: 'goal',
-      title: goal.title,
-      ...(reason !== undefined ? { reason } : {}),
-      batchId,
-      cascadeTasks: taskIds.length,
-      actor: by,
-      ts,
-    });
-    for (const id of taskIds) {
-      const row = this.getTask(id);
-      if (!row) continue;
-      this.emit({
-        type: 'task.restored',
-        workspaceId: goal.workspaceId,
-        taskId: id,
-        title: row.title,
-        ...(reason !== undefined ? { reason } : {}),
-        partOf: batchId,
-        actor: by,
-        ts,
-      });
-    }
-    return { ok: true, goal, changed: true, taskIds };
+    return this.archive.unarchiveGoal(goalId, opts);
   }
 
   // ── Goal bands ───────────────────────────────────────────────────────────
@@ -3814,131 +2790,29 @@ export class TaskStore {
   ): ReorderGoalsResult {
     return this.goals.reorderGoals(workspaceId, order, opts);
   }
-  /**
-   * Refresh a task's markdown body snapshot from its live `task:<taskId>`
-   * doc room (the projection's debounced flush). The snapshot is for search
-   * and export only — it never re-seeds a live fragment (§3.3) — so this
-   * emits NO event and deliberately does not bump `updatedAt`: body typing
-   * is content activity, and the live doc room already announces it.
-   */
   updateBodySnapshot(taskId: string, body: string): boolean {
-    const task = this.getTask(taskId);
-    if (!task) return false;
-    if (task.body === body) return true;
-    // THE CHOKE POINT for "this row's description was replaced". Every door
-    // into a task body converges here — `rewrite_task`, `set_doc_content`
-    // on the `task:<id>` room, `find_and_replace` and the other prose edit
-    // tools aimed at that docId, and a person typing on the board — because
-    // they all mutate one Yjs fragment and this is what its observer flushes.
-    // So the preservation hangs here rather than on any one route: a route
-    // guard is only a guarantee for the callers who use that route, and the
-    // reason this is being fixed is that one of them didn't.
-    //
-    // Write-once, predicate `quote` empty and NOTHING else — see the note on
-    // `noteBodyEdited`, which used to hold this and could not see the doorways
-    // that skipped it. Placed AFTER the equality guard above so a no-op flush
-    // (the seed round-trip when a body room is first opened, measured stable)
-    // preserves nothing: there is no rewrite there to preserve against.
-    if (task.quote === undefined) {
-      const original = task.body?.trim() || task.title.trim();
-      if (original) task.quote = original;
-    }
-    task.body = body;
-    // The one thing this path DOES record: when the description changed.
-    // Stamped only on a real change (the equality guard above returns first),
-    // so a no-op flush cannot make a stale body look freshly written — which
-    // would silently clear the drift notice on exactly the rows that need it.
-    task.bodyWrittenAt = Date.now();
-    // A body rewrite reads as "somebody reconciled this row with the plan as
-    // it now stands": the flag clears and the row re-stamps at the revision
-    // it was flagged against, so a STILL-later plan edit flags it again.
-    // Here at the choke point rather than on any one route, for the same
-    // reason `quote` preservation is.
-    if (task.possiblyStale !== undefined) {
-      task.originDocRevision = task.possiblyStale.docRevision;
-      task.possiblyStale = undefined;
-    }
-    bumpWordsRevision(task);
-    this.scheduleSave(task.workspaceId);
-    return true;
+    return this.authoring.updateBodySnapshot(taskId, body);
   }
 
-  /**
-   * Record what the done-artifact check concluded about this row's links.
-   *
-   * Deliberately quiet on both clocks: no store event (§3.6's table is
-   * exhaustive by contract, and a subscriber-visible event here would restart
-   * the ready-nudger's idle clock on machine bookkeeping) and no `updatedAt`
-   * bump (the row did not change in any sense a person acts on). The visible
-   * half of a bad verdict is the system comment the checker posts on the
-   * task's discussion, which rides the ordinary thread pipeline. Last write
-   * wins: a row done twice keeps the latest check, which is the one that
-   * matches its current claim.
-   */
   recordArtifactCheck(
     taskId: string,
     result: ArtifactCheck,
   ): { ok: true; task: Task } | { ok: false; error: 'not-found' } {
-    const task = this.getTask(taskId);
-    if (!task) return { ok: false, error: 'not-found' };
-    task.artifactCheck = result;
-    this.scheduleSave(task.workspaceId);
-    return { ok: true, task };
+    return this.notes.recordArtifactCheck(taskId, result);
   }
 
-  /**
-   * Fold one interaction-bounded `read_session` into a task's cumulative
-   * reading time. The LIVE path — called once per session flush, right
-   * where the server already accepts the browser's `read_session` POST
-   * (see `rooms.recordReadEvent` and its caller in server.ts).
-   *
-   * Quiet like `recordArtifactCheck` and for the identical reason: no store
-   * event, no `updatedAt` bump. A person reading a ticket must not reset
-   * its own staleness clock — that would let attention masquerade as
-   * progress on the row.
-   *
-   * `deltaSeconds` is expected already server-clamped (`clampReadPayload`)
-   * before it reaches here; a non-finite or non-positive value is a no-op
-   * rather than an error, since it typically means the payload had nothing
-   * to record instead of nothing found.
-   */
   recordReadingTime(
     taskId: string,
     deltaSeconds: number,
   ): { ok: true; task: Task } | { ok: false; error: 'not-found' } {
-    const task = this.getTask(taskId);
-    if (!task) return { ok: false, error: 'not-found' };
-    if (!Number.isFinite(deltaSeconds) || deltaSeconds <= 0) return { ok: true, task };
-    const prev = task.readingTime;
-    task.readingTime = {
-      totalSeconds: (prev?.totalSeconds ?? 0) + deltaSeconds,
-      sessionCount: (prev?.sessionCount ?? 0) + 1,
-      lastSessionAt: Date.now(),
-    };
-    this.scheduleSave(task.workspaceId);
-    return { ok: true, task };
+    return this.notes.recordReadingTime(taskId, deltaSeconds);
   }
 
-  /**
-   * Overwrite a task's `readingTime` with an already-computed total — the
-   * RECONCILIATION path, used by `reading-time-backfill.ts` to fold in
-   * `read_session` events that were live-captured (since #468) but never
-   * rolled up onto the task record before this field existed. A full
-   * replace, not an add: the caller recomputes each task's total from the
-   * complete activity log every run, so calling this twice with the same
-   * inputs is a no-op and calling it after `recordReadingTime` has already
-   * added some of the same events cannot double-count — the recompute
-   * already includes them. Quiet for the same reason as `recordArtifactCheck`.
-   */
   setReadingTime(
     taskId: string,
     readingTime: TaskReadingTime,
   ): { ok: true; task: Task } | { ok: false; error: 'not-found' } {
-    const task = this.getTask(taskId);
-    if (!task) return { ok: false, error: 'not-found' };
-    task.readingTime = readingTime;
-    this.scheduleSave(task.workspaceId);
-    return { ok: true, task };
+    return this.notes.setReadingTime(taskId, readingTime);
   }
 
   // ── Cross-references (§3.2 Ref; §3.12 commit 4) ──────────────────────────
@@ -3949,291 +2823,44 @@ export class TaskStore {
   // layer refreshes the ydoc projection by hand, the same pattern as
   // createWorkspace/attachDoc.
 
-  /**
-   * Add a cross-reference to a task's `links`. Idempotent: linking a ref
-   * that's already there reports `changed: false` and touches nothing.
-   * A task may not link itself (`self-ref`).
-   */
   linkRef(taskId: string, ref: Ref): LinkRefResult {
-    const task = this.getTask(taskId);
-    if (!task) return { ok: false, error: 'not-found' };
-    if (!isValidRef(ref)) return { ok: false, error: 'bad-ref' };
-    if (ref.kind === 'task' && ref.taskId === taskId) return { ok: false, error: 'self-ref' };
-    const key = refKey(ref);
-    if (task.links.some((r) => refKey(r) === key)) return { ok: true, task, changed: false };
-    task.links.push(ref);
-    task.updatedAt = Date.now();
-    this.scheduleSave(task.workspaceId);
-    return { ok: true, task, changed: true };
+    return this.links.linkRef(taskId, ref);
   }
 
-  /**
-   * The goal half of `linkRef`: add a cross-reference to a goal row's
-   * `links`. Same idempotency contract; a goal cannot self-ref (its own id
-   * is a task-kind ref, refused for symmetry with `linkRef`).
-   */
   linkGoalRef(
     goalId: string,
     ref: Ref,
   ):
     | { ok: true; goal: GoalRow; changed: boolean }
     | { ok: false; error: 'not-found' | 'bad-ref' | 'self-ref' } {
-    const goal = this.getGoalRow(goalId);
-    if (!goal) return { ok: false, error: 'not-found' };
-    if (!isValidRef(ref)) return { ok: false, error: 'bad-ref' };
-    if (ref.kind === 'task' && ref.taskId === goalId) return { ok: false, error: 'self-ref' };
-    const key = refKey(ref);
-    if ((goal.links ?? []).some((r) => refKey(r) === key))
-      return { ok: true, goal, changed: false };
-    goal.links = [...(goal.links ?? []), ref];
-    goal.updatedAt = Date.now();
-    this.scheduleSave(goal.workspaceId);
-    return { ok: true, goal, changed: true };
+    return this.links.linkGoalRef(goalId, ref);
   }
 
-  /** Remove a cross-reference. Removing one that isn't there is a no-op
-   *  (`changed: false`), not an error — the end state is what was asked for. */
   unlinkRef(taskId: string, ref: Ref): UnlinkRefResult {
-    const task = this.getTask(taskId);
-    if (!task) return { ok: false, error: 'not-found' };
-    if (!isValidRef(ref)) return { ok: false, error: 'bad-ref' };
-    const key = refKey(ref);
-    const next = task.links.filter((r) => refKey(r) !== key);
-    if (next.length === task.links.length) return { ok: true, task, changed: false };
-    task.links = next;
-    task.updatedAt = Date.now();
-    this.scheduleSave(task.workspaceId);
-    return { ok: true, task, changed: true };
+    return this.links.unlinkRef(taskId, ref);
   }
 
-  /**
-   * Every task that references `ref` — via `links` or via its promotion
-   * `origin` (a task promoted from a thread references that thread without
-   * anyone calling link_refs). Exact-ref matching; spans all workspaces,
-   * because refs do (a task may cite a doc that lives outside its hub
-   * workspace). Deterministic order: creation time, then id.
-   */
   backlinksFor(ref: Ref): Task[] {
-    const key = refKey(ref);
-    return this.tasksMatching((r) => refKey(r) === key);
+    return this.links.backlinksFor(ref);
   }
 
-  /**
-   * Doc→task surfacing: tasks that reference the doc itself OR any thread
-   * in it — a task promoted from one of a doc's threads is about that doc.
-   */
   tasksReferencingDoc(docId: string): Task[] {
-    return this.tasksMatching(
-      (r) => (r.kind === 'doc' || r.kind === 'thread') && r.docId === docId,
-    );
+    return this.links.tasksReferencingDoc(docId);
   }
 
-  /** Thread→task surfacing: exact thread-ref matches only. */
   tasksReferencingThread(docId: string, threadId: string): Task[] {
-    return this.backlinksFor({ kind: 'thread', docId, threadId });
+    return this.links.tasksReferencingThread(docId, threadId);
   }
 
-  /**
-   * A plan doc's content moved past the revision some derived rows were
-   * stamped at — flag them `possiblyStale`. Wired to the doc store's settled
-   * revision bump (`rooms.onContentRevision`); `docIds` carries the canonical
-   * id AND the alias because origin refs routinely hold the caller-chosen
-   * name. Advisory only: nothing here gates a transition. Open rows only —
-   * a done row's premise no longer matters, and an archived one has left the
-   * board. Rows with no `originDocRevision` (predate the field, or the doc
-   * was not in memory at create) are skipped rather than guessed at.
-   *
-   * Emits no store event — §3.6's table is exhaustive by contract — so the
-   * CALLER refreshes the ydoc projection for the returned workspaces, the
-   * same pattern as `linkRef`.
-   */
   flagStaleFromDocEdit(docIds: string[], revision: number): Set<string> {
-    const ids = new Set(docIds);
-    const touched = new Set<string>();
-    for (const state of this.workspaces.values()) {
-      for (const task of state.tasks.values()) {
-        if (task.status === 'done' || isArchived(task)) continue;
-        const o = task.origin;
-        if (!isValidRef(o) || (o.kind !== 'doc' && o.kind !== 'thread')) continue;
-        if (!ids.has(o.docId)) continue;
-        if (task.originDocRevision === undefined) continue;
-        if (task.originDocRevision >= revision) continue;
-        if (task.possiblyStale?.docRevision === revision) continue;
-        task.possiblyStale = { docRevision: revision, ts: Date.now() };
-        touched.add(task.workspaceId);
-        this.scheduleSave(task.workspaceId);
-      }
-    }
-    return touched;
+    return this.links.flagStaleFromDocEdit(docIds, revision);
   }
 
-  /**
-   * The plan was approved: clear every hold pointing at it and release the
-   * held rows to `todo` — approval IS the "start the work" gesture the
-   * drafts were waiting for, so leaving them in triage would hand the
-   * approver a second chore per row. The release goes through the ordinary
-   * transition gate (hold cleared first), so each row's trail records who
-   * approved and the projection refreshes off the emitted events. A held row
-   * that is archived, or that somebody already moved before holds existed,
-   * just loses the hold.
-   *
-   * Returns the released task ids plus every workspace whose rows changed —
-   * the caller refreshes projections for holds cleared WITHOUT a transition
-   * (clearing alone emits nothing).
-   */
   releasePlanHolds(
     docIds: string[],
     actor: { id: string; name: string; kind?: string },
   ): { released: string[]; workspaceIds: Set<string> } {
-    const ids = new Set(docIds);
-    const released: string[] = [];
-    const workspaceIds = new Set<string>();
-    for (const state of this.workspaces.values()) {
-      for (const task of state.tasks.values()) {
-        if (task.planHold === undefined || !ids.has(task.planHold.docId)) continue;
-        task.planHold = undefined;
-        task.updatedAt = Date.now();
-        workspaceIds.add(task.workspaceId);
-        this.scheduleSave(task.workspaceId);
-        if (task.status === 'triage' && !isArchived(task)) {
-          const moved = this.transition(task.id, 'todo', {
-            actor,
-            note: 'Plan approved — draft released to the queue.',
-          });
-          if (moved.ok) released.push(task.id);
-        }
-      }
-    }
-    return { released, workspaceIds };
-  }
-
-  /**
-   * Tasks whose `links` or `origin` contain a ref matching `pred`.
-   *
-   * Every ref is re-validated on the way past. `pred` is usually built on
-   * `refKey`, which reads `ref.kind` and throws on anything that isn't a
-   * ref — and this loop spans EVERY workspace, so one malformed ref stored
-   * anywhere took down every caller: `tasksReferencingDoc` sits on the
-   * doc-open path and on thread listing. `origin` used to be written to
-   * `<ws>.tasks.json` unvalidated (the route cast instead of checking), so
-   * `origin: null` persisted, survived restart, and made doc-open 500 —
-   * `task.origin !== undefined` is true for `null`. The route now validates;
-   * this guard is what keeps already-persisted junk from being fatal.
-   */
-  private tasksMatching(pred: (ref: Ref) => boolean): Task[] {
-    const out: Task[] = [];
-    for (const state of this.workspaces.values()) {
-      for (const task of state.tasks.values()) {
-        const matches =
-          task.links.some((r) => isValidRef(r) && pred(r)) ||
-          (isValidRef(task.origin) && pred(task.origin));
-        if (matches) out.push(task);
-      }
-    }
-    return out.sort((a, b) => a.createdAt - b.createdAt || a.id.localeCompare(b.id));
-  }
-
-  /** Open (not-done) dependencies of a task, described so the message can
-   *  land verbatim in an agent's context: "blocked by open decision t-x:
-   *  'your go'". A dangling id (dep task deleted) can't gate — skipped. */
-  /**
-   * A row by id, task or goal — the lookup the transition gate uses.
-   *
-   * Deliberately NOT `getTask`, which stays tasks-only. `getTask` has dozens
-   * of callers and every one of them is a task verb; widening it would put
-   * goal rows in reach of `assign_task`, `set_task_goal` and the rest by id
-   * alone. Only the gate needs to see both, so only the gate gets a lookup
-   * that does.
-   */
-  private findRow(id: string): BoardRow | undefined {
-    return this.getTask(id) ?? this.getGoalRow(id);
-  }
-
-  /**
-   * A goal's open children, reported so a declaration can be made with them
-   * in view — never to refuse it.
-   *
-   * `enforce: false` on every row, unconditionally, and that is the feature
-   * rather than a default: a goal is done because somebody says so, and the
-   * children are reported, not enforced. There is deliberately no opt-in to
-   * make one of these enforcing, because an enforcing child edge would make
-   * `done` derived again through the back door — the goal could only be
-   * closed once its children were, which is exactly the roll-up rule Bryan
-   * ruled out.
-   */
-  private openChildren(goal: GoalRow): TransitionBlocker[] {
-    const state = this.workspaces.get(goal.workspaceId);
-    if (!state) return [];
-    const out: TransitionBlocker[] = [];
-    for (const task of state.tasks.values()) {
-      if (task.goal !== goal.id || task.status === 'done') continue;
-      if (isArchived(task)) continue;
-      const noun = task.needs === 'decision' ? 'decision' : 'task';
-      out.push({
-        taskId: task.id,
-        title: task.title,
-        status: task.status,
-        ...(task.needs !== undefined ? { needs: task.needs } : {}),
-        enforce: false,
-        message: `still open in this goal — ${noun} ${task.id}: '${task.title}'`,
-      });
-    }
-    return out;
-  }
-
-  /**
-   * The chain of `after` edges from `fromId` to `targetId`, or null when
-   * there is none — the cycle detector behind `setDependencies`.
-   *
-   * Depth-first with a seen set, so a ring that already exists in the store
-   * (written before this check did) cannot spin here forever. Ids naming rows
-   * this workspace does not hold are skipped, which is the same reading every
-   * other consumer of `after` takes: a dangling edge gates nothing, so it can
-   * close nothing either.
-   */
-  private pathTo(
-    fromId: string,
-    targetId: string,
-    state: { tasks: Map<string, Task> },
-  ): string[] | null {
-    const seen = new Set<string>();
-    const walk = (id: string): string[] | null => {
-      if (seen.has(id)) return null;
-      seen.add(id);
-      const row = state.tasks.get(id);
-      if (!row) return null;
-      if (id === targetId) return [id];
-      for (const next of row.after) {
-        const rest = walk(next);
-        if (rest) return [id, ...rest];
-      }
-      return null;
-    };
-    return walk(fromId);
-  }
-
-  private openBlockers(task: Task): TransitionBlocker[] {
-    const enforce = new Set(task.afterEnforce ?? []);
-    const out: TransitionBlocker[] = [];
-    for (const depId of task.after) {
-      const dep = this.getTask(depId);
-      // Deleted, finished, or archived — none of the three can gate. The
-      // archived arm joined the other two when Blocked became a state the
-      // board DRAWS: a row held by a ticket that is off the board is held by
-      // something its reader cannot see, and nobody is going to finish it.
-      // One reading, shared with `@feedback/core/task-blocked` and the queue.
-      if (!dep || dep.status === 'done' || isArchived(dep)) continue;
-      const noun = dep.needs === 'decision' ? 'decision' : 'task';
-      out.push({
-        taskId: dep.id,
-        title: dep.title,
-        status: dep.status,
-        ...(dep.needs !== undefined ? { needs: dep.needs } : {}),
-        enforce: enforce.has(depId),
-        message: `blocked by open ${noun} ${dep.id}: '${dep.title}'`,
-      });
-    }
-    return out;
+    return this.links.releasePlanHolds(docIds, actor);
   }
 
   /* REMOVED 2026-08-18 (Bryan): `riskRefusal`, the §3.4 risk arm of the gate.

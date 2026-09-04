@@ -15762,6 +15762,26 @@ var TOOL_LIST = {
       }
     },
     {
+      name: "find_related_work",
+      description: "Before writing a plan, or creating a goal, ask what on this board already covers the request. Returns the goals and plan docs that line up — each with a score, a one-line reason and a relative link — or an empty list when nothing does. Cheap: token overlap plus the board's own links, no model call. If anything comes back, file ONE decision review item (extend / replace / new) and wait for the answer; if nothing does, plan from scratch. Either way the goal you create or update gets a description and a link to the doc the request came from.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          workspaceId: { type: "string" },
+          text: {
+            type: "string",
+            description: "The request in the words it was asked in. Scoring does not depend on length, so paste the whole ask rather than boiling it down to a keyword."
+          },
+          docId: {
+            type: "string",
+            description: "The doc the request came out of — meeting notes, a huddle, a thread. A goal that already links it is returned even when its title shares no word with the request."
+          },
+          limit: { type: "number", description: "How many matches to return. Default 5, max 20." }
+        },
+        required: ["workspaceId", "text"]
+      }
+    },
+    {
       name: "next_tasks",
       description: 'The work queue: what to pick up next, in priority order, filtered to what you can actually do. Take the whole ready set, not the top row. Each row carries its full description, blockedBy, ready, and bodyWrittenAt — descriptions age, so check that date before trusting one. Skip any row whose claimedBy is an active session that is not you. Triage rows are never returned; read those with list_tasks(status:"triage").',
       inputSchema: {
@@ -17685,6 +17705,24 @@ async function handleWorkspaceTool(name, a, ctx) {
         goals: res.goalSummary
       });
     }
+    case "find_related_work": {
+      const { workspaceId, text, docId, limit } = a;
+      if (typeof text !== "string" || text.trim().length === 0) {
+        return err2("text is required: the plan request in the words it was asked in.");
+      }
+      const params = new URLSearchParams({ q: text });
+      if (typeof docId === "string" && docId.length > 0)
+        params.set("docId", docId);
+      if (typeof limit === "number" && Number.isFinite(limit))
+        params.set("limit", String(limit));
+      const res = await http("GET", `/api/workspaces/${encodeURIComponent(workspaceId)}/related-work?${params.toString()}`);
+      return ok2({
+        workspaceId,
+        considered: res.considered,
+        matches: res.matches,
+        next: res.matches.length > 0 ? 'Something already covers this. File ONE decision review item on the task — options along the lines of "Extend that plan" / "Replace it" / "New plan", each with a cost line, and the matches named as inline relative links in the detail — then WAIT for the answer.' : "Nothing on this board lines up. Plan from scratch, and give the goal you create a description and a link to the doc the request came from."
+      });
+    }
     case "attach_agent": {
       const { workspaceId, agentId, runtime, capabilities, subscribe } = a;
       const res = await http("POST", `/api/workspaces/${encodeURIComponent(workspaceId)}/attachments`, {
@@ -18106,7 +18144,7 @@ var STATUS_TEXT_MAX = 4000;
 function suggestionAuthor() {
   return { id: AUTHOR.id, name: AUTHOR.name, color: AUTHOR.color };
 }
-var PLUGIN_VERSION = "0.1.156";
+var PLUGIN_VERSION = "0.1.157";
 var PROCESS_ID = randomUUID();
 var server = new Server({
   name: "claude-workspaces",

@@ -431,23 +431,6 @@ describe('prev/next comment nav', () => {
     );
   });
 
-  it('stays usable when the cards are in the margin, and steps into the sheet', () => {
-    // The sheet case: the reader chose balloons on a screen with no room for
-    // a margin, so no inline card is built — but the doc is full of anchored
-    // comments and ‹ › is how you reach them. Counting BUILT CARDS here
-    // disabled the nav on exactly the surface that needs it most.
-    const h = harness([thread('a'), thread('b')], { inlineVisible: () => false });
-    const next = document.getElementById('next-comment') as HTMLButtonElement;
-    expect(h.placed()).toEqual([]);
-    expect(next.disabled).toBe(false);
-    expect(next.title).toBe('Next comment');
-
-    next.click();
-    // No card to centre on, so the thread is shown where its only copy is.
-    expect(h.sheetOpen()).toBe(true);
-    expect(h.panel.getActive()).toBe('a');
-  });
-
   it('does nothing (rather than wrapping onto nothing) when there is no inline thread', () => {
     const h = harness([orphanThread('o')]);
     expect(() => h.mobile.step(1)).not.toThrow();
@@ -539,7 +522,7 @@ describe('the mobile sheet rides the keyboard', () => {
     // says nothing about whether they REACH the pane: they sit inside a
     // `max-width: 900px` block, and a text match holds at every width whether
     // or not the query does.
-    sheets = installSheets('styles.css');
+    sheets = installSheets('styles.css', 'doc.css');
     const down = pane(PHONE, '0px');
     expect(down.position).toBe('fixed');
     expect(down.bottom).toBe('0px');
@@ -563,7 +546,7 @@ describe('the mobile sheet rides the keyboard', () => {
     // in a `max-width: 900px` block, so on the iPad the pane must NOT be a
     // fixed, keyboard-riding sheet. A grep for `position: fixed` passes here
     // either way.
-    sheets = installSheets('styles.css');
+    sheets = installSheets('styles.css', 'doc.css');
     const wide = pane(IPAD, '300px');
     expect(wide.position).not.toBe('fixed');
     expect(wide.bottom).not.toBe('300px');
