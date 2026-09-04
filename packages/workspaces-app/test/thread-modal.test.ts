@@ -786,3 +786,36 @@ describe('an interrupted promote takes its fade partners down with it', () => {
     expect(h.card()).not.toBe(null);
   });
 });
+
+describe('the dialog offers a keyboard one close, not two', () => {
+  it('the card’s caret is out of the tab order inside the modal', () => {
+    const h = mount();
+    const t = thread('t1', [comment('First', decisionPayload)]);
+    h.panel.setThreads([t]);
+    h.modal.open(t);
+    const caret = h.card()?.querySelector('.thread-caret');
+    expect(caret).not.toBe(null);
+    // Not removed and not disabled — a screen reader still reads it as part of
+    // the card. It just no longer takes a tab stop that lands on a second
+    // close beside the real one.
+    expect(caret?.getAttribute('tabindex')).toBe('-1');
+    expect((caret as HTMLButtonElement).disabled).toBe(false);
+  });
+
+  it('and keeps its tab stop on a card in the column, where it is the only one', () => {
+    const h = mount();
+    const t = thread('t1', [comment('First', decisionPayload)]);
+    h.panel.setThreads([t]);
+    const columnCard = h.panel.renderThread(t);
+    expect(columnCard.querySelector('.thread-caret')?.hasAttribute('tabindex')).toBe(false);
+  });
+
+  it('the dialog’s own close button is still the focused control', () => {
+    const h = mount();
+    const t = thread('t1', [comment('First', decisionPayload)]);
+    h.panel.setThreads([t]);
+    h.modal.open(t);
+    const close = h.root().querySelector('.thread-modal-close') as HTMLElement;
+    expect(close.getAttribute('tabindex')).not.toBe('-1');
+  });
+});

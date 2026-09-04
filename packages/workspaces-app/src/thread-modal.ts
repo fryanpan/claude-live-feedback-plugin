@@ -218,6 +218,13 @@ export function mountThreadModal(opts: ThreadModalOpts): ThreadModalHandle {
     // dialog growing around content that had already changed.
     card.classList.toggle('expanded', !folded);
     syncFaceVisibility(card, !folded);
+    // Out of the tab order in here, and ONLY in here. On a card in the column
+    // the caret is the one focusable thing a folded conversation offers, so it
+    // has to be tabbable there. Inside the dialog the card is always open and
+    // the fold tap is swallowed into a close — which handed a keyboard user
+    // two closes in a row, the caret and then the close button beside it. It
+    // keeps its glyph and its label; it loses only its stop.
+    card.querySelector('.thread-caret')?.setAttribute('tabindex', '-1');
     bodyEl.appendChild(card);
     // A slot has no intrinsic height; nothing renders until it is measured,
     // and it can only be measured once it is in the document — which is also
