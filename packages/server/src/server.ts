@@ -145,7 +145,7 @@ import { parseBotStatusWebhook } from './recall-status.ts';
 import { WebhookReplayGuard, svixHeadersFrom, verifySvixSignature } from './recall-webhook-auth.ts';
 import { type RecallClient, unreachableCallbackReason } from './recall.ts';
 import { scanSettledDocRefs } from './refs-backfill.ts';
-import { listArchivedDocs, listArchivedReviews, readDocArchiveManifest } from './review-archive.ts';
+import { listArchivedReviews, readDocArchiveManifest } from './review-archive.ts';
 import { backfillReviewFiling } from './review-backfill.ts';
 import { type ReviewJudge, type ReviewJudgeVerdict } from './review-judge.ts';
 import { type ReviewItemRow, type ReviewThreadItem, reviewItemRows } from './review-queue.ts';
@@ -154,6 +154,7 @@ import {
   type AgentIdentityRoutesContext,
   handleAgentIdentityRoutes,
 } from './routes/agent-identity.ts';
+import { type ArchiveRoutesContext, createArchiveRoutes } from './routes/archive.ts';
 import { type AuthShareRoutesContext, handleAuthShareRoutes } from './routes/auth-share.ts';
 import {
   type DocRoutesContext,
@@ -1050,9 +1051,6 @@ const REVIEW_API = {
   contextFile: reviewApi('context-file'),
   editableFile: reviewApi('editable-file'),
 } as const;
-/** Review-only delete. `DELETE /api/workspaces/<id>` still fronts both. */
-const REVIEW_DELETE = /^\/api\/reviews\/([^/]+)$/;
-
 export function createServer(opts: ServerOptions = {}): ServerHandle {
   const port = opts.port ?? DEFAULT_PORT;
   const hostname = opts.hostname;
@@ -4984,6 +4982,20 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
     requestAddress: (req) => server.requestIP(req)?.address,
   };
 
+  /** The archive family — the four archive/unarchive routes and the
+   *  review-only delete the board delete two positions below still calls. */
+  const archiveRoutesCtx: ArchiveRoutesContext = {
+    rooms,
+    taskStore,
+    taskProjection,
+    dataDir,
+    j,
+    safeJson,
+    unlinkFromEveryHubWorkspace,
+    canonicalDocId,
+  };
+  const { deleteReview, handleArchiveRoutes } = createArchiveRoutes(archiveRoutesCtx);
+
   /** What the two agent-id-keyed routes read instead of this closure's
    *  scope — the watch set, the roster and the store a merge moves. */
   const agentIdentityRoutesCtx: AgentIdentityRoutesContext = {
@@ -6314,167 +6326,12 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           });
           if (handled) return handled;
         }
-        /** Boards that link this review, so an archive can put them back. */
-        const boardsLinking = (attachmentId: string): string[] =>
-          taskStore
-            .listWorkspaces()
-            .filter((w) => w.docIds?.includes(attachmentId))
-            .map((w) => w.id);
-        /**
-         * Retire a review WITHOUT destroying it: its members' `.ydoc` files
-         * move to `data/_archive/`, out of the top level `hydrateFromDisk`
-         * reads and into the directory `activity-backfill` scans. Open threads
-         * do not block it — a review is usually retired precisely because the
-         * threads it still shows have stopped mattering.
-         */
-        const archiveReview = (setId: string, by: string, reason: string | undefined): Response => {
-          const res = rooms.archiveReview(setId, {
-            archivedBy: by,
-            ...(reason !== undefined ? { reason } : {}),
-            linkedWorkspaces: boardsLinking(setId),
-          });
-          if (!res.ok) return j(res.error === 'not-found' ? 404 : 409, res);
-          // A board row pointing at a review that no longer loads is a dead
-          // end, so archiving takes the row too — and the manifest remembers
-          // which boards, so unarchiving puts it back rather than orphaning it.
-          unlinkFromEveryHubWorkspace(setId);
-          return j(200, res);
-        };
-        // Delete a REVIEW as one unit (all-or-nothing open-thread guardrail;
-        // ?force=true to override). Member SOURCE files are left untouched,
-        // same as DELETE /api/docs/:id.
-        //
-        // SOFT BY DEFAULT since 0.1.92. The guardrail and the response shape
-        // are unchanged — what changed is what happens to the files once it
-        // commits: they are archived, not purged. The old payload still works
-        // and still means "retire this review"; `?purge=true` is the way to
-        // ask for the destructive half, and asking is the point. The project
-        // rule is that the `.ydoc` is the durable record the Weekly Review
-        // analyses are rebuilt from, so purging is a decision, never a default.
-        const deleteReview = (setId: string, force: boolean, purge: boolean): Response => {
-          if (!purge) {
-            // Apply the SAME open-thread guardrail before archiving, so a
-            // caller that passed no `force` gets the refusal it has always
-            // got rather than a surprise retirement.
-            if (!force) {
-              const blocked = rooms
-                .list()
-                .filter((m) => reviewIdOf(m) === setId)
-                .map((m) => ({
-                  docId: m.docId,
-                  openThreads: rooms.listThreads(m.docId, { status: 'open' }).length,
-                }))
-                .filter((f) => f.openThreads > 0);
-              if (blocked.length > 0) {
-                return j(409, { ok: false, error: 'has-open-threads', files: blocked });
-              }
-            }
-            return archiveReview(setId, 'delete_review', undefined);
-          }
-          const res = rooms.deleteWorkspace(setId, { force });
-          if (res.ok) {
-            // The review was one row on a board; deleting it must take the
-            // row with it, the same way a deleted doc does.
-            unlinkFromEveryHubWorkspace(setId);
-            return j(200, res);
-          }
-          return j(res.error === 'has-open-threads' ? 409 : 404, res);
-        };
-        // Everything currently parked in `data/_archive/` with a manifest.
-        // Read-only, and the answer to "what can I bring back".
-        //
-        // Both kinds, under separate keys. `docs` is ADDITIVE: an older bundle
-        // reading `archived` still gets reviews and only reviews, so nothing
-        // it already reads changes meaning — which is the rule for this
-        // server's REST routes, where the caller is a plugin nobody can
-        // restart. Keys rather than one merged list with a discriminator,
-        // because the two manifests genuinely differ (a review has `docIds`
-        // and a `root`; a doc is one id) and a caller almost always wants one
-        // kind or the other.
-        if (pathname === '/api/reviews/archived' && req.method === 'GET') {
-          if (visitor) return j(403, { error: 'not available to share visitors' });
-          return j(200, {
-            archived: listArchivedReviews(dataDir),
-            docs: listArchivedDocs(dataDir),
-          });
-        }
-        const reviewArchiveMatch = pathname.match(/^\/api\/reviews\/([^/]+)\/archive$/);
-        if (reviewArchiveMatch && req.method === 'POST') {
-          if (visitor) return j(403, { error: 'not available to share visitors' });
-          const setId = decodeURIComponent(reviewArchiveMatch[1] ?? '');
-          const body = await safeJson(req);
-          const author = body?.author as { name?: string } | undefined;
-          const reason = typeof body?.reason === 'string' ? (body.reason as string) : undefined;
-          return archiveReview(setId, author?.name ?? 'unknown', reason);
-        }
-        const reviewUnarchiveMatch = pathname.match(/^\/api\/reviews\/([^/]+)\/unarchive$/);
-        if (reviewUnarchiveMatch && req.method === 'POST') {
-          if (visitor) return j(403, { error: 'not available to share visitors' });
-          const setId = decodeURIComponent(reviewUnarchiveMatch[1] ?? '');
-          const body = await safeJson(req);
-          const author = body?.author as { name?: string } | undefined;
-          const res = rooms.unarchiveReview(setId, { archivedBy: author?.name ?? 'unknown' });
-          if (!res.ok) return j(res.error === 'not-found' ? 404 : 409, res);
-          // Put the review back on every board it was on when it was archived.
-          for (const workspaceId of res.manifest.linkedWorkspaces) {
-            if (taskStore.attachDoc(workspaceId, setId).ok)
-              taskProjection.ensureWorkspace(workspaceId);
-          }
-          return j(200, res);
-        }
-        // The same pair for ONE free-standing doc. They sit HERE rather than in
-        // the `/api/docs/:id/...` block below because that block opens with
-        // `rooms.get(docId)` and 404s without a room — which is precisely the
-        // state an archived doc is in, so an unarchive route inside it could
-        // never be reached.
-        const docArchiveMatch = pathname.match(/^\/api\/docs\/([^/]+)\/archive$/);
-        if (docArchiveMatch && req.method === 'POST') {
-          if (visitor) return j(403, { error: 'not available to share visitors' });
-          const docId = canonicalDocId(decodeURIComponent(docArchiveMatch[1] ?? ''));
-          const body = await safeJson(req);
-          const author = body?.author as { name?: string } | undefined;
-          const reason = typeof body?.reason === 'string' ? (body.reason as string) : undefined;
-          const res = rooms.archiveDoc(docId, {
-            archivedBy: author?.name ?? 'unknown',
-            ...(reason !== undefined ? { reason } : {}),
-            linkedWorkspaces: boardsLinking(docId),
-          });
-          if (!res.ok) return j(res.error === 'not-found' ? 404 : 409, res);
-          // A board row pointing at a doc that no longer loads is a dead end,
-          // so archiving takes the row too — and the manifest remembers which
-          // boards, so unarchiving puts it back rather than orphaning it.
-          unlinkFromEveryHubWorkspace(docId);
-          return j(200, res);
-        }
-        const docUnarchiveMatch = pathname.match(/^\/api\/docs\/([^/]+)\/unarchive$/);
-        if (docUnarchiveMatch && req.method === 'POST') {
-          if (visitor) return j(403, { error: 'not available to share visitors' });
-          // Deliberately NOT canonicalized: an archived doc has no room, so
-          // there is nothing for an alias to resolve against. The canonical
-          // id is what `list_archived_reviews` hands back, which is where a
-          // caller gets one. Asserted in doc-id-routes.test.ts so the
-          // asymmetry is a decision on the record rather than a surprise.
-          const docId = decodeURIComponent(docUnarchiveMatch[1] ?? '');
-          const body = await safeJson(req);
-          const author = body?.author as { name?: string } | undefined;
-          const res = rooms.unarchiveDoc(docId, { archivedBy: author?.name ?? 'unknown' });
-          if (!res.ok) return j(res.error === 'not-found' ? 404 : 409, res);
-          for (const workspaceId of res.manifest.linkedWorkspaces) {
-            if (taskStore.attachDoc(workspaceId, docId).ok)
-              taskProjection.ensureWorkspace(workspaceId);
-          }
-          return j(200, res);
-        }
-        const reviewDeleteMatch = pathname.match(REVIEW_DELETE);
-        if (reviewDeleteMatch && req.method === 'DELETE') {
-          // Review-only, and that is the point of the separate verb: a BOARD
-          // id here answers not-found rather than being destroyed by a call
-          // that meant to clean up a diff review.
-          return deleteReview(
-            decodeURIComponent(reviewDeleteMatch[1] ?? ''),
-            url.searchParams.get('force') === 'true',
-            url.searchParams.get('purge') === 'true',
-          );
+        // --- REST: archive and unarchive, for a review and for one doc ---
+        // see ./routes/archive.ts. Same chain position as before the split:
+        // after the agent attachments, before the board delete.
+        {
+          const handled = await handleArchiveRoutes({ req, pathname, url, visitor });
+          if (handled) return handled;
         }
         // --- REST: the board delete --- see ./routes/workspace-delete.ts.
         // It stays BELOW `DELETE /api/reviews/:id`, which is the whole reason
