@@ -415,3 +415,38 @@ describe('the head shows the author’s colour everywhere the row can afford it'
     expect(styleOf(shown).display).toBe('inline-block');
   });
 });
+
+describe('no face of the card names its kind — not even the open one', () => {
+  /** The item card, which only exists on the detail face. */
+  const openItem = (t: Thread) => {
+    const r = render(t);
+    r.panel.setActive('t1');
+    return r.card.querySelector<HTMLElement>('.face-detail .thread-item-card');
+  };
+
+  it('an expanded decision offers its options and never says the word', () => {
+    const item = openItem(thread([comment('Which clock?', decision())]));
+    expect(item).not.toBe(null);
+    expect(item?.querySelector('.thread-item-k')).toBe(null);
+    expect(item?.querySelector('.thread-item-head')?.textContent).not.toMatch(/decision/i);
+    // Positive control: what says "decision" instead is still there to press.
+    const opts = item?.querySelectorAll('.thread-item-options .thread-item-option') ?? [];
+    expect(
+      Array.from(opts).map((o) => o.querySelector('.thread-item-option-label')?.textContent),
+    ).toEqual(['Cadence ceiling', 'Pause threshold']);
+  });
+
+  it('an expanded question offers its answer box and never says the word', () => {
+    const item = openItem(thread([comment('Well?', question())]));
+    expect(item?.querySelector('.thread-item-k')).toBe(null);
+    expect(item?.querySelector('.thread-item-head')?.textContent).not.toMatch(/question/i);
+    // Positive control: the composer the item card carries while it is pending.
+    expect(item?.querySelector('.thread-reply textarea')).not.toBe(null);
+  });
+
+  it('the headline and the asked-by line survive the chip’s removal', () => {
+    const item = openItem(thread([comment('Which clock?', decision())]));
+    expect(item?.querySelector('.thread-item-headline')?.textContent).toBe('Pick a tick clock');
+    expect(item?.querySelector('.thread-item-meta')?.textContent).toMatch(/Asked/);
+  });
+});
