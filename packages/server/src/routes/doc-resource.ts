@@ -67,9 +67,24 @@ export async function handleDocResourceCore(
   const docTaskRows = (): Task[] => {
     const rows = taskStore.tasksReferencingDoc(docId);
     const alias = room.meta.alias;
-    if (alias === undefined || alias === docId) return rows;
-    const seen = new Set(rows.map((t) => t.id));
-    return [...rows, ...taskStore.tasksReferencingDoc(alias).filter((t) => !seen.has(t.id))];
+    const all =
+      alias === undefined || alias === docId
+        ? rows
+        : (() => {
+            const seen = new Set(rows.map((t) => t.id));
+            return [
+              ...rows,
+              ...taskStore.tasksReferencingDoc(alias).filter((t) => !seen.has(t.id)),
+            ];
+          })();
+    // `tasksReferencingDoc` spans every workspace, deliberately — a ref may
+    // cross a board, and a row on another board pointing here is a real
+    // link. For a caller scoped to ONE board it is also a read of a board
+    // they were never given: this doc is theirs to open, and the chip hands
+    // them a private row's id, title, status and assignee off the back of
+    // it. Filtered exactly as `GET /api/tasks/<id>/links` filters backlinks,
+    // and as `withTaskChips` filters the thread half of the same surface.
+    return all.filter((t) => !visitor || t.workspaceId === visitor.workspaceId);
   };
   // The chip a MEMBER sees carries what the doc page's derived-work
   // strip draws: where the row lives (a board id is an unguessable
