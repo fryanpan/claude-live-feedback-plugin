@@ -30,6 +30,7 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { join } from 'node:path';
+import { storedJudgement } from '@feedback/core';
 import type { Task, TaskStatus } from '@feedback/core/task-wire';
 import type { ReviewItemPersistence } from './review-items/persistence.ts';
 import {
@@ -383,14 +384,29 @@ export function hydrateTasksFromDisk(store: TaskPersistenceHost): void {
         // A judge call that was out when the last process died never
         // came back. The item must not stay off the queue for it: a
         // verdict nobody will deliver is a judge failure, and those pass.
+        //
+        // Through `storedJudgement`, which is what keeps the item's hold
+        // HISTORY across the restart. Spelling the record out here instead
+        // dropped it — and a lost history is invisible: the count restarts
+        // at zero and the gate can hold the item forever again, which is
+        // the loop this whole family of changes exists to end.
         for (const item of task.reviews ?? []) {
           if (item?.judge?.verdict === 'pending') {
-            item.judge = {
-              at: item.judge.at,
+            item.judge = storedJudgement({
+              ...item.judge,
               verdict: 'unavailable',
               reason: 'the server restarted before the judge answered',
-            };
+            });
           }
+        }
+        // The same recovery for the ticket's OWN decision, whose verdict
+        // lives on the task rather than on a row.
+        if (task.decisionJudge?.verdict === 'pending') {
+          task.decisionJudge = storedJudgement({
+            ...task.decisionJudge,
+            verdict: 'unavailable',
+            reason: 'the server restarted before the judge answered',
+          });
         }
         tasks.set(task.id, task);
         store.taskIndex.set(task.id, workspace.id);
