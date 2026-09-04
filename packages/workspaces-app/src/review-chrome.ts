@@ -7,9 +7,10 @@ import {
   onPlacementChange,
 } from './card-placement.ts';
 import { type SeenTracker, createSeenTracker } from './comment-seen.ts';
-import { el, showToast } from './doc/chrome-dom.ts';
+import { el } from './doc/chrome-dom.ts';
 import { wireResizeHandle } from './doc/chrome-panels.ts';
 import { wireReviewComposer } from './doc/review-composer.ts';
+import { createThreadActions } from './doc/thread-actions.ts';
 import { createThreadProjection } from './doc/thread-projection.ts';
 import {
   initialDrawerOpen,
@@ -36,7 +37,8 @@ import { ThreadPanel, type ThreadTab } from './threads.ts';
  * surface-specific parts via `ChromeOpts`.
  *
  * What is NOT here, and why: the ydoc → Thread[] projection and its
- * decorations live in `doc/thread-projection.ts`, the two writing surfaces in
+ * decorations live in `doc/thread-projection.ts`, the five server writes a
+ * card can make in `doc/thread-actions.ts`, the two writing surfaces in
  * `doc/review-composer.ts`, the per-device view preferences in
  * `doc/view-prefs.ts`, the resize handles in `doc/chrome-panels.ts` and the
  * DOM helpers in `doc/chrome-dom.ts`. What is left is the WIRING: which
@@ -358,6 +360,16 @@ export function mountReviewChrome(opts: ChromeOpts): ReviewChrome {
   }
 
   // --- thread panel ------------------------------------------------------
+  // Every write a card can make. Stateless and DOM-free — see
+  // doc/thread-actions.ts for why the failure contract is the reason they are
+  // one module.
+  const actions = createThreadActions({
+    docId,
+    user,
+    getSelection: opts.getSelection,
+    reanchorHint: opts.reanchorHint,
+  });
+
   // The wide modal a thread too big for the column opens in. Built BEFORE the
   // panel it renders from: the two reference each other, so one of them has to
   // be named first, and every reference here is inside a closure that does not
@@ -482,109 +494,25 @@ export function mountReviewChrome(opts: ChromeOpts): ReviewChrome {
     },
     onThreadClick: (id) => engageThread(id),
     isNew: (t) => seen.isNew(t),
-    onReply: async (id, text, answersCommentId, optionId) => {
-      // Two routes, one reply. `/answer` posts the SAME comment and
-      // additionally stamps `answeredAt` on the declaring comment, which is
-      // what takes the item off the Home queue. The panel decides which by
-      // handing back an id or not; sending one the server did not declare is
-      // refused rather than invented, so there is nothing to guess here.
-      //
-      // Until this branch existed, every doc reply went to `/comments`, so a
-      // review item could be read in the doc, answered in the person's own
-      // words, and stay queued — which is exactly what happened four times on
-      // `board-review-2026-08-19`.
-      const base = `/api/docs/${encodeURIComponent(docId)}/threads/${encodeURIComponent(id)}`;
-      let res: Response;
-      try {
-        res = await fetch(answersCommentId ? `${base}/answer` : `${base}/comments`, {
-          method: 'POST',
-          headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({
-            author: user,
-            text,
-            ...(answersCommentId ? { commentId: answersCommentId } : {}),
-            // Provenance for a tapped option — records WHICH offered candidate
-            // the verbatim words came from. Typed answers send none.
-            ...(answersCommentId && optionId ? { optionId } : {}),
-          }),
-        });
-      } catch {
-        if (answersCommentId) showToast('Answer failed to post — try again');
-        return false;
-      }
-      // A failed answer must not read as a posted one: the toast says try
-      // again, and the returned `false` is what makes trying again possible —
-      // the panel puts the typed words back in the box.
-      if (!res.ok && answersCommentId) {
-        showToast('Answer failed to post — try again');
-      }
-      return res.ok;
+    // The five server writes a card can make — reply / answer, undo-answer,
+    // resolve, reopen, re-anchor — live in doc/thread-actions.ts with the
+    // failure contract they share. Nothing repaints from their return value:
+    // the server writes the thread, the CRDT syncs it, and the observer below
+    // redraws. The one exception is `reply`, whose `false` is what lets the
+    // panel put the typed words back in the box.
+    onReply: (id, text, answersCommentId, optionId) =>
+      actions.reply(id, text, answersCommentId, optionId),
+    onUndoAnswer: (id, commentId) => {
+      void actions.undoAnswer(id, commentId);
     },
-    onUndoAnswer: async (id, commentId) => {
-      // Soft delete on the server: the stamps move into `answerHistory` and
-      // the reply comment stays. The doc's own websocket repaint is what
-      // re-renders the thread as pending again, so success needs no client
-      // state here.
-      const res = await fetch(
-        `/api/docs/${encodeURIComponent(docId)}/threads/${encodeURIComponent(id)}/answer/undo`,
-        {
-          method: 'POST',
-          headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({ author: user, commentId }),
-        },
-      );
-      if (!res.ok) {
-        // "not-answered" means somebody else took it back first — the live
-        // repaint is already showing that, and a failure toast over an
-        // already-done undo would read as a broken button.
-        const err = (await res.json().catch(() => undefined)) as { error?: string } | undefined;
-        if (err?.error !== 'not-answered') showToast('Undo failed — try again');
-      }
+    onResolve: (id) => {
+      void actions.resolve(id);
     },
-    onResolve: async (id) => {
-      try {
-        const res = await fetch(
-          `/api/docs/${encodeURIComponent(docId)}/threads/${encodeURIComponent(id)}/resolve`,
-          { method: 'POST' },
-        );
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        showToast('✓ Resolved');
-      } catch {
-        showToast('Failed to resolve — try again');
-      }
+    onReopen: (id) => {
+      void actions.reopen(id);
     },
-    onReopen: async (id) => {
-      try {
-        const res = await fetch(
-          `/api/docs/${encodeURIComponent(docId)}/threads/${encodeURIComponent(id)}/reopen`,
-          { method: 'POST' },
-        );
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        showToast('✓ Reopened');
-      } catch {
-        showToast('Failed to reopen — try again');
-      }
-    },
-    onReanchor: async (id) => {
-      const sel = opts.getSelection();
-      if (!sel) {
-        showToast(opts.reanchorHint);
-        return;
-      }
-      try {
-        const res = await fetch(
-          `/api/docs/${encodeURIComponent(docId)}/threads/${encodeURIComponent(id)}/reanchor`,
-          {
-            method: 'POST',
-            headers: { 'content-type': 'application/json' },
-            body: JSON.stringify({ anchor: anchorBody(sel) }),
-          },
-        );
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        showToast('✓ Re-anchored');
-      } catch {
-        showToast('Failed to re-anchor — try again');
-      }
+    onReanchor: (id) => {
+      void actions.reanchor(id);
     },
   });
 
