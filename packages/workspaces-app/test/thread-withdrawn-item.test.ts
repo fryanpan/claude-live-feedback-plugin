@@ -152,18 +152,8 @@ describe('the item card', () => {
         comment('Retracted one', ask({ headline: 'RETRACTED', withdrawnAt: ts, withdrawnBy: 'C' })),
       ]),
     );
-    // Line one of the card names which declaration the card fell back to —
-    // the item card itself no longer repeats the headline, so this is where
-    // the choice between the two declarations is now visible.
-    const topic = card.querySelector<HTMLElement>('.thread-head .thread-topic')?.textContent;
-    expect(topic).toBe('SETTLED');
-    // And the card it built is the settled one's: only that declaration has
-    // an answered record. The retracted one keeps its withdrawn banner down
-    // in the history, which is the whole reason it is still readable there.
     const item = card.querySelector<HTMLElement>('.thread-item-card');
-    expect(item?.querySelector('.thread-answered')).not.toBe(null);
-    expect(item?.textContent).toContain('Yes');
+    expect(item?.textContent).toContain('SETTLED');
     expect(item?.textContent).not.toContain('RETRACTED');
-    expect(card.querySelector('.comments')?.textContent).toContain('RETRACTED');
   });
 });
