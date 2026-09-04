@@ -331,6 +331,15 @@ async function unwatchDoc(
   // The multiplexed stream carries the whole set, so unwatching ONE key must
   // not hang it up — the server drops that channel when the persist below
   // lands. Only the last key closes the socket.
+  //
+  // The replay position goes with it. An unwatched key's cursor is a position
+  // on a channel the server will no longer send, and it kept spending the
+  // reconnect header's byte budget — which is finite — on a key that can
+  // never advance again. Caveat: the cursor map is keyed by the CANONICAL id
+  // the server stamps on each frame, and a caller may have watched by alias,
+  // in which case this misses and the bound in `deliverThenCommitMux`
+  // eventually evicts it instead.
+  deps.mux.dropCursor(docId);
   if (usesMux(deps) && deps.watchers.size === 0) deps.mux.stop();
   // Forget it on the server even if it was not locally wired — a sibling
   // session may have recorded it, and an explicit unwatch means "stop".

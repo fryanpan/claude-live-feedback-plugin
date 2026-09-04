@@ -21,7 +21,13 @@
  * `Math.random`, or waits on a real clock.
  */
 import { describe, expect, it } from 'vitest';
-import { createMuxLoop, deliverThenCommitMux, frameWatchKey, muxPath } from '../src/mux-loop.ts';
+import {
+  MUX_CURSOR_MAX_KEYS,
+  createMuxLoop,
+  deliverThenCommitMux,
+  frameWatchKey,
+  muxPath,
+} from '../src/mux-loop.ts';
 import type { Watcher } from '../src/sse-loop.ts';
 
 const AGENT = 'agent-mira';
@@ -329,5 +335,63 @@ describe('deliver, then commit — per key', () => {
       () => {},
     );
     expect([...cursors.keys()]).toEqual(['doc-b', 'doc-a']);
+  });
+});
+
+describe('a position is not held forever', () => {
+  it("drops one key's position on request and leaves the rest", async () => {
+    const h = harness([() => sse(`${frame('doc-a', 'x', 'b:1')}${frame('doc-b', 'x', 'b:2')}`)], {
+      keys: ['doc-a', 'doc-b'],
+    });
+    await h.loop.ensureOpen();
+    await settle();
+    expect(h.loop.cursorCount()).toBe(2);
+    h.loop.dropCursor('doc-a');
+    expect(h.loop.cursorCount()).toBe(1);
+    // Dropping a key that was never held is not an error — an unwatch of a
+    // key that never received a frame takes this path.
+    h.loop.dropCursor('never-seen');
+    expect(h.loop.cursorCount()).toBe(1);
+    h.loop.stop();
+  });
+
+  it('bounds the map, evicting the longest-quiet key first', async () => {
+    const cursors = new Map<string, string>();
+    for (let i = 0; i < MUX_CURSOR_MAX_KEYS + 20; i++) {
+      await deliverThenCommitMux(
+        frame(`doc-${i}`, 'thread.created', `b:${i}`),
+        async () => {},
+        cursors,
+        () => {},
+      );
+    }
+    expect(cursors.size).toBe(MUX_CURSOR_MAX_KEYS);
+    // The first twenty are gone and the newest is held: eviction takes the
+    // key the wire budget would have dropped anyway, not the busy one.
+    expect(cursors.has('doc-0')).toBe(false);
+    expect(cursors.has('doc-19')).toBe(false);
+    expect(cursors.has('doc-20')).toBe(true);
+    expect(cursors.get(`doc-${MUX_CURSOR_MAX_KEYS + 19}`)).toBe(`b:${MUX_CURSOR_MAX_KEYS + 19}`);
+  });
+
+  it('a key that keeps advancing survives the eviction of quiet ones', async () => {
+    const cursors = new Map<string, string>();
+    const advance = async (key: string, n: number) => {
+      await deliverThenCommitMux(
+        frame(key, 'thread.created', `b:${n}`),
+        async () => {},
+        cursors,
+        () => {},
+      );
+    };
+    await advance('busy', 0);
+    for (let i = 0; i < MUX_CURSOR_MAX_KEYS; i++) {
+      await advance(`quiet-${i}`, i);
+      // The busy key speaks between every quiet one, so it is never the
+      // oldest entry and never the one evicted.
+      await advance('busy', i + 1);
+    }
+    expect(cursors.size).toBe(MUX_CURSOR_MAX_KEYS);
+    expect(cursors.get('busy')).toBe(`b:${MUX_CURSOR_MAX_KEYS}`);
   });
 });
