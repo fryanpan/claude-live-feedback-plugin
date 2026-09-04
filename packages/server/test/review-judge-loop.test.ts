@@ -62,7 +62,7 @@ interface Held {
   message?: string;
   item?: {
     id: string;
-    judge?: { verdict: string; reason: string; heldFor?: string[]; add?: string };
+    judge?: { verdict: string; reason: string; heldFor?: string[]; add?: string; at?: number };
   };
 }
 
@@ -142,6 +142,67 @@ describe('the review-item hold loop', () => {
     let n = 0;
     return async () => ({ ok: false, reason: reasons[n++ % reasons.length] as string });
   }
+
+  describe('a judge that cannot answer', () => {
+    it('leaves a held item held rather than admitting it on a failed call', async () => {
+      const { taskId } = await board();
+      judge = async () => ({ ok: false, reason: 'The detail does not say what waits on this.' });
+      const filed = await jj<Held>(
+        await post(`/api/tasks/${taskId}/review-items`, { author: FILER, review: COSTS_IN_OPTIONS }),
+      );
+      const itemId = filed.item?.id as string;
+      const heldAt = filed.item?.judge?.at;
+      // The revision lands while the judge is unreadable — a truncated
+      // reply, a timeout, a non-2xx. Admitting here would mean a filer
+      // could clear any hold by revising until a call failed.
+      judge = async () => null;
+      const out = await jj<Held>(
+        await post(`/api/tasks/${taskId}/review-items/${itemId}/revise`, {
+          author: FILER,
+          detail: 'A different blurb that does not close the gap either.',
+        }),
+      );
+      expect(out.held).toBe(true);
+      expect(out.item?.judge?.verdict).toBe('held');
+      expect(out.item?.judge?.reason).toBe('The detail does not say what waits on this.');
+      expect(out.message).toContain('could not answer');
+      // The hold's own clock does not restart, or a failing judge would
+      // keep the stall monitor from ever complaining about it.
+      expect(out.item?.judge?.at).toBe(heldAt as number);
+      // And the failed call is not a hold: it did not happen.
+      expect(out.item?.judge?.heldFor).toHaveLength(1);
+    });
+
+    it('still passes an item nobody has held — the fail-open rule is intact', async () => {
+      const { taskId } = await board();
+      judge = async () => null;
+      const out = await jj<Held>(
+        await post(`/api/tasks/${taskId}/review-items`, { author: FILER, review: COSTS_IN_OPTIONS }),
+      );
+      expect(out.held ?? false).toBe(false);
+      expect(out.item?.judge?.verdict).toBe('unavailable');
+    });
+
+    it('does the same when the judge throws', async () => {
+      const { taskId } = await board();
+      judge = async () => ({ ok: false, reason: 'The detail does not say what waits on this.' });
+      const filed = await jj<Held>(
+        await post(`/api/tasks/${taskId}/review-items`, { author: FILER, review: COSTS_IN_OPTIONS }),
+      );
+      const itemId = filed.item?.id as string;
+      judge = async () => {
+        throw new Error('judge exploded');
+      };
+      const out = await jj<Held>(
+        await post(`/api/tasks/${taskId}/review-items/${itemId}/revise`, {
+          author: FILER,
+          detail: 'A different blurb that does not close the gap either.',
+        }),
+      );
+      expect(out.held).toBe(true);
+      expect(out.item?.judge?.verdict).toBe('held');
+    });
+  });
 
   describe('a server death mid-judge', () => {
     it('leaves the hold history intact, so the cap is not reset by a crash', async () => {
