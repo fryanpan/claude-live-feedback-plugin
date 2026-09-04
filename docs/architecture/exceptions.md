@@ -78,10 +78,11 @@ modules came out on that principle (`hub-islands`, `hub-projection`,
 `hub-board-region`, `hub-queue-open`, `hub-home-region`, `hub-discussion`,
 `hub-detail-panel`, `hub-chrome-region`, `hub-data-loads`, `hub-load-report`,
 `hub-deep-links`, `hub-voice`, plus `wireNavCollapse` into `hub-shell.ts` and
-`wireHubShortcuts` into `hub-shortcuts.ts`); only one of them — `hub-detail-panel`
-(572) — is over the limit and gains a row, so the list grows by one while the row
-it leaves behind describes a boot sequence rather than a render layer. The lesson to keep: **"they all share one
-`state`" argues for one PROJECTION, not for one file.** A region that takes
+`wireHubShortcuts` into `hub-shortcuts.ts`); only one of them —
+`hub-detail-panel` (572) — is over the limit and gains a row, so the list
+grows by one while the row it leaves behind describes a boot sequence rather
+than a render layer. The lesson to keep: **"they all share one `state`"
+argues for one PROJECTION, not for one file.** A region that takes
 that projection plus a named deps object is smaller than the closure it came
 from AND says what it may reach, which the closure never did.
 
