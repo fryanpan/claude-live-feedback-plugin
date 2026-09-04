@@ -194,3 +194,42 @@ describe('a hold names the sentence it wants added, not a category', () => {
     expect(out?.add?.length).toBeLessThanOrEqual(REVIEW_JUDGE_REASON_MAX);
   });
 });
+
+describe('a verdict is ONE sentence, because everything downstream builds a sentence around it', () => {
+  it('keeps the first sentence and drops the rest', () => {
+    const out = parseReviewJudgeResponse(
+      '{"ok": false, "reason": "The detail never says what waits on this. Also the headline is a ticket id. And the links are bare."}',
+    );
+    expect(out?.reason).toBe('The detail never says what waits on this.');
+  });
+
+  it('does the same for the sentence it wants added', () => {
+    const out = parseReviewJudgeResponse(
+      '{"ok": false, "reason": "No stakes.", "add": "The rollout is blocked until this is picked. Pick soon."}',
+    );
+    expect(out?.add).toBe('The rollout is blocked until this is picked.');
+  });
+
+  it('does not cut at a full stop inside an abbreviation or a number', () => {
+    const out = parseReviewJudgeResponse(
+      '{"ok": false, "reason": "The detail cites v1.2 of the spec but never says what waits on it."}',
+    );
+    expect(out?.reason).toBe('The detail cites v1.2 of the spec but never says what waits on it.');
+    expect(
+      parseReviewJudgeResponse('{"ok": false, "reason": "No stakes, e.g. what is blocked."}')
+        ?.reason,
+    ).toBe('No stakes, e.g. what is blocked.');
+  });
+
+  it('keeps a question or an exclamation whole', () => {
+    expect(
+      parseReviewJudgeResponse('{"ok": false, "reason": "What waits on this? Say so."}')?.reason,
+    ).toBe('What waits on this?');
+  });
+
+  it('keeps a lone sentence with no terminator at all', () => {
+    expect(parseReviewJudgeResponse('{"ok": false, "reason": "No stakes given"}')?.reason).toBe(
+      'No stakes given',
+    );
+  });
+});
