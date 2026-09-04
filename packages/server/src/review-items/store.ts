@@ -25,6 +25,7 @@ import {
   reviewGapAdvice,
   reviewPayloadMessage,
   withdrawReview,
+  withoutHoldHistory,
 } from '@feedback/core';
 import type { TaskActor } from '@feedback/core/task-wire';
 import { classifyActor } from '../actor-identity.ts';
@@ -436,6 +437,13 @@ export class ReviewItemStore {
           });
     if (!applied.ok) return { ok: false, error: applied.error, message: applied.message };
     item.review = applied.next;
+    // A ticket item keeps its verdict on the WRAPPER, not in the payload, so
+    // `withdrawReview`'s reset does not reach it. Same rule, applied where
+    // this shape stores it: the standing verdict stands, the hold count
+    // starts again, and a re-filed ask gets the two rounds a fresh one gets.
+    if (opts.undo !== true && item.judge?.heldFor !== undefined) {
+      item.judge = withoutHoldHistory(item.judge);
+    }
     task.updatedAt = ts;
     this.p.save(task.workspaceId);
     const reason = opts.reason?.trim();

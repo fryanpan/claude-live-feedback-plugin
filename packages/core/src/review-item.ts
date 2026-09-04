@@ -506,9 +506,36 @@ export type ReviseReviewResult =
     }
   | {
       ok: false;
-      error: 'answered' | 'withdrawn' | 'empty-patch' | 'bad-review' | 'bad-range';
+      error: 'answered' | 'withdrawn' | 'empty-patch' | 'no-change' | 'bad-review' | 'bad-range';
       message?: string;
     };
+
+/**
+ * Do these two payloads say the same thing to the judge?
+ *
+ * The judged content is the headline, the detail and the options — nothing
+ * else on a payload reaches the prompt. Compared because a revision that
+ * changes none of it is not a revision: it re-runs the gate, spends one of
+ * the two rounds the filer gets, and leaves the item exactly as it was. A
+ * filer doing it by accident loses their remaining round; a filer doing it on
+ * purpose reaches the cap without ever addressing a word of the feedback.
+ */
+export function sameJudgedContent(a: ReviewPayload, b: ReviewPayload): boolean {
+  if (a.headline !== b.headline) return false;
+  if ((a.detail ?? '') !== (b.detail ?? '')) return false;
+  const left = a.options ?? [];
+  const right = b.options ?? [];
+  if (left.length !== right.length) return false;
+  return left.every((o, i) => {
+    const other = right[i];
+    return (
+      other !== undefined &&
+      o.id === other.id &&
+      o.label === other.label &&
+      (o.detail ?? '') === (other.detail ?? '')
+    );
+  });
+}
 
 export function applyReviewRevision(
   current: ReviewPayload,
@@ -557,6 +584,14 @@ export function applyReviewRevision(
   if (!check.ok) return { ok: false, error: 'bad-review', message: reviewPayloadMessage(check) };
   const next = readReviewPayload(merged);
   if (!next) return { ok: false, error: 'bad-review', message: reviewPayloadMessage(check) };
+  if (sameJudgedContent(current, next)) {
+    return {
+      ok: false,
+      error: 'no-change',
+      message:
+        'this revision leaves the headline, detail and options exactly as they are — say what changed, or the gate judges the same words again',
+    };
+  }
 
   // An explicit range is offsets into the NEW detail; one that runs past it
   // would be served to the queue as-is and highlight to the end of whatever
@@ -648,6 +683,12 @@ export function withdrawReview(
       withdrawnAt: opts.at,
       withdrawnBy: opts.by,
       ...(reason !== undefined && reason !== '' ? { withdrawnReason: reason } : {}),
+      // Taking the ask back ends this round of it. The standing verdict is
+      // kept — a reinstated item the gate held is still held, and still off
+      // the reader's queue — but the COUNT starts again, so a re-filed ask
+      // gets the two rounds a fresh one gets. Without this the cap outlived
+      // the ask it was counted for.
+      ...(current.judge ? { judge: withoutHoldHistory(current.judge) } : {}),
     },
   };
 }
@@ -874,6 +915,60 @@ export interface ReviewItemJudgement {
   verdict: ReviewJudgeVerdictKind;
   /** The judge's one sentence — on a hold, the gap to fix. May be empty. */
   reason: string;
+  /**
+   * Every reason this item has ALREADY been held for, oldest first — so its
+   * length is the hold count and its contents are what the judge is shown
+   * before it rules again.
+   *
+   * Kept on the item rather than in the request that made it, because both
+   * things it is for outlive the request: the gate stops holding after
+   * `REVIEW_GATE_MAX_HOLDS` of these, and the judge is handed them so a
+   * revision that closed the gap it was told about is not held for a
+   * different one it could have been told about the first time. A peer met
+   * that loop eight times over (2026-09-04) and gave up on the gate.
+   *
+   * Absent on an item never held, and never rewritten by a later verdict: a
+   * hold that happened is a fact, and an item admitted after two of them
+   * still carries both.
+   */
+  heldFor?: string[];
+  /**
+   * On a hold: the sentence the judge wants added, written out.
+   *
+   * Stored beside the reason rather than folded into it, because the two do
+   * different jobs — the reason says what is wrong, this says what to write —
+   * and every surface that repeats a hold (the tool result, the filer's wake,
+   * the stall report, the card's "Held: …") should be able to offer the draft
+   * without re-deriving it from prose.
+   */
+  add?: string;
+}
+
+/**
+ * The judgement as it is STORED — the projected fields, picked in one place.
+ *
+ * Three call sites write a verdict onto a row (a ticket item, a ticket's own
+ * decision, a comment-borne payload), and each used to spell the record out
+ * field by field. That is three places a new field has to be remembered in,
+ * and `heldFor` is exactly the kind of field whose loss is invisible: the
+ * gate would simply start counting from zero again and hold forever.
+ */
+/** The same verdict with its hold history dropped — see `withdrawReview`. */
+export function withoutHoldHistory(judgement: ReviewItemJudgement): ReviewItemJudgement {
+  const { heldFor: _dropped, ...rest } = judgement;
+  return rest;
+}
+
+export function storedJudgement(judgement: ReviewItemJudgement): ReviewItemJudgement {
+  return {
+    at: judgement.at,
+    verdict: judgement.verdict,
+    reason: judgement.reason,
+    ...(judgement.heldFor && judgement.heldFor.length > 0
+      ? { heldFor: [...judgement.heldFor] }
+      : {}),
+    ...(judgement.add !== undefined && judgement.add !== '' ? { add: judgement.add } : {}),
+  };
 }
 
 /**
