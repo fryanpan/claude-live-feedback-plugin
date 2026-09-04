@@ -47,6 +47,23 @@ const NAV_ITEMS: ReadonlyArray<{ nav: HubNav; label: string; icon: string }> = [
   { nav: 'activity', label: 'Activity', icon: NAV_ICONS.activity },
 ];
 
+/**
+ * The back arrow, or nothing.
+ *
+ * `/` is the all-workspaces page, and on a share or collaboration hostname it
+ * is not a page at all: the host guard refuses every path that names no
+ * workspace, so the arrow landed a visitor on a raw JSON refusal. A member was
+ * given one board; there is nowhere above it for them to go, so the arrow is
+ * left out rather than pointed somewhere it does not belong.
+ *
+ * The server sets `data-visitor` on `#hub-root` — it is the only side that
+ * knows which hostname class served the page.
+ */
+function backLink(root: HTMLElement): string {
+  if (root.dataset.visitor === '1') return '';
+  return '<a href="/" class="back-link" title="All workspaces" aria-label="Back">←</a>';
+}
+
 /** Static shell — built once; regions re-render into their containers. */
 export function buildShell(
   document: Document,
@@ -56,7 +73,7 @@ export function buildShell(
 ): void {
   root.innerHTML = `
     <header class="hub-topbar">
-      <a href="/" class="back-link" title="All workspaces" aria-label="Back">←</a>
+      ${backLink(root)}
       <span class="hub-ws-name"><span class="hub-ws-name-text" id="hub-ws-name-text">${escapeHtml(name)}</span><span id="hub-retired-badge" class="hub-retired-badge hidden">Retired</span></span>
       <div class="hub-cluster">
         <div id="hub-people" class="hub-presence hub-people hidden"></div>

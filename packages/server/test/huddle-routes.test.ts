@@ -363,15 +363,17 @@ describe('POST /api/workspaces/:id/huddles and the empty task', () => {
     });
   });
 
-  describe('share visitors', () => {
-    it('can reach the hub page but neither quick action (403)', async () => {
+  describe('share members', () => {
+    it('files an empty task on the board, but does not start a huddle', async () => {
       const visitor = await mintAccessShare(base, access, workspaceId, { label: 'hub share' });
       const visitorHeaders = { ...visitor.headers, 'content-type': 'application/json' };
       // Presence: the cookie DOES reach the hub page.
       const page = await fetch(`${base}/workspaces/${workspaceId}`, { headers: visitorHeaders });
       expect(page.status).toBe(200);
       const before = (await boardDocs(workspaceId)).length;
-      // Absence: the same credentials start nothing.
+      // A huddle is a MEETING on the owner's machine — it opens a recording
+      // surface and binds a notes doc — so it is not on the member's table,
+      // and it must not have created a board doc on the way to being refused.
       const huddle = await fetch(`${base}/api/workspaces/${workspaceId}/huddles`, {
         method: 'POST',
         headers: visitorHeaders,
@@ -379,12 +381,14 @@ describe('POST /api/workspaces/:id/huddles and the empty task', () => {
       });
       expect(huddle.status).toBe(403);
       expect((await boardDocs(workspaceId)).length).toBe(before);
+      // Filing a row IS a member's, since 2026-09-03 — the positive control
+      // that makes the refusal above about the huddle rather than the gate.
       const task = await fetch(`${base}/api/workspaces/${workspaceId}/tasks`, {
         method: 'POST',
         headers: visitorHeaders,
         body: JSON.stringify({ untitled: true, author: PERSON }),
       });
-      expect(task.status).toBe(403);
+      expect(task.status, await task.clone().text()).toBe(200);
     });
   });
 });

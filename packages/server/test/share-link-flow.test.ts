@@ -30,6 +30,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'bun:test';
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { emailDisplayName } from '@feedback/core';
 import { type JSONWebKeySet, type JWK, SignJWT, exportJWK, generateKeyPair } from 'jose';
 import { type ServerHandle, createServer } from '../src/server.ts';
 import { ACCESS_SHARE_CONFIG, mockCfApi } from './access-share.ts';
@@ -431,7 +432,8 @@ describe('share links over HTTP', () => {
       for (const [path, init] of [
         ['/api/docs', {}],
         ['/api/share', {}],
-        [`/api/workspaces/${encodeURIComponent(board)}/tasks`, {}],
+        [`/api/workspaces/${encodeURIComponent(board)}/settings`, {}],
+        [`/api/workspaces/${encodeURIComponent(board)}/events`, {}],
       ] as Array<[string, RequestInit]>) {
         const r = await onShareHost(path, member, init);
         expect(r.status, path).toBe(403);
@@ -440,6 +442,58 @@ describe('share links over HTTP', () => {
         method: 'DELETE',
       });
       expect(del.status).toBe(403);
+    });
+
+    it('works the board it DOES hold — files a task, moves it, and is named for it', async () => {
+      // Bryan, 2026-09-03: "Let's allow everything for now." A member is a
+      // participant, so this is the positive control the refusals above are
+      // measured against.
+      const filed = await onShareHost(
+        `/api/workspaces/${encodeURIComponent(board)}/tasks`,
+        member,
+        {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ title: 'Filed by a member', assignee: 'human' }),
+        },
+      );
+      expect(filed.status, await filed.clone().text()).toBe(200);
+      const { task } = (await filed.json()) as { task: { id: string; createdBy?: string } };
+      // Attributed to the address Cloudflare Access verified, not to a claim.
+      expect(task.createdBy).toBe(emailDisplayName(member));
+
+      const moved = await onShareHost(`/api/tasks/${task.id}/transition`, member, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ to: 'in-progress' }),
+      });
+      expect(moved.status, await moved.clone().text()).toBe(200);
+
+      // The same row is refused to a signed-in stranger, and to a member of
+      // no board at all — the boundary is the board, not the verb.
+      const byStranger = await onShareHost(`/api/tasks/${task.id}/transition`, STRANGER, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ to: 'done' }),
+      });
+      expect(byStranger.status).toBe(403);
+      expect(await byStranger.json()).toEqual({ error: 'out_of_share_scope' });
+    });
+
+    it('is refused a row on a board it was never given', async () => {
+      const other = await postLocal(`/api/workspaces/${encodeURIComponent(otherBoard)}/tasks`, {
+        title: 'On the private board',
+        assignee: 'human',
+      });
+      expect(other.status).toBe(200);
+      const otherTask = ((await other.json()) as { task: { id: string } }).task.id;
+      const r = await onShareHost(`/api/tasks/${otherTask}/transition`, member, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ to: 'done' }),
+      });
+      expect(r.status).toBe(403);
+      expect(await r.json()).toEqual({ error: 'out_of_share_scope' });
     });
 
     it('gets nothing useful from root or any path naming no workspace', async () => {

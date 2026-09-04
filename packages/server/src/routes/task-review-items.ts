@@ -355,7 +355,11 @@ export async function handleTaskReviewItems(
     /^\/api\/tasks\/([^/]+)\/review-items\/([^/]+)\/withdraw(\/undo)?$/,
   );
   if (taskReviewWithdrawMatch && req.method === 'POST') {
-    if (visitor) return j(403, { error: 'not available to share visitors' });
+    // No visitor refusal here, unlike its neighbours. Withdrawing is the exit
+    // from filing, and a share member files review items on the board they
+    // were admitted to (Bryan, 2026-09-03). The board question is asked one
+    // layer up: `shareScopeAllows` admits this path only when the TASK is on
+    // the workspace this member holds.
     const taskId = decodeURIComponent(taskReviewWithdrawMatch[1] ?? '');
     const reviewItemId = decodeURIComponent(taskReviewWithdrawMatch[2] ?? '');
     const undo = taskReviewWithdrawMatch[3] !== undefined;
