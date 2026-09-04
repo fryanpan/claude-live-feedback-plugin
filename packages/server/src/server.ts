@@ -1481,6 +1481,18 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
   // are only ever called from a route or a hook, so the callers above that
   // name one (`proposeAllowRule`, `stallVerdict`) reach it at request time.
 
+  // Effort scoring — see effort-scoring.ts. Built ABOVE the subscription
+  // that calls it, so `scoreEffortEstimate` is declared before its first
+  // use: on main it was a hoisted function declaration and the order could
+  // not bite, and a `const` in the temporal dead zone would throw if a task
+  // event ever fired during init. The projection it re-projects through is
+  // built further down, so it arrives as a thunk.
+  const { scoreEffortEstimate, rescoreStaleEffortEstimates, stopEffortRescore } =
+    createEffortScoring({
+      taskStore,
+      refreshWorkspace: (workspaceId) => taskProjection.refresh(workspaceId),
+      opts,
+    });
   // Effort-estimate scoring: re-score a ticket in the background whenever
   // its words — or its goal — change. `task.created`, `task.retitled` and
   // `task.body_edited` are the three doors a title or a body move through —
@@ -1552,13 +1564,6 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
   // authoritative for gated fields on restart.
   const taskProjection = new TaskProjection({ rooms, tasks: taskStore });
   taskProjection.init();
-
-  // Effort scoring — see effort-scoring.ts. Built HERE, after the projection
-  // it refreshes: the two store subscriptions above keep the position they
-  // had, and every function this returns is reached from a store event or
-  // from the post-bind boot pass, never during construction.
-  const { scoreEffortEstimate, rescoreStaleEffortEstimates, stopEffortRescore } =
-    createEffortScoring({ taskStore, taskProjection, opts });
 
   // Provenance stamping at the store's one choke point: every create whose
   // origin names a doc records the doc's settled content revision, whichever
