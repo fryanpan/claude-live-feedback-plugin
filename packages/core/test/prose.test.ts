@@ -303,8 +303,8 @@ function firstParaDelta(
   const frag = getProseFragment(doc);
   const first = frag.toArray()[0] as Y.XmlElement;
   const text = first.toArray()[0] as Y.XmlText;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  return text.toDelta() as any;
+  // `toDelta()` is declared `any` by yjs; the return annotation is the narrowing.
+  return text.toDelta();
 }
 
 describe('findAndReplace — parseInlineMarks', () => {
