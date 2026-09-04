@@ -300,7 +300,7 @@ Every count that went wrong had one.
 
 ## Diff review (type='diff') — immutable content changes the rules
 
-- **A diff review is "bind_folder where the file list comes from `git diff`
+- **A diff review is "attach_folder where the file list comes from `git diff`
   and the bytes come from `git show target:path`".** One doc per changed
   file grouped under workspaceId = reviewId buys the tree UI, thread stack,
   SSE watch, delete_workspace, and cleanup for free. Content pinned to a
@@ -3321,7 +3321,7 @@ the claim needed and the one the probe never made.
 ### The bug the vacuous check was hiding
 
 Chasing the same links turned up why one of them was really broken, and it is
-worth its own note: **`bind_mock`'s tool description documents behaviour that
+worth its own note: **`attach_mockup`'s tool description documents behaviour that
 has no implementation.** It says *"Idempotent — calling twice on the same docId
 is safe; just updates the bound source path."* Rebinding an existing docId to a
 new path returns `200` with the OLD `sourceUrl` still in the response, and goes
@@ -3413,7 +3413,7 @@ write-once in practice, and the repair verb for a moved file cannot repair it.
   left theirs behind.
 - **0.1.93 adds the single-doc half**: `Rooms.archiveDoc` / `unarchiveDoc`,
   reached from `archive_doc` / `unarchive_doc`, for the few hundred
-  free-standing docs (a `create_review_doc` markdown doc, a `bind_mock`
+  free-standing docs (a `create_review_doc` markdown doc, an `attach_mockup`
   mockup) that belong to no review and so had no soft path at all. Manifest
   at `_archive/<docId>.doc.json` — a different suffix from a review's, so
   each listing enumerates its own kind. It REFUSES a doc that carries a

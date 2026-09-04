@@ -82,7 +82,7 @@ describe('Rooms.refreshWorkspace — browse workspace', () => {
       expect(res.ok).toBe(false);
       if (!res.ok) {
         expect(res.error).toBe('not-found');
-        expect(res.detail).toContain('bind_folder');
+        expect(res.detail).toContain('attach_folder');
       }
 
       writeFileSync(join(empty, 'now.md'), '# arrived late\n');
