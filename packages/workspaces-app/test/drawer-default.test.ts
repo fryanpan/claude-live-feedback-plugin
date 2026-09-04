@@ -2,8 +2,9 @@ import { createThread, getContent } from '@feedback/core';
 import { TextRange } from '@feedback/core/anchor';
 import { afterEach, describe, expect, it } from 'vitest';
 import * as Y from 'yjs';
+import { initialDrawerOpen } from '../src/doc/view-prefs.ts';
 import { MountScope } from '../src/mount-scope.ts';
-import { type ChromeOpts, initialDrawerOpen, mountReviewChrome } from '../src/review-chrome.ts';
+import { type ChromeOpts, mountReviewChrome } from '../src/review-chrome.ts';
 import type { InlineThreadCard, ReviewSurface } from '../src/review-surface.ts';
 import { sizeThreadSlots } from '../src/thread-morph.ts';
 

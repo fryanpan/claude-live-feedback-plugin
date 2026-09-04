@@ -11,8 +11,8 @@
  * the time they were told to try again.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import type { ChromeSelection } from '../src/doc/anchor-body.ts';
 import { createThreadActions } from '../src/doc/thread-actions.ts';
-import type { ChromeSelection } from '../src/review-chrome.ts';
 
 const USER = { id: 'u1', name: 'Ann', kind: 'known', color: '#2e7dd7' } as const;
 
