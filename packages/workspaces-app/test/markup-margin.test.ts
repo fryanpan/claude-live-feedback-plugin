@@ -135,6 +135,7 @@ function mountRedlineWithChrome(baseText: string, md: string) {
     ydoc,
     surface,
     whenSynced: (cb) => cb(),
+    canWrite: true,
     scope,
     selectHint: '',
     reanchorHint: '',
@@ -163,6 +164,7 @@ function mountPlainWithChrome(md: string) {
     ydoc,
     surface: editor,
     whenSynced: (cb) => cb(),
+    canWrite: true,
     scope,
     selectHint: '',
     reanchorHint: '',
@@ -484,18 +486,18 @@ describe('mountMarkupMargin — comment balloons', () => {
     expect(balloon.getAttribute('data-thread-id')).toBe(thread.id);
     expect(balloon.textContent).toContain('Please clarify this.');
     expect(balloon.textContent).toContain('Bob'); // the comment's author
-    // ...with the streamlined card's own shape: line one outside the fold,
-    // and the one folding slot holding the opening message and the reply box.
+    // ...with the streamlined card's own shape: both folding slots present,
+    // the opening message in slot A, and the reply box in slot B.
     expect(balloon.classList.contains('expanded')).toBe(true);
     expect(balloon.querySelector('.slot-a .face-detail .thread-message')?.textContent).toContain(
       'Please clarify this.',
     );
-    expect(balloon.querySelector('.slot-a .face-detail textarea')).not.toBeNull();
+    expect(balloon.querySelector('.slot-b .face-detail textarea')).not.toBeNull();
 
     const fetchSpy = vi.fn(() => Promise.resolve({ ok: true }) as unknown as Promise<Response>);
     vi.stubGlobal('fetch', fetchSpy);
     try {
-      // ONE resolve control, in the foot at the bottom of the opened card.
+      // ONE resolve control, in the foot, outside both slots.
       const resolveBtn = balloon.querySelector<HTMLButtonElement>('.thread-foot .thread-resolve');
       expect(balloon.querySelectorAll('.thread-resolve')).toHaveLength(1);
       expect(resolveBtn?.getAttribute('aria-label')).toBe('Resolve thread');
@@ -833,7 +835,7 @@ describe('mountMarkupMargin — collapsed balloons (Word-style)', () => {
     expect(badge.title).toBe('3 more lines');
   });
 
-  it('a collapsed comment says where the conversation got to, not how many replies it has', async () => {
+  it('a collapsed comment shows its reply count in the foot, beside the one resolve control', async () => {
     const fixture = mountRedlineWithChrome('', 'Alpha bravo gamma.\n');
     const { parent, surface, ydoc, chrome, scope } = fixture;
     const t = openThreadAt(
@@ -866,14 +868,13 @@ describe('mountMarkupMargin — collapsed balloons (Word-style)', () => {
 
     const balloon = parent.querySelector('.lf-balloon-comment') as HTMLElement;
     expect(balloon.classList.contains('expanded')).toBe(false);
-    // Line two of the folded balloon is the last thing said. It replaced a
-    // "1 reply" count in the foot, which told a reader scanning the margin
-    // that there was something to read without telling them what it was —
-    // and cost the balloon a third line to do it.
-    const line = balloon.querySelector('.slot-a > .face-summary .thread-discussion');
-    expect(line?.textContent).toBe('A reply.');
+    // A folded balloon states no reply count — the number restated the replies
+    // an open card is already showing, and told a folded one's reader
+    // something they could not act on (Bryan, 2026-09-04). What it DOES show
+    // is the discussion line, which says where the conversation got to.
     expect(balloon.querySelector('.thread-meta')).toBeNull();
-    expect(balloon.textContent).not.toContain('1 reply');
+    expect(balloon.querySelector('.thread-head')?.textContent).not.toMatch(/reply|replies/i);
+    expect(balloon.querySelector('.slot-b .face-summary .thread-discussion')).not.toBeNull();
   });
 });
 
@@ -1606,16 +1607,16 @@ describe('mountMarkupMargin — a composer mounting re-measures the balloon that
     clickToExpand(balloon);
     expect(balloon.classList.contains('expanded')).toBe(true);
 
-    const slot = balloon.querySelector<HTMLElement>('.slot-a') as HTMLElement;
-    const face = balloon.querySelector<HTMLElement>('.slot-a > .face-detail') as HTMLElement;
+    const slotB = balloon.querySelector<HTMLElement>('.slot-b') as HTMLElement;
+    const face = balloon.querySelector<HTMLElement>('.slot-b > .face-detail') as HTMLElement;
     // The editor landed and the reply box grew from 2 rows to a mounted surface.
     Object.defineProperty(face, 'offsetHeight', { get: () => 80, configurable: true });
     // POSITIVE CONTROL: the slot still holds the pre-mount measurement.
-    expect(slot.style.height).not.toBe('80px');
+    expect(slotB.style.height).not.toBe('80px');
 
-    const ta = balloon.querySelector('.slot-a .face-detail textarea') as HTMLElement;
+    const ta = balloon.querySelector('.slot-b .face-detail textarea') as HTMLElement;
     ta.dispatchEvent(new CustomEvent('lf-composer-mounted', { bubbles: true }));
-    expect(slot.style.height).toBe('80px');
+    expect(slotB.style.height).toBe('80px');
   });
 });
 
@@ -1671,5 +1672,139 @@ describe('mountMarkupMargin — fit-to-fold keeps the composer reachable', () =>
     // Viewport bottom 800 - gap 8 - height 560 = 232 — lifted off the 600
     // anchor so the footer (composer + Answer) sits inside the fold.
     expect(Number.parseFloat(balloon.style.top)).toBe(232);
+  });
+});
+
+/**
+ * Word-style bubbles: the connector runs out of the text block, never over a
+ * word, and tapping one brings it forward while the rest go back.
+ *
+ * happy-dom has no layout, so the rects that matter are stubbed explicitly —
+ * the same approach the ordering tests above take. What is being asserted is
+ * the RULE the geometry follows, not a pixel.
+ */
+describe('mountMarkupMargin — the leader never crosses a word', () => {
+  it('starts every connector at the prose block’s right edge, not at the word it points to', async () => {
+    const { parent, editor, ydoc, chrome, scope } = mountPlainWithChrome(
+      'A sentence with a phrase somebody commented on, and more text after it.\n',
+    );
+    await tick();
+    const thread = openThreadAt(
+      ydoc,
+      editor.editor,
+      () => editor.getSelectionRel(),
+      { from: 1, to: 9 },
+      'About the phrase.',
+    );
+
+    const view = editor.editor.view;
+    // The editor pane, the prose block and the margin column, laid out as they
+    // are on an iPad in landscape: an 890px measure, then a 16px gutter, then
+    // the 260px column.
+    const rect = (over: Partial<DOMRect>): DOMRect =>
+      ({
+        top: 0,
+        bottom: 0,
+        left: 0,
+        right: 0,
+        width: 0,
+        height: 0,
+        x: 0,
+        y: 0,
+        toJSON() {},
+        ...over,
+      }) as DOMRect;
+    vi.spyOn(parent, 'getBoundingClientRect').mockReturnValue(
+      rect({ left: 0, right: 1166, width: 1166 }),
+    );
+    vi.spyOn(view.dom, 'getBoundingClientRect').mockReturnValue(
+      rect({ left: 0, right: 890, width: 890 }),
+    );
+    // The anchor sits in the MIDDLE of a line — the case a connector drawn to
+    // the word itself would have to cross the rest of the sentence to reach.
+    const span = parent.querySelector(`[data-thread-id="${thread.id}"]`) as HTMLElement;
+    vi.spyOn(span, 'getBoundingClientRect').mockReturnValue(
+      rect({ top: 40, bottom: 58, left: 120, right: 240, width: 120, height: 18 }),
+    );
+
+    const margin = mountMarkupMargin({
+      editorEl: parent,
+      view,
+      getDeletions: () => [],
+      threads: () => chrome.collectThreads(),
+      chrome,
+      scope,
+    });
+    vi.spyOn(margin.marginEl, 'getBoundingClientRect').mockReturnValue(
+      rect({ left: 906, right: 1166, width: 260 }),
+    );
+    margin.relayout();
+
+    const line = parent.querySelector('.lf-leader-comment') as SVGLineElement;
+    expect(line).not.toBeNull();
+    const x1 = Number.parseFloat(line.getAttribute('x1') ?? '0');
+    const x2 = Number.parseFloat(line.getAttribute('x2') ?? '0');
+    // The visible leg begins where the PROSE ends. Anything smaller would put
+    // the line inside the text block, over the words after the anchor.
+    expect(x1).toBe(890);
+    expect(x1).toBeGreaterThanOrEqual(240); // …and clear of the anchor itself
+    // …and runs rightwards into the column, never back across the page.
+    expect(x2).toBeGreaterThan(x1);
+  });
+});
+
+describe('mountMarkupMargin — tapping a bubble brings it forward', () => {
+  it('marks the tapped thread active and dims the others by leaving them unmarked', async () => {
+    const { parent, editor, ydoc, chrome, scope } = mountPlainWithChrome(
+      'First sentence here. Second sentence here. Third sentence here.\n',
+    );
+    await tick();
+    const a = openThreadAt(
+      ydoc,
+      editor.editor,
+      () => editor.getSelectionRel(),
+      { from: 1, to: 6 },
+      'On the first.',
+      't-a',
+    );
+    const b = openThreadAt(
+      ydoc,
+      editor.editor,
+      () => editor.getSelectionRel(),
+      { from: 22, to: 28 },
+      'On the second.',
+      't-b',
+    );
+
+    const margin = mountMarkupMargin({
+      editorEl: parent,
+      view: editor.editor.view,
+      getDeletions: () => [],
+      threads: () => chrome.collectThreads(),
+      chrome,
+      scope,
+    });
+    margin.relayout();
+
+    const balloonFor = (id: string) =>
+      parent.querySelector<HTMLElement>(`.lf-balloon-comment[data-thread-id="${id}"]`);
+    expect(balloonFor(a.id)?.classList.contains('active')).toBe(false);
+    expect(balloonFor(b.id)?.classList.contains('active')).toBe(false);
+    // Nothing selected: no leader is emphasised, so none is dimmed either.
+    expect(parent.querySelectorAll('.lf-leader-dim').length).toBe(0);
+    expect(parent.querySelectorAll('.lf-leader-on').length).toBe(0);
+
+    chrome.threadsPanel.setActive(b.id);
+    margin.relayout();
+
+    // Selection, not expansion: a promoted thread stays folded behind the
+    // modal and still has to read as the one the reader is on.
+    expect(balloonFor(b.id)?.classList.contains('active')).toBe(true);
+    expect(balloonFor(a.id)?.classList.contains('active')).toBe(false);
+    // Its leader comes forward with it; the other goes back. The CARDS dim in
+    // CSS off `.markup-margin:has(.thread.active)`; the lines cannot, so the
+    // classes are written here.
+    expect(parent.querySelectorAll('.lf-leader-on').length).toBe(1);
+    expect(parent.querySelectorAll('.lf-leader-dim').length).toBe(1);
   });
 });

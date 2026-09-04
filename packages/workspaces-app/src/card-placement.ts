@@ -20,6 +20,9 @@
  * therefore picks the DEFAULT and nothing else — once the reader has chosen,
  * their choice survives every zoom, rotation and resize.
  *
+ * The DEFAULT at 1180x820 — Bryan's iPad in landscape — is therefore the
+ * margin, which is the placement the approved mock leads with.
+ *
  * The choice is published as `data-cards` on `<body>` so the stylesheet can
  * key off it exactly where it used to key off the media query, and changes
  * are announced on `window` as `PLACEMENT_CHANGED_EVENT` so the chrome can
@@ -33,7 +36,7 @@ export type CardPlacement = 'inline' | 'balloon';
 export const PLACEMENT_PREF_KEY = 'lf:cards';
 
 /**
- * Enough width for a 300px margin column beside the prose. The DEFAULT only:
+ * Enough width for the 260px margin column beside the prose. The DEFAULT only:
  * a stored choice wins at every width, including this one.
  */
 export const BALLOON_ROOM_QUERY = '(min-width: 1101px)';
@@ -41,7 +44,7 @@ export const BALLOON_ROOM_QUERY = '(min-width: 1101px)';
 /**
  * Below this there is no margin at all — not for the default and not for a
  * stored choice. A reader who picked balloons on their laptop and opens the
- * same doc on a phone gets the over-doc sheet rather than a 300px column
+ * same doc on a phone gets the over-doc sheet rather than a 260px column
  * squeezed into 430px.
  */
 export const BALLOON_SHEET_QUERY = '(max-width: 900px)';

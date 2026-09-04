@@ -1,3 +1,33 @@
+/* ===== THE CHROME EVERY PAGE SHARES =====
+   The base stylesheet. All three pages load it: the review editor
+   (index.html), the board (renderHubShell) and the sign-in page
+   (renderSigninShell). A rule belongs here when more than one of them can
+   reach it — and only then, because every byte in this file is downloaded
+   three times over.
+
+   Its two siblings are the pages' own:
+
+     hub.css     the board's surfaces, loaded BEFORE this file (its rules sat
+                 ahead of most of this one, so loading it last would flip
+                 ~30 equal-specificity ties)
+     doc.css     the review editor's surfaces, loaded AFTER this file (its
+                 rules sat interleaved through it, and after is the order
+                 that flips none)
+     signin.css  the sign-in page's, loaded after this file
+     tokens.css  the Open Props remap, loaded last of all by every page
+
+   Before moving a rule out of here, check whether the OTHER pages reach it:
+   a class that only the editor's bundle names can go to doc.css, but
+   `.thread-line` looks like diff chrome and is rendered by the board too.
+   B2 shipped `.signin-bar` out with signin.css on the same reasoning and had
+   to bring it back — a render comparison caught 1,007 differing elements.
+
+   Put a rule under the banner naming the surface it paints:
+
+       grep -n '^/\* =' packages/workspaces-app/src/styles.css
+
+   Appending at the end is what makes two branches conflict over a line
+   neither of them cared about. */
 /* ===== DESIGN TOKENS =====
    The single home for app-wide custom properties. Component-scoped variables
    (--threads-w, --hub-bottom-bar, --lf-suggest-*) stay with their component —
@@ -266,24 +296,6 @@ button {
   gap: 6px;
   flex: 0 0 auto;
 }
-/* The row does not fit a phone and did not before the placement toggle joined
-   it: measured at 430px, the meeting-record options button already ended 11px
-   past the right edge, and one more control took that to 51px. `flex: 0 0
-   auto` means it can never shrink, so the overflow is silent — the buttons
-   are simply not there. Let it scroll instead of clipping, and let it give
-   back width the crumb was holding. Above this the row fits. */
-@media (max-width: 900px) {
-  #topbar .toolbar {
-    flex: 1 1 auto;
-    min-width: 0;
-    overflow-x: auto;
-    scrollbar-width: none;
-    justify-content: flex-end;
-  }
-  #topbar .toolbar::-webkit-scrollbar {
-    display: none;
-  }
-}
 .icon-btn {
   position: relative;
   min-width: 38px;
@@ -353,7 +365,7 @@ body.view-mode #toggle-format {
   display: inline-block;
 }
 
-/* "N questions for you" — every open review item on the doc, behind the one
+/* "N waiting on you" — every open review item on the doc, behind the one
    amber glyph the highlight and the card also carry (comments mock 3). A
    pill, not an icon button: it is a sentence on a wide screen and a glyph
    plus a count on a phone (`.w` is the wordy part; see INLINE THREAD CARDS
@@ -408,593 +420,6 @@ body.view-mode #toggle-format {
 @media (max-width: 1100px) {
   .comment-nav {
     display: inline-flex;
-  }
-}
-
-/* ================= MAIN LAYOUT ================= */
-
-#main {
-  position: relative;
-  display: grid;
-  /* `minmax(0, 1fr)` (not `1fr`) so the prose column can't be widened by
-     long unbreakable tokens inside it — `1fr` = `minmax(auto, 1fr)` and
-     `auto`'s min is content-driven, which causes mobile horizontal
-     overflow whenever a single long file path / URL / inline code
-     exists in the doc. */
-  grid-template-columns: minmax(0, 1fr) var(--threads-w, 360px);
-  overflow: hidden;
-}
-/* Review-set sidebar adds a left column — but only once the reviewer opens
-   it. Closed is the default and needs no rule of its own: the grid falls
-   through to #main's own two-column definition above, which IS the closed
-   layout. That fall-through also fixes something the width-gated rule this
-   replaces got wrong — it hard-coded `360px` for the comments column, so a
-   collapsed comments drawer silently stopped collapsing on a narrow desktop.
-   Below 1101px the pane cannot show at all, so the column is never reserved
-   there; see the `#set-pane` show gate for why width no longer decides
-   visibility itself. */
-@media (min-width: 1101px) {
-  body.has-set.set-pane-open #main {
-    grid-template-columns: var(--set-w, 320px) minmax(0, 1fr) var(--threads-w, 360px);
-  }
-}
-@media (max-width: 900px) {
-  #main {
-    grid-template-columns: minmax(0, 1fr);
-  }
-  body.has-set #main {
-    grid-template-columns: minmax(0, 1fr);
-  }
-}
-/* Desktop drawer state: `threads-open` historically only mattered in the
-   ≤900px overlay mode — above it the grid ALWAYS reserved the comments
-   column, so closeDrawer() was a visual no-op on desktop. Zeroing the
-   column var (scoped to #shell, which beats the :root inline value the
-   resize handle writes) lets the drawer genuinely collapse now that it
-   defaults closed when the balloon margin already shows every thread. */
-@media (min-width: 901px) {
-  #shell:not(.threads-open) {
-    --threads-w: 0px;
-  }
-  #shell:not(.threads-open) #threads-pane {
-    display: none;
-  }
-}
-
-/* ================= REVIEW-SET SIDEBAR + DROPDOWN ================= */
-
-#set-pane {
-  display: none;
-  border-right: 1px solid var(--border);
-  background: var(--bg-subtle, #fafafa);
-  overflow-y: auto;
-  font-size: 13px;
-}
-/* Whether the sidebar shows is a REVIEWER'S CHOICE, not a measurement.
-   Default closed (no `.set-pane-open` on <body> until the toggle or the
-   stored preference adds it), so every screen starts with the width the
-   prose gets.
-
-   Width used to decide this and cannot. Page zoom scales the layout
-   viewport: a 1366px iPad at 85% zoom reports 1607px, so any gate set high
-   enough to exclude that iPad also excludes a 1512px MacBook. The previous
-   fix picked 1367px and Bryan defeated it by pinching — *"I actually zoom out
-   a bit and the panel is back on my iPad"* — and then settled it outright:
-   *"On desktop, even at the resolutions I'd zoomed out above, would prefer to
-   have more horizontal space and collapse the left bar."*
-
-   What is left of width here is narrow and honest: below 1101px there is no
-   room for a 320px column beside the prose, so the toggle is not offered and
-   the topbar dropdown remains the whole nav. TWO rules carry that number —
-   this one and `body.has-set.set-pane-open #main`'s columns — plus the
-   toggle's own show rule below. `set-pane.test.ts` asserts all three agree,
-   because a media query cannot read a custom property and there is no other
-   way to name the value once. (`.set-resize` used to be a fourth copy; it is
-   a child of #set-pane, so `display: none` here already takes it along.) */
-@media (min-width: 1101px) {
-  body.has-set.set-pane-open #set-pane {
-    display: block;
-  }
-}
-/* The toggle that opens it. Lives in the crumb rather than the toolbar
-   because it acts on the left edge of the page and that is where a reader
-   looks for it. Hidden entirely when there is no set to list, and below the
-   width where the pane could open — a control that flips a class no
-   stylesheet acts on is a dead control. */
-#toggle-set-pane {
-  display: none;
-}
-@media (min-width: 1101px) {
-  body.has-set #toggle-set-pane {
-    display: inline-flex;
-  }
-}
-#set-pane-list {
-  list-style: none;
-  margin: 0;
-  /* Top gap is the list's own: the "In this review" header used to supply it
-     and was dropped 2026-08-19 for costing ~36px of vertical space on an iPad
-     to say what the pane's contents already say. */
-  padding: 10px 8px 16px;
-}
-#set-pane-list li {
-  margin: 2px 0;
-}
-#set-pane-list a,
-.doc-menu a {
-  display: block;
-  padding: 8px 10px;
-  border-radius: var(--radius);
-  color: var(--fg);
-  text-decoration: none;
-  line-height: 1.35;
-  word-break: break-word;
-}
-#set-pane-list a:hover,
-.doc-menu a:hover {
-  background: var(--bg-hover, rgba(0, 0, 0, 0.04));
-}
-#set-pane-list a.active,
-.doc-menu a.active {
-  background: var(--accent-subtle, rgba(46, 125, 215, 0.1));
-  color: var(--accent, #2e7dd7);
-  font-weight: 600;
-}
-#set-pane-list a small,
-.doc-menu a small {
-  display: block;
-  font-size: 11px;
-  color: var(--fg-muted);
-  margin-top: 2px;
-  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
-}
-
-/* ================= WORKSPACE FILE TREE ================= */
-/* Rendered into #set-pane-list (and the mobile dropdown) when the doc has
-   a workspaceId. Collapsible native <details>/<summary> per directory;
-   indentation comes from nested <ul> padding so depth is self-describing. */
-.tree-root,
-.tree-root ul {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-}
-.tree-root ul {
-  /* Each nesting level indents one notch; the <summary>/<a> padding
-     supplies the row height. */
-  padding-left: 12px;
-}
-.tree-dir > details > summary {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 6px 10px;
-  border-radius: var(--radius);
-  cursor: pointer;
-  color: var(--fg);
-  list-style: none;
-  user-select: none;
-}
-.tree-dir > details > summary::-webkit-details-marker {
-  display: none;
-}
-.tree-dir > details > summary::before {
-  content: "▸";
-  font-size: 9px;
-  color: var(--fg-muted);
-  transition: transform 0.1s ease;
-  flex-shrink: 0;
-}
-.tree-dir > details[open] > summary::before {
-  transform: rotate(90deg);
-}
-.tree-dir > details > summary:hover {
-  background: var(--bg-hover, rgba(0, 0, 0, 0.04));
-}
-.tree-file a {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 6px 10px 6px 25px;
-  border-radius: var(--radius);
-  color: var(--fg);
-  text-decoration: none;
-  line-height: 1.35;
-}
-.tree-file a:hover {
-  background: var(--bg-hover, rgba(0, 0, 0, 0.04));
-}
-.tree-file a.active {
-  background: var(--accent-subtle, rgba(46, 125, 215, 0.1));
-  color: var(--accent, #2e7dd7);
-  font-weight: 600;
-}
-/* Left the review (file deleted, or its change reverted) but kept because it
-   still holds comments. Dimmed and struck through, never hidden — a stranded
-   thread you can't see is a thread that gets lost. Stays fully clickable, and
-   the active state still reads as active. */
-.tree-file a.stale .tree-name,
-.diff-file a.stale .diff-file-name {
-  opacity: 0.5;
-  text-decoration: line-through;
-}
-.tree-file a.stale:hover .tree-name,
-.diff-file a.stale:hover .diff-file-name {
-  opacity: 0.8;
-}
-.tree-name {
-  flex: 1;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-/* Open-count pill — clones the landing page's .badge-open look. */
-.tree-badge {
-  flex-shrink: 0;
-  font-size: 10.5px;
-  line-height: 1;
-  padding: 2px 7px;
-  border-radius: 99px;
-  font-weight: 600;
-  font-variant-numeric: tabular-nums;
-}
-.tree-badge.badge-open {
-  background: #fff1e6;
-  color: #bf5b16;
-}
-/* Folder roll-up badge — same shape, slightly muted so files read as the
-   primary signal. */
-.tree-badge.tree-badge-dir {
-  background: #f3f0ec;
-  color: #9a7a55;
-  font-weight: 500;
-}
-
-/* Doc-switcher button in the topbar. Behaves like a label by default;
-   becomes interactive (caret visible, hover + click) only when the
-   doc has a setId. */
-.doc-switcher {
-  display: inline-flex;
-  align-items: baseline;
-  gap: 4px;
-  padding: 2px 6px;
-  margin: 0 -6px;
-  border: 0;
-  background: transparent;
-  cursor: default;
-  border-radius: var(--radius-sm);
-  font: inherit;
-  color: inherit;
-  min-width: 0;
-}
-.doc-switcher:focus-visible {
-  outline: 2px solid var(--accent, #2e7dd7);
-  outline-offset: 1px;
-}
-.doc-switcher-caret {
-  display: none;
-  font-size: 10px;
-  color: var(--fg-muted);
-}
-body.has-set .doc-switcher {
-  cursor: pointer;
-}
-body.has-set .doc-switcher:hover {
-  background: var(--bg-hover, rgba(0, 0, 0, 0.04));
-}
-body.has-set .doc-switcher-caret {
-  display: inline;
-}
-
-/* Dropdown menu — anchored under the topbar's doc-crumb. Only shown
-   when has-set + open. */
-.doc-menu {
-  position: absolute;
-  top: var(--topbar-h, 48px);
-  left: 0;
-  right: auto;
-  z-index: 30;
-  max-width: min(420px, 90vw);
-  max-height: 60vh;
-  overflow-y: auto;
-  background: var(--bg);
-  border: 1px solid var(--border);
-  border-radius: 0 0 8px 8px;
-  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.08);
-  padding: 6px;
-  margin-left: 14px;
-  font-size: 13px;
-}
-.doc-menu.hidden {
-  display: none;
-}
-.doc-menu ol {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-}
-.doc-menu li {
-  margin: 0;
-}
-@media (min-width: 1101px) {
-  /* On wide screens, the sidebar already shows the list; the dropdown
-     is redundant. Keep it for keyboard / explicit-tap users but the
-     primary nav is the sidebar. */
-}
-
-/* Doc-level pending-suggestions menu (redline-suggestions Phase 2, commit
-   5c) — Accept all / Reject all across every author, opened from the
-   `#toggle-suggestions` topbar badge (suggestions-summary.ts). Anchored
-   under the RIGHT side of the topbar (the toolbar it belongs to), unlike
-   `.doc-menu` which anchors left under the doc-crumb — same positioning
-   idea, opposite edge, so it never collides with the doc-switcher dropdown. */
-.suggestions-menu {
-  position: absolute;
-  top: var(--topbar-h, 48px);
-  right: 8px;
-  left: auto;
-  z-index: 30;
-  display: flex;
-  flex-direction: column;
-  min-width: 160px;
-  background: var(--bg);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-lg);
-  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.08);
-  padding: 4px;
-  font-size: 13px;
-}
-.suggestions-menu.hidden {
-  display: none;
-}
-.suggestions-menu button {
-  display: block;
-  width: 100%;
-  text-align: left;
-  padding: 8px 10px;
-  border: 0;
-  background: transparent;
-  border-radius: var(--radius);
-  color: var(--fg);
-  font: inherit;
-  cursor: pointer;
-}
-.suggestions-menu button:hover {
-  background: var(--bg-hover, rgba(0, 0, 0, 0.04));
-}
-
-#editor-pane {
-  /* Anchors the floating diff/file view toggle AND the plan-approve float
-     (src/plan-gate.ts) — both `position: absolute` children pinned to this
-     pane, not to the scrolling prose. */
-  position: relative;
-  display: grid;
-  /* format bar, document. The meeting strip is the SHELL's row now, fused
-     under the topbar (src/meeting-strip.ts); the old derived-work-chips
-     strip and the plan gate's one-line bar are both gone (#526/#531/#536) —
-     the approve float and the prose's own link chips carry what they did.
-     The auto track is what makes the format bar RESERVE its height instead
-     of covering the prose: the editor keeps the 1fr and shrinks by exactly
-     its height, and costs nothing collapsed — a hidden bar is a zero-height
-     track. */
-  grid-template-rows: auto 1fr;
-  overflow: hidden;
-  background: var(--bg);
-  border-right: 1px solid var(--border);
-}
-
-/* The "Make a plan" entry's one line of guidance (src/plan-placeholder.ts)
-   — a render-time widget under the Goal heading of an unwritten plan doc.
-   Muted and unselectable: it reads as the editor talking, not as content,
-   and it must never catch a tap meant for the empty paragraph under it. */
-.plan-placeholder {
-  color: var(--fg-muted);
-  font-size: 16px;
-  line-height: 1.5;
-  pointer-events: none;
-  user-select: none;
-}
-
-/* The plan doc's one floating control (src/plan-gate.ts) — always at the
-   bottom of the editor pane, wearing one of four faces as the doc moves from
-   an unasked goal to an approved plan: Make Plan, Plan requested, Approve
-   Plan, ✓ Plan Approved. One element rather than a dock of buttons because
-   only ever one of them applies.
-
-   It replaces two retired surfaces: the derived-work chip strip (#531 — the
-   tasks a doc produced now read through the links written in its prose,
-   decorated by task-link-chips.ts) and the plan-gate one-line bar (#536 —
-   "don't design for plan approval here"). Anchored to #editor-pane's
-   `position: relative`, so it pins to the visible pane, not to the scrolling
-   prose. Two lines, label over subtitle, per the approved mock: the subtitle
-   is what makes a press predictable ("Creates the goal and tickets, starts
-   work") rather than a leap. The shadow is what separates it from the prose
-   that scrolls beneath. */
-/* The dock (src/float-dock.ts) is what pins to the pane: one flex row at
-   the bottom, holding Make Plan and — on a huddle doc — the Review float
-   beside it (src/review-float.ts). Each float used to centre ITSELF, which
-   two buttons cannot both do; the row centres and they sit in it. */
-.doc-floats {
-  position: absolute;
-  left: 50%;
-  bottom: 22px;
-  transform: translateX(-50%);
-  z-index: 30;
-  display: flex;
-  align-items: stretch;
-  justify-content: center;
-  gap: 10px;
-  max-width: calc(100% - 24px);
-}
-.plan-float {
-  position: relative;
-  display: inline-flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 1px;
-  min-height: 44px;
-  padding: 10px 26px;
-  border: 0;
-  /* 12px, not --radius-lg's 8: a two-line float reads as a card at 8 and the
-     mock draws it softer than the token's buttons. */
-  border-radius: 12px;
-  cursor: pointer;
-  background: var(--accent);
-  color: #fff;
-  font: 700 16px var(--sans);
-  text-align: center;
-  box-shadow: 0 8px 28px rgba(46, 125, 215, 0.38);
-}
-/* `display: inline-flex` out-specifies the UA's `[hidden]` rule, so without
-   this the float showed on EVERY doc — plan-gate.ts sets `hidden` on all
-   but a plan doc, and the attribute did nothing (Bryan, 2026-08-31:
-   "there should not be an Approve Plan button in all docs"). Same guard
-   `.plan-gate-error[hidden]` and `.meeting-strip[hidden]` already carry. */
-.plan-float[hidden] {
-  display: none;
-}
-.plan-float-label {
-  font: 700 15px var(--sans);
-  line-height: 1.2;
-}
-.plan-float-sub {
-  font: 400 11.5px var(--sans);
-  opacity: 0.88;
-  line-height: 1.3;
-}
-.plan-float-sub[hidden] {
-  display: none;
-}
-/* Approve keeps the approval green the link chips use — it is the one press
-   here that changes the board, and it has read green since #536. */
-.plan-float--approve {
-  background: var(--green-strong);
-  box-shadow: 0 8px 28px rgba(26, 127, 55, 0.42);
-}
-.plan-float--approve:hover {
-  background: var(--green);
-}
-/* Already asked: still pressable (asking twice is allowed), but it reads as
-   a state rather than an invitation. */
-.plan-float--requested {
-  background: var(--bg);
-  color: var(--fg-muted);
-  border: 1px solid var(--border);
-  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.1);
-}
-/* The receipt, for its few seconds. Not a control — plan-gate.ts disables
-   it — so it must not offer a pointer. */
-.plan-float--done {
-  background: var(--green-strong);
-  box-shadow: 0 8px 28px rgba(26, 127, 55, 0.42);
-  cursor: default;
-}
-.plan-float:hover {
-  filter: brightness(1.06);
-}
-.plan-float:disabled {
-  cursor: default;
-}
-.plan-float--make:disabled,
-.plan-float--approve:disabled {
-  opacity: 0.7;
-}
-/* The receipt is disabled too, but NOT faded: `opacity` on the whole pill
-   let the prose scrolling beneath show through its white face, and at
-   phone width the three-line receipt read as text over text. Its muted
-   colours above already say "a state, not a control". */
-.plan-float--requested:disabled {
-  opacity: 1;
-}
-/* The Review float's own face. Secondary to Make Plan's filled accent, per
-   the approved mock: white, accent border and text — the second of two
-   asks, not a rival to the first. Its receipt reuses `.plan-float--requested`. */
-.review-float--ask {
-  background: var(--bg);
-  color: var(--accent);
-  border: 1px solid color-mix(in srgb, var(--accent) 55%, transparent);
-  box-shadow: 0 8px 28px rgba(27, 31, 35, 0.16);
-}
-.review-float--ask:hover {
-  background: color-mix(in srgb, var(--accent) 8%, var(--bg));
-  filter: none;
-}
-.review-float--ask:disabled {
-  opacity: 0.7;
-}
-/* The always-there float (doc/comment-float.ts). Quieter than its neighbours
-   on purpose: Make Plan and Review appear because the doc is waiting on
-   something, and a permanent control painted the same way would read as a
-   standing demand. One line, so it drops the two-line float's height. */
-.comment-float {
-  padding: 9px 18px;
-  background: var(--bg-panel);
-  color: var(--fg);
-  border: 1px solid var(--border);
-  font: 600 13.5px var(--sans);
-  box-shadow: 0 4px 14px rgba(27, 31, 35, 0.14);
-}
-.comment-float:hover {
-  border-color: var(--accent);
-  color: var(--accent);
-}
-/* No dock-clearance rule here, and the empty space is the point. `#editor`
-   already ends in `max(160px, …)` of bottom padding (see its own rule), which
-   is more than the dock needs, and the pane-scoped rule that used to sit here
-   reached every OTHER ProseMirror in the pane as well: an id plus a class
-   beats `.md-composer-surface .ProseMirror`, so a reply composer inside an
-   inline card or a margin balloon opened 139px tall with 84px of dead space
-   under the caret. That is the exact trap the comment above `#editor >
-   .ProseMirror` warns about, one selector further out. Anything the document
-   surface needs goes on `#editor` or on `#editor > .ProseMirror`. */
-@media (max-width: 640px) {
-  /* Edge-to-edge above the home indicator: a centred pill at phone width is
-     a small target over the one control the doc is waiting on. Two floats
-     share the width; a lone one takes it all. */
-  .doc-floats {
-    left: 12px;
-    right: 12px;
-    transform: none;
-    max-width: none;
-    bottom: calc(14px + var(--safe-bottom));
-    gap: 8px;
-  }
-  .plan-float {
-    flex: 1 1 0;
-    min-width: 0;
-    padding-left: 12px;
-    padding-right: 12px;
-  }
-}
-/* The refusal reason for a failed Approve press — only ever appears in
-   answer to one, floating just above the button it answers. */
-.plan-gate-error {
-  position: absolute;
-  left: 50%;
-  bottom: 74px;
-  transform: translateX(-50%);
-  z-index: 30;
-  max-width: min(90vw, 360px);
-  padding: 6px 12px;
-  border-radius: var(--radius);
-  background: var(--bg);
-  border: 1px solid var(--red, #dc322f);
-  color: var(--red, #dc322f);
-  font-size: 12.5px;
-  text-align: center;
-  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.14);
-}
-.plan-gate-error[hidden] {
-  display: none;
-}
-@media (max-width: 640px) {
-  .plan-gate-error {
-    left: 12px;
-    right: 12px;
-    transform: none;
-    max-width: none;
   }
 }
 
@@ -1174,123 +599,6 @@ body.has-set .doc-switcher-caret {
   }
 }
 
-/* ================= FORMAT BAR ================= */
-
-.format-bar {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 4px;
-  padding: 6px 12px;
-  border-bottom: 1px solid var(--border);
-  background: var(--bg-panel);
-  min-height: 44px;
-  transition: max-height 180ms ease, padding 180ms ease, opacity 120ms ease;
-  overflow: hidden;
-  max-height: 200px;
-}
-.format-bar.is-collapsed {
-  max-height: 0;
-  padding-top: 0;
-  padding-bottom: 0;
-  border-bottom-width: 0;
-  opacity: 0;
-}
-.format-bar button {
-  border: 1px solid transparent;
-  background: transparent;
-  border-radius: var(--radius);
-  padding: 6px 10px;
-  font-size: 13px;
-  line-height: 1;
-  cursor: pointer;
-  color: var(--fg);
-  min-width: 34px;
-  min-height: 32px;
-  white-space: nowrap;
-}
-.format-bar button:hover {
-  background: var(--bg-hover);
-}
-.format-bar button.active {
-  background: #e4edf9;
-  color: var(--accent);
-  border-color: #cfe0f5;
-}
-.format-bar .sep {
-  flex: 0 0 1px;
-  width: 1px;
-  height: 20px;
-  background: var(--border);
-  margin: 0 4px;
-  display: inline-block;
-}
-
-@media (max-width: 900px) {
-  .format-bar button {
-    min-height: 36px;
-    min-width: 40px;
-    font-size: 14px;
-  }
-}
-@media (max-width: 560px) {
-  .format-bar button[data-cmd="code"],
-  .format-bar button[data-cmd="codeBlock"],
-  .format-bar button[data-cmd="link"],
-  .format-bar button[data-cmd="hr"] {
-    display: none;
-  }
-  .format-bar .sep {
-    display: none;
-  }
-}
-
-/* Table operations popover — anchored under the ▦ button, driven by
-   @tiptap/extension-table commands. Fixed-positioned in <body> so it escapes
-   the format bar's overflow clipping. */
-.table-menu {
-  position: fixed;
-  z-index: 40;
-  min-width: 168px;
-  max-width: 90vw;
-  /* Cap height + scroll so the full in-table menu never overflows a short
-     (e.g. landscape mobile) viewport. */
-  max-height: 70vh;
-  overflow-y: auto;
-  display: flex;
-  flex-direction: column;
-  padding: 4px;
-  background: var(--bg);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-lg);
-  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.12);
-}
-.table-menu.hidden {
-  display: none;
-}
-.table-menu-item {
-  text-align: left;
-  border: 1px solid transparent;
-  background: transparent;
-  border-radius: var(--radius);
-  padding: 8px 10px;
-  font-size: 13px;
-  line-height: 1.2;
-  min-height: 36px;
-  cursor: pointer;
-  color: var(--fg);
-  white-space: nowrap;
-}
-.table-menu-item:hover {
-  background: var(--bg-hover);
-}
-.table-menu-item.danger {
-  color: #b4232a;
-}
-.table-menu-item.danger:hover {
-  background: #fbeaea;
-}
-
 /* ================= EDITOR ================= */
 
 /* The bottom padding is the document's SCROLL RUNWAY, and it has to cover an
@@ -1457,113 +765,6 @@ body.is-reading-width #editor > .ProseMirror {
        Horizontal stays small: neighbouring WORDS sit closer than
        neighbouring lines do. */
     inset: -10px -3px;
-  }
-}
-
-/* ===== The reassign menu =====
-   Raised by tapping a tag, and the answer to "who said this?" is always one
-   of a short known list, so it is a menu rather than a field. Each row
-   carries the last thing that voice said, because "Speaker A" identifies
-   nobody and "Move the gate." identifies the person you remember.
-
-   Attached to the BODY, not the editor: an ancestor with `overflow: hidden`
-   would otherwise clip the menu of a tag near the edge of the prose. */
-.speaker-menu {
-  position: absolute;
-  z-index: 960;
-  min-width: 15rem;
-  max-width: min(22rem, calc(100vw - 1rem));
-  background: var(--surface, #fff);
-  border: 1px solid var(--border, rgba(127, 127, 127, 0.25));
-  border-radius: 12px;
-  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.18);
-  overflow: hidden;
-}
-/* Transparent on a pointer: it exists to catch the click that dismisses the
-   menu, not to dim anything. The sheet below gives it a colour. */
-.speaker-menu-scrim {
-  position: fixed;
-  inset: 0;
-  z-index: 955;
-}
-.speaker-menu-head {
-  padding: 0.5rem 0.75rem 0.35rem;
-  font-size: 0.72rem;
-  font-weight: 600;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-  color: var(--fg-muted, #6b7280);
-}
-.speaker-menu-voice,
-.speaker-menu-nobody {
-  display: block;
-  width: 100%;
-  text-align: left;
-  background: none;
-  border: 0;
-  font: inherit;
-  color: var(--fg, #111827);
-  padding: 0.5rem 0.75rem;
-  cursor: pointer;
-}
-.speaker-menu-voice:hover,
-.speaker-menu-nobody:hover,
-.speaker-menu-voice:focus-visible,
-.speaker-menu-nobody:focus-visible {
-  background: var(--chip-bg, rgba(127, 127, 127, 0.12));
-}
-.speaker-menu-who {
-  display: block;
-  font-weight: 600;
-}
-/* One line, clipped. The words are here to tell two voices apart at a
-   glance; a row that grows to three lines turns a menu into a transcript. */
-.speaker-menu-said {
-  display: block;
-  font-size: 0.85em;
-  color: var(--fg-muted, #6b7280);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-.speaker-menu-voice[aria-checked="true"] .speaker-menu-who::after {
-  content: " ✓";
-  color: var(--accent, #2e7dd7);
-}
-.speaker-menu-empty {
-  padding: 0.35rem 0.75rem 0.5rem;
-  font-size: 0.85em;
-  color: var(--fg-muted, #6b7280);
-}
-/* Its own thing, not another voice: it removes a claim rather than moving
-   one, so it sits below a rule instead of at the end of the list. */
-.speaker-menu-nobody {
-  border-top: 1px solid var(--border, rgba(127, 127, 127, 0.25));
-  color: var(--fg-muted, #6b7280);
-}
-/* A menu anchored to a word works next to a cursor. Under a thumb it lands
-   half off-screen, on top of the sentence being read — so at phone width it
-   becomes a sheet at the bottom of the screen, where the thumb already is,
-   riding above the keyboard by the same --kb-bottom the threads pane uses. */
-@media (max-width: 560px) {
-  .speaker-menu {
-    position: fixed;
-    top: auto !important;
-    left: 0 !important;
-    right: 0;
-    bottom: var(--kb-bottom, 0px);
-    max-width: 100%;
-    border-radius: 16px 16px 0 0;
-    max-height: 70vh;
-    overflow-y: auto;
-    padding-bottom: env(safe-area-inset-bottom, 0px);
-  }
-  .speaker-menu-scrim {
-    background: rgba(0, 0, 0, 0.35);
-  }
-  .speaker-menu-voice,
-  .speaker-menu-nobody {
-    padding: 0.75rem;
   }
 }
 
@@ -1827,1442 +1028,6 @@ body.is-reading-width #editor > .ProseMirror {
   margin: 1.2em 0;
 }
 
-/* ========== code blocks + mermaid diagrams ========== */
-#editor > .ProseMirror .cm-codeblock {
-  margin: 0.8em 0;
-}
-#editor > .ProseMirror .cm-codeblock pre {
-  margin: 0;
-}
-/* Mermaid blocks: only show the diagram in the default (read) view.
-   Click the diagram to move the cursor into the code block — the
-   NodeView adds .is-editing, which reveals the source. Click outside
-   to collapse back to diagram-only. */
-#editor > .ProseMirror .cm-codeblock.is-mermaid .cm-source {
-  display: none;
-}
-#editor > .ProseMirror .cm-codeblock.is-mermaid.is-editing .cm-source {
-  display: block;
-  margin-top: 8px;
-  border: 1px dashed var(--border);
-  border-radius: var(--radius);
-}
-#editor > .ProseMirror .cm-codeblock.is-mermaid .cm-diagram {
-  cursor: pointer;
-}
-#editor > .ProseMirror .cm-codeblock.is-mermaid.is-editing .cm-diagram {
-  cursor: default;
-  opacity: 0.9;
-}
-#editor > .ProseMirror .cm-diagram {
-  background: var(--bg-panel);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  padding: 16px;
-  margin: 0 0 8px 0;
-  display: flex;
-  justify-content: center;
-  overflow: auto;
-  user-select: none;
-}
-#editor > .ProseMirror .cm-diagram:empty {
-  /* Don't reserve vertical space while mermaid's first render is in
-     flight, but keep the element in the layout so the NodeView can
-     swap in SVG or an error without a reflow jump. */
-  padding: 0;
-  border: 0;
-  background: transparent;
-  min-height: 0;
-}
-#editor > .ProseMirror .cm-diagram svg {
-  max-width: 100%;
-  height: auto;
-}
-#editor > .ProseMirror .cm-diagram-error {
-  color: var(--red);
-  font-family: var(--mono);
-  font-size: 13px;
-  padding: 8px 12px;
-  background: rgba(215, 58, 73, 0.08);
-  border-left: 3px solid var(--red);
-  border-radius: var(--radius-sm);
-  white-space: pre-wrap;
-}
-
-/* ========== tables (GFM) ========== */
-#editor > .ProseMirror table {
-  border-collapse: collapse;
-  margin: 1em 0;
-  width: 100%;
-  overflow: auto;
-  font-family: var(--sans); /* tables read better sans even in serif-body mode */
-  font-size: 14px;
-}
-#editor > .ProseMirror th,
-#editor > .ProseMirror td {
-  border: 1px solid var(--border);
-  padding: 6px 10px;
-  vertical-align: top;
-  text-align: left;
-  min-width: 6em;
-}
-#editor > .ProseMirror th {
-  background: var(--bg-panel);
-  font-weight: 600;
-}
-#editor > .ProseMirror tr:nth-child(even) td {
-  background: rgba(246, 248, 250, 0.5);
-}
-#editor > .ProseMirror td > p,
-#editor > .ProseMirror th > p {
-  margin: 0;
-}
-/* Wrap tables so wide ones scroll horizontally instead of blowing out the layout */
-#editor > .ProseMirror .prose-table {
-  display: block;
-  overflow-x: auto;
-  max-width: 100%;
-}
-
-/* ========== thread highlights ========== */
-#editor > .ProseMirror .thread-range {
-  background: rgba(255, 213, 79, 0.35);
-  border-bottom: 2px solid rgba(191, 135, 0, 0.55);
-  cursor: pointer;
-  transition: background 180ms ease;
-}
-#editor > .ProseMirror .thread-range:hover {
-  background: rgba(255, 213, 79, 0.55);
-}
-#editor > .ProseMirror .thread-range.resolved {
-  background: rgba(45, 164, 78, 0.12);
-  border-bottom-color: rgba(45, 164, 78, 0.45);
-}
-#editor > .ProseMirror .thread-range.active {
-  background: rgba(46, 125, 215, 0.22);
-  border-bottom-color: rgba(46, 125, 215, 0.8);
-}
-
-/* The highlight carries the SAME glyph as its card — comments mock 3. One
-   glyph per state, everywhere it appears: blue bubble for a comment, amber
-   question mark for an open review item (a question and a decision alike —
-   Bryan, 2026-09-01), green tick once answered or resolved. The open
-   question's amber wash is the one amber thing on the page; a plain comment
-   stays yellow, and a resolved thread fades to a green tint so it reads as
-   settled from across the room. */
-#editor > .ProseMirror .thread-range::before {
-  content: "";
-  display: inline-block;
-  width: 14px;
-  height: 14px;
-  margin-right: 4px;
-  vertical-align: -2px;
-  background: var(--ic-comment) center / contain no-repeat;
-}
-#editor > .ProseMirror .thread-range.question {
-  background: var(--warn-wash, #fff4e5);
-  border-bottom-color: var(--warn-fg, #b25e09);
-}
-#editor > .ProseMirror .thread-range.question::before {
-  background-image: var(--ic-question);
-}
-#editor > .ProseMirror .thread-range.answered {
-  background: rgba(45, 164, 78, 0.1);
-  border-bottom-color: rgba(45, 164, 78, 0.5);
-}
-#editor > .ProseMirror .thread-range.answered::before,
-#editor > .ProseMirror .thread-range.resolved::before {
-  background-image: var(--ic-done);
-}
-/* Arrived since the reader last looked: a red underline on the sentence,
-   cleared once the thread has sat in view (comment-seen.ts). */
-#editor > .ProseMirror .thread-range.is-new {
-  box-shadow: inset 0 -2px 0 var(--red);
-}
-#editor > .ProseMirror .thread-range.pulse {
-  animation: thread-wink 650ms ease-out;
-}
-@keyframes thread-wink {
-  0% {
-    background: rgba(255, 213, 79, 0.95);
-  }
-  45% {
-    background: rgba(255, 213, 79, 0.95);
-  }
-  100% {
-    background: rgba(255, 213, 79, 0.35);
-  }
-}
-
-/* ================= MEETING RECORD CHROME =================
-   One Record Audio button in the top bar owns everything audio; the live
-   transcript strip is #shell's second grid row, fused directly under the bar
-   the button sits in (the notch points at it), and the two popovers — the
-   speaker menu while recording, the start chooser while not — hang from the
-   same button. Secondary by construction against the doc: panel background,
-   sans at 13px against the prose's serif, one 36px row that is simply absent
-   (hidden ⇒ zero-height track) when there is nothing to say.
-
-   Every choice is made in the start chooser; the strip itself holds no
-   controls but the speaker tags — the controls live behind the button the
-   strip grows out of. */
-
-/* The lead banner (src/lead-banner.ts): a meeting doc's one standing line
-   while nobody is listening. Sticky at the top of the scrolling editor so
-   it is there whichever line the person is on, and gone — not dimmed — the
-   moment a lead attaches. Same secondary register as the strip: panel
-   background, sans at 13px, one row. It must never take a click meant for
-   the prose under it, and it is not dismissable: the state it names is the
-   thing to fix, and hiding the line would hide the queue. */
-.lead-banner {
-  position: sticky;
-  top: 0;
-  z-index: 3;
-  /* #editor is a two-column grid on wide screens (prose + the markup
-     margin, `.redline-layout`); the line spans both, or the prose would be
-     pushed into the margin column beside it. */
-  grid-column: 1 / -1;
-  align-self: start;
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  margin: -12px 0 20px;
-  padding: 8px 14px;
-  border: 1px solid var(--border);
-  border-radius: 10px;
-  background: var(--panel-bg, var(--bg));
-  color: var(--fg-muted);
-  font-family: var(--font-sans, system-ui, sans-serif);
-  font-size: 13px;
-  line-height: 1.35;
-  box-shadow: var(--shadow-sm, 0 1px 2px rgba(0, 0, 0, 0.08));
-  user-select: none;
-}
-.lead-banner[hidden] {
-  display: none;
-}
-.lead-banner__dot {
-  flex: 0 0 auto;
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  background: #d98b1f;
-}
-.lead-banner__text {
-  flex: 1 1 auto;
-  min-width: 0;
-}
-.lead-banner__text strong {
-  color: var(--fg);
-  font-weight: 600;
-}
-@media (max-width: 1100px) {
-  .lead-banner {
-    margin: -8px 0 16px;
-    padding: 7px 12px;
-    font-size: 12px;
-  }
-}
-
-.meeting-record {
-  flex: none;
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  /* design-mobile.md tap-target floor; it is a real control on a phone. */
-  min-height: 36px;
-  padding: 0 11px;
-  margin-left: 4px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-pill);
-  background: var(--bg);
-  font: inherit;
-  font-size: 13px;
-  font-weight: 600;
-  color: var(--fg);
-  cursor: pointer;
-}
-.meeting-record:hover {
-  background: var(--bg-hover);
-}
-.meeting-record.is-open {
-  border-color: var(--accent);
-  background: color-mix(in srgb, var(--accent) 10%, var(--bg));
-}
-/* Solid red dot + "Recording": the button and the strip under it read as one
-   unit, and the person who was told they are being recorded can look up and
-   see that they still are. */
-.meeting-record.is-live {
-  border-color: var(--red);
-  background: color-mix(in srgb, var(--red) 8%, var(--bg));
-  color: var(--red-strong);
-}
-.meeting-record-glyph {
-  display: inline-flex;
-}
-.meeting-record-glyph svg {
-  width: 16px;
-  height: 16px;
-  display: block;
-}
-.meeting-record-dot {
-  flex: none;
-  width: 10px;
-  height: 10px;
-  border-radius: var(--radius-pill);
-  background: var(--red);
-}
-/* The chooser's door beside Record, for the doc where a tap records at once
-   (nobody else on it): a chevron the height of the pill, no border of its
-   own so the pair reads as one control. Hidden while recording — Record's
-   own menu is the surface then. */
-.meeting-record-options {
-  flex: none;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  min-height: 36px;
-  min-width: 32px;
-  padding: 0 6px;
-  border: 0;
-  border-radius: var(--radius-pill);
-  background: transparent;
-  color: var(--fg-muted);
-  cursor: pointer;
-}
-.meeting-record-options svg {
-  width: 14px;
-  height: 14px;
-  display: block;
-}
-.meeting-record-options:hover {
-  background: var(--bg-hover);
-  color: var(--fg);
-}
-
-/* ---- the strip: blinker · clock · flowing feed ---- */
-.meeting-strip {
-  position: relative;
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  min-height: 36px;
-  padding: 0 14px;
-  background: var(--bg-panel);
-  border-bottom: 1px solid var(--border);
-  font-family: var(--sans);
-  font-size: 13px;
-  color: var(--fg);
-}
-/* `display: flex` out-specifies the UA's `[hidden]` rule, so a hidden strip
-   would otherwise claim its grid row on every surface with nothing to say. */
-.meeting-strip[hidden] {
-  display: none;
-}
-.meeting-strip.is-live {
-  background: color-mix(in srgb, var(--red) 6%, var(--bg));
-  border-bottom-color: color-mix(in srgb, var(--red) 25%, var(--bg));
-}
-/* The visual fuse: a notch pointing up at the Record button in the bar
-   above. Offset from the right edge to sit under the toolbar's last control;
-   cosmetic — nothing anchors it to the button's true box. */
-.meeting-strip::before {
-  content: "";
-  position: absolute;
-  top: -6px;
-  right: 64px;
-  width: 10px;
-  height: 10px;
-  transform: rotate(45deg);
-  background: var(--bg-panel);
-  border-top: 1px solid var(--border);
-  border-left: 1px solid var(--border);
-}
-.meeting-strip.is-live::before {
-  background: color-mix(in srgb, var(--red) 6%, var(--bg));
-  border-color: color-mix(in srgb, var(--red) 25%, var(--bg));
-}
-.meeting-blinker {
-  flex: none;
-  width: 10px;
-  height: 10px;
-  border-radius: var(--radius-pill);
-  background: var(--red);
-  animation: meeting-blink 1.2s ease-in-out infinite;
-}
-@keyframes meeting-blink {
-  0%,
-  100% {
-    opacity: 1;
-  }
-  50% {
-    opacity: 0.25;
-  }
-}
-/* A strip that is not recording does not pulse: the bot dialling in or
-   waiting on the host is the orange of "in progress", and a settled failure
-   is no light at all — a blinking dot beside "the mic was refused" claims a
-   recording that is not happening. */
-.meeting-strip[data-state="requesting"] .meeting-blinker,
-.meeting-strip.is-bot:not(.is-live) .meeting-blinker {
-  background: var(--orange);
-  animation: none;
-}
-.meeting-strip[data-state="unavailable"] .meeting-blinker,
-.meeting-strip[data-state="blocked"] .meeting-blinker,
-.meeting-strip[data-state="error"] .meeting-blinker {
-  background: var(--border-strong);
-  animation: none;
-}
-.meeting-elapsed {
-  flex: none;
-  font-weight: 700;
-  color: var(--red-strong);
-  font-variant-numeric: tabular-nums;
-}
-/* The clock is the microphone's; a bot meeting and every settled failure
-   would otherwise show 00:00 forever. */
-.meeting-strip:not([data-state="recording"]) .meeting-elapsed {
-  display: none;
-}
-/* One flowing line, newest words at the right, the tail fading out at the
-   left — the mask is what keeps a half-visible word from reading as clipped
-   text. */
-.meeting-feed {
-  flex: 1 1 auto;
-  min-width: 0;
-  overflow: hidden;
-  white-space: nowrap;
-  -webkit-mask-image: linear-gradient(90deg, transparent 0, #000 56px);
-  mask-image: linear-gradient(90deg, transparent 0, #000 56px);
-}
-.meeting-feed-inner {
-  float: right;
-}
-/* A note is read left-to-right from its start, and may need to wrap — the
-   flowing-feed treatment is for words that arrive forever, not for one
-   sentence with an audience. */
-.meeting-feed:has(.meeting-note) {
-  white-space: normal;
-  -webkit-mask-image: none;
-  mask-image: none;
-}
-.meeting-feed:has(.meeting-note) .meeting-feed-inner {
-  float: none;
-}
-.meeting-turn {
-  display: inline;
-}
-/* One span per word, so a word the engine revises is rewritten where it
-   already is rather than the line being redrawn under the reader. */
-.meeting-caption-line .w {
-  border-radius: 3px;
-}
-.meeting-caption-line .w.is-fixed {
-  animation: meeting-fix 1300ms ease-out both;
-}
-@keyframes meeting-fix {
-  0%,
-  40% {
-    background: rgba(46, 125, 215, 0.22);
-  }
-  100% {
-    background: transparent;
-  }
-}
-/* Who said the turn: a muted tag at the head of each turn's words, and the one
-   tap that names a voice from the feed itself.
-
-   THE TARGET IS THE BUTTON'S OWN PADDING, and the button clips NOTHING. Two
-   rounds of review were lost to a pseudo-element hit area: first an
-   ancestor's `overflow: hidden` ate it, then the button's own did. A pseudo
-   target is defeated by a clip on ANY ancestor, its own element included, and
-   it fails silently and measures 19px. Real padding cannot be clipped away by
-   a property somebody adds one level up.
-
-   So the two jobs are split across two elements, and must stay split: the
-   BUTTON is a transparent box whose padding is the target, and the PILL
-   inside it carries every visual and the only overflow. Give the button a
-   background, a border or an `overflow` and you have rebuilt the bug. */
-.meeting-speaker {
-  display: inline-block;
-  padding: 10px 4px;
-  margin: -10px 0 -10px -4px;
-  border: 0;
-  background: none;
-  font: inherit;
-  line-height: 0;
-  cursor: pointer;
-  vertical-align: middle;
-}
-/* The pill: the whole look, and the clip that keeps a long name from growing
-   the line. The max-width is load-bearing, not tidiness — a 60-character
-   name rendered a 335px pill that pushed every tag out of the window, so
-   naming a voice was what turned the labels off. */
-.meeting-speaker-pill {
-  display: inline-block;
-  max-width: 11em;
-  padding: 0 6px;
-  font-size: 10.5px;
-  font-weight: 600;
-  line-height: 1.5;
-  letter-spacing: 0.02em;
-  color: var(--fg-muted);
-  background: var(--bg);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-pill);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  /* At rest it has to LOOK like a control. Hover is not an answer on the
-     iPad, and `cursor: pointer` and a `title` are both hover-only. */
-  text-decoration: underline dotted;
-  text-underline-offset: 2px;
-}
-.meeting-speaker:hover .meeting-speaker-pill {
-  color: var(--fg);
-  border-color: var(--border-strong);
-}
-/* The pill says it is editable WITHOUT hover: a pencil before the name. CSS
-   content rather than markup so the button's aria-label ("Name Speaker A")
-   stays the accessible name, and at the START of the pill so the ellipsis
-   clipping a long name can never eat it. */
-.meeting-speaker-pill::before {
-  content: "✎ ";
-}
-/* A bot turn's tag is the same pill with nothing to tap: the platform named
-   the voice, and a live bot meeting is not renamed from the strip. So no
-   pencil, no dotted underline, no hover — the two signals that promise an
-   edit — on the span the strip renders instead of the button. */
-.meeting-speaker.is-fixed {
-  cursor: default;
-}
-.meeting-speaker.is-fixed .meeting-speaker-pill {
-  text-decoration: none;
-}
-.meeting-speaker.is-fixed .meeting-speaker-pill::before {
-  content: none;
-}
-.meeting-speaker.is-fixed:hover .meeting-speaker-pill {
-  color: var(--fg-muted);
-  border-color: var(--border);
-}
-/* Why no words are coming — an unconfigured server, a refused mic, an origin
-   the browser gives no mic on, a bot's state. It occupies the feed because it
-   is the answer to the same question. */
-.meeting-note {
-  color: var(--fg-muted);
-}
-/* The announcement a person is meant to READ. It holds the feed until a
-   settled turn arrives or it is tapped away, so it is a button — a
-   dismissible thing has to be reachable by more than a pointer. Stripped back
-   to look exactly like the note it replaces: the affordance is the whole
-   line, not a control someone has to find. */
-.meeting-note-dismiss {
-  font: inherit;
-  /* NOT the strip's 13px, and not `--fg-muted`. Every other string here is a
-     readout, glanced at by the one person holding the device. This one is a
-     SCRIPT: somebody reads it out loud to a room, off an iPad at arm's
-     length, while people wait. It gets body size and body colour because it
-     is the only line in the strip with an audience. */
-  font-size: 16px;
-  line-height: 1.4;
-  color: var(--fg);
-  background: none;
-  border: 0;
-  padding: 0;
-  margin: 0;
-  text-align: left;
-  cursor: pointer;
-}
-/* The same line when the tap DOES something — an auto-started huddle whose
-   mic is still waiting on a gesture. It has to read as a control at rest:
-   hover is not an answer on the iPad, and the words alone read as one more
-   caption. */
-.meeting-note-start {
-  text-decoration: underline dotted;
-  text-underline-offset: 3px;
-  /* A control someone has to HIT — padding rather than a min-height, so a
-     sentence that wraps to two lines on the phone grows the target instead
-     of centring a fixed box inside it. */
-  padding-block: 7px;
-}
-/* The line the transcript opens with, before anybody has said anything.
-   Italic because every other line in this panel is something a person
-   actually said, and this one is not: it is addressed to whoever pressed
-   record. Muted and 13px like the rest of the strip's chrome — it is a
-   reminder, not a script to be read out to a room. */
-.meeting-consent-note {
-  font-style: italic;
-}
-/* And the row gives a held sentence the room, rather than clipping it at
-   36px. The shell's strip track is `auto` — the strip RESERVES its height —
-   so growing here shortens the editor by exactly this much and gives it
-   straight back. Transient by construction: the rule stops applying the
-   moment a settled turn arrives or the line is tapped away. */
-.meeting-strip:has(.meeting-note-dismiss) {
-  padding-block: 5px;
-}
-
-/* ---- the popovers: scrim, speaker menu, start chooser ---- */
-.meeting-scrim {
-  position: fixed;
-  inset: 0;
-  z-index: 40;
-  background: rgba(27, 31, 35, 0.06);
-}
-.meeting-scrim[hidden] {
-  display: none;
-}
-.meeting-pop {
-  position: fixed;
-  top: calc(var(--safe-top) + 52px);
-  right: 10px;
-  z-index: 41;
-  width: 320px;
-  max-width: calc(100vw - 20px);
-  /* The scarce axis on the iPad is HEIGHT (~750px usable); the chooser holds
-     two groups, a checkbox and a CTA, so it scrolls before it clips. */
-  max-height: calc(100dvh - var(--safe-top) - 70px);
-  overflow: auto;
-  background: var(--bg);
-  border: 1px solid var(--border);
-  border-radius: 10px;
-  box-shadow: var(--shadow-lg);
-  padding: 6px;
-  font-family: var(--sans);
-  font-size: 14px;
-  color: var(--fg);
-}
-.meeting-pop[hidden] {
-  display: none;
-}
-.meeting-sheet {
-  width: 340px;
-}
-.meeting-pop-head {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 8px 10px 6px;
-  font-size: 12px;
-  color: var(--fg-muted);
-}
-.meeting-pop-head .meeting-blinker {
-  width: 8px;
-  height: 8px;
-}
-.meeting-pop-speaker {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  min-height: 36px;
-  padding: 2px 10px;
-  font-size: 13.5px;
-}
-.meeting-pop-speaker-name {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.meeting-pop-rename {
-  flex: none;
-  margin-left: auto;
-  min-height: 36px;
-  padding: 6px 8px;
-  font: inherit;
-  font-size: 12.5px;
-  color: var(--accent);
-  background: none;
-  border: 0;
-  cursor: pointer;
-}
-.meeting-pop-sep {
-  height: 1px;
-  background: var(--border);
-  margin: 5px 8px;
-}
-/* Stop is the menu's primary action and has to look like one: a full-width
-   red button at the bottom, not one more menu row (Bryan, on the mock: "make
-   this more like a button"). The chooser's Start is the same shape — the two
-   verbs of the same machine. */
-.meeting-stop-cta,
-.meeting-start-cta {
-  display: block;
-  width: calc(100% - 16px);
-  margin: 4px 8px 8px;
-  min-height: 40px;
-  /* The chooser outgrows the iPad tier's ~750px of height once Advanced
-     Options is open. The pop scrolls (its own max-height above); the verb
-     stays visible by sticking to the scrollport's bottom edge, and content
-     sliding under it IS the scroll cue. When everything fits, sticky sits
-     at its natural place and nothing changes. */
-  position: sticky;
-  bottom: 0;
-  box-shadow: 0 -10px 10px -8px color-mix(in srgb, var(--fg) 15%, transparent);
-  padding: 10px;
-  border: 0;
-  border-radius: var(--radius-lg);
-  cursor: pointer;
-  background: var(--red);
-  color: #fff;
-  font: 700 14px var(--sans);
-}
-.meeting-stop-cta:hover,
-.meeting-start-cta:hover {
-  background: var(--red-strong);
-}
-.meeting-stop-cta:disabled,
-.meeting-start-cta:disabled {
-  opacity: 0.6;
-  cursor: default;
-}
-.meeting-sheet-title {
-  margin: 4px 10px 8px;
-  font-size: 14px;
-}
-/* The last meeting's voices, still nameable after it ended — the surface the
-   old idle strip's legend carried, now living where the button leads. */
-.meeting-pop-cast {
-  margin: 0 8px 10px;
-  padding-bottom: 4px;
-  border-bottom: 1px solid var(--border);
-}
-.meeting-choice-group {
-  margin: 0 8px 10px;
-}
-.meeting-choice-group-label {
-  font-size: 11px;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-  color: var(--fg-muted);
-  margin: 0 2px 5px;
-}
-.meeting-choice {
-  display: flex;
-  align-items: flex-start;
-  gap: 9px;
-  padding: 9px 10px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-lg);
-  margin-bottom: 6px;
-  cursor: pointer;
-}
-.meeting-choice.is-selected {
-  border-color: var(--accent);
-  background: color-mix(in srgb, var(--accent) 8%, var(--bg));
-}
-.meeting-choice input[type="radio"] {
-  flex: none;
-  margin: 2px 0 0;
-  accent-color: var(--accent);
-}
-.meeting-choice-body {
-  display: block;
-  min-width: 0;
-  flex: 1;
-}
-.meeting-choice-title {
-  display: block;
-  font-weight: 600;
-  font-size: 13.5px;
-}
-.meeting-choice-detail {
-  display: block;
-  font-size: 12px;
-  color: var(--fg-muted);
-}
-.meeting-bot-url,
-.meeting-bot-name {
-  width: 100%;
-  min-height: 36px;
-  margin-top: 6px;
-  padding: 7px 8px;
-  font: 13px var(--sans);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  background: var(--bg);
-  color: var(--fg);
-}
-/* The prefilled name reads as the default it is, not as something typed. */
-.meeting-bot-name {
-  color: var(--fg-muted);
-}
-.meeting-bot-name:focus {
-  color: var(--fg);
-}
-.meeting-bot-name-hint {
-  display: block;
-  margin-top: 8px;
-  font-size: 11px;
-  color: var(--fg-muted);
-}
-/* The chooser's verb, in a sticky footer. The red CTA carries its own
-   `position: sticky` for the menu's Stop twin; inside this footer it goes
-   static instead, so one element owns `bottom: 0` — same scrollport, same
-   edge, the verb reachable with Advanced Options open on a ~750px-tall
-   iPad. */
-.meeting-start-actions {
-  position: sticky;
-  bottom: 0;
-  /* Opaque, or the content scrolling under it shows through and the cue
-     reads as a rendering bug. */
-  background: var(--bg);
-  box-shadow: 0 -10px 10px -8px color-mix(in srgb, var(--fg) 15%, transparent);
-}
-.meeting-start-actions .meeting-start-cta {
-  position: static;
-  box-shadow: none;
-}
-.meeting-pop-error {
-  display: block;
-  margin: 0 10px 6px;
-  font-size: 12.5px;
-  color: var(--red-strong);
-}
-.meeting-pop-error:empty {
-  display: none;
-}
-
-/* ---- the engine hint + Advanced Options (approved mock 2) ----
-   The engine picker itself is gone from the chooser (one-tap ticket,
-   2026-09-02); what remains is the one line about the default engine's
-   speaker cap, and Advanced Options: a collapsed section whose header carries
-   an amber dot while anything is off its default, with the same dot beside
-   each modified control. Max speakers lives IN here (AssemblyAI engines only). */
-.meeting-engine-hint {
-  margin: -6px 10px 10px;
-  font-size: 11.5px;
-  color: var(--fg-muted);
-}
-.meeting-adv {
-  margin: 0 8px 10px;
-  border-top: 1px solid var(--border);
-  padding-top: 4px;
-}
-.meeting-adv-headrow {
-  display: flex;
-  align-items: center;
-}
-.meeting-adv-head {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  flex: 1;
-  min-width: 0;
-  min-height: 36px;
-  padding: 4px 2px;
-  border: 0;
-  background: none;
-  font: 500 13px var(--sans);
-  color: var(--fg-muted);
-  cursor: pointer;
-  text-align: left;
-}
-.meeting-adv-chev {
-  width: 10px;
-  font-size: 10px;
-}
-.meeting-adv-moddot,
-.meeting-adv-ctldot {
-  flex: none;
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: var(--warn-fg);
-}
-.meeting-adv-reset {
-  flex: none;
-  border: 0;
-  background: none;
-  font: 400 11.5px var(--sans);
-  color: var(--accent);
-  cursor: pointer;
-  min-height: 36px;
-  padding: 0 4px;
-}
-.meeting-adv-ctl {
-  padding: 9px 2px 7px;
-}
-.meeting-adv-ctl + .meeting-adv-ctl {
-  border-top: 1px solid var(--border);
-}
-.meeting-adv-label {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  font-size: 12.5px;
-  margin-bottom: 5px;
-}
-.meeting-adv-ctldot {
-  visibility: hidden;
-}
-.meeting-adv-ctl.is-modified .meeting-adv-ctldot {
-  visibility: visible;
-}
-.meeting-adv-labtext {
-  flex: 1;
-  min-width: 0;
-}
-.meeting-adv-val {
-  flex: none;
-  font-size: 12px;
-  color: var(--fg-muted);
-  white-space: nowrap;
-}
-.meeting-adv-val b {
-  color: var(--fg);
-  font-weight: 600;
-}
-.meeting-adv input[type="range"] {
-  width: 100%;
-  margin: 6px 0 2px;
-  accent-color: var(--accent);
-  cursor: pointer;
-}
-.meeting-adv-seg {
-  display: flex;
-  border: 1px solid var(--border);
-  border-radius: 7px;
-  overflow: hidden;
-}
-.meeting-adv-seg button {
-  flex: 1;
-  min-height: 36px;
-  padding: 5px 4px;
-  border: 0;
-  border-right: 1px solid var(--border);
-  background: none;
-  font: inherit;
-  font-size: 12px;
-  color: var(--fg-muted);
-  cursor: pointer;
-}
-.meeting-adv-seg button:last-child {
-  border-right: 0;
-}
-.meeting-adv-seg button.is-on {
-  background: color-mix(in srgb, var(--accent) 10%, var(--bg));
-  color: var(--accent);
-  font-weight: 600;
-}
-.meeting-adv-toggle {
-  flex: none;
-  width: 34px;
-  height: 20px;
-  border: 0;
-  border-radius: 10px;
-  background: var(--border);
-  position: relative;
-  cursor: pointer;
-  transition: background 0.15s;
-}
-.meeting-adv-toggle::after {
-  content: "";
-  position: absolute;
-  top: 2px;
-  left: 2px;
-  width: 16px;
-  height: 16px;
-  border-radius: 50%;
-  background: #fff;
-  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.25);
-  transition: left 0.15s;
-}
-.meeting-adv-toggle.is-on {
-  background: var(--accent);
-}
-.meeting-adv-toggle.is-on::after {
-  left: 16px;
-}
-.meeting-adv-stepper {
-  display: inline-flex;
-  align-items: center;
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  overflow: hidden;
-}
-.meeting-adv-stepper button {
-  min-width: 36px;
-  min-height: 32px;
-  border: 0;
-  background: color-mix(in srgb, var(--fg) 3%, var(--bg));
-  font: inherit;
-  font-size: 14px;
-  color: var(--fg-muted);
-  cursor: pointer;
-}
-.meeting-adv-stepper button:first-child {
-  border-right: 1px solid var(--border);
-}
-.meeting-adv-stepper button:last-child {
-  border-left: 1px solid var(--border);
-}
-.meeting-adv-stepnum {
-  min-width: 70px;
-  text-align: center;
-  font-size: 13px;
-  padding: 2px 9px;
-}
-.meeting-adv-chips {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 5px;
-  align-items: center;
-  border: 1px solid var(--border);
-  border-radius: 7px;
-  padding: 6px 8px;
-  min-height: 36px;
-  cursor: text;
-}
-.meeting-adv-chip {
-  display: inline-flex;
-  align-items: center;
-  gap: 3px;
-  font-size: 12px;
-  color: var(--accent);
-  background: color-mix(in srgb, var(--accent) 10%, var(--bg));
-  border-radius: 5px;
-  padding: 2px 2px 2px 7px;
-}
-.meeting-adv-chip-x {
-  border: 0;
-  background: none;
-  font: inherit;
-  font-size: 12px;
-  color: var(--accent);
-  opacity: 0.7;
-  cursor: pointer;
-  padding: 0 5px;
-}
-.meeting-adv-chips input {
-  flex: 1;
-  min-width: 90px;
-  border: 0;
-  outline: none;
-  background: transparent;
-  font: 12px var(--sans);
-  color: var(--fg);
-}
-.meeting-adv-chips input::placeholder {
-  color: var(--fg-muted);
-}
-.meeting-adv-note {
-  margin-top: 4px;
-  font-size: 11.5px;
-  color: var(--fg-muted);
-}
-.meeting-adv-note.is-applied {
-  color: var(--accent);
-}
-/* The panel and the live engine disagree and the wire cannot settle it —
-   the same amber the header's modified dot uses, because it is the same
-   fact: something here is not what the session is running. */
-.meeting-adv-note.is-stale {
-  color: var(--warn-fg);
-}
-.meeting-adv-foot {
-  margin-top: 8px;
-  padding-top: 8px;
-  border-top: 1px solid var(--border);
-  font-size: 11.5px;
-  color: var(--fg-muted);
-  text-align: center;
-}
-/* Mobile tier (≤1100, per design-mobile.md): fingers, not cursors — the
-   approved mock's 430 frame promises ≥44px targets. The slider keeps its
-   native thumb but the whole input grows into the tap target. */
-@media (max-width: 1100px) {
-  .meeting-adv-head,
-  .meeting-adv-reset {
-    min-height: 44px;
-  }
-  .meeting-adv-reset {
-    padding: 0 8px;
-    font-size: 13px;
-  }
-  /* The 44px is the TAP TARGET; the thumb inside it is the mock's 24px.
-     Sizing a thumb means giving up the native control — `accent-color`
-     cannot do it and `::-webkit-slider-thumb` is inert until `appearance`
-     is none — which also gives up the blue progress fill, since Chrome has
-     no `::-webkit-slider-progress`. The fill is painted back as a gradient
-     driven by `--fill`, which the panel sets on the input as it moves. */
-  .meeting-adv input[type="range"] {
-    height: 44px;
-    margin: 0;
-    appearance: none;
-    -webkit-appearance: none;
-    background: none;
-  }
-  .meeting-adv input[type="range"]::-webkit-slider-runnable-track {
-    height: 6px;
-    border-radius: 3px;
-    background: linear-gradient(
-      to right,
-      var(--accent) var(--fill, 0%),
-      var(--border) var(--fill, 0%)
-    );
-  }
-  .meeting-adv input[type="range"]::-webkit-slider-thumb {
-    appearance: none;
-    -webkit-appearance: none;
-    width: 24px;
-    height: 24px;
-    border: 0;
-    border-radius: 50%;
-    background: var(--accent);
-    box-shadow: 0 1px 3px rgb(0 0 0 / 30%);
-    /* Centres the 24px thumb on the 6px track: (6 - 24) / 2. */
-    margin-top: -9px;
-  }
-  /* Firefox paints its own progress, so the track stays flat there. */
-  .meeting-adv input[type="range"]::-moz-range-track {
-    height: 6px;
-    border-radius: 3px;
-    background: var(--border);
-  }
-  .meeting-adv input[type="range"]::-moz-range-progress {
-    height: 6px;
-    border-radius: 3px;
-    background: var(--accent);
-  }
-  .meeting-adv input[type="range"]::-moz-range-thumb {
-    width: 24px;
-    height: 24px;
-    border: 0;
-    border-radius: 50%;
-    background: var(--accent);
-    box-shadow: 0 1px 3px rgb(0 0 0 / 30%);
-  }
-  .meeting-adv-seg button {
-    min-height: 44px;
-    font-size: 13px;
-  }
-  .meeting-adv-toggle {
-    width: 51px;
-    height: 31px;
-    border-radius: 16px;
-  }
-  .meeting-adv-toggle::after {
-    width: 27px;
-    height: 27px;
-  }
-  .meeting-adv-toggle.is-on::after {
-    left: 22px;
-  }
-  .meeting-adv-stepper button {
-    min-width: 44px;
-    min-height: 44px;
-    font-size: 16px;
-  }
-  .meeting-adv-stepnum {
-    font-size: 14px;
-  }
-  .meeting-adv-chips {
-    min-height: 44px;
-  }
-  .meeting-adv-chips input {
-    min-height: 32px;
-    font-size: 14px;
-  }
-  .meeting-adv-chip {
-    font-size: 13px;
-    padding: 5px 4px 5px 9px;
-  }
-  .meeting-adv-chip-x {
-    padding: 4px 8px;
-  }
-}
-
-/* ---- the timing readout (`?timing=1`) ----
-   A row of its own under the strip's line, present only under the flag. The
-   cells wrap rather than scroll — measured at 430px, nowrap plus overflow-x
-   made the strip 447px inside a 430px window, because `overflow-x` does not
-   shrink an element's max-content contribution. */
-.meeting-strip.has-timing {
-  flex-wrap: wrap;
-}
-.meeting-timing-row {
-  flex: 1 1 100%;
-  min-width: 0;
-  order: 99;
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 4px 12px;
-  min-height: 34px;
-  padding-block: 2px;
-  border-top: 1px dashed var(--border);
-  font-size: 11.5px;
-  font-variant-numeric: tabular-nums;
-  color: var(--fg-muted);
-}
-.meeting-timing-stat {
-  flex: 0 1 auto;
-  min-width: 0;
-  display: inline-flex;
-  align-items: baseline;
-  gap: 5px;
-  /* A label and its number are one thing; only the gaps BETWEEN cells break. */
-  white-space: nowrap;
-}
-.meeting-timing-label {
-  opacity: 0.75;
-}
-.meeting-timing-value {
-  color: var(--fg);
-  font-weight: 600;
-}
-.meeting-timing-save {
-  flex: none;
-  margin-left: auto;
-  font: inherit;
-  font-weight: 600;
-  padding: 2px 10px;
-  /* design-mobile.md tap-target floor; it is a real control on a phone. */
-  min-height: 36px;
-  border: 1px solid var(--border);
-  background: var(--bg);
-  color: var(--fg);
-  border-radius: var(--radius-pill);
-  cursor: pointer;
-}
-
-/* ---- narrow widths ---- */
-@media (max-width: 640px) {
-  /* Glyph only: at 121px the word "Record Audio" was a third of the phone's
-     toolbar, and the crumb beside it paid for it (see the topbar phone block).
-     The red dot and red border still say "recording", and the strip that
-     opens under the bar says it in words. */
-  .meeting-record {
-    padding: 0 9px;
-    font-size: 12px;
-    margin-left: 2px;
-    gap: 0;
-  }
-  .meeting-record-label {
-    display: none;
-  }
-  .meeting-record-options {
-    min-width: 28px;
-    padding: 0 4px;
-  }
-  .meeting-strip {
-    gap: 8px;
-    padding: 0 10px;
-  }
-  .meeting-strip::before {
-    right: 60px;
-  }
-  /* The popovers become an edge-to-edge sheet under the bar. */
-  .meeting-pop,
-  .meeting-sheet {
-    left: 6px;
-    right: 6px;
-    width: auto;
-  }
-}
-@media (min-width: 721px) {
-  /* The strip runs as a single ROW at every width now — it never stacks into
-     a column. The timing line already gets its own full-width row inside
-     that flex container unconditionally, via `order: 99` + `flex-basis:
-     100%` above. This query only refines that for ≥721px: `height: auto`
-     lets the strip grow past its 36px floor to fit the wrapped line, and
-     pinning the timing row to `flex: 0 0 100%` keeps it rigid once there is
-     room to show the stats in full. Below 721px the unconditional `1 1 100%`
-     stays in effect so the row can shrink instead of overflowing a narrow
-     window. */
-  .meeting-strip.has-timing {
-    height: auto;
-    flex-wrap: wrap;
-  }
-  .meeting-timing-row {
-    /* A line of its own on the flattened row. */
-    flex: 0 0 100%;
-  }
-}
-@media (max-width: 720px) {
-  /* The strip yields while an editor has focus at phone width — height is
-     the scarce thing under a keyboard, and an idle strip has nothing to say
-     while somebody types. `data-edit-viewport` is published by
-     edit-viewport.ts from `stripYield()`, which never yields a RECORDING
-     strip to `hidden`: a live mic with no indicator is not a thing to ship.
-     Yielding is layout ONLY — the socket, the state machine and any
-     in-progress capture run straight through an edit. */
-  body[data-edit-viewport="hidden"] .meeting-strip {
-    display: none;
-  }
-}
-@media (prefers-reduced-motion: reduce) {
-  .meeting-blinker,
-  .meeting-caption-line .w.is-fixed {
-    animation: none;
-  }
-}
-
-/* ========== provisional live zone (meeting-live-zone.ts) ==========
-   The live transcript at the END of the doc — appended after the editor's
-   content, never inside it. Approved mock: provisional-text-mock-1, option A.
-   Sans throughout: provisional text is a different material from the notes,
-   so it can never be mistaken for one. No status dots; the caret on the line
-   still being spoken is the one animated thing in the stream. */
-/* The transcript starts on the next line down from the doc's last line
-   (owner, 2026-09-01: "too much space between the bottom of the doc and the
-   start of the live transcript box"). No top margin of its own — the last
-   paragraph's bottom margin is the whole gap — a slim top pad, and the label
-   floated into the top-right corner so the first line of words IS the first
-   line of the box. Measured at 1180×820 and 430px: last prose line-box
-   bottom to first transcript line-box top went from 69px / 51px to under one
-   prose line-height. */
-.live-zone {
-  margin: 0 0 4px;
-  padding: 4px 14px 10px;
-  border: 1.5px dashed var(--border-strong);
-  border-radius: var(--radius-lg);
-  background: var(--bg-panel);
-  font-family: var(--sans);
-  max-width: min(100%, 1200px);
-  margin-inline: auto;
-}
-body.is-reading-width #editor > .live-zone {
-  max-width: 36rem;
-}
-/* The zone hugs the last line of the doc: the editor's 60vh click-to-type
-   floor would otherwise strand it below a screen of empty surface on a doc
-   whose meeting has just started. Only while the zone is showing — an
-   ordinary doc keeps its clickable runway. `auto`, never `0`: in the
-   balloon-margin grid (redline-layout, below) an explicit min-height —
-   60vh or 0 — becomes the prose ROW's size and the prose overflows it,
-   which put the zone at a fixed 60vh over the notes; `auto` sizes the row
-   to the content, so the zone follows the last line. */
-#editor:has(> .live-zone:not([hidden])) > .ProseMirror {
-  min-height: auto;
-}
-.lz-head {
-  float: right;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin: 2px 0 2px 12px;
-  line-height: 1.3;
-  font-size: 11.5px;
-  font-weight: 600;
-  letter-spacing: 0.02em;
-  color: var(--fg-muted);
-}
-/* The stream is ONE run of text: a turn is the engine's unit, not the
-   reader's (owner, 2026-09-01), so turns are inline spans and the only
-   line breaks are the <br>s the engine's own text carried. */
-.lz-lines,
-.lz-chunk-lines {
-  font-size: 15.5px;
-  line-height: 1.55;
-  color: #4b535c;
-  margin: 0;
-  overflow-wrap: anywhere;
-}
-.lz-turn {
-  display: inline;
-}
-.lz-speaker {
-  font-size: 0.78em;
-  font-weight: 550;
-  letter-spacing: 0.01em;
-  padding: 0.1em 0.5em;
-  margin-right: 0.35em;
-  border-radius: var(--radius-pill);
-  background: rgba(127, 127, 127, 0.12);
-  color: var(--fg-muted);
-  white-space: nowrap;
-}
-.lz-partial::after {
-  content: "";
-  display: inline-block;
-  width: 2px;
-  height: 1em;
-  vertical-align: -0.15em;
-  background: var(--red);
-  margin-left: 2px;
-  animation: lz-caret-blink 1s step-end infinite;
-}
-@keyframes lz-caret-blink {
-  0%,
-  100% {
-    opacity: 1;
-  }
-  50% {
-    opacity: 0;
-  }
-}
-/* The splitting-off card: settled lines lift out of the dashed frame as a
-   solid card that says what is happening to them, while the remainder keeps
-   streaming below. */
-/* Not positioned: a positioned card would paint over the floated label in
-   the corner; unpositioned, the label stays visible and the card's lines
-   wrap short of it like the stream's do. */
-.lz-chunk {
-  border: 1px solid var(--border);
-  border-left: 3px solid var(--accent);
-  border-radius: var(--radius);
-  background: var(--bg);
-  box-shadow: 0 3px 12px rgba(27, 31, 35, 0.13);
-  padding: 8px 11px 10px;
-  margin: -2px -8px 12px -12px;
-}
-.lz-chunk-lines {
-  color: var(--fg);
-}
-.lz-chunk-note {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  font-size: 11.5px;
-  font-weight: 600;
-  color: var(--accent);
-  margin-top: 5px;
-}
-.lz-spinner {
-  width: 11px;
-  height: 11px;
-  border-radius: 50%;
-  border: 2px solid color-mix(in srgb, var(--accent) 30%, transparent);
-  border-top-color: var(--accent);
-  animation: lz-spin 850ms linear infinite;
-}
-@keyframes lz-spin {
-  to {
-    transform: rotate(360deg);
-  }
-}
-/* The settle wash: the note a chunk just became, highlighted where it landed
-   (settle-wash.ts decorates the block). ~1.5s held at full wash, then a
-   1.3s fade. No provenance label — the highlight IS the provenance. */
-#editor > .ProseMirror .settle-wash {
-  animation: settle-wash 2800ms ease-out;
-}
-@keyframes settle-wash {
-  0% {
-    background: color-mix(in srgb, var(--accent) 18%, transparent);
-    box-shadow: -20px 0 0 color-mix(in srgb, var(--accent) 18%, transparent);
-  }
-  55% {
-    background: color-mix(in srgb, var(--accent) 16%, transparent);
-    box-shadow: -20px 0 0 color-mix(in srgb, var(--accent) 16%, transparent);
-  }
-  100% {
-    background: transparent;
-    box-shadow: -20px 0 0 transparent;
-  }
-}
-@media (prefers-reduced-motion: reduce) {
-  .lz-partial::after,
-  .lz-spinner,
-  #editor > .ProseMirror .settle-wash {
-    animation: none;
-  }
-}
-
 /* ================= COMMENT PILL (inline, near selection/caret) =================
    Small circular button anchored near the end of the selection (or the
    caret when the selection is empty). Positioned absolutely inside the
@@ -3442,7 +1207,8 @@ body.threads-resizing {
    the top-bar chip and the off-screen hints. Blue bubble: comment. Amber
    question mark: an open review item — question OR decision, one glyph
    (Bryan, 2026-09-01). Green tick: answered or resolved. The status dot the
-   head used to lead with is superseded by the glyph and hidden. */
+   head used to lead with said the same thing in a colour with no name; the
+   card stopped building one (thread-card.ts) rather than hiding it here. */
 :root {
   --ic-comment: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M2.5 3.5h11v7h-6l-3 2.5v-2.5h-2z' fill='none' stroke='%232e7dd7' stroke-width='1.6' stroke-linejoin='round'/%3E%3C/svg%3E");
   --ic-question: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Ccircle cx='8' cy='8' r='7.5' fill='%23b25e09'/%3E%3Ctext x='8' y='11.6' text-anchor='middle' font-family='-apple-system,Helvetica,Arial,sans-serif' font-weight='700' font-size='10.5' fill='%23fff'%3E?%3C/text%3E%3C/svg%3E");
@@ -3467,13 +1233,9 @@ body.threads-resizing {
   background-image: var(--ic-done);
 }
 /* The red dot: something here changed since the reader last looked. On the
-   glyph rather than beside it, so it costs no width in a 300px column.
-   The CARD's copy of this dot is a real element (`.thread-new-dot`, below)
-   that `head()` builds, and this pseudo used to draw a second one at the same
-   7px and the same offset, exactly on top of it. This selector is now the
-   hint icons only (comment-hints.ts), which carry `is-new` on the icon
-   itself and build no element. */
-.lf-ic.is-new::after {
+   glyph rather than beside it, so it costs no width in a 300px column. */
+.lf-ic.is-new::after,
+.thread.is-new .thread-glyph::after {
   content: "";
   position: absolute;
   top: -3px;
@@ -3487,35 +1249,49 @@ body.threads-resizing {
 .thread.is-new {
   box-shadow: 0 0 0 2px rgba(215, 58, 73, 0.35);
 }
-.thread-answer-cta {
-  display: inline-block;
-  margin-top: 4px;
+/* The folded face of a declared thread answers in place, and the field IS how
+   the reader knows it is a question — no chip says so. One line, because it
+   has to fit under two lines of summary inside a 260px margin bubble; the
+   fold is where a longer answer goes. */
+.thread-answer-field {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 6px;
+  min-width: 0;
+}
+.thread-answer-input {
+  flex: 1 1 auto;
+  min-width: 0;
+  font: inherit;
+  font-size: 12.5px;
+  font-family: var(--sans);
+  min-height: 30px;
+  padding: 4px 8px;
+  border: 1px solid var(--border-strong, var(--border));
+  border-radius: var(--radius-sm);
+  background: var(--bg);
+  color: var(--fg);
+}
+.thread-answer-input:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -1px;
+}
+.thread-answer-send {
+  flex: 0 0 auto;
+  font: inherit;
   font-size: 12px;
   font-weight: 600;
-  color: var(--warn-fg, #b25e09);
-  border: 1px solid var(--warn-fg, #b25e09);
+  min-height: 30px;
+  padding: 4px 12px;
   border-radius: var(--radius-sm);
-  padding: 3px 10px;
-  background: var(--bg);
+  cursor: pointer;
 }
 .thread-options-compact {
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
   margin-top: 6px;
-}
-/* Content width, not a share of the row. A compact option carries
-   `.thread-item-option` as well, for the frame and the tap target, and that
-   rule's `flex: 1 1 240px` is written for the OPEN card — where an answer is
-   the thing you came to press. Folded, these are chips on line two beside a
-   topic, and inheriting the basis stretched a two-word option to 345px in a
-   card sitting in the flow. Two classes rather than one, because
-   `.thread-item-option` is declared further down this file and would win a
-   tie on order alone. `max-width` keeps a long label inside the row instead
-   of widening it. */
-.thread-options-compact .thread-item-option {
-  flex: 0 1 auto;
-  max-width: 100%;
 }
 .thread-item-option-compact {
   min-height: 30px;
@@ -3551,108 +1327,89 @@ body.threads-resizing {
   font-size: 11px;
   color: var(--fg-muted);
 }
-/* A resolved thread folds to ONE faded line — the head and the topic — until
-   it is opened (comments mock 3). The slots keep their measured heights (the
-   morph needs them); clipping is what hides them, so opening still measures
-   real faces. */
-.thread.resolved:not(.expanded) {
-  opacity: 0.55;
-  padding-top: 5px;
-  padding-bottom: 5px;
+/* A closed-out thread keeps its two lines and its shape — it just recedes
+   (mock round 4, superseding mock 3's fold to a single faded line). The line
+   it used to hide is the one that says what was settled: the tick, the outcome
+   and who chose it live on slot B's summary face, so clipping slot B left a
+   resolved card marked by nothing but its own dimness.
+
+   Withdrawn recedes the same way and adds the one thing a strike-through
+   cannot: the reason, on the row under it. Neither state wears a word on the
+   head — see `.thread-tag`. */
+.thread.resolved:not(.expanded),
+.thread.withdrawn:not(.expanded) {
+  opacity: 0.6;
 }
-/* Nothing to clip any more: the folded card IS two lines, and the foot now
-   rides inside the slot's detail face. The fade and the green tick are the
-   whole of "resolved" on a folded card. */
+.thread.withdrawn {
+  background: var(--bg-panel);
+}
+.thread.withdrawn .thread-topic {
+  text-decoration: line-through;
+  text-decoration-color: var(--fg-muted);
+}
+/* Why the ask was taken back. Muted and one step down in size: it is the
+   footnote to a card that has already said its piece. */
+.thread-gone {
+  margin-top: 7px;
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--fg-muted);
+  overflow-wrap: anywhere;
+}
 
-/* ---------- the card: one head row, one folding slot ---------- */
+/* ---------- the card: head, two folding slots, foot ---------- */
 
-/* LINE ONE, and the row that stays put across the fold: glyph, topic, who
-   started it, chevron. It is the whole of "what is this and does it need me",
-   which is what a reader scanning a column of these is answering. */
+/* Row 1 is the attribution for the OPENING MESSAGE and nothing else — which
+   is why the opening message never repeats the name when the card expands. */
 .thread-head {
   display: flex;
   align-items: center;
-  gap: 7px;
-  min-width: 0;
-  font-family: var(--sans);
-}
-/* Topic and starter share one clipped line: a long topic takes the space and
-   the name ellipsizes with it, rather than the name pushing the topic out of
-   a 300px balloon. */
-.thread-topic-line {
-  flex: 1;
-  min-width: 0;
-  font-size: 13.5px;
-  line-height: 1.32;
-  color: var(--fg);
-}
-.thread-sep,
-.thread-who {
-  color: var(--fg-muted);
-  font-weight: 400;
-}
-.thread-tag {
-  color: var(--fg-muted);
-}
-/* An open card lets line one breathe: it is the header of what you just
-   opened, so it stops being an ellipsized scan line and reads in full. */
-.thread.expanded .thread-topic-line {
-  white-space: normal;
-  overflow: visible;
-  font-weight: 650;
-  font-size: 14px;
-}
-/* Except in the margin, where line one may not move at all.
-   "The title and the glyph stay put on expand" is a claim about the fold, and
-   the fold is tightest exactly where the column is 260px wide: a topic that
-   fits one clipped row folded wraps to three rows open, the head grows from
-   18px to 55px, and `align-items: center` re-centres the glyph 20px down the
-   row the reader just tapped. Measured at 1180x820 (2026-09-03). The prose
-   surfaces — drawer, modal, inline card — have the width to let it wrap, and
-   there the growth is the header behaving like a header. */
-.markup-margin .thread.expanded .thread-topic-line {
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  /* Restated, not reverted: these are the folded values from
-     `.thread-topic-line` above, and `revert` would go past them to the
-     browser default. `normal` rather than `inherit` for the same reason a
-     step further on — `inherit` is the right answer in a browser and an
-     unresolved keyword to the test that has to compare the two states. */
-  font-weight: normal;
-  font-size: 13.5px;
-}
-/* Who opened it and when, under line one on the open card only. The folded
-   card names the starter on line one instead — a swatch beside the glyph
-   made two different threads read as the same one at a glance. */
-.thread-asked-meta {
-  display: flex;
-  align-items: center;
   gap: 6px;
-  margin: 0 0 6px;
+  font-size: 12.5px;
+  min-width: 0;
   font-family: var(--sans);
-  font-size: 11.5px;
-  color: var(--fg-muted);
 }
-.thread-asked-meta .swatch {
+.thread-head .swatch {
   display: inline-block;
   width: 10px;
   height: 10px;
   border-radius: 2px;
   flex: 0 0 auto;
 }
-/* Unread, as a dot on the glyph rather than a word beside the name — it costs
-   no width in a 300px column. A real element, not a pseudo: the card builds
-   it, so a test can see it. */
-.thread-new-dot {
-  position: absolute;
-  top: -3px;
-  right: -3px;
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  background: var(--red);
-  box-shadow: 0 0 0 1.5px var(--bg);
+.thread-who {
+  flex: 1;
+  min-width: 0;
+}
+.thread-who .name {
+  font-weight: 600;
+}
+/* The ONE chip left on a head, and only for an orphan. Every other state is
+   marked by what the card offers you to press or by what it shows: a row of
+   options IS a decision, a field with a send button IS a question, a tick over
+   the outcome IS resolved, a struck line on a dimmed card IS withdrawn. That
+   is why "DECIDE", "ANSWER" and "RESOLVED" are all gone. An orphan has no
+   control and no line of its own — its anchor is what went missing. */
+.thread-tag {
+  flex: 0 0 auto;
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  border-radius: var(--radius-sm);
+  padding: 2px 6px;
+  white-space: nowrap;
+  color: var(--fg-muted);
+  background: var(--bg-hover);
+}
+/* When this started, top right — one fact about the opening message, sitting
+   with the attribution for it. Never shrinks and never wraps: the author name
+   beside it is the part that can afford to lose characters. */
+.thread-time {
+  flex: 0 0 auto;
+  font-size: 11px;
+  color: var(--fg-muted);
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
 }
 /* Lines truncate rather than wrap, so a card cannot exceed its rows at any
    width. Shared by every one-line row on the card. */
@@ -3706,17 +1463,6 @@ body.threads-resizing {
 .thread-slot {
   position: relative;
   overflow: hidden;
-  margin-top: 3px;
-  /* Line one's glyph is 15px plus the head's 7px gap: the slot starts where
-     line one's TEXT starts, so the two read as one block rather than as a
-     row and a paragraph under it. */
-  padding-left: 22px;
-}
-/* Open, the card is a panel rather than two lines, and the indent that lined
-   line two up under line one would push a whole conversation off to the
-   right in a 300px balloon. */
-.thread.expanded .thread-slot {
-  padding-left: 0;
   margin-top: 7px;
 }
 .thread-slot > .thread-face {
@@ -3738,40 +1484,61 @@ body.threads-resizing {
   pointer-events: auto;
 }
 
-/* The opening message keeps the prose face — it is somebody's writing. Line
-   one is chrome by comparison and reads in the interface font, set above. */
+/* Same face, size and leading as the message it morphs into — a font change
+   mid-cross-fade reads as two things swapping rather than one becoming the
+   other. The thin left rule and the muted colour carry the distinction
+   instead: properties that fade without moving a glyph. */
+.thread-topic,
 .thread-message {
   font-family: var(--prose);
   font-size: 14.5px;
   line-height: 1.55;
 }
-/* ONE LINE EACH while folded. Both summary lines used to wrap to as many
-   rows as their text demanded, which is how a column of six threads became
-   the wall this redesign answers (task: "one line per card"). They ellipsize
-   instead, and the fold is where the full text lives — a reader who wants
-   the rest opens the card, which is one tap and now shows everything. */
-.thread-topic-line,
-.thread-discussion {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-/* Line two, under line one: where the conversation got to, in one clipped
-   line. Indented past the glyph so the two lines read as one block. */
-.thread-discussion {
-  font-family: var(--sans);
-  font-size: 11.5px;
-  line-height: 1.35;
+.thread-topic {
   color: var(--fg-muted);
+  border-left: 3px solid var(--border);
+  padding: 0 8px;
   margin: 0;
 }
-/* Open: line two stops being a scan line too, and becomes the abstract over
-   the conversation below it. */
-.thread.expanded .thread-discussion {
+/* The summary lines show their FULL text, wrapping as many lines as the
+   width demands — a summary cut off mid-thought reads as broken, not brief.
+   Height stays bounded upstream: generated lines are word-capped (~12) by
+   the prompt, deterministic lines char-capped (80/120) in thread-summary.ts.
+   Overrides `.clip`'s one-row nowrap, which stays in force for every other
+   row (attribution, participants). */
+.thread-topic.clip,
+.thread-discussion.clip {
   white-space: normal;
-  overflow: visible;
   overflow-wrap: anywhere;
-  margin-bottom: 6px;
+}
+/* Who else is in the thread — with the discussion line it describes, not up
+   in the header. */
+.thread-participants {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11.5px;
+  color: var(--fg-muted);
+  margin: 0 0 3px;
+  min-width: 0;
+  font-family: var(--sans);
+}
+.thread-participants .swatch {
+  display: inline-block;
+  width: 9px;
+  height: 9px;
+  border-radius: 2px;
+  flex: 0 0 auto;
+}
+.thread-participants .name {
+  font-weight: 600;
+  color: var(--fg);
+}
+.thread-discussion {
+  font-family: var(--prose);
+  font-size: 13.5px;
+  line-height: 1.4;
+  margin: 0;
 }
 .thread-discussion::before {
   content: "↳ ";
@@ -3813,22 +1580,40 @@ body.threads-resizing {
   }
 }
 
-/* The one resolve control, at the bottom of the OPEN card — inside the slot's
-   detail face, so a folded card does not carry it at all. It used to sit
-   outside the fold beside a reply count; the count answered none of a folded
-   line's four jobs, and a Resolve a thumb-width from the chevron is the
-   misfire that closes somebody's thread. Right-aligned, as far from the
-   chevron as the card allows. */
+/* The last row of an EXPANDED thread, inside slot B's detail face — so a
+   folded card carries no destructive control at all, and ✓ Resolve is the
+   last thing an open one offers. `margin-left: auto` on the button puts it
+   at the right edge now that the reply count that used to fill the row is
+   gone. */
 .thread-foot {
   display: flex;
   align-items: center;
-  justify-content: flex-end;
   gap: 8px;
-  margin-top: 10px;
+  margin-top: 9px;
+}
+.thread-foot .thread-resolve {
+  margin-left: auto;
 }
 /* The same element with the same colour in both states — not icon-only, and
    not a control that only turns green once the thread is resolved. It reads
    as an action before you take it. */
+/* Read-only (`ThreadPanelOpts.canWrite === false`). Every posting control on
+   a card is `disabled` there, and this is what makes that visible: a button
+   that looks pressable and is not is worse than one that looks unavailable.
+   The controls STAY on the card rather than being hidden, because what a
+   thread is asking of you is worth reading even when you cannot answer it —
+   the banner above the doc already says why. One rule for the lot: the tag
+   varies (button, input, textarea) but the reason never does. */
+.thread button:disabled,
+.thread input:disabled,
+.thread textarea:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+.thread button:disabled:hover {
+  border-color: var(--border);
+  color: var(--fg-muted);
+}
 .thread-resolve {
   flex: 0 0 auto;
   display: inline-flex;
@@ -3932,31 +1717,22 @@ body.threads-resizing {
   flex-wrap: wrap;
   margin: 0 0 6px;
 }
-.thread-item-k {
-  font-size: 10px;
-  font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-  border-radius: var(--radius-sm);
-  padding: 2px 7px;
-  white-space: nowrap;
-}
-/* Same tone tokens as the hub (`decision` amber, `review` accent) — the
-   class token stays `review` while the UI text says Question. */
-.thread-item-k-decision {
-  color: var(--warn-fg, #b25e09);
-  background: var(--warn-wash, #fff4e5);
-}
-.thread-item-k-review {
-  color: var(--accent, #2e7dd7);
-  background: var(--accent-wash, rgba(59, 111, 212, 0.07));
-}
-/* A sentence — it wraps, never nowrap (430px). The headline that used to sit
-   between the chip and this line is gone: line one of the card already is it. */
-.thread-item-meta {
+/* `.thread-item-k*` lived here — the item card's DECISION / QUESTION chip.
+   Deleted with the chip itself: no face of a doc card names its kind now,
+   because the option buttons and the answer box below already do. The hub's
+   own item cards are a different component and keep theirs. */
+.thread-item-headline {
   margin: 0;
   flex: 1;
-  min-width: 120px;
+  min-width: 140px;
+  font-size: 14px;
+  font-weight: 650;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+/* A sentence — it wraps, never nowrap (430px). */
+.thread-item-meta {
+  margin: 0;
   font-size: 11.5px;
   color: var(--fg-muted);
   overflow-wrap: anywhere;
@@ -3973,30 +1749,20 @@ body.threads-resizing {
 .thread-item-body > :last-child {
   margin-bottom: 0;
 }
-/* Answers wrap rather than stretch. `flex-direction: column` with
-   `width: 100%` was written when a card was only ever 260px wide and the two
-   were the same shape; once a card could sit in the flow of a 1180px pane,
-   the same rule drew two 872px buttons for "Yes" and "No" — a target eight
-   times wider than its label, and the row the 900px prose cap narrowed the
-   card to fix and could not reach. A 240px basis does both jobs from one
-   rule: below ~500px each answer still takes its own row and no two share a
-   thumb, and above it they sit side by side and stop at `max-width`. */
+/* One answer per row with real air between them — on a phone the tap IS the
+   primary gesture, and two answers must never share one thumb. */
 .thread-item-options {
   display: flex;
-  /* Stated rather than left to the initial value: it is the half of this rule
-     that changed, and an unset property is not something a test can read. */
-  flex-direction: row;
-  flex-wrap: wrap;
+  flex-direction: column;
   gap: 8px;
   margin-top: 10px;
-  max-width: 560px;
 }
 .thread-item-option {
   display: flex;
   flex-direction: column;
   align-items: flex-start;
   gap: 3px;
-  flex: 1 1 240px;
+  width: 100%;
   min-height: 44px;
   padding: 10px 12px;
   border: 1px solid var(--border-strong, var(--border));
@@ -4307,89 +2073,29 @@ body.threads-resizing {
   line-height: 1.5;
 }
 
-/* ========== Over-doc bottom sheet on mobile ==========
-   Not a side drawer any more. On a phone the comments render INLINE in the
-   document (see INLINE THREAD CARDS below) and this pane is what the app
-   bar's comment badge raises OVER the doc: the grouped Open / Orphaned /
-   Resolved list, and the only place a thread with no line to sit beside
-   exists at all. Same open/close state (`.threads-open`) as the desktop
-   drawer — only the shape changes. */
+/* Line-number chip on a comment ("L293" / "L293-301"). Authored beside the
+   diff nav that mints it and left in the shared base on purpose: the board
+   renders the same chip on a task discussion, and doc.css is a file the
+   board never loads.
 
-@media (max-width: 900px) {
-  #threads-pane {
-    position: fixed;
-    top: auto;
-    right: 0;
-    left: 0;
-    /* Ride above the iOS keyboard via --kb-bottom (published by app.ts). The
-       sheet's cards carry the reply box now — the full-screen thread view no
-       longer does — and `position: fixed` is layout-viewport-relative on iOS,
-       so a plain `bottom: 0` puts the textarea being typed into, and the
-       Reply button under it, behind the keyboard. Cap the height against the
-       same variable or the sheet grows off the top of the screen instead. */
-    bottom: var(--kb-bottom, 0px);
-    width: auto;
-    max-width: 100%;
-    max-height: min(82vh, calc(100vh - var(--kb-bottom, 0px) - 56px));
-    z-index: 950;
-    transform: translateY(100%);
-    transition: transform 220ms cubic-bezier(0.2, 0.8, 0.2, 1);
-    border-left: none;
-    border-top: 1px solid var(--border);
-    border-radius: 16px 16px 0 0;
-    box-shadow: 0 -10px 40px rgba(0, 0, 0, 0.25);
-    padding-top: 0;
-    padding-bottom: env(safe-area-inset-bottom, 0px);
-  }
-  /* Grabber: the "drag me" affordance every bottom sheet in this app has.
-     Drawn on the header rather than added to the markup so the desktop
-     drawer, which shares this element, needs no matching change. */
-  #threads-pane .threads-header {
-    position: relative;
-    padding-top: 16px;
-  }
-  #threads-pane .threads-header::before {
-    content: "";
-    position: absolute;
-    top: 7px;
-    left: 50%;
-    transform: translateX(-50%);
-    width: 36px;
-    height: 4px;
-    border-radius: var(--radius-pill);
-    background: var(--border);
-  }
-  .threads-open #threads-pane {
-    transform: translateY(0);
-  }
-  #threads-pane[aria-hidden="false"] {
-    transform: translateY(0);
-  }
-  .threads-close {
-    display: inline-flex;
-  }
-  .scrim {
-    position: fixed;
-    inset: 0;
-    background: rgba(15, 18, 22, 0.4);
-    opacity: 0;
-    pointer-events: none;
-    transition: opacity 180ms ease;
-    z-index: 940;
-  }
-  .threads-open .scrim {
-    opacity: 1;
-    pointer-events: auto;
-  }
-}
-/* hide scrim on desktop */
-@media (min-width: 901px) {
-  .scrim {
-    display: none;
-  }
-  .threads-close {
-    display: none;
-  }
+   It is also the ONE rule the split moved rather than lifted. Every other
+   rule kept its position — read the two files back in link order and you get
+   this file's old rule sequence exactly — but the banner this one was
+   authored under went to doc.css whole, so staying behind meant landing
+   somewhere else, and comment chrome is the banner it belongs under. The
+   move is a no-op on the cascade: the chip is a span carrying this class and
+   no other, this is the only rule in any sheet that names `.thread-line`,
+   and nothing it jumped over matches a lone span at equal specificity. */
+.thread-line {
+  display: inline-block;
+  margin-right: 6px;
+  padding: 0 5px;
+  border-radius: var(--radius-sm);
+  background: var(--bg-hover);
+  color: var(--fg-muted);
+  font: 600 10.5px / 16px var(--mono);
+  vertical-align: 1px;
+  white-space: nowrap;
 }
 
 /* ================= COMPOSER (Notion-style, slim) =================
@@ -4779,282 +2485,6 @@ body.composer-open #editor > .ProseMirror ::selection {
   color: #fff;
 }
 
-/* ================= FULL-SCREEN THREAD VIEW =================
-   Tapping a highlight in the doc opens this — Notion's "Diskussion"
-   pattern. Focused single-thread view, dismissable with X or Esc. */
-
-.thread-view {
-  position: fixed;
-  top: 0;
-  left: 0;
-  right: 0;
-  /* Ride above the iOS keyboard via --kb-bottom — when the reply
-     textarea is focused, the keyboard would otherwise push the
-     reply bar (textarea + submit ↑) off-screen because position:fixed
-     is layout-viewport-relative on iOS. */
-  bottom: var(--kb-bottom, 0px);
-  z-index: 1100;
-  background: var(--bg);
-  display: flex;
-  flex-direction: column;
-  transform: translateY(100%);
-  transition: transform 220ms cubic-bezier(0.2, 0.9, 0.3, 1);
-  padding-top: var(--safe-top);
-  padding-bottom: var(--safe-bottom);
-}
-.thread-view:not(.hidden) {
-  transform: translateY(0);
-}
-.thread-view-header {
-  position: relative;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 18px 16px 12px;
-  border-bottom: 1px solid var(--border);
-}
-.thread-view-header .drag-handle {
-  position: absolute;
-  top: 6px;
-  left: 50%;
-  transform: translateX(-50%);
-  width: 36px;
-  height: 4px;
-  border-radius: 2px;
-  background: var(--border-strong);
-  opacity: 0.5;
-}
-.thread-view-title {
-  margin: 0;
-  font-size: 16px;
-  font-weight: 600;
-}
-.thread-view-close {
-  position: absolute;
-  right: 12px;
-  top: 14px;
-  border-radius: 50%;
-  width: 36px;
-  height: 36px;
-  padding: 0;
-  font-size: 20px;
-  line-height: 1;
-  background: var(--bg-panel);
-  border: 1px solid var(--border);
-}
-.thread-view-body {
-  flex: 1;
-  overflow-y: auto;
-  padding: 16px 16px 20px;
-}
-.thread-view-body .thread-anchor {
-  font-family: var(--prose);
-  font-size: 15px;
-  line-height: 1.55;
-  font-style: italic;
-  color: var(--fg);
-  background: rgba(255, 213, 79, 0.22);
-  border-left: 3px solid rgba(191, 135, 0, 0.55);
-  padding: 10px 12px;
-  border-radius: 0 8px 8px 0;
-  margin-bottom: 16px;
-}
-.thread-view-body .comment {
-  padding: 14px 0;
-  border-bottom: 1px solid var(--bg-hover);
-}
-.thread-view-body .comment:last-child {
-  border-bottom: 0;
-}
-.thread-view-body .comment .author {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  font-size: 13px;
-  margin-bottom: 6px;
-  font-family: var(--sans);
-}
-.thread-view-body .comment .author .swatch {
-  width: 10px;
-  height: 10px;
-  border-radius: 50%;
-  flex: 0 0 auto;
-}
-.thread-view-body .comment .author .name {
-  font-weight: 600;
-}
-.thread-view-body .comment .author .time {
-  color: var(--fg-muted);
-  font-size: 12px;
-  margin-left: auto;
-}
-.thread-view-body .comment .body {
-  font-family: var(--prose);
-  font-size: 16px;
-  line-height: 1.6;
-  color: var(--fg);
-  font-feature-settings: "kern", "liga";
-  -webkit-font-smoothing: antialiased;
-  -moz-osx-font-smoothing: grayscale;
-  white-space: pre-wrap;
-  word-wrap: break-word;
-}
-.thread-view-actions {
-  display: flex;
-  gap: 8px;
-  padding: 4px 16px 12px;
-  border-top: 1px solid var(--bg-hover);
-}
-.thread-view-actions button {
-  flex: 1;
-  padding: 10px 14px;
-  border: 1px solid var(--border);
-  background: var(--bg);
-  border-radius: 10px;
-  font-size: 14px;
-  font-weight: 500;
-  cursor: pointer;
-  min-height: 42px;
-}
-.thread-view-actions button.primary {
-  background: var(--accent);
-  color: #fff;
-  border-color: var(--accent);
-}
-.thread-view-reply {
-  display: flex;
-  align-items: flex-end;
-  gap: 8px;
-  padding: 10px 12px calc(10px + var(--safe-bottom));
-  border-top: 1px solid var(--border);
-  background: var(--bg);
-}
-.thread-view-reply textarea {
-  flex: 1;
-  min-width: 0;
-  border: 1px solid var(--border);
-  border-radius: 20px;
-  padding: 10px 14px;
-  font: inherit;
-  font-size: 15px;
-  line-height: 1.35;
-  resize: none;
-  max-height: 40vh;
-  outline: none;
-}
-.thread-view-reply textarea:focus {
-  border-color: var(--accent);
-}
-
-/* ================= LONG-THREAD MODAL (desktop / tablet) =================
-   The balloon column is 300px. An 80-character measure wrapped into it is
-   about six words a line, so a long exchange — or a decision, whose options
-   are buttons — is unreadable there at any height. Above the threshold in
-   long-thread.ts the thread stops expanding in place and opens here.
-
-   Sized for the tablet tier deliberately, because that is where almost every
-   screen lands and its scarce axis is HEIGHT: an iPad in landscape is 1180x820
-   with roughly 750px usable. So the width is generous (760px against the
-   column's 300) and the height is capped BELOW the viewport with the scroll
-   inside the body — the document behind must never be what moves when the
-   reader reaches the reply box.
-
-   Sibling of the full-screen thread view above, not a variant of it: that one
-   is the phone's slide-up sheet and owns ≤1100px. This one is never shown
-   there — the caller checks the width, because a modal on top of a sheet is
-   two dismissable layers over one conversation. */
-
-.thread-modal-scrim {
-  position: fixed;
-  inset: 0;
-  z-index: 1190;
-  background: rgba(15, 18, 22, 0.42);
-}
-.thread-modal {
-  position: fixed;
-  z-index: 1200;
-  top: 50%;
-  left: 50%;
-  transform: translate(-50%, -50%);
-  width: min(760px, calc(100vw - 64px));
-  max-height: min(84vh, 720px);
-  display: flex;
-  flex-direction: column;
-  background: var(--bg);
-  border: 1px solid var(--border);
-  border-radius: 12px;
-  box-shadow: var(--shadow-lg);
-  overflow: hidden;
-}
-.thread-modal-header {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  flex: 0 0 auto;
-  padding: 10px 12px 10px 16px;
-  border-bottom: 1px solid var(--border);
-  font-family: var(--sans);
-}
-.thread-modal-title {
-  margin: 0;
-  font-size: 14px;
-  font-weight: 650;
-}
-.thread-modal-close {
-  margin-left: auto;
-  flex: 0 0 auto;
-  width: 32px;
-  height: 32px;
-  padding: 0;
-  border-radius: 50%;
-  font-size: 20px;
-  line-height: 1;
-}
-/* The one scroller. `min-height: 0` because a flex item's default `auto`
-   floor is its content, which would push the modal past its own max-height
-   and put the scrollbar on the page instead of in here. */
-.thread-modal-body {
-  flex: 1 1 auto;
-  min-height: 0;
-  overflow-y: auto;
-  overscroll-behavior: contain;
-  padding: 14px 16px 18px;
-}
-/* The card is the drawer's card, and in here it is the whole content — no
-   second border around it inside a bordered dialog, and no hover lift or
-   pointer, because it is not a thing you click to open any more. */
-.thread-modal-body .thread {
-  border: 0;
-  padding: 0;
-  margin: 0;
-  cursor: default;
-  box-shadow: none;
-  background: transparent;
-}
-.thread-modal-body .thread:hover {
-  background: transparent;
-}
-/* Room to read: the prose in here gets the measure the column could not give
-   it, and the reply box gets more than two rows. */
-.thread-modal-body .thread-message,
-.thread-modal-body .comment .body,
-.thread-modal-body .thread-item-body {
-  font-size: 15.5px;
-  line-height: 1.6;
-}
-.thread-modal-body .thread-reply textarea,
-.thread-modal-body .thread-reply .md-composer-surface {
-  min-height: 76px;
-}
-/* Options side by side once there is width for them — the shape that made a
-   decision unreadable in a 300px column. The wrapping row moved to the base
-   rule when inline cards made the modal stop being the only wide surface;
-   what stays here is the modal's own wider ceiling, because the dialog is
-   sized for reading a decision rather than for sitting beside prose. */
-.thread-modal-body .thread-item-options {
-  max-width: none;
-}
-
 /* ================= UTILITIES ================= */
 
 .hidden {
@@ -5080,585 +2510,35 @@ body.composer-open #editor > .ProseMirror ::selection {
   display: block !important;
 }
 
-/* ================= CODE REVIEW SURFACE ================= */
-/* The read-only CodeMirror surface for type='code' docs. The format bar
-   and the edit-mode toggle are markdown/Tiptap-only — hide them so the
-   code surface shows only the comment affordances. */
-body.code-mode #format-bar,
-body.code-mode #toggle-format,
-body.code-mode #toggle-edit-mode,
-body.code-mode #toggle-suggest-mode {
-  display: none !important;
-}
+/* ================= SUGGESTED EDITS (shared: the board mounts this editor too)
+   =================
 
-/* Let the CodeMirror editor fill #editor and own its own scroll. The
-   markdown path scrolls #editor; CodeMirror scrolls .cm-scroller, so drop
-   the prose padding and let CM stretch full-height. */
-body.code-mode #editor {
-  padding: 0;
-  overflow: hidden;
-  display: flex;
-}
-body.code-mode #editor .cm-editor {
-  flex: 1;
-  min-width: 0;
-  height: 100%;
-  font-family: var(--mono);
-  font-size: 13.5px;
-}
-body.code-mode #editor .cm-scroller {
-  overflow: auto;
-  -webkit-overflow-scrolling: touch;
-}
-body.code-mode #editor .cm-content {
-  /* Bottom padding so the last lines clear the composer / bottom UI. */
-  padding-bottom: calc(160px + var(--safe-bottom));
-}
-
-/* Comment-marker gutter: a dot on the start line of each open thread.
-   Active thread's dot uses the accent; others are muted. */
-.cm-comment-gutter {
-  min-width: 14px;
-}
-.cm-comment-dot {
-  display: inline-block;
-  width: 100%;
-  text-align: center;
-  color: var(--border-strong);
-  font-size: 11px;
-  line-height: inherit;
-  cursor: pointer;
-}
-.cm-comment-dot:hover {
-  color: var(--accent);
-}
-.cm-comment-dot.active {
-  color: var(--accent);
-}
-
-/* Transient pulse when a thread is revealed (panel click / gutter click). */
-.cm-line.cm-pulse-line {
-  background: var(--accent-subtle, rgba(46, 125, 215, 0.18));
-  transition: background 0.25s ease;
-}
-
-/* ================= DIFF REVIEW SURFACE ================= */
-/* Unified-diff rendering on top of the code surface (type='diff' docs).
-   @codemirror/merge's baseTheme colors the chunks; these rules add the
-   PR-style dual line-number columns, the view toggle, and the banners. */
-
-/* Diff ↔ File segmented toggle in the topbar. 36px tap targets (mobile). */
-.view-toggle {
-  display: inline-flex;
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  overflow: hidden;
-}
-.view-toggle.hidden {
-  display: none;
-}
-.view-toggle-btn {
-  min-height: 36px;
-  min-width: 48px;
-  padding: 0 10px;
-  border: none;
-  background: var(--bg);
-  color: var(--fg-muted);
-  font: 600 12.5px var(--sans);
-  cursor: pointer;
-}
-.view-toggle-btn + .view-toggle-btn {
-  border-left: 1px solid var(--border);
-}
-.view-toggle-btn.active {
-  background: var(--accent);
-  color: #fff;
-}
-
-/* Wrapper for the floating view controls. `display: contents` by default so
-   a non-diff doc's grid rows are unchanged — #editor-pane is a two-row grid
-   and a real box here would claim one of them. Diff mode turns it into the
-   positioned flex row (see the DIFF REVIEW positioning block below). */
-.view-controls {
-  display: contents;
-}
-
-/* Whitespace suppression toggle. Standalone, not part of the segmented
-   group: it's an independent switch, so it gets its own border and sits
-   apart from the Diff/File radio pair. `.active` = whitespace is SHOWING,
-   i.e. the noise is deliberately visible. */
-.ws-toggle {
-  flex: 0 0 auto;
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  min-width: 0;
-  /* The label carries a per-file count; keep it from reflowing the row. */
-  max-width: 42vw;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.ws-toggle.hidden {
-  display: none;
-}
-
-/* Old-line-number gutter (base commit). Sits LEFT of the target numbers;
-   blank on added/changed lines, like GitHub's left column. */
-.cm-old-line-gutter {
-  min-width: 3ch;
-  padding: 0 3px 0 8px;
-  text-align: right;
-  color: var(--fg-muted);
-  opacity: 0.65;
-}
-
-/* Deleted-chunk widgets: number each deleted line from data-old-line
-   (stamped by numberDeletedLines) in a left column that mirrors a gutter. */
-body.diff-mode .cm-deletedChunk {
-  padding-left: 0;
-}
-body.diff-mode .cm-deletedChunk .cm-deletedLine {
-  display: block;
-  position: relative;
-  padding-left: calc(6ch + 16px);
-}
-body.diff-mode .cm-deletedChunk .cm-deletedLine::before {
-  content: attr(data-old-line);
-  position: absolute;
-  left: 0;
-  width: 3ch;
-  padding: 0 3px 0 8px;
-  text-align: right;
-  color: var(--fg-muted);
-  opacity: 0.65;
-  font-size: inherit;
-}
-
-/* Persistent notice above the editor (renamed-from, deleted file,
-   diff-unavailable fallback). */
-.diff-banner {
-  padding: 6px 14px;
-  background: var(--bg-panel);
-  border-bottom: 1px solid var(--border);
-  color: var(--fg-muted);
-  font: 12.5px / 1.4 var(--sans);
-  overflow-wrap: anywhere;
-}
-
-/* Workspace-tree badges for diff members: A/M/D/R letter + line counts. */
-.tree-diff-status {
-  flex: none;
-  display: inline-block;
-  min-width: 14px;
-  text-align: center;
-  border-radius: 3px;
-  font: 700 10px / 16px var(--sans);
-}
-.tree-diff-A {
-  color: var(--green);
-}
-.tree-diff-M {
-  color: var(--yellow);
-}
-.tree-diff-D {
-  color: var(--red);
-}
-.tree-diff-R {
-  color: var(--accent);
-}
-.tree-diff-counts {
-  flex: none;
-  color: var(--fg-muted);
-  font: 10.5px / 16px var(--mono);
-  white-space: nowrap;
-}
-
-/* Collapsed-unchanged bar (from @codemirror/merge) — make the tap target
-   comfortable on mobile. */
-body.diff-mode .cm-collapsedLines {
-  padding: 6px 12px;
-  min-height: 28px;
-}
-
-@media (max-width: 720px) {
-  /* Keep the toggle compact but tappable next to the 💬 button. */
-  .view-toggle-btn {
-    min-width: 42px;
-    padding: 0 8px;
-  }
-  /* Narrow screens: keep the row inside the viewport next to Diff|File. */
-  .ws-toggle {
-    max-width: 30vw;
-  }
-  body.diff-mode #view-controls {
-    gap: 4px;
-    right: 8px;
-  }
-  /* Tighter deleted-line number column on narrow screens. */
-  body.diff-mode .cm-deletedChunk .cm-deletedLine {
-    padding-left: calc(4ch + 10px);
-  }
-}
-
-/* ================= DIFF NAV (grouped diffs / all files sidebar) ========== */
-.diff-nav-toggle {
-  display: flex;
-  gap: 4px;
-  padding: 6px 8px 8px;
-  border-bottom: 1px solid var(--border);
-  position: sticky;
-  top: 0;
-  background: inherit;
-  z-index: 1;
-}
-.diff-nav-toggle button {
-  flex: 1;
-  min-height: 36px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  background: var(--bg);
-  color: var(--fg-muted);
-  font: 600 11.5px var(--sans);
-  padding: 0 6px;
-  cursor: pointer;
-}
-.diff-nav-toggle button.active {
-  background: var(--accent);
-  border-color: var(--accent);
-  color: #fff;
-}
-.diff-group {
-  margin: 0 0 2px;
-}
-/* Group headers: obviously headers, obviously collapsible — full-width bar
-   with a caret that flips. */
-.diff-group > summary.diff-group-title {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 7px 10px 7px 8px;
-  min-height: 32px;
-  background: var(--bg-panel);
-  border-top: 1px solid var(--border);
-  border-bottom: 1px solid var(--border);
-  font: 700 11.5px var(--sans);
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-  color: var(--fg);
-  cursor: pointer;
-  list-style: none;
-  user-select: none;
-}
-.diff-group > summary.diff-group-title::-webkit-details-marker {
-  display: none;
-}
-.diff-group > summary.diff-group-title::before {
-  content: "▸";
-  color: var(--fg-muted);
-  font-size: 10px;
-  flex-shrink: 0;
-  transition: transform 0.12s ease;
-}
-.diff-group[open] > summary.diff-group-title::before {
-  content: "▾";
-}
-.diff-group > summary.diff-group-title:hover {
-  background: var(--bg-hover);
-}
-.diff-group-name {
-  flex: 1;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.diff-group-meta {
-  color: var(--fg-muted);
-  font: 600 10.5px var(--mono);
-}
-/* Per-group intro (e.g. a commit message body). Sits under the header,
-   above the file list; wraps and preserves the source's line breaks, but
-   clamps so a 500-char blurb can't crowd out the files. */
-.diff-group-details {
-  margin: 0;
-  padding: 6px 10px 7px 24px;
-  background: var(--bg-panel);
-  border-bottom: 1px solid var(--border);
-  color: var(--fg-muted);
-  font: 400 11.5px / 1.45 var(--sans);
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-  display: -webkit-box;
-  -webkit-line-clamp: 6;
-  -webkit-box-orient: vertical;
-  overflow: hidden;
-}
-.diff-group-files {
-  list-style: none;
-  margin: 0;
-  padding: 2px 0;
-}
-/* Compact single-line rows: letter | name | (open badge) | +/− counts.
-   The #set-pane-list scope out-specifies the generic sidebar link rule
-   (`#set-pane-list a { display: block }`), which otherwise wins on the ID. */
-#set-pane-list .diff-file a,
-.doc-menu .diff-file a {
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  padding: 3px 10px 3px 12px;
-  min-height: 28px;
-  text-decoration: none;
-  color: var(--fg);
-  font-size: 12.5px;
-  border-left: 2px solid transparent;
-  overflow: hidden;
-}
-#set-pane-list .diff-file a.active,
-.doc-menu .diff-file a.active {
-  background: var(--bg-hover);
-  border-left-color: var(--accent);
-}
-/* Stale rows keep their status letter and counts at full strength — the
-   dimming is on the name only (see WORKSPACE FILE TREE). */
-.diff-file-name {
-  flex: 1;
-  min-width: 0;
-  white-space: nowrap;
-  text-overflow: ellipsis;
-  overflow: hidden;
-}
-.diff-group-files .tree-diff-counts {
-  margin-left: auto;
-  font-variant-numeric: tabular-nums;
-}
-@media (max-width: 720px) {
-  /* Tap-target floor on phones. */
-  #set-pane-list .diff-file a,
-  .doc-menu .diff-file a {
-    min-height: 36px;
-  }
-}
-.diff-changed-dot {
-  flex: none;
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  background: var(--orange);
-}
-.diff-nav-empty {
-  padding: 8px 10px;
-  color: var(--fg-muted);
-  font-size: 12px;
-}
-[data-context-path].loading {
-  opacity: 0.5;
-  pointer-events: none;
-}
-
-/* The view controls float top-right INSIDE the editor pane. The wrapper owns
-   the positioning so the Diff|File group and the whitespace toggle sit on one
-   row without either needing to know the other's width. */
-body.diff-mode #view-controls {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  position: absolute;
-  top: 8px;
-  right: 16px;
-  z-index: 5;
-}
-body.diff-mode #view-toggle,
-body.diff-mode .ws-toggle {
-  background: var(--bg);
-  box-shadow: var(--shadow);
-}
-/* Must out-specify the rule above, which would otherwise repaint the pressed
-   button's background back to --bg and leave .active's white text on white. */
-body.diff-mode .ws-toggle.active {
-  background: var(--accent);
-  color: #fff;
-}
-
-/* File mode on a diff doc: whole live file with added/changed lines still
-   highlighted; deletion widgets and collapse bars are diff-view-only. */
-.cm-file-mode .cm-deletedChunk,
-.cm-file-mode .cm-collapsedLines {
-  display: none !important;
-}
-
-/* Clickable line numbers advertise the click-to-comment affordance. */
-body.code-mode .cm-lineNumbers .cm-gutterElement {
-  cursor: pointer;
-}
-body.code-mode .cm-lineNumbers .cm-gutterElement:hover {
-  color: var(--accent);
-  font-weight: 700;
-}
-
-/* PR-style chunk colors. @codemirror/merge's default marks changed text
-   with a 2px bottom-gradient "underline" — on inserted lines that means
-   every line (indentation included) reads as green underlining. Override
-   with GitHub-style solid tints: line-level wash + stronger word-level
-   emphasis, no underlines. */
-body.code-mode .cm-editor .cm-changedLine {
-  background-color: #e6ffec !important;
-}
-body.code-mode .cm-editor .cm-changedText {
-  background: #abf2bc !important;
-}
-body.code-mode .cm-editor .cm-deletedChunk {
-  background-color: #ffebe9 !important;
-}
-body.code-mode .cm-editor .cm-deletedChunk .cm-deletedText {
-  background: #ffc9c0 !important;
-}
-
-/* "Show All Files": make changed files unmistakable — tinted row + bold
-   name + status letter; folders on the path to changes auto-expand and
-   carry the orange dot. */
-.tree-file a.changed {
-  background: rgba(45, 164, 78, 0.09);
-  font-weight: 600;
-}
-.tree-file a.changed:hover {
-  background: rgba(45, 164, 78, 0.16);
-}
-
-/* In-This-Review panel: wider by default (320px) and drag-resizable on
-   desktop — grab the right edge; double-click resets. */
-#set-pane {
-  position: relative;
-}
-.set-resize {
-  position: absolute;
-  top: 0;
-  right: -3px;
-  width: 7px;
-  height: 100%;
-  cursor: col-resize;
-  z-index: 4;
-}
-.set-resize:hover,
-.set-resize.dragging {
-  background: var(--accent-subtle, rgba(46, 125, 215, 0.25));
-}
-/* No width gate of its own: the handle is appended INTO #set-pane by
-   wireResizeHandle, so hiding the pane hides the handle. This was a third
-   hand-maintained copy of the sidebar breakpoint until 2026-08-19. */
-
-/* Line-number chip on comments (code/diff surfaces): "L293" / "L293-301". */
-.thread-line {
-  display: inline-block;
-  margin-right: 6px;
-  padding: 0 5px;
-  border-radius: var(--radius-sm);
-  background: var(--bg-hover);
-  color: var(--fg-muted);
-  font: 600 10.5px / 16px var(--mono);
-  vertical-align: 1px;
-  white-space: nowrap;
-}
-
-/* Diff-standard count colors: additions green, deletions red. */
-.tree-diff-counts .add {
-  color: var(--green);
-}
-.tree-diff-counts .del {
-  color: var(--red);
-}
-
-/* ---------------------------------------------------------------------------
-   Markdown redline (body.redline-mode) — Word-style tracked changes.
-
-   Colours deliberately match the CodeMirror source-diff surface (#e6ffec
-   additions / #ffebe9 deletions) so the two views of the same file read as one
-   product rather than two features.
-
-   Colour NEVER carries the meaning on its own: the underline and the
-   strikethrough do, so the redline still reads for a colourblind reviewer and
-   in print.
-   --------------------------------------------------------------------------- */
-
-body.redline-mode #editor {
-  overflow-y: auto;
-}
-
-body.redline-mode .ProseMirror ins.lf-ins {
-  background: #e6ffec;
-  color: inherit;
-  text-decoration: underline;
-  text-decoration-thickness: 2px;
-  text-underline-offset: 2px;
-  text-decoration-color: var(--green-strong);
-  border-radius: 2px;
-  padding: 0 1px;
-}
-
-body.redline-mode .ProseMirror del.lf-del {
-  background: #ffebe9;
-  color: #57606a;
-  text-decoration: line-through;
-  text-decoration-thickness: 2px;
-  text-decoration-color: var(--red-strong);
-  border-radius: 2px;
-  padding: 0 1px;
-}
-
-/* Whole-block changes get a change bar, mirroring the source view's changed
-   lines. The bar is on the block; the inline marks stay the fine detail. */
-body.redline-mode .ProseMirror [data-lf-change] {
-  position: relative;
-  padding-left: 10px;
-}
-
-body.redline-mode .ProseMirror [data-lf-change]::before {
-  content: "";
-  position: absolute;
-  left: 0;
-  top: 0.1em;
-  bottom: 0.1em;
-  width: 3px;
-  border-radius: 2px;
-  background: #d0d7de;
-}
-
-body.redline-mode .ProseMirror .lf-block-ins::before {
-  background: var(--green-strong);
-}
-
-body.redline-mode .ProseMirror .lf-block-del::before {
-  background: var(--red-strong);
-}
-
-body.redline-mode .ProseMirror .lf-block-changed::before {
-  background: #9a6700;
-}
-
-/* A deleted block is context, not the live document — recede it so the
-   reviewer's eye lands on what the file says NOW. */
-body.redline-mode .ProseMirror .lf-block-del {
-  opacity: 0.75;
-}
-
-/* Long unbreakable strings (URLs, hashes) inside a redlined block must wrap
-   rather than force the page to scroll sideways — see the CSS Grid `1fr`
-   overflow trap in docs/process/learnings.md. */
-body.redline-mode .ProseMirror ins.lf-ins,
-body.redline-mode .ProseMirror del.lf-del {
-  overflow-wrap: anywhere;
-}
-
-/* ---------------------------------------------------------------------------
    Suggested edits (Phase 2). A pending proposal must NEVER be invisible, so
-   these rules are NOT scoped to a lens or body mode — they apply wherever the
-   prose editor renders (plain markdown surface AND the redline lens).
+   the mark rules are NOT scoped to a lens or body mode — they apply wherever
+   the prose editor renders.
+
+   THEY ARE IN THE SHARED BASE, not doc.css, and that is load-bearing. The
+   board mounts the same `createEditor` over a task body
+   (hub/task-body-editor.ts), and editor.ts registers SuggestInsert,
+   SuggestDelete and SuggestionChips in the BASE extension list with no
+   review-surface condition. The board loads hub.css + styles.css and never
+   links doc.css, so a suggestion rule parked there would leave an agent's
+   pending proposal on a task description rendering as plain accepted prose,
+   and would leave the chip's `display: none` default off the board entirely.
+   Asserted in doc-css.test.ts.
 
    Each span carries its author's color as an inline `--lf-suggest-color`
    custom property (set by suggest-marks.ts from the mark's authorColor attr).
    As with the redline marks, color never carries the meaning alone: the
    underline (proposed insert) and strikethrough (proposed delete) do.
-   --------------------------------------------------------------------------- */
+
+   ORDER INSIDE THIS SECTION IS THE ORDER THESE RULES HAD IN THE ONE FILE, and
+   it stays that way: the ≤1100px block sits BEFORE the base rule it competes
+   with, so at equal specificity the base wins and the chip is hidden at every
+   width. That is what shipped, and `.lf-del-chip` (doc.css) has the same
+   shape. Reordering the two would reveal a chip the product has never shown —
+   a change to make deliberately, not as a side effect of moving a file.
+   =========================================================================== */
 
 .ProseMirror .lf-suggest-ins {
   --lf-suggest-tint: color-mix(in srgb, var(--lf-suggest-color, var(--accent)) 14%, transparent);
@@ -5685,524 +2565,22 @@ body.redline-mode .ProseMirror del.lf-del {
   overflow-wrap: anywhere;
 }
 
-/* The Suggesting toggle reads as "engaged" while the mode is on. */
-#toggle-suggest-mode[aria-pressed="true"] {
-  background: var(--accent-subtle, rgba(46, 125, 215, 0.1));
-  color: var(--accent, #2e7dd7);
-}
-
-/* The Suggesting toggle is wired by the markdown mount only — hide it on the
-   redline surface until its chrome learns the mode (commit 5). Suggestions
-   authored elsewhere still RENDER there (the rules above are unscoped). */
-body.redline-mode #toggle-suggest-mode {
-  display: none !important;
-}
-
-/* The three-way toggle must not overflow a 430px viewport. */
-@media (max-width: 480px) {
-  body.redline-mode .ProseMirror [data-lf-change] {
-    padding-left: 8px;
-  }
-
-  .view-toggle {
-    max-width: calc(100vw - 24px);
-    flex-wrap: wrap;
-  }
-}
-
-@media (prefers-color-scheme: dark) {
-  body.redline-mode .ProseMirror ins.lf-ins {
-    background: rgba(46, 160, 67, 0.2);
-    text-decoration-color: #3fb950;
-  }
-
-  body.redline-mode .ProseMirror del.lf-del {
-    background: rgba(248, 81, 73, 0.15);
-    color: #8b949e;
-    text-decoration-color: #f85149;
-  }
-}
-
-/* ---------------------------------------------------------------------------
-   Markup margin — Word's balloon column for deletions AND open comment
-   threads. Mounted on the editable redline surface (deletions + comments)
-   AND on plain markdown review docs (comments only, via mountMarkupMargin
-   from app.ts) — NOT scoped to body.redline-mode, since the plain-doc mount
-   never sets that class.
-
-   The grid MUST use minmax(0, 1fr): plain `1fr` is minmax(auto, 1fr), so a
-   long unbreakable string in the prose would push the 300px column (and the
-   page) sideways — the CSS Grid overflow trap in docs/process/learnings.md.
-   --------------------------------------------------------------------------- */
-
-#editor.redline-layout {
-  position: relative; /* anchors the balloon column and the SVG overlay */
-  display: grid;
-  /* 260px: balloons collapse to one-line summaries by default (Word-style),
-     so the column no longer needs full-card width at rest. */
-  grid-template-columns: minmax(0, 1fr) 260px;
-  column-gap: 16px;
-  align-items: start;
-}
-
-#editor.redline-layout > .ProseMirror {
-  min-width: 0;
-}
-
-/* The provisional live zone (meeting-live-zone.ts) is appended after the
-   prose, so here it auto-places into a second row under the prose column.
-   The rows must not stretch to fill the pane (grid's default align-content
-   is stretch, which parked the zone a screen below a short doc); only while
-   the zone shows, so the ordinary layout is untouched. Its WIDTH is matched
-   to the prose in JS: the prose shrink-wraps to its widest line in this
-   grid (auto margins in a cell), which no rule here can coincide with. */
-#editor.redline-layout:has(> .live-zone:not([hidden])) {
-  align-content: start;
-}
-#editor.redline-layout > .live-zone {
-  grid-column: 1;
-}
-
-.markup-margin {
-  position: relative;
-  min-width: 0;
-}
-
-/* "4 comments & 1 question above" — a pill at the top or bottom edge of the
-   doc's viewport that jumps to the nearest off-screen thread when tapped.
-   Absolutely positioned in #editor-pane (not in the scrolling margin, where
-   a balloon could land on it); comment-hints.ts sets the insets — over the
-   balloon column on a wide screen, at the pane's corners on a phone. Words
-   on a wide screen (`.w`); glyph + count + arrow (`.m`) on a phone — see the
-   INLINE THREAD CARDS block for that switch. */
-.lf-offscreen {
-  position: absolute;
-  z-index: 25;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 4px;
-  font: 600 11px / 1.2 var(--sans);
-  color: var(--fg);
-  background: var(--bg);
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius-pill);
-  padding: 4px 9px;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
-  cursor: pointer;
-  user-select: none;
-  /* Wrap rather than spill: the insets pin the pill to the balloon column,
-     and "4 comments & 2 questions above" is wider than that column at 1180. */
-  box-sizing: border-box;
-  min-width: 0;
-  flex-wrap: wrap;
-  text-align: center;
-  white-space: normal;
-}
-.lf-offscreen[hidden] {
-  display: none;
-}
-.lf-offscreen:hover {
-  background: var(--bg-hover);
-}
-.lf-offscreen-top {
-  top: 8px;
-}
-.lf-offscreen-bottom {
-  bottom: 12px;
-}
-.lf-offscreen b {
-  font-weight: 700;
-}
-.lf-offscreen .m {
-  display: none;
-  font-size: 9px;
-  color: var(--fg-muted);
-}
-.lf-offscreen-new {
-  color: var(--red);
-}
-
-/* One overlay for every leader line; never intercepts clicks. */
-.lf-leader-overlay {
-  position: absolute;
-  top: 0;
-  left: 0;
-  pointer-events: none;
-  overflow: visible;
-}
-
-.lf-leader {
-  stroke: var(--red-strong);
-  stroke-width: 1.25;
-  fill: none;
-  opacity: 0.5;
-}
-
-.lf-balloon {
-  position: absolute;
-  left: 4px;
-  right: 4px;
-  box-sizing: border-box;
-  background: var(--bg-panel);
-  border: 1px solid var(--border);
-  border-left: 3px solid var(--red-strong);
-  border-radius: var(--radius);
-  padding: 8px 10px;
-  font-size: 13px;
-  line-height: 1.45;
-  color: var(--fg);
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.06);
-}
-
-.lf-balloon-label {
-  font-size: 11px;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-  color: var(--red-strong);
-  margin-bottom: 4px;
-}
-
-/* Deleted markdown shown verbatim; long tokens wrap instead of overflowing. */
-.lf-balloon-text {
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-  color: #57606a;
-}
-
-.lf-balloon-text.is-clamped {
-  display: -webkit-box;
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 6;
-  line-clamp: 6;
-  overflow: hidden;
-}
-
-.lf-balloon-expand {
-  margin-top: 4px;
-  border: none;
-  background: none;
-  padding: 0;
-  font-size: 12px;
-  color: var(--accent);
-  cursor: pointer;
-}
-
-.lf-balloon-expand:hover,
-.lf-balloon-expand:focus-visible {
-  text-decoration: underline;
-}
-
-/* Comment balloons ARE the drawer's `.thread` card (ThreadPanel.renderThread,
-   reused) plus these positioning/colour overrides — `.lf-balloon` gives it
-   the absolute-positioned box, this gives it an accent (not red) edge so it
-   reads as a comment, not a deletion. Two classes on one element by design:
-   see markup-margin.ts. */
-.lf-balloon-comment {
-  border-left-color: var(--accent);
-  cursor: pointer;
-}
-
-/* The card's edge says what it is, in the same three colours as its glyph:
-   amber for an open review item, green once answered or resolved. */
-.lf-balloon-comment.thread-kind-question {
-  border-left-color: var(--warn-fg, #b25e09);
-  background: #fffaf3;
-}
-.lf-balloon-comment.thread-kind-answered,
-.lf-balloon-comment.thread-kind-resolved {
-  border-left-color: var(--green);
-}
-
-/* An OPEN balloon is capped against the screen and scrolls inside itself.
-   A declared thread's balloon is the full item interface — head, opening
-   message, item card, options, answer composer, foot — and measured ~700px on
-   the staging build. Bryan reads on an iPad in landscape with about 750px of
-   usable height, so on any anchor past the first screenful the composer and
-   the Answer button started below the fold, and reaching them scrolled the
-   DOCUMENT, which moves the balloon out from under the reader. Clamping puts
-   that scroll inside the card instead, where the item head and the composer
-   stay reachable and the anchor stays put. `layoutBalloons` measures
-   `offsetHeight`, which honours a max-height, so the column stacks the
-   clamped height rather than the natural one. Same `min(<n>vh, <n>px)` shape
-   as every other thing in this file that can outgrow its viewport. */
-.lf-balloon-comment.expanded {
-  max-height: min(70vh, 560px);
-  overflow-y: auto;
-  overscroll-behavior: contain;
-}
-
-/* Balloon hover/focus: a subtle lift so the margin reads as a column of
-   interactive cards, matching the drawer's own :hover treatment. Keyed off
-   `.lf-balloon` (not `.lf-balloon-del`, which has no click target of its
-   own — only its nested Show more/expand button and the sheet chip do). */
-.lf-balloon-comment:hover,
-.lf-balloon-comment:focus-visible {
-  border-color: var(--accent);
-  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.1);
-}
-.lf-balloon-comment:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 1px;
-}
-
-.lf-leader-comment {
-  stroke: var(--accent);
-}
-
-/* The leader line lives in a separate SVG overlay, not nested inside the
-   balloon, so the balloon's inline `--lf-suggest-color` custom property
-   isn't in scope here — accent is the closest stand-in (same simplification
-   `.lf-leader-comment` already makes). */
-.lf-leader-suggestion {
-  stroke: var(--accent);
-}
-
-/* Suggestion balloon (redline-suggestions Phase 2, commit 5) — a THIRD kind
-   sharing the `.lf-balloon` card + the same layoutBalloons pass as deletions
-   and comments (markup-margin.ts). Author color drives the accent (the
-   `--lf-suggest-color` custom property set inline by buildSuggestionBalloon,
-   same hex-validated pattern as the live-doc marks in suggest-marks.ts);
-   falls back to --accent for an unsafe/missing color. */
-.lf-balloon-suggestion {
-  border-left-color: var(--lf-suggest-color, var(--accent));
-}
-
-.lf-suggest-header {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  margin-bottom: 4px;
-  font-size: 12px;
-}
-
-.lf-suggest-swatch {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  flex-shrink: 0;
-}
-
-.lf-suggest-author {
-  font-weight: 600;
-  color: var(--fg);
-}
-
-.lf-suggest-age {
-  color: var(--fg-muted);
-}
-
-/* Old struck / new underlined — color never carries the meaning alone,
-   same rule as the live-doc marks (styles.css, Suggested edits section). */
-.lf-suggest-old {
-  text-decoration: line-through;
-  color: var(--fg-muted);
-}
-
-.lf-suggest-new {
-  text-decoration: underline;
-  text-decoration-thickness: 2px;
-  text-underline-offset: 2px;
-  color: var(--fg);
-}
-
-/* Collapsed balloons (Word-style): every balloon rests as ONE line — author
-   swatch + name + truncated preview — and expands on click into the full
-   card; at most one is expanded at a time (markup-margin.ts owns the state).
-   The nowrap + ellipsis pair does the truncation; min-width: 0 on the
-   preview lets it actually shrink inside the flex row. */
-.lf-balloon-collapsed {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 5px 10px;
-  cursor: pointer;
-  white-space: nowrap;
-}
-.lf-balloon-collapsed .lf-balloon-label {
-  margin-bottom: 0;
-  flex: none;
-}
-.lf-collapsed-swatch {
-  flex: none;
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-}
-.lf-collapsed-name {
-  flex: none;
-  max-width: 45%;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  font-size: 12px;
-  font-weight: 600;
-}
-.lf-collapsed-preview {
-  flex: 1;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  font-size: 12px;
-  color: var(--fg-muted, #656d76);
-}
-.lf-collapsed-count {
-  flex: none;
-  min-width: 16px;
-  padding: 0 4px;
-  border-radius: var(--radius-lg);
-  background: var(--accent);
-  color: #fff;
-  font-size: 11px;
-  font-weight: 600;
-  line-height: 16px;
-  text-align: center;
-}
-/* Compact ✓ / ✕ on a collapsed suggestion — same classes (and therefore the
-   same delegated behaviour) as the full card's Accept/Reject. */
-.lf-collapsed-actions {
-  flex: none;
-  display: flex;
-  gap: 2px;
-}
-.lf-collapsed-actions button {
-  padding: 0 6px;
-  font-size: 12px;
-  line-height: 1.6;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  background: var(--bg-panel);
-  cursor: pointer;
-}
-.lf-collapsed-actions .lf-suggest-accept:hover {
-  border-color: var(--green-strong);
-  color: var(--green-strong);
-}
-.lf-collapsed-actions .lf-suggest-reject:hover {
-  border-color: var(--red-strong);
-  color: var(--red-strong);
-}
-/* Collapse control on an expanded balloon, top-right. */
-.lf-balloon-collapse {
-  position: absolute;
-  top: 4px;
-  right: 6px;
-  padding: 0 6px;
-  border: none;
-  background: none;
-  color: var(--fg-muted, #656d76);
-  font-size: 14px;
-  line-height: 1.4;
-  cursor: pointer;
-}
-.lf-balloon-collapse:hover,
-.lf-balloon-collapse:focus-visible {
-  color: var(--fg);
-}
-
-.lf-suggest-actions {
-  display: flex;
-  gap: 8px;
-  margin-top: 6px;
-}
-
-.lf-suggest-actions button {
-  border: 1px solid var(--border);
-  background: var(--bg);
-  border-radius: var(--radius-pill);
-  padding: 3px 10px;
-  font-size: 12px;
-  font-weight: 600;
-  cursor: pointer;
-}
-
-.lf-suggest-actions button:hover {
-  background: var(--bg-hover);
-}
-
-.lf-suggest-accept {
-  color: var(--green-strong);
-  border-color: var(--green-strong);
-}
-
-.lf-suggest-reject {
-  color: var(--red-strong);
-  border-color: var(--red-strong);
-}
-
-/* Balloons ride the margin only when the reader has ASKED for them there.
-   `body[data-cards]` is written by card-placement.ts and carries the surface
-   in force — `balloon`, `inline`, or `sheet` when balloons were chosen on a
-   screen too narrow to hold a column. This used to be `@media (max-width:
-   1100px)`, which made the surface a property of the window rather than of
-   the reader: page zoom moves a 1366px iPad to 1607px, so width could say how
-   much room there was and never what device this was.
-
-   Everywhere the margin is not in force, the column and leader lines
-   disappear and `.lf-del-chip` (live-markup.ts, one per deletion group — same
-   grouping as the balloon) and `.lf-suggest-chip` (suggestion-chips.ts, one
-   per sid) take over as the fallback. `display: block` restores the
-   single-column flow — no 260px track means no horizontal scroll at 430px. */
-body:not([data-cards="balloon"]) #editor.redline-layout {
-  display: block;
-}
-
-body:not([data-cards="balloon"]) .markup-margin,
-body:not([data-cards="balloon"]) .lf-leader-overlay {
-  display: none;
-}
-
-body:not([data-cards="balloon"]) .lf-del-chip,
-body:not([data-cards="balloon"]) .lf-suggest-chip {
-  display: inline-flex;
-}
-
-/* Cards in the flow are as wide as the prose, so the prose has to keep a
-   measure a card reads well at. Without this, moving the cards inline handed
-   the freed margin column to the paragraph: an 1180px iPad went from an 890px
-   measure to 1100px, about 110 characters at 18px, and a two-option decision
-   grew buttons the width of the pane. Yields to the Aa toolbar's
-   reading-width mode, which is the reader asking for something narrower. */
-body[data-cards="inline"]:not(.is-reading-width) #editor.redline-layout > .ProseMirror {
-  max-width: min(100%, 900px);
-}
-
-/* Mobile deletion chip (`.lf-del-chip`, live-markup.ts widget decoration) —
-   a compact, tappable inline marker standing in for the balloon that's
-   hidden at this width. Hidden by default (desktop shows the balloon
-   instead); the media query above is what actually reveals it ≤1100px, so
-   this rule alone never introduces markup on wide screens. Padding — not a
-   fixed 36px box — gives the tap target room without blowing out the
-   surrounding line's height; see docs/product/design-mobile.md's tap-target
-   guidance, relaxed here because this chip sits inline in flowing prose. */
-.lf-del-chip {
-  display: none;
-  align-items: center;
-  gap: 3px;
-  margin: 0 2px;
-  padding: 3px 8px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-pill);
-  background: var(--bg-panel);
-  color: var(--red-strong);
-  font: 600 12px / 1.4 var(--sans);
-  cursor: pointer;
-  vertical-align: baseline;
-  white-space: nowrap;
-}
-
-.lf-del-chip:hover {
-  background: var(--bg-hover);
-  border-color: var(--border-strong);
-}
-.lf-del-chip:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 1px;
-}
+/* The reveal for this chip is NOT here. It lives in doc.css beside
+   `.lf-del-chip`'s, keyed on `body[data-cards]` rather than on a width: the
+   board mints this chip too (SuggestionChips is a base extension) and writes
+   no `data-cards`, so a placement-keyed reveal in this file would fire on the
+   board at every width and show a chip the product has never shown. PR 669
+   measured that the chip computes `none` on the board and left it there
+   deliberately; keeping the reveal in the editor's own sheet is what holds
+   it. The shape below stays here because the board still has to style the
+   chip it mints. */
 
 /* Mobile suggestion chip (`.lf-suggest-chip`, suggestion-chips.ts widget
-   decoration) — same shape/sizing as `.lf-del-chip` above, accent-colored
-   instead of red (a suggestion is a proposal, not necessarily a removal). */
+   decoration) — same shape and sizing as doc.css's `.lf-del-chip`,
+   accent-colored instead of red (a suggestion is a proposal, not necessarily
+   a removal). The chip is always in the DOM and CSS alone decides whether it
+   shows, so this default is the load-bearing half: without it an unstyled
+   "✎ suggestion" button sits in the prose at every width. */
 .lf-suggest-chip {
   display: none;
   align-items: center;
@@ -6228,201 +2606,11 @@ body[data-cards="inline"]:not(.is-reading-width) #editor.redline-layout > .Prose
   outline-offset: 1px;
 }
 
-/* The mobile deletion sheet (mountDeletionSheet, markup-margin.ts) — opened
-   by tapping a `.lf-del-chip`. `.thread-view` (styles.css, FULL-SCREEN THREAD
-   VIEW section above) supplies the fixed slide-up sheet, header, drag handle,
-   and close button for free; `.lf-del-sheet` adds nothing positional, only
-   marks this as a distinct instance from the comment thread-view. The text
-   itself wraps rather than overflowing — same long-unbreakable-token rule as
-   the balloon (`.lf-balloon-text`) and docs/product/design-mobile.md. */
-.lf-del-sheet-text {
-  font-family: var(--prose);
-  font-size: 16px;
-  line-height: 1.6;
-  color: var(--fg);
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-  word-break: break-word;
-}
-
-/* The mobile suggestion sheet (mountSuggestionSheet, markup-margin.ts) —
-   opened by tapping a `.lf-suggest-chip`. Reuses `.thread-view` for the
-   sheet chrome AND reuses `buildSuggestionBalloon`'s own card for the body
-   (same DOM the desktop balloon renders) — these overrides only neutralize
-   the balloon's absolute-positioning rules, which apply only inside the
-   margin column. */
-.lf-suggest-sheet .lf-balloon {
-  position: static;
-  left: auto;
-  right: auto;
-  box-shadow: none;
-  border: none;
-  border-left: 3px solid var(--lf-suggest-color, var(--accent));
-  border-radius: 0;
-  padding: 4px 4px 4px 12px;
-  font-size: 15px;
-}
-
-/* The balloon column is a screen-only affordance: a printed page has no
-   hover/tap interaction to reveal a chip's content either, so both are
-   hidden and the prose reclaims the full page width. Scoped to the redline
-   layout classes only — the code/diff surface never carries them (see
-   docs/process/learnings.md, minmax(0,1fr) footgun note above), so this
-   cannot affect the code surface's print output. */
+/* The print half of doc.css's block, split for the same reason. */
 @media print {
-  #editor.redline-layout {
-    display: block;
-  }
-
-  .markup-margin,
-  .lf-leader-overlay,
-  .lf-del-chip,
-  .lf-del-sheet,
-  .lf-suggest-chip,
-  .lf-suggest-sheet {
+  .lf-suggest-chip {
     display: none !important;
   }
-}
-
-@media (prefers-color-scheme: dark) {
-  .lf-balloon {
-    border-left-color: #f85149;
-    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.4);
-  }
-
-  .lf-balloon-label {
-    color: #f85149;
-  }
-
-  .lf-balloon-text {
-    color: #8b949e;
-  }
-
-  .lf-leader {
-    stroke: #f85149;
-  }
-
-  .lf-del-chip {
-    color: #f85149;
-  }
-
-  /* --accent is not theme-varying (styles.css defines it once at :root), so
-     .lf-balloon-comment / .lf-leader-comment / .lf-balloon-suggestion /
-     .lf-leader-suggestion / .lf-suggest-chip need no dark override — they
-     already read var(--accent) (or the author's own --lf-suggest-color) via
-     the base rules above. */
-}
-
-/* ================= INLINE THREAD CARDS (mobile) =================
-   The phone's comment surface: the same `.thread` card the drawer and the
-   balloon margin render, placed IN THE FLOW under the text (or the source
-   line) it points at — where a GitHub PR comment sits. Injected as a widget
-   decoration by the surface, so these rules must not assume a parent: they
-   style the card wrapper itself.
-
-   Only threads with a line to sit beside appear here (open, resolvable
-   anchor). Orphaned and resolved threads live in the bottom sheet, which is
-   the THREADS PANE block above. */
-.lf-inline-card {
-  margin: 10px 0 14px;
-  /* Code scrolls sideways; the card must not, or reading a comment on a long
-     line would need a horizontal scroll of its own. */
-  max-width: 100%;
-  white-space: normal;
-  cursor: default;
-  border: 1px solid var(--border);
-  border-left: 3px solid var(--accent);
-  border-radius: var(--radius);
-  background: var(--bg-panel);
-  padding: 10px 12px;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.06);
-}
-.lf-inline-card.thread-kind-question {
-  border-left-color: var(--warn-fg, #b25e09);
-  background: #fffaf3;
-}
-.lf-inline-card.thread-kind-answered,
-.lf-inline-card.thread-kind-resolved {
-  border-left-color: var(--green);
-}
-/* The off-screen hints at phone widths float over the prose — the margin
-   column that holds them on a wide screen is gone here. Top right under the
-   app bar; bottom left, ABOVE the action dock (Make Plan and friends): the
-   bottom offset is measured live against the dock by comment-hints.ts, so a
-   dock that grows a line can never cover it. Glyph + count + arrow only —
-   the words are the wide screen's. */
-@media (max-width: 1100px) {
-  .lf-offscreen {
-    gap: 6px;
-    padding: 6px 10px;
-    min-height: 34px;
-  }
-  .lf-offscreen-top {
-    right: 12px;
-  }
-  .lf-offscreen-bottom {
-    left: 12px;
-  }
-  .lf-offscreen .w,
-  .doc-asks .w {
-    display: none;
-  }
-  .lf-offscreen .m {
-    display: inline;
-  }
-  .doc-asks {
-    min-height: 34px;
-    padding: 3px 8px;
-  }
-}
-/* Inside CodeMirror the card is a block widget in a monospace, pre-wrapped
-   context — reset both, or the comment renders as code. */
-.cm-content .lf-inline-card {
-  font-family: var(--sans);
-  font-size: 14px;
-  white-space: normal;
-  tab-size: initial;
-  margin-left: 4px;
-  margin-right: 4px;
-  /* The code surface does NOT wrap lines, so `.cm-content` is as wide as the
-     file's longest line and `max-width: 100%` resolves against THAT — on a
-     file with one 200-column line the card's ✓ Resolve and its caret render
-     hundreds of pixels off the right edge of a phone. Size against the
-     scroller instead (published by code-editor.ts as it measures), and stick
-     to the left edge so the card stays put while the code scrolls under it. */
-  position: sticky;
-  left: 0;
-  box-sizing: border-box;
-  width: var(--lf-inline-card-w, 100%);
-  max-width: var(--lf-inline-card-w, 100%);
-}
-/* Where the ‹ › nav just landed. Deliberately brief and colour-only: the
-   card has already been scrolled to the middle of the screen, so this only
-   has to answer "which one". */
-.lf-inline-card.lf-nav-flash {
-  animation: lf-inline-flash 900ms ease-out;
-}
-@keyframes lf-inline-flash {
-  0% {
-    background: var(--accent-soft, rgba(46, 125, 215, 0.16));
-  }
-  100% {
-    background: var(--bg-panel);
-  }
-}
-@media (prefers-reduced-motion: reduce) {
-  .lf-inline-card.lf-nav-flash {
-    animation: none;
-    outline: 2px solid var(--accent);
-  }
-}
-/* Inline cards render only where they are the surface in force. Belt-and-
-   braces: `mobile-review.ts` builds none anywhere else, but a card left over
-   from a placement change must never sit in the middle of the prose while a
-   balloon says the same thing in the margin. Exactly one always-on comment
-   surface, and `card-placement.ts` is the one thing that decides which. */
-body:not([data-cards="inline"]) .lf-inline-card {
-  display: none;
 }
 
 /* ================= SIGN-IN REQUIRED (the standing read-only notice) =======

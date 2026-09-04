@@ -64,6 +64,7 @@ function opts(scope: MountScope, docId = 'd1'): ChromeOpts {
     ydoc: new Y.Doc(),
     surface: fakeSurface(),
     whenSynced: (cb) => cb(),
+    canWrite: true,
     selectHint: '',
     reanchorHint: '',
     getSelection: () => null,
