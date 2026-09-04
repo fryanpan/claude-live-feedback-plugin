@@ -21,7 +21,7 @@ idle threshold **>24h**; daily cadence.
 ## Key finding (verified)
 
 The live-feedback MCP child's `process.cwd()` is the agent's project dir
-(confirmed: job-search, ai-team-lead, personal-crm, writing-assistant). That
+(confirmed across four peer projects). That
 is exactly how claude-hive keys peers (`from_cwd`). So **owner = cwd** maps
 directly to a live peer via `list_peers` — no per-agent config needed.
 (`.mcp.json` hardcodes `FEEDBACK_AUTHOR: "agent"` for everyone, so author
