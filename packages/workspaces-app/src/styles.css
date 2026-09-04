@@ -3811,6 +3811,23 @@ body.threads-resizing {
 /* The same element with the same colour in both states — not icon-only, and
    not a control that only turns green once the thread is resolved. It reads
    as an action before you take it. */
+/* Read-only (`ThreadPanelOpts.canWrite === false`). Every posting control on
+   a card is `disabled` there, and this is what makes that visible: a button
+   that looks pressable and is not is worse than one that looks unavailable.
+   The controls STAY on the card rather than being hidden, because what a
+   thread is asking of you is worth reading even when you cannot answer it —
+   the banner above the doc already says why. One rule for the lot: the tag
+   varies (button, input, textarea) but the reason never does. */
+.thread button:disabled,
+.thread input:disabled,
+.thread textarea:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+.thread button:disabled:hover {
+  border-color: var(--border);
+  color: var(--fg-muted);
+}
 .thread-resolve {
   flex: 0 0 auto;
   display: inline-flex;

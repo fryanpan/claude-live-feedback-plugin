@@ -126,6 +126,16 @@ export interface ChromeOpts {
    *  a second copy of the same comments. An explicit user toggle overrides
    *  the default for the rest of the session. */
   hasBalloonMargin?: boolean;
+  /**
+   * Can this reader post? Straight from `MountContext.canWrite` — the
+   * server's answer, fetched once before the router started.
+   *
+   * REQUIRED for the same reason `whenSynced` is: three surfaces mount this
+   * chrome, and an optional access flag is how two of them would quietly keep
+   * offering a working reply box to somebody the server will refuse. Making
+   * it required turns "did I wire all three" into a compile error.
+   */
+  canWrite: boolean;
 }
 
 /**
@@ -740,6 +750,7 @@ export function mountReviewChrome(opts: ChromeOpts): ReviewChrome {
     container: threadsListEl,
     currentUser: user,
     threadLineLabel,
+    canWrite: opts.canWrite,
     // The anchor highlight follows the panel's selection from here, once,
     // instead of at each of the half-dozen places that change it. Folding an
     // open card had no such place — it selects nothing, from inside the card's
