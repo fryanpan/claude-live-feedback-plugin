@@ -17,7 +17,7 @@ import type { ReviewOption } from './review-item.ts';
 
 /** Bumped when the frame around the criteria changes, so a stored verdict
  *  can be told from one made under an older ask. */
-export const REVIEW_JUDGE_PROMPT_VERSION = 2;
+export const REVIEW_JUDGE_PROMPT_VERSION = 3;
 
 /**
  * What a workspace judges its review items against until somebody edits it.
@@ -74,6 +74,12 @@ export function buildReviewJudgePrompt(
     // held for “The detail section is empty”, which is a different fault with
     // a different fix (UX review, 2026-08-29).
     'The reason must describe what the item ACTUALLY says. Never call a field empty or missing when it has content: name the words that are there and why they are not enough — a detail reading “see below” is present and says nothing, which is not the same fault as no detail at all.',
+    // The same fault, one field along, and the one that produced the loop
+    // this instruction was added for: an item was held eight times, and the
+    // last hold asked for costs its options stated word for word. The costs
+    // were in the prompt every time — proved end-to-end in
+    // `review-judge-loop.test.ts` — so what was missing was this sentence.
+    'An option’s detail IS its cost: the words after the dash on an option line are what choosing it costs or buys. Read them, and never say the options give no costs when their details name them — an option marked “(no cost given)” is the only one that has none.',
     '',
     'Criteria:',
     criteria.trim(),

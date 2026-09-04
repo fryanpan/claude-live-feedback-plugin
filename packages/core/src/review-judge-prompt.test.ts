@@ -96,3 +96,30 @@ describe('the judge is told to describe what it actually saw', () => {
     ).toContain('Detail: (none)');
   });
 });
+
+describe('option costs live in option details, and the judge is told so', () => {
+  // The loop this exists to end: a decision item was held eight times, and
+  // the last hold asked for costs the options already stated. The words did
+  // reach the judge (proved end-to-end in review-judge-loop.test.ts); what
+  // was missing was the instruction not to read a costed option as uncosted.
+  const COSTED = {
+    headline: 'Which cache size for the nightly rebuild',
+    detail: 'The rebuild runs at 02:00 and finishes before the morning sync.',
+    options: [
+      { id: 'o-1', label: 'Keep it', detail: 'costs 2GB of disk and no extra time' },
+      { id: 'o-2', label: 'Halve it', detail: 'frees 1GB but adds an hour to every night' },
+    ],
+  };
+
+  it('lays every option cost in front of the judge verbatim', () => {
+    const { user } = buildReviewJudgePrompt(DEFAULT_REVIEW_ITEM_CRITERIA, COSTED);
+    expect(user).toContain('costs 2GB of disk and no extra time');
+    expect(user).toContain('frees 1GB but adds an hour to every night');
+  });
+
+  it('tells the judge an option detail IS its cost and must not be called missing', () => {
+    const { system } = buildReviewJudgePrompt(DEFAULT_REVIEW_ITEM_CRITERIA, COSTED);
+    expect(system).toContain('An option’s detail IS its cost');
+    expect(system).toContain('never say the options give no costs when their details name them');
+  });
+});
