@@ -27,15 +27,16 @@ they are not restated here.
 ## Strict types
 
 `tsconfig.base.json` is `strict`, plus `noUnusedLocals`, `noUnusedParameters`,
-`noImplicitReturns` and `noFallthroughCasesInSwitch`. `any` is a lint
+`noImplicitReturns`, `noFallthroughCasesInSwitch` and `noImplicitOverride`
+(a method that overrides says `override`). `any` is a lint
 **error**, not a warning, and so is an unused import — the repo sits at zero
 of both, so a new one is yours. A cast you genuinely cannot avoid takes
 `// biome-ignore lint/suspicious/noExplicitAny: <reason>`; the reason is the
 point of the escape hatch.
 
-**Not enforced:** `noUncheckedIndexedAccess` is off — switching it on is 556
-errors today. Indexing an array or a record still hands you a value the
-compiler swears is defined. Check it yourself.
+**Not enforced:** `noUncheckedIndexedAccess` (556 errors today) and
+`exactOptionalPropertyTypes` (306) are off. Indexing an array or a record
+still hands you a value the compiler swears is defined. Check it yourself.
 
 *Enforced by:* `bun run typecheck`, `bun run lint`.
 
