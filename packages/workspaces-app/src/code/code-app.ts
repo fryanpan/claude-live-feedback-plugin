@@ -172,6 +172,7 @@ export async function mountCode(
     surface,
     whenSynced: (cb) => client.onReady(cb),
     scope,
+    canWrite: ctx.canWrite,
     labelHint: ctx.sourceUrl || ctx.relPath || undefined,
     selectHint: 'Click a line number, or select some lines, to leave a comment.',
     reanchorHint: 'Select new lines first, then click Re-anchor.',

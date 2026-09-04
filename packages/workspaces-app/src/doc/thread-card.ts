@@ -360,7 +360,7 @@ function slotB(
     ? `Answer as ${host.opts.currentUser.name}…`
     : `Reply as ${host.opts.currentUser.name}…`;
   if (pendingReply) ta.value = pendingReply;
-  reply.appendChild(ta);
+  reply.appendChild(lockWrite(host, ta));
   // Every composer is a markdown editor (design point 4); refresh covers
   // the programmatic clear below, which the editor cannot see.
   const refreshComposer = attachMarkdownComposer(ta);
@@ -389,12 +389,17 @@ function slotB(
     }
   });
   const actions = div('thread-actions');
-  actions.appendChild(btn(answering ? 'Answer' : 'Reply', 'primary', submitReply));
+  actions.appendChild(lockWrite(host, btn(answering ? 'Answer' : 'Reply', 'primary', submitReply)));
   // Resolve/Reopen is NOT here — one control, in the foot, outside the
   // slots. Re-anchoring is a repair, not a reply, and belongs with the
   // conversation it is repairing.
   if (status === 'orphan') {
-    actions.appendChild(btn('Re-anchor…', '', () => host.opts.onReanchor(t.id)));
+    actions.appendChild(
+      lockWrite(
+        host,
+        btn('Re-anchor…', '', () => host.opts.onReanchor(t.id)),
+      ),
+    );
   }
   reply.appendChild(actions);
 
@@ -489,8 +494,11 @@ function compactItemLine(
   if (review.shape === 'decision' && review.options && review.options.length > 0) {
     const opts = div('thread-options-compact');
     for (const o of review.options) {
-      const b = btn(o.label, 'thread-item-option thread-item-option-compact', () =>
-        host.opts.onReply(t.id, o.label, c.id, o.id),
+      const b = lockWrite(
+        host,
+        btn(o.label, 'thread-item-option thread-item-option-compact', () =>
+          host.opts.onReply(t.id, o.label, c.id, o.id),
+        ),
       );
       if (o.detail) b.title = o.detail;
       opts.appendChild(b);
@@ -543,7 +551,10 @@ function compactAnswerField(
       send();
     }
   });
-  wrap.append(input, btn('Answer', 'thread-answer-send primary', send));
+  wrap.append(
+    lockWrite(host, input),
+    lockWrite(host, btn('Answer', 'thread-answer-send primary', send)),
+  );
   return wrap;
 }
 
@@ -612,10 +623,13 @@ function itemCard(
   if (pending && review.options && review.options.length > 0) {
     const opts = div('thread-item-options');
     for (const o of review.options) {
-      const b = btn('', 'thread-item-option', () =>
-        // The tap answers with the option's VERBATIM label — the id is
-        // provenance the chrome forwards to `/answer`, never the answer.
-        host.opts.onReply(t.id, o.label, c.id, o.id),
+      const b = lockWrite(
+        host,
+        btn('', 'thread-item-option', () =>
+          // The tap answers with the option's VERBATIM label — the id is
+          // provenance the chrome forwards to `/answer`, never the answer.
+          host.opts.onReply(t.id, o.label, c.id, o.id),
+        ),
       );
       const label = span('thread-item-option-label');
       label.textContent = o.label;
@@ -680,7 +694,10 @@ function answeredRecord(
   wrap.append(meta);
 
   if (host.opts.onUndoAnswer) {
-    const undo = btn('Undo', 'thread-answer-undo', () => host.opts.onUndoAnswer?.(t.id, c.id));
+    const undo = lockWrite(
+      host,
+      btn('Undo', 'thread-answer-undo', () => host.opts.onUndoAnswer?.(t.id, c.id)),
+    );
     undo.title = 'Take this answer back — it reopens the item and keeps a record';
     undo.setAttribute('aria-label', 'Undo this answer and reopen the review item');
     wrap.append(undo);
@@ -708,8 +725,11 @@ function foot(
   // never swaps it for a different button. It reads as an action before you
   // take it — never icon-only, never green-only-once-resolved.
   const resolved = status === 'resolved';
-  const b = btn(resolved ? '✓ Resolved' : '✓ Resolve', 'thread-resolve', () =>
-    resolved ? host.opts.onReopen(t.id) : host.opts.onResolve(t.id),
+  const b = lockWrite(
+    host,
+    btn(resolved ? '✓ Resolved' : '✓ Resolve', 'thread-resolve', () =>
+      resolved ? host.opts.onReopen(t.id) : host.opts.onResolve(t.id),
+    ),
   );
   b.setAttribute('aria-label', resolved ? 'Reopen thread' : 'Resolve thread');
   foot.appendChild(b);
@@ -838,6 +858,31 @@ function commentRow(c: Comment, carriedByItemCard = false): HTMLElement {
   // the declaration is what it is asking for.
   row.append(authorRow, ...(header ? [header] : []), body);
   return row;
+}
+
+/**
+ * Disable a control that POSTS, for a reader the server will refuse.
+ *
+ * `disabled` is what stops the click; `aria-disabled` is what a screen reader
+ * announces, and both are set because a `disabled` button is skipped by some
+ * readers rather than reported as unavailable. Under the "You are reading
+ * only" banner the whole card used to render live: the decision options took
+ * a tap and did nothing — no answer, no error, not even the failure toast a
+ * refused post would have shown, because the tap never reached a route that
+ * could refuse it.
+ *
+ * The caret is deliberately NOT locked. Unfolding a card is reading, not
+ * writing, and it is the only focusable thing on a folded card — locking it
+ * would take the conversation away from a keyboard entirely.
+ */
+function lockWrite<T extends HTMLButtonElement | HTMLInputElement | HTMLTextAreaElement>(
+  host: ThreadCardHost,
+  el: T,
+): T {
+  if (host.opts.canWrite !== false) return el;
+  el.disabled = true;
+  el.setAttribute('aria-disabled', 'true');
+  return el;
 }
 
 function btn(label: string, cls: string, on: () => void): HTMLButtonElement {

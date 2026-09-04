@@ -76,6 +76,7 @@ function opts(ydoc: Y.Doc): ChromeOpts {
     ydoc,
     surface: fakeSurface(),
     whenSynced: (cb) => cb(),
+    canWrite: true,
     selectHint: '',
     reanchorHint: '',
     getSelection: () => null,
