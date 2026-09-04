@@ -124,7 +124,7 @@ describe('thread card — the two slots', () => {
     expect(msg.textContent).not.toContain('Alice');
   });
 
-  it('keeps both lines on a thread with no replies, with "No replies yet" in the discussion slot', () => {
+  it('drops the discussion line entirely on a thread with no replies', () => {
     const withReply = makeThread({
       id: 'has-reply',
       comments: [comment(alice, 'Question?'), comment(bob, 'Answer.')],
@@ -139,11 +139,13 @@ describe('thread card — the two slots', () => {
     expect(a.querySelector('.thread-participants')).not.toBeNull();
     expect(text(a.querySelector('.thread-discussion'))).toContain('Answer.');
 
+    // A card that spent a row saying "No replies yet" reported an absence the
+    // reader can already see (Bryan, 2026-09-04, on mock round 4). The topic
+    // line stays — it is the thread — and slot B's summary face is then just
+    // whatever the reader can press.
     const b = cardFor(alone);
     expect(b.querySelector('.thread-topic')).not.toBeNull();
-    const discussion = b.querySelector('.thread-discussion') as HTMLElement;
-    expect(text(discussion)).toBe('No replies yet');
-    expect(discussion.classList.contains('none')).toBe(true);
+    expect(b.querySelector('.thread-discussion')).toBeNull();
     expect(b.querySelector('.thread-participants')).toBeNull();
   });
 });
@@ -226,8 +228,10 @@ describe('thread card — caret and resolve control', () => {
 
     const head = card.querySelector('.thread-head') as HTMLElement;
     expect(head.lastElementChild?.classList.contains('thread-caret')).toBe(true);
-    // Caret at the top, resolve at the bottom — not adjacent.
-    expect(card.querySelector('.thread-foot .thread-resolve')).not.toBeNull();
+    // Caret at the top of the folded card, resolve at the bottom of the OPEN
+    // one — a whole fold apart now, not merely two rows.
+    expect(card.querySelector('.face-summary .thread-resolve')).toBeNull();
+    expect(card.querySelector('.slot-b .face-detail .thread-foot .thread-resolve')).not.toBeNull();
   });
 
   /* The whole card is the tap target — but a tap is not a gesture a keyboard
@@ -279,14 +283,18 @@ describe('thread card — caret and resolve control', () => {
     expect(replyBox().closest('[inert]')).toBeNull();
   });
 
-  it('has ONE resolve control, outside both folding slots, identical in both states', () => {
+  it('has ONE resolve control, and it is reachable only on the OPEN face', () => {
     const t = makeThread({ comments: [comment(alice, 'Open.')] });
     const { panel, cardFor, calls } = mountPanel();
     panel.setThreads([t]);
 
+    // Folded, the control is built but sits on the detail face, which is
+    // `inert` and invisible — so a card being scanned carries no destructive
+    // button a thumb-width from the caret (Bryan, 2026-09-04).
     const collapsed = cardFor(t).querySelector('.thread-resolve') as HTMLButtonElement;
     expect(cardFor(t).querySelectorAll('.thread-resolve')).toHaveLength(1);
-    expect(collapsed.closest('.thread-slot')).toBeNull();
+    expect(collapsed.closest('.face-summary')).toBeNull();
+    expect(collapsed.closest('.face-detail')?.hasAttribute('inert')).toBe(true);
     expect(collapsed.getAttribute('aria-label')).toBe('Resolve thread');
     const collapsedClass = collapsed.className;
 
@@ -295,8 +303,10 @@ describe('thread card — caret and resolve control', () => {
     expect(expandedCard.classList.contains('expanded')).toBe(true);
     const expanded = expandedCard.querySelector('.thread-resolve') as HTMLButtonElement;
     expect(expandedCard.querySelectorAll('.thread-resolve')).toHaveLength(1);
+    // The same element in both states — expanding never swaps it for a
+    // different button, and it reads as an action before you take it.
     expect(expanded.className).toBe(collapsedClass);
-    expect(expanded.closest('.thread-slot')).toBeNull();
+    expect(expanded.closest('.face-detail')?.hasAttribute('inert')).toBe(false);
 
     click(expanded);
     expect(calls.resolve).toEqual([t.id]);
@@ -578,7 +588,7 @@ describe('thread card — a thread that carries a review item IS the review item
 
     const face = cardFor(t).querySelector('.slot-b .face-detail') as HTMLElement;
     const kids = Array.from(face.children).map((el) => el.className.split(' ')[0]);
-    expect(kids).toEqual(['thread-item-card', 'thread-history-label', 'comments']);
+    expect(kids).toEqual(['thread-item-card', 'thread-history-label', 'comments', 'thread-foot']);
     expect(text(face.querySelector('.thread-history-label'))).toBe('Earlier in this thread');
     // The answer composer is part of the item interface, inside the card.
     expect(face.querySelector('.thread-item-card .thread-reply textarea')).not.toBeNull();
@@ -649,7 +659,14 @@ describe('thread card — a thread that carries a review item IS the review item
 
     const face = cardFor(t).querySelector('.slot-b .face-detail') as HTMLElement;
     const kids = Array.from(face.children).map((el) => el.className.split(' ')[0]);
-    expect(kids).toEqual(['thread-item-card', 'thread-history-label', 'comments', 'thread-reply']);
+    expect(kids).toEqual([
+      'thread-item-card',
+      'thread-history-label',
+      'comments',
+      'thread-reply',
+      // ✓ Resolve, last — the last thing an expanded thread offers.
+      'thread-foot',
+    ]);
 
     const record = face.querySelector('.thread-item-card .thread-answered') as HTMLElement;
     // A labelled outcome, then who settled it — not one sentence with the
@@ -754,7 +771,7 @@ describe('thread card — a thread that carries a review item IS the review item
     panel.setActive(t.id);
     const face = cardFor(t).querySelector('.slot-b .face-detail') as HTMLElement;
     const kids = Array.from(face.children).map((el) => el.className.split(' ')[0]);
-    expect(kids).toEqual(['comments', 'thread-reply']);
+    expect(kids).toEqual(['comments', 'thread-reply', 'thread-foot']);
     expect(face.querySelector('.thread-item-card')).toBeNull();
     expect(face.querySelector('.thread-history-label')).toBeNull();
   });
