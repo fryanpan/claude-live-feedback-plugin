@@ -14,6 +14,7 @@ import { ThreadPanel, type ThreadPanelOpts, sizeThreadSlots } from '../src/threa
 
 const alice: User = { id: 'u1', name: 'Alice', kind: 'known', color: '#2e7dd7' };
 const bob: User = { id: 'u2', name: 'Bob', kind: 'known', color: '#e36f1e' };
+const cara: User = { id: 'u3', name: 'Cara', kind: 'known', color: '#1a7f4f' };
 
 let ts = 1_700_000_000_000;
 function comment(author: User, text: string): Comment {
@@ -76,8 +77,8 @@ const click = (el: Element): void => {
   el.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
 };
 
-describe('thread card — the collapsed card is two lines', () => {
-  it('leads line one with the topic and who started it, and line two with the discussion', () => {
+describe('thread card — the two slots', () => {
+  it('renders both faces of both slots: topic ⇄ opening message, discussion ⇄ replies', () => {
     const t = makeThread({
       comments: [comment(alice, 'Why is the retry count fixed?'), comment(bob, 'Because of X.')],
     });
@@ -85,91 +86,45 @@ describe('thread card — the collapsed card is two lines', () => {
     panel.setThreads([t]);
     const card = cardFor(t);
 
-    // Line one: the head, and it is NOT a folding face — it stays put when
-    // the card opens, which is what makes opening read as growth rather than
-    // as a second panel appearing under a row that repeats itself.
-    const head = card.querySelector('.thread-head') as HTMLElement;
-    expect(head.closest('.thread-slot')).toBeNull();
-    expect(text(head.querySelector('.thread-topic'))).toBe('the anchor');
-    expect(text(head.querySelector('.thread-who'))).toBe('Alice');
-    expect(head.querySelector('.thread-glyph')).not.toBeNull();
+    const slotA = card.querySelector('.thread-slot.slot-a') as HTMLElement;
+    const slotB = card.querySelector('.thread-slot.slot-b') as HTMLElement;
+    expect(slotA).not.toBeNull();
+    expect(slotB).not.toBeNull();
 
-    // Line two is the ONE folding slot, and both of its faces exist at once —
-    // the morph cross-fades between them, so neither may be built lazily.
-    const slots = Array.from(card.querySelectorAll('.thread-slot'));
-    expect(slots).toHaveLength(1);
-    const slot = slots[0] as HTMLElement;
-    expect(slot.classList.contains('slot-a')).toBe(true);
-    expect(slot.querySelector('.thread-face.face-summary')).not.toBeNull();
-    expect(slot.querySelector('.thread-face.face-detail')).not.toBeNull();
+    // Both faces of a slot exist SIMULTANEOUSLY — the morph cross-fades
+    // between them, so neither may be built lazily.
+    expect(slotA.querySelector('.thread-face.face-summary')).not.toBeNull();
+    expect(slotA.querySelector('.thread-face.face-detail')).not.toBeNull();
+    expect(slotB.querySelector('.thread-face.face-summary')).not.toBeNull();
+    expect(slotB.querySelector('.thread-face.face-detail')).not.toBeNull();
 
-    expect(text(slot.querySelector('.face-summary .thread-discussion'))).toContain('Because of X.');
-    expect(text(slot.querySelector('.face-detail .comments'))).toContain('Because of X.');
-    expect(text(slot.querySelector('.face-detail .thread-message'))).toBe(
+    expect(text(slotA.querySelector('.face-summary .thread-topic'))).toBe('the anchor');
+    expect(text(slotA.querySelector('.face-detail .thread-message'))).toBe(
       'Why is the retry count fixed?',
     );
-    expect(slot.querySelector('.face-detail textarea')).not.toBeNull();
+    expect(text(slotB.querySelector('.face-summary .thread-discussion'))).toContain(
+      'Because of X.',
+    );
+    expect(text(slotB.querySelector('.face-detail .comments'))).toContain('Because of X.');
+    expect(slotB.querySelector('.face-detail textarea')).not.toBeNull();
   });
 
-  it('carries nothing on the folded card that a folded line has no job for', () => {
-    // Each of these cost a row and answered none of the four jobs in the
-    // card module's header, and each was removed by name in round 2 of the
-    // mocks. A positive control follows, so an empty card would not pass.
-    const t = makeThread({ comments: [comment(alice, 'Open.'), comment(bob, 'Reply.')] });
-    const { panel, cardFor } = mountPanel();
-    panel.setThreads([t]);
-    const card = cardFor(t);
-
-    expect(card.querySelector('.thread-meta')).toBeNull(); // no reply count
-    expect(card.querySelector('.thread-flag-row')).toBeNull(); // no decision tag
-    expect(card.querySelector('.thread-participants')).toBeNull();
-    expect(card.querySelector('.thread-new-tag')).toBeNull();
-    expect(card.querySelector('.status-dot')).toBeNull();
-    // Resolve exists, but only inside the fold — see the resolve suite below.
-    expect(card.querySelector('.face-summary .thread-resolve')).toBeNull();
-
-    // POSITIVE CONTROL: the two lines this card DOES carry are both there,
-    // so the nulls above are about what was removed and not about a card
-    // that failed to render.
-    expect(text(card.querySelector('.thread-topic'))).not.toBe('');
-    expect(text(card.querySelector('.face-summary .thread-discussion'))).not.toBe('');
-  });
-
-  it('names the starter as exactly the name, with the separator beside it', () => {
-    // The hub's activity feed and the task panel read `.thread-who` for the
-    // name on its own; a card that folded " · Alice" into that node would
-    // hand them a name with punctuation in it.
-    const t = makeThread({ comments: [comment(alice, 'Open.')] });
-    const { panel, cardFor } = mountPanel();
-    panel.setThreads([t]);
-    const card = cardFor(t);
-
-    expect(text(card.querySelector('.thread-who'))).toBe('Alice');
-    expect(text(card.querySelector('.thread-sep'))).toBe('·');
-    // …and the whole line reads as one phrase.
-    expect(text(card.querySelector('.thread-topic-line'))).toBe('the anchor · Alice');
-  });
-
-  it('never repeats the author name in the opening message — line one is its attribution', () => {
+  it('never repeats the author name in the opening message — the header row is its attribution', () => {
     const t = makeThread({ comments: [comment(alice, 'Opening thought.')] });
     const { panel, cardFor } = mountPanel();
     panel.setThreads([t]);
     const card = cardFor(t);
 
-    // Positive control: the name IS on the card, exactly once, on line one.
+    // Positive control: the name IS on the card, exactly once, in the header.
     expect(text(card.querySelector('.thread-head'))).toContain('Alice');
     expect(card.querySelectorAll('.thread-head .name')).toHaveLength(1);
 
     const msg = card.querySelector('.face-detail .thread-message') as HTMLElement;
     expect(text(msg)).toBe('Opening thought.');
     expect(msg.textContent).not.toContain('Alice');
-    // Opened, the attribution moves under line one as its own meta row — the
-    // folded card's "· Alice" and this are the same fact in the two places it
-    // has room to live.
-    expect(text(card.querySelector('.face-detail .thread-asked-meta'))).toContain('Alice');
   });
 
-  it('drops line two on a thread with no replies rather than filling it', () => {
+  it('keeps both lines on a thread with no replies, with "No replies yet" in the discussion slot', () => {
     const withReply = makeThread({
       id: 'has-reply',
       comments: [comment(alice, 'Question?'), comment(bob, 'Answer.')],
@@ -178,79 +133,62 @@ describe('thread card — the collapsed card is two lines', () => {
     const { panel, cardFor } = mountPanel();
     panel.setThreads([withReply, alone]);
 
-    // Positive control: a real discussion line does render when there IS a
-    // reply — so the absence below is the suppression and not a dead probe.
+    // Positive control: the participants row and a real discussion line do
+    // render when there IS a reply — so their absence below means something.
     const a = cardFor(withReply);
-    expect(text(a.querySelector('.face-summary .thread-discussion'))).toContain('Answer.');
+    expect(a.querySelector('.thread-participants')).not.toBeNull();
+    expect(text(a.querySelector('.thread-discussion'))).toContain('Answer.');
 
     const b = cardFor(alone);
     expect(b.querySelector('.thread-topic')).not.toBeNull();
-    expect(b.querySelector('.face-summary .thread-discussion')).toBeNull();
-    expect(b.textContent).not.toContain('No replies yet');
-  });
-
-  it('folds to one line when there is nothing to put on line two', () => {
-    // Every one of these used to carry "No replies yet" — a plain comment
-    // nobody had answered, and a RESOLVED one, where it was the last thing
-    // said about a finished thread. An empty summary face is what makes the
-    // folded card one line, and `sizeThreadSlots` writes its zero (see
-    // below); the guard that refuses a zero is for a face WITH children.
-    const empty: Thread[] = [
-      makeThread({ id: 's1', comments: [comment(alice, 'Alone.')] }),
-      makeThread({ id: 's3', status: 'resolved', comments: [comment(alice, 'Done.')] }),
-    ];
-    const populated = makeThread({
-      id: 's2',
-      comments: [comment(alice, 'A.'), comment(bob, 'B.')],
-    });
-    const { panel, cardFor } = mountPanel();
-    panel.setThreads([...empty, populated]);
-    panel.setTab('all');
-    for (const t of empty) {
-      expect((cardFor(t).querySelector('.face-summary') as HTMLElement).childElementCount).toBe(0);
-    }
-    // Control: a thread that HAS something to say still says it, so the zero
-    // above is about the content and not about the render.
-    expect(
-      (cardFor(populated).querySelector('.face-summary') as HTMLElement).childElementCount,
-    ).toBeGreaterThan(0);
-  });
-
-  it('sizes an empty summary face to zero, and still refuses a populated face’s zero', () => {
-    // The two halves of one rule. Before this, `sizeThreadSlots` refused
-    // every zero it measured, because the only zero it could ever see came
-    // from a subtree that was not being laid out. A card with nothing on line
-    // two now measures zero truthfully, and a slot left at its last good
-    // height would carry a blank second row under a one-line card.
-    const alone = makeThread({ id: 'z1', comments: [comment(alice, 'Alone.')] });
-    const withReply = makeThread({
-      id: 'z2',
-      comments: [comment(alice, 'A.'), comment(bob, 'B.')],
-    });
-    const { panel, cardFor } = mountPanel();
-    panel.setThreads([alone, withReply]);
-
-    // happy-dom has no layout, so every offsetHeight is already 0 — which is
-    // exactly the measurement both branches have to be told apart under.
-    const slotOf = (t: Thread) => cardFor(t).querySelector('.thread-slot') as HTMLElement;
-    const populated = slotOf(withReply);
-    populated.style.height = '24px';
-    sizeThreadSlots(document);
-
-    expect(slotOf(alone).style.height).toBe('0px');
-    // The original bug, rebuilt: this face HAS children, so its zero is the
-    // not-laid-out case and the last good height survives.
-    expect(populated.style.height).toBe('24px');
-    expect(
-      (cardFor(withReply).querySelector('.face-summary') as HTMLElement).childElementCount,
-    ).toBeGreaterThan(0);
+    const discussion = b.querySelector('.thread-discussion') as HTMLElement;
+    expect(text(discussion)).toBe('No replies yet');
+    expect(discussion.classList.contains('none')).toBe(true);
+    expect(b.querySelector('.thread-participants')).toBeNull();
   });
 });
 
-describe('thread card — untrusted text', () => {
+describe('thread card — participants', () => {
+  it('names exactly one replier and counts two or more, excluding the thread author', () => {
+    const one = makeThread({
+      id: 'one',
+      comments: [comment(alice, 'Open.'), comment(bob, 'Reply.'), comment(bob, 'Again.')],
+    });
+    const many = makeThread({
+      id: 'many',
+      comments: [
+        comment(alice, 'Open.'),
+        comment(bob, 'Reply.'),
+        comment(cara, 'Reply.'),
+        comment(alice, 'Author again.'),
+      ],
+    });
+    const { panel, cardFor } = mountPanel();
+    panel.setThreads([one, many]);
+
+    const p1 = cardFor(one).querySelector('.thread-participants') as HTMLElement;
+    expect(text(p1)).toBe('Bob replied');
+    expect(p1.querySelectorAll('.swatch')).toHaveLength(1); // deduped
+
+    const p2 = cardFor(many).querySelector('.thread-participants') as HTMLElement;
+    expect(text(p2)).toBe('+2 others'); // the author's own reply is not counted
+    expect(p2.querySelectorAll('.swatch')).toHaveLength(2);
+  });
+
+  it('puts the participants row directly above the discussion line, in the same face', () => {
+    const t = makeThread({ comments: [comment(alice, 'Open.'), comment(bob, 'Reply.')] });
+    const { panel, cardFor } = mountPanel();
+    panel.setThreads([t]);
+
+    const face = cardFor(t).querySelector('.slot-b .face-summary') as HTMLElement;
+    const kids = Array.from(face.children);
+    expect(kids[0]?.classList.contains('thread-participants')).toBe(true);
+    expect(kids[1]?.classList.contains('thread-discussion')).toBe(true);
+  });
+
   it('renders an author name as text, never as HTML', () => {
     const evil: User = { ...bob, name: '<img src=x onerror="alert(1)">' };
-    const t = makeThread({ comments: [comment(evil, 'Open.'), comment(alice, 'Reply.')] });
+    const t = makeThread({ comments: [comment(alice, 'Open.'), comment(evil, 'Reply.')] });
     const { panel, cardFor } = mountPanel();
     panel.setThreads([t]);
 
@@ -259,7 +197,7 @@ describe('thread card — untrusted text', () => {
     card.querySelector('.thread-topic')?.insertAdjacentHTML('beforeend', '<img data-probe>');
     expect(card.querySelectorAll('img[data-probe]')).toHaveLength(1);
     expect(card.querySelectorAll('img:not([data-probe])')).toHaveLength(0);
-    expect(text(card.querySelector('.thread-who'))).toContain('<img src=x');
+    expect(text(card.querySelector('.thread-participants'))).toContain('<img src=x');
   });
 
   it('renders the anchor snippet as text, never as HTML', () => {
@@ -288,11 +226,8 @@ describe('thread card — caret and resolve control', () => {
 
     const head = card.querySelector('.thread-head') as HTMLElement;
     expect(head.lastElementChild?.classList.contains('thread-caret')).toBe(true);
-    // Caret on line one, resolve at the bottom of the fold — not adjacent,
-    // and not even on the same face while the card is closed.
-    const resolve = card.querySelector('.thread-foot .thread-resolve') as HTMLElement;
-    expect(resolve).not.toBeNull();
-    expect(resolve.closest('.thread-face.face-detail')).not.toBeNull();
+    // Caret at the top, resolve at the bottom — not adjacent.
+    expect(card.querySelector('.thread-foot .thread-resolve')).not.toBeNull();
   });
 
   /* The whole card is the tap target — but a tap is not a gesture a keyboard
@@ -334,7 +269,7 @@ describe('thread card — caret and resolve control', () => {
     panel.setThreads([t]);
 
     const replyBox = () =>
-      cardFor(t).querySelector('.slot-a .face-detail textarea') as HTMLTextAreaElement;
+      cardFor(t).querySelector('.slot-b .face-detail textarea') as HTMLTextAreaElement;
     expect(replyBox().closest('[inert]')).not.toBeNull();
 
     // Activating the caret is a plain click — which is exactly what Enter and
@@ -344,19 +279,14 @@ describe('thread card — caret and resolve control', () => {
     expect(replyBox().closest('[inert]')).toBeNull();
   });
 
-  it('has ONE resolve control, and only inside the fold', () => {
+  it('has ONE resolve control, outside both folding slots, identical in both states', () => {
     const t = makeThread({ comments: [comment(alice, 'Open.')] });
     const { panel, cardFor, calls } = mountPanel();
     panel.setThreads([t]);
 
-    // Folded, Resolve is present but on the face nobody can see or reach —
-    // deliberately: it used to sit a thumb-width from the chevron, and the
-    // misfire that costs you is the one that closes somebody's thread.
-    const collapsedCard = cardFor(t);
-    expect(collapsedCard.querySelectorAll('.thread-resolve')).toHaveLength(1);
-    const collapsed = collapsedCard.querySelector('.thread-resolve') as HTMLButtonElement;
-    expect(collapsed.closest('.thread-face.face-detail')).not.toBeNull();
-    expect(collapsed.closest('[inert]')).not.toBeNull();
+    const collapsed = cardFor(t).querySelector('.thread-resolve') as HTMLButtonElement;
+    expect(cardFor(t).querySelectorAll('.thread-resolve')).toHaveLength(1);
+    expect(collapsed.closest('.thread-slot')).toBeNull();
     expect(collapsed.getAttribute('aria-label')).toBe('Resolve thread');
     const collapsedClass = collapsed.className;
 
@@ -365,10 +295,8 @@ describe('thread card — caret and resolve control', () => {
     expect(expandedCard.classList.contains('expanded')).toBe(true);
     const expanded = expandedCard.querySelector('.thread-resolve') as HTMLButtonElement;
     expect(expandedCard.querySelectorAll('.thread-resolve')).toHaveLength(1);
-    // Same element and same class in both states, so opening never swaps it
-    // for a different button.
     expect(expanded.className).toBe(collapsedClass);
-    expect(expanded.closest('[inert]')).toBeNull();
+    expect(expanded.closest('.thread-slot')).toBeNull();
 
     click(expanded);
     expect(calls.resolve).toEqual([t.id]);
@@ -586,12 +514,7 @@ describe('thread card — a declared Review Item', () => {
     // The ask itself is the item card's, in full.
     const item = card.querySelector('.thread-item-card') as HTMLElement;
     expect(text(item.querySelector('.thread-item-k'))).toBe('Question');
-    // The headline is line ONE of the card, and the item card below it does
-    // not print it a second time.
-    expect(text(card.querySelector('.thread-head .thread-topic'))).toBe(
-      'Read the new onboarding copy',
-    );
-    expect(item.querySelector('.thread-item-headline')).toBeNull();
+    expect(text(item.querySelector('.thread-item-headline'))).toBe('Read the new onboarding copy');
     expect(text(item.querySelector('.thread-item-body'))).toContain(
       'Ships Tuesday and nobody outside the team has read it.',
     );
@@ -653,50 +576,28 @@ describe('thread card — a thread that carries a review item IS the review item
     panel.setThreads([t]);
     panel.setActive(t.id);
 
-    const face = cardFor(t).querySelector('.slot-a .face-detail') as HTMLElement;
+    const face = cardFor(t).querySelector('.slot-b .face-detail') as HTMLElement;
     const kids = Array.from(face.children).map((el) => el.className.split(' ')[0]);
-    // The opened card reads top-down: the summary line it grew out of, who
-    // asked and when, what they wrote, then the item interface, then the
-    // history under a plain "Comments" heading, then the one resolve control.
-    expect(kids).toEqual([
-      'thread-discussion',
-      'thread-asked-meta',
-      'thread-message',
-      'thread-item-card',
-      'thread-history-label',
-      'comments',
-      'thread-foot',
-    ]);
-    // A plain heading with no reply count anywhere on the card (Bryan,
-    // round 2: "no reply-count line").
-    expect(text(face.querySelector('.thread-history-label'))).toBe('Comments');
-    expect(face.querySelector('.thread-meta')).toBeNull();
+    expect(kids).toEqual(['thread-item-card', 'thread-history-label', 'comments']);
+    expect(text(face.querySelector('.thread-history-label'))).toBe('Earlier in this thread');
     // The answer composer is part of the item interface, inside the card.
     expect(face.querySelector('.thread-item-card .thread-reply textarea')).not.toBeNull();
-    // ...and the item card does not re-attribute an ask the line above it
-    // already attributed.
-    expect(face.querySelectorAll('.thread-item-meta')).toHaveLength(0);
   });
 
-  it('spells the head row: kind chip and one markdown body, nothing said twice', () => {
+  it('spells the head row: kind chip, headline, asked-by meta — and one markdown body', () => {
     const t = makeThread({ comments: [declaredComment(asked())] });
     const { panel, cardFor } = mountPanel();
     panel.setThreads([t]);
     panel.setActive(t.id);
 
-    const whole = cardFor(t);
-    const card = whole.querySelector('.thread-item-card') as HTMLElement;
+    const card = cardFor(t).querySelector('.thread-item-card') as HTMLElement;
     // New UI text says Question; the class token stays `review` (stored
     // vocabulary is unchanged by the rename in flight).
     const chip = card.querySelector('.thread-item-k') as HTMLElement;
     expect(text(chip)).toBe('Question');
     expect(chip.classList.contains('thread-item-k-review')).toBe(true);
-    // The headline is line one of the card, and the asked-by line sits under
-    // it — so the item card repeats neither. It used to print both, which put
-    // the ask in two sizes and the asker twice on one open card.
-    expect(card.querySelector('.thread-item-headline')).toBeNull();
-    expect(card.querySelector('.thread-item-meta')).toBeNull();
-    expect(text(whole.querySelector('.thread-asked-meta'))).toMatch(/^Bob · \S/);
+    expect(text(card.querySelector('.thread-item-headline'))).toBe('Read the stall rota');
+    expect(text(card.querySelector('.thread-item-meta'))).toMatch(/^Asked by Bob .+ ago$/);
     // The ONE body, rendered as markdown.
     const body = card.querySelector('.thread-item-body') as HTMLElement;
     expect(text(body)).toContain('Ordering and missing stalls.');
@@ -746,18 +647,9 @@ describe('thread card — a thread that carries a review item IS the review item
     panel.setThreads([t]);
     panel.setActive(t.id);
 
-    const face = cardFor(t).querySelector('.slot-a .face-detail') as HTMLElement;
+    const face = cardFor(t).querySelector('.slot-b .face-detail') as HTMLElement;
     const kids = Array.from(face.children).map((el) => el.className.split(' ')[0]);
-    expect(kids).toEqual([
-      'thread-discussion',
-      'thread-asked-meta',
-      'thread-message',
-      'thread-item-card',
-      'thread-history-label',
-      'comments',
-      'thread-reply',
-      'thread-foot',
-    ]);
+    expect(kids).toEqual(['thread-item-card', 'thread-history-label', 'comments', 'thread-reply']);
 
     const record = face.querySelector('.thread-item-card .thread-answered') as HTMLElement;
     // A labelled outcome, then who settled it — not one sentence with the
@@ -768,9 +660,8 @@ describe('thread card — a thread that carries a review item IS the review item
       /^Answered by you \d+ \w+ ago$/,
     );
     // The item it settles is still whole above it — a decided card keeps the
-    // question exactly as it was asked, headline on line one and detail in
-    // the body.
-    expect(text(face.querySelector('.thread-item-k'))).not.toBe('');
+    // question exactly as it was asked.
+    expect(text(face.querySelector('.thread-item-headline'))).not.toBe('');
     expect(face.querySelector('.thread-item-body')).not.toBeNull();
     // Settled: no options, no composer inside the card — the plain Reply
     // outside it is the one way to keep talking.
@@ -856,26 +747,16 @@ describe('thread card — a thread that carries a review item IS the review item
     expect(cardFor(t).querySelector('.thread-item-card')).not.toBeNull();
   });
 
-  it('heads the history "Comments" on an undeclared thread too, and adds no item card', () => {
+  it('leaves a thread with no declaration exactly as it was — comments, then the reply box', () => {
     const t = makeThread({ comments: [comment(alice, 'A note.'), comment(bob, 'Ack.')] });
     const { panel, cardFor } = mountPanel();
     panel.setThreads([t]);
     panel.setActive(t.id);
-    const face = cardFor(t).querySelector('.slot-a .face-detail') as HTMLElement;
+    const face = cardFor(t).querySelector('.slot-b .face-detail') as HTMLElement;
     const kids = Array.from(face.children).map((el) => el.className.split(' ')[0]);
-    expect(kids).toEqual([
-      'thread-discussion',
-      'thread-asked-meta',
-      'thread-message',
-      'thread-history-label',
-      'comments',
-      'thread-reply',
-      'thread-foot',
-    ]);
+    expect(kids).toEqual(['comments', 'thread-reply']);
     expect(face.querySelector('.thread-item-card')).toBeNull();
-    // One heading for the history everywhere, declared or not — it is the
-    // same conversation either way.
-    expect(text(face.querySelector('.thread-history-label'))).toBe('Comments');
+    expect(face.querySelector('.thread-history-label')).toBeNull();
   });
 
   it('keeps the collapsed faces as they were — the item card lives only in the detail face', () => {
@@ -886,18 +767,16 @@ describe('thread card — a thread that carries a review item IS the review item
     panel.setThreads([t]);
     const card = cardFor(t); // collapsed
 
-    // The folded face is line two and the row that answers it — never the
-    // item card, and never a second copy of the declared header. That header
-    // was never on the face a folded card shows.
-    const summary = card.querySelector('.slot-a .face-summary') as HTMLElement;
-    expect(Array.from(summary.children).map((el) => el.className.split(' ')[0])).toEqual([
-      'thread-discussion',
-      'thread-answer-cta',
+    // Slot A's summary face is still just the topic line — which is also why
+    // dropping the duplicated declared header from slot A costs a collapsed
+    // card nothing: that header was never on the face a folded card shows.
+    const slotASummary = card.querySelector('.slot-a .face-summary') as HTMLElement;
+    expect(Array.from(slotASummary.children).map((el) => el.className.split(' ')[0])).toEqual([
+      'thread-topic',
     ]);
-    expect(card.querySelector('.face-summary .comment-review')).toBeNull();
-    // …and line one carries the ask's headline rather than the sentence it
-    // hangs off, which is the whole reason a declared card reads at a glance.
-    expect(text(card.querySelector('.thread-topic'))).toBe('Read the stall rota');
+    expect(card.querySelector('.slot-a .comment-review')).toBeNull();
+    // Slot B's summary face carries no card either — the sidebar and mobile
+    // inline reads are unchanged.
     expect(card.querySelector('.face-summary .thread-item-card')).toBeNull();
     expect(card.querySelectorAll('.thread-item-card')).toHaveLength(1);
     expect(card.querySelector('.thread-item-card')?.closest('.face-detail')).not.toBeNull();

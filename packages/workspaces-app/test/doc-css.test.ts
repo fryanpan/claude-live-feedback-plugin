@@ -72,14 +72,13 @@ describe('the editor page keeps every surface that moved', () => {
     expect(s.display).toBe('flex');
   });
 
-  it('hides an inline comment card unless the doc asked for inline cards', () => {
-    // INLINE THREAD CARDS, and the rule that gates the whole surface.
-    document.body.dataset.cards = 'margin';
+  it('boxes the in-flow comment card so code cannot widen it (INLINE THREAD CARDS)', () => {
     const card = attach('lf-inline-card');
-    expect(styleOf(card).display).toBe('none');
-    document.body.dataset.cards = 'inline';
-    expect(styleOf(card).display).not.toBe('none');
-    delete document.body.dataset.cards;
+    const s = styleOf(card);
+    // Code scrolls sideways; the card is clamped so a comment on a long line
+    // never needs a horizontal scroll of its own.
+    expect(s.maxWidth).toBe('100%');
+    expect(s.paddingTop).toBe('10px');
   });
 });
 
@@ -94,6 +93,7 @@ describe('the board never loads doc.css, and loses nothing by it', () => {
     expect(styleOf(attach('meeting-strip')).display).not.toBe('flex');
     expect(styleOf(attach('format-bar')).minHeight).not.toBe('44px');
     expect(styleOf(attach('diff-nav-toggle')).position).not.toBe('sticky');
+    expect(styleOf(attach('lf-inline-card')).maxWidth).not.toBe('100%');
   });
 
   it('positive control: the shared chrome in styles.css still reaches the board', () => {

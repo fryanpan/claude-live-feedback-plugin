@@ -102,12 +102,14 @@ describe('the modal is sized for the tablet tier', () => {
     const body = attach('thread-modal-body');
     const options = attach('thread-item-options', { parent: body });
     expect(styleOf(options).flexDirection).toBe('row');
-    expect(styleOf(options).flexWrap).toBe('wrap');
-    // The dialog is the one surface with no ceiling on the row: it is sized
-    // for reading a decision rather than for sitting beside prose, which is
-    // what the 560px cap on the base rule is for. Control below.
-    expect(styleOf(options).maxWidth).toBe('none');
-    expect(styleOf(attach('thread-item-options')).maxWidth).toBe('560px');
+    // The base rule pins an option to `width: 100%`; left alone it would put
+    // one button per line and the row would buy nothing. Read as a computed
+    // value, the override's win over that base rule is the assertion — the
+    // text version could only see that both declarations existed.
+    expect(styleOf(attach('thread-item-option', { tag: 'button', parent: options })).width).toBe(
+      'auto',
+    );
+    expect(styleOf(attach('thread-item-option', { tag: 'button' })).width).toBe('100%');
   });
 
   it('drops the card’s own frame — no border inside a bordered dialog', () => {
