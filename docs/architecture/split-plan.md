@@ -470,6 +470,31 @@ Landed as planned: `hub.css` (5,364) and `signin.css` (185), leaving
   one loop over a list of filenames — would have hidden those reads from
   `test:audit` rather than removed them.
 
+**The third file was taken on 2026-09-03**, and the measurement above held.
+`doc.css` (3,977) carries the seventeen blocks the editor alone reaches and
+`styles.css` drops to 2,669 — more than the estimated 2,459 because three
+blocks B2 did not count (the format bar, the thread highlights and the
+long-thread modal) measure editor-only too. What the work added to B2's
+lesson:
+
+- **The order question is answerable rather than arguable.** Splitting an
+  interleaved block reorders pairs of rules — 71,591 of them here — and a
+  pair can only change a value when it agrees on specificity, importance,
+  property, element and pseudo-element box. Loading `doc.css` after the base
+  leaves zero such pairs; loading it first leaves twenty, and they are not
+  cosmetic (two `#main` grid declarations swap, `#threads-pane` takes the
+  phone sheet's border on the desktop, `.thread-modal-body .thread` starts
+  beating `.thread:hover`). `test/doc-css.test.ts` reads two of the twenty at
+  430px, with the wrong order as its control.
+- **The `.signin-bar` lesson repeated, and was caught before the split this
+  time.** `.thread-line` is the line-number chip on a comment, authored
+  beside the diff nav that mints it — and rendered by the board on a task
+  discussion. Checking every moved selector's class and id tokens against
+  `hub.js` and `signin.js` found it; it stayed in the base.
+- **Two pages get lighter this time, and they are the other two.** The board
+  and the sign-in page stop downloading 3,977 lines of editor CSS; the editor
+  downloads what it always did, in two files.
+
 | Becomes | Moves | Importers to update |
 |---|---|---|
 | `hub.css` (~5330) | the contiguous hub block, 25 `HUB ·` sub-banners from line 1056, including its own `≤1100px` and `≤720px` breakpoints | `scripts/build.ts` (hashed asset list and the copy step), `core`'s `SHELL_ASSETS`, `renderHubShell` |
