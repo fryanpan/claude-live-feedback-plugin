@@ -6,6 +6,7 @@
  */
 import { linkTitlesFor } from '../link-titles.ts';
 import { runRefsBackfill } from '../refs-backfill.ts';
+import { OUT_OF_SHARE_SCOPE, refInVisitorScope } from '../share/ref-scope.ts';
 import { BAD_REF_ERROR } from '../task-create.ts';
 import { type TaskStatus, isValidRef, taskChip } from '../tasks.ts';
 import type { TaskRouteRequest, TaskRoutesContext } from './task-routes-context.ts';
@@ -23,6 +24,7 @@ export async function handleTaskStatusAndLinks(
     safeJson,
     boardIndexForListing,
     hubBoardsForDocIndexed,
+    workspacesOfDoc,
   } = ctx;
   const { req, pathname, authorFor, visitor } = rq;
   // The single gate for status changes: attributed and
@@ -195,6 +197,17 @@ export async function handleTaskStatusAndLinks(
     const body = await safeJson(req);
     const ref = body?.ref;
     if (!isValidRef(ref)) return j(400, { error: BAD_REF_ERROR });
+    // The ref names its target in the BODY, so the path check that admitted
+    // this call never saw it. A member's own row could otherwise point at a
+    // row on a board they were never given, and backlinks are computed per
+    // read — so the chip appeared over there, written from outside. Refused
+    // in the words every out-of-board refusal uses; see share/ref-scope.ts
+    // for why a made-up id is refused by the same line.
+    //
+    // DELETE too, and not as symmetry for its own sake: unlinking is a write
+    // whose subject is the same foreign row, and one verb open is the verb
+    // that gets used.
+    if (!refInVisitorScope(ref, visitor, workspacesOfDoc)) return j(403, OUT_OF_SHARE_SCOPE);
     const res =
       req.method === 'POST' ? taskStore.linkRef(taskId, ref) : taskStore.unlinkRef(taskId, ref);
     if (!res.ok) return j(res.error === 'not-found' ? 404 : 400, res);
