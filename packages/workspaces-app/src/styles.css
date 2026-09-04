@@ -5893,6 +5893,47 @@ body.redline-mode #toggle-suggest-mode {
   overscroll-behavior: contain;
 }
 
+/* Word's rule: tapping a balloon brings it FORWARD and pushes the rest back.
+   Keyed on the panel's selection (`.active`), not on `.expanded` — a decision
+   or a long thread promotes into the modal and its bubble stays folded and
+   selected behind the scrim, which is exactly the state that has to read as
+   "this is the one you are on".
+
+   `:has()` rather than a class the margin writes, because the selection moves
+   from four places (a balloon tap, a drawer row, a highlight in the prose, a
+   click through the modal's scrim) and every one of them folds the card in
+   place without telling the column. The stylesheet already uses `:has()` for
+   the live zone's grid. */
+.markup-margin:has(.thread.active) .lf-balloon-comment:not(.active) {
+  opacity: 0.42;
+}
+.markup-margin .lf-balloon-comment {
+  transition: opacity 0.12s ease;
+}
+@media (prefers-reduced-motion: reduce) {
+  .markup-margin .lf-balloon-comment {
+    transition: none;
+  }
+}
+/* Forward: out of the wash the others are in, above them in the stack, and
+   lifted off the page. The border says which one without moving anything. */
+.markup-margin .lf-balloon-comment.active {
+  z-index: 3;
+  background: var(--bg);
+  border-color: var(--accent);
+  box-shadow: 0 6px 18px rgba(27, 31, 35, 0.16);
+}
+/* The leader follows its balloon. `lf-leader-on` / `lf-leader-dim` are
+   written by positionBalloons — an SVG line in a detached overlay has no
+   ancestor that knows which thread is selected. */
+.lf-leader-on {
+  stroke-width: 1.4;
+  opacity: 1;
+}
+.lf-leader-dim {
+  opacity: 0.35;
+}
+
 /* Balloon hover/focus: a subtle lift so the margin reads as a column of
    interactive cards, matching the drawer's own :hover treatment. Keyed off
    `.lf-balloon` (not `.lf-balloon-del`, which has no click target of its
