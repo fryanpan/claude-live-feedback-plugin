@@ -1325,6 +1325,29 @@ export const TOOL_LIST: ListToolsResult = {
       },
     },
     {
+      name: 'find_related_work',
+      description:
+        "Before writing a plan, or creating a goal, ask what on this board already covers the request. Returns the goals and plan docs that line up — each with a score, a one-line reason and a relative link — or an empty list when nothing does. Cheap: token overlap plus the board's own links, no model call. If anything comes back, file ONE decision review item (extend / replace / new) and wait for the answer; if nothing does, plan from scratch. Either way the goal you create or update gets a description and a link to the doc the request came from.",
+      inputSchema: {
+        type: 'object',
+        properties: {
+          workspaceId: { type: 'string' },
+          text: {
+            type: 'string',
+            description:
+              'The request in the words it was asked in. Scoring does not depend on length, so paste the whole ask rather than boiling it down to a keyword.',
+          },
+          docId: {
+            type: 'string',
+            description:
+              'The doc the request came out of — meeting notes, a huddle, a thread. A goal that already links it is returned even when its title shares no word with the request.',
+          },
+          limit: { type: 'number', description: 'How many matches to return. Default 5, max 20.' },
+        },
+        required: ['workspaceId', 'text'],
+      },
+    },
+    {
       name: 'next_tasks',
       description:
         'The work queue: what to pick up next, in priority order, filtered to what you can actually do. Take the whole ready set, not the top row. Each row carries its full description, blockedBy, ready, and bodyWrittenAt — descriptions age, so check that date before trusting one. Skip any row whose claimedBy is an active session that is not you. Triage rows are never returned; read those with list_tasks(status:"triage").',
