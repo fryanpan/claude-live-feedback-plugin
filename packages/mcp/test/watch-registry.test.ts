@@ -8,8 +8,17 @@
  * the half that worked.
  *
  * `createWatchRegistry` takes the HTTP client, this session's identity, the
- * SSE loop starter and the shared watcher map as arguments, so all of that is
- * a fake here. No socket, no server, no clock.
+ * SSE loop starter, the session's ONE multiplexed loop and the shared watcher
+ * map as arguments, so all of that is a fake here. No socket, no server, no
+ * clock.
+ *
+ * The transport moved under this contract on 2026-09-04 and the contract did
+ * not move with it. N watches now ride ONE stream — that is what the socket
+ * exhaustion forced — so the default harness gives the registry a working mux
+ * and counts how many loops it starts. The per-key assertions did not go away:
+ * they moved under `muxUnsupported`, which is the live rollout state of a
+ * bundle talking to a server that predates the route, and they still have to
+ * hold there.
  */
 import { describe, expect, it } from 'vitest';
 import type { Watcher } from '../src/sse-loop.ts';
@@ -26,11 +35,50 @@ const WATCHES_PATH = '/api/agents/agent-workspaces/watches';
 type Sent = { method: string; path: string; body: unknown };
 type Opened = { label: string; path: string };
 
-function harness(over: Partial<WatchRegistryDeps> & { opens?: boolean; httpFails?: boolean } = {}) {
+/** A stand-in for the session's one multiplexed loop. `starts` is the number
+ *  of times it actually connected — the "N watches, one socket" measurement. */
+function fakeMux(over: { opens?: boolean; unsupported?: boolean } = {}) {
+  const state = { running: false, open: false, starts: 0, stops: 0 };
+  return {
+    state,
+    loop: {
+      ensureOpen: async () => {
+        if (over.unsupported) return false;
+        if (!state.running) {
+          state.running = true;
+          state.starts += 1;
+          state.open = over.opens ?? true;
+        }
+        return state.open;
+      },
+      stop: () => {
+        if (!state.running) return;
+        state.running = false;
+        state.open = false;
+        state.stops += 1;
+      },
+      isOpen: () => state.open,
+      unsupported: () => over.unsupported === true,
+      loopCount: () => (state.running ? 1 : 0),
+    },
+  };
+}
+
+function harness(
+  over: Partial<WatchRegistryDeps> & {
+    opens?: boolean;
+    httpFails?: boolean;
+    muxUnsupported?: boolean;
+  } = {},
+) {
   const watchers = new Map<string, Watcher>();
   const sent: Sent[] = [];
   const opened: Opened[] = [];
   const logged: unknown[][] = [];
+  const mux = fakeMux({
+    ...(over.opens !== undefined ? { opens: over.opens } : {}),
+    ...(over.muxUnsupported ? { unsupported: true } : {}),
+  });
   const deps: WatchRegistryDeps = {
     watchers,
     http: async (method, path, body) => {
@@ -47,11 +95,12 @@ function harness(over: Partial<WatchRegistryDeps> & { opens?: boolean; httpFails
       void controller;
       return open;
     },
+    mux: mux.loop,
     identityIsShared: false,
     log: (...args) => logged.push(args),
     ...over,
   };
-  return { registry: createWatchRegistry(deps), watchers, sent, opened, logged };
+  return { registry: createWatchRegistry(deps), watchers, sent, opened, logged, mux: mux.state };
 }
 
 describe('isSharedIdentity names the one id that must not key a watch set', () => {
@@ -66,28 +115,29 @@ describe('isSharedIdentity names the one id that must not key a watch set', () =
   });
 });
 
-describe('watching a doc opens one stream and mirrors the change', () => {
-  it('opens the doc stream and posts the addition', async () => {
-    const { registry, sent, opened, watchers } = harness();
+describe('watching a doc rides the one stream and mirrors the change', () => {
+  it('starts the one loop and posts the addition', async () => {
+    const { registry, sent, opened, watchers, mux } = harness();
     await expect(registry.watchDoc('plan')).resolves.toBe(true);
-    expect(opened).toEqual([{ label: 'plan', path: '/events/plan' }]);
+    // No per-key socket at all — the whole point of the change.
+    expect(opened).toEqual([]);
+    expect(mux.starts).toBe(1);
     expect(sent).toEqual([
       { method: 'POST', path: WATCHES_PATH, body: { add: ['plan'], name: 'Workspaces' } },
     ]);
     expect(watchers.get('plan')?.open).toBe(true);
+    expect(registry.streamMode()).toBe('multiplexed');
   });
 
-  it('percent-encodes a docId that would otherwise break the path', async () => {
-    const { registry, opened } = harness();
-    await registry.watchDoc('a/b c');
-    expect(opened[0]?.path).toBe('/events/a%2Fb%20c');
-  });
-
-  it('opens the stream once for a doc already watched', async () => {
-    const { registry, opened } = harness();
-    await registry.watchDoc('plan');
-    await registry.watchDoc('plan');
-    expect(opened).toHaveLength(1);
+  it('holds N watches on ONE loop', async () => {
+    // The measurement the outage was about: a lead session with 214 watches
+    // held 214 sockets, and the fleet's 332 exhausted the kernel's socket
+    // memory. Fifty here, one connection.
+    const { registry, mux, opened, watchers } = harness();
+    for (let i = 0; i < 50; i++) await registry.watchDoc(`doc-${i}`);
+    expect(watchers.size).toBe(50);
+    expect(mux.starts).toBe(1);
+    expect(opened).toEqual([]);
   });
 
   it('still re-posts a doc already watched, because an earlier persist may have failed', async () => {
@@ -98,10 +148,70 @@ describe('watching a doc opens one stream and mirrors the change', () => {
   });
 
   it('skips the mirror when the caller asked for a local-only watch', async () => {
-    const { registry, sent, opened } = harness();
+    const { registry, sent, mux } = harness();
     await expect(registry.watchDoc('plan', false)).resolves.toBe(false);
-    expect(opened).toHaveLength(1);
+    expect(mux.starts).toBe(1);
     expect(sent).toEqual([]);
+  });
+
+  it('mirrors the addition BEFORE wiring, because the persisted set IS the channel set', async () => {
+    // The server fans out the set it holds, so a key that has not landed
+    // there yet is a key the stream does not carry. Order, not decoration.
+    const order: string[] = [];
+    const { registry } = harness({
+      http: async (method, path, body) => {
+        order.push(`persist ${JSON.stringify((body as { add?: string[] }).add)}`);
+        void method;
+        void path;
+        return {};
+      },
+      mux: {
+        ensureOpen: async () => {
+          order.push('ensureOpen');
+          return true;
+        },
+        stop: () => {},
+        isOpen: () => true,
+        unsupported: () => false,
+        loopCount: () => 1,
+      },
+    });
+    await registry.watchDoc('plan');
+    expect(order).toEqual(['persist ["plan"]', 'ensureOpen']);
+  });
+});
+
+describe('a server that predates the mux route falls back to a stream per key', () => {
+  it('opens the doc stream and posts the addition', async () => {
+    const { registry, sent, opened, watchers } = harness({ muxUnsupported: true });
+    await expect(registry.watchDoc('plan')).resolves.toBe(true);
+    expect(opened).toEqual([{ label: 'plan', path: '/events/plan' }]);
+    expect(sent).toEqual([
+      { method: 'POST', path: WATCHES_PATH, body: { add: ['plan'], name: 'Workspaces' } },
+    ]);
+    expect(watchers.get('plan')?.open).toBe(true);
+    expect(registry.streamMode()).toBe('per-key');
+  });
+
+  it('percent-encodes a docId that would otherwise break the path', async () => {
+    const { registry, opened } = harness({ muxUnsupported: true });
+    await registry.watchDoc('a/b c');
+    expect(opened[0]?.path).toBe('/events/a%2Fb%20c');
+  });
+
+  it('opens the stream once for a doc already watched', async () => {
+    const { registry, opened } = harness({ muxUnsupported: true });
+    await registry.watchDoc('plan');
+    await registry.watchDoc('plan');
+    expect(opened).toHaveLength(1);
+  });
+
+  it('names itself on the workspace stream so the server can address it', async () => {
+    const { registry, opened } = harness({ muxUnsupported: true });
+    await registry.watchWorkspace('w1');
+    expect(opened).toEqual([
+      { label: 'ws:w1', path: '/events/workspace/w1?agentId=agent-workspaces' },
+    ]);
   });
 });
 
@@ -114,30 +224,36 @@ describe('a stream that did not open and a watch that did not persist stay apart
     });
   });
 
-  it('reports the open stream and the failed persist separately', async () => {
-    const { registry } = harness({ httpFails: true });
+  it('reports the open stream and the failed persist separately, per key', async () => {
+    // On the per-key transport the two really are independent: the socket for
+    // this key is up whatever the server remembers.
+    const { registry } = harness({ httpFails: true, muxUnsupported: true });
     await expect(registry.watchWorkspace('w1')).resolves.toEqual({
       open: true,
       persisted: false,
     });
   });
 
-  it('names itself on the workspace stream so the server can address it', async () => {
-    const { registry, opened } = harness();
-    await registry.watchWorkspace('w1');
-    expect(opened).toEqual([
-      { label: 'ws:w1', path: '/events/workspace/w1?agentId=agent-workspaces' },
-    ]);
+  it('multiplexed, a failed persist also means this key is not being delivered', async () => {
+    // The mux stream's channel set IS the persisted set, so a persist that
+    // did not land leaves this key uncovered even though the connection is
+    // fine. Reporting `open: true` here would be the reassurance about the
+    // half that worked which this pair exists to prevent.
+    const { registry } = harness({ httpFails: true });
+    await expect(registry.watchWorkspace('w1')).resolves.toEqual({
+      open: false,
+      persisted: false,
+    });
   });
 
   it('reports an already-open workspace without re-opening the stream', async () => {
-    const { registry, opened } = harness();
+    const { registry, mux } = harness();
     await registry.watchWorkspace('w1');
     await expect(registry.watchWorkspace('w1')).resolves.toEqual({
       open: true,
       persisted: true,
     });
-    expect(opened).toHaveLength(1);
+    expect(mux.starts).toBe(1);
   });
 });
 
@@ -165,9 +281,39 @@ describe('a failed mirror is reported, never thrown', () => {
   });
 });
 
+describe('unwatching one key never hangs up the stream the others ride', () => {
+  it('keeps the one loop running while any watch remains', async () => {
+    const { registry, mux } = harness();
+    await registry.watchDoc('plan');
+    await registry.watchDoc('spec');
+    await registry.unwatchDoc('plan');
+    expect(mux.stops).toBe(0);
+    expect(mux.running).toBe(true);
+  });
+
+  it('closes the loop when the LAST watch goes away', async () => {
+    const { registry, mux } = harness();
+    await registry.watchDoc('plan');
+    await registry.watchDoc('spec');
+    await registry.unwatchDoc('plan');
+    await registry.unwatchDoc('spec');
+    expect(mux.stops).toBe(1);
+    expect(mux.running).toBe(false);
+  });
+
+  it('re-opens one loop, not two, when a watch comes back', async () => {
+    const { registry, mux } = harness();
+    await registry.watchDoc('plan');
+    await registry.unwatchDoc('plan');
+    await registry.watchDoc('plan');
+    expect(mux.starts).toBe(2);
+    expect(mux.running).toBe(true);
+  });
+});
+
 describe('unwatching aborts the stream and forgets the key on the server', () => {
   it('aborts, deletes and posts the removal', async () => {
-    const { registry, watchers, sent } = harness();
+    const { registry, watchers, sent } = harness({ muxUnsupported: true });
     await registry.watchDoc('plan');
     const aborted = watchers.get('plan')?.controller.signal;
     await expect(registry.unwatchDoc('plan')).resolves.toBe(true);
@@ -195,11 +341,15 @@ describe('unwatching aborts the stream and forgets the key on the server', () =>
 
 describe('a shared identity keys nothing on the server', () => {
   it('watches locally and mirrors nothing', async () => {
-    const { registry, sent, opened } = harness({ identityIsShared: true });
+    const { registry, sent, opened, mux } = harness({ identityIsShared: true });
     await expect(registry.watchDoc('plan')).resolves.toBe(false);
+    // A shared identity has no server-side set to fan out — the server refuses
+    // to key one on it — so these sessions keep the per-key transport.
     expect(opened).toHaveLength(1);
+    expect(mux.starts).toBe(0);
     expect(sent).toEqual([]);
     expect(registry.watchPersistenceMode()).toBe('session-only');
+    expect(registry.streamMode()).toBe('per-key');
   });
 
   it('asks for no coverage read at all', async () => {
