@@ -66,7 +66,7 @@ that way and add new subsystem docs to the list here.
 - PR after each task is done; a cohesive feature is ONE PR with ordered
   commits, not a fragment per file.
 - **Mockups and sketches never enter the repo** — write the HTML outside the
-  working tree and serve it with `bind_mock(docId, sourceHtmlPath)`.
+  working tree and serve it with `attach_mockup(docId, sourceHtmlPath)`.
 
 ## The four gates — run all of them before you push
 

@@ -32,8 +32,8 @@ The unifying vision: from one Claude Code session, a reviewer can use live‑fee
   - `workspaceRoot?: string` — absolute folder root (stored on every member so the tree is derivable without a registry).
 - Persist exactly like `setId`/`owner` today (`initDocMeta`/`readDocMeta`). No separate workspace registry in M1 — derive workspaces from member docs (mirrors how the landing page derives its list from `rooms.list()`).
 
-### 2. Folder binding — `bind_folder` (MCP) + `POST /api/workspaces`
-- **MCP tool** `bind_folder(folderPath, workspaceId?, title?, include?, maxFiles?, subscribe?)` in `packages/mcp/src/mcp.ts` (mirror the `create_review_doc` case). After binding, it loops the returned files and `watch_doc`s markdown+code docs (cap by `maxFiles`).
+### 2. Folder binding — `attach_folder` (MCP) + `POST /api/workspaces`
+- **MCP tool** `attach_folder(folderPath, workspaceId?, title?, include?, maxFiles?, subscribe?)` in `packages/mcp/src/mcp.ts` (mirror the `create_review_doc` case). After binding, it loops the returned files and `watch_doc`s markdown+code docs (cap by `maxFiles`).
 - **Server route** `POST /api/workspaces` → new `rooms.bindFolder(...)` in `packages/server/src/rooms.ts`.
 - **Scan strategy** (established `spawnSync` pattern already used in keychain.ts/public-host.ts):
   1. If folder is in a git repo: `git -C <folder> ls-files --cached --others --exclude-standard` → respects `.gitignore` for free (skips `node_modules`/`dist`/etc).
@@ -86,7 +86,7 @@ Load the source file into the schema's flat `content` Y.Text (read‑only) and *
 - `packages/core/src/prose.ts` — add `autoReanchorCodeDoc` (flat‑text snippet sweep).
 - `packages/server/src/rooms.ts` — `bindFolder`, `attachReadonlyFile`, type‑branches in `attachFile`/`reconcile`/`wireEvents`/`hydrate`; pass new meta through `getOrCreate`.
 - `packages/server/src/server.ts` — `POST /api/workspaces`, `GET /api/workspaces/:id/tree`; accept `type='code'` in the `/y/` WS + `POST /api/docs` attach branch; `withReviewUrl` for code.
-- `packages/mcp/src/mcp.ts` — `bind_folder` tool def + dispatcher case + post‑bind `watch_doc` loop.
+- `packages/mcp/src/mcp.ts` — `attach_folder` tool def + dispatcher case + post‑bind `watch_doc` loop.
 - `packages/markdown-app/src/app.ts` — editor‑type branch (Tiptap vs CodeMirror); `renderSetNav` tree branch.
 - `packages/markdown-app/index.html` — `#set-pane` content → file tree container.
 - `packages/markdown-app/src/styles.css` — tree indentation + count badges + `.cm-editor`/gutter + `body.code-mode`.
@@ -100,7 +100,7 @@ Land the whole milestone as **one PR** (Bryan's call), built in this internal or
 1. **Core model** — `DocType 'code'` + `DocMeta` fields + schema read/init (+ tests).
 2. **Read‑only code doc plumbing** — `attachReadonlyFile`, reconcile/wireEvents/hydrate branches, `autoReanchorCodeDoc`, `type='code'` accepted by server/WS (+ server tests). Verifiable via API before any UI.
 3. **Code surface in the SPA** — CodeMirror read‑only editor + languages + `app.ts` type branch + gutter/anchor; deps + `splitting:true` (validate chunk serving first). Verify a single `.ts`/`.json` file renders highlighted with line comments.
-4. **Folder bind** — `bindFolder` + `bind_folder` MCP + `POST /api/workspaces` (+ tests, guardrails).
+4. **Folder bind** — `bindFolder` + `attach_folder` MCP + `POST /api/workspaces` (+ tests, guardrails).
 5. **File tree UI** — `GET …/tree` + `renderSetNav` tree + styles.
 
 CI green + full verification (below) before requesting review; deploy via server restart after merge.
@@ -114,8 +114,8 @@ CI green + full verification (below) before requesting review; deploy via server
 Use `claude-live-feedback-plugin` itself as the test worktree.
 1. **Per‑surface, via MCP + browser** (after PR 3): `create_review_doc` on a `.ts` file → open `/review/<docId>` → confirm syntax highlighting, read‑only, line numbers; select lines → leave a comment → confirm the gutter marker + that clicking the panel scrolls to the line and clicking the marker reveals the comment (mirrors #52). Repeat for `.json`. Open a `.md` file → confirm WYSIWYG still works.
 2. **Agent‑edit re‑anchor**: edit the `.ts` file via the Edit tool → confirm the view re‑renders and the comment re‑anchors (or orphans cleanly) like markdown.
-3. **Folder + tree** (after PR 5): `bind_folder` on `packages/core` (or `docs/`) → confirm the tree lists files grouped by directory with per‑file unresolved‑count badges and folder rollups; leave comments in two files → confirm counts update on refocus; click files to navigate between the markdown and code surfaces.
-4. **Guardrails**: `bind_folder` on the repo root → expect the `too-many-files` guard (or a sane filtered count); confirm `node_modules`/`dist` are skipped.
+3. **Folder + tree** (after PR 5): `attach_folder` on `packages/core` (or `docs/`) → confirm the tree lists files grouped by directory with per‑file unresolved‑count badges and folder rollups; leave comments in two files → confirm counts update on refocus; click files to navigate between the markdown and code surfaces.
+4. **Guardrails**: `attach_folder` on the repo root → expect the `too-many-files` guard (or a sane filtered count); confirm `node_modules`/`dist` are skipped.
 5. **Tests**: new vitest (core: schema fields, `autoReanchorCodeDoc`, languages map; code‑anchor offset round‑trip) + server tests (`bindFolder` scan/allowlist/guardrail, tree counts, read‑only attach reconcile). Run full `vitest` + `bun test packages/server/test`, typecheck, biome; build all bundles; restart the supervised server and re‑verify in the browser.
 
 ## Risks

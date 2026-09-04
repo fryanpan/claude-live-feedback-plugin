@@ -73,7 +73,7 @@ function suggestionAuthor(): { id: string; name: string; color: string } {
  * bundle than the deploy source would install. A second literal would be a
  * fourth version site, and this file's history is that version sites drift.
  */
-const PLUGIN_VERSION = '0.1.157';
+const PLUGIN_VERSION = '0.1.158';
 
 /**
  * One nonce per PROCESS, minted at module load and sent on every attach.
@@ -137,7 +137,7 @@ const server = new Server(
       'PR-style unified diff with line comments. Omit base to BROWSE a folder',
       'instead (no diff): everything is navigable from the all-files sidebar,',
       'files open lazily, markdown editable — works on plain folders and',
-      'fresh repos too (bind_folder is an alias for this). Default mode diffs',
+      'fresh repos too (attach_folder is an alias for this). Default mode diffs',
       'base against the LIVE working tree: keep editing the code and the reviewer',
       'sees your changes re-render within ~1s, with their comments riding along',
       '(threads orphan into the outdated-comments flow if their line disappears).',
@@ -184,7 +184,7 @@ const server = new Server(
       'WORKSPACE HUB: a hub workspace is a goal + a task board + linked docs.',
       'create_workspace mints one; attach_doc links existing docs/reviews to it;',
       'create_tasks (ALWAYS a list — one idea is a one-row list) and',
-      'promote_to_task add work (omit `goal` and the task lands UNPLACED in',
+      'spin_off_task add work (omit `goal` and the task lands UNPLACED in',
       'Backlog awaiting triage — the create says so and hands you the goal',
       'bands, and placing it with set_task_goal IS the triage:',
       'pick the goal AND the exact position). task_transition is the',

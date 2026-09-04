@@ -40,10 +40,10 @@ failed.
 
 You do not need the file to change. Generate the page exactly as it normally
 renders — bare, no widget anywhere in the template, the generator, or the
-output — and hand the produced file to `bind_mock`:
+output — and hand the produced file to `attach_mockup`:
 
 ```
-bind_mock(docId: "<DOC_ID>", sourceHtmlPath: "/abs/path/to/out/report.html")
+attach_mockup(docId: "<DOC_ID>", sourceHtmlPath: "/abs/path/to/out/report.html")
 ```
 
 The reviewer opens the returned `reviewUrl` and gets the widget. The server
@@ -202,12 +202,12 @@ non-URL dynamic surfaces.
 ## Concrete patterns
 
 ### Generated report / static build output
-The generator stays bare. `bind_mock` the file it wrote. If the output is
+The generator stays bare. `attach_mockup` the file it wrote. If the output is
 gitignored (it usually is), you may also embed by hand — but binding survives
 a regeneration and hand-editing the output does not.
 
 ### Mockup you are writing from scratch
-Write the HTML outside the working tree and `bind_mock` it. Mockups do not
+Write the HTML outside the working tree and `attach_mockup` it. Mockups do not
 enter the repo, so this needs no widget markup at all — and the bind captures
 the content, so cleaning up your scratch directory does not take the mock
 down with it.

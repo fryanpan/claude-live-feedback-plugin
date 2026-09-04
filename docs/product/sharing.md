@@ -9,7 +9,7 @@ then have their access expire automatically.
 
 **A board is the unit of sharing** (Bryan, 2026-08-17: "Workspace only — a
 review must be filed on a board before it can be shared"). You bind docs the
-way you always did — `create_review_doc`, `bind_folder`, `create_diff_review`
+way you always did — `create_review_doc`, `attach_folder`, `create_diff_review`
 — and then you share the BOARD they are filed on.
 
 Two smaller grants used to exist, and both are gone:
@@ -21,7 +21,7 @@ Two smaller grants used to exist, and both are gone:
 | `share_link` | a Cloudflare Access application per share | `410 link_share_mint_retired` |
 
 So the id you pass is always a hub board id — the one `create_workspace`
-returned, or the `hubWorkspaceId` that `bind_folder` / `create_diff_review`
+returned, or the `hubWorkspaceId` that `attach_folder` / `create_diff_review`
 reports back.
 
 That is a deliberate narrowing rather than a missing feature. Everything on a
@@ -284,7 +284,7 @@ Tell the agent something like:
 The agent will:
 
 1. Confirm the docs are filed on a board — binding the folder
-   (`bind_folder`), creating the diff review, or `attach_doc`-ing a loose
+   (`attach_folder`), creating the diff review, or `attach_doc`-ing a loose
    doc onto a board.
 2. Check what else that board holds, because the visitor gets all of it. For
    a diff review the grouping's root is the whole repo, so `files` /
