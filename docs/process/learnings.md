@@ -3616,3 +3616,26 @@ write-once in practice, and the repair verb for a moved file cannot repair it.
   control". The new half is the mechanism: **prose wrapping silently changes
   what a line-based tool can see, so the file's own formatting is part of the
   probe's design.**
+
+## A launchd service reads Dropbox online-only files as `EDEADLK`, and a hang on the same open is the consent dialog or the download
+
+- On 2026-09-04 prod's main thread sat in a synchronous `readFileSync` of a
+  Dropbox-bound doc for ~20 minutes (macOS consent dialog for the service's
+  bun, shown after a reboot); every boot afterwards failed the same reads
+  instantly with `EDEADLK`. The first diagnosis, TCC, explained the dialog but
+  not the errno.
+- `open(2)` names the errno: a dataless file that needs materialization while
+  the process's I/O policy disallows it. `getiopolicy_np(3)`: the system
+  default for `IOPOL_TYPE_VFS_MATERIALIZE_DATALESS_FILES` is OFF, and
+  children inherit it, so a launchd job (and anything spawned from it) never
+  downloads an online-only cloud file — it fails at once. A GUI app's shell
+  can differ, which is why a peer's own server reads the same folder fine.
+- Probe it with the service's own binary, not `/bin/cat`: a ten-line
+  `bun:ffi` script calling `getiopolicy_np(3, 0)` printed `1 (OFF)` both from
+  a shell and via `launchctl submit`. That is the positive control the
+  earlier `/bin/cat` probes never had.
+- Consequence for bound docs: an attach-time read that fails seeds the doc
+  from the `.ydoc`, disk edits never flow in, and the next flush overwrites
+  the file on disk. Treat `EDEADLK` from a bound read as "not on disk", log it
+  once, and do not quarantine the path for it (a quarantine is for a read
+  that did not answer, which is the download or the dialog).
