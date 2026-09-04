@@ -861,9 +861,22 @@ export function mergeNotesSection(
   // The ledger separates the two cases the position test was conflating. An
   // item this session wrote is proof the section is this meeting's, so it is
   // extended and never twinned — which is the whole of the fix.
+  //
+  // TWO READINGS OF "THIS SESSION WROTE IT", because a restart destroys one of
+  // them. `claims` is element AND text, and a doc reloaded from disk comes
+  // back as new Yjs objects holding the same words, so after a deploy
+  // mid-meeting it claimed nothing and the position test below took over —
+  // putting the twinning back for as long as the process was young. So a
+  // line the note-taker WROTE, matched on text alone, identifies the section
+  // too; the ledger reads that half back from disk (`notes-ledger-store.ts`).
+  // It says only WHERE the notes go. What may be replaced inside them is
+  // still `claims` alone, so a restarted server adds and suggests here and
+  // rewrites nothing.
+  const inSection = found !== null ? itemsInSection(fragment, found) : [];
   const mine =
     found !== null &&
-    itemsInSection(fragment, found).some((item) => opts.ownership.claims(item.el, item.md));
+    (inSection.some((item) => opts.ownership.claims(item.el, item.md)) ||
+      opts.ownership.wroteAnyOf(inSection.map((item) => item.md)));
   // A section it has written NOTHING into belongs to a previous recording, or
   // to a server that restarted. Then the position test still holds, and still
   // for the owner's reason (2026-09-01, "notes got inserted in the top in the

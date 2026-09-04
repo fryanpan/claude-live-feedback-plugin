@@ -66,8 +66,8 @@ export const NAV_FLASH_MS = 900;
 export interface MobileReviewOpts {
   /** Phone-width, i.e. the viewport where inline + sheet replace the drawer. */
   /** Do inline cards apply at this width? NOT "is this a phone" — the cards
-   *  cover every width the balloon margin doesn't (see `INLINE_CARDS_QUERY`),
-   *  which includes the 901–1100px band where the drawer is still a column. */
+   *  are the reader's chosen surface (see `card-placement.ts`), which is a
+   *  stored per-device preference rather than anything about this width. */
   inlineVisible: () => boolean;
   /** Every thread on this doc, as the chrome already reads them. */
   threads: () => Thread[];
