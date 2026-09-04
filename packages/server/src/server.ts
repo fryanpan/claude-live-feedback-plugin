@@ -3298,8 +3298,6 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
       // finds the path quarantined and parks the doc without touching it.
       const prewarmUrl = new URL(req.url);
       const prewarmIds = docIdsAddressedBy(prewarmUrl);
-      const bodyDocId = prewarmIds.length === 0 ? await docIdInBody(req) : undefined;
-      if (bodyDocId) prewarmIds.push(bodyDocId);
       if (prewarmIds.length > 0) {
         await Promise.all(prewarmIds.map((id) => rooms.prewarmHydration(id)));
       }
@@ -5385,6 +5383,15 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
  * Being liberal here is safe in exactly the way being conservative was not:
  * an extra candidate reads a file the request was likely to read anyway, a
  * missing one puts a blocking read back on the main thread.
+ *
+ * There is no body-reading companion to this, and there was briefly: a
+ * function that pulled `docId` out of a JSON body for the routes that address
+ * a doc there rather than in the URL. It could never run. `isValidDocId`
+ * accepts any ordinary URL-safe word, so `api` and `docs` are candidates and
+ * the list this returns is empty only for `/` itself. Those body-addressed
+ * routes are the bind and attach pair, and they are covered where it
+ * actually holds — they call `attachFileAsync`, which does its own pooled
+ * read before it touches the doc.
  */
 function docIdsAddressedBy(url: URL): string[] {
   const found: string[] = [];
@@ -5404,28 +5411,6 @@ function docIdsAddressedBy(url: URL): string[] {
   for (const segment of url.pathname.split('/')) add(segment);
   add(url.searchParams.get('docId'));
   return found;
-}
-
-/**
- * The docId a JSON request body names, for the routes that address a doc
- * there rather than in the URL (attach, and the doc-create/bind pair).
- *
- * The body is read from a CLONE, so the route still gets an unconsumed
- * stream. Anything unexpected — not JSON, malformed, no `docId` — returns
- * nothing rather than throwing: this feeds a latency optimisation, and a
- * request must never fail because the prewarm could not read it.
- */
-async function docIdInBody(req: Request): Promise<string | undefined> {
-  const type = req.headers.get('content-type') ?? '';
-  if (!type.includes('application/json')) return undefined;
-  if (req.method !== 'POST' && req.method !== 'PUT' && req.method !== 'PATCH') return undefined;
-  try {
-    const body = (await req.clone().json()) as { docId?: unknown } | null;
-    const raw = body?.docId;
-    return typeof raw === 'string' && isValidDocId(raw) ? raw : undefined;
-  } catch {
-    return undefined;
-  }
 }
 
 function isValidDocId(s: string): boolean {

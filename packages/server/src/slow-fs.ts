@@ -128,8 +128,9 @@ type Raced<T> = { kind: 'settled'; value: T } | { kind: 'failed'; err: unknown }
 class BoundFileReader {
   /** Paths that blew the deadline, and the time they may be tried again. */
   private readonly stalledUntil = new Map<string, number>();
-  /** Last time each unreadable-but-not-hostile path was logged. */
-  private readonly unreadableLoggedAt = new Map<string, number>();
+  /** Last time each unusable-but-not-hostile path was logged, keyed by
+   *  `<verb>:<path>` so a failing write does not silence a failing read. */
+  private readonly unusableLoggedAt = new Map<string, number>();
   /** Reads whose pool thread has not come back yet. Bounded, see above. */
   private inflightRead = 0;
   /** Stats whose pool thread has not come back yet. Bounded separately. */
@@ -160,6 +161,26 @@ class BoundFileReader {
   }
 
   /**
+   * Is the pool currently refusing new calls?
+   *
+   * `quarantined` is per-path; this is the state of the gate itself. It is
+   * true only once `BOUND_READ_MAX_OVERDUE` calls have blown their deadline
+   * without ever landing, which means some bound path is holding pool threads
+   * and has not been identified yet. A synchronous caller must treat that as
+   * "do not open a bound file on the main thread": the path in front of it
+   * may be one of the bad ones, and the whole reason this file exists is that
+   * finding out the blocking way costs the process.
+   *
+   * Refusing on a global signal parks a doc that may have been perfectly
+   * healthy. That is the cheap side of the trade — the doc keeps its `.ydoc`
+   * content and the next hydrate after the backoff tries again — and it is
+   * rare by construction, because a healthy call is never overdue.
+   */
+  busy(): boolean {
+    return this.leaked >= BOUND_READ_MAX_OVERDUE;
+  }
+
+  /**
    * Read a bound file off the main thread, or report why we did not.
    *
    * `keep: false` reads without leaving the bytes for a later hydrate to
@@ -186,7 +207,7 @@ class BoundFileReader {
         return gone;
       }
       if (isDataless(raced.err)) {
-        this.noteUnreadable(path, raced.err);
+        this.noteUnusable(path, raced.err, 'read');
         return { status: 'unavailable', reason: 'error' };
       }
       // EINTR / EIO from a sick file provider land here. They are the same
@@ -242,6 +263,12 @@ class BoundFileReader {
    * the REALPATH so a symlinked bound file is written through rather than
    * replaced.
    *
+   * The temp file is named for this LANE, not for the write: the synchronous
+   * shutdown flush in `file-binding.ts` writes through a different one. Two
+   * writers sharing a temp path can interleave their bytes into it, and the
+   * two lanes are exactly the pair that can be live at the same moment — a
+   * pool write still on the thread when SIGTERM arrives.
+   *
    * Returns the mtime the file ended up with, so the caller can record its
    * own write and keep the poll from reading it back as an external edit.
    */
@@ -253,18 +280,28 @@ class BoundFileReader {
       try {
         target = await realpath(path);
       } catch {}
-      const tmp = `${target}.lf-write~`;
+      const tmp = `${target}.lf-pool-write~`;
       await writeFile(tmp, text);
       await rename(tmp, target);
       return stat(target);
     });
     if (raced.kind === 'late') return { status: 'unavailable', reason: 'timeout' };
     if (raced.kind === 'failed') {
-      if (isDataless(raced.err)) {
-        this.noteUnreadable(path, raced.err);
-        return { status: 'unavailable', reason: 'error' };
-      }
-      this.markStalled(path, raced.err);
+      // No backoff here, and this is where the write differs from the read.
+      // A read that fails with something other than ENOENT says the FILE is
+      // in trouble, so the next caller is right to stay away from it. A write
+      // fails for a whole family of reasons that say nothing about reading:
+      // EACCES on a file the server may still read, EROFS after a volume
+      // remounts read-only, ENOSPC, ENOENT when the parent directory has been
+      // renamed out from under a bound doc. Quarantining on those would park
+      // every READ of a perfectly healthy file for the whole backoff, which
+      // is the opposite of what a failing write should cost.
+      //
+      // The one write failure that does earn the backoff is the one that
+      // never came back, and `race` has already recorded it on the `late`
+      // branch above — a wedged write holds a pool thread exactly like a
+      // wedged read.
+      this.noteUnusable(path, raced.err, 'written');
       return { status: 'unavailable', reason: 'error' };
     }
     return { status: 'ok', exists: true, mtimeMs: raced.value.mtimeMs };
@@ -279,7 +316,7 @@ class BoundFileReader {
     if (raced.kind === 'failed') {
       if (isEnoent(raced.err)) return { status: 'ok', exists: false };
       if (isDataless(raced.err)) {
-        this.noteUnreadable(path, raced.err);
+        this.noteUnusable(path, raced.err, 'read');
         return { status: 'unavailable', reason: 'error' };
       }
       this.markStalled(path, raced.err);
@@ -310,7 +347,7 @@ class BoundFileReader {
   reset(): void {
     this.fresh.clear();
     this.stalledUntil.clear();
-    this.unreadableLoggedAt.clear();
+    this.unusableLoggedAt.clear();
   }
 
   private gate(path: string): { status: 'unavailable'; reason: 'backoff' | 'busy' } | undefined {
@@ -320,21 +357,24 @@ class BoundFileReader {
   }
 
   /**
-   * A file we could not read but which has earned no backoff — see
-   * `isDataless`. Logged at most once a minute per path, because the caller
-   * that hit it is free to try again immediately and usually will.
+   * A file we could not use but which has earned no backoff — an
+   * un-materialized cloud file (see `isDataless`), or any ordinary write
+   * failure (see `write`). Logged at most once a minute per path and verb,
+   * because the caller that hit it is free to try again immediately and
+   * usually will.
    */
-  private noteUnreadable(path: string, err: unknown): void {
-    const last = this.unreadableLoggedAt.get(path) ?? 0;
+  private noteUnusable(path: string, err: unknown, verb: 'read' | 'written'): void {
+    const key = `${verb}:${path}`;
+    const last = this.unusableLoggedAt.get(key) ?? 0;
     const now = Date.now();
     if (now - last < RETRY_MS) return;
-    this.unreadableLoggedAt.set(path, now);
-    if (this.unreadableLoggedAt.size > 256) {
-      for (const [key, at] of this.unreadableLoggedAt) {
-        if (now - at >= RETRY_MS) this.unreadableLoggedAt.delete(key);
+    this.unusableLoggedAt.set(key, now);
+    if (this.unusableLoggedAt.size > 256) {
+      for (const [seen, at] of this.unusableLoggedAt) {
+        if (now - at >= RETRY_MS) this.unusableLoggedAt.delete(seen);
       }
     }
-    console.error(`[slow-fs] ${path} could not be read; the doc keeps its .ydoc content`, err);
+    console.error(`[slow-fs] ${path} could not be ${verb}; the doc keeps its .ydoc content`, err);
   }
 
   private markStalled(path: string, err?: unknown): void {

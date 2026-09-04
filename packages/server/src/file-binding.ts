@@ -111,6 +111,12 @@ interface FileBinding {
   /** A write-back is on the thread pool right now — see `writeBoundFileNow`. */
   writeInFlight?: boolean;
   /**
+   * Which write is the current one. Bumped by every write that starts; a
+   * pool write compares it on landing and records nothing if it lost — see
+   * `writeBoundFileNow`.
+   */
+  writeSeq?: number;
+  /**
    * Last file mtime (ms) we have actually READ, so the poll reacts only to
    * changes. Advanced when the reconcile's read lands, never when the stat
    * that spotted the change lands — see `applyPolledMtime`.
@@ -336,6 +342,15 @@ export class FileBindings {
    *
    * A file that cannot be read is not an error here: the attach is refused,
    * the doc keeps its `.ydoc` content, and the caller sees `read-failed`.
+   *
+   * There is deliberately no `attachFlatFileAsync` beside this. Every flat
+   * (code / diff-member) attach is reached from a synchronous caller — the
+   * folder-bind loop in `bind-diff`, a workspace member open, hydration —
+   * and an async door with no caller is worse than none, because it reads
+   * like coverage the flat path does not have. What `attachFlatFile` does
+   * have is the refusal guard, so a known-hostile path is never opened on
+   * the main thread; a first read of a healthy-but-slow file still blocks
+   * there. Giving those callers a real async door is its own change.
    */
   async attachFileAsync(
     docId: string,
@@ -345,20 +360,6 @@ export class FileBindings {
     const ready = await this.withPreread(filePath, opts);
     if (ready === 'unreadable') return { ok: false, error: 'read-failed' };
     return this.attachFile(docId, filePath, ready);
-  }
-
-  /** `attachFlatFile`'s async door — same contract as `attachFileAsync`. */
-  async attachFlatFileAsync(
-    docId: string,
-    filePath: string,
-    opts: AttachOpts & { writeBack?: boolean } = {},
-  ): Promise<ReturnType<FileBindings['attachFlatFile']>> {
-    const ready = await this.withPreread(filePath, opts);
-    if (ready === 'unreadable') return { ok: false, error: 'read-failed' };
-    return this.attachFlatFile(docId, filePath, {
-      ...ready,
-      ...(opts.writeBack === undefined ? {} : { writeBack: opts.writeBack }),
-    });
   }
 
   /**
@@ -416,7 +417,16 @@ export class FileBindings {
     // path that has not already proved hostile. A quarantined one is refused
     // outright rather than opened: `attachFileAsync` is the door every
     // request and timer path comes through, and it always brings a preread.
-    if (!pre && boundFiles.quarantined(abs)) return { ok: false, error: 'read-failed' };
+    //
+    // `busy` is the same refusal one level up. It means some bound path is
+    // holding pool threads and has not been identified yet, so THIS path is
+    // not known-good either — and a `busy` verdict leaves no quarantine mark
+    // behind, which is how a hostile file used to reach the blocking read
+    // below anyway. Refusing costs a parked doc; not refusing costs the
+    // process.
+    if (!pre && (boundFiles.quarantined(abs) || boundFiles.busy())) {
+      return { ok: false, error: 'read-failed' };
+    }
     const fileExists = () => (pre ? pre.exists : existsSync(abs));
     const readFile = () => (pre ? (pre.text ?? '') : readFileSync(abs, 'utf8'));
     let seeded = false;
@@ -584,6 +594,13 @@ export class FileBindings {
     // See `attachFile`: hydration reads off the main thread and hands the
     // bytes down, so nothing below opens the bound path itself.
     const pre = opts.preread;
+    // And the same refusal, for the same reason. This door is the one a
+    // folder bind walks — `bind-diff` attaches every member of a repo in one
+    // synchronous loop — so a single hostile file in a bound tree is exactly
+    // the shape that parked the event loop. Read the note in `attachFile`.
+    if (!pre && (boundFiles.quarantined(abs) || boundFiles.busy())) {
+      return { ok: false, error: 'read-failed' };
+    }
     const fileExists = () => (pre ? pre.exists : existsSync(abs));
     let text = '';
     if (fileExists()) {
@@ -792,7 +809,7 @@ export class FileBindings {
       const md = prose.serializeFragmentToMarkdown(prose.getProseFragment(room.ydoc));
       try {
         mkdirSync(dirname(absPath), { recursive: true });
-        const tmp = `${absPath}.lf-write~`;
+        const tmp = `${absPath}.lf-export~`;
         writeFileSync(tmp, md);
         renameSync(tmp, absPath);
         // The export just changed the answer the preread carried, and a
@@ -1008,6 +1025,13 @@ export class FileBindings {
   private applyPolledMtime(docId: string, binding: FileBinding, mtimeMs: number): void {
     const room = this.p.residentRoom(docId);
     if (!room) return;
+    // Our own write-back is on the pool. Its rename has possibly landed and
+    // its `lastMtimeMs` certainly has not — that is recorded in the callback
+    // — so the mtime in hand can be OUR bytes reading as an external edit,
+    // and the conflict arm would back up the user's own document as if a
+    // stranger had written it. The write's callback records the mtime it
+    // ended up with, and the next sweep then sees no change at all.
+    if (binding.writeInFlight) return;
     if (this.bindings.get(docId) !== binding) return;
     if (mtimeMs === binding.lastMtimeMs) return;
     // A reconcile for this exact mtime is already on the debounce; re-arming
@@ -1528,6 +1552,7 @@ export class FileBindings {
           return;
         }
         binding.writeInFlight = true;
+        const seq = (binding.writeSeq = (binding.writeSeq ?? 0) + 1);
         // `lastWritten` and the pending flag are set when the bytes LAND, not
         // here: until then the doc genuinely is unsaved, and a restart in
         // between must still reassert it.
@@ -1535,6 +1560,18 @@ export class FileBindings {
           .write(binding.path, md)
           .then((res) => {
             if (this.bindings.get(room.docId) !== binding) return;
+            // A synchronous flush ran while this write was still on the pool.
+            // Both renames target the same file and the order is the pool's
+            // to choose, so disk may hold either version and we cannot say
+            // which. Claiming `lastWritten` here would assert bytes we did
+            // not verify, and clearing the pending flag would tell the next
+            // boot there is nothing to reassert. Keep the doc marked instead:
+            // the `.ydoc` holds the newer content either way, and a restart
+            // puts it back on disk.
+            if (binding.writeSeq !== seq) {
+              this.failedWrites.add(room.docId);
+              return;
+            }
             if (res.status !== 'ok') {
               this.failedWrites.add(room.docId);
               return;
@@ -1562,11 +1599,20 @@ export class FileBindings {
         this.failedWrites.add(room.docId);
         return;
       }
+      // Take the generation before writing: a pool write already on the
+      // thread must not report its own bytes as the file's content once this
+      // one has landed on top of them.
+      binding.writeSeq = (binding.writeSeq ?? 0) + 1;
       let target = binding.path;
       try {
         target = realpathSync(binding.path);
       } catch {}
-      const tmp = `${target}.lf-write~`;
+      // A LANE of its own, never the pool writer's temp path. Both can be
+      // live at the same moment — SIGTERM arriving while a write-back sits on
+      // the thread pool is precisely the case this branch exists for — and
+      // two writers filling one temp file interleave their bytes into it,
+      // which the rename then publishes as the user's document.
+      const tmp = `${target}.lf-flush~`;
       writeFileSync(tmp, md);
       renameSync(tmp, target);
       binding.lastWritten = md;
@@ -1768,7 +1814,7 @@ export class FileBindings {
   pendingFileWrites(root?: string): { docId: string; path: string }[] {
     const out: { docId: string; path: string }[] = [];
     for (const [docId, binding] of this.bindings) {
-      if (!binding.writeTimer) continue;
+      if (!binding.writeTimer && !binding.writeInFlight) continue;
       if (root !== undefined && !isWithinRoot(root, binding.path)) continue;
       out.push({ docId, path: binding.path });
     }
@@ -1804,10 +1850,19 @@ export class FileBindings {
     };
   }
 
-  /** A write-back is armed and has not fired — the live doc holds edits disk
-   *  does not. What `pendingFileWrite` on the index row records. */
+  /**
+   * A write-back is outstanding — the live doc holds edits disk does not.
+   * What `pendingFileWrite` on the index row records.
+   *
+   * A write on the thread pool counts. It has no timer (the timer is what
+   * started it) and it has not landed, so answering "no" here is how a doc
+   * mid-write became invisible to the shutdown sweep, to the deploy's
+   * refusal check, and to the eviction guard, all at once.
+   */
   hasPendingWrite(docId: string): boolean {
-    return this.bindings.get(docId)?.writeTimer != null;
+    const binding = this.bindings.get(docId);
+    if (!binding) return false;
+    return binding.writeTimer != null || binding.writeInFlight === true;
   }
 
   /** The last write-back threw; a restart still has to reassert this doc. */
@@ -1824,7 +1879,7 @@ export class FileBindings {
   pendingWriteDocIds(): string[] {
     const out: string[] = [];
     for (const [docId, binding] of this.bindings) {
-      if (binding.writeTimer) out.push(docId);
+      if (binding.writeTimer || binding.writeInFlight) out.push(docId);
     }
     return out;
   }
@@ -1836,8 +1891,13 @@ export class FileBindings {
    */
   flushWrite(docId: string, room: DocRoom | undefined): void {
     const binding = this.bindings.get(docId);
-    if (!binding?.writeTimer) return;
-    clearTimeout(binding.writeTimer);
+    // An armed timer OR a write already on the pool. The second is the one
+    // that used to be skipped: `flush()` has no way to await it, so the only
+    // way to keep the SIGTERM contract is to write the current content
+    // synchronously here and let the generation counter sort out what the
+    // pool write may claim afterwards.
+    if (!binding || (!binding.writeTimer && !binding.writeInFlight)) return;
+    if (binding.writeTimer) clearTimeout(binding.writeTimer);
     binding.writeTimer = null;
     if (room) this.writeBoundFileNow(room, binding, 'sync');
   }
@@ -1850,8 +1910,8 @@ export class FileBindings {
    */
   flushWriteBeforeEvict(room: DocRoom): void {
     const binding = this.bindings.get(room.docId);
-    if (!binding?.writeTimer) return;
-    clearTimeout(binding.writeTimer);
+    if (!binding || (!binding.writeTimer && !binding.writeInFlight)) return;
+    if (binding.writeTimer) clearTimeout(binding.writeTimer);
     binding.writeTimer = null;
     try {
       this.writeBoundFileNow(room, binding, 'sync');
