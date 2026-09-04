@@ -195,6 +195,16 @@ const JUDGE_SYSTEM = [
   '  scattered. False if the same point now appears twice in different places.',
 ].join('\n');
 
+/**
+ * Why judge replies could not be read, this run.
+ *
+ * A judge that answers unusably is not evidence about the note-taker, so its
+ * tick is dropped — and a drop that says nothing is how five behaviours
+ * quietly fell to twelve examples each. Collected here and printed with the
+ * report, so a sample that shrank says why.
+ */
+const judgeUnread = new Set<string>();
+
 /** One judged behaviour: did it hold, and why not. */
 interface JudgedField {
   ok: boolean;
@@ -226,7 +236,13 @@ async function judge(
     },
     body: JSON.stringify({
       model: JUDGE_MODEL,
-      max_tokens: 300,
+      // Five verdicts each carrying their own sentence. 300 was the budget
+      // for ONE reason and it silently truncated the JSON of the five-reason
+      // reply, which failed to parse, which returned null, which dropped the
+      // tick — taking the judged behaviours from 32 examples to 12 with
+      // nothing in the output saying so. Sized for the reply that is now
+      // asked for, and a truncation is reported rather than dropped.
+      max_tokens: 900,
       system: JUDGE_SYSTEM,
       messages: [{ role: 'user', content: user }],
     }),
@@ -234,16 +250,25 @@ async function judge(
   if (!res.ok) return null;
   const body = (await res.json()) as {
     content?: Array<{ text?: string }>;
+    stop_reason?: string | null;
     usage?: { input_tokens?: number; output_tokens?: number };
   };
   recordUsage(JUDGE_MODEL, body.usage?.input_tokens ?? 0, body.usage?.output_tokens ?? 0);
+  if (body.stop_reason === 'max_tokens') {
+    judgeUnread.add('the judge ran out of output tokens mid-JSON');
+    return null;
+  }
   const text = body.content?.map((b) => b.text ?? '').join('') ?? '';
   const json = text.match(/\{[\s\S]*\}/);
-  if (!json) return null;
+  if (!json) {
+    judgeUnread.add('the judge answered with no JSON object in it');
+    return null;
+  }
   let raw: Record<string, unknown>;
   try {
     raw = JSON.parse(json[0]) as Record<string, unknown>;
   } catch {
+    judgeUnread.add("the judge's JSON would not parse");
     return null;
   }
   // Tolerate the flat shape too. A judge that answers `"covers": false`
@@ -458,6 +483,10 @@ function report(behaviours: Record<string, Behaviour>): number {
     if (b.failures.length === 0) continue;
     console.log(`\n${b.what} — ${b.failures.length} failures, first five:`);
     for (const f of b.failures.slice(0, 5)) console.log(`  ${f}`);
+  }
+  if (judgeUnread.size > 0) {
+    console.log('\nJudge replies that could not be read (their ticks are not examples):');
+    for (const reason of judgeUnread) console.log(`  ${reason}`);
   }
   console.log('\nSpend:');
   for (const [model, u] of Object.entries(usage)) {
