@@ -643,9 +643,27 @@ export function storedJudgement(judgement: ReviewItemJudgement): ReviewItemJudge
  * An answered item is never held, whatever the verdict says: the answer is
  * the fact that closes an item (`isReviewItemOpen`), and a hold on a closed
  * item would be a second opinion about words somebody has already acted on.
+ *
+ * A WITHDRAWN item is never held either, and for the same reason wearing the
+ * other face. `reviewWithdrawn` is the twin of `reviewAnswered` — both retire
+ * an item — so a rule that reads one and not the other is half a rule. The
+ * half that was missing is what this predicate's callers pay for: a
+ * withdrawal leaves the standing verdict in place on purpose (see
+ * `withdrawReview`, which keeps it so a reinstated item is still held), so an
+ * item taken back by its asker kept answering `true` here forever. It sat in
+ * the stall monitor's held index with nothing left that could clear it —
+ * `revise_review_item` refuses a withdrawn item, and answering it is the
+ * reader's door, which a withdrawal is the act of closing. Measured on a live
+ * board as `workspace.review_item_held` re-firing at the filer every few
+ * minutes for hours after the withdrawal, and the same items named inside
+ * every `workspace.stalled` frame.
  */
 export function isReviewItemHeld(item: TaskReviewItem): boolean {
-  return item.answer === undefined && item.judge?.verdict === 'held';
+  return (
+    item.answer === undefined &&
+    !reviewWithdrawn(item.review) &&
+    item.judge?.verdict === 'held'
+  );
 }
 
 /**
@@ -694,7 +712,10 @@ export function isReviewItemGated(item: TaskReviewItem): boolean {
  * Same rule, one difference: what "answered" is. A ticket item carries an
  * `answer` object on its wrapper; a comment-borne one carries the answer
  * STAMPS on the payload (`reviewAnswered`). Both say "a person has acted on
- * these words, so a second opinion about them changes nothing".
+ * these words, so a second opinion about them changes nothing". Withdrawal
+ * lives on the payload on BOTH surfaces, so `reviewWithdrawn` is read the
+ * same way in each — see `isReviewItemHeld` for what reading only half of
+ * "retired" cost.
  *
  * Separate functions rather than one over a union, because the two inputs are
  * genuinely different shapes and a caller holding a `TaskReviewItem` must not
@@ -702,7 +723,7 @@ export function isReviewItemGated(item: TaskReviewItem): boolean {
  * invisible here and an answered item would read as held.
  */
 export function isReviewPayloadHeld(review: ReviewPayload): boolean {
-  return !reviewAnswered(review) && review.judge?.verdict === 'held';
+  return !reviewAnswered(review) && !reviewWithdrawn(review) && review.judge?.verdict === 'held';
 }
 
 export function isReviewPayloadGated(review: ReviewPayload): boolean {
