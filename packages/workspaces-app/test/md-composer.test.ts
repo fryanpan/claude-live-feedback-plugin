@@ -157,6 +157,7 @@ describe('attachMarkdownComposer — what the box and the editor owe each other'
             f.md = md;
           },
           focus: () => {},
+          blur: () => {},
           selection: () => ({ from: 1, to: 1 }) as ComposerSelection,
           isFocused: () => false,
           setEditable: (on) => {

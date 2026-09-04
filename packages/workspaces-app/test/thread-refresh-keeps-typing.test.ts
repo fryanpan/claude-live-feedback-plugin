@@ -152,6 +152,9 @@ describe('a background refresh while typing a reply (live composer)', () => {
             focused = true;
             if (s) sel = s;
           },
+          blur: () => {
+            focused = false;
+          },
           selection: () => sel,
           isFocused: () => focused,
           setEditable: () => {},
