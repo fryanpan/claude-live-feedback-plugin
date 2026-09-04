@@ -73,8 +73,17 @@ class AudioClient {
     this.ws.send(JSON.stringify({ type: 'stop' }));
   }
 
-  /** Wait for a frame of this type, or fail loudly with what did arrive. */
-  async waitFor(type: string, timeoutMs = 2_000): Promise<ServerFrame> {
+  /**
+   * Wait for a frame of this type, or fail loudly with what did arrive.
+   *
+   * The default budget is generous for the same measured reason
+   * ready-nudge-routes.test.ts gives: this board dispatches parallel
+   * worktrees, and under a full agent load a round trip that normally takes
+   * 3ms has been seen to take seconds. Polling means a healthy machine pays
+   * nothing — the first pass returns. Callers that mean "do not wait" still
+   * say so by passing 0.
+   */
+  async waitFor(type: string, timeoutMs = 15_000): Promise<ServerFrame> {
     const deadline = Date.now() + timeoutMs;
     while (Date.now() < deadline) {
       const found = this.frames.find((f) => f.type === type);
@@ -305,6 +314,28 @@ describe('meeting audio socket', () => {
     await new Promise((r) => setTimeout(r, 100));
     client.stop();
     await client.waitFor('stopped');
+    // `stopped` says the AUDIO SOCKET was told. The doc channel is a second,
+    // independent delivery, so a fixed 100ms here was a bet on this machine's
+    // SSE latency: a late `meeting.stopped` leaves `kinds` one short and the
+    // deep-equal below fails on a diff that never touched the meeting code.
+    //
+    // Hardening, NOT a reproduced fix. This test was reported alternating
+    // between runs on 2026-09-04 and the bet did not turn out to be why: 10
+    // runs clean, 10 more under load average 12-19 clean, and 5 with this
+    // window cut to zero also clean — the broadcast is already in `events`
+    // before `stopped` returns. The reported failure fell inside the machine's
+    // ENOBUFS window (see fd-contention.ts), which is what the socket probe
+    // there now names. Poll anyway: it costs nothing when the frame has
+    // arrived, and it removes the one assertion here that a slower machine
+    // could still decide.
+    const stoppedByDeadline = Date.now() + 15_000;
+    while (!events.some((e) => e.event === 'meeting.stopped') && Date.now() < stoppedByDeadline) {
+      await new Promise((r) => setTimeout(r, 10));
+    }
+    // THEN a fixed window, which the second half of this test genuinely needs:
+    // it asserts that word-rate frames are ABSENT, and an absence proved by
+    // looking too early is not proved at all. A poll cannot stand in for it —
+    // there is nothing to poll for.
     await new Promise((r) => setTimeout(r, 100));
     controller.abort();
     await pump;
