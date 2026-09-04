@@ -108,8 +108,14 @@ interface FileBinding {
   pollArmed?: boolean;
   /** A poll stat is on the thread pool right now — see `pollBinding`. */
   statInFlight?: boolean;
-  /** Last file mtime (ms) we observed, so the poll reacts only to changes. */
+  /**
+   * Last file mtime (ms) we have actually READ, so the poll reacts only to
+   * changes. Advanced when the reconcile's read lands, never when the stat
+   * that spotted the change lands — see `applyPolledMtime`.
+   */
   lastMtimeMs?: number;
+  /** An mtime spotted by the stat whose reconcile read has not landed yet. */
+  pendingMtimeMs?: number;
   /** The serialized markdown we last wrote or last read from disk.
    *  Both directions guard against this to break echo loops. */
   lastWritten?: string;
@@ -897,7 +903,7 @@ export class FileBindings {
     // file, so a single path whose provider has stopped answering used to be
     // enough to park the event loop for the whole server — see slow-fs. A
     // stat still in flight is not re-issued: a stalled one never returns, and
-    // re-issuing it every tick is how the inflight bound would be exhausted.
+    // re-issuing it every tick is how the overdue bound would be exhausted.
     if (binding.statInFlight) return;
     binding.statInFlight = true;
     void boundFiles
@@ -921,7 +927,11 @@ export class FileBindings {
     if (!room) return;
     if (this.bindings.get(docId) !== binding) return;
     if (mtimeMs === binding.lastMtimeMs) return;
-    binding.lastMtimeMs = mtimeMs;
+    // A reconcile for this exact mtime is already on the debounce; re-arming
+    // it on every tick would push the read further away the longer the file
+    // sits changed.
+    if (mtimeMs === binding.pendingMtimeMs && binding.readTimer) return;
+    binding.pendingMtimeMs = mtimeMs;
     // An external write IS somebody reaching for the doc — the editor or the
     // git operation that made it is usually about to make another. Promote
     // the binding to the fast lane so the next few writes are seen in one
@@ -943,7 +953,19 @@ export class FileBindings {
       // guarded stat above with a blocking read here would guard nothing.
       void boundFiles.read(binding.path).then((res) => {
         if (this.bindings.get(docId) !== binding) return;
-        if (res.status !== 'ok') return;
+        if (res.status !== 'ok') {
+          // The read was refused or never answered. Forget that we spotted
+          // this mtime so the next sweep tries again: committing it here
+          // would make the change look already-handled and lose the external
+          // edit for as long as nobody touched the file a second time.
+          binding.pendingMtimeMs = undefined;
+          return;
+        }
+        // Commit the mtime of the bytes we actually got, not the one the stat
+        // reported — the file may have been written again in between, and
+        // that write must still look like a change worth reading.
+        binding.lastMtimeMs = res.exists ? res.mtimeMs : undefined;
+        binding.pendingMtimeMs = undefined;
         this.reconcileFromDisk(room, binding, res);
       });
     }, READ_DEBOUNCE_MS);

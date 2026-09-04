@@ -23,11 +23,11 @@
  *     path that blew it is skipped outright until the backoff expires. This
  *     is what stops a reconnecting subscriber re-arming the stall every
  *     second.
- *   - A CONCURRENCY BOUND, because a read that never returns never gives its
- *     pool thread back. Only `BOUND_READ_MAX_INFLIGHT` reads may be
- *     outstanding at once, so a whole stalled folder can leak at most that
- *     many pool threads for the life of the process rather than draining the
- *     pool and taking every other async read down with it.
+ *   - An OVERDUE BOUND, because a read that never returns never gives its
+ *     pool thread back. Once `BOUND_READ_MAX_OVERDUE` calls have blown the
+ *     deadline without ever landing, no further call starts until some of
+ *     them come back, so a whole stalled folder cannot drain the pool and
+ *     take every other async read down with it.
  *
  * This is a gate in front of the syscall, not a layer over the filesystem:
  * callers still decide what a missing or unavailable file means for them. The
@@ -55,21 +55,33 @@ const DEADLINE_MS = ROOM_TIMINGS.boundReadDeadlineMs;
 const RETRY_MS = ROOM_TIMINGS.boundReadRetryMs;
 
 /**
- * How many bound-file operations of ONE kind may be outstanding at once.
+ * How many calls may be OVERDUE — past the deadline and still unlanded —
+ * before new ones are refused.
  *
- * This is the leak bound. A read the provider never answers holds its thread
- * pool slot forever, so the worst case for a permanently stalled folder is
- * four parked reads plus four parked stats — not the whole pool. Healthy
- * calls finish in microseconds and never approach the limit; when it is
- * reached, callers get `unavailable` and retry later rather than queueing.
+ * This is the leak bound, and it counts the right thing. A read the provider
+ * never answers holds its pool thread forever; a read that finishes gives it
+ * straight back. So the quantity worth capping is the number of calls that
+ * have already proved they are never coming back, not the number in flight.
  *
- * Reads and stats are counted SEPARATELY, and that separation is load
- * bearing. The mtime poll stats every active binding on every tick, so a busy
- * corpus keeps stat slots occupied more or less continuously; sharing one
- * budget let that background traffic refuse the hydrate read a request was
- * waiting on, which is the one call that must not be starved.
+ * The first version of this file capped in-flight calls at four instead, and
+ * that starved the very poll it was meant to protect. `sweepFilePolls` issues
+ * one stat per armed binding in a single synchronous loop, so on a corpus of
+ * N bound docs all N stats are outstanding the moment the loop ends no matter
+ * how fast each one resolves — nothing can settle until the loop yields. The
+ * first four won every tick and the rest were refused `busy`, deterministically,
+ * by position in a Map. On a fast local disk the next tick usually recovered
+ * it; on a slower filesystem it did not, and an external edit to a bound file
+ * could go unnoticed indefinitely. Measured on one test file: 1,338 refusals
+ * with a warm local stat, 12,448 once each stat was made to take 30ms.
+ *
+ * Gating on overdue calls instead means healthy traffic is never refused —
+ * it cannot be, because a healthy call is never overdue. What remains is the
+ * first sweep across a folder that has just gone bad: one call per bound path
+ * may enter the pool before the deadline fires. After that the per-path
+ * quarantine holds every one of them off for `RETRY_MS`, so the exposure is
+ * one call per path per minute, and the main thread blocks through none of it.
  */
-export const BOUND_READ_MAX_INFLIGHT = 4;
+export const BOUND_READ_MAX_OVERDUE = 4;
 
 /**
  * How long a completed read stays available to the hydrate that asked for it.
@@ -131,7 +143,7 @@ class BoundFileReader {
 
   /** Read a bound file off the main thread, or report why we did not. */
   async read(path: string): Promise<BoundReadResult> {
-    const blocked = this.gate('read', path);
+    const blocked = this.gate(path);
     if (blocked) return blocked;
     const raced = await this.race('read', path, async () => {
       const [text, st] = await Promise.all([readFile(path, 'utf8'), stat(path)]);
@@ -189,7 +201,7 @@ class BoundFileReader {
 
   /** The mtime half of `read`, for the poll's change detection. */
   async statMtime(path: string): Promise<BoundStatResult> {
-    const blocked = this.gate('stat', path);
+    const blocked = this.gate(path);
     if (blocked) return blocked;
     const raced = await this.race('stat', path, () => stat(path));
     if (raced.kind === 'late') return { status: 'unavailable', reason: 'timeout' };
@@ -211,28 +223,23 @@ class BoundFileReader {
   }
 
   /**
-   * Tests only: forget the quarantine, the held bytes and the leak counter.
+   * Tests only: forget the quarantine and the held bytes.
    *
-   * `inflight` is deliberately NOT cleared. A read still parked in `open`
-   * owns its pool thread whatever this map says, so zeroing the count here
-   * would let the next caller start `BOUND_READ_MAX_INFLIGHT` more — the
-   * exact drain the bound exists to prevent, hidden behind a counter that
-   * reads as healthy. Tests release their own blocked reads and assert the
-   * count is genuinely back to zero (see test/fifo.ts).
+   * Neither counter is cleared, and that is the point. A read still parked
+   * in `open` owns its pool thread whatever this object says, so zeroing
+   * `leaked` here would both report a pool that had not been given back and
+   * re-open the gate that number now controls — and the parked read would
+   * then decrement past zero when it finally landed. Tests release their own
+   * blocked reads, which brings both counts down for real (see test/fifo.ts).
    */
   reset(): void {
     this.fresh.clear();
     this.stalledUntil.clear();
-    this.leaked = 0;
   }
 
-  private gate(
-    kind: 'read' | 'stat',
-    path: string,
-  ): { status: 'unavailable'; reason: 'backoff' | 'busy' } | undefined {
+  private gate(path: string): { status: 'unavailable'; reason: 'backoff' | 'busy' } | undefined {
     if (this.quarantined(path)) return { status: 'unavailable', reason: 'backoff' };
-    const held = kind === 'read' ? this.inflightRead : this.inflightStat;
-    if (held >= BOUND_READ_MAX_INFLIGHT) return { status: 'unavailable', reason: 'busy' };
+    if (this.leaked >= BOUND_READ_MAX_OVERDUE) return { status: 'unavailable', reason: 'busy' };
     return undefined;
   }
 
