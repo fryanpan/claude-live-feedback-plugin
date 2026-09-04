@@ -2531,6 +2531,108 @@ body.composer-open #editor > .ProseMirror ::selection {
   display: block !important;
 }
 
+/* ================= SUGGESTED EDITS (shared: the board mounts this editor too)
+   =================
+
+   Suggested edits (Phase 2). A pending proposal must NEVER be invisible, so
+   the mark rules are NOT scoped to a lens or body mode — they apply wherever
+   the prose editor renders.
+
+   THEY ARE IN THE SHARED BASE, not doc.css, and that is load-bearing. The
+   board mounts the same `createEditor` over a task body
+   (hub/task-body-editor.ts), and editor.ts registers SuggestInsert,
+   SuggestDelete and SuggestionChips in the BASE extension list with no
+   review-surface condition. The board loads hub.css + styles.css and never
+   links doc.css, so a suggestion rule parked there would leave an agent's
+   pending proposal on a task description rendering as plain accepted prose,
+   and would leave the chip's `display: none` default off the board entirely.
+   Asserted in doc-css.test.ts.
+
+   Each span carries its author's color as an inline `--lf-suggest-color`
+   custom property (set by suggest-marks.ts from the mark's authorColor attr).
+   As with the redline marks, color never carries the meaning alone: the
+   underline (proposed insert) and strikethrough (proposed delete) do.
+
+   ORDER INSIDE THIS SECTION IS THE ORDER THESE RULES HAD IN THE ONE FILE, and
+   it stays that way: the ≤1100px block sits BEFORE the base rule it competes
+   with, so at equal specificity the base wins and the chip is hidden at every
+   width. That is what shipped, and `.lf-del-chip` (doc.css) has the same
+   shape. Reordering the two would reveal a chip the product has never shown —
+   a change to make deliberately, not as a side effect of moving a file.
+   =========================================================================== */
+
+.ProseMirror .lf-suggest-ins {
+  --lf-suggest-tint: color-mix(in srgb, var(--lf-suggest-color, var(--accent)) 14%, transparent);
+  background: var(--lf-suggest-tint);
+  color: inherit;
+  text-decoration: underline;
+  text-decoration-thickness: 2px;
+  text-underline-offset: 2px;
+  text-decoration-color: var(--lf-suggest-color, var(--accent));
+  border-radius: 2px;
+  padding: 0 1px;
+  overflow-wrap: anywhere;
+}
+
+.ProseMirror .lf-suggest-del {
+  --lf-suggest-tint: color-mix(in srgb, var(--lf-suggest-color, var(--accent)) 10%, transparent);
+  background: var(--lf-suggest-tint);
+  color: inherit;
+  text-decoration: line-through;
+  text-decoration-thickness: 2px;
+  text-decoration-color: var(--lf-suggest-color, var(--accent));
+  border-radius: 2px;
+  padding: 0 1px;
+  overflow-wrap: anywhere;
+}
+
+/* The mobile half of the ≤1100px block doc.css keeps for `.lf-del-chip` —
+   split across the two files because the chip is minted by a base extension
+   and the deletion chip is not. */
+@media (max-width: 1100px) {
+  .lf-suggest-chip {
+    display: inline-flex;
+  }
+}
+
+/* Mobile suggestion chip (`.lf-suggest-chip`, suggestion-chips.ts widget
+   decoration) — same shape and sizing as doc.css's `.lf-del-chip`,
+   accent-colored instead of red (a suggestion is a proposal, not necessarily
+   a removal). The chip is always in the DOM and CSS alone decides whether it
+   shows, so this default is the load-bearing half: without it an unstyled
+   "✎ suggestion" button sits in the prose at every width. */
+.lf-suggest-chip {
+  display: none;
+  align-items: center;
+  gap: 3px;
+  margin: 0 2px;
+  padding: 3px 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-pill);
+  background: var(--bg-panel);
+  color: var(--accent);
+  font: 600 12px / 1.4 var(--sans);
+  cursor: pointer;
+  vertical-align: baseline;
+  white-space: nowrap;
+}
+
+.lf-suggest-chip:hover {
+  background: var(--bg-hover);
+  border-color: var(--border-strong);
+}
+.lf-suggest-chip:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+/* The print half of doc.css's block, split for the same reason. */
+@media print {
+  .lf-suggest-chip {
+    display: none !important;
+  }
+}
+
 /* ================= SIGN-IN REQUIRED (the standing read-only notice) =======
    Not the sign-in PAGE — this is the bar the board and the review editor
    mount when the reader is not signed in, plus the button a refused write
