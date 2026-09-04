@@ -1842,7 +1842,9 @@ late correction) + `speaker-roster.ts` (the meeting's cast) ·
 `packages/workspaces-app/src/speaker-reassign.ts` +
 `speaker-reassign-menu.ts` (correcting one mention) ·
 `packages/workspaces-app/src/meeting-strip.ts`
-(UI) · `meeting-solo.ts` (who else is on the doc — the one-tap predicate) ·
+(the socket state machine and the surface it drives) + `meeting-chooser.ts`
+(the start form) + `meeting-feed.ts` (the transcript line and the notes that
+stand in for it) + `meeting-menu.ts` (the running meeting's report) · `meeting-solo.ts` (who else is on the doc — the one-tap predicate) ·
 `packages/workspaces-app/src/meeting-audio.ts` (capture + the room's
 microphone config) · `packages/server/src/recall.ts` (vendor
 client) · `recall-turns.ts` (frames → turns, naming) · `recall-status.ts` +
