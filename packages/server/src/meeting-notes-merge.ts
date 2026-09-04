@@ -696,17 +696,6 @@ function createSuggestion(
 }
 
 /**
- * Merge `notesMarkdown` into the doc's notes section, keeping every item the
- * agent did not write, and updating `ownership` to what it owns afterwards.
- *
- * `basedOn` is the item list the compose that produced these notes was
- * reading. An ownership record that claims nothing — a server that restarted
- * — means everything already in the section reads as a person's. That is the
- * safe direction: a doc whose notes section holds an agenda somebody typed
- * before pressing record keeps it, at the price of the note-taker adding
- * beneath rather than revising.
- */
-/**
  * Rewrite the section body to the shape the composer returned, and hand the
  * ledger the elements it now holds.
  *
@@ -751,6 +740,17 @@ function relayoutSection(
   return { deleted, inserted: items.length };
 }
 
+/**
+ * Merge `notesMarkdown` into the doc's notes section, keeping every item the
+ * agent did not write, and updating `ownership` to what it owns afterwards.
+ *
+ * `basedOn` is the item list the compose that produced these notes was
+ * reading. An ownership record that claims nothing — a server that restarted
+ * — means everything already in the section reads as a person's. That is the
+ * safe direction: a doc whose notes section holds an agenda somebody typed
+ * before pressing record keeps it, at the price of the note-taker adding
+ * beneath rather than revising.
+ */
 export function mergeNotesSection(
   ydoc: Y.Doc,
   notesMarkdown: string,
