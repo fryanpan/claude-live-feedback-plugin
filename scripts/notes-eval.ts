@@ -166,16 +166,11 @@ const JUDGE_SYSTEM = [
   'You get the speech from one moment of a meeting, the notes as they stood',
   'before it, and the notes after. Judge ONLY what the new writing does.',
   '',
-  'Answer with JSON and nothing else. Every field is an object holding the',
-  'verdict AND the reason for THAT verdict — a reason that explains a',
-  'different field is worse than none, because it is read as evidence about',
-  'the one it is filed under:',
-  '{"paraphrased":{"ok":bool,"why":"..."},"covers":{"ok":bool,"why":"..."},',
-  ' "topics":{"ok":bool,"why":"..."},"guesses":{"ok":bool,"why":"..."},',
-  ' "together":{"ok":bool,"why":"..."}}',
-  '',
-  'Each "why" is one short sentence naming what failed, or empty when ok is',
-  "true. Never repeat one field's reason under another field.",
+  'Record every verdict with the record_verdict tool. Each behaviour carries',
+  'its own verdict AND its own reason — a reason that explains a different',
+  'behaviour is worse than none, because it is read as evidence about the one',
+  'it is filed under. Each reason is AT MOST TWELVE WORDS naming what failed,',
+  'or empty when the verdict holds.',
   '',
   "- paraphrased: the new notes say what the speech MEANT in the writer's own",
   '  short sentences. False if a note reads as a transcript line, quotes',
@@ -194,6 +189,37 @@ const JUDGE_SYSTEM = [
   '- together: related points sit together rather than being repeated or',
   '  scattered. False if the same point now appears twice in different places.',
 ].join('\n');
+
+/**
+ * The judge's answer as a TOOL rather than as prose to be parsed.
+ *
+ * Two runs were lost to the judge writing its way past a token budget and
+ * truncating the JSON mid-object. The obvious fix — prefill the opening
+ * brace — this model refuses outright ("does not support assistant message
+ * prefill"). A forced tool call is the shape the API itself enforces, so
+ * there is no reply to parse and no way to half-answer.
+ */
+const VERDICT_TOOL = {
+  name: 'record_verdict',
+  description: 'Record one verdict, with its reason, for each behaviour graded.',
+  input_schema: {
+    type: 'object' as const,
+    properties: Object.fromEntries(
+      ['paraphrased', 'covers', 'topics', 'guesses', 'together'].map((field) => [
+        field,
+        {
+          type: 'object',
+          properties: {
+            ok: { type: 'boolean' },
+            why: { type: 'string', description: 'At most twelve words, or empty when ok.' },
+          },
+          required: ['ok', 'why'],
+        },
+      ]),
+    ),
+    required: ['paraphrased', 'covers', 'topics', 'guesses', 'together'],
+  },
+};
 
 /**
  * Why judge replies could not be read, this run.
@@ -244,45 +270,42 @@ async function judge(
       // asked for, and a truncation is reported rather than dropped.
       max_tokens: 900,
       system: JUDGE_SYSTEM,
+      tools: [VERDICT_TOOL],
+      tool_choice: { type: 'tool', name: VERDICT_TOOL.name },
       messages: [{ role: 'user', content: user }],
     }),
   });
-  if (!res.ok) return null;
+  if (!res.ok) {
+    // The status only. A body can echo the prompt, and the prompt carries
+    // meeting speech. This line used to be a bare `return null`, which is how
+    // a run once reported no judged examples and no reason for it.
+    judgeUnread.add(`the judge call returned HTTP ${res.status}`);
+    return null;
+  }
   const body = (await res.json()) as {
-    content?: Array<{ text?: string }>;
+    content?: Array<{ type?: string; name?: string; input?: unknown }>;
     stop_reason?: string | null;
     usage?: { input_tokens?: number; output_tokens?: number };
   };
   recordUsage(JUDGE_MODEL, body.usage?.input_tokens ?? 0, body.usage?.output_tokens ?? 0);
-  if (body.stop_reason === 'max_tokens') {
-    judgeUnread.add('the judge ran out of output tokens mid-JSON');
+  const call = body.content?.find((b) => b.type === 'tool_use' && b.name === VERDICT_TOOL.name);
+  if (!call?.input || typeof call.input !== 'object') {
+    judgeUnread.add(
+      body.stop_reason === 'max_tokens'
+        ? 'the judge ran out of output tokens before recording a verdict'
+        : 'the judge answered without calling record_verdict',
+    );
     return null;
   }
-  const text = body.content?.map((b) => b.text ?? '').join('') ?? '';
-  const json = text.match(/\{[\s\S]*\}/);
-  if (!json) {
-    judgeUnread.add('the judge answered with no JSON object in it');
-    return null;
-  }
-  let raw: Record<string, unknown>;
-  try {
-    raw = JSON.parse(json[0]) as Record<string, unknown>;
-  } catch {
-    judgeUnread.add("the judge's JSON would not parse");
-    return null;
-  }
-  // Tolerate the flat shape too. A judge that answers `"covers": false`
-  // rather than `{"ok": false}` has still answered, and dropping the whole
-  // tick over the wrapper would silently shrink the sample.
   const out: Record<string, JudgedField> = {};
-  for (const [field, value] of Object.entries(raw)) {
+  for (const [field, value] of Object.entries(call.input as Record<string, unknown>)) {
+    // The schema requires the object form, but a schema is a request and this
+    // reads whatever actually arrived: a bare boolean is still an answer, and
+    // dropping the tick over the wrapper would shrink the sample silently.
     if (typeof value === 'boolean') out[field] = { ok: value, why: '' };
     else if (value && typeof value === 'object') {
       const o = value as { ok?: unknown; why?: unknown };
-      out[field] = {
-        ok: o.ok === true,
-        why: typeof o.why === 'string' ? o.why : '',
-      };
+      out[field] = { ok: o.ok === true, why: typeof o.why === 'string' ? o.why : '' };
     }
   }
   return out;
