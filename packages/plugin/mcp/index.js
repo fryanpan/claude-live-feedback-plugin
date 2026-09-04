@@ -15770,7 +15770,7 @@ var TOOL_LIST = {
           workspaceId: { type: "string" },
           text: {
             type: "string",
-            description: "The request in the words it was asked in. A whole sentence matches better than a keyword."
+            description: "The request in the words it was asked in. Scoring does not depend on length, so paste the whole ask rather than boiling it down to a keyword."
           },
           docId: {
             type: "string",

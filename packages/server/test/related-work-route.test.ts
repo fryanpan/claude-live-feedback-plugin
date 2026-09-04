@@ -127,6 +127,7 @@ describe('GET /api/workspaces/:id/related-work', () => {
     title: string,
     path: string,
     markdown: string,
+    hub: string = wsId,
   ): Promise<string> {
     writeFileSync(path, markdown);
     const res = await fetch(`${base}/api/docs`, {
@@ -137,18 +138,22 @@ describe('GET /api/workspaces/:id/related-work', () => {
         type: 'markdown',
         title,
         sourceUrl: path,
-        hubWorkspaceId: wsId,
+        hubWorkspaceId: hub,
       }),
     });
     expect(res.status, `creating ${alias}: ${await res.clone().text()}`).toBe(200);
     return ((await res.json()) as { docId: string }).docId;
   }
 
-  async function related(params: Record<string, string>): Promise<RelatedBody> {
+  async function relatedOn(board: string, params: Record<string, string>): Promise<RelatedBody> {
     const qs = new URLSearchParams(params).toString();
-    const res = await fetch(`${base}/api/workspaces/${wsId}/related-work?${qs}`);
+    const res = await fetch(`${base}/api/workspaces/${board}/related-work?${qs}`);
     expect(res.status, await res.clone().text()).toBe(200);
     return (await res.json()) as RelatedBody;
+  }
+
+  async function related(params: Record<string, string>): Promise<RelatedBody> {
+    return relatedOn(wsId, params);
   }
 
   it('puts the goal the request lines up with first, and its plan doc beside it', async () => {
@@ -232,5 +237,54 @@ describe('GET /api/workspaces/:id/related-work', () => {
   it('honours a caller-supplied limit', async () => {
     const body = await related({ q: 'meeting notes plan huddle', limit: '1' });
     expect(body.matches.length).toBe(1);
+  });
+
+  it('never reaches another board, even for a request that board is exactly about', async () => {
+    // Scoping, asserted from both sides. The route reads goals and docs; a
+    // filter that missed either one would leak a neighbouring board's work
+    // into this board's answer, and the caller would file a clarifying
+    // question about a goal nobody here can see.
+    const otherRes = await fetch(`${base}/api/workspaces`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ name: 'billing', goal: 'Invoices that reconcile.' }),
+    });
+    const otherWs = ((await otherRes.json()) as { workspace: { id: string } }).workspace.id;
+
+    const otherGoals = await seedGoalsOverHttp(
+      base,
+      otherWs,
+      [{ key: 'refund', title: 'Bryan can refund a duplicate invoice without a support ticket' }],
+      PERSON,
+    );
+    const refundGoal = otherGoals.refund ?? '';
+    handle.tasks.updateGoalBodySnapshot(
+      refundGoal,
+      'A duplicate invoice should be refundable from the billing page, with the reason recorded.',
+    );
+    const refundDoc = await makeDoc(
+      'duplicate-invoice-refund-plan',
+      'Duplicate invoice refund plan',
+      join(dataDir, 'duplicate-invoice-refund-plan.md'),
+      '# Duplicate invoice refund plan\n\nHow a duplicate invoice is refunded.\n',
+      otherWs,
+    );
+
+    const q = 'Plan how Bryan refunds a duplicate invoice without a support ticket';
+
+    // The positive control, and the reason the negative below means anything:
+    // asked of the board that owns them, both rows come back. So they are
+    // matchable text, and their absence next door is scoping rather than a
+    // scoring miss.
+    const owning = await relatedOn(otherWs, { q });
+    expect(owning.matches.map((m) => m.id)).toContain(refundGoal);
+    expect(owning.matches.map((m) => m.id)).toContain(refundDoc);
+
+    const neighbour = await related({ q });
+    expect(neighbour.matches.map((m) => m.id)).not.toContain(refundGoal);
+    expect(neighbour.matches.map((m) => m.id)).not.toContain(refundDoc);
+    // ...and this board did weigh its own rows, so the answer is not empty
+    // because the route gave up before looking.
+    expect(neighbour.considered).toBeGreaterThan(0);
   });
 });

@@ -20,16 +20,22 @@
  *
  * Two signals, and they are weighted very differently on purpose:
  *
- *   • TITLE overlap, by Dice coefficient. Both sides are short, so a
- *     symmetric measure is right — a two-word title that matches two of the
- *     request's words is a strong signal, and normalizing by only one side
- *     would either flatter a long title or bury a short one.
+ *   • TITLE overlap, by the OVERLAP COEFFICIENT — shared terms over the
+ *     smaller of the two sets. A two-word title matching two of the request's
+ *     words is a strong signal however long the request is.
  *
- *   • BODY overlap, by COVERAGE of the request. A goal's prose runs to
- *     paragraphs and a plan doc to pages, so Dice against a body is near zero
- *     for everything and ranks nothing. What a reader actually means by "that
- *     doc is about this" is that the doc mentions most of what they asked
- *     about, which is |request ∩ body| / |request|.
+ *   • BODY overlap, by a SATURATING COUNT of shared terms. A goal's prose
+ *     runs to paragraphs and a plan doc to pages, so a symmetric measure is
+ *     near zero for everything and ranks nothing; a handful of the request's
+ *     own words appearing in the body is what "that doc is about this" means.
+ *
+ * Both are deliberately independent of how long the request is. The first
+ * version normalized both by the request's size, which meant that pasting the
+ * paragraph somebody actually wrote scored lower than typing two words of it,
+ * and past about forty words NOTHING cleared the threshold. Since an empty
+ * answer is read as "no related work exists", that turned a verbose request
+ * into a silent licence to duplicate the board — the exact failure this
+ * module was written to prevent.
  *
  * And one relation: a LINK. A goal that already points at the doc the request
  * came from is related whether or not its words match, so a link is a flat
@@ -50,6 +56,21 @@
  */
 export const TITLE_WEIGHT = 0.7;
 export const BODY_WEIGHT = 0.3;
+/**
+ * How many of the request's own words a body has to mention before the body
+ * signal is at full strength. A count that SATURATES, not a coverage ratio:
+ * dividing by the request's size means a long request scores lower against
+ * the very doc that discusses it, because prose about a topic never repeats
+ * every word somebody used to ask about it. Four is roughly the number of
+ * distinct content words a body shares with a request that is genuinely about
+ * the same work.
+ */
+export const BODY_SATURATION = 4;
+/**
+ * The smallest divisor the title overlap will use. Three is the shortest title
+ * this repo's boards actually carry that means anything on its own.
+ */
+export const MIN_TITLE_DENOMINATOR = 3;
 /**
  * A link's flat contribution. Above `DEFAULT_THRESHOLD` on purpose: a goal
  * that links the doc the request came out of is worth surfacing even when its
@@ -279,10 +300,24 @@ function intersect(a: Set<string>, b: Set<string>): string[] {
   return shared;
 }
 
-/** 2|A∩B| / (|A|+|B|) — 1 for identical sets, 0 for disjoint ones. */
-function dice(a: Set<string>, b: Set<string>, sharedCount: number): number {
-  const total = a.size + b.size;
-  return total === 0 ? 0 : (2 * sharedCount) / total;
+/**
+ * |A∩B| / min(|A|,|B|), with the divisor floored at `MIN_TITLE_DENOMINATOR`.
+ *
+ * Normalizing by the SMALLER side is what makes the score stable as a request
+ * grows. Dice divides by the sum, so pasting a paragraph instead of typing a
+ * phrase shrinks every score toward zero while the threshold stays put, and
+ * the longer, more informative request matches less than the short one.
+ *
+ * The floor is there because normalizing by the smaller side flatters a tiny
+ * title: "Huddle notes" is two words, so sharing the single word "notes" would
+ * otherwise score half marks and clear the threshold on a generic term. The
+ * floor asks a two-word title to share both words before it scores as highly
+ * as a longer title sharing two of its own.
+ */
+function overlap(a: Set<string>, b: Set<string>, sharedCount: number): number {
+  const smaller = Math.min(a.size, b.size);
+  if (smaller === 0) return 0;
+  return sharedCount / Math.max(smaller, MIN_TITLE_DENOMINATOR);
 }
 
 function listTerms(terms: string[]): string {
@@ -315,8 +350,8 @@ export function scoreRelatedWork(
     const bodyTerms = relatedWorkTerms(candidate.body);
     const titleShared = intersect(request, titleTerms);
     const bodyShared = intersect(request, bodyTerms);
-    const titleScore = dice(request, titleTerms, titleShared.length);
-    const bodyScore = request.size === 0 ? 0 : bodyShared.length / request.size;
+    const titleScore = overlap(request, titleTerms, titleShared.length);
+    const bodyScore = Math.min(1, bodyShared.length / BODY_SATURATION);
     const linked = candidate.linked === true;
     const score = Math.min(
       1,
