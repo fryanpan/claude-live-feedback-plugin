@@ -247,9 +247,11 @@ export function createNotesLedger(store?: NotesLedgerStore): NotesLedger {
       return build(docId, continuesSitting(store?.read(docId) ?? null, Date.now()));
     },
     beginMeeting(docId, meetingId, now = Date.now()) {
-      // Rebuilt rather than released: the two halves have different lives,
-      // and seeding at construction is what keeps the text claim out of a
-      // meeting that does not continue the last one.
+      // Released AND rebuilt, and both are needed. The release reaches an
+      // ownership object a caller took out of `forDoc` before this call and
+      // is still holding; the rebuild is how the TEXT claim gets seeded,
+      // since that half is read once at construction and is exactly what
+      // must not carry into a meeting that does not continue the last one.
       if (meetingId !== undefined) meetings.set(docId, meetingId);
       byDoc.get(docId)?.release();
       build(docId, continuesSitting(store?.read(docId) ?? null, now));
