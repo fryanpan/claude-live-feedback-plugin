@@ -66,6 +66,46 @@ export const WAKE_WORDS = ['claude', 'claud', 'clod', 'cloud'] as const;
 /** Greetings that may precede the wake word. */
 const WAKE_GREETINGS = ['hey', 'hi', 'ok', 'okay'] as const;
 
+/**
+ * The verbs a NOW ask opens with — the openings the three now intents were
+ * written around ("look into", "find out", "pull up", "link", "check", "ask
+ * the team") and their near neighbours. Consulted only AFTER a coordinator,
+ * where a verb is what tells a second ask from the rest of the first one's
+ * object. See {@link nowCueAskCount}.
+ */
+const NOW_ASK_VERBS = [
+  'look',
+  'find',
+  'pull',
+  'link',
+  'check',
+  'ask',
+  'dig',
+  'see',
+  'get',
+  'open',
+  'show',
+  'bring',
+  'read',
+  'search',
+  'review',
+  'confirm',
+  'figure',
+  'tell',
+  'share',
+  'summarize',
+  'summarise',
+  'list',
+  'compare',
+  'investigate',
+  'explain',
+] as const;
+
+/** What joins two asks said in one breath. Longest-first alternation matters
+ *  here: "and" alone would consume the joint and leave "then" to fail the
+ *  verb test that follows it. */
+const NOW_JOINERS = ['and then', 'and also', 'and', 'then', 'also', 'plus'] as const;
+
 /** The verb half of the later cue — "**create** a task". */
 const LATER_VERBS = ['create', 'make', 'file', 'add'] as const;
 
@@ -222,6 +262,13 @@ const NOW_RE = new RegExp(
   'g',
 );
 
+/** A coordinator followed by a verb — the joint between two asks in one
+ *  now-cue line. Global: a line may carry several. */
+const NOW_JOINT_RE = new RegExp(
+  `\\b(?:${alternation(NOW_JOINERS)})\\s+(?:${alternation(NOW_ASK_VERBS)})\\b`,
+  'g',
+);
+
 function laterRe(nouns: readonly string[]): RegExp {
   return new RegExp(
     `^(?:${alternation(LATER_VERBS)})\\s+(?:(?:${alternation(LATER_DETERMINERS)})\\s+){0,2}` +
@@ -310,6 +357,48 @@ export function askCuesIn(text: string): { now: boolean; later: boolean } {
  */
 export function laterCueIsPlural(text: string): boolean {
   return clausesIn(normalize(text)).some((clause) => LATER_MANY_RE.test(stripLeadIns(clause)));
+}
+
+/**
+ * How many asks one NOW-cue line carries.
+ *
+ * A cue is spent on the one ask it licensed, which was right until somebody
+ * said both halves in one breath: "Claude, can you look at the retry loop and
+ * pull up last week's notes" is two asks, and the second was dropped in
+ * silence because the line that cued it had already been consumed. So a
+ * line's capacity is counted rather than assumed to be one.
+ *
+ * Two things raise it and nothing else does: the speaker said the wake word
+ * again ("…and Claude, could you…"), or a coordinator is followed by a VERB.
+ * The verb is the whole test, because it is what separates a second ask from
+ * a longer object — "look at the retry loop and the sync worker" is one ask
+ * about two things, and "the" is not a verb. Erring high costs nothing on its
+ * own: a cue left live still has to be claimed by an ask the subject guards
+ * vouch for. Erring low drops an ask somebody spoke, which is the failure
+ * this exists to end.
+ *
+ * Zero for a line with no now cue at all, so a caller may use it as the
+ * capacity without asking twice.
+ */
+export function nowCueAskCount(text: string): number {
+  const normalized = normalize(text);
+  let cues = 0;
+  let firstEnd = -1;
+  NOW_RE.lastIndex = 0;
+  for (let m = NOW_RE.exec(normalized); m !== null; m = NOW_RE.exec(normalized)) {
+    const end = m.index + m[0].length;
+    // The same carve-out askCuesIn makes: a now cue whose own remainder opens
+    // the later cue asked for a row, not for an action.
+    if (LATER_RE.test(stripLeadIns(normalized.slice(end)))) continue;
+    cues++;
+    if (firstEnd < 0) firstEnd = end;
+  }
+  if (cues === 0) return 0;
+  let joints = 0;
+  const rest = normalized.slice(firstEnd);
+  NOW_JOINT_RE.lastIndex = 0;
+  while (NOW_JOINT_RE.exec(rest) !== null) joints++;
+  return Math.max(cues, 1 + joints);
 }
 
 /** Did this line use the given convention? */
