@@ -89,6 +89,7 @@ function mount(md = 'Alpha bravo gamma. Delta epsilon.\n') {
     surface: editor,
     whenSynced: (cb) => cb(),
     scope,
+    canWrite: true,
     selectHint: '',
     reanchorHint: '',
     getSelection: () => editor.getSelectionRel(),
