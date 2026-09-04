@@ -660,9 +660,7 @@ export function storedJudgement(judgement: ReviewItemJudgement): ReviewItemJudge
  */
 export function isReviewItemHeld(item: TaskReviewItem): boolean {
   return (
-    item.answer === undefined &&
-    !reviewWithdrawn(item.review) &&
-    item.judge?.verdict === 'held'
+    item.answer === undefined && !reviewWithdrawn(item.review) && item.judge?.verdict === 'held'
   );
 }
 
