@@ -844,7 +844,7 @@ function setBandCollapsed(goalId: string, folded: boolean): void {
 }
 
 /**
- * One board band: the goal's own ROW on top, its tasks on a rail below it
+ * One board band: the goal's own ROW on top, its tasks indented below it
  * (Bryan's approved mock, 2026-08-23). The row deliberately carries NONE of a
  * task row's working chrome — his review struck, by name: open/doing/done
  * counts, the drag handle, the status circle, decision chips, and any 'legacy
@@ -1126,9 +1126,12 @@ function GoalBand(props: {
           the summary is worth most, and it is not "something extra in place
           of the tasks" that the folding decision struck. */}
       <GoalEffort section={section} />
-      {/* The band's tasks, on the rail that says "these belong to the row
-          above". A folded band hides this container in CSS and renders NOTHING
-          in its place — a collapsed band shows nothing extra, by decision. */}
+      {/* The band's tasks. The indent is what says "these belong to the row
+          above" — the accent rail that used to draw it is gone, because a
+          solid vertical behind every dependency curve is what made the curves
+          unreadable. A folded band hides this container in CSS and renders
+          NOTHING in its place — a collapsed band shows nothing extra, by
+          decision. */}
       <div class="hub-band-tasks">
         <DepLayer section={section} />
         {section.tasks.length === 0 ? (
