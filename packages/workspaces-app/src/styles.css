@@ -2097,7 +2097,16 @@ body.threads-resizing {
 /* Line-number chip on a comment ("L293" / "L293-301"). Authored beside the
    diff nav that mints it and left in the shared base on purpose: the board
    renders the same chip on a task discussion, and doc.css is a file the
-   board never loads. */
+   board never loads.
+
+   It is also the ONE rule the split moved rather than lifted. Every other
+   rule kept its position — read the two files back in link order and you get
+   this file's old rule sequence exactly — but the banner this one was
+   authored under went to doc.css whole, so staying behind meant landing
+   somewhere else, and comment chrome is the banner it belongs under. The
+   move is a no-op on the cascade: the chip is a span carrying this class and
+   no other, this is the only rule in any sheet that names `.thread-line`,
+   and nothing it jumped over matches a lone span at equal specificity. */
 .thread-line {
   display: inline-block;
   margin-right: 6px;

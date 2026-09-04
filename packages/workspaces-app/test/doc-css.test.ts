@@ -80,6 +80,21 @@ describe('the editor page keeps every surface that moved', () => {
     expect(s.maxWidth).toBe('100%');
     expect(s.paddingTop).toBe('10px');
   });
+
+  it('still paints the line chip on the editor page, where the split moved it', () => {
+    // `.thread-line` is the one rule whose POSITION changed rather than its
+    // file: every other rule was lifted in source order, but this one was
+    // authored under the diff nav — a banner that went to doc.css whole — and
+    // had to stay in the shared base, so it landed under the comment chrome
+    // instead. That hop jumped it over the composers, the toast and the
+    // banners. The editor page is where both sides of the hop are loaded, so
+    // it is where a value would change if anything it passed could tie.
+    const chip = attach('thread-line', { tag: 'span' });
+    const s = styleOf(chip);
+    expect(s.display).toBe('inline-block');
+    expect(s.whiteSpace).toBe('nowrap');
+    expect(s.marginRight).toBe('6px');
+  });
 });
 
 describe('the board never loads doc.css, and loses nothing by it', () => {

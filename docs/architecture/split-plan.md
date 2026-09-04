@@ -472,7 +472,7 @@ Landed as planned: `hub.css` (5,364) and `signin.css` (185), leaving
 
 **The third file was taken on 2026-09-03**, and the measurement above held.
 `doc.css` (3,942) carries the seventeen blocks the editor alone reaches and
-`styles.css` drops to 2,672 — more than the estimated 2,459 because three
+`styles.css` drops to 2,681 — more than the estimated 2,459 because three
 blocks B2 did not count (the format bar, the thread highlights and the
 long-thread modal) measure editor-only too. What the work added to B2's
 lesson:
@@ -490,7 +490,15 @@ lesson:
   time.** `.thread-line` is the line-number chip on a comment, authored
   beside the diff nav that mints it — and rendered by the board on a task
   discussion. Checking every moved selector's class and id tokens against
-  `hub.js` and `signin.js` found it; it stayed in the base.
+  `hub.js` and `signin.js` found it; it stayed in the base. It is also the
+  only rule in either file whose POSITION changed: parse both files into
+  rules and `doc.css` is an exact in-order subsequence of the pre-split
+  `styles.css`, and so is the base apart from this one rule, which had to
+  move because the banner it was authored under went to `doc.css` whole.
+  It hopped 163 rules to land under the comment chrome. Safe, and worth
+  saying why the check is cheap rather than trusting it: the chip is a span
+  carrying that class and no other, one rule in any sheet names the class,
+  and nothing it passed matches a lone span at equal specificity.
 - **Two pages get lighter this time, and they are the other two.** The board
   and the sign-in page stop downloading 3,942 lines of editor CSS; the editor
   downloads what it always did, in two files.
