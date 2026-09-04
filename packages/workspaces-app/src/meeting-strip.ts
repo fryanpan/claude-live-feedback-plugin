@@ -15,7 +15,7 @@
  * IT RESERVES HEIGHT. The strip is the shell's second grid row, directly
  * under the top bar it grows out of, so the editor below is shorter by
  * exactly its height rather than running underneath it. Hidden, the row is
- * zero. Layout rules live in styles.css under MEETING RECORD CHROME and are
+ * zero. Layout rules live in doc.css under MEETING RECORD CHROME and are
  * asserted in `meeting-strip-css.test.ts`, because no DOM test resolves
  * layout.
  *

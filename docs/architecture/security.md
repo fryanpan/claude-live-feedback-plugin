@@ -77,9 +77,15 @@ Above all of this is a master switch. Off, every outside hostname is refused bef
 
 ### Layer 3: inside a workspace, everyone has everything
 
-A member is a participant, not a reader. They can file and edit tasks, move status, answer review items and decisions, comment anywhere, edit any document filed on the board, rename goal bands, and turn a comment into a task. Every write is attributed to the email Cloudflare confirmed; whatever the request claims about its author is ignored.
+A member is a participant, not a reader. They can file and edit tasks, move status, answer review items and decisions, comment anywhere, edit any document filed on the board, file onto the board a document they can already open on it, start and join a meeting on it, name and rank the goal bands, open and change the board's settings, read its activity log and the roster of agents working it, and turn a comment into a task. Every write is attributed to the email Cloudflare confirmed; whatever the request claims about its author is ignored.
 
-"Everything" means everything on that board. What is outside the board is refused in the same words a guessed id gets: other boards, the list of boards, share administration (minting or revoking links, reading the member list, the master switch), the board's own lifecycle, and anything that names a path on the owner's machine or acts on the machine itself. Each route a member may call is written out by name, so a route added later is closed until someone opens it. A request reached through a task or goal id is resolved to its own board first, and the gate is asked about that board and no other.
+Filing a document onto the board is what makes it readable there, so a member may file only what they can already open. Pulling one in from elsewhere would be a read of another board dressed as a write.
+
+"Everything" means everything on that board. What is outside the board is refused in the same words a guessed id gets: other boards, the list of boards, share administration (minting or revoking links, reading the member list, the master switch), the board's own lifecycle, the seats on it that belong to the owner's agents, and anything that names a path on the owner's machine or acts on the machine itself. Each route a member may call is written out by name, so a route added later is closed until someone opens it. A request reached through a task or goal id is resolved to its own board first, and the gate is asked about that board and no other.
+
+Two things on the board itself are still the owner's alone, and both spend the owner's machine rather than working the board: sending a meeting bot into a call somewhere else, and routing a spoken request to the owner's agents.
+
+A route a member may call still filters what it sends back. The settings withhold the notes checkout, which is a path on the owner's disk, and refuse to accept one. The activity log names people the way the board's live feed already does, by display name rather than by internal id, so the two doors onto the same record cannot disagree.
 
 Document text is edited over the live-editing connection, and that is what a review is for. The board's own live room is different: its contents are a projection the server owns, so a write arriving on it from any peer is reverted, and a member changes the board through the named routes instead.
 
@@ -87,7 +93,7 @@ Roles, and finer control than "everything", are not built yet. When they are, th
 
 ## Rules that guard the machine itself
 
-**A browser may never name a path on this machine.** Binding a file or folder, importing a task list, starting a diff review, deploying, and refreshing the plugin all refuse every browser, signed in or not. They exist for the owner's agents, over `localhost`. The danger is a page on another local port riding the owner's session.
+**A browser may never name a path on this machine.** Binding a file or folder, importing a task list, starting a diff review, deploying, and refreshing the plugin all refuse every browser, signed in or not. They exist for the owner's agents, over `localhost`. The danger is a page on another local port riding the owner's session. The same routes are refused to a member of a shared board by the workspace gate as well, and that second refusal is the load-bearing one: the browser rule turns away pages, and a member could arrive from a client that is not a page.
 
 **Changing anything from a browser needs a sign-in, decided by read-versus-write, not by a route list.** The gate looks at whether a request asks to change something, so a new route that writes is covered without anyone adding it. The hole is a live connection, because opening one looks like a read: the document-editing socket and the meeting-audio socket each check the sign-in themselves when they open and keep that answer for as long as the connection lasts. A third live connection has to do the same; nothing will catch it for you.
 

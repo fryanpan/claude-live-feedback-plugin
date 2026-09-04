@@ -48,8 +48,13 @@ that way and add new subsystem docs to the list here.
   `/* ===== SECTION ===== */` banner they belong to. The board's rules live in
   `hub.css`, under the per-surface `/* ##### HUB · … ##### */` sub-banner that
   names the surface (`grep -n '##### HUB' packages/workspaces-app/src/hub.css`
-  lists them); `styles.css` keeps the review editor and the chrome every page
-  shares. Parallel branches that both append at EOF conflict every time.
+  lists them); the review editor's live in `doc.css`; `styles.css` keeps only
+  the chrome all three pages share. The test for which file is **which pages
+  can reach the rule**, not which surface it looks like — `.thread-line` reads
+  as diff chrome and the board renders it too, so it stays in the base. Link
+  order is load-bearing and measured: `hub.css` BEFORE `styles.css`, `doc.css`
+  and `signin.css` AFTER it, `tokens.css` last. Parallel branches that both
+  append at EOF conflict every time.
 - **Edit Bryan's bound docs directly; don't default to `suggest: true`.**
   Concurrent editing is the norm; reserve suggestions for judgment calls.
 - **Verify UI at 1180x820 (iPad landscape — Bryan's main device) AND 430px**
