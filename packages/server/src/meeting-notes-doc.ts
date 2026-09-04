@@ -95,6 +95,7 @@ import {
   taskCaptureUrl,
 } from './meeting-task-capture.ts';
 import {
+  type NotesLedgerRecord,
   type NotesLedgerStore,
   continuesSitting,
   createNotesLedgerStore,
@@ -208,6 +209,23 @@ export interface NotesLedger {
    * and start in the same sitting. A meeting that opens on a doc whose notes
    * were written long ago claims no section and starts its own at the end,
    * which is the owner's 2026-09-01 rule.
+   *
+   * THE WINDOW IS NOT RESTART-ONLY, AND THAT IS THE INTENT. A boot id would
+   * make it restart-only, and was considered and rejected: it would leave a
+   * stop-and-start in the same sitting falling back to the position test,
+   * which is the twinning #637 exists to prevent. Note what that fallback
+   * actually does — with nothing under the notes it extends the same section
+   * anyway, and only a heading landing below (a Research placeholder, a line
+   * a person typed) makes it open a second one. So restart-only would not
+   * give "a new recording gets a new section"; it would give "a new
+   * recording gets a new section IF something happens to sit below the
+   * notes", which is the arbitrary rule, not the safe one. Continuing the
+   * sitting is the same answer in both cases.
+   *
+   * What bounds it is the sitting rather than the process, because the
+   * sitting is what the person experiences: they are still at the same
+   * table, still on the same subject. Half an hour later they are not, and
+   * the claim lapses.
    */
   beginMeeting(docId: string, meetingId?: string, now?: number): void;
 }
@@ -216,10 +234,13 @@ export function createNotesLedger(store?: NotesLedgerStore): NotesLedger {
   const byDoc = new Map<string, NotesOwnership>();
   const meetings = new Map<string, string>();
 
-  /** A doc's ownership, seeded with the section claim when `adopt` says the
-   *  recording that wrote it is the one still going on. */
-  const build = (docId: string, adopt: boolean): NotesOwnership => {
-    const prior = store?.read(docId) ?? null;
+  /** A doc's ownership, seeded with the section claim when the record the
+   *  caller already read is the sitting still going on. Taking the record as
+   *  an argument rather than re-reading it is not only a saved file read:
+   *  it is what makes the freshness verdict and the claim it admits come
+   *  from the same reading of the file. */
+  const build = (docId: string, prior: NotesLedgerRecord | null, now: number): NotesOwnership => {
+    const adopt = continuesSitting(prior, now);
     const created = createNotesOwnership({
       ...(adopt && prior ? { written: prior.items } : {}),
       ...(store
@@ -244,7 +265,7 @@ export function createNotesLedger(store?: NotesLedgerStore): NotesLedger {
       // No meeting has begun on this doc in this process — the notes tools
       // and the tests that write one update. Read the claim under the same
       // freshness rule a recording would.
-      return build(docId, continuesSitting(store?.read(docId) ?? null, Date.now()));
+      return build(docId, store?.read(docId) ?? null, Date.now());
     },
     beginMeeting(docId, meetingId, now = Date.now()) {
       // Released AND rebuilt, and both are needed. The release reaches an
@@ -254,7 +275,7 @@ export function createNotesLedger(store?: NotesLedgerStore): NotesLedger {
       // must not carry into a meeting that does not continue the last one.
       if (meetingId !== undefined) meetings.set(docId, meetingId);
       byDoc.get(docId)?.release();
-      build(docId, continuesSitting(store?.read(docId) ?? null, now));
+      build(docId, store?.read(docId) ?? null, now);
     },
   };
 }
