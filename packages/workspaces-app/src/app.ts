@@ -352,7 +352,7 @@ async function mountMarkdown(ctx: MountContext): Promise<void> {
   // across every author) — per-suggestion Accept/Reject lives on the
   // balloon/chip card the margin just wired above.
   const suggestionsSummary = mountSuggestionsSummary({ docId, ydoc, scope });
-  // Off-screen comment counts + the "N questions for you" chip — the
+  // Off-screen comment counts + the "N waiting on you" chip — the
   // information scent for what the reader cannot see (comment-hints.ts).
   // Jumping goes the same route a tap on the highlight takes: scroll, pulse,
   // and open the card where it lives (balloon above 1100px, inline below).

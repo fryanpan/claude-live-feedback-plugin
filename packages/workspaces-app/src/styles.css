@@ -335,7 +335,7 @@ body.view-mode #toggle-format {
   display: inline-block;
 }
 
-/* "N questions for you" — every open review item on the doc, behind the one
+/* "N waiting on you" — every open review item on the doc, behind the one
    amber glyph the highlight and the card also carry (comments mock 3). A
    pill, not an icon button: it is a sentence on a wide screen and a glyph
    plus a count on a phone (`.w` is the wordy part; see INLINE THREAD CARDS
