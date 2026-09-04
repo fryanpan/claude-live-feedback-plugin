@@ -582,6 +582,26 @@ const GOAL_MEMBER_ROUTES: Readonly<Record<string, readonly string[]>> = {
 };
 
 /**
+ * One table lookup, and the reason it is a function rather than `table[sub]`.
+ *
+ * `sub` is a path segment the CALLER typed. On a plain object literal
+ * `toString`, `constructor`, `valueOf` and `__proto__` all resolve up
+ * Object.prototype to something truthy that is not an array, `?.includes(...)`
+ * on it throws, the exception escapes the guard, and the connection closes
+ * with no response at all — which is neither an allow nor a deny, chosen by
+ * whoever sent the request. `Object.hasOwn` asks the table and nothing above
+ * it, so an unlisted segment is an ordinary refusal like every other one.
+ */
+function memberRouteAllows(
+  table: Readonly<Record<string, readonly string[]>>,
+  sub: string,
+  method: string,
+): boolean {
+  if (!Object.hasOwn(table, sub)) return false;
+  return table[sub]?.includes(method.toUpperCase()) === true;
+}
+
+/**
  * `review-items/r-7/answer` to `review-items/*\/answer`, so one table entry
  * covers every item id.
  *
@@ -791,7 +811,7 @@ export function shareScopeAllows(
       const seg = slash < 0 ? rest : rest.slice(0, slash);
       if (safeDecode(seg) === wsId) {
         const sub = slash < 0 ? '' : rest.slice(slash + 1);
-        if (BOARD_MEMBER_ROUTES[sub]?.includes(method.toUpperCase())) return true;
+        if (memberRouteAllows(BOARD_MEMBER_ROUTES, sub, method)) return true;
       }
     }
   }
@@ -837,7 +857,7 @@ export function shareScopeAllows(
       rowPrefix === '/api/tasks/'
         ? taskSubroutePattern(rest.slice(slash + 1))
         : rest.slice(slash + 1);
-    return table[sub]?.includes(method.toUpperCase()) === true;
+    return memberRouteAllows(table, sub, method);
   }
 
   // Workspace navigation — ONLY for a workspace share, and only its own

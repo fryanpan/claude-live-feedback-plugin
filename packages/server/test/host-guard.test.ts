@@ -863,6 +863,29 @@ describe('shareScopeAllows (workspace-hub surfaces — §3.12 commit 8)', () => 
     }
   });
 
+  it('answers a prototype-named segment rather than throwing on it', () => {
+    // The three route tables are indexed by a segment the CALLER types. On a
+    // plain object literal `toString` and friends resolve up Object.prototype
+    // to a function, `.includes` on it is undefined, and the TypeError used to
+    // escape the guard entirely — the connection closed with no response,
+    // which is neither an allow nor a deny, chosen by whoever sent the path.
+    //
+    // A boolean here IS the assertion: `toBe(false)` cannot pass if the call
+    // throws. Asserted on all three tables, since each one is read this way.
+    for (const seg of ['toString', 'constructor', '__proto__', 'hasOwnProperty', 'valueOf']) {
+      expect(shareScopeAllows(`/api/tasks/t-1/${seg}`, 'POST', HUB, workspaceOf), seg).toBe(false);
+      expect(shareScopeAllows(`/api/goals/g-1/${seg}`, 'POST', HUB, workspaceOf), seg).toBe(false);
+      expect(shareScopeAllows(`/api/workspaces/hub-1/${seg}`, 'GET', HUB, workspaceOf), seg).toBe(
+        false,
+      );
+    }
+    // Positive control on the same rows: the listed verbs still pass, so the
+    // refusals above are the segment and not a table that stopped matching.
+    expect(shareScopeAllows('/api/tasks/t-1/transition', 'POST', HUB, workspaceOf)).toBe(true);
+    expect(shareScopeAllows('/api/goals/g-1/archive', 'POST', HUB, workspaceOf)).toBe(true);
+    expect(shareScopeAllows('/api/workspaces/hub-1/tasks', 'GET', HUB, workspaceOf)).toBe(true);
+  });
+
   it('allows promoting a thread to a task — a member files tasks on this board', () => {
     // It was refused while a visitor was read-only on the board, and that is
     // the exact reason 2026-09-03 removed. The document-surgery verbs beside
