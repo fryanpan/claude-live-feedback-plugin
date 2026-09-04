@@ -749,6 +749,51 @@ describe('share links over HTTP', () => {
       expect(await elsewhere.json()).toEqual({ error: 'out_of_share_scope' });
     });
 
+    it('reads a review_item row on the Activity tab without the asker\u2019s id', async () => {
+      // The row above covers `task.*`. `review_item.*` was outside the
+      // redaction's prefix set entirely, so those three events crossed to a
+      // member with the asker's full actor on them — while `decision.*`, the
+      // answer to the very same ask, was reduced to name and kind.
+      const askerId = 'agent-review-item-probe';
+      const asker = { id: askerId, name: 'Review Item Probe', kind: 'agent' };
+      const filed = await postLocal(`/api/workspaces/${encodeURIComponent(board)}/tasks`, {
+        title: 'Row that carries a review item',
+        assignee: 'human',
+        author: asker,
+      });
+      expect(filed.status, await filed.clone().text()).toBe(200);
+      const taskId = ((await filed.json()) as { task: { id: string } }).task.id;
+
+      const headline = 'Which of the two goal orders do you want?';
+      const raised = await postLocal(`/api/tasks/${encodeURIComponent(taskId)}/review-items`, {
+        review: {
+          shape: 'review',
+          headline,
+          detail: 'Both orders ship the same work; they differ in what lands first.',
+        },
+        author: asker,
+      });
+      expect(raised.status, await raised.clone().text()).toBe(200);
+
+      // Positive control: the id IS in the log, so the member's read below is
+      // measured against a payload that has something to hide.
+      const owner = await local(`/api/workspaces/${encodeURIComponent(board)}/events`);
+      expect(owner.status).toBe(200);
+      const ownerText = await owner.text();
+      expect(ownerText).toContain('review_item.added');
+      expect(ownerText).toContain(askerId);
+
+      const read = await asMember(`/api/workspaces/${encodeURIComponent(board)}/events`);
+      expect(read.status, await read.clone().text()).toBe(200);
+      const text = await read.text();
+      expect(text).not.toContain(askerId);
+      // A real read, not an empty one: the row, the ask and the display name
+      // all survive — the ask is board content, and the member may see it.
+      expect(text).toContain('review_item.added');
+      expect(text).toContain(headline);
+      expect(text).toContain('Review Item Probe');
+    });
+
     it('reads the agent roster of its own board, and no other', async () => {
       const roster = await asMember(`/api/workspaces/${encodeURIComponent(board)}/attachments`);
       expect(roster.status, await roster.clone().text()).toBe(200);
