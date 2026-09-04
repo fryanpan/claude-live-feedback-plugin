@@ -168,13 +168,19 @@ written.
   `~/.claude/claude-workspaces` to boot-disk storage would remove the first —
   it works under launchd, but it is NOT currently installed. Audit every new
   `homedir()` path against this.
-- **Whether the grant survives a reboot is OPEN.** Nothing observed on
-  2026-09-01 spanned one (`kern.boottime` was Aug 31 23:20 throughout). A
-  `/bin/cat` probe that *hung* in the morning returned a clean `Operation not
-  permitted` that afternoon — two failure modes on one binary in a single boot
-  session, still **unexplained**. Leading hypothesis, unconfirmed: a TCC write
-  made when the plist change was approved. Do not let this get retold as
-  settled.
+- **The 2026-09-04 reboot answered it, and the answer is not TCC alone.**
+  After the 14:25Z reboot prod wedged for ~20 min: the main thread sat in a
+  synchronous open of a Dropbox-bound doc while macOS showed a consent dialog
+  for prod's bun, and Bryan allowing it ended the hang. Every boot since logs
+  `EDEADLK` on the same reads. `open(2)` documents EDEADLK as "a dataless file
+  needs materialization and the process's I/O policy disallows it", and a
+  probe with prod's own bun under launchd read
+  `IOPOL_TYPE_VFS_MATERIALIZE_DATALESS_FILES` = OFF (the system default). So a
+  Dropbox file that is online-only fails instantly (the doc runs from its
+  `.ydoc`, disk edits never flow in, and the next flush overwrites the file),
+  while one still downloading or waiting on consent hangs the open. The
+  hydrate guard bounds the hang; whether the server turns materialization on
+  or the folders go Available Offline is Bryan's call on the hydrate ticket.
 - Diagnosing it: `launchctl submit` a probe **using the same binary the
   service runs**, and pair it with a positive control on a path you expect to
   work. A system binary like `/bin/cat` is not a proxy for bun — it will
