@@ -3492,6 +3492,15 @@ body.threads-resizing {
 .markup-margin .thread-answer-send {
   margin-left: auto;
 }
+/* The author swatch goes in the margin, and only there. 260px has room for a
+   glyph, a name, a time and a chevron; the swatch is the fifth thing competing
+   for the row, and it is the one whose job — telling two people's cards apart
+   at a glance — the column already does by stacking each card beside its own
+   sentence. Every other surface (the drawer, the inline card, the sheet, the
+   dialog) has the width and shows it. */
+.markup-margin .thread-head > .swatch {
+  display: none;
+}
 .thread-options-compact {
   display: flex;
   flex-wrap: wrap;
@@ -3532,24 +3541,34 @@ body.threads-resizing {
   font-size: 11px;
   color: var(--fg-muted);
 }
-/* A resolved thread folds to ONE faded line — the head and the topic — until
-   it is opened (comments mock 3). The slots keep their measured heights (the
-   morph needs them); clipping is what hides them, so opening still measures
-   real faces. */
-.thread.resolved:not(.expanded) {
-  opacity: 0.55;
-  padding-top: 5px;
-  padding-bottom: 5px;
+/* A closed-out thread keeps its two lines and its shape — it just recedes
+   (mock round 4, superseding mock 3's fold to a single faded line). The line
+   it used to hide is the one that says what was settled: the tick, the outcome
+   and who chose it live on slot B's summary face, so clipping slot B left a
+   resolved card marked by nothing but its own dimness.
+
+   Withdrawn recedes the same way and adds the one thing a strike-through
+   cannot: the reason, on the row under it. Neither state wears a word on the
+   head — see `.thread-tag`. */
+.thread.resolved:not(.expanded),
+.thread.withdrawn:not(.expanded) {
+  opacity: 0.6;
 }
-.thread.resolved:not(.expanded) .slot-b,
-.thread.resolved:not(.expanded) .thread-foot {
-  max-height: 0;
-  overflow: hidden;
-  margin: 0;
-  padding: 0;
+.thread.withdrawn {
+  background: var(--bg-panel);
 }
-.thread.resolved:not(.expanded) .thread-topic {
+.thread.withdrawn .thread-topic {
+  text-decoration: line-through;
+  text-decoration-color: var(--fg-muted);
+}
+/* Why the ask was taken back. Muted and one step down in size: it is the
+   footnote to a card that has already said its piece. */
+.thread-gone {
+  margin-top: 7px;
   font-size: 12px;
+  line-height: 1.45;
+  color: var(--fg-muted);
+  overflow-wrap: anywhere;
 }
 
 /* ---------- the card: head, two folding slots, foot ---------- */
@@ -3578,9 +3597,12 @@ body.threads-resizing {
 .thread-who .name {
   font-weight: 600;
 }
-/* The only chips left on a head. Resolved and orphaned are the two states
-   with no control to read them off — every other kind is marked by what the
-   card offers you to press, which is why "DECIDE" and "ANSWER" are gone. */
+/* The ONE chip left on a head, and only for an orphan. Every other state is
+   marked by what the card offers you to press or by what it shows: a row of
+   options IS a decision, a field with a send button IS a question, a tick over
+   the outcome IS resolved, a struck line on a dimmed card IS withdrawn. That
+   is why "DECIDE", "ANSWER" and "RESOLVED" are all gone. An orphan has no
+   control and no line of its own — its anchor is what went missing. */
 .thread-tag {
   flex: 0 0 auto;
   font-size: 10px;
