@@ -73,6 +73,15 @@ export interface TaskRoutesContext {
   ) => Promise<Response>;
   /** doc id → the hub boards holding it, built once per request that needs it. */
   boardIndexForListing: () => Map<string, string[]>;
+  /**
+   * Every workspace an id belongs to — `shareWorkspacesOf`, the same resolver
+   * the host guard scopes paths with.
+   *
+   * Here it answers the question the guard cannot: a cross-reference names
+   * its target in the BODY, so no path check ever saw it. See
+   * `share/ref-scope.ts`.
+   */
+  workspacesOfDoc: (id: string) => string[];
   /** The response fields a filing route adds when the gate held the item. */
   heldFields: (gate: ReviewGate | undefined) => Record<string, unknown>;
   /** "alice on \"Ship the thing\", bob on t-2" — the cap refusal's sentence. */

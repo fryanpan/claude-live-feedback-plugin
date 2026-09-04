@@ -23,7 +23,34 @@ export async function handleWorkspaceHome(
     reviewItemsFor,
     resolveWorkspaceForDoc,
   } = ctx;
-  const { req, pathname, url, visitor } = rq;
+  const { req, pathname, url, visitor, authorFor } = rq;
+  /**
+   * WHOSE marker this request may move or read.
+   *
+   * Everything in the Home payload is per person — the caught-up marker, the
+   * brief written against it — and until this line the person came from the
+   * request itself: `?user=` on the GET, `author.name` on the POST. On a
+   * board with more than one member that is one person naming another and
+   * being served their queue, or moving their marker, which the member
+   * boundary otherwise forbids everywhere else.
+   *
+   * `authorFor` is the server's own verdict and already ranks the proofs: a
+   * Cloudflare Access email or a session outranks whatever the body claims,
+   * and a share visitor with nothing proven is their own stable guest. So a
+   * VERIFIED caller is whoever was verified, full stop.
+   *
+   * It answers undefined for the caller every other route lets speak for
+   * itself — an agent or the owner over loopback, with no session at all —
+   * and those fall back to the name the request supplies, exactly as before.
+   * That is the same boundary `authorFor` draws for attribution on every
+   * write, rather than a second rule about markers.
+   *
+   * The key is still the display NAME, not the identity id, because that is
+   * what the stored markers hold; two verified people whose display names
+   * collide share a marker, which is a pre-existing property of the store and
+   * not something this line makes worse.
+   */
+  const verifiedPerson = (claimed: unknown): string => authorFor(claimed)?.name?.trim() ?? '';
   // The human's queue, to the board's agent-side `next` below: every
   // open thread across this workspace's tasks and docs that is ASKING
   // a person something — an unanswered agent comment with a direct
@@ -101,7 +128,7 @@ export async function handleWorkspaceHome(
     const workspaceId = decodeURIComponent(wsHomeMatch[1] ?? '');
     const workspace = taskStore.getWorkspace(workspaceId);
     if (!workspace) return j(404, { error: 'workspace not found' });
-    const person = (url.searchParams.get('user') ?? '').trim();
+    const person = verifiedPerson(undefined) || (url.searchParams.get('user') ?? '').trim();
     if (person === '') {
       return j(400, { error: 'user is required — the read marker and brief are per person' });
     }
@@ -116,7 +143,9 @@ export async function handleWorkspaceHome(
     const workspace = taskStore.getWorkspace(workspaceId);
     if (!workspace) return j(404, { error: 'workspace not found' });
     const body = await safeJson(req);
-    const person = String((body?.author as { name?: unknown } | undefined)?.name ?? '').trim();
+    const person =
+      verifiedPerson(body?.author) ||
+      String((body?.author as { name?: unknown } | undefined)?.name ?? '').trim();
     if (person === '') return j(400, { error: 'author.name is required' });
     const at =
       typeof body?.at === 'number' && Number.isFinite(body.at) && body.at >= 0
@@ -136,7 +165,12 @@ export async function handleWorkspaceHome(
     const workspace = taskStore.getWorkspace(workspaceId);
     if (!workspace) return j(404, { error: 'workspace not found' });
     const body = await safeJson(req);
-    const person = String((body?.author as { name?: unknown } | undefined)?.name ?? '').trim();
+    // The instructions are the BOARD's, not this person's — `person` only
+    // decides whose payload comes back — but it is read from the same place
+    // for the same reason.
+    const person =
+      verifiedPerson(body?.author) ||
+      String((body?.author as { name?: unknown } | undefined)?.name ?? '').trim();
     if (person === '') return j(400, { error: 'author.name is required' });
     const instructions = typeof body?.instructions === 'string' ? body.instructions : '';
     if (instructions.trim() === '') {

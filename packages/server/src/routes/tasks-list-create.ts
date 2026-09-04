@@ -4,6 +4,7 @@
  * Lifted verbatim out of `createServer`'s request closure; the handlers
  * read their collaborators off `TaskRoutesContext` instead of the scope.
  */
+import { OUT_OF_SHARE_SCOPE, firstRefOutOfScope, refInVisitorScope } from '../share/ref-scope.ts';
 import { createdVisibility, parseTaskCreate } from '../task-create.ts';
 import { placeableGoals } from '../task-queue.ts';
 import { type TaskStatus, isRetired, retiredRefusal } from '../tasks.ts';
@@ -26,8 +27,9 @@ export async function handleTaskListCreate(
     judgeReviewItem,
     judgeTaskDecision,
     mergedHold,
+    workspacesOfDoc,
   } = ctx;
-  const { req, pathname, url, authorFor } = rq;
+  const { req, pathname, url, authorFor, visitor } = rq;
   const wsTasksMatch = pathname.match(/^\/api\/workspaces\/([^/]+)\/tasks$/);
   if (wsTasksMatch && req.method === 'GET') {
     const workspaceId = decodeURIComponent(wsTasksMatch[1] ?? '');
@@ -130,6 +132,24 @@ export async function handleTaskListCreate(
         ...(parsed.message !== undefined ? { message: parsed.message } : {}),
       });
     }
+    // `links` and `origin` name their targets in the BODY, which no path
+    // check ever read. For a member that makes them the one field on this
+    // route that can reach off their board: a stored ref becomes a computed
+    // backlink chip on whatever it points at. Same rule and same words as
+    // `POST /api/tasks/<id>/links` — see share/ref-scope.ts, including why a
+    // made-up id is refused by the same line rather than accepted.
+    //
+    // A REFUSAL rather than the `ignoredLinks` drop a malformed ref gets: the
+    // shape of an annotation is the caller's business, but which board a
+    // write reaches is the boundary, and every other crossing of it on this
+    // server answers 403.
+    const strayLink =
+      firstRefOutOfScope(parsed.opts.links, visitor, workspacesOfDoc) ??
+      (parsed.opts.origin !== undefined &&
+      !refInVisitorScope(parsed.opts.origin, visitor, workspacesOfDoc)
+        ? parsed.opts.origin
+        : undefined);
+    if (strayLink !== undefined) return j(403, OUT_OF_SHARE_SCOPE);
     const res = taskStore.createTask(workspaceId, parsed.opts);
     if (!res.ok) return j(res.error === 'workspace-not-found' ? 404 : 400, res);
     if (spinoff !== undefined && !parsed.opts.fileToTriage && res.task.status !== 'todo') {

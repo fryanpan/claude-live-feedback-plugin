@@ -2852,8 +2852,14 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
    *     same set `shareScopeAllows` reaches through, so it grants exactly
    *     what a share on one of those boards already grants — no wider.
    *   - `boardShareTarget` is applied to each share, so a record whose
-   *     workspace is no longer a board is as dead here as it is on its own
-   *     hostname. One rule for what a share is worth.
+   *     workspace no longer EXISTS as a board is as dead here as it is on
+   *     its own hostname. One rule for what a share is worth. Note what that
+   *     is not: a board that still exists and has merely been RETIRED is
+   *     still a board (`isBoard` asks `getWorkspace`, and `retiredAt` is a
+   *     field on a row that stays), so retiring admits and revokes nobody.
+   *     Ending one person's access is `remove_share_member`, which is
+   *     immediate and hangs up their live connections; revoking the link
+   *     stops new redemptions and leaves the people who already used it.
    *   - A token with NO email claim is nobody, and nobody is a member. It
    *     reaches the app shell and nothing else.
    */
@@ -2900,9 +2906,19 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
    * own link already grants — no wider.
    *
    * `boardShareTarget`'s rule applies here too, spelled as the lookup it is:
-   * a workspace that is no longer a board grants nothing, so a link minted
-   * before a board was retired stops admitting people the moment it stops
-   * being a board.
+   * a workspace that is not a board grants nothing.
+   *
+   * This used to end "so a link minted before a board was retired stops
+   * admitting people the moment it stops being a board", and that was simply
+   * false — `getWorkspace` answers for a retired board exactly as it does for
+   * a live one, because retirement is a field on a row that stays and is
+   * reversible (`unretire_workspace`). Retiring a board is not a revocation
+   * and must not be relied on as one; see `collabMemberOf` above and the
+   * "Two verbs end access" paragraph in `docs/architecture/security.md` for
+   * the two that are. Left as a comment fix rather than a behaviour change
+   * on purpose: hanging a person's access on a reversible lifecycle flag
+   * would revoke and restore it silently, and the deliberate verb already
+   * exists.
    *
    * A token with NO email claim is nobody, and nobody is a member.
    */
@@ -3864,6 +3880,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
     heldFields,
     rewriteTaskBody,
     parseRevisedRange,
+    workspacesOfDoc: shareWorkspacesOf,
   };
 
   /**
@@ -3928,6 +3945,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
     proposeAllowRule,
     regateDecisionWords,
     rewriteTaskBody,
+    workspacesOfDoc: shareWorkspacesOf,
   };
   /**
    * The same split for the workspace routes — see ./routes/workspaces.ts.
@@ -4178,6 +4196,30 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
          * was whichever way the flag is set.
          */
         const authorFor = (claimed: unknown): User | undefined => {
+          /**
+           * Rung -1, and it exists ONLY on a share surface: the identity the
+           * boundary itself proved outranks a widget popup-token.
+           *
+           * Everywhere else rung 0 below is right — a token is a stronger
+           * proof than a cookie for the page that holds it. On a share or
+           * collaboration host it is not, because there the Access email is
+           * what the member gate just decided the whole request on, and a
+           * token is an `Authorization` header. Ranking the header first let
+           * a request choose which of two proven identities to be written
+           * down as, which is the "no writing as someone else" half of the
+           * member boundary and is what `docs/architecture/security.md`
+           * claims outright ("Every write is attributed to the email
+           * Cloudflare confirmed").
+           *
+           * A token is bound to one page origin, so this is reachable by a
+           * non-browser client that sets `Origin` by hand rather than by a
+           * page; it stays a precedence bug either way, and the fix is that
+           * the two proofs cannot disagree about a member.
+           */
+          if (visitor) {
+            const provenHere = provenIdentityFor();
+            if (provenHere) return userForIdentity(provenHere);
+          }
           // Rung 0: a verified widget popup-token. NOT behind the flag,
           // unlike the cookie rung — no request carries this header by
           // accident, so presenting the token is itself the opt-in, and the
@@ -4243,7 +4285,16 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
          * results, §3.10) — every reader treats a missing `tasks` as none.
          */
         const withTaskChips = <T extends { id: string }>(docId: string, t: T): T => {
-          const chips = taskStore.tasksReferencingThread(docId, t.id).map(taskChip);
+          const chips = taskStore
+            .tasksReferencingThread(docId, t.id)
+            // `tasksReferencingThread` spans every workspace, deliberately —
+            // a ref may cross a board. For a caller scoped to ONE board that
+            // span is a read of a board they were never given: a private
+            // row's title, status and assignee, arriving through a thread on
+            // a doc they ARE allowed to open. The same filter, for the same
+            // reason and in the same words, as `GET /api/tasks/<id>/links`.
+            .filter((task) => !visitor || task.workspaceId === visitor.workspaceId)
+            .map(taskChip);
           return chips.length > 0 ? { ...t, tasks: chips } : t;
         };
 
