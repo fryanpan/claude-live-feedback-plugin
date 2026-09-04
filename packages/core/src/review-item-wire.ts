@@ -308,10 +308,15 @@ function readJudgement(value: unknown): ReviewItemJudgement | undefined {
   if (!isPlainObject(value)) return undefined;
   if (typeof value.verdict !== 'string' || !JUDGE_VERDICTS.has(value.verdict)) return undefined;
   if (typeof value.at !== 'number' || !Number.isFinite(value.at)) return undefined;
+  const heldFor = Array.isArray(value.heldFor)
+    ? value.heldFor.filter((r): r is string => typeof r === 'string')
+    : [];
   return {
     at: value.at,
     verdict: value.verdict as ReviewJudgeVerdictKind,
     reason: str(value.reason, ''),
+    ...(heldFor.length > 0 ? { heldFor } : {}),
+    ...(typeof value.add === 'string' && value.add.trim() !== '' ? { add: value.add } : {}),
   };
 }
 

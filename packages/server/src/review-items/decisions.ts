@@ -37,6 +37,26 @@ import type {
 const BAD_DECISION_OPTIONS_MESSAGE =
   'options must be an array of { label, detail? } — label is required and non-empty, and an id you already hold is kept as you sent it';
 
+/** The decision-shaped twin of `sameJudgedContent` — its words are the
+ *  task's title and body, so only the options need comparing here. */
+function sameDecisionOptions(
+  a: ReadonlyArray<DecisionOption> | undefined,
+  b: ReadonlyArray<DecisionOption> | undefined,
+): boolean {
+  const left = a ?? [];
+  const right = b ?? [];
+  if (left.length !== right.length) return false;
+  return left.every((o, i) => {
+    const other = right[i];
+    return (
+      other !== undefined &&
+      o.id === other.id &&
+      o.label === other.label &&
+      (o.detail ?? '') === (other.detail ?? '')
+    );
+  });
+}
+
 export class TaskDecisionStore {
   constructor(private readonly p: ReviewItemPersistence) {}
 
@@ -314,6 +334,22 @@ export class TaskDecisionStore {
     }
     const nextTitle = typeof headline === 'string' ? headline.trim() : task.title;
     const nextBody = typeof detail === 'string' ? detail : task.body;
+    // A revision that changes none of the judged words is refused here for
+    // the reason `applyReviewRevision` refuses it on a stored item: it
+    // re-runs the gate on the same words and spends one of the two rounds
+    // the filer gets, without addressing any of the feedback.
+    if (
+      nextTitle === task.title &&
+      (nextBody ?? '') === (task.body ?? '') &&
+      sameDecisionOptions(task.options, nextOptions)
+    ) {
+      return {
+        ok: false,
+        error: 'no-change',
+        message:
+          'this revision leaves the title, body and options exactly as they are — say what changed, or the gate judges the same words again',
+      };
+    }
     // The same shape gate `createTask` runs, on the words as they WILL be —
     // so a revision cannot leave the ticket in a state the create door would
     // have refused, and the filer is told in the create door's own words.
