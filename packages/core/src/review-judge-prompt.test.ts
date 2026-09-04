@@ -123,3 +123,32 @@ describe('option costs live in option details, and the judge is told so', () => 
     expect(system).toContain('never say the options give no costs when their details name them');
   });
 });
+
+describe('an item the judge has already held', () => {
+  const HELD_TWICE = {
+    headline: 'Which cache size for the nightly rebuild',
+    detail: 'Picking a size unblocks the rollout.',
+    priorHolds: ['The detail does not say what waits on this.', 'The headline is a ticket id.'],
+  };
+
+  it('shows the judge what it held the item for last time', () => {
+    const { user } = buildReviewJudgePrompt(DEFAULT_REVIEW_ITEM_CRITERIA, HELD_TWICE);
+    expect(user).toContain('Previously held for:');
+    expect(user).toContain('- The detail does not say what waits on this.');
+    expect(user).toContain('- The headline is a ticket id.');
+  });
+
+  it('tells it to judge the words as they stand and not to raise a new gap', () => {
+    const { system } = buildReviewJudgePrompt(DEFAULT_REVIEW_ITEM_CRITERIA, HELD_TWICE);
+    expect(system).toContain('Judge the words as they stand NOW');
+    expect(system).toContain('Do NOT hold it for a gap you did not raise the first time');
+  });
+
+  it('says none of that to a first-time item — the control', () => {
+    const { system, user } = buildReviewJudgePrompt(DEFAULT_REVIEW_ITEM_CRITERIA, {
+      headline: 'Which cache size for the nightly rebuild',
+    });
+    expect(user).not.toContain('Previously held for');
+    expect(system).not.toContain('Judge the words as they stand NOW');
+  });
+});

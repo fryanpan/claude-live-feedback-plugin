@@ -41,6 +41,21 @@ export interface ReviewJudgeItem {
   headline: string;
   detail?: string;
   options?: ReviewOption[];
+  /**
+   * Every reason this same item has already been held for, oldest first.
+   *
+   * The judge is stateless — one call, one item, no history — and that is
+   * what made the gate a wall rather than a check: an item that closed the
+   * gap it was told about came back held for a different gap the judge could
+   * have named the first time, round after round, until the filer gave up
+   * and posted the ask as a plain comment (peer report, 2026-09-04).
+   *
+   * Handing the earlier reasons back is the whole fix on the judge's side.
+   * It is not a licence to hold again: the instruction that goes with them
+   * says the opposite — judge the words as they stand now, and a gap you did
+   * not raise the first time is not a reason to hold the second.
+   */
+  priorHolds?: string[];
 }
 
 export interface ReviewJudgeVerdict {
@@ -63,7 +78,7 @@ export function buildReviewJudgePrompt(
   criteria: string,
   item: ReviewJudgeItem,
 ): { system: string; user: string } {
-  const system = [
+  const system: string[] = [
     'You judge whether a review item an AI agent filed for a human reader is good enough to put on that reader’s queue.',
     'Judge substance against the criteria below, not length or tone. When unsure, pass it: a held item costs the reader an answer they could have given.',
     'Reply with JSON only, on one line: {"ok": true|false, "reason": "<one sentence>"}.',
@@ -83,7 +98,16 @@ export function buildReviewJudgePrompt(
     '',
     'Criteria:',
     criteria.trim(),
-  ].join('\n');
+  ];
+  if (item.priorHolds && item.priorHolds.length > 0) {
+    system.push(
+      '',
+      'You have already held this item, for the reasons listed under "Previously held for" below, and the filer has revised it since.',
+      'Judge the words as they stand NOW. If those gaps are closed, say so and pass it.',
+      'Do NOT hold it for a gap you did not raise the first time: a fresh reason on a revised item reads as a moving target, and the filer cannot aim at one.',
+    );
+  }
+  const systemText = system.join('\n');
   const lines = [`Headline: ${item.headline}`];
   lines.push(`Detail: ${item.detail?.trim() ? item.detail.trim() : '(none)'}`);
   if (item.options && item.options.length > 0) {
@@ -94,7 +118,11 @@ export function buildReviewJudgePrompt(
       );
     }
   }
-  return { system, user: lines.join('\n') };
+  if (item.priorHolds && item.priorHolds.length > 0) {
+    lines.push('Previously held for:');
+    for (const r of item.priorHolds) lines.push(`- ${r}`);
+  }
+  return { system: systemText, user: lines.join('\n') };
 }
 
 /**

@@ -874,6 +874,43 @@ export interface ReviewItemJudgement {
   verdict: ReviewJudgeVerdictKind;
   /** The judge's one sentence — on a hold, the gap to fix. May be empty. */
   reason: string;
+  /**
+   * Every reason this item has ALREADY been held for, oldest first — so its
+   * length is the hold count and its contents are what the judge is shown
+   * before it rules again.
+   *
+   * Kept on the item rather than in the request that made it, because both
+   * things it is for outlive the request: the gate stops holding after
+   * `REVIEW_GATE_MAX_HOLDS` of these, and the judge is handed them so a
+   * revision that closed the gap it was told about is not held for a
+   * different one it could have been told about the first time. A peer met
+   * that loop eight times over (2026-09-04) and gave up on the gate.
+   *
+   * Absent on an item never held, and never rewritten by a later verdict: a
+   * hold that happened is a fact, and an item admitted after two of them
+   * still carries both.
+   */
+  heldFor?: string[];
+}
+
+/**
+ * The judgement as it is STORED — the projected fields, picked in one place.
+ *
+ * Three call sites write a verdict onto a row (a ticket item, a ticket's own
+ * decision, a comment-borne payload), and each used to spell the record out
+ * field by field. That is three places a new field has to be remembered in,
+ * and `heldFor` is exactly the kind of field whose loss is invisible: the
+ * gate would simply start counting from zero again and hold forever.
+ */
+export function storedJudgement(judgement: ReviewItemJudgement): ReviewItemJudgement {
+  return {
+    at: judgement.at,
+    verdict: judgement.verdict,
+    reason: judgement.reason,
+    ...(judgement.heldFor && judgement.heldFor.length > 0
+      ? { heldFor: [...judgement.heldFor] }
+      : {}),
+  };
 }
 
 /**

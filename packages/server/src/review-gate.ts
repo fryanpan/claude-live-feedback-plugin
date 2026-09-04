@@ -21,6 +21,7 @@ import {
   type User,
   isReviewItemHeld,
   isReviewPayloadHeld,
+  judgeReasonClause,
   judgeReasonSentence,
   latestThreadedQuestion,
   locateReviewItemRange,
@@ -43,6 +44,22 @@ import {
   reviewItemVersion,
   wordsRevisionOf,
 } from './tasks.ts';
+
+/**
+ * How many times the gate may hold ONE item before it admits it anyway.
+ *
+ * Two, because two is the most a check can ask for and still be a check: the
+ * filer files, is told the gap, and fixes it. A third round is where a gate
+ * stops being read as feedback — a peer whose decision item was held eight
+ * times with a different reason each round gave up and posted the ask as a
+ * plain comment, which is precisely the outcome the gate exists to prevent
+ * (2026-09-04).
+ *
+ * The item is not silently waved through: it reaches the reader carrying the
+ * gate's FIRST concern, which is the one thing the judge cannot have
+ * contradicted later.
+ */
+export const REVIEW_GATE_MAX_HOLDS = 2;
 
 /** The long-lived collaborators the gate reads. */
 export interface ReviewGateContext {
@@ -272,6 +289,23 @@ export function createReviewGate(ctx: ReviewGateContext) {
     }
   }
 
+  /**
+   * The one sentence a reader is given about an item the gate stopped
+   * holding — never a fresh reason.
+   *
+   * It quotes the FIRST hold, deliberately. That reason is the only one in
+   * the history the judge cannot have contradicted with a later one, and
+   * repeating it is what makes "we stopped holding this" a statement about a
+   * standing concern rather than a fourth opinion.
+   */
+  function admittedReason(heldFor: string[]): string {
+    // The clause form — the judge's own words with the trailing full stop
+    // taken off, so the sentence built around them has exactly one.
+    const first = judgeReasonClause(heldFor[0] ?? '');
+    if (first === '') return `Admitted to the queue after ${REVIEW_GATE_MAX_HOLDS} holds.`;
+    return `Admitted to the queue after ${REVIEW_GATE_MAX_HOLDS} holds; the standing concern is unchanged — ${first}.`;
+  }
+
   /** What a filing route says when the gate held the item. Points at the
    *  fix rather than only at the verdict: the filer's next act is one call. */
   function heldMessage(address: ReviewGateAddress, reason: string): string {
@@ -372,13 +406,25 @@ export function createReviewGate(ctx: ReviewGateContext) {
     // judge is out gets its own call; this one's verdict must not be
     // stamped onto words it never read (codex review).
     const forVersion = target.version(row);
+    // Every reason this item has been held for already. Read off the ROW, so
+    // it survives the revision that produced this call: the gate is a check
+    // and not a wall precisely because this number stops growing.
+    const heldFor = target.judgement(row)?.heldFor ?? [];
     // Off the queue from THIS moment, not from the verdict: the item is
     // already in the store, and the seconds the judge takes were seconds the
     // reader could see — and answer — an item about to be held (codex
     // review). `pending` is what the queue reads meanwhile; the ticket says
     // nothing about it.
     const pendingAt = Date.now();
-    target.record({ at: pendingAt, verdict: 'pending', reason: 'being judged' }, { forVersion });
+    target.record(
+      {
+        at: pendingAt,
+        verdict: 'pending',
+        reason: 'being judged',
+        ...(heldFor.length > 0 ? { heldFor } : {}),
+      },
+      { forVersion },
+    );
     const words = target.words(row);
     let verdict: ReviewJudgeVerdict | null = null;
     try {
@@ -388,6 +434,7 @@ export function createReviewGate(ctx: ReviewGateContext) {
           headline: words.headline,
           ...(words.detail !== undefined ? { detail: words.detail } : {}),
           ...(words.options !== undefined ? { options: words.options } : {}),
+          ...(heldFor.length > 0 ? { priorHolds: heldFor } : {}),
         },
       });
     } catch (err) {
@@ -401,10 +448,27 @@ export function createReviewGate(ctx: ReviewGateContext) {
       verdict = null;
     }
     const at = Date.now();
-    const judgement =
+    const carried = heldFor.length > 0 ? { heldFor } : {};
+    // The cap. A third hold is not placed: the item goes to the reader with
+    // the concern the gate has been making all along, and the reader decides
+    // whether it is answerable. Two rounds is a check; a third is the wall
+    // the peer walked into, and a gate that can refuse forever is a gate
+    // agents route around.
+    const admitAfterHolds =
+      verdict !== null && !verdict.ok && heldFor.length >= REVIEW_GATE_MAX_HOLDS;
+    const judgement: ReviewItemJudgement =
       verdict === null
-        ? { at, verdict: 'unavailable' as const, reason: 'the judge could not answer' }
-        : { at, verdict: verdict.ok ? ('ok' as const) : ('held' as const), reason: verdict.reason };
+        ? { at, verdict: 'unavailable' as const, reason: 'the judge could not answer', ...carried }
+        : admitAfterHolds
+          ? { at, verdict: 'ok' as const, reason: admittedReason(heldFor), ...carried }
+          : verdict.ok
+            ? { at, verdict: 'ok' as const, reason: verdict.reason, ...carried }
+            : {
+                at,
+                verdict: 'held' as const,
+                reason: verdict.reason,
+                heldFor: [...heldFor, verdict.reason],
+              };
     const recorded = target.record(judgement, {
       forVersion,
       // Also refused if the reader overruled the gate while we were out: a
