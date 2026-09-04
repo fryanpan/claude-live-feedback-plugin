@@ -14,6 +14,14 @@
  * way a person would check them: run a real meeting through the real pipeline
  * and read the notes. This does the reading, on 273 ticks instead of three.
  *
+ * A RATE HERE IS OVER TICKS, NOT OVER MODEL REPLIES. The decidable checks ask
+ * what the NOTES say at each tick, so one over-long bullet that nobody
+ * rewrites fails every tick it survives — twenty-eight failures in a run can
+ * be four bullets. That is the honest reading of "are the notes good right
+ * now", which is the question a reader of a live doc actually asks, but it is
+ * not "how often did the model err". Read the failure lines, which name the
+ * bullet, before concluding anything about frequency.
+ *
  * ON DEMAND ONLY. It spends money and it talks to the network, so nothing
  * runs it on a push except the `--smoke` slice, which is sized to cost cents.
  * It is not a test and it does not live in the suites: a check whose verdict
