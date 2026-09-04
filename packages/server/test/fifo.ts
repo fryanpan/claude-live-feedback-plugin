@@ -20,7 +20,7 @@
  * and says so — which is also how the loop below knows when it is done.
  */
 import { execFileSync } from 'node:child_process';
-import { constants, closeSync, openSync, readdirSync, statSync } from 'node:fs';
+import { constants, closeSync, openSync, readSync, readdirSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { boundFiles } from '../src/slow-fs.ts';
 
@@ -65,6 +65,52 @@ export function releaseFifo(path: string): boolean {
   }
 }
 
+/**
+ * Open the READ end of this pipe and drain it, which unblocks a parked WRITER.
+ *
+ * The mirror of `releaseFifo`, and both are needed. A pipe wedges a reader
+ * when nobody is writing and a writer when nobody is reading, and the
+ * write-back timer produces the second kind — so a cleanup that only handed
+ * out end-of-file left the writer parked and hung the runner exactly the way
+ * an unreleased reader does.
+ *
+ * `O_NONBLOCK` makes the read-side open safe on a pipe nobody is writing: it
+ * returns at once instead of blocking in turn. Returns whether any bytes came
+ * out, which is how the caller knows a writer was actually released.
+ */
+export function drainFifo(path: string): boolean {
+  let isFifo = false;
+  try {
+    isFifo = statSync(path).isFIFO();
+  } catch {
+    return false;
+  }
+  if (!isFifo) return false;
+  let fd: number | undefined;
+  try {
+    fd = openSync(path, constants.O_RDONLY | constants.O_NONBLOCK);
+    const buf = Buffer.alloc(64 * 1024);
+    let drained = 0;
+    for (;;) {
+      let n = 0;
+      try {
+        n = readSync(fd, buf, 0, buf.length, null);
+      } catch (err) {
+        // EAGAIN: nothing more in the pipe right now, which is the exit.
+        if ((err as NodeJS.ErrnoException)?.code === 'EAGAIN') break;
+        throw err;
+      }
+      if (n <= 0) break;
+      drained += n;
+    }
+    return drained > 0;
+  } catch {
+    return false;
+  } finally {
+    if (fd !== undefined) closeSync(fd);
+  }
+}
+
 /** How long to keep handing EOF to the pipes in a directory before giving up. */
 const RELEASE_BUDGET_MS = 5_000;
 
@@ -92,8 +138,12 @@ export async function releaseFifosIn(dir: string): Promise<void> {
   const deadline = Date.now() + RELEASE_BUDGET_MS;
   let held: string[] = [];
   for (;;) {
+    // Both directions every pass: a parked reader needs end-of-file, a parked
+    // writer needs somebody to take its bytes.
+    let drainedAny = false;
+    for (const path of paths) if (drainFifo(path)) drainedAny = true;
     held = paths.filter((path) => releaseFifo(path));
-    if (held.length === 0) return;
+    if (held.length === 0 && !drainedAny) return;
     if (Date.now() >= deadline) break;
     await new Promise((resolve) => setTimeout(resolve, 20));
   }

@@ -462,7 +462,7 @@ export async function handleDocCreateListRoutes(
     );
     let attached: ReturnType<typeof rooms.attachFile> | undefined;
     if (type === 'markdown' && sourceUrl) {
-      attached = rooms.attachFile(canonicalId, sourceUrl);
+      attached = await rooms.attachFileAsync(canonicalId, sourceUrl);
       if (!attached.ok) return j(409, { error: 'attach_failed', attached });
       // Notes-home creation: pin the doc to the derived home. The pin
       // exports the (possibly still missing) file and takes over the
