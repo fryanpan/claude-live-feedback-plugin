@@ -226,6 +226,28 @@ describe('the review-item hold loop', () => {
       return { workspaceId, taskId, itemId, first, second };
     }
 
+    it('says on the LAST hold that it is the last one', async () => {
+      const { second } = await heldTwice();
+      // The promise the earlier message made — "the item reaches the queue
+      // when it passes" — stops being the whole truth at the cap, and a
+      // filer told otherwise is a filer bracing for a fourth round.
+      expect(second.message).toContain('last hold');
+      expect(second.message).not.toContain('reaches the queue when it passes');
+    });
+
+    it('does not say that on the first hold — the control', async () => {
+      const { taskId } = await board();
+      judge = contradictoryJudge();
+      const filed = await jj<Held>(
+        await post(`/api/tasks/${taskId}/review-items`, {
+          author: FILER,
+          review: COSTS_IN_OPTIONS,
+        }),
+      );
+      expect(filed.message).toContain('reaches the queue when it passes');
+      expect(filed.message).not.toContain('last hold');
+    });
+
     it('accepts the third revision instead of holding it a third time', async () => {
       const { taskId, itemId } = await heldTwice();
       const third = await jj<Held>(
