@@ -7,6 +7,7 @@ import { DEFAULT_REVIEW_ITEM_CRITERIA } from '@feedback/core/review-judge-prompt
  * read their collaborators off `WorkspaceRoutesContext` instead of the scope.
  */
 import { canonicalRepoRoot, normalizeDocHome } from '../doc-home.ts';
+import { redactCapChangeForVisitor } from '../share/redact-workspace.ts';
 import { PARALLELISM_CAP_MAX, PARALLELISM_CAP_MIN, type WorkspaceNotesHome } from '../tasks.ts';
 import { parseVoiceContext } from '../voice.ts';
 import type { WorkspaceRouteRequest, WorkspaceRoutesContext } from './workspace-routes-context.ts';
@@ -26,7 +27,7 @@ export async function handleWorkspaceSettings(
   rq: WorkspaceRouteRequest,
 ): Promise<Response | undefined> {
   const { taskStore, taskProjection, voiceRouter, j, safeJson, parallelismCapView } = ctx;
-  const { req, pathname, authorFor } = rq;
+  const { req, pathname, authorFor, visitor } = rq;
   // The workspace-level TEXT goal is GONE — the ordered goal LIST is
   // the one goal system now. This route stays because it is on the
   // SHARED server: plugin bundles built before the removal still call
@@ -179,6 +180,27 @@ export async function handleWorkspaceSettings(
       // path stored here would park every note the board ever derives.
       let hasNotesHome = false;
       let notesHomeValue: WorkspaceNotesHome | undefined;
+      /**
+       * `notesHome` is the one field on this route that is about the OWNER'S
+       * MACHINE rather than about the board: a checkout path, a branch and a
+       * directory under it. A member of a shared board has the rest of this
+       * panel; this field is not theirs, in either direction.
+       *
+       * Refused BEFORE it is validated, and that order is the point. The
+       * validation asks whether the path is a git checkout right now, so
+       * running it first would answer "does this path exist on your machine"
+       * one 400 at a time, to anybody holding a share link.
+       *
+       * Named-and-refused rather than silently dropped: a caller who sent it
+       * would otherwise be told the write succeeded when the field it cared
+       * about never landed.
+       */
+      if (visitor && body && Object.hasOwn(body, 'notesHome')) {
+        return j(403, {
+          error: 'not available to share visitors',
+          message: 'notesHome names a path on the owner’s machine.',
+        });
+      }
       if (body && Object.hasOwn(body, 'notesHome')) {
         const raw = body.notesHome as {
           repoRoot?: unknown;
@@ -294,10 +316,25 @@ export async function handleWorkspaceSettings(
         value: capView.cap,
         isDefault: capView.isDefault,
         default: capView.default,
-        ...(capView.lastChange !== undefined ? { lastChange: capView.lastChange } : {}),
+        // Who moved it, given to a member the way every other visitor
+        // surface gives an actor: name and kind, no id. This route used to
+        // pass the record through verbatim, and it carries a full
+        // `TaskActor` whose id is derived from an email — the same field the
+        // board record beside it (`GET /api/workspaces/<id>`) has been
+        // reducing since the cap shipped. The local surface keeps it whole.
+        ...(capView.lastChange !== undefined
+          ? {
+              lastChange: visitor
+                ? redactCapChangeForVisitor(capView.lastChange)
+                : capView.lastChange,
+            }
+          : {}),
       },
       dispatchesInUse: capView.inUse,
-      ...(notesHome ? { notesHome } : {}),
+      // Withheld from a member, for the reason the refusal above gives: it is
+      // `repoRoot` on the owner's machine. Everything else on this route
+      // describes the board, so a member reads all of it.
+      ...(notesHome && !visitor ? { notesHome } : {}),
     });
   }
   // rename_workspace. The name was set once at creation and nothing

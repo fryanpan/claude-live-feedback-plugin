@@ -119,6 +119,35 @@ describe('redactHubEventForVisitor', () => {
     expect(out.context).toBeUndefined();
   });
 
+  it('redacts the actor on every review_item event — the Activity tab reads these', () => {
+    // `review_item.added/revised/withdrawn` were outside the HUB_EVENT
+    // prefix set, so they crossed to a visitor with `actor.id` on them —
+    // which is a hash of the asker's email, and the one field every
+    // neighbouring visitor surface strips. They reach a member by two doors:
+    // the board's SSE feed, and `GET …/events`, the Activity tab admitted by
+    // the member-rights change.
+    for (const event of ['review_item.added', 'review_item.revised', 'review_item.withdrawn']) {
+      const out = redactHubEventForVisitor({
+        event,
+        workspaceId: 'w-1',
+        taskId: 't-1',
+        reviewItemId: 'r-1',
+        headline: 'Which of the two goal orders do you want?',
+        actor: { id: 'known-jordan', name: 'Jordan', kind: 'person' },
+        ts: 12,
+      });
+      // Positive control: the ask itself is board content and stays, or
+      // "no id" would be satisfied by an empty payload.
+      expect(out.event, event).toBe(event);
+      expect((out as unknown as Record<string, unknown>).headline, event).toBe(
+        'Which of the two goal orders do you want?',
+      );
+      const actor = out.actor as unknown as Record<string, unknown>;
+      expect(actor, event).toEqual({ name: 'Jordan', kind: 'person' });
+      expect(actor.id, event).toBeUndefined();
+    }
+  });
+
   it('redacts the bucket-review actor on triage.requested', () => {
     const out = redactHubEventForVisitor({
       event: 'triage.requested',
