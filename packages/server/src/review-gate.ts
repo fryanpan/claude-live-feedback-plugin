@@ -61,6 +61,27 @@ import {
  */
 export const REVIEW_GATE_MAX_HOLDS = 2;
 
+/**
+ * WHERE a held item lives, and therefore how its filer addresses the fix.
+ *
+ * Two surfaces file review items and both are gated, so the hold has to be
+ * able to name either address. A hold whose message points at the wrong
+ * verb is a dead end — the item sits off the queue, the stall loop
+ * complains at five minutes, and the filer cannot comply — which is
+ * exactly the objection that kept the thread path ungated until
+ * `revise_review_item` grew its doc form.
+ */
+export type ReviewGateAddress =
+  | { kind: 'task'; taskId: string; reviewItemId: string }
+  | { kind: 'thread'; docId: string; threadId: string; commentId: string }
+  // The ticket's OWN decision — a row that IS the question rather than one
+  // carrying it. It has no item id to name (`legacyReviewItem` derives it
+  // at read time under the fixed `r-legacy`, which is the same string on
+  // every such ticket), so the address is the ticket, and
+  // `revise_review_item` takes it with `reviewItemId` omitted — the shape
+  // `answer_decision` has always used for the same row.
+  | { kind: 'decision'; taskId: string };
+
 /** The long-lived collaborators the gate reads. */
 export interface ReviewGateContext {
   /** Doc rooms — a comment-borne declaration is judged and stamped on one. */
@@ -252,27 +273,6 @@ export function createReviewGate(ctx: ReviewGateContext) {
       key: `${task.id}:${item.id}`,
     });
   }
-
-  /**
-   * WHERE a held item lives, and therefore how its filer addresses the fix.
-   *
-   * Two surfaces file review items and both are gated, so the hold has to be
-   * able to name either address. A hold whose message points at the wrong
-   * verb is a dead end — the item sits off the queue, the stall loop
-   * complains at five minutes, and the filer cannot comply — which is
-   * exactly the objection that kept the thread path ungated until
-   * `revise_review_item` grew its doc form.
-   */
-  type ReviewGateAddress =
-    | { kind: 'task'; taskId: string; reviewItemId: string }
-    | { kind: 'thread'; docId: string; threadId: string; commentId: string }
-    // The ticket's OWN decision — a row that IS the question rather than one
-    // carrying it. It has no item id to name (`legacyReviewItem` derives it
-    // at read time under the fixed `r-legacy`, which is the same string on
-    // every such ticket), so the address is the ticket, and
-    // `revise_review_item` takes it with `reviewItemId` omitted — the shape
-    // `answer_decision` has always used for the same row.
-    | { kind: 'decision'; taskId: string };
 
   /** The paste-ready call that ends a hold, per surface. One spelling, used by
    *  the tool result, the filer's wake and the stall report alike — three

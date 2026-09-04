@@ -285,6 +285,9 @@ the default rather than firing every tick (`positiveEnvDuration` in
 
 ## Where things live
 
+`packages/server/src/stall-wiring.ts` (the wiring: both per-board snapshots,
+the two nudgers, the lead-presence monitor and the comment-queue bridge —
+`createServer` composes it and arms the nudgers, it derives none of it) ·
 `packages/server/src/stall-gate.ts` (classification) ·
 `packages/server/src/stall-nudge.ts` (stamps, wakes, logging) ·
 `packages/server/src/review-judge.ts` (the Haiku judge; prompt in
