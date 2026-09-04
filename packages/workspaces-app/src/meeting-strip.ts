@@ -72,7 +72,6 @@ import {
   type MeetingBotStatus,
   type MeetingServerMessage,
   type MeetingUnavailableReason,
-  RECORDING_CONSENT_NOTE,
   type TranscriptionEngineName,
   describeBotState,
   speakerDisplayName,
@@ -93,10 +92,12 @@ import {
 } from './meeting-audio.ts';
 import type { MeetingBotClient } from './meeting-bot-client.ts';
 import { type ChooserState, createMeetingChooser } from './meeting-chooser.ts';
+import { type MeetingFeed, createMeetingFeed } from './meeting-feed.ts';
 import type { MeetingLiveZone } from './meeting-live-zone.ts';
+import { type MeetingMenu, createMeetingMenu } from './meeting-menu.ts';
 import {
   type TranscriptTurn,
-  diffTurnWords,
+  formatElapsed,
   meetingSocketUrl,
   parseMeetingServerMessage,
   rollTranscript,
@@ -109,13 +110,12 @@ import type { DocSpeakers } from './speaker-voices.ts';
  *  drift out of phase. */
 const CLOCK_MS = 500;
 
-/** mm:ss, zero-padded, counting past an hour rather than wrapping. */
-export function formatElapsed(ms: number): string {
-  const total = Math.max(0, Math.floor(ms / 1000));
-  const mm = Math.floor(total / 60);
-  const ss = total % 60;
-  return `${String(mm).padStart(2, '0')}:${String(ss).padStart(2, '0')}`;
-}
+/**
+ * mm:ss, zero-padded. The clock lives in `meeting-protocol.ts` — the speaker
+ * menu quotes the same one — and is re-exported here because this is the
+ * module every caller and its test have always imported it from.
+ */
+export { formatElapsed };
 
 /** What the meeting machinery is doing. */
 export type StripState =
@@ -471,12 +471,6 @@ export function mountMeetingStrip(opts: MeetingStripOpts): MeetingStripHandle {
    *  the strip is the tap that supplies one, and says so. Cleared by any
    *  press. */
   let tapToStart = false;
-  /** Live word spans per turn, so a correction rewrites the span that is
-   *  already on screen instead of redrawing the line under the reader. */
-  const rendered = new Map<
-    number,
-    { span: HTMLElement; tag: HTMLElement | null; words: HTMLElement[]; text: string }
-  >();
   /**
    * Engine label → what the person calls that voice. Belongs to ONE meeting:
    * the engine hands out "A" afresh each session, so the map is emptied when
@@ -614,7 +608,7 @@ export function mountMeetingStrip(opts: MeetingStripOpts): MeetingStripHandle {
     bot,
     advFor,
     cast,
-    speakerRow,
+    speakerRow: (label) => menu.speakerRow(label),
     renderPop,
     onStartPressed,
     isChooserView: () => view === 'chooser',
@@ -623,51 +617,43 @@ export function mountMeetingStrip(opts: MeetingStripOpts): MeetingStripHandle {
   });
 
   /**
-   * The button every rename surface uses. The pill is a child so the button
-   * itself can stay free of the overflow that clipping a long name needs — a
-   * clip anywhere on the button eats its own tap target.
+   * The transcript line, and the speaker menu the Record button opens over a
+   * running meeting. Both take the same shape the chooser does: the four `let`s
+   * this mount moves — the state, the turns, the mode, which popover is up —
+   * reach them as accessors read at call time, never as a captured value.
    */
-  function speakerButton(): HTMLButtonElement {
-    const tag = document.createElement('button');
-    tag.type = 'button';
-    tag.className = 'meeting-speaker';
-    tag.title = 'Tap to name this speaker';
-    const pill = document.createElement('span');
-    pill.className = 'meeting-speaker-pill';
-    tag.append(pill);
-    tag.addEventListener('click', () => nameSpeaker(tag.dataset.speaker ?? ''));
-    return tag;
-  }
+  const transcript: MeetingFeed = createMeetingFeed({
+    line,
+    ...(opts.liveZone ? { liveZone: opts.liveZone } : {}),
+    state: () => state,
+    turns: () => turns,
+    mode: () => mode,
+    names: () => names,
+    liveBot,
+    botFarewell,
+    nameSpeaker: (label) => nameSpeaker(label),
+    dismissBotNote: () => {
+      botNoteDismissed = true;
+      render();
+    },
+  });
 
-  /**
-   * The same tag with no tap in it — a bot turn's. The platform already
-   * named the voice, and a live bot meeting cannot be renamed from here
-   * anyway (the rename route refuses a recording meeting; the socket a
-   * live rename rides is the microphone's). Same pill, same place on the
-   * line, so a bot meeting reads exactly like a microphone one; the
-   * pencil and the dotted underline are the stylesheet's to withhold.
-   */
-  function speakerLabel(): HTMLElement {
-    const tag = document.createElement('span');
-    tag.className = 'meeting-speaker is-fixed';
-    const pill = document.createElement('span');
-    pill.className = 'meeting-speaker-pill';
-    tag.append(pill);
-    return tag;
-  }
-
-  /** The tag every turn with this label wears, as it should read now. The
-   *  name goes on the PILL, never on the button: the button is the tap
-   *  target and holds nothing but padding (see the stylesheet). */
-  function renderTag(entry: { tag: HTMLElement | null }, label: string): void {
-    const tag = entry.tag;
-    if (!tag) return;
-    const shown = speakerDisplayName(label, names);
-    tag.dataset.speaker = label;
-    const pill = tag.querySelector('.meeting-speaker-pill');
-    if (pill) pill.textContent = shown;
-    if (tag instanceof HTMLButtonElement) tag.setAttribute('aria-label', `Name ${shown}`);
-  }
+  const menu: MeetingMenu = createMeetingMenu({
+    pop,
+    bot,
+    state: () => state,
+    mode: () => mode,
+    names: () => names,
+    cast,
+    liveBot,
+    nameSpeaker: (label) => nameSpeaker(label),
+    now: () => now(),
+    recordingEngine: () => recordingEngine,
+    buildAdvancedPanel: (engineId, recording) => chooser.buildAdvancedPanel(engineId, recording),
+    stop: () => stop(),
+    closePop: () => closePop(),
+    isDisposed: () => disposed,
+  });
 
   function nameSpeaker(label: string): void {
     const current = speakerDisplayName(label, names);
@@ -675,11 +661,9 @@ export function mountMeetingStrip(opts: MeetingStripOpts): MeetingStripHandle {
     if (!answer || answer === current) return;
     const hadName = label in names;
     names[label] = answer;
-    for (const entry of rendered.values()) {
-      if (entry.tag?.dataset.speaker === label) renderTag(entry, label);
-    }
+    transcript.retagSpeaker(label);
     opts.liveZone?.setNames({ ...names });
-    renderFeed();
+    transcript.renderFeed();
     renderPop();
     if (socketOpen) {
       socket?.send(JSON.stringify({ type: 'name_speaker', speaker: label, name: answer }));
@@ -696,11 +680,9 @@ export function mountMeetingStrip(opts: MeetingStripOpts): MeetingStripHandle {
           if (names[label] !== answer) return;
           if (hadName) names[label] = current;
           else delete names[label];
-          for (const entry of rendered.values()) {
-            if (entry.tag?.dataset.speaker === label) renderTag(entry, label);
-          }
+          transcript.retagSpeaker(label);
           opts.liveZone?.setNames({ ...names });
-          renderFeed();
+          transcript.renderFeed();
           renderPop();
         });
     }
@@ -711,260 +693,17 @@ export function mountMeetingStrip(opts: MeetingStripOpts): MeetingStripHandle {
     return [...new Set([...seen, ...Object.keys(names)])].sort((a, b) => a.localeCompare(b));
   }
 
-  function renderFeed(): void {
-    if (state.kind !== 'idle' && state.kind !== 'recording') return;
-    // A note and a transcript share the line, so the reason the last attempt
-    // gave has to go when words start arriving.
-    line.querySelector('.meeting-note')?.remove();
-    if (state.kind === 'idle') {
-      // An idle strip with a live bot shows the bot's words once there are
-      // any, and narrates its state until then; with a farewell, the
-      // farewell; otherwise the strip is hidden and the line stays empty.
-      const live = liveBot();
-      if (live && turns.length > 0) {
-        renderTurns(false);
-        return;
-      }
-      if (live) {
-        clearTurnSpans();
-        const who = live.speakers.length ? ` · ${live.speakers.join(', ')}` : '';
-        const note = document.createElement('span');
-        note.className = 'meeting-note meeting-bot-note';
-        note.textContent = `${describeBotState(live.state)}${who}`;
-        line.append(note);
-        return;
-      }
-      const farewell = botFarewell();
-      if (farewell) {
-        clearTurnSpans();
-        const note = document.createElement('button');
-        note.type = 'button';
-        note.className = 'meeting-note meeting-note-dismiss meeting-bot-note';
-        note.textContent = farewell;
-        note.title = 'Tap to dismiss';
-        note.addEventListener('click', () => {
-          botNoteDismissed = true;
-          render();
-        });
-        line.append(note);
-        return;
-      }
-      clearTurnSpans();
-      return;
-    }
-    // Recording, and nothing said yet: the line the transcript opens with.
-    // It is where the announcement used to go, and it is deliberately a
-    // different kind of thing — addressed to the person recording rather than
-    // to the room, gone the instant there are words to show instead, and
-    // never a control. See `RECORDING_CONSENT_NOTE`. A solo capture has no
-    // room to have asked, so it gets no line at all: a reminder with nobody
-    // to act on it is a question with no answer (Urgent-fixes ticket,
-    // 2026-09-02).
-    if (turns.length === 0) {
-      if (mode !== 'solo') showNote(RECORDING_CONSENT_NOTE, 'meeting-consent-note');
-      return;
-    }
-    renderTurns(true);
-  }
-
-  /**
-   * The rolling window onto the line, one span per turn and one per word.
-   * `tappable` is whether a speaker tag is the rename button (a microphone
-   * meeting) or the fixed label a bot meeting's turns wear.
-   */
-  function renderTurns(tappable: boolean): void {
-    // The zone at the end of the doc is the transcript surface when it
-    // exists; the same words rolling in two places read as two meetings.
-    if (opts.liveZone) {
-      clearTurnSpans();
-      return;
-    }
-    for (const [turn, entry] of rendered) {
-      if (!turns.some((t) => t.turn === turn)) {
-        entry.span.remove();
-        rendered.delete(turn);
-      }
-    }
-    for (const turn of turns) {
-      let entry = rendered.get(turn.turn);
-      if (!entry) {
-        const span = document.createElement('span');
-        span.className = 'meeting-turn';
-        line.append(span);
-        entry = { span, tag: null, words: [], text: '' };
-        rendered.set(turn.turn, entry);
-      }
-      // The tag comes and goes with the label — the engine attributes a turn
-      // once it has heard enough of it, and may reattribute it at the end.
-      const label = turn.speaker;
-      if (label === undefined) {
-        entry.tag?.remove();
-        entry.tag = null;
-      } else {
-        if (!entry.tag) {
-          const tag = tappable ? speakerButton() : speakerLabel();
-          entry.span.prepend(tag);
-          entry.tag = tag;
-        }
-        renderTag(entry, label);
-      }
-      if (entry.text === turn.text) continue;
-      const words = diffTurnWords(entry.text, turn.text);
-      for (let i = 0; i < words.length; i++) {
-        const word = words[i];
-        if (!word) continue;
-        let el = entry.words[i];
-        if (!el) {
-          el = document.createElement('span');
-          el.className = 'w';
-          entry.span.append(el);
-          entry.words[i] = el;
-        }
-        // A leading space on every word, never a generated one: a ::before
-        // cannot line-break, and at the start of a line a real space
-        // collapses away.
-        el.textContent = ` ${word.text}`;
-        el.classList.remove('is-fixed');
-        if (word.changed) {
-          // Reading the box restarts the animation for a word corrected twice.
-          void el.offsetWidth;
-          el.classList.add('is-fixed');
-        }
-      }
-      for (const extra of entry.words.splice(words.length)) extra.remove();
-      entry.text = turn.text;
-    }
-  }
-
-  function clearTurnSpans(): void {
-    rendered.clear();
-    line.replaceChildren();
-  }
-
-  function showNote(text: string, extra?: string): void {
-    clearTurnSpans();
-    const note = document.createElement('span');
-    note.className = extra ? `meeting-note ${extra}` : 'meeting-note';
-    note.textContent = text;
-    line.append(note);
-  }
-
   function tickClock(): void {
     elapsed.textContent =
       state.kind === 'recording' ? formatElapsed(now() - state.startedAt) : formatElapsed(0);
     // The menu head quotes the same clock; a menu left open must keep pace.
     if (view === 'menu') {
       const head = pop.querySelector('.meeting-pop-headline');
-      if (head) head.textContent = menuHeadline();
+      if (head) head.textContent = menu.headline();
     }
   }
 
   // ---- popover rendering ----------------------------------------------------
-
-  /** `Recording · microphone · 2 speakers · 12:47` — the menu's one line of
-   *  facts, every one settled at start time except the clock. */
-  function menuHeadline(): string {
-    const live = liveBot();
-    if (live) {
-      const parts = [describeBotState(live.state), 'meeting bot'];
-      if (live.speakers.length > 0) {
-        parts.push(`${live.speakers.length} speaker${live.speakers.length === 1 ? '' : 's'}`);
-      }
-      return parts.join(' · ');
-    }
-    const parts = [state.kind === 'recording' ? 'Recording' : 'Starting…', 'microphone'];
-    const voices = cast().length;
-    if (mode === 'conversation') {
-      parts.push(voices > 0 ? `${voices} speaker${voices === 1 ? '' : 's'}` : 'multiple speakers');
-    }
-    if (state.kind === 'recording') parts.push(formatElapsed(now() - state.startedAt));
-    return parts.join(' · ');
-  }
-
-  /** One rename row: the display name (label until renamed, then only the
-   *  name — never both) and the Rename affordance. */
-  function speakerRow(label: string): HTMLElement {
-    const row = document.createElement('div');
-    row.className = 'meeting-pop-speaker';
-    const name = document.createElement('span');
-    name.className = 'meeting-pop-speaker-name';
-    name.textContent = speakerDisplayName(label, names);
-    const rename = document.createElement('button');
-    rename.type = 'button';
-    rename.className = 'meeting-pop-rename';
-    rename.textContent = 'Rename';
-    rename.setAttribute('aria-label', `Rename ${speakerDisplayName(label, names)}`);
-    rename.addEventListener('click', () => nameSpeaker(label));
-    row.append(name, rename);
-    return row;
-  }
-
-  /** The speaker menu: the facts line, the cast, and Stop as the one action. */
-  function buildMenu(): void {
-    pop.replaceChildren();
-    pop.className = 'meeting-pop meeting-menu';
-    pop.setAttribute('role', 'menu');
-    pop.removeAttribute('aria-label');
-    const head = document.createElement('div');
-    head.className = 'meeting-pop-head';
-    const headBlink = document.createElement('span');
-    headBlink.className = 'meeting-blinker';
-    headBlink.setAttribute('aria-hidden', 'true');
-    const headline = document.createElement('span');
-    headline.className = 'meeting-pop-headline';
-    headline.textContent = menuHeadline();
-    head.append(headBlink, headline);
-    pop.append(head);
-    const live = liveBot();
-    if (live) {
-      // A bot's speakers are display names from the call — nothing here to
-      // rename; the rename that reaches backwards lives on the notes' tags.
-      for (const who of live.speakers) {
-        const row = document.createElement('div');
-        row.className = 'meeting-pop-speaker';
-        const name = document.createElement('span');
-        name.className = 'meeting-pop-speaker-name';
-        name.textContent = who;
-        row.append(name);
-        pop.append(row);
-      }
-    } else {
-      for (const label of cast()) pop.append(speakerRow(label));
-    }
-    // Mid-meeting tuning (v1 keeps it to this same panel, no new chrome):
-    // the recording engine's own Advanced Options, still reachable while it
-    // runs. Changes the live session can take apply immediately and say
-    // "Applied."; the rest wait for the next recording and say that instead.
-    // A bot meeting has no microphone engine to tune, so it gets nothing.
-    if (!live && recordingEngine !== null && advancedControls(recordingEngine).length > 0) {
-      pop.append(chooser.buildAdvancedPanel(recordingEngine, true));
-    }
-    const sep = document.createElement('div');
-    sep.className = 'meeting-pop-sep';
-    pop.append(sep);
-    const stopCta = document.createElement('button');
-    stopCta.type = 'button';
-    stopCta.className = 'meeting-stop-cta';
-    stopCta.textContent = live ? '■ Send the bot home' : '■ Stop Recording';
-    stopCta.addEventListener('click', () => {
-      if (live) {
-        stopCta.disabled = true;
-        void bot
-          ?.leave()
-          .catch(() => {
-            // The strip keeps showing the bot's real state; a failed leave
-            // changes nothing worth a second surface.
-          })
-          .finally(() => {
-            if (!disposed) closePop();
-          });
-        return;
-      }
-      stop();
-      closePop();
-    });
-    pop.append(stopCta);
-  }
 
   /** The chooser's one verb. */
   function onStartPressed(): void {
@@ -1010,7 +749,7 @@ export function mountMeetingStrip(opts: MeetingStripOpts): MeetingStripHandle {
   }
 
   function renderPop(): void {
-    if (view === 'menu') buildMenu();
+    if (view === 'menu') menu.buildMenu();
     else if (view === 'chooser') chooser.buildChooser();
   }
 
@@ -1050,17 +789,17 @@ export function mountMeetingStrip(opts: MeetingStripOpts): MeetingStripHandle {
     );
     switch (state.kind) {
       case 'requesting':
-        showNote('Asking for the microphone…');
+        transcript.showNote('Asking for the microphone…');
         break;
       case 'unavailable':
-        showNote(state.message || unavailableFallback(state.reason));
+        transcript.showNote(state.message || unavailableFallback(state.reason));
         break;
       case 'blocked':
       case 'error':
         if (tapToStart) {
           // Deliberately a button: the tap is the gesture the auto-start was
           // missing, and pressing it is how the meeting gets its mic.
-          clearTurnSpans();
+          transcript.clearTurnSpans();
           const note = document.createElement('button');
           note.type = 'button';
           note.className = 'meeting-note meeting-note-dismiss meeting-note-start';
@@ -1068,7 +807,7 @@ export function mountMeetingStrip(opts: MeetingStripOpts): MeetingStripHandle {
           note.addEventListener('click', () => void start(false));
           line.append(note);
         } else {
-          showNote(state.message);
+          transcript.showNote(state.message);
         }
         break;
       default:
@@ -1083,7 +822,7 @@ export function mountMeetingStrip(opts: MeetingStripOpts): MeetingStripHandle {
       renderPop();
     }
     tickClock();
-    renderFeed();
+    transcript.renderFeed();
   }
 
   function setState(next: StripState): void {
@@ -1172,7 +911,7 @@ export function mountMeetingStrip(opts: MeetingStripOpts): MeetingStripHandle {
           final: msg.final,
           ...(msg.speaker !== undefined ? { speaker: msg.speaker } : {}),
         });
-        renderFeed();
+        transcript.renderFeed();
         timing?.domUpdated();
         break;
       case 'notes_progress':
@@ -1410,7 +1149,7 @@ export function mountMeetingStrip(opts: MeetingStripOpts): MeetingStripHandle {
       final: frame.final,
       ...(frame.speaker !== undefined ? { speaker: frame.speaker } : {}),
     });
-    renderFeed();
+    transcript.renderFeed();
   });
   // The bot feature answers whether it exists a beat after mount; a chooser
   // opened in that beat should grow the bot source when the answer lands.
@@ -1461,7 +1200,7 @@ export function mountMeetingStrip(opts: MeetingStripOpts): MeetingStripHandle {
       closeSocket();
       stopClock?.();
       stopClock = null;
-      clearTurnSpans();
+      transcript.clearTurnSpans();
       closePop();
       record.remove();
       options.remove();
