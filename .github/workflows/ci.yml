@@ -93,3 +93,40 @@ jobs:
             exit 1
           fi
           echo "packages/plugin/mcp/index.js matches a fresh build."
+
+  # The note-taking behaviour, on three ticks of one real meeting.
+  #
+  # A SEPARATE JOB, not a step of `verify`, because it is the only thing in CI
+  # that spends money and reaches the network, and because it must never be
+  # able to fail the build for anyone else's change. `continue-on-error` says
+  # that in the one place it is enforced: the slice reports, and a red note-
+  # taker is read rather than merged around.
+  #
+  # It SKIPS ITSELF when no key is configured, which is the state of this repo
+  # today. That is deliberate and it is also the failure mode to watch — a
+  # skipped job looks exactly like a passing one in the checks list, so the
+  # step below says out loud which of the two happened.
+  #
+  # The full run is `bun run notes:eval`, on demand, from somebody's machine.
+  notes-eval-smoke:
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.10
+      - run: bun install --frozen-lockfile
+      - name: Note-taking smoke slice
+        env:
+          CW_SUMMARY_API_KEY: ${{ secrets.CW_SUMMARY_API_KEY }}
+        run: |
+          if [ -z "${CW_SUMMARY_API_KEY}" ]; then
+            echo "::notice::No CW_SUMMARY_API_KEY secret — the note-taking eval did not run."
+            echo "Add the repository secret to turn this job on. Until then it is a no-op,"
+            echo "and a green tick here means 'skipped', not 'the note-taker behaved'."
+            exit 0
+          fi
+          bun run notes:eval --smoke

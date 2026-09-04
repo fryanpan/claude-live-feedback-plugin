@@ -51,6 +51,7 @@ import {
   renameSpeakerTags,
   speakerDisplayName,
 } from '@feedback/core';
+import { type NoteReference, matchReferences } from './notes-references.ts';
 import {
   DEFAULT_NOTES_CADENCE_MS,
   DEFAULT_NOTES_QUIET_MS,
@@ -75,6 +76,8 @@ export {
   createPauseTicker,
   realTickScheduler,
 } from './pause-ticker.ts';
+
+export type { NoteReference } from './notes-references.ts';
 
 /** One settled turn as a tick's delta carries it. */
 export interface NotesTurn {
@@ -183,6 +186,14 @@ export interface NotesComposeInput {
   /** Material THIS tick's speech asked to have pulled in, already resolved.
    *  Absent on the same terms as `taskLinks`, and for the same reason. */
   docLinks?: readonly NoteDocLink[];
+  /**
+   * Board rows and docs THIS tick's speech NAMED — found by searching the
+   * meeting's catalogue for the titles the words contain
+   * (`notes-references.ts`), so a note about work that has a ticket can cite
+   * it. Distinct from `taskLinks`, which are rows the capture pass FILED or
+   * touched: these were merely mentioned, and most ticks name none.
+   */
+  references?: readonly NoteReference[];
 }
 
 export interface NotesComposer {
@@ -364,6 +375,16 @@ export interface MeetingNotesDeps {
    */
   resolveContext?: (docId: string) => NotesProjectContext | undefined;
   /**
+   * Everything on this meeting's board a note could link to — every open row
+   * and every doc, with its URL — read ONCE at session start and searched per
+   * tick for the titles that tick's speech contains.
+   *
+   * Deliberately not part of `context`: context is prompt text, and this is a
+   * board-sized list that must never become prompt text. What reaches the
+   * compose is the handful of entries the words actually named.
+   */
+  resolveReferences?: (docId: string) => readonly NoteReference[];
+  /**
    * The capture pass, run per tick BEFORE the compose so the links it
    * returns can ride the same compose input. Its failure costs the tick its
    * links, never its notes — capture is an enhancement on the same terms as
@@ -474,6 +495,16 @@ export interface MeetingNotesSession {
   nameSpeaker(speaker: string, name: string): void;
   /** Flush the tail delta and wait for every compose in flight. */
   end(): Promise<void>;
+  /**
+   * What this meeting lost. Read after `end()` for the whole meeting, or
+   * during it for what has happened so far.
+   *
+   * `refusedTooLong` is the one worth watching: those ticks are the notes
+   * falling behind the room, they cluster in the second half of a long
+   * meeting, and nothing about them is visible in the doc — the words carry
+   * forward and the notes just stop growing.
+   */
+  stats(): { composeFailures: number; refusedTooLong: number };
 }
 
 /**
@@ -542,6 +573,10 @@ export function beginNotesSession(
   // finished writing, and this session must never replace it.
   deps.onSessionStart?.(ids);
   const context = deps.resolveContext?.(ids.docId) ?? deps.context;
+  /** The board as it stood when the meeting started. Not refreshed per tick:
+   *  a row filed mid-meeting reaches the notes through the capture pass's
+   *  `taskLinks`, which is the path that knows it was just created. */
+  const catalogue = deps.resolveReferences?.(ids.docId) ?? [];
   let previous: string | null = null;
   /** Raw engine labels, never display names — a carried turn is re-mapped
    *  on its next attempt, and mapping a name a second time would wrap it. */
@@ -574,6 +609,22 @@ export function beginNotesSession(
           // knows both halves of a voice's identity at once.
           speakerLabel: turn.speaker,
         };
+
+  /**
+   * Composes this meeting lost, and how many of them were refused for being
+   * too long.
+   *
+   * A whole-notes reply grows with the MEETING, so the ticks that overrun the
+   * composer's output ceiling are the late ones — and the failure is silent
+   * by construction: the turns carry into the next tick, nothing is lost, and
+   * the notes simply stop keeping up. `bun run notes:eval` measured about a
+   * tenth of ticks refused this way across its corpus, all in the second half
+   * of the longer meetings. Nothing in production could see that, because the
+   * only report was an `onError` nobody supplied. Counted here so the meeting
+   * can say it out loud when it ends.
+   */
+  let composeFailures = 0;
+  let refusedTooLong = 0;
 
   const lifecycle = (phase: 'composing' | 'written' | 'failed', tick: number, turns: number[]) =>
     deps.onTickLifecycle?.({ docId: ids.docId, meetingId: ids.meetingId, tick, phase, turns });
@@ -650,6 +701,11 @@ export function beginNotesSession(
           deps.onError?.(err instanceof Error ? err.message : 'task capture failed');
         }
       }
+      // What this tick's words named on the board. A local scan of a list
+      // read at session start — no store call, no network, nothing that can
+      // fail a tick — so it sits outside the try blocks the fallible stages
+      // need.
+      const references = matchReferences(turns.map((t) => t.text).join('\n'), catalogue);
       // Read INSIDE the chain, immediately before composing: the compose is
       // the thing that must not be written from stale text, and the chain is
       // what serializes it against the previous tick's write.
@@ -679,6 +735,7 @@ export function beginNotesSession(
         ...(context ? { context } : {}),
         ...(taskLinks.length > 0 ? { taskLinks } : {}),
         ...(docLinks.length > 0 ? { docLinks } : {}),
+        ...(references.length > 0 ? { references } : {}),
       };
       try {
         const composed = await deps.composer.compose(input);
@@ -728,7 +785,13 @@ export function beginNotesSession(
           tick.tick,
           raw.map((t) => t.turn),
         );
-        deps.onError?.(err instanceof Error ? err.message : 'notes composer failed');
+        const reason = err instanceof Error ? err.message : 'notes composer failed';
+        composeFailures++;
+        if (/max_tokens/.test(reason)) refusedTooLong++;
+        // The ids and the tick, not just the reason. "notes compose hit
+        // max_tokens" in a log with several meetings running says nothing
+        // about which meeting stopped keeping up, or how far into it.
+        deps.onError?.(`${ids.docId} meeting ${ids.meetingId} tick ${tick.tick}: ${reason}`);
       }
     });
   };
@@ -865,6 +928,13 @@ export function beginNotesSession(
         composeTick({ tick: lastTickNo + 1, reason: 'end', turns: [] });
         await chain;
       }
+      if (refusedTooLong > 0) {
+        deps.onError?.(
+          `${ids.docId} meeting ${ids.meetingId}: ${refusedTooLong} of this meeting's ` +
+            'notes composes were refused as too long — the notes stopped keeping up',
+        );
+      }
     },
+    stats: () => ({ composeFailures, refusedTooLong }),
   };
 }
