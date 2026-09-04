@@ -1933,6 +1933,22 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
     // nothing.
     const threadActivity = new Map<string, number>();
     const commentAsks: Array<{ taskId: string; askedAt: number }> = [];
+    // How many rows link each doc — the fact that decides whether an ask on a
+    // doc is unambiguously about ONE row. Counted over every row on the board,
+    // not just the suspects: a doc shared with a row that is moving fine is
+    // still a shared doc. Done and archived rows count too, deliberately, and
+    // that is the safe direction — a higher count parks fewer rows, which
+    // leaves the watchdog noisier rather than switched off.
+    const linkingRowCount = new Map<string, number>();
+    for (const t of tasks) {
+      const seen = new Set<string>();
+      for (const ref of t.links ?? []) {
+        if (ref.kind !== 'doc' && ref.kind !== 'thread') continue;
+        if (seen.has(ref.docId)) continue;
+        seen.add(ref.docId);
+        linkingRowCount.set(ref.docId, (linkingRowCount.get(ref.docId) ?? 0) + 1);
+      }
+    }
     /**
      * One room's discussion, read for both things a discussion can say about
      * a row: that somebody is talking on it, and that somebody is waiting on
@@ -2020,17 +2036,32 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
         // Measured 2026-09-04: five wakes in sixty-five minutes over two
         // rows, one of them a mock round sitting on the reader's queue.
         //
-        // The ask half is scoped to the row whose OWNER asked it, because a
-        // doc is a shared surface: a design doc linked by four rows would
-        // otherwise park all four, indefinitely, on one unanswered question
-        // that only one of them is actually waiting on. The row's own
-        // `task:<id>` room needs no such scoping — a task-body thread belongs
-        // to exactly one row by construction. An ask by a person, or by an
-        // agent the roster cannot place, counts for nobody here; it is still
-        // MOVEMENT on the doc, which is the `newest` half below and stays
-        // unscoped, because that exoneration expires with the quiet window
-        // rather than lasting as long as the question does.
+        // The ask half is SCOPED, because a doc is a shared surface: a design
+        // doc linked by four rows must not park all four, indefinitely, on one
+        // unanswered question that only one of them is actually waiting on.
+        // The row's own `task:<id>` room needs no such scoping — a task-body
+        // thread belongs to exactly one row by construction.
+        //
+        // Two ways an ask can be about THIS row, and the first is why the
+        // owner test is not enough on its own:
+        //
+        //  - Nothing else links the doc. Then the ask cannot be about another
+        //    row, whoever typed it, so a builder's question on a lead-owned
+        //    row parks it. Scoping on the owner alone missed exactly this and
+        //    left the row waking while a person owed it an answer.
+        //  - Otherwise the asker must be the row's owner, which is the only
+        //    signal that separates the four-row design doc's rows from each
+        //    other. Matching the row's ASSIGNEE instead was considered and
+        //    rejected — see the known limit above; it over-exonerates the
+        //    moment one agent holds two rows.
+        //
+        // An ask by a person, or by an agent the roster cannot place, counts
+        // for nobody on a shared doc; it is still MOVEMENT on the doc, which
+        // is the `newest` half below and stays unscoped, because that
+        // exoneration expires with the quiet window rather than lasting as
+        // long as the question does.
         const discussed = readDiscussion(ref.docId, row.id, (askedBy) => {
+          if ((linkingRowCount.get(ref.docId) ?? 0) <= 1) return true;
           if (ownerId === undefined || askedBy === undefined) return false;
           return (taskStore.resolveAgentId(askedBy) ?? askedBy) === ownerId;
         });

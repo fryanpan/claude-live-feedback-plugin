@@ -243,6 +243,38 @@ describe("a linked doc's discussion counts too", () => {
     await ctx.lead.stop();
   });
 
+  /**
+   * The other half of the scoping rule, and the case owner-matching alone got
+   * wrong: a BUILDER asking on a doc that only a LEAD-owned row links.
+   *
+   * The row is waiting on a person either way — somebody has to answer the
+   * question before the work can move — so waking the lead about it is the
+   * same false wake the owner case fixed. What makes it safe to park on an
+   * ask from someone who does not own the row is that nothing else links the
+   * doc: there is no other row the question could have been about. The test
+   * below this one holds the opposite shape, where two rows share the doc and
+   * the ask is scoped back to its asker's row.
+   */
+  it("parks a lead-owned row on a BUILDER's ask when no other row links the doc", async () => {
+    const ctx = await boardWithLead();
+    const asked = await inProgressRow(ctx.workspaceId, 'Rank results by recency', LEAD);
+    const bystander = await inProgressRow(ctx.workspaceId, 'Cache the facet counts', BUILDER);
+    const docId = await linkedDoc(asked, 'sole-linked-design-doc');
+    // The Millwright does not own the row and is not its assignee; the doc is
+    // the row's alone, which is what makes the question unambiguously its own.
+    await askOnDoc(docId, BUILDER);
+    await settle(QUIET_MS + 100);
+
+    handle.nudgeStalls();
+    const got = await waitForFrames(ctx.lead.frames, STALL_EVENT, 1);
+
+    // The bystander is the positive control: the same pass that spared the
+    // asked row still names one, so the park is the ask and not a silent pass.
+    expect(got).toHaveLength(1);
+    expect(namedRows(got[0])).toEqual([bystander]);
+    await ctx.lead.stop();
+  });
+
   it('parks only the row whose owner asked, not every row linking that doc', async () => {
     const ctx = await boardWithLead();
     // Two rows, two different owners, ONE shared design doc — the shape a
