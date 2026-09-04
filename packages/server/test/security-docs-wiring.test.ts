@@ -97,6 +97,12 @@ describe('security docs are wired together', () => {
       'packages/server/src/fs-scan.ts',
       'packages/server/src/server.ts',
       'packages/server/src/bin.ts',
+      // The two halves that came OUT of server.ts and kept its surface: the
+      // Access verifiers and host lists (access-deps.ts) and the roster,
+      // sessions and widget tokens (identity-setup.ts). Without these the
+      // split would have quietly taken the sign-in chain off the trigger.
+      'packages/server/src/access-deps.ts',
+      'packages/server/src/identity-setup.ts',
     ];
     for (const path of security) expect(pattern.test(path)).toBe(true);
 
