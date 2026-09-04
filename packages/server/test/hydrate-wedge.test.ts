@@ -101,6 +101,31 @@ describe('a bound file that never answers', () => {
     // it is not something this test can assert an exact number for.
   });
 
+  it('parks the doc on an /api route too, not just the five prewarmed prefixes', async () => {
+    // The prewarm used to be a list of five path prefixes — `/events/`,
+    // `/y/`, `/review/`, `/audio/`, `/mockup/`. Every other way of naming a
+    // doc went the unprewarmed way and hydrated on the main thread, which is
+    // most of the surface: this route, and the canonical
+    // `/workspaces/<ws>/docs/<docId>` address with it. `GET /api/docs/<id>`
+    // reaches the same `rooms.get` the SSE route does, so on a build that
+    // only prewarms by prefix this request parks the whole server and the
+    // unrelated one below never answers.
+    handle = createServer({ port: 0, dataDir, requireSignInToWrite: false });
+    const base = `http://localhost:${handle.port}`;
+
+    const viaApi = fetch(`${base}/api/docs/${DOC_ID}`);
+    const unrelated = fetch(`${base}/api/docs`).then((r) => `answered:${r.status}`);
+    const tooSlow = new Promise<string>((resolve) => setTimeout(() => resolve('wedged'), 1_000));
+    expect(await Promise.race([unrelated, tooSlow])).toBe('answered:200');
+
+    const res = await viaApi;
+    expect(res.status).toBeLessThan(500);
+    await res.body?.cancel();
+
+    expect(handle.rooms.boundPathOf(DOC_ID)).toBeUndefined();
+    expect(boundFiles.quarantined(boundPath)).toBe(true);
+  });
+
   it('positive control: the same doc on a readable file binds as before', async () => {
     // Same fixture, same route, with the FIFO swapped back for a real file.
     // Without this the test above would pass on a server that had simply

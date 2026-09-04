@@ -3296,8 +3296,13 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
       // here, on the thread pool and under a deadline, means the synchronous
       // hydrate inside the route either finds the bytes already in hand or
       // finds the path quarantined and parks the doc without touching it.
-      const prewarmDocId = docIdAddressedBy(pathname);
-      if (prewarmDocId) await rooms.prewarmHydration(prewarmDocId);
+      const prewarmUrl = new URL(req.url);
+      const prewarmIds = docIdsAddressedBy(prewarmUrl);
+      const bodyDocId = prewarmIds.length === 0 ? await docIdInBody(req) : undefined;
+      if (bodyDocId) prewarmIds.push(bodyDocId);
+      if (prewarmIds.length > 0) {
+        await Promise.all(prewarmIds.map((id) => rooms.prewarmHydration(id)));
+      }
       // Server-side Sentry (a no-op passthrough when unconfigured — see
       // sentry.ts): one span per request, named by route PATTERN never raw
       // path, continuing the browser's trace when it sent one so a page load
@@ -5363,27 +5368,64 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
 }
 
 /**
- * Routes whose first path segment after the prefix is a docId, and which can
- * therefore pull a doc in from disk. Kept as a list rather than derived from
- * the route bodies because it feeds ONE thing — the hydration prewarm — and a
- * prefix missing from it costs a slow hydrate, never a wrong answer.
+ * Every docId a request might address, from anywhere in its URL.
+ *
+ * This used to be a list of five path prefixes, and the list was the bug: it
+ * covered `/events/`, `/y/`, `/review/`, `/audio/` and `/mockup/` while the
+ * canonical `/workspaces/<ws>/docs/<docId>` address and every `/api` route
+ * that names a doc in its path went the unprewarmed way and hydrated on the
+ * main thread. A prefix list also has to be maintained: a route added later
+ * is silently uncovered, and nothing fails until a bound file stops
+ * answering.
+ *
+ * So this walks the path instead of matching the front of it. Every segment
+ * that could be a docId is offered to the prewarm, which looks each one up in
+ * the doc index and does nothing for the ones it does not know — so a
+ * workspace slug or a verb like `archive` costs a Map lookup and no syscall.
+ * Being liberal here is safe in exactly the way being conservative was not:
+ * an extra candidate reads a file the request was likely to read anyway, a
+ * missing one puts a blocking read back on the main thread.
  */
-const DOC_ADDRESSED_PREFIXES = ['/events/', '/y/', '/review/', '/audio/', '/mockup/'] as const;
-
-/** The docId a request addresses, when its route is one that can hydrate. */
-function docIdAddressedBy(pathname: string): string | undefined {
-  for (const prefix of DOC_ADDRESSED_PREFIXES) {
-    if (!pathname.startsWith(prefix)) continue;
-    const rest = pathname.slice(prefix.length);
-    if (!rest || rest.includes('/')) return undefined;
+function docIdsAddressedBy(url: URL): string[] {
+  const found: string[] = [];
+  const add = (raw: string | null | undefined): void => {
+    if (!raw) return;
+    let decoded: string;
     try {
-      const decoded = decodeURIComponent(rest);
-      return isValidDocId(decoded) ? decoded : undefined;
+      decoded = decodeURIComponent(raw);
     } catch {
-      return undefined;
+      return;
     }
+    // `/mockup/<docId>.html` is the one address that carries an extension.
+    const bare = decoded.replace(/\.html?$/i, '');
+    if (!isValidDocId(bare) || found.includes(bare)) return;
+    found.push(bare);
+  };
+  for (const segment of url.pathname.split('/')) add(segment);
+  add(url.searchParams.get('docId'));
+  return found;
+}
+
+/**
+ * The docId a JSON request body names, for the routes that address a doc
+ * there rather than in the URL (attach, and the doc-create/bind pair).
+ *
+ * The body is read from a CLONE, so the route still gets an unconsumed
+ * stream. Anything unexpected — not JSON, malformed, no `docId` — returns
+ * nothing rather than throwing: this feeds a latency optimisation, and a
+ * request must never fail because the prewarm could not read it.
+ */
+async function docIdInBody(req: Request): Promise<string | undefined> {
+  const type = req.headers.get('content-type') ?? '';
+  if (!type.includes('application/json')) return undefined;
+  if (req.method !== 'POST' && req.method !== 'PUT' && req.method !== 'PATCH') return undefined;
+  try {
+    const body = (await req.clone().json()) as { docId?: unknown } | null;
+    const raw = body?.docId;
+    return typeof raw === 'string' && isValidDocId(raw) ? raw : undefined;
+  } catch {
+    return undefined;
   }
-  return undefined;
 }
 
 function isValidDocId(s: string): boolean {
