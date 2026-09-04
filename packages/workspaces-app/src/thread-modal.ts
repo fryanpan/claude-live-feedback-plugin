@@ -214,19 +214,19 @@ export function mountThreadModal(opts: ThreadModalOpts): ThreadModalHandle {
     return card;
   }
 
-/**
- * Grow the dialog out of `rect`, or shrink it back into it.
- *
- * Same length and easing as the slot morph, so the promote and the unfold read
- * as one gesture rather than two animations that happen to be adjacent. The
- * resting state is written FIRST and the keyframes only replay the journey —
- * exactly as `slide` does in thread-morph.ts — so an interrupted or
- * unsupported animation still leaves the dialog in the right place.
- *
- * Handing the inline styles back to the stylesheet on settle is not tidiness:
- * they pin the dialog in viewport coordinates, and a resize would otherwise
- * leave it parked wherever it was born.
- */
+  /**
+   * Grow the dialog out of `rect`, or shrink it back into it.
+   *
+   * Same length and easing as the slot morph, so the promote and the unfold read
+   * as one gesture rather than two animations that happen to be adjacent. The
+   * resting state is written FIRST and the keyframes only replay the journey —
+   * exactly as `slide` does in thread-morph.ts — so an interrupted or
+   * unsupported animation still leaves the dialog in the right place.
+   *
+   * Handing the inline styles back to the stylesheet on settle is not tidiness:
+   * they pin the dialog in viewport coordinates, and a resize would otherwise
+   * leave it parked wherever it was born.
+   */
   function promote(rect: DOMRect | null, grow: boolean, done?: () => void): void {
     let finish: (() => void) | undefined = done;
     const settle = (): void => {
@@ -278,7 +278,10 @@ export function mountThreadModal(opts: ThreadModalOpts): ThreadModalHandle {
       ...timing,
       duration: MORPH_MS * 0.8,
     });
-    scrim.animate(grow ? [{ opacity: 0 }, { opacity: 1 }] : [{ opacity: 1 }, { opacity: 0 }], timing);
+    scrim.animate(
+      grow ? [{ opacity: 0 }, { opacity: 1 }] : [{ opacity: 1 }, { opacity: 0 }],
+      timing,
+    );
     promoting?.addEventListener('finish', settle);
     // A cancelled journey still has to hand the styles back, but must NOT run
     // the callback of the journey that replaced it.
