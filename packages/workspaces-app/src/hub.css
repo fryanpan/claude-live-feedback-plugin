@@ -2448,27 +2448,18 @@ body.hub-body {
 .hub-goal-row:focus-visible .hub-goal-open {
   opacity: 0.7;
 }
-/* The band's tasks, on the rail that says they belong to the row above. */
+/* The band's tasks. The gutter on the left is empty on purpose: it is where
+   the dependency curves are drawn, and it used to also carry a 2px accent
+   rail running the height of the band. That rail is gone (Bryan, 2026-09-04)
+   — it said only "these rows belong to the goal above", which the band's own
+   grouping already says, and a solid vertical behind every curve is exactly
+   the thing that made the curves hard to read. Nothing else changes: the
+   padding is the same, so no row moves. */
 .hub-band-tasks {
   padding: 2px 8px 6px 34px;
   position: relative;
 }
-.hub-band-tasks::before {
-  content: "";
-  position: absolute;
-  left: 20px;
-  top: 2px;
-  bottom: 8px;
-  width: 2px;
-  border-radius: 2px;
-  background: color-mix(in srgb, var(--accent) 28%, transparent);
-}
-/* The dependency curves, in the same gutter. They pass BEHIND the goal rail
-   above: the rail says "these rows belong to the goal above" and the curve
-   says "this row is waiting for that one", so the two must not fight for the
-   same 2px of x. `z-index` is what separates them — both are positioned
-   children of the same box, so without it the SVG would paint over the rail
-   simply for coming later in the tree.
+/* The dependency curves, in that gutter.
 
    `pointer-events: none` because the layer covers the whole band: a click on
    a row must reach the row, not the drawing over it. `overflow: visible` so
@@ -2482,9 +2473,6 @@ body.hub-body {
   z-index: 0;
   overflow: visible;
   pointer-events: none;
-}
-.hub-band-tasks::before {
-  z-index: 1;
 }
 /* A collapsed band is the goal row and NOTHING else (decision: no hidden-N
    line, no summary) — the renderer emits nothing extra and this hides the
@@ -2501,7 +2489,7 @@ body.hub-body {
   color: var(--fg-muted);
 }
 /* Backlog: reserved, and drawn as NOT a goal — neutral accent, page
-   background, no rename cursor, no open caret, a grey rail. */
+   background, no rename cursor, no open caret. */
 .hub-band-reserved .hub-goal-row {
   border-left-color: var(--border);
   background: var(--bg);
@@ -2513,9 +2501,6 @@ body.hub-body {
 }
 .hub-band-reserved .hub-goal-open {
   visibility: hidden;
-}
-.hub-band-reserved .hub-band-tasks::before {
-  background: var(--border);
 }
 /* --- adding a goal from the list itself ---
    The free-text goals block above the board is gone; goals live only as the
@@ -5225,9 +5210,6 @@ a.hub-link-chip:hover {
   }
   .hub-band-tasks {
     padding-left: 24px;
-  }
-  .hub-band-tasks::before {
-    left: 12px;
   }
 }
 

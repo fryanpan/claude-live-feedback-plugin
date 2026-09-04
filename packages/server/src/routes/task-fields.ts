@@ -5,6 +5,7 @@
  * read their collaborators off `TaskRoutesContext` instead of the scope.
  */
 import { parkNoteText } from '../park-note.ts';
+import { OUT_OF_SHARE_SCOPE, firstTaskIdOutOfScope } from '../share/ref-scope.ts';
 import {
   ASSIGNEE_REQUIRED_ERROR,
   ASSIGNEE_REQUIRED_HANDOVER_MESSAGE,
@@ -21,9 +22,17 @@ export async function handleTaskFields(
   ctx: TaskRoutesContext,
   rq: TaskRouteRequest,
 ): Promise<Response | undefined> {
-  const { taskStore, taskProjection, rooms, j, safeJson, regateDecisionWords, rewriteTaskBody } =
-    ctx;
-  const { req, pathname, authorFor } = rq;
+  const {
+    taskStore,
+    taskProjection,
+    rooms,
+    j,
+    safeJson,
+    regateDecisionWords,
+    rewriteTaskBody,
+    workspacesOfDoc,
+  } = ctx;
+  const { req, pathname, authorFor, visitor } = rq;
   // set_task_dependencies: edit `after` / `afterEnforce` on a task that
   // already exists. Until this route, `after` could only be set at
   // creation — so a decision filed after the work it gates could never
@@ -42,6 +51,18 @@ export async function handleTaskFields(
     for (const id of [...body.after, ...((body.afterEnforce as unknown[]) ?? [])]) {
       if (typeof id !== 'string') return j(400, { error: 'task ids must be strings' });
     }
+    // The member boundary, on ids that arrive in the BODY. An edge may point
+    // anywhere, and the transition gate then READS the row at the other end
+    // and reports its title and status back — so an unchecked edge is both a
+    // read of a board the caller was never given and, aimed at a guess, an
+    // existence-and-status oracle. Asked BEFORE any lookup of these ids, so a
+    // made-up one and a private one answer alike. See `share/ref-scope.ts`.
+    const strayDep = firstTaskIdOutOfScope(
+      [...(body.after as string[]), ...((body.afterEnforce as string[] | undefined) ?? [])],
+      visitor,
+      workspacesOfDoc,
+    );
+    if (strayDep !== undefined) return j(403, OUT_OF_SHARE_SCOPE);
     const author = authorFor(body?.author);
     if (!author) return j(400, { error: 'author required' });
     const res = taskStore.setDependencies(
@@ -252,6 +273,10 @@ export async function handleTaskFields(
           return j(400, { error: 'blockedBy must be a task id, or an array of them' });
         }
       }
+      // The dependencies route's rule, on the verb that ADDS one edge rather
+      // than replacing the set — same body-borne id, same boundary.
+      const strayBlocker = firstTaskIdOutOfScope(ids as string[], visitor, workspacesOfDoc);
+      if (strayBlocker !== undefined) return j(403, OUT_OF_SHARE_SCOPE);
       const after = [...new Set([...task.after, ...(ids as string[])])];
       const res = taskStore.setDependencies(
         taskId,
