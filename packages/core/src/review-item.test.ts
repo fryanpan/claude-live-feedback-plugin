@@ -14,6 +14,7 @@ import {
   isReviewPayloadGated,
   isReviewPayloadHeld,
   judgeReasonClause,
+  reinstateReview,
   judgeReasonSentence,
   pendingDeclaration,
   readReviewPayload,
@@ -23,6 +24,8 @@ import {
   reviewGapAdvice,
   reviewPayloadMessage,
   reviewPayloadVersion,
+  reviewWithdrawn,
+  withdrawReview,
 } from './review-item.ts';
 
 /** All fixtures are synthetic — invented names, ids and copy throughout. */
@@ -1279,6 +1282,50 @@ describe('the quality gate’s verdict on a review item', () => {
       }),
     );
     expect(read ? isReviewItemHeld(read) : null).toBe(false);
+  });
+
+  /**
+   * The other way an item retires. `withdrawReview` deliberately KEEPS the
+   * standing verdict — a reinstated item the gate held is still held — so a
+   * predicate reading the verdict alone kept calling a withdrawn item held
+   * forever, with nothing left that could clear it. That is what put a
+   * withdrawn ask in the stall monitor's held index for hours.
+   */
+  it('a withdrawn item is never held, and is held again once reinstated', () => {
+    const taken = withdrawReview(decision() as ReviewPayload, { by: 'Scheduler Agent', at: 9 });
+    if (!taken.ok) throw new Error('unreachable');
+    const read = readTaskReviewItem(
+      item({
+        review: taken.next,
+        judge: { at: 1, verdict: 'held', reason: 'Headline is a ticket id.' },
+      }),
+    );
+    expect(read?.judge?.verdict).toBe('held');
+    expect(read ? isReviewItemHeld(read) : null).toBe(false);
+
+    const reinstated = reinstateReview(read?.review as ReviewPayload);
+    expect(reinstated.ok).toBe(true);
+    if (!reinstated.ok) throw new Error('unreachable');
+    const back = readTaskReviewItem(
+      item({ review: reinstated.next, judge: { at: 1, verdict: 'held', reason: 'r' } }),
+    );
+    expect(back ? isReviewItemHeld(back) : null).toBe(true);
+  });
+
+  it('a withdrawn COMMENT-borne item is never held either', () => {
+    const held: ReviewPayload = {
+      ...(decision() as ReviewPayload),
+      judge: { at: 1, verdict: 'held', reason: 'Headline is a ticket id.' },
+    };
+    expect(isReviewPayloadHeld(held)).toBe(true);
+    const taken = withdrawReview(held, { by: 'Scheduler Agent', at: 9 });
+    expect(taken.ok).toBe(true);
+    if (!taken.ok) throw new Error('unreachable');
+    expect(reviewWithdrawn(taken.next)).toBe(true);
+    expect(isReviewPayloadHeld(taken.next)).toBe(false);
+    // Still GATED: the words are off the reader's queue either way, and
+    // widening that predicate would put a withdrawn ask back on it.
+    expect(isReviewPayloadGated(taken.next)).toBe(true);
   });
 });
 
