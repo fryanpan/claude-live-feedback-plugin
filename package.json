@@ -35,7 +35,10 @@
     "agents:merge": "bun run scripts/merge-agent.ts",
     "identity:link": "bun run scripts/link-identity.ts",
     "review:migrate": "bun run packages/server/src/migrate-review-queue.ts",
-    "meeting:replay": "bun run scripts/replay-meeting-audio.ts"
+    "meeting:replay": "bun run scripts/replay-meeting-audio.ts",
+    "notes:eval": "bun run scripts/notes-eval.ts",
+    "notes:eval:fixtures": "bun run scripts/notes-eval-fixtures.ts",
+    "notes:cost": "bun run scripts/notes-prompt-cost.ts"
   },
   "devDependencies": {
     "@biomejs/biome": "1.9.4",

@@ -95,7 +95,7 @@ describe('notes prompt', () => {
 
   it('tells the model a person’s own line never takes a speaker tag', () => {
     const { system } = buildNotesPrompt(input);
-    expect(system).toContain('Never put a speaker tag');
+    expect(system).toContain('never put a speaker tag on one');
   });
 
   it('says so when there are no notes yet, instead of an empty section', () => {
@@ -216,7 +216,7 @@ describe('the person’s own lines in the prompt', () => {
     });
     expect(user).toContain('Written by a person — reproduce verbatim:');
     expect(user).toContain('- my own bullet, my own words');
-    expect(system).toContain('reproduce each one character for character');
+    expect(system).toContain('Reproduce each one character for character');
     expect(system).toContain('suggestion');
     expect(system).toContain('Never delete one');
   });

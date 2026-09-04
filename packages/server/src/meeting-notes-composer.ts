@@ -29,10 +29,23 @@ import { resolveKeyFrom } from './summarize.ts';
 export const NOTES_MODEL = 'claude-haiku-4-5-20251001';
 const API_URL = 'https://api.anthropic.com/v1/messages';
 /**
- * Whole-notes replies grow with the meeting, not the tick, so this sits well
- * above a long meeting's notes (~2 pages of bullets). A reply that still
- * hits it is refused rather than truncated — cut notes would REPLACE whole
- * ones, and the next tick retries with the same words carried.
+ * A reply that hits this is refused rather than truncated — cut notes would
+ * REPLACE whole ones, and the next tick retries with the same words carried,
+ * so nothing said is lost.
+ *
+ * IT IS NOT AS FAR ABOVE A LONG MEETING AS THIS COMMENT USED TO CLAIM. It
+ * said the ceiling sat "well above a long meeting's notes (~2 pages of
+ * bullets)"; `bun run notes:eval` measured otherwise. Whole-notes replies
+ * grow with the MEETING rather than the tick, so the reply length climbs all
+ * meeting and the ticks that hit the ceiling are the late ones. Across the
+ * eval corpus — eight fifteen-minute excerpts — about a tenth of ticks were
+ * refused this way, all of them in the second half of the longer meetings.
+ *
+ * A real hour-long meeting is four times the excerpt, so raising the number
+ * only moves where the wall is: the shape of the fix is a compose that
+ * returns a CHANGE rather than the whole notes, which is a different design
+ * and not this constant. Left as measured rather than nudged, so the eval
+ * keeps reporting the refusals instead of hiding them one meeting longer.
  */
 const MAX_TOKENS = 2_000;
 const TIMEOUT_MS = 30_000;
@@ -87,6 +100,20 @@ export function buildNotesPrompt(
         'Do not summarize what is inside it — you have not read it, and the',
         'link is the answer.',
         ...input.docLinks.map((l) => `- [${l.title}](${l.url})${l.when ? ` — ${l.when}` : ''}`),
+      ].join('\n'),
+    );
+  }
+
+  if (input.references?.length) {
+    parts.push(
+      [
+        'Named in this speech, and already on the board. Where a note covers',
+        'one, write its name as a markdown link — [its title](its url) — the',
+        'first time that note mentions it. Do not add one to a note that is',
+        'not about it, and do not link the same thing twice in one note.',
+        ...input.references.map(
+          (r) => `- [${r.title}](${r.url}) — ${r.kind}${r.when ? `, met ${r.when}` : ''}`,
+        ),
       ].join('\n'),
     );
   }
