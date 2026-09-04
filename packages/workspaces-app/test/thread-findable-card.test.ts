@@ -134,11 +134,11 @@ describe('answering from the folded face', () => {
     expect(onReply).toHaveBeenCalledWith('t1', 'Pause threshold', c.id, 'b');
   });
 
-  it('a question shows where to tap — a cue, not a control', () => {
+  it('a question offers a field to answer in, not a cue telling you to tap', () => {
     const { card } = render(thread([comment('?', question())]));
-    const cue = card.querySelector('.slot-b .face-summary .thread-answer-cta');
-    expect(cue?.textContent).toBe('Answer');
-    expect(cue?.tagName).not.toBe('BUTTON');
+    const field = card.querySelector('.slot-b .face-summary .thread-answer-field');
+    expect(field?.querySelector('.thread-answer-input')?.tagName).toBe('INPUT');
+    expect(field?.querySelector('.thread-answer-send')?.textContent).toBe('Answer');
   });
 
   it('an answered question keeps a compact record: the words, who, when', () => {
@@ -151,10 +151,10 @@ describe('answering from the folded face', () => {
     expect(line?.querySelector('.thread-answered-words')?.textContent).toBe('Yes, both.');
     expect(line?.querySelector('.thread-answered-who')?.textContent).toMatch(/you/i);
     expect(card.querySelector('.thread-options-compact')).toBe(null);
-    expect(card.querySelector('.thread-answer-cta')).toBe(null);
+    expect(card.querySelector('.thread-answer-field')).toBe(null);
   });
 
-  it('an answered decision does not repeat the outcome the flag row already shows', () => {
+  it('an answered decision states the outcome — no row above the head does it now', () => {
     const { card } = render(
       thread([
         comment(
@@ -163,48 +163,56 @@ describe('answering from the folded face', () => {
         ),
       ]),
     );
-    expect(card.querySelector('.thread-decision-outcome')?.textContent).toBe('Cadence ceiling');
-    expect(card.querySelector('.thread-answered-words')).toBe(null);
+    expect(card.querySelector('.thread-decision-outcome')).toBe(null);
+    expect(card.querySelector('.thread-answered-words')?.textContent).toBe('Cadence ceiling');
     expect(card.querySelector('.thread-answered-who')).not.toBe(null);
   });
 
   it('a plain comment gets none of it', () => {
     const { card } = render(thread([comment('Looks fine.')]));
     expect(card.querySelector('.thread-answered-line')).toBe(null);
-    expect(card.querySelector('.thread-answer-cta')).toBe(null);
+    expect(card.querySelector('.thread-answer-field')).toBe(null);
     expect(card.querySelector('.thread-options-compact')).toBe(null);
   });
 });
 
-describe('Details / Less', () => {
-  it('a declared thread says it in words, and the words follow the fold', () => {
+describe('the chevron', () => {
+  /* It used to read "Details ▾" on a declared thread. That caption was one of
+     the things this round removes: a folded card that already offers the
+     options or the answer box does not need telling that there is more behind
+     the fold — and the words made the caret a different width on every card in
+     a 260px column. What it announces is unchanged. */
+  it('is a chevron on a declared thread, and announces the fold state', () => {
     const { card, panel } = render(thread([comment('?', question())]));
     const caret = card.querySelector<HTMLElement>('.thread-caret');
-    expect(caret?.classList.contains('thread-caret-words')).toBe(true);
-    expect(caret?.textContent).toBe('Details ▾');
+    expect(caret?.textContent).toBe('›');
+    expect(caret?.getAttribute('aria-expanded')).toBe('false');
     panel.setActive('t1');
-    expect(caret?.textContent).toBe('Less ▴');
     expect(caret?.getAttribute('aria-expanded')).toBe('true');
     panel.setActive(null);
-    expect(caret?.textContent).toBe('Details ▾');
+    expect(caret?.getAttribute('aria-expanded')).toBe('false');
   });
 
-  it('a plain comment keeps the chevron', () => {
+  it('is the same chevron on a plain comment', () => {
     const { card } = render(thread([comment('Looks fine.')]));
     expect(card.querySelector('.thread-caret')?.textContent).toBe('›');
   });
 });
 
 describe('new since you last looked', () => {
-  it('stamps the card and tags the head when the panel says it is new', () => {
+  /* A dot ON the glyph rather than a "NEW" tag beside it. The tag was a word
+     competing for a 260px row with the author, the clock and the caret; the
+     dot costs no width at all. */
+  it('stamps the card and dots the glyph when the panel says it is new', () => {
     const { card } = render(thread([comment('Hi')]), { isNew: () => true });
     expect(card.classList.contains('is-new')).toBe(true);
-    expect(card.querySelector('.thread-new-tag')?.textContent).toBe('New');
+    expect(card.querySelector('.thread-glyph')?.classList.contains('is-new')).toBe(true);
+    expect(card.querySelector('.thread-new-tag')).toBe(null);
   });
 
   it('leaves a seen thread alone', () => {
     const { card } = render(thread([comment('Hi')]), { isNew: () => false });
     expect(card.classList.contains('is-new')).toBe(false);
-    expect(card.querySelector('.thread-new-tag')).toBe(null);
+    expect(card.querySelector('.thread-glyph')?.classList.contains('is-new')).toBe(false);
   });
 });

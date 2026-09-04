@@ -77,6 +77,23 @@ export interface ThreadPanelOpts {
    * deliberately not part of the render key.
    */
   isNew?: (t: Thread) => boolean;
+  /**
+   * Can this reader post? The server's answer, carried down from the mount
+   * context — NOT a hopeful `true` the card narrows later.
+   *
+   * `false` disables every control on a card that posts: the option buttons,
+   * the folded answer field, the reply composer, Resolve/Reopen, Undo. A
+   * read-only reader was getting the full working card under the "You are
+   * reading only" banner, and tapping a decision option did nothing at all —
+   * the request never reached a route that could refuse it, so there was not
+   * even a failure toast to read.
+   *
+   * Optional, defaulting to writable, because the panel is built in a dozen
+   * tests that have no notion of access. The three surfaces that mount the
+   * chrome must pass it: `ChromeOpts.canWrite` is required for exactly that
+   * reason.
+   */
+  canWrite?: boolean;
 }
 
 export class ThreadPanel {

@@ -1,5 +1,6 @@
 import { type Thread, suggestOps, threadRenderKey } from '@feedback/core';
 import type { EditorView } from '@tiptap/pm/view';
+import { balloonMarginVisible } from '../card-placement.ts';
 import { keptComposerFocus, restoreComposerFocus } from '../composer-keep.ts';
 import { showToast } from '../doc/chrome-dom.ts';
 import { COMPOSER_MOUNTED_EVENT } from '../md-composer.ts';
@@ -115,14 +116,13 @@ const GAP = 8;
 const RELAYOUT_DEBOUNCE_MS = 100;
 const SVG_NS = 'http://www.w3.org/2000/svg';
 
-/** Mirrors the doc.css breakpoint that hides `.markup-margin` (and the
- *  leader overlay) — `rendered[]` is populated regardless of viewport, so
- *  anything answering "is this balloon actually visible?" must consult this,
- *  not the DOM. Same query app.ts uses for its mobile checks. */
-const MARGIN_HIDDEN_QUERY = '(max-width: 1100px)';
-
+/** Is the margin actually on screen? `rendered[]` is populated regardless of
+ *  the surface in force, so anything answering "is this balloon visible?" must
+ *  consult the placement, not the DOM. It used to mirror a `max-width` query
+ *  the stylesheet also carried; both now read `card-placement.ts`, so the
+ *  reader's stored choice moves the column and this check together. */
 function marginHidden(): boolean {
-  return window.matchMedia(MARGIN_HIDDEN_QUERY).matches;
+  return !balloonMarginVisible();
 }
 
 /** `CSS.escape` guarded — happy-dom (and very old browsers) may not have it. */
@@ -501,6 +501,11 @@ export function mountMarkupMargin(opts: MarkupMarginOpts): MarkupMarginHandle {
     const anchorX = proseRect.right - editorRect.left - overlayOffsetX;
     const balloonX = marginRect.left - editorRect.left - overlayOffsetX + 4;
 
+    // Which thread the reader is on, if any — the panel's selection, which is
+    // the one authority for it (a balloon promoted into the modal stays folded
+    // and SELECTED, so this is not the same question as "which is expanded").
+    const selectedId = opts.chrome?.threadsPanel.getActive() ?? null;
+
     let maxBottom = 0;
     for (let i = 0; i < rendered.length; i++) {
       const y = Math.max(0, ys[i]);
@@ -509,14 +514,26 @@ export function mountMarkupMargin(opts: MarkupMarginOpts): MarkupMarginHandle {
 
       const leaderKind = rendered[i].kind;
       const line = document.createElementNS(SVG_NS, 'line');
-      line.setAttribute(
-        'class',
+      const classes =
         leaderKind === 'comment'
-          ? 'lf-leader lf-leader-comment'
+          ? ['lf-leader', 'lf-leader-comment']
           : leaderKind === 'suggestion'
-            ? 'lf-leader lf-leader-suggestion'
-            : 'lf-leader',
-      );
+            ? ['lf-leader', 'lf-leader-suggestion']
+            : ['lf-leader'];
+      // Word's rule: tapping a balloon brings it forward and pushes the rest
+      // back, and its leader comes with it. The CARDS dim in CSS (the margin
+      // reads `:has(.thread.active)`), but a line in a detached SVG overlay
+      // has no ancestor that knows which thread is selected — so the emphasis
+      // is written here, on the pass that draws them.
+      const b = rendered[i];
+      if (selectedId !== null && b.kind === 'comment') {
+        classes.push(b.thread.id === selectedId ? 'lf-leader-on' : 'lf-leader-dim');
+      }
+      line.setAttribute('class', classes.join(' '));
+      // The visible leg starts where the PROSE ends, never inside it: `anchorX`
+      // is the right edge of `view.dom`, so a connector runs out of the text
+      // block and across the gutter rather than over a word. The one geometry
+      // rule this column has, and the reason the line is straight.
       line.setAttribute('x1', String(anchorX));
       line.setAttribute('y1', String(items[i].anchorY - overlayOffsetY));
       line.setAttribute('x2', String(balloonX));

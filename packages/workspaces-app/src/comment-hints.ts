@@ -98,10 +98,6 @@ export function splitOffscreen(
   return { above, below, inView, nearestAbove, nearestBelow };
 }
 
-function plural(n: number, one: string, many: string): string {
-  return `${n} ${n === 1 ? one : many}`;
-}
-
 /**
  * The hint's words, as parts a renderer can show or hide by width: the full
  * sentence on a wide screen, icon + count only on a phone. Empty when there is
@@ -143,10 +139,16 @@ export function hintSentence(t: Tally, dir: 'above' | 'below'): string {
   return `${parts.join(' & ')} ${dir}${fresh}`;
 }
 
-/** The top-bar chip's words. */
+/** The top-bar chip's words.
+ *
+ * "N waiting on you", not "N questions for you" (Bryan, 2026-09-04, on mock
+ * round 4). The chip counts questions AND decisions under one glyph, so
+ * naming one of the two kinds was both wrong and a kind-chip in the top bar —
+ * the same marking the cards themselves dropped. What the reader needs from
+ * it is the count and the fact that it is theirs. */
 export function chipSentence(questions: number): string {
   if (questions === 0) return 'Nothing waiting on you';
-  return `${plural(questions, 'question', 'questions')} for you`;
+  return `${questions} waiting on you`;
 }
 
 export function threadHintItem(
@@ -277,6 +279,8 @@ export function mountCommentHints(opts: CommentHintsOpts): CommentHintsHandle {
   let lastVisible = new Set<string>();
   let lastQuestions = -1;
   let doneTimer: ReturnType<typeof setTimeout> | null = null;
+  /** The ask the chip last took the reader to — where the next tap starts. */
+  let askCursor: string | null = null;
   const dwellTimers = new Map<string, ReturnType<typeof setTimeout>>();
 
   function items(): { list: HintItem[]; byId: Map<string, Thread> } {
@@ -363,10 +367,13 @@ export function mountCommentHints(opts: CommentHintsOpts): CommentHintsHandle {
       chip.appendChild(b);
       const w = document.createElement('span');
       w.className = 'w';
-      w.textContent = ` ${questions === 1 ? 'question' : 'questions'} for you`;
+      w.textContent = ' waiting on you';
       chip.appendChild(w);
       chip.title = chipSentence(questions);
-      chip.setAttribute('aria-label', `${chipSentence(questions)} — jump to the first`);
+      chip.setAttribute(
+        'aria-label',
+        `${chipSentence(questions)} — ${questions === 1 ? 'jump to it' : 'step through them'}`,
+      );
     } else if (lastQuestions > 0) {
       // The last one was just answered: say so, briefly. A permanent "nothing
       // waiting" chip is metadata the reader cannot act on.
@@ -435,22 +442,45 @@ export function mountCommentHints(opts: CommentHintsOpts): CommentHintsHandle {
     if (id) opts.onJump(id);
   }
 
-  function jumpToFirstAsk(): void {
-    const { list } = items();
-    const first = list.find((it) => it.kind === 'question');
-    if (first) {
-      opts.onJump(first.id);
-      return;
-    }
-    // An open ask with no highlight to scroll to (a subject-anchored thread):
-    // still hand it over — the caller's reveal knows how to open it.
-    const any = opts.threads().find((t) => threadKind(t) === 'question');
-    if (any) opts.onJump(any.id);
+  /** Every open ask, in the order the reader would meet them: anchored ones
+   *  down the page, then the subject-anchored ones that have no highlight to
+   *  scroll to but still need answering. */
+  function openAsks(): string[] {
+    const anchored = items()
+      .list.filter((it) => it.kind === 'question')
+      .map((it) => it.id);
+    const seen = new Set(anchored);
+    const rest = opts
+      .threads()
+      .filter((t) => threadKind(t) === 'question' && !seen.has(t.id))
+      .map((t) => t.id);
+    return [...anchored, ...rest];
+  }
+
+  /**
+   * The chip STEPS: each tap moves to the next open ask and the last one wraps
+   * to the first (Bryan, 2026-09-04). It used to jump to the first every time,
+   * which meant a reader with four asks could reach exactly one of them from
+   * the top bar and had to hunt for the other three — the count told them
+   * there was more and the control could not take them there.
+   *
+   * The cursor is the ask last jumped to, not an index: asks get answered and
+   * arrive while the reader works, and an index would silently point at a
+   * different thread the moment the list moved under it. An unrecognised
+   * cursor (answered, or a first tap) starts the walk at the top of the doc.
+   */
+  function stepAsks(): void {
+    const asks = openAsks();
+    if (asks.length === 0) return;
+    const at = askCursor === null ? -1 : asks.indexOf(askCursor);
+    const next = asks[(at + 1) % asks.length] as string;
+    askCursor = next;
+    opts.onJump(next);
   }
 
   scope.listen(floatTop, 'click', () => jump('above'));
   scope.listen(floatBot, 'click', () => jump('below'));
-  if (opts.chipEl) scope.listen(opts.chipEl, 'click', jumpToFirstAsk);
+  if (opts.chipEl) scope.listen(opts.chipEl, 'click', stepAsks);
 
   // Scroll is the hot path: one measurement per frame at most, and a settle
   // pass afterwards so the last position always gets counted.
