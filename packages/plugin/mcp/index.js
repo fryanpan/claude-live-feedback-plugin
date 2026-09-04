@@ -14592,8 +14592,148 @@ async function deliverThenCommit(frame, deliver, cursor, onGap) {
   }
 }
 
-// packages/mcp/src/mux-loop.ts
+// packages/mcp/src/sse-loop.ts
 var DEFAULT_CONNECT_CAP_MS = 3000;
+var ABSENT_STATUSES = new Set([403, 404, 410]);
+var ABSENT_RETRY_CAP_MS = 60000;
+var ABSENT_DROP_AFTER = 5;
+function createSseLoops(deps) {
+  return {
+    runSseLoop: (label, path, signal, onFirstAttempt) => runSseLoop(deps, label, path, signal, onFirstAttempt),
+    startSseLoop: (label, path, controller) => startSseLoop(deps, label, path, controller)
+  };
+}
+async function runSseLoop(deps, label, path, signal, onFirstAttempt) {
+  let first = onFirstAttempt;
+  const settleFirst = (open) => {
+    if (!first)
+      return;
+    const f = first;
+    first = undefined;
+    f(open);
+  };
+  const setOpen = (open) => {
+    const w = deps.watchers.get(label);
+    if (!w)
+      return;
+    w.open = open;
+    if (open)
+      w.inactiveReason = undefined;
+  };
+  const dropKey = (reason) => {
+    const w = deps.watchers.get(label);
+    if (w) {
+      w.open = false;
+      w.inactiveReason = reason;
+    }
+    deps.log(`[claude-workspaces-mcp] ${label}: ${reason}`);
+  };
+  const cursor = { lastEventId: undefined };
+  let attempt = 0;
+  let absent = 0;
+  while (!signal.aborted) {
+    try {
+      const res = await deps.fetch(`${deps.resolveBaseUrl()}${path}`, {
+        signal,
+        ...cursor.lastEventId ? { headers: { "Last-Event-ID": cursor.lastEventId } } : {}
+      });
+      const live = res.ok && res.body !== null;
+      setOpen(live);
+      settleFirst(live);
+      if (!live) {
+        await releaseBody(res);
+        if (ABSENT_STATUSES.has(res.status)) {
+          absent += 1;
+          if (absent >= ABSENT_DROP_AFTER) {
+            dropKey(`server answered ${res.status} ${absent} times running — stopped watching this key`);
+            return;
+          }
+        } else {
+          absent = 0;
+        }
+        throw new Error(`sse ${path} → ${res.status}`);
+      }
+      attempt = 0;
+      absent = 0;
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder;
+      let buf = "";
+      try {
+        while (!signal.aborted) {
+          const { value, done } = await reader.read();
+          if (done)
+            break;
+          buf += decoder.decode(value, { stream: true });
+          let sep = buf.indexOf(`
+
+`);
+          while (sep >= 0) {
+            const frame = buf.slice(0, sep);
+            buf = buf.slice(sep + 2);
+            await deliverThenCommit(frame, deps.handleFrame, cursor, deps.resetDedup);
+            sep = buf.indexOf(`
+
+`);
+          }
+        }
+      } finally {
+        await releaseReader(reader);
+      }
+    } catch (err2) {
+      setOpen(false);
+      settleFirst(false);
+      if (signal.aborted)
+        return;
+      deps.log(`[claude-workspaces-mcp] ${label} sse error, retrying:`, err2);
+    }
+    setOpen(false);
+    attempt += 1;
+    const cap = absent > 0 ? ABSENT_RETRY_CAP_MS : RECONNECT_CAP_MS;
+    await deps.sleep(reconnectDelayMs(attempt, deps.random, RECONNECT_BASE_MS, cap));
+    deps.resetDedup();
+  }
+  setOpen(false);
+  settleFirst(false);
+}
+function startSseLoop(deps, label, path, controller) {
+  return new Promise((resolve) => {
+    const cap = deps.timers.set(() => resolve(false), deps.connectCapMs ?? DEFAULT_CONNECT_CAP_MS);
+    runSseLoop(deps, label, path, controller.signal, (open) => {
+      deps.timers.clear(cap);
+      resolve(open);
+    }).catch((err2) => {
+      deps.log(`[claude-workspaces-mcp] watcher ${label} crashed:`, err2);
+      deps.watchers.delete(label);
+      deps.timers.clear(cap);
+      resolve(false);
+    });
+  });
+}
+async function releaseBody(res) {
+  try {
+    await res.body?.cancel();
+  } catch {}
+}
+async function releaseReader(reader) {
+  try {
+    await reader.cancel();
+  } catch {}
+  try {
+    reader.releaseLock();
+  } catch {}
+}
+function inactiveWatches(watchers) {
+  const out = [];
+  for (const [key, w] of watchers) {
+    const reason = w?.inactiveReason;
+    if (typeof reason === "string")
+      out.push({ key, reason });
+  }
+  return out;
+}
+
+// packages/mcp/src/mux-loop.ts
+var DEFAULT_CONNECT_CAP_MS2 = 3000;
 function muxPath(agentId) {
   return `/events/agent/${encodeURIComponent(agentId)}`;
 }
@@ -14643,7 +14783,7 @@ function ensureOpen(deps, rt) {
         return;
       settled = true;
       resolve(false);
-    }, deps.connectCapMs ?? DEFAULT_CONNECT_CAP_MS);
+    }, deps.connectCapMs ?? DEFAULT_CONNECT_CAP_MS2);
     runMuxLoop(deps, rt, controller.signal, settle).catch((err2) => {
       deps.log("[claude-workspaces-mcp] mux loop crashed:", err2);
       rt.running = false;
@@ -14678,6 +14818,7 @@ async function runMuxLoop(deps, rt, signal, onFirstAttempt) {
         ...value ? { headers: { "Last-Event-ID": value } } : {}
       });
       if (res.status === 404) {
+        await releaseBody(res);
         rt.unsupported = true;
         rt.running = false;
         setOpen(deps, rt, false);
@@ -14688,31 +14829,37 @@ async function runMuxLoop(deps, rt, signal, onFirstAttempt) {
       const live = res.ok && res.body !== null;
       setOpen(deps, rt, live);
       onFirstAttempt(live);
-      if (!live)
+      if (!live) {
+        await releaseBody(res);
         throw new Error(`sse ${path} → ${res.status}`);
+      }
       const reader = res.body.getReader();
       const decoder = new TextDecoder;
       let buf = "";
       let framesRead = 0;
-      while (!signal.aborted) {
-        const { value: chunk, done } = await reader.read();
-        if (done)
-          break;
-        buf += decoder.decode(chunk, { stream: true });
-        let sep = buf.indexOf(`
+      try {
+        while (!signal.aborted) {
+          const { value: chunk, done } = await reader.read();
+          if (done)
+            break;
+          buf += decoder.decode(chunk, { stream: true });
+          let sep = buf.indexOf(`
 
 `);
-        while (sep >= 0) {
-          const frame = buf.slice(0, sep);
-          buf = buf.slice(sep + 2);
-          framesRead += 1;
-          if (framesRead > 1)
-            attempt = 0;
-          await deliverThenCommitMux(frame, deps.handleFrame, rt.cursors, deps.resetDedup);
-          sep = buf.indexOf(`
+          while (sep >= 0) {
+            const frame = buf.slice(0, sep);
+            buf = buf.slice(sep + 2);
+            framesRead += 1;
+            if (framesRead > 1)
+              attempt = 0;
+            await deliverThenCommitMux(frame, deps.handleFrame, rt.cursors, deps.resetDedup);
+            sep = buf.indexOf(`
 
 `);
+          }
         }
+      } finally {
+        await releaseReader(reader);
       }
     } catch (err2) {
       setOpen(deps, rt, false);
@@ -14763,92 +14910,6 @@ async function deliverThenCommitMux(frame, deliver, cursors, onGap) {
     return;
   cursors.delete(key);
   cursors.set(key, meta2.id);
-}
-
-// packages/mcp/src/sse-loop.ts
-var DEFAULT_CONNECT_CAP_MS2 = 3000;
-function createSseLoops(deps) {
-  return {
-    runSseLoop: (label, path, signal, onFirstAttempt) => runSseLoop(deps, label, path, signal, onFirstAttempt),
-    startSseLoop: (label, path, controller) => startSseLoop(deps, label, path, controller)
-  };
-}
-async function runSseLoop(deps, label, path, signal, onFirstAttempt) {
-  let first = onFirstAttempt;
-  const settleFirst = (open) => {
-    if (!first)
-      return;
-    const f = first;
-    first = undefined;
-    f(open);
-  };
-  const setOpen2 = (open) => {
-    const w = deps.watchers.get(label);
-    if (w)
-      w.open = open;
-  };
-  const cursor = { lastEventId: undefined };
-  let attempt = 0;
-  while (!signal.aborted) {
-    try {
-      const res = await deps.fetch(`${deps.resolveBaseUrl()}${path}`, {
-        signal,
-        ...cursor.lastEventId ? { headers: { "Last-Event-ID": cursor.lastEventId } } : {}
-      });
-      const live = res.ok && res.body !== null;
-      setOpen2(live);
-      settleFirst(live);
-      if (!res.ok || !res.body)
-        throw new Error(`sse ${path} → ${res.status}`);
-      attempt = 0;
-      const reader = res.body.getReader();
-      const decoder = new TextDecoder;
-      let buf = "";
-      while (!signal.aborted) {
-        const { value, done } = await reader.read();
-        if (done)
-          break;
-        buf += decoder.decode(value, { stream: true });
-        let sep = buf.indexOf(`
-
-`);
-        while (sep >= 0) {
-          const frame = buf.slice(0, sep);
-          buf = buf.slice(sep + 2);
-          await deliverThenCommit(frame, deps.handleFrame, cursor, deps.resetDedup);
-          sep = buf.indexOf(`
-
-`);
-        }
-      }
-    } catch (err2) {
-      setOpen2(false);
-      settleFirst(false);
-      if (signal.aborted)
-        return;
-      deps.log(`[claude-workspaces-mcp] ${label} sse error, retrying:`, err2);
-    }
-    setOpen2(false);
-    attempt += 1;
-    await deps.sleep(reconnectDelayMs(attempt, deps.random));
-    deps.resetDedup();
-  }
-  setOpen2(false);
-  settleFirst(false);
-}
-function startSseLoop(deps, label, path, controller) {
-  return new Promise((resolve) => {
-    const cap = deps.timers.set(() => resolve(false), deps.connectCapMs ?? DEFAULT_CONNECT_CAP_MS2);
-    runSseLoop(deps, label, path, controller.signal, (open) => {
-      deps.timers.clear(cap);
-      resolve(open);
-    }).catch((err2) => {
-      deps.log(`[claude-workspaces-mcp] watcher ${label} crashed:`, err2);
-      deps.watchers.delete(label);
-      deps.timers.clear(cap);
-      resolve(false);
-    });
-  });
 }
 
 // packages/core/src/task-wire.ts
@@ -17051,8 +17112,10 @@ async function handleDocsTool(name, a, ctx) {
     }
     case "list_watched_docs": {
       const coverage = await refreshCoverage();
+      const inactive = inactiveWatches(watchers);
       return ok2({
         watching: Array.from(watchers.keys()),
+        ...inactive.length > 0 ? { inactive } : {},
         persistence: {
           mode: watchPersistenceMode(),
           agentId: AUTHOR.id,
