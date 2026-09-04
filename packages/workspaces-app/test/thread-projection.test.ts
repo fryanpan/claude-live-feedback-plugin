@@ -9,7 +9,7 @@
  * first shipped broken (docs/process/learnings.md). Every assertion below
  * drives `createThreadProjection` directly and reads what came out.
  */
-import { createThread, postReply } from '@feedback/core';
+import { createThread, postReply, summaryHash } from '@feedback/core';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import * as Y from 'yjs';
 import { createSeenTracker } from '../src/comment-seen.ts';
@@ -129,6 +129,44 @@ describe('the ydoc → Thread[] projection', () => {
       shape: 'review',
       headline: 'Does this read right?',
     });
+  });
+
+  it('carries a stored summary through — the one field whose loss is invisible', () => {
+    const ydoc = new Y.Doc();
+    createThread(ydoc, {
+      threadId: 't1',
+      anchor: range(0, 1),
+      createdBy: AUTHOR,
+      firstComment: { id: 'c1', text: 'Why is this swallowed?' },
+    });
+    // A reply, because the discussion line is what a generated summary
+    // replaces — a thread with none stays deterministic.
+    postReply(ydoc, 't1', { id: 'c2', author: AUTHOR, text: 'The wrapper eats it.' });
+    const threadMap = ydoc.getMap('threads').get('t1') as Y.Map<unknown>;
+    // Stamped as generating, so the assertions below also pin the branch that
+    // takes the card back OUT of "Generating summary…": `summaryPending` reads
+    // `t.summary`, so a projection that drops the field leaves every card
+    // spinning until the window runs out and then shows the fallback lines
+    // forever. Both symptoms are invisible to every other test in this file.
+    threadMap.set('summaryPendingTs', Date.now());
+
+    const { projection } = projectionOver(ydoc);
+    const before = projection.collect()[0];
+    if (!before) throw new Error('no thread projected');
+    expect(before.summary).toBeUndefined(); // positive control: nothing stored yet
+    expect(before.summaryPending).toBe(true);
+
+    const stored = {
+      topic: 'The retry wrapper swallows it',
+      discussion: 'Ann traced it to the wrapper.',
+      hash: summaryHash(before),
+      promptVersion: 3,
+    };
+    threadMap.set('summary', stored);
+
+    const t = projection.collect()[0];
+    expect(t?.summary).toEqual(stored);
+    expect(t?.summaryPending).toBeUndefined();
   });
 
   it('shows an unresolvable range as orphaned without touching what is stored', () => {
