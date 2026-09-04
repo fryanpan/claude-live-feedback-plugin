@@ -17,6 +17,7 @@ import {
   replaceAnchor as schemaReplaceAnchor,
   setStatus as schemaSetStatus,
   setCommentReview,
+  storedJudgement,
   withRevision,
   withdrawReview,
 } from '@feedback/core';
@@ -408,7 +409,7 @@ export class DocThreads {
     }
     const review: ReviewPayload = {
       ...current,
-      judge: { at: judgement.at, verdict: judgement.verdict, reason: judgement.reason },
+      judge: storedJudgement(judgement),
     };
     if (!setCommentReview(room.ydoc, threadId, commentId, review)) {
       // The comment went between the read and the write — a race, not an

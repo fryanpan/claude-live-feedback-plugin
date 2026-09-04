@@ -38,7 +38,7 @@ const DRAWER_PREF_KEY = 'lf:drawer';
 export function initialDrawerOpen(opts: {
   isDesktop: boolean;
   marginVisible: boolean;
-  /** Inline cards cover this width — see `INLINE_CARDS_QUERY`. */
+  /** Inline cards are this device's chosen surface — see `card-placement.ts`. */
   inlineVisible: boolean;
   stored: string | null;
 }): boolean {

@@ -60,6 +60,7 @@ function opts(scope: MountScope, docId = 'd1'): ChromeOpts {
     // Fire immediately: these mounts assert against threads that are already
     // present, so they are testing the post-sync world.
     whenSynced: (cb) => cb(),
+    canWrite: true,
     selectHint: '',
     reanchorHint: '',
     getSelection: () => null,

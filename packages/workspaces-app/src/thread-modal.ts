@@ -6,7 +6,14 @@ import {
   restoreScrollTops,
 } from './composer-keep.ts';
 import { threadDecision } from './long-thread.ts';
-import { isFoldingTap, sizeThreadSlots, syncFaceVisibility } from './thread-morph.ts';
+import {
+  MORPH_MS,
+  isFoldingTap,
+  morphCard,
+  prefersReducedMotion,
+  sizeThreadSlots,
+  syncFaceVisibility,
+} from './thread-morph.ts';
 
 /**
  * The wide modal a long or decision-bearing thread opens in.
@@ -50,6 +57,10 @@ export interface ThreadModalScope {
   onCleanup: (fn: () => void) => void;
 }
 
+/** The dialog's own easing, matching thread-morph.ts's `EASE` so the promote
+ *  and the unfold inside it read as one gesture. */
+const PROMOTE_EASE = 'cubic-bezier(.22,.72,.24,1)';
+
 export interface ThreadModalOpts {
   scope: ThreadModalScope;
   /** The card. Pass `(t, draft) => threadsPanel.renderThread(t, draft)`. */
@@ -82,8 +93,15 @@ export interface ThreadModalOpts {
 }
 
 export interface ThreadModalHandle {
-  open: (t: Thread) => void;
-  close: () => void;
+  /**
+   * Show `t`. `origin` is the rectangle the dialog should grow out of — the
+   * bubble the reader tapped — and closing shrinks back into it. Omit it and
+   * the dialog simply appears, which is right for every caller that has no
+   * bubble on screen (the drawer, a keyboard route, a phone).
+   */
+  open: (t: Thread, origin?: DOMRect | null) => void;
+  /** `instant` skips the shrink — see `close`. */
+  close: (instant?: boolean) => void;
   /** The thread on screen, or null when the modal is down. */
   openThreadId: () => string | null;
   /**
@@ -104,14 +122,25 @@ export function mountThreadModal(opts: ThreadModalOpts): ThreadModalHandle {
   root.setAttribute('role', 'dialog');
   root.setAttribute('aria-modal', 'true');
   root.setAttribute('aria-label', 'Comment thread');
+  // `.thread-modal-inner` exists for the promote tween and nothing else: the
+  // dialog's BOX is what travels between the bubble's rectangle and its own,
+  // while this wrapper is pinned at the final size for the whole journey. That
+  // makes the box a widening WINDOW onto content already laid out where it
+  // will finish. The two alternatives both break: a transform tween from a
+  // 260px bubble to a 760px dialog squashes every glyph to a third of its
+  // width on the way, and a width tween with fluid content rewraps the entire
+  // card on every frame.
   root.innerHTML = `
-    <header class="thread-modal-header">
-      <h2 class="thread-modal-title">Comment</h2>
-      <button type="button" class="icon-btn thread-modal-close" aria-label="Close" title="Close">×</button>
-    </header>
-    <div class="thread-modal-body"></div>
+    <div class="thread-modal-inner">
+      <header class="thread-modal-header">
+        <h2 class="thread-modal-title">Comment</h2>
+        <button type="button" class="icon-btn thread-modal-close" aria-label="Close" title="Close">×</button>
+      </header>
+      <div class="thread-modal-body"></div>
+    </div>
   `;
   document.body.append(scrim, root);
+  const innerEl = root.querySelector('.thread-modal-inner') as HTMLElement;
   const titleEl = root.querySelector('.thread-modal-title') as HTMLElement;
   const bodyEl = root.querySelector('.thread-modal-body') as HTMLElement;
 
@@ -126,6 +155,35 @@ export function mountThreadModal(opts: ThreadModalOpts): ThreadModalHandle {
    *  wrapping onto another line as it is typed, an image landing in a comment
    *  body — re-sizes the slots instead of being clipped by a stale height. */
   let faceWatch: ResizeObserver | null = null;
+  /** The bubble this dialog grew out of, so closing can shrink back into it. */
+  let promoteFrom: DOMRect | null = null;
+  /** The box tween in flight, so an interrupting one can tear it down. */
+  let promoting: Animation | null = null;
+  /** The fade partners of the box tween. Held so an interrupted promote takes
+   *  them down WITH it: cancelling the box alone left a shrink's fade-to-zero
+   *  running underneath the reopen that replaced it, which emptied the dialog
+   *  the reader had just asked for. */
+  let promoteExtra: Animation[] = [];
+
+  /**
+   * Take down whatever promote is in flight, and hand the dialog's inline
+   * sizes back on the way out.
+   *
+   * Cancelling BEFORE anything measures is the point: a dialog halfway through
+   * a shrink reports the rect it is passing through, so a reopen that measured
+   * first would grow out of a phantom box that was never on screen.
+   */
+  function cancelPromote(): void {
+    for (const a of promoteExtra) {
+      try {
+        a.cancel();
+      } catch {
+        // A finished animation can refuse; there is nothing left to stop.
+      }
+    }
+    promoteExtra = [];
+    promoting?.cancel();
+  }
 
   function draft(): string | undefined {
     return bodyEl.querySelector<HTMLTextAreaElement>('textarea')?.value || undefined;
@@ -145,15 +203,28 @@ export function mountThreadModal(opts: ThreadModalOpts): ThreadModalHandle {
     }
   }
 
-  function paint(t: Thread, pendingReply?: string): void {
+  function paint(t: Thread, pendingReply?: string, folded = false): HTMLElement {
     bodyEl.textContent = '';
     const card = opts.renderCard(t, pendingReply);
-    // The modal's contract is that the card is OPEN. The panel's selection is
-    // the authority and the chrome sets it, but a card built while the panel
+    // The modal's contract is that the card ends up OPEN. The panel's selection
+    // is the authority and the chrome sets it, but a card built while the panel
     // disagrees would mount folded inside a dialog with nothing to unfold it —
     // the fold tap is swallowed in here.
-    card.classList.add('expanded');
-    syncFaceVisibility(card, true);
+    //
+    // `folded` is the one exception, and it is what makes the promote read as a
+    // single gesture: on the way in the card mounts as the two summary lines
+    // the bubble was already showing, and morphs into the conversation only
+    // once the box has arrived at its shape. A card painted open would have the
+    // dialog growing around content that had already changed.
+    card.classList.toggle('expanded', !folded);
+    syncFaceVisibility(card, !folded);
+    // Out of the tab order in here, and ONLY in here. On a card in the column
+    // the caret is the one focusable thing a folded conversation offers, so it
+    // has to be tabbable there. Inside the dialog the card is always open and
+    // the fold tap is swallowed into a close — which handed a keyboard user
+    // two closes in a row, the caret and then the close button beside it. It
+    // keeps its glyph and its label; it loses only its stop.
+    card.querySelector('.thread-caret')?.setAttribute('tabindex', '-1');
     bodyEl.appendChild(card);
     // A slot has no intrinsic height; nothing renders until it is measured,
     // and it can only be measured once it is in the document — which is also
@@ -172,27 +243,128 @@ export function mountThreadModal(opts: ThreadModalOpts): ThreadModalHandle {
     titleEl.textContent =
       threadDecision(t) === 'none' ? threadSummary(t).topic || 'Comment' : 'Decision';
     renderedKey = threadRenderKey(t);
+    return card;
   }
 
-  function open(t: Thread): void {
+  /**
+   * Grow the dialog out of `rect`, or shrink it back into it.
+   *
+   * Same length and easing as the slot morph, so the promote and the unfold read
+   * as one gesture rather than two animations that happen to be adjacent. The
+   * resting state is written FIRST and the keyframes only replay the journey —
+   * exactly as `slide` does in thread-morph.ts — so an interrupted or
+   * unsupported animation still leaves the dialog in the right place.
+   *
+   * Handing the inline styles back to the stylesheet on settle is not tidiness:
+   * they pin the dialog in viewport coordinates, and a resize would otherwise
+   * leave it parked wherever it was born.
+   */
+  function promote(rect: DOMRect | null, grow: boolean, done?: () => void): void {
+    // Whatever was in flight is superseded — and its completion callback with
+    // it, so a cancelled close can never finish closing a dialog that has
+    // since been reopened. Ahead of the measurement below, deliberately.
+    cancelPromote();
+    let finish: (() => void) | undefined = done;
+    const settle = (): void => {
+      root.style.cssText = '';
+      innerEl.style.cssText = '';
+      promoting = null;
+      finish?.();
+    };
+    if (rect === null || prefersReducedMotion() || typeof root.animate !== 'function') {
+      settle();
+      return;
+    }
+    const fin = root.getBoundingClientRect();
+    // Nothing to tween between: a dialog with no layout (a test DOM, a hidden
+    // pane) would otherwise animate to a zero box and land there.
+    if (fin.width <= 0 || fin.height <= 0 || rect.width <= 0) {
+      settle();
+      return;
+    }
+    // Pin the content at the size it will end at, for the whole journey.
+    innerEl.style.width = `${fin.width}px`;
+    innerEl.style.height = `${fin.height}px`;
+    root.style.transform = 'none';
+    root.style.maxHeight = 'none';
+    const box = (r: { left: number; top: number; width: number; height: number }, radius: string) =>
+      ({
+        left: `${Math.round(r.left)}px`,
+        top: `${Math.round(r.top)}px`,
+        width: `${Math.round(r.width)}px`,
+        height: `${Math.round(r.height)}px`,
+        borderRadius: radius,
+      }) as Keyframe;
+    const small = box(rect, '8px');
+    const large = box(fin, '12px');
+    const from = grow ? small : large;
+    const to = grow ? large : small;
+    // The resting state lands now; the tween below replays the journey.
+    Object.assign(root.style, to);
+
+    const timing: KeyframeAnimationOptions = {
+      duration: MORPH_MS,
+      easing: PROMOTE_EASE,
+      fill: 'backwards',
+    };
+    promoting = root.animate([from, to], timing);
+    // The content fades with the box rather than being revealed as a
+    // hard-clipped fragment of itself.
+    promoteExtra = [
+      innerEl.animate(grow ? [{ opacity: 0 }, { opacity: 1 }] : [{ opacity: 1 }, { opacity: 0 }], {
+        ...timing,
+        duration: MORPH_MS * 0.8,
+      }),
+      scrim.animate(
+        grow ? [{ opacity: 0 }, { opacity: 1 }] : [{ opacity: 1 }, { opacity: 0 }],
+        timing,
+      ),
+    ];
+    promoting?.addEventListener('finish', settle);
+    // A cancelled journey still has to hand the styles back, but must NOT run
+    // the callback of the journey that replaced it.
+    promoting?.addEventListener('cancel', () => {
+      finish = undefined;
+      settle();
+    });
+  }
+
+  function open(t: Thread, origin?: DOMRect | null): void {
     if (openId === null) {
       returnFocus = document.activeElement as HTMLElement | null;
     }
     openId = t.id;
+    cancelPromote();
     // Visible BEFORE painted: paint measures the card's slots, and a subtree
     // under `display: none` measures 0 everywhere. Same tick, so no frame is
     // ever shown between the two.
     scrim.classList.remove('hidden');
     root.classList.remove('hidden');
     scrim.setAttribute('aria-hidden', 'false');
-    paint(t);
+    // Painted FOLDED, then unfolded once the box has arrived — see `paint`.
+    const card = paint(t, undefined, origin != null);
+    promoteFrom = origin ?? null;
+    promote(promoteFrom, true, () => {
+      if (openId !== t.id) return;
+      // Shape first, then content: the card grows into the room the dialog
+      // just made rather than racing the box it is growing inside. A second
+      // measure, because the faces were laid out against a box that has since
+      // changed width.
+      sizeThreadSlots(bodyEl);
+      morphCard(card, true);
+    });
     // Focus lands on the close button rather than on the card: it is the one
     // control that is always present and always safe to press, and tabbing on
     // from it walks the conversation in reading order.
     (root.querySelector('.thread-modal-close') as HTMLElement | null)?.focus?.();
   }
 
-  function close(): void {
+  /**
+   * `instant` skips the shrink. Used when the reader clicked THROUGH the scrim
+   * onto another bubble: the dialog is not going away so much as being
+   * replaced, and a shrink-then-grow reads as a flinch.
+   */
+  function close(instant = false): void {
     // A close that closes nothing announces nothing. The caller's `onClose`
     // hands the panel's selection back, which comes round again as an
     // active-change — and that is where an unguarded second close would loop.
@@ -202,13 +374,25 @@ export function mountThreadModal(opts: ThreadModalOpts): ThreadModalHandle {
     renderedKey = '';
     faceWatch?.disconnect();
     faceWatch = null;
-    bodyEl.textContent = '';
-    root.classList.add('hidden');
-    scrim.classList.add('hidden');
-    scrim.setAttribute('aria-hidden', 'true');
-    returnFocus?.focus?.();
-    returnFocus = null;
-    opts.onClose(was);
+    cancelPromote();
+
+    const finish = (): void => {
+      bodyEl.textContent = '';
+      root.classList.add('hidden');
+      scrim.classList.add('hidden');
+      scrim.setAttribute('aria-hidden', 'true');
+      root.style.cssText = '';
+      innerEl.style.cssText = '';
+      promoteFrom = null;
+      returnFocus?.focus?.();
+      returnFocus = null;
+      opts.onClose(was);
+    };
+    // The shape arrives back where it came from, and THEN the column takes its
+    // selection back — `onClose` is what hands it over, so it rides the end of
+    // the shrink rather than the start.
+    if (instant) finish();
+    else promote(promoteFrom, false, finish);
   }
 
   function refresh(t: Thread | null): void {
@@ -230,7 +414,10 @@ export function mountThreadModal(opts: ThreadModalOpts): ThreadModalHandle {
     restoreScrollTops(keptScroll);
   }
 
-  scope.listen(root.querySelector('.thread-modal-close') as HTMLElement, 'click', close);
+  // `() => close()` and not `close`: a listener is handed the Event, and
+  // `close(instant)` would read a MouseEvent as a truthy `instant` and skip
+  // the shrink on every close from the × button.
+  scope.listen(root.querySelector('.thread-modal-close') as HTMLElement, 'click', () => close());
   /**
    * The scrim dismisses — unless the reader was aiming at another thread.
    *
@@ -248,6 +435,9 @@ export function mountThreadModal(opts: ThreadModalOpts): ThreadModalHandle {
     const me = ev as MouseEvent;
     const under = opts.threadUnderPoint?.(me.clientX, me.clientY) ?? null;
     if (under !== null && under !== openId && opts.onSwitchThread) {
+      // Replaced, not dismissed: no shrink, because the next thread's own
+      // promote is about to run out of a different bubble.
+      close(true);
       opts.onSwitchThread(under);
       return;
     }
