@@ -1293,6 +1293,14 @@ export class Rooms {
    * deadline. The doc parks exactly like an unplaced doc home: content stays
    * in the `.ydoc`, no binding, and the next hydrate after the backoff tries
    * again. Nothing here opens the file.
+   *
+   * The second half of that verdict is the pool being BUSY, and leaving it
+   * out was a hole. A prewarm refused for `busy` reads nothing and marks
+   * nothing — there are no bytes to hand over and no quarantine on the path —
+   * so this returned `undefined` and the hydrate went and opened the file on
+   * the main thread. That is the one moment it must not: `busy` means calls
+   * are already parked in the pool with their threads unreturned, which is
+   * the signature of a folder that has stopped answering.
    */
   private prereadFor(docId: string, path: string): PrereadFile | 'unavailable' | undefined {
     const fresh = boundFiles.takeFresh(path);
@@ -1301,9 +1309,15 @@ export class Rooms {
         ? { exists: true, text: fresh.text, mtimeMs: fresh.mtimeMs }
         : { exists: false };
     }
-    if (!boundFiles.quarantined(path)) return undefined;
-    console.warn(`[rooms] ${docId}: bound file is not answering; writes parked (${path})`);
-    return 'unavailable';
+    if (boundFiles.quarantined(path)) {
+      console.warn(`[rooms] ${docId}: bound file is not answering; writes parked (${path})`);
+      return 'unavailable';
+    }
+    if (boundFiles.busy()) {
+      console.warn(`[rooms] ${docId}: bound reads are backed up; writes parked (${path})`);
+      return 'unavailable';
+    }
+    return undefined;
   }
 
   /**
@@ -2327,15 +2341,6 @@ export class Rooms {
     opts: AttachOpts & { writeBack?: boolean } = {},
   ): { ok: boolean; error?: 'not-found' | 'path-empty' | 'read-failed'; resolvedPath?: string } {
     return this.bindings.attachFlatFile(docId, filePath, opts);
-  }
-
-  /** `attachFlatFile` with the file read on the thread pool first. */
-  attachFlatFileAsync(
-    docId: string,
-    filePath: string,
-    opts: AttachOpts & { writeBack?: boolean } = {},
-  ): ReturnType<FileBindings['attachFlatFileAsync']> {
-    return this.bindings.attachFlatFileAsync(docId, filePath, opts);
   }
 
   /** Pin a doc to its repo home: repo + branch + relPath. */

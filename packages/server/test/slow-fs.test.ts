@@ -93,6 +93,16 @@ describe('boundFiles', () => {
     const extra = makeFifo(join(scratch, 'stall-extra.md'));
     expect(await boundFiles.read(extra)).toEqual({ status: 'unavailable', reason: 'busy' });
     expect(boundFiles.stats().leaked).toBe(BOUND_READ_MAX_OVERDUE);
+
+    // And the refusal reaches a HEALTHY path too. That is the fact the
+    // synchronous callers depend on: `busy` is the state of the gate, not a
+    // property of the path in front of it, so a hydrate cannot read "no
+    // quarantine on this file" as "safe to open on the main thread". It also
+    // leaves no mark behind — nothing about `readable` is quarantined — which
+    // is exactly how a `busy` verdict used to fall through to a blocking read.
+    expect(boundFiles.busy()).toBe(true);
+    expect(await boundFiles.read(readable)).toEqual({ status: 'unavailable', reason: 'busy' });
+    expect(boundFiles.quarantined(readable)).toBe(false);
   });
 
   it('never refuses a healthy file, however many calls are outstanding', async () => {
@@ -109,6 +119,9 @@ describe('boundFiles', () => {
     );
     expect(results.filter((r) => r.status === 'unavailable')).toEqual([]);
     expect(boundFiles.stats().leaked).toBe(0);
+    // The negative control for the busy assertions above: healthy traffic,
+    // however much of it, never puts the gate into the refusing state.
+    expect(boundFiles.busy()).toBe(false);
   });
 
   it('leaves a healthy file readable while another path is stalled', async () => {
