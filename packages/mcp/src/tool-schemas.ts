@@ -1007,39 +1007,6 @@ export const TOOL_LIST: ListToolsResult = {
       },
     },
     {
-      name: 'share_link',
-      description:
-        'Publish a board to people outside the tailnet. Everyone signs in: the share gets its own hostname behind Cloudflare Access, so the URL carries no secret and can be pasted anywhere. The unguessable no-sign-in link this tool used to mint is retired (2026-09-02) — existing ones are kept and listed, and redeem nowhere. Same scope as share_workspace, and a board is still the unit: there is no doc-scoped share, and a docId is refused rather than widened to the board. allowDomains says who may sign in; with none given it falls back to the operator allowlist and says so (audienceDefaulted), and refuses when there is no allowlist either — it never admits anyone. Default TTL two weeks; a configured ceiling clamps longer asks and the reply says so (ttlClamped). Every argument is honoured or refused by name — never silently dropped.',
-      inputSchema: {
-        type: 'object',
-        properties: {
-          workspaceId: {
-            type: 'string',
-            description:
-              'The BOARD to share — the id create_workspace returned, or the hubWorkspaceId bind_folder / create_diff_review reported. NOT a review/review id.',
-          },
-          ttl: {
-            type: 'string',
-            description:
-              "How long the link lives, as an integer plus a unit: '15m', '2h', '3d', '1w'. Pass this OR ttlSeconds, not both.",
-          },
-          ttlSeconds: {
-            type: 'number',
-            description:
-              'Lifetime in seconds. Defaults to two weeks (1209600) when neither ttl nor ttlSeconds is given.',
-          },
-          label: { type: 'string', description: 'Human label shown in list_shares.' },
-          allowDomains: {
-            type: 'array',
-            items: { type: 'string' },
-            description:
-              "Who may sign in: email addresses ('reviewer@partner-org.example') or domains ('@partner-org.example'). Read .claude/claude-workspaces.json's share.defaultAllowDomains first; omit only when you mean the operator allowlist, and never widen to a domain nobody asked for.",
-          },
-        },
-        required: ['workspaceId'],
-      },
-    },
-    {
       name: 'set_share_ttl',
       description:
         'Extend or shorten a live share. `ttlSeconds` is measured from now, so passing 3600 makes it expire an hour from this call regardless of when it was created. Takes effect immediately — an already-open browser is refused on its next request once the share lapses.',
