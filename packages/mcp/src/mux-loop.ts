@@ -36,7 +36,7 @@
 import { reconnectDelayMs } from './backoff.ts';
 import { formatMuxCursor } from './mux-cursor.ts';
 import { frameMeta } from './sse-cursor.ts';
-import type { LoopTimers, Watcher } from './sse-loop.ts';
+import { type LoopTimers, type Watcher, releaseBody, releaseReader } from './sse-loop.ts';
 
 /** How long `ensureOpen` waits for a first connect outcome before answering
  *  `false`, so a wedged connect never stalls a tool call. Same budget the
@@ -209,6 +209,7 @@ async function runMuxLoop(
       if (res.status === 404) {
         // This server predates the route. Not a transient failure and not
         // worth a retry loop: say so once and let the registry fall back.
+        await releaseBody(res);
         rt.unsupported = true;
         rt.running = false;
         setOpen(deps, rt, false);
@@ -221,7 +222,14 @@ async function runMuxLoop(
       const live = res.ok && res.body !== null;
       setOpen(deps, rt, live);
       onFirstAttempt(live);
-      if (!live) throw new Error(`sse ${path} → ${res.status}`);
+      if (!live) {
+        // Hand the body back before throwing. An un-consumed, un-cancelled
+        // response body holds its connection on the platform side, and a
+        // retrying loop that skips this leaks one protocol control block per
+        // attempt — see the constants in sse-loop.ts for what that cost.
+        await releaseBody(res);
+        throw new Error(`sse ${path} → ${res.status}`);
+      }
       const reader = (res.body as ReadableStream<Uint8Array>).getReader();
       const decoder = new TextDecoder();
       let buf = '';
@@ -238,24 +246,30 @@ async function runMuxLoop(
        * working connection — and that is the thing worth resetting on.
        */
       let framesRead = 0;
-      while (!signal.aborted) {
-        const { value: chunk, done } = await reader.read();
-        if (done) break;
-        buf += decoder.decode(chunk, { stream: true });
-        // Split on blank-line boundaries per SSE framing.
-        let sep = buf.indexOf('\n\n');
-        while (sep >= 0) {
-          const frame = buf.slice(0, sep);
-          buf = buf.slice(sep + 2);
-          framesRead += 1;
-          // Reset here rather than after the read loop: a long-lived stream
-          // that finally throws is still a stream that was working, and a
-          // reset that only ran on a clean end-of-stream would never fire for
-          // it.
-          if (framesRead > 1) attempt = 0;
-          await deliverThenCommitMux(frame, deps.handleFrame, rt.cursors, deps.resetDedup);
-          sep = buf.indexOf('\n\n');
+      try {
+        while (!signal.aborted) {
+          const { value: chunk, done } = await reader.read();
+          if (done) break;
+          buf += decoder.decode(chunk, { stream: true });
+          // Split on blank-line boundaries per SSE framing.
+          let sep = buf.indexOf('\n\n');
+          while (sep >= 0) {
+            const frame = buf.slice(0, sep);
+            buf = buf.slice(sep + 2);
+            framesRead += 1;
+            // Reset here rather than after the read loop: a long-lived stream
+            // that finally throws is still a stream that was working, and a
+            // reset that only ran on a clean end-of-stream would never fire
+            // for it.
+            if (framesRead > 1) attempt = 0;
+            await deliverThenCommitMux(frame, deps.handleFrame, rt.cursors, deps.resetDedup);
+            sep = buf.indexOf('\n\n');
+          }
         }
+      } finally {
+        // Abort, throw or clean end — the reader goes back either way, so the
+        // platform can reclaim the connection.
+        await releaseReader(reader);
       }
     } catch (err) {
       setOpen(deps, rt, false);

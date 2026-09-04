@@ -192,6 +192,51 @@ describe('the reconnect presents a per-key cursor', () => {
   });
 });
 
+describe('no response body is left un-released', () => {
+  /** A response whose body records the moment it is cancelled. */
+  function bodied(status: number): { res: Response; cancelled: () => boolean } {
+    let cancelled = false;
+    const stream = new ReadableStream<Uint8Array>({
+      start() {},
+      cancel() {
+        cancelled = true;
+      },
+    });
+    return { res: new Response(stream, { status }), cancelled: () => cancelled };
+  }
+
+  it('cancels the body of a non-ok response before throwing', async () => {
+    // An un-consumed, un-cancelled body is a protocol control block the
+    // platform cannot reclaim. A retrying loop that skips this leaks one per
+    // attempt; see sse-loop.ts for the 162,000 that measured.
+    const b = bodied(500);
+    const h = harness([() => b.res]);
+    await expect(h.loop.ensureOpen()).resolves.toBe(false);
+    expect(b.cancelled()).toBe(true);
+    h.loop.stop();
+  });
+
+  it('cancels the body of the 404 that ends the loop', async () => {
+    const b = bodied(404);
+    const h = harness([() => b.res]);
+    await expect(h.loop.ensureOpen()).resolves.toBe(false);
+    expect(h.loop.unsupported()).toBe(true);
+    expect(b.cancelled()).toBe(true);
+  });
+
+  it('gives the reader back when a live stream ends', async () => {
+    const held = sseHeld();
+    const h = harness([() => held.res]);
+    await h.loop.ensureOpen();
+    held.close();
+    await settle();
+    await settle();
+    // A lock left held is the same leak reached from the reading side.
+    expect(held.res.body?.locked).toBe(false);
+    h.loop.stop();
+  });
+});
+
 describe('a server that predates the route is a rollout state, not a retry loop', () => {
   it('stops on a 404, says so once, and reports itself unsupported', async () => {
     const h = harness([() => new Response('not found', { status: 404 })]);
