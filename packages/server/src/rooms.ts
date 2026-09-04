@@ -2299,6 +2299,18 @@ export class Rooms {
     return this.bindings.attachFile(docId, filePath, opts);
   }
 
+  /**
+   * `attachFile` with the file read on the thread pool first — the binding
+   * door for request handlers. See `FileBindings.attachFileAsync`.
+   */
+  attachFileAsync(
+    docId: string,
+    filePath: string,
+    opts: AttachOpts = {},
+  ): ReturnType<FileBindings['attachFileAsync']> {
+    return this.bindings.attachFileAsync(docId, filePath, opts);
+  }
+
   /** Bind a READ-ONLY source file (type='code') for review — no write-back. */
   attachReadonlyFile(
     docId: string,
@@ -2315,6 +2327,15 @@ export class Rooms {
     opts: AttachOpts & { writeBack?: boolean } = {},
   ): { ok: boolean; error?: 'not-found' | 'path-empty' | 'read-failed'; resolvedPath?: string } {
     return this.bindings.attachFlatFile(docId, filePath, opts);
+  }
+
+  /** `attachFlatFile` with the file read on the thread pool first. */
+  attachFlatFileAsync(
+    docId: string,
+    filePath: string,
+    opts: AttachOpts & { writeBack?: boolean } = {},
+  ): ReturnType<FileBindings['attachFlatFileAsync']> {
+    return this.bindings.attachFlatFileAsync(docId, filePath, opts);
   }
 
   /** Pin a doc to its repo home: repo + branch + relPath. */

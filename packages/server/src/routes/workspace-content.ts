@@ -299,7 +299,7 @@ export async function handleWorkspaceContent(
       console.error(`[huddle] could not write ${file}:`, err);
       return j(500, { error: 'huddle-file-failed' });
     }
-    const attached = rooms.attachFile(docId, file);
+    const attached = await rooms.attachFileAsync(docId, file);
     if (!attached.ok) return j(409, { error: 'attach_failed', attached });
     if (typeof huddleTaskId === 'string') {
       const linked = taskStore.linkRef(huddleTaskId, { kind: 'doc', docId });

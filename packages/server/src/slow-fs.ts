@@ -35,7 +35,7 @@
  * hydrate that asked for it can use them instead of opening the file again —
  * consumed on first use, never served twice.
  */
-import { readFile, stat } from 'node:fs/promises';
+import { readFile, realpath, rename, stat, writeFile } from 'node:fs/promises';
 import { ROOM_TIMINGS } from './room-timings.ts';
 
 /**
@@ -107,11 +107,29 @@ function isEnoent(err: unknown): boolean {
   return code === 'ENOENT' || code === 'ENOTDIR';
 }
 
+/**
+ * A cloud-sync provider refusing to materialize an online-only file.
+ *
+ * Whether a stalled provider HANGS or fails fast is a property of the
+ * process, not the file: with dataless-file materialization off — which is
+ * how prod's launchd job runs — the kernel refuses immediately with EDEADLK
+ * instead of waiting on the provider. That is an ordinary unreadable file,
+ * not a hostile path, so it must not earn the backoff: the doc hydrates from
+ * its `.ydoc` and the next attempt costs a syscall that returns at once. A
+ * minute-long quarantine here would keep a doc parked long after the file
+ * came back.
+ */
+function isDataless(err: unknown): boolean {
+  return (err as NodeJS.ErrnoException | undefined)?.code === 'EDEADLK';
+}
+
 type Raced<T> = { kind: 'settled'; value: T } | { kind: 'failed'; err: unknown } | { kind: 'late' };
 
 class BoundFileReader {
   /** Paths that blew the deadline, and the time they may be tried again. */
   private readonly stalledUntil = new Map<string, number>();
+  /** Last time each unreadable-but-not-hostile path was logged. */
+  private readonly unreadableLoggedAt = new Map<string, number>();
   /** Reads whose pool thread has not come back yet. Bounded, see above. */
   private inflightRead = 0;
   /** Stats whose pool thread has not come back yet. Bounded separately. */
@@ -141,8 +159,19 @@ class BoundFileReader {
     return false;
   }
 
-  /** Read a bound file off the main thread, or report why we did not. */
-  async read(path: string): Promise<BoundReadResult> {
+  /**
+   * Read a bound file off the main thread, or report why we did not.
+   *
+   * `keep: false` reads without leaving the bytes for a later hydrate to
+   * pick up. The held-bytes map is the prewarm-to-hydrate handoff and nothing
+   * else: a caller that already HAS the bytes it asked for must not also
+   * leave them lying in a cache keyed only by path, because the next hydrate
+   * of that path would take them as its own. A bind doing exactly that made
+   * a doc re-bind to bytes read seconds earlier, from a file that had since
+   * been replaced.
+   */
+  async read(path: string, opts: { keep?: boolean } = {}): Promise<BoundReadResult> {
+    const keep = opts.keep !== false;
     const blocked = this.gate(path);
     if (blocked) return blocked;
     const raced = await this.race('read', path, async () => {
@@ -153,13 +182,17 @@ class BoundFileReader {
     if (raced.kind === 'failed') {
       if (isEnoent(raced.err)) {
         const gone: Extract<BoundReadResult, { status: 'ok' }> = { status: 'ok', exists: false };
-        this.keepFresh(path, gone);
+        if (keep) this.keepFresh(path, gone);
         return gone;
       }
-      // EDEADLK / EINTR / EIO from a sick file provider land here. They are
-      // the same trouble as a timeout one step earlier, so they earn the
-      // same backoff — otherwise a provider that errors fast gets retried
-      // as hard as the reconnect loop can ask.
+      if (isDataless(raced.err)) {
+        this.noteUnreadable(path, raced.err);
+        return { status: 'unavailable', reason: 'error' };
+      }
+      // EINTR / EIO from a sick file provider land here. They are the same
+      // trouble as a timeout one step earlier, so they earn the same backoff
+      // — otherwise a provider that errors fast gets retried as hard as the
+      // reconnect loop can ask.
       this.markStalled(path, raced.err);
       return { status: 'unavailable', reason: 'error' };
     }
@@ -169,7 +202,7 @@ class BoundFileReader {
       text: raced.value.text,
       mtimeMs: raced.value.mtimeMs,
     };
-    this.keepFresh(path, result);
+    if (keep) this.keepFresh(path, result);
     return result;
   }
 
@@ -199,6 +232,44 @@ class BoundFileReader {
     this.fresh.set(path, { at: Date.now(), result });
   }
 
+  /**
+   * Write a bound file off the main thread, atomically.
+   *
+   * Same shape as `read` and for the same reason: `writeFileSync` on a path
+   * whose provider has stopped answering parks the only thread that runs
+   * JavaScript, and the write-back timer fires against every bound doc. The
+   * temp-then-rename is the editors' save pattern, and the rename lands on
+   * the REALPATH so a symlinked bound file is written through rather than
+   * replaced.
+   *
+   * Returns the mtime the file ended up with, so the caller can record its
+   * own write and keep the poll from reading it back as an external edit.
+   */
+  async write(path: string, text: string): Promise<BoundStatResult> {
+    const blocked = this.gate(path);
+    if (blocked) return blocked;
+    const raced = await this.race('read', path, async () => {
+      let target = path;
+      try {
+        target = await realpath(path);
+      } catch {}
+      const tmp = `${target}.lf-write~`;
+      await writeFile(tmp, text);
+      await rename(tmp, target);
+      return stat(target);
+    });
+    if (raced.kind === 'late') return { status: 'unavailable', reason: 'timeout' };
+    if (raced.kind === 'failed') {
+      if (isDataless(raced.err)) {
+        this.noteUnreadable(path, raced.err);
+        return { status: 'unavailable', reason: 'error' };
+      }
+      this.markStalled(path, raced.err);
+      return { status: 'unavailable', reason: 'error' };
+    }
+    return { status: 'ok', exists: true, mtimeMs: raced.value.mtimeMs };
+  }
+
   /** The mtime half of `read`, for the poll's change detection. */
   async statMtime(path: string): Promise<BoundStatResult> {
     const blocked = this.gate(path);
@@ -207,6 +278,10 @@ class BoundFileReader {
     if (raced.kind === 'late') return { status: 'unavailable', reason: 'timeout' };
     if (raced.kind === 'failed') {
       if (isEnoent(raced.err)) return { status: 'ok', exists: false };
+      if (isDataless(raced.err)) {
+        this.noteUnreadable(path, raced.err);
+        return { status: 'unavailable', reason: 'error' };
+      }
       this.markStalled(path, raced.err);
       return { status: 'unavailable', reason: 'error' };
     }
@@ -235,12 +310,31 @@ class BoundFileReader {
   reset(): void {
     this.fresh.clear();
     this.stalledUntil.clear();
+    this.unreadableLoggedAt.clear();
   }
 
   private gate(path: string): { status: 'unavailable'; reason: 'backoff' | 'busy' } | undefined {
     if (this.quarantined(path)) return { status: 'unavailable', reason: 'backoff' };
     if (this.leaked >= BOUND_READ_MAX_OVERDUE) return { status: 'unavailable', reason: 'busy' };
     return undefined;
+  }
+
+  /**
+   * A file we could not read but which has earned no backoff — see
+   * `isDataless`. Logged at most once a minute per path, because the caller
+   * that hit it is free to try again immediately and usually will.
+   */
+  private noteUnreadable(path: string, err: unknown): void {
+    const last = this.unreadableLoggedAt.get(path) ?? 0;
+    const now = Date.now();
+    if (now - last < RETRY_MS) return;
+    this.unreadableLoggedAt.set(path, now);
+    if (this.unreadableLoggedAt.size > 256) {
+      for (const [key, at] of this.unreadableLoggedAt) {
+        if (now - at >= RETRY_MS) this.unreadableLoggedAt.delete(key);
+      }
+    }
+    console.error(`[slow-fs] ${path} could not be read; the doc keeps its .ydoc content`, err);
   }
 
   private markStalled(path: string, err?: unknown): void {
