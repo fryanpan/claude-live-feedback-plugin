@@ -2549,6 +2549,21 @@ body.is-reading-width #editor > .live-zone {
   box-shadow: var(--shadow-lg);
   overflow: hidden;
 }
+/* The promote transition's moving part. The dialog's BOX grows out of the
+   bubble's rectangle while this wrapper is pinned at the dialog's final size,
+   so the box is a widening window onto content that is already laid out where
+   it will end up. Nothing reflows and nothing is scaled: a transform tween
+   from a 260px bubble to a 760px dialog would squash every glyph to a third of
+   its width on the way, and a width tween with fluid content rewraps the whole
+   card on every frame. thread-modal.ts owns the inline sizes and hands them
+   back when the journey settles. */
+.thread-modal-inner {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
+  width: 100%;
+}
 .thread-modal-header {
   display: flex;
   align-items: center;
@@ -3428,6 +3443,75 @@ body.redline-mode #toggle-suggest-mode {
   overscroll-behavior: contain;
 }
 
+/* Word's rule: tapping a balloon brings it FORWARD and pushes the rest back.
+   Keyed on the panel's selection (`.active`), not on `.expanded` — a decision
+   or a long thread promotes into the modal and its bubble stays folded and
+   selected behind the scrim, which is exactly the state that has to read as
+   "this is the one you are on".
+
+   `:has()` rather than a class the margin writes, because the selection moves
+   from four places (a balloon tap, a drawer row, a highlight in the prose, a
+   click through the modal's scrim) and every one of them folds the card in
+   place without telling the column. The stylesheet already uses `:has()` for
+   the live zone's grid. */
+.markup-margin:has(.thread.active) .lf-balloon-comment:not(.active) {
+  opacity: 0.42;
+}
+.markup-margin .lf-balloon-comment {
+  transition: opacity 0.12s ease;
+}
+@media (prefers-reduced-motion: reduce) {
+  .markup-margin .lf-balloon-comment {
+    transition: none;
+  }
+}
+/* Forward: out of the wash the others are in, above them in the stack, and
+   lifted off the page. The border says which one without moving anything. */
+.markup-margin .lf-balloon-comment.active {
+  z-index: 3;
+  background: var(--bg);
+  border-color: var(--accent);
+  box-shadow: 0 6px 18px rgba(27, 31, 35, 0.16);
+}
+/* The leader follows its balloon. `lf-leader-on` / `lf-leader-dim` are
+   written by positionBalloons — an SVG line in a detached overlay has no
+   ancestor that knows which thread is selected. */
+.lf-leader-on {
+  stroke-width: 1.4;
+  opacity: 1;
+}
+.lf-leader-dim {
+  opacity: 0.35;
+}
+
+/* The card inside a balloon, where 260px is the whole budget. The card's own
+   rules are the shared ones in styles.css (THREADS PANE); these four are the
+   margin's corrections to them, and they live here because only the review
+   editor mounts a margin.
+
+   The answer row first: the field takes the whole first line and the button
+   drops to the right of the line beneath it, because a 60px input beside a
+   70px button is neither. */
+.markup-margin .thread-answer-field {
+  flex-wrap: wrap;
+  gap: 5px;
+}
+.markup-margin .thread-answer-input {
+  flex: 1 1 100%;
+}
+.markup-margin .thread-answer-send {
+  margin-left: auto;
+}
+/* The author swatch goes in the margin, and only there. 260px has room for a
+   glyph, a name, a time and a chevron; the swatch is the fifth thing competing
+   for the row, and it is the one whose job — telling two people's cards apart
+   at a glance — the column already does by stacking each card beside its own
+   sentence. Every other surface (the drawer, the inline card, the sheet, the
+   dialog) has the width and shows it. */
+.markup-margin .thread-head > .swatch {
+  display: none;
+}
+
 /* Balloon hover/focus: a subtle lift so the margin reads as a column of
    interactive cards, matching the drawer's own :hover treatment. Keyed off
    `.lf-balloon` (not `.lf-balloon-del`, which has no click target of its
@@ -3625,28 +3709,50 @@ body.redline-mode #toggle-suggest-mode {
   border-color: var(--red-strong);
 }
 
-/* Balloons are desktop-only. Below 1100px the column and leader lines
-   disappear and `.lf-del-chip` (built in live-markup.ts, one per deletion
-   group — same grouping as the balloon) takes over as the mobile fallback,
-   shown only in this breakpoint. `display: block` restores the single-column
-   flow — no 300px track means no horizontal scroll at 430px.
+/* Balloons ride the margin only when the reader has ASKED for them there.
+   `body[data-cards]` is written by card-placement.ts and carries the surface
+   in force — `balloon`, `inline`, or `sheet` when balloons were chosen on a
+   screen too narrow to hold a column. This used to be `@media (max-width:
+   1100px)`, which made the surface a property of the window rather than of
+   the reader: page zoom moves a 1366px iPad to 1607px, so width could say how
+   much room there was and never what device this was.
 
-   `.lf-suggest-chip` is the same shape at the same breakpoint but lives in
-   styles.css (EDITOR): SuggestionChips is a BASE extension, so the board's
-   task-body editor mints that chip too and the board never loads this file. */
-@media (max-width: 1100px) {
-  #editor.redline-layout {
-    display: block;
-  }
+   Everywhere the margin is not in force, the column and leader lines
+   disappear and `.lf-del-chip` (live-markup.ts, one per deletion group — same
+   grouping as the balloon) and `.lf-suggest-chip` (suggestion-chips.ts, one
+   per sid) take over as the fallback. `display: block` restores the
+   single-column flow — no 260px track means no horizontal scroll at 430px.
 
-  .markup-margin,
-  .lf-leader-overlay {
-    display: none;
-  }
+   BOTH chips are revealed from here, in the EDITOR sheet, though only the
+   deletion chip is styled here. `.lf-suggest-chip`'s shape stays in
+   styles.css because SuggestionChips is a base extension and the board's
+   task-body editor mints that chip too — but the board writes no
+   `body[data-cards]`, so a reveal keyed on placement would fire there at
+   every width and show a chip the product has never shown. Keeping the
+   reveal in this file is what holds the board where PR 669 left it: the
+   chip computes `none` there, and `doc-css.test.ts` asserts it. */
+body:not([data-cards="balloon"]) #editor.redline-layout {
+  display: block;
+}
 
-  .lf-del-chip {
-    display: inline-flex;
-  }
+body:not([data-cards="balloon"]) .markup-margin,
+body:not([data-cards="balloon"]) .lf-leader-overlay {
+  display: none;
+}
+
+body:not([data-cards="balloon"]) .lf-del-chip,
+body:not([data-cards="balloon"]) .lf-suggest-chip {
+  display: inline-flex;
+}
+
+/* Cards in the flow are as wide as the prose, so the prose has to keep a
+   measure a card reads well at. Without this, moving the cards inline handed
+   the freed margin column to the paragraph: an 1180px iPad went from an 890px
+   measure to 1100px, about 110 characters at 18px, and a two-option decision
+   grew buttons the width of the pane. Yields to the Aa toolbar's
+   reading-width mode, which is the reader asking for something narrower. */
+body[data-cards="inline"]:not(.is-reading-width) #editor.redline-layout > .ProseMirror {
+  max-width: min(100%, 900px);
 }
 
 /* Mobile deletion chip (`.lf-del-chip`, live-markup.ts widget decoration) —
@@ -3870,13 +3976,11 @@ body.redline-mode #toggle-suggest-mode {
     outline: 2px solid var(--accent);
   }
 }
-/* Above 1100px the balloon margin owns the comments; inline cards are not
-   produced there, but belt-and-braces so a stale card left over from a
-   resize can never sit in the middle of desktop prose. The boundary matches
-   `INLINE_CARDS_QUERY` and the margin's own — exactly one always-on comment
-   surface at every width. */
-@media (min-width: 1101px) {
-  .lf-inline-card {
-    display: none;
-  }
+/* Inline cards render only where the reader put them. `mobile-review.ts`
+   builds none on the other surfaces, but belt-and-braces so a stale card left
+   over from a placement flip can never sit in the middle of the prose. Keyed
+   on `body[data-cards]` — the same attribute the margin reads — so exactly one
+   comment surface is on screen at a time, whatever the width. */
+body:not([data-cards="inline"]) .lf-inline-card {
+  display: none;
 }
