@@ -27,7 +27,7 @@ const JORDAN: User = { id: 'known-jordan', name: 'Jordan', kind: 'known', color:
 let root: HTMLElement;
 let removeSheets = () => {};
 beforeEach(() => {
-  removeSheets = installSheets('styles.css');
+  removeSheets = installSheets('styles.css', 'doc.css');
   root = document.createElement('div');
   document.body.replaceChildren(root);
 });
