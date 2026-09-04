@@ -299,6 +299,12 @@ async function runMeeting(
   // Ticks whose compose never ran. Counted and reported rather than assumed
   // away: a run that quietly measured 250 of 273 ticks would still print a
   // pass rate, and the rate would be over a sample nobody could see.
+  //
+  // These are composes that FAILED — a timeout, or the API refusing. The
+  // words are not lost: a failed compose carries its turns into the next
+  // tick, which is what the live pipeline does too. What is lost is the tick
+  // as an EXAMPLE, which is why the count is printed next to the totals and
+  // the reasons are printed under them.
   let uncomposed = 0;
   for (let i = 0; i < ticks.length; i++) {
     const tick = ticks[i]!;
@@ -398,6 +404,11 @@ async function runMeeting(
       `${marked} marked unconfirmed` +
       (uncomposed > 0 ? `, ${uncomposed} never composed` : ''),
   );
+  // Distinct reasons, not one line per failure: twenty timeouts are one fact
+  // about the run, and printing them twenty times buries the meeting totals.
+  for (const reason of new Set(harness.errors)) {
+    console.log(`    ${fixture.meeting}: ${reason}`);
+  }
 }
 
 function report(behaviours: Record<string, Behaviour>): number {
