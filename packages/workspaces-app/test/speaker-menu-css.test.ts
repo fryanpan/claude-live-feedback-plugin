@@ -25,7 +25,7 @@ beforeEach(() => {
   // out on purpose: the served sheet is the vendored Open Props subset
   // concatenated with src/tokens.css, and the mapping layer alone resolves its
   // `var(--gray-9)` chain to nothing, which would blank every colour below.
-  cleanup = installSheets('hub.css', 'styles.css');
+  cleanup = installSheets('hub.css', 'styles.css', 'doc.css');
 });
 afterEach(() => {
   cleanup();
