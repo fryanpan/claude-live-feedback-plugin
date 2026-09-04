@@ -26,6 +26,7 @@ import {
   askCuesIn,
   hasAskCue,
   laterCueIsPlural,
+  nowCueAskCount,
 } from '../src/meeting-ask-cues.ts';
 import { cueLineFor, spokenLineFor } from '../src/meeting-capture-guards.ts';
 import type { NotesTurn } from '../src/meeting-notes.ts';
@@ -282,6 +283,35 @@ describe('spokenLineFor quotes the line the ask was made in', () => {
   });
 });
 
+describe('nowCueAskCount \u2014 how many asks one now-cue line carries', () => {
+  it('counts a second ask when a coordinator is followed by a verb', () => {
+    expect(
+      nowCueAskCount('Claude, can you look at the retry loop and pull up the design doc'),
+    ).toBe(2);
+    expect(nowCueAskCount('Claude, can you check the notes and then find the tunnel thread')).toBe(
+      2,
+    );
+  });
+
+  it('counts one when the coordinator only lengthens the object', () => {
+    expect(nowCueAskCount('Claude, can you look at the retry loop and the sync worker')).toBe(1);
+    expect(nowCueAskCount('Claude, could you pull up last week\u2019s notes')).toBe(1);
+  });
+
+  it('counts the wake word said twice as two', () => {
+    expect(
+      nowCueAskCount('Claude, can you check the notes, Claude could you open the design doc'),
+    ).toBe(2);
+  });
+
+  it('counts nothing for a line that cued no now ask', () => {
+    expect(nowCueAskCount('The retry loop wakes the sync and nobody knows why')).toBe(0);
+    expect(nowCueAskCount('Bob, can you pass me the water and get the lights')).toBe(0);
+    // Later beats now, so a line asking for a row carries no now ask at all.
+    expect(nowCueAskCount('Claude, can you create a task for the retry loop')).toBe(0);
+  });
+});
+
 describe('the capture prompt states the convention it is guarded by', () => {
   it('names both cue families, the wake word, and the neither case', () => {
     // Read off the same tables the guard matches on: a prompt that taught a
@@ -298,7 +328,10 @@ describe('the capture prompt states the convention it is guarded by', () => {
     expect(said).toContain('A bare "can you" to another person in the room is NOT it');
     expect(said).toContain('Speech with NEITHER cue asks for nothing');
     expect(said).toContain('carrying both ("Claude, can you create a task") is LATER');
-    expect(said).toContain('Never return two asks for one cued line');
+    expect(said).toContain('One cued line asks for as many things as it NAMES');
+    // The plural cue's own half of the convention, so the model is not
+    // asked for rows the guard will then throw away.
+    expect(said).toContain('asks for a row per thing they THEN NAME');
   });
 });
 
@@ -393,6 +426,98 @@ describe('parseTaskCaptureReply licenses each ask on its own cue line', () => {
       trigger,
     );
     expect(items).toHaveLength(2);
+  });
+
+  it('files only the rows a PLURAL cue\u2019s window actually spoke', () => {
+    // The bug this guard closes: a plural cue is never spent, so nothing
+    // bounded it, and one "file tickets for the next few things I mention"
+    // licensed four requests \u2014 two of them about work nobody in the room
+    // had mentioned. Requests were the one ask with no spoken-subject guard.
+    const trigger: NotesTurn[] = [
+      { turn: 1, speaker: 'Bryan', text: 'File tickets for the next few things I mention.' },
+    ];
+    const subjects: NotesTurn[] = [
+      { turn: 2, speaker: 'Bryan', text: 'The lantern badge counts stale invites.' },
+      { turn: 3, speaker: 'Bryan', text: 'And the export dialog forgets the chosen range.' },
+    ];
+    const items = parseTaskCaptureReply(
+      reply([
+        // Spoken \u2014 the positive control, one word from the invented pair.
+        { kind: 'request', title: 'Lantern badge counts stale invites', actionable: true },
+        // Invented: nobody said either of these.
+        { kind: 'request', title: 'Retry loop wakes the sync too often', actionable: true },
+        { kind: 'request', title: 'Tunnel drops on mobile', actionable: true },
+        { kind: 'request', title: 'Export dialog forgets the chosen range', actionable: true },
+      ]),
+      candidates,
+      subjects,
+      trigger,
+    );
+    expect(items.map((i) => (i.kind === 'request' ? i.title : i.kind))).toEqual([
+      'Lantern badge counts stale invites',
+      'Export dialog forgets the chosen range',
+    ]);
+  });
+
+  it('still files a SINGULAR cue\u2019s row when the ask only pointed at one', () => {
+    // The guard is deliberately narrow. A singular cue is spent on its one
+    // row, so it needs no subject check \u2014 and "make that a task" names its
+    // subject nowhere, which is exactly the ask that would break.
+    const turns: NotesTurn[] = [
+      { turn: 1, speaker: 'Alice', text: 'The lantern badge counts stale invites.' },
+      { turn: 2, speaker: 'Bryan', text: 'Make that a task.' },
+    ];
+    const items = parseTaskCaptureReply(
+      reply([{ kind: 'request', title: 'Stale invite count on the badge', actionable: true }]),
+      candidates,
+      turns,
+    );
+    expect(items).toHaveLength(1);
+  });
+
+  it('lets ONE line cue two asks when it asked for two things', () => {
+    // "look at X and pull up Y" is two asks said in one breath. Spending the
+    // line on the first dropped the second in silence.
+    const turns: NotesTurn[] = [
+      {
+        turn: 1,
+        speaker: 'Bryan',
+        text:
+          'Claude, can you look into why the retry loop wakes the sync ' +
+          'and pull up last week\u2019s notes',
+      },
+    ];
+    const items = parseTaskCaptureReply(
+      reply([
+        { kind: 'research', topic: 'why the retry loop wakes the sync' },
+        { kind: 'lookup', query: 'last week\u2019s notes' },
+      ]),
+      candidates,
+      turns,
+    );
+    expect(items.map((i) => i.kind)).toEqual(['research', 'lookup']);
+  });
+
+  it('does not stretch one line into two asks when the "and" joins objects', () => {
+    // The negative control for the line above: a coordinator followed by a
+    // determiner is a longer OBJECT, not a second ask, so the cue is spent
+    // once and the invented second ask finds nothing to license it.
+    const turns: NotesTurn[] = [
+      {
+        turn: 1,
+        speaker: 'Bryan',
+        text: 'Claude, can you look into the retry loop and the sync worker',
+      },
+    ];
+    const items = parseTaskCaptureReply(
+      reply([
+        { kind: 'research', topic: 'the retry loop' },
+        { kind: 'research', topic: 'the sync worker' },
+      ]),
+      candidates,
+      turns,
+    );
+    expect(items).toHaveLength(1);
   });
 
   it('gives each ask its own cue line when the room asked twice', () => {

@@ -245,6 +245,7 @@ The remaining 93 are exceptions. Each row names the one harness its cases share.
 | `packages/workspaces-app/test/hub-detail-css.test.ts` | 632 | Every describe parses the same `CSS` string through the shared `rule()` / `media()` helpers. |
 | `packages/server/test/task-import.test.ts` | 629 | The parser describes and the route describe both exercise `parseTrackerMarkdown` on the same synthetic tracker fixture. |
 | `packages/server/test/goal-rename.test.ts` | 627 | Store and route describes share the `bands()` / `boardFor()` goal-id fixture builders. |
+| `packages/server/test/meeting-ask-cues.test.ts` | 620 | The detector describes and the `parseTaskCaptureReply` describes are the two halves of one convention, and the second reads the first: every licensing case is built from the same phrase tables the first half asserts, over the shared `candidates` / `reply()` fixture. |
 | `packages/server/test/sentry-server.test.ts` | 617 | All describes drive `src/sentry.ts` against the module-scope `startCaptureServer()` harness. |
 | `packages/server/test/agent-watches.test.ts` | 615 | Store and route describes share the `AgentWatches` data-dir fixture. |
 | `packages/server/test/comment-durability.test.ts` | 610 | Both describes use the shared `listenFrames()` / `settle()` SSE harness against the agent comment queue. |
