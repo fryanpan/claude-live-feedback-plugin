@@ -578,7 +578,7 @@ export async function handleDocPromoteRoute(
   rq: DocRouteRequest,
 ): Promise<Response | undefined> {
   const { rooms, taskStore, j, safeJson, canonicalDocId } = ctx;
-  const { req, pathname, authorFor } = rq;
+  const { req, pathname, authorFor, visitor } = rq;
   // promote_to_task (§3.10): thread → task. Captures the origin ref,
   // the latest HUMAN comment as the verbatim quote (an agent's closing
   // note must never become the quote), and drafts a title + body the
@@ -592,6 +592,22 @@ export async function handleDocPromoteRoute(
     const workspaceId = body?.workspaceId;
     if (typeof workspaceId !== 'string' || workspaceId.length === 0) {
       return j(400, { error: 'workspaceId required' });
+    }
+    // A scoped caller — a share member, a collaborator — may promote onto the
+    // board their scope covers and nowhere else.
+    //
+    // This is the one route on the share surface whose DESTINATION is named in
+    // the body rather than in the path. The host guard read the path, found
+    // the doc in scope and said yes; the body then chose a different board,
+    // and the row landed there. So the destination is asked the same question
+    // the path was, and the answer comes from the scope this request already
+    // resolved rather than from a second membership rule that could drift.
+    //
+    // Fail closed: a scope with no workspace at all promotes nowhere. And
+    // this sits ABOVE the existence check on purpose — 404 for a real id and
+    // 403 for a made-up one would tell a member which board ids exist.
+    if (visitor && workspaceId !== visitor.workspaceId) {
+      return j(403, { error: 'out_of_share_scope' });
     }
     if (!taskStore.getWorkspace(workspaceId)) {
       return j(404, { error: 'workspace not found' });

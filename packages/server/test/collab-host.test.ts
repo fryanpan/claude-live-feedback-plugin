@@ -488,6 +488,43 @@ describe('the collaboration hostname over HTTP', () => {
       expect((await asEmail(NAMED_EMAIL, boardPath(exactBoard))).status).toBe(200);
     });
 
+    it('a member works their own board’s rows, and never another board’s', async () => {
+      // The row routes name no workspace in their path — `/api/tasks/<id>/…`
+      // resolves through the task's own board — so the membership question
+      // and the scope question have to land on the same board. This is that,
+      // end to end, on the collaboration hostname.
+      const json = { 'content-type': 'application/json' };
+      const mine = await asCollaborator(`${boardPath(board)}/tasks`, {
+        method: 'POST',
+        headers: json,
+        body: JSON.stringify({ title: 'Filed by a collaborator', assignee: 'human' }),
+      });
+      expect(mine.status, await mine.clone().text()).toBe(200);
+      const taskId = ((await mine.json()) as { task: { id: string } }).task.id;
+      const moved = await asCollaborator(`/api/tasks/${taskId}/transition`, {
+        method: 'POST',
+        headers: json,
+        body: JSON.stringify({ to: 'in-progress' }),
+      });
+      expect(moved.status, await moved.clone().text()).toBe(200);
+
+      // `named@other.example` holds a board of their own and not this one.
+      const crossed = await asEmail(NAMED_EMAIL, `/api/tasks/${taskId}/transition`, {
+        method: 'POST',
+        headers: json,
+        body: JSON.stringify({ to: 'done' }),
+      });
+      expect(crossed.status).toBe(403);
+      expect(await crossed.json()).toEqual({ error: 'out_of_share_scope' });
+      // POSITIVE CONTROL: the same address files on the board it DOES hold.
+      const theirs = await asEmail(NAMED_EMAIL, `${boardPath(exactBoard)}/tasks`, {
+        method: 'POST',
+        headers: json,
+        body: JSON.stringify({ title: 'On their own board', assignee: 'human' }),
+      });
+      expect(theirs.status, await theirs.clone().text()).toBe(200);
+    });
+
     it('a board with no live share admits nobody', async () => {
       for (const email of [MEMBER_EMAIL, NAMED_EMAIL, NEIGHBOUR_EMAIL]) {
         const r = await asEmail(email, boardPath(otherBoard));

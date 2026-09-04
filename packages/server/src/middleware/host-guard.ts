@@ -506,6 +506,117 @@ export function classifyHost(
 }
 
 /**
+ * What a MEMBER of a shared board may do ON that board, by route name.
+ *
+ * A share used to admit a reader: comments, suggestions, the reading tracker,
+ * and document text over the live-editing socket. Bryan's 2026-09-03 call
+ * ("Let's allow everything for now") makes an admitted member a participant
+ * instead, so the acts a board is worked with — filing a task, editing one,
+ * moving its status, answering what is waiting on a person, organising the
+ * goal bands — are named here.
+ *
+ * THREE TABLES, one shape: `<route sub-path>` to the methods allowed on it.
+ * Named routes rather than a prefix wildcard, because a wildcard grants
+ * routes that do not exist yet, and adding one then becomes an accidental
+ * publication rather than a decision. Anything absent is refused.
+ *
+ * Every one of them is still asked the workspace question first. These tables
+ * say WHICH ACT is a member's; `shareScopeAllows` says which board it may be
+ * done on, and the ids in `/api/tasks/<id>` and `/api/goals/<id>` are resolved
+ * through the same `workspacesOf` every other scope question uses — as
+ * `task:<id>`, which is the id a board holds a task's body under.
+ */
+const BOARD_MEMBER_ROUTES: Readonly<Record<string, readonly string[]>> = {
+  // Reads that predate membership — the workspace record, the presence strip,
+  // and the review-item queue the strip's thread half arrives on.
+  '': ['GET'],
+  attachments: ['GET'],
+  'review-items': ['GET'],
+  // The board's rows. GET is the list the Tasks pane pages through; POST is
+  // filing one. The board room syncs the same rows, so the GET is a
+  // convenience rather than a new disclosure.
+  tasks: ['GET', 'POST'],
+  // The Home pane and its per-person "caught up" marker.
+  home: ['GET'],
+  'home/read': ['POST'],
+  // The goal bands: naming one, and renaming one.
+  'goals/add': ['POST'],
+  'goals/rename': ['POST'],
+};
+
+/** The per-task verbs, under `/api/tasks/<taskId>/`. See BOARD_MEMBER_ROUTES. */
+const TASK_MEMBER_ROUTES: Readonly<Record<string, readonly string[]>> = {
+  transition: ['POST'],
+  evidence: ['POST'],
+  goal: ['POST'],
+  after: ['POST'],
+  title: ['POST'],
+  body: ['POST'],
+  assignee: ['POST'],
+  due: ['POST'],
+  park: ['POST'],
+  archive: ['POST'],
+  restore: ['POST'],
+  answer: ['POST'],
+  'answer/undo': ['POST'],
+  'more-info': ['POST'],
+  links: ['GET', 'POST', 'DELETE'],
+  'review-items': ['POST'],
+  // The item verbs, spelled with their id segment elided — see
+  // `taskSubroutePattern`. Answering, asking back, releasing a hold,
+  // revising the ask, and taking it back.
+  'review-items/*/answer': ['POST'],
+  'review-items/*/more-info': ['POST'],
+  'review-items/*/release': ['POST'],
+  'review-items/*/revise': ['POST'],
+  'review-items/*/withdraw': ['POST'],
+  'review-items/*/withdraw/undo': ['POST'],
+};
+
+/** The per-goal verbs, under `/api/goals/<goalId>/`. A goal row lives in the
+ *  same `task:<id>` id space as a task body, so it resolves the same way. */
+const GOAL_MEMBER_ROUTES: Readonly<Record<string, readonly string[]>> = {
+  cascade: ['GET'],
+  archive: ['POST'],
+  restore: ['POST'],
+};
+
+/**
+ * One table lookup, and the reason it is a function rather than `table[sub]`.
+ *
+ * `sub` is a path segment the CALLER typed. On a plain object literal
+ * `toString`, `constructor`, `valueOf` and `__proto__` all resolve up
+ * Object.prototype to something truthy that is not an array, `?.includes(...)`
+ * on it throws, the exception escapes the guard, and the connection closes
+ * with no response at all — which is neither an allow nor a deny, chosen by
+ * whoever sent the request. `Object.hasOwn` asks the table and nothing above
+ * it, so an unlisted segment is an ordinary refusal like every other one.
+ */
+function memberRouteAllows(
+  table: Readonly<Record<string, readonly string[]>>,
+  sub: string,
+  method: string,
+): boolean {
+  if (!Object.hasOwn(table, sub)) return false;
+  return table[sub]?.includes(method.toUpperCase()) === true;
+}
+
+/**
+ * `review-items/r-7/answer` to `review-items/*\/answer`, so one table entry
+ * covers every item id.
+ *
+ * Only the segment after `review-items` is elided, and only when there is
+ * exactly one. Eliding by position rather than by pattern is what keeps
+ * `review-items/<id>/withdraw/undo` a DIFFERENT key from
+ * `review-items/<id>/withdraw`: the table decides, not the parser.
+ */
+function taskSubroutePattern(sub: string): string {
+  const parts = sub.split('/');
+  if (parts[0] !== 'review-items' || parts.length < 3) return sub;
+  return ['review-items', '*', ...parts.slice(2)].join('/');
+}
+
+/**
  * May a request on a SHARE host touch this path?
  *
  * Allowlist, not denylist: the app shell plus the shared doc's own surfaces.
@@ -548,6 +659,23 @@ export function shareScopeAllows(
   if (pathname === '/widget.js' || pathname === '/widget.iife.js') return true;
   if (pathname === '/widget.esm.js' || pathname.startsWith('/widget/')) return true;
   if (pathname === '/favicon.ico') return true;
+  /**
+   * Who am I, and may I write? — `GET /api/auth/session`.
+   *
+   * The board's bundle asks this before it paints anything. Refused, it fell
+   * back to "nobody is signed in" and opened the "Who's reviewing?" name
+   * prompt, which `main()` awaits — so a member landing on their board saw a
+   * modal asking them to type a name and NO BOARD BEHIND IT until they
+   * dismissed it. Measured in headless Chromium on 2026-09-03.
+   *
+   * It carries the caller's own identity and nothing else: the email
+   * Cloudflare Access already proved to reach this hostname, the display name
+   * derived from it, and whether this deployment demands a sign-in to write.
+   * Telling somebody who they are cannot tell them anything they did not
+   * bring. `GET` only, and the sign-in flow's other routes stay out — there
+   * is no second sign-in behind Access to start or finish.
+   */
+  if (pathname === '/api/auth/session' && method.toUpperCase() === 'GET') return true;
 
   /**
    * Is this id INSIDE the shared workspace? The one rule, and the only place
@@ -644,33 +772,46 @@ export function shareScopeAllows(
       const seg = pathname.slice('/events/workspace/'.length);
       if (!seg.includes('/') && safeDecode(seg) === wsId) return true;
     }
-    // The two REST reads the hub page makes on load. Both were closed while
-    // the SAME facts rode the SSE feed above, so a visitor's page titled
-    // itself with the raw workspace id and its §2.7 presence strip showed no
-    // agents — with the visitor-redaction branch built for `attachments`
-    // (endpoint stripped) unreachable. The transport and the surface have to
-    // agree; the client swallows a non-ok, so they disagreed silently.
-    //   GET <ws>              workspace name + goal text (§3.3 in-contract)
-    //   GET <ws>/attachments  agent presence, redacted to PublicAttachment
-    //   GET <ws>/review-items what is waiting on a person
-    // Bare DELETE and every mutation stay closed (method-checked here, and
-    // refused again at the route).
+    // The board's own REST surface, `<sub>` by `<sub>` and method by method:
+    // BOARD_MEMBER_ROUTES. Everything not in that table is refused here, so a
+    // route added to the workspace prefix later is closed until someone puts
+    // it in the table on purpose.
     //
-    // `review-items` is here for the same reason the first two are: the strip's
-    // decision half arrives over the board room and its thread half over REST,
-    // so blocking one leaves a visitor a strip that quietly drops every doc and
-    // task question. It carries workspace content only — thread asks, which a
-    // workspace share already reaches through `<ws>/threads`, and a doc label
-    // that is a title or a BASENAME, never a path. Note `<ws>/tasks` GET stays
-    // closed and is not the precedent: tasks are closed there because the board
-    // room already syncs them, not because they are withheld.
-    if (method === 'GET' && pathname.startsWith('/api/workspaces/')) {
+    // It used to be three GETs — the workspace record, the presence strip and
+    // the review-item queue — because a visitor was a reader. A member of a
+    // shared board is a PARTICIPANT (Bryan, 2026-09-03: "Let's allow
+    // everything for now"), so the table now also carries the writes that
+    // filing and organising work on this board are made of. What did NOT move
+    // is where the answer comes from: the segment must still be the shared
+    // workspace, and every id nested under it still goes through
+    // `insideSharedWorkspace`.
+    //
+    // Four classes stay off the table deliberately, and each would be a way
+    // out of the shared board rather than a way to work in it:
+    //   `docs`          attaches ANY doc id on the server to this board, and
+    //                   a doc filed here is a doc this member may then read —
+    //                   so it is a read of somebody else's board wearing a
+    //                   write's clothes.
+    //   `settings`      stores and returns `notesHome.repoRoot`, a path on
+    //                   the owner's machine. Host paths never reach a visitor.
+    //   `import-tasks`  reads a file off the owner's disk by path.
+    //   `events`        the Activity audit log names actors by ID. The board
+    //                   room's own event stream is redacted to display names
+    //                   for a visitor (`redactHubEventForVisitor`) and this
+    //                   log is not, so admitting it would undo that in the
+    //                   one place nothing checks.
+    //   `attachments` POST, `agent-heartbeat`, `dispatches`, `agent-notes`
+    //                   the agent roster's own verbs — a seat on the board,
+    //                   not work on it.
+    // Board lifecycle (`DELETE`, `rename`, `retired`, `lead`) stays closed
+    // too: a member was given a board to work on, not to retire.
+    if (pathname.startsWith('/api/workspaces/')) {
       const rest = pathname.slice('/api/workspaces/'.length);
       const slash = rest.indexOf('/');
       const seg = slash < 0 ? rest : rest.slice(0, slash);
       if (safeDecode(seg) === wsId) {
         const sub = slash < 0 ? '' : rest.slice(slash + 1);
-        if (sub === '' || sub === 'attachments' || sub === 'review-items') return true;
+        if (memberRouteAllows(BOARD_MEMBER_ROUTES, sub, method)) return true;
       }
     }
   }
@@ -688,6 +829,35 @@ export function shareScopeAllows(
     const docSeg = slash < 0 ? rest : rest.slice(0, slash);
     if (!inScope(docSeg)) return false;
     return docSubrouteAllowed(slash < 0 ? '' : rest.slice(slash + 1), method);
+  }
+
+  // Task and goal rows: `/api/tasks/<taskId>/<verb>` and
+  // `/api/goals/<goalId>/<verb>`. Neither path spells a workspace out, so the
+  // row's own id is resolved through `insideSharedWorkspace` — as
+  // `task:<rowId>`, the id a board holds a task body or a goal body under.
+  // That is the SAME resolver every other scope question here reads, which is
+  // what stops a second membership rule existing to drift open later.
+  //
+  // A row on another board answers false at that step, so `POST
+  // /api/tasks/<someone-elses>/transition` is refused by the same line that
+  // refuses reading their doc.
+  //
+  // Bare `/api/tasks/<id>` is not in the table and therefore refused: the row
+  // itself arrives over the board room, and a bare-path read would be a
+  // second, unredacted spelling of it.
+  const rowPrefix = ['/api/tasks/', '/api/goals/'].find((p) => pathname.startsWith(p));
+  if (rowPrefix) {
+    const rest = pathname.slice(rowPrefix.length);
+    const slash = rest.indexOf('/');
+    if (slash < 0) return false;
+    const rowId = safeDecode(rest.slice(0, slash));
+    if (!insideSharedWorkspace(`task:${rowId}`)) return false;
+    const table = rowPrefix === '/api/tasks/' ? TASK_MEMBER_ROUTES : GOAL_MEMBER_ROUTES;
+    const sub =
+      rowPrefix === '/api/tasks/'
+        ? taskSubroutePattern(rest.slice(slash + 1))
+        : rest.slice(slash + 1);
+    return memberRouteAllows(table, sub, method);
   }
 
   // Workspace navigation — ONLY for a workspace share, and only its own
@@ -902,6 +1072,15 @@ function pathWorkspaces(pathname: string, workspacesOf?: (id: string) => string[
   // bare `<id>`; the LIST route has no segment and falls through to none.
   const wsApi = seg('/api/workspaces/');
   if (wsApi) return [wsApi];
+  // A task or goal row names its board through the id a board holds its BODY
+  // under, `task:<rowId>` — the same spelling `shareScopeAllows` resolves, so
+  // the workspace membership is asked about and the workspace the scope
+  // verdict is made about cannot be two different boards.
+  const rowId = seg('/api/tasks/') ?? seg('/api/goals/');
+  if (rowId) {
+    const rowOwners = workspacesOf?.(`task:${rowId}`);
+    return Array.isArray(rowOwners) ? rowOwners : [];
+  }
   // The board room socket is `/y/ws:<id>`; every other `/y/<id>` is a doc.
   const room = seg('/y/');
   if (room?.startsWith('ws:')) return [room.slice('ws:'.length)];
@@ -929,8 +1108,11 @@ function pathWorkspaces(pathname: string, workspacesOf?: (id: string) => string[
  *   POST reparse_from_disk  discards live state, including others' edits
  *   POST threads/<id>/{rewrite_region,insert_after,insert_blocks_after}
  *                       agent-side document surgery, not a review action
- *   POST threads/<id>/promote  creates a TASK — visitors are read-only on
- *                       the hub gate, comments are their only write
+ * `threads/<id>/promote` used to be in that list, with the reason "visitors
+ * are read-only on the hub gate, comments are their only write". That reason
+ * is the thing Bryan's 2026-09-03 call removed: a member files tasks on the
+ * board this doc is filed on, so turning a comment into one is the same act
+ * by a shorter route. It is allowed now.
  *
  * `tasks` (GET) is the §3.3 rule-2 chip endpoint: how a task chip inside a
  * shared doc resolves (id, title, status, assignee) without the visitor
@@ -945,7 +1127,7 @@ function docSubrouteAllowed(sub: string, method: string): boolean {
   if (sub === 'tasks') return method === 'GET'; // task chips, visitor-safe shape
   if (sub === 'activity') return method === 'POST'; // reading tracker
   if (sub === 'threads' || sub.startsWith('threads/')) {
-    return !/\/(rewrite_region|insert_after|insert_blocks_after|promote)$/.test(sub);
+    return !/\/(rewrite_region|insert_after|insert_blocks_after)$/.test(sub);
   }
   if (sub === 'suggestions' || sub.startsWith('suggestions/')) return true;
   return false;
