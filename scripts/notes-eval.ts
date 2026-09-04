@@ -175,7 +175,7 @@ const JUDGE_SYSTEM = [
   ' "together":{"ok":bool,"why":"..."}}',
   '',
   'Each "why" is one short sentence naming what failed, or empty when ok is',
-  'true. Never repeat one field\'s reason under another field.',
+  "true. Never repeat one field's reason under another field.",
   '',
   "- paraphrased: the new notes say what the speech MEANT in the writer's own",
   '  short sentences. False if a note reads as a transcript line, quotes',
