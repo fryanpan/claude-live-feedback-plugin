@@ -1,9 +1,8 @@
 /**
- * The selection affordances over a markdown document: the round comment pill,
- * the always-in-view Comment float, and the cached selection both of them and
- * the composer anchor to.
+ * The selection affordances over a markdown document: the round comment pill
+ * and the cached selection both it and the composer anchor to.
  *
- * One module because they are one state machine, not three widgets. A gesture
+ * One module because they are one state machine, not two widgets. A gesture
  * suppresses the pill; a settled selection brings it back; a caret shows a
  * lighter pill over the sentence it would select; a blur takes both away —
  * and every one of those transitions writes the SAME cached selection, which
@@ -21,7 +20,6 @@ import { trackGesture } from '../gesture.ts';
 import type { MountScope } from '../mount-scope.ts';
 import type { ChromeSelection } from '../review-chrome.ts';
 import { showToast } from './chrome-dom.ts';
-import { mountCommentFloat } from './comment-float.ts';
 import type { PointerPillLayer } from './doc-pointer-pill.ts';
 
 export interface CommentPillOptions {
@@ -293,40 +291,6 @@ export function mountCommentPill(opts: CommentPillOptions): CommentPillHandle {
       return;
     }
     openComposer();
-  });
-
-  /**
-   * Start a comment from the always-in-view Comment float.
-   *
-   * Same three cases the selection pill handles, in the same order, because
-   * the reader has to be able to reach the composer from the button they can
-   * see rather than only from the one that appears: a live selection is the
-   * anchor; otherwise the SENTENCE at the caret is (the pill's "tap then
-   * comment" gesture, without needing the tap to have raised a pill); with
-   * neither, say what would make it work rather than opening an empty box.
-   */
-  function commentAtCaret(): void {
-    if (editor.getSelectionRel()) {
-      openComposer();
-      return;
-    }
-    const { state } = editor.editor.view;
-    const range = caretParaRange ?? sentenceRangeAt(state, state.selection.from);
-    if (!range || range.from >= range.to) {
-      showToast('Tap the sentence you want to comment on, then Comment.');
-      return;
-    }
-    editor.editor.commands.focus();
-    editor.editor.commands.setTextSelection(range);
-    const sel = editor.getSelectionRel();
-    if (sel) selection = sel;
-    openComposer();
-  }
-
-  mountCommentFloat({
-    anchor: editorMount.closest('#editor-pane') ?? editorMount,
-    onComment: commentAtCaret,
-    listen: (target, type, fn) => scope.listen(target, type, fn),
   });
 
   // This lives on the editor's own DOM, which is removed by editor.destroy()

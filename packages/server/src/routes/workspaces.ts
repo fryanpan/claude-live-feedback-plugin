@@ -23,6 +23,7 @@ import { handleWorkspaceDelete } from './workspace-delete.ts';
 import { handleWorkspaceGoals } from './workspace-goals.ts';
 import { handleWorkspaceHome } from './workspace-home.ts';
 import { handleWorkspaceNext } from './workspace-next.ts';
+import { handleWorkspaceRelated } from './workspace-related.ts';
 import type {
   WorkspaceDeleteRequest,
   WorkspaceRouteRequest,
@@ -49,6 +50,11 @@ export async function handleWorkspaceRoutes(
     (await handleWorkspaceCreateRead(ctx, rq)) ??
     (await handleWorkspaceHome(ctx, rq)) ??
     (await handleWorkspaceNext(ctx, rq)) ??
+    // Reads the board's goals and plan docs to answer "is somebody already
+    // planning this". Above the settings block only because that is where it
+    // was added; its path matches nothing else, anchored like every regex
+    // here, so its position carries no behaviour.
+    (await handleWorkspaceRelated(ctx, rq)) ??
     (await handleWorkspaceSettings(ctx, rq)) ??
     (await handleWorkspaceContent(ctx, rq))
   );

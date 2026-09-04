@@ -8,10 +8,9 @@ import { MountScope } from '../src/mount-scope.ts';
 
 /**
  * The selection affordances over a markdown document (doc/doc-comment-pill.ts):
- * the round pill, the always-in-view Comment float, and the cached selection
- * both of them and the composer anchor to.
+ * the round pill and the cached selection both it and the composer anchor to.
  *
- * They are one state machine, not three widgets, and the state that matters
+ * They are one state machine, not two widgets, and the state that matters
  * is the CACHE: iOS blurs the editor between the pill appearing and the tap
  * landing, so what a comment anchors to has to survive the editor forgetting
  * it. The tests below drive the transitions that write it, and the huddle
@@ -34,9 +33,6 @@ beforeEach(() => {
 });
 
 const pill = () => document.getElementById('comment-pill') as HTMLButtonElement;
-const float = () => document.getElementById('comment-float') as HTMLButtonElement;
-const toastText = () =>
-  (document.getElementById('toast')?.firstChild?.textContent ?? '').toString();
 
 function mount(opts: { huddle?: boolean; markdown?: string } = {}) {
   const ydoc = new Y.Doc();
@@ -171,38 +167,6 @@ describe('hiding', () => {
     repositionViaScroll(editorMount);
     editor.editor.emit('blur', {} as never);
     expect(pill().classList.contains('hidden')).toBe(true);
-  });
-});
-
-describe('the always-in-view Comment float', () => {
-  it('is mounted in the pane’s dock, labelled for what it does', () => {
-    mount();
-    expect(float()).not.toBeNull();
-    expect(float().textContent).toBe('＋ Comment');
-    expect(document.querySelector('#editor-pane')?.contains(float())).toBe(true);
-  });
-
-  it('opens the composer when there is already a selection', () => {
-    const { editor, openComposer } = mount();
-    editor.editor.commands.setTextSelection({ from: 1, to: 13 });
-    float().click();
-    expect(openComposer).toHaveBeenCalledTimes(1);
-  });
-
-  it('selects the SENTENCE at the caret when there is no selection', () => {
-    const { editor, handle, openComposer } = mount();
-    // A caret inside the second sentence.
-    editor.editor.commands.setTextSelection({ from: 20, to: 20 });
-    float().click();
-    expect(openComposer).toHaveBeenCalledTimes(1);
-    expect(handle.currentSelection()?.snippet).toBe('And a second one here.');
-  });
-
-  it('says what would make it work rather than opening an empty box', () => {
-    const { openComposer } = mount({ markdown: '' });
-    float().click();
-    expect(openComposer).not.toHaveBeenCalled();
-    expect(toastText()).toBe('Tap the sentence you want to comment on, then Comment.');
   });
 });
 

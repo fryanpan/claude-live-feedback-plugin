@@ -15,7 +15,6 @@
  */
 import { suggestOps } from '@feedback/core';
 import type * as Y from 'yjs';
-import { balloonMarginVisible } from '../card-placement.ts';
 import { mountCommentHints } from '../comment-hints.ts';
 import type { EditorHandle } from '../editor.ts';
 import type { MountScope } from '../mount-scope.ts';
@@ -113,7 +112,7 @@ export function mountDocMargin(opts: DocMarginOptions): DocMarginHandle {
     onSeen: () => margin.scheduleRelayout(),
     onJump: jumpToThread,
     dockEl: () => document.querySelector<HTMLElement>('#editor-pane .plan-float'),
-    marginVisible: balloonMarginVisible,
+    marginVisible: () => !window.matchMedia('(max-width: 1100px)').matches,
     scope,
   });
   const onMarginTransaction = (): void => {
