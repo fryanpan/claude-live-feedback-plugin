@@ -57,6 +57,16 @@ lengthens it by nothing. That is the shape to expect from a file whose
 remaining mass is a render closure: what comes out is the pieces that did not
 need it, and the row that stays gets shorter rather than disappearing.
 
+`app.ts` then came off the list entirely (1569 → 484). Its row named the seam
+as "a sequence rather than a set of jobs", which was true of the ORDER and not
+of the work: each step of that order — the balloon margin, the two floats, the
+selection pills, the spin-off runner, the sidebar, the save-state chip, the
+write gates — turned out to take a handful of named arguments rather than the
+whole closure. Nine modules under `src/doc/`, none over 500, so this one
+shortens the list by one and lengthens it by nothing. What is left in `app.ts`
+is the sequence that calls them, plus the forward refs the editor's callbacks
+need and the reads of the address the mount was opened at.
+
 Test files are judged by a narrower rule, in their own table below: a long test
 file is an exception unless two *unrelated harnesses* share it. Many `describe`
 blocks over one set of fixtures is one harness, however long the file gets.
@@ -120,7 +130,6 @@ blocks over one set of fixtures is one harness, however long the file gets.
 | `packages/workspaces-app/src/hub/hub-detail-render.ts` | 1145 | Exception | One panel: who has the task (`assigneePicker`), what it says (`detailFields`, `bodySlot`), what it cost (`effortFields`, `effortComputationLines`), what it points at (`renderTaskLinks`, `renderRelatedLinks`) and what happened to it (`activityRow`, `renderTransitionRow`). Split out of `hub-render.ts` (B1). Larger than the plan's ~900 estimate because the doc-title hydration helpers and `assigneePicker` came with it — both are used only by this panel, and leaving them behind would have pointed `hub-render.ts` back at this file. |
 | `packages/workspaces-app/src/hub/hub-render.ts` | 770 | Exception | The hub's shell chrome after B1: the topbar, the lead-agent strip, the archived list, the goal detail panel, the quick actions, the review banner, the Home brief and the activity view. Eight small regions that share the shell's own idioms and nothing else; the three regions with a vocabulary of their own are now `hub-detail-render.ts`, `hub-discussion-render.ts` and `hub-review-render.ts`. |
 | `packages/workspaces-app/src/meeting-strip.ts` | 1476 | Split | B4 took the DOM-free wire layer to `meeting-protocol.ts` (200) and both popovers to `meeting-chooser.ts` (433). What is left is the socket state machine and the surface it drives: the Record button, the strip's own render, the speaker menu, and the `handle` switch that turns a server frame into a state. Those share `state`, `socket`, `turns` and `view` by construction — the next candidate seam, the transcript feed's render, reads three of the four — so what remains is one subject rather than a set of jobs. `buildChooser` and `buildAdvancedPanel` were closures over eight form fields, not top-level functions; they left behind an explicit `ChooserState` and a `MeetingChooserDeps`, which is the B1 `HubActionDeps` shape. **M** |
-| `packages/workspaces-app/src/app.ts` | 1505 | Split | B3 took the format bar and its table popover to `doc/editor-toolbar.ts`, the view/edit and Suggesting interlock to `doc/doc-modes.ts`, and the whole live-meeting surface to `doc/doc-meeting-mount.ts`. What is left is `mountMarkdown()` itself: the boot order for one document — connect, editor, chrome, floats, gates — which is a sequence rather than a set of jobs, and every remaining candidate seam is a run of that sequence rather than a separable subject. **M** |
 | `packages/workspaces-app/src/review-chrome.ts` | 1080 | Split | B3 took the two writing surfaces to `doc/review-composer.ts`, the panel resize handle and thread-range clicks to `doc/chrome-panels.ts`, and the shared DOM helpers to `doc/chrome-dom.ts`. What remains is `mountReviewChrome`: the threads panel and its redraw, the drawer and set pane, the mobile review surface, the doc label and the seen tracker — all reading one `opts` and one ydoc. The next seam is the thread projection (`collectThreads`, `resolveThreadRange`, `redrawThreads`), roughly 300 lines, which needs the pending-reply state that the drawer also reads. **M** |
 | `packages/workspaces-app/src/doc/thread-card.ts` | 812 | Exception | One comment thread as a card, out of `threads.ts` in B3 — and the same card the redline margin renders as a balloon, which is why it is shared rather than duplicated. It looks like two files, the card and the eight DOM helpers under it, and is deliberately one: every helper has this card as its only caller, and the four faces a card can show (summary, detail, collapsed, answered) are built together because the fold cross-fades between faces that must already exist in the same box. |
 | `packages/workspaces-app/src/redline/markup-margin.ts` | 718 | Exception | B3 took the card builders to `balloon-cards.ts` and the phone sheets to `margin-sheets.ts`. What is left is the margin's own geometry and the render list it measures: `positionBalloons` reads four elements' rects plus the private rendered-balloon union, and `relayout` is the orchestration point that calls the deletion grouper, the thread filter and the renderer in order. The plan had both joining `balloon-layout.ts`; they did not, because that file holds the pure stacking algorithm and taking the glue there would point the dependency backwards — see split-plan.md B3. |
@@ -300,7 +309,7 @@ months, so splitting it buys almost nothing.
 | 6 | `hub-board-model.ts` + `hub-review-model.ts` + `hub-presence-model.ts` (was `hub-model.ts`, split in B1) | 3645 | 89 | M |
 | 7 | `packages/server/src/tasks.ts` | 4714 | 87 | M |
 | 8 | `rooms.ts` + `file-binding.ts` (split in A10) | 4801 | 71 | M |
-| 9 | `packages/workspaces-app/src/app.ts` | 1505 | 55 | M |
+| 9 | `app.ts` + the nine phase modules under `src/doc/` (split for the markdown mount) | 1505 | 55 | done |
 | 10 | `packages/server/src/task-projection.ts` | 743 | 43 | done |
 | 11 | `packages/workspaces-app/src/review-chrome.ts` | 1080 | 24 | M |
 | 12 | `thread-card.ts` + `threads.ts` (was `threads.ts`, split in B3) | 1230 | 20 | done |
