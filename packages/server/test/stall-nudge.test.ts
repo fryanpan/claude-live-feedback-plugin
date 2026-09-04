@@ -709,6 +709,38 @@ describe('the arming survives a restart', () => {
     expect(second.sent).toHaveLength(0);
   });
 
+  it('remembers the BUCKET a row was named under, not merely the row', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'stall-nudge-'));
+    dirs.push(dir);
+    const stampFile = join(dir, 'stall-nudge-stamps.json');
+
+    const first = harness({ stampFile });
+    first.nudger.tick();
+    expect(first.sent).toHaveLength(1);
+    // Written down, and written down as the bucket. The test above passes on
+    // the seed-from-stamp fallback alone — every remembered row reads as
+    // UNKNOWN_BUCKET there, which matches nothing and so says nothing — so
+    // it cannot tell a file that carries the buckets from one that does not.
+    expect(JSON.parse(readFileSync(stampFile, 'utf8')).told['w-atlas']['t-1']).toBe('in-progress');
+
+    // Same row, different bucket, new process: the builder it was dispatched
+    // to has died, which is news whatever the last process was told. Only the
+    // file can say the row was last named under a bucket it has now left.
+    const second = harness({ stampFile });
+    second.world.boards[0]!.stalled = [
+      {
+        id: 't-1',
+        title: 'Rank results by recency',
+        bucket: 'builder-silent',
+        quietMs: 50 * MIN,
+      },
+    ];
+    second.nudger.tick();
+
+    expect(second.sent).toHaveLength(1);
+    expect(second.sent[0]?.frame.changed?.rows?.map((r) => r.id)).toEqual(['t-1']);
+  });
+
   it('starts clean rather than throwing when the file cannot be parsed', () => {
     const dir = mkdtempSync(join(tmpdir(), 'stall-nudge-'));
     dirs.push(dir);
