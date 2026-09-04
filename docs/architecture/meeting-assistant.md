@@ -1192,18 +1192,25 @@ it:
   So "we can add tasks to the sprint later" files nothing, and neither does
   "add a ticket TYPE for design work" — the first is a fact about the sprint,
   the second a sentence about the board's schema.
-- **A cue licenses as many asks as its line asked for, and then stays
-  spent.** The cue is a property of the ask, matched against the line the ask
-  was quoted from, so a single "create a task for the retry loop" cannot
-  license the tunnel and the sidebar the room mentioned next. A line that has
-  given everything it carries is consumed for the rest of the meeting, which
-  is what stops the overlap replaying it into the following tick. What a line
-  carries is usually one thing and sometimes two: "Claude, can you look at the
-  retry loop **and pull up** last week's notes" is two asks said in one
-  breath, and counting only the first dropped the second in silence.
-  `nowCueAskCount` counts them, and only a coordinator followed by a VERB
-  raises the count — "look at the retry loop and the sync worker" is one ask
-  about two things.
+- **A cue licenses as many asks as its line asked for, within one pass, and
+  is then consumed for the rest of the meeting.** The cue is a property of the
+  ask, matched against the line the ask was quoted from, so a single "create a
+  task for the retry loop" cannot license the tunnel and the sidebar the room
+  mentioned next. Consuming it is what stops the overlap replaying it into the
+  following tick, so it happens when the pass ends and not when the count runs
+  out: a line that gave one of the two asks it carried is done anyway, because
+  both of them were in that one window by construction. Skipping that step is
+  a REPLAY — the same ask filed again next tick off the same line.
+- **What a line carries is usually one thing and sometimes two.** "Claude, can
+  you look at the retry loop **and pull up** last week's notes" is two asks
+  said in one breath, and counting only the first dropped the second in
+  silence. `nowCueAskCount` counts them off a coordinator followed by a verb
+  AND by the word that proves the verb was one — an object or a particle.
+  Both halves are load-bearing: without the verb, "look at the retry loop and
+  the sync worker" reads as two asks about one; without the follower, every
+  verb in the table is also a noun, and "and review comments" reads as a
+  second ask. Erring high is not free either, because an uncounted-down cue
+  is a cue the overlap can replay.
 - **The cue line is still searched across the whole capture window.** The
   boundary problem the overlap exists for puts the cue and its subject in
   different ticks — "Claude, can you go and" / boundary / "look into why the
