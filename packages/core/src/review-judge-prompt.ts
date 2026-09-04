@@ -62,6 +62,16 @@ export interface ReviewJudgeVerdict {
   ok: boolean;
   /** One sentence naming the biggest gap (or, on `ok`, what carried it). */
   reason: string;
+  /**
+   * On a hold: the sentence the judge wants ADDED to the item, written out.
+   *
+   * A reason that names a category — "the detail lacks stakes", "no option
+   * states its cost" — leaves the filer to guess what the words should be,
+   * and a guess is what gets held next round. Naming the sentence turns a
+   * verdict into an edit. Absent when the judge gave none, which is a hold
+   * with a reason and no draft, not a refusal.
+   */
+  add?: string;
 }
 
 /** The longest reason stored or shown. A judge that writes an essay is
@@ -81,8 +91,12 @@ export function buildReviewJudgePrompt(
   const system: string[] = [
     'You judge whether a review item an AI agent filed for a human reader is good enough to put on that reader’s queue.',
     'Judge substance against the criteria below, not length or tone. When unsure, pass it: a held item costs the reader an answer they could have given.',
-    'Reply with JSON only, on one line: {"ok": true|false, "reason": "<one sentence>"}.',
+    'Reply with JSON only, on one line: {"ok": true|false, "reason": "<one sentence>", "add": "<one sentence>"}.',
     'When ok is false, the reason names the single biggest gap so the agent can fix it in one edit.',
+    // A category is not an instruction. Held items came back round after
+    // round because "the detail lacks stakes" left the filer guessing at the
+    // words, and the guess was held for something else (2026-09-04).
+    'When ok is false, "add" is the sentence you want ADDED to the item, written out in full as the item would carry it — not the name of a category and not an instruction about one. Write it in the reader’s words, ready to paste. Omit "add" only when no single sentence would close the gap.',
     // A judge that mis-states the item loses the agent a whole revision: it
     // fixes the fault it was told about and is held again for the real one.
     // Measured on the live board — an item whose detail read “see below” was
@@ -130,6 +144,15 @@ export function buildReviewJudgePrompt(
  * boolean `ok` — which the caller treats exactly like a failed call: the
  * item passes through. A reply that half-parses must not become a hold.
  */
+/** One sentence as it is stored: whitespace collapsed, clipped at the
+ *  ceiling. `''` for anything that is not a string with words in it. */
+function clipSentence(value: unknown): string {
+  const text = (typeof value === 'string' ? value : '').trim().replace(/\s+/g, ' ');
+  return text.length > REVIEW_JUDGE_REASON_MAX
+    ? `${text.slice(0, REVIEW_JUDGE_REASON_MAX - 1)}\u2026`
+    : text;
+}
+
 export function parseReviewJudgeResponse(text: string): ReviewJudgeVerdict | null {
   const start = text.indexOf('{');
   const end = text.lastIndexOf('}');
@@ -144,12 +167,7 @@ export function parseReviewJudgeResponse(text: string): ReviewJudgeVerdict | nul
   const ok = (parsed as { ok?: unknown }).ok;
   if (typeof ok !== 'boolean') return null;
   const rawReason = (parsed as { reason?: unknown }).reason;
-  const reason = (typeof rawReason === 'string' ? rawReason : '').trim().replace(/\s+/g, ' ');
-  return {
-    ok,
-    reason:
-      reason.length > REVIEW_JUDGE_REASON_MAX
-        ? `${reason.slice(0, REVIEW_JUDGE_REASON_MAX - 1)}…`
-        : reason,
-  };
+  const reason = clipSentence(rawReason);
+  const add = clipSentence((parsed as { add?: unknown }).add);
+  return { ok, reason, ...(add !== '' ? { add } : {}) };
 }

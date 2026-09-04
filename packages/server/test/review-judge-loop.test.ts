@@ -60,7 +60,10 @@ interface Held {
   held?: boolean;
   heldReason?: string;
   message?: string;
-  item?: { id: string; judge?: { verdict: string; reason: string; heldFor?: string[] } };
+  item?: {
+    id: string;
+    judge?: { verdict: string; reason: string; heldFor?: string[]; add?: string };
+  };
 }
 
 describe('the review-item hold loop', () => {
@@ -139,6 +142,60 @@ describe('the review-item hold loop', () => {
     let n = 0;
     return async () => ({ ok: false, reason: reasons[n++ % reasons.length] as string });
   }
+
+  describe('a hold names the sentence it wants added', () => {
+    const ADD = 'Nothing ships until the cache size is picked.';
+
+    it('quotes that sentence in the message the filer is handed', async () => {
+      const { taskId } = await board();
+      judge = async () => ({
+        ok: false,
+        reason: 'The detail never says what waits on this.',
+        add: ADD,
+      });
+      const filed = await jj<Held>(
+        await post(`/api/tasks/${taskId}/review-items`, {
+          author: FILER,
+          review: COSTS_IN_OPTIONS,
+        }),
+      );
+      expect(filed.held).toBe(true);
+      expect(filed.message).toContain(ADD);
+      // The address still has to be there — a sentence to add is no use
+      // without the call that applies it.
+      expect(filed.message).toContain('revise_review_item');
+    });
+
+    it('keeps it on the item, so the ticket and the wake say the same thing', async () => {
+      const { taskId } = await board();
+      judge = async () => ({
+        ok: false,
+        reason: 'The detail never says what waits on this.',
+        add: ADD,
+      });
+      const filed = await jj<Held>(
+        await post(`/api/tasks/${taskId}/review-items`, {
+          author: FILER,
+          review: COSTS_IN_OPTIONS,
+        }),
+      );
+      expect(filed.item?.judge?.add).toBe(ADD);
+    });
+
+    it('says nothing extra when the judge offered no sentence — the control', async () => {
+      const { taskId } = await board();
+      judge = async () => ({ ok: false, reason: 'The detail never says what waits on this.' });
+      const filed = await jj<Held>(
+        await post(`/api/tasks/${taskId}/review-items`, {
+          author: FILER,
+          review: COSTS_IN_OPTIONS,
+        }),
+      );
+      expect(filed.message).toContain('The detail never says what waits on this');
+      expect(filed.message).not.toContain('Add this sentence');
+      expect(filed.item?.judge?.add).toBeUndefined();
+    });
+  });
 
   describe('after two holds the gate stops holding', () => {
     async function heldTwice(): Promise<{
