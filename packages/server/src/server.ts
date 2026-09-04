@@ -6880,6 +6880,10 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           return new Response(
             renderHubShell(workspace.id, workspace.name, {
               feedback: !visitor,
+              // The board is the whole of what a visitor was given, so the
+              // shell leaves out the "all workspaces" arrow rather than
+              // painting a link to a 403.
+              visitor: Boolean(visitor),
               sentry: browserSentry,
               assets: readAppAssetManifest(markdownAppDist),
             }),

@@ -630,7 +630,11 @@ describe('shareScopeAllows — a visitor is a reviewer, not an operator', () => 
     expect(shareScopeAllows('/api/docs/auth-rfc/rename', 'POST', WS_A, workspaceOf)).toBe(false);
   });
 
-  it('BLOCKS writing the audit trail, including the retired evidence route', () => {
+  it('BLOCKS a task row on no board this share covers, evidence route included', () => {
+    // These used to be refused because a visitor could not write a task at
+    // all. A member of the board a task is ON may now do both (see the
+    // board-participation describe below); `t-1` belongs to neither target
+    // here, so what this pins is the BOARD boundary rather than the verb.
     // The allowlist above is the positive control: these same predicates say
     // yes to the review verbs, so a `false` here is a decision and not a
     // probe that can never see anything.
@@ -653,7 +657,19 @@ describe('shareScopeAllows (workspace-hub surfaces — §3.12 commit 8)', () => 
   // the boundary it tests has always been board-to-board.
   const OTHER_WS: ShareTarget = { workspaceId: 'ws-a' };
   const workspaceOf = (d: string) =>
-    d === 'auth-rfc' ? ['ws-a'] : d.startsWith('hub-1:') ? ['hub-1'] : [];
+    d === 'auth-rfc'
+      ? ['ws-a']
+      : d.startsWith('hub-1:')
+        ? ['hub-1']
+        : // A task row and a goal row on each board. The guard asks about a
+          // row as `task:<rowId>`, so this is what makes a row-scoped route
+          // resolvable at all — and `task:t-other` answering `ws-a` is what
+          // makes the cross-board negative below a real one.
+          d === 'task:t-1' || d === 'task:g-1'
+          ? ['hub-1']
+          : d === 'task:t-other'
+            ? ['ws-a']
+            : [];
 
   it('allows the hub page for a workspace-scope share', () => {
     expect(shareScopeAllows('/workspaces/hub-1', 'GET', HUB)).toBe(true);
@@ -735,37 +751,151 @@ describe('shareScopeAllows (workspace-hub surfaces — §3.12 commit 8)', () => 
     expect(shareScopeAllows('/api/workspaces/hub-1/review-items', 'POST', HUB)).toBe(false);
   });
 
-  it('visitors are read-only on the gate: every task/goal/decision mutation route is out of scope', () => {
+  /**
+   * A member is a PARTICIPANT on the board they were admitted to (Bryan,
+   * 2026-09-03: "Let's allow everything for now"). These are the acts, named
+   * one by one, and every one of them is a route the board's own UI calls.
+   */
+  it('admits the session read — the bundle asks who it is before it paints', () => {
+    // Refused, the board bundle fell back to "nobody is signed in" and opened
+    // the name prompt `main()` awaits, so a member saw a modal and no board
+    // behind it (measured in headless Chromium, 2026-09-03). The payload is
+    // the caller's own identity, which Access already proved to get here.
+    expect(shareScopeAllows('/api/auth/session', 'GET', HUB, workspaceOf)).toBe(true);
+    // Read only, and the rest of the sign-in flow stays out — there is no
+    // second sign-in behind Access to start or finish.
+    expect(shareScopeAllows('/api/auth/session', 'POST', HUB, workspaceOf)).toBe(false);
+    expect(shareScopeAllows('/api/auth/start', 'POST', HUB, workspaceOf)).toBe(false);
+    expect(shareScopeAllows('/api/auth/verify', 'POST', HUB, workspaceOf)).toBe(false);
+    expect(shareScopeAllows('/api/auth/profile', 'POST', HUB, workspaceOf)).toBe(false);
+  });
+
+  it('admits the board-participation routes on the shared workspace', () => {
     const cases: Array<[string, string]> = [
+      ['/api/workspaces/hub-1/tasks', 'GET'],
+      ['/api/workspaces/hub-1/tasks', 'POST'],
+      ['/api/workspaces/hub-1/home', 'GET'],
+      ['/api/workspaces/hub-1/home/read', 'POST'],
+      ['/api/workspaces/hub-1/goals/add', 'POST'],
+      ['/api/workspaces/hub-1/goals/rename', 'POST'],
       ['/api/tasks/t-1/transition', 'POST'],
-      ['/api/tasks/t-1/answer', 'POST'],
-      ['/api/tasks/t-1/goal', 'POST'],
+      ['/api/tasks/t-1/evidence', 'POST'],
       ['/api/tasks/t-1/title', 'POST'],
+      ['/api/tasks/t-1/body', 'POST'],
+      ['/api/tasks/t-1/assignee', 'POST'],
+      ['/api/tasks/t-1/due', 'POST'],
+      ['/api/tasks/t-1/after', 'POST'],
+      ['/api/tasks/t-1/goal', 'POST'],
+      ['/api/tasks/t-1/park', 'POST'],
+      ['/api/tasks/t-1/archive', 'POST'],
+      ['/api/tasks/t-1/restore', 'POST'],
+      ['/api/tasks/t-1/answer', 'POST'],
+      ['/api/tasks/t-1/answer/undo', 'POST'],
+      ['/api/tasks/t-1/more-info', 'POST'],
+      ['/api/tasks/t-1/links', 'GET'],
       ['/api/tasks/t-1/links', 'POST'],
       ['/api/tasks/t-1/links', 'DELETE'],
-      ['/api/tasks/t-1/links', 'GET'],
-      ['/api/workspaces/hub-1/goal', 'PUT'],
-      ['/api/workspaces/hub-1/goals', 'PUT'],
-      ['/api/workspaces/hub-1/tasks', 'POST'],
-      ['/api/workspaces/hub-1/tasks', 'GET'],
-      ['/api/workspaces/hub-1/docs', 'POST'],
-      ['/api/workspaces/hub-1/attachments', 'POST'],
-      // The audit log carries actor IDs — owner-only (commit 7's flag).
-      ['/api/workspaces/hub-1/events', 'GET'],
+      ['/api/tasks/t-1/review-items', 'POST'],
+      ['/api/tasks/t-1/review-items/r-9/answer', 'POST'],
+      ['/api/tasks/t-1/review-items/r-9/more-info', 'POST'],
+      ['/api/tasks/t-1/review-items/r-9/release', 'POST'],
+      ['/api/tasks/t-1/review-items/r-9/revise', 'POST'],
+      ['/api/tasks/t-1/review-items/r-9/withdraw', 'POST'],
+      ['/api/tasks/t-1/review-items/r-9/withdraw/undo', 'POST'],
+      ['/api/goals/g-1/cascade', 'GET'],
+      ['/api/goals/g-1/archive', 'POST'],
+      ['/api/goals/g-1/restore', 'POST'],
     ];
     for (const [p, m] of cases) {
-      expect(
-        shareScopeAllows(p, m, HUB, () => []),
-        `${m} ${p}`,
-      ).toBe(false);
+      expect(shareScopeAllows(p, m, HUB, workspaceOf), `${m} ${p}`).toBe(true);
     }
   });
 
-  it('BLOCKS promoting a thread to a task — a mutation hiding under /api/docs', () => {
-    // threads/* is broadly allowed for commenting; promote creates a TASK
-    // and must stay owner-only like the other document-surgery verbs.
+  it('refuses every one of those on a row belonging to ANOTHER board', () => {
+    // `t-other` resolves to `ws-a`, so this is the same predicate answering
+    // about a row the share does not cover — not a fixture that reaches
+    // nothing. The positive test above is the control.
+    for (const [p, m] of [
+      ['/api/tasks/t-other/transition', 'POST'],
+      ['/api/tasks/t-other/title', 'POST'],
+      ['/api/tasks/t-other/review-items/r-9/answer', 'POST'],
+      ['/api/tasks/t-unknown/transition', 'POST'],
+    ] as Array<[string, string]>) {
+      expect(shareScopeAllows(p, m, HUB, workspaceOf), `${m} ${p}`).toBe(false);
+    }
+  });
+
+  it('keeps the board out of a member’s hands, and the owner’s machine with it', () => {
+    const cases: Array<[string, string]> = [
+      // Filing somebody else's doc onto this board would be a read of their
+      // board wearing a write's clothes.
+      ['/api/workspaces/hub-1/docs', 'POST'],
+      // Names a path on the owner's machine, both ways.
+      ['/api/workspaces/hub-1/settings', 'GET'],
+      ['/api/workspaces/hub-1/settings', 'PUT'],
+      ['/api/workspaces/hub-1/import-tasks', 'POST'],
+      // The audit log names actors by id; the board room's feed redacts them.
+      ['/api/workspaces/hub-1/events', 'GET'],
+      // The agent roster's own verbs — a seat on the board, not work on it.
+      ['/api/workspaces/hub-1/attachments', 'POST'],
+      // Board lifecycle.
+      ['/api/workspaces/hub-1', 'DELETE'],
+      ['/api/workspaces/hub-1/rename', 'POST'],
+      ['/api/workspaces/hub-1/retired', 'PUT'],
+      ['/api/workspaces/hub-1/lead', 'PUT'],
+      ['/api/workspaces/hub-1/goal', 'PUT'],
+      ['/api/workspaces/hub-1/goals', 'PUT'],
+      // A row route this table does not name stays closed.
+      ['/api/tasks/t-1', 'GET'],
+      ['/api/tasks/t-1/reopen', 'POST'],
+      ['/api/goals/g-1/rename', 'POST'],
+      // Share administration and the operator routes.
+      ['/api/share/workspace', 'POST'],
+      ['/api/share/enabled', 'POST'],
+      ['/api/deploy', 'POST'],
+      // The whole-server lists.
+      ['/api/workspaces', 'GET'],
+      ['/api/docs', 'GET'],
+      ['/api/review-items/r-9', 'GET'],
+    ];
+    for (const [p, m] of cases) {
+      expect(shareScopeAllows(p, m, HUB, workspaceOf), `${m} ${p}`).toBe(false);
+    }
+  });
+
+  it('answers a prototype-named segment rather than throwing on it', () => {
+    // The three route tables are indexed by a segment the CALLER types. On a
+    // plain object literal `toString` and friends resolve up Object.prototype
+    // to a function, `.includes` on it is undefined, and the TypeError used to
+    // escape the guard entirely — the connection closed with no response,
+    // which is neither an allow nor a deny, chosen by whoever sent the path.
+    //
+    // A boolean here IS the assertion: `toBe(false)` cannot pass if the call
+    // throws. Asserted on all three tables, since each one is read this way.
+    for (const seg of ['toString', 'constructor', '__proto__', 'hasOwnProperty', 'valueOf']) {
+      expect(shareScopeAllows(`/api/tasks/t-1/${seg}`, 'POST', HUB, workspaceOf), seg).toBe(false);
+      expect(shareScopeAllows(`/api/goals/g-1/${seg}`, 'POST', HUB, workspaceOf), seg).toBe(false);
+      expect(shareScopeAllows(`/api/workspaces/hub-1/${seg}`, 'GET', HUB, workspaceOf), seg).toBe(
+        false,
+      );
+    }
+    // Positive control on the same rows: the listed verbs still pass, so the
+    // refusals above are the segment and not a table that stopped matching.
+    expect(shareScopeAllows('/api/tasks/t-1/transition', 'POST', HUB, workspaceOf)).toBe(true);
+    expect(shareScopeAllows('/api/goals/g-1/archive', 'POST', HUB, workspaceOf)).toBe(true);
+    expect(shareScopeAllows('/api/workspaces/hub-1/tasks', 'GET', HUB, workspaceOf)).toBe(true);
+  });
+
+  it('allows promoting a thread to a task — a member files tasks on this board', () => {
+    // It was refused while a visitor was read-only on the board, and that is
+    // the exact reason 2026-09-03 removed. The document-surgery verbs beside
+    // it are still refused (asserted in the doc-subroute describe above).
     expect(
       shareScopeAllows('/api/docs/auth-rfc/threads/t1/promote', 'POST', OTHER_WS, workspaceOf),
+    ).toBe(true);
+    // …on a doc this share does not cover, still no.
+    expect(
+      shareScopeAllows('/api/docs/auth-rfc/threads/t1/promote', 'POST', HUB, workspaceOf),
     ).toBe(false);
   });
 
@@ -1376,8 +1506,11 @@ describe('collabScope', () => {
     expect(allows('/api/docs/design-doc', 'DELETE')).toBe(false);
     expect(allows('/api/docs/design-doc/content', 'POST')).toBe(false);
     expect(allows('/api/docs/design-doc/reparse_from_disk', 'POST')).toBe(false);
-    expect(allows('/api/docs/design-doc/threads/t-1/promote', 'POST')).toBe(false);
     expect(allows('/api/docs/design-doc/threads/t-1/rewrite_region', 'POST')).toBe(false);
+    // `promote` is deliberately NOT here any more: a member files tasks on
+    // the board this doc is filed on, so turning a comment into one is the
+    // same act by a shorter route (Bryan, 2026-09-03).
+    expect(allows('/api/docs/design-doc/threads/t-1/promote', 'POST')).toBe(true);
     expect(allows('/api/workspaces/ws-a', 'DELETE')).toBe(false);
     expect(allows('/api/workspaces/ws-a/refresh', 'POST')).toBe(false);
     expect(allows('/api/workspaces/ws-a/groups', 'POST')).toBe(false);

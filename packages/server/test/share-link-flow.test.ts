@@ -30,6 +30,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'bun:test';
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { emailDisplayName } from '@feedback/core';
 import { type JSONWebKeySet, type JWK, SignJWT, exportJWK, generateKeyPair } from 'jose';
 import { type ServerHandle, createServer } from '../src/server.ts';
 import { ACCESS_SHARE_CONFIG, mockCfApi } from './access-share.ts';
@@ -431,7 +432,8 @@ describe('share links over HTTP', () => {
       for (const [path, init] of [
         ['/api/docs', {}],
         ['/api/share', {}],
-        [`/api/workspaces/${encodeURIComponent(board)}/tasks`, {}],
+        [`/api/workspaces/${encodeURIComponent(board)}/settings`, {}],
+        [`/api/workspaces/${encodeURIComponent(board)}/events`, {}],
       ] as Array<[string, RequestInit]>) {
         const r = await onShareHost(path, member, init);
         expect(r.status, path).toBe(403);
@@ -440,6 +442,58 @@ describe('share links over HTTP', () => {
         method: 'DELETE',
       });
       expect(del.status).toBe(403);
+    });
+
+    it('works the board it DOES hold — files a task, moves it, and is named for it', async () => {
+      // Bryan, 2026-09-03: "Let's allow everything for now." A member is a
+      // participant, so this is the positive control the refusals above are
+      // measured against.
+      const filed = await onShareHost(
+        `/api/workspaces/${encodeURIComponent(board)}/tasks`,
+        member,
+        {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ title: 'Filed by a member', assignee: 'human' }),
+        },
+      );
+      expect(filed.status, await filed.clone().text()).toBe(200);
+      const { task } = (await filed.json()) as { task: { id: string; createdBy?: string } };
+      // Attributed to the address Cloudflare Access verified, not to a claim.
+      expect(task.createdBy).toBe(emailDisplayName(member));
+
+      const moved = await onShareHost(`/api/tasks/${task.id}/transition`, member, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ to: 'in-progress' }),
+      });
+      expect(moved.status, await moved.clone().text()).toBe(200);
+
+      // The same row is refused to a signed-in stranger, and to a member of
+      // no board at all — the boundary is the board, not the verb.
+      const byStranger = await onShareHost(`/api/tasks/${task.id}/transition`, STRANGER, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ to: 'done' }),
+      });
+      expect(byStranger.status).toBe(403);
+      expect(await byStranger.json()).toEqual({ error: 'out_of_share_scope' });
+    });
+
+    it('is refused a row on a board it was never given', async () => {
+      const other = await postLocal(`/api/workspaces/${encodeURIComponent(otherBoard)}/tasks`, {
+        title: 'On the private board',
+        assignee: 'human',
+      });
+      expect(other.status).toBe(200);
+      const otherTask = ((await other.json()) as { task: { id: string } }).task.id;
+      const r = await onShareHost(`/api/tasks/${otherTask}/transition`, member, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ to: 'done' }),
+      });
+      expect(r.status).toBe(403);
+      expect(await r.json()).toEqual({ error: 'out_of_share_scope' });
     });
 
     it('gets nothing useful from root or any path naming no workspace', async () => {
@@ -473,6 +527,156 @@ describe('share links over HTTP', () => {
       expect(
         (await onShareHost(`/api/workspaces/${encodeURIComponent(board)}`, member)).status,
       ).toBe(200);
+    });
+  });
+
+  /**
+   * Three ways out of the shared board that the participation grant opened,
+   * found by a security review of the change that opened it.
+   *
+   * Each one starts from a route the member is SUPPOSED to reach, so none of
+   * them is caught by asking whether the path is in scope — the path is. What
+   * moves is where the answer goes (a board named in the body), where it comes
+   * from (a store lookup that spans every board), or whether an answer is
+   * produced at all.
+   */
+  describe('the ways out of the shared board a member must not have', () => {
+    let member: string;
+    let threadId: string;
+    beforeAll(async () => {
+      member = 'escape-member@partner.example';
+      const { linkId } = await mintLink(board);
+      expect((await onShareHost(`/s/${linkId}`, member)).status).toBe(302);
+      const th = await postLocal(`/api/docs/${docId}/threads`, {
+        author: { id: 'owner', name: 'Owner', kind: 'person' },
+        text: 'Worth a ticket',
+        anchor: {
+          kind: 'element',
+          fingerprint: {
+            tag: 'P',
+            stableAttrs: {},
+            classes: [],
+            text: 'Body.',
+            path: 'P[0] > BODY[0]',
+            dataAttrs: {},
+          },
+          snippet: { text: 'Body.' },
+        },
+      });
+      expect(th.status, await th.clone().text()).toBe(200);
+      threadId = ((await th.json()) as { thread: { id: string } }).thread.id;
+    });
+
+    const promote = (destination: string) =>
+      onShareHost(`/api/docs/${docId}/threads/${threadId}/promote`, member, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ workspaceId: destination, title: 'Promoted by a member' }),
+      });
+
+    it('promotes a thread onto the board it holds, and refuses any other destination', async () => {
+      // The path names the DOC, which is in scope; the destination board is
+      // named in the BODY, which the scope check never read. So the guard
+      // said yes to a write that landed on a board this member was never
+      // given.
+      const escaped = await promote(otherBoard);
+      expect(escaped.status).toBe(403);
+      expect(await escaped.json()).toEqual({ error: 'out_of_share_scope' });
+
+      // …and nothing landed there. A 403 whose row was already written is
+      // the failure this test exists for, so the board is read back rather
+      // than the status being trusted.
+      const listed = await local(`/api/workspaces/${encodeURIComponent(otherBoard)}/tasks`);
+      expect(listed.status).toBe(200);
+      const { tasks } = (await listed.json()) as { tasks: Array<{ title: string }> };
+      expect(tasks.map((t) => t.title)).not.toContain('Promoted by a member');
+
+      // Positive control: the same call naming their own board succeeds, so
+      // the refusal above is the destination and not a broken promote.
+      const kept = await promote(board);
+      expect(kept.status, await kept.clone().text()).toBe(200);
+      const { task } = (await kept.json()) as { task: { id: string; workspaceId: string } };
+      expect(task.workspaceId).toBe(board);
+    });
+
+    it('reads a row’s backlinks without learning what a private board points at', async () => {
+      // `backlinksFor` walks every workspace, because a ref may cross one.
+      // Read through a member's scope that is a private row's title, id,
+      // status and assignee arriving on a route the member is allowed.
+      const onShared = await postLocal(`/api/workspaces/${encodeURIComponent(board)}/tasks`, {
+        title: 'The shared row',
+        assignee: 'human',
+      });
+      expect(onShared.status).toBe(200);
+      const sharedTask = ((await onShared.json()) as { task: { id: string } }).task.id;
+
+      const onPrivate = await postLocal(`/api/workspaces/${encodeURIComponent(otherBoard)}/tasks`, {
+        title: 'Secret roadmap row',
+        assignee: 'human',
+      });
+      expect(onPrivate.status).toBe(200);
+      const privateTask = ((await onPrivate.json()) as { task: { id: string } }).task.id;
+      const linked = await postLocal(`/api/tasks/${privateTask}/links`, {
+        ref: { kind: 'task', taskId: sharedTask },
+      });
+      expect(linked.status, await linked.clone().text()).toBe(200);
+
+      const asMember = await onShareHost(`/api/tasks/${sharedTask}/links`, member);
+      expect(asMember.status, await asMember.clone().text()).toBe(200);
+      const memberView = (await asMember.json()) as {
+        backlinks: Array<{ id: string; title: string }>;
+      };
+      expect(memberView.backlinks.map((b) => b.id)).not.toContain(privateTask);
+      expect(JSON.stringify(memberView)).not.toContain('Secret roadmap row');
+
+      // Positive control on the same row: the owner, who may see both boards,
+      // still gets the backlink. Without this the assertion above passes on a
+      // route that answers nothing at all.
+      const asOwner = await local(`/api/tasks/${sharedTask}/links`);
+      expect(asOwner.status).toBe(200);
+      const ownerView = (await asOwner.json()) as { backlinks: Array<{ id: string }> };
+      expect(ownerView.backlinks.map((b) => b.id)).toContain(privateTask);
+    });
+
+    it('answers a prototype-named subroute instead of dropping the connection', async () => {
+      // The route tables are looked up by a segment the caller types. On a
+      // plain object literal `toString` resolves up the prototype chain to a
+      // function, `.includes` on it is undefined, and the TypeError escaped
+      // the handler — so the connection closed with no response at all, which
+      // is neither an allow nor a deny.
+      const filed = await postLocal(`/api/workspaces/${encodeURIComponent(board)}/tasks`, {
+        title: 'Row for the prototype probe',
+        assignee: 'human',
+      });
+      expect(filed.status).toBe(200);
+      const rowId = ((await filed.json()) as { task: { id: string } }).task.id;
+
+      for (const seg of ['toString', 'constructor', '__proto__', 'hasOwnProperty', 'valueOf']) {
+        const r = await onShareHost(`/api/tasks/${rowId}/${seg}`, member, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ to: 'done' }),
+        });
+        expect([403, 404], `${seg} status`).toContain(r.status);
+        // Also on the board prefix and the goal prefix, which read their own
+        // tables the same way.
+        const board2 = await onShareHost(
+          `/api/workspaces/${encodeURIComponent(board)}/${seg}`,
+          member,
+        );
+        expect([403, 404], `board ${seg} status`).toContain(board2.status);
+        const goal = await onShareHost(`/api/goals/${rowId}/${seg}`, member);
+        expect([403, 404], `goal ${seg} status`).toContain(goal.status);
+      }
+
+      // Positive control: a real subroute on the same row still answers, so
+      // the loop above is not passing because the row or the member is broken.
+      const real = await onShareHost(`/api/tasks/${rowId}/transition`, member, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ to: 'in-progress' }),
+      });
+      expect(real.status, await real.clone().text()).toBe(200);
     });
   });
 
