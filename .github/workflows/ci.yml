@@ -30,8 +30,19 @@ jobs:
         run: bun run typecheck
       - name: Lint
         run: bun run lint
-      - name: Test
-        run: bun run test
+      # Two steps, not one `bun run test`. That script is
+      # `test:vitest && test:server`, and the `&&` means a red client suite
+      # short-circuits before the server suite is ever run — so a server
+      # regression that arrives alongside an unrelated client failure is
+      # invisible until somebody fixes the client one and pushes again. The
+      # server step runs even when the step above it failed, so ONE CI run
+      # reports on both suites. `!cancelled()` and not `always()`: a cancelled
+      # workflow should stop, not spend three more minutes.
+      - name: Test (client + unit)
+        run: bun run test:vitest
+      - name: Test (server)
+        if: ${{ !cancelled() }}
+        run: bun run test:server
       # Mechanical half of .claude/rules/testing-standards.md. Ratchets on
       # scripts/test-audit.baseline.json, so the counts it tracks cannot grow
       # back once they have been paid down.
