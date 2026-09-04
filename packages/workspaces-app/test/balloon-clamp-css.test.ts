@@ -39,7 +39,7 @@ import { IPAD, PHONE, attach, installSheets, setViewport, styleOf } from './css-
 
 let cleanup = () => {};
 beforeEach(() => {
-  cleanup = installSheets('styles.css');
+  cleanup = installSheets('styles.css', 'doc.css');
 });
 afterEach(() => {
   cleanup();

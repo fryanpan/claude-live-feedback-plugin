@@ -115,7 +115,7 @@ const GAP = 8;
 const RELAYOUT_DEBOUNCE_MS = 100;
 const SVG_NS = 'http://www.w3.org/2000/svg';
 
-/** Mirrors the styles.css breakpoint that hides `.markup-margin` (and the
+/** Mirrors the doc.css breakpoint that hides `.markup-margin` (and the
  *  leader overlay) — `rendered[]` is populated regardless of viewport, so
  *  anything answering "is this balloon actually visible?" must consult this,
  *  not the DOM. Same query app.ts uses for its mobile checks. */
