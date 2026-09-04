@@ -24,7 +24,7 @@ export async function handleTaskStatusAndLinks(
     boardIndexForListing,
     hubBoardsForDocIndexed,
   } = ctx;
-  const { req, pathname, authorFor } = rq;
+  const { req, pathname, authorFor, visitor } = rq;
   // The single gate for status changes: attributed and
   // dependency-checked. 409 on an enforce-marked open dependency.
   const taskTransitionMatch = pathname.match(/^\/api\/tasks\/([^/]+)\/transition$/);
@@ -90,10 +90,20 @@ export async function handleTaskStatusAndLinks(
     const taskId = decodeURIComponent(taskLinksMatch[1] ?? '');
     const task = taskStore.getTask(taskId);
     if (!task) return j(404, { error: 'task not found' });
+    // `backlinksFor` spans every workspace, deliberately — a ref may cross a
+    // board, and the whole point of a backlink is that the pointing row does
+    // not have to be nearby. For a caller scoped to ONE board that span is a
+    // read of boards they were never given: a private row's title, id, status
+    // and assignee, arriving on a route they are allowed to call about a row
+    // they are allowed to see. So a scoped caller is answered with the
+    // backlinks from their own board, and a member is answered with none.
+    const backlinks = taskStore
+      .backlinksFor({ kind: 'task', taskId })
+      .filter((t) => !visitor || t.workspaceId === visitor.workspaceId);
     return j(200, {
       taskId,
       links: task.links,
-      backlinks: taskStore.backlinksFor({ kind: 'task', taskId }).map(taskChip),
+      backlinks: backlinks.map(taskChip),
     });
   }
   // The same question asked about an ARBITRARY ref. `backlinksFor`
