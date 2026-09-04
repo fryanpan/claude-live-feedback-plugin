@@ -193,7 +193,7 @@ export interface SpinoffDeps {
   quote: string;
   /**
    * That same selection as a thread anchor — the WIRE shape
-   * (`review-chrome.ts`'s `anchorBody`), not core's `Anchor`. The two differ
+   * (`doc/anchor-body.ts`'s `anchorBody`), not core's `Anchor`. The two differ
    * on purpose: core stores relative positions as `Uint8Array`, and what
    * crosses the network is the JSON array form. Nothing here posts it today;
    * it rides along so a caller can pin what was spun off from where.
