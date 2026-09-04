@@ -409,31 +409,43 @@ describe('meeting audio socket with no engine configured', () => {
 });
 
 /**
- * The audio socket spends money and opens a microphone, so who may reach it is
- * not the same question as who may read the doc. `shareScopeAllows` is a closed
- * allowlist and `/audio/` was never added to it, so a share visitor has been
- * refused since the route existed — this pins that, because "closed by default"
- * is a property of a file somebody can edit.
+ * Who may open a doc's meeting audio socket.
+ *
+ * It used to be nobody but the owner: `/audio/` was never on the share
+ * allowlist, so every visitor was refused. That was correct while a share
+ * admitted a READER — reading a board is not a reason to spend money against
+ * a doc filed on it. Bryan's 2026-09-03 call makes a share link full access
+ * to the board, and holding a meeting is one of the things a board is for, so
+ * the socket is now scoped exactly like the doc's own editing socket: the
+ * board this member holds, and no other.
+ *
+ * What did NOT move is the cost. A recording that happened cannot be taken
+ * back, unlike a foreign write on the editing socket, which is reverted
+ * server-side — so the boundary below is the assertion that matters.
  */
-describe('a share visitor cannot open a doc’s meeting audio socket', () => {
+describe('a member opens the audio socket on their board, and on no other', () => {
   const HUB: ShareTarget = { workspaceId: 'hub-1' };
   const OTHER: ShareTarget = { workspaceId: 'ws-a' };
   const workspaceOf = (d: string): string[] =>
     d === 'standup-notes' ? ['ws-a'] : d.startsWith('hub-1:') ? ['hub-1'] : [];
 
-  it('refuses /audio/ for every share, however the doc is addressed', () => {
-    // Reading a board is not a reason to be able to spend money against a doc
-    // filed on it — and unlike a foreign write on the editing socket, which is
-    // reverted server-side, a recording that happened cannot be taken back.
+  it('opens /audio/ for a doc on the shared board, however it is addressed', () => {
+    expect(shareScopeAllows('/audio/standup-notes', 'GET', OTHER, workspaceOf)).toBe(true);
+    expect(shareScopeAllows('/audio/hub-1%3Aplan.md', 'GET', HUB, workspaceOf)).toBe(true);
+  });
+
+  it('refuses /audio/ for a doc on a board this share does not cover', () => {
+    // Same two paths, the other target each time — so a `false` here is the
+    // board boundary and not a fixture that refuses everything.
+    expect(shareScopeAllows('/audio/standup-notes', 'GET', HUB, workspaceOf)).toBe(false);
+    expect(shareScopeAllows('/audio/hub-1%3Aplan.md', 'GET', OTHER, workspaceOf)).toBe(false);
+    // A doc on no board at all is refused by both.
     for (const target of [HUB, OTHER]) {
-      expect(shareScopeAllows('/audio/standup-notes', 'GET', target, workspaceOf)).toBe(false);
-      expect(shareScopeAllows('/audio/hub-1%3Aplan.md', 'GET', target, workspaceOf)).toBe(false);
+      expect(shareScopeAllows('/audio/unfiled-doc', 'GET', target, workspaceOf)).toBe(false);
     }
   });
 
   it('positive control: the same doc IS reachable over the editing socket', () => {
-    // Without this the refusals above would also pass against a fixture that
-    // refuses everything it is handed.
     expect(shareScopeAllows('/y/standup-notes', 'GET', OTHER, workspaceOf)).toBe(true);
   });
 });

@@ -3870,6 +3870,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
     resolveWorkspaceForDoc,
     fileUnderHubWorkspace,
     unfileFromDefault,
+    workspacesOfDoc: shareWorkspacesOf,
     watchKeyExists,
   };
 
@@ -3892,6 +3893,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
     kind?: 'yjs' | 'audio' | 'recall';
     token?: string;
     shareId?: string;
+    shareMember?: string;
     readOnly?: boolean;
   };
 
@@ -4691,7 +4693,22 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           // a bare error event with no body to show.
           const audioReadOnly = requireSignInToWrite && browserProvedNobody();
           const upgraded = server.upgrade(req, {
-            data: { docId, kind: 'audio' as const, ...(audioReadOnly ? { readOnly: true } : {}) },
+            data: {
+              docId,
+              kind: 'audio' as const,
+              // WHAT AUTHORIZED THIS SOCKET, carried for its life, exactly as
+              // `/y/` carries it below. A websocket is authorized once at its
+              // upgrade, so revoking a share, removing a member and throwing
+              // the sharing master switch all have to be able to find the
+              // connections that grant opened. Without these two the sweeps
+              // closed the editor and left an open microphone running a
+              // billed transcription session against a doc the person may no
+              // longer read. `Rooms.trackShareSocket` is the other half: this
+              // socket is in no room's `conns` for a sweep to walk.
+              ...(visitorShareId ? { shareId: visitorShareId } : {}),
+              ...(visitorMemberKey ? { shareMember: visitorMemberKey } : {}),
+              ...(audioReadOnly ? { readOnly: true } : {}),
+            },
           });
           if (!upgraded) return new Response('upgrade required', { status: 426 });
           return undefined;
@@ -5535,6 +5552,11 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
       open(ws) {
         if (ws.data.kind === 'recall') return;
         if (ws.data.kind === 'audio') {
+          // Before the relay, because the relay's own bookkeeping is a
+          // WeakMap nothing can enumerate: this is what makes the socket
+          // reachable by the share sweeps in `rooms.ts`. A socket carrying
+          // neither stamp — the owner's — is not tracked at all.
+          rooms.trackShareSocket(ws);
           meetingRelay.onOpen(ws);
           return;
         }
@@ -5591,6 +5613,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           return;
         }
         if (ws.data.kind === 'audio') {
+          rooms.untrackShareSocket(ws);
           meetingRelay.onClose(ws);
           return;
         }
