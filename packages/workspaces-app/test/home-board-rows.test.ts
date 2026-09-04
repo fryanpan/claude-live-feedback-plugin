@@ -33,8 +33,11 @@ import {
   boardSections,
 } from '../src/hub/hub-board-model.ts';
 import { type ShimHandlers as BoardHandlers, disposeBoards, renderBoard } from './support/board.ts';
+import { HUB_BOOT_SOURCES } from './support/hub-boot-sources.ts';
 
-const HUB_APP = readFileSync(resolve(import.meta.dirname, '../src/hub/hub-app.ts'), 'utf8');
+const HUB_APP = HUB_BOOT_SOURCES.map((m) =>
+  readFileSync(resolve(import.meta.dirname, `../src/hub/${m}.ts`), 'utf8'),
+).join('\n');
 
 const NOW = 1_700_000_000_000;
 
