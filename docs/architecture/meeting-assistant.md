@@ -757,7 +757,8 @@ typed since the last one. Now (`meeting-notes-merge.ts`):
   a bullet list is a single block and block granularity would hand the
   agent's whole list to the person who fixed one bullet.
 - Ownership is a **ledger keyed by the Yjs element**, holding the markdown
-  the agent left in it, held per doc in memory. An item is the agent's only
+  the agent left in it, held per doc in memory (the section claim alone is
+  also written down — see below). An item is the agent's only
   if the agent wrote that element AND it still reads exactly as the agent
   left it. Both halves matter: text alone hands a person's element to the
   agent the moment they type a line matching one of its own, and element
@@ -790,6 +791,30 @@ typed since the last one. Now (`meeting-notes-merge.ts`):
 - **A ledger that claims nothing means "everything here is somebody
   else's"**, so a restarted server adds and stops replacing rather than
   claiming prose it has never seen.
+- **The ledger answers two questions and only one of them is written down.**
+  "May I replace this item?" is element AND text, so it cannot survive a
+  process and must not: a restarted server that claimed items it has never
+  seen would delete a person's writing on its first from-scratch compose.
+  "Is this section the note-taker's?" — the question that decides whether a
+  tick extends the "Meeting notes" it finds or opens a second one — is
+  answered by TEXT alone, and that half is persisted
+  (`notes-ledger-store.ts`, `<dataDir>/meetings/<docId>/notes-ledger.json`,
+  a whole-file snapshot written via temp-and-rename). Without it a deploy
+  mid-meeting emptied the ledger, the position test below took over, and any
+  heading appended under the notes — a Research placeholder, a heading a
+  person typed — twinned the section on the very next tick, which is the
+  twinning PR 637 had already fixed. Recognising a section by text grants
+  nothing INSIDE it: every replace and delete still goes through `claims`,
+  so the restarted server adds and suggests there and rewrites nothing.
+  The record names its meeting and is adopted only while the sitting that
+  wrote it is still going on (`NOTES_LEDGER_CONTINUATION_MS`, 30 min), which
+  is what keeps a genuinely new meeting starting its own section at the end.
+  Per DOC rather than per meeting id, because a restart mid-meeting does not
+  resume the meeting — the browser reports the connection lost and the next
+  recording is minted a new id. Nothing in the store throws: a missing file,
+  a torn one, a folder that cannot be made all read as no claim, which is
+  the behaviour it replaces. `notes-ledger-persist.test.ts` drives the
+  restart end to end; `notes-ledger-store.test.ts` drives the file.
 - **An in-place agent edit has to tell the ledger.** The speaker rename below
   rewrites characters inside the agent's own lines rather than replacing
   them, so the ledger would stop recognising them and hand each one to the
@@ -1792,7 +1817,8 @@ doc sink) + `pause-ticker.ts` (the two clocks, in `createPauseTicker`) +
 `notes-section-write.ts` (every write into a live section) ·
 `packages/server/src/meeting-notes-merge.ts` (the merge that
 keeps a person's writing) + `notes-ownership.ts` (the ownership ledger
-everything else asks) + `notes-section.ts` (what a section decomposes into) ·
+everything else asks) + `notes-ledger-store.ts` (the half of that ledger that
+survives a restart) + `notes-section.ts` (what a section decomposes into) ·
 `packages/server/src/meeting-notes-correction.ts` (which note a spoken
 correction lands on, and whether it may) ·
 `packages/server/src/meeting-ask-cues.ts` (now, later or neither — the two
