@@ -532,7 +532,7 @@ describe('the mobile sheet rides the keyboard', () => {
     // says nothing about whether they REACH the pane: they sit inside a
     // `max-width: 900px` block, and a text match holds at every width whether
     // or not the query does.
-    sheets = installSheets('styles.css');
+    sheets = installSheets('styles.css', 'doc.css');
     const down = pane(PHONE, '0px');
     expect(down.position).toBe('fixed');
     expect(down.bottom).toBe('0px');
@@ -556,7 +556,7 @@ describe('the mobile sheet rides the keyboard', () => {
     // in a `max-width: 900px` block, so on the iPad the pane must NOT be a
     // fixed, keyboard-riding sheet. A grep for `position: fixed` passes here
     // either way.
-    sheets = installSheets('styles.css');
+    sheets = installSheets('styles.css', 'doc.css');
     const wide = pane(IPAD, '300px');
     expect(wide.position).not.toBe('fixed');
     expect(wide.bottom).not.toBe('300px');
@@ -615,7 +615,10 @@ describe('the 430px sheet', () => {
   });
 
   it('leaves nothing in the document flow, and no 260px track to scroll sideways past', () => {
-    const off = installSheets('styles.css');
+    // Both sheets: the placement rules live in `doc.css` since the editor's
+    // CSS became its own file, and a negative read against the base alone
+    // would pass on a stylesheet that never had the rule.
+    const off = installSheets('styles.css', 'doc.css');
     cleanups.push(off);
     setViewport(PHONE);
     setCardPlacement('balloon');
@@ -632,7 +635,7 @@ describe('the 430px sheet', () => {
   });
 
   it('positive control: the same nodes at 1180 with balloons chosen do show the margin', () => {
-    const off = installSheets('styles.css');
+    const off = installSheets('styles.css', 'doc.css');
     cleanups.push(off);
     setViewport(IPAD);
     setCardPlacement('balloon');

@@ -17,7 +17,13 @@
     <link rel="manifest" href="/manifest.webmanifest" />
     <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
     <meta name="theme-color" content="#2e7dd7" />
+    <!-- The chrome every page shares, then this page's own surfaces. The
+         order is measured, not tidy: doc.css was interleaved through
+         styles.css, and loading it second reorders ~72,600 pairs of rules
+         without letting any of them decide a value differently. Loading it
+         FIRST flips twenty pairs that do — see the header of doc.css. -->
     <link rel="stylesheet" href="/app/styles.css" />
+    <link rel="stylesheet" href="/app/doc.css" />
     <!-- Open Props trial layer — MUST come after styles.css: it remaps the
          same :root tokens at equal specificity, so document order is what
          lets it win. Removing this link reverts the trial. -->

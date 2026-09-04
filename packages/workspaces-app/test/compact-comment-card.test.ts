@@ -402,7 +402,9 @@ describe('the head shows the author’s colour everywhere the row can afford it'
   });
 
   it('and the 260px margin column is the one place it stands down', () => {
-    const off = installSheets('styles.css');
+    // The margin's corrections to the shared card live in `doc.css`; the card
+    // itself is in the base. This reads across the seam, so it installs both.
+    const off = installSheets('styles.css', 'doc.css');
     cleanups.push(off);
     setViewport({ width: 1180, height: 820 });
     const margin = attach('markup-margin');
