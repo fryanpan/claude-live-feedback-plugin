@@ -315,4 +315,79 @@ describe('the gutter curve', () => {
     expect(styleOf(layer() as unknown as HTMLElement).pointerEvents).toBe('none');
     expect(layer().getAttribute('aria-hidden')).toBe('true');
   });
+
+  /** The x of the vertical one line runs down, read off the painted path. */
+  function laneOf(path: Element): number {
+    return Number((path.getAttribute('d') ?? '').split(' ')[6]);
+  }
+
+  /** The line paths only — `paintDeps` appends a line then its arrowhead. */
+  function lines(): Element[] {
+    return [...layer().querySelectorAll('path')].filter((_, i) => i % 2 === 0);
+  }
+
+  it('gives a band full of blockers one x per line, so no two curves overlap', async () => {
+    // Six rows waiting on one ticket — the shape Bryan reported, where every
+    // line used to run down the same 12px and the drawing became unreadable.
+    const gate = task({ title: 'Ship the renderer' });
+    const waiting = Array.from({ length: 6 }, (_, i) =>
+      task({ title: `Waiting ${i + 1}`, after: [gate.id] }),
+    );
+    paint([gate, ...waiting]);
+    stubLayout();
+    await repaint();
+    expect(lines()).toHaveLength(6);
+    const xs = lines().map(laneOf);
+    expect(new Set(xs).size).toBe(6);
+    // Nearest target rightmost, each further one to its left — the rows are
+    // painted in board order, so the array is already nearest-first here.
+    expect(xs).toEqual([...xs].sort((a, b) => b - a));
+    // Inside the gutter: the rows' own left padding is 34, and the rightmost
+    // lane is the spine the single-line case has always used.
+    expect(Math.max(...xs)).toBe(12);
+    expect(Math.min(...xs)).toBeGreaterThanOrEqual(2);
+  });
+
+  it('still draws a lone blocker down the gutter spine — the nesting costs nothing at one', async () => {
+    // Positive control for the case above: one edge, one lane, the same x.
+    const gate = task({ title: 'Ship the renderer' });
+    const waiting = task({ title: 'Wire the panel', after: [gate.id] });
+    paint([gate, waiting]);
+    stubLayout();
+    await repaint();
+    expect(lines().map(laneOf)).toEqual([12]);
+  });
+});
+
+/**
+ * The gutter behind the curves.
+ *
+ * happy-dom has no `::before`, so this reads the CSSOM the sheets built rather
+ * than a computed style: the assertion is that no rule in the cascade still
+ * gives `.hub-band-tasks` a pseudo-element to paint. How the gutter LOOKS is
+ * the headless-Chromium pass; what this catches is the rule coming back.
+ */
+describe('the band gutter', () => {
+  /** Every selector in the installed sheets, media blocks included. */
+  function selectors(): string[] {
+    const out: string[] = [];
+    const walk = (rules: CSSRuleList): void => {
+      for (const rule of [...rules]) {
+        const styleRule = rule as CSSStyleRule & { cssRules?: CSSRuleList };
+        if (typeof styleRule.selectorText === 'string') out.push(styleRule.selectorText);
+        if (styleRule.cssRules) walk(styleRule.cssRules);
+      }
+    };
+    for (const sheet of [...document.styleSheets]) walk(sheet.cssRules);
+    return out;
+  }
+
+  it('draws no vertical rail behind the rows — it fought the dependency curves', () => {
+    paint([task(), task()]);
+    const all = selectors();
+    // Positive control: the walk reaches the band's own rule, so the absence
+    // below is the rule being gone and not an empty read.
+    expect(all).toContain('.hub-band-tasks');
+    expect(all.filter((sel) => sel.includes('.hub-band-tasks::before'))).toEqual([]);
+  });
 });

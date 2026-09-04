@@ -65,6 +65,7 @@ import {
 } from '../mockup-capture.ts';
 import type { ReadyWorkNudger } from '../ready-nudge.ts';
 import type { DocRoom, Rooms } from '../rooms.ts';
+import { OUT_OF_SHARE_SCOPE, firstRefOutOfScope } from '../share/ref-scope.ts';
 import type { ThreadSummarizer } from '../summarize.ts';
 import {
   BAD_OPTIONS_ERROR,
@@ -262,6 +263,13 @@ export interface DocRoutesContext {
   parseRevisedRange: (
     raw: unknown,
   ) => { ok: true; range?: { start: number; end: number } } | { ok: false; error: string };
+  /**
+   * Every workspace an id belongs to — `shareWorkspacesOf`, the same resolver
+   * the host guard scopes paths with. Read here for the fields the guard
+   * cannot see, which are the ones a request names in its BODY: a promoted
+   * row's cross-references. See `share/ref-scope.ts`.
+   */
+  workspacesOfDoc: (id: string) => string[];
 }
 
 /** What only this request knows. */
@@ -577,7 +585,7 @@ export async function handleDocPromoteRoute(
   ctx: DocRoutesContext,
   rq: DocRouteRequest,
 ): Promise<Response | undefined> {
-  const { rooms, taskStore, j, safeJson, canonicalDocId } = ctx;
+  const { rooms, taskStore, j, safeJson, canonicalDocId, workspacesOfDoc } = ctx;
   const { req, pathname, authorFor, visitor } = rq;
   // promote_to_task (§3.10): thread → task. Captures the origin ref,
   // the latest HUMAN comment as the verbatim quote (an agent's closing
@@ -643,6 +651,13 @@ export async function handleDocPromoteRoute(
     if (!promoteOptions.ok) return j(400, { error: BAD_OPTIONS_ERROR });
     const promoteLinks = parseLinks(body?.links);
     if (!promoteLinks.ok) return j(400, { error: BAD_REF_ERROR });
+    // The third body-borne ref surface, and the same rule as the other two
+    // (share/ref-scope.ts): a member may annotate their promoted row with
+    // things on their own board and nothing else. `origin` needs no check —
+    // it is built from the doc and thread this route already scoped.
+    if (firstRefOutOfScope(promoteLinks.links, visitor, workspacesOfDoc) !== undefined) {
+      return j(403, OUT_OF_SHARE_SCOPE);
+    }
     // Same rule as a plain create: a promoted thread lands owned by
     // whoever promoted it unless the call names someone else.
     const promotedBy = authorFor(body?.author);
