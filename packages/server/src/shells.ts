@@ -223,7 +223,26 @@ to an HTML file. Once bound, the file is served here without any symlink dance.<
 export function renderHubShell(
   workspaceId: string,
   name: string,
-  opts: { feedback: boolean; sentry?: BrowserSentryConfig | null; assets?: AssetManifest } = {
+  opts: {
+    feedback: boolean;
+    /**
+     * Is the reader a share or collaboration visitor rather than the owner?
+     *
+     * One bit, and it exists for one thing the bundle cannot work out for
+     * itself: on a share hostname there is no "all workspaces" page to go
+     * back to — `/` is out of scope and answers a JSON refusal — so the back
+     * arrow has no destination and `buildShell` leaves it out. The server is
+     * the only side that knows which hostname class served this page, so it
+     * has to be told rather than sniffed.
+     *
+     * Deliberately NOT a general "am I a visitor" channel for the client:
+     * every access decision is made server-side, per request, and a bit in
+     * the HTML is a hint about what to paint, never a permission.
+     */
+    visitor?: boolean;
+    sentry?: BrowserSentryConfig | null;
+    assets?: AssetManifest;
+  } = {
     feedback: false,
   },
 ): string {
@@ -275,7 +294,7 @@ export function renderHubShell(
     <link rel="stylesheet" href="${tokensCss}" />
   </head>
   <body class="hub-body">
-    <div id="hub-root" data-workspace-id="${safeId}"></div>
+    <div id="hub-root" data-workspace-id="${safeId}"${opts.visitor ? ' data-visitor="1"' : ''}></div>
     <script type="module" src="${hubJs}"></script>${widget}
   </body>
 </html>`;

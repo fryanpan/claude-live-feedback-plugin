@@ -31,6 +31,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'bun:test';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { emailDisplayName } from '@feedback/core';
 import * as decoding from 'lib0/decoding';
 import * as encoding from 'lib0/encoding';
 import * as syncProtocol from 'y-protocols/sync';
@@ -45,6 +46,9 @@ import {
 } from './access-share.ts';
 
 const PERSON = { id: 'known-jordan', name: 'Jordan', kind: 'known', color: '#2e7dd7' };
+
+/** The address the Access harness signs every visitor token as. */
+const VISITOR_EMAIL = 'reviewer@partner.example';
 
 const MSG_SYNC = 0;
 
@@ -510,8 +514,12 @@ describe('workspace-hub minimal share (§3.12 commit 8)', () => {
       expect((await pub(`/api/workspaces/${otherId}/review-items`, otherCookie)).status).toBe(200);
       expect((await pub(`/api/workspaces/${hubId}/review-items`, otherCookie)).status).toBe(403);
       expect((await pub(`/api/workspaces/${hubId}/review-items`)).status).toBe(403);
-      // Read-only, like every other allowance on this gate.
-      expect((await pub(`/api/workspaces/${hubId}/tasks`, hubCookie)).status).toBe(403);
+      // The board's rows are a member's too now (2026-09-03), so what a
+      // stranger is refused is the board, not the verb: an un-vouched-for
+      // caller and a member of the OTHER board both get nothing here.
+      expect((await pub(`/api/workspaces/${hubId}/tasks`, hubCookie)).status).toBe(200);
+      expect((await pub(`/api/workspaces/${hubId}/tasks`, otherCookie)).status).toBe(403);
+      expect((await pub(`/api/workspaces/${hubId}/tasks`)).status).toBe(403);
     });
 
     it('serves agent presence redacted — no endpoint — with the owner’s copy as the control', async () => {
@@ -543,45 +551,183 @@ describe('workspace-hub minimal share (§3.12 commit 8)', () => {
     });
   });
 
-  describe('visitors are READ-ONLY on the gate', () => {
-    it('every task/goal/decision mutation route refuses visitor auth', async () => {
+  describe('the board page a member is served', () => {
+    it('leaves out the all-workspaces arrow — `/` is not a page on this host', async () => {
+      const seen = await (await pub(`/workspaces/${hubId}`, hubCookie)).text();
+      expect(seen).toContain('id="hub-root"');
+      expect(seen).toContain('data-visitor="1"');
+      // POSITIVE CONTROL: the owner's own copy of the same page does not
+      // carry the flag, so the assertion above is about the visitor and not
+      // about a shell that stamps it on everything.
+      const owner = await (await local(`/workspaces/${hubId}`)).text();
+      expect(owner).toContain('id="hub-root"');
+      expect(owner).not.toContain('data-visitor');
+      // And `/` really is refused here, which is what the arrow would hit.
+      expect((await pub('/', hubCookie)).status).toBe(403);
+    });
+  });
+
+  describe('a member is a participant on the board they were admitted to', () => {
+    /**
+     * Bryan, 2026-09-03: "Let's allow everything for now." Each admitted
+     * route gets a request that SUCCEEDS on the share host for the shared
+     * board — a positive control per route, so a refusal on the next block
+     * cannot be the fixture failing to reach anything.
+     */
+    it('files, edits, moves and answers work on the shared board', async () => {
       const author = PERSON;
+      const filed = await pub(`/api/workspaces/${hubId}/tasks`, hubCookie, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ title: 'Filed by a member', assignee: 'human', author }),
+      });
+      expect(filed.status, await filed.clone().text()).toBe(200);
+      const filedId = ((await filed.json()) as { task: { id: string } }).task.id;
+
       const cases: Array<[string, RequestInit]> = [
+        [`/api/workspaces/${hubId}/tasks`, { method: 'GET' }],
+        [`/api/workspaces/${hubId}/home?user=${encodeURIComponent(PERSON.id)}`, { method: 'GET' }],
         [
-          `/api/tasks/${taskId}/transition`,
-          { method: 'POST', body: JSON.stringify({ to: 'done', author }) },
+          `/api/workspaces/${hubId}/home/read`,
+          { method: 'POST', body: JSON.stringify({ author }) },
+        ],
+        [
+          `/api/workspaces/${hubId}/goals/add`,
+          { method: 'POST', body: JSON.stringify({ title: 'A member’s goal', author }) },
+        ],
+        [
+          `/api/tasks/${filedId}/title`,
+          { method: 'POST', body: JSON.stringify({ title: 'Retitled by a member', author }) },
+        ],
+        [
+          `/api/tasks/${filedId}/body`,
+          { method: 'POST', body: JSON.stringify({ markdown: 'Rewritten.', author }) },
+        ],
+        [
+          `/api/tasks/${filedId}/assignee`,
+          { method: 'POST', body: JSON.stringify({ assignee: 'human', author }) },
+        ],
+        [
+          `/api/tasks/${filedId}/goal`,
+          { method: 'POST', body: JSON.stringify({ goal: 'chores', author }) },
+        ],
+        [
+          `/api/tasks/${filedId}/links`,
+          {
+            method: 'POST',
+            body: JSON.stringify({ ref: { kind: 'doc', docId: ATTACHED }, author }),
+          },
+        ],
+        [`/api/tasks/${filedId}/links`, { method: 'GET' }],
+        [
+          `/api/tasks/${filedId}/transition`,
+          { method: 'POST', body: JSON.stringify({ to: 'in-progress', author }) },
         ],
         [
           `/api/tasks/${decisionId}/answer`,
           { method: 'POST', body: JSON.stringify({ text: 'Ship now.', author }) },
         ],
+      ];
+      for (const [path, init] of cases) {
+        const r = await pub(path, hubCookie, {
+          ...init,
+          headers: { 'content-type': 'application/json' },
+        });
+        expect(r.status, `${init.method} ${path}: ${await r.clone().text()}`).toBe(200);
+      }
+
+      // …and the board really changed: the owner surface reads the member's
+      // work back. A 200 from a route that dropped the write would pass the
+      // loop above and fail here.
+      const listed = (await (await local(`/api/workspaces/${hubId}/tasks`)).json()) as {
+        tasks: Array<{ id: string; title: string; status: string }>;
+      };
+      const row = listed.tasks.find((t) => t.id === filedId);
+      expect(row?.title).toBe('Retitled by a member');
+      expect(row?.status).toBe('in-progress');
+    });
+
+    it('attributes the member’s writes to the email Cloudflare Access verified', async () => {
+      // The body claims a fleet identity; the trail must name the verified
+      // address instead. Same rule the comment routes already follow — this
+      // change added no second identity source, it reused `authorFor`.
+      const filed = await pub(`/api/workspaces/${hubId}/tasks`, hubCookie, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          title: 'Whose task is this',
+          assignee: 'human',
+          author: { id: 'known-bryan', name: 'Mallory', kind: 'known' },
+        }),
+      });
+      expect(filed.status).toBe(200);
+      const { task } = (await filed.json()) as { task: { id: string; createdBy?: string } };
+      expect(task.createdBy).toBe(emailDisplayName(VISITOR_EMAIL));
+      expect(task.createdBy).not.toBe('Mallory');
+
+      // …and on the task trail, which is what the owner actually reads back.
+      const moved = await pub(`/api/tasks/${task.id}/transition`, hubCookie, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          to: 'in-progress',
+          author: { id: 'known-bryan', name: 'Mallory', kind: 'known' },
+        }),
+      });
+      expect(moved.status).toBe(200);
+      const log = await local(`/api/workspaces/${hubId}/events`);
+      expect(log.status).toBe(200);
+      const { events } = (await log.json()) as {
+        events: Array<{ taskId?: string; actor?: { id: string; name: string } }>;
+      };
+      const mine = events.filter((e) => e.taskId === task.id && e.actor);
+      expect(mine.length).toBeGreaterThan(0);
+      for (const e of mine) {
+        expect(e.actor?.name).toBe(emailDisplayName(VISITOR_EMAIL));
+        expect(e.actor?.id).not.toBe('known-bryan');
+      }
+    });
+
+    it('refuses every row on a board this member was NOT given', async () => {
+      // `otherCookie` holds the OTHER board; `taskId` is on the hub board.
+      // The same verbs the test above ran green.
+      for (const [path, init] of [
         [
-          `/api/tasks/${taskId}/goal`,
-          { method: 'POST', body: JSON.stringify({ goal: 'chores', author }) },
+          `/api/tasks/${taskId}/transition`,
+          { method: 'POST', body: JSON.stringify({ to: 'done' }) },
         ],
-        [
-          `/api/tasks/${taskId}/title`,
-          { method: 'POST', body: JSON.stringify({ title: 'Renamed', author }) },
-        ],
-        [
-          `/api/tasks/${taskId}/links`,
-          { method: 'POST', body: JSON.stringify({ ref: { kind: 'doc', docId: ATTACHED } }) },
-        ],
-        [
-          `/api/workspaces/${hubId}/goals`,
-          { method: 'PUT', body: JSON.stringify({ goals: [], author }) },
-        ],
+        [`/api/tasks/${taskId}/title`, { method: 'POST', body: JSON.stringify({ title: 'X' }) }],
         [
           `/api/workspaces/${hubId}/tasks`,
-          {
-            method: 'POST',
-            body: JSON.stringify({ title: 'Injected task', assignee: 'human' }),
-          },
+          { method: 'POST', body: JSON.stringify({ title: 'X' }) },
         ],
+        [`/api/workspaces/${hubId}/tasks`, { method: 'GET' }],
+      ] as Array<[string, RequestInit]>) {
+        const r = await pub(path, otherCookie, {
+          ...init,
+          headers: { 'content-type': 'application/json' },
+        });
+        expect(r.status, `${init.method} ${path}`).toBe(403);
+      }
+    });
+
+    it('refuses everything that is not work on this board', async () => {
+      const author = PERSON;
+      const cases: Array<[string, RequestInit]> = [
+        // Filing somebody else's doc here would be a read of their board.
         [
           `/api/workspaces/${hubId}/docs`,
           { method: 'POST', body: JSON.stringify({ docId: ATTACHED }) },
         ],
+        // Names, and returns, a path on the owner's machine.
+        [`/api/workspaces/${hubId}/settings`, { method: 'GET' }],
+        [
+          `/api/workspaces/${hubId}/settings`,
+          { method: 'PUT', body: JSON.stringify({ reviewItemCriteria: 'anything', author }) },
+        ],
+        // The audit log names actors by id.
+        [`/api/workspaces/${hubId}/events`, { method: 'GET' }],
+        // The agent roster's own verbs.
         [
           `/api/workspaces/${hubId}/attachments`,
           {
@@ -589,26 +735,36 @@ describe('workspace-hub minimal share (§3.12 commit 8)', () => {
             body: JSON.stringify({ agentId: 'agent-x', runtime: 'claude-code-local' }),
           },
         ],
+        // Board lifecycle.
+        [`/api/workspaces/${hubId}`, { method: 'DELETE' }],
+        [
+          `/api/workspaces/${hubId}/lead`,
+          { method: 'PUT', body: JSON.stringify({ agentId: 'agent-x' }) },
+        ],
+        [
+          `/api/workspaces/${hubId}/goals`,
+          { method: 'PUT', body: JSON.stringify({ goals: [], author }) },
+        ],
         [
           `/api/workspaces/${hubId}/voice`,
           { method: 'POST', body: JSON.stringify({ transcript: 'delete everything', author }) },
         ],
-        // Not workspace-scoped, and the only route here that reaches OUTSIDE
-        // this process — it updates the machine's plugin cache. Holding a
-        // share link is not a reason to run a deploy step on the host.
-        // Refused by `shareScopeAllows` before any route runs (the allowlist
-        // is closed by default), which is where the real assertion lives:
-        // host-guard.test.ts, 'never lets a share host reach the plugin
-        // refresh'. This row is the end-to-end confirmation that the gate is
-        // actually wired in front of it.
+        // The whole-server lists and the global review-item resolver.
+        ['/api/workspaces', { method: 'GET' }],
+        ['/api/docs', { method: 'GET' }],
+        ['/api/review-items/r-anything', { method: 'GET' }],
+        // Share administration — minting, revoking, and the master switch.
+        ['/api/share/workspace', { method: 'POST', body: JSON.stringify({ workspaceId: hubId }) }],
+        ['/api/share', { method: 'GET' }],
+        ['/api/share/some-link-id', { method: 'DELETE' }],
+        ['/api/share/enabled', { method: 'POST', body: JSON.stringify({ enabled: false }) }],
+        // Not workspace-scoped, and the only routes here that reach OUTSIDE
+        // this process — the plugin cache, and a restart that would drop
+        // every live editor socket. Refused by `shareScopeAllows` before any
+        // route runs; the layer-level assertions live in host-guard.test.ts
+        // and deploy-reachability.test.ts. These rows confirm the gate is
+        // wired in front of them.
         ['/api/plugin/refresh', { method: 'POST' }],
-        // Same shape, one step worse in consequence: a deploy restarts this
-        // process and drops every live editor socket, so a share visitor
-        // reaching it would be able to interrupt everyone else's review.
-        // Also refused by `shareScopeAllows` before any route runs; the
-        // layer-level assertion lives in deploy-reachability.test.ts, 'a
-        // share visitor cannot reach the deploy route'. This row confirms
-        // the gate is wired in front of it.
         ['/api/deploy', { method: 'POST' }],
         ['/api/deploy', { method: 'GET' }],
       ];
@@ -621,27 +777,29 @@ describe('workspace-hub minimal share (§3.12 commit 8)', () => {
       }
     });
 
-    it('the same transition succeeds from the owner surface (positive control)', async () => {
-      const r = await post(`/api/tasks/${taskId}/transition`, { to: 'done', author: PERSON });
-      expect(r.status).toBe(200);
+    it('the master switch still closes the door on a member', async () => {
+      expect((await post('/api/share/enabled', { enabled: false })).status).toBe(200);
+      try {
+        const r = await pub(`/api/workspaces/${hubId}/tasks`, hubCookie, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ title: 'While the door is shut', assignee: 'human' }),
+        });
+        expect(r.status).toBe(403);
+        expect(await r.json()).toEqual({ error: 'sharing_disabled' });
+      } finally {
+        expect((await post('/api/share/enabled', { enabled: true })).status).toBe(200);
+      }
+      // Positive control: the same call lands again once it is back on.
+      const again = await pub(`/api/workspaces/${hubId}/tasks`, hubCookie, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ title: 'After the door reopened', assignee: 'human' }),
+      });
+      expect(again.status).toBe(200);
     });
 
-    it('the decision stayed unanswered — the refusals were refusals, not silent drops', async () => {
-      const r = await local(`/api/workspaces/${hubId}/tasks?needs=decision`);
-      const { tasks } = (await r.json()) as { tasks: Array<{ id: string; answer?: unknown }> };
-      const decision = tasks.find((t) => t.id === decisionId);
-      expect(decision).toBeDefined();
-      expect(decision?.answer).toBeUndefined();
-    });
-
-    it('the events audit log is owner-only — it carries actor ids', async () => {
-      expect((await local(`/api/workspaces/${hubId}/events`)).status).toBe(200); // positive control
-      expect((await pub(`/api/workspaces/${hubId}/events`, hubCookie)).status).toBe(403);
-    });
-
-    it('promoting a thread to a task is refused even on an in-scope doc', async () => {
-      // The thread exists and the visitor can SEE it (positive control below
-      // proves comment access) — but promote CREATES a task.
+    it('promotes a thread to a task, and still refuses document surgery', async () => {
       const mk = await post(`/api/docs/${attachedId}/threads/by_find`, {
         author: PERSON,
         text: 'This paragraph needs a task.',
@@ -652,15 +810,26 @@ describe('workspace-hub minimal share (§3.12 commit 8)', () => {
       const r = await pub(`/api/docs/${attachedId}/threads/${threadId}/promote`, hubCookie, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ workspaceId: hubId }),
+        body: JSON.stringify({ workspaceId: hubId, author: PERSON }),
       });
-      expect(r.status).toBe(403);
-      // And the visitor CAN reply on the same thread — comments are the one
-      // write they keep.
+      expect(r.status, await r.clone().text()).toBe(200);
+      // The verbs beside it are agent-side document surgery, not a review
+      // action, and stay refused.
+      const surgery = await pub(
+        `/api/docs/${attachedId}/threads/${threadId}/rewrite_region`,
+        hubCookie,
+        {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ markdown: 'Replaced.', author: PERSON }),
+        },
+      );
+      expect(surgery.status).toBe(403);
+      // And the member can reply on the same thread.
       const reply = await pub(`/api/docs/${attachedId}/threads/${threadId}/comments`, hubCookie, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ author: PERSON, text: 'Agreed — but from a visitor.' }),
+        body: JSON.stringify({ author: PERSON, text: 'Agreed — but from a member.' }),
       });
       expect(reply.status).toBe(200);
     });
