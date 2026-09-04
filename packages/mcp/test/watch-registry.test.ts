@@ -38,7 +38,14 @@ type Opened = { label: string; path: string };
 /** A stand-in for the session's one multiplexed loop. `starts` is the number
  *  of times it actually connected — the "N watches, one socket" measurement. */
 function fakeMux(over: { opens?: boolean; unsupported?: boolean } = {}) {
-  const state = { running: false, open: false, starts: 0, stops: 0 };
+  const state = {
+    running: false,
+    open: false,
+    starts: 0,
+    stops: 0,
+    /** Cursor keys the registry asked the loop to forget. */
+    dropped: [] as string[],
+  };
   return {
     state,
     loop: {
@@ -60,6 +67,10 @@ function fakeMux(over: { opens?: boolean; unsupported?: boolean } = {}) {
       isOpen: () => state.open,
       unsupported: () => over.unsupported === true,
       loopCount: () => (state.running ? 1 : 0),
+      dropCursor: (key: string) => {
+        state.dropped.push(key);
+      },
+      cursorCount: () => 0,
     },
   };
 }
@@ -173,6 +184,8 @@ describe('watching a doc rides the one stream and mirrors the change', () => {
         stop: () => {},
         isOpen: () => true,
         unsupported: () => false,
+        dropCursor: () => {},
+        cursorCount: () => 0,
         loopCount: () => 1,
       },
     });
@@ -416,5 +429,28 @@ describe('coverage is never fabricated out of a failed request', () => {
       workspaces: [],
       unattachedBoards: [],
     });
+  });
+});
+
+describe('an unwatched key stops costing the reconnect header', () => {
+  it("forgets that key's replay position", async () => {
+    const h = harness();
+    await h.registry.watchDoc('doc-a');
+    await h.registry.watchDoc('doc-b');
+    await h.registry.unwatchDoc('doc-a');
+    // A position on a channel the server will no longer send is a position
+    // that can never advance, and the reconnect header's byte budget is
+    // finite — every stale entry is one a live key does not get to spend.
+    expect(h.mux.dropped).toEqual(['doc-a']);
+  });
+
+  it("leaves the surviving keys' positions alone", async () => {
+    const h = harness();
+    await h.registry.watchDoc('doc-a');
+    await h.registry.watchDoc('doc-b');
+    await h.registry.unwatchDoc('doc-a');
+    expect(h.mux.dropped).not.toContain('doc-b');
+    // And the stream the survivor rides is still up.
+    expect(h.mux.stops).toBe(0);
   });
 });

@@ -82,7 +82,24 @@ export interface MuxLoop {
   /** How many loops are running: 0 or 1, ever. The test surface for "N
    *  watches, one socket". */
   loopCount(): number;
+  /** Forget one key's replay position, because the watch is gone. */
+  dropCursor(key: string): void;
+  /** How many positions are held. The test surface for "an unwatched key
+   *  stops costing anything". */
+  cursorCount(): number;
 }
+
+/**
+ * The most positions worth holding in memory.
+ *
+ * `formatMuxCursor` already bounds the WIRE at 6,000 bytes, which is a couple
+ * of hundred entries; nothing beyond that can ever be presented. The map
+ * itself was unbounded, so a long session that watched and unwatched its way
+ * through thousands of docs kept a position for every one of them. Evicting
+ * from the front drops the longest-quiet key, which is the same key the wire
+ * budget would have dropped anyway.
+ */
+export const MUX_CURSOR_MAX_KEYS = 512;
 
 interface MuxRuntime {
   controller: AbortController | null;
@@ -119,6 +136,10 @@ export function createMuxLoop(deps: MuxLoopDeps): MuxLoop {
     isOpen: () => rt.open,
     unsupported: () => rt.unsupported,
     loopCount: () => (rt.running ? 1 : 0),
+    dropCursor: (key) => {
+      rt.cursors.delete(key);
+    },
+    cursorCount: () => rt.cursors.size,
   };
 }
 
@@ -343,4 +364,11 @@ export async function deliverThenCommitMux(
   // order and the encoder's budget can be spent on the busiest keys.
   cursors.delete(key);
   cursors.set(key, meta.id);
+  // Bound the map. Front-first eviction drops the longest-quiet key, which is
+  // the one the wire budget would have dropped on the next reconnect anyway.
+  while (cursors.size > MUX_CURSOR_MAX_KEYS) {
+    const oldest = cursors.keys().next();
+    if (oldest.done) break;
+    cursors.delete(oldest.value);
+  }
 }
