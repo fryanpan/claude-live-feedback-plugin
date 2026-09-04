@@ -55,7 +55,22 @@ export type ReviewJudge = (input: ReviewJudgeInput) => Promise<ReviewJudgeVerdic
 
 const MODEL = 'claude-haiku-4-5-20251001';
 const API_URL = 'https://api.anthropic.com/v1/messages';
-const MAX_TOKENS = 200;
+/**
+ * Room for a maximal verdict, with margin.
+ *
+ * The reply carries a reason AND the sentence to add, each clipped at
+ * `REVIEW_JUDGE_REASON_MAX` (300 characters), so the longest reply the parser
+ * keeps in full is 633 characters — about 160 tokens of ordinary English and
+ * ~420 in the punctuation-dense worst case. This was 200, which fitted a
+ * reason alone and nothing else.
+ *
+ * Truncation is not a smaller answer, it is NO answer: a reply cut mid-string
+ * never closes its JSON, `parseReviewJudgeResponse` returns null, and the
+ * call is recorded as a judge failure. So the budget is roughly twice the
+ * worst case. It is a ceiling, not a spend — a one-sentence verdict costs
+ * what it costs.
+ */
+const MAX_TOKENS = 1000;
 /** Short: this call sits INSIDE a filing route the agent is waiting on. A
  *  judge that takes longer than this is treated as down for this item. */
 export const REVIEW_JUDGE_TIMEOUT_MS = 8_000;

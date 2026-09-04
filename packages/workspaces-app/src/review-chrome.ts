@@ -1,5 +1,15 @@
 import { type Thread, type User, readDocMeta } from '@feedback/core';
 import type * as Y from 'yjs';
+import {
+  applyPlacement,
+  cardPlacement,
+  effectiveSurface,
+  inlineCardsVisible,
+  onPlacementChange,
+  otherPlacement,
+  placementToggleLabel,
+  setCardPlacement,
+} from './card-placement.ts';
 import { type SeenTracker, createSeenTracker } from './comment-seen.ts';
 import type { ChromeSelection } from './doc/anchor-body.ts';
 import { el } from './doc/chrome-dom.ts';
@@ -91,21 +101,60 @@ export interface ChromeOpts {
    *  a second copy of the same comments. An explicit user toggle overrides
    *  the default for the rest of the session. */
   hasBalloonMargin?: boolean;
+  /**
+   * Can this reader post? Straight from `MountContext.canWrite` — the
+   * server's answer, fetched once before the router started.
+   *
+   * REQUIRED for the same reason `whenSynced` is: three surfaces mount this
+   * chrome, and an optional access flag is how two of them would quietly keep
+   * offering a working reply box to somebody the server will refuse. Making
+   * it required turns "did I wire all three" into a compile error.
+   */
+  canWrite: boolean;
 }
 
 /**
- * The width at or below which comment cards sit inline in the document.
+ * Wire the topbar's comment-placement toggle: cards in the flow, or cards in
+ * the right margin.
  *
- * The SAME boundary the balloon margin hides at (`markup-margin.ts`), and
- * deliberately so: one always-on comment surface at every width, never two
- * and never none. 901–1100px used to fall between them — the margin had
- * already collapsed and inline cards had not yet started — which left the
- * drawer as the only way to see a comment.
+ * Beside the doc-list toggle and the comments toggle, because it is the same
+ * kind of thing — a stored per-device view preference, not a doc setting. Runs
+ * once per page for the same reason `wireSetPaneToggle` does: chrome remounts
+ * on every doc change, and a second listener would flip the placement twice
+ * per click.
+ *
+ * The glyph shows the surface IN FORCE and the labels name the destination,
+ * so a reader who has never touched it can still tell where their comments
+ * are. There is no `aria-pressed`: this is not an on/off, it is a choice
+ * between two surfaces, and "pressed = margin" would be an arbitrary reading
+ * of which one counts as on.
  */
-export const INLINE_CARDS_QUERY = '(max-width: 1100px)';
+export function wireCardPlacementToggle(): void {
+  const btn = document.getElementById('toggle-cards');
+  if (!btn || btn.dataset.wired === '1') return;
+  btn.dataset.wired = '1';
+  const paint = () => {
+    // The SURFACE, not the stored choice: on a phone a stored `balloon`
+    // resolves to the sheet, and the button has to say so.
+    const label = placementToggleLabel(effectiveSurface());
+    btn.textContent = label.glyph;
+    btn.title = label.title;
+    btn.setAttribute('aria-label', label.ariaLabel);
+  };
+  paint();
+  // Repaint on a width change too: with nothing stored the placement follows
+  // the width, so crossing the default boundary moves the cards and a button
+  // still showing the old glyph would be describing the other surface.
+  onPlacementChange((target, type, fn) => target.addEventListener(type, fn), paint);
+  btn.addEventListener('click', () => {
+    setCardPlacement(otherPlacement(cardPlacement()));
+  });
+}
 
-export function inlineCardsVisible(): boolean {
-  return window.matchMedia(INLINE_CARDS_QUERY).matches;
+/** `CSS.escape` guarded — happy-dom (and very old browsers) may not have it.
+ *  Same guard thread-morph.ts carries, for the same lookup. */
+function cssEscape(id: string): string {
+  return typeof CSS !== 'undefined' && CSS.escape ? CSS.escape(id) : id;
 }
 
 export interface ReviewChrome {
@@ -236,6 +285,11 @@ export function mountReviewChrome(opts: ChromeOpts): ReviewChrome {
     label: 'Resize comments panel',
   });
   wireSetPaneToggle();
+  // Publish the surface before anything measures a card: the stylesheet
+  // keys the margin and the inline cards off `body[data-cards]`, and a first
+  // paint with the attribute missing lays every card out on the wrong surface.
+  applyPlacement();
+  wireCardPlacementToggle();
   wireResizeHandle({
     pane: document.getElementById('set-pane'),
     cssVar: '--set-w',
@@ -403,8 +457,17 @@ export function mountReviewChrome(opts: ChromeOpts): ReviewChrome {
     if (inlineCardsVisible()) return false;
     const t = collectThreads().find((x) => x.id === id);
     if (!t || !threadNeedsModal(t)) return false;
+    // The rectangle the dialog grows out of, measured BEFORE anything folds:
+    // the margin bubble this thread is showing in. Null on every other route
+    // (the drawer, a keyboard, a phone), and the modal simply appears there —
+    // growing out of a row in a panel the dialog is about to cover would point
+    // the gesture at nothing the reader is looking at.
+    const bubble = document
+      .querySelector('.markup-margin')
+      ?.querySelector<HTMLElement>(`.thread[data-thread-id="${cssEscape(id)}"]`);
+    const origin = bubble?.getBoundingClientRect() ?? null;
     threadsPanel.setExpandedElsewhere(id);
-    threadModal.open(t);
+    threadModal.open(t, origin);
     threadsPanel.setActive(id);
     return true;
   }
@@ -438,6 +501,7 @@ export function mountReviewChrome(opts: ChromeOpts): ReviewChrome {
     container: threadsListEl,
     currentUser: user,
     threadLineLabel,
+    canWrite: opts.canWrite,
     // The anchor highlight follows the panel's selection from here, once,
     // instead of at each of the half-dozen places that change it. Folding an
     // open card had no such place — it selects nothing, from inside the card's
@@ -503,12 +567,17 @@ export function mountReviewChrome(opts: ChromeOpts): ReviewChrome {
   // Crossing the phone breakpoint changes which surface owns the comments —
   // inline cards must appear (or be handed back) at the same width the
   // stylesheet swaps the drawer for a sheet.
-  on(window.matchMedia(INLINE_CARDS_QUERY), 'change', () => {
+  // Which surface owns the comments can move three ways — the reader flips
+  // the topbar toggle, or the window crosses either of the two widths where
+  // the DEFAULT changes — and a listener on one of them alone is a silent
+  // half-fix. `onPlacementChange` subscribes to all three.
+  onPlacementChange(on, () => {
+    applyPlacement();
     mobile.refresh();
-    // Crossing DOWN hands the conversation to the inline card and the sheet.
-    // Leaving the dialog up would stack a second dismissable layer over the
-    // same thread — and page zoom moves a reviewer across this line, so it is
-    // not a hypothetical transition.
+    // Moving to the flow hands the conversation to the inline card and the
+    // sheet. Leaving the dialog up would stack a second dismissable layer over
+    // the same thread — and page zoom moves a reviewer across this line, so it
+    // is not a hypothetical transition.
     if (inlineCardsVisible()) threadModal.close();
   });
 

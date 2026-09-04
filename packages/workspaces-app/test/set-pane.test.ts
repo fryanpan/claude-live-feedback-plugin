@@ -74,7 +74,7 @@ describe('review-set sidebar', () => {
     // person to add a heading finds it already styled and assumes it is wanted.
     // Asked of the cascade rather than of the file's text — an element with
     // that class must come out of the sheets carrying nothing.
-    const sheets = installSheets('styles.css');
+    const sheets = installSheets('styles.css', 'doc.css');
     setViewport({ width: PANE_TIER, height: 820 });
     document.body.className = 'has-set set-pane-open';
     document.body.replaceChildren();
@@ -105,7 +105,7 @@ describe('review-set sidebar', () => {
     // Without this the first doc sits flush against the topbar. The value is
     // deliberately smaller than the 14px the header had — the gap is now doing
     // one job (breathing room) instead of two (breathing room + a label).
-    const sheets = installSheets('styles.css');
+    const sheets = installSheets('styles.css', 'doc.css');
     const padding = chrome(PANE_TIER, true).list;
     expect(padding, 'the #set-pane-list rule reached nothing').not.toBe('');
     expect(Number.parseFloat(padding)).toBeGreaterThan(0);
@@ -172,7 +172,7 @@ describe('initialSetPaneOpen', () => {
 describe('review-set sidebar visibility', () => {
   let sheets = () => {};
   beforeEach(() => {
-    sheets = installSheets('styles.css');
+    sheets = installSheets('styles.css', 'doc.css');
   });
   afterEach(() => {
     sheets();

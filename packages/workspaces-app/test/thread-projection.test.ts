@@ -227,18 +227,21 @@ describe('the ydoc → Thread[] projection', () => {
       createdBy: AUTHOR,
       firstComment: { id: 'c1', text: 'a' },
     });
+    // The dot rides the glyph: the standalone "NEW" tag was one of the chips
+    // the card round removed, so clearing it in place is a class off the glyph.
     document.body.innerHTML =
-      '<li class="thread is-new" data-thread-id="t1"><span class="thread-new-tag">new</span></li>';
+      '<li class="thread is-new" data-thread-id="t1"><span class="thread-glyph is-new"></span></li>';
 
     const { projection, last } = projectionOver(ydoc);
     const card = document.querySelector('.thread') as HTMLElement;
 
     expect(projection.markSeen('nope')).toBe(false);
     expect(card.classList.contains('is-new')).toBe(true); // positive control
+    expect(card.querySelector('.thread-glyph')?.classList.contains('is-new')).toBe(true);
 
     expect(projection.markSeen('t1')).toBe(true);
     expect(card.classList.contains('is-new')).toBe(false);
-    expect(card.querySelector('.thread-new-tag')).toBeNull();
+    expect(card.querySelector('.thread-glyph')?.classList.contains('is-new')).toBe(false);
     // The highlight carries the same dot, so it repaints from here too.
     expect(last()?.ranges[0]?.isNew).toBe(false);
 

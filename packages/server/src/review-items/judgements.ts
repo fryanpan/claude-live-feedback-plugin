@@ -7,7 +7,7 @@
  * a newer verdict (`forPendingAt`), which is what stops a judge returning
  * late from re-holding an item a reader has just released.
  */
-import { type ReviewItemJudgement, readTaskReviewItem } from '@feedback/core';
+import { type ReviewItemJudgement, readTaskReviewItem, storedJudgement } from '@feedback/core';
 import { classifyActor } from '../actor-identity.ts';
 import { wordsRevisionOf } from '../task-fields.ts';
 import { LEGACY_REVIEW_ITEM_ID, legacyDecisionItem, reviewItemVersion } from './derive.ts';
@@ -75,7 +75,7 @@ export class ReviewJudgementStore {
     ) {
       return { ok: false, error: 'stale' };
     }
-    item.judge = { at: judgement.at, verdict: judgement.verdict, reason: judgement.reason };
+    item.judge = storedJudgement(judgement);
     item.filedBy = {
       id: opts.actor.id,
       name: opts.actor.name,
@@ -131,11 +131,7 @@ export class ReviewJudgementStore {
     ) {
       return { ok: false, error: 'stale' };
     }
-    task.decisionJudge = {
-      at: judgement.at,
-      verdict: judgement.verdict,
-      reason: judgement.reason,
-    };
+    task.decisionJudge = storedJudgement(judgement);
     task.decisionFiledBy = {
       id: opts.actor.id,
       name: opts.actor.name,
