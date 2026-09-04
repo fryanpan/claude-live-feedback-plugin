@@ -553,7 +553,10 @@ export function mountReviewChrome(opts: ChromeOpts): ReviewChrome {
     if (!seen.markSeen(t)) return false;
     for (const el of threadCards(threadId)) {
       el.classList.remove('is-new');
-      el.querySelector('.thread-new-tag')?.remove();
+      // The dot rides the glyph rather than a "NEW" tag beside it — one of
+      // the chips this card round removed, so there is nothing left to strip
+      // out of the head; clearing the class takes the dot with it.
+      el.querySelector('.thread-glyph')?.classList.remove('is-new');
     }
     refreshThreadDecorations(activeThreadId);
     return true;

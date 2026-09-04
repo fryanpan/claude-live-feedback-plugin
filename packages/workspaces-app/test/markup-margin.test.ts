@@ -866,10 +866,13 @@ describe('mountMarkupMargin — collapsed balloons (Word-style)', () => {
 
     const balloon = parent.querySelector('.lf-balloon-comment') as HTMLElement;
     expect(balloon.classList.contains('expanded')).toBe(false);
-    expect(balloon.querySelector('.thread-foot .thread-meta')?.textContent).toContain('1 reply');
-    // The count lives in the foot, OUTSIDE both folding slots, so expanding
-    // neither moves nor rebuilds it.
-    expect(balloon.querySelector('.thread-foot')?.closest('.thread-slot')).toBeNull();
+    // A folded balloon states no reply count — the number restated the replies
+    // an open card is already showing, and told a folded one's reader
+    // something they could not act on (Bryan, 2026-09-04). What it DOES show
+    // is the discussion line, which says where the conversation got to.
+    expect(balloon.querySelector('.thread-meta')).toBeNull();
+    expect(balloon.querySelector('.thread-head')?.textContent).not.toMatch(/reply|replies/i);
+    expect(balloon.querySelector('.slot-b .face-summary .thread-discussion')).not.toBeNull();
   });
 });
 

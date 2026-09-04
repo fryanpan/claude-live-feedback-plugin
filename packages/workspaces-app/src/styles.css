@@ -3392,20 +3392,6 @@ body.threads-resizing {
   border-color: var(--accent);
   box-shadow: 0 0 0 2px rgba(46, 125, 215, 0.2);
 }
-.thread .status-dot {
-  display: inline-block;
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  background: var(--accent);
-  flex: 0 0 auto;
-}
-.thread.resolved .status-dot {
-  background: var(--green);
-}
-.thread.orphan .status-dot {
-  background: var(--yellow);
-}
 
 /* ---------- one glyph per state, everywhere a thread appears ----------
    The three icons are CSS-only data URIs so the highlight in the prose (a
@@ -3413,7 +3399,8 @@ body.threads-resizing {
    the top-bar chip and the off-screen hints. Blue bubble: comment. Amber
    question mark: an open review item — question OR decision, one glyph
    (Bryan, 2026-09-01). Green tick: answered or resolved. The status dot the
-   head used to lead with is superseded by the glyph and hidden. */
+   head used to lead with said the same thing in a colour with no name; the
+   card stopped building one (thread-card.ts) rather than hiding it here. */
 :root {
   --ic-comment: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M2.5 3.5h11v7h-6l-3 2.5v-2.5h-2z' fill='none' stroke='%232e7dd7' stroke-width='1.6' stroke-linejoin='round'/%3E%3C/svg%3E");
   --ic-question: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Ccircle cx='8' cy='8' r='7.5' fill='%23b25e09'/%3E%3Ctext x='8' y='11.6' text-anchor='middle' font-family='-apple-system,Helvetica,Arial,sans-serif' font-weight='700' font-size='10.5' fill='%23fff'%3E?%3C/text%3E%3C/svg%3E");
@@ -3451,44 +3438,59 @@ body.threads-resizing {
   background: var(--red);
   box-shadow: 0 0 0 1.5px var(--bg);
 }
-.thread-head .status-dot {
-  display: none;
-}
 .thread.is-new {
   box-shadow: 0 0 0 2px rgba(215, 58, 73, 0.35);
 }
-.thread-new-tag {
-  flex: 0 0 auto;
-  font-size: 10px;
-  font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-  color: #fff;
-  background: var(--red);
+/* The folded face of a declared thread answers in place, and the field IS how
+   the reader knows it is a question — no chip says so. One line, because it
+   has to fit under two lines of summary inside a 260px margin bubble; the
+   fold is where a longer answer goes. */
+.thread-answer-field {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 6px;
+  min-width: 0;
+}
+.thread-answer-input {
+  flex: 1 1 auto;
+  min-width: 0;
+  font: inherit;
+  font-size: 12.5px;
+  font-family: var(--sans);
+  min-height: 30px;
+  padding: 4px 8px;
+  border: 1px solid var(--border-strong, var(--border));
   border-radius: var(--radius-sm);
-  padding: 1px 5px;
+  background: var(--bg);
+  color: var(--fg);
 }
-/* A review item's disclosure is words — "Details ▾" / "Less ▴" — because its
-   folded face already holds the ask and the ways to answer it; the fold
-   only adds the why and each option's reasoning. */
-.thread-caret-words {
-  font-size: 11px;
-  font-weight: 600;
-  color: var(--accent);
-  transform: none !important;
-  padding: 2px 0 2px 6px;
+.thread-answer-input:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -1px;
 }
-/* The folded face of a declared thread answers in place (comments mock 3). */
-.thread-answer-cta {
-  display: inline-block;
-  margin-top: 4px;
+.thread-answer-send {
+  flex: 0 0 auto;
+  font: inherit;
   font-size: 12px;
   font-weight: 600;
-  color: var(--warn-fg, #b25e09);
-  border: 1px solid var(--warn-fg, #b25e09);
+  min-height: 30px;
+  padding: 4px 12px;
   border-radius: var(--radius-sm);
-  padding: 3px 10px;
-  background: var(--bg);
+  cursor: pointer;
+}
+/* The margin column is 260px, so the field takes the whole first row and the
+   button drops to the right of the row beneath it — a 60px input beside a
+   70px button is neither. */
+.markup-margin .thread-answer-field {
+  flex-wrap: wrap;
+  gap: 5px;
+}
+.markup-margin .thread-answer-input {
+  flex: 1 1 100%;
+}
+.markup-margin .thread-answer-send {
+  margin-left: auto;
 }
 .thread-options-compact {
   display: flex;
@@ -3576,24 +3578,10 @@ body.threads-resizing {
 .thread-who .name {
   font-weight: 600;
 }
+/* The only chips left on a head. Resolved and orphaned are the two states
+   with no control to read them off — every other kind is marked by what the
+   card offers you to press, which is why "DECIDE" and "ANSWER" are gone. */
 .thread-tag {
-  color: var(--fg-muted);
-}
-/* "Decision needed", on its own row above the head — outside both folding
-   slots, so a reader scanning the column sees it without opening anything.
-
-   Its own row and not a chip beside the name: the head is a flex row in a
-   300px column, and sharing it clipped the author to about seven characters at
-   1180px, which is where two different askers stopped being distinguishable.
-   ~18px, and only on the cards that carry a decision. */
-.thread-flag-row {
-  display: flex;
-  margin-bottom: 4px;
-}
-/* The same amber tone tokens as `.thread-item-k-decision` inside the opened
-   item card, because it is the same fact stated one fold earlier. Sized to its
-   text rather than to the row, so it reads as a chip and not as a banner. */
-.thread-decision-flag {
   flex: 0 0 auto;
   font-size: 10px;
   font-weight: 700;
@@ -3602,26 +3590,18 @@ body.threads-resizing {
   border-radius: var(--radius-sm);
   padding: 2px 6px;
   white-space: nowrap;
-  color: var(--warn-fg, #b25e09);
-  background: var(--warn-wash, #fff4e5);
-}
-/* Answered: the same fact, no longer a request. Muted so an open decision is
-   the only amber thing in the column. */
-.thread-decision-flag.is-answered {
   color: var(--fg-muted);
   background: var(--bg-hover);
 }
-/* WHAT was decided, beside the chip that says something was. Not uppercase and
-   not a chip: these are a person's words, and shouting them would make the row
-   compete with the author line under it. Shrinks and ellipsizes (`.clip`) —
-   the chip beside it is fixed and this is the part that can afford to lose
-   characters. */
-.thread-decision-outcome {
-  flex: 0 1 auto;
-  margin-left: 6px;
+/* When this started, top right — one fact about the opening message, sitting
+   with the attribution for it. Never shrinks and never wraps: the author name
+   beside it is the part that can afford to lose characters. */
+.thread-time {
+  flex: 0 0 auto;
   font-size: 11px;
   color: var(--fg-muted);
-  align-self: center;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
 }
 /* Lines truncate rather than wrap, so a card cannot exceed its rows at any
    width. Shared by every one-line row on the card. */
@@ -3792,22 +3772,19 @@ body.threads-resizing {
   }
 }
 
-/* Row 4: how much conversation there is, and the one resolve control. Lives
-   outside both slots, so expanding never rebuilds or moves it. */
+/* The last row of an EXPANDED thread, inside slot B's detail face — so a
+   folded card carries no destructive control at all, and ✓ Resolve is the
+   last thing an open one offers. `margin-left: auto` on the button puts it
+   at the right edge now that the reply count that used to fill the row is
+   gone. */
 .thread-foot {
   display: flex;
   align-items: center;
   gap: 8px;
   margin-top: 9px;
 }
-.thread-meta {
-  font-size: 12px;
-  color: var(--fg-muted);
-  flex: 1;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-family: var(--sans);
+.thread-foot .thread-resolve {
+  margin-left: auto;
 }
 /* The same element with the same colour in both states — not icon-only, and
    not a control that only turns green once the thread is resolved. It reads
