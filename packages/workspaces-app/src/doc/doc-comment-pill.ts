@@ -18,7 +18,7 @@ import type { EditorState } from '@tiptap/pm/state';
 import type { EditorHandle } from '../editor.ts';
 import { trackGesture } from '../gesture.ts';
 import type { MountScope } from '../mount-scope.ts';
-import type { ChromeSelection } from '../review-chrome.ts';
+import type { ChromeSelection } from './anchor-body.ts';
 import { showToast } from './chrome-dom.ts';
 import type { PointerPillLayer } from './doc-pointer-pill.ts';
 

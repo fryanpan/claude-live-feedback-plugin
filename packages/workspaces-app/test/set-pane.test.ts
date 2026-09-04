@@ -25,7 +25,7 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { WIDE_SCREEN_QUERY, initialSetPaneOpen, wireSetPaneToggle } from '../src/review-chrome.ts';
+import { WIDE_SCREEN_QUERY, initialSetPaneOpen, wireSetPaneToggle } from '../src/doc/view-prefs.ts';
 import { attach, installSheets, setViewport, styleOf } from './css-harness.ts';
 
 const ROOT = resolve(import.meta.dirname, '..');
