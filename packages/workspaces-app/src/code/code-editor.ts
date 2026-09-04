@@ -157,7 +157,7 @@ const markerField = StateField.define<RangeSet<GutterMarker>>({
 const setInlineCardsEffect =
   StateEffect.define<Array<{ from: number; to: number; el: HTMLElement }>>();
 
-/** The card's own left+right margin inside `.cm-content` (see styles.css,
+/** The card's own left+right margin inside `.cm-content` (see doc.css,
  *  INLINE THREAD CARDS). Subtracted from the width published to CSS so the
  *  card plus its margins fit the scroller exactly. */
 const CARD_MARGIN_X = 8;
