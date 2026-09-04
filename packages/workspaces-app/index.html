@@ -118,9 +118,9 @@
           >
             ›
           </button>
-          <!-- "N questions for you": every open review item on this doc, one
-               amber glyph, tap to jump to the first. Hidden when nothing is
-               waiting (comment-hints.ts owns it). -->
+          <!-- "N waiting on you": every open review item on this doc, one
+               amber glyph, tapped repeatedly to step through them. Hidden
+               when nothing is waiting (comment-hints.ts owns it). -->
           <button type="button" id="doc-asks" class="doc-asks" hidden></button>
           <button
             type="button"
@@ -132,6 +132,25 @@
           >
             💬
             <span id="threads-count" class="badge">0</span>
+          </button>
+          <!-- Where comment cards sit: in the flow under the phrase they are
+               about, in the right margin beside it, or — where there is room
+               for neither — in a sheet over the doc. A stored per-device
+               choice, not a width rule: page zoom moves the width, so it can
+               never say what device this is. card-placement.ts owns the
+               state and wireCardPlacementToggle paints the glyph and both
+               labels for the surface in force.
+
+               The static markup names the CONTROL and not a surface, because
+               only script can know which surface this device resolved to. -->
+          <button
+            type="button"
+            id="toggle-cards"
+            class="icon-btn"
+            title="Where comment cards sit"
+            aria-label="Change where comment cards sit"
+          >
+            ▤
           </button>
           <!-- Doc-level pending-suggestions affordance (redline-suggestions
                Phase 2). Hidden by default; mountSuggestionsSummary shows it

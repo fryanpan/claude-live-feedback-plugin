@@ -1,6 +1,16 @@
 import type { Comment, Thread, User } from '@feedback/core';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
+  PLACEMENT_PREF_KEY,
+  applyPlacement,
+  cardPlacement,
+  effectiveSurface,
+  inlineCardsVisible,
+  otherPlacement,
+  placementToggleLabel,
+  setCardPlacement,
+} from '../src/card-placement.ts';
+import {
   type MobileReviewOpts,
   centreScrollTop,
   mountMobileReview,
@@ -550,5 +560,90 @@ describe('the mobile sheet rides the keyboard', () => {
     const wide = pane(IPAD, '300px');
     expect(wide.position).not.toBe('fixed');
     expect(wide.bottom).not.toBe('300px');
+  });
+});
+
+/**
+ * The 430px sheet — the state the mock names and the one neither in-flow
+ * surface covers.
+ *
+ * A reader who put their cards in the margin on a laptop has not changed
+ * their mind by picking up a phone, so `cardPlacement` still reads `balloon`
+ * there. But 430px has no margin to ride in, so the over-doc sheet becomes
+ * the comment surface and NOTHING sits in the document flow. That is a state
+ * with a real way to get everything wrong: build inline cards anyway and the
+ * reader gets both surfaces at once; build none and disable the walk with
+ * them and the comments become unreachable from the app bar.
+ */
+describe('the 430px sheet', () => {
+  afterEach(() => {
+    try {
+      localStorage.removeItem(PLACEMENT_PREF_KEY);
+    } catch {
+      // nothing stored to clear
+    }
+    document.body.removeAttribute('data-cards');
+    setViewport({ width: 1024, height: 768 });
+  });
+
+  it('builds no inline card, yet ‹ › still walks and lands the reader in the sheet', () => {
+    setViewport(PHONE);
+    setCardPlacement('balloon');
+    const h = harness([thread('a'), thread('b')], { inlineVisible: inlineCardsVisible });
+    expect(h.placed()).toEqual([]);
+    // Disabling the walk along with the cards is the tempting mistake: the
+    // buttons count ANCHORED THREADS, and stepping is exactly how a reader
+    // reaches a thread whose only copy is in the sheet.
+    const next = document.getElementById('next-comment') as HTMLButtonElement;
+    expect(next.disabled).toBe(false);
+    next.click();
+    expect(h.sheetOpen()).toBe(true);
+    expect(h.panel.getActive()).toBe('a');
+    next.click();
+    expect(h.panel.getActive()).toBe('b');
+  });
+
+  it('keeps the choice the reader made, and offers to move the cards into the flow', () => {
+    setViewport(PHONE);
+    setCardPlacement('balloon');
+    // What was chosen, what is on screen, and what the toggle offers are three
+    // different answers here — and only the middle one changed.
+    expect(cardPlacement()).toBe('balloon');
+    expect(effectiveSurface()).toBe('sheet');
+    expect(otherPlacement(cardPlacement())).toBe('inline');
+    expect(placementToggleLabel(effectiveSurface()).title).toContain('sheet');
+  });
+
+  it('leaves nothing in the document flow, and no 260px track to scroll sideways past', () => {
+    // Both sheets: the placement rules live in `doc.css` since the editor's
+    // CSS became its own file, and a negative read against the base alone
+    // would pass on a stylesheet that never had the rule.
+    const off = installSheets('styles.css', 'doc.css');
+    cleanups.push(off);
+    setViewport(PHONE);
+    setCardPlacement('balloon');
+    applyPlacement();
+    expect(document.body.dataset.cards).toBe('sheet');
+    const editor = attach('redline-layout', { attrs: { id: 'editor' } });
+    const margin = attach('markup-margin', { parent: editor });
+    const inline = attach('lf-inline-card', { parent: editor });
+    expect(styleOf(margin).display).toBe('none');
+    expect(styleOf(inline).display).toBe('none');
+    // Single-column flow: the two-track grid is what put a 260px column
+    // beside 430px of prose and made the page scroll sideways.
+    expect(styleOf(editor).display).toBe('block');
+  });
+
+  it('positive control: the same nodes at 1180 with balloons chosen do show the margin', () => {
+    const off = installSheets('styles.css', 'doc.css');
+    cleanups.push(off);
+    setViewport(IPAD);
+    setCardPlacement('balloon');
+    applyPlacement();
+    expect(document.body.dataset.cards).toBe('balloon');
+    const editor = attach('redline-layout', { attrs: { id: 'editor' } });
+    const margin = attach('markup-margin', { parent: editor });
+    expect(styleOf(margin).display).not.toBe('none');
+    expect(styleOf(editor).display).not.toBe('block');
   });
 });
