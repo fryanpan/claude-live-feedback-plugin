@@ -116,6 +116,101 @@ describe('a deploy mid-meeting keeps the notes in one section', () => {
     expect(ownership.claims(element(), 'we should measure first')).toBe(false);
   });
 
+  it('a section sharing only a topic heading with the notes is not claimed', () => {
+    // A sub-heading is an ordinary item to the merge, so it used to go into
+    // the durable claim beside the bullets. It is the one item that cannot
+    // carry evidence: the composer emits the same small vocabulary every
+    // meeting, and a person organising their own notes reaches for the same
+    // words. One `### Decisions` in common would hand the note-taker a
+    // section it never wrote a word of.
+    const first = createNotesTickHarness({
+      doc: '# Agenda\n\nSome intro.\n',
+      dataDir,
+      docId: DOC_ID,
+      meetingId: 'm-1',
+      compose: () => '## Meeting notes\n\n### Decisions\n\n- we should measure first\n',
+    });
+    return (async () => {
+      const wrote = await first.speak('We should measure first.');
+      expect(wrote.markdown).toContain('### Decisions');
+      await first.end();
+
+      // The restart finds a "Meeting notes" holding the SAME topic heading
+      // and none of the note-taker's own lines — the person kept the shape
+      // and rewrote the substance. A Research heading sits below it, so the
+      // position test cannot claim it either, and the tick must start its
+      // own section rather than growing theirs.
+      const after = createNotesTickHarness({
+        doc: [
+          '# Agenda',
+          '',
+          'Some intro.',
+          '',
+          '## Meeting notes',
+          '',
+          '### Decisions',
+          '',
+          '- I will decide the budget myself',
+          '',
+          '## Research: pricing',
+          '',
+          'Researching — in progress.',
+          '',
+        ].join('\n'),
+        dataDir,
+        docId: DOC_ID,
+        meetingId: 'm-2',
+        compose: () => '## Meeting notes\n\n- Devi owns the rollout\n',
+      });
+      const shot = await after.speak('Devi owns the rollout.');
+
+      expect(after.countHeadings(MEETING_NOTES_HEADING)).toBe(2);
+      // And the person's line is untouched wherever it sits.
+      expect(shot.markdown).toContain('I will decide the budget myself');
+      expect(after.errors).toEqual([]);
+      await after.end();
+    })();
+  });
+
+  it('a second recording in the same sitting keeps writing the same section', () => {
+    // THE DELIBERATE HALF of the continuation window, pinned so it cannot be
+    // narrowed to "restart-only" by accident. One process, one ledger, two
+    // recordings minutes apart, with a Research heading landed below the
+    // notes between them. A boot id would make this twin — and it would twin
+    // ONLY because something happens to sit below the notes, which is the
+    // arbitrary rule rather than the safe one. See `beginMeeting`.
+    const ledger = createNotesLedger(createNotesLedgerStore(dataDir));
+    const first = createNotesTickHarness({
+      doc: '# Agenda\n\nSome intro.\n',
+      dataDir,
+      ledger,
+      docId: DOC_ID,
+      meetingId: 'm-1',
+      compose: () => '## Meeting notes\n\n- we should measure first\n',
+    });
+    return (async () => {
+      await first.speak('We should measure first.');
+      pressResearch(first.ydoc, 'pricing');
+      const onDisk = first.markdown();
+      await first.end();
+
+      const second = createNotesTickHarness({
+        doc: onDisk,
+        dataDir,
+        ledger,
+        docId: DOC_ID,
+        meetingId: 'm-2',
+        compose: () => '## Meeting notes\n\n- we should measure first\n- Devi owns the rollout\n',
+      });
+      const shot = await second.speak('Devi owns the rollout.');
+
+      expect(second.countHeadings(MEETING_NOTES_HEADING)).toBe(1);
+      expect(shot.notes).toContain('Devi owns the rollout');
+      expect(shot.markdown.match(/we should measure first/g)).toHaveLength(1);
+      await second.end();
+    })();
+  });
+
   it('a meeting long after the last note starts its own section again', () => {
     // The owner's 2026-09-01 rule, unchanged: a NEW meeting does not grow an
     // old meeting's notes above everything a person has written since. The
@@ -193,5 +288,45 @@ describe('the ledger’s written half, driven directly', () => {
     ownership.release();
     expect(ownership.claims(el, 'a note')).toBe(false);
     expect(ownership.wroteAnyOf(['a note'])).toBe(true);
+  });
+});
+
+describe('a topic heading is not evidence', () => {
+  it('records a heading as the agent’s element without letting it claim a section', () => {
+    // Both halves in one assertion, because the split is the whole point: the
+    // note-taker must go on owning the heading it wrote (so it can revise it),
+    // and that heading must never be what tells a later process "this section
+    // is mine".
+    const written: string[][] = [];
+    const ownership = createNotesOwnership({ onWrite: (w) => written.push([...w]) });
+    const heading = { nodeName: 'heading' } as unknown as Y.XmlElement;
+    const bullet = { nodeName: 'listItem' } as unknown as Y.XmlElement;
+    ownership.record([
+      { el: heading, md: '### Decisions' },
+      { el: bullet, md: 'ship on Friday' },
+    ]);
+
+    expect(ownership.claims(heading, '### Decisions')).toBe(true);
+    expect(ownership.wroteAnyOf(['### Decisions'])).toBe(false);
+    expect(ownership.wroteAnyOf(['ship on Friday'])).toBe(true);
+    expect(written).toEqual([['ship on Friday']]);
+  });
+
+  it('drops a heading a record written by an older build still carries', () => {
+    // The seed is text with no elements to ask, so the one thing it can go on
+    // is the leading `#` a serialized heading always has. Without this a file
+    // written before the guard — or edited by hand — would put the claim back.
+    const ownership = createNotesOwnership({
+      written: ['### Decisions', '## Next steps', 'ship on Friday'],
+    });
+    expect(ownership.wroteAnyOf(['### Decisions'])).toBe(false);
+    expect(ownership.wroteAnyOf(['## Next steps'])).toBe(false);
+    expect(ownership.wroteAnyOf(['ship on Friday'])).toBe(true);
+    // A line that merely mentions a hash is not a heading.
+    expect(
+      createNotesOwnership({ written: ['#1 priority is pricing'] }).wroteAnyOf([
+        '#1 priority is pricing',
+      ]),
+    ).toBe(true);
   });
 });
