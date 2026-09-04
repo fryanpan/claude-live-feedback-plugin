@@ -98,10 +98,6 @@ export function splitOffscreen(
   return { above, below, inView, nearestAbove, nearestBelow };
 }
 
-function plural(n: number, one: string, many: string): string {
-  return `${n} ${n === 1 ? one : many}`;
-}
-
 /**
  * The hint's words, as parts a renderer can show or hide by width: the full
  * sentence on a wide screen, icon + count only on a phone. Empty when there is
