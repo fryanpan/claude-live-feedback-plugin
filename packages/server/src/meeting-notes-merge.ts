@@ -49,7 +49,13 @@
  * whole notes every tick, and the next tick reads the person's text.
  */
 
-import { prose, speakerLabelsIn, suggestOps } from '@feedback/core';
+import {
+  SUGGEST_DELETE_MARK,
+  SUGGEST_INSERT_MARK,
+  prose,
+  speakerLabelsIn,
+  suggestOps,
+} from '@feedback/core';
 import * as Y from 'yjs';
 import { type NotesOwnership, classifyOwnership, itemKey, mdOfKey } from './notes-ownership.ts';
 import {
@@ -696,6 +702,53 @@ function createSuggestion(
 }
 
 /**
+ * Is anything in this span still waiting for somebody to accept or reject it?
+ *
+ * ASKING THE PLAN IS NOT ENOUGH, and the first version of the relayout gate
+ * asked only the plan: `plan.suggestions.length === 0` counts what THIS tick
+ * proposes and knows nothing about a proposal already sitting in the doc.
+ * Worse, a pending proposal can be invisible to every other check here — a
+ * block or list item whose every character is a pending insert serializes to
+ * the empty string, so it never becomes a `NoteItem`, never reaches
+ * `classifyOwnership`, and leaves `allAgent` true. Relayout would then delete
+ * the span it lives in and the proposal with it, reporting `suggested: 0` and
+ * leaving no trace in the Yjs tree.
+ *
+ * So this reads the DOC, walking the span for either suggestion mark. It is
+ * deliberately coarse: any pending mark anywhere in the section refuses the
+ * relayout, and the ordinary merge runs instead — which puts the heading
+ * below the list rather than inside it. Worse looking, and it cannot eat
+ * somebody's proposal.
+ */
+export function spanHasPendingSuggestion(fragment: Y.XmlFragment, span: NotesSectionSpan): boolean {
+  const marked = (text: Y.XmlText): boolean =>
+    text
+      .toDelta()
+      .some(
+        (op: { attributes?: Record<string, unknown> }) =>
+          op.attributes?.[SUGGEST_INSERT_MARK] != null ||
+          op.attributes?.[SUGGEST_DELETE_MARK] != null,
+      );
+  const walk = (node: Y.XmlElement | Y.XmlText): boolean => {
+    if (node instanceof Y.XmlText) return marked(node);
+    for (const child of node.toArray()) {
+      if (child instanceof Y.XmlText || child instanceof Y.XmlElement) {
+        if (walk(child)) return true;
+      }
+    }
+    return false;
+  };
+  const top = fragment.toArray();
+  for (let i = span.start; i < span.endExclusive && i < top.length; i++) {
+    const node = top[i];
+    if (node instanceof Y.XmlText || node instanceof Y.XmlElement) {
+      if (walk(node)) return true;
+    }
+  }
+  return false;
+}
+
+/**
  * Rewrite the section body to the shape the composer returned, and hand the
  * ledger the elements it now holds.
  *
@@ -718,10 +771,26 @@ function relayoutSection(
   canonical: string,
   headings: readonly string[],
   ownership: NotesOwnership,
-): { deleted: number; inserted: number } | null {
+  dropped: readonly string[],
+): { deleted: number; inserted: number; dropped: number } | null {
+  // THE PLAN'S DROP LIST APPLIES HERE TOO. `incoming` is what the composer
+  // returned, and the plan has already decided some of it must not be
+  // written — an item whose person's line is newer than the compose that
+  // produced it, or a bullet somebody deleted while the compose was in
+  // flight. Writing `incoming` wholesale put those back, silently undoing a
+  // deletion and reporting `dropped: 0` while the ordinary path reported 1.
+  const withheld = new Map<string, number>();
+  for (const md of dropped) withheld.set(md, (withheld.get(md) ?? 0) + 1);
+  const keep: IncomingItem[] = [];
+  for (const item of incoming) {
+    const left = withheld.get(item.md);
+    if (left) withheld.set(item.md, left - 1);
+    else keep.push(item);
+  }
+  const dropCount = incoming.length - keep.length;
   let blocks: Y.XmlElement[];
   try {
-    blocks = prose.parseMarkdownBlocks(`## ${canonical}\n\n${markdownOfItems(incoming)}`);
+    blocks = prose.parseMarkdownBlocks(`## ${canonical}\n\n${markdownOfItems(keep)}`);
   } catch {
     return null;
   }
@@ -737,7 +806,7 @@ function relayoutSection(
   const written = findNotesSection(fragment, headings);
   const items = written ? itemsInSection(fragment, written) : [];
   ownership.record(items.map((i) => ({ el: i.el, md: i.md })));
-  return { deleted, inserted: items.length };
+  return { deleted, inserted: items.length, dropped: dropCount };
 }
 
 /**
@@ -870,7 +939,12 @@ export function mergeNotesSection(
   // one) turns this off and the ordinary merge runs, which places the heading
   // below the list rather than inside it: worse looking, and safe.
   const allAgent = current.length > 0 && classifyOwnership(current, opts.ownership).every(Boolean);
-  if (allAgent && plan.suggestions.length === 0 && planNeedsRelayout(current, plan)) {
+  if (
+    allAgent &&
+    plan.suggestions.length === 0 &&
+    !spanHasPendingSuggestion(fragment, span) &&
+    planNeedsRelayout(current, plan)
+  ) {
     const relaid = relayoutSection(
       ydoc,
       fragment,
@@ -879,8 +953,9 @@ export function mergeNotesSection(
       canonical,
       headings,
       opts.ownership,
+      plan.dropped,
     );
-    if (relaid) return { ok: true, mode: 'merged', ...relaid, suggested: 0, dropped: 0 };
+    if (relaid) return { ok: true, mode: 'merged', ...relaid, suggested: 0 };
   }
 
   const applied = applyPlan(ydoc, plan, span.heading, opts.author ?? NOTES_SUGGESTION_AUTHOR);
