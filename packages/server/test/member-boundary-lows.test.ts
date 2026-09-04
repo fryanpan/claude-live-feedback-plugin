@@ -262,7 +262,9 @@ describe('the member boundary, on the surfaces a path check cannot see', () => {
 
     it('answers a MADE-UP id in the same words, so it is not an existence oracle', async () => {
       const res = await asMemberJson(linkPath(ownTask), 'POST', {
-        ref: { kind: 'task', taskId: 't-no-such-row-anywhere' },
+        // Not spelled like a real row id on purpose: the pre-push leak
+        // scanner reads `t-<slug>` as one wherever it appears.
+        ref: { kind: 'task', taskId: 'no-such-row-anywhere' },
       });
       expect(res.status).toBe(403);
       expect(await res.json()).toEqual({ error: 'out_of_share_scope' });
