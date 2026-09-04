@@ -30,7 +30,10 @@ function stubFetch(reply: string, sent: { body?: Record<string, unknown> }) {
 describe('the judge asks for enough tokens to answer', () => {
   it('budgets past a maximal reply — both fields at the ceiling', async () => {
     const sent: { body?: Record<string, unknown> } = {};
-    const judge = haikuReviewJudge({ apiKey: 'test-key', fetchImpl: stubFetch('{"ok":true}', sent) });
+    const judge = haikuReviewJudge({
+      apiKey: 'test-key',
+      fetchImpl: stubFetch('{"ok":true}', sent),
+    });
     await judge?.({ criteria: 'be clear', item: { headline: 'Which cache size' } });
     const max = sent.body?.max_tokens as number;
     // A maximal reply is 633 characters. English runs about 4 characters to
