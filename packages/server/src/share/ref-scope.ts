@@ -87,3 +87,60 @@ export function firstRefOutOfScope(
   if (!visitor || !refs) return undefined;
   return refs.find((ref) => !refInVisitorScope(ref, visitor, workspacesOf));
 }
+
+/**
+ * The same question about a BARE task id.
+ *
+ * Two writes name a dependency as a plain string rather than as a `Ref`:
+ * `POST /api/tasks/<id>/after` replaces the edge set, and the `blockedBy`
+ * arm of `.../park` adds to it. Both are member-allowed and both take their
+ * ids from the body, so they LOOK like the `links` route's hole with none of
+ * the `Ref` shape around it.
+ *
+ * They are not, and it is worth writing down why rather than leaving the
+ * next reader to re-derive it: the store refuses a cross-board edge on its
+ * own, on BOTH write paths (`state.tasks.has(dep)` in `setDependencies` and
+ * in `createTask` — the map is per workspace), and it refuses a foreign id
+ * and a made-up one with the same `unknown-after`. So this check closes no
+ * reachable leak today. What it does is refuse in the BOUNDARY's words
+ * before the store is asked at all, so that the member rule has one answer
+ * across every body-borne id, and so that a later relaxation of that
+ * same-workspace check — or a verb that moves a row between boards — does
+ * not silently open the door this module exists to hold.
+ */
+export function firstTaskIdOutOfScope(
+  ids: readonly string[],
+  visitor: ShareTarget | null,
+  workspacesOf: (id: string) => string[],
+): string | undefined {
+  if (!visitor) return undefined;
+  return ids.find((taskId) => !refInVisitorScope({ kind: 'task', taskId }, visitor, workspacesOf));
+}
+
+/**
+ * The blockers a scoped caller may be TOLD about.
+ *
+ * The transition gate reports what a row waits on — each blocker's id,
+ * title, status and `needs` — and it reads those rows through the store's
+ * GLOBAL `getTask`, not through the board's own map. Only the write checks
+ * keep a foreign id out of `after` in the first place, so the report is one
+ * relaxation of those away from carrying a private row's title to whoever
+ * moves the pointing row. It costs a filter to make the report not depend
+ * on them: what a scoped caller is told is cut to their own board, and the
+ * verdict is untouched, because a member who cannot see the holding row
+ * cannot finish it either.
+ *
+ * Generic over the blocker shape so this module keeps naming nothing from
+ * the task store.
+ */
+export function blockersInVisitorScope<T extends { taskId: string }>(
+  blockers: readonly T[] | undefined,
+  visitor: ShareTarget | null,
+  workspacesOf: (id: string) => string[],
+): T[] | undefined {
+  if (blockers === undefined) return undefined;
+  if (!visitor) return [...blockers];
+  return blockers.filter((b) =>
+    refInVisitorScope({ kind: 'task', taskId: b.taskId }, visitor, workspacesOf),
+  );
+}
