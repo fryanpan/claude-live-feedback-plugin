@@ -15,10 +15,17 @@ arrive at the board, and navigate to everything filed on it.
 review must be filed on a board before it can be shared"). Two smaller grants
 used to exist and both are gone:
 
-- **Per-doc** — `share_doc` is gone and `share_link` no longer takes a
-  `docId`. A doc with a `docId` in the body gets `410 per_doc_sharing_removed`.
+- **Per-doc** — `share_doc` is gone. A doc with a `docId` in the body gets
+  `410 per_doc_sharing_removed`.
 - **Per-grouping** — a folder bind or diff review cannot be shared on its
   own. Passing a grouping / review id gets `410 grouping_sharing_removed`.
+
+`share_link` is gone too, and for a different reason: it minted a Cloudflare
+Access **application** per share — its own hostname, audience and policy —
+while `share_workspace` writes a membership record behind the one Access
+application that fronts the share hostname. Two mints meant two answers to
+"who may open this board". Shares already minted the old way keep working:
+`list_shares` lists them, `set_share_ttl` shortens one, `unshare` revokes one.
 
 So the id you share is always a hub board id: the one `create_workspace`
 returned, or the `hubWorkspaceId` that `bind_folder` / `create_diff_review`
@@ -53,12 +60,13 @@ reports. Everything on that board is available to everyone the share reaches
    board: `create_workspace` takes about a second, and `create_diff_review`
    accepts the new board's id as `hubWorkspaceId` in the same call.
 
-4. **Call `share_workspace`** with `{ workspaceId, allowDomains, ttlSeconds? }`,
-   where `workspaceId` is the BOARD id. Default ttl is 72h; override only if
-   the user requests a different window. `share_link({ workspaceId })` does
-   the same thing under an older name and is still accepted. Either call
-   answers `410 grouping_sharing_removed` if you hand it a review id by
-   mistake.
+4. **Call `share_workspace`** with `{ workspaceId, ttlSeconds? }`, where
+   `workspaceId` is the BOARD id. Links do not expire by default — pass a ttl
+   only when the user asks for a window. `allowDomains` is accepted and
+   ignored: everyone who opens the link signs in through Cloudflare Access and
+   becomes a member, and the reply says `allowDomainsIgnored` when you sent
+   one. The call answers `410 grouping_sharing_removed` if you hand it a
+   review id by mistake.
 
 5. **Share the resulting URL** with the user along with a brief instruction
    the user can forward to reviewers:
