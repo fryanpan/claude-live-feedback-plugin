@@ -69,18 +69,48 @@ export interface NotesOwnership {
 
 export interface NotesOwnershipOptions {
   /** Item markdown the note-taker has already written into this doc's notes
-   *  section — a claim read back from disk after a restart. */
+   *  section — a claim read back from disk after a restart. Headings are
+   *  dropped on the way in as well as on the way out (`isHeading` below says
+   *  why), so a record written by an older build, or edited by hand, cannot
+   *  put one back. A serialized heading is the one item that starts with
+   *  `#`, which is all this can go on: the seed is text, with no elements to
+   *  ask. */
   written?: Iterable<string>;
   /** Called with the whole text claim whenever it grows, so it can be kept
    *  somewhere the process cannot take with it. */
   onWrite?: (written: readonly string[]) => void;
 }
 
+/**
+ * Is this item a heading rather than something somebody said?
+ *
+ * A sub-heading inside the notes is an ordinary item to the merge —
+ * `itemsInSection` flattens it in beside the bullets — and the agent must go
+ * on owning the ones it wrote, so this does NOT affect the element claim.
+ *
+ * It keeps them out of the TEXT claim, which is a different job with a
+ * different failure. That claim decides whether a section is the
+ * note-taker's, by finding a line it wrote in it, and the whole strength of
+ * the test is that the line is EVIDENCE — something said in this meeting and
+ * written down in these words. A topic heading is not evidence: the composer
+ * emits the same small vocabulary meeting after meeting, and a person
+ * organising their own "Meeting notes" reaches for exactly the same words.
+ * One `### Decisions` in common would hand the note-taker a section it never
+ * wrote a word of.
+ *
+ * Length is deliberately not the test. A short bullet is still somebody's
+ * sentence; a long heading is still a heading. What makes a line unsafe to
+ * key on is that it is structure, and structure is what the node says.
+ */
+function isHeading(el: Y.XmlElement): boolean {
+  return el?.nodeName === 'heading';
+}
+
 export function createNotesOwnership(opts: NotesOwnershipOptions = {}): NotesOwnership {
   let byElement = new WeakMap<Y.XmlElement, string>();
   // Insertion-ordered, so the durable half can drop the oldest lines when a
   // long meeting outgrows its cap.
-  const written = new Set<string>(opts.written ?? []);
+  const written = new Set<string>([...(opts.written ?? [])].filter((md) => !/^#{1,6}\s/.test(md)));
   return {
     claims: (el, md) => byElement.get(el) === md,
     wroteAnyOf: (mds) => mds.some((md) => written.has(md)),
@@ -88,7 +118,7 @@ export function createNotesOwnership(opts: NotesOwnershipOptions = {}): NotesOwn
       let grew = false;
       for (const item of items) {
         byElement.set(item.el, item.md);
-        if (item.md.length > 0 && !written.has(item.md)) {
+        if (item.md.length > 0 && !isHeading(item.el) && !written.has(item.md)) {
           written.add(item.md);
           grew = true;
         }
