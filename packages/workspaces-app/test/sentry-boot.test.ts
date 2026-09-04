@@ -140,7 +140,10 @@ describe('the page Sentry entry', () => {
 describe('the page bundles stay out of the SDK', async () => {
   const { readFileSync } = await import('node:fs');
   const { join } = await import('node:path');
-  const hubSrc = readFileSync(join(__dirname, '..', 'src', 'hub', 'hub-app.ts'), 'utf8');
+  const { HUB_BOOT_SOURCES } = await import('./support/hub-boot-sources.ts');
+  const hubSrc = HUB_BOOT_SOURCES.map((m) =>
+    readFileSync(join(__dirname, '..', 'src', 'hub', `${m}.ts`), 'utf8'),
+  ).join('\n');
   const appSrc = readFileSync(join(__dirname, '..', 'src', 'app.ts'), 'utf8');
 
   it('neither entry imports @sentry/browser', () => {

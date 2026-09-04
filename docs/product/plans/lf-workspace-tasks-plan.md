@@ -123,7 +123,7 @@ The default path into the board. The agent doesn't just file the task; it places
 
 ```mermaid
 flowchart LR
-  C["Comment on doc / diff / mockup"] -->|promote_to_task| T["Task created"]
+  C["Comment on doc / diff / mockup"] -->|spin_off_task| T["Task created"]
   T --> O["origin: thread ref<br/>quote: verbatim words<br/>body: user-story draft — who / what / why<br/>+ falsifiable acceptance criteria"]
   T --> TR{"Triage vs current goal"}
   TR --> G["goal + exact position in it"]
@@ -563,7 +563,7 @@ Prototyped in the hub mockup. Holding Space doesn't trigger the mic while you're
 | Surface | New                                                          | Notes                                                        |
 | ------- | ------------------------------------------------------------ | ------------------------------------------------------------ |
 | MCP     | `create_task(title, opts)`                                   | opts: assignee, needs, goal, after, links, body, quote — verbatim words for chat-born asks, where no thread exists to promote from; omitted goal/assignee are triaged |
-| MCP     | `promote_to_task(docId, threadId, opts?)`                    | captures the origin ref, the latest human comment as `quote`, and a draft body; returns the task |
+| MCP     | `spin_off_task(docId, threadId, opts?)`                    | captures the origin ref, the latest human comment as `quote`, and a draft body; returns the task |
 | MCP     | `task_transition(taskId, to, note?, evidence?)`              | the single gate for status changes; the result names any open after dependencies |
 | MCP     | set_task_goal(taskId, goalId, position) · set_goal_list(workspaceId, goals) — renamed from set_workspace_goals (ultrareview, 2026-08-13): one letter from set_workspace_goal and two from the already-shipped set_workspace_groups was a mis-call trap | open to humans and agents; recorded                          |
 | MCP     | `list_tasks(workspaceId, filter?)`                           | by goal/status/assignee/needs                                |
@@ -615,7 +615,7 @@ Two PRs, because PR 2 waits on DNS and Cloudflare setup that isn't done yet — 
 3. Ydoc projection + workspace room + SSE/channel events (task.*, decision.answered with verbatim, workspace.goal_updated, workspace.goals_changed — the goal-list event is prose-only in §3.2 today, so this commit also adds its row to the §3.6 events table) + the per-workspace events.jsonl audit log.
 4. Cross-reference model (`Ref`, links, computed backlinks; thread→task and doc→task surfacing in existing doc/thread payloads).
 5. Attachment registry + heartbeat + `agent.*` events (§4).
-6. MCP tools: create_workspace, attach_doc, promote_to_task, create_task, list_tasks, set_task_goal, set_goal_list, set_workspace_goal, answer_decision (+ a route-forwarding test per param). New tools conform to the §3.10 agent edit-interface conventions.
+6. MCP tools: create_workspace, attach_doc, spin_off_task, create_task, list_tasks, set_task_goal, set_goal_list, set_workspace_goal, answer_decision (+ a route-forwarding test per param). New tools conform to the §3.10 agent edit-interface conventions.
 7. Hub UI per §3.9, including the presence strip (§2.7).
 8. Minimal-share slice — the one-day Collaboration target (§1): workspace-level reuse of today's per-doc email shares, so the hub URL is shareable the way a doc is now. Three NEW guard allowances, each with §6-style presence-then-absence tests per transport (ultrareview, 2026-08-13): the hub page path, the ws:<id> room socket (not a member doc — today's workspaceOf() returns null for it), and the workspace SSE feed. Visitors are read-only on the gate — every task/goal/decision mutation route rejects visitor auth, with a route-level test that a visitor POST to transition and answer is refused — and may post comments only, the existing visitor capability. What a visitor syncs from the ws room is exactly the §3.3 visitor-contract list. Collaborators appear as visitors; named identity waits for PR 2.
 9. Voice on hub + doc + task detail: hold-to-talk capture with per-surface context, /voice route, Haiku fast path + agent route, the always-answers reply.

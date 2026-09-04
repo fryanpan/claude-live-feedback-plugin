@@ -8,7 +8,7 @@
  * machine rather than on the work — the parallelism cap, the chat audit, the
  * plugin-cache refresh.
  *
- * `setBoardRetired` came with the arms: `retire_workspace` and
+ * `setBoardRetired` came with the arms: `archive_workspace` and
  * `unretire_workspace` are one route call with the boolean flipped, and they
  * stay two `case` blocks rather than one fall-through because that is the
  * shape `tool-wiring.test.ts` reads to prove no advertised tool is unhandled.
@@ -52,7 +52,7 @@ export interface WorkspaceToolContext {
 }
 
 /**
- * The body of retire_workspace and unretire_workspace, which are one route
+ * The body of archive_workspace and unretire_workspace, which are one route
  * call with the boolean flipped. Shared here rather than as a fall-through
  * case so each tool keeps its own `case` block — that is the shape
  * `tool-wiring.test.ts` reads to prove no advertised tool is unhandled.
@@ -151,11 +151,17 @@ export async function handleWorkspaceTool(
         ...(res.sameName ? { sameName: res.sameName } : {}),
       });
     }
-    // Two cases rather than one fall-through, because `tool-wiring.test.ts`
-    // reads this switch as SOURCE — `case 'x': {` is how it proves every
-    // advertised tool has a handler, and a shared block would hide one of
-    // these two from it.
-    case 'retire_workspace': {
+    // Archive and un-archive stay two `case` blocks rather than one
+    // fall-through, because `tool-wiring.test.ts` reads this switch as
+    // SOURCE — `case 'x': {` is how it proves every advertised tool has a
+    // handler, and a shared block would hide one of these two from it.
+    //
+    // COMPAT: `retire_workspace` is the name this had before archiving became
+    // the product's word for a reversible stand-down. It is a bare label with
+    // no block, so it is not a second advertised tool; it lands here and the
+    // log says so once. See deprecated-aliases.ts.
+    case 'retire_workspace':
+    case 'archive_workspace': {
       const { workspaceId, reason } = a as { workspaceId: string; reason?: string };
       return ok(await setBoardRetired(ctx, workspaceId, true, reason));
     }
