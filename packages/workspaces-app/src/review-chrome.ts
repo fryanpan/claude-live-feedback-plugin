@@ -1,12 +1,4 @@
-import {
-  SUMMARY_PENDING_WINDOW_MS,
-  type Thread,
-  type User,
-  readDocMeta,
-  readReviewPayload,
-  readStoredSummary,
-  summaryPending,
-} from '@feedback/core';
+import { type Thread, type User, readDocMeta } from '@feedback/core';
 import type * as Y from 'yjs';
 import {
   applyPlacement,
@@ -23,24 +15,28 @@ import { type SeenTracker, createSeenTracker } from './comment-seen.ts';
 import { el, showToast } from './doc/chrome-dom.ts';
 import { wireResizeHandle } from './doc/chrome-panels.ts';
 import { wireReviewComposer } from './doc/review-composer.ts';
+import { createThreadProjection } from './doc/thread-projection.ts';
 import { threadNeedsModal } from './long-thread.ts';
 import { type MobileReview, mountMobileReview } from './mobile-review.ts';
 import type { MountScope } from './mount-scope.ts';
 import type { ReviewSurface } from './review-surface.ts';
 import { setTabTitle, tabName } from './tab-title.ts';
-import { threadKind } from './thread-kind.ts';
 import { type ThreadModalHandle, mountThreadModal } from './thread-modal.ts';
-import { installSlotRemeasure, sizeThreadSlots, threadCards } from './thread-morph.ts';
+import { installSlotRemeasure, sizeThreadSlots } from './thread-morph.ts';
 import { ThreadPanel, type ThreadTab } from './threads.ts';
 
 /**
  * The review "chrome" — everything around the editor that is identical for
  * every SPA surface (markdown / code / diff): the threads drawer + tabs +
  * panel callbacks, the composer sheet, the mobile full-screen thread view,
- * thread collection/decoration plumbing, the doc-title label, hotkeys, and
- * the small DOM helpers. Extracted from app.ts / code-app.ts, which had
- * forked ~450 duplicated lines of this wiring; each boot now supplies only
- * its genuinely surface-specific parts via `ChromeOpts`.
+ * the doc-title label and the hotkeys. Extracted from app.ts / code-app.ts,
+ * which had forked ~450 duplicated lines of this wiring; each boot now
+ * supplies only its genuinely surface-specific parts via `ChromeOpts`.
+ *
+ * What is NOT here, and why: the ydoc → Thread[] projection and its
+ * decorations live in `doc/thread-projection.ts`, the two writing surfaces in
+ * `doc/review-composer.ts`, the resize handles in `doc/chrome-panels.ts` and
+ * the DOM helpers in `doc/chrome-dom.ts`.
  */
 
 export interface ChromeSelection {
@@ -432,138 +428,33 @@ export function mountReviewChrome(opts: ChromeOpts): ReviewChrome {
   }
 
   // --- thread data plumbing --------------------------------------------------
-  function resolveThreadRange(threadId: string): { from: number; to: number } | null {
-    const doc = ydoc.getMap('threads').get(threadId) as Y.Map<unknown> | undefined;
-    if (!doc) return null;
-    const anchor = doc.get('anchor') as
-      | { kind: 'text-range'; startRel: Uint8Array | number[]; endRel: Uint8Array | number[] }
-      | { kind: 'element' | 'orphan' }
-      | undefined;
-    if (!anchor || anchor.kind !== 'text-range') return null;
-    const startRel =
-      anchor.startRel instanceof Uint8Array ? anchor.startRel : new Uint8Array(anchor.startRel);
-    const endRel =
-      anchor.endRel instanceof Uint8Array ? anchor.endRel : new Uint8Array(anchor.endRel);
-    return surface.resolveRel(startRel, endRel);
-  }
-
-  function collectThreads(): Thread[] {
-    const threadsMap = ydoc.getMap('threads');
-    const out: Thread[] = [];
-    threadsMap.forEach((entry, id) => {
-      const threadMap = entry as Y.Map<unknown>;
-      const anchorRaw = threadMap.get('anchor') as Thread['anchor'] | undefined;
-      const status = threadMap.get('status') as Thread['status'] | undefined;
-      const createdBy = threadMap.get('createdBy') as User | undefined;
-      const commentsArr = threadMap.get('comments') as Y.Array<Y.Map<unknown>> | undefined;
-      if (!anchorRaw || !status || !createdBy) return;
-      const comments = [];
-      if (commentsArr) {
-        for (const c of commentsArr) {
-          const cid = c.get('id') as string | undefined;
-          const author = c.get('author') as User | undefined;
-          const text = c.get('text') as string | undefined;
-          const ts = c.get('ts') as number | undefined;
-          if (cid && author && text != null && ts != null) {
-            // The review payload is what makes a thread CARRY an item — drop
-            // it here and the panel renders a plain conversation: no item
-            // card, no Answer routing, no answered record. This reader is the
-            // panel's only source (see the summary note below), so the doc
-            // half of answering worked in every panel unit test and not at
-            // all through the mounted chrome until the glue tests posted
-            // through it.
-            const review = readReviewPayload(c.get('review'));
-            comments.push({ id: cid, author, text, ts, ...(review ? { review } : {}) });
-          }
-        }
-      }
-      // A text-range anchor that no longer resolves displays as orphaned so
-      // the panel offers the recover flow (the persisted anchor is untouched).
-      let displayAnchor: Thread['anchor'] = anchorRaw;
-      if (anchorRaw.kind === 'text-range') {
-        const r = resolveThreadRange(id);
-        if (!r) displayAnchor = { kind: 'orphan', original: anchorRaw, lastSeenAt: Date.now() };
-      }
-      // The generated summary is part of the thread, not a decoration on top
-      // of it: `threadLines` reads `t.summary`, so a Thread built without it
-      // silently renders the deterministic lines forever. This reader is the
-      // ONLY source of threads for the panel, the balloons and the mobile
-      // cards — the widget gets the lift for free via core's `readThread`,
-      // this surface does not. Same shape as the "route layer silently drops
-      // params" class in docs/process/learnings.md.
-      const summary = readStoredSummary(threadMap.get('summary'));
-      const pendingTsRaw = threadMap.get('summaryPendingTs');
-      const t: Thread = {
-        id,
-        status,
-        anchor: displayAnchor,
-        createdBy,
-        commentCount: comments.length,
-        lastActivity: comments.length > 0 ? (comments[comments.length - 1]?.ts ?? 0) : 0,
-        comments,
-        ...(summary ? { summary } : {}),
-        ...(typeof pendingTsRaw === 'number' ? { summaryPendingTs: pendingTsRaw } : {}),
-      };
-      // "A summary is being generated" is a server-written fact, not a guess:
-      // `summaryPendingTs` is stamped when a generation is QUEUED (gated
-      // visitor writes never stamp), and `summaryPending` time-bounds it so a
-      // failed call degrades to the deterministic lines.
-      if (summaryPending(t, { now: Date.now() })) {
-        t.summaryPending = true;
-        schedulePendingExpiry((t.summaryPendingTs ?? 0) + SUMMARY_PENDING_WINDOW_MS);
-      }
-      out.push(t);
-    });
-    return out;
-  }
-
-  // A pending card's ONLY exits are a summary syncing in (repaints via the
-  // ydoc observer) or its window expiring — and expiry is a clock event, not
-  // a doc event, so nothing would repaint the card without this timer. One
-  // timer, always armed for the EARLIEST expiry seen: a later `collect` may
-  // find a thread that expires sooner, so an earlier deadline retimes the
-  // timer rather than being swallowed by "one is already scheduled".
-  let pendingExpiryTimer: ReturnType<typeof setTimeout> | null = null;
-  let pendingExpiryAt = Number.POSITIVE_INFINITY;
-  function schedulePendingExpiry(expiresAt: number): void {
-    const fireAt = expiresAt + 250; // small slack so the redraw lands after expiry
-    if (fireAt >= pendingExpiryAt) return;
-    if (pendingExpiryTimer != null) clearTimeout(pendingExpiryTimer);
-    pendingExpiryAt = fireAt;
-    pendingExpiryTimer = setTimeout(
-      () => {
-        clearPendingExpiry();
-        redrawThreads();
-      },
-      Math.max(0, fireAt - Date.now()),
-    );
-  }
-  function clearPendingExpiry(): void {
-    if (pendingExpiryTimer != null) clearTimeout(pendingExpiryTimer);
-    pendingExpiryTimer = null;
-    pendingExpiryAt = Number.POSITIVE_INFINITY;
-  }
+  // The ydoc → Thread[] projection, the anchor decorations, the seen tracker's
+  // in-place dot removal and the pending-summary expiry timer live in
+  // doc/thread-projection.ts with the state they own. The chrome keeps only
+  // the fan-out below: which surfaces get repainted when that projection
+  // changes.
 
   // Per doc, per browser: which threads this reader has looked at. Drives the
   // red "new" dot on the card, the highlight and the off-screen hints.
   const seen = createSeenTracker({ docId });
-  function markSeen(threadId: string): boolean {
-    const t = collectThreads().find((x) => x.id === threadId);
-    if (!t) return false;
-    if (!seen.markSeen(t)) return false;
-    for (const el of threadCards(threadId)) {
-      el.classList.remove('is-new');
-      el.querySelector('.thread-new-tag')?.remove();
-    }
-    refreshThreadDecorations(activeThreadId);
-    return true;
-  }
+  const projection = createThreadProjection({
+    ydoc,
+    surface,
+    seen,
+    onPendingExpiry: () => redrawThreads(),
+  });
+  const {
+    collect: collectThreads,
+    resolveRange: resolveThreadRange,
+    refreshDecorations: refreshThreadDecorations,
+    lineLabel: threadLineLabel,
+    markSeen,
+  } = projection;
 
-  let activeThreadId: string | null = null;
   function redrawThreads(): void {
     const all = collectThreads();
     threadsPanel.setThreads(all);
-    refreshThreadDecorations(activeThreadId);
+    refreshThreadDecorations(projection.activeThreadId());
     const counts = threadsPanel.countByStatus();
     const openCount = counts.open + counts.orphan;
     threadsCount.textContent = String(openCount);
@@ -577,37 +468,6 @@ export function mountReviewChrome(opts: ChromeOpts): ReviewChrome {
     // up everywhere on the page except in the dialog being read.
     const modalId = threadModal.openThreadId();
     if (modalId) threadModal.refresh(all.find((t) => t.id === modalId) ?? null);
-  }
-  function refreshThreadDecorations(activeId: string | null): void {
-    activeThreadId = activeId;
-    const ranges = collectThreads()
-      .filter((t) => t.anchor.kind === 'text-range')
-      .map((t) => {
-        const r = resolveThreadRange(t.id);
-        if (!r) return null;
-        return {
-          id: t.id,
-          from: r.from,
-          to: r.to,
-          status: t.status,
-          kind: threadKind(t),
-          isNew: seen.isNew(t),
-        };
-      })
-      .filter((x): x is NonNullable<typeof x> => x != null);
-    surface.setThreadRanges(ranges, activeId);
-  }
-
-  // "L293" / "L293–301" for line-oriented surfaces (code/diff); null on
-  // prose. Recomputed at render time so labels track live edits.
-  function threadLineLabel(threadId: string): string | null {
-    if (!surface.lineForPos) return null;
-    const r = resolveThreadRange(threadId);
-    if (!r) return null;
-    const a = surface.lineForPos(r.from);
-    const b = surface.lineForPos(Math.max(r.from, r.to - 1));
-    if (a == null) return null;
-    return b != null && b > a ? `L${a}–${b}` : `L${a}`;
   }
 
   // --- thread panel ------------------------------------------------------
@@ -1052,7 +912,7 @@ export function mountReviewChrome(opts: ChromeOpts): ReviewChrome {
       // chrome and fire `redrawThreads` for the document we just left —
       // repainting the previous doc's threads over the next mount, which
       // reuses the same DOM.
-      clearPendingExpiry();
+      projection.clearPendingExpiry();
       threadsListEl.innerHTML = '';
       hideComposer();
       closeThreadView();
