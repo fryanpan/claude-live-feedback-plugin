@@ -1113,48 +1113,56 @@ function TaskAskControls(props: {
   // arrive. Cleared implicitly by unmount — the reopened panel reads the
   // doc's own stamps, which is the durable answer.
   const [justAsked, setJustAsked] = useState<readonly TaskAskKind[]>([]);
-  if (!handlers.onAsk) return null;
-  return (
-    <div class="hub-task-asks">
-      {TASK_ASK_KINDS.map((kind) => {
-        const asked =
-          taskAskFace(kind, handlers.taskAsks) === 'requested' || justAsked.includes(kind);
-        if (asked) {
-          const receipt =
-            taskAskReceipt(kind, handlers.taskAsks, props.now) ??
-            `${TASK_ASK_LABEL[kind]} requested`;
-          return (
-            <span key={kind} class="hub-task-ask-receipt" data-ask={kind}>
-              {receipt}
-            </span>
-          );
-        }
-        return (
-          <button
-            key={kind}
-            type="button"
-            class="hub-btn hub-task-ask"
-            data-ask={kind}
-            title={TASK_ASK_TITLE[kind]}
-            aria-label={TASK_ASK_TITLE[kind]}
-            disabled={busy !== null}
-            onClick={(ev) => {
-              ev.stopPropagation();
-              if (busy !== null) return;
-              setBusy(kind);
-              void Promise.resolve(handlers.onAsk?.(task, kind))
-                .then((landed) => {
-                  if (landed) setJustAsked((was) => [...was, kind]);
-                })
-                .finally(() => setBusy(null));
-            }}
-          >
-            {TASK_ASK_LABEL[kind]}
-          </button>
-        );
-      })}
-    </div>
+
+  const receiptFor = (kind: TaskAskKind) => (
+    // `<output>`, whose implicit ARIA role is `status`: the swap is otherwise
+    // silent, and a screen reader hears a button disappear with nothing
+    // taking its place — the one confirmation that the ask landed would
+    // reach only the eye. The element rather than `role="status"` on a span
+    // because it carries the same semantics without an attribute, which is
+    // what `a11y/useSemanticElements` asks for.
+    <output key={kind} class="hub-task-ask-receipt" data-ask={kind}>
+      {taskAskReceipt(kind, handlers.taskAsks, props.now) ?? `${TASK_ASK_LABEL[kind]} requested`}
+    </output>
   );
+
+  const offerFor = (kind: TaskAskKind) => (
+    <button
+      key={kind}
+      type="button"
+      class="hub-btn hub-task-ask"
+      data-ask={kind}
+      title={TASK_ASK_TITLE[kind]}
+      aria-label={TASK_ASK_TITLE[kind]}
+      disabled={busy !== null}
+      onClick={(ev) => {
+        ev.stopPropagation();
+        if (busy !== null) return;
+        setBusy(kind);
+        void Promise.resolve(handlers.onAsk?.(task, kind))
+          .then((landed) => {
+            if (landed) setJustAsked((was) => [...was, kind]);
+          })
+          .finally(() => setBusy(null));
+      }}
+    >
+      {TASK_ASK_LABEL[kind]}
+    </button>
+  );
+
+  // Read access is not write access, and the two decide DIFFERENT halves of
+  // this row. Without `onAsk` nothing may be OFFERED — a press would come
+  // back 403 with no sign-in path — but a receipt for an ask somebody else
+  // already made is ticket state, and withholding it shows a reader an
+  // untouched ticket. So the offer is gated and the receipt is not; the row
+  // disappears only when there is neither.
+  const controls = TASK_ASK_KINDS.map((kind) => {
+    const asked = taskAskFace(kind, handlers.taskAsks) === 'requested' || justAsked.includes(kind);
+    if (asked) return receiptFor(kind);
+    return handlers.onAsk ? offerFor(kind) : null;
+  }).filter((c) => c !== null);
+  if (controls.length === 0) return null;
+  return <div class="hub-task-asks">{controls}</div>;
 }
 
 function TaskDetailPanel(props: {

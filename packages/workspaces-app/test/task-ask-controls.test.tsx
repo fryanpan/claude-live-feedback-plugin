@@ -108,12 +108,28 @@ describe('the ticket’s Plan and Review controls', () => {
     expect(receipt(host, 'plan')).toBeNull();
   });
 
-  it('draws neither control on a board that cannot ask', () => {
-    // Positive control for the case above: the buttons found there are the
-    // handler's doing, not something the panel always renders.
+  it('draws neither control for a reader who cannot write', () => {
+    // The app withholds `onAsk` from a reader without write access, exactly
+    // as the two doc floats hide themselves on `!canWrite`. Offered to a
+    // share visitor the press comes back 403, and all they get is a failure
+    // toast — no sign-in path and no way to make the ask.
+    //
+    // Doubles as the positive control for the case above: the buttons found
+    // there are the handler's doing, not something the panel always renders.
     const host = mount();
     show(task());
     expect(askButton(host, 'plan')).toBeNull();
+    expect(askButton(host, 'review')).toBeNull();
+    expect(host.querySelector('.hub-task-asks')?.children.length ?? 0).toBe(0);
+  });
+
+  it('shows a non-writer the receipt for an ask somebody else made', () => {
+    // Read access is not the same as write access: a reader who cannot ask
+    // must still be able to see that the plan has been asked for, or the
+    // ticket looks untouched to them.
+    const host = mount();
+    show(task(), { taskAsks: { planRequestedAt: NOW - 60_000, planRequestedBy: 'Bryan' } });
+    expect(receipt(host, 'plan')?.textContent).toBe('Plan requested by Bryan, 1m ago');
     expect(askButton(host, 'review')).toBeNull();
   });
 
@@ -146,8 +162,11 @@ describe('the ticket’s Plan and Review controls', () => {
     expect(askButton(host, 'plan')).toBeNull();
     const line = receipt(host, 'plan');
     expect(line).not.toBeNull();
-    expect(line?.tagName).toBe('SPAN');
     expect(line?.textContent).toContain('Plan requested');
+    // `<output>` carries an implicit `status` role. Without it a screen
+    // reader hears a button vanish and nothing take its place, and the swap
+    // is the only confirmation the ask landed.
+    expect(line?.tagName).toBe('OUTPUT');
     // And it cannot be pressed by any route a button offers.
     expect(line?.closest('button')).toBeNull();
     // Review is untouched: two independent asks, not one toggle.

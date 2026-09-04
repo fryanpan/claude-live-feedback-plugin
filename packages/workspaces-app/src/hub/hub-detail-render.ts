@@ -428,9 +428,10 @@ export interface DetailHandlers {
    * LANDED, so a refused press puts the control back rather than leaving a
    * receipt for an ask nobody received.
    *
-   * Absent → neither control is drawn. That is the honest state for a reader
-   * who cannot write, and for a board served by a server that predates the
-   * ask routes.
+   * Absent → neither ask is OFFERED, which is the honest state for a reader
+   * who cannot write and for a board served by a server that predates the
+   * ask routes. A receipt below still renders: whether somebody has asked is
+   * ticket state, and hiding it would show a reader an untouched ticket.
    */
   onAsk?: (task: HubTask, kind: TaskAskKind) => Promise<boolean>;
   /**

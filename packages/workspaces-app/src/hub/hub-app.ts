@@ -1307,7 +1307,12 @@ export async function bootHub(env: HubBootEnv): Promise<void> {
         // route, because a ticket's comments live in its body doc — which is
         // exactly what makes the ask reach the seated lead on the board
         // subscription it already holds.
-        onAsk: (t, kind) => askOnTask(t, kind),
+        //
+        // Gated on write access, which is what draws the controls at all: the
+        // two floats hide themselves the same way. Offered to a reader who
+        // cannot write, the press would come back 403 and the only thing they
+        // would get is a toast — no sign-in path, no way to make the ask.
+        ...(writeAccess.canWrite ? { onAsk: (t, kind) => askOnTask(t, kind) } : {}),
         ...(detailAsks !== undefined ? { taskAsks: detailAsks } : {}),
         // The workspace's audit rows; the panel takes this task's out of them.
         // The same list the Activity view reads — one log, two surfaces.

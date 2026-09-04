@@ -119,14 +119,17 @@ export const TASK_PLAN_REQUEST_COMMENT =
 export const TASK_REVIEW_REQUEST_COMMENT =
   'Please review this ticket before it is worked. Where the goal, the acceptance criteria or the approach is thin, ambiguous, or missing a decision, ask a clarifying question as a comment on this ticket — as a review or decision item where an answer is a choice rather than prose.';
 
-/** Which words an ask on this doc carries: a ticket's body doc gets the
- *  ticket's, everything else the huddle doc's. `task:` is the body-doc
- *  prefix (`taskIdOfBodyDoc`), re-spelled here rather than imported so this
- *  module keeps depending on nothing. */
-export function askCommentFor(docId: string, kind: 'plan' | 'review'): string {
-  const task = docId.startsWith('task:');
-  if (kind === 'plan') return task ? TASK_PLAN_REQUEST_COMMENT : PLAN_REQUEST_COMMENT;
-  return task ? TASK_REVIEW_REQUEST_COMMENT : REVIEW_REQUEST_COMMENT;
+/**
+ * Which words an ask carries: a ticket's, or a huddle doc's.
+ *
+ * `onTask` rather than a doc id, because whether a doc id names a ticket's
+ * body is `taskIdOfBodyDoc`'s question (`task-row.ts`) and there must not be
+ * a second answer to it — spelling the `task:` prefix here would be exactly
+ * that, one rename away from silently sending huddle words to a ticket.
+ */
+export function askCommentFor(onTask: boolean, kind: 'plan' | 'review'): string {
+  if (kind === 'plan') return onTask ? TASK_PLAN_REQUEST_COMMENT : PLAN_REQUEST_COMMENT;
+  return onTask ? TASK_REVIEW_REQUEST_COMMENT : REVIEW_REQUEST_COMMENT;
 }
 
 /**

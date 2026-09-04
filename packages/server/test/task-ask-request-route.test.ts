@@ -158,6 +158,34 @@ describe('the task panel’s Plan / Review controls press the doc ask routes', (
     expect(reviewText).not.toBe(REVIEW_REQUEST_COMMENT);
   });
 
+  it('keeps the one-question-per-thread instruction in the ticket wording', () => {
+    // The huddle plan ask carries this and its own test (plan-request-route);
+    // the ticket ask is a second copy of the words and would drift on its own.
+    // The root cause it fixes is the same: "a plan came back as one comment
+    // holding twelve questions" — the agent had the tools and lacked the line.
+    expect(TASK_PLAN_REQUEST_COMMENT).toMatch(/create_thread/);
+    expect(TASK_PLAN_REQUEST_COMMENT).toMatch(/`review` payload/);
+    expect(TASK_PLAN_REQUEST_COMMENT).toMatch(/never a list of questions in one comment/);
+    // And the review ask says where an answer that is a CHOICE should go,
+    // which is what makes a clarifying question answerable in one tap.
+    expect(TASK_REVIEW_REQUEST_COMMENT).toMatch(/review or decision item/);
+  });
+
+  it('points both ticket asks at the ticket, never at "this doc"', () => {
+    // The shape control that matters most here. Both texts are reworded
+    // copies of a huddle doc's, and the phrase the huddle version turns on —
+    // "this doc" — names the ticket's own description when it is read on a
+    // ticket. Either text drifting back to it sends the agent to the wrong
+    // place while every other assertion still passes.
+    for (const text of [TASK_PLAN_REQUEST_COMMENT, TASK_REVIEW_REQUEST_COMMENT]) {
+      expect(text).not.toMatch(/this doc/i);
+      expect(text).toMatch(/this ticket/);
+    }
+    // Positive control: the phrase IS what the huddle wording says, so the
+    // check above can fail rather than being vacuously true of any sentence.
+    expect(PLAN_REQUEST_COMMENT).toMatch(/this doc/i);
+  });
+
   it('stamps who asked and when, so a reopened panel can render the receipt', async () => {
     const docId = await newTask('Receipt after a reload');
     const before = await docOf(docId);

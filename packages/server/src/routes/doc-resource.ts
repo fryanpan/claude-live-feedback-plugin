@@ -204,7 +204,7 @@ export async function handleDocResourceCore(
       docId,
       null,
       author,
-      askCommentFor(docId, 'plan'),
+      askCommentFor(taskIdOfBodyDoc(docId) !== null, 'plan'),
       { kind: 'subject' },
       { generate: false },
     );
@@ -233,7 +233,11 @@ export async function handleDocResourceCore(
     const author = authorFor(body?.author);
     if (!author) return j(400, { error: 'author required' });
     if (isCategoryAuthor(author)) return refuseCategoryAuthor();
-    const filed = await fileReviewRequest(docId, author, askCommentFor(docId, 'review'));
+    const filed = await fileReviewRequest(
+      docId,
+      author,
+      askCommentFor(taskIdOfBodyDoc(docId) !== null, 'review'),
+    );
     if (!filed) return j(404, { error: 'doc not found' });
     return j(200, { docId, ...filed });
   }
