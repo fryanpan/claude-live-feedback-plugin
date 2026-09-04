@@ -9,7 +9,7 @@ import { Decoration, DecorationSet } from '@tiptap/pm/view';
  * 2, commit 5): a small, tappable "✎ suggestion" widget rendered right
  * after each proposal's furthest marked position — mirrors live-markup.ts's
  * `.lf-del-chip` (same "always in the DOM, CSS decides visibility ≤1100px"
- * contract; styles.css shows `.lf-suggest-chip` in the SAME media query
+ * contract; doc.css shows `.lf-suggest-chip` in the SAME media query
  * block that reveals `.lf-del-chip`). markup-margin.ts owns what happens
  * when one is tapped (opens a bottom sheet with the same card the desktop
  * balloon renders); this extension owns only the decoration.
