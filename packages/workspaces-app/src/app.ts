@@ -12,6 +12,7 @@ import { saveStateView, settlePending, watchConnection } from './connection-stat
 import { renderDiffNav, setActiveFile } from './diff-nav.ts';
 import { fetchDocMeta } from './doc-meta.ts';
 import { docHref, workspaceIdFromPath } from './doc-path.ts';
+import { type ChromeSelection, anchorBody } from './doc/anchor-body.ts';
 import { el, showToast } from './doc/chrome-dom.ts';
 import { wireThreadRangeClicks } from './doc/chrome-panels.ts';
 import { mountDocMeeting } from './doc/doc-meeting-mount.ts';
@@ -32,12 +33,7 @@ import { startReadingTracker } from './reading-tracker.ts';
 import { mountMarkupMargin } from './redline/markup-margin.ts';
 import { mountRedline } from './redline/redline-app.ts';
 import { mountSuggestionsSummary } from './redline/suggestions-summary.ts';
-import {
-  type ChromeSelection,
-  type ReviewChrome,
-  anchorBody,
-  mountReviewChrome,
-} from './review-chrome.ts';
+import { type ReviewChrome, mountReviewChrome } from './review-chrome.ts';
 import { mountReviewFloat } from './review-float.ts';
 import { navigateTo, startRouter } from './router.ts';
 import { type SetDoc, selectSetSiblings, setDocsUrl } from './set-nav.ts';

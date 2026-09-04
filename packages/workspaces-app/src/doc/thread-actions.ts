@@ -17,7 +17,7 @@
  * broken button.
  */
 import type { User } from '@feedback/core';
-import { type ChromeSelection, anchorBody } from '../review-chrome.ts';
+import { type ChromeSelection, anchorBody } from './anchor-body.ts';
 import { showToast } from './chrome-dom.ts';
 
 export interface ThreadActionDeps {

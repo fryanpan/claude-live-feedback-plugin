@@ -1,6 +1,7 @@
 import { type Thread, type User, readDocMeta } from '@feedback/core';
 import type * as Y from 'yjs';
 import { type SeenTracker, createSeenTracker } from './comment-seen.ts';
+import type { ChromeSelection } from './doc/anchor-body.ts';
 import { el } from './doc/chrome-dom.ts';
 import { wireResizeHandle } from './doc/chrome-panels.ts';
 import { wireReviewComposer } from './doc/review-composer.ts';
@@ -33,43 +34,11 @@ import { ThreadPanel, type ThreadTab } from './threads.ts';
  * decorations live in `doc/thread-projection.ts`, the five server writes a
  * card can make in `doc/thread-actions.ts`, the two writing surfaces in
  * `doc/review-composer.ts`, the per-device view preferences in
- * `doc/view-prefs.ts`, the resize handles in `doc/chrome-panels.ts` and the
+ * `doc/view-prefs.ts`, the selection → wire-anchor build in
+ * `doc/anchor-body.ts`, the resize handles in `doc/chrome-panels.ts` and the
  * DOM helpers in `doc/chrome-dom.ts`. What is left is the WIRING: which
  * surface repaints when, and which callback each panel gets.
  */
-
-export interface ChromeSelection {
-  start: Uint8Array;
-  end: Uint8Array;
-  snippet: string;
-  /**
-   * Set by the redline surface when the selection was entirely base-only
-   * (struck-through) text, which has no position in `content`. The anchor
-   * snaps to the nearest following retained line; this records what the
-   * comment was actually about.
-   */
-  deletedSnippet?: string;
-}
-
-/**
- * Build the wire anchor for a selection.
- *
- * ONE place on purpose. Every anchor body here is hand-built field by field,
- * so a new field added to ChromeSelection but not copied is silently dropped —
- * the server accepts it, returns 200, and the data is gone. That is exactly
- * how `deletedSnippet` first shipped broken (and how `groups` did before it;
- * see docs/process/learnings.md). Add new anchor fields HERE, not at the call
- * sites.
- */
-export function anchorBody(sel: ChromeSelection) {
-  return {
-    kind: 'text-range' as const,
-    startRel: Array.from(sel.start),
-    endRel: Array.from(sel.end),
-    snippet: { text: sel.snippet },
-    ...(sel.deletedSnippet ? { deletedSnippet: sel.deletedSnippet } : {}),
-  };
-}
 
 export interface ChromeOpts {
   docId: string;
@@ -138,19 +107,6 @@ export const INLINE_CARDS_QUERY = '(max-width: 1100px)';
 export function inlineCardsVisible(): boolean {
   return window.matchMedia(INLINE_CARDS_QUERY).matches;
 }
-
-/**
- * The per-device view preferences — the drawer default and the doc-list pane —
- * live in `doc/view-prefs.ts` with the storage keys they own. Re-exported here
- * because `app.ts` and two existing test files import them from this module,
- * and every existing test has to pass unmodified.
- */
-export {
-  WIDE_SCREEN_QUERY,
-  initialDrawerOpen,
-  initialSetPaneOpen,
-  wireSetPaneToggle,
-} from './doc/view-prefs.ts';
 
 export interface ReviewChrome {
   threadsPanel: ThreadPanel;
@@ -797,7 +753,3 @@ export function mobileLabel(full: string): string {
   const base = parts[parts.length - 1] ?? s;
   return base.length <= 32 ? base : `…${base.slice(-31)}`;
 }
-
-/** Exposed for unit tests — this is the layer that silently drops anchor
- *  fields, so it needs a test of its own. Not part of the public surface. */
-export const __testing = { anchorBody };
