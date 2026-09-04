@@ -108,6 +108,8 @@ interface FileBinding {
   pollArmed?: boolean;
   /** A poll stat is on the thread pool right now — see `pollBinding`. */
   statInFlight?: boolean;
+  /** A write-back is on the thread pool right now — see `writeBoundFileNow`. */
+  writeInFlight?: boolean;
   /**
    * Last file mtime (ms) we have actually READ, so the poll reacts only to
    * changes. Advanced when the reconcile's read lands, never when the stat
@@ -322,6 +324,60 @@ export class FileBindings {
    *   write we initiated won't be re-applied, and a read that matches
    *   our cached content is silently ignored.
    */
+  /**
+   * Bind a file, reading it on the thread pool first.
+   *
+   * This is the door every REQUEST and TIMER path uses. `attachFile` itself
+   * stays synchronous because hydration needs it to be, and its no-preread
+   * fallback still opens the file on the main thread — safe only where
+   * nothing is waiting, which after this is boot and nothing else. Anything
+   * with a caller on the other end comes through here instead, so the one
+   * blocking syscall is already done and handed over as a preread.
+   *
+   * A file that cannot be read is not an error here: the attach is refused,
+   * the doc keeps its `.ydoc` content, and the caller sees `read-failed`.
+   */
+  async attachFileAsync(
+    docId: string,
+    filePath: string,
+    opts: AttachOpts = {},
+  ): Promise<ReturnType<FileBindings['attachFile']>> {
+    return this.attachFile(docId, filePath, await this.withPreread(filePath, opts));
+  }
+
+  /** `attachFlatFile`'s async door — same contract as `attachFileAsync`. */
+  async attachFlatFileAsync(
+    docId: string,
+    filePath: string,
+    opts: AttachOpts & { writeBack?: boolean } = {},
+  ): Promise<ReturnType<FileBindings['attachFlatFile']>> {
+    return this.attachFlatFile(docId, filePath, {
+      ...(await this.withPreread(filePath, opts)),
+      ...(opts.writeBack === undefined ? {} : { writeBack: opts.writeBack }),
+    });
+  }
+
+  /**
+   * Fill in `opts.preread` from a pool read, unless the caller brought one.
+   *
+   * A read that fails or never answers leaves the preread unset on purpose:
+   * the attach then hits its own quarantine check and refuses, which is the
+   * same outcome by a shorter route than inventing an empty file here.
+   */
+  private async withPreread<T extends AttachOpts>(filePath: string, opts: T): Promise<T> {
+    if (opts.preread) return opts;
+    if (!filePath || filePath.trim() === '') return opts;
+    const abs = filePath.startsWith('/') ? filePath : join(process.cwd(), filePath);
+    const res = await boundFiles.read(abs, { keep: false });
+    if (res.status !== 'ok') return opts;
+    return {
+      ...opts,
+      preread: res.exists
+        ? { exists: true, text: res.text, mtimeMs: res.mtimeMs }
+        : { exists: false },
+    };
+  }
+
   attachFile(
     docId: string,
     filePath: string,
@@ -341,6 +397,11 @@ export class FileBindings {
     // main thread) or we read it here. Both branches go through these two so
     // no path below can reach the filesystem behind the preread's back.
     const pre = opts.preread;
+    // No preread means the sync fallback below, and that is only safe on a
+    // path that has not already proved hostile. A quarantined one is refused
+    // outright rather than opened: `attachFileAsync` is the door every
+    // request and timer path comes through, and it always brings a preread.
+    if (!pre && boundFiles.quarantined(abs)) return { ok: false, error: 'read-failed' };
     const fileExists = () => (pre ? pre.exists : existsSync(abs));
     const readFile = () => (pre ? (pre.text ?? '') : readFileSync(abs, 'utf8'));
     let seeded = false;
@@ -417,7 +478,7 @@ export class FileBindings {
             else this.reconcileFromDisk(room, binding);
           } else if (
             prior === undefined &&
-            (opts.liveWins || !this.diskNewerThanState(docId, abs))
+            (opts.liveWins || !this.diskNewerThanState(docId, abs, pre?.mtimeMs))
           ) {
             // Fresh attach with NO bookkeeping (post-restart hydrate) and the
             // .md is OLDER than the persisted .ydoc: the crash happened inside
@@ -534,7 +595,7 @@ export class FileBindings {
       if (
         opts.writeBack &&
         content.length > 0 &&
-        (opts.liveWins || !this.diskNewerThanState(docId, abs))
+        (opts.liveWins || !this.diskNewerThanState(docId, abs, pre?.mtimeMs))
       ) {
         this.backupExternalVersion(docId, text);
         reassertDoc = true;
@@ -850,16 +911,23 @@ export class FileBindings {
       this.ensureFilePollTicker();
       return;
     }
+    // No preread means a startup attach: every request and timer path comes
+    // through `attachFileAsync`, which always brings one. Nothing is waiting
+    // on the server at boot, so this stat may block — and it must stay
+    // synchronous, because arming is part of what `attachFile` PROMISES its
+    // caller. Making it async moved `pollArmed` a tick later and broke every
+    // test that counts armed bindings straight after an attach.
+    if (boundFiles.quarantined(binding.path)) return;
     if (!existsSync(binding.path)) return;
     try {
       binding.lastMtimeMs = statSync(binding.path).mtimeMs;
     } catch {}
-    binding.pollArmed = true;
     // Armed, but deliberately not marked as ACCESSED. Hydration re-binds
     // every bound doc at boot; if arming warmed them, the first minute of
     // every restart would put the whole corpus in the fast lane — the storm
     // this change exists to remove. It joins the idle rotation instead, and
     // the first real `get` / `getOrCreate` promotes it.
+    binding.pollArmed = true;
     this.ensureFilePollTicker();
   }
 
@@ -1356,7 +1424,24 @@ export class FileBindings {
 
   /** The write-back body: what the ~800ms debounce runs when it fires, and
    *  what `flush()` runs synchronously on graceful shutdown. */
-  private writeBoundFileNow(room: DocRoom, binding: FileBinding): void {
+  /**
+   * Serialize the doc and put it on disk.
+   *
+   * `how` decides which thread does the writing, and the two callers want
+   * opposite things. The 800ms write-back timer fires on a LIVE server
+   * against every bound doc, so its write goes on the pool: `writeFileSync`
+   * to a provider that has stopped answering parks the event loop exactly the
+   * way the hydrate read used to. Shutdown and eviction pass `'sync'`,
+   * because `flush()` is the SIGTERM durability contract — it must have the
+   * bytes on disk before the process exits, and it has no way to await. On
+   * the way down a blocked write delays an exit; on a live server it would
+   * stop the whole thing answering.
+   */
+  private writeBoundFileNow(
+    room: DocRoom,
+    binding: FileBinding,
+    how: 'pool' | 'sync' = 'pool',
+  ): void {
     try {
       // Home-pinned docs re-verify the destination before every write —
       // "persistence never writes to whatever checkout happens to be
@@ -1418,6 +1503,50 @@ export class FileBindings {
       // a document. (Same save pattern editors use.) Rename onto the
       // REALPATH — renaming onto a symlink would replace the link with a
       // regular file instead of writing through it (codex P2).
+      if (how === 'pool') {
+        // One write at a time per binding. Two pool writes racing to the same
+        // path would land in whichever order the pool chose, and the loser
+        // would be the newer content. Re-arm instead: the debounce that
+        // brought us here will bring us back with whatever the doc says then.
+        if (binding.writeInFlight) {
+          this.scheduleFileWrite(room, binding);
+          return;
+        }
+        binding.writeInFlight = true;
+        // `lastWritten` and the pending flag are set when the bytes LAND, not
+        // here: until then the doc genuinely is unsaved, and a restart in
+        // between must still reassert it.
+        void boundFiles
+          .write(binding.path, md)
+          .then((res) => {
+            if (this.bindings.get(room.docId) !== binding) return;
+            if (res.status !== 'ok') {
+              this.failedWrites.add(room.docId);
+              return;
+            }
+            binding.lastWritten = md;
+            // Record our own write's mtime so the poll doesn't treat the
+            // write-back as an external edit and schedule a redundant reconcile.
+            if (res.exists) binding.lastMtimeMs = res.mtimeMs;
+            this.failedWrites.delete(room.docId);
+            this.p.clearPendingFileWrite(room.docId);
+          })
+          .finally(() => {
+            binding.writeInFlight = false;
+          });
+        return;
+      }
+      // The sync path is shutdown and eviction, and it is unbounded by
+      // nature — `writeFileSync` to a provider that has stopped answering
+      // never returns, which would hang the very shutdown that exists to save
+      // the edit. A path already known hostile is skipped instead: the flush
+      // saves nothing there either way, and the `.ydoc` is the durable record
+      // the doc comes back from. It stays a failed write, so a restart
+      // reasserts it once the file answers again.
+      if (boundFiles.quarantined(binding.path)) {
+        this.failedWrites.add(room.docId);
+        return;
+      }
       let target = binding.path;
       try {
         target = realpathSync(binding.path);
@@ -1544,11 +1673,23 @@ export class FileBindings {
    * debounce and disk is the STALE side. Errs toward disk (the documented
    * source of truth at rest) when either stat fails.
    */
-  private diskNewerThanState(docId: string, filePath: string): boolean {
+  /**
+   * Is the bound file at least as new as the persisted `.ydoc`?
+   *
+   * `knownMtimeMs` is the preread's, and passing it is what keeps this off
+   * the main thread: the caller has already paid for that stat on the pool,
+   * and re-taking it here used to put a blocking syscall back on the hostile
+   * path even when the read had been prewarmed. The `.ydoc` is server-owned
+   * local state and never on a sync folder, so its stat stays synchronous.
+   */
+  private diskNewerThanState(docId: string, filePath: string, knownMtimeMs?: number): boolean {
     try {
       const ydocPath = this.p.ydocPath(docId);
       if (!existsSync(ydocPath)) return true;
-      return statSync(filePath).mtimeMs >= statSync(ydocPath).mtimeMs;
+      const stateMtime = statSync(ydocPath).mtimeMs;
+      if (knownMtimeMs !== undefined) return knownMtimeMs >= stateMtime;
+      if (boundFiles.quarantined(filePath)) return true;
+      return statSync(filePath).mtimeMs >= stateMtime;
     } catch {
       return true;
     }
@@ -1683,7 +1824,7 @@ export class FileBindings {
     if (!binding?.writeTimer) return;
     clearTimeout(binding.writeTimer);
     binding.writeTimer = null;
-    if (room) this.writeBoundFileNow(room, binding);
+    if (room) this.writeBoundFileNow(room, binding, 'sync');
   }
 
   /**
@@ -1698,7 +1839,7 @@ export class FileBindings {
     clearTimeout(binding.writeTimer);
     binding.writeTimer = null;
     try {
-      this.writeBoundFileNow(room, binding);
+      this.writeBoundFileNow(room, binding, 'sync');
     } catch (err) {
       console.error(`[rooms] evict ${room.docId}: write-back failed:`, err);
     }
