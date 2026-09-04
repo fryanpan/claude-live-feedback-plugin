@@ -198,3 +198,18 @@ export function meetingSocketUrl(docId: string): string {
   const scheme = location.protocol === 'https:' ? 'wss' : 'ws';
   return `${scheme}://${location.host}${meetingSocketPath(docId)}`;
 }
+
+/**
+ * mm:ss, zero-padded, counting past an hour rather than wrapping.
+ *
+ * DOM-free like the rest of this file, and here rather than in the strip
+ * because two surfaces quote the same clock: the strip's elapsed readout and
+ * the speaker menu's headline. `meeting-strip.ts` re-exports it — that is
+ * where its callers and its test have always imported it from.
+ */
+export function formatElapsed(ms: number): string {
+  const total = Math.max(0, Math.floor(ms / 1000));
+  const mm = Math.floor(total / 60);
+  const ss = total % 60;
+  return `${String(mm).padStart(2, '0')}:${String(ss).padStart(2, '0')}`;
+}

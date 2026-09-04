@@ -15,7 +15,6 @@ import { fetchDocMeta } from './doc-meta.ts';
 import { docHref, workspaceIdFromPath } from './doc-path.ts';
 import { el, showToast } from './doc/chrome-dom.ts';
 import { wireThreadRangeClicks } from './doc/chrome-panels.ts';
-import { mountCommentFloat } from './doc/comment-float.ts';
 import { mountDocMeeting } from './doc/doc-meeting-mount.ts';
 import { wireDocModes } from './doc/doc-modes.ts';
 import { applyWidthPref, wireFormatBar } from './doc/editor-toolbar.ts';
@@ -292,6 +291,7 @@ async function mountMarkdown(ctx: MountContext): Promise<void> {
     surface: editor,
     whenSynced: (cb) => client.onReady(cb),
     scope,
+    canWrite,
     labelHint: ctx.sourceUrl || ctx.relPath || undefined,
     selectHint: 'Select some text first to leave a comment.',
     reanchorHint: 'Select new text first, then click Re-anchor.',
@@ -353,7 +353,7 @@ async function mountMarkdown(ctx: MountContext): Promise<void> {
   // across every author) — per-suggestion Accept/Reject lives on the
   // balloon/chip card the margin just wired above.
   const suggestionsSummary = mountSuggestionsSummary({ docId, ydoc, scope });
-  // Off-screen comment counts + the "N questions for you" chip — the
+  // Off-screen comment counts + the "N waiting on you" chip — the
   // information scent for what the reader cannot see (comment-hints.ts).
   // Jumping goes the same route a tap on the highlight takes: scroll, pulse,
   // and open the card where it lives (balloon above 1100px, inline below).
@@ -935,40 +935,6 @@ async function mountMarkdown(ctx: MountContext): Promise<void> {
       return;
     }
     reviewChrome.openComposer();
-  });
-
-  /**
-   * Start a comment from the always-in-view Comment float.
-   *
-   * Same three cases the selection pill handles, in the same order, because
-   * the reader has to be able to reach the composer from the button they can
-   * see rather than only from the one that appears: a live selection is the
-   * anchor; otherwise the SENTENCE at the caret is (the pill's "tap then
-   * comment" gesture, without needing the tap to have raised a pill); with
-   * neither, say what would make it work rather than opening an empty box.
-   */
-  function commentAtCaret(): void {
-    if (editor.getSelectionRel()) {
-      reviewChrome.openComposer();
-      return;
-    }
-    const { state } = editor.editor.view;
-    const range = caretParaRange ?? sentenceRangeAt(state, state.selection.from);
-    if (!range || range.from >= range.to) {
-      showToast('Tap the sentence you want to comment on, then Comment.');
-      return;
-    }
-    editor.editor.commands.focus();
-    editor.editor.commands.setTextSelection(range);
-    const sel = editor.getSelectionRel();
-    if (sel) selection = sel;
-    reviewChrome.openComposer();
-  }
-
-  mountCommentFloat({
-    anchor: editorMount.closest('#editor-pane') ?? editorMount,
-    onComment: commentAtCaret,
-    listen: (target, type, fn) => scope.listen(target, type, fn),
   });
 
   async function takeSpinoff(

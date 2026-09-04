@@ -6,7 +6,10 @@
  */
 import { classifyActor } from '../actor-identity.ts';
 import { browserCannotBindBody, isBrowserRequest } from '../middleware/write-gate.ts';
-import { redactHubWorkspaceForVisitor } from '../share/redact-workspace.ts';
+import {
+  redactCapChangeForVisitor,
+  redactHubWorkspaceForVisitor,
+} from '../share/redact-workspace.ts';
 import { summarizeGoals } from '../task-queue.ts';
 import { isRetired, retiredNotice } from '../tasks.ts';
 import type { WorkspaceRouteRequest, WorkspaceRoutesContext } from './workspace-routes-context.ts';
@@ -260,18 +263,13 @@ export async function handleWorkspaceCreateRead(
     // (redactHubEventForVisitor), and the transport and the surface have
     // to agree about the same fact — an id here is one the neighbouring
     // `retiredBy` redaction exists to strip. The local surface keeps the
-    // full actor.
+    // full actor. Shared with `GET …/settings`, the third door onto this
+    // fact, which used to answer it with the id still on.
     const capLastChange =
       capView?.lastChange === undefined
         ? undefined
         : visitor
-          ? {
-              ...capView.lastChange,
-              actor: {
-                name: capView.lastChange.actor.name,
-                kind: capView.lastChange.actor.kind,
-              },
-            }
+          ? redactCapChangeForVisitor(capView.lastChange)
           : capView.lastChange;
     return j(200, {
       workspace,
