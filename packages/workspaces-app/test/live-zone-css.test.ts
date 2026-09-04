@@ -24,7 +24,7 @@ import { IPAD, attach, installSheets, setViewport, styleOf } from './css-harness
 
 let cleanup = () => {};
 beforeEach(() => {
-  cleanup = installSheets('styles.css');
+  cleanup = installSheets('styles.css', 'doc.css');
   setViewport(IPAD);
 });
 afterEach(() => {
