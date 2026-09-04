@@ -185,9 +185,9 @@ h1{font-size:22px}code{background:#f3f3f3;padding:1px 5px;border-radius:3px;font
 small{color:#777}</style>
 <h1>Mockup not found</h1>
 <p>No mockup is bound to <code>${safe}</code>, or its source file isn't readable.
-Mockups are bound by an agent calling <code>bind_mock</code> with an absolute path
+Mockups are bound by an agent calling <code>attach_mockup</code> with an absolute path
 to an HTML file. Once bound, the file is served here without any symlink dance.</p>
-<p>Ask the agent who shared this URL to call <code>bind_mock(docId, sourceHtmlPath)</code>, then refresh.</p>`;
+<p>Ask the agent who shared this URL to call <code>attach_mockup(docId, sourceHtmlPath)</code>, then refresh.</p>`;
 }
 
 /**

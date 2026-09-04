@@ -52,7 +52,7 @@ flowchart LR
 | B. Single aggregate doc per review; server-parsed unified diff text as content; custom DOM renderer | High — new multi-file surface, new anchor coordinate space, no reuse of code surface or workspace tree | High — anchors into diff text break on any re-render decision; full-file toggle needs a second content source and second anchor space | GitHub-like single page, but 65-file page is heavy on a phone | Same feature, worse foundations |
 | C. Server-rendered static diff HTML + inject the feedback widget (element anchors) | Low-medium | Medium — element anchors on generated DOM are brittle; no Yjs content doc means `get_doc`/thread snippets degrade; second thread UX diverges from code surface | Comments feel bolted-on; no full-file toggle for free | MVP-ish, dead-ends the roadmap |
 
-A wins: it's "bind_folder where the file list comes from `git diff` and the bytes come from `git show`," and the whole review stack already works on that shape.
+A wins: it's "attach_folder where the file list comes from `git diff` and the bytes come from `git show`," and the whole review stack already works on that shape.
 
 ## System design
 
@@ -84,7 +84,7 @@ flowchart TB
 
 | Interface | Shape | Notes |
 |---|---|---|
-| MCP `create_diff_review` | `(reviewId?, repoPath, baseRef, targetRef, title?, maxFiles?, subscribe?)` → `{reviewId, entryUrl, files[{relPath, status, additions, deletions, reviewUrl, docId}], skipped[]}` | Mirrors `bind_folder`; auto-watches each file doc; agent shares `entryUrl` (first changed file) |
+| MCP `create_diff_review` | `(reviewId?, repoPath, baseRef, targetRef, title?, maxFiles?, subscribe?)` → `{reviewId, entryUrl, files[{relPath, status, additions, deletions, reviewUrl, docId}], skipped[]}` | Mirrors `attach_folder`; auto-watches each file doc; agent shares `entryUrl` (first changed file) |
 | `POST /api/diffs` | body `{reviewId?, repo, base, target, owner, title?, maxFiles?, producedBy?}` → same as above | New route; validates repo + refs via `git rev-parse --verify <ref>^{commit}` (reject refs starting `-`), `spawnSync` arg arrays only |
 | `rooms.bindDiff(opts)` | Creates per-file rooms: docId `` `${reviewId}:${relPath.replaceAll('/','~')}` `` (hash fallback >100 chars), `type:'diff'`, meta `{workspaceId: reviewId, relPath, workspaceRoot: repo, diffBase, diffTarget, diffStatus, diffOldPath?, diffAdditions, diffDeletions, title}` | Idempotent (deterministic docIds — re-bind preserves threads); guardrails: maxFiles 300, >512KB and binary → skipped |
 | `attachDiffFile` | Seeds `content` Y.Text from `git show target:path` once (empty-fragment gate) | No mtime poll, no write-back — content immutable; `reparse_from_disk` re-runs git show |

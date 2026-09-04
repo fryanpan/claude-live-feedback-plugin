@@ -122,3 +122,55 @@ export function hubShortcutKeydown(deps: HubShortcutDeps): (ev: KeyboardEvent) =
     }
   };
 }
+
+/** Everything the board's own keydown wiring needs from `bootHub`. */
+export interface HubShortcutWiring {
+  document: Document;
+  /** The board's one projection, handed straight to the handler. LIVE. */
+  state: HubShortcutDeps['state'] & { detailThreadId: string | null };
+  /** `getElementById`, already narrowed — `bootHub`'s own `el`. */
+  el(id: string): HTMLElement;
+  renderDetail(): void;
+  /** The REST archive verb, already bound — `createHubActions`' own. */
+  archiveTask(task: { id: string }): Promise<void> | void;
+  /** True for a row the board has already archived: `e` must not archive
+   *  twice from the restore list. */
+  isArchived(task: { id: string }): boolean;
+}
+
+/**
+ * Register the board's keydown listener. Call once, from boot.
+ *
+ * Separate from the handler above because what a key DOES is a pure decision
+ * a test drives directly, while which document hears it is boot's business.
+ */
+export function wireHubShortcuts(deps: HubShortcutWiring): void {
+  const { document, state, el, renderDetail, archiveTask, isArchived } = deps;
+  document.addEventListener(
+    'keydown',
+    hubShortcutKeydown({
+      state,
+      helpEl: () => el('hub-help'),
+      openDetail: (taskId) => {
+        state.detailTaskId = taskId;
+        renderDetail();
+      },
+      closeDetail: () => {
+        state.detailTaskId = null;
+        // The goal panel closes on Escape too. It floats over the board the
+        // same way the task panel does, and one overlay that ignores the key
+        // its neighbour obeys reads as stuck rather than as different.
+        state.detailGoalId = null;
+        state.detailThreadId = null;
+        renderDetail();
+      },
+      archiveTask: (taskId) => {
+        const task = state.tasks.get(taskId);
+        // An already-archived row is unreachable from the board (it is not in
+        // a lane to focus) but IS reachable from the restore list, where `e`
+        // must not re-archive what is already gone.
+        if (task && !isArchived(task)) void archiveTask(task);
+      },
+    }),
+  );
+}

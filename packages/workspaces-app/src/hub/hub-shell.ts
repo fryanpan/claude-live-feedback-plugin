@@ -9,9 +9,11 @@
  * the render layer cannot — nothing in this file can reach `state`, so a
  * change to the shell cannot quietly become a change to the board.
  *
- * `NAV_ICONS` is exported for one reader outside the shell: the rail's
- * collapse button swaps its glyph at runtime, which is a behaviour of the
- * boot wiring rather than of the markup.
+ * `wireNavCollapse` sits here rather than in the boot for the same reason
+ * the markup does: it is entirely about the rail — the class the rail wears,
+ * the glyph and label the button swaps to, and the one stored preference
+ * that makes the choice survive a reload. Nothing in it reads board state
+ * either.
  */
 import { escapeHtml } from '@feedback/core';
 import { MIC_ICON, SVG, SVG_ENDS } from '../icons.ts';
@@ -20,6 +22,13 @@ import { MIC_ICON, SVG, SVG_ENDS } from '../icons.ts';
 import '../meeting-banner.ts';
 import { DEFAULT_DONE_WINDOW, DONE_WINDOWS } from './hub-board-model.ts';
 import type { HubNav } from './hub-presence-model.ts';
+
+/** Where the collapse choice is remembered — `bootHub`'s injected
+ *  `localStorage`, so a test can hand it a plain map. */
+export interface NavCollapseStorage {
+  getItem(key: string): string | null;
+  setItem(key: string, value: string): void;
+}
 
 /** Icons. The four nav glyphs are the approved mockup's (home-pane-mockup-v1);
  *  share and settings are new, for the top-right cluster. The shared
@@ -207,4 +216,33 @@ export function buildShell(
     doneSelect.append(opt);
   }
   doneSelect.value = DEFAULT_DONE_WINDOW;
+}
+
+/**
+ * The rail's collapse toggle, persisted so the choice survives reloads.
+ *
+ * Call once, from boot. The button only renders on wide screens (CSS hides
+ * it in the strip and bottom-bar bands), so on a phone this wires nothing
+ * and the stored preference is simply not consulted.
+ */
+export function wireNavCollapse(document: Document, storage: NavCollapseStorage): void {
+  const NAV_COLLAPSED_KEY = 'lf-hub-nav-collapsed';
+  const nav = document.getElementById('hub-nav');
+  const collapseBtn = document.getElementById('hub-nav-collapse');
+  const apply = (collapsed: boolean) => {
+    nav?.classList.toggle('hub-nav--collapsed', collapsed);
+    if (collapseBtn) {
+      const icon = collapseBtn.querySelector('.hub-nav-icon');
+      if (icon) icon.innerHTML = collapsed ? NAV_ICONS.expand : NAV_ICONS.collapse;
+      const label = collapseBtn.querySelector('.hub-nav-label');
+      if (label) label.textContent = collapsed ? 'Expand' : 'Collapse';
+      collapseBtn.title = collapsed ? 'Expand' : 'Collapse';
+    }
+  };
+  apply(storage.getItem(NAV_COLLAPSED_KEY) === '1');
+  collapseBtn?.addEventListener('click', () => {
+    const next = !nav?.classList.contains('hub-nav--collapsed');
+    storage.setItem(NAV_COLLAPSED_KEY, next ? '1' : '0');
+    apply(next);
+  });
 }
