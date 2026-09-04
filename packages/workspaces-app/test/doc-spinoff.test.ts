@@ -2,9 +2,9 @@ import { type User, prose } from '@feedback/core';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { Awareness } from 'y-protocols/awareness';
 import * as Y from 'yjs';
+import type { ChromeSelection } from '../src/doc/anchor-body.ts';
 import { createSpinoffRunner } from '../src/doc/doc-spinoff.ts';
 import { type EditorHandle, createEditor } from '../src/editor.ts';
-import type { ChromeSelection } from '../src/review-chrome.ts';
 
 /**
  * Spinning selected words off a doc into work (doc/doc-spinoff.ts).
