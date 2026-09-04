@@ -18,12 +18,12 @@
 import type { EditorHandle } from '../editor.ts';
 import type { MountScope } from '../mount-scope.ts';
 import { mountPointerPill } from '../pointer-pill.ts';
-import type { ChromeSelection } from '../review-chrome.ts';
 import {
   POINTER_PILL_ACTIONS,
   type PointerPillActionId,
   type SpinoffTaskId,
 } from '../spinoff-menu.ts';
+import type { ChromeSelection } from './anchor-body.ts';
 
 export interface PointerPillLayer {
   /** Grow the pill over the selection `from`..`to`. No-op off a huddle doc. */

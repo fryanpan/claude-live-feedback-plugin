@@ -10,9 +10,9 @@
 import { type User, readDocMeta } from '@feedback/core';
 import type * as Y from 'yjs';
 import type { EditorHandle } from '../editor.ts';
-import { type ChromeSelection, anchorBody } from '../review-chrome.ts';
 import { linkSpinoffRange, unlinkSpinoffHref } from '../spinoff-link.ts';
 import { type SpinoffTaskId, boardIdFor, runSpinoff } from '../spinoff-menu.ts';
+import { type ChromeSelection, anchorBody } from './anchor-body.ts';
 import { showToast } from './chrome-dom.ts';
 
 export interface DocSpinoffOptions {

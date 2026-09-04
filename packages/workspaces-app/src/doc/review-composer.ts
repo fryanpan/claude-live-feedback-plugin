@@ -14,9 +14,9 @@
  */
 import { type Thread, type User, authorLabel, formatTime } from '@feedback/core';
 import { attachMarkdownComposer, focusMarkdownComposer } from '../md-composer.ts';
-import { type ChromeSelection, anchorBody } from '../review-chrome.ts';
 import type { ReviewSurface } from '../review-surface.ts';
 import type { ThreadPanel } from '../threads.ts';
+import { type ChromeSelection, anchorBody } from './anchor-body.ts';
 import { el, makeBtn, showToast } from './chrome-dom.ts';
 
 /** An idempotency key for one comment-composer submit attempt — unique
