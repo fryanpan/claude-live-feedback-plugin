@@ -36,13 +36,25 @@ export interface NotesTopic {
 /**
  * Markdown reduced to the words a reader reads.
  *
- * Link syntax collapses to its LABEL — `[@Priya](speaker:A)` is the one word
- * "Priya", and `[Retry loop wakes the sync](/workspaces/…)` is the four words
- * of the title, not a URL. Counting the URL would make citing a ticket cost a
- * bullet its length budget, which would teach exactly the wrong lesson.
+ * Link syntax collapses to its LABEL — `[Retry loop wakes the sync](/…)` is
+ * the four words of the title, not a URL. Counting the URL would make citing
+ * a ticket cost a bullet its length budget, which would teach exactly the
+ * wrong lesson.
+ *
+ * A SPEAKER TAG COLLAPSES TO NOTHING AT ALL. `[@Priya](speaker:A)` is
+ * attribution the instructions require and promise is free of the twenty-word
+ * budget, so charging for it here would fail a nineteen-word note for obeying
+ * them.
  */
 export function plainWords(markdown: string): string[] {
   const text = markdown
+    // A SPEAKER TAG COSTS NOTHING, because the instructions promise it costs
+    // nothing: "the speaker tag does not count towards the twenty". Counting
+    // it here would fail a well-behaved nineteen-word note for carrying the
+    // attribution the same instructions demand — and the first full eval run
+    // did exactly that, reporting a 21-word failure on a bullet whose prose
+    // was 19. A rule the writer is told is free must be free to the judge.
+    .replace(/\[@[^\]]*\]\(speaker:[^)]*\)/g, ' ')
     .replace(/\[([^\]]*)\]\([^)]*\)/g, '$1')
     .replace(/[*_`~]/g, '')
     .replace(/^@/, '')

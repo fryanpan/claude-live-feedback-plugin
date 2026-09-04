@@ -166,9 +166,16 @@ const JUDGE_SYSTEM = [
   'You get the speech from one moment of a meeting, the notes as they stood',
   'before it, and the notes after. Judge ONLY what the new writing does.',
   '',
-  'Answer with JSON and nothing else:',
-  '{"paraphrased":bool,"covers":bool,"topics":bool,"guesses":bool,',
-  ' "together":bool,"why":"one short sentence naming the worst failure, or empty"}',
+  'Answer with JSON and nothing else. Every field is an object holding the',
+  'verdict AND the reason for THAT verdict — a reason that explains a',
+  'different field is worse than none, because it is read as evidence about',
+  'the one it is filed under:',
+  '{"paraphrased":{"ok":bool,"why":"..."},"covers":{"ok":bool,"why":"..."},',
+  ' "topics":{"ok":bool,"why":"..."},"guesses":{"ok":bool,"why":"..."},',
+  ' "together":{"ok":bool,"why":"..."}}',
+  '',
+  'Each "why" is one short sentence naming what failed, or empty when ok is',
+  'true. Never repeat one field\'s reason under another field.',
   '',
   "- paraphrased: the new notes say what the speech MEANT in the writer's own",
   '  short sentences. False if a note reads as a transcript line, quotes',
@@ -188,12 +195,18 @@ const JUDGE_SYSTEM = [
   '  scattered. False if the same point now appears twice in different places.',
 ].join('\n');
 
+/** One judged behaviour: did it hold, and why not. */
+interface JudgedField {
+  ok: boolean;
+  why: string;
+}
+
 async function judge(
   key: string,
   before: string,
   after: string,
   transcript: string,
-): Promise<Record<string, boolean | string> | null> {
+): Promise<Record<string, JudgedField> | null> {
   const user = [
     `Speech in this moment:\n${transcript}`,
     `Notes before:\n${before || '(none yet)'}`,
@@ -227,11 +240,27 @@ async function judge(
   const text = body.content?.map((b) => b.text ?? '').join('') ?? '';
   const json = text.match(/\{[\s\S]*\}/);
   if (!json) return null;
+  let raw: Record<string, unknown>;
   try {
-    return JSON.parse(json[0]) as Record<string, boolean | string>;
+    raw = JSON.parse(json[0]) as Record<string, unknown>;
   } catch {
     return null;
   }
+  // Tolerate the flat shape too. A judge that answers `"covers": false`
+  // rather than `{"ok": false}` has still answered, and dropping the whole
+  // tick over the wrapper would silently shrink the sample.
+  const out: Record<string, JudgedField> = {};
+  for (const [field, value] of Object.entries(raw)) {
+    if (typeof value === 'boolean') out[field] = { ok: value, why: '' };
+    else if (value && typeof value === 'object') {
+      const o = value as { ok?: unknown; why?: unknown };
+      out[field] = {
+        ok: o.ok === true,
+        why: typeof o.why === 'string' ? o.why : '',
+      };
+    }
+  }
+  return out;
 }
 
 /* ===== The run ===== */
@@ -381,7 +410,6 @@ async function runMeeting(
     if (judged.has(i) && opts.judgePerMeeting > 0) {
       const verdict = await judge(opts.key, before, notes, transcript);
       if (verdict) {
-        const why = typeof verdict.why === 'string' ? verdict.why : '';
         for (const [key, id] of [
           ['paraphrased', 'paraphrase'],
           ['covers', 'covers'],
@@ -389,7 +417,12 @@ async function runMeeting(
           ['guesses', 'unconfirmed'],
           ['together', 'together'],
         ] as const) {
-          behaviours[id]!.see({ ok: verdict[key] === true, detail: why }, where);
+          // A field the judge did not answer is not an example of anything.
+          // Scoring it as a failure would grade the judge's JSON, not the
+          // note-taker.
+          const field = verdict[key];
+          if (!field) continue;
+          behaviours[id]!.see({ ok: field.ok, detail: field.why }, where);
         }
       }
     }
