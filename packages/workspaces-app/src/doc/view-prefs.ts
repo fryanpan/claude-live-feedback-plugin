@@ -1,30 +1,27 @@
 /**
  * Where this reader's comments and doc list live, on THIS device.
  *
- * Three stored view preferences and the topbar toggles that own them: the
- * threads drawer, the In-This-Review doc list, and whether comment cards sit
- * in the flow or in the margin. They are one module because they answer one
- * question in one way — a stored choice wins in both directions, and with
- * nothing stored a width tier decides — and because none of them is a
- * property of the document: navigating to another doc must not re-ask any of
- * them.
+ * Two stored view preferences and the toggle that owns one of them: the
+ * threads drawer, and the In-This-Review doc list. They are one module
+ * because they answer one question in one way — a stored choice wins in both
+ * directions, and with nothing stored a width tier decides — and because
+ * neither is a property of the document: navigating to another doc must not
+ * re-ask either of them.
  *
- * Deliberately NOT an attempt to identify a device: pinch-zoom scales the
- * layout viewport (a 1366px iPad at 85% reports 1607px), so width cannot say
- * what hardware this is. It can still say how much room there is.
+ * A width tier is deliberately NOT an attempt to identify a device:
+ * pinch-zoom scales the layout viewport (a 1366px iPad at 85% reports
+ * 1607px), so width cannot say what hardware this is. It can still say how
+ * much room there is.
+ *
+ * Every storage call is wrapped. Private mode, cleared site data and the
+ * thumbnail renderer all throw on the accessor itself, and a review page that
+ * cannot render without `sessionStorage` renders blank for the reader who
+ * most needs it.
  *
  * Nothing here touches a ydoc, a thread or the mount's scope, which is what
- * lets the two `wire*` functions run once per PAGE while the chrome around
- * them remounts on every doc change.
+ * lets `wireSetPaneToggle` run once per PAGE while the chrome around it
+ * remounts on every doc change.
  */
-import {
-  cardPlacement,
-  effectiveSurface,
-  onPlacementChange,
-  otherPlacement,
-  placementToggleLabel,
-  setCardPlacement,
-} from '../card-placement.ts';
 
 const DRAWER_PREF_KEY = 'lf:drawer';
 
@@ -41,7 +38,7 @@ const DRAWER_PREF_KEY = 'lf:drawer';
 export function initialDrawerOpen(opts: {
   isDesktop: boolean;
   marginVisible: boolean;
-  /** Inline cards are this device's chosen surface — see `card-placement.ts`. */
+  /** Inline cards cover this width — see `INLINE_CARDS_QUERY`. */
   inlineVisible: boolean;
   stored: string | null;
 }): boolean {
@@ -121,43 +118,5 @@ export function wireSetPaneToggle(): void {
     } catch {
       // storage unavailable — the choice holds for this page only.
     }
-  });
-}
-
-/**
- * Wire the topbar's comment-placement toggle: cards in the flow, or cards in
- * the right margin.
- *
- * Beside the doc-list toggle and the comments toggle, because it is the same
- * kind of thing — a stored per-device view preference, not a doc setting. Runs
- * once per page for the same reason `wireSetPaneToggle` does: chrome remounts
- * on every doc change, and a second listener would flip the placement twice
- * per click.
- *
- * The glyph shows the placement IN FORCE and the labels name the destination,
- * so a reader who has never touched it can still tell where their comments
- * are. There is no `aria-pressed`: this is not an on/off, it is a choice
- * between two surfaces, and "pressed = margin" would be an arbitrary reading
- * of which one counts as on.
- */
-export function wireCardPlacementToggle(): void {
-  const btn = document.getElementById('toggle-cards');
-  if (!btn || btn.dataset.wired === '1') return;
-  btn.dataset.wired = '1';
-  const paint = () => {
-    // The SURFACE, not the stored choice: on a phone a stored `balloon`
-    // resolves to the sheet, and the button has to say so.
-    const label = placementToggleLabel(effectiveSurface());
-    btn.textContent = label.glyph;
-    btn.title = label.title;
-    btn.setAttribute('aria-label', label.ariaLabel);
-  };
-  paint();
-  // Repaint on a width change too: with nothing stored the placement follows
-  // the width, so crossing the default boundary moves the cards and a button
-  // still showing the old glyph would be describing the other surface.
-  onPlacementChange((target, type, fn) => target.addEventListener(type, fn), paint);
-  btn.addEventListener('click', () => {
-    setCardPlacement(otherPlacement(cardPlacement()));
   });
 }

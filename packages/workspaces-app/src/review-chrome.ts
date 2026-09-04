@@ -1,11 +1,5 @@
 import { type Thread, type User, readDocMeta } from '@feedback/core';
 import type * as Y from 'yjs';
-import {
-  applyPlacement,
-  balloonMarginVisible,
-  inlineCardsVisible,
-  onPlacementChange,
-} from './card-placement.ts';
 import { type SeenTracker, createSeenTracker } from './comment-seen.ts';
 import { el } from './doc/chrome-dom.ts';
 import { wireResizeHandle } from './doc/chrome-panels.ts';
@@ -15,7 +9,6 @@ import { createThreadProjection } from './doc/thread-projection.ts';
 import {
   initialDrawerOpen,
   readDrawerPref,
-  wireCardPlacementToggle,
   wireSetPaneToggle,
   writeDrawerPref,
 } from './doc/view-prefs.ts';
@@ -132,17 +125,30 @@ export interface ChromeOpts {
 }
 
 /**
- * The per-device view preferences — the drawer default, the doc-list pane and
- * the comment-placement toggle — live in `doc/view-prefs.ts` with the storage
- * keys they own. Re-exported here because the three tests and `app.ts` that
- * import them do so from this module, and the point of this refactor is that
- * every existing test passes unchanged.
+ * The width at or below which comment cards sit inline in the document.
+ *
+ * The SAME boundary the balloon margin hides at (`markup-margin.ts`), and
+ * deliberately so: one always-on comment surface at every width, never two
+ * and never none. 901–1100px used to fall between them — the margin had
+ * already collapsed and inline cards had not yet started — which left the
+ * drawer as the only way to see a comment.
+ */
+export const INLINE_CARDS_QUERY = '(max-width: 1100px)';
+
+export function inlineCardsVisible(): boolean {
+  return window.matchMedia(INLINE_CARDS_QUERY).matches;
+}
+
+/**
+ * The per-device view preferences — the drawer default and the doc-list pane —
+ * live in `doc/view-prefs.ts` with the storage keys they own. Re-exported here
+ * because `app.ts` and two existing test files import them from this module,
+ * and every existing test has to pass unmodified.
  */
 export {
   WIDE_SCREEN_QUERY,
   initialDrawerOpen,
   initialSetPaneOpen,
-  wireCardPlacementToggle,
   wireSetPaneToggle,
 } from './doc/view-prefs.ts';
 
@@ -274,7 +280,6 @@ export function mountReviewChrome(opts: ChromeOpts): ReviewChrome {
     label: 'Resize comments panel',
   });
   wireSetPaneToggle();
-  wireCardPlacementToggle();
   wireResizeHandle({
     pane: document.getElementById('set-pane'),
     cssVar: '--set-w',
@@ -285,14 +290,11 @@ export function mountReviewChrome(opts: ChromeOpts): ReviewChrome {
     handleClass: 'set-resize',
     label: 'Resize review panel',
   });
-  // Publish the comment surface BEFORE anything measures or mounts: every
-  // rule that places a card keys off `body[data-cards]`, so a doc that paints
-  // before this runs paints with no surface at all.
-  applyPlacement();
   // Desktop layout shows the drawer inline. Default open — EXCEPT when a
   // balloon margin is visible, where the drawer duplicates the balloons.
   const storedPref = readDrawerPref();
-  const marginVisible = (opts.hasBalloonMargin ?? false) && balloonMarginVisible();
+  const marginVisible =
+    (opts.hasBalloonMargin ?? false) && window.matchMedia('(min-width: 1101px)').matches;
   // Enforce (not just apply-when-open): the `threads-open` class lives on the
   // shell and survives navigation, so a drawer a previous doc opened via
   // revealThread would otherwise leak into a doc whose default is closed.
@@ -358,7 +360,6 @@ export function mountReviewChrome(opts: ChromeOpts): ReviewChrome {
     const modalId = threadModal.openThreadId();
     if (modalId) threadModal.refresh(all.find((t) => t.id === modalId) ?? null);
   }
-
   // --- thread panel ------------------------------------------------------
   // Every write a card can make. Stateless and DOM-free — see
   // doc/thread-actions.ts for why the failure contract is the reason they are
@@ -546,13 +547,12 @@ export function mountReviewChrome(opts: ChromeOpts): ReviewChrome {
   // Crossing the phone breakpoint changes which surface owns the comments —
   // inline cards must appear (or be handed back) at the same width the
   // stylesheet swaps the drawer for a sheet.
-  onPlacementChange(on, () => {
-    applyPlacement();
+  on(window.matchMedia(INLINE_CARDS_QUERY), 'change', () => {
     mobile.refresh();
-    // Moving TO the inline surface hands the conversation to the inline card
-    // and the sheet. Leaving the dialog up would stack a second dismissable
-    // layer over the same thread — and the toggle, a rotation and page zoom
-    // all move a reviewer across this line, so it is not a hypothetical.
+    // Crossing DOWN hands the conversation to the inline card and the sheet.
+    // Leaving the dialog up would stack a second dismissable layer over the
+    // same thread — and page zoom moves a reviewer across this line, so it is
+    // not a hypothetical transition.
     if (inlineCardsVisible()) threadModal.close();
   });
 

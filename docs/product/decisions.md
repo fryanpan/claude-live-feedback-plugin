@@ -809,3 +809,41 @@ are untouched (the gate keys on the headers only browsers send).
 - **The bundle budget held at 40 KB gzipped** by removing no-op
   `type="button"` attributes and try/catch wrappers rather than raising it.
 
+
+## 2026-09-03 — A plan request reads the board first, and the ask about it is one decision
+
+From the 2026-09-02 huddle: planning ignored work already on the board, and
+the goal it created had no description and no link to the notes it came out
+of. The step is now a verb the planner calls before writing anything —
+`find_related_work(workspaceId, text, docId?)`, `GET
+/api/workspaces/:id/related-work` underneath — plus the branch it feeds, in
+`claude-workspaces:leading-a-workspace`.
+
+- **Cheap matching, no model call.** Dice coefficient over title terms,
+  request-coverage over body terms, plus a flat bonus for a link. Chosen over
+  an LLM pass because a matching step that costs a token budget is a step
+  agents skip, and over exact-substring search because the near miss this
+  exists for is "meeting notes" against "Meeting note capture". Weights,
+  threshold and the plural strip all live in `packages/core/src/related-work.ts`
+  beside their arguments.
+- **The link bonus is relative to the request, never absolute.** A doc is
+  `linked` only when a goal that links the request's own `docId` also links
+  it. Marking a doc linked because SOME goal points at it is a permanent
+  property, and it made the huddle notes score 0.35 against "rotate the
+  sending credentials" — caught by the route test, not by review.
+- **Candidate docs are plan-shaped ones plus anything a goal links.** The
+  notes a goal came out of are rarely titled like a plan and are exactly the
+  doc a new plan should cite. Everything else on the board stays out: a list
+  nobody reads is the same as no list.
+- **Goals lead docs at an equal score, and nothing else is imposed.** The row
+  whose title the request most resembles ranks first, so a request worded
+  like an existing plan surfaces that plan above the band. Both come back
+  either way, which is what the decision item needs.
+- **The answer carries `considered`.** `matches: []` alone cannot separate
+  "this board holds nothing like your request" from "this board holds
+  nothing", and only the first means plan from scratch.
+- **ONE review item, not one per match.** A plan request that came back as
+  twelve questions left the reader answering four (Bryan, 2026-09-01); the
+  reader here is choosing a way forward, not judging five rows.
+- **The step lives in the lead skill** because the verbs it ends in —
+  `set_goal_list`, `rename_goal`, `link_refs` on a band — are the lead's.
