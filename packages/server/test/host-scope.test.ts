@@ -32,6 +32,7 @@ import { type JSONWebKeySet, type JWK, SignJWT, exportJWK, generateKeyPair } fro
 import { type ServerHandle, createServer } from '../src/server.ts';
 import { CfApi } from '../src/share/cf-api.ts';
 import type { CfAccessApp, CfAccessPolicy } from '../src/share/cf-api.ts';
+import type { Share } from '../src/share/types.ts';
 
 const TEAM_DOMAIN = 'test.cloudflareaccess.com';
 const BASE_HOSTNAME = 'tunnel.example.com';
@@ -43,6 +44,34 @@ const SHARE_CONFIG = {
   cfTeamDomain: TEAM_DOMAIN,
   baseHostname: BASE_HOSTNAME,
 };
+
+/**
+ * A LIVE per-share Access record, written straight into the registry.
+ *
+ * Both suites below are about a per-share HOSTNAME and its own audience, and
+ * no route mints one on a deployment that has a share hostname configured
+ * (`share_link` answers 410 link_share_mint_retired there). Hand-writing the
+ * record is what a restart onto an existing data directory does anyway, and
+ * it is the only shape that lets one server exercise BOTH doors — the old
+ * per-share hostname and `share_workspace`'s share link — in one suite.
+ */
+function legacyAccessShare(workspaceId: string, slug: string): Share {
+  const hostname = `share-${slug}.${BASE_HOSTNAME}`;
+  return {
+    shareId: `legacy-${slug}`,
+    surface: 'workspace',
+    docId: '',
+    workspaceId,
+    hostname,
+    url: `https://${hostname}/workspaces/${encodeURIComponent(workspaceId)}`,
+    audience: `aud-${slug}`,
+    appId: `app-${slug}`,
+    policyId: `policy-${slug}`,
+    allowDomains: ['partner.example'],
+    createdAt: Date.now(),
+    expiresAt: Date.now() + 86_400_000,
+  };
+}
 
 function makeMockCfApi(state: { apps: CfAccessApp[]; policies: CfAccessPolicy[] }) {
   // biome-ignore lint/suspicious/noExplicitAny: Bun fetch type compatibility
@@ -79,6 +108,7 @@ function makeMockCfApi(state: { apps: CfAccessApp[]; policies: CfAccessPolicy[] 
 
 describe('host gate + share scoping over HTTP', () => {
   let handle: ServerHandle;
+  let serverOptions: () => Parameters<typeof createServer>[0];
   let dataDir: string;
   let base: string;
   let shareHost: string;
@@ -141,7 +171,7 @@ describe('host gate + share scoping over HTTP', () => {
         .sign(privateKey);
 
     dataDir = mkdtempSync(join(tmpdir(), 'host-scope-'));
-    handle = createServer({
+    serverOptions = () => ({
       port: 0,
       dataDir,
       trustedHosts: [LOCAL_ALIAS],
@@ -153,6 +183,7 @@ describe('host gate + share scoping over HTTP', () => {
       cfAccess: { teamDomain: TEAM_DOMAIN, audience: 'unused', jwks },
       share: { config: SHARE_CONFIG, cfApi: makeMockCfApi({ apps: [], policies: [] }) },
     });
+    handle = createServer(serverOptions());
     base = `http://localhost:${handle.port}`;
 
     // Two file-backed docs in two separate workspaces; only one workspace
@@ -199,26 +230,22 @@ describe('host gate + share scoping over HTTP', () => {
     boardShared = await boardHolding('Shared review', WS_SHARED);
     boardOther = await boardHolding('Other review', WS_OTHER);
 
-    // `/api/share/link`, not `/api/share/workspace`: this suite is about the
-    // per-share HOSTNAME and its own audience, and that is the mint that
-    // still makes one. `share_workspace` mints a share LINK now, which has
-    // neither.
-    const sr = await fetch(`${base}/api/share/link`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ workspaceId: boardShared, allowDomains: ['partner.example'] }),
-    });
-    expect(sr.status).toBe(200);
-    const shareBody = (await sr.json()) as {
-      share: { hostname: string; audience: string; docId: string; workspaceId: string };
-    };
+    // A per-share Access record for the shared board, written into the
+    // registry and picked up on restart. This suite is about the per-share
+    // HOSTNAME and its own audience, and no route mints one here — see
+    // `legacyAccessShare`.
+    const shared = legacyAccessShare(boardShared, 'scoped');
+    await handle.stop();
+    writeFileSync(join(dataDir, 'shares.json'), JSON.stringify([shared], null, 2));
+    handle = createServer(serverOptions());
+    base = `http://localhost:${handle.port}`;
     // The URL opens the BOARD. There is no entry doc any more — `docId` is
-    // empty on every record minted today — and the grant was never it: scope
-    // is the board, which is what every assertion below measures.
-    expect(shareBody.share.docId).toBe('');
-    expect(shareBody.share.workspaceId).toBe(boardShared);
-    shareHost = shareBody.share.hostname;
-    shareJwt = await signJwt(shareBody.share.audience);
+    // empty on every record — and the grant was never it: scope is the board,
+    // which is what every assertion below measures.
+    expect(shared.docId).toBe('');
+    expect(shared.workspaceId).toBe(boardShared);
+    shareHost = shared.hostname;
+    shareJwt = await signJwt(shared.audience ?? '');
   });
 
   afterAll(async () => {
@@ -488,28 +515,27 @@ describe('host gate + share scoping over HTTP', () => {
 
     it('POSITIVE CONTROL: a BOARD share still mints', async () => {
       // Without this the two refusals above would pass on a server that has
-      // stopped minting shares altogether. Access mode, because this fixture
-      // configures no `publicHostname` — link mode's own mint is controlled
-      // the same way in share-grouping-scope.test.ts.
+      // stopped minting shares altogether. `share_workspace`, because it is
+      // the mint this deployment has: `share_link` answers 410
+      // link_share_mint_retired wherever a share hostname is configured, so
+      // using it here would make the control pass vacuously on a dead stack.
       //
       // Over the BOARD, not the grouping `WS_OTHER` it holds: a grouping is no
       // longer shareable on its own, so passing one here would make the control
       // a 410 and the whole suite would pass on a dead share stack.
-      const mint = await req('/api/share/link', `localhost:${handle.port}`, {
+      const mint = await req('/api/share/workspace', `localhost:${handle.port}`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ workspaceId: boardOther, allowDomains: ['partner.example'] }),
+        body: JSON.stringify({ workspaceId: boardOther }),
       });
-      expect(mint.status).toBe(200);
-      const { share } = (await mint.json()) as {
-        share: { shareId: string; workspaceId: string; docId: string };
+      expect(mint.status, await mint.clone().text()).toBe(200);
+      const { link } = (await mint.json()) as {
+        link: { linkId: string; workspaceId: string };
       };
-      expect(share.workspaceId).toBe(boardOther);
-      // A board share opens the board, so there is no entry doc on the record.
-      expect(share.docId).toBe('');
+      expect(link.workspaceId).toBe(boardOther);
       // Clean up so the expiry suite below still finds exactly one Access
-      // share on `shareHost`.
-      await req(`/api/share/${share.shareId}`, `localhost:${handle.port}`, { method: 'DELETE' });
+      // share on `shareHost`. `unshare` is one verb over both registries.
+      await req(`/api/share/${link.linkId}`, `localhost:${handle.port}`, { method: 'DELETE' });
     });
 
     it('refuses the GROUPING the board holds, and says so by name', async () => {
@@ -578,6 +604,7 @@ describe('host gate + share scoping over HTTP', () => {
  */
 describe('workspace share over HTTP', () => {
   let handle: ServerHandle;
+  let serverOptions2: () => Parameters<typeof createServer>[0];
   let dataDir: string;
   let folder: string;
   let base: string;
@@ -619,7 +646,7 @@ describe('workspace share over HTTP', () => {
     writeFileSync(join(folder, 'design.md'), '# Design\n\nThe plan.\n');
     writeFileSync(join(folder, 'sub', 'notes.md'), '# Notes\n\nDetail.\n');
 
-    handle = createServer({
+    serverOptions2 = () => ({
       port: 0,
       dataDir,
       cfAccess: { teamDomain: TEAM_DOMAIN, audience: 'unused', jwks },
@@ -628,6 +655,7 @@ describe('workspace share over HTTP', () => {
       shareLinkHosts: ['share.example.test'],
       share: { config: SHARE_CONFIG, cfApi: makeMockCfApi({ apps: [], policies: [] }) },
     });
+    handle = createServer(serverOptions2());
     base = `http://localhost:${handle.port}`;
 
     // The board first, then the bind FILED on it in the same call — that is
@@ -666,26 +694,22 @@ describe('workspace share over HTTP', () => {
       body: JSON.stringify({ docId: outsideDocId, type: 'markdown', sourceUrl: outsidePath }),
     });
 
-    const sr = await fetch(`${base}/api/share/link`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ workspaceId: boardId, allowDomains: ['partner.example'] }),
-    });
-    expect(sr.status).toBe(200);
-    const shareBody = (await sr.json()) as {
-      share: { hostname: string; audience: string; url: string; workspaceId?: string };
-    };
-    shareHost = shareBody.share.hostname;
-    expect(shareBody.share.workspaceId).toBe(boardId);
+    // A per-share Access record for the board, written into the registry and
+    // picked up on restart — see `legacyAccessShare`.
+    const shared = legacyAccessShare(boardId, 'folder');
+    await handle.stop();
+    writeFileSync(join(dataDir, 'shares.json'), JSON.stringify([shared], null, 2));
+    handle = createServer(serverOptions2());
+    base = `http://localhost:${handle.port}`;
+    shareHost = shared.hostname;
+    expect(shared.workspaceId).toBe(boardId);
     // The share opens the board; the folder is reached because it is filed on
     // it, which is what every assertion below actually exercises.
-    expect(shareBody.share.url).toBe(
-      `https://${shareHost}/workspaces/${encodeURIComponent(boardId)}`,
-    );
+    expect(shared.url).toBe(`https://${shareHost}/workspaces/${encodeURIComponent(boardId)}`);
     shareJwt = await new SignJWT({ email: 'reviewer@partner.example' })
       .setProtectedHeader({ alg: 'RS256', kid: KID })
       .setIssuer(`https://${TEAM_DOMAIN}`)
-      .setAudience(shareBody.share.audience)
+      .setAudience(shared.audience ?? '')
       .setIssuedAt()
       .setExpirationTime(Math.floor(Date.now() / 1000) + 600)
       .setSubject('cf-access-user-2')
