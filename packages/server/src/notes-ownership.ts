@@ -28,6 +28,25 @@ import { type NoteItem, findNotesSection, itemsInSection, sectionItems } from '.
 export interface NotesOwnership {
   /** Did the agent write this element, and does it still read as it left it? */
   claims(el: Y.XmlElement, md: string): boolean;
+  /**
+   * Does any of this read as a line the note-taker WROTE — text alone, no
+   * element?
+   *
+   * THE WEAKER TEST, AND IT ANSWERS A DIFFERENT QUESTION. `claims` decides
+   * what a write may replace, and it is element AND text precisely so a line
+   * a person retyped becomes theirs. This decides which SECTION a tick is
+   * looking at, where element identity is exactly what a restart destroys:
+   * the doc comes back from disk with new Yjs objects holding the same words.
+   * A section holding a line this note-taker wrote is its section wherever it
+   * now sits; a section holding none of them — a person's own "Meeting notes"
+   * heading, or one whose every note they have since rewritten — is not, and
+   * the position test decides as it always did.
+   *
+   * Recognising a section carries no right to change anything in it. Every
+   * item in it is still somebody else's until `claims` says otherwise, so the
+   * most a restarted server can do there is add and suggest.
+   */
+  wroteAnyOf(mds: readonly string[]): boolean;
   /** Record what the agent owns after a write. */
   record(items: ReadonlyArray<{ el: Y.XmlElement; md: string }>): void;
   /**
@@ -37,16 +56,44 @@ export interface NotesOwnership {
    * which is the stop-and-restart data loss the owner reported ("recording
    * replaces all existing notes"). Released, they read as somebody else's:
    * kept where they are, revisable only by suggestion.
+   *
+   * The TEXT half — what `wroteAnyOf` reads — is not touched. Which section
+   * the notes are in is not a claim on anything in it, and a recording that
+   * follows another one in the same sitting is still writing the same
+   * section. Its lifetime belongs to whoever built the ledger
+   * (`meeting-notes-doc.ts`), which is the only place that knows whether a
+   * new recording continues the last one.
    */
   release(): void;
 }
 
-export function createNotesOwnership(): NotesOwnership {
+export interface NotesOwnershipOptions {
+  /** Item markdown the note-taker has already written into this doc's notes
+   *  section — a claim read back from disk after a restart. */
+  written?: Iterable<string>;
+  /** Called with the whole text claim whenever it grows, so it can be kept
+   *  somewhere the process cannot take with it. */
+  onWrite?: (written: readonly string[]) => void;
+}
+
+export function createNotesOwnership(opts: NotesOwnershipOptions = {}): NotesOwnership {
   let byElement = new WeakMap<Y.XmlElement, string>();
+  // Insertion-ordered, so the durable half can drop the oldest lines when a
+  // long meeting outgrows its cap.
+  const written = new Set<string>(opts.written ?? []);
   return {
     claims: (el, md) => byElement.get(el) === md,
+    wroteAnyOf: (mds) => mds.some((md) => written.has(md)),
     record(items) {
-      for (const item of items) byElement.set(item.el, item.md);
+      let grew = false;
+      for (const item of items) {
+        byElement.set(item.el, item.md);
+        if (item.md.length > 0 && !written.has(item.md)) {
+          written.add(item.md);
+          grew = true;
+        }
+      }
+      if (grew) opts.onWrite?.([...written]);
     },
     release() {
       byElement = new WeakMap();
