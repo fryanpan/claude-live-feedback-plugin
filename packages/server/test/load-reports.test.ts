@@ -1,12 +1,12 @@
 import { afterAll, beforeAll, describe, expect, it } from 'bun:test';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, rmSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { type ServerHandle, createServer } from '../src/server.ts';
 
 /**
- * The monitoring half of t-scWMQmOZcpu1: Bryan measured a 10+ second board
- * load on his iPad and nothing recorded where the time went. Each browser
+ * The monitoring half of the slow-board-load ticket: Bryan measured a 10+
+ * second board load on his iPad and nothing recorded where the time went. Each browser
  * boot posts one timing report; the server keeps them per workspace and
  * hands back the recent ones, so "how slow was it, and in which phase" is a
  * read instead of a guess. No external service — the decision on Sentry is
@@ -83,6 +83,67 @@ describe('board load reports', () => {
       body: JSON.stringify({ msToBoot: 1 }),
     });
     expect(res.status).toBe(404);
+  });
+
+  /**
+   * The route is on the share-member table, so every one of these is a write
+   * to a file on the OWNER's disk by anybody holding a link to the board. It
+   * used to take whatever JSON parsed and append it, unexamined and
+   * unbounded, which makes a telemetry endpoint a place to park data.
+   */
+  describe('what it will accept', () => {
+    const post = (body: unknown, raw?: string) =>
+      fetch(`${base}/api/workspaces/${wsId}/load-reports`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: raw ?? JSON.stringify(body),
+      });
+
+    it('refuses a report far larger than a boot timing', async () => {
+      const res = await post({ msToBoot: 1, note: 'x'.repeat(50_000) });
+      expect(res.status).toBe(400);
+      // Control: the same field within the limit is a report like any other.
+      expect((await post({ msToBoot: 1, note: 'x'.repeat(20) })).status).toBe(200);
+    });
+
+    it('refuses a nested structure — a report is flat numbers, not a document', async () => {
+      expect((await post({ msToBoot: 1, resources: [1, 2, 3] })).status).toBe(400);
+      expect((await post({ msToBoot: 1, detail: { phase: 'boot' } })).status).toBe(400);
+    });
+
+    it('refuses a body that is not an object at all', async () => {
+      expect((await post(undefined, '[1,2,3]')).status).toBe(400);
+      expect((await post(undefined, '"just a string"')).status).toBe(400);
+      expect((await post(undefined, '17')).status).toBe(400);
+    });
+
+    it('refuses a report with far more fields than the client sends', async () => {
+      const wide: Record<string, number> = {};
+      for (let i = 0; i < 200; i++) wide[`f${i}`] = i;
+      expect((await post(wide)).status).toBe(400);
+    });
+
+    it('keeps the log bounded, so a member cannot fill the owner’s disk', async () => {
+      const logPath = join(dataDir, 'workspaces', `${wsId}.load-reports.jsonl`);
+      // Each of these is a legal report at close to the per-row ceiling —
+      // four fields at the per-string limit. The file must stop growing well
+      // before their sum.
+      const filler = 'y'.repeat(390);
+      for (let i = 0; i < 400; i++) {
+        const res = await post({ msToBoot: i, a: filler, b: filler, c: filler, d: filler });
+        expect(res.status, `report ${i}`).toBe(200);
+      }
+      const bytes = statSync(logPath).size;
+      // 400 rows of ~1.6 KB is ~640 KB unbounded. Asserted as a ceiling
+      // rather than a value, because what matters is that it stopped, not
+      // exactly where.
+      expect(bytes).toBeLessThan(400_000);
+      // …and the read still works and is still newest-first, so the bound
+      // costs the feature nothing.
+      const got = await fetch(`${base}/api/workspaces/${wsId}/load-reports`);
+      const body = (await got.json()) as { reports: Array<{ msToBoot?: number }> };
+      expect(body.reports[0]?.msToBoot).toBe(399);
+    });
   });
 
   it('caps the read at the newest 50 so the file can grow without the read growing', async () => {
