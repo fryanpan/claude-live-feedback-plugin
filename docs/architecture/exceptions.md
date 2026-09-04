@@ -57,6 +57,15 @@ lengthens it by nothing. That is the shape to expect from a file whose
 remaining mass is a render closure: what comes out is the pieces that did not
 need it, and the row that stays gets shorter rather than disappearing.
 
+A12 then took `server.ts` from 7531 to 5934 across seven modules, of which
+only one — `review-gate.ts` (783) — is over the limit and gains a row. The
+other six are 133–366 lines and need none. The lesson worth keeping is in the
+row this slice was working from: it named `server-deps.ts` as the file to
+create, and `server-deps.ts` already existed, doing the OTHER half of the
+composition root (the adapters `bin.ts` builds to talk out). A verdict written
+months ago is a hypothesis about the code, not a description of it — check the
+seam before you cut it.
+
 `app.ts` then came off the list entirely (1569 → 484). Its row named the seam
 as "a sequence rather than a set of jobs", which was true of the ORDER and not
 of the work: each step of that order — the balloon margin, the two floats, the
@@ -77,7 +86,8 @@ blocks over one set of fixtures is one harness, however long the file gets.
 
 | File | Lines | Verdict | Reason / seam |
 |---|---|---|---|
-| `packages/server/src/server.ts` | 7131 | Split | A1 took five families out (see below); what is left is `createServer` itself — the closure that builds every collaborator and the request wrapper that walks the chain. The next seam is the composition, not the routes: A4 moves env resolution and adapter construction to `server-config.ts` / `server-deps.ts`, after which the remaining route blocks (agents, chat-audit, reviews, workspaces-resource, static and page routes) are extractable the same way the five were. **L** |
+| `packages/server/src/server.ts` | 5934 | Split | A1 took five families out; A12 took the seam this row named — the composition. Out went the sharing and Access adapters (`access-deps.ts`), email-keyed identity (`identity-setup.ts`), the review-item quality gate and the push announcement under it (`review-gate.ts` + `push-announce.ts`), effort scoring (`effort-scoring.ts`), and two more route blocks (`routes/agent-identity.ts`, `routes/archive.ts`). Note the row's own premise was half stale: `server-deps.ts` already existed, built by `bin.ts` for the adapters that talk OUT, so the inward-facing ones needed their own file rather than that one. What is left is `createServer` composing the collaborators plus the request wrapper that walks the chain. The next seam is the stall/ready-work wiring — `readyWorkSnapshot`, `stallVerdict`, `stallSnapshot`, the two nudgers and the comment-queue bridge, ~670 lines that are one documented subsystem (docs/architecture/stall-detection.md) and reach `hubBoardsForDoc`, which is built below them. **M** |
+| `packages/server/src/review-gate.ts` | 783 | Exception | The review-item quality gate, out of `createServer` in A12. One file because "judged, then announced, in that order" is the rule the whole family exists to keep: a declaration filed on a TICKET and one filed on a COMMENT land in the same reader's queue, so both run the same judge, and a push whose title is the item's headline must never go out for an item that queue omits. The two judges, the two hold-message spellings, the ask-back that turns a question into a thread and the re-judge after a ticket's words move are all written in terms of one another — `runReviewGate` is the shared body and everything else is a target for it. Splitting the ticket half from the comment half would put the ordering rule in two files with nothing asserting it, which is the drift the gate was built to close. `announceReviewItem` deliberately does NOT live here: it arrives in the context from `push-announce.ts` (133 lines), so a caller cannot announce without asking the gate first. |
 | `packages/server/src/routes/docs.ts` | 729 | Exception | The `handleDocResourceRoutes` seam this row used to describe is done: the `/api/docs/:id/...` resource block split along `rest ===` families into `doc-resource.ts`, `doc-threads-routes.ts` and `doc-edit-routes.ts`, verified byte-identical and in-order the same way A1 verified the whole-file move. `docs.ts` still owns the `docId`/`room`/`rest` resolution those three delegate from, the two remaining entry points (`handleDocCreateListRoutes`, `handleDocPromoteRoute`, ~270 and ~130 lines — neither over the line on its own), the context types both halves of every split need (`DocRoutesContext`, `DocRouteRequest`, `DocResourceRouteRequest`, `ThreadReviewGate`), and the helpers shared by more than one of the three new files (`withSyncError`, `parsePlacement`, `parseSuggestionAuthor`). Just over the line on the shared-type weight alone. |
 | `packages/server/src/routes/doc-threads-routes.ts` | 733 | Exception | Thread creation (`threads` POST, `threads/by_find` POST) and every per-thread mutation (`threads/:threadId/...` — reply, answer, revise, withdraw, resolve, reopen, reanchor, the anchored-edit trio), plus `reviewFromBody`, the declaration checker all three route groups call and nowhere else does. The ticket that produced this file filed the `threads/:threadId/...` block under `doc-resource.ts`'s `home` bucket; it moved here instead because every route in it is a thread mutation, not a doc-resource read, and splitting it from `threads` POST would separate two directions of the same write (create a thread vs. mutate one) plus the gate/dedup helpers both need. **M**, if the per-thread mutations (reply/answer/revise/withdraw/resolve/reopen/reanchor) are worth their own file from the anchored-edit trio (rewrite_region/insert_after/insert_blocks_after) and thread creation — the split point would be "read/react to a thread" vs. "restructure one," which is a real seam but wasn't this PR's job. |
 | `packages/server/src/shells.ts` | 930 | Exception | One job: the HTML this server renders before any bundle runs. Every shell is a complete document with its own `<style>`, which is the point — nothing here may depend on an asset that has not loaded. Splitting per page would separate each shell from the `escape` / `landingShell` / `HTML_SHELL_HEADERS` trio all five share, and the file has no logic to test apart from the strings. |
@@ -301,7 +311,7 @@ months, so splitting it buys almost nothing.
 
 | # | File | Lines | Commits (90d) | Size |
 |---|---|---|---|---|
-| 1 | `packages/server/src/server.ts` | 7131 | 233 | L |
+| 1 | `packages/server/src/server.ts` (split in A1 and A12) | 7131 | 233 | M |
 | 2 | `styles.css` + `hub.css` + `signin.css` (split in B2) | 12042 | 158 | M |
 | 3 | `mcp.ts` + `tool-schemas.ts` + `tools/` + the eight modules lifted for coverage (all under `packages/mcp/src`, split in B6 and again for coverage) | 5563 | 156 | done |
 | 4 | `hub-app.ts` + `hub-shell.ts` + `hub-settings-panel.ts` + `hub-walkthrough.ts` (split in A11) | 3594 | 102 | M |
