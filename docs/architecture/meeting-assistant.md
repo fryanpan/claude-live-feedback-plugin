@@ -1411,9 +1411,57 @@ starts. Criterion 1.2 has no examples without one: a meeting where nobody
 types is a meeting where the rule cannot be broken, and its pass rate would
 be 100% and meaningless.
 
+**A rate is over TICKS, not over model replies.** The decidable checks ask
+what the notes say at each tick, so one over-long bullet nobody rewrites fails
+every tick it survives — twenty-eight failures can be four bullets. That is
+the honest answer to "are the notes good right now", which is what a reader of
+a live doc asks; it is not "how often did the model err". The failure lines
+name the bullet, and they are what to read before concluding anything about
+frequency.
+
+**The judge answers with a forced tool call**, not with JSON in prose. Asking
+for a reason per behaviour made the reply long enough to truncate mid-object,
+twice, at two different budgets; prefilling the opening brace — the usual fix
+— this model refuses with a 400. The API enforcing the schema is the only
+version of this that cannot half-answer.
+
+#### What the run says today
+
+Full run, 273 ticks, judge on 48 of them:
+
+| Behaviour | examples | pass |
+|---|---|---|
+| Bullets: 20 words or fewer | 273 | 90% |
+| Bullets: not copied from the transcript | 273 | 99% |
+| Paraphrased into written sentences | 46 | 96% |
+| Covers discussed / decided / next | 46 | 80% |
+| Related points kept together | 46 | 74% |
+| A person's bullet is never edited | 273 | 100% |
+| One heading per topic | 273 | 100% |
+| Notes are organised under topics | 264 | 100% |
+| A new heading means a new topic | 46 | 87% |
+| A named board row is linked | 36 | 81% |
+| Decisions and questions keep a speaker | 273 | 86% |
+| Uncertain points marked unconfirmed | 46 | 78% |
+
+The structural guarantees — a person's line, one heading per topic, notes
+under topics — are the 100%s, and they are the ones the pipeline enforces
+rather than asks for. Everything the PROMPT asks for sits between 74% and 99%,
+which is the honest shape of instructing a model.
+
+**The run's own biggest finding is not in the table.** About a tenth of ticks
+never composed at all: the reply hit the composer's 2000-token ceiling and was
+refused rather than truncated. The refusals are all late in the longer
+meetings, because a whole-notes reply grows with the MEETING and not with the
+tick — ES2002d lost 13 of 52 ticks and ended with fewer bullets than meetings
+half its length. Nothing said is lost, since a failed compose carries its
+turns to the next tick, but the notes stop keeping up. Raising the constant
+only moves the wall a meeting further out; the shape of the fix is a compose
+that returns a CHANGE rather than the whole notes.
+
 **On demand only.** It spends money and reaches the network, so nothing runs
 it on a push except a `--smoke` slice — one meeting, three ticks, one judged —
-which measured **$0.011**. It is not a test and does not live in the suites: a
+which measured **$0.016**. It is not a test and does not live in the suites: a
 check whose verdict depends on a model's mood must never take somebody else's
 CI red, which is why the CI job is `continue-on-error` and skips itself, out
 loud, when no key is configured.
