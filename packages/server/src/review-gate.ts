@@ -308,14 +308,27 @@ export function createReviewGate(ctx: ReviewGateContext) {
 
   /** What a filing route says when the gate held the item. Points at the
    *  fix rather than only at the verdict: the filer's next act is one call. */
-  function heldMessage(address: ReviewGateAddress, reason: string, add?: string): string {
+  function heldMessage(
+    address: ReviewGateAddress,
+    reason: string,
+    add?: string,
+    /** How many holds this item now carries, THIS one included. */
+    holds = 0,
+  ): string {
+    // At the cap, "it reaches the queue when it passes" stops being the whole
+    // truth — the next revision reaches the reader whether it passes or not.
+    // Saying so is the difference between a filer making one more edit and a
+    // filer bracing for a fourth round and giving up instead.
+    const last = holds >= REVIEW_GATE_MAX_HOLDS;
     return (
       `Held off the reader's queue — ${judgeReasonSentence(reason)} ` +
       // The draft, when the judge wrote one. A hold that names the words is
       // one edit away from passing; a hold that names a category is a guess.
       (add ? `Add this sentence: “${add}” ` : '') +
       `It is on the ${address.kind === 'thread' ? 'thread' : 'ticket'}; revise it with ${reviseCallFor(address)}. ` +
-      'Every revision is judged again, and the item reaches the queue when it passes.'
+      (last
+        ? 'This is the last hold: the next revision goes to the reader either way.'
+        : 'Every revision is judged again, and the item reaches the queue when it passes.')
     );
   }
 
@@ -495,7 +508,12 @@ export function createReviewGate(ctx: ReviewGateContext) {
           held: true,
           row: current,
           reason,
-          message: heldMessage(target.address, reason, target.judgement(current)?.add),
+          message: heldMessage(
+            target.address,
+            reason,
+            target.judgement(current)?.add,
+            target.judgement(current)?.heldFor?.length ?? 0,
+          ),
         };
       }
       return { held: false, row: current ?? row };
@@ -527,7 +545,12 @@ export function createReviewGate(ctx: ReviewGateContext) {
       held: true,
       row: recorded.row,
       reason: judgement.reason,
-      message: heldMessage(address, judgement.reason, judgement.add),
+      message: heldMessage(
+        address,
+        judgement.reason,
+        judgement.add,
+        judgement.heldFor?.length ?? 0,
+      ),
     };
   }
 
