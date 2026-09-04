@@ -24,6 +24,7 @@
  */
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import type { AgentAuthor } from '../author.ts';
+import { inactiveWatches } from '../sse-loop.ts';
 import { type ThreadCreateInput, threadCreateRequest } from '../thread-create.ts';
 import type { RestoreState, WatchCoverage } from '../watch-coverage.ts';
 
@@ -747,8 +748,15 @@ export async function handleDocsTool(
       // queued for a board it had never attached to. Absent rather than
       // empty when the server did not say.
       const coverage = await refreshCoverage();
+      // A key whose loop GAVE UP, with the reason. `open: false` alone cannot
+      // tell "reconnecting" from "stopped trying", and a doc deleted out from
+      // under a watch is the case where the difference matters: the key stays
+      // in `watching` and nothing will ever arrive on it. Absent when every
+      // watch is still being retried.
+      const inactive = inactiveWatches(watchers);
       return ok({
         watching: Array.from(watchers.keys()),
+        ...(inactive.length > 0 ? { inactive } : {}),
         persistence: {
           mode: watchPersistenceMode(),
           agentId: AUTHOR.id,
