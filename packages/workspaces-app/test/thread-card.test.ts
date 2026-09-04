@@ -523,7 +523,6 @@ describe('thread card — a declared Review Item', () => {
     expect(text(slotA.querySelector('.face-detail .thread-message'))).toBe('Draft is up.');
     // The ask itself is the item card's, in full.
     const item = card.querySelector('.thread-item-card') as HTMLElement;
-    expect(text(item.querySelector('.thread-item-k'))).toBe('Question');
     expect(text(item.querySelector('.thread-item-headline'))).toBe('Read the new onboarding copy');
     expect(text(item.querySelector('.thread-item-body'))).toContain(
       'Ships Tuesday and nobody outside the team has read it.',
@@ -547,10 +546,12 @@ describe('thread card — a declared Review Item', () => {
     // A thread can start as a status note and become a review item later, so
     // the mark is per comment.
     expect(rows.map((r) => r.className.includes('comment-declared'))).toEqual([false, true]);
-    // The KIND is stated by the item card that carries this declaration, and
-    // not a second time by the history row sitting under it.
+    // The KIND is stated by nothing in words any more — not by the history
+    // row, and not by the item card above it either.
     expect(rows[1]?.querySelector('.comment-review-k')).toBeNull();
-    expect(text(card.querySelector('.thread-item-card .thread-item-k'))).toBe('Decision');
+    expect(card.querySelector('.thread-item-card .thread-item-k')).toBeNull();
+    // Positive control: the item card is still there, carrying the ask.
+    expect(text(card.querySelector('.thread-item-card .thread-item-headline'))).not.toBe('');
   });
 
   it('renders no header at all on a thread nobody declared anything on', () => {
@@ -594,18 +595,17 @@ describe('thread card — a thread that carries a review item IS the review item
     expect(face.querySelector('.thread-item-card .thread-reply textarea')).not.toBeNull();
   });
 
-  it('spells the head row: kind chip, headline, asked-by meta — and one markdown body', () => {
+  it('spells the head row: headline and asked-by meta, no kind chip — and one markdown body', () => {
     const t = makeThread({ comments: [declaredComment(asked())] });
     const { panel, cardFor } = mountPanel();
     panel.setThreads([t]);
     panel.setActive(t.id);
 
     const card = cardFor(t).querySelector('.thread-item-card') as HTMLElement;
-    // New UI text says Question; the class token stays `review` (stored
-    // vocabulary is unchanged by the rename in flight).
-    const chip = card.querySelector('.thread-item-k') as HTMLElement;
-    expect(text(chip)).toBe('Question');
-    expect(chip.classList.contains('thread-item-k-review')).toBe(true);
+    // No chip, on this face or the folded one: the answer box below is what
+    // says "question", the same way a row of options says "decision".
+    expect(card.querySelector('.thread-item-k')).toBeNull();
+    expect(text(card.querySelector('.thread-item-head'))).not.toMatch(/question/i);
     expect(text(card.querySelector('.thread-item-headline'))).toBe('Read the stall rota');
     expect(text(card.querySelector('.thread-item-meta'))).toMatch(/^Asked by Bob .+ ago$/);
     // The ONE body, rendered as markdown.
@@ -615,7 +615,7 @@ describe('thread card — a thread that carries a review item IS the review item
     expect(body.querySelector('a')?.getAttribute('href')).toBe('https://example.test/rota');
   });
 
-  it('says Decision on a decision and offers its options as whole-row buttons', () => {
+  it('names a decision by nothing but its options, as whole-row buttons', () => {
     const t = makeThread({
       comments: [
         declaredComment(
@@ -634,7 +634,7 @@ describe('thread card — a thread that carries a review item IS the review item
     panel.setActive(t.id);
 
     const card = cardFor(t).querySelector('.thread-item-card') as HTMLElement;
-    expect(text(card.querySelector('.thread-item-k'))).toBe('Decision');
+    expect(card.querySelector('.thread-item-k')).toBeNull();
     const options = Array.from(card.querySelectorAll<HTMLButtonElement>('.thread-item-option'));
     expect(options).toHaveLength(2);
     expect(text(options[0]?.querySelector('.thread-item-option-label') ?? null)).toBe('Ship it');

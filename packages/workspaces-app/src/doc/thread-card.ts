@@ -564,12 +564,16 @@ function itemCard(
 ): HTMLElement {
   const card = div('thread-item-card');
   const head = div('thread-item-head');
-  // New UI text says Question; the class token stays `review` (stored
-  // vocabulary and tone classes are unchanged by the rename in flight).
-  const decision = review.shape === 'decision';
-  const kind = span(`thread-item-k thread-item-k-${decision ? 'decision' : 'review'}`);
-  kind.textContent = decision ? 'Decision' : 'Question';
-  head.append(kind);
+  // NO kind chip, on any face. The folded card dropped it with mock round 4
+  // and this one was simply missed: the rule is the same either side of the
+  // fold, because the row of option buttons directly below IS the decision
+  // and the answer box IS the question. A "Decision" badge above them
+  // restates in a word what the reader can already press, and the modal was
+  // the one place a person met both at once.
+  //
+  // Doc surface only. The hub board renders review items through its own
+  // `src/hub/thread-card.tsx`, which this file shares no code with, so its
+  // cards are untouched by this change.
   const headline = document.createElement('p');
   headline.className = 'thread-item-headline';
   // Plain text, never HTML: the headline is agent-supplied and the API
@@ -637,9 +641,9 @@ function itemCard(
  * outcome mid-sentence, where the one word a person scans for — what was
  * decided — had no visual home. The approved mock gives it one.
  *
- * Three parts, in reading order: the label ("Decision" or "Answer",
- * following the same shape the card's kind chip reads), the verbatim
- * outcome, then who settled it and when. Undo is the recovery path for a
+ * Three parts, in reading order: the label ("Decision" or "Answer" — the
+ * card carries no kind chip any more, so this strip is the only place the
+ * word appears), the verbatim outcome, then who settled it and when. Undo is the recovery path for a
  * single unconfirmed tap, so it persists rather than expiring with a toast.
  *
  * The words render markdown-inline because they are a comment's words.

@@ -3914,25 +3914,10 @@ body.threads-resizing {
   flex-wrap: wrap;
   margin: 0 0 6px;
 }
-.thread-item-k {
-  font-size: 10px;
-  font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-  border-radius: var(--radius-sm);
-  padding: 2px 7px;
-  white-space: nowrap;
-}
-/* Same tone tokens as the hub (`decision` amber, `review` accent) — the
-   class token stays `review` while the UI text says Question. */
-.thread-item-k-decision {
-  color: var(--warn-fg, #b25e09);
-  background: var(--warn-wash, #fff4e5);
-}
-.thread-item-k-review {
-  color: var(--accent, #2e7dd7);
-  background: var(--accent-wash, rgba(59, 111, 212, 0.07));
-}
+/* `.thread-item-k*` lived here — the item card's DECISION / QUESTION chip.
+   Deleted with the chip itself: no face of a doc card names its kind now,
+   because the option buttons and the answer box below already do. The hub's
+   own item cards are a different component and keep theirs. */
 .thread-item-headline {
   margin: 0;
   flex: 1;
