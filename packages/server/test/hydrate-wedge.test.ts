@@ -16,12 +16,12 @@
  * The doc, the paths and the content here are invented.
  */
 import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
-import { execFileSync } from 'node:child_process';
 import { mkdtempSync, rmSync, unlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { type ServerHandle, createServer } from '../src/server.ts';
 import { boundFiles } from '../src/slow-fs.ts';
+import { makeFifo, releaseFifosIn } from './fifo.ts';
 
 const DOC_ID = 'stalled-source-doc';
 
@@ -53,14 +53,16 @@ describe('a bound file that never answers', () => {
     // else about it — it exists, it stats, it is the doc's recorded source —
     // is unchanged, which is what made the real failure so hard to see.
     unlinkSync(boundPath);
-    // No `mkfifo` in node:fs — this is the POSIX tool, and the FIFO it
-    // makes is what blocks `open` for as long as nobody writes to it.
-    execFileSync('mkfifo', [boundPath]);
+    makeFifo(boundPath);
   });
 
   afterEach(async () => {
     await handle?.stop();
     handle = undefined;
+    // Before the directory goes: a read parked on a pipe that has been
+    // unlinked can never be released, and it owns a pool thread until it is.
+    // `releaseFifosIn` throws rather than letting the runner hang on one.
+    await releaseFifosIn(scratch);
     boundFiles.reset();
     rmSync(dataDir, { recursive: true, force: true });
     rmSync(scratch, { recursive: true, force: true });
@@ -93,6 +95,10 @@ describe('a bound file that never answers', () => {
     // starting the same doomed read.
     expect(handle.rooms.boundPathOf(DOC_ID)).toBeUndefined();
     expect(boundFiles.quarantined(boundPath)).toBe(true);
+    // The read is parked, not abandoned: `afterEach` hands it end-of-file and
+    // gets the pool thread back, and fails loudly by name if it cannot. The
+    // count itself is process-wide (one runner process, every test file), so
+    // it is not something this test can assert an exact number for.
   });
 
   it('positive control: the same doc on a readable file binds as before', async () => {

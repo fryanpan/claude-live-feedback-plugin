@@ -33,6 +33,10 @@ export type RoomTimings = {
   revisionSettleMs: number;
   /** How long after a content change the thread re-anchor sweep runs. */
   reanchorMs: number;
+  /** How long a bound file gets to answer a read before it is parked (slow-fs). */
+  boundReadDeadlineMs: number;
+  /** Minimum gap between attempts on a bound file that blew the deadline. */
+  boundReadRetryMs: number;
 };
 
 /** The production cadences. Every one of these is a documented number elsewhere. */
@@ -43,6 +47,8 @@ export const DEFAULT_ROOM_TIMINGS: RoomTimings = {
   persistMs: 200,
   revisionSettleMs: 1000,
   reanchorMs: 250,
+  boundReadDeadlineMs: 3000,
+  boundReadRetryMs: 60000,
 };
 
 /**
@@ -69,6 +75,8 @@ export function resolveRoomTimings(scale: string | undefined): RoomTimings {
     persistMs: scaled(DEFAULT_ROOM_TIMINGS.persistMs),
     revisionSettleMs: scaled(DEFAULT_ROOM_TIMINGS.revisionSettleMs),
     reanchorMs: scaled(DEFAULT_ROOM_TIMINGS.reanchorMs),
+    boundReadDeadlineMs: scaled(DEFAULT_ROOM_TIMINGS.boundReadDeadlineMs),
+    boundReadRetryMs: scaled(DEFAULT_ROOM_TIMINGS.boundReadRetryMs),
   };
 }
 
