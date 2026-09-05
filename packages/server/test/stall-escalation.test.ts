@@ -16,7 +16,7 @@
  *
  * All fixtures are synthetic — invented names. The repo is public.
  */
-import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
+import { afterEach, beforeEach, describe, expect, it, setSystemTime } from 'bun:test';
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -103,6 +103,9 @@ describe('a told row that has not moved escalates to the reader', () => {
   });
 
   afterEach(() => {
+    // Back to the real clock whatever the test did with it, so a pinned one
+    // can never leak into the test that runs next.
+    setSystemTime();
     store.stop();
     rmSync(dataDir, { recursive: true, force: true });
   });
@@ -353,12 +356,26 @@ describe('a told row that has not moved escalates to the reader', () => {
     // The reader asks back, doc-style — a question anchored on a thread is
     // what puts the item in `waiting`, and `waiting` leaves the queue: it is
     // the owner's turn, on a ticket that is very much alive.
+    //
+    // The STORE's clock is pinned across these two writes, and only here.
+    // Asking a question WRITES to the ticket, so `updatedAt` moves — and
+    // `anchorHolds` reads that field to ask whether anybody else has touched
+    // the row. Left to the real clock this test passed only when the question
+    // and the filing landed in the same millisecond; one millisecond later the
+    // module read the reader's own question as the row moving and re-anchored,
+    // which is the failure this test is named for (it flaked in CI on a branch
+    // that touches no stall file). So the ordering is made explicit — a second
+    // between them, no sleep — and the module now discounts writes its own
+    // item explains.
+    const asked = Date.now() + 1000;
+    setSystemTime(asked);
     store.requestMoreInfoOnReview(a.id, filed, 'Which of these is holding the other up?', {
       actor: PERSON,
       threadId: 'th-reader-asked-back',
     });
     expect(queued()).toHaveLength(0);
 
+    setSystemTime(asked + 1000);
     told.set(b.id, { at: now - ESCALATE_MS - 60_000, delivered: true });
     escalations.onBoard(board(wsId, { stalled: [row(b, 'in-progress')] }), told, now + 60_000);
 
