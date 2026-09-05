@@ -80,8 +80,8 @@ import {
 } from './routes/agent-identity.ts';
 import { type ArchiveRoutesContext, createArchiveRoutes } from './routes/archive.ts';
 import { type AuthShareRoutesContext, handleAuthShareRoutes } from './routes/auth-share.ts';
+import type { DocRoutesContext } from './routes/docs-routes-context.ts';
 import {
-  type DocRoutesContext,
   handleDocCreateListRoutes,
   handleDocPromoteRoute,
   handleDocResourceRoutes,
