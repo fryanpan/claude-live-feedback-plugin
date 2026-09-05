@@ -18,7 +18,7 @@ flowchart TB
   mcp["mcp<br/>stdio MCP server"]
   subgraph srv["server — one Bun process"]
     edge["HTTP edge<br/>server.ts · routes/ · middleware/ · shells.ts<br/>request-admission · request-attribution<br/>socket-handlers · server-options"]
-    docs["Doc store and rooms<br/>doc-store.ts · binds.ts · file-binding.ts<br/>doc-*.ts · yjs-protocol.ts · sse.ts · sse-mux.ts"]
+    docs["Doc store and attachments<br/>doc-store.ts · binds.ts · file-binding.ts<br/>doc-*.ts · doc-origin-repo.ts · attachment-backfill.ts<br/>yjs-protocol.ts · sse.ts · sse-mux.ts"]
     board["Board<br/>tasks.ts · task-*.ts · review-items/<br/>home-pane.ts · board-membership.ts · activity.ts"]
     meet["Meetings<br/>meetings.ts · meeting-*.ts · notes-*.ts<br/>transcribe-*.ts · recall*.ts"]
     keep["Keep-moving<br/>stall-wiring · stall-gate · stall-nudge<br/>stall-escalation · note-ask · keep-moving"]
@@ -43,7 +43,7 @@ flowchart TB
 
 | Package | What it is | Hard constraint |
 | --- | --- | --- |
-| `core` | Wire types, the Yjs⇄markdown document model, anchors, review-item rules, goal arithmetic, schedule rules and their English, prompts. | Imports no other workspace package. No `node:` I/O beyond path math, no DOM. |
+| `core` | Wire types, the Yjs⇄markdown document model, anchors, attachment-set ids (`attachment.ts`), review-item rules, goal arithmetic, schedule rules and their English, prompts. | Imports no other workspace package. No `node:` I/O beyond path math, no DOM. |
 | `server` | The one process: data dir, Yjs rooms, board, meetings, auth, sharing, deploys. | The only writer of durable state. Everything else asks it. |
 | `workspaces-app` | The browser client, five bundles from `scripts/build.ts`. | Ships as static assets the server publishes as a numbered release. |
 | `mcp` | The stdio MCP server agents talk to — a **client** of the server's REST and SSE. | No business logic the server does not also enforce. |
@@ -102,7 +102,10 @@ value. *SSE* pushes changes to anyone holding no Yjs socket for them.
 `workspaces-app` layers the same way — entries, controllers, views, models,
 transport — and its models are DOM-free, which is what lets `board/board-model.ts`,
 `board/board-review-model.ts` and `board/board-presence-model.ts` be tested without a
-document. `notes-link-affordance.ts` joins the editor tier beside
+document. `suggestions/` sits in the editor tier rather than inside `redline/`,
+because Redline is the change view and a suggestion is the proposal: the chip
+and the doc-level pending badge render on the plain markdown surface and on the
+board's task-body editor, neither of which mounts a redline module. `notes-link-affordance.ts` joins the editor tier beside
 `task-link-chips.ts`, and is the one plugin there that WRITES: the chips are
 render-time and change nothing, while accepting a note's suggestion or undoing
 a link edits the stored doc and calls the board. `core` is three tiers: wire types, the document model (`prose-*.ts`,
