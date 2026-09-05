@@ -168,6 +168,81 @@ describe('pause ticker', () => {
     expect(schedule.armed).toBe(0);
   });
 
+  it('end() carries the sentence still being spoken, flagged as unfinished', () => {
+    const { ticks, ticker } = setup();
+    ticker.onTurn({ turn: 0, text: 'We agreed on the smaller scope.', final: true });
+    ticker.onTurn({ turn: 1, text: 'and the one thing I still want is', final: false });
+    ticker.end();
+    // Both: the settled sentence first, then the interrupted one after it.
+    expect(ticks[0]?.turns).toEqual([
+      { turn: 0, text: 'We agreed on the smaller scope.' },
+      { turn: 1, text: 'and the one thing I still want is', partial: true },
+    ]);
+  });
+
+  it('an unsettled turn is the ONLY thing a final tick needs to fire', () => {
+    const { schedule, ticks, ticker } = setup();
+    ticker.onTurn({ turn: 0, text: 'Ship it.', final: true });
+    schedule.fire();
+    expect(ticks.length).toBe(1);
+    // Nothing has settled since, so the old ticker had nothing to flush and
+    // this sentence went nowhere.
+    ticker.onTurn({ turn: 1, text: 'one last thing before we', final: false });
+    ticker.end();
+    expect(ticks.length).toBe(2);
+    expect(ticks[1]).toEqual({
+      tick: 2,
+      reason: 'end',
+      turns: [{ turn: 1, text: 'one last thing before we', partial: true }],
+    });
+  });
+
+  it('carries the LATEST partial of a turn, not every draft of it', () => {
+    const { ticks, ticker } = setup();
+    ticker.onTurn({ turn: 0, text: 'the thing', final: false });
+    ticker.onTurn({ turn: 0, text: 'the thing I keep', final: false });
+    ticker.onTurn({ turn: 0, text: 'the thing I keep meaning to', final: false });
+    ticker.end();
+    expect(ticks[0]?.turns).toEqual([
+      { turn: 0, text: 'the thing I keep meaning to', partial: true },
+    ]);
+  });
+
+  it('a turn that settled is carried as settled, never twice', () => {
+    const { ticks, ticker } = setup();
+    ticker.onTurn({ turn: 0, text: 'we should measure', final: false });
+    ticker.onTurn({ turn: 0, text: 'We should measure first.', final: true });
+    ticker.end();
+    expect(ticks[0]?.turns).toEqual([{ turn: 0, text: 'We should measure first.' }]);
+  });
+
+  it('the speaker rides the unfinished sentence too', () => {
+    const { ticks, ticker } = setup();
+    ticker.onTurn({ turn: 0, text: 'and my worry is that', final: false, speaker: 'B' });
+    ticker.end();
+    expect(ticks[0]?.turns).toEqual([
+      { turn: 0, text: 'and my worry is that', partial: true, speaker: 'B' },
+    ]);
+  });
+
+  it('an empty partial is not a sentence, and does not manufacture a tick', () => {
+    const { ticks, ticker } = setup();
+    ticker.onTurn({ turn: 0, text: '   ', final: false });
+    ticker.end();
+    expect(ticks).toEqual([]);
+  });
+
+  it('an ordinary tick still carries settled words only', () => {
+    const { schedule, ticks, ticker } = setup();
+    ticker.onTurn({ turn: 0, text: 'Ship the fix.', final: true });
+    ticker.onTurn({ turn: 1, text: 'but only once we have', final: false });
+    schedule.fireAt(QUIET_MS);
+    expect(ticks[0]?.turns).toEqual([{ turn: 0, text: 'Ship the fix.' }]);
+    // And it is still available to the end tick afterwards.
+    ticker.end();
+    expect(ticks[1]?.turns).toEqual([{ turn: 1, text: 'but only once we have', partial: true }]);
+  });
+
   it("carries the engine's speaker label on a settled turn", () => {
     const { schedule, ticks, ticker } = setup();
     ticker.onTurn({ turn: 0, text: 'Take it?', final: true, speaker: 'A' });
@@ -511,7 +586,11 @@ describe('notes session', () => {
     session.nameSpeaker('A', 'Devi');
     await session.end();
 
-    expect(order).toEqual(['composed', 'relabelled']);
+    // Three, not two: turn 90 was heard only as a partial and never settled,
+    // so the final pass composes it. That is the point of the final pass —
+    // the sentence in progress at the stop gets a tick of its own — and it
+    // lands after the relabel like everything else on the chain.
+    expect(order).toEqual(['composed', 'relabelled', 'composed']);
     expect(relabels).toEqual([
       {
         docId: ids.docId,
@@ -938,7 +1017,10 @@ describe('task capture riding the notes session', () => {
     session.onTurn({ turn: 1, text: 'File a ticket for that one.', final: true, speaker: 'A' });
     schedule.fire();
     await session.end();
-    expect(passes).toHaveLength(2);
+    // Two pause ticks, then the final pass over turn 90 — the partial that
+    // registered the second voice and never settled.
+    expect(passes).toHaveLength(3);
+    expect(passes[2]?.turns).toEqual(['Speaker Z: mm']);
     // Nothing came before the first tick.
     expect(passes[0]?.prior).toEqual([]);
     expect(passes[0]?.turns).toEqual(['Speaker A: That retry loop is the real cost.']);
