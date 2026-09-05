@@ -38,9 +38,16 @@ from datetime import datetime, timezone
 # projection counts down to this, so "hours left" means hours of real
 # headroom rather than hours to an arbitrary threshold.
 DEFAULT_CEILING = 163000
-DEFAULT_TASK_ID = "t-kkAtJxK85M4O"
-DEFAULT_WORKSPACE_ID = "w-DRa7BgNaZkqh"
 DEFAULT_BASE_URL = "http://127.0.0.1:8787"
+
+# WHICH row and WHICH board are deliberately NOT defaulted here. This is a
+# public repo and its pre-push leak gate refuses board ids on sight, which is
+# the right call: an id in a checked-in file is a pointer into a private
+# workspace that survives every later copy of the file. They arrive from the
+# environment instead, substituted into the installed plist at install time —
+# the same treatment the install directory gets. With neither set the alerter
+# refuses rather than guessing, because a comment posted at the wrong row is
+# indistinguishable from no alert at all.
 
 # The watcher's own identity on the board. `agent-<slug of the name>` is the
 # same derivation `agentIdForName` uses in packages/core/src/identity.ts, and
@@ -219,11 +226,8 @@ def main(argv: list[str]) -> int:
     p.add_argument("--csv", default=os.environ.get("SOCKET_WATCH_LOG", ""))
     p.add_argument("--state", default=os.environ.get("SOCKET_WATCH_STATE", ""))
     p.add_argument("--base-url", default=os.environ.get("SOCKET_WATCH_BASE_URL", DEFAULT_BASE_URL))
-    p.add_argument("--task-id", default=os.environ.get("SOCKET_WATCH_TASK_ID", DEFAULT_TASK_ID))
-    p.add_argument(
-        "--workspace-id",
-        default=os.environ.get("SOCKET_WATCH_WORKSPACE_ID", DEFAULT_WORKSPACE_ID),
-    )
+    p.add_argument("--task-id", default=os.environ.get("SOCKET_WATCH_TASK_ID", ""))
+    p.add_argument("--workspace-id", default=os.environ.get("SOCKET_WATCH_WORKSPACE_ID", ""))
     p.add_argument("--ceiling", type=int, default=int(os.environ.get("SOCKET_WATCH_CEILING", DEFAULT_CEILING)))
     p.add_argument("--timeout", type=float, default=10.0)
     p.add_argument(
@@ -238,6 +242,11 @@ def main(argv: list[str]) -> int:
         return fail("--state (or SOCKET_WATCH_STATE) is required")
     if not args.csv:
         return fail("--csv (or SOCKET_WATCH_LOG) is required")
+    if not args.task_id or not args.workspace_id:
+        return fail(
+            "--task-id and --workspace-id (or SOCKET_WATCH_TASK_ID / "
+            "SOCKET_WATCH_WORKSPACE_ID) are required — see the plist's install block"
+        )
 
     previous = ""
     try:

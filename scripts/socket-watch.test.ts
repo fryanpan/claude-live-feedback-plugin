@@ -50,7 +50,25 @@ function runAlerter(
 ): { stdout: string; stderr: string; code: number } {
   const res = spawnSync(
     'python3',
-    [ALERTER, '--status', status, '--leak', String(leak), '--csv', csv, '--state', state, ...extra],
+    [
+      ALERTER,
+      '--status',
+      status,
+      '--leak',
+      String(leak),
+      '--csv',
+      csv,
+      '--state',
+      state,
+      // Invented ids. The real ones live only in the installed plist — the
+      // leak gate refuses a board id in this repo, and a test is a file like
+      // any other.
+      '--task-id',
+      't-fixture',
+      '--workspace-id',
+      'w-fixture',
+      ...extra,
+    ],
     { encoding: 'utf8' },
   );
   return { stdout: res.stdout ?? '', stderr: res.stderr ?? '', code: res.status ?? -1 };
@@ -110,7 +128,7 @@ describe('socket-watch alerting', () => {
     expect(text).toContain('climbing 3,600/hr');
     // (163,000 − 121,600) ÷ 3,600 ≈ 11.5 hours of headroom left.
     expect(text).toContain('About 12 hours to the 163,000 failure point');
-    expect(text).toContain('(/workspaces/w-DRa7BgNaZkqh?task=t-kkAtJxK85M4O)');
+    expect(text).toContain('(/workspaces/w-fixture?task=t-fixture)');
     expect(wordCount(text)).toBeLessThan(60);
   });
 
@@ -137,6 +155,33 @@ describe('socket-watch alerting', () => {
     // The state file still says OK, so the next sample tries again — the
     // whole point, since the server may be down for the same reason.
     expect(readFileSync(state, 'utf8').trim()).toBe('OK');
+  });
+
+  it('refuses to post when it has not been told which row to post on', () => {
+    // No repo default for these: a board id in a public checkout is a pointer
+    // into a private workspace, and the pre-push leak gate refuses one. A
+    // comment on the wrong row is indistinguishable from no alert, so the
+    // alerter stops rather than guessing.
+    const res = spawnSync(
+      'python3',
+      [
+        ALERTER,
+        '--status',
+        'WARN',
+        '--leak',
+        '121600',
+        '--csv',
+        csv,
+        '--state',
+        state,
+        '--dry-run',
+      ],
+      { encoding: 'utf8' },
+    );
+
+    expect(res.status).toBe(2);
+    expect(res.stderr).toContain('--task-id and --workspace-id');
+    expect(res.stdout).not.toContain('[dry-run]');
   });
 
   it('reports a short history as an unknown rate rather than inventing one', () => {
