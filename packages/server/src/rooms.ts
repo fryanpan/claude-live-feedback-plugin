@@ -512,8 +512,8 @@ export class Rooms {
       room: (docId) => this.resolveRoom(docId),
       residentRoom: (docId) => this.rooms.get(docId),
       getOrCreate: (docId, init) => this.getOrCreate(docId, init),
-      attachFile: (docId, filePath) => this.attachFile(docId, filePath),
-      attachReadonlyFile: (docId, filePath) => this.attachReadonlyFile(docId, filePath),
+      attachFileAsync: (docId, filePath) => this.attachFileAsync(docId, filePath),
+      attachReadonlyFileAsync: (docId, filePath) => this.attachReadonlyFileAsync(docId, filePath),
       deleteDoc: (docId, opts) => this.deleteDoc(docId, opts),
       hydrateDoc: (docId) => this.hydrateDoc(docId),
       persistRoomNow: (room) => this.persistRoomNow(room),
@@ -2202,16 +2202,20 @@ export class Rooms {
   openContextFile(
     setId: string,
     relPath: string,
-  ):
+  ): Promise<
     | { ok: true; docId: string; meta: DocMeta }
-    | { ok: false; error: 'not-found' | 'bad-path' | 'not-listed' | 'attach-failed' } {
+    | {
+        ok: false;
+        error: 'not-found' | 'bad-path' | 'not-listed' | 'attach-failed' | 'unavailable';
+      }
+  > {
     return this.workspaces.openContextFile(setId, relPath);
   }
 
   openEditableFile(
     setId: string,
     relPath: string,
-  ):
+  ): Promise<
     | { ok: true; docId: string; meta: DocMeta }
     | {
         ok: false;
@@ -2221,8 +2225,10 @@ export class Rooms {
           | 'not-listed'
           | 'pinned'
           | 'not-markdown'
-          | 'attach-failed';
-      } {
+          | 'attach-failed'
+          | 'unavailable';
+      }
+  > {
     return this.workspaces.openEditableFile(setId, relPath);
   }
 
@@ -2330,12 +2336,13 @@ export class Rooms {
    * idempotent: the same file maps to the same docId, so threads survive.
    */
   /** Bind a whole folder/worktree for review — see binds.ts. */
-  bindFolder(opts: BindFolderOpts): BindFolderResult {
+  bindFolder(opts: BindFolderOpts): Promise<BindFolderResult> {
     return bindFolderImpl(this, opts);
   }
 
-  /** Bind a git diff (working-tree or pinned) for review — see binds.ts. */
-  bindDiff(opts: BindDiffOpts): BindDiffResult {
+  /** Bind a git diff (working-tree or pinned) for review — see binds.ts.
+   *  Async because a bind reads every member off the thread pool. */
+  bindDiff(opts: BindDiffOpts): Promise<BindDiffResult> {
     return bindDiffImpl(this, opts);
   }
 
@@ -2373,7 +2380,7 @@ export class Rooms {
 
   /** Re-reconcile a workspace against disk, keeping docIds (and therefore
    *  threads) stable — see binds.ts. */
-  refreshWorkspace(setId: string): RefreshWorkspaceResult {
+  refreshWorkspace(setId: string): Promise<RefreshWorkspaceResult> {
     return refreshWorkspaceImpl(this, setId);
   }
 
@@ -2419,6 +2426,25 @@ export class Rooms {
     opts: AttachOpts = {},
   ): ReturnType<FileBindings['attachFileAsync']> {
     return this.bindings.attachFileAsync(docId, filePath, opts);
+  }
+
+  /** `attachFlatFile` with the file read on the thread pool first — the
+   *  binding door for the diff bind and the workspace member opens. */
+  attachFlatFileAsync(
+    docId: string,
+    filePath: string,
+    opts: AttachOpts & { writeBack?: boolean } = {},
+  ): ReturnType<FileBindings['attachFlatFileAsync']> {
+    return this.bindings.attachFlatFileAsync(docId, filePath, opts);
+  }
+
+  /** `attachReadonlyFile` with the file read on the thread pool first. */
+  attachReadonlyFileAsync(
+    docId: string,
+    filePath: string,
+    opts: AttachOpts = {},
+  ): ReturnType<FileBindings['attachReadonlyFileAsync']> {
+    return this.bindings.attachReadonlyFileAsync(docId, filePath, opts);
   }
 
   /** Bind a READ-ONLY source file (type='code') for review — no write-back. */

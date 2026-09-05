@@ -140,7 +140,7 @@ export async function handleReviewFileRoutes(
   const wsRefreshMatch = pathname.match(REVIEW_API.refresh);
   if (wsRefreshMatch && req.method === 'POST') {
     const setId = decodeURIComponent(wsRefreshMatch[1] ?? '');
-    const res = rooms.refreshWorkspace(setId);
+    const res = await rooms.refreshWorkspace(setId);
     if (res.ok) return j(200, res);
     return j(res.error === 'not-found' ? 404 : 400, res);
   }
@@ -179,10 +179,16 @@ export async function handleReviewFileRoutes(
     const body = await safeJson(req);
     const relPath = body?.relPath as string | undefined;
     if (!relPath) return j(400, { error: 'relPath required' });
-    const res = rooms.openContextFile(setId, relPath);
+    const res = await rooms.openContextFile(setId, relPath);
     // `not-listed` is a 404 on purpose: the tree does not show the
     // file, and whether it exists is exactly what must not be told.
-    if (!res.ok) return j(res.error === 'bad-path' ? 400 : 404, res);
+    // `unavailable` is a 503: the file is there and did not answer, which is
+    // a retry-later, not a missing file — telling the sidebar 404 would make
+    // it look deleted.
+    if (!res.ok) {
+      const status = res.error === 'bad-path' ? 400 : res.error === 'unavailable' ? 503 : 404;
+      return j(status, res);
+    }
     return j(200, { docId: res.docId, meta: metaFor(res.meta) });
   }
   const wsEditMatch = pathname.match(REVIEW_API.editableFile);
@@ -191,14 +197,16 @@ export async function handleReviewFileRoutes(
     const body = await safeJson(req);
     const relPath = body?.relPath as string | undefined;
     if (!relPath) return j(400, { error: 'relPath required' });
-    const res = rooms.openEditableFile(setId, relPath);
+    const res = await rooms.openEditableFile(setId, relPath);
     if (!res.ok) {
       const status =
         res.error === 'bad-path' || res.error === 'not-markdown'
           ? 400
           : res.error === 'pinned'
             ? 409
-            : 404;
+            : res.error === 'unavailable'
+              ? 503
+              : 404;
       return j(status, res);
     }
     return j(200, { docId: res.docId, meta: metaFor(res.meta) });
