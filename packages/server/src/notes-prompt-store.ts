@@ -52,25 +52,29 @@ export const NOTES_PROMPT_FILENAME = 'notes-prompt.md';
  * A reader's place is protected by the merge instead of by the prompt: the
  * ledger lets an agent line move and never lets a person's line be rewritten.
  *
- * WHY REGROUPING ASKS FOR SUB-BULLETS AND NEVER A SUBHEADING. Breaking a long
- * topic up could have been written either way, and the merge decides which
- * one survives. A heading landing inside an existing run of bullets cannot be
- * merged item by item — Yjs will not re-parent an element — so the section is
- * rebuilt from the composed markdown instead, and that rebuild is refused the
- * moment one line in the section belongs to a person. Measured against that,
- * with a control: the same composed notes come through with their headings in
- * order into a section nobody has typed in, and come through with every
- * heading below the bullets into a section holding one line a person wrote.
- * The meetings where people type are the meetings the rule matters in, so
- * asking for a heading would break it exactly there. Nesting needs no
- * re-parenting and merges in order either way.
+ * WHY REGROUPING ASKS FOR SUB-BULLETS, WHICH IS NOW A PREFERENCE AND NO
+ * LONGER A CONSTRAINT. Breaking a long topic up could be written either way.
+ * A heading landing inside an existing run of bullets cannot be merged item
+ * by item — Yjs will not re-parent an element — and for a while the only way
+ * to express it was rebuilding the section from the composed markdown, which
+ * is refused the moment one line in the section belongs to a person. Measured
+ * with a control at the time: the same composed notes came through in order
+ * into a section nobody had typed in, and came through with every heading
+ * below the bullets into a section holding one line a person wrote. That is
+ * fixed in the merge rather than here — it now clears its OWN bullets out of
+ * the list first and plans again, so the heading lands where the composer put
+ * it and a person's items keep their elements. The ask stays sub-bullets
+ * because nesting still costs less: no element the reader has commented on is
+ * re-created, and the shape comes through on every path.
  *
- * AND A PERSON'S LINE STAYS AT THE TOP LEVEL, said here because the ledger
- * cannot say it. The ledger stops the note-taker REWRITING their line; a copy
- * of it nested under a lead bullet is not a rewrite, it is new writing of the
- * note-taker's own, and it is accepted — leaving their line and a duplicate
- * of it side by side. Until the merge recognises that case, the instruction
- * is the guard.
+ * AND A PERSON'S LINE STAYS AT THE TOP LEVEL, now said in both places. The
+ * ledger stops the note-taker REWRITING their line, and a copy of it nested
+ * under a lead bullet is not a rewrite — it is new writing of the
+ * note-taker's own, which used to be accepted and left their line and a
+ * duplicate of it side by side. `withoutPersonCopies` in the merge takes such
+ * a copy back out, so the guarantee no longer rests on the model reading this
+ * paragraph. It is still asked for, because a regroup that never writes the
+ * copy is better than one the merge has to undo.
  */
 export const DEFAULT_NOTES_INSTRUCTIONS = [
   'You are the live note-taker for a working meeting, writing in the doc the',
