@@ -64,7 +64,7 @@ describe('the queue says who is already on a row', () => {
    *  is the display name — that join is half of what is under test. */
   const attach = async (workspaceId: string, agentId: string, pluginVersion?: string) =>
     jj(
-      await post(`/api/workspaces/${workspaceId}/attachments`, {
+      await post(`/workspaces/${workspaceId}/agents`, {
         agentId,
         runtime: 'claude-code-local',
         capabilities: ['tasks.write'],
@@ -247,7 +247,7 @@ describe('the queue says who is already on a row', () => {
   it('never carries the host-machine endpoint onto a queue row', async () => {
     const wsId = await setup();
     await jj(
-      await post(`/api/workspaces/${wsId}/attachments`, {
+      await post(`/workspaces/${wsId}/agents`, {
         agentId: 'agent-cartographer',
         runtime: 'managed-agent',
         capabilities: ['tasks.write'],

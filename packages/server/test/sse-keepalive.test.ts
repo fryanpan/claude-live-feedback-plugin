@@ -2,7 +2,7 @@
  * An SSE stream has to outlive the idle timeout that is watching it.
  *
  * Measured 2026-08-19 against this server on Bun 1.3.10: a plain
- * `curl -N` on `/events/workspace/<id>` ended after **9.7 seconds** having
+ * `curl -N` on `/workspaces/<id>/events:stream` ended after **9.7 seconds** having
  * received five bytes — the `:ok` preamble and nothing else. It was asked to
  * hold for forty.
  *
@@ -94,7 +94,7 @@ describe('an idle SSE stream survives past the old death window', () => {
       body: JSON.stringify({ name: 'Idle Board' }),
     });
     const { workspace } = (await made.json()) as { workspace: { id: string } };
-    const res = await fetch(`${base}/events/workspace/${workspace.id}`, {
+    const res = await fetch(`${base}/workspaces/${workspace.id}/events:stream`, {
       headers: { host, accept: 'text/event-stream' },
     });
     expect(res.status).toBe(200);

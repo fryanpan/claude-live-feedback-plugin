@@ -104,7 +104,7 @@ export async function declareWorkspaceLead(
     //    hasLiveLeadAttachment read, and it is what drains a queue that built
     //    up while the seat was empty. Doing it after the seat change would
     //    leave setLeadAgent re-delivering to a lead the server cannot see.
-    attached = (await deps.http('POST', `${path}/attachments`, {
+    attached = (await deps.http('POST', `/workspaces/${encodeURIComponent(workspaceId)}/agents`, {
       agentId: deps.self.id,
       // The roster row is written from this: the name every surface then
       // uses for this agent, rather than whatever each one derives.

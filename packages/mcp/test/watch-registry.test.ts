@@ -223,7 +223,7 @@ describe('a server that predates the mux route falls back to a stream per key', 
     const { registry, opened } = harness({ muxUnsupported: true });
     await registry.watchWorkspace('w1');
     expect(opened).toEqual([
-      { label: 'ws:w1', path: '/events/workspace/w1?agentId=agent-workspaces' },
+      { label: 'ws:w1', path: '/workspaces/w1/events:stream?agentId=agent-workspaces' },
     ]);
   });
 });

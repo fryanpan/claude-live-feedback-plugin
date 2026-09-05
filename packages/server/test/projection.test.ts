@@ -317,7 +317,7 @@ describe('ydoc projection + workspace room', () => {
     const taskId = await makeTask(wsId, { title: 'Real task' });
 
     // Watch the board workspace event stream for the whole exercise.
-    const sseRes = await local(`/events/workspace/${wsId}`);
+    const sseRes = await local(`/workspaces/${wsId}/events:stream`);
     expect(sseRes.status).toBe(200);
     const sse = listen(sseRes);
 
@@ -373,7 +373,7 @@ describe('ydoc projection + workspace room', () => {
   });
 
   it('rejects the workspace event stream for an unknown workspace', async () => {
-    const r = await local('/events/workspace/w-missing');
+    const r = await local('/workspaces/w-missing/events:stream');
     expect(r.status).toBe(404);
   });
 

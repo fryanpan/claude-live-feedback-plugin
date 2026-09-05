@@ -232,7 +232,7 @@ describe('voice actions (§3.8): status and assignee, on the speaker’s authori
     // queued fallback is proved on a board that genuinely has nobody.
     expect(
       (
-        await post(`/api/workspaces/${boardId}/attachments`, {
+        await post(`/workspaces/${boardId}/agents`, {
           agentId: 'agent-search-revamp',
           runtime: 'claude-code-local',
         })

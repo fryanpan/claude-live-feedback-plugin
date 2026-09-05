@@ -2,7 +2,7 @@
  * Hold the workspace event stream the way a real attached agent holds it.
  *
  * Attaching is not the same act as being reachable. The MCP does both — it
- * POSTs the attach and then opens `/events/workspace/<id>` (mcp.ts, the
+ * POSTs the attach and then opens `/workspaces/<id>/events:stream` (mcp.ts, the
  * `subscribe !== false` line in `attach_agent`) — but a test that only does
  * the first half describes an agent that registered and then never connected.
  * The server delivers a request by BROADCASTING on `ws~<id>`, so for that
@@ -33,11 +33,14 @@ export async function openWorkspaceStream(
 ): Promise<AgentStream> {
   const controller = new AbortController();
   const query = agentId ? `?agentId=${encodeURIComponent(agentId)}` : '';
-  const res = await fetch(`${base}/events/workspace/${encodeURIComponent(workspaceId)}${query}`, {
-    ...init,
-    signal: controller.signal,
-    headers: { accept: 'text/event-stream', ...((init.headers as Record<string, string>) ?? {}) },
-  });
+  const res = await fetch(
+    `${base}/workspaces/${encodeURIComponent(workspaceId)}/events:stream${query}`,
+    {
+      ...init,
+      signal: controller.signal,
+      headers: { accept: 'text/event-stream', ...((init.headers as Record<string, string>) ?? {}) },
+    },
+  );
   if (!res.ok) {
     controller.abort();
     throw new Error(`workspace stream ${workspaceId}: HTTP ${res.status}`);

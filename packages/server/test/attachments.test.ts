@@ -467,7 +467,7 @@ describe('attachment routes + lead-addressed delivery', () => {
     // first says who it is, so the roster row is written here — and an older
     // bundle that sends no name still attaches, under its id.
     const wsId = await makeWorkspace('roster-board');
-    const r = await post(`/api/workspaces/${wsId}/attachments`, {
+    const r = await post(`/workspaces/${wsId}/agents`, {
       agentId: 'agent-lighthouse',
       agentName: 'Lighthouse',
       runtime: 'claude-code-local',
@@ -478,7 +478,7 @@ describe('attachment routes + lead-addressed delivery', () => {
     expect(rec?.displayName).toBe('Lighthouse');
     expect(handle.identities.resolveAgentId('lighthouse')).toBe('agent-lighthouse');
 
-    const old = await post(`/api/workspaces/${wsId}/attachments`, {
+    const old = await post(`/workspaces/${wsId}/agents`, {
       agentId: 'agent-legacy-bundle',
       runtime: 'claude-code-local',
     });
@@ -488,7 +488,7 @@ describe('attachment routes + lead-addressed delivery', () => {
 
   it('POST attach → GET list round-trips every param, including endpoint + capabilities', async () => {
     const wsId = await makeWorkspace('routes-board');
-    const r = await post(`/api/workspaces/${wsId}/attachments`, {
+    const r = await post(`/workspaces/${wsId}/agents`, {
       agentId: 'relay-agent',
       runtime: 'webhook',
       endpoint: ENDPOINT,
@@ -506,7 +506,7 @@ describe('attachment routes + lead-addressed delivery', () => {
     expect(body.gating.summary).toBe('no open gating decisions');
     expect(body.untriaged).toEqual([]);
 
-    const list = await local(`/api/workspaces/${wsId}/attachments`);
+    const list = await local(`/workspaces/${wsId}/agents`);
     expect(list.status).toBe(200);
     const listBody = (await list.json()) as {
       attachments: Array<AgentAttachment & { state: string; stateLabel: string }>;
@@ -522,26 +522,23 @@ describe('attachment routes + lead-addressed delivery', () => {
 
   it('validates: 400 on missing agentId / bad runtime, 404 on unknown workspace', async () => {
     const wsId = await makeWorkspace('bad-board');
-    expect((await post(`/api/workspaces/${wsId}/attachments`, { runtime: 'webhook' })).status).toBe(
-      400,
-    );
+    expect((await post(`/workspaces/${wsId}/agents`, { runtime: 'webhook' })).status).toBe(400);
     expect(
       (
-        await post(`/api/workspaces/${wsId}/attachments`, {
+        await post(`/workspaces/${wsId}/agents`, {
           agentId: 'x',
           runtime: 'carrier-pigeon',
         })
       ).status,
     ).toBe(400);
     expect(
-      (await post('/api/workspaces/w-nope/attachments', { agentId: 'x', runtime: 'webhook' }))
-        .status,
+      (await post('/workspaces/w-nope/agents', { agentId: 'x', runtime: 'webhook' })).status,
     ).toBe(404);
   });
 
   it('heartbeat route forwards toolCallAt (the groups lesson: prove it through the real route)', async () => {
     const wsId = await makeWorkspace('hb-routes-board');
-    const attach = await post(`/api/workspaces/${wsId}/attachments`, {
+    const attach = await post(`/workspaces/${wsId}/agents`, {
       agentId: 'lead',
       runtime: 'claude-code-local',
     });
@@ -551,7 +548,7 @@ describe('attachment routes + lead-addressed delivery', () => {
     // Let the clock pass t0+5, or the claim is (correctly) clamped as a
     // forward-dated one.
     await settle(20);
-    const hb = await post(`/api/workspaces/${wsId}/attachments/lead/heartbeat`, {
+    const hb = await post(`/workspaces/${wsId}/agents/lead/heartbeat`, {
       toolCallAt: t0 + 5,
     });
     expect(hb.status).toBe(200);
@@ -559,24 +556,22 @@ describe('attachment routes + lead-addressed delivery', () => {
     expect(hbBody.attachment.lastToolCallAt).toBe(t0 + 5);
     expect(hbBody.attachment.lastHeartbeat).toBeGreaterThanOrEqual(t0);
 
-    expect((await post(`/api/workspaces/${wsId}/attachments/ghost/heartbeat`, {})).status).toBe(
-      404,
-    );
+    expect((await post(`/workspaces/${wsId}/agents/ghost/heartbeat`, {})).status).toBe(404);
   });
 
   it('DELETE detaches; agent.* events reach the workspace SSE channel', async () => {
     const wsId = await makeWorkspace('sse-board');
-    const sseRes = await local(`/events/workspace/${wsId}`);
+    const sseRes = await local(`/workspaces/${wsId}/events:stream`);
     expect(sseRes.status).toBe(200);
     const sse = listen(sseRes);
     try {
-      await post(`/api/workspaces/${wsId}/attachments`, {
+      await post(`/workspaces/${wsId}/agents`, {
         agentId: 'lead',
         runtime: 'claude-code-local',
         endpoint: ENDPOINT,
       });
-      await post(`/api/workspaces/${wsId}/attachments/lead/heartbeat`, {});
-      const del = await local(`/api/workspaces/${wsId}/attachments/lead`, { method: 'DELETE' });
+      await post(`/workspaces/${wsId}/agents/lead/heartbeat`, {});
+      const del = await local(`/workspaces/${wsId}/agents/lead`, { method: 'DELETE' });
       expect(del.status).toBe(200);
       await settle();
       expect(sse.events).toContain('agent.attached');
@@ -588,7 +583,7 @@ describe('attachment routes + lead-addressed delivery', () => {
       // Positive control: the same data lines DO carry the agent identity.
       expect(sse.data.join('\n')).toContain('"agentId":"lead"');
 
-      const del2 = await local(`/api/workspaces/${wsId}/attachments/lead`, { method: 'DELETE' });
+      const del2 = await local(`/workspaces/${wsId}/agents/lead`, { method: 'DELETE' });
       expect(del2.status).toBe(404);
     } finally {
       sse.stop();
@@ -602,7 +597,7 @@ describe('attachment routes + lead-addressed delivery', () => {
     // them — a cold board never emitted, a live one always did — so a
     // cold-only assertion would pass against the code this replaces.
     const coldWs = await makeWorkspace('cold-board');
-    const coldSse = listen(await local(`/events/workspace/${coldWs}`));
+    const coldSse = listen(await local(`/workspaces/${coldWs}/events:stream`));
     const cold = await post(`/api/workspaces/${coldWs}/tasks`, {
       author: PERSON,
       title: 'Nobody home',
@@ -618,11 +613,11 @@ describe('attachment routes + lead-addressed delivery', () => {
 
     // LIVE attachment: the condition the removed flow fired under.
     const hotWs = await makeWorkspace('hot-board');
-    await post(`/api/workspaces/${hotWs}/attachments`, {
+    await post(`/workspaces/${hotWs}/agents`, {
       agentId: 'lead',
       runtime: 'claude-code-local',
     });
-    const hotSse = listen(await local(`/events/workspace/${hotWs}`));
+    const hotSse = listen(await local(`/workspaces/${hotWs}/events:stream`));
     const hot = await post(`/api/workspaces/${hotWs}/tasks`, {
       author: PERSON,
       title: 'Somebody home',
@@ -647,12 +642,12 @@ describe('attachment routes + lead-addressed delivery', () => {
     // reached the ydoc, and this test still refuses the latter.
     const wsId = await makeWorkspace('clean-room-board', 'agent-board-lead');
     await post(`/api/workspaces/${wsId}/tasks`, { author: PERSON, title: 'A visible task' });
-    await post(`/api/workspaces/${wsId}/attachments`, {
+    await post(`/workspaces/${wsId}/agents`, {
       agentId: 'relay-agent',
       runtime: 'webhook',
       endpoint: ENDPOINT,
     });
-    await post(`/api/workspaces/${wsId}/attachments/relay-agent/heartbeat`, {});
+    await post(`/workspaces/${wsId}/agents/relay-agent/heartbeat`, {});
     await settle();
 
     const room = handle.docStore.get(workspaceDocId(wsId));
@@ -698,7 +693,7 @@ describe('attachment routes + lead-addressed delivery', () => {
    * an agent that never connected.
    */
   const declareSelf = async (wsId: string, agentId: string) => {
-    await post(`/api/workspaces/${wsId}/attachments`, {
+    await post(`/workspaces/${wsId}/agents`, {
       agentId,
       runtime: 'claude-code-local',
     });
@@ -719,7 +714,7 @@ describe('attachment routes + lead-addressed delivery', () => {
     expect(seatBody.changed).toBe(true);
     expect(seatBody.workspace.leadAgentId).toBe('agent-self');
 
-    const list = (await (await local(`/api/workspaces/${wsId}/attachments`)).json()) as {
+    const list = (await (await local(`/workspaces/${wsId}/agents`)).json()) as {
       attachments: Array<AgentAttachment & { state: string }>;
     };
     const lead = list.attachments.find((a) => a.agentId === seatBody.workspace.leadAgentId);
@@ -741,7 +736,7 @@ describe('attachment routes + lead-addressed delivery', () => {
     // reaches the reader at all, and that it distinguishes the two states a
     // request can reach.
     const wsId = await makeWorkspace('seat-read-board', 'agent-absent');
-    const before = (await (await local(`/api/workspaces/${wsId}/attachments`)).json()) as {
+    const before = (await (await local(`/workspaces/${wsId}/agents`)).json()) as {
       seat: { leadAgentId?: string; live: boolean; stale: boolean; unattached?: boolean };
     };
     expect(before.seat.leadAgentId).toBe('agent-absent');
@@ -752,7 +747,7 @@ describe('attachment routes + lead-addressed delivery', () => {
     expect(before.seat.unattached).toBe(true);
 
     await declareSelf(wsId, 'agent-present');
-    const after = (await (await local(`/api/workspaces/${wsId}/attachments`)).json()) as {
+    const after = (await (await local(`/workspaces/${wsId}/agents`)).json()) as {
       seat: { leadAgentId?: string; live: boolean; stale: boolean; unattached?: boolean };
     };
     expect(after.seat.leadAgentId).toBe('agent-present');
@@ -788,7 +783,7 @@ describe('attachment routes + lead-addressed delivery', () => {
     // lead, and unreachable, which is exactly the case queuing exists for.
     // The seat starts with a seeded lead so the attach cannot claim it.
     const wsId = await makeWorkspace('third-party-board', 'agent-original');
-    await post(`/api/workspaces/${wsId}/attachments`, {
+    await post(`/workspaces/${wsId}/agents`, {
       agentId: 'agent-elsewhere',
       runtime: 'claude-code-local',
     });
@@ -798,7 +793,7 @@ describe('attachment routes + lead-addressed delivery', () => {
     });
     expect(seat.status).toBe(200);
 
-    const list = (await (await local(`/api/workspaces/${wsId}/attachments`)).json()) as {
+    const list = (await (await local(`/workspaces/${wsId}/agents`)).json()) as {
       attachments: AgentAttachment[];
     };
     // Only the agent's OWN attach is on record — neither the seeded seat nor
@@ -817,7 +812,7 @@ describe('attachment routes + lead-addressed delivery', () => {
     // And the queued note is still there for whoever does show up — the
     // whole point of refusing to fake the delivery.
     const drain = (await (
-      await post(`/api/workspaces/${wsId}/attachments`, {
+      await post(`/workspaces/${wsId}/agents`, {
         agentId: 'agent-elsewhere',
         runtime: 'claude-code-local',
       })

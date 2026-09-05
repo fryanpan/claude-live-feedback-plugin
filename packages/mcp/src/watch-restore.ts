@@ -145,7 +145,7 @@ async function ensureWatchesRestored(deps: WatchRestoreDeps, rt: RestoreRuntime)
         try {
           const attachRes = (await deps.http(
             'POST',
-            `/api/workspaces/${encodeURIComponent(workspaceId)}/attachments`,
+            `/workspaces/${encodeURIComponent(workspaceId)}/agents`,
             {
               agentId: deps.author.id,
               agentName: deps.author.name,

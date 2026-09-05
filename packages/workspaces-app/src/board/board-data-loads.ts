@@ -115,7 +115,7 @@ export function createBoardLoads(deps: BoardLoadDeps): BoardLoads {
       seat?: LeadSeatView;
       pluginRelease?: PluginRelease;
       clientRelease?: ClientRelease;
-    }>(`/api/workspaces/${encodeURIComponent(workspaceId)}/attachments`);
+    }>(`/workspaces/${encodeURIComponent(workspaceId)}/agents`);
     const before = knownAgentIds().join('\n');
     // Which sessions can't run what was merged. Rides the read the board
     // already makes, so nobody has to think to check.

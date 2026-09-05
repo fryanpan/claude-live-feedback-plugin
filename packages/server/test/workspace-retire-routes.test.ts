@@ -263,12 +263,12 @@ describe('retire / rename routes', () => {
     expect(r.status).toBe(200);
   });
 
-  it('POST /api/workspaces/:id/attachments hands the lead its duplicate-name warning', async () => {
+  it('POST /workspaces/:id/agents hands the lead its duplicate-name warning', async () => {
     start();
     const stale = await newBoard('harbor-relay');
     const live = await newBoard('harbor-relay');
     // Both boards were created by this author, so it holds both lead seats.
-    const r = await post(`/api/workspaces/${live}/attachments`, {
+    const r = await post(`/workspaces/${live}/agents`, {
       agentId: AGENT.id,
       runtime: 'claude-code-local',
     });
@@ -282,7 +282,7 @@ describe('retire / rename routes', () => {
 
     // Retiring the stale one is the fix, and the fix has to clear the warning.
     await put(`/api/workspaces/${stale}/retired`, { retired: true, author: AGENT });
-    const after = await post(`/api/workspaces/${live}/attachments`, {
+    const after = await post(`/workspaces/${live}/agents`, {
       agentId: AGENT.id,
       runtime: 'claude-code-local',
     });
