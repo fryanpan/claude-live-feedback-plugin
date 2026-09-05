@@ -20,7 +20,7 @@ import {
 } from './auth/agent-token.ts';
 import { DEFAULT_HUB_WORKSPACE_NAME, createBoardMembership } from './board-membership.ts';
 import { type BrowserSentryConfig } from './browser-sentry.ts';
-import { ChatAudit, isSharedAgentName, localDay } from './chat-audit.ts';
+import { ChatAudit } from './chat-audit.ts';
 import { maybeCompress, maybeNotModified } from './compress.ts';
 import { DispatchRegistry } from './dispatch-registry.ts';
 import { createEffortScoring } from './effort-scoring.ts';
@@ -35,7 +35,6 @@ import { MeetingRelay } from './meeting-protocol.ts';
 import { MEETING_CAPTURE_ACTOR } from './meeting-task-capture.ts';
 import { MeetingStore } from './meetings.ts';
 import { isAllowedBrowserOrigin } from './middleware/browser-origin.ts';
-import { RECALL_STATUS_PATH } from './middleware/recall-callback-gate.ts';
 import { isGatedWrite, signInRequiredBody } from './middleware/write-gate.ts';
 import {
   PARK_MIGRATION_ACTOR,
@@ -46,14 +45,8 @@ import { parkNoteText } from './park-note.ts';
 import { publicBaseUrl } from './public-host.ts';
 import { createPushAnnounce } from './push-announce.ts';
 import type { NudgeTally } from './ready-nudge.ts';
-import {
-  CalendarConnectionStore,
-  CalendarSyncConsumer,
-  parseCalendarSyncWebhook,
-} from './recall-calendar.ts';
+import { CalendarConnectionStore, CalendarSyncConsumer } from './recall-calendar.ts';
 import { RecallMeetingRelay } from './recall-meeting.ts';
-import { parseBotStatusWebhook } from './recall-status.ts';
-import { svixHeadersFrom, verifySvixSignature } from './recall-webhook-auth.ts';
 import { unreachableCallbackReason } from './recall.ts';
 import { scanSettledDocRefs } from './refs-backfill.ts';
 import { createOriginPolicy, createRequestAdmission } from './request-admission.ts';
@@ -69,6 +62,7 @@ import {
 } from './routes/agent-identity.ts';
 import { type ArchiveRoutesContext, createArchiveRoutes } from './routes/archive.ts';
 import { type AuthShareRoutesContext, handleAuthShareRoutes } from './routes/auth-share.ts';
+import { type ChatAuditRoutesContext, handleChatAuditRoutes } from './routes/chat-audit-routes.ts';
 import type { DocRoutesContext } from './routes/docs-routes-context.ts';
 import {
   handleDocCreateListRoutes,
@@ -79,7 +73,18 @@ import {
   type MeetingCalendarRoutesContext,
   handleMeetingCalendarRoutes,
 } from './routes/meetings-calendar.ts';
-import { type OpsRoutesContext, handleOpsMetricsRoute, handleOpsRoutes } from './routes/ops.ts';
+import {
+  type OpsRoutesContext,
+  handleOpsMetricsRoute,
+  handleOpsRoutes,
+  handleSummaryBackfillRoute,
+  handleWebhookLogRoute,
+} from './routes/ops.ts';
+import {
+  type RecallWebhookRoutesContext,
+  handleRecallWebhookRoute,
+} from './routes/recall-webhook.ts';
+import { type ReviewFileRoutesContext, handleReviewFileRoutes } from './routes/review-files.ts';
 import {
   type TaskRoutesContext,
   handleDispatchAndNoteRoutes,
@@ -94,11 +99,6 @@ import {
 } from './routes/workspaces.ts';
 import { captureServerError, routePatternForSpan, withRouteSpan } from './sentry.ts';
 import type { ServerOptions } from './server-options.ts';
-import {
-  redactWorkspaceFilesForVisitor,
-  redactWorkspaceGroupedForVisitor,
-  redactWorkspaceTreeForVisitor,
-} from './share/redact-meta.ts';
 import { Shares } from './share/shares.ts';
 import { SharingGate } from './share/sharing-gate.ts';
 import { createShellStatic } from './shell-static.ts';
@@ -245,36 +245,6 @@ export interface ServerHandle {
   stop: () => Promise<void>;
 }
 
-/**
- * ===== COMPAT: the review API answers at two prefixes =====
- *
- * A diff review and a bound folder are REVIEWS. They were built as a second
- * thing called a "workspace" and their endpoints are still spelled
- * `/api/workspaces/<id>/…`, which is the vocabulary this change removes: the
- * canonical name is now `/api/reviews/<setId>/…`.
- *
- * Every one of these routes therefore matches BOTH prefixes. This is the whole
- * of the alias — one helper, one comment — and it exists because the callers
- * are plugin bundles running inside sessions nobody can restart, plus browser
- * tabs that are already open. They keep calling the address they were built
- * against and would get a 404 they could not explain from their own version.
- *
- * The bare `DELETE /api/workspaces/<id>` is deliberately NOT in here: that one
- * route fronts two stores (a board or a review, dispatched by id) and is
- * handled on its own.
- */
-const reviewApi = (sub: string): RegExp =>
-  new RegExp(`^/api/(?:reviews|workspaces)/([^/]+)/${sub}$`);
-const REVIEW_API = {
-  refresh: reviewApi('refresh'),
-  groups: reviewApi('groups'),
-  grouped: reviewApi('grouped'),
-  threads: reviewApi('threads'),
-  files: reviewApi('files'),
-  tree: reviewApi('tree'),
-  contextFile: reviewApi('context-file'),
-  editableFile: reviewApi('editable-file'),
-} as const;
 export function createServer(opts: ServerOptions = {}): ServerHandle {
   const port = opts.port ?? DEFAULT_PORT;
   const hostname = opts.hostname;
@@ -1481,9 +1451,27 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
     deployer,
     pushStore,
     pushNotifier,
+    webhookLog,
     j,
     safeJson,
     requestAddress: (req) => server.requestIP(req)?.address,
+  };
+
+  /** A review's own files — thread roll-up, grouped diff, tree, lazy opens. */
+  const reviewFileRoutesCtx: ReviewFileRoutesContext = { rooms, j, safeJson };
+
+  /** The chat-audit counters — one store, read and written by two routes. */
+  const chatAuditRoutesCtx: ChatAuditRoutesContext = { chatAudit, j, safeJson };
+
+  /** Recall's signed webhook — bot status changes and calendar sync events,
+   *  which arrive on the same endpoint because webhooks are workspace-level
+   *  at the vendor. */
+  const recallWebhookRoutesCtx: RecallWebhookRoutesContext = {
+    recallRelay,
+    calendarSync,
+    webhookReplayGuard,
+    meetingBotWebhookSecret: opts.meetingBotWebhookSecret,
+    j,
   };
 
   /** The archive family — the four archive/unarchive routes and the
@@ -1857,79 +1845,19 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           if (handled) return handled;
         }
 
-        // --- Recall's bot status-change webhook ---
-        //
-        // Workspace-level at the vendor, so it carries no token of ours and
-        // arrives for every bot this account creates; the relay ignores bot
-        // ids it does not know. Answered 200 even for an event we do not
-        // model — a non-2xx makes the vendor retry, and retrying will not
-        // make an unmodelled code become one.
-        //
-        // It lives under `/recall/` with the websocket upgrade below, and
-        // IMMEDIATELY above it, both on purpose. One prefix is the whole bot
-        // surface, which is what the dedicated callback hostname admits and
-        // what a tunnel rule can be written against; and the upgrade's own
-        // test is `startsWith('/recall/')`, so a status POST reaching it
-        // first would be answered `404 unknown endpoint` by the token
-        // lookup. Order is load-bearing — keep these two adjacent.
-        if (pathname === RECALL_STATUS_PATH && req.method === 'POST') {
-          const secret = opts.meetingBotWebhookSecret;
-          // ARMED ONLY WHILE ITS CREDENTIAL IS CONFIGURED — on every host,
-          // not just the dedicated callback one.
-          //
-          // `recallCallbackAllows` already closes this path on the callback
-          // hostname when `RECALL_WEBHOOK_SECRET` is unset, precisely because
-          // an unset secret used to mean "accept unsigned bodies". But the
-          // route is reachable on every other admitting host class too, and
-          // there the whole signature-and-replay block sat inside `if
-          // (secret)`: an unauthenticated non-browser caller on the LAN or the
-          // tailnet could inject arbitrary bot-status and calendar-sync
-          // events, unsigned and unbounded by the replay guard. Unset is the
-          // DEFAULT (`bin.ts` warns rather than refuses), so that was the
-          // shipped state.
-          //
-          // 404 rather than 401: without a secret there is no credential this
-          // route could check, so it is not a door that can be knocked on.
-          if (!secret) return j(404, { error: 'not_found' });
-          const raw = await req.text();
-          {
-            const svix = svixHeadersFrom(req.headers);
-            const signed = await verifySvixSignature({ secret, body: raw, headers: svix });
-            if (!signed) return j(401, { error: 'bad signature' });
-            // Signed, so the id is the vendor's — and a repeat of it inside
-            // the window is a captured request played back, not a delivery.
-            // 409 rather than a quiet 200: the ticket asks that a replay be
-            // REJECTED, and a rejection is what an operator reading the log
-            // can act on. The cost is that a genuine at-least-once duplicate
-            // from the vendor is retried against this 409 for a while; that
-            // is noise, and it is the rarer of the two cases by far.
-            // (Urgent-fixes ticket, 2026-09-02.)
-            if (!webhookReplayGuard.admit(svix.id ?? '')) {
-              return j(409, { error: 'replayed webhook', id: svix.id });
-            }
-          }
-          let parsed: unknown;
-          try {
-            parsed = JSON.parse(raw);
-          } catch {
-            return j(400, { error: 'bad json' });
-          }
-          const event = parseBotStatusWebhook(parsed);
-          if (event) recallRelay.onStatus(event);
-          // The same Svix-signed endpoint carries the CALENDAR webhooks —
-          // webhooks are workspace-level at the vendor — so a body that is
-          // not a bot status may be a `calendar.sync_events`. Consumed after
-          // the 200 is decided: the vendor's contract is "you got it", and a
-          // list-and-reconcile that takes seconds must not make it retry.
-          if (!event && calendarSync) {
-            const sync = parseCalendarSyncWebhook(parsed);
-            if (sync) {
-              calendarSync.onSync(sync).catch((err: unknown) => {
-                console.error('[calendar] sync_events consume failed:', err);
-              });
-            }
-          }
-          return j(200, { ok: true });
+        // --- Recall's bot status-change webhook --- see
+        // ./routes/recall-webhook.ts. Called from the position the block
+        // held: it must stay IMMEDIATELY above the `/recall/` websocket
+        // upgrade below, because that upgrade's own test is
+        // `startsWith('/recall/')` and would answer a status POST with the
+        // token lookup's 404. That adjacency is behaviour — keep these two
+        // adjacent.
+        {
+          const handled = await handleRecallWebhookRoute(recallWebhookRoutesCtx, {
+            req,
+            pathname,
+          });
+          if (handled) return handled;
         }
 
         // ── Upgrade and stream ── see upgrade-stream.ts.
@@ -1955,6 +1883,19 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           return streamed.response;
         }
 
+        // --- REST: run the summary backfill on request --- see
+        // ./routes/ops.ts. Same chain position as before the split: above the
+        // metrics route, which is the next call below.
+        {
+          const handled = await handleSummaryBackfillRoute(opsRoutesCtx, {
+            req,
+            pathname,
+            visitor,
+            authorFor,
+          });
+          if (handled) return handled;
+        }
+
         // --- REST: what this process currently costs ---
         //
         // The 2026-08-29 jetsam kill left nothing to read: the server was at
@@ -1967,28 +1908,6 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
         // it safe to leave un-gated for anyone already past the front door,
         // and it still refuses a share visitor: an external reviewer invited
         // to one document has no business reading how many others exist.
-        /**
-         * Run the one-shot summary backfill NOW, on request.
-         *
-         * It used to be reachable only by restarting the server with
-         * CW_SUMMARY_BACKFILL=1, which made a piece of catch-up work into a
-         * reason to bounce the process — the opposite of what a cheap boot
-         * is for. It is the same sweep with the same pacing and the same
-         * skip-if-summarized rule; what changed is that asking for it no
-         * longer costs a restart.
-         *
-         * Still deliberate rather than automatic: the backlog is hundreds of
-         * billed calls, so nothing schedules this. Somebody asks.
-         */
-        if (pathname === '/api/summaries/backfill' && req.method === 'POST') {
-          if (visitor) return j(403, { error: 'not available to share visitors' });
-          const body = await safeJson(req);
-          const minutes = Number(body?.windowMinutes ?? 15);
-          const windowMs = (Number.isFinite(minutes) && minutes > 0 ? minutes : 15) * 60_000;
-          const { queued, open, resolved } = rooms.backfillSummaries({ windowMs });
-          return j(200, { ok: true, queued, open, resolved, windowMs });
-        }
-
         {
           const handled = handleOpsMetricsRoute(opsRoutesCtx, {
             req,
@@ -2102,53 +2021,16 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           });
           if (handled) return handled;
         }
-        // --- REST: chat-audit counters ---
-        // The daily chat audit publishes per-agent unfiled-ask counts here
-        // (POST), and any session reads its own back (GET /:agent). The
-        // server stores the audit's number rather than measuring anything —
-        // it cannot see chat — so the count a session queries and the count
-        // the audit reports are the same row. See chat-audit.ts.
-        if (pathname === '/api/chat-audit') {
-          // Same defense-in-depth posture as the agent-watches route: no
-          // share host reaches here today, and this keeps a later
-          // allowlisting from exposing fleet discipline numbers to an
-          // external reviewer.
-          if (visitor) return j(403, { error: 'not available to share visitors' });
-          if (req.method === 'GET') {
-            return j(200, { day: localDay(Date.now()), rows: chatAudit.latestPerAgent() });
-          }
-          if (req.method === 'POST') {
-            const body = await safeJson(req);
-            try {
-              const res = chatAudit.publish({
-                day: typeof body?.day === 'string' ? body.day : undefined,
-                auditor: typeof body?.auditor === 'string' ? body.auditor : undefined,
-                // The store re-validates every field before a byte lands, so
-                // this cast narrows shape only, not trust.
-                entries: Array.isArray(body?.entries)
-                  ? (body?.entries as Parameters<ChatAudit['publish']>[0]['entries'])
-                  : [],
-              });
-              return j(200, res);
-            } catch (e) {
-              return j(400, { error: e instanceof Error ? e.message : String(e) });
-            }
-          }
-          return j(405, { error: 'method not allowed' });
-        }
-        const chatAuditMatch = pathname.match(/^\/api\/chat-audit\/([^/]+)$/);
-        if (chatAuditMatch) {
-          if (visitor) return j(403, { error: 'not available to share visitors' });
-          if (req.method !== 'GET') return j(405, { error: 'method not allowed' });
-          const agent = decodeURIComponent(chatAuditMatch[1] ?? '').trim();
-          if (!agent) return j(400, { error: 'bad agent name' });
-          if (isSharedAgentName(agent)) {
-            return j(400, {
-              error: `"${agent}" is a shared identity — counts are kept per display name (CW_AGENT_NAME)`,
-            });
-          }
-          const day = localDay(Date.now());
-          return j(200, { agent, day, ...chatAudit.readFor(agent, day) });
+        // --- REST: chat-audit counters --- see ./routes/chat-audit-routes.ts.
+        // Same chain position as before the split: after the builder
+        // dispatches, before the operator routes.
+        {
+          const handled = await handleChatAuditRoutes(chatAuditRoutesCtx, {
+            req,
+            pathname,
+            visitor,
+          });
+          if (handled) return handled;
         }
         // --- Operator routes: plugin refresh, push and deploy — ./routes/ops.ts ---
         // Same chain position as before the split: after the chat-audit
@@ -2198,122 +2080,19 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           });
           if (handled) return handled;
         }
-        // File-tree view for a bound workspace: nested directory tree with
-        // per-file unresolved-comment counts + folder roll-ups. Files are
-        // decorated with reviewUrl by the rooms decorator (withReviewUrl).
-        // All threads across a workspace (folder bind or diff review) in one
-        // call — lets a watching agent poll a single endpoint per review
-        // instead of one per member file. ?status=open|resolved filters.
-        const wsThreadsMatch = pathname.match(REVIEW_API.threads);
-        if (wsThreadsMatch && req.method === 'GET') {
-          const setId = decodeURIComponent(wsThreadsMatch[1] ?? '');
-          if (!rooms.list().some((m) => reviewIdOf(m) === setId)) {
-            return j(404, { error: 'review not found', setId, workspaceId: setId });
-          }
-          const status = url.searchParams.get('status') as 'open' | 'resolved' | null;
-          const threads = rooms
-            .listWorkspaceThreads(setId, status ? { status } : undefined)
-            .map((t) => withTaskChips(t.docId, t));
-          // `workspaceId` carries the SAME value and is deprecated for one
-          // release: callers built before the rename read it by that name.
-          return j(200, { setId, workspaceId: setId, threads });
-        }
-        // Grouped-diff sidebar model: changed files organized into logical
-        // groups (agent-supplied or heuristic). The default nav for diff
-        // reviews.
-        const wsGroupedMatch = pathname.match(REVIEW_API.grouped);
-        if (wsGroupedMatch && req.method === 'GET') {
-          const setId = decodeURIComponent(wsGroupedMatch[1] ?? '');
-          const grouped = rooms.listGroupedDiff(setId);
-          if (grouped.groups.length === 0) {
-            return j(404, { error: 'no diff review found', setId, workspaceId: setId });
-          }
-          // Every file node carries the same absolute `reviewUrl` /tree and
-          // /files build, and this route is on the same visitor allowlist
-          // line — see redactWorkspaceGroupedForVisitor.
-          return j(
-            200,
-            visitor ? redactWorkspaceGroupedForVisitor(grouped, visitor.workspaceId) : grouped,
-          );
-        }
-        // Re-reconcile a workspace against disk: pick up files that changed
-        // since the bind, flag members whose file is gone. Never re-mints a
-        // docId, so every comment thread survives.
-        const wsRefreshMatch = pathname.match(REVIEW_API.refresh);
-        if (wsRefreshMatch && req.method === 'POST') {
-          const setId = decodeURIComponent(wsRefreshMatch[1] ?? '');
-          const res = rooms.refreshWorkspace(setId);
-          if (res.ok) return j(200, res);
-          return j(res.error === 'not-found' ? 404 : 400, res);
-        }
-        // Re-group a diff review's sidebar in place. An empty `groups` array
-        // is meaningful (fall back to the heuristic); a MISSING one is a
-        // caller mistake, so it 400s rather than silently regrouping.
-        const wsGroupsMatch = pathname.match(REVIEW_API.groups);
-        if (wsGroupsMatch && req.method === 'POST') {
-          const setId = decodeURIComponent(wsGroupsMatch[1] ?? '');
-          const body = await safeJson(req);
-          const groups = body?.groups;
-          if (!Array.isArray(groups)) return j(400, { error: 'groups array required' });
-          const res = rooms.setWorkspaceGroups(
-            setId,
-            groups as Array<{ title: string; paths: string[]; details?: string }>,
-          );
-          if (res.ok) return j(200, res);
-          return j(res.error === 'not-found' ? 404 : 400, res);
-        }
-        // Every file in the workspace's repo (changed ones marked) — the
-        // "Show All Files" context view.
-        const wsFilesMatch = pathname.match(REVIEW_API.files);
-        if (wsFilesMatch && req.method === 'GET') {
-          const setId = decodeURIComponent(wsFilesMatch[1] ?? '');
-          const res = rooms.listRepoFiles(setId);
-          if (!res.ok) return j(404, res);
-          // `root` is an absolute host path and every reviewUrl carries the
-          // tailnet hostname — neither belongs in a visitor's copy.
-          return j(200, visitor ? redactWorkspaceFilesForVisitor(res, visitor.workspaceId) : res);
-        }
-        // Lazily open an unchanged repo file for context (read-only code doc
-        // in the same workspace).
-        const wsCtxMatch = pathname.match(REVIEW_API.contextFile);
-        if (wsCtxMatch && req.method === 'POST') {
-          const setId = decodeURIComponent(wsCtxMatch[1] ?? '');
-          const body = await safeJson(req);
-          const relPath = body?.relPath as string | undefined;
-          if (!relPath) return j(400, { error: 'relPath required' });
-          const res = rooms.openContextFile(setId, relPath);
-          // `not-listed` is a 404 on purpose: the tree does not show the
-          // file, and whether it exists is exactly what must not be told.
-          if (!res.ok) return j(res.error === 'bad-path' ? 400 : 404, res);
-          return j(200, { docId: res.docId, meta: metaFor(res.meta) });
-        }
-        const wsEditMatch = pathname.match(REVIEW_API.editableFile);
-        if (wsEditMatch && req.method === 'POST') {
-          const setId = decodeURIComponent(wsEditMatch[1] ?? '');
-          const body = await safeJson(req);
-          const relPath = body?.relPath as string | undefined;
-          if (!relPath) return j(400, { error: 'relPath required' });
-          const res = rooms.openEditableFile(setId, relPath);
-          if (!res.ok) {
-            const status =
-              res.error === 'bad-path' || res.error === 'not-markdown'
-                ? 400
-                : res.error === 'pinned'
-                  ? 409
-                  : 404;
-            return j(status, res);
-          }
-          return j(200, { docId: res.docId, meta: metaFor(res.meta) });
-        }
-        const wsTreeMatch = pathname.match(REVIEW_API.tree);
-        if (wsTreeMatch && req.method === 'GET') {
-          const setId = decodeURIComponent(wsTreeMatch[1] ?? '');
-          const tree = rooms.buildWorkspaceTree(setId);
-          if (tree.tree.children.length === 0) {
-            return j(404, { error: 'review not found', setId, workspaceId: setId });
-          }
-          // Same redaction as /files — see redactWorkspaceTreeForVisitor.
-          return j(200, visitor ? redactWorkspaceTreeForVisitor(tree, visitor.workspaceId) : tree);
+        // --- REST: a review's own files --- see ./routes/review-files.ts.
+        // Same chain position as before the split: after the board delete,
+        // before the meeting and calendar routes.
+        {
+          const handled = await handleReviewFileRoutes(reviewFileRoutesCtx, {
+            req,
+            url,
+            pathname,
+            visitor,
+            metaFor,
+            withTaskChips,
+          });
+          if (handled) return handled;
         }
         // --- Meetings, transcripts and the calendar — ./routes/meetings-calendar.ts ---
         // Called from the position the block occupied: every
@@ -2343,9 +2122,16 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           if (handled) return handled;
         }
 
-        // --- Web log ---
-        if (pathname === '/api/webhooks/log') {
-          return j(200, { log: webhookLog.slice(-100) });
+        // --- Web log --- see ./routes/ops.ts. Same chain position as before
+        // the split: under the doc resource routes, above the shell tail.
+        {
+          const handled = handleWebhookLogRoute(opsRoutesCtx, {
+            req,
+            pathname,
+            visitor,
+            authorFor,
+          });
+          if (handled) return handled;
         }
 
         // ── Shell and static serving ── see shell-static.ts.
