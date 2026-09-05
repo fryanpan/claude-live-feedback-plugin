@@ -124,6 +124,17 @@ describe('security docs are wired together', () => {
       // all land on this file, so a PR that edits only it must still answer
       // them.
       'packages/server/src/shell-static.ts',
+      // …and the sixth, which is on the list by its nature rather than by
+      // argument. Every route in it ends in a LONG-LIVED connection, and a
+      // websocket is authorized exactly once — at its upgrade. The Origin
+      // checks that stand in for CORS on `/audio/` and `/y/`, the per-bot
+      // token that is the whole authentication for `/recall/`, the sign-in
+      // carry that makes an editing socket read-only, the `shareId` and
+      // `shareMember` stamps the revocation sweeps hunt by, and the share
+      // visitor's refusal from the agent-level stream all live here. A gate
+      // moved or reordered in this file cannot be caught later by a request
+      // that arrives afterwards, because there is no afterwards.
+      'packages/server/src/upgrade-stream.ts',
     ];
     for (const path of security) expect(pattern.test(path)).toBe(true);
 
