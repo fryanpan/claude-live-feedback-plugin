@@ -239,6 +239,13 @@ export function projectTask(
     // owed; a field the store can see and no surface can render is the bug
     // this line exists to avoid. Workspace content like every field here.
     ...(task.schedule !== undefined ? { schedule: task.schedule } : {}),
+    // The recurrence MARK — this row is one occurrence of a rule, and which
+    // one. Projected for the same reason the rule above is: the board draws a
+    // live instance in its own goal band with a mark back to the rule it came
+    // from, and a mark it cannot resolve is a mark it cannot draw. Narrow by
+    // construction (an id, an instant, a count), so there is nothing here to
+    // widen later.
+    ...(task.recurrenceOf !== undefined ? { recurrenceOf: task.recurrenceOf } : {}),
     // Soft-deleted, by whom, and why. Conditional like everything else here,
     // and the refresh deletes projected keys absent from this object — so a
     // RESTORE removes the keys and the row rejoins its lane with nothing
