@@ -69,6 +69,32 @@ describe('the rule reaches the browser', () => {
     expect(projectTask(row).schedule).toEqual(schedule);
   });
 
+  it('projects the recurrence mark, so the board can point a run at its rule', () => {
+    // The board draws a live instance in its own goal band with a mark back
+    // to the rule that made it. A mark it cannot resolve is a mark it cannot
+    // draw, so the field has to be on the wire and not only in the store.
+    const { workspaceId, goal, taskId: ruleId } = seedRow('Sweep the lamp room');
+    const mark = { taskId: ruleId, occurrenceAt: MON + 9 * 3_600_000, missed: 2 };
+    const run = store.createTask(workspaceId, {
+      title: 'Sweep the lamp room',
+      body: 'Agent can sweep the lamp room so that the beam stays clean.',
+      assignee: OWNER.name,
+      assigneeKind: 'agent',
+      goal,
+      actor: OWNER,
+      recurrenceOf: mark,
+    });
+    if (!run.ok) throw new Error(`create refused: ${run.error}`);
+    const row = store.getTask(run.task.id);
+    if (!row) throw new Error('instance vanished');
+    expect(projectTask(row).recurrenceOf).toEqual(mark);
+    // The control: the rule row itself is not a run of anything, so it must
+    // carry no mark — the two rows are told apart by exactly this field.
+    const ruleRow = store.getTask(ruleId);
+    if (!ruleRow) throw new Error('rule row vanished');
+    expect(projectTask(ruleRow)).not.toHaveProperty('recurrenceOf');
+  });
+
   it('projects no key at all for an unscheduled row', () => {
     // So a reader cannot mistake a row nobody has scheduled for one that is
     // armed and has never fired — `schedule.state` is what answers that, and

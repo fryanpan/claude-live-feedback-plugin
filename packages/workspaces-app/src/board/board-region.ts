@@ -242,6 +242,11 @@ export function createBoardRegion(deps: BoardDeps): BoardRegion {
       pane: state.pane,
       showArchived,
       knownAgentIds: knownAgentIds(),
+      // The UNFILTERED rows, by id. A live instance's recurrence mark and an
+      // after-completion rule's cursor both have to resolve a row the
+      // sections may not be showing, so this is built from the projection
+      // rather than from what the filters let through.
+      tasksById: new Map(taskList().map((t) => [t.id, t])),
       // Bands count too: the chip is the way back to the restore list, and a
       // board whose only archived thing is a goal must not read "0 archived"
       // and hide the door.

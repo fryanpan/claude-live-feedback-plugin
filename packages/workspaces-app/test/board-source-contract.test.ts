@@ -54,6 +54,12 @@ const px = (v: string) => Number.parseFloat(v);
  * `.board-task-badges` sits in an `auto` track — a track sized FROM the item —
  * so `max-width: 30%` meant "30% of yourself", and with `overflow: hidden`
  * the `decision` pill rendered as the two letters "de" on a phone.
+ *
+ * The cap survived that fix; the CLIP did not. It sat on the strip, where
+ * anything too wide simply stopped existing at the strip's edge — which is
+ * how the pill lost its tail without saying so, and how a second row later
+ * lost the word "triage" down to "t". The clip now sits on each chip, with
+ * an ellipsis, so a chip that has to give way says that it did.
  */
 describe('the row badges are capped against the viewport, not against themselves', () => {
   function badgeCap(width: number): string {
@@ -72,14 +78,20 @@ describe('the row badges are capped against the viewport, not against themselves
     expect(at430).toMatch(/px$/);
   });
 
-  it('positive control: the cap is what the phone adds, and the clip it protects is on the base rule', () => {
-    // Without the cap the badges would still be `overflow: hidden` — which is
-    // the half that turned an over-wide pill into "de". Both halves read.
+  it('positive control: the cap is what the phone adds, and the clip it protects announces itself', () => {
+    // Half one, unchanged: the cap is a phone rule, absent at 1180.
     expect(badgeCap(1180)).toBe('');
     setViewport(PHONE);
-    expect(
-      styleOf(attach('board-task-badges', { parent: attach('board-task-row') })).overflow,
-    ).toBe('hidden');
+    const strip = attach('board-task-badges', { parent: attach('board-task-row') });
+    // Half two, moved. The strip no longer hides anything — it wraps — and the
+    // chip inside it owns the crop. Read both, because a chip with
+    // `text-overflow` and no `overflow: hidden` ellipses nothing at all, and
+    // that pair failing open is exactly the silent cut this guards.
+    expect(styleOf(strip).flexWrap).toBe('wrap');
+    expect(['', 'visible']).toContain(styleOf(strip).overflow);
+    const chip = attach('board-badge', { parent: strip });
+    expect(styleOf(chip).overflow).toBe('hidden');
+    expect(styleOf(chip).textOverflow).toBe('ellipsis');
   });
 });
 

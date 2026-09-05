@@ -65,6 +65,7 @@ describe('createBoardRegion', () => {
       pane: 'board',
       showArchived: false,
       knownAgentIds: [],
+      tasksById: new Map(),
       archivedCount: 0,
     };
   });
