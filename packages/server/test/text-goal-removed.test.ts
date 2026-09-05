@@ -138,11 +138,11 @@ describe('the legacy text goal is removed', () => {
     it('leaves the workspace list without a goal column', async () => {
       await newWorkspace();
       const r = await local('/api/workspaces');
-      const { hubWorkspaces } = (await r.json()) as {
-        hubWorkspaces: Array<Record<string, unknown>>;
+      const { boardWorkspaces } = (await r.json()) as {
+        boardWorkspaces: Array<Record<string, unknown>>;
       };
-      expect(hubWorkspaces.length).toBeGreaterThan(0);
-      for (const row of hubWorkspaces) {
+      expect(boardWorkspaces.length).toBeGreaterThan(0);
+      for (const row of boardWorkspaces) {
         expect(row).not.toHaveProperty('goal');
         expect(row).toHaveProperty('name');
       }

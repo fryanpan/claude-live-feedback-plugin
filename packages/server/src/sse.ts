@@ -3,7 +3,7 @@ import type { ReplayMarks } from './sse-marks.ts';
 
 /**
  * Anything broadcast over SSE: thread/suggestion webhook payloads and the
- * hub task events. The hub only needs the event name here — the whole
+ * board task events. The bus only needs the event name here — the whole
  * object is serialized as the data line either way.
  */
 type SsePayload = { event: string };
@@ -94,7 +94,7 @@ type Sink = {
   close: () => void;
 };
 
-export class SseHub {
+export class SseBus {
   /**
    * docId → (sink → who opened it).
    *
@@ -598,7 +598,7 @@ export class SseHub {
   }
 }
 
-/** Produce a ReadableStream that emits SSE lines, and register with the hub.
+/** Produce a ReadableStream that emits SSE lines, and register with the bus.
  *  `shareId` tags the stream with the share that authorized it so revocation
  *  and expiry can hang it up. `transform` rewrites each payload before it is
  *  serialized — how a share visitor's stream gets the redacted view of an
@@ -616,7 +616,7 @@ export class SseHub {
  *  `transform` exactly like live ones, so a share visitor's catch-up is as
  *  redacted as their live view. */
 export function openSseStream(
-  hub: SseHub,
+  bus: SseBus,
   docId: string,
   shareId?: string,
   transform?: (payload: SsePayload & Record<string, unknown>) => SsePayload,
@@ -649,16 +649,16 @@ export function openSseStream(
       };
       // initial comment so proxies flush headers
       c.enqueue(encoder.encode(':ok\n\n'));
-      remove = hub.add(docId, sink, shareId, agentId, shareMember);
+      remove = bus.add(docId, sink, shareId, agentId, shareMember);
       // Catch-up, BETWEEN registration and the first live write. Everything
       // in start() runs synchronously on one event loop, so no broadcast can
-      // land between `hub.add` above and this replay — the replayed tail and
+      // land between `bus.add` above and this replay — the replayed tail and
       // the live feed meet with neither a hole nor a duplicate.
       if (lastEventId) {
         // The stream's own agentId scopes the replay: an agent's catch-up
         // includes the frames addressed to it, everyone else's excludes them
         // — the same visibility the live feed enforces.
-        const replay = hub.replayAfter(docId, lastEventId, agentId);
+        const replay = bus.replayAfter(docId, lastEventId, agentId);
         if (replay.ok) {
           for (const e of replay.events) sink.write(e.payload.event, e.payload, e.id);
         } else {

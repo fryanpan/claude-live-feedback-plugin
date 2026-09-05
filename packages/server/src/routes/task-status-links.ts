@@ -27,7 +27,7 @@ export async function handleTaskStatusAndLinks(
     j,
     safeJson,
     boardIndexForListing,
-    hubBoardsForDocIndexed,
+    boardsForDocIndexed,
     workspacesOfDoc,
   } = ctx;
   const { req, pathname, authorFor, visitor } = rq;
@@ -197,7 +197,7 @@ export async function handleTaskStatusAndLinks(
             if (!meta) return false;
             if (meta.workspaceId === workspaceId) return true;
             boardIndex ??= boardIndexForListing();
-            return hubBoardsForDocIndexed(boardIndex, meta).has(workspaceId);
+            return boardsForDocIndexed(boardIndex, meta).has(workspaceId);
           },
           task: (taskId) => {
             // Goals answer here too: they share the id namespace and

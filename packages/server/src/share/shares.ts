@@ -169,7 +169,7 @@ export class Shares {
     const shareId = randomHex(8);
     const slug = req.name ?? `${dateSlug(new Date())}-${randomHex(3)}`;
     const hostname = `share-${slug}.${this.config.baseHostname}`;
-    // A hub workspace share (empty docId) opens the hub page directly.
+    // A board workspace share (empty docId) opens the board page directly.
     const url = req.docId
       ? `https://${hostname}/review/${encodeURIComponent(req.docId)}`
       : `https://${hostname}/workspaces/${encodeURIComponent(req.workspaceId)}`;

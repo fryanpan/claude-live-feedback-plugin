@@ -1,5 +1,5 @@
 /**
- * Hub workspace + task routes, driven through the real route table.
+ * Board workspace + task routes, driven through the real route table.
  *
  * The route layer hand-copies body fields and nothing type-checks it — a
  * field that isn't forwarded is silently discarded while the request still
@@ -25,7 +25,7 @@ const AGENT = { id: 'agent-search-revamp', name: 'Search Revamp', kind: 'known',
 const DECISION_BODY =
   'Which of these two? Both land this week; the second costs a migration. Blocked until answered: the PR.';
 
-describe('hub workspace + task routes', () => {
+describe('board workspace + task routes', () => {
   let handle: ServerHandle;
   let dataDir: string;
   let folder: string;
@@ -60,8 +60,8 @@ describe('hub workspace + task routes', () => {
     for (const d of [dataDir, folder]) rmSync(d, { recursive: true, force: true });
   });
 
-  describe('POST /api/workspaces (hub create)', () => {
-    it('creates a hub workspace from a name and GET reads it back', async () => {
+  describe('POST /api/workspaces (board create)', () => {
+    it('creates a board workspace from a name and GET reads it back', async () => {
       const r = await post('/api/workspaces', { name: 'search-revamp' });
       expect(r.status).toBe(200);
       const { workspace } = (await r.json()) as {
@@ -100,7 +100,7 @@ describe('hub workspace + task routes', () => {
       writeFileSync(mdPath, '# Plan\n\nBody.\n');
       const planDocId = (
         (await (
-          await post('/api/docs', { docId: 'hub-plan-doc', type: 'markdown', sourceUrl: mdPath })
+          await post('/api/docs', { docId: 'board-plan-doc', type: 'markdown', sourceUrl: mdPath })
         ).json()) as { docId: string }
       ).docId;
 
@@ -108,7 +108,7 @@ describe('hub workspace + task routes', () => {
         workspace: { id: string };
       };
       // Attached by the readable name…
-      const r = await post(`/api/workspaces/${ws.workspace.id}/docs`, { docId: 'hub-plan-doc' });
+      const r = await post(`/api/workspaces/${ws.workspace.id}/docs`, { docId: 'board-plan-doc' });
       expect(r.status).toBe(200);
 
       const got = (await (await local(`/api/workspaces/${ws.workspace.id}`)).json()) as {
@@ -118,7 +118,7 @@ describe('hub workspace + task routes', () => {
       // cannot become two rows on the board.
       expect(got.workspace.docIds).toEqual([planDocId]);
       // The doc itself keeps working at its current URL — no migration.
-      const doc = await local('/api/docs/hub-plan-doc');
+      const doc = await local('/api/docs/board-plan-doc');
       expect(doc.status).toBe(200);
       const meta = (await doc.json()) as { meta: { workspaceId?: string } };
       expect(meta.meta.workspaceId).toBeUndefined();
@@ -140,7 +140,7 @@ describe('hub workspace + task routes', () => {
       };
       const noDoc = await post(`/api/workspaces/${ws.workspace.id}/docs`, { docId: 'no-such' });
       expect(noDoc.status).toBe(404);
-      const noWs = await post('/api/workspaces/w-nope/docs', { docId: 'hub-plan-doc' });
+      const noWs = await post('/api/workspaces/w-nope/docs', { docId: 'board-plan-doc' });
       expect(noWs.status).toBe(404);
     });
 
@@ -196,7 +196,7 @@ describe('hub workspace + task routes', () => {
         after: [gate.task.id],
         afterEnforce: [gate.task.id],
         dueAt: 1770000000000,
-        links: [{ kind: 'doc', docId: 'hub-plan-doc' }],
+        links: [{ kind: 'doc', docId: 'board-plan-doc' }],
         quote: 'pick one of these for me',
         author: AGENT,
       };
@@ -237,7 +237,7 @@ describe('hub workspace + task routes', () => {
       expect(stored?.needs).toBe('decision');
       expect(stored?.quote).toBe('pick one of these for me');
       expect(stored?.dueAt).toBe(1770000000000);
-      expect(stored?.links).toEqual([{ kind: 'doc', docId: 'hub-plan-doc' }]);
+      expect(stored?.links).toEqual([{ kind: 'doc', docId: 'board-plan-doc' }]);
       expect(stored?.after).toEqual([gate.task.id]);
       expect(stored?.afterEnforce).toEqual([gate.task.id]);
       expect(stored?.options?.length).toBe(2);
@@ -250,8 +250,8 @@ describe('hub workspace + task routes', () => {
         assignee: 'human',
         needs: 'decision',
         quote: 'which of these two?',
-        links: [{ kind: 'doc', docId: 'hub-plan-doc' }],
-        origin: { kind: 'thread', docId: 'hub-plan-doc', threadId: 'th-1' },
+        links: [{ kind: 'doc', docId: 'board-plan-doc' }],
+        origin: { kind: 'thread', docId: 'board-plan-doc', threadId: 'th-1' },
         dueAt: 1770000000000,
         body: 'Which of the two attached candidates? The warmer one costs a contrast pass. Blocked until answered: the mockup.',
         order: 7,
@@ -262,8 +262,8 @@ describe('hub workspace + task routes', () => {
       expect(task.assignee).toBe('human');
       expect(task.needs).toBe('decision');
       expect(task.quote).toBe('which of these two?');
-      expect(task.links).toEqual([{ kind: 'doc', docId: 'hub-plan-doc' }]);
-      expect(task.origin).toEqual({ kind: 'thread', docId: 'hub-plan-doc', threadId: 'th-1' });
+      expect(task.links).toEqual([{ kind: 'doc', docId: 'board-plan-doc' }]);
+      expect(task.origin).toEqual({ kind: 'thread', docId: 'board-plan-doc', threadId: 'th-1' });
       expect(task.dueAt).toBe(1770000000000);
       expect(task.body).toContain('Which of the two attached candidates?');
       expect(task.order).toBe(7);
@@ -506,7 +506,7 @@ describe('hub workspace + task routes', () => {
       expect(listed.tasks.find((t) => t.id === task.id)?.links).toEqual([{ kind: 'url', url: pr }]);
     });
 
-    // The hub renders links as clickable chips, so a ref is an href. Every
+    // The board renders links as clickable chips, so a ref is an href. Every
     // other kind is an internal id and can't carry a scheme; `url` is the
     // first that can, which makes it the first that can carry `javascript:`.
     it('refuses a URL ref whose scheme is not http(s)', async () => {

@@ -1,5 +1,5 @@
 /**
- * Visitor redaction for hub events riding the workspace SSE feed.
+ * Visitor redaction for board events riding the workspace SSE feed.
  *
  * The ws:<id> board room enforces the §3.3 visitor contract via projectTask
  * (transition actors as display names only). The SSE feed
@@ -11,7 +11,7 @@
  *
  * Pure and total: unknown events pass through untouched, so this can sit in
  * every visitor stream's write path without a maintained event list. Only
- * hub-shaped events (task.* / decision.* / review_item.* / workspace.* /
+ * board-shaped events (task.* / decision.* / review_item.* / workspace.* /
  * agent.* / triage.* / voice.*) are rewritten. Two fields carry ids — `actor`
  * (TaskActor) and `task` (a full Task) — and `voice.request` carries the
  * one field the §3.3 enumeration never granted: the utterance itself.
@@ -30,7 +30,7 @@ import type { Task } from '../tasks.ts';
  * were passing through untouched while `decision.*` beside them — the answer
  * to the very same ask — was reduced to name and kind.
  */
-const HUB_EVENT = /^(task|decision|review_item|workspace|agent|triage|voice)\./;
+const BOARD_EVENT = /^(task|decision|review_item|workspace|agent|triage|voice)\./;
 
 /**
  * Fields dropped outright from a visitor's copy of a `voice.*` event.
@@ -72,8 +72,8 @@ function isTaskShape(value: unknown): value is Task {
  * object itself when nothing needs redacting, so owner streams (which never
  * call this) and untouched events pay nothing.
  */
-export function redactHubEventForVisitor<T extends { event: string }>(payload: T): T {
-  if (!HUB_EVENT.test(payload.event)) return payload;
+export function redactBoardEventForVisitor<T extends { event: string }>(payload: T): T {
+  if (!BOARD_EVENT.test(payload.event)) return payload;
   const p = payload as unknown as { event: string } & Record<string, unknown>;
   const out: { event: string } & Record<string, unknown> = { ...p };
   if (p.actor !== undefined) out.actor = displayActor(p.actor);

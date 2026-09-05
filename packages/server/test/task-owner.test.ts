@@ -174,7 +174,7 @@ describe('task creation records a real owner', () => {
       );
       const stored = (await getTasks(wsId)).find((t) => t.id === task.id);
       expect(stored?.assignee).not.toBe(PERSON.name);
-      // The generic value is what the hub draws as "Unassigned" and what no
+      // The generic value is what the board draws as "Unassigned" and what no
       // agent's `next_tasks?assignee=<me>` matches: a vacancy, on purpose.
       expect(stored?.assignee).toBe(GENERIC_ASSIGNEE);
       expect(stored?.status).toBe('triage');

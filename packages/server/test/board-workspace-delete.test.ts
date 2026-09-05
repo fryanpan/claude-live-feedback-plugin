@@ -1,14 +1,14 @@
 /**
- * DELETE /api/workspaces/:id, for a HUB workspace.
+ * DELETE /api/workspaces/:id, for a BOARD workspace.
  *
- * The route existed and did not cover hub workspaces at all:
+ * The route existed and did not cover board workspaces at all:
  * `rooms.deleteWorkspace` starts from `rooms.list().filter(m =>
- * m.workspaceId === id)`, and a hub workspace has no doc members — hub
+ * m.workspaceId === id)`, and a board workspace has no doc members — board
  * workspaces live in `TaskStore`, a different store — so every call hit
  * `members.length === 0` and returned `not-found`. A workspace made for a
  * five-minute experiment was permanent.
  *
- * A hub workspace's footprint is bigger than its map entry, and every piece
+ * A board workspace's footprint is bigger than its map entry, and every piece
  * left behind fails differently:
  *   - the tasks sidecar    → hydrate RESURRECTS the workspace on restart
  *   - the events log       → the audit trail of a board nobody can see
@@ -56,7 +56,7 @@ const AGENT: User = {
   color: '#888888',
 };
 
-describe('DELETE /api/workspaces/:id — hub workspace', () => {
+describe('DELETE /api/workspaces/:id — board workspace', () => {
   let handle: ServerHandle | undefined;
   let dataDir: string | undefined;
   let base = '';
@@ -116,14 +116,14 @@ describe('DELETE /api/workspaces/:id — hub workspace', () => {
   };
 
   /**
-   * Hub boards and doc groupings are two lists in one payload, and the one
-   * this file is about is `hubWorkspaces` — reading `workspaces` reports a
-   * hub board as absent before anything has been deleted.
+   * Boards and doc groupings are two lists in one payload, and the one
+   * this file is about is `boardWorkspaces` — reading `workspaces` reports a
+   * board as absent before anything has been deleted.
    */
   const listWorkspaceIds = async (): Promise<string[]> => {
     const r = await fetch(`${base}/api/workspaces`);
-    const payload = (await r.json()) as { hubWorkspaces?: Array<{ id: string }> };
-    return (payload.hubWorkspaces ?? []).map((w) => w.id);
+    const payload = (await r.json()) as { boardWorkspaces?: Array<{ id: string }> };
+    return (payload.boardWorkspaces ?? []).map((w) => w.id);
   };
 
   /**
@@ -150,7 +150,7 @@ describe('DELETE /api/workspaces/:id — hub workspace', () => {
 
   /** A board with two tasks, one of them already closed. */
   async function seed(): Promise<{ wsId: string; open: Task; done: Task }> {
-    dataDir = mkdtempSync(join(tmpdir(), 'hub-ws-delete-'));
+    dataDir = mkdtempSync(join(tmpdir(), 'board-ws-delete-'));
     handle = await start(dataDir);
     const ws = await post('/api/workspaces', { name: 'scratch', goal: 'Try one thing.' });
     const wsId = ((await ws.json()) as { workspace: { id: string } }).workspace.id;
@@ -395,7 +395,7 @@ describe('DELETE /api/workspaces/:id — hub workspace', () => {
     //
     // Store-level, with a debounce long enough that "a write is pending" is
     // a fact rather than a race.
-    const dir = mkdtempSync(join(tmpdir(), 'hub-ws-delete-store-'));
+    const dir = mkdtempSync(join(tmpdir(), 'board-ws-delete-store-'));
     const store = new TaskStore({ dataDir: dir, debounceMs: 5000 });
     try {
       const ws = store.createWorkspace('scratch');
@@ -428,7 +428,7 @@ describe('DELETE /api/workspaces/:id — hub workspace', () => {
     const { wsId } = await seed();
     const docId = 'attached-spec';
     // Every markdown doc is file-backed, so the create needs a real path.
-    const docDir = mkdtempSync(join(tmpdir(), 'hub-ws-delete-doc-'));
+    const docDir = mkdtempSync(join(tmpdir(), 'board-ws-delete-doc-'));
     const docPath = join(docDir, 'spec.md');
     writeFileSync(docPath, '# Spec\n\nStill useful after the board is gone.\n');
     const created = await post('/api/docs', {
@@ -450,7 +450,7 @@ describe('DELETE /api/workspaces/:id — hub workspace', () => {
     rmSync(docDir, { recursive: true, force: true });
   });
 
-  it('404s on an id that is neither a hub board nor a doc grouping', async () => {
+  it('404s on an id that is neither a board nor a doc grouping', async () => {
     // Non-vacuous because the same route returns 200 above on a real id.
     await seed();
     expect((await del('/api/workspaces/w-nope?force=true')).status).toBe(404);
@@ -458,11 +458,11 @@ describe('DELETE /api/workspaces/:id — hub workspace', () => {
 
   it('still deletes a doc-grouping workspace — the pre-existing path', async () => {
     // Two different stores answer to the word "workspace", and ONE route
-    // creates both: `POST /api/workspaces` mints a hub board from `name` and
+    // creates both: `POST /api/workspaces` mints a board from `name` and
     // a doc grouping from `folderPath`. So the delete has to consult both,
-    // and the regression to fear is the new hub branch shadowing this one.
-    dataDir = mkdtempSync(join(tmpdir(), 'hub-ws-delete-grouping-'));
-    const folder = mkdtempSync(join(tmpdir(), 'hub-ws-delete-folder-'));
+    // and the regression to fear is the new board branch shadowing this one.
+    dataDir = mkdtempSync(join(tmpdir(), 'board-ws-delete-grouping-'));
+    const folder = mkdtempSync(join(tmpdir(), 'board-ws-delete-folder-'));
     writeFileSync(join(folder, 'README.md'), '# Member\n\nOne file is enough.\n');
     handle = await start(dataDir);
 

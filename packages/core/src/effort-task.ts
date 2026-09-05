@@ -68,7 +68,7 @@ export const EFFORT_MIN_CLOSES_FOR_PROJECTION = 3;
 export const DAY_MS = 24 * 60 * 60 * 1000;
 
 /** The slice of a transition this module reads. Structural, so both the
- *  server's `TaskTransition` and the client's `HubTransition` satisfy it. */
+ *  server's `TaskTransition` and the client's `BoardTransition` satisfy it. */
 export interface EffortTransition {
   ts: number;
   to: string;
@@ -77,7 +77,7 @@ export interface EffortTransition {
 /**
  * What this module needs off a ticket.
  *
- * Deliberately a structural subset of both `Task` (server) and `HubTask`
+ * Deliberately a structural subset of both `Task` (server) and `BoardTask`
  * (client) rather than either of them — that is what lets one
  * implementation serve both callers.
  */

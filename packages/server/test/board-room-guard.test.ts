@@ -4,9 +4,9 @@
  * handshake, so every absence it reports is vacuous — learnings.md).
  *
  *  1. **The `meta` map is a file-bind vector.** The projection guards the
- *     `tasks` and `workspace` maps; every OTHER type in a hub room was
+ *     `tasks` and `workspace` maps; every OTHER type in a board room was
  *     freely writable by any connected peer, share visitors included. The
- *     hub rooms (`ws:<id>`, `task:<id>`) are the only visitor-writable rooms
+ *     board rooms (`ws:<id>`, `task:<id>`) are the only visitor-writable rooms
  *     with no private-meta sidecar, so a peer-written `meta.sourceUrl`
  *     survived `readPrivateMeta` returning `{}` and was promoted into
  *     `room.meta` on the next load — where `hydrateFromDisk` binds the room
@@ -98,7 +98,7 @@ function connectDoc(url: string): {
   return { ws, ydoc, ready, close: () => ws.close() };
 }
 
-describe('hub rooms defend everything the server owns', () => {
+describe('board rooms defend everything the server owns', () => {
   let handle: ServerHandle;
   let dataDir: string;
   let base: string;
@@ -138,7 +138,7 @@ describe('hub rooms defend everything the server owns', () => {
   }
 
   beforeEach(() => {
-    dataDir = mkdtempSync(join(tmpdir(), 'hub-guard-'));
+    dataDir = mkdtempSync(join(tmpdir(), 'board-guard-'));
     secretPath = join(dataDir, 'private-notes.md');
     writeFileSync(secretPath, CANARY);
     handle = createServer({ port: 0, dataDir });

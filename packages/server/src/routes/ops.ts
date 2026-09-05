@@ -205,7 +205,7 @@ export async function handleOpsRoutes(
   // --- Push notifications ---
   //
   // Three verbs: what key to subscribe against, enrol a device, retire
-  // one. Enrolment is per browser-per-device, so the hub calls these
+  // one. Enrolment is per browser-per-device, so the board calls these
   // from a settings toggle rather than at page load.
   if (pathname === '/api/push/key' && req.method === 'GET') {
     const notifier = await pushNotifier();

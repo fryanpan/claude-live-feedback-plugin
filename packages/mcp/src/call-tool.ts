@@ -69,7 +69,7 @@ export const NO_AUTO_WATCH_TOOLS = new Set([
   'watch_doc',
   'observe_url',
   // attach_doc's docId may be a diff-review/folder workspaceId, which has no
-  // per-doc SSE channel — the hub watch is the WORKSPACE channel, wired by
+  // per-doc SSE channel — the board watch is the WORKSPACE channel, wired by
   // create_workspace / attach_agent instead.
   'attach_doc',
 ]);

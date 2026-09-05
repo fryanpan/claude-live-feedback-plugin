@@ -12,7 +12,7 @@
  * 99.92% of it one repeated line. Every cause was found by grepping by hand.
  *
  * Dynamic import, gated on the DSN being present — same pattern as the
- * browser's Sentry init in hub-app.ts. An unconfigured process (every test,
+ * browser's Sentry init in board-app.ts. An unconfigured process (every test,
  * every stranger's clone, prod with the env var unset) never imports
  * `@sentry/bun`, never calls `Sentry.init`, and never opens a socket to
  * anywhere. See sentry-server.test.ts, which proves that by pointing a real

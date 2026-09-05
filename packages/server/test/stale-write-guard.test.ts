@@ -9,7 +9,7 @@ import * as Y from 'yjs';
 import { getProseFragment } from '../../core/src/prose.ts';
 import { Rooms } from '../src/rooms.ts';
 import { type ServerHandle, createServer } from '../src/server.ts';
-import { SseHub } from '../src/sse.ts';
+import { SseBus } from '../src/sse.ts';
 import { createWebhookDispatcher } from '../src/webhooks.ts';
 
 /**
@@ -298,7 +298,7 @@ describe('Rooms.staleWriteCheck (10-minute fallback window)', () => {
     dataDir = mkdtempSync(join(tmpdir(), 'cw-stale-rooms-'));
     rooms = new Rooms({
       dataDir,
-      sse: new SseHub(),
+      sse: new SseBus(),
       webhooks: createWebhookDispatcher({ onLog: () => {} }),
     });
     rooms.getOrCreate('d1', { type: 'markdown' });

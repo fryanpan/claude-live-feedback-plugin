@@ -273,7 +273,7 @@ function boardQualifier(boardNames: readonly string[]): RegExp | null {
   if (names.length === 0) return null;
   const alt = names.map((n) => n.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|');
   return new RegExp(
-    `\\s+(?:in|on)\\s+(?:the\\s+)?(?:${alt})(?:\\s+(?:board|workspace|hub))?\\s*$`,
+    `\\s+(?:in|on)\\s+(?:the\\s+)?(?:${alt})(?:\\s+(?:board|workspace))?\\s*$`,
     'i',
   );
 }
@@ -480,16 +480,16 @@ export function answerBody(transcript: string): string | null {
   return body.length > 0 ? body : null;
 }
 
-// ── The hub's own destinations ─────────────────────────────────────────────
+// ── The board's own destinations ─────────────────────────────────────────────
 
 /**
- * The hub's four places, as `HubNav` in the client names them
- * (`packages/workspaces-app/src/hub/hub-presence-model.ts`): the URL suffix is the name,
+ * The board's four places, as `BoardNav` in the client names them
+ * (`packages/workspaces-app/src/board/board-presence-model.ts`): the URL suffix is the name,
  * except `tasks`, which is the bare workspace path. Mirrored rather than
  * imported — the server does not depend on the client package — and pinned
  * by voice-nav.test.ts against the paths `home-routes.test.ts` proves served.
  */
-export type HubDestination = 'home' | 'tasks' | 'mine' | 'activity';
+export type BoardDestination = 'home' | 'tasks' | 'mine' | 'activity';
 
 /**
  * What a person calls each destination, after the opener ("take me to") and
@@ -497,7 +497,7 @@ export type HubDestination = 'home' | 'tasks' | 'mine' | 'activity';
  * regex with "home" in it would swallow "open the home page redesign", which
  * is a task. Adding a phrase here is adding a row, not widening a pattern.
  */
-const HUB_DESTINATIONS: Record<HubDestination, readonly string[]> = {
+const BOARD_DESTINATIONS: Record<BoardDestination, readonly string[]> = {
   home: [
     'home',
     'homepage',
@@ -507,7 +507,6 @@ const HUB_DESTINATIONS: Record<HubDestination, readonly string[]> = {
     'my home',
     'my homepage',
     'my home page',
-    'hub',
   ],
   tasks: ['board', 'task board', 'tasks', 'task list', 'all tasks', 'board view'],
   mine: ['my tasks', 'my task list', 'my tasks tab'],
@@ -517,29 +516,29 @@ const HUB_DESTINATIONS: Record<HubDestination, readonly string[]> = {
 /** "go home" / "take me home" have no "to", so the opener never sees them. */
 const GO_HOME = new RegExp(`^${NAV_PREFIX}(?:go|take me|bring me|head)(?: back)? home$`, 'i');
 
-function destinationNamed(name: string): HubDestination | null {
+function destinationNamed(name: string): BoardDestination | null {
   const key = name
     .toLowerCase()
     .replace(/[^a-z0-9 ]+/g, ' ')
     .replace(/\s+/g, ' ')
     .trim()
     .replace(/^the /, '');
-  for (const nav of Object.keys(HUB_DESTINATIONS) as HubDestination[]) {
-    if (HUB_DESTINATIONS[nav].includes(key)) return nav;
+  for (const nav of Object.keys(BOARD_DESTINATIONS) as BoardDestination[]) {
+    if (BOARD_DESTINATIONS[nav].includes(key)) return nav;
   }
   return null;
 }
 
 /**
- * The hub destination an utterance asks for, or null when it names none —
+ * The board destination an utterance asks for, or null when it names none —
  * including when it names a task or doc whose title merely contains one of
  * these words. `boardNames` strips a trailing "in <board>" exactly as
  * `navigationAsk` does.
  */
-export function hubDestinationAsk(
+export function boardDestinationAsk(
   transcript: string,
   boardNames: readonly string[] = [],
-): HubDestination | null {
+): BoardDestination | null {
   const s = transcript.trim().replace(/[.!?]+$/, '');
   // "go home in QB": the qualifier is stripped here too, since this form
   // never reaches `navigationAsk`, which strips it for everything else.
@@ -558,7 +557,7 @@ const GOAL_FILLER = new Set(['the', 'my', 'our', 'a', 'priority', 'on', 'list', 
 /**
  * "open my top goal" → 0; "the second goal" → 1; "the last goal" → the
  * bottom of the order; "goal number two" → 1. Zero-based index into the
- * workspace's goals, which `HubWorkspace.goals` holds in priority order, or
+ * workspace's goals, which `BoardWorkspace.goals` holds in priority order, or
  * null: not a navigation ask, not about a goal, a goal named rather than
  * counted, or an ordinal past the end (an empty board included).
  */

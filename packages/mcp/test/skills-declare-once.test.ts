@@ -14,7 +14,7 @@
  *
  * SHAPE NOTE: the lead skill is operator-authored and deliberately minimal —
  * four sections, ~45 lines. The operational liveness material used to sit in a
- * `running-a-workspace-hub` skill beside it; that skill is gone, and its
+ * `running-a-workspace-board` skill beside it; that skill is gone, and its
  * content now lives in the description of the tool that owns each piece
  * (`set_workspace_lead` for the declare-once behaviour, `list_watched_docs`
  * for the quiet-board probe, `attach_agent` for the non-lead path). A tool
@@ -45,7 +45,7 @@ const SHIPPED: Array<[string, string]> = readdirSync(SKILLS, { withFileTypes: tr
 /** Skills that were retired. A dangling name in a skill, a triage line or a
  *  tool description reads as a skill the agent failed to FIND, not as one that
  *  no longer exists — which sends the reader looking for a broken install. */
-const RETIRED = ['running-a-workspace-hub', 'handling-a-goal-change', 'reviewing-task-shape'];
+const RETIRED = ['running-a-workspace-board', 'handling-a-goal-change', 'reviewing-task-shape'];
 
 /**
  * One line, lower-cased. Every assertion below that searches for a PHRASE runs
@@ -79,7 +79,7 @@ describe('the wrong delivery claims cannot come back in any skill', () => {
       // flattened text — see the note on `flatten` for why the raw file lets a
       // line wrap hide the sentence.
       expect(flatten(raw)).not.toMatch(/gated on a heartbeat/);
-      // And the retired hub's display-vs-delivery fusion stays gone.
+      // And the retired board's display-vs-delivery fusion stays gone.
       expect(flatten(raw)).not.toMatch(/away and triage requests queue/);
     });
   }
@@ -186,7 +186,7 @@ describe('positive controls — guidance that must survive the edit', () => {
     // checking every row against the standard. `handling-a-goal-change` went
     // because the operations do the task movement themselves — removing a band
     // sweeps its tasks, a reorder carries them, and `set_goal_list` refuses a
-    // removal that would strand work. `running-a-workspace-hub` went because
+    // removal that would strand work. `running-a-workspace-board` went because
     // its content belongs in the description of the tool that owns it.
     for (const gone of RETIRED) {
       expect(existsSync(join(SKILLS, gone))).toBe(false);

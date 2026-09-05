@@ -1,13 +1,13 @@
 /**
  * How the board's two WAKE events read to the lead agent that receives them.
  *
- * Everything else on the hub channel reports something a person or an agent
+ * Everything else on the board channel reports something a person or an agent
  * just did, and arrives while the recipient is already in the loop. These two
  * are the opposite: the board woke a session that was not thinking about this
  * board, at the cost of a turn, to say that work is waiting. That makes the
  * line the entire message — there is no surrounding context to fall back on.
  *
- * Both landed in the renderer's `default:` case, which renders an unknown hub
+ * Both landed in the renderer's `default:` case, which renders an unknown board
  * event as `[<event>] task <id>`. For a task transition among a stream of them
  * that is thin but survivable; for a wake it is the failure the nudger's
  * arming rules were written to prevent, reintroduced at the last hop. A lead
@@ -483,7 +483,7 @@ export function stalledLine(p: StallPayload): string {
  *
  * Spelled here rather than imported: this package publishes standalone and
  * does not depend on `@feedback/core`, whose `judgeReasonClause` is the same
- * rule for the server and the hub.
+ * rule for the server and the board.
  */
 function judgeReasonClauseLocal(reason: string): string {
   return reason.trim().replace(/\.+$/, '').trimEnd();

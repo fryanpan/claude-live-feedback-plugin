@@ -52,7 +52,7 @@ describe('voice, smoothly (route)', () => {
   let handle: ServerHandle;
   let dataDir: string;
   let base: string;
-  let hubId: string;
+  let boardId: string;
   let akashDocId: string;
   let decoyDocId: string;
   /** Attached mid-suite: the near-twin that makes the Akash ask ambiguous. */
@@ -99,13 +99,13 @@ describe('voice, smoothly (route)', () => {
     context: unknown,
     author: unknown = PERSON,
   ): Promise<{ route: string; ack: string; navigate?: string }> => {
-    const r = await post(`/api/workspaces/${hubId}/voice`, { transcript, context, author });
+    const r = await post(`/api/workspaces/${boardId}/voice`, { transcript, context, author });
     expect(r.status).toBe(200);
     return (await r.json()) as { route: string; ack: string; navigate?: string };
   };
 
   const newTask = async (body: Record<string, unknown>): Promise<string> => {
-    const r = await post(`/api/workspaces/${hubId}/tasks`, { author: PERSON, ...body });
+    const r = await post(`/api/workspaces/${boardId}/tasks`, { author: PERSON, ...body });
     expect(r.status).toBe(200);
     return ((await r.json()) as { task: { id: string } }).task.id;
   };
@@ -116,7 +116,7 @@ describe('voice, smoothly (route)', () => {
     const made = await post('/api/docs', { docId: name, type: 'markdown', sourceUrl: file, title });
     expect(made.status).toBe(200);
     const id = ((await made.json()) as { docId: string }).docId;
-    expect((await post(`/api/workspaces/${hubId}/docs`, { docId: id })).status).toBe(200);
+    expect((await post(`/api/workspaces/${boardId}/docs`, { docId: id })).status).toBe(200);
     return id;
   };
 
@@ -170,7 +170,7 @@ describe('voice, smoothly (route)', () => {
 
     const ws = await post('/api/workspaces', { name: 'QB', goal: 'Ship onboarding.' });
     expect(ws.status).toBe(200);
-    hubId = ((await ws.json()) as { workspace: { id: string } }).workspace.id;
+    boardId = ((await ws.json()) as { workspace: { id: string } }).workspace.id;
 
     akashDocId = await newDoc('akash-onboarding', AKASH);
     decoyDocId = await newDoc('billing-export', DECOY);
@@ -229,7 +229,7 @@ describe('voice, smoothly (route)', () => {
 
   it('Bryan’s phrase opens the Akash review doc, and no model was asked', async () => {
     calls.n = 0;
-    const body = await say("I want to go to the 'Akash review doc' in QB", { surface: 'hub' });
+    const body = await say("I want to go to the 'Akash review doc' in QB", { surface: 'board' });
     expect(body.route).toBe('fast-path');
     expect(body.navigate).toBe(`/review/${encodeURIComponent(akashDocId)}`);
     expect(body.ack).toContain(AKASH);
@@ -240,7 +240,7 @@ describe('voice, smoothly (route)', () => {
   it('a vague ask that matches NOTHING still reaches the model, with the index', async () => {
     calls.n = 0;
     completeImpl = () => Promise.resolve(JSON.stringify({ kind: 'lookup' }));
-    const body = await say('take me to the flux capacitor', { surface: 'hub' });
+    const body = await say('take me to the flux capacitor', { surface: 'board' });
     expect(calls.n).toBe(1);
     expect(body.navigate).toBeUndefined();
   });
@@ -249,7 +249,7 @@ describe('voice, smoothly (route)', () => {
     twinDocId = await newDoc('akash-billing', AKASH_TWIN);
     const twinId = twinDocId;
     calls.n = 0;
-    const asked = await say("I want to go to the 'Akash review doc' in QB", { surface: 'hub' });
+    const asked = await say("I want to go to the 'Akash review doc' in QB", { surface: 'board' });
     expect(asked.route).toBe('fast-path');
     expect(asked.navigate).toBeUndefined();
     expect(asked.ack).toContain(AKASH);
@@ -258,7 +258,7 @@ describe('voice, smoothly (route)', () => {
     expect(calls.n).toBe(0);
     // Which title the ack offered SECOND is the one "the second one" means.
     const secondIsTwin = asked.ack.indexOf(AKASH_TWIN) > asked.ack.indexOf(AKASH);
-    const picked = await say('the second one', { surface: 'hub' });
+    const picked = await say('the second one', { surface: 'board' });
     expect(picked.route).toBe('fast-path');
     expect(picked.navigate).toBe(
       `/review/${encodeURIComponent(secondIsTwin ? twinId : akashDocId)}`,
@@ -267,31 +267,31 @@ describe('voice, smoothly (route)', () => {
   });
 
   it('a choice can also be made by NAME after the ask', async () => {
-    const asked = await say('open the akash review', { surface: 'hub' });
+    const asked = await say('open the akash review', { surface: 'board' });
     expect(asked.navigate).toBeUndefined();
-    const picked = await say('the billing one', { surface: 'hub' });
+    const picked = await say('the billing one', { surface: 'board' });
     expect(picked.route).toBe('fast-path');
     expect(picked.navigate).toBe(`/review/${encodeURIComponent(twinDocId)}`);
     expect(picked.ack).toContain(AKASH_TWIN);
   });
 
   it('a pending "which one?" does not swallow an unrelated next utterance', async () => {
-    const asked = await say('open the akash review', { surface: 'hub' });
+    const asked = await say('open the akash review', { surface: 'board' });
     expect(asked.navigate).toBeUndefined();
     // Not an answer to the question — handled on its own terms (a status read).
-    const next = await say('brief status', { surface: 'hub' });
+    const next = await say('brief status', { surface: 'board' });
     expect(next.navigate).toBeUndefined();
     expect(next.ack.toLowerCase()).toContain('in progress');
     // And the question is gone: "the first one" now means nothing here.
     completeImpl = () => Promise.resolve(JSON.stringify({ kind: 'change' }));
-    const stale = await say('the first one', { surface: 'hub' });
+    const stale = await say('the first one', { surface: 'board' });
     expect(stale.navigate).toBeUndefined();
   });
 
   it('a "which one?" asked on the board is DROPPED once the speaker moves into a doc', async () => {
-    // Ask on the hub, tap into a decision doc, say "pick the second one":
+    // Ask on the board, tap into a decision doc, say "pick the second one":
     // that is an answer to the decision, not to the stale question.
-    const asked = await say('open the akash review', { surface: 'hub' });
+    const asked = await say('open the akash review', { surface: 'board' });
     expect(asked.navigate).toBeUndefined();
     calls.n = 0;
     const picked = await say('pick the second one', { surface: 'doc', docId: decisionDocId3 });
@@ -318,14 +318,14 @@ describe('voice, smoothly (route)', () => {
     const asked = await router.handle(ws.id, {
       transcript: 'open the akash review',
       actor,
-      context: { surface: 'hub' },
+      context: { surface: 'board' },
     });
     expect(asked.ok && asked.ack.includes('Did you mean')).toBe(true);
     now += CHOICE_WINDOW_MS + 1_000;
     const late = await router.handle(ws.id, {
       transcript: 'the second one',
       actor,
-      context: { surface: 'hub' },
+      context: { surface: 'board' },
     });
     expect(late.ok && late.navigate).toBeFalsy();
     expect(CHOICE_WINDOW_MS).toBeLessThanOrEqual(30_000);
@@ -336,7 +336,7 @@ describe('voice, smoothly (route)', () => {
 
   it('"brief status" on the board answers in ≤100 words, from the store, no model', async () => {
     calls.n = 0;
-    const body = await say('brief status', { surface: 'hub' });
+    const body = await say('brief status', { surface: 'board' });
     expect(body.route).toBe('fast-path');
     expect(body.navigate).toBeUndefined();
     expect(countWords(body.ack)).toBeLessThanOrEqual(VOICE_STATUS_MAX_WORDS);
@@ -405,7 +405,7 @@ describe('voice, smoothly (route)', () => {
   });
 
   it('a ticket merely HIGHLIGHTED, not open: a pick is not guessed — the ack asks', async () => {
-    // The hub sends `{surface:'task', taskId}` for a keyboard-focused row
+    // The board sends `{surface:'task', taskId}` for a keyboard-focused row
     // too. A row is not a review item the speaker is IN; without the item
     // open the answer would land on whatever the cursor happened to rest on.
     completeImpl = () => Promise.resolve(JSON.stringify({ kind: 'change' }));

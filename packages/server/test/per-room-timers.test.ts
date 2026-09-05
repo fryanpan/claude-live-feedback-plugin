@@ -17,14 +17,14 @@ import { prose } from '@feedback/core';
 import * as awarenessProtocol from 'y-protocols/awareness';
 import * as Y from 'yjs';
 import { Rooms, maintainAwareness } from '../src/rooms.ts';
-import { SseHub } from '../src/sse.ts';
+import { SseBus } from '../src/sse.ts';
 import { createWebhookDispatcher } from '../src/webhooks.ts';
 import { pastExternalRead, waitFor } from './wait-for.ts';
 
 function makeRooms(dataDir: string): Rooms {
   return new Rooms({
     dataDir,
-    sse: new SseHub(),
+    sse: new SseBus(),
     webhooks: createWebhookDispatcher({ onLog: () => {} }),
   });
 }

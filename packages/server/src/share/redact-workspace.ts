@@ -1,30 +1,30 @@
-import type { HubWorkspace, ParallelismCapChange } from '../tasks.ts';
+import type { BoardWorkspace, ParallelismCapChange } from '../tasks.ts';
 
 /**
  * Strip a board's record down to what a share or collab visitor needs.
  *
  * `GET /api/workspaces/<id>` is on the visitor allowlist, documented there as
  * "workspace name + goal text", and it used to answer with the stored
- * `HubWorkspace` verbatim. That record is partly a description of the HOST
+ * `BoardWorkspace` verbatim. That record is partly a description of the HOST
  * rather than of the board: `notesHome.repoRoot` is an absolute path on this
  * machine, and `retiredBy` carries an actor id the way every other visitor
- * surface refuses to (`redactHubEventForVisitor` reduces an actor to name and
+ * surface refuses to (`redactBoardEventForVisitor` reduces an actor to name and
  * kind; `listPublicAttachments` drops `endpoint`; `redactWorkspaceFilesForVisitor`
  * drops `root`). A visitor was handed one link, and the answer mapped a
  * filesystem for them.
  *
  * ALLOWLIST, NOT DENYLIST — the same rule `redactMetaForVisitor` is built on.
- * A field added to `HubWorkspace` later is withheld by default rather than
+ * A field added to `BoardWorkspace` later is withheld by default rather than
  * shipped until somebody notices it went out. The set below is exactly what
- * the board client declares it reads (`HubWorkspaceInfo` in
- * `workspaces-app/src/hub/hub-board-model.ts`), so widening it is a deliberate act
+ * the board client declares it reads (`BoardWorkspaceInfo` in
+ * `workspaces-app/src/board/board-model.ts`), so widening it is a deliberate act
  * with a surface asking for the field.
  *
  * `leadAgentId` STAYS: who is responsible for a board is workspace content,
  * a visitor already sees agent ids on the presence strip through
  * `PublicAttachment`, and the header says "nobody" without it.
  */
-export function redactHubWorkspaceForVisitor(workspace: HubWorkspace): Partial<HubWorkspace> {
+export function redactBoardWorkspaceForVisitor(workspace: BoardWorkspace): Partial<BoardWorkspace> {
   return {
     id: workspace.id,
     name: workspace.name,
@@ -48,8 +48,8 @@ export type VisitorCapChange = Omit<ParallelismCapChange, 'actor'> & {
  *
  * The cap and its author are board content — "set by X 2h ago" is what stops
  * a lowered cap being a mystery — so what is withheld is the id alone, the
- * same field `redactHubWorkspaceForVisitor` strips from `retiredBy` and
- * `redactHubEventForVisitor` strips from every hub event's actor.
+ * same field `redactBoardWorkspaceForVisitor` strips from `retiredBy` and
+ * `redactBoardEventForVisitor` strips from every board event's actor.
  *
  * ONE function because there are three doors onto this fact and they must
  * not answer differently: `GET /api/workspaces/<id>`, `GET …/settings`, and

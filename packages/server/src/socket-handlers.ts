@@ -94,7 +94,7 @@ export function createSocketHandlers(ctx: SocketHandlersContext): WebSocketHandl
 
   return {
     // Yjs sync step 2 hands a fresh tab the WHOLE room state in one binary
-    // frame. Measured over the live hub board's persisted state on
+    // frame. Measured over the live board's persisted state on
     // 2026-08-29: 1,264,566 bytes, deflating to 431,733 — 2.9×, or 813 KB
     // this server stops sending on every board open, every tab, every
     // reconnect. Every browser offers the extension already; the server

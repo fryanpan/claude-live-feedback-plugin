@@ -198,7 +198,7 @@ describe('a session never hears its own act come back', () => {
     expect(frames).toHaveLength(1);
   });
 
-  it('drops a hub event this session is the actor of', async () => {
+  it('drops a board event this session is the actor of', async () => {
     const { frames, messages } = harness();
     await messages.emitChannelMessage('task.transitioned', {
       workspaceId: 'w1',
@@ -211,7 +211,7 @@ describe('a session never hears its own act come back', () => {
   });
 });
 
-describe('hub events route to the hub renderer', () => {
+describe('board events route to the board renderer', () => {
   it('renders a created task with its goal and assignee', async () => {
     const { frames, messages } = harness();
     await messages.emitChannelMessage('task.created', {

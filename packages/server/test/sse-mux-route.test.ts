@@ -1,7 +1,7 @@
 /**
  * `/events/agent/<agentId>` end to end, through a real server.
  *
- * `sse-mux.test.ts` drives the fan-out against a bare `SseHub`; this file
+ * `sse-mux.test.ts` drives the fan-out against a bare `SseBus`; this file
  * proves the ROUTE is wired to the things it has to be wired to — the durable
  * watch store, its change hook, and the identity refusals — because every one
  * of those was a separate wire and a silent stream is what a broken one looks

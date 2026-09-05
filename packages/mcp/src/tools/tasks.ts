@@ -42,7 +42,7 @@ export interface TaskToolContext {
   claimNoticeFor: (taskId: string) => Promise<string | undefined>;
 }
 
-/** The task shape the hub routes return — only the fields the trimmed tool
+/** The task shape the board routes return — only the fields the trimmed tool
  *  results read; the wire object carries more. */
 interface TaskPayload {
   id: string;

@@ -41,7 +41,7 @@ import { ACCESS_NOT_CONFIGURED, type Shares } from '../share/shares.ts';
 import type { SharingGate } from '../share/sharing-gate.ts';
 import { resolveTtl } from '../share/ttl.ts';
 import { DEFAULT_LINK_TTL_SECONDS } from '../share/types.ts';
-import type { SseHub } from '../sse.ts';
+import type { SseBus } from '../sse.ts';
 import type { TaskStore } from '../tasks.ts';
 import { widgetAuthPage } from '../widget-auth-page.ts';
 
@@ -119,9 +119,9 @@ export interface AuthShareRoutesContext {
   /** Doc rooms — read to refuse sharing a board that holds a bound review,
    *  and told to drop a revoked share's sockets. */
   rooms: Rooms;
-  /** The SSE hub, told to drop a revoked share's streams. */
-  sse: SseHub;
-  /** The hub task store — the only thing that knows what a board is. */
+  /** The SSE bus, told to drop a revoked share's streams. */
+  sse: SseBus;
+  /** The board task store — the only thing that knows what a board is. */
   taskStore: TaskStore;
   /** The share registry, or null when sharing was never configured. */
   shares: Shares | null;
@@ -162,7 +162,7 @@ export interface AuthShareRoutesContext {
    */
   emailCodeSignIn: boolean;
   /** The name of the catch-all board, which may not be shared. */
-  defaultHubWorkspaceName: string;
+  defaultBoardWorkspaceName: string;
   /**
    * Who a share admits when the caller names nobody — the operator allowlist
    * (`CW_PROXIED_TRUSTED_EMAILS`, defaulting to `CW_OWNER_EMAIL`).
@@ -233,7 +233,7 @@ export async function handleAuthShareRoutes(
     requireEmailAuth,
     requireSignInToWrite,
     emailCodeSignIn,
-    defaultHubWorkspaceName: DEFAULT_HUB_WORKSPACE_NAME,
+    defaultBoardWorkspaceName: DEFAULT_BOARD_WORKSPACE_NAME,
     defaultShareAudience,
     j,
     safeJson,
@@ -685,10 +685,10 @@ export async function handleAuthShareRoutes(
       return j(404, { error: 'workspace not found', workspaceId });
     }
     // And never the UNFILED board. Matched by NAME, because that is
-    // how `defaultHubWorkspaceId()` itself finds it on every call —
+    // how `defaultBoardWorkspaceId()` itself finds it on every call —
     // the id is never cached, and any board answering that lookup can
     // receive other agents' stray reviews.
-    if (linkBoard.name === DEFAULT_HUB_WORKSPACE_NAME) {
+    if (linkBoard.name === DEFAULT_BOARD_WORKSPACE_NAME) {
       return j(403, UNFILED_SHARING_REFUSED);
     }
     // A board share opens the board. There is no entry doc to choose,
@@ -903,9 +903,9 @@ export async function handleAuthShareRoutes(
       return j(404, { error: 'workspace not found', workspaceId });
     }
     // And never the UNFILED board — matched by NAME, the way
-    // `defaultHubWorkspaceId()` finds it, because the id is never cached and
+    // `defaultBoardWorkspaceId()` finds it, because the id is never cached and
     // any board answering that lookup receives other agents' stray reviews.
-    if (board.name === DEFAULT_HUB_WORKSPACE_NAME) {
+    if (board.name === DEFAULT_BOARD_WORKSPACE_NAME) {
       return j(403, UNFILED_SHARING_REFUSED);
     }
     // BELOW the board lookup, in the order the retired mint used: an older

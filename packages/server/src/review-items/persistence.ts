@@ -1,9 +1,9 @@
 import type { Task } from '@feedback/core/task-wire';
 import type {
+  BoardWorkspace,
   DecisionAnswerWithdrawnEvent,
   DecisionAnsweredEvent,
   DecisionInfoRequestedEvent,
-  HubWorkspace,
   RenameTaskResult,
   ReviewItemAddedEvent,
   ReviewItemRevisedEvent,
@@ -49,7 +49,7 @@ export interface ReviewItemPersistence {
   listWorkspaceIds(): Iterable<string>;
   /** The board's own record — read AND written for the judging criteria,
    *  which is a workspace setting rather than a task field. */
-  getWorkspaceRecord(workspaceId: string): HubWorkspace | undefined;
+  getWorkspaceRecord(workspaceId: string): BoardWorkspace | undefined;
   /** Persist a board's rows after a mutation (debounced by the owner). */
   save(workspaceId: string): void;
   /** Publish one board event; the owner appends the audit line and fans out. */

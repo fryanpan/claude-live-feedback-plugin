@@ -23,7 +23,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { type ServerHandle, createServer } from '../src/server.ts';
 import { type ReplayMarks, claimReplayMarks, saveReplayMarks } from '../src/sse-marks.ts';
-import { REPLAY_MAX_AGE_MS, REPLAY_MAX_EVENTS, SseHub, openSseStream } from '../src/sse.ts';
+import { REPLAY_MAX_AGE_MS, REPLAY_MAX_EVENTS, SseBus, openSseStream } from '../src/sse.ts';
 
 const PERSON = { id: 'known-reviewer', name: 'Reviewer', kind: 'known', color: '#2e7dd7' };
 const settle = (ms = 400) => new Promise((r) => setTimeout(r, ms));
@@ -227,25 +227,25 @@ describe('SSE Last-Event-ID replay', () => {
   });
 });
 
-describe('SseHub replay buffer bounds', () => {
+describe('SseBus replay buffer bounds', () => {
   it('evicts by count, and an evicted id yields a gap — never a partial replay', () => {
-    const hub = new SseHub();
-    hub.broadcast('doc-x', { event: 'thread.created', n: 0 } as never);
-    const oldest = hub.replayAfter('doc-x', '__none__');
+    const bus = new SseBus();
+    bus.broadcast('doc-x', { event: 'thread.created', n: 0 } as never);
+    const oldest = bus.replayAfter('doc-x', '__none__');
     // Sanity on the probe itself: an id the buffer holds replays cleanly.
     expect(oldest.ok).toBe(false); // unknown id → gap, even on a fresh buffer
-    const firstId = hub.lastIdOn('doc-x') as string;
+    const firstId = bus.lastIdOn('doc-x') as string;
     expect(typeof firstId).toBe('string');
     // Push the first event out of the bounded buffer.
     for (let i = 1; i <= REPLAY_MAX_EVENTS + 5; i++) {
-      hub.broadcast('doc-x', { event: 'thread.created', n: i } as never);
+      bus.broadcast('doc-x', { event: 'thread.created', n: i } as never);
     }
-    const res = hub.replayAfter('doc-x', firstId);
+    const res = bus.replayAfter('doc-x', firstId);
     expect(res.ok).toBe(false); // evicted → explicit gap
     // POSITIVE CONTROL: an id still inside the buffer replays the exact tail.
-    const events = hub.eventsOn('doc-x');
+    const events = bus.eventsOn('doc-x');
     const anchor = events[events.length - 3];
-    const tail = hub.replayAfter('doc-x', (anchor as { id: string }).id);
+    const tail = bus.replayAfter('doc-x', (anchor as { id: string }).id);
     expect(tail.ok).toBe(true);
     if (tail.ok) {
       expect(tail.events.length).toBe(2);
@@ -257,18 +257,18 @@ describe('SseHub replay buffer bounds', () => {
   });
 
   it('buffers even when nobody is subscribed — the gap IS the no-subscriber case', () => {
-    const hub = new SseHub();
-    hub.broadcast('doc-y', { event: 'thread.created', n: 1 } as never);
-    hub.broadcast('doc-y', { event: 'thread.created', n: 2 } as never);
-    const events = hub.eventsOn('doc-y');
+    const bus = new SseBus();
+    bus.broadcast('doc-y', { event: 'thread.created', n: 1 } as never);
+    bus.broadcast('doc-y', { event: 'thread.created', n: 2 } as never);
+    const events = bus.eventsOn('doc-y');
     expect(events.length).toBe(2);
-    const res = hub.replayAfter('doc-y', (events[0] as { id: string }).id);
+    const res = bus.replayAfter('doc-y', (events[0] as { id: string }).id);
     expect(res.ok).toBe(true);
     if (res.ok) expect(res.events.length).toBe(1);
   });
 });
 
-describe('SseHub transient fan-out — word-rate frames never touch the replay window', () => {
+describe('SseBus transient fan-out — word-rate frames never touch the replay window', () => {
   /** A sink that records what it was written, id line included. */
   const sinkOf = (log: Array<{ event: string; id?: string }>) => ({
     write: (event: string, _data: unknown, id?: string) => {
@@ -278,15 +278,15 @@ describe('SseHub transient fan-out — word-rate frames never touch the replay w
   });
 
   it('reaches every open stream live, carries NO id, and buffers nothing', () => {
-    const hub = new SseHub();
+    const bus = new SseBus();
     const a: Array<{ event: string; id?: string }> = [];
     const b: Array<{ event: string; id?: string }> = [];
-    hub.add('doc-t', sinkOf(a));
-    hub.add('doc-t', sinkOf(b));
-    hub.broadcast('doc-t', { event: 'thread.created', n: 1 } as never);
-    const mark = hub.lastIdOn('doc-t');
+    bus.add('doc-t', sinkOf(a));
+    bus.add('doc-t', sinkOf(b));
+    bus.broadcast('doc-t', { event: 'thread.created', n: 1 } as never);
+    const mark = bus.lastIdOn('doc-t');
     for (let i = 0; i < REPLAY_MAX_EVENTS + 50; i++) {
-      hub.broadcastTransient('doc-t', { event: 'meeting.transcript', turn: i } as never);
+      bus.broadcastTransient('doc-t', { event: 'meeting.transcript', turn: i } as never);
     }
     // Both live streams got every word…
     expect(a.filter((f) => f.event === 'meeting.transcript')).toHaveLength(REPLAY_MAX_EVENTS + 50);
@@ -297,36 +297,36 @@ describe('SseHub transient fan-out — word-rate frames never touch the replay w
     );
     // …and the buffer still holds exactly the one real event, at the same
     // mark, so a reconnect at that cursor is a clean no-op rather than a gap.
-    expect(hub.eventsOn('doc-t')).toHaveLength(1);
-    expect(hub.lastIdOn('doc-t')).toBe(mark);
-    expect(hub.replayAfter('doc-t', mark as string)).toEqual({ ok: true, events: [] });
+    expect(bus.eventsOn('doc-t')).toHaveLength(1);
+    expect(bus.lastIdOn('doc-t')).toBe(mark);
+    expect(bus.replayAfter('doc-t', mark as string)).toEqual({ ok: true, events: [] });
   });
 
   it('POSITIVE CONTROL: the same volume through broadcast evicts the real event', () => {
-    const hub = new SseHub();
-    hub.broadcast('doc-u', { event: 'thread.created', n: 1 } as never);
-    const mark = hub.lastIdOn('doc-u') as string;
+    const bus = new SseBus();
+    bus.broadcast('doc-u', { event: 'thread.created', n: 1 } as never);
+    const mark = bus.lastIdOn('doc-u') as string;
     for (let i = 0; i < REPLAY_MAX_EVENTS + 50; i++) {
-      hub.broadcast('doc-u', { event: 'meeting.transcript', turn: i } as never);
+      bus.broadcast('doc-u', { event: 'meeting.transcript', turn: i } as never);
     }
-    expect(hub.replayAfter('doc-u', mark)).toEqual({ ok: false });
+    expect(bus.replayAfter('doc-u', mark)).toEqual({ ok: false });
   });
 
   it('with nobody subscribed a transient frame reaches zero sinks and leaves no trace', () => {
-    const hub = new SseHub();
-    expect(hub.broadcastTransient('doc-v', { event: 'meeting.transcript' } as never)).toBe(0);
-    expect(hub.eventsOn('doc-v')).toHaveLength(0);
-    expect(hub.lastIdOn('doc-v')).toBeUndefined();
+    const bus = new SseBus();
+    expect(bus.broadcastTransient('doc-v', { event: 'meeting.transcript' } as never)).toBe(0);
+    expect(bus.eventsOn('doc-v')).toHaveLength(0);
+    expect(bus.lastIdOn('doc-v')).toBeUndefined();
   });
 });
 
-describe('SseHub replay negative control', () => {
+describe('SseBus replay negative control', () => {
   it('the newest id yields an empty ok replay — never a gap, never a duplicate', () => {
-    const hub = new SseHub();
-    hub.broadcast('doc-nc', { event: 'thread.created', n: 1 } as never);
-    hub.broadcast('doc-nc', { event: 'thread.created', n: 2 } as never);
-    const current = hub.lastIdOn('doc-nc') as string;
-    const res = hub.replayAfter('doc-nc', current);
+    const bus = new SseBus();
+    bus.broadcast('doc-nc', { event: 'thread.created', n: 1 } as never);
+    bus.broadcast('doc-nc', { event: 'thread.created', n: 2 } as never);
+    const current = bus.lastIdOn('doc-nc') as string;
+    const res = bus.replayAfter('doc-nc', current);
     expect(res.ok).toBe(true);
     if (res.ok) expect(res.events).toEqual([]);
   });
@@ -340,18 +340,18 @@ describe('SseHub replay negative control', () => {
  * `sent > 0` read as delivered, and the lead's reconnect came back clean
  * with neither the frame nor a gap.
  */
-describe('SseHub addressed-frame replay', () => {
+describe('SseBus addressed-frame replay', () => {
   const CH = 'ws~replay-agent';
 
   it('replays an addressed frame to its recipient only — anonymous and other-agent streams never see it', () => {
-    const hub = new SseHub();
-    hub.broadcast(CH, { event: 'task.created', n: 1 } as never);
-    const anchor = hub.lastIdOn(CH) as string;
-    hub.sendToAgent(CH, 'lead-1', { event: 'triage.requested', kind: 'bucket-review' } as never);
-    hub.broadcast(CH, { event: 'task.updated', n: 2 } as never);
+    const bus = new SseBus();
+    bus.broadcast(CH, { event: 'task.created', n: 1 } as never);
+    const anchor = bus.lastIdOn(CH) as string;
+    bus.sendToAgent(CH, 'lead-1', { event: 'triage.requested', kind: 'bucket-review' } as never);
+    bus.broadcast(CH, { event: 'task.updated', n: 2 } as never);
 
     // The addressee catches up on both.
-    const lead = hub.replayAfter(CH, anchor, 'lead-1');
+    const lead = bus.replayAfter(CH, anchor, 'lead-1');
     expect(lead.ok).toBe(true);
     if (lead.ok) {
       expect(lead.events.map((e) => e.payload.event)).toEqual(['triage.requested', 'task.updated']);
@@ -360,41 +360,41 @@ describe('SseHub addressed-frame replay', () => {
       expect(lead.events.every((e) => e.id.length > 0)).toBe(true);
     }
     // A browser tab (no agentId) replays exactly what its live feed carried.
-    const anon = hub.replayAfter(CH, anchor);
+    const anon = bus.replayAfter(CH, anchor);
     expect(anon.ok).toBe(true);
     if (anon.ok) expect(anon.events.map((e) => e.payload.event)).toEqual(['task.updated']);
     // …and so does a different agent.
-    const other = hub.replayAfter(CH, anchor, 'lead-2');
+    const other = bus.replayAfter(CH, anchor, 'lead-2');
     expect(other.ok).toBe(true);
     if (other.ok) expect(other.events.map((e) => e.payload.event)).toEqual(['task.updated']);
   });
 
   it('an addressed frame id is a valid cursor for its recipient', () => {
-    const hub = new SseHub();
-    hub.sendToAgent(CH, 'lead-1', { event: 'triage.requested', kind: 'task-review' } as never);
-    const cursor = hub.lastIdOn(CH) as string;
-    hub.broadcast(CH, { event: 'task.updated', n: 3 } as never);
-    const res = hub.replayAfter(CH, cursor, 'lead-1');
+    const bus = new SseBus();
+    bus.sendToAgent(CH, 'lead-1', { event: 'triage.requested', kind: 'task-review' } as never);
+    const cursor = bus.lastIdOn(CH) as string;
+    bus.broadcast(CH, { event: 'task.updated', n: 3 } as never);
+    const res = bus.replayAfter(CH, cursor, 'lead-1');
     expect(res.ok).toBe(true);
     if (res.ok) expect(res.events.map((e) => e.payload.event)).toEqual(['task.updated']);
   });
 
   it('buffers even when the agent holds no stream — sent=0 parks the frame for the reconnect, not the void', () => {
-    const hub = new SseHub();
-    const sent = hub.sendToAgent(CH, 'lead-1', { event: 'triage.requested' } as never);
+    const bus = new SseBus();
+    const sent = bus.sendToAgent(CH, 'lead-1', { event: 'triage.requested' } as never);
     expect(sent).toBe(0); // still the honest answer the caller queues on
-    expect(hub.eventsOn(CH).length).toBe(1);
+    expect(bus.eventsOn(CH).length).toBe(1);
   });
 
   it('an agent stream reconnecting replays the addressed frame it missed, with its id on the wire', async () => {
-    const hub = new SseHub();
-    hub.broadcast(CH, { event: 'task.created', n: 1 } as never);
-    const anchor = hub.lastIdOn(CH) as string;
+    const bus = new SseBus();
+    bus.broadcast(CH, { event: 'task.created', n: 1 } as never);
+    const anchor = bus.lastIdOn(CH) as string;
     // The disconnect window: the lead holds no stream (or a dead one) while
     // the addressed request goes out.
-    hub.sendToAgent(CH, 'lead-1', { event: 'triage.requested', kind: 'bucket-review' } as never);
+    bus.sendToAgent(CH, 'lead-1', { event: 'triage.requested', kind: 'bucket-review' } as never);
 
-    const l = listenFrames(openSseStream(hub, CH, undefined, undefined, 'lead-1', anchor));
+    const l = listenFrames(openSseStream(bus, CH, undefined, undefined, 'lead-1', anchor));
     await settle(150);
     const replayed = l.frames.filter((f) => f.event === 'triage.requested');
     expect(replayed.length).toBe(1);
@@ -405,7 +405,7 @@ describe('SseHub addressed-frame replay', () => {
 
     // Control: an anonymous stream presenting the same anchor replays nothing
     // — the addressed frame is not leaked to a browser tab's catch-up.
-    const tab = listenFrames(openSseStream(hub, CH, undefined, undefined, undefined, anchor));
+    const tab = listenFrames(openSseStream(bus, CH, undefined, undefined, undefined, anchor));
     await settle(150);
     expect(tab.frames.filter((f) => f.event === 'triage.requested').length).toBe(0);
     expect(tab.frames.some((f) => f.event === 'replay.gap')).toBe(false);
@@ -413,10 +413,10 @@ describe('SseHub addressed-frame replay', () => {
   });
 
   it('a live addressed write carries its id, so the recipient cursor advances past it', async () => {
-    const hub = new SseHub();
-    const l = listenFrames(openSseStream(hub, CH, undefined, undefined, 'lead-1'));
+    const bus = new SseBus();
+    const l = listenFrames(openSseStream(bus, CH, undefined, undefined, 'lead-1'));
     await settle(150);
-    hub.sendToAgent(CH, 'lead-1', { event: 'triage.requested', kind: 'bucket-review' } as never);
+    bus.sendToAgent(CH, 'lead-1', { event: 'triage.requested', kind: 'bucket-review' } as never);
     await settle(150);
     const got = l.frames.filter((f) => f.event === 'triage.requested');
     expect(got.length).toBe(1);
@@ -452,9 +452,9 @@ describe('SseHub addressed-frame replay', () => {
 describe('vacuous replay gaps — a quiet channel is not a gap', () => {
   it('a cursor at the newest event survives the buffer ageing out: empty ok replay, no gap', () => {
     let now = 1_000_000;
-    const hub = new SseHub(() => now);
-    hub.broadcast('doc-quiet', { event: 'thread.created', n: 1 } as never);
-    const cursor = hub.lastIdOn('doc-quiet') as string;
+    const bus = new SseBus(() => now);
+    bus.broadcast('doc-quiet', { event: 'thread.created', n: 1 } as never);
+    const cursor = bus.lastIdOn('doc-quiet') as string;
     expect(typeof cursor).toBe('string');
 
     // The channel goes quiet for longer than the buffer's age bound. Nothing
@@ -462,63 +462,63 @@ describe('vacuous replay gaps — a quiet channel is not a gap', () => {
     // set most of the time.
     now += REPLAY_MAX_AGE_MS + 60_000;
 
-    const res = hub.replayAfter('doc-quiet', cursor);
+    const res = bus.replayAfter('doc-quiet', cursor);
     expect(res.ok).toBe(true);
     if (res.ok) expect(res.events).toEqual([]);
     // The buffer really is gone — this is the state the old code called a gap.
-    expect(hub.eventsOn('doc-quiet').length).toBe(0);
+    expect(bus.eventsOn('doc-quiet').length).toBe(0);
   });
 
   it('POSITIVE CONTROL: an event the cursor never saw still yields a gap after the same ageing', () => {
     let now = 2_000_000;
-    const hub = new SseHub(() => now);
-    hub.broadcast('doc-real', { event: 'thread.created', n: 1 } as never);
-    const cursor = hub.lastIdOn('doc-real') as string;
+    const bus = new SseBus(() => now);
+    bus.broadcast('doc-real', { event: 'thread.created', n: 1 } as never);
+    const cursor = bus.lastIdOn('doc-real') as string;
 
     // A second event lands — the one this subscriber is about to miss — and
     // THEN everything ages out.
-    hub.broadcast('doc-real', { event: 'thread.created', n: 2 } as never);
+    bus.broadcast('doc-real', { event: 'thread.created', n: 2 } as never);
     now += REPLAY_MAX_AGE_MS + 60_000;
 
     // Same pruned-to-nothing buffer as the test above (the read below prunes
     // it, as any reconnect would), opposite answer: the cursor is no longer
     // the newest thing this channel carried.
-    expect(hub.replayAfter('doc-real', cursor).ok).toBe(false);
-    expect(hub.eventsOn('doc-real').length).toBe(0);
+    expect(bus.replayAfter('doc-real', cursor).ok).toBe(false);
+    expect(bus.eventsOn('doc-real').length).toBe(0);
   });
 
   it('a cursor at the newest event is clean even for a channel whose buffer never existed here', () => {
-    const hub = new SseHub();
-    // What a restart looks like from inside the hub: marks recovered from the
+    const bus = new SseBus();
+    // What a restart looks like from inside the bus: marks recovered from the
     // previous process, no buffer for the channel because nothing has been
     // broadcast on it since boot.
-    hub.restoreMarks({ 'doc-restored': 'oldboot:7' });
-    const res = hub.replayAfter('doc-restored', 'oldboot:7');
+    bus.restoreMarks({ 'doc-restored': 'oldboot:7' });
+    const res = bus.replayAfter('doc-restored', 'oldboot:7');
     expect(res.ok).toBe(true);
     if (res.ok) expect(res.events).toEqual([]);
     // POSITIVE CONTROL: any other id on that channel is still a gap.
-    expect(hub.replayAfter('doc-restored', 'oldboot:6').ok).toBe(false);
+    expect(bus.replayAfter('doc-restored', 'oldboot:6').ok).toBe(false);
     // …and a channel the marks say nothing about is a gap, not a shrug.
-    expect(hub.replayAfter('doc-unknown', 'oldboot:7').ok).toBe(false);
+    expect(bus.replayAfter('doc-unknown', 'oldboot:7').ok).toBe(false);
   });
 
   it('a mark is superseded the moment this process broadcasts on the channel', () => {
-    const hub = new SseHub();
-    hub.restoreMarks({ 'doc-moved': 'oldboot:7' });
-    hub.broadcast('doc-moved', { event: 'task.updated', n: 1 } as never);
+    const bus = new SseBus();
+    bus.restoreMarks({ 'doc-moved': 'oldboot:7' });
+    bus.broadcast('doc-moved', { event: 'task.updated', n: 1 } as never);
     // The recovered cursor is now genuinely behind — the new event is exactly
     // what a reconnect at that id missed.
-    expect(hub.replayAfter('doc-moved', 'oldboot:7').ok).toBe(false);
-    expect(hub.marks()['doc-moved']).toBe(hub.lastIdOn('doc-moved') as string);
+    expect(bus.replayAfter('doc-moved', 'oldboot:7').ok).toBe(false);
+    expect(bus.marks()['doc-moved']).toBe(bus.lastIdOn('doc-moved') as string);
   });
 
   it('restoreMarks never overwrites what this process already knows', () => {
-    const hub = new SseHub();
-    hub.broadcast('doc-live', { event: 'task.updated', n: 1 } as never);
-    const live = hub.lastIdOn('doc-live') as string;
-    hub.restoreMarks({ 'doc-live': 'oldboot:7' });
-    expect(hub.marks()['doc-live']).toBe(live);
-    expect(hub.replayAfter('doc-live', 'oldboot:7').ok).toBe(false);
+    const bus = new SseBus();
+    bus.broadcast('doc-live', { event: 'task.updated', n: 1 } as never);
+    const live = bus.lastIdOn('doc-live') as string;
+    bus.restoreMarks({ 'doc-live': 'oldboot:7' });
+    expect(bus.marks()['doc-live']).toBe(live);
+    expect(bus.replayAfter('doc-live', 'oldboot:7').ok).toBe(false);
   });
 });
 
@@ -548,103 +548,103 @@ describe('vacuous replay gaps — an addressed frame is not a bystander gap', ()
 
   it("a bystander's cursor survives an addressed frame plus the buffer ageing out", () => {
     let now = 3_000_000;
-    const hub = new SseHub(() => now);
-    hub.broadcast(CH, { event: 'task.updated', n: 1 } as never);
-    const cursor = hub.lastIdOn(CH) as string;
+    const bus = new SseBus(() => now);
+    bus.broadcast(CH, { event: 'task.updated', n: 1 } as never);
+    const cursor = bus.lastIdOn(CH) as string;
 
     // The lead is tapped. Nobody else's live feed carried this frame.
-    hub.sendToAgent(CH, 'lead-1', { event: 'workspace.stalled' } as never);
+    bus.sendToAgent(CH, 'lead-1', { event: 'workspace.stalled' } as never);
     now += REPLAY_MAX_AGE_MS + 60_000;
 
     // A browser tab (no agent identity) and another attached peer both hold
     // the newest id their OWN stream ever carried, so both missed nothing.
-    const tab = hub.replayAfter(CH, cursor);
+    const tab = bus.replayAfter(CH, cursor);
     expect(tab.ok).toBe(true);
     if (tab.ok) expect(tab.events).toEqual([]);
-    const peer = hub.replayAfter(CH, cursor, 'peer-2');
+    const peer = bus.replayAfter(CH, cursor, 'peer-2');
     expect(peer.ok).toBe(true);
     if (peer.ok) expect(peer.events).toEqual([]);
     // The buffer really is gone (the reads above pruned it, as any reconnect
     // would) — this is the state the old code called a gap.
-    expect(hub.eventsOn(CH).length).toBe(0);
+    expect(bus.eventsOn(CH).length).toBe(0);
   });
 
   it('POSITIVE CONTROL: a bystander behind a BROADCAST still gets a gap', () => {
     let now = 4_000_000;
-    const hub = new SseHub(() => now);
-    hub.broadcast(CH, { event: 'task.updated', n: 1 } as never);
-    const cursor = hub.lastIdOn(CH) as string;
+    const bus = new SseBus(() => now);
+    bus.broadcast(CH, { event: 'task.updated', n: 1 } as never);
+    const cursor = bus.lastIdOn(CH) as string;
 
     // The event this subscriber genuinely misses — visible to everyone — with
     // an addressed frame either side of it so the fix cannot pass by ignoring
     // addressed frames altogether.
-    hub.sendToAgent(CH, 'lead-1', { event: 'workspace.stalled' } as never);
-    hub.broadcast(CH, { event: 'task.updated', n: 2 } as never);
-    hub.sendToAgent(CH, 'lead-1', { event: 'workspace.ready_idle' } as never);
+    bus.sendToAgent(CH, 'lead-1', { event: 'workspace.stalled' } as never);
+    bus.broadcast(CH, { event: 'task.updated', n: 2 } as never);
+    bus.sendToAgent(CH, 'lead-1', { event: 'workspace.ready_idle' } as never);
     now += REPLAY_MAX_AGE_MS + 60_000;
 
-    expect(hub.replayAfter(CH, cursor).ok).toBe(false);
-    expect(hub.replayAfter(CH, cursor, 'peer-2').ok).toBe(false);
+    expect(bus.replayAfter(CH, cursor).ok).toBe(false);
+    expect(bus.replayAfter(CH, cursor, 'peer-2').ok).toBe(false);
     // …including for the addressee, whose own newer frames do not excuse the
     // broadcast sitting between them.
-    expect(hub.replayAfter(CH, cursor, 'lead-1').ok).toBe(false);
+    expect(bus.replayAfter(CH, cursor, 'lead-1').ok).toBe(false);
   });
 
   it('the addressee reconnecting at its own addressed frame gets no gap either', () => {
     let now = 5_000_000;
-    const hub = new SseHub(() => now);
-    hub.broadcast(CH, { event: 'task.updated', n: 1 } as never);
-    hub.sendToAgent(CH, 'lead-1', { event: 'workspace.stalled' } as never);
-    const leadCursor = hub.lastIdOn(CH) as string;
+    const bus = new SseBus(() => now);
+    bus.broadcast(CH, { event: 'task.updated', n: 1 } as never);
+    bus.sendToAgent(CH, 'lead-1', { event: 'workspace.stalled' } as never);
+    const leadCursor = bus.lastIdOn(CH) as string;
     now += REPLAY_MAX_AGE_MS + 60_000;
 
-    const lead = hub.replayAfter(CH, leadCursor, 'lead-1');
+    const lead = bus.replayAfter(CH, leadCursor, 'lead-1');
     expect(lead.ok).toBe(true);
     if (lead.ok) expect(lead.events).toEqual([]);
   });
 
   it('an addressee behind a frame addressed to IT gets a gap; a bystander does not', () => {
     let now = 6_000_000;
-    const hub = new SseHub(() => now);
-    hub.broadcast(CH, { event: 'task.updated', n: 1 } as never);
-    const cursor = hub.lastIdOn(CH) as string;
+    const bus = new SseBus(() => now);
+    bus.broadcast(CH, { event: 'task.updated', n: 1 } as never);
+    const cursor = bus.lastIdOn(CH) as string;
     // Addressed to the lead while the lead was away — the one frame whose
     // loss addressing exists to prevent.
-    hub.sendToAgent(CH, 'lead-1', { event: 'workspace.stalled' } as never);
+    bus.sendToAgent(CH, 'lead-1', { event: 'workspace.stalled' } as never);
     now += REPLAY_MAX_AGE_MS + 60_000;
 
     // CONTROL half — true before this change and after it: the one frame
     // whose loss addressing exists to prevent is still reported.
-    expect(hub.replayAfter(CH, cursor, 'lead-1').ok).toBe(false);
+    expect(bus.replayAfter(CH, cursor, 'lead-1').ok).toBe(false);
     // The half this change adds: the same frame, addressed to somebody else,
     // is nothing to this subscriber.
-    expect(hub.replayAfter(CH, cursor, 'peer-2').ok).toBe(true);
+    expect(bus.replayAfter(CH, cursor, 'peer-2').ok).toBe(true);
   });
 
   it('a later broadcast retires the addressed mark — the addressee is behind again', () => {
     let now = 7_000_000;
-    const hub = new SseHub(() => now);
-    hub.sendToAgent(CH, 'lead-1', { event: 'workspace.stalled' } as never);
-    const addressed = hub.lastIdOn(CH) as string;
-    hub.broadcast(CH, { event: 'task.updated', n: 1 } as never);
-    const broadcast = hub.lastIdOn(CH) as string;
+    const bus = new SseBus(() => now);
+    bus.sendToAgent(CH, 'lead-1', { event: 'workspace.stalled' } as never);
+    const addressed = bus.lastIdOn(CH) as string;
+    bus.broadcast(CH, { event: 'task.updated', n: 1 } as never);
+    const broadcast = bus.lastIdOn(CH) as string;
     now += REPLAY_MAX_AGE_MS + 60_000;
 
     // The broadcast came after, and the lead's stream carried it too.
-    expect(hub.replayAfter(CH, addressed, 'lead-1').ok).toBe(false);
-    expect(hub.replayAfter(CH, broadcast, 'lead-1').ok).toBe(true);
-    expect(hub.replayAfter(CH, broadcast).ok).toBe(true);
+    expect(bus.replayAfter(CH, addressed, 'lead-1').ok).toBe(false);
+    expect(bus.replayAfter(CH, broadcast, 'lead-1').ok).toBe(true);
+    expect(bus.replayAfter(CH, broadcast).ok).toBe(true);
   });
 
   it('the addressed marks ride the restart beside the broadcast mark', () => {
-    const first = new SseHub();
+    const first = new SseBus();
     first.broadcast(CH, { event: 'task.updated', n: 1 } as never);
     const broadcast = first.lastIdOn(CH) as string;
     first.sendToAgent(CH, 'lead-1', { event: 'workspace.stalled' } as never);
     const addressed = first.lastIdOn(CH) as string;
 
     // Exactly what a clean shutdown hands the next boot.
-    const next = new SseHub();
+    const next = new SseBus();
     next.restoreMarks(JSON.parse(JSON.stringify(first.marks())) as ReplayMarks);
 
     expect(next.replayAfter(CH, addressed, 'lead-1').ok).toBe(true);

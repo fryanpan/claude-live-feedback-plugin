@@ -10,7 +10,7 @@
  * The design settled the naming question this suite pins: a goal's body room
  * is `task:<goalId>`, not `goal:<goalId>`. Goal ids are `g-…` and task ids are
  * `t-…`, so the namespace cannot collide, and reusing the prefix means
- * `isHubOwnedRoom`, every prose edit tool, the thread store, the SSE redactors
+ * `isBoardOwnedRoom`, every prose edit tool, the thread store, the SSE redactors
  * and the doc routes all work on a goal body with no change at all. A second
  * prefix would have been an edit to each of them buying nothing.
  *

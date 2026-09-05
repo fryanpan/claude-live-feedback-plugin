@@ -27,7 +27,7 @@ import type { Task, TaskEffortEstimate, TaskStore } from './tasks.ts';
 import { wordsRevisionOf } from './tasks.ts';
 
 export interface EffortScoringContext {
-  /** The hub store — the rows scored, and where a verdict is recorded. */
+  /** The board store — the rows scored, and where a verdict is recorded. */
   taskStore: TaskStore;
   /**
    * Re-project one board. Called by hand after every recorded estimate,
