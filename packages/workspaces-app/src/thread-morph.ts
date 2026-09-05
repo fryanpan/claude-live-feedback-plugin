@@ -166,6 +166,34 @@ function faceOf(slot: HTMLElement, expanded: boolean): HTMLElement | null {
 }
 
 /**
+ * Is a face's zero measurement TRUE, or is it "this subtree isn't laid out"?
+ *
+ * Both writers below refuse a zero, because a slot's height is a number WE
+ * write and a wrong zero pins a card shut. That refusal was correct while
+ * every face was guaranteed to have content — and it stopped being correct on
+ * 2026-09-04, when slot B's summary face lost the rows that used to guarantee
+ * it: the kind chips went, and so did "No replies yet". A thread with no
+ * repliers and no review item now builds a summary face with NOTHING in it,
+ * which is a legitimate zero.
+ *
+ * The consequence was the bug Bryan reported: expand such a card and collapse
+ * it again, and `slide` refused to write the 0 it measured, so slot B kept the
+ * height of the REPLIES it had just cross-faded away from — 169px of empty
+ * space under a folded card, measured at 1180x820. A re-render fixed it (the
+ * inline height goes with the old node), which is why a freshly drawn card
+ * always looked right and only a card you had opened was wrong.
+ *
+ * Asked of the DOM rather than of layout, deliberately: `offsetWidth` would
+ * work in a browser and reads 0 in every test environment, which would make
+ * the discriminator untestable at exactly the layer that got this wrong. A
+ * face is empty when it holds no nodes at all — every face this app builds
+ * holds elements or nothing, never bare text.
+ */
+function faceIsEmpty(face: HTMLElement): boolean {
+  return face.childNodes.length === 0;
+}
+
+/**
  * Give every slot under `root` the height of the face that is currently
  * showing.
  *
@@ -174,14 +202,17 @@ function faceOf(slot: HTMLElement, expanded: boolean): HTMLElement | null {
  * whenever text metrics change underneath a measurement that has already been
  * taken (see `installSlotRemeasure`).
  *
- * A zero measurement is REFUSED, never written. The showing face always has
- * content (both lines render on every card, always), so zero can only mean
- * "this subtree isn't being laid out" — the drawer is `display: none` while
- * closed on desktop, and the cards inside it are rendered anyway. Writing
- * that zero pins every slot shut with nothing left to reopen it: the card
- * keeps its head and its foot and loses everything in between. Skipping
- * leaves the last good height in place until the drawer opens and someone
- * re-measures for real (`ReviewChrome.openDrawer`).
+ * A zero measurement from a face that HAS content is REFUSED, never written:
+ * it can only mean "this subtree isn't being laid out" — the drawer is
+ * `display: none` while closed on desktop, and the cards inside it are
+ * rendered anyway. Writing that zero pins every slot shut with nothing left to
+ * reopen it: the card keeps its head and its foot and loses everything in
+ * between. Skipping leaves the last good height in place until the drawer
+ * opens and someone re-measures for real (`ReviewChrome.openDrawer`).
+ *
+ * A zero from an EMPTY face is written, because it is the truth — see
+ * `faceIsEmpty` for the card shape that produces one and the folded-card bug
+ * that refusing it caused.
  *
  * The pass repeats until the numbers stop moving, because WRITING the heights
  * can reflow the very faces it just measured: on a scroller whose content
@@ -201,7 +232,10 @@ export function sizeThreadSlots(root: ParentNode): void {
       const face = faceOf(slot, expanded);
       if (!face) continue;
       const h = face.offsetHeight;
-      if (h > 0 && slot.style.height !== `${h}px`) {
+      // A zero is believed only from a face that is genuinely empty; from a
+      // face with content it means the subtree is not being laid out.
+      if (h === 0 && !faceIsEmpty(face)) continue;
+      if (slot.style.height !== `${h}px`) {
         slot.style.height = `${h}px`;
         changed = true;
       }
@@ -314,12 +348,14 @@ function slide(
   const leaving = faceOf(slot, !expanded);
   if (!arriving || !leaving) return;
   const to = arriving.offsetHeight;
-  // Same refusal as `sizeThreadSlots`: zero means this card is not being laid
-  // out, not that its face is empty. A card folds on EVERY copy at once, and
-  // one of those copies is routinely in a closed (`display: none`) drawer —
-  // writing that zero would outlive the fold and open the drawer on a card
-  // clipped to its head and its foot. The class flip above already landed.
-  if (to <= 0) return;
+  // Same refusal as `sizeThreadSlots`, and the same exception: zero from a
+  // face that HAS content means this card is not being laid out. A card folds
+  // on EVERY copy at once, and one of those copies is routinely in a closed
+  // (`display: none`) drawer — writing that zero would outlive the fold and
+  // open the drawer on a card clipped to its head and its foot. The class flip
+  // above already landed. Zero from an EMPTY face is the real height, and
+  // refusing it is what left a folded card holding its expanded slot.
+  if (to <= 0 && !faceIsEmpty(arriving)) return;
   // The resting state lands immediately; the tween below replays the journey.
   slot.style.height = `${to}px`;
   if (!timing.duration || typeof slot.animate !== 'function') return;
