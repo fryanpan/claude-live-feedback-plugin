@@ -16,6 +16,7 @@
  */
 
 import type { StoredSummary, Thread, User } from './types.ts';
+import { wordCount } from './word-count.ts';
 
 /** Discussion line for a thread nobody has replied to. Rendered muted italic. */
 export const NO_REPLIES_TEXT = 'No replies yet';
@@ -38,6 +39,34 @@ export const SUMMARY_PENDING_WINDOW_MS = 30_000;
  * opening-message fallback do not, so the cap is applied here too.
  */
 export const TOPIC_MAX = 80;
+
+/**
+ * How many words an anchor snippet needs before it can stand as the topic on
+ * its own.
+ *
+ * The snippet says WHERE a thread is; the topic line is supposed to say what
+ * it is ABOUT. For a phrase-length selection those coincide closely enough
+ * that quoting the snippet is the best line available with no model in the
+ * loop. For a one- or two-word selection they do not: a reviewer who
+ * highlights a single table cell and asks a question about it gets a card
+ * whose headline is that cell.
+ *
+ * Observed in production 2026-09-05 on a shared board. The reviewer selected
+ * the word "Scheduled" and asked whether a notice period was 10 days or 120;
+ * the card's topic line read "Scheduled", which looks like a status label
+ * rather than a summary of anything. Generation would have replaced it — it
+ * writes "Notice period for scheduled task" from the same input — but that
+ * thread was a share visitor's, and a visitor's write deliberately never
+ * spends the summary API key (`generate: !visitor` on every doc thread route,
+ * pinned by summary-visitor-gate.test.ts). So the deterministic line was the
+ * whole card, which is exactly the case this layer exists to get right:
+ * generation is an enhancement to a working card, never a dependency of one.
+ *
+ * Three words rather than a character count, because the failure is about
+ * saying too little and not about fitting: "Scheduled" is nine characters of
+ * nothing, and the card is already sitting beside the highlight it came from.
+ */
+export const TOPIC_MIN_SNIPPET_WORDS = 3;
 
 /**
  * Hard cap on the discussion line. CSS ellipsizes at the real width (which is
@@ -310,10 +339,17 @@ function deriveTopic(t: Thread): string {
   // render key: one malformed anchor used to break its own card, and would
   // now throw inside the key and take down the whole panel render.
   const snippet = anchorText(t);
+  const opening = oneLine(t.comments[0]?.text ?? '');
   // An anchor can legitimately carry an empty snippet (a collapsed range, an
-  // element with no text). A blank topic line would leave slot A with nothing
-  // to morph out of, so fall back to what the thread opened with.
-  const text = snippet || oneLine(t.comments[0]?.text ?? '');
+  // element with no text), and a snippet of one or two words says nothing the
+  // highlight beside the card does not already say. Both fall back to what
+  // the thread opened with — which is the one thing on a card that is always
+  // about the subject. A blank topic line would leave slot A with nothing to
+  // morph out of, so the snippet still wins whenever the opening message is
+  // empty: falling back is only an improvement when there is something to
+  // fall back TO.
+  const thin = wordCount(snippet) < TOPIC_MIN_SNIPPET_WORDS;
+  const text = thin && opening ? opening : snippet || opening;
   return clip(text, TOPIC_MAX);
 }
 
