@@ -31,7 +31,7 @@
  * Every fixture name is invented; the repo is public.
  */
 
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it } from 'bun:test';
 import type { NotesComposeInput } from '../src/meeting-notes.ts';
 import { createNotesTickHarness } from './notes-tick-harness.ts';
 
