@@ -35,8 +35,8 @@ describe('createRedlineEditor', () => {
   it('renders prose as prose with inline ins/del', () => {
     const { parent } = mount('The quick brown fox.\n', '# T\n\nThe quick red fox.\n');
     expect(parent.innerHTML).toContain('<h1 ');
-    expect(parent.innerHTML).toContain('lf-del');
-    expect(parent.innerHTML).toContain('lf-ins');
+    expect(parent.innerHTML).toContain('cw-del');
+    expect(parent.innerHTML).toContain('cw-ins');
   });
 
   it('does not emit blank filler paragraphs between blocks', () => {
@@ -62,8 +62,8 @@ describe('createRedlineEditor', () => {
 
   it('shows no change marks when base equals content', () => {
     const { parent } = mount('# T\n\nBody.\n', '# T\n\nBody.\n');
-    expect(parent.innerHTML).not.toContain('lf-del');
-    expect(parent.innerHTML).not.toContain('lf-ins');
+    expect(parent.innerHTML).not.toContain('cw-del');
+    expect(parent.innerHTML).not.toContain('cw-ins');
     expect(parent.innerHTML).toContain('Body.');
   });
 
@@ -99,13 +99,13 @@ describe('createRedlineEditor', () => {
 
   it('re-renders when content changes (an agent save)', () => {
     const { ydoc, parent } = mount('Old text.\n', 'Old text.\n');
-    expect(parent.innerHTML).not.toContain('lf-ins');
+    expect(parent.innerHTML).not.toContain('cw-ins');
     const content = getContent(ydoc);
     ydoc.transact(() => {
       content.delete(0, content.length);
       content.insert(0, 'New text.\n');
     });
-    expect(parent.innerHTML).toContain('lf-ins');
+    expect(parent.innerHTML).toContain('cw-ins');
   });
 
   it('renders content that arrives AFTER mount', () => {
@@ -126,7 +126,7 @@ describe('createRedlineEditor', () => {
     // Whole-document underline told the reviewer nothing; the mount shows a
     // "New file in this diff" banner instead and the content renders plain.
     const { parent, surface, content } = mount('', '# New file\n\nBody.\n', true);
-    expect(parent.innerHTML).not.toContain('lf-ins');
+    expect(parent.innerHTML).not.toContain('cw-ins');
     expect(parent.textContent).toContain('New file');
     // Provenance still resolves, so comments on an added file keep working.
     const range = surface.resolveRel(...anchorFor(content, 0, 3));
@@ -135,13 +135,13 @@ describe('createRedlineEditor', () => {
 
   it('a MODIFIED file with an empty base blob still shows ins markup (added ≠ empty base)', () => {
     const { parent } = mount('', 'Fresh content.\n');
-    expect(parent.innerHTML).toContain('lf-ins');
+    expect(parent.innerHTML).toContain('cw-ins');
   });
 
   it('keeps deleted blocks visible with a snap target', () => {
     const { parent } = mount('A.\n\nGone.\n\nC.\n', 'A.\n\nC.\n');
     expect(parent.textContent).toContain('Gone.');
-    expect(parent.innerHTML).toContain('lf-del');
+    expect(parent.innerHTML).toContain('cw-del');
   });
 
   it('reports a 1-based content line for a prose position', () => {
@@ -199,7 +199,7 @@ describe('createRedlineEditor — structural blocks', () => {
     const md = 'Intro.\n\n```js\nconst a = 1;\n```\n';
     const { parent } = mount(md, md);
     expect(parent.querySelector('pre')).not.toBeNull();
-    expect(parent.innerHTML).not.toContain('data-lf-change');
+    expect(parent.innerHTML).not.toContain('data-cw-change');
   });
 
   it('keeps a fence containing a blank line intact and does not swallow following blocks', () => {
@@ -245,10 +245,10 @@ describe('createRedlineEditor — getSelectionRel', () => {
     // THE headline claim of the design — previously asserted nowhere.
     const newText = '# T\n\nAlpha here.\n\nBravo there.\n';
     const { surface, ydoc, parent } = mount('# T\n\nAlpha here.\n', newText);
-    const target = parent.querySelector('[data-lf-change="ins"]') as HTMLElement | null;
+    const target = parent.querySelector('[data-cw-change="ins"]') as HTMLElement | null;
     expect(target).not.toBeNull();
-    const from = Number(target?.getAttribute('data-lf-from'));
-    const to = Number(target?.getAttribute('data-lf-to'));
+    const from = Number(target?.getAttribute('data-cw-from'));
+    const to = Number(target?.getAttribute('data-cw-to'));
 
     // Select inside that block, the way a reviewer would.
     const { doc } = surface as unknown as { __editor?: unknown } as never;
@@ -286,7 +286,7 @@ describe('createRedlineEditor — getSelectionRel', () => {
       '# Title\n\nKept paragraph.\n\nDoomed final paragraph.\n',
       '# Title\n\nKept paragraph.\n',
     );
-    const del = parent.querySelector('[data-lf-change="del"]') as HTMLElement | null;
+    const del = parent.querySelector('[data-cw-change="del"]') as HTMLElement | null;
     expect(del).not.toBeNull();
     const range = document.createRange();
     range.selectNodeContents(del as Node);

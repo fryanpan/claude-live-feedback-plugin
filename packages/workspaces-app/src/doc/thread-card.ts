@@ -171,7 +171,7 @@ function head(
   // It is also the ONLY state marker in the head now. The status dot beside
   // it said the same thing in a colour with no name, and a card carrying both
   // spent two of a 260px row's slots on one fact.
-  const glyph = span(`thread-glyph lf-ic lf-ic-${threadGlyph(kind)}`);
+  const glyph = span(`thread-glyph cw-ic cw-ic-${threadGlyph(kind)}`);
   glyph.setAttribute('aria-hidden', 'true');
   head.appendChild(glyph);
 

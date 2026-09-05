@@ -304,7 +304,7 @@ describe('a closed-out card recedes and keeps the row that says why', () => {
     // the outcome, and the foot reads "✓ Resolved".
     expect(card.querySelector('.thread-tag')).toBe(null);
     expect(foldedText(card)).not.toMatch(/resolved/i);
-    expect(card.querySelector('.thread-head .lf-ic-done')).not.toBe(null);
+    expect(card.querySelector('.thread-head .cw-ic-done')).not.toBe(null);
     expect(card.querySelector('.thread-foot .thread-resolve')?.textContent).toBe('✓ Resolved');
   });
 

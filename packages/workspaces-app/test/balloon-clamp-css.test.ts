@@ -27,7 +27,7 @@ import { IPAD, PHONE, attach, installSheets, setViewport, styleOf } from './css-
  * that difference is the whole claim: the ceiling is the SCREEN, not the
  * content.
  *
- * `.lf-balloon-comment` + `.expanded` on one element is what an open balloon
+ * `.cw-balloon-comment` + `.expanded` on one element is what an open balloon
  * carries; `markup-margin.test.ts` pins that the code produces it. How the
  * clamped card LOOKS at 1180x820 and at 430px stays a browser check.
  *
@@ -56,13 +56,13 @@ afterEach(() => {
  */
 function capAt(vp: { width: number; height: number }): string {
   setViewport(vp);
-  return styleOf(attach('lf-balloon-comment expanded')).maxHeight;
+  return styleOf(attach('cw-balloon-comment expanded')).maxHeight;
 }
 
 /** An open balloon at `vp`, for properties that do not depend on the viewport. */
 function expanded(vp: { width: number; height: number }) {
   setViewport(vp);
-  return styleOf(attach('lf-balloon-comment expanded'));
+  return styleOf(attach('cw-balloon-comment expanded'));
 }
 
 describe('the expanded comment balloon clamps itself to the viewport', () => {
@@ -95,7 +95,7 @@ describe('the expanded comment balloon clamps itself to the viewport', () => {
     // measuring an element no rule reaches: an unstyled box reads '' for
     // max-height and overflow-y, which is what "uncapped" looks like.
     setViewport(IPAD);
-    const closed = styleOf(attach('lf-balloon-comment'));
+    const closed = styleOf(attach('cw-balloon-comment'));
     expect(closed.cursor).toBe('pointer'); // the rule that predates the clamp
     expect(closed.maxHeight === 'none' || closed.maxHeight === '').toBe(true);
     expect(closed.overflowY === 'visible' || closed.overflowY === '').toBe(true);

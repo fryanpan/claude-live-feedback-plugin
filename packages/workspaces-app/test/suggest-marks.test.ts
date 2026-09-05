@@ -55,7 +55,7 @@ describe('suggestion marks in the live editor schema', () => {
     text.insert('Alpha '.length, 'beta ', { [SUGGEST_INSERT_MARK]: sattrs('s1') });
     const editor = editorOver(ydoc);
     const html = editor.getHTML();
-    expect(html).toContain('data-lf-suggest="ins"');
+    expect(html).toContain('data-cw-suggest="ins"');
     expect(html).toContain('data-sid="s1"');
     expect(html).toContain('data-author-name="Docs Agent"');
     editor.destroy();
@@ -66,7 +66,7 @@ describe('suggestion marks in the live editor schema', () => {
     text.format('Alpha '.length, 'beta '.length, { [SUGGEST_DELETE_MARK]: sattrs('s2') });
     const editor = editorOver(ydoc);
     const html = editor.getHTML();
-    expect(html).toContain('data-lf-suggest="del"');
+    expect(html).toContain('data-cw-suggest="del"');
     expect(html).toContain('beta');
     editor.destroy();
   });
@@ -79,7 +79,7 @@ describe('suggestion marks in the live editor schema', () => {
     const html = editor.getHTML();
     // Both marks expose the author color as a CSS custom property inline —
     // the stylesheet's underline/strikethrough/tint rules read it.
-    const spans = html.match(/--lf-suggest-color: #7c5cff/g) ?? [];
+    const spans = html.match(/--cw-suggest-color: #7c5cff/g) ?? [];
     expect(spans.length).toBe(2);
     editor.destroy();
   });
@@ -90,7 +90,7 @@ describe('suggestion marks in the live editor schema', () => {
       [SUGGEST_INSERT_MARK]: { ...sattrs('s-bad'), authorColor: 'red; background:url(x)' },
     });
     const editor = editorOver(ydoc);
-    expect(editor.getHTML()).not.toContain('--lf-suggest-color');
+    expect(editor.getHTML()).not.toContain('--cw-suggest-color');
     editor.destroy();
   });
 
@@ -132,8 +132,8 @@ describe('suggestion marks in the REDLINE lens', () => {
       debounceMs: 0,
     });
     const html = parent.innerHTML;
-    expect(html).toContain('data-lf-suggest="ins"');
-    expect(html).toContain('--lf-suggest-color: #7c5cff');
+    expect(html).toContain('data-cw-suggest="ins"');
+    expect(html).toContain('--cw-suggest-color: #7c5cff');
     surface.destroy();
     parent.remove();
   });

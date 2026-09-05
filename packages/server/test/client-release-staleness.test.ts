@@ -30,7 +30,7 @@ import {
 } from '../src/client-release.ts';
 
 function fakeBuild(marker: string): { dir: string; widget: string; markdownApp: string } {
-  const dir = mkdtempSync(join(tmpdir(), 'lf-build-'));
+  const dir = mkdtempSync(join(tmpdir(), 'cw-build-'));
   const widget = join(dir, 'widget');
   const markdownApp = join(dir, 'workspaces-app');
   mkdirSync(widget, { recursive: true });
@@ -55,7 +55,7 @@ function brokenBuild(marker: string): { dir: string; widget: string; markdownApp
 }
 
 function tmpRoot(): string {
-  return mkdtempSync(join(tmpdir(), 'lf-releases-'));
+  return mkdtempSync(join(tmpdir(), 'cw-releases-'));
 }
 
 const HOUR = 60 * 60 * 1000;

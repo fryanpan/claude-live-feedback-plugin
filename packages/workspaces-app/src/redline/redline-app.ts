@@ -34,7 +34,7 @@ import { mountSuggestionsSummary } from './suggestions-summary.ts';
 
 export type RedlineViewMode = 'redline' | 'diff' | 'file';
 
-const modeKey = (docId: string) => `lf-view-mode:${docId}`;
+const modeKey = (docId: string) => `cw-view-mode:${docId}`;
 
 export function readViewMode(docId: string): RedlineViewMode {
   try {

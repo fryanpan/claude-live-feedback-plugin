@@ -84,7 +84,7 @@ describe('the glyph', () => {
   it('a plain comment gets the bubble', () => {
     const { card } = render(thread([comment('Looks fine.')]));
     expect(card.classList.contains('thread-kind-comment')).toBe(true);
-    expect(glyphOf(card)?.classList.contains('lf-ic-comment')).toBe(true);
+    expect(glyphOf(card)?.classList.contains('cw-ic-comment')).toBe(true);
   });
 
   it('an open question AND an open decision get the same question mark', () => {
@@ -92,15 +92,15 @@ describe('the glyph', () => {
     const d = render(thread([comment('?', decision())]));
     expect(q.card.classList.contains('thread-kind-question')).toBe(true);
     expect(d.card.classList.contains('thread-kind-question')).toBe(true);
-    expect(glyphOf(q.card)?.classList.contains('lf-ic-question')).toBe(true);
-    expect(glyphOf(d.card)?.classList.contains('lf-ic-question')).toBe(true);
+    expect(glyphOf(q.card)?.classList.contains('cw-ic-question')).toBe(true);
+    expect(glyphOf(d.card)?.classList.contains('cw-ic-question')).toBe(true);
   });
 
   it('answered and resolved get the tick', () => {
     const a = render(thread([comment('?', question({ answeredAt: ts, answerText: 'Yes' }))]));
     const r = render(thread([comment('Hi')], { status: 'resolved' }));
-    expect(glyphOf(a.card)?.classList.contains('lf-ic-done')).toBe(true);
-    expect(glyphOf(r.card)?.classList.contains('lf-ic-done')).toBe(true);
+    expect(glyphOf(a.card)?.classList.contains('cw-ic-done')).toBe(true);
+    expect(glyphOf(r.card)?.classList.contains('cw-ic-done')).toBe(true);
     expect(r.card.classList.contains('thread-kind-resolved')).toBe(true);
   });
 });

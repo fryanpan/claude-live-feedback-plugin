@@ -59,7 +59,7 @@ async function realSubscription(endpoint: string) {
 }
 
 async function start() {
-  const dataDir = mkdtempSync(join(tmpdir(), 'lf-push-e2e-'));
+  const dataDir = mkdtempSync(join(tmpdir(), 'cw-push-e2e-'));
   trash.push(dataDir);
   const sent: Sent[] = [];
   const server = createServer({
@@ -178,7 +178,7 @@ describe('filing a review item announces it', () => {
   });
 
   it('retires a device the push service reports GONE, without hard-deleting it', async () => {
-    const dataDir = mkdtempSync(join(tmpdir(), 'lf-push-e2e-'));
+    const dataDir = mkdtempSync(join(tmpdir(), 'cw-push-e2e-'));
     trash.push(dataDir);
     const seen: string[] = [];
     const server = createServer({
@@ -266,7 +266,7 @@ describe('withdrawing a doc-thread review item', () => {
     expect((await post('/api/push/subscriptions', { author: AGENT, subscription: sub })).ok).toBe(
       true,
     );
-    const dataDir = mkdtempSync(join(tmpdir(), 'lf-push-doc-'));
+    const dataDir = mkdtempSync(join(tmpdir(), 'cw-push-doc-'));
     trash.push(dataDir);
     const file = join(dataDir, 'notes.md');
     writeFileSync(file, '# Notes\n\nThe phone layout holds together.\n');

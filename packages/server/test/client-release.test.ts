@@ -34,7 +34,7 @@ import {
 /** A plausible pair of built bundle dirs. `marker` lands in every file so a
  *  test can tell one generation of the build from the next. */
 function fakeBuild(marker: string): { dir: string; widget: string; markdownApp: string } {
-  const dir = mkdtempSync(join(tmpdir(), 'lf-build-'));
+  const dir = mkdtempSync(join(tmpdir(), 'cw-build-'));
   const widget = join(dir, 'widget');
   const markdownApp = join(dir, 'workspaces-app');
   mkdirSync(widget, { recursive: true });
@@ -54,7 +54,7 @@ function fakeBuild(marker: string): { dir: string; widget: string; markdownApp: 
 }
 
 function tmpRoot(): string {
-  return mkdtempSync(join(tmpdir(), 'lf-releases-'));
+  return mkdtempSync(join(tmpdir(), 'cw-releases-'));
 }
 
 describe('publishClientRelease', () => {
@@ -243,7 +243,7 @@ describe('resolveClientDists', () => {
   });
 
   it('falls back to the repo dist dirs when no release is given', () => {
-    const repoRoot = mkdtempSync(join(tmpdir(), 'lf-repo-'));
+    const repoRoot = mkdtempSync(join(tmpdir(), 'cw-repo-'));
     const w = join(repoRoot, 'packages', 'widget', 'dist');
     const m = join(repoRoot, 'packages', 'workspaces-app', 'dist');
     mkdirSync(w, { recursive: true });
@@ -258,7 +258,7 @@ describe('resolveClientDists', () => {
   });
 
   it('is null for a dist dir that does not exist', () => {
-    const repoRoot = mkdtempSync(join(tmpdir(), 'lf-repo-'));
+    const repoRoot = mkdtempSync(join(tmpdir(), 'cw-repo-'));
     try {
       expect(resolveClientDists({ repoRoot }).markdownApp).toBeNull();
       expect(
@@ -286,8 +286,8 @@ describe('clientReleaseRoot', () => {
    * is serving from.
    */
   it('still honours the pre-rename LF_CLIENT_ROOT, and the current name wins', () => {
-    expect(clientReleaseRoot({ LF_CLIENT_ROOT: '/srv/lf-client' }, '/home/u')).toBe(
-      '/srv/lf-client',
+    expect(clientReleaseRoot({ LF_CLIENT_ROOT: '/srv/cw-client' }, '/home/u')).toBe(
+      '/srv/cw-client',
     );
     expect(
       clientReleaseRoot({ CW_CLIENT_ROOT: '/srv/cw', LF_CLIENT_ROOT: '/srv/lf' }, '/home/u'),

@@ -78,14 +78,14 @@ describe('annotateBlockMarkdown', () => {
 
 describe('applyAttrs', () => {
   it('puts attributes on the outer element', () => {
-    const out = applyAttrs('<p>Body.</p>', { 'data-lf-from': '12', 'data-lf-to': '25' });
-    expect(out).toContain('data-lf-from="12"');
-    expect(out).toContain('data-lf-to="25"');
+    const out = applyAttrs('<p>Body.</p>', { 'data-cw-from': '12', 'data-cw-to': '25' });
+    expect(out).toContain('data-cw-from="12"');
+    expect(out).toContain('data-cw-to="25"');
     expect(out).toContain('Body.');
   });
 
   it('preserves inner markup rather than flattening it', () => {
-    const out = applyAttrs('<h2>A <del>x</del> b</h2>', { 'data-lf-from': '1' });
+    const out = applyAttrs('<h2>A <del>x</del> b</h2>', { 'data-cw-from': '1' });
     expect(out).toContain('<del>x</del>');
     expect(out).toMatch(/^<h2 /);
   });
@@ -95,32 +95,32 @@ describe('applyAttrs', () => {
   });
 
   it('returns the input unchanged when there is no element to attribute', () => {
-    expect(applyAttrs('', { 'data-lf-from': '1' })).toBe('');
+    expect(applyAttrs('', { 'data-cw-from': '1' })).toBe('');
   });
 });
 
 describe('renderRedlineHtml', () => {
   it('emits from/to provenance for a block that exists on the new side', () => {
     const html = renderRedlineHtml(computeRedline('A.\n', 'A.\n\nB.\n'), fakeToHtml);
-    expect(html).toMatch(/data-lf-from="\d+"/);
-    expect(html).toMatch(/data-lf-to="\d+"/);
+    expect(html).toMatch(/data-cw-from="\d+"/);
+    expect(html).toMatch(/data-cw-to="\d+"/);
   });
 
-  it('emits data-lf-snap instead of from/to on a deleted block', () => {
+  it('emits data-cw-snap instead of from/to on a deleted block', () => {
     const html = renderRedlineHtml(computeRedline('A.\n\nGone.\n\nC.\n', 'A.\n\nC.\n'), fakeToHtml);
-    expect(html).toContain('data-lf-snap=');
+    expect(html).toContain('data-cw-snap=');
     expect(html).toContain('<del>Gone.</del>');
   });
 
-  it('marks changed blocks with data-lf-change and leaves same blocks unmarked', () => {
+  it('marks changed blocks with data-cw-change and leaves same blocks unmarked', () => {
     const html = renderRedlineHtml(
       computeRedline('# T\n\nOne.\n', '# T\n\nOne changed.\n'),
       fakeToHtml,
     );
-    expect(html).toContain('data-lf-change="changed"');
+    expect(html).toContain('data-cw-change="changed"');
     // The untouched heading must not be marked as a change.
     const headingChunk = html.split('</p>')[0];
-    expect(headingChunk).not.toContain('data-lf-change');
+    expect(headingChunk).not.toContain('data-cw-change');
   });
 
   it('converts each block in isolation — one toHtml call per block', () => {

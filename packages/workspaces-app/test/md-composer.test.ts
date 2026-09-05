@@ -484,11 +484,11 @@ describe('the markdown composer is styled', () => {
 describe('announcing the mount', () => {
   function listenOnForm(): Event[] {
     const seen: Event[] = [];
-    form.addEventListener('lf-composer-mounted', (e) => seen.push(e));
+    form.addEventListener('cw-composer-mounted', (e) => seen.push(e));
     return seen;
   }
 
-  it('fires one bubbling lf-composer-mounted event when the async chunk lands', async () => {
+  it('fires one bubbling cw-composer-mounted event when the async chunk lands', async () => {
     setComposerEditorLoader(() => Promise.resolve(realChunk));
     const seen = listenOnForm();
     attachMarkdownComposer(ta);

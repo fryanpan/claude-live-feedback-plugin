@@ -87,8 +87,8 @@ describe('git operations against a bound doc', () => {
   let rooms: Rooms;
 
   beforeEach(() => {
-    root = mkdtempSync(join(tmpdir(), 'lf-gitops-'));
-    dataDir = mkdtempSync(join(tmpdir(), 'lf-gitops-data-'));
+    root = mkdtempSync(join(tmpdir(), 'cw-gitops-'));
+    dataDir = mkdtempSync(join(tmpdir(), 'cw-gitops-data-'));
     repo = join(root, 'repo');
     mkdirSync(repo);
     git(repo, 'init', '-q', '-b', 'main');
@@ -396,8 +396,8 @@ describe('a flush inside the read debounce cannot overwrite unread bytes', () =>
   let clock: number;
 
   beforeEach(() => {
-    root = mkdtempSync(join(tmpdir(), 'lf-gitrace-'));
-    dataDir = mkdtempSync(join(tmpdir(), 'lf-gitrace-data-'));
+    root = mkdtempSync(join(tmpdir(), 'cw-gitrace-'));
+    dataDir = mkdtempSync(join(tmpdir(), 'cw-gitrace-data-'));
     repo = join(root, 'repo');
     mkdirSync(repo);
     git(repo, 'init', '-q', '-b', 'main');
@@ -472,7 +472,7 @@ describe('classifyExternalContent', () => {
   let path: string;
 
   beforeEach(() => {
-    root = mkdtempSync(join(tmpdir(), 'lf-prov-'));
+    root = mkdtempSync(join(tmpdir(), 'cw-prov-'));
     repo = join(root, 'repo');
     mkdirSync(repo);
     git(repo, 'init', '-q', '-b', 'main');
@@ -609,7 +609,7 @@ describe('classifyExternalContent', () => {
   }, 60_000);
 
   it('answers unknown outside a git repository instead of throwing', () => {
-    const bare = mkdtempSync(join(tmpdir(), 'lf-nogit-'));
+    const bare = mkdtempSync(join(tmpdir(), 'cw-nogit-'));
     const outside = join(bare, 'doc.md');
     writeFileSync(outside, MAIN_DOC);
     expect(classifyExternalContent(outside, MAIN_DOC).source).toBe('unknown');

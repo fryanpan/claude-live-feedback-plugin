@@ -93,7 +93,7 @@ One control, labelled **`✓ Resolve`**, in the card's footer row beside the met
 
 It lives **outside both folding slots**, in the footer, so expanding never rebuilds it and it never moves relative to the caret.
 
-Wired to the same resolve path the expanded card uses, reusing `.lf-collapsed-actions` (`redline/markup-margin.ts:507`). Needs an explicit `aria-label` ("Resolve thread"), matching the existing collapsed accept/reject buttons.
+Wired to the same resolve path the expanded card uses, reusing `.cw-collapsed-actions` (`redline/markup-margin.ts:507`). Needs an explicit `aria-label` ("Resolve thread"), matching the existing collapsed accept/reject buttons.
 
 Collapsed *suggestion* cards get no resolve control — accept/reject is already their resolution, and a third checkmark beside `✓/✕` would be ambiguous.
 

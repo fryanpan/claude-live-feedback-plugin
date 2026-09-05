@@ -80,7 +80,7 @@ describe('the queue says who is already on a row', () => {
   };
 
   const setup = async (opts?: { heartbeatFreshMs?: number }) => {
-    dataDir = mkdtempSync(join(tmpdir(), 'lf-row-presence-'));
+    dataDir = mkdtempSync(join(tmpdir(), 'cw-row-presence-'));
     handle = createServer({
       port: 0,
       dataDir,

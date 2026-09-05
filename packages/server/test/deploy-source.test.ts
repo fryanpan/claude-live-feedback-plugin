@@ -59,7 +59,7 @@ function write(repo: string, rel: string, body: string): void {
 /** A checkout shaped like this repo's deploy source: a doc tree, a served
  *  demos tree, and package sources — all committed, so it starts clean. */
 function fixtureRepo(): string {
-  const repo = mkdtempSync(join(tmpdir(), 'lf-deploy-src-'));
+  const repo = mkdtempSync(join(tmpdir(), 'cw-deploy-src-'));
   git(repo, 'init', '-q');
   write(repo, 'README.md', '# fixture\n');
   write(repo, 'docs/product/plans/some-plan.md', '# plan\n\nfirst draft\n');
@@ -228,7 +228,7 @@ describe('against a real checkout', () => {
   });
 
   it('answers null where git cannot describe at all, and dirty where it cannot look', () => {
-    const notARepo = mkdtempSync(join(tmpdir(), 'lf-not-a-repo-'));
+    const notARepo = mkdtempSync(join(tmpdir(), 'cw-not-a-repo-'));
     try {
       expect(readDeploySource(notARepo)).toBeNull();
     } finally {

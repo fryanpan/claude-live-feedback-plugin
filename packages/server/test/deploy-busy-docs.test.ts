@@ -22,7 +22,7 @@ describe('pendingFileWrites', () => {
   let rooms: Rooms;
 
   beforeEach(() => {
-    dataDir = mkdtempSync(join(tmpdir(), 'lf-busy-'));
+    dataDir = mkdtempSync(join(tmpdir(), 'cw-busy-'));
     path = join(dataDir, 'Main.kt');
     writeFileSync(path, 'fun main() {}\n');
     rooms = new Rooms({
@@ -62,7 +62,7 @@ describe('pendingFileWrites', () => {
     expect(rooms.pendingFileWrites()).toHaveLength(1);
     expect(rooms.pendingFileWrites(dataDir)).toHaveLength(1);
 
-    const elsewhere = mkdtempSync(join(tmpdir(), 'lf-other-'));
+    const elsewhere = mkdtempSync(join(tmpdir(), 'cw-other-'));
     try {
       expect(rooms.pendingFileWrites(elsewhere)).toEqual([]);
     } finally {
@@ -72,7 +72,7 @@ describe('pendingFileWrites', () => {
 
   it('does not mistake a sibling directory whose name shares a prefix', () => {
     // Both roots must EXIST, or the absence proves only that realpath failed.
-    const parent = mkdtempSync(join(tmpdir(), 'lf-roots-'));
+    const parent = mkdtempSync(join(tmpdir(), 'cw-roots-'));
     try {
       const repo = join(parent, 'repo');
       const lookalike = join(parent, 'repo-evil');

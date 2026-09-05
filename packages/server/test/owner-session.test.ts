@@ -137,7 +137,7 @@ describe('the owning session over the real routes', () => {
   const AUTHOR = { id: 'agent-cartographer', name: 'Cartographer', kind: 'agent' };
 
   beforeAll(() => {
-    dataDir = mkdtempSync(join(tmpdir(), 'lf-owner-session-'));
+    dataDir = mkdtempSync(join(tmpdir(), 'cw-owner-session-'));
     handle = createServer({ port: 0, dataDir });
     base = `http://localhost:${handle.port}`;
   });
