@@ -687,6 +687,25 @@ with headings"*):
   new material at the end, "never to restructure notes the new speech does not
   touch" — which produced a doc shaped like the clock, where the third mention
   of a topic sat nowhere near the first two.
+- **Regroup a topic that passes four bullets**, on every tick and not only on
+  the one that opened it: gather its points into two or three groups, each a
+  short lead bullet with its own points nested under it as sub-bullets. It is
+  said twice — once in HOW TO ORGANISE with a worked example, and once as the
+  last thing before the output rule, under **BEFORE YOU ANSWER**. That is not
+  redundancy but measurement: stated once, the smoke slice came back with six
+  flat bullets under one heading, and with the example added, five. Stated
+  again at the end it holds — and the closing clause "get under the number by
+  GROUPING, never by dropping a point" is there because the revision without
+  it passed by deleting a note instead. The
+  shape is sub-bullets and never a subheading, and the reason is the re-layout
+  gate below: a new heading inside an existing run of bullets can only land by
+  rebuilding the section, which is refused as soon as one line in it is a
+  person's, so a heading-based regroup arrives BELOW the bullets in exactly
+  the meetings people are typing in. Nesting needs no re-parenting and comes
+  through in order. The instructions also tell it to leave a person's lines at
+  the top level: the ledger stops it REWRITING one, and a copy of their line
+  nested inside a group is new writing of its own, which is accepted and reads
+  as two notes saying one thing.
 - **Mark a guess.** Where the point rests on a garbled word, write the note
   and end it `(unconfirmed)`. A marked guess beats a confident wrong note and
   beats no note.
@@ -1527,8 +1546,9 @@ failing on the meeting it was built for.
 
 **Two kinds of judge, and the split is the point.** Anything decidable is
 decided in code (`notes-quality.ts`, unit-tested): bullet length, a topic
-opened twice, a decision with no voice on it, a named row left unlinked, a
-bullet copied verbatim out of the transcript, and the seeded human bullet
+opened twice, a topic left running past four bullets with no nesting and no
+heading inside it, a decision with no voice on it, a named row left unlinked,
+a bullet copied verbatim out of the transcript, and the seeded human bullet
 still reading character for character. Only reading comprehension goes to a
 model (Sonnet): was the paraphrase faithful, does the note say what was
 decided and by whom, was that new heading really a new topic. A model
@@ -1600,6 +1620,14 @@ which measured **$0.016**. It is not a test and does not live in the suites: a
 check whose verdict depends on a model's mood must never take somebody else's
 CI red, which is why the CI job is `continue-on-error` and skips itself, out
 loud, when no key is configured.
+
+**The flat wall is the one verdict the smoke slice returns non-zero on.**
+Every rate in the report is a reading of a model's output and exits 0. A topic
+left running past four bullets with nothing inside it is not a reading: it is
+decidable, it is cheap to see, and it is the shape the notes are not allowed
+to have — so `--smoke` exits 1 on one, and the fix is to raise the structure
+rather than the threshold. The full run still only reports, per meeting, how
+many such topics the meeting ended with.
 
 ### Cost
 
