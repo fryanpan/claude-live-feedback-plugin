@@ -267,6 +267,51 @@ export function writeSchedulePhrase(phrase: SchedulePhrase, ctx: SchedulePhraseC
   return `${head} until ${formatUntil(phrase.until, ctx)}`;
 }
 
+/**
+ * The rule as CHIPS: the same labels `writeSchedulePhrase` builds its sentence
+ * from, split at the joints a reader scans rather than read as prose.
+ *
+ * One function rather than a second vocabulary, for the reason the module
+ * doc gives: a chip that read differently from the phrase it stands for would
+ * be a second answer to when the row is owed. Everything here comes back out
+ * of `cadenceWords`, `formatTimeList`, `formatInterval` and `formatUntil` —
+ * add a label and it has to go in one of those, where the phrase gets it too.
+ *
+ * A ONE-OFF GETS NO PARTS, deliberately. Its rule is its instant, and every
+ * surface that draws these already draws the next occurrence beside them — so
+ * a chip would say the date the row is already showing, twice.
+ */
+export function scheduleRuleChipParts(
+  phrase: SchedulePhrase,
+  ctx: SchedulePhraseContext,
+): string[] {
+  const rule = phrase.rule;
+  const parts: string[] = [];
+  switch (rule.kind) {
+    case 'once':
+      return [];
+    case 'every':
+      parts.push(`Every ${formatInterval(rule.everyMs, { allowDays: false, bareSingular: true })}`);
+      break;
+    case 'calendar':
+      // Two parts, because they are two questions — which days, and at what
+      // time — and a reader scanning a column of rules compares them one at a
+      // time. `cadenceWords` writes them lower-case for the sentence.
+      parts.push(`Every ${cadenceWords(rule)}`, formatTimeList(rule.times));
+      break;
+    case 'after-completion':
+      parts.push(
+        `${formatInterval(rule.delayMs, { allowDays: true, bareSingular: false })} after it's done`,
+      );
+      break;
+  }
+  // The end is part of the rule, so a rule that stops in December must say so
+  // — a chip strip that showed the cadence and swallowed the end would read
+  // as a rule that runs forever.
+  if (phrase.until !== undefined) parts.push(`until ${formatUntil(phrase.until, ctx)}`);
+  return parts;
+}
+
 /** The phrases the editor offers as one-tap starting points. They are the
  *  four the ticket's acceptance criteria name, so the row a reader sees and
  *  the row the round-trip tests walk are the same four. */
