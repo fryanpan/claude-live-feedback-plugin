@@ -115,6 +115,15 @@ describe('security docs are wired together', () => {
       // the checklist; without this row the split would have taken the whole
       // host gate off the trigger.
       'packages/server/src/request-admission.ts',
+      // …and the fifth, which is NOT an auth surface and is on the list
+      // anyway. Shell and static serving holds the three static roots and
+      // the containment checks over them, serves a mockup from an absolute
+      // path the room was bound to, and `/widget/` sits on the share-host
+      // allowlist. Checklist items 1, 2 and 4 — name the gate on a moved
+      // route, what rejects a hostile file path, did share scope widen —
+      // all land on this file, so a PR that edits only it must still answer
+      // them.
+      'packages/server/src/shell-static.ts',
     ];
     for (const path of security) expect(pattern.test(path)).toBe(true);
 
