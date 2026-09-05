@@ -2350,6 +2350,23 @@ body.composer-open #editor > .ProseMirror ::selection {
   pointer-events: none;
   color: var(--fg-muted);
 }
+/* An empty box has to show the WHOLE hint, and the rule above is a float of
+   zero height: a placeholder that wraps adds no height to the block, so the
+   surface's scroll box cuts its second line off mid-word. The doc composer's
+   hint names the three things a reader can ask for and measures 324px at the
+   composer's own font, against 290px of box at a 430px viewport — two lines
+   there, one line from about 470px up. So the EMPTY box is given two lines
+   across the phone tier; it collapses back to one the moment anything is
+   typed, and between ~470px and this breakpoint it costs a blank line rather
+   than a cut sentence. A hint longer than two lines' worth would clip again —
+   this buys the current one, it does not make the box elastic. Verified in
+   headless Chromium at 430x932 and 1180x820. */
+@media (max-width: 640px) {
+  #composer .md-composer-surface .ProseMirror p.is-editor-empty:first-child,
+  #composer-text:placeholder-shown {
+    min-height: 2.7em;
+  }
+}
 
 /* ================= TOAST ================= */
 

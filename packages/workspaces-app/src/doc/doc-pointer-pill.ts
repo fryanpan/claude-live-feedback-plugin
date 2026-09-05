@@ -1,6 +1,16 @@
 /**
- * The pointer pill over a huddle document: Comment / Research / Create Task,
- * grown just to the right of the point where the finger or mouse let go.
+ * The pointer pill over a huddle document: Comment, grown just to the right
+ * of the point where the finger or mouse let go.
+ *
+ * It offered three actions until 2026-09-04 (Comment / Research / Create
+ * Task). Bryan cut it to the one: what the other two did is asked for in the
+ * comment itself, so the pill no longer makes a reader choose a verb before
+ * they have said anything. Pressing it opens the composer on the selection
+ * and puts the caret in the box in the SAME tick — see `openComposer` in
+ * `doc/review-composer.ts`, whose focus used to be 30ms out. iOS raises the
+ * keyboard only for a focus that happens inside the gesture that asked for
+ * it, so on the iPad this pill is mostly used from, a deferred focus meant a
+ * second tap.
  *
  * The release point is the whole reason this is a module rather than a call.
  * A pill anchored to the selection's box lands in the wrong place on a
@@ -18,11 +28,7 @@
 import type { EditorHandle } from '../editor.ts';
 import type { MountScope } from '../mount-scope.ts';
 import { mountPointerPill } from '../pointer-pill.ts';
-import {
-  POINTER_PILL_ACTIONS,
-  type PointerPillActionId,
-  type SpinoffTaskId,
-} from '../spinoff-menu.ts';
+import { POINTER_PILL_ACTIONS, type PointerPillActionId } from '../spinoff-menu.ts';
 import type { ChromeSelection } from './anchor-body.ts';
 
 export interface PointerPillLayer {
@@ -43,17 +49,17 @@ export interface PointerPillLayerOptions {
   getSelection: () => ChromeSelection | null;
   /** Hide BOTH pills — picking an action ends the round pill too. */
   hideAll: () => void;
+  /**
+   * Open the comment composer on the standing selection AND put the caret in
+   * it, synchronously. Called straight out of the button's click handler with
+   * nothing awaited in between, because that is the only thing iOS accepts as
+   * grounds for raising the keyboard.
+   */
   openComposer: () => void;
-  takeSpinoff: (
-    action: SpinoffTaskId,
-    sel: ChromeSelection,
-    range: { from: number; to: number } | null,
-  ) => void;
 }
 
 export function mountPointerPillLayer(opts: PointerPillLayerOptions): PointerPillLayer {
-  const { huddle, editor, editorMount, scope, getSelection, hideAll, openComposer, takeSpinoff } =
-    opts;
+  const { huddle, editor, editorMount, scope, getSelection, hideAll, openComposer } = opts;
 
   /** Where the last selection gesture let go, in viewport coordinates. A
    *  release ON the pill is not recorded: it would walk the anchor up by one
@@ -86,33 +92,20 @@ export function mountPointerPillLayer(opts: PointerPillLayerOptions): PointerPil
     { capture: true, passive: true },
   );
 
-  /** The selection the pill was shown for, captured when it appeared: on iOS
-   *  the tap on a button blurs the editor before the click lands, and by
-   *  then there is nothing left to write the task's link beside. */
-  let pointerPillCtx: {
-    sel: ChromeSelection;
-    range: { from: number; to: number } | null;
-  } | null = null;
   const pointerPill = huddle
     ? mountPointerPill<PointerPillActionId>({
         actions: POINTER_PILL_ACTIONS,
-        onPick: (action) => {
-          const captured = pointerPillCtx;
-          pointerPillCtx = null;
+        // Not the component's default ("Turn this line into work") — that
+        // named a toolbar of spin-offs, and this one comments.
+        ariaLabel: 'Comment on the selected text',
+        onPick: () => {
           hideAll();
-          if (action === 'comment') {
-            // The composer anchors to the selection that is standing, so
-            // it stays: the same path the round pill takes everywhere else.
-            openComposer();
-            return;
-          }
-          // The selection has done its job. Left standing, the next
-          // `positionPill` — the release of this very tap, or the edit
-          // that writes the link — would grow the pill straight back over
-          // words that have already become a row.
-          window.getSelection()?.removeAllRanges();
-          editor.editor.commands.blur();
-          if (captured) takeSpinoff(action, captured.sel, captured.range);
+          // The composer anchors to the selection that is standing, so it
+          // stays: the same path the round pill takes everywhere else. And
+          // `openComposer` focuses the box before this handler returns —
+          // nothing may be awaited or deferred between the click and the
+          // focus, or iOS declines to raise the keyboard.
+          openComposer();
         },
         onDismiss: () => hideAll(),
       })
@@ -195,12 +188,12 @@ export function mountPointerPillLayer(opts: PointerPillLayerOptions): PointerPil
       top: Math.max(er.top, vvTop) + 6,
       bottom: Math.min(er.bottom, vvTop + vvHeight) - 6,
     };
-    const sel = getSelection();
-    if (!sel) {
+    // No selection, no pill: the composer would have nothing to anchor to,
+    // and would only toast "select some text first" at a person who did.
+    if (!getSelection()) {
       pointerPill.hide();
       return;
     }
-    pointerPillCtx = { sel, range: from < to ? { from, to } : null };
     pointerPill.show(anchor, rects, bounds);
   }
 

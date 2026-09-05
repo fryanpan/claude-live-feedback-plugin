@@ -1,6 +1,9 @@
 /**
- * The pointer pill — Comment, Research and Create Task, hung off the point
- * where a selection was released.
+ * The pointer pill — the actions for a selection, hung off the point where
+ * that selection was released. Its one caller offers Comment and nothing
+ * else (`doc/doc-pointer-pill.ts`); it carried Research and Create Task
+ * beside it until 2026-09-04, which is why it is built from a LIST rather
+ * than being a button.
  *
  * A selection on a huddle doc used to grow a round button at its far end
  * which opened a four-row menu, and the menu became a bottom sheet on a
@@ -196,7 +199,10 @@ export function mountPointerPill<Id extends string>(opts: PointerPillOpts<Id>): 
   const el = document.createElement('div');
   el.className = 'pointer-pill hidden no-arrow';
   el.setAttribute('role', 'toolbar');
-  el.setAttribute('aria-label', opts.ariaLabel ?? 'Turn this line into work');
+  // The fallback is deliberately about the SELECTION rather than about work:
+  // the caller names its own actions, and this component no longer knows
+  // that any of them file anything.
+  el.setAttribute('aria-label', opts.ariaLabel ?? 'Actions for the selected text');
 
   const flagged = opts.actions.some((a) => a.primary === true);
   for (const [i, action] of opts.actions.entries()) {
