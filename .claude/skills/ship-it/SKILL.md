@@ -42,7 +42,7 @@ Decide from the changed-file list, not from memory:
 
 ```bash
 git diff --name-only <base-branch>...HEAD |
-  grep -E 'packages/server/src/(server|bin|access-deps|identity-setup|request-admission|request-attribution|socket-handlers)\.ts|packages/server/src/routes/(agent-identity|shell-static|upgrade-stream|recall-webhook)\.ts|packages/server/src/middleware/|packages/server/src/auth/|packages/server/src/share/|packages/server/src/(webhooks|recall-webhook-auth|recall|fs-scan)\.ts'
+  grep -E 'packages/server/src/(server|bin|access-deps|identity-setup|request-admission|shell-static|upgrade-stream|request-attribution|socket-handlers)\.ts|packages/server/src/routes/agent-identity\.ts|packages/server/src/middleware/|packages/server/src/auth/|packages/server/src/share/|packages/server/src/(webhooks|recall-webhook-auth|recall|fs-scan)\.ts'
 ```
 
 **No match** → skip to step 3 and say "no security-surface files touched" in

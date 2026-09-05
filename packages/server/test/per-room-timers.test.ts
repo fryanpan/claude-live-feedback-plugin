@@ -51,9 +51,7 @@ describe('per-room timers', () => {
   });
 
   /** Bind `count` markdown files, then restart the server over the same dir. */
-  async function seedBound(
-    count: number,
-  ): Promise<{ rooms: Rooms; docIds: string[]; paths: string[] }> {
+  function seedBound(count: number): { rooms: Rooms; docIds: string[]; paths: string[] } {
     const first = makeRooms(dataDir);
     const docIds: string[] = [];
     const paths: string[] = [];
@@ -73,13 +71,6 @@ describe('per-room timers', () => {
     // docs are in memory. `seedBoundCold` is the same fixture unopened.
     const rooms = makeRooms(dataDir);
     for (const docId of docIds) rooms.get(docId);
-    // `get` returns the doc in the same turn and binds its file a moment
-    // later, off the thread pool — a hydrate no longer opens a bound path on
-    // the main thread (see `Rooms.prereadFor`). So wait for the bindings this
-    // fixture is about rather than assuming they arrived with the rooms.
-    await waitFor(() => rooms.stats().bindings === count, {
-      describe: `all ${count} deferred file bindings to land`,
-    });
     // Opening put every doc in the poll's fast lane; drop the access stamps
     // so the fixture starts where a restart used to leave it — resident and
     // bound, with nobody looking at anything.
@@ -88,16 +79,14 @@ describe('per-room timers', () => {
   }
 
   /** The same fixture, restarted and NOT opened. */
-  async function seedBoundCold(
-    count: number,
-  ): Promise<{ rooms: Rooms; docIds: string[]; paths: string[] }> {
-    const { rooms, docIds, paths } = await seedBound(count);
+  function seedBoundCold(count: number): { rooms: Rooms; docIds: string[]; paths: string[] } {
+    const { rooms, docIds, paths } = seedBound(count);
     for (const docId of docIds) rooms.evictRoom(docId);
     return { rooms, docIds, paths };
   }
 
-  it('a restart holds nothing until somebody reaches for a doc', async () => {
-    const { rooms, docIds } = await seedBoundCold(5);
+  it('a restart holds nothing until somebody reaches for a doc', () => {
+    const { rooms, docIds } = seedBoundCold(5);
     // The boot that used to load every doc on the server now loads none, and
     // that is the whole memory change: no rooms, no bindings, no timers that
     // scale with the corpus.
@@ -109,8 +98,8 @@ describe('per-room timers', () => {
     expect(rooms.stats().rooms).toBe(1);
   });
 
-  it('opening rooms constructs no Awareness (no presence timer)', async () => {
-    const { rooms, docIds } = await seedBound(5);
+  it('opening rooms constructs no Awareness (no presence timer)', () => {
+    const { rooms, docIds } = seedBound(5);
     expect(rooms.stats().rooms).toBeGreaterThanOrEqual(docIds.length);
     expect(rooms.stats().awareness).toBe(0);
     for (const docId of docIds) {
@@ -120,8 +109,8 @@ describe('per-room timers', () => {
     expect(rooms.stats().awareness).toBe(0);
   });
 
-  it('creates the Awareness on first read and keeps returning the same one', async () => {
-    const { rooms, docIds } = await seedBound(2);
+  it('creates the Awareness on first read and keeps returning the same one', () => {
+    const { rooms, docIds } = seedBound(2);
     const room = rooms.get(docIds[0]);
     if (!room) throw new Error('room missing');
     const first = room.awareness;
@@ -167,7 +156,7 @@ describe('per-room timers', () => {
     // `onOpen` hands `getStates()` to the next joiner before any sweep — so
     // the joiner would see a ghost peer. The library's own timer expired
     // those whether or not anyone was connected.
-    const { rooms, docIds } = await seedBound(1);
+    const { rooms, docIds } = seedBound(1);
     const room = rooms.get(docIds[0]);
     if (!room) throw new Error('room missing');
     const aw = room.awareness;
@@ -195,8 +184,8 @@ describe('per-room timers', () => {
     ghostDoc.destroy();
   });
 
-  it('a bound doc nobody is looking at is not in the fast lane', async () => {
-    const { rooms } = await seedBound(10);
+  it('a bound doc nobody is looking at is not in the fast lane', () => {
+    const { rooms } = seedBound(10);
     const after = rooms.stats();
     expect(after.bindings).toBe(10);
     // All ten bindings armed, none of them active: they are swept on the
@@ -214,7 +203,7 @@ describe('per-room timers', () => {
     // reader, socket or tool is looking at it. It holds for every doc the
     // server is holding — which, since lazy hydration, means every doc that
     // has been opened at least once. The cold case is the test below.
-    const { rooms, docIds, paths } = await seedBound(1);
+    const { rooms, docIds, paths } = seedBound(1);
     expect(rooms.stats().activeBindings).toBe(0);
     writeFileSync(paths[0], '# Doc 0\n\narrived with nobody watching\n');
     // Same control as above: the seed and this write can share a millisecond,
@@ -235,7 +224,7 @@ describe('per-room timers', () => {
     // notified. What is preserved is the thing that matters — the edit is
     // not lost. `attachFile` arbitrates on open, the file is the source of
     // truth at rest, and the content is there the moment somebody reaches.
-    const { rooms, docIds, paths } = await seedBoundCold(1);
+    const { rooms, docIds, paths } = seedBoundCold(1);
     expect(rooms.stats().rooms).toBe(0);
     expect(rooms.stats().bindings).toBe(0);
 
@@ -259,7 +248,7 @@ describe('per-room timers', () => {
     // edit pinned that binding in the fast lane for the life of the process
     // — a 500ms stat per changed doc, forever, with nobody watching. On
     // production this read as every bound doc active five minutes after boot.
-    const { rooms, docIds, paths } = await seedBound(2);
+    const { rooms, docIds, paths } = seedBound(2);
     expect(rooms.stats().activeBindings).toBe(0);
 
     writeFileSync(paths[0], '# Doc 0\n\nedited once\n');
@@ -281,18 +270,18 @@ describe('per-room timers', () => {
     expect(rooms.stats().activeBindings).toBe(0);
   });
 
-  it('an access activates exactly the doc that was accessed', async () => {
-    const { rooms, docIds } = await seedBound(10);
+  it('an access activates exactly the doc that was accessed', () => {
+    const { rooms, docIds } = seedBound(10);
     rooms.get(docIds[3]);
     expect(rooms.stats().activeBindings).toBe(1);
   });
 
-  it('a live connection keeps a doc active with no access at all', async () => {
+  it('a live connection keeps a doc active with no access at all', () => {
     // The websocket path: `websocket.open` resolves the room and adds the
     // socket to `conns`, and from then on the doc is active for as long as
     // the socket lives — it must not fall back to the idle rotation after
     // FILE_POLL_ACTIVE_MS just because nobody made another REST call.
-    const { rooms, docIds } = await seedBound(3);
+    const { rooms, docIds } = seedBound(3);
     const room = rooms.get(docIds[1]);
     if (!room) throw new Error('room missing');
     // Stand in for the socket; `bindingIsActive` only reads `conns.size`.
@@ -307,7 +296,7 @@ describe('per-room timers', () => {
   });
 
   it('an external edit made while idle reaches the doc after a connect', async () => {
-    const { rooms, docIds, paths } = await seedBound(1);
+    const { rooms, docIds, paths } = seedBound(1);
     const docId = docIds[0];
     rooms.resetDerivedCaches();
     expect(rooms.stats().activeBindings).toBe(0);
@@ -334,7 +323,7 @@ describe('per-room timers', () => {
   });
 
   it('picks up an external edit to an IDLE bound file on the next access', async () => {
-    const { rooms, docIds, paths } = await seedBound(1);
+    const { rooms, docIds, paths } = seedBound(1);
     const docId = docIds[0];
     expect(rooms.stats().activeBindings).toBe(0);
 
@@ -353,15 +342,15 @@ describe('per-room timers', () => {
   });
 
   it('reparse_from_disk still force-pulls an idle bound file', async () => {
-    const { rooms, docIds, paths } = await seedBound(1);
+    const { rooms, docIds, paths } = seedBound(1);
     writeFileSync(paths[0], '# Doc 0\n\nforced in by reparse\n');
     const res = rooms.reparseFromDisk(docIds[0]);
     expect(res.ok).toBe(true);
     expect(markdownOf(rooms, docIds[0])).toContain('forced in by reparse');
   });
 
-  it('list() reports the .ydoc mtime and keeps reporting it after a write', async () => {
-    const { rooms, docIds } = await seedBound(3);
+  it('list() reports the .ydoc mtime and keeps reporting it after a write', () => {
+    const { rooms, docIds } = seedBound(3);
     const rows = rooms.list().filter((m) => docIds.includes(m.docId));
     expect(rows).toHaveLength(3);
     for (const row of rows) {
@@ -373,13 +362,13 @@ describe('per-room timers', () => {
     expect(again.map((m) => m.lastActivityAt)).toEqual(rows.map((m) => m.lastActivityAt));
   });
 
-  it('list() is byte-identical cold-cache and warm-cache', async () => {
+  it('list() is byte-identical cold-cache and warm-cache', () => {
     // The cache is populated lazily by the first read, so a fresh Rooms over
     // the same data dir serves the FIRST list from statSync and the second
     // from the cache. Serialising both is the strongest form of "GET
     // /api/docs returns the same rows": not the same values field by field,
     // the same bytes.
-    const { rooms, docIds } = await seedBound(4);
+    const { rooms, docIds } = seedBound(4);
     expect(docIds).toHaveLength(4);
     const cold = JSON.stringify(rooms.list());
     const warm = JSON.stringify(rooms.list());
@@ -391,7 +380,7 @@ describe('per-room timers', () => {
   });
 
   it('list() picks up a doc that has just been written', async () => {
-    const { rooms, docIds } = await seedBound(1);
+    const { rooms, docIds } = seedBound(1);
     const before = rooms.list().find((m) => m.docId === docIds[0])?.lastActivityAt;
     await sleep(20);
     const room = rooms.get(docIds[0]);
@@ -405,7 +394,7 @@ describe('per-room timers', () => {
 });
 
 describe('hydration cost at corpus scale', () => {
-  it('holds no per-doc timers for a few hundred hydrated bound docs', async () => {
+  it('holds no per-doc timers for a few hundred hydrated bound docs', () => {
     const dataDir = mkdtempSync(join(tmpdir(), 'prt-scale-data-'));
     const srcDir = mkdtempSync(join(tmpdir(), 'prt-scale-src-'));
     mkdirSync(srcDir, { recursive: true });
@@ -425,13 +414,6 @@ describe('hydration cost at corpus scale', () => {
       // this file records the boot cost as well as the held cost.
       expect(rooms.stats().rooms).toBe(0);
       for (let i = 0; i < 200; i++) rooms.get(`scale-${i}`);
-      // The bindings arrive off the thread pool a moment after the rooms do —
-      // a hydrate no longer opens a bound file on the main thread, which is
-      // the whole of `Rooms.prereadFor`. Wait for them, because the count
-      // below is what this test is about.
-      await waitFor(() => rooms.stats().bindings === 200, {
-        describe: 'all 200 deferred file bindings to land',
-      });
       rooms.resetDerivedCaches();
       const s = rooms.stats();
       expect(s.rooms).toBe(200);

@@ -130,22 +130,11 @@ export function buildNotesPrompt(
   }
   parts.push(
     `New transcript since the last update:\n${input.tick.turns
-      .map((t) => `- ${speakerPrefix(t)}${t.text}${t.partial ? PARTIAL_SUFFIX : ''}`)
+      .map((t) => `- ${speakerPrefix(t)}${t.text}`)
       .join('\n')}`,
   );
   return { system, user: parts.join('\n\n') };
 }
-
-/**
- * How the last, unfinished sentence of a meeting is presented.
- *
- * It reaches the composer only on the final tick, where it is the engine's
- * raw partial — no punctuation, no sentence casing, sometimes cut mid-word.
- * Saying so is what stops the note-taker rendering a fragment as a finished
- * point: the instructions already ask it to end a note it is unsure of with
- * `(unconfirmed)`, and this is that case named on the wire.
- */
-const PARTIAL_SUFFIX = ' [unfinished — the recording stopped mid-sentence]';
 
 /**
  * "Devi (B): " — the name to write and the label to tag with, in the one

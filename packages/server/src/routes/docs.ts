@@ -23,11 +23,7 @@
  * fails if its path starts reaching a different handler.
  *
  * Dependencies arrive in an explicit context rather than captured from the
- * `createServer` closure, following `task-routes-context.ts`. The context and
- * request shapes themselves, and the body parsers more than one of the four
- * doc route modules calls, live in `docs-routes-context.ts` — so the three
- * modules this one delegates to import their vocabulary from there and not
- * back out of their own caller.
+ * `createServer` closure, following `task-routes-context.ts`.
  *
  * The third entry point, `handleDocResourceRoutes`, is itself a chain of
  * three: this file still owns the `/api/docs/:id/...` match and resolves
@@ -44,11 +40,22 @@
  * strings), so no two of the ~30 subroutes can match the same request and a
  * fixed delegation order cannot make one answer a path meant for another.
  */
-import { type Anchor, type DocMeta, type DocType, reviewIdOf } from '@feedback/core';
+import {
+  type Anchor,
+  type DocMeta,
+  type DocType,
+  type ReviewPayload,
+  type Thread,
+  type User,
+  reviewIdOf,
+  suggestOps,
+} from '@feedback/core';
 import { classifyActor } from '../actor-identity.ts';
 import { normalizeDocHome, resolveHomeCheckout } from '../doc-home.ts';
 import { RESERVED_DOC_PREFIXES } from '../doc-ids.ts';
 import { compactDocRow, matchesDocFilters, pageDocs, parseListDocsQuery } from '../doc-listing.ts';
+import type { createLeadPresenceMonitor } from '../lead-presence.ts';
+import type { ShareTarget } from '../middleware/host-guard.ts';
 import { browserCannotBindBody, isBrowserRequest } from '../middleware/write-gate.ts';
 import {
   captureMockup,
@@ -56,7 +63,10 @@ import {
   isHtmlMockupSource,
   readMockupHtml,
 } from '../mockup-capture.ts';
+import type { ReadyWorkNudger } from '../ready-nudge.ts';
+import type { DocRoom, Rooms } from '../rooms.ts';
 import { OUT_OF_SHARE_SCOPE, firstRefOutOfScope } from '../share/ref-scope.ts';
+import type { ThreadSummarizer } from '../summarize.ts';
 import {
   BAD_OPTIONS_ERROR,
   BAD_REF_ERROR,
@@ -73,16 +83,15 @@ import {
   parseAssigneeKind,
   resolveAssignee,
 } from '../task-owner.ts';
+import type { TaskProjection } from '../task-projection.ts';
 import { placeableGoals } from '../task-queue.ts';
 import { clipToWordBoundary } from '../task-title.ts';
+import { type Task, type TaskStore } from '../tasks.ts';
+import type { ThreadRequestDedup } from '../thread-request-dedup.ts';
+import type { createWebhookDispatcher } from '../webhooks.ts';
 import { handleDocEditRoutes } from './doc-edit-routes.ts';
 import { handleDocResourceCore } from './doc-resource.ts';
 import { handleDocThreadRoutes } from './doc-threads-routes.ts';
-import type {
-  DocResourceRouteRequest,
-  DocRouteRequest,
-  DocRoutesContext,
-} from './docs-routes-context.ts';
 /** The anchor's display snippet, whichever anchor kind carries it — an
  *  orphan keeps its original's snippet. */
 function anchorSnippetText(anchor: Anchor): string | undefined {
@@ -91,6 +100,224 @@ function anchorSnippetText(anchor: Anchor): string | undefined {
     return anchor.original.snippet?.text;
   }
   return anchor.snippet?.text;
+}
+
+/** Attach the doc's pending syncError (if any) to a successful edit-tool
+ *  response. Agents read edit results, not get_doc — so this is the surface
+ *  where a disk↔doc conflict actually reaches whoever can fix it. Used by
+ *  both `doc-threads-routes.ts` and `doc-edit-routes.ts`, which is why it
+ *  stays here rather than moving with either. */
+export function withSyncError(rooms: Rooms, docId: string, body: object): object {
+  const syncError = rooms.getSyncError(docId);
+  // The write just landed: ask whether it left markdown syntax sitting in the
+  // doc as literal characters. This is the only signal for that family of
+  // corruption — the verb returns ok and the file on disk serializes back
+  // correctly, so a reader of the rendered page is otherwise the first to
+  // know. A disk conflict is the more urgent of the two, so it leads and the
+  // integrity note is appended rather than replacing it.
+  const literal = rooms.literalMarkdownSyncError(docId);
+  if (syncError && literal) {
+    return {
+      ...body,
+      syncError: { ...syncError, message: `${syncError.message}; ${literal.message}` },
+    };
+  }
+  const combined = syncError ?? literal;
+  return combined ? { ...body, syncError: combined } : body;
+}
+
+/** Sentinel for a `placement` body value that is present but not one of the
+ *  two known values — the route answers 400 rather than silently splicing at
+ *  the default position (an insert in the wrong place is a structure edit
+ *  the caller then has to hunt down and undo). Used by both
+ *  `doc-threads-routes.ts` and `doc-edit-routes.ts`. */
+export const PLACEMENT_INVALID = Symbol('placement-invalid');
+
+/** Parse an insert_blocks body's optional `placement`. Absent → undefined
+ *  (core defaults to 'after-block', the historical behavior). */
+export function parsePlacement(
+  value: unknown,
+): 'after-block' | 'top-level' | undefined | typeof PLACEMENT_INVALID {
+  if (value === undefined || value === null) return undefined;
+  if (value === 'after-block' || value === 'top-level') return value;
+  return PLACEMENT_INVALID;
+}
+
+/** Parse a `suggest: true` request body's `author` field into a
+ *  SuggestionAuthor. Requires `id` + `name`; `color` defaults so a caller
+ *  that omits it (unlikely — MCP always sends the full identity) still
+ *  produces an attributable proposal instead of a 400. Used by both
+ *  `doc-threads-routes.ts` and `doc-edit-routes.ts`. */
+export function parseSuggestionAuthor(
+  body: Record<string, unknown> | null,
+): suggestOps.SuggestionAuthor | null {
+  const a = body?.author as { id?: unknown; name?: unknown; color?: unknown } | undefined;
+  if (!a || typeof a.id !== 'string' || a.id.length === 0) return null;
+  if (typeof a.name !== 'string' || a.name.length === 0) return null;
+  return { id: a.id, name: a.name, color: typeof a.color === 'string' ? a.color : '#888888' };
+}
+
+/** The gate's answer for a COMMENT-borne item. Same three facts as
+ *  `ReviewGate`; a bare payload where that one carries the wrapper.
+ *
+ *  It lives here rather than in the server closure for the same reason
+ *  `ReviewGate` lives in `task-routes-context.ts`: both sides of the split
+ *  need it — `createServer` runs the judge and these routes report what it
+ *  said. */
+export type ThreadReviewGate =
+  | { held: false; review: ReviewPayload }
+  | { held: true; review: ReviewPayload; reason: string; message: string };
+
+/** The long-lived collaborators these routes need, built once per server. */
+export interface DocRoutesContext {
+  /** Doc rooms — every route here is an operation on one. */
+  rooms: Rooms;
+  /** The hub task store — doc↔board membership, and the rows a doc carries. */
+  taskStore: TaskStore;
+  /** The ydoc projection of the store, refreshed after writes that emit no
+   *  store event. */
+  taskProjection: TaskProjection;
+  /** Webhook fan-out for thread events. */
+  webhooks: ReturnType<typeof createWebhookDispatcher>;
+  /** Who is holding the lead seat, for the doc page's presence chip. */
+  leadPresence: ReturnType<typeof createLeadPresenceMonitor>;
+  /** Wakes the lead when a row it owns becomes ready. */
+  readyNudger: ReadyWorkNudger;
+  /** Collapses concurrent identical thread requests onto one answer. */
+  threadRequestDedup: ThreadRequestDedup<Thread | null>;
+  /** The thread summarizer, or null when generation is not opted into. */
+  summarizer: ThreadSummarizer | null;
+  /** The data directory — read for the mockup capture's output path. */
+  dataDir: string;
+
+  /** JSON response helper — status plus body, no CORS (the per-request
+   *  wrapper in createServer adds that, because it knows the Origin). */
+  j: (status: number, body: unknown) => Response;
+  /** Parse a request body, answering null rather than throwing. */
+  safeJson: (req: Request) => Promise<Record<string, unknown> | null>;
+  /** Attribution for a write that arrived with no author at all. */
+  ANONYMOUS_ACTOR: User;
+
+  /** Whether a string may be used as a doc id at all. */
+  isValidDocId: (s: string) => boolean;
+  /** An alias or an id → the doc's own id. */
+  canonicalDocId: (addressed: string) => string;
+  /** Where a doc's back arrow goes — the board or review that holds it. */
+  backTargetFor: (docId: string, reviewId?: string) => { id: string; name: string } | null;
+  /** The board a doc belongs to, or null. */
+  resolveWorkspaceForDoc: (docId: string) => string | null;
+  /** Decorate a doc's meta with its review URL. `precomputedHome` is the
+   *  doc's board when a listing already resolved it off a shared index;
+   *  `null` is a real answer (no board), `undefined` means "not supplied". */
+  withReviewUrl: <T extends { docId: string; type: DocType; sourceUrl?: string }>(
+    meta: T,
+    precomputedHome?: string | null,
+  ) => T & { reviewUrl?: string };
+  /** doc id → the hub boards holding it, built once per request that needs it. */
+  boardIndexForListing: () => Map<string, string[]>;
+  /** Which hub boards hold a doc, answered off a prebuilt index. */
+  hubBoardsForDocIndexed: (index: Map<string, string[]>, meta: DocMeta) => Set<string>;
+  /** Which board a doc calls home, answered off the same index. */
+  homeForDocIndexed: (index: Map<string, string[]>, meta: DocMeta) => string | null;
+  /** File a loose attachment under a hub board, minting Unfiled if needed. */
+  fileUnderHubWorkspace: (attachmentId: string, requested?: string) => string | undefined;
+  /** Drop an attachment from every hub board that holds it. */
+  unlinkFromEveryHubWorkspace: (attachmentId: string) => void;
+  /** The doc-thread URL a webhook or an SSE payload carries. */
+  threadUrl: (docId: string, isVisitor: boolean) => string | undefined;
+
+  /** Turn a "review this" ask into a filed review request. */
+  fileReviewRequest: (
+    docId: string,
+    author: User,
+    text: string,
+  ) => Promise<{ threadId: string; requestedAt?: number } | null>;
+  /** Put a comment-borne review declaration through the quality gate. */
+  judgeThreadReview: (
+    docId: string,
+    threadId: string,
+    commentId: string,
+    review: ReviewPayload,
+    author: User,
+  ) => Promise<ThreadReviewGate>;
+  /** Tell the addressee a comment-borne review item is waiting on them. */
+  announceThreadReview: (
+    docId: string,
+    threadId: string,
+    review: ReviewPayload,
+    author: User,
+  ) => void;
+  /** Record that the gate held a comment-borne item, so a revision is judged
+   *  against what was actually said. */
+  recordedThreadHold: (
+    docId: string,
+    thread: Thread,
+    review: ReviewPayload | undefined,
+  ) => ThreadReviewGate | undefined;
+  /** Run the gate over a declaration arriving on a comment. */
+  gateThreadDeclaration: (
+    docId: string,
+    thread: Thread,
+    review: ReviewPayload,
+    author: User,
+  ) => Promise<ThreadReviewGate>;
+  /** The response fields a filing route adds when the gate held the item. */
+  heldFields: (gate: ThreadReviewGate | undefined) => Record<string, unknown>;
+  /** Replace a task's body markdown through the body doc. */
+  rewriteTaskBody: (
+    task: Task,
+    markdown: string,
+    opts: {
+      actor?: { id: string; name: string; kind?: string };
+      title?: string;
+      reason?: string;
+    },
+  ) => { ok: true } | { ok: false; error: string };
+  /** Parse a revise route's optional `revisedRange`. */
+  parseRevisedRange: (
+    raw: unknown,
+  ) => { ok: true; range?: { start: number; end: number } } | { ok: false; error: string };
+  /**
+   * Every workspace an id belongs to — `shareWorkspacesOf`, the same resolver
+   * the host guard scopes paths with. Read here for the fields the guard
+   * cannot see, which are the ones a request names in its BODY: a promoted
+   * row's cross-references. See `share/ref-scope.ts`.
+   */
+  workspacesOfDoc: (id: string) => string[];
+}
+
+/** What only this request knows. */
+export interface DocRouteRequest {
+  req: Request;
+  url: URL;
+  pathname: string;
+  /** The share target this request resolved to, or null for a member. */
+  visitor: ShareTarget | null;
+  /** The author this request is allowed to claim. */
+  authorFor: (claimed: unknown) => User | undefined;
+  /** The 400 for an author that names a category rather than a person. */
+  refuseCategoryAuthor: () => Response;
+  /** The doc meta a REST reply carries — redacted when the caller is a share
+   *  visitor, which is why it is per-request rather than per-server. */
+  metaFor: <T extends DocMeta>(meta: T) => Record<string, unknown>;
+  /** Attach the §-chips for the tasks a doc's thread produced. Per-request
+   *  for the same reason: what a visitor is shown is narrower. */
+  withTaskChips: <T extends { id: string }>(docId: string, t: T) => T;
+}
+
+/**
+ * What only a `/api/docs/:id/...` resource-block route knows, on top of the
+ * plain request: the doc `handleDocResourceRoutes` resolved from the path
+ * (canonicalized — see that function), and the path remaining after the id,
+ * tried by each of the three family handlers in turn.
+ */
+export interface DocResourceRouteRequest extends DocRouteRequest {
+  /** The doc this resource route is operating on. */
+  docId: string;
+  /** The room for `docId`, already confirmed to exist. */
+  room: DocRoom;
+  /** The path after `/api/docs/:id/`, e.g. `''`, `threads`, `content`. */
+  rest: string;
 }
 
 /**
@@ -216,13 +443,6 @@ export async function handleDocCreateListRoutes(
     // `task:<realTaskId>` body used to land on that task's live
     // description and file-bind it, 200 and no audit row. A caller
     // cannot address a server-owned namespace by a name it invents.
-    // The docId arrives in the BODY, so the per-request prewarm in server.ts
-    // — which reads ids out of the URL — never saw it. Re-binding an existing
-    // doc hydrates it, and hydration off a cold path is a blocking read; this
-    // route was measured parking production for 328 seconds. Prewarming here
-    // puts the bytes in hand (or quarantines the path) before the synchronous
-    // create below can reach for the file.
-    await rooms.prewarmHydration(docId);
     const created = rooms.createForCaller(docId, {
       type,
       sourceUrl,
@@ -263,12 +483,7 @@ export async function handleDocCreateListRoutes(
       // binding, so branch churn from here on follows the branch.
       if (derivedHome) rooms.setDocHome(canonicalId, derivedHome);
     } else if (type === 'code' && sourceUrl) {
-      // The pool door, like the markdown branch above it. `sourceUrl` is
-      // whatever the caller put in the body, so this is the same class of
-      // path — a synchronous read of one that has stopped answering parks
-      // the process, and being the code branch rather than the prose one
-      // makes no difference to that.
-      attached = await rooms.attachReadonlyFileAsync(canonicalId, sourceUrl);
+      attached = rooms.attachReadonlyFile(canonicalId, sourceUrl);
       if (!attached.ok) return j(409, { error: 'attach_failed', attached });
     }
     // Capture at bind, not merely on first serve: a mock that is bound

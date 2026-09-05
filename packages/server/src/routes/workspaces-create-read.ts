@@ -77,7 +77,7 @@ export async function handleWorkspaceCreateRead(
     if (!folderPath || typeof folderPath !== 'string') {
       return j(400, { error: 'folderPath (folder bind) or name (hub workspace) required' });
     }
-    const res = await rooms.bindFolder({
+    const res = rooms.bindFolder({
       folderPath,
       // `workspaceId` is what this body key was called before a review
       // stopped being a workspace; both are read, neither is required.
@@ -154,7 +154,7 @@ export async function handleWorkspaceCreateRead(
     if (reviewId !== undefined && !isValidDocId(reviewId)) {
       return j(400, { error: 'bad reviewId' });
     }
-    const res = await rooms.bindDiff({
+    const res = rooms.bindDiff({
       repoPath,
       base,
       target,

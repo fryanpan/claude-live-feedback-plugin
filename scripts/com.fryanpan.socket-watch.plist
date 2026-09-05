@@ -1,34 +1,15 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <!--
-  Socket-pool watcher (see scripts/socket-watch.sh). One CSV line every 15s to
-  ~/Library/Logs/socket-watch.csv, and one comment on the board's socket-leak
-  row each time the state changes (see scripts/socket-watch-alert.py).
+  Socket-pool watcher (see scripts/socket-watch.sh). One CSV line a minute to
+  ~/Library/Logs/socket-watch.csv, so the next ENOBUFS event names its holder.
 
-  The job runs a COPY on the boot disk, not the checkout: the same rule the
-  rest of the fleet's launchd jobs follow (CLAUDE.md, "Where prod lives"), and
-  it keeps the watcher alive across a worktree being pruned or a branch being
-  checked out underneath it. Two files now, because the alerter sits beside
-  the sampler and the sampler finds it by its own directory.
-
-  __TASK_ID__ and __WORKSPACE_ID__ name the board row the alert lands on.
-  They are placeholders and must stay placeholders IN THE REPO: this is a
-  public repo, and its pre-push leak gate refuses board ids on sight. The real
-  ids exist only in the installed copy of this file.
-
-  Install (INSTALL_DIR is the boot-disk directory the two scripts live in):
-    INSTALL_DIR="$HOME/Library/Application Support/claude-workspaces"
-    cp scripts/socket-watch.sh scripts/socket-watch-alert.py "$INSTALL_DIR/"
-    sed -e "s|__INSTALL_DIR__|$INSTALL_DIR|g" \
-        -e "s|__TASK_ID__|<the socket-leak row's task id>|g" \
-        -e "s|__WORKSPACE_ID__|<its workspace id>|g" \
-        scripts/com.fryanpan.socket-watch.plist \
+  Install (replace __REPO__ with this checkout's absolute path):
+    sed "s|__REPO__|$(pwd)|g" scripts/com.fryanpan.socket-watch.plist \
       > ~/Library/LaunchAgents/com.fryanpan.socket-watch.plist
     launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.fryanpan.socket-watch.plist
   Check:   launchctl print gui/$(id -u)/com.fryanpan.socket-watch | grep state
   Remove:  launchctl bootout gui/$(id -u)/com.fryanpan.socket-watch
-  Reinstall: bootout, WAIT ~30s, then bootstrap — run back to back it fails
-  with an I/O error.
 -->
 <plist version="1.0">
 <dict>
@@ -36,17 +17,13 @@
   <key>ProgramArguments</key>
   <array>
     <string>/bin/bash</string>
-    <string>__INSTALL_DIR__/socket-watch.sh</string>
+    <string>__REPO__/scripts/socket-watch.sh</string>
     <string>--watch</string>
   </array>
   <!-- 15s, not the script's 60s default: a measured burst (2,261 TIME_WAIT,
        5,371 mbufs, no suite running) rose and collapsed inside 40 seconds. -->
   <key>EnvironmentVariables</key>
-  <dict>
-    <key>SOCKET_WATCH_INTERVAL</key><string>15</string>
-    <key>SOCKET_WATCH_TASK_ID</key><string>__TASK_ID__</string>
-    <key>SOCKET_WATCH_WORKSPACE_ID</key><string>__WORKSPACE_ID__</string>
-  </dict>
+  <dict><key>SOCKET_WATCH_INTERVAL</key><string>15</string></dict>
   <key>RunAtLoad</key><true/>
   <key>KeepAlive</key><true/>
   <key>ThrottleInterval</key><integer>30</integer>

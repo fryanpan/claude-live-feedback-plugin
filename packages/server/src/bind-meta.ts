@@ -49,22 +49,13 @@ export interface BindHost {
       diffGroupDetails?: string;
     },
   ): DocRoom;
-  // Every attach here reads a path the CALLER supplied — a file in a repo
-  // the bind was pointed at — so all three are the pool doors rather than the
-  // synchronous ones. A bind loop over a repository whose folder has stopped
-  // answering is the shape that parked production; there is no version of it
-  // that may open a bound file on the main thread.
-  attachFileAsync(docId: string, path: string): Promise<{ ok: boolean }>;
-  attachReadonlyFileAsync(docId: string, path: string): Promise<{ ok: boolean }>;
-  attachFlatFileAsync(
-    docId: string,
-    path: string,
-    opts?: { writeBack?: boolean },
-  ): Promise<{ ok: boolean }>;
+  attachFile(docId: string, path: string): { ok: boolean };
+  attachReadonlyFile(docId: string, path: string): { ok: boolean };
+  attachFlatFile(docId: string, path: string, opts?: { writeBack?: boolean }): { ok: boolean };
   openContextFile(
     setId: string,
     relPath: string,
-  ): Promise<{ ok: true; docId: string; meta: DocMeta } | { ok: false; error: string }>;
+  ): { ok: true; docId: string; meta: DocMeta } | { ok: false; error: string };
   list(): DocMeta[];
 }
 

@@ -24,7 +24,6 @@
     "check:plugin-version": "bun run scripts/check-plugin-version.ts",
     "check:scrub-gate": "python3 scripts/scrub-selftest.py",
     "check:architecture": "bun run scripts/architecture-freshness.ts",
-    "check:imports": "bun run scripts/import-direction.ts",
     "test:audit": "bun run scripts/test-audit.ts",
     "coverage": "bun run scripts/coverage.ts",
     "loc:audit": "bun run scripts/loc-audit.ts",

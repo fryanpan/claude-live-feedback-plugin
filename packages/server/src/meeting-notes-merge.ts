@@ -367,115 +367,6 @@ export function planNeedsRelayout(current: readonly NoteItem[], plan: MergePlan)
   return false;
 }
 
-/** A bullet line inside an item's markdown: its indent, and its words. */
-const NESTED_BULLET = /^(\s*)(?:[-*+]|\d+[.)])\s+(.*)$/;
-
-/** How deep a line is indented. */
-function indentOf(line: string): number {
-  return line.length - line.trimStart().length;
-}
-
-/**
- * Take a person's own line back out of any item the composer wrapped around
- * it — the guarantee the ledger cannot give on its own.
- *
- * THE HOLE THIS CLOSES. The ledger stops the note-taker REWRITING a line
- * somebody typed: an incoming entry that reads like one of their lines lands
- * as a suggestion on it, never in its place. A REGROUP evades that entirely.
- * Asked to gather a long topic's points into groups, the composer returns a
- * lead bullet with their line nested under it — and a nested line is not an
- * item, it is part of the enclosing item's markdown, so nothing in the plan
- * ever compares it to anything. It is accepted as new writing of the agent's
- * own, and the reader is left with their line and a copy of it, saying one
- * thing twice. The prompt asks the composer not to; this is the guarantee,
- * and the difference matters because a prompt is a request and a merge is a
- * rule.
- *
- * WHAT COUNTS AS A COPY is the module's own definition of "reads as the same
- * note" — `NOTES_REWRITE_SIMILARITY`, the bar a rewrite of their line has to
- * clear before it is treated as one. A restatement of their point inside a
- * group is the same duplicate as a verbatim copy of it and reads worse, so
- * both go by the same measure rather than by string equality.
- *
- * TWO SHAPES, AND THE HEAD ONE IS NOT A DELETION. A nested copy is removed
- * with whatever was nested under it. A lead bullet that IS their line — the
- * composer making their note the head of a group of its own points — is
- * SPLIT instead: the head becomes an item of its own, which the merge
- * already recognises as their line and leaves where they put it, and the
- * group's remaining points become items of the agent's own beside it.
- * Splitting rather than dropping is why no point the composer wrote is lost
- * on either shape.
- */
-export function withoutPersonCopies(
-  incoming: readonly IncomingItem[],
-  personLines: readonly string[],
-): IncomingItem[] {
-  if (personLines.length === 0) return [...incoming];
-  const isCopyOf = (text: string): boolean =>
-    text.length > 0 &&
-    personLines.some((line) => similarity(line, text) >= NOTES_REWRITE_SIMILARITY);
-  const out: IncomingItem[] = [];
-  for (const item of incoming) out.push(...splitPersonCopies(item, isCopyOf));
-  return out;
-}
-
-function splitPersonCopies(
-  item: IncomingItem,
-  isCopyOf: (text: string) => boolean,
-): IncomingItem[] {
-  // Only a bullet carries nested lines. A block is one paragraph, one heading
-  // or one table, and its later lines are its own words rather than notes of
-  // their own.
-  if (item.kind !== 'item' || !item.md.includes('\n')) return [item];
-  const lines = item.md.split('\n');
-  const drop = new Array<boolean>(lines.length).fill(false);
-  for (let i = 1; i < lines.length; i++) {
-    if (drop[i]) continue;
-    const bullet = lines[i]!.match(NESTED_BULLET);
-    if (!bullet || !isCopyOf(bullet[2]!.trim())) continue;
-    drop[i] = true;
-    // Whatever was nested under their line goes with it: those points were
-    // written as elaborations of a note that is not staying here.
-    const depth = indentOf(lines[i]!);
-    for (let j = i + 1; j < lines.length && indentOf(lines[j]!) > depth; j++) drop[j] = true;
-  }
-  const kept = lines.filter((_, i) => !drop[i]);
-  if (!isCopyOf(lines[0]!.trim())) {
-    if (kept.length === lines.length) return [item];
-    return [{ ...item, md: kept.join('\n') }];
-  }
-  return [
-    { md: lines[0]!.trim(), kind: 'item', ordered: item.ordered },
-    ...promoteChildren(kept.slice(1)),
-  ];
-}
-
-/** The nested points of a group, each as an item of its own — dedented by the
- *  one level they all shared, so their own children stay nested under them. */
-function promoteChildren(lines: readonly string[]): IncomingItem[] {
-  if (lines.length === 0) return [];
-  const base = Math.min(...lines.map(indentOf));
-  const out: IncomingItem[] = [];
-  let group: string[] = [];
-  const flush = (): void => {
-    const head = group[0]?.match(NESTED_BULLET);
-    if (head) {
-      out.push({
-        md: [head[2]!.trim(), ...group.slice(1).map((l) => l.slice(base))].join('\n'),
-        kind: 'item',
-        ordered: /^\s*\d/.test(group[0]!),
-      });
-    }
-    group = [];
-  };
-  for (const line of lines) {
-    if (indentOf(line) === base && NESTED_BULLET.test(line)) flush();
-    group.push(line);
-  }
-  flush();
-  return out;
-}
-
 /** The markdown of the `basedOn` entries no longer present among `current`,
  *  matched by item key so a restructured item counts as gone. */
 function missingFrom(basedOn: readonly string[], current: readonly NoteItem[]): string[] {
@@ -997,7 +888,8 @@ export function mergeNotesSection(
   // index, because the transcript owns the tail (`sectionInsertIndex`). Read
   // any other way, a second meeting would refuse to join the section sitting
   // immediately above the record it had just written.
-  let span = found && (mine || found.endExclusive === sectionInsertIndex(fragment)) ? found : null;
+  const span =
+    found && (mine || found.endExclusive === sectionInsertIndex(fragment)) ? found : null;
   // Whatever an earlier section already holds is written. The composer's
   // `previous` is only the LAST section, so once a fresh one starts it
   // re-lists the points it no longer sees; appending those would say them
@@ -1047,15 +939,8 @@ export function mergeNotesSection(
     };
   }
 
-  let current = itemsInSection(fragment, span);
-  let isAgent = classifyOwnership(current, opts.ownership);
-  // A person's line is theirs once. Anything the composer nested a copy of it
-  // inside is unwrapped before the plan is made, on every path below.
-  const entries = withoutPersonCopies(
-    incoming,
-    current.filter((_, i) => !isAgent[i]).map((item) => item.md),
-  );
-  let plan = planNotesMerge(current, entries, opts);
+  const current = itemsInSection(fragment, span);
+  const plan = planNotesMerge(current, incoming, opts);
 
   // THE ONE CASE THE ITEM-LEVEL MERGE CANNOT EXPRESS: the notes are being
   // grouped under topic headings for the first time, so a heading has to land
@@ -1066,16 +951,18 @@ export function mergeNotesSection(
   // One person's item anywhere in the section (or one pending proposal on
   // one) turns this off and the ordinary merge runs, which places the heading
   // below the list rather than inside it: worse looking, and safe.
-  const allAgent = current.length > 0 && isAgent.every(Boolean);
-  // Nothing below may move furniture while somebody has a proposal open on
-  // one of these lines — see `spanHasPendingSuggestion`.
-  const mayRestructure = plan.suggestions.length === 0 && !spanHasPendingSuggestion(fragment, span);
-  if (allAgent && mayRestructure && planNeedsRelayout(current, plan)) {
+  const allAgent = current.length > 0 && classifyOwnership(current, opts.ownership).every(Boolean);
+  if (
+    allAgent &&
+    plan.suggestions.length === 0 &&
+    !spanHasPendingSuggestion(fragment, span) &&
+    planNeedsRelayout(current, plan)
+  ) {
     const relaid = relayoutSection(
       ydoc,
       fragment,
       span,
-      entries,
+      incoming,
       canonical,
       headings,
       opts.ownership,
@@ -1084,62 +971,12 @@ export function mergeNotesSection(
     if (relaid) return { ok: true, mode: 'merged', ...relaid, suggested: 0 };
   }
 
-  // A SECTION SOMEBODY HAS TYPED IN CAN STILL BE REGROUPED, and until this it
-  // could not: relayout rebuilds the whole body from markdown, which may not
-  // touch a person's element, so one line of theirs anywhere in the section
-  // turned the whole thing off and every heading the composer wrote landed
-  // BELOW the bullets it was meant to group. Measured with a control in
-  // PR 712 — the same notes come through in order into a section nobody has
-  // typed in — so the rule was off in exactly the meetings people write in.
-  //
-  // The fix does not rebuild anything. A heading can only land between two
-  // bullets of one list, so the agent's own bullets are cleared out of that
-  // list FIRST and the merge planned again against what is left. The
-  // composer returns the whole notes every tick, so those bullets come
-  // straight back, now around the headings; a person's items are never
-  // deleted, keep their elements, their marks and their comment anchors, and
-  // are simply anchored by the diff as usual.
-  //
-  // What it costs is the same thing relayout costs and no more: a comment on
-  // one of the AGENT's bullets orphans into the outdated-comment flow. So it
-  // is paid only on the tick that moves the furniture — a tick adding a
-  // bullet under a heading that already exists plans no block insert and
-  // never comes here.
-  let cleared = 0;
-  if (!allAgent && mayRestructure && planNeedsRelayout(current, plan)) {
-    const inTheWay = current.filter((_, i) => isAgent[i]);
-    if (inTheWay.length > 0) {
-      const emptied = applyPlan(
-        ydoc,
-        { deletes: inTheWay, inserts: [], suggestions: [], dropped: [], keptAgent: [] },
-        span.heading,
-        opts.author ?? NOTES_SUGGESTION_AUTHOR,
-      );
-      cleared = emptied.deleted;
-      const reopened = findNotesSection(fragment, headings);
-      if (reopened) {
-        span = reopened;
-        current = itemsInSection(fragment, reopened);
-        isAgent = classifyOwnership(current, opts.ownership);
-        // THE `basedOn` LIST LOSES THE LINES THIS JUST CLEARED, or the second
-        // plan reads them as items a person deleted mid-compose and withholds
-        // the composer's copy of every one of them — dropping the notes
-        // instead of regrouping them.
-        const gone = consumable(inTheWay.map(itemKey));
-        plan = planNotesMerge(current, entries, {
-          ownership: opts.ownership,
-          basedOn: opts.basedOn?.filter((key) => !gone(key)),
-        });
-      }
-    }
-  }
-
   const applied = applyPlan(ydoc, plan, span.heading, opts.author ?? NOTES_SUGGESTION_AUTHOR);
   opts.ownership.record([...plan.keptAgent.map((i) => ({ el: i.el, md: i.md })), ...applied.owned]);
   return {
     ok: true,
     mode: 'merged',
-    deleted: cleared + applied.deleted,
+    deleted: applied.deleted,
     inserted: applied.inserted,
     suggested: applied.suggested,
     dropped: plan.dropped.length,

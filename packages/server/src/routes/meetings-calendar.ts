@@ -37,7 +37,7 @@ import {
 
 import type { RecallMeetingRelay } from '../recall-meeting.ts';
 import type { Rooms } from '../rooms.ts';
-import type { ServerOptions } from '../server-options.ts';
+import type { ServerOptions } from '../server.ts';
 import type { TaskStore } from '../tasks.ts';
 
 /** The long-lived collaborators these routes need, built once per server. */

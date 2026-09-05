@@ -14,7 +14,7 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { DEFAULT_ROOM_TIMINGS, ROOM_TIMINGS } from '../src/room-timings.ts';
-import { BOUND_READ_MAX_OVERDUE, boundFiles, redactBoundPath } from '../src/slow-fs.ts';
+import { BOUND_READ_MAX_OVERDUE, boundFiles } from '../src/slow-fs.ts';
 import { makeFifo, releaseFifo, releaseFifosIn } from './fifo.ts';
 import { waitFor } from './wait-for.ts';
 
@@ -151,44 +151,6 @@ describe('boundFiles', () => {
     await waitFor(() => (boundFiles.stats().leaked === 0 ? 'given back' : false), {
       describe: 'slow-fs to stop counting the read as parked',
     });
-  });
-
-  it('quarantines a path on its FIRST missed deadline, not its fourth', async () => {
-    // `BOUND_READ_MAX_OVERDUE` gates the whole POOL, and it is easy to read
-    // it as the quarantine threshold too. It is not, and the difference is
-    // the whole incident: if a path needed four missed deadlines to earn the
-    // backoff, three more callers would each hand a thread to a file already
-    // known not to answer. One miss is enough.
-    expect(boundFiles.quarantined(stalled)).toBe(false);
-
-    const first = await boundFiles.read(stalled);
-    expect(first.status).toBe('unavailable');
-
-    // One read, one miss, and the path is already closed to everyone else —
-    // including the synchronous callers that consult `quarantined` before
-    // they touch a bound path at all.
-    expect(boundFiles.quarantined(stalled)).toBe(true);
-    // And nothing like four misses was needed to get there.
-    expect(BOUND_READ_MAX_OVERDUE).toBeGreaterThan(1);
-  });
-
-  it('keeps a private folder out of the log line that names the stalled file', () => {
-    // The quarantine line exists so the next incident is diagnosable from the
-    // error log, and the files most likely to appear in one live in a
-    // cloud-sync folder. The basename says WHICH file without saying whose
-    // folder it sits in or what else is filed beside it.
-    const home = process.env.HOME ?? '';
-    expect(redactBoundPath(`${home}/Dropbox/team-plans/q4-budget.md`)).toBe(
-      '<Dropbox>/q4-budget.md',
-    );
-    expect(redactBoundPath(`${home}/Documents/notes/private-notes.md`)).toBe(
-      '<Documents>/private-notes.md',
-    );
-    // A path that is not under one of those roots is the ordinary case, and
-    // its full path is what makes the line useful. Without this the test
-    // above would pass on a function that redacted everything to a basename.
-    const ordinary = join(scratch, 'checkout', 'README.md');
-    expect(redactBoundPath(ordinary)).toBe(ordinary);
   });
 
   it('runs on the scaled room cadences, at three seconds and a minute in production', () => {

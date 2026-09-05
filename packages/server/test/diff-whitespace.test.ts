@@ -161,7 +161,7 @@ describe('whitespace-only grouping', () => {
  * "the fix lives one layer from where it's consumed" shape as the route
  * layer dropping params.
  */
-describe('whitespace classification survives regrouping', async () => {
+describe('whitespace classification survives regrouping', () => {
   const { repo, base, target } = makeRepo();
   const rooms = new Rooms({
     dataDir: mkdtempSync(join(tmpdir(), 'ws-diff-data-')),
@@ -169,7 +169,7 @@ describe('whitespace classification survives regrouping', async () => {
     webhooks: createWebhookDispatcher({ onLog: () => {} }),
     decorateDocMeta: (m) => m,
   });
-  const bound = await rooms.bindDiff({ repoPath: repo, base, target, owner: '/cwd' });
+  const bound = rooms.bindDiff({ repoPath: repo, base, target, owner: '/cwd' });
   if (!bound.ok) throw new Error(bound.error);
   const groupOf = (rel: string) =>
     rooms.list().find((m) => m.relPath === rel && m.workspaceId === bound.reviewId)?.diffGroup;

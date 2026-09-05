@@ -21,22 +21,14 @@ import { linkSpinoffRange, unlinkSpinoffHref } from '../src/spinoff-link.ts';
 
 const HREF = '/workspaces/w-demo?task=t-77';
 
-/** Every editor this file mounts, so `afterEach` can end the ones a test
- *  did not — emptying `document.body` detaches a ProseMirror view without
- *  stopping it, and a view still running when the file ends flushes into a
- *  torn-down environment. */
-const mounted: Editor[] = [];
-
 function mount(content: string): Editor {
   const element = document.createElement('div');
   document.body.appendChild(element);
-  const editor = new Editor({
+  return new Editor({
     element,
     extensions: [StarterKit.configure({ undoRedo: false })],
     content,
   });
-  mounted.push(editor);
-  return editor;
 }
 
 /** Every block's text, in order — the shape a reader sees and the bound file
@@ -72,7 +64,6 @@ function wholeLine(editor: Editor, index: number): { from: number; to: number } 
 }
 
 afterEach(() => {
-  for (const e of mounted.splice(0)) if (!e.isDestroyed) e.destroy();
   document.body.innerHTML = '';
 });
 

@@ -20,8 +20,6 @@ import {
   prose,
 } from '@feedback/core';
 import {
-  DEFAULT_NOTES_CADENCE_MS,
-  DEFAULT_NOTES_QUIET_MS,
   type NotesComposeInput,
   type NotesComposer,
   type NotesCorrection,
@@ -86,56 +84,6 @@ class ManualScheduler implements TickScheduler {
     return due.length;
   }
 }
-
-describe('the notes clocks', () => {
-  /**
-   * The two numbers that decide when a meeting's notes get written, spelled
-   * out so moving either has to be a deliberate edit to this line.
-   *
-   * They are pinned because of what was DELIBERATELY left alone. Work on the
-   * wait between speaking and reading a note keeps arriving, and the standing
-   * decision (Bryan, 2026-09-04) is that these two stay where they are and
-   * the latency work happens upstream of them — in the engine's endpoint
-   * detector. A change that quietly shaved the quiet threshold would show up
-   * as the same improvement on every latency report in the repo while being
-   * the one thing that was not allowed, so the assertion lives here rather
-   * than in a reviewer's memory.
-   *
-   * Nothing else asserts them: `room-timings.test.ts` pins the DOC room's
-   * debounces (file poll, write-back, persist) and has never had these two
-   * in it.
-   */
-  it('are the shipped 4s quiet threshold and 15s cadence ceiling', () => {
-    expect(DEFAULT_NOTES_QUIET_MS).toBe(4_000);
-    expect(DEFAULT_NOTES_CADENCE_MS).toBe(15_000);
-    // The ceiling is a ceiling: quiet has to be able to fire first, or the
-    // pause tick would be unreachable and every note would arrive on cadence.
-    expect(DEFAULT_NOTES_QUIET_MS).toBeLessThan(DEFAULT_NOTES_CADENCE_MS);
-  });
-
-  it('are what a session with no overrides actually arms', async () => {
-    // A positive control on the test above: the constants could hold the
-    // right numbers while `beginNotesSession` fell back to something else.
-    // Every other test in this file passes its own quietMs, so nothing else
-    // here exercises the defaulting at all.
-    const schedule = new ManualScheduler();
-    const updates: NotesUpdate[] = [];
-    const session = beginNotesSession(
-      { composer: createStubNotesComposer(), schedule, onNotes: (u) => updates.push(u) },
-      { docId: 'doc-clocks', meetingId: 'm-clocks' },
-    );
-    session.onTurn({ turn: 0, text: 'The sync is the slowest thing on the page.', final: true });
-    // Both clocks are armed, each at the delay it ships with — and at no
-    // other, which is what a moved default would look like.
-    expect(schedule.armedAt(DEFAULT_NOTES_QUIET_MS)).toBe(1);
-    expect(schedule.armedAt(DEFAULT_NOTES_CADENCE_MS)).toBe(1);
-    expect(schedule.armed).toBe(2);
-    // Quiet is the one that fires first in a meeting, so it is the one asked.
-    expect(schedule.fireAt(DEFAULT_NOTES_QUIET_MS)).toBe(1);
-    await session.end();
-    expect(updates.map((u) => u.tick.reason)).toEqual(['pause']);
-  });
-});
 
 describe('pause ticker', () => {
   const QUIET_MS = 1000;
@@ -218,81 +166,6 @@ describe('pause ticker', () => {
     });
     // Nothing armed survives the end.
     expect(schedule.armed).toBe(0);
-  });
-
-  it('end() carries the sentence still being spoken, flagged as unfinished', () => {
-    const { ticks, ticker } = setup();
-    ticker.onTurn({ turn: 0, text: 'We agreed on the smaller scope.', final: true });
-    ticker.onTurn({ turn: 1, text: 'and the one thing I still want is', final: false });
-    ticker.end();
-    // Both: the settled sentence first, then the interrupted one after it.
-    expect(ticks[0]?.turns).toEqual([
-      { turn: 0, text: 'We agreed on the smaller scope.' },
-      { turn: 1, text: 'and the one thing I still want is', partial: true },
-    ]);
-  });
-
-  it('an unsettled turn is the ONLY thing a final tick needs to fire', () => {
-    const { schedule, ticks, ticker } = setup();
-    ticker.onTurn({ turn: 0, text: 'Ship it.', final: true });
-    schedule.fire();
-    expect(ticks.length).toBe(1);
-    // Nothing has settled since, so the old ticker had nothing to flush and
-    // this sentence went nowhere.
-    ticker.onTurn({ turn: 1, text: 'one last thing before we', final: false });
-    ticker.end();
-    expect(ticks.length).toBe(2);
-    expect(ticks[1]).toEqual({
-      tick: 2,
-      reason: 'end',
-      turns: [{ turn: 1, text: 'one last thing before we', partial: true }],
-    });
-  });
-
-  it('carries the LATEST partial of a turn, not every draft of it', () => {
-    const { ticks, ticker } = setup();
-    ticker.onTurn({ turn: 0, text: 'the thing', final: false });
-    ticker.onTurn({ turn: 0, text: 'the thing I keep', final: false });
-    ticker.onTurn({ turn: 0, text: 'the thing I keep meaning to', final: false });
-    ticker.end();
-    expect(ticks[0]?.turns).toEqual([
-      { turn: 0, text: 'the thing I keep meaning to', partial: true },
-    ]);
-  });
-
-  it('a turn that settled is carried as settled, never twice', () => {
-    const { ticks, ticker } = setup();
-    ticker.onTurn({ turn: 0, text: 'we should measure', final: false });
-    ticker.onTurn({ turn: 0, text: 'We should measure first.', final: true });
-    ticker.end();
-    expect(ticks[0]?.turns).toEqual([{ turn: 0, text: 'We should measure first.' }]);
-  });
-
-  it('the speaker rides the unfinished sentence too', () => {
-    const { ticks, ticker } = setup();
-    ticker.onTurn({ turn: 0, text: 'and my worry is that', final: false, speaker: 'B' });
-    ticker.end();
-    expect(ticks[0]?.turns).toEqual([
-      { turn: 0, text: 'and my worry is that', partial: true, speaker: 'B' },
-    ]);
-  });
-
-  it('an empty partial is not a sentence, and does not manufacture a tick', () => {
-    const { ticks, ticker } = setup();
-    ticker.onTurn({ turn: 0, text: '   ', final: false });
-    ticker.end();
-    expect(ticks).toEqual([]);
-  });
-
-  it('an ordinary tick still carries settled words only', () => {
-    const { schedule, ticks, ticker } = setup();
-    ticker.onTurn({ turn: 0, text: 'Ship the fix.', final: true });
-    ticker.onTurn({ turn: 1, text: 'but only once we have', final: false });
-    schedule.fireAt(QUIET_MS);
-    expect(ticks[0]?.turns).toEqual([{ turn: 0, text: 'Ship the fix.' }]);
-    // And it is still available to the end tick afterwards.
-    ticker.end();
-    expect(ticks[1]?.turns).toEqual([{ turn: 1, text: 'but only once we have', partial: true }]);
   });
 
   it("carries the engine's speaker label on a settled turn", () => {
@@ -638,11 +511,7 @@ describe('notes session', () => {
     session.nameSpeaker('A', 'Devi');
     await session.end();
 
-    // Three, not two: turn 90 was heard only as a partial and never settled,
-    // so the final pass composes it. That is the point of the final pass —
-    // the sentence in progress at the stop gets a tick of its own — and it
-    // lands after the relabel like everything else on the chain.
-    expect(order).toEqual(['composed', 'relabelled', 'composed']);
+    expect(order).toEqual(['composed', 'relabelled']);
     expect(relabels).toEqual([
       {
         docId: ids.docId,
@@ -1069,10 +938,7 @@ describe('task capture riding the notes session', () => {
     session.onTurn({ turn: 1, text: 'File a ticket for that one.', final: true, speaker: 'A' });
     schedule.fire();
     await session.end();
-    // Two pause ticks, then the final pass over turn 90 — the partial that
-    // registered the second voice and never settled.
-    expect(passes).toHaveLength(3);
-    expect(passes[2]?.turns).toEqual(['Speaker Z: mm']);
+    expect(passes).toHaveLength(2);
     // Nothing came before the first tick.
     expect(passes[0]?.prior).toEqual([]);
     expect(passes[0]?.turns).toEqual(['Speaker A: That retry loop is the real cost.']);

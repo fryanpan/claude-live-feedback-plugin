@@ -17,7 +17,7 @@ flowchart TB
   plug["plugin<br/>skills · hooks · bundled mcp"]
   mcp["mcp<br/>stdio MCP server"]
   subgraph srv["server — one Bun process"]
-    edge["HTTP edge<br/>server.ts · routes/ · middleware/ · shells.ts<br/>request-admission · request-attribution<br/>socket-handlers · server-options"]
+    edge["HTTP edge<br/>server.ts · routes/ · middleware/ · shells.ts<br/>request-admission · request-attribution<br/>upgrade-stream · socket-handlers · shell-static"]
     docs["Docs and rooms<br/>rooms.ts · binds.ts · file-binding.ts<br/>doc-*.ts · yjs-protocol.ts · sse.ts · sse-mux.ts"]
     board["Board<br/>tasks.ts · task-*.ts · review-items/<br/>home-pane.ts · board-membership.ts · activity.ts"]
     meet["Meetings<br/>meetings.ts · meeting-*.ts · notes-*.ts<br/>transcribe-*.ts · recall*.ts"]
@@ -43,41 +43,12 @@ flowchart TB
 
 | Package | What it is | Hard constraint |
 | --- | --- | --- |
-| `core` | Wire types, the Yjs⇄markdown document model, anchors, review-item rules, goal arithmetic, schedule rules and their English, prompts. | Imports no other workspace package. No `node:` I/O beyond path math, no DOM. |
+| `core` | Wire types, the Yjs⇄markdown document model, anchors, review-item rules, goal arithmetic, prompts. | Imports no other workspace package. No `node:` I/O beyond path math, no DOM. |
 | `server` | The one process: data dir, Yjs rooms, board, meetings, auth, sharing, deploys. | The only writer of durable state. Everything else asks it. |
 | `workspaces-app` | The browser client, five bundles from `scripts/build.ts`. | Ships as static assets the server publishes as a numbered release. |
 | `mcp` | The stdio MCP server agents talk to — a **client** of the server's REST and SSE. | No business logic the server does not also enforce. |
 | `widget` | The injectable comment widget for mockups and dev servers. | 40 KB gzipped (`check:widget-size`). Vanilla JS, no framework deps. |
 | `plugin` | Skills, hooks, and a bundled copy of `mcp`. | Version bumped in three places; see CLAUDE.md. |
-
-**Where a route lives.** Everything that decides which URL paths it answers is
-under `routes/`, `server.ts` composes and delegates to it and matches nothing
-itself, and imports point one way: `server.ts` → `routes/` → everything else.
-So `routes/shell-static.ts` (which page or asset an address gets) and
-`routes/upgrade-stream.ts` (this request wants a connection, not a response)
-sit there rather than at the top level, while `request-admission.ts`,
-`request-attribution.ts` and `socket-handlers.ts` stay top-level because they
-run for a request whatever path it named. `server-options.ts` holds
-`ServerOptions` so a route can name it without importing the router back, and
-`review-gate-types.ts` holds the two verdict shapes a route and the gate both
-need. Full rule: [.claude/rules/code-health.md](../../.claude/rules/code-health.md).
-
-**What runs on a clock.** Three loops in the server tick rather than answer a
-request, and all three take an injected `now` so a test moves the clock
-instead of waiting: the two board wakes in the Keep-moving group, and
-`task-scheduler.ts`, which files an instance each time a row's schedule comes
-due ([scheduled-tasks](scheduled-tasks.md)). The scheduler joins the Board
-group under its `task-*.ts` glob rather than changing the picture — it reads
-and writes the same rows through the same store, and only its clock is new.
-
-**A schedule rule has one spelling.** `core` holds four modules for it and no
-other package holds any: `task-schedule.ts` (the rule type and the occurrence
-arithmetic), `schedule-timezone.ts` (instant ⇄ wall clock),
-`schedule-phrase.ts` (a rule written as canonical English) and
-`schedule-phrase-parse.ts` (English read back into a rule). The last two are a
-pair and are asserted to be inverses, which is what lets the editor show one
-rule as a phrase and as chips without either view being the source
-([scheduled-tasks](scheduled-tasks.md)).
 
 **Which channel carries what.** *Yjs*, one WebSocket per document, carries what
 two people watch change under each other's cursors: text, threads, replies,
@@ -93,24 +64,18 @@ value. *SSE* pushes changes to anyone holding no Yjs socket for them.
 
 | Layer | Where it lives | Why it is its own layer |
 | --- | --- | --- |
-| **HTTP** | `server.ts`, `routes/**`, `middleware/**`, `shells.ts`, `request-admission.ts`, `request-attribution.ts`, `socket-handlers.ts` | The only code that knows about HTTP. Parse, admit, call one service, format. |
+| **HTTP** | `server.ts`, `routes/**`, `middleware/**`, `shells.ts`, `shell-static.ts`, `request-admission.ts`, `upgrade-stream.ts`, `socket-handlers.ts` | The only code that knows about HTTP. Parse, admit, call one service, format. |
 | **Services / stores** | `rooms.ts`, `tasks.ts` and the `task-*` stores, `review-items/**`, `home-pane.ts`, `share/**`, `auth/**`, the `meeting-*` and `notes-*` families, `sse.ts`, `activity.ts` | Owns durable state and orchestrates one change across stores and adapters. |
-| **Domain (pure)** | `task-owner.ts`, `task-fields.ts`, `task-row.ts`, `decision-shape.ts`, `safe-path.ts`, `diff-groups.ts`, `pause-ticker.ts`, `keep-moving.ts`, `stall-gate.ts`, `notes-section.ts`, `ask-detection.ts`, `notes-link-intent.ts` | Functions over values: no clock, filesystem or socket unless passed in, so a rule is testable without a server. |
+| **Domain (pure)** | `task-owner.ts`, `task-fields.ts`, `task-row.ts`, `decision-shape.ts`, `safe-path.ts`, `diff-groups.ts`, `pause-ticker.ts`, `keep-moving.ts`, `stall-gate.ts`, `notes-section.ts`, `ask-detection.ts` | Functions over values: no clock, filesystem or socket unless passed in, so a rule is testable without a server. |
 | **Adapters** | `transcribe-*.ts`, `recall*.ts`, `google-oauth.ts`, `summarize.ts`, `deploy*.ts`, `client-release.ts`, `push-notify.ts`, `share/cf-api.ts`, `share/keychain.ts`, `git-diff.ts`, `sentry.ts` | One vendor or OS facility each, behind an injected interface, so a swap or a test double touches one file and no state. |
 | *Composition root* | `bin.ts`, `server-config.ts`, `server-deps.ts` | Reads the environment once, builds adapters, wires services. Beside the stack, not on top of it. |
 
 `workspaces-app` layers the same way — entries, controllers, views, models,
 transport — and its models are DOM-free, which is what lets `hub/hub-board-model.ts`,
 `hub/hub-review-model.ts` and `hub/hub-presence-model.ts` be tested without a
-document. `notes-link-affordance.ts` joins the editor tier beside
-`task-link-chips.ts`, and is the one plugin there that WRITES: the chips are
-render-time and change nothing, while accepting a note's suggestion or undoing
-a link edits the stored doc and calls the board. `core` is three tiers: wire types, the document model (`prose-*.ts`,
+document. `core` is three tiers: wire types, the document model (`prose-*.ts`,
 `anchor/**`, `redline.ts`), then the rules both sides must compute identically
-(`review-item*.ts`, `effort-*.ts`, `goal-effort.ts`, and
-`note-suggestion.ts`, which is how a note's written "did you mean this row?"
-is spelled — server writes it, browser reads it back, one definition so the
-two cannot drift into a suggestion nobody can accept).
+(`review-item*.ts`, `effort-*.ts`, `goal-effort.ts`).
 
 ## The core flows
 
@@ -162,9 +127,3 @@ exactly once, and nothing word-rate enters the SSE buffer.
 4. If it is a **top-level** module — a file or directory sitting directly in
    `packages/<pkg>/src/` — redraw the diagram above in the same PR.
    `bun run check:architecture` fails a PR that moves that map without it.
-5. In `server`, if it names a URL path it goes under `routes/`; if it runs for
-   every request whatever the path, or never sees a `Request`, it stays at the
-   top level. The rule and its two consequences are
-   [.claude/rules/code-health.md](../../.claude/rules/code-health.md), "A route
-   lives in `routes/`", and `bun run check:imports` fails the import edges it
-   forbids.

@@ -184,39 +184,14 @@ const STOPWORDS = new Set([
 ]);
 
 /**
- * What a candidate IS on the board.
- *
- * `task` joined `goal` and `doc` for the meeting note-taker, which asks this
- * scorer the same question about a board ROW: somebody said "link that to the
- * existing task" and the row they meant has to be found from a loose spoken
- * description. The route behind `find_related_work` still offers only goals
- * and docs — a plan is written against outcomes, not against single rows —
- * so nothing about that answer changed when this widened.
- */
-export type RelatedWorkKind = 'goal' | 'task' | 'doc';
-
-/**
- * How the kinds break a tie at equal score: the widest thing first.
- *
- * A goal is where a plan lands, a task is one row inside one, and a doc is
- * what was written about either — so at the same score that is the order a
- * reader wants them offered in. Spelled as a rank rather than a comparison
- * because three kinds no longer fit in one ternary.
- */
-const KIND_RANK: Record<RelatedWorkKind, number> = { goal: 0, task: 1, doc: 2 };
-
-/** The noun a reason line opens with, per kind. */
-const KIND_NOUN: Record<RelatedWorkKind, string> = { goal: 'Goal', task: 'Task', doc: 'Doc' };
-
-/**
- * A candidate the caller assembled: a goal band, a board row, or a doc.
+ * A candidate the caller assembled: a goal band, or a doc on the board.
  *
  * The server decides what goes in this list (which docs read as plans, which
  * ones a goal links). This module only ranks what it is given, so a change in
  * that policy never needs a change in the scoring.
  */
 export interface RelatedWorkCandidate {
-  kind: RelatedWorkKind;
+  kind: 'goal' | 'doc';
   /** Goal id, or doc id. */
   id: string;
   title: string;
@@ -242,7 +217,7 @@ export interface RelatedWorkCandidate {
 
 /** One ranked candidate, with the sentence a person reads. */
 export interface RelatedWorkMatch {
-  kind: RelatedWorkKind;
+  kind: 'goal' | 'doc';
   id: string;
   title: string;
   /** 0–1, rounded to three places so a wire payload is readable. */
@@ -393,7 +368,7 @@ export function scoreRelatedWork(
     const bodyOnly = bodyShared.filter((t) => !titleTerms.has(t));
     if (bodyOnly.length > 0) parts.push(`body mentions ${listTerms(bodyOnly)}`);
     if (linked) parts.push(candidate.linkNote ?? 'already linked to this work');
-    const noun = KIND_NOUN[candidate.kind];
+    const noun = candidate.kind === 'goal' ? 'Goal' : 'Doc';
     matches.push({
       kind: candidate.kind,
       id: candidate.id,
@@ -406,12 +381,12 @@ export function scoreRelatedWork(
     });
   }
 
-  // Highest first, then `KIND_RANK` — the widest thing first at equal score,
-  // because a goal is where a plan would land and a row is one piece of one —
-  // and id last so the order is total and a test can assert it.
+  // Highest first; goals before docs at equal score because a goal is where
+  // the plan would land, and id last so the order is total and a test can
+  // assert it.
   matches.sort((a, b) => {
     if (b.score !== a.score) return b.score - a.score;
-    if (a.kind !== b.kind) return KIND_RANK[a.kind] - KIND_RANK[b.kind];
+    if (a.kind !== b.kind) return a.kind === 'goal' ? -1 : 1;
     return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
   });
   return matches.slice(0, limit);

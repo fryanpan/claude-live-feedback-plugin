@@ -130,17 +130,6 @@ const MAX_CONTEXT_TASKS = 30;
  */
 const MAX_REFERENCE_ROWS = 500;
 
-/**
- * How much of one row's prose the loose matcher may read.
- *
- * The catalogue is assembled once per meeting and held for its length, so
- * this is the only number keeping that read proportional to the meeting
- * rather than to the board. Generous against what the scorer can use: its
- * body signal is at full strength once four of the request's words appear,
- * and four content words arrive long before a thousand characters do.
- */
-const MAX_REFERENCE_BODY_CHARS = 1_000;
-
 export {
   type RelabelNotesResult,
   type ReplaceNotesResult,
@@ -169,16 +158,9 @@ export interface NotesDocRooms {
 /** The slice of `TaskStore` the context gatherer needs. `id` is here for the
  *  reference catalogue, which needs a URL and not only a name. */
 export interface NotesContextTasks {
-  listTasks(workspaceId: string): Array<{
-    id?: string;
-    title: string;
-    status: string;
-    kind?: 'task' | 'goal';
-    /** The row's prose. Read by the loose matcher only — a spoken
-     *  description matches what somebody wrote in the ticket far more often
-     *  than the few words of its title. */
-    body?: string;
-  }>;
+  listTasks(
+    workspaceId: string,
+  ): Array<{ id?: string; title: string; status: string; kind?: 'task' | 'goal' }>;
 }
 
 /**
@@ -516,13 +498,6 @@ export function withServerNotesSinks(
      *  Absent, every BOUND doc is treated as outside it and keeps whatever
      *  `Raw transcript` section it has. */
     dataDir?: string;
-    /**
-     * Writes the doc ref onto a row somebody asked, out loud, to link — the
-     * store half of `onTaskLinked`, which is `TaskStore.linkRef` in the
-     * server and a recorder in the tests. Absent, a spoken link still writes
-     * its citation into the notes and the row simply gains no backlink.
-     */
-    linkTaskToDoc?: (taskId: string, docId: string) => void;
     /** Tests: an ownership ledger they can seed or read back. */
     ledger?: NotesLedger;
   },
@@ -622,27 +597,6 @@ export function withServerNotesSinks(
       console.error(`[meeting-notes] ${message}`);
       options.onError?.(message);
     },
-    // ONE LINE PER MEETING, and the reason it exists is that there were
-    // none. A meeting reported as "skipping chunks" left nothing in the log
-    // to check the claim against: the pipeline spoke only when a stage threw,
-    // so a meeting whose notes quietly covered half of what was said read
-    // exactly like a healthy one. This is the coverage, stated at the stop.
-    onMeetingSummary: (summary): void => {
-      const plural = (n: number, one: string): string => `${n} ${one}${n === 1 ? '' : 's'}`;
-      const line =
-        `[meeting-notes] ${summary.docId} meeting ${summary.meetingId}: ` +
-        `${plural(summary.ticks, 'tick')} over ${plural(summary.turnsSettled, 'settled turn')}, ` +
-        `${plural(summary.turnsLost, 'turn')} in no note` +
-        (summary.composeFailures > 0
-          ? `, ${plural(summary.composeFailures, 'failed compose')}`
-          : '');
-      // Only a meeting that actually lost words is an error. A clean one is
-      // still logged, because the absence of a line is not evidence that a
-      // meeting went well — it is evidence that nothing was written down.
-      if (summary.turnsLost > 0) console.error(line);
-      else console.log(line);
-      options.onMeetingSummary?.(summary);
-    },
     onSessionStart: (ids): void => {
       // A new recording on this doc: whatever the previous one wrote is
       // finished writing. Releasing the claims is what makes stop-and-restart
@@ -700,17 +654,7 @@ export function withServerNotesSinks(
         for (const task of deps.tasks().listTasks(workspaceId)) {
           if (out.length >= MAX_REFERENCE_ROWS) break;
           if (task.kind === 'goal' || !task.id || !task.title) continue;
-          out.push({
-            kind: 'task',
-            id: task.id,
-            title: task.title,
-            url: taskCaptureUrl(workspaceId, task.id),
-            // Clipped: a catalogue of five hundred whole ticket bodies is the
-            // one way this per-session read could grow with the board rather
-            // than with the meeting, and the scorer saturates long before a
-            // body runs out of words.
-            ...(task.body ? { body: task.body.slice(0, MAX_REFERENCE_BODY_CHARS) } : {}),
-          });
+          out.push({ kind: 'task', title: task.title, url: taskCaptureUrl(workspaceId, task.id) });
         }
         // The meeting's own doc is excluded for the reason the lookup
         // excludes it: a note citing the page it is written on is a link to
@@ -719,7 +663,6 @@ export function withServerNotesSinks(
           if (out.length >= MAX_REFERENCE_ROWS) break;
           out.push({
             kind: 'doc',
-            id: doc.docId,
             title: doc.title,
             url: docLookupUrl(workspaceId, doc.docId),
             ...(doc.meetingAt !== undefined ? { when: referenceDate(doc.meetingAt) } : {}),
@@ -780,17 +723,6 @@ export function withServerNotesSinks(
         console.error('[meeting-notes] correction failed:', err);
         return 'none';
       }
-    },
-    onTaskLinked: (link): void => {
-      try {
-        deps.linkTaskToDoc?.(link.taskId, link.docId);
-      } catch (err) {
-        // The note already carries the link; what fails here is the row's
-        // backlink. Contained on the same terms as every other sink — a
-        // throw reaching the compose chain would cost the meeting its notes.
-        console.error('[meeting-notes] task link failed:', err);
-      }
-      options.onTaskLinked?.(link);
     },
     onReattribute: (reattribution: NotesReattribution): void => {
       try {

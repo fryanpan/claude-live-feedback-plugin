@@ -91,7 +91,6 @@ import {
 } from './hub-review-model.ts';
 import { panelReviewQueue } from './hub-review-render.ts';
 import { markPhrase } from './review-item-phrase.ts';
-import { ScheduleEditor } from './schedule-editor.tsx';
 import { selectWordAtPoint, useSelectionPill } from './selection-pill.ts';
 import {
   TASK_ASK_KINDS,
@@ -1450,21 +1449,6 @@ function TaskDetailPanel(props: {
           with the rest of the panel's chips; no caption under either — what
           "Plan" does is the button, not a sentence beside it. */}
       <TaskAskControls task={task} handlers={handlers} now={now} />
-
-      {/* WHEN this row's work starts, as a sentence and as chips — one rule,
-          two views. It sits with the facts rather than below the description
-          because a schedule is a property of the row, like Due next to it,
-          and a reader checking whether a ticket runs itself should not have
-          to scroll past the prose to find out. An unscheduled row shows one
-          ghost button and nothing else. */}
-      {handlers.onScheduleSet && (
-        <ScheduleEditor
-          key={task.id}
-          task={task}
-          now={now}
-          onSet={(next) => handlers.onScheduleSet?.(task, next) ?? Promise.resolve(false)}
-        />
-      )}
 
       {/* Related Links: what this ticket is waiting on, the docs it ties to,
           and any address someone pasted — the approved mock's section, right

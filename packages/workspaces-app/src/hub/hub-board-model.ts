@@ -18,7 +18,6 @@ import {
   summarizeGoalEffort,
 } from '@feedback/core/goal-effort';
 import { blockableStatus, blockerLookup, openBlockerIds } from '@feedback/core/task-blocked';
-import type { ScheduleRule, TaskSchedule } from '@feedback/core/task-schedule';
 import {
   type DecisionOption,
   TASK_STATUSES,
@@ -26,11 +25,6 @@ import {
   type TaskStatus,
   byBoardOrder,
 } from '@feedback/core/task-wire';
-
-/** What arming a row's schedule sends: the rule, the zone its clock times
- *  mean, and the optional end. `null` clears the rule, which the route reads
- *  as the explicit clear it is rather than as a value it could not parse. */
-export type ScheduleWrite = { rule: ScheduleRule; timezone?: string; until?: number } | null;
 
 /** The status vocabulary is the server's, spelled once in core; re-exported
  *  so the hub's own modules keep their one import. */
@@ -138,11 +132,6 @@ export interface HubTask {
   after: string[];
   afterEnforce?: string[];
   dueAt?: number;
-  /** The rule that says when this row's work STARTS, projected whole by the
-   *  server. Absent means unscheduled — never "armed and never fired", which
-   *  `schedule.state` is what answers. The panel's phrase editor reads this
-   *  back into the sentence a person typed. */
-  schedule?: TaskSchedule;
   /** Soft-deleted at this instant — off every lane, one tap from coming back.
    *  The row is still PROJECTED while archived (that is what lets the Undo
    *  toast and the restore list draw without a fetch); `taskVisible` is what

@@ -84,10 +84,7 @@ export type RefreshWorkspaceResult =
  * `stale` is always reversible: the next refresh that finds the file clears
  * the flag and reports it under `restored`.
  */
-export async function refreshWorkspace(
-  host: BindHost,
-  setId: string,
-): Promise<RefreshWorkspaceResult> {
+export function refreshWorkspace(host: BindHost, setId: string): RefreshWorkspaceResult {
   const members = host.list().filter((m) => reviewIdOf(m) === setId);
   // No members means nothing is bound — which is also the state a folder
   // bound while EMPTY is left in (a documented degenerate success that
@@ -128,7 +125,7 @@ export async function refreshWorkspace(
   if (diffMember) {
     const base = diffMember.diffBase;
     if (!base) return { ok: false, error: 'rebind-failed', detail: 'diff member has no base ref' };
-    const res = await bindDiff(host, {
+    const res = bindDiff(host, {
       repoPath: root,
       base,
       reviewId: setId,

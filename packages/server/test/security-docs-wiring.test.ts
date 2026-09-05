@@ -134,7 +134,7 @@ describe('security docs are wired together', () => {
       // route, what rejects a hostile file path, did share scope widen —
       // all land on this file, so a PR that edits only it must still answer
       // them.
-      'packages/server/src/routes/shell-static.ts',
+      'packages/server/src/shell-static.ts',
       // …and the sixth, which is on the list by its nature rather than by
       // argument. Every route in it ends in a LONG-LIVED connection, and a
       // websocket is authorized exactly once — at its upgrade. The Origin
@@ -145,7 +145,7 @@ describe('security docs are wired together', () => {
       // visitor's refusal from the agent-level stream all live here. A gate
       // moved or reordered in this file cannot be caught later by a request
       // that arrives afterwards, because there is no afterwards.
-      'packages/server/src/routes/upgrade-stream.ts',
+      'packages/server/src/upgrade-stream.ts',
       // …and the seventh, which is the other half of the fourth. Admission
       // decides who the boundary proved; THIS file decides which proof is
       // written down as the author, and it holds the widget-token gate whose
@@ -164,13 +164,6 @@ describe('security docs are wired together', () => {
       // handed to a room, which is the read the share scope was deciding
       // about in the first place.
       'packages/server/src/socket-handlers.ts',
-      // …and the ninth, which came out of `server.ts` when the last five
-      // inline route families moved under `routes/`. Recall's webhook is the
-      // one route on this server authenticated by a shared secret rather than
-      // a session: the Svix signature check, the disarm-when-unconfigured 404
-      // and the replay guard are all inside it, so checklist item 6 lands
-      // here as well as on `recall-webhook-auth.ts`.
-      'packages/server/src/routes/recall-webhook.ts',
     ];
     for (const path of security) expect(pattern.test(path)).toBe(true);
 

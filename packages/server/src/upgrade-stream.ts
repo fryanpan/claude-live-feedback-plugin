@@ -48,20 +48,45 @@ import {
   SHARED_IDENTITY_ERROR,
   SHARED_IDENTITY_MESSAGE,
   isValidAgentId,
-} from '../agent-watches.ts';
-import { authorizeAgentCaller } from '../auth/agent-token.ts';
-import type { OriginPolicy } from '../middleware/browser-origin.ts';
-import { isAllowedBrowserOrigin } from '../middleware/browser-origin.ts';
-import type { ShareTarget } from '../middleware/host-guard.ts';
-import { signInRequiredBody } from '../middleware/write-gate.ts';
-import { parseMuxCursor } from '../mux-cursor.ts';
-import type { RecallMeetingRelay } from '../recall-meeting.ts';
-import type { Rooms } from '../rooms.ts';
-import { redactHubEventForVisitor } from '../share/redact-hub-events.ts';
-import type { UpgradeData } from '../socket-handlers.ts';
-import { channelForWatchKey, openAgentMuxStream } from '../sse-mux.ts';
-import { type SseHub, openSseStream } from '../sse.ts';
-import type { TaskStore } from '../tasks.ts';
+} from './agent-watches.ts';
+import { authorizeAgentCaller } from './auth/agent-token.ts';
+import type { OriginPolicy } from './middleware/browser-origin.ts';
+import { isAllowedBrowserOrigin } from './middleware/browser-origin.ts';
+import type { ShareTarget } from './middleware/host-guard.ts';
+import { signInRequiredBody } from './middleware/write-gate.ts';
+import { parseMuxCursor } from './mux-cursor.ts';
+import type { RecallMeetingRelay } from './recall-meeting.ts';
+import type { Rooms } from './rooms.ts';
+import { redactHubEventForVisitor } from './share/redact-hub-events.ts';
+import { channelForWatchKey, openAgentMuxStream } from './sse-mux.ts';
+import { type SseHub, openSseStream } from './sse.ts';
+import type { TaskStore } from './tasks.ts';
+
+/**
+ * What an upgrade attaches to a socket, for every socket this server opens.
+ *
+ * `kind` is what the ONE websocket handler branches on: Bun routes every
+ * upgraded path into the same `open`/`message`/`close`, so the audio socket
+ * and the editing socket are told apart by what the upgrade attached. Absent
+ * means the editing socket, which is every upgrade that predates meetings.
+ *
+ * `shareId` and `readOnly` are named here rather than passed as excess
+ * properties, so the two upgrades that set them are type-checked against the
+ * fields the handlers read (`WsCtx` in rooms.ts, `MeetingClient` in
+ * meeting-protocol.ts).
+ *
+ * It lives in this file because the three blocks that CONSTRUCT it do.
+ * `server.ts` imports it for `Bun.serve<UpgradeData>` and the handler that
+ * reads it back.
+ */
+export type UpgradeData = {
+  docId: string;
+  kind?: 'yjs' | 'audio' | 'recall';
+  token?: string;
+  shareId?: string;
+  shareMember?: string;
+  readOnly?: boolean;
+};
 
 /** The id a reconnecting SSE client last saw: the `Last-Event-ID` header a
  *  native EventSource sends back by itself once frames carry `id:` lines,

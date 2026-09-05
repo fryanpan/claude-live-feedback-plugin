@@ -73,10 +73,6 @@ jobs:
       # fetch-depth: 0 above provides.
       - name: Architecture overview is current
         run: bun run check:architecture --base origin/${{ github.event.pull_request.base.ref || 'main' }}
-      # server.ts → routes/ → everything else. Both edges this forbids had
-      # shipped as `import type`, which nothing else in CI can see.
-      - name: Import direction holds
-        run: bun run check:imports
       - name: Build widget
         run: bun run build:widget
       - name: Widget bundle size

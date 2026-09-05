@@ -14,16 +14,9 @@ import { type CreateCodeEditorOpts, createCodeEditor } from '../src/code/code-ed
 
 const SRC = 'fun main() {\n    println("one")\n}\n';
 
-/**
- * Detaching the parent does not end a CodeMirror view: it keeps its own
- * listeners and its yCollab binding on a `Y.Doc` this file also holds. The
- * surface's `destroy` is what stops both, so each mount is registered for it
- * here rather than left to the garbage collector — a view still running
- * after its file finished is how a torn-down environment gets read.
- */
-const open: Array<() => void> = [];
+const open: HTMLElement[] = [];
 afterEach(() => {
-  for (const close of open.splice(0)) close();
+  for (const p of open.splice(0)) p.remove();
 });
 
 function mount(opts: Partial<CreateCodeEditorOpts> = {}) {
@@ -32,15 +25,12 @@ function mount(opts: Partial<CreateCodeEditorOpts> = {}) {
   content.insert(0, SRC);
   const parent = document.createElement('div');
   document.body.appendChild(parent);
+  open.push(parent);
   const surface = createCodeEditor({
     parent,
     ydoc,
     sourceUrl: 'Main.kt',
     ...opts,
-  });
-  open.push(() => {
-    surface.destroy();
-    parent.remove();
   });
   const view = EditorView.findFromDOM(parent);
   if (!view) throw new Error('no EditorView mounted');
@@ -62,17 +52,14 @@ describe('editable code surface', () => {
     const content = getContent(ydoc);
     const parent = document.createElement('div');
     document.body.appendChild(parent);
-    const surface = createCodeEditor({
+    open.push(parent);
+    createCodeEditor({
       parent,
       ydoc,
       sourceUrl: 'Main.kt',
       editable: true,
       diff: { baseText },
       initialViewMode: 'diff',
-    });
-    open.push(() => {
-      surface.destroy();
-      parent.remove();
     });
     expect(parent.querySelector('.cm-collapsedLines')).toBeNull();
     content.insert(0, changed);

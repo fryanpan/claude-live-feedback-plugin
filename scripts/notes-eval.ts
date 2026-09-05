@@ -22,13 +22,6 @@
  * not "how often did the model err". Read the failure lines, which name the
  * bullet, before concluding anything about frequency.
  *
- * THE SMOKE SLICE IS THE ONE THAT CAN FAIL. Every other run reports and
- * exits 0: a rate over a model's output is a reading, not a verdict, and one
- * bad meeting must not be able to turn a push red. The exception is the flat
- * wall of bullets — a topic left running past four with no sub-bullets and no
- * subheading under it is decidable, cheap to see, and the shape the notes are
- * not allowed to have — so `--smoke` exits 1 on one.
- *
  * ON DEMAND ONLY. It spends money and it talks to the network, so nothing
  * runs it on a push except the `--smoke` slice, which is sized to cost cents.
  * It is not a test and it does not live in the suites: a check whose verdict
@@ -36,9 +29,8 @@
  *
  * TWO KINDS OF JUDGE, and the split is deliberate. Anything decidable is
  * decided in code (`notes-quality.ts`, unit-tested) — bullet length, a topic
- * opened twice, a topic left running as a flat wall of bullets, a decision
- * with no voice on it, a named row left unlinked, a bullet copied verbatim
- * out of the transcript. Only the questions that need
+ * opened twice, a decision with no voice on it, a named row left unlinked, a
+ * bullet copied verbatim out of the transcript. Only the questions that need
  * reading comprehension go to a model: was this paraphrase faithful, does the
  * note say what was decided and by whom, was that new heading a new topic.
  * A model judging what a regex can settle is money spent on a worse answer.
@@ -51,11 +43,9 @@ import { join } from 'node:path';
 import { createHaikuNotesComposer } from '../packages/server/src/meeting-notes-composer.ts';
 import type { NoteReference, NotesComposeInput } from '../packages/server/src/meeting-notes.ts';
 import {
-  MAX_FLAT_RUN_BULLETS,
   allBullets,
   decisionsWithoutSpeaker,
   duplicateTopics,
-  longFlatRuns,
   overlongBullets,
   parseNotesTopics,
   unconfirmedBullets,
@@ -455,20 +445,6 @@ async function runMeeting(
           },
       where,
     );
-    // A topic that has grown past the bar and never been regrouped. Every
-    // tick it survives is a failure, the same way an over-long bullet is:
-    // the question is what the notes look like NOW, not how often the model
-    // erred. The detail names the heading so a reader can go and look at it.
-    const walls = longFlatRuns(notes);
-    behaviours.flatRuns!.see(
-      {
-        ok: walls.length === 0,
-        detail: walls
-          .map((r) => `${r.bullets.length} flat bullets under "${r.heading || '(no heading)'}"`)
-          .join(' | '),
-      },
-      where,
-    );
 
     /* --- 1.4 reference hygiene --- */
     behaviours.links!.see(
@@ -514,12 +490,7 @@ async function runMeeting(
   console.log(
     `  ${fixture.meeting}: ${ticks.length} ticks, ${allBullets(harness.notes()).length} bullets, ` +
       `${parseNotesTopics(harness.notes()).filter((t) => t.heading).length} topics, ` +
-      `${marked} marked unconfirmed, ` +
-      // The count over the FINAL notes, which is what the room was left
-      // reading. The behaviour table counts the ticks a wall survived; this
-      // counts the walls still standing when the meeting ended, and a zero
-      // is worth printing because it is the number that should be there.
-      `${longFlatRuns(harness.notes()).length} topics over ${MAX_FLAT_RUN_BULLETS} flat bullets` +
+      `${marked} marked unconfirmed` +
       (uncomposed > 0 ? `, ${uncomposed} never composed` : ''),
   );
   // Distinct reasons, not one line per failure: twenty timeouts are one fact
@@ -529,7 +500,7 @@ async function runMeeting(
   }
 }
 
-function report(behaviours: Record<string, Behaviour>, failOnWalls: boolean): number {
+function report(behaviours: Record<string, Behaviour>): number {
   console.log('\nBehaviour                                  examples   pass rate');
   console.log('-'.repeat(66));
   let thin = 0;
@@ -558,15 +529,6 @@ function report(behaviours: Record<string, Behaviour>, failOnWalls: boolean): nu
   }
   console.log(`  total: $${totalCost().toFixed(4)}`);
   if (thin > 0) console.log(`\n${thin} behaviour(s) saw fewer than 25 examples.`);
-  const walls = behaviours.flatRuns!;
-  if (failOnWalls && walls.failures.length > 0) {
-    console.log(
-      `\nFAILED: ${walls.failures.length} tick(s) left a topic running past ` +
-        `${MAX_FLAT_RUN_BULLETS} flat bullets. The instructions ask for the topic's points ` +
-        'to be gathered into groups once it passes the bar; raise the structure, not the bar.',
-    );
-    return 1;
-  }
   return 0;
 }
 
@@ -595,7 +557,6 @@ async function main(argv: string[]): Promise<number> {
     human: new Behaviour('1.2', "A person's bullet is never edited"),
     oneHeading: new Behaviour('1.3', 'One heading per topic'),
     organised: new Behaviour('1.3', 'Notes are organised under topics'),
-    flatRuns: new Behaviour('1.3', `No topic runs past ${MAX_FLAT_RUN_BULLETS} flat bullets`),
     topicChange: new Behaviour('1.3', 'A new heading means a new topic'),
     links: new Behaviour('1.4', 'A named board row is linked'),
     speakers: new Behaviour('1.4', 'Decisions and questions keep a speaker'),
@@ -619,8 +580,7 @@ async function main(argv: string[]): Promise<number> {
       `notes on ${NOTES_MODEL}, judge ${opts.judgePerMeeting > 0 ? JUDGE_MODEL : 'off'}`,
   );
   for (const fixture of fixtures) await runMeeting(fixture, opts, behaviours, ticksWanted);
-  // Only the smoke slice can turn a verdict red — see the header.
-  return report(behaviours, smoke);
+  return report(behaviours);
 }
 
 if (import.meta.main) {

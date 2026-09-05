@@ -233,12 +233,6 @@ export function projectTask(
     after: task.after,
     ...(task.afterEnforce !== undefined ? { afterEnforce: task.afterEnforce } : {}),
     ...(task.dueAt !== undefined ? { dueAt: task.dueAt } : {}),
-    // The row's SCHEDULE — the rule that says when its work starts. Projected
-    // whole, `state` included, because the panel's phrase editor reads the
-    // rule back to show it as chips and the board says when the rule is next
-    // owed; a field the store can see and no surface can render is the bug
-    // this line exists to avoid. Workspace content like every field here.
-    ...(task.schedule !== undefined ? { schedule: task.schedule } : {}),
     // Soft-deleted, by whom, and why. Conditional like everything else here,
     // and the refresh deletes projected keys absent from this object — so a
     // RESTORE removes the keys and the row rejoins its lane with nothing

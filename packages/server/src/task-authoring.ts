@@ -178,21 +178,13 @@ export class TaskAuthoringStore {
       // drafts of an unapproved plan, and a person's rows are not exempt from
       // their own declaration. `fileToTriage` is the same shape of claim made
       // about the row's CONTENT rather than its provenance.
-      // A scheduled OCCURRENCE lands in `todo`, not the `triage` an agent
-      // create otherwise gets: the judgement triage collects was already made
-      // on the rule, and re-triaging every run would make recurrence a chore.
-      // Below the two forced-triage claims, deliberately — a rule row whose
-      // own filing was held would still produce held runs.
       status:
         opts.planHold !== undefined || opts.fileToTriage === true
           ? 'triage'
-          : opts.recurrenceOf !== undefined
-            ? 'todo'
-            : initialTaskStatus(opts.actor),
+          : initialTaskStatus(opts.actor),
       after,
       ...(afterEnforce.length > 0 ? { afterEnforce } : {}),
       ...(opts.dueAt !== undefined ? { dueAt: opts.dueAt } : {}),
-      ...(opts.recurrenceOf !== undefined ? { recurrenceOf: opts.recurrenceOf } : {}),
       links: opts.links ?? [],
       ...(opts.origin !== undefined ? { origin: opts.origin } : {}),
       ...(opts.planHold !== undefined ? { planHold: opts.planHold } : {}),

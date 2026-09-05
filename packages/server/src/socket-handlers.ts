@@ -6,7 +6,7 @@
  * trio Bun then calls for the life of that connection. Bun routes every
  * upgraded path into ONE `open` / `message` / `close`, so the first thing
  * each of them does is read back the `kind` the upgrade attached — which is
- * why these three and `routes/upgrade-stream.ts` are two halves of one contract and
+ * why these three and `upgrade-stream.ts` are two halves of one contract and
  * neither reads correctly without the other.
  *
  * ── Nothing here is snapshotted ──
@@ -37,6 +37,7 @@ import type { WebSocketHandler } from 'bun';
 import type { MeetingRelay } from './meeting-protocol.ts';
 import type { RecallMeetingRelay } from './recall-meeting.ts';
 import { type FeedbackWs, type Rooms } from './rooms.ts';
+import type { UpgradeData } from './upgrade-stream.ts';
 import { onClose, onMessage, onOpen } from './yjs-protocol.ts';
 
 /** What the socket handlers read. All three are live stores, read at call
@@ -51,37 +52,7 @@ export interface SocketHandlersContext {
 }
 
 /**
- * What an upgrade attaches to a socket, for every socket this server opens.
- *
- * `kind` is what the ONE websocket handler branches on: Bun routes every
- * upgraded path into the same `open`/`message`/`close`, so the audio socket
- * and the editing socket are told apart by what the upgrade attached. Absent
- * means the editing socket, which is every upgrade that predates meetings.
- *
- * `shareId` and `readOnly` are named here rather than passed as excess
- * properties, so the two upgrades that set them are type-checked against the
- * fields the handlers read (`WsCtx` in rooms.ts, `MeetingClient` in
- * meeting-protocol.ts).
- *
- * It lives beside the handlers that READ it back rather than with the three
- * blocks in `routes/upgrade-stream.ts` that construct it. Those blocks are
- * routes; these handlers are not, and a non-route module may not import out
- * of `routes/`. Reading it here is also the better reason: `kind` exists for
- * the branch immediately below, and the two halves of this contract are
- * type-checked against each other either way. `server.ts` imports it for
- * `Bun.serve<UpgradeData>`.
- */
-export type UpgradeData = {
-  docId: string;
-  kind?: 'yjs' | 'audio' | 'recall';
-  token?: string;
-  shareId?: string;
-  shareMember?: string;
-  readOnly?: boolean;
-};
-
-/**
- * The `websocket` half of `Bun.serve`, for the sockets `routes/upgrade-stream.ts`
+ * The `websocket` half of `Bun.serve`, for the sockets `upgrade-stream.ts`
  * opened.
  *
  * Returned as one object rather than three functions because Bun takes it as

@@ -185,7 +185,7 @@ describe('flat write-back through bindDiff', () => {
   });
 
   it('working-tree members get write-back for code but NOT for markdown', async () => {
-    const res = await rooms.bindDiff({ repoPath: repo, base });
+    const res = rooms.bindDiff({ repoPath: repo, base });
     expect(res.ok).toBe(true);
     if (!res.ok) return;
     const ktId = res.files.find((f) => f.relPath === 'Main.kt')?.docId ?? '';
@@ -204,7 +204,7 @@ describe('flat write-back through bindDiff', () => {
     // Learnings: state hydration ≠ binding hydration. hydrateFromDisk
     // re-attached flat docs read-only, so after a restart the File view
     // LOOKED editable but edits silently never reached the working tree.
-    const res = await rooms.bindDiff({ repoPath: repo, base });
+    const res = rooms.bindDiff({ repoPath: repo, base });
     expect(res.ok).toBe(true);
     if (!res.ok) return;
     const ktId = res.files.find((f) => f.relPath === 'Main.kt')?.docId ?? '';
@@ -215,10 +215,10 @@ describe('flat write-back through bindDiff', () => {
   });
 
   it('openEditableFile: companion markdown doc whose edits reach the working tree and the member', async () => {
-    const res = await rooms.bindDiff({ repoPath: repo, base });
+    const res = rooms.bindDiff({ repoPath: repo, base });
     expect(res.ok).toBe(true);
     if (!res.ok) return;
-    const opened = await rooms.openEditableFile(res.reviewId, 'README.md');
+    const opened = rooms.openEditableFile(res.reviewId, 'README.md');
     expect(opened.ok).toBe(true);
     if (!opened.ok) return;
     expect(opened.meta.type).toBe('markdown');
@@ -239,28 +239,28 @@ describe('flat write-back through bindDiff', () => {
       'Body edited in File view.',
     );
     // Idempotent: repeat opens reuse the doc (threads survive).
-    const again = await rooms.openEditableFile(res.reviewId, 'README.md');
+    const again = rooms.openEditableFile(res.reviewId, 'README.md');
     expect(again.ok && again.docId === opened.docId).toBe(true);
   });
 
-  it('openEditableFile refuses pinned reviews and non-markdown members', async () => {
+  it('openEditableFile refuses pinned reviews and non-markdown members', () => {
     git(repo, 'add', '-A');
     git(repo, 'commit', '-q', '-m', 'target');
     const target = git(repo, 'rev-parse', 'HEAD');
-    const pinned = await rooms.bindDiff({ repoPath: repo, base, target });
+    const pinned = rooms.bindDiff({ repoPath: repo, base, target });
     expect(pinned.ok).toBe(true);
     if (!pinned.ok) return;
-    const refused = await rooms.openEditableFile(pinned.reviewId, 'README.md');
+    const refused = rooms.openEditableFile(pinned.reviewId, 'README.md');
     expect(refused.ok).toBe(false);
     if (!refused.ok) expect(refused.error).toBe('pinned');
 
-    const live = await rooms.bindDiff({ repoPath: repo, base });
+    const live = rooms.bindDiff({ repoPath: repo, base });
     expect(live.ok).toBe(true);
     if (!live.ok) return;
-    const notMd = await rooms.openEditableFile(live.reviewId, 'Main.kt');
+    const notMd = rooms.openEditableFile(live.reviewId, 'Main.kt');
     expect(notMd.ok).toBe(false);
     if (!notMd.ok) expect(notMd.error).toBe('not-markdown');
-    const traversal = await rooms.openEditableFile(live.reviewId, '../evil.md');
+    const traversal = rooms.openEditableFile(live.reviewId, '../evil.md');
     expect(traversal.ok).toBe(false);
     if (!traversal.ok) expect(traversal.error).toBe('bad-path');
   });
@@ -271,7 +271,7 @@ describe('flat write-back through bindDiff', () => {
       git(repo, 'commit', '-q', '-m', 'target');
       return git(repo, 'rev-parse', 'HEAD');
     })();
-    const res = await rooms.bindDiff({ repoPath: repo, base, target });
+    const res = rooms.bindDiff({ repoPath: repo, base, target });
     expect(res.ok).toBe(true);
     if (!res.ok) return;
     const ktId = res.files.find((f) => f.relPath === 'Main.kt')?.docId ?? '';
@@ -282,11 +282,11 @@ describe('flat write-back through bindDiff', () => {
   });
 
   it('workspace tree lists an opened editable .md once, under the diff member, badges merged', async () => {
-    const res = await rooms.bindDiff({ repoPath: repo, base });
+    const res = rooms.bindDiff({ repoPath: repo, base });
     expect(res.ok).toBe(true);
     if (!res.ok) return;
     const mdId = res.files.find((f) => f.relPath === 'README.md')?.docId ?? '';
-    const opened = await rooms.openEditableFile(res.reviewId, 'README.md');
+    const opened = rooms.openEditableFile(res.reviewId, 'README.md');
     expect(opened.ok).toBe(true);
     if (!opened.ok) return;
     // One thread on the diff member, one on the companion editor doc — the
@@ -384,15 +384,7 @@ describe('flat write-back through bindDiff', () => {
     writeExternal(file, downtimeEdit); // future mtime > .ydoc mtime
 
     const restarted = makeRooms(dataDir);
-    // `get` brings the doc back in this turn and its file binding a moment
-    // later, off the thread pool — a hydrate no longer opens a bound path on
-    // the main thread (`Rooms.prereadFor`). The attach-time arbitration this
-    // test is about rides along with that bind, so wait for it.
-    expect(restarted.get('crash2')).toBeDefined();
-    await waitFor(
-      () => restarted.get('crash2')?.ydoc.getText('content').toString() === downtimeEdit,
-      { describe: 'the restart hydrate to take the newer file over the stale doc state' },
-    );
+    expect(restarted.get('crash2')?.ydoc.getText('content').toString()).toBe(downtimeEdit);
     await waitForFileToBe(file, downtimeEdit);
   });
 
