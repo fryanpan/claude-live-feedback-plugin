@@ -26,6 +26,7 @@
 
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { MAX_FLAT_RUN_BULLETS } from './notes-quality.ts';
 import { MEETING_NOTES_HEADING } from './notes-section.ts';
 
 /** `<dataDir>/notes-prompt.md` — the whole override surface. */
@@ -50,6 +51,26 @@ export const NOTES_PROMPT_FILENAME = 'notes-prompt.md';
  * already written — so reorganising is now asked for rather than forbidden.
  * A reader's place is protected by the merge instead of by the prompt: the
  * ledger lets an agent line move and never lets a person's line be rewritten.
+ *
+ * WHY REGROUPING ASKS FOR SUB-BULLETS AND NEVER A SUBHEADING. Breaking a long
+ * topic up could have been written either way, and the merge decides which
+ * one survives. A heading landing inside an existing run of bullets cannot be
+ * merged item by item — Yjs will not re-parent an element — so the section is
+ * rebuilt from the composed markdown instead, and that rebuild is refused the
+ * moment one line in the section belongs to a person. Measured against that,
+ * with a control: the same composed notes come through with their headings in
+ * order into a section nobody has typed in, and come through with every
+ * heading below the bullets into a section holding one line a person wrote.
+ * The meetings where people type are the meetings the rule matters in, so
+ * asking for a heading would break it exactly there. Nesting needs no
+ * re-parenting and merges in order either way.
+ *
+ * AND A PERSON'S LINE STAYS AT THE TOP LEVEL, said here because the ledger
+ * cannot say it. The ledger stops the note-taker REWRITING their line; a copy
+ * of it nested under a lead bullet is not a rewrite, it is new writing of the
+ * note-taker's own, and it is accepted — leaving their line and a duplicate
+ * of it side by side. Until the merge recognises that case, the instruction
+ * is the guard.
  */
 export const DEFAULT_NOTES_INSTRUCTIONS = [
   'You are the live note-taker for a working meeting, writing in the doc the',
@@ -91,6 +112,16 @@ export const DEFAULT_NOTES_INSTRUCTIONS = [
   '- Rewrite, merge, split and MOVE your own earlier bullets so related',
   '  points sit together. Fold a new point into the bullet it belongs with',
   '  rather than repeating it further down.',
+  '- COUNT THE BULLETS UNDER EACH HEADING BEFORE YOU ANSWER. More than',
+  `  ${MAX_FLAT_RUN_BULLETS} under one heading and that topic is REGROUPED, never returned as`,
+  '  a flat list: gather its points into two or three groups, each a short',
+  '  lead bullet naming the group with its own points nested under it as',
+  '  sub-bullets. Like this:',
+  '      - What the export dialog gets wrong',
+  '        - It forgets the range between sessions.',
+  '        - The CSV path uses a different dialog.',
+  '  Do this EVERY time you write, not only when a topic is new: a topic',
+  `  that has grown past ${MAX_FLAT_RUN_BULLETS} since is regrouped now.`,
   '',
   'LINES A PERSON WROTE',
   '- SOME LINES OF THE CURRENT NOTES WERE WRITTEN BY A PERSON IN THE',
@@ -101,6 +132,10 @@ export const DEFAULT_NOTES_INSTRUCTIONS = [
   '  typed is their own note, not something a voice in the room said.',
   '- You MAY move one under the topic it belongs to. Moving is organising,',
   '  not editing, and their words are unchanged by it.',
+  '- WHEN YOU REGROUP A TOPIC, LEAVE THEIR LINES AT THE TOP LEVEL. Never',
+  '  nest one under a lead bullet of yours, and never restate it inside a',
+  '  group: a copy of their line beside their line is two notes saying one',
+  '  thing, and the second one is not theirs.',
   '- If one is WRONG in a way that matters, return your version of that line',
   '  in its place and change nothing else: it reaches them as a suggestion',
   '  they can accept or reject, never as a replacement. Only for a real',
@@ -135,6 +170,13 @@ export const DEFAULT_NOTES_INSTRUCTIONS = [
   '- Where a note is about a task, doc or earlier meeting offered to you',
   '  above, cite it as a markdown link the first time that note names it.',
   '  Keep links already in the notes.',
+  '',
+  'BEFORE YOU ANSWER',
+  `- Count the bullets under each heading. More than ${MAX_FLAT_RUN_BULLETS} under one heading`,
+  '  is the wall these notes exist instead of: go back and gather that',
+  "  topic's points into groups under lead bullets before you answer. Get",
+  '  under the number by GROUPING, never by dropping a point to make it',
+  '  fit. This is the check you are most likely to skip.',
   '',
   'Output markdown only: no preamble, no code fences, nothing after the',
   'notes.',
