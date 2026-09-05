@@ -4,9 +4,9 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { prose } from '@feedback/core';
 import * as Y from 'yjs';
-import { Rooms } from '../src/rooms.ts';
+import { DocStore } from '../src/doc-store.ts';
 import { withSyncError } from '../src/routes/docs-routes-context.ts';
-import { SseHub } from '../src/sse.ts';
+import { SseBus } from '../src/sse.ts';
 import { createWebhookDispatcher } from '../src/webhooks.ts';
 
 /**
@@ -29,15 +29,15 @@ Second paragraph.
 describe('a write that leaves literal markdown in the doc reports a syncError', () => {
   let dataDir: string;
   let path: string;
-  let rooms: Rooms;
+  let rooms: DocStore;
 
   beforeEach(() => {
     dataDir = mkdtempSync(join(tmpdir(), 'lf-literalmd-'));
     path = join(dataDir, 'doc.md');
     writeFileSync(path, DOC);
-    rooms = new Rooms({
+    rooms = new DocStore({
       dataDir,
-      sse: new SseHub(),
+      sse: new SseBus(),
       webhooks: createWebhookDispatcher({ onLog: () => {} }),
     });
     rooms.getOrCreate('d1', { type: 'markdown', sourceUrl: path });
