@@ -52,6 +52,41 @@ const NOT_ASKS: ReadonlyArray<[label: string, text: string]> = [
     'blocked on another ticket is a dependency, not an ask',
     'Blocked on the schema migration landing in main.',
   ],
+  // The three below are a review finding, not invention. The first draft
+  // matched "any waiting phrase anywhere AND any person word anywhere", and
+  // read all three as asks on the strength of a pronoun several words from
+  // the phrase. With no judge key — a supported state — such a row leaves
+  // `in-progress`, drops off the stalled list where `builder-silent` could
+  // still have named it, and wakes the lead to file an ask nobody has.
+  [
+    'a possessive far from the phrase is not the thing being waited on',
+    'Blocked on the CI runner outage; the vendor says their fix is rolling out.',
+  ],
+  [
+    'a possessive THING is a thing, even next to the phrase',
+    'Waiting for your CI credentials to propagate before the smoke test.',
+  ],
+  [
+    'a dependency, with somebody else’s fixtures mentioned after it',
+    'Blocked on the schema migration; I will regenerate their fixtures after.',
+  ],
+  [
+    'waiting on a deploy, with a possessive in the following clause',
+    'Waiting on the deploy to finish; their runner is slow today.',
+  ],
+  [
+    'a rebase is not a person, however many pronouns follow',
+    'Needs a rebase onto main before you can review it.',
+  ],
+];
+
+/** Asks whose person is a pronoun or an act, not a name — so the table above
+ *  cannot be passing on the board's roster alone. */
+const PRONOUN_ASKS: ReadonlyArray<[label: string, text: string]> = [
+  ['a possessive ACT is a person acting', 'Waiting on your final call before I touch the schema.'],
+  ['handed over, with the name as the object', 'Handed over to Bryan for a decision.'],
+  ['needs a sign-off', 'Needs your sign-off before it can merge.'],
+  ['the phrase carries both halves on its own', 'Your call: (a) ship it, (b) hold for the audit.'],
 ];
 
 describe('noteReadsAsWaitingOnPerson — the deterministic prefilter', () => {
@@ -66,6 +101,21 @@ describe('noteReadsAsWaitingOnPerson — the deterministic prefilter', () => {
       expect(noteReadsAsWaitingOnPerson(text, PEOPLE)).toBe(false);
     });
   }
+
+  for (const [label, text] of PRONOUN_ASKS) {
+    it(`reads as an ask: ${label}`, () => {
+      expect(noteReadsAsWaitingOnPerson(text, PEOPLE)).toBe(true);
+    });
+  }
+
+  it('the person has to be what the phrase is WAITING FOR, not merely present', () => {
+    // One waiting phrase, one pronoun, two readings — the difference is
+    // whether the pronoun is the phrase's object or a possession in it.
+    expect(noteReadsAsWaitingOnPerson('Waiting for your read on the migration.', PEOPLE)).toBe(
+      true,
+    );
+    expect(noteReadsAsWaitingOnPerson('Waiting for your migration to finish.', PEOPLE)).toBe(false);
+  });
 
   it('needs a PERSON, not just a waiting phrase — the name is what supplies one', () => {
     const text = "R12 std arm is parked on Bryan's build-only run";
@@ -171,6 +221,40 @@ describe('NoteAskClassifier — the confirmation, and what happens without one',
     expect(c.asks(ASK)).toBe(true);
     await c.settle();
     expect(calls).toBe(2);
+  });
+
+  it('a judge that throws SYNCHRONOUSLY does not escape into the caller', async () => {
+    let clock = 5_000;
+    let calls = 0;
+    const c = new NoteAskClassifier({
+      personNames: PEOPLE,
+      clock: () => clock,
+      // Not `async`: this throws before any await, which is what turns
+      // `Promise.resolve(judge(text))` into a synchronous throw out of asks().
+      judge: ((): Promise<boolean | null> => {
+        calls += 1;
+        throw new Error('bad key');
+      }) as () => Promise<boolean | null>,
+    });
+    expect(() => c.asks(ASK)).not.toThrow();
+    await c.settle();
+    // The slot was released, so a later reading can still be judged.
+    expect(calls).toBe(1);
+    clock += 10 * 60_000;
+    expect(c.asks(ASK)).toBe(true);
+    await c.settle();
+    expect(calls).toBe(2);
+  });
+
+  it('settled confirmations are released, not retained for the process lifetime', async () => {
+    const c = new NoteAskClassifier({ personNames: PEOPLE, judge: async () => true });
+    for (let i = 0; i < 3; i += 1) c.asks({ ts: 100 + i, text: ASK.text });
+    // Positive control: they really were held while running, so the zero
+    // below cannot be a promise that was never added.
+    expect(c.pendingCount()).toBe(3);
+    await c.settle();
+    expect(c.pendingCount()).toBe(0);
+    expect(c.cachedCount()).toBe(3);
   });
 
   it('a judge that answers "could not judge" caches nothing', async () => {
