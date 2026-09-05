@@ -56,6 +56,7 @@ import {
 } from './review-archive.ts';
 import type { DocRoom, WorkspaceDirNode, WorkspaceFileNode, WorkspaceTree } from './rooms.ts';
 import { isWithinRoot } from './safe-path.ts';
+import { boundFiles } from './slow-fs.ts';
 
 /**
  * What the workspace surface needs from the room lifecycle. Deliberately
@@ -92,8 +93,11 @@ export interface RoomsWorkspacePersistence {
       title: string;
     },
   ): DocRoom;
-  attachFile(docId: string, filePath: string): { ok: boolean };
-  attachReadonlyFile(docId: string, filePath: string): { ok: boolean };
+  // The pool doors, not the synchronous ones: the path being bound came out
+  // of a repo tree the caller pointed at, so it is exactly the path a
+  // cloud-sync provider can refuse to answer for.
+  attachFileAsync(docId: string, filePath: string): Promise<{ ok: boolean }>;
+  attachReadonlyFileAsync(docId: string, filePath: string): Promise<{ ok: boolean }>;
   deleteDoc(docId: string, opts?: { force?: boolean }): { ok: boolean };
   hydrateDoc(docId: string): boolean;
   persistRoomNow(room: DocRoom): void;
@@ -281,12 +285,16 @@ export class RoomsWorkspaces {
    * docId, so repeat opens reuse the doc and any comments on it survive).
    * relPath is validated against the workspace root — no traversal.
    */
-  openContextFile(
+  async openContextFile(
     setId: string,
     relPath: string,
-  ):
+  ): Promise<
     | { ok: true; docId: string; meta: DocMeta }
-    | { ok: false; error: 'not-found' | 'bad-path' | 'not-listed' | 'attach-failed' } {
+    | {
+        ok: false;
+        error: 'not-found' | 'bad-path' | 'not-listed' | 'attach-failed' | 'unavailable';
+      }
+  > {
     const members = this.p.list().filter((m) => reviewIdOf(m) === setId);
     const root = members.find((m) => m.workspaceRoot)?.workspaceRoot;
     if (!root) return { ok: false, error: 'not-found' };
@@ -311,12 +319,22 @@ export class RoomsWorkspaces {
     // route can say 404: whether the hidden file exists is itself the leak.
     // (Urgent-fixes ticket, 2026-09-02.)
     if (!isListedFile(root, clean)) return { ok: false, error: 'not-listed' };
-    if (!existsSync(abs)) return { ok: false, error: 'not-found' };
+    // Existence and content in one pool call, off the main thread. This
+    // endpoint is a click in the all-files sidebar, so `abs` is whatever the
+    // caller's tree holds — `existsSync` on a path whose provider has stopped
+    // answering parks the only thread that runs JavaScript just as a read
+    // does, and the sidebar of a review rooted in a cloud-sync folder is full
+    // of such paths. A file that will not answer is refused as 'unavailable'
+    // rather than reported missing: it is there, it is quarantined for the
+    // backoff, and the next click after that tries again.
+    const read = await boundFiles.read(abs, { keep: false });
+    if (read.status !== 'ok') return { ok: false, error: 'unavailable' };
+    if (!read.exists) return { ok: false, error: 'not-found' };
     // The guard above is lexical, so a symlink INSIDE the root that points
     // outside it passes: `join` never touches the filesystem. Resolve what
     // the path really points at before reading it — this endpoint is
     // reachable by a share visitor, and a diff review's root is a whole repo.
-    // Ordered after existsSync so a missing file still reads 'not-found'.
+    // Ordered after the read so a missing file still reads 'not-found'.
     if (!isWithinRoot(root, abs)) return { ok: false, error: 'bad-path' };
     const existing = members.find((m) => m.relPath === clean);
     if (existing) return { ok: true, docId: existing.docId, meta: existing };
@@ -337,7 +355,9 @@ export class RoomsWorkspaces {
       relPath: clean,
       title: clean,
     });
-    const attached = isMd ? this.p.attachFile(docId, abs) : this.p.attachReadonlyFile(docId, abs);
+    const attached = isMd
+      ? await this.p.attachFileAsync(docId, abs)
+      : await this.p.attachReadonlyFileAsync(docId, abs);
     if (!attached.ok) return { ok: false, error: 'attach-failed' };
     return { ok: true, docId: room.docId, meta: room.meta };
   }
@@ -352,10 +372,10 @@ export class RoomsWorkspaces {
    * openContextFile (already a full markdown doc); pinned reviews refuse —
    * their content is a commit, not a file.
    */
-  openEditableFile(
+  async openEditableFile(
     setId: string,
     relPath: string,
-  ):
+  ): Promise<
     | { ok: true; docId: string; meta: DocMeta }
     | {
         ok: false;
@@ -365,8 +385,10 @@ export class RoomsWorkspaces {
           | 'not-listed'
           | 'pinned'
           | 'not-markdown'
-          | 'attach-failed';
-      } {
+          | 'attach-failed'
+          | 'unavailable';
+      }
+  > {
     const members = this.p.list().filter((m) => reviewIdOf(m) === setId);
     const root = members.find((m) => m.workspaceRoot)?.workspaceRoot;
     if (!root) return { ok: false, error: 'not-found' };
@@ -385,10 +407,15 @@ export class RoomsWorkspaces {
     // the shape that drifts. (Urgent-fixes ticket, 2026-09-02.)
     if (!isListedFile(root, clean)) return { ok: false, error: 'not-listed' };
     const member = members.find((m) => m.relPath === clean);
-    if (!member) return this.openContextFile(setId, clean);
+    if (!member) return await this.openContextFile(setId, clean);
     if (member.type !== 'diff') return { ok: true, docId: member.docId, meta: member };
     if (member.diffTarget) return { ok: false, error: 'pinned' };
-    if (!existsSync(abs)) return { ok: false, error: 'not-found' };
+    // Off the main thread, for the reason openContextFile spells out. A diff
+    // member's path is git-derived rather than typed by the caller, which
+    // says nothing about whether the folder holding it still answers.
+    const read = await boundFiles.read(abs, { keep: false });
+    if (read.status !== 'ok') return { ok: false, error: 'unavailable' };
+    if (!read.exists) return { ok: false, error: 'not-found' };
     // Same symlink escape as openContextFile — see the note there. A member's
     // relPath is git-derived rather than caller-supplied, but git tracks
     // symlinks, so the member path is not self-evidently safe either.
@@ -407,7 +434,7 @@ export class RoomsWorkspaces {
       relPath: clean,
       title: clean,
     });
-    const attached = this.p.attachFile(companionId, abs);
+    const attached = await this.p.attachFileAsync(companionId, abs);
     if (!attached.ok) return { ok: false, error: 'attach-failed' };
     return { ok: true, docId: room.docId, meta: room.meta };
   }

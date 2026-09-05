@@ -18,11 +18,11 @@ function makeRooms(dataDir: string): Rooms {
 /** Materialize a whole folder as workspace members — bindFolder now binds
  *  lazily (entry only), so tests that need every file as a doc open the
  *  rest explicitly, mirroring what a reviewer clicking through does. */
-function bindAllFiles(
+async function bindAllFiles(
   rooms: Rooms,
   folderPath: string,
   owner?: string,
-):
+): Promise<
   | {
       ok: true;
       workspaceId: string;
@@ -30,13 +30,14 @@ function bindAllFiles(
       fileCount: number;
       files: Array<{ docId: string; relPath: string; type: string; title: string }>;
     }
-  | { ok: false } {
-  const bound = rooms.bindFolder({ folderPath, owner });
+  | { ok: false }
+> {
+  const bound = await rooms.bindFolder({ folderPath, owner });
   if (!bound.ok) return { ok: false };
   const all = rooms.listRepoFiles(bound.workspaceId);
   const files: Array<{ docId: string; relPath: string; type: string; title: string }> = [];
   for (const f of all.files ?? []) {
-    const opened = rooms.openContextFile(bound.workspaceId, f.relPath);
+    const opened = await rooms.openContextFile(bound.workspaceId, f.relPath);
     if (opened.ok) {
       files.push({
         docId: opened.docId,
@@ -81,8 +82,8 @@ describe('Rooms.deleteWorkspace + listWorkspaces', () => {
     if (!res.ok) expect(res.error).toBe('not-found');
   });
 
-  it('deletes every member doc when no member has open threads', () => {
-    const bound = bindAllFiles(rooms, folder, '/cwd');
+  it('deletes every member doc when no member has open threads', async () => {
+    const bound = await bindAllFiles(rooms, folder, '/cwd');
     expect(bound.ok).toBe(true);
     if (!bound.ok) return;
     const before = rooms.list().length;
@@ -98,7 +99,7 @@ describe('Rooms.deleteWorkspace + listWorkspaces', () => {
   });
 
   it('all-or-nothing guardrail: one open thread aborts the WHOLE delete', async () => {
-    const bound = bindAllFiles(rooms, folder, '/cwd');
+    const bound = await bindAllFiles(rooms, folder, '/cwd');
     expect(bound.ok).toBe(true);
     if (!bound.ok) return;
     const mdDocId = bound.files.find((f) => f.relPath === 'README.md')!.docId;
@@ -125,7 +126,7 @@ describe('Rooms.deleteWorkspace + listWorkspaces', () => {
   });
 
   it('force deletes all members even with open threads', async () => {
-    const bound = bindAllFiles(rooms, folder, '/cwd');
+    const bound = await bindAllFiles(rooms, folder, '/cwd');
     expect(bound.ok).toBe(true);
     if (!bound.ok) return;
     const mdDocId = bound.files.find((f) => f.relPath === 'README.md')!.docId;
@@ -144,7 +145,7 @@ describe('Rooms.deleteWorkspace + listWorkspaces', () => {
   });
 
   it('listWorkspaces rolls up fileCount + openThreads + owner', async () => {
-    const bound = bindAllFiles(rooms, folder, '/cwd');
+    const bound = await bindAllFiles(rooms, folder, '/cwd');
     expect(bound.ok).toBe(true);
     if (!bound.ok) return;
     const mdDocId = bound.files.find((f) => f.relPath === 'README.md')!.docId;
@@ -165,8 +166,8 @@ describe('Rooms.deleteWorkspace + listWorkspaces', () => {
     expect(w.root).toBe(bound.root);
   });
 
-  it('listWorkspaces.allIdle is true only when every member is idle >24h', () => {
-    const bound = bindAllFiles(rooms, folder, '/cwd');
+  it('listWorkspaces.allIdle is true only when every member is idle >24h', async () => {
+    const bound = await bindAllFiles(rooms, folder, '/cwd');
     expect(bound.ok).toBe(true);
     if (!bound.ok) return;
 
