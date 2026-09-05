@@ -108,6 +108,7 @@ import { claimReplayMarks, saveReplayMarks } from './sse-marks.ts';
 import { HTTP_IDLE_TIMEOUT_SEC, SseHub } from './sse.ts';
 import { createStallWiring } from './stall-wiring.ts';
 import { TaskProjection, taskBodyDocId } from './task-projection.ts';
+import { type FiredOccurrence, createTaskScheduler } from './task-scheduler.ts';
 import {
   DEFAULT_PARALLELISM_CAP,
   type ParallelismCapChange,
@@ -228,6 +229,10 @@ export interface ServerHandle {
   /** One pass of the stall wake (stall-nudge.ts). Runs on a 60s interval;
    *  exposed so tests exercise the real pass. */
   nudgeStalls: () => void;
+  /** One pass of the scheduled-task loop (task-scheduler.ts), returning the
+   *  occurrences it fired. Runs on a 30s interval; exposed for the same
+   *  reason the two wakes are — a test drives the real pass. */
+  runScheduler: () => FiredOccurrence[];
   /**
    * The wake's own falsifiability counter — what it suppressed, by condition,
    * against what it actually delivered.
@@ -949,6 +954,16 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
     ...(opts.noteAskJudge !== undefined ? { noteAskJudge: opts.noteAskJudge } : {}),
   });
   const { leadPresence, readyNudger, stallNudger } = stallWiring;
+
+  // The scheduled-task loop (docs/architecture/scheduled-tasks.md). Built
+  // beside the two nudgers because it is the third thing on this server that
+  // runs on a clock rather than on a request, and armed with them below.
+  // `schedulerNow` is a seam for the same reason `stallNudgeQuietMs` is one:
+  // the feature IS a comparison against a clock, so a test that could not move
+  // the clock would have to burn real minutes to assert anything.
+  const taskScheduler = createTaskScheduler(taskStore, {
+    ...(opts.schedulerNow !== undefined ? { now: opts.schedulerNow } : {}),
+  });
   // The late binding `Rooms` was constructed with: the bridge needs the task
   // store and the projection, which are built after `Rooms` is.
   onDocRoomEvent = stallWiring.onDocRoomEvent;
@@ -2306,6 +2321,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
   // timer, so this can never keep a process alive.
   readyNudger.start();
   stallNudger.start();
+  taskScheduler.start(opts.schedulerTickMs ?? undefined);
 
   // Rows still carrying the removed `parked` state come onto the new spelling
   // for it here — triage, plus a comment holding the date and the reason. See
@@ -2371,6 +2387,9 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
     // Same contract as `nudgeReadyWork`: a test drives the real loop rather
     // than a re-implementation of what it is believed to do.
     nudgeStalls: () => stallNudger.tick(),
+    // Same contract again: a test drives the real scheduler pass and reads
+    // back what it fired, rather than re-implementing the loop.
+    runScheduler: () => taskScheduler.tick(),
     readyNudgeTally: () => readyNudger.tally(),
     sharingGate,
     webhookLog,
@@ -2386,6 +2405,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
       // server that is going away.
       readyNudger.stop();
       stallNudger.stop();
+      taskScheduler.stop();
       leadPresence.stop();
       // The boot re-scoring pass runs for as long as there are stale rows, so
       // a short-lived server (every test) can still be mid-loop here. Setting
