@@ -725,15 +725,16 @@ with headings"*):
   again at the end it holds — and the closing clause "get under the number by
   GROUPING, never by dropping a point" is there because the revision without
   it passed by deleting a note instead. The
-  shape is sub-bullets and never a subheading, and the reason is the re-layout
-  gate below: a new heading inside an existing run of bullets can only land by
-  rebuilding the section, which is refused as soon as one line in it is a
-  person's, so a heading-based regroup arrives BELOW the bullets in exactly
-  the meetings people are typing in. Nesting needs no re-parenting and comes
-  through in order. The instructions also tell it to leave a person's lines at
-  the top level: the ledger stops it REWRITING one, and a copy of their line
-  nested inside a group is new writing of its own, which is accepted and reads
-  as two notes saying one thing.
+  shape asked for is sub-bullets, which was once the only shape that survived
+  the merge and is now the cheaper of the two: a heading inside an existing
+  run of bullets used to arrive BELOW them as soon as one line in the section
+  was a person's, and the merge now makes room for it instead — see the
+  re-layout gate below. Nesting still re-creates no element a reader may have
+  commented on, so it stays what the instructions ask for. They also tell it
+  to leave a person's lines at the top level, and THAT one is a guarantee now
+  rather than a request: the ledger only stops it REWRITING their line, a copy
+  nested inside a group is new writing of its own, and `withoutPersonCopies`
+  takes such a copy back out before anything is written.
 - **Mark a guess.** Where the point rests on a garbled word, write the note
   and end it `(unconfirmed)`. A marked guess beats a confident wrong note and
   beats no note.
@@ -942,6 +943,39 @@ typed since the last one. Now (`meeting-notes-merge.ts`):
   of the agent's bullets orphans into the outdated-comment flow — which is
   why it fires on the tick that MOVES the furniture and never on a tick that
   merely adds a bullet under a heading that already exists.
+- **A section somebody has typed in is regrouped WITHOUT rebuilding it.** The
+  rule above says relayout needs a section that is entirely the agent's, and
+  for a while that was the end of it: one line of a person's turned the whole
+  thing off and every heading the composer wrote landed below the bullets it
+  was meant to group — in exactly the meetings people write in. The fix
+  rebuilds nothing. A heading can only land between two bullets of one list,
+  so the agent's OWN bullets are cleared out of that list first and the merge
+  is planned again against what is left; the composer returns the whole notes
+  every tick, so they come straight back around the headings. A person's items
+  are never deleted, keep their elements, their marks and their comment
+  anchors, and are anchored by the diff as usual. It costs exactly what
+  relayout costs and no more — a comment on one of the AGENT's bullets
+  orphans — and it is paid only on the tick that moves the furniture. The one
+  trap worth naming: the second plan's `basedOn` must lose the lines the clear
+  just took out, or it reads them as items a person deleted mid-compose and
+  withholds the composer's copy of every one of them, dropping the notes
+  instead of regrouping them.
+- **A person's line is theirs ONCE, and the ledger cannot say that on its
+  own.** The ledger stops the note-taker rewriting a line somebody typed: an
+  incoming entry that reads like one of theirs lands as a suggestion on it.
+  A regroup walks around that completely — a lead bullet with their line
+  nested underneath is not an item, it is part of the enclosing item's
+  markdown, so nothing in the plan ever compares it to anything, and it is
+  accepted as new writing of the agent's own. The reader is left with their
+  line and a copy of it saying one thing twice. `withoutPersonCopies` unwraps
+  it before the plan is made, on every path: a nested copy is removed with
+  whatever was nested under it, and a group whose LEAD is their line is SPLIT
+  instead — the head becomes an item of its own, which the merge already
+  recognises as theirs, and the group's points become items beside it. So no
+  point the composer wrote is lost on either shape. What counts as a copy is
+  `NOTES_REWRITE_SIMILARITY`, the module's own bar for "reads as the same
+  note", because a restatement of their point inside a group is the same
+  duplicate as a verbatim one and reads worse.
 - **"No proposal is pending" is a question for the DOC, not for the plan.**
   The first version of that gate asked `plan.suggestions.length === 0`, which
   counts only what THIS tick proposes. A proposal already sitting in the
