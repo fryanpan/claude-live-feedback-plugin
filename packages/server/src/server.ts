@@ -9,17 +9,10 @@ import {
   isEmailLike,
   reviewIdOf,
 } from '@feedback/core';
-import type { Server as BunServer } from 'bun';
 import { createAccessDeps } from './access-deps.ts';
 import { releaseActivityLock } from './activity-lock.ts';
 import { AgentNoteRing } from './agent-notes.ts';
-import {
-  AgentWatches,
-  SHARED_AGENT_IDS,
-  SHARED_IDENTITY_ERROR,
-  SHARED_IDENTITY_MESSAGE,
-  isValidAgentId,
-} from './agent-watches.ts';
+import { AgentWatches } from './agent-watches.ts';
 import { AllowRuleProposals } from './allow-rules.ts';
 import { ARTIFACT_CHECK_ACTOR, ArtifactChecker } from './artifact-check.ts';
 import type { CodeSender } from './auth/code-sender.ts';
@@ -47,7 +40,6 @@ import { isAllowedBrowserOrigin } from './middleware/browser-origin.ts';
 import type { CfAccessOptions } from './middleware/cf-access.ts';
 import { RECALL_STATUS_PATH } from './middleware/recall-callback-gate.ts';
 import { isBrowserRequest, isGatedWrite, signInRequiredBody } from './middleware/write-gate.ts';
-import { parseMuxCursor } from './mux-cursor.ts';
 import type { NoteAskJudge } from './note-ask.ts';
 import {
   PARK_MIGRATION_ACTOR,
@@ -109,7 +101,6 @@ import {
 } from './routes/workspaces.ts';
 import { captureServerError, routePatternForSpan, withRouteSpan } from './sentry.ts';
 import { CfApi } from './share/cf-api.ts';
-import { redactHubEventForVisitor } from './share/redact-hub-events.ts';
 import {
   redactWorkspaceFilesForVisitor,
   redactWorkspaceGroupedForVisitor,
@@ -121,8 +112,7 @@ import type { ShareConfig } from './share/types.ts';
 import { sanitizeVisitorAuthor } from './share/visitor-identity.ts';
 import { createShellStatic } from './shell-static.ts';
 import { claimReplayMarks, saveReplayMarks } from './sse-marks.ts';
-import { channelForWatchKey, openAgentMuxStream } from './sse-mux.ts';
-import { HTTP_IDLE_TIMEOUT_SEC, SseHub, openSseStream } from './sse.ts';
+import { HTTP_IDLE_TIMEOUT_SEC, SseHub } from './sse.ts';
 import { createStallWiring } from './stall-wiring.ts';
 import { ThreadSummarizer } from './summarize.ts';
 import { AUTHOR_REQUIRED_ERROR, AUTHOR_REQUIRED_MESSAGE } from './task-owner.ts';
@@ -136,6 +126,7 @@ import {
 } from './tasks.ts';
 import { ThreadRequestDedup } from './thread-request-dedup.ts';
 import type { TranscriptionEngine } from './transcribe.ts';
+import { type UpgradeData, createUpgradeStream } from './upgrade-stream.ts';
 import { UptimeMonitor } from './uptime.ts';
 import { type VoiceComplete, VoiceRouter } from './voice.ts';
 import { type WebhookLogEntry, createWebhookDispatcher } from './webhooks.ts';
@@ -1982,6 +1973,32 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
     homeQueueTotal,
     defaultHubWorkspaceName: DEFAULT_HUB_WORKSPACE_NAME,
   });
+
+  /**
+   * The requests that end in a connection rather than a body — see
+   * upgrade-stream.ts. Composed HERE because `requireSignInToWrite` comes out
+   * of the identity setup above and `policyFor` out of the origin policy
+   * above that; everything else it reads is a store built with the rest.
+   *
+   * `server` is a forward reference, the same shape `requestAddress` uses two
+   * blocks down: `Bun.serve` has not returned yet, and it is narrowed to
+   * `upgrade` so this module can take a connection over and nothing else.
+   */
+  const { serveUpgradeAndStreamRoutes } = createUpgradeStream({
+    server: { upgrade: (req, options) => server.upgrade(req, options) },
+    rooms,
+    taskStore,
+    sse,
+    agentWatches,
+    watchKeyExists,
+    recallRelay,
+    policyFor,
+    requireSignInToWrite,
+    isValidDocId,
+    canonicalDocId,
+    fileUnderHubWorkspace,
+    j,
+  });
   /**
    * What the operator routes read instead of this closure's scope. Built
    * once — every collaborator in it is long-lived.
@@ -2179,29 +2196,6 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
     watchKeyExists,
   };
 
-  /**
-   * What an upgrade attaches to a socket, for every socket this server opens.
-   *
-   * `kind` is what the ONE websocket handler below branches on: Bun routes
-   * every upgraded path into the same `open`/`message`/`close`, so the audio
-   * socket and the editing socket are told apart by what the upgrade
-   * attached. Absent means the editing socket, which is every upgrade that
-   * predates meetings.
-   *
-   * `shareId` and `readOnly` are named here rather than passed as excess
-   * properties, so the two upgrades that set them are type-checked against
-   * the fields the handlers read (`WsCtx` in rooms.ts, `MeetingClient` in
-   * meeting-protocol.ts).
-   */
-  type UpgradeData = {
-    docId: string;
-    kind?: 'yjs' | 'audio' | 'recall';
-    token?: string;
-    shareId?: string;
-    shareMember?: string;
-    readOnly?: boolean;
-  };
-
   const server = Bun.serve<UpgradeData>({
     port,
     // Unset means Bun's own default (every interface) — unchanged for every
@@ -2219,7 +2213,12 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
     // editing sockets were never affected — measured idle-surviving 30s on
     // the unfixed build, while SSE died at 9.7s.
     idleTimeout: HTTP_IDLE_TIMEOUT_SEC,
-    async fetch(req, server) {
+    // `server` is gone from this signature and from `route`'s: the three
+    // websocket upgrades were the only things in the route table that read
+    // it, and they now reach it through the narrowed forward reference the
+    // upgrade-stream factory holds. Bun still passes it; nothing here wants
+    // it.
+    async fetch(req) {
       const startedAt = performance.now();
       const pathname = new URL(req.url).pathname;
       // A docId-addressed request may HYDRATE that doc, and hydration reads
@@ -2242,7 +2241,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
       // observes, it does not change what a request returns.
       let routed: Response | undefined;
       try {
-        routed = await withRouteSpan(req, pathname, () => route(req, server));
+        routed = await withRouteSpan(req, pathname, () => route(req));
       } catch (err) {
         captureServerError(err, { route: routePatternForSpan(pathname), method: req.method });
         throw err;
@@ -2274,10 +2273,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
 
       // Hoisted, so the wrapper above can call it first. The whole route
       // table lives in here unchanged.
-      async function route(
-        req: Request,
-        server: BunServer<UpgradeData>,
-      ): Promise<Response | undefined> {
+      async function route(req: Request): Promise<Response | undefined> {
         const url = new URL(req.url);
         const { pathname } = url;
 
@@ -2641,235 +2637,27 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           return j(200, { ok: true });
         }
 
-        // --- WebSocket upgrade: Recall dialling US with a bot's words ---
-        //
-        // NO Origin check, unlike `/audio/` and `/y/` below. That guard exists
-        // because a browser will open a socket from any page the user visits
-        // and hand it the data regardless of CORS. This caller is a vendor's
-        // backend: there is no origin, and requiring one would refuse every
-        // real connection. The unguessable per-bot token in the path is the
-        // authentication — 128 CSPRNG bits, one bot, forgotten when that
-        // bot's meeting ends (see RecallMeetingRelay's mintToken).
-        if (pathname.startsWith('/recall/')) {
-          const token = decodeURIComponent(pathname.slice('/recall/'.length));
-          // Shape-checked before it is looked up so a lookup is never the
-          // thing that distinguishes a malformed token from an unknown one.
-          if (!/^[0-9a-f]{32}$/.test(token) || !recallRelay.acceptsToken(token)) {
-            return j(404, { error: 'unknown endpoint' });
-          }
-          const upgraded = server.upgrade(req, {
-            data: { docId: '', token, kind: 'recall' as const },
-          });
-          if (!upgraded) return new Response('upgrade required', { status: 426 });
-          return undefined;
-        }
-
-        // --- WebSocket upgrade: a doc's live meeting audio ---
-        //
-        // Same guard as `/y/` below and for the same reason: CORS does not
-        // apply to websockets, so without the Origin check any page the user
-        // visits could open a microphone relay against any doc — and this one
-        // spends money while it is open.
-        if (pathname.startsWith('/audio/')) {
-          if (!isAllowedBrowserOrigin(req.headers.get('origin'), policyFor(req))) {
-            return j(403, { error: 'origin_not_allowed' });
-          }
-          const addressed = decodeURIComponent(pathname.slice('/audio/'.length));
-          if (!isValidDocId(addressed)) return j(400, { error: 'bad docId' });
-          const docId = rooms.get(addressed)?.docId ?? addressed;
-          // Unlike `/y/`, this never conjures a room: a meeting belongs to a
-          // doc that already exists, and auto-creating one here would let a
-          // typo start a billed session against a doc nobody can find.
-          if (!rooms.get(docId)) return j(404, { error: 'doc not found' });
-          // The SAME sign-in decision `/y/` makes two branches down, for a
-          // surface that is write-only: a meeting opens a billed engine
-          // session and writes transcript and notes into the doc, and the
-          // method-keyed write gate cannot see it because a websocket
-          // upgrade is a GET. Carried rather than refused at the handshake
-          // so the strip can render the reason (meeting-protocol.ts refuses
-          // the `start` frame); an upgrade refused here reaches the page as
-          // a bare error event with no body to show.
-          const audioReadOnly = requireSignInToWrite && browserProvedNobody();
-          const upgraded = server.upgrade(req, {
-            data: {
-              docId,
-              kind: 'audio' as const,
-              // WHAT AUTHORIZED THIS SOCKET, carried for its life, exactly as
-              // `/y/` carries it below. A websocket is authorized once at its
-              // upgrade, so revoking a share, removing a member and throwing
-              // the sharing master switch all have to be able to find the
-              // connections that grant opened. Without these two the sweeps
-              // closed the editor and left an open microphone running a
-              // billed transcription session against a doc the person may no
-              // longer read. `Rooms.trackShareSocket` is the other half: this
-              // socket is in no room's `conns` for a sweep to walk.
-              ...(visitorShareId ? { shareId: visitorShareId } : {}),
-              ...(visitorMemberKey ? { shareMember: visitorMemberKey } : {}),
-              ...(audioReadOnly ? { readOnly: true } : {}),
-            },
-          });
-          if (!upgraded) return new Response('upgrade required', { status: 426 });
-          return undefined;
-        }
-
-        // --- WebSocket upgrade ---
-        if (pathname.startsWith('/y/')) {
-          // CORS does not apply to websockets — the browser opens the socket and
-          // hands the page the data regardless of what headers we set. So the
-          // Origin check has to happen HERE, or any page the user visits can
-          // sync (and mutate) any doc. Reproduced before this existed: a socket
-          // sent with `Origin: https://evil.example.com` synced a real document.
-          if (!isAllowedBrowserOrigin(req.headers.get('origin'), policyFor(req))) {
-            return j(403, { error: 'origin_not_allowed' });
-          }
-          const addressed = decodeURIComponent(pathname.slice(3));
-          if (!isValidDocId(addressed)) return j(400, { error: 'bad docId' });
-          // `ws.data.docId` is re-resolved on every frame, so it must be the
-          // canonical id — a socket opened by alias would otherwise sync a
-          // room of its own.
-          const docId = rooms.get(addressed)?.docId ?? addressed;
-          const type = url.searchParams.get('type') as DocType | null;
-          const sourceUrl = url.searchParams.get('sourceUrl') ?? undefined;
-          // Mockup docs auto-create on WS — the widget connects first with a
-          // known type + sourceUrl (this covers the dev-server surface too;
-          // the widget always identifies as 'mockup'). Markdown docs MUST be
-          // created upfront via POST /api/docs (which auto-attaches a file).
-          // The browser navigating to /review/<docId> before the agent has
-          // created the doc gets a clean 404 from /review's own handler.
-          // Decided BEFORE the creation below, not after it. Creating a room
-          // and filing a workspace row is a write like any other, and it used
-          // to run above this line: a browser that had proven nobody could
-          // open `/y/<any-new-id>?type=mockup` and make the server create a
-          // doc and file it under the hub workspace, with the read-only carry
-          // only stopping the ydoc edits that came afterwards.
-          const readOnly = requireSignInToWrite && browserProvedNobody();
-          if (!rooms.get(docId)) {
-            if (type === 'mockup') {
-              // Nothing to read yet, so refusing here gates no read: the doc
-              // this socket would have created does not exist for anybody.
-              if (readOnly) return j(401, signInRequiredBody());
-              rooms.getOrCreate(docId, { type, sourceUrl });
-              // The widget is the third creation path (next to POST /api/docs
-              // and the MCP tools that front it), so it files its doc too —
-              // otherwise a mockup that was only ever opened in a browser is
-              // an orphan the hub can't see.
-              fileUnderHubWorkspace(docId);
-            } else {
-              return j(404, { error: 'doc not found' });
-            }
-          }
-          // READ-ONLY, not refused. The editing socket is also the READING
-          // socket — a markdown doc's text arrives over it and nowhere else
-          // — so refusing the upgrade would gate reading, which this gate
-          // must never do. The socket opens, sync step 1 hands over the
-          // whole doc, and `onMessage` drops anything that would change it
-          // (see yjs-protocol.ts). Decided once here, at the handshake, and
-          // then carried for the life of the connection: the same shape the
-          // share authorization uses two lines up.
-          const upgraded = server.upgrade(req, {
-            data: {
-              docId,
-              ...(visitorShareId ? { shareId: visitorShareId } : {}),
-              ...(visitorMemberKey ? { shareMember: visitorMemberKey } : {}),
-              ...(readOnly ? { readOnly: true } : {}),
-            },
-          });
-          if (!upgraded) return new Response('upgrade required', { status: 426 });
-          return undefined;
-        }
-
-        // --- SSE (agent-level): every key ONE agent watches, on ONE socket. ---
-        //
-        // The route that ends the socket-per-watch storm. An MCP child used to
-        // open a TCP connection per watched key, so a lead holding 214 watches
-        // held 214 sockets; on 2026-09-04 the fleet exhausted this machine's
-        // kernel socket memory and the supervisor read the resulting connect
-        // failures as an unbound server, restarting it twenty times. The
-        // per-key routes below are untouched — a session on the previous
-        // bundle keeps using them through the rollout.
-        //
-        // The channel set is the agent's DURABLE watch set, so this route
-        // needs no key list from the caller: the same set a respawn restores
-        // from is the one the stream fans out, and `watch_doc` reaches an open
-        // stream through the store's change hook rather than a reconnect.
-        const agentEventsMatch = pathname.match(/^\/events\/agent\/([^/]+)$/);
-        if (agentEventsMatch) {
-          // A share visitor never opens one. The same posture the watches REST
-          // route takes, and for a stronger reason: this stream carries every
-          // channel one agent watches, which is a superset of any one board.
-          if (visitor) return j(403, { error: 'not available to share visitors' });
-          const streamAgentId = decodeURIComponent(agentEventsMatch[1] ?? '');
-          if (!isValidAgentId(streamAgentId)) return j(400, { error: 'bad agentId' });
-          if (SHARED_AGENT_IDS.has(streamAgentId)) {
-            // Same refusal the watch store makes: a set keyed on the shared
-            // identity is every anonymous session's watches at once, so a
-            // stream over it would deliver everybody's events into each of
-            // them. Those sessions keep the per-key routes.
-            return j(400, { error: SHARED_IDENTITY_ERROR, message: SHARED_IDENTITY_MESSAGE });
-          }
-          return openAgentMuxStream({
-            hub: sse,
-            agentId: streamAgentId,
-            keys: () => agentWatches.list(streamAgentId, watchKeyExists).watches.map((w) => w.key),
-            channelFor: (key) => channelForWatchKey(key, canonicalDocId),
-            cursors: parseMuxCursor(sseLastEventId(req, url)),
-            onWatchSetChanged: (cb) => agentWatches.onChange(streamAgentId, cb),
-          });
-        }
-
-        // --- SSE (workspace-level): every thread event on any member doc of a
-        // workspace/diff review, one stream — agents watch this instead of one
-        // stream per file. ---
-        const wsEventsMatch = pathname.match(/^\/events\/workspace\/([^/]+)$/);
-        if (wsEventsMatch) {
-          const workspaceId = decodeURIComponent(wsEventsMatch[1] ?? '');
-          if (!isValidDocId(workspaceId)) return j(400, { error: 'bad workspaceId' });
-          // A workspace channel exists for reviews (diff
-          // reviews / folder binds) AND for hub workspaces — task.* events
-          // broadcast on the same `ws~<id>` channel (§3.6).
-          const exists =
-            rooms.list().some((m) => m.workspaceId === workspaceId) ||
-            taskStore.getWorkspace(workspaceId) !== undefined;
-          if (!exists) return j(404, { error: 'workspace not found' });
-          // A share visitor's stream carries the §3.3 visitor-contract view
-          // of every hub event (display names, projected tasks) — the SSE
-          // feed is the second door next to the ws room, and redacting one
-          // transport but not the other is how the DocMeta leak shipped.
-          // An agent's MCP child names itself here; a browser tab does not.
-          // A visitor never counts as one — their stream is authorized by a
-          // share, and letting a share-bearer claim an agentId would let an
-          // outside tab impersonate the agent whose work it can see.
-          const streamAgentId = visitor
-            ? undefined
-            : (url.searchParams.get('agentId') ?? undefined);
-          return openSseStream(
-            sse,
-            `ws~${workspaceId}`,
-            visitorShareId ?? undefined,
-            visitor ? redactHubEventForVisitor : undefined,
-            streamAgentId,
-            sseLastEventId(req, url),
-            visitorMemberKey ?? undefined,
-          );
-        }
-        // --- SSE ---
-        if (pathname.startsWith('/events/')) {
-          const addressed = decodeURIComponent(pathname.slice('/events/'.length));
-          if (!isValidDocId(addressed)) return j(400, { error: 'bad docId' });
-          const eventsRoom = rooms.get(addressed);
-          if (!eventsRoom) return j(404, { error: 'doc not found' });
-          // The CHANNEL is the doc's own id: a watcher that opened the stream
-          // by the readable name and a writer that fired on the canonical one
-          // have to meet, and they only do if both spellings collapse here.
-          return openSseStream(
-            sse,
-            eventsRoom.docId,
-            visitorShareId ?? undefined,
-            undefined,
-            undefined,
-            sseLastEventId(req, url),
-            visitorMemberKey ?? undefined,
-          );
+        // ── Upgrade and stream ── see upgrade-stream.ts.
+        // Six blocks that end in a long-lived connection rather than a body:
+        // the three websocket upgrades and the three SSE openers. Called from
+        // the position the run held, so the `/recall/` upgrade still sits
+        // IMMEDIATELY below the status webhook above it — that adjacency is
+        // load-bearing and the comment on the webhook says why. Null means no
+        // block there claimed this address, which is the same fall-through the
+        // run did in place; `upgraded` is the one outcome that must reach Bun
+        // as `undefined`, and this is the only place that spells it.
+        const streamed = serveUpgradeAndStreamRoutes({
+          req,
+          url,
+          pathname,
+          visitor,
+          visitorShareId,
+          visitorMemberKey,
+          browserProvedNobody,
+        });
+        if (streamed) {
+          if (streamed.kind === 'upgraded') return undefined;
+          return streamed.response;
         }
 
         // --- REST: what this process currently costs ---
@@ -3710,17 +3498,6 @@ function isValidDocId(s: string): boolean {
   // valid filename char, matching the .ydoc-on-disk naming.
   if (!s || s.startsWith('.')) return false;
   return /^[a-zA-Z0-9_.:~\-]{1,100}$/.test(s);
-}
-
-/** `scheme://host` with the default port normalized away, or the raw
- *  concatenation when it doesn't parse (which then simply matches nothing). */
-/** The id a reconnecting SSE client last saw: the `Last-Event-ID` header a
- *  native EventSource sends back by itself once frames carry `id:` lines,
- *  else the `lastEventId` query param for hand-rolled fetch-stream consumers
- *  (the MCP watch loop). Absent/empty → a fresh subscription, no replay. */
-function sseLastEventId(req: Request, url: URL): string | undefined {
-  const v = req.headers.get('last-event-id') ?? url.searchParams.get('lastEventId');
-  return v ? v : undefined;
 }
 
 function j(status: number, body: unknown): Response {
