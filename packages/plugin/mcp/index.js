@@ -15578,7 +15578,7 @@ var TOOL_LIST = {
     },
     {
       name: "find_and_replace",
-      description: "Replace plain text in a doc with other plain text. find matches the doc's plain text, not markdown — marks are preserved automatically. Exception: a find that IS pipe-table row syntax (| a | b |) matches table rows structurally, cells compared by text with whitespace ignored, so a row quoted from the .md works; the replace must keep the same row/cell shape. Disambiguate repeats with contextBefore / contextAfter or occurrence, or pass replaceAll for a mechanical sweep. A no-match returns a hint quoting the doc's actual characters; copy the find from that rather than guessing. Pass parseInlineMarks to read markdown in replace as real marks, and suggest: true to propose the edit instead of applying it.",
+      description: "Replace plain text in a doc with other plain text. find matches the doc's plain text, not markdown — marks are preserved automatically. Exception: a find that IS pipe-table row syntax (| a | b |) matches table rows structurally, cells compared by text with whitespace ignored, so a row quoted from the .md works; the replace must keep the same row/cell shape. Disambiguate repeats with contextBefore / contextAfter or occurrence, or pass replaceAll for a mechanical sweep. A no-match returns a hint quoting the doc's actual characters; copy the find from that rather than guessing. Pass parseInlineMarks to read markdown in replace as real marks, and suggest: true to propose the edit instead of applying it. INLINE ONLY: replace goes inside one existing block, so block-level markdown in it — a heading, a list item, a rule, a fence — is refused with block-markdown-in-replacement; use insert_blocks_after_thread or insert_blocks_at_anchor for those.",
       inputSchema: {
         type: "object",
         properties: {
@@ -18561,7 +18561,7 @@ var STATUS_TEXT_MAX = 4000;
 function suggestionAuthor() {
   return { id: AUTHOR.id, name: AUTHOR.name, color: AUTHOR.color };
 }
-var PLUGIN_VERSION = "0.1.165";
+var PLUGIN_VERSION = "0.1.166";
 var PROCESS_ID = randomUUID();
 var server = new Server({
   name: "claude-workspaces",
