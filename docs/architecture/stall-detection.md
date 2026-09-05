@@ -80,6 +80,40 @@ clock without lighting up every board it is attached to. The board-level
 ready-idle clock (`ready-nudge.ts`) ignores notes on purpose — that wake
 exists to catch a session that keeps talking without moving anything.
 
+**Except a note that says the agent is waiting on a PERSON.** That is not
+movement, it is an unfiled ask wearing movement's clothes: three rows waited
+hours on 2026-09-04 while their end-of-turn notes said "Waiting on Bryan: …"
+and "parked on Bryan's (a) / (b) / (c)", nothing was filed, and the loop saw
+an agent-owned row under a dispatching band and called it ordinary quiet work
+the lead had already been told about. Such a row is now
+`blocked-on-owner-unfiled` with `unfiledAsk`, so it joins the `unfiled` list
+on both the report path and the wake path, and the lead is re-woken because a
+row that comes back under a different BUCKET is news. The reading is the
+row's NEWEST note — a later note reporting progress means the agent moved on
+— and the wake's clock is then the longer of the row's silence and the age of
+the ask, walked back through the unbroken run of notes that say the same
+thing. Without that second half nothing would ever fire: posting a note bumps
+`updatedAt`, so an agent restating the same ask each turn holds the quiet
+clock at zero forever.
+
+Detection is two stages and the second only ever narrows the first
+(`note-ask.ts`). A deterministic prefilter reads the note for a waiting phrase
+(waiting on, parked on, blocked on, needs a decision, for your read) AND a
+person — the board's own people by name, or a pronoun — with an explicit
+release vocabulary that wins: a note opening "Not waiting", "Not stalled" or
+"Not blocked", or saying the person answered, is not an ask. A prefilter HIT
+is then confirmed by the same Haiku key the review gate uses
+(`note-ask-judge.ts`, `CW_NOTE_ASK_JUDGE=0` to turn it off), one word back,
+cached per note by timestamp and text hash, run in the background between
+ticks and at most four in flight. A prefilter MISS is never sent anywhere, so
+the spend is one call per new ask-note and none at all on a board whose notes
+have been read. No key, an error, a timeout or an unparseable reply leaves the
+prefilter's verdict standing — a nudge, never a door that closes when the API
+does. The bias is stated rather than hidden: the release vocabulary winning
+means a note still waiting while it mentions an answer reads as released, and
+that direction is chosen because a false wake costs a lead's whole turn while
+a missed one still surfaces on the ordinary stall clock a window later.
+
 Known gap, deliberately open: nothing ages review items sitting unanswered
 on the owner's queue. That is a different signal (ask-aging, not
 row-stalling) and gets its own design if it proves needed. The one kind of
@@ -278,6 +312,7 @@ grace window that #411 fixed.
 | `CW_STALL_REPEAT_HOURS` | 4 | how often an unchanged bad board is re-said |
 | `CW_HELD_ITEM_MINUTES` | 5 | how long a held review item may stand before its filer, then the lead, is told |
 | `CW_REVIEW_GATE` | on | `0` turns the judge off; every item passes unjudged (also the state with no summary API key) |
+| `CW_NOTE_ASK_JUDGE` | on | `0` turns the note-ask confirmation off; the deterministic prefilter decides alone (also the state with no summary API key) |
 
 Both accept fractions; zero, negative, or unreadable values fall back to
 the default rather than firing every tick (`positiveEnvDuration` in
@@ -292,6 +327,8 @@ the two nudgers, the lead-presence monitor and the comment-queue bridge —
 `packages/server/src/stall-nudge.ts` (stamps, wakes, logging) ·
 `packages/server/src/review-judge.ts` (the Haiku judge; prompt in
 `packages/core/src/review-judge-prompt.ts`) ·
+`packages/server/src/note-ask.ts` (the note prefilter and its verdict cache)
+· `packages/server/src/note-ask-judge.ts` (its Haiku confirmation) ·
 `packages/server/src/keep-moving.ts` (shared row classifier — the report
 counts unfiled asks with NO age gate on purpose; only the wake path has
 the grace) · `packages/mcp/src/nudge-line.ts` (frame rendering) ·
