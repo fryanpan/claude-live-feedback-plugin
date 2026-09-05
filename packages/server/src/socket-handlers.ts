@@ -36,7 +36,7 @@
 import type { WebSocketHandler } from 'bun';
 import type { MeetingRelay } from './meeting-protocol.ts';
 import type { RecallMeetingRelay } from './recall-meeting.ts';
-import { type FeedbackWs, type Rooms } from './rooms.ts';
+import { type FeedbackWs, type Rooms } from './doc-store.ts';
 import { onClose, onMessage, onOpen } from './yjs-protocol.ts';
 
 /** What the socket handlers read. All three are live stores, read at call
@@ -60,7 +60,7 @@ export interface SocketHandlersContext {
  *
  * `shareId` and `readOnly` are named here rather than passed as excess
  * properties, so the two upgrades that set them are type-checked against the
- * fields the handlers read (`WsCtx` in rooms.ts, `MeetingClient` in
+ * fields the handlers read (`WsCtx` in doc-store.ts, `MeetingClient` in
  * meeting-protocol.ts).
  *
  * It lives beside the handlers that READ it back rather than with the three
@@ -112,7 +112,7 @@ export function createSocketHandlers(ctx: SocketHandlersContext): WebSocketHandl
       if (ws.data.kind === 'audio') {
         // Before the relay, because the relay's own bookkeeping is a
         // WeakMap nothing can enumerate: this is what makes the socket
-        // reachable by the share sweeps in `rooms.ts`. A socket carrying
+        // reachable by the share sweeps in `doc-store.ts`. A socket carrying
         // neither stamp — the owner's — is not tracked at all.
         rooms.trackShareSocket(ws);
         meetingRelay.onOpen(ws);

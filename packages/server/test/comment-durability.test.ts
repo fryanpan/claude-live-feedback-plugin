@@ -408,7 +408,7 @@ describe('a comment posted while the subscriber is disconnected is delivered aft
     expect(delivered?.event).toBe('thread.created');
     // The frame is the ORIGINAL broadcast payload replayed — and a
     // thread.created carries its opening comment inside the thread, not on
-    // the payload's `comment` field (rooms.ts fireEvent call sites).
+    // the payload's `comment` field (doc-store.ts fireEvent call sites).
     const threadComments = (delivered?.data.thread as { comments?: Array<{ text?: string }> })
       ?.comments;
     expect(threadComments?.[threadComments.length - 1]?.text).toBe('This contradicts the goal.');

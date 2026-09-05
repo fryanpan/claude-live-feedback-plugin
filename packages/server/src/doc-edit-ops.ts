@@ -3,7 +3,7 @@
  * anchored edits a comment thread drives, suggestions, and block insert and
  * delete.
  *
- * Split out of `rooms.ts`, which keeps the room lifecycle these operate on.
+ * Split out of `doc-store.ts`, which keeps the room lifecycle these operate on.
  * Almost every verb here is a thin, deliberate wrapper: resolve the room,
  * hand the `Y.Doc` to `prose` or `suggestOps`, return what it says. The
  * value of gathering them is that the wrapping is the SAME each time —
@@ -18,7 +18,7 @@ import { existsSync, mkdirSync, readdirSync, rmSync, writeFileSync } from 'node:
 import { join } from 'node:path';
 import { type Thread, contentKind, prose, suggestOps } from '@feedback/core';
 import * as Y from 'yjs';
-import type { DocRoom } from './rooms.ts';
+import type { DocRoom } from './doc-store.ts';
 
 /** Backups kept per doc by `backupReplacedContent` before rotation. */
 const REPLACE_BACKUP_CAP = 20;

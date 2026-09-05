@@ -24,7 +24,7 @@
  */
 
 import { extractWorkspaceLinks, parseWorkspaceLink } from '@feedback/core';
-import type { Rooms } from './rooms.ts';
+import type { Rooms } from './doc-store.ts';
 import { taskIdOfBodyDoc } from './task-projection.ts';
 import type { GoalRow, Ref, Task, TaskStore } from './tasks.ts';
 import { isValidRef, refKey } from './tasks.ts';

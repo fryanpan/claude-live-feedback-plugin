@@ -7,7 +7,7 @@ import { type ServerHandle, createServer } from '../src/server.ts';
 
 /**
  * HTTP-level tests for `replaceAll: true` on find_and_replace — exercised
- * through the REAL route, not rooms.ts. A rooms-level unit test proves
+ * through the REAL route, not doc-store.ts. A rooms-level unit test proves
  * nothing about whether the HTTP layer actually forwards a new param — only
  * a real fetch() through server.ts does (the "groups" param the API accepted
  * and discarded is the incident behind this pattern).

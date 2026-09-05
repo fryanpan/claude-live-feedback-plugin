@@ -1,6 +1,6 @@
 /**
  * The websocket fan-out of a doc room, driven directly rather than through a
- * `Rooms`. It came out of `rooms.ts` as a pure move, so everything below had
+ * `Rooms`. It came out of `doc-store.ts` as a pure move, so everything below had
  * SOME coverage through the higher layers already; what it lacked was a test
  * that can fail for the fan-out's own reasons — the frame it builds, the
  * channels it writes it to, which sockets it hangs up, and which transaction
@@ -16,7 +16,7 @@ import {
   type RoomFanoutHost,
   maintainAwareness,
 } from '../src/room-fanout.ts';
-import type { DocRoom, FeedbackWs } from '../src/rooms.ts';
+import type { DocRoom, FeedbackWs } from '../src/doc-store.ts';
 import { SseHub } from '../src/sse.ts';
 import type { ThreadSummarizer } from '../src/summarize.ts';
 

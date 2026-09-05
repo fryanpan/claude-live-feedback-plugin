@@ -4,7 +4,7 @@ import type { DispatchRegistry } from '../dispatch-registry.ts';
 import type { ShareTarget } from '../middleware/host-guard.ts';
 import type { ReadyWorkNudger } from '../ready-nudge.ts';
 import type { ReviewGate } from '../review-gate-types.ts';
-import type { Rooms } from '../rooms.ts';
+import type { Rooms } from '../doc-store.ts';
 import type { TaskProjection } from '../task-projection.ts';
 import type { ParallelismCapChange, Task, TaskStore } from '../tasks.ts';
 

@@ -22,7 +22,7 @@
 import { reviewIdOf } from '@feedback/core';
 import type { ShareTarget } from '../middleware/host-guard.ts';
 import { listArchivedDocs, listArchivedReviews } from '../review-archive.ts';
-import type { Rooms } from '../rooms.ts';
+import type { Rooms } from '../doc-store.ts';
 import type { TaskProjection } from '../task-projection.ts';
 import type { TaskStore } from '../tasks.ts';
 

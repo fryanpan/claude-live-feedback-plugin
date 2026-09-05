@@ -34,7 +34,7 @@ import type { Identities, IdentityRecord } from '../identities.ts';
 import { userForIdentity } from '../identities.ts';
 import { type OriginPolicy, isAllowedBrowserOrigin } from '../middleware/browser-origin.ts';
 import { browserCannotOperateBody, isBrowserRequest } from '../middleware/write-gate.ts';
-import type { Rooms } from '../rooms.ts';
+import type { Rooms } from '../doc-store.ts';
 import { readCookie } from '../share/link-session.ts';
 import { type ShareLinks, shareMemberKey } from '../share/share-links.ts';
 import { ACCESS_NOT_CONFIGURED, type Shares } from '../share/shares.ts';

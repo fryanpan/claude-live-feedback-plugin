@@ -39,7 +39,7 @@ import {
   FileBindings,
   type PrereadFile,
 } from './file-binding.ts';
-import { type RoomsWorkspacePersistence, RoomsWorkspaces } from './rooms-workspaces.ts';
+import { type RoomsWorkspacePersistence, RoomsWorkspaces } from './doc-store-workspaces.ts';
 
 /** Moved to `room-fanout.ts` with the presence ticker it drives — re-exported
  *  under the name it was first published as. */
@@ -105,7 +105,7 @@ import {
 } from './private-meta.ts';
 import { type ArchivedDoc, type ArchivedReview } from './review-archive.ts';
 import { CONTENT_REVISION_ORIGIN, RoomFanout, type RoomFanoutHost } from './room-fanout.ts';
-import { ROOM_TIMINGS } from './room-timings.ts';
+import { ROOM_TIMINGS } from './doc-store-timings.ts';
 import { boundFiles, redactBoundPath } from './slow-fs.ts';
 import type { SseHub } from './sse.ts';
 import type { ScheduleArgs, ThreadSummarizer } from './summarize.ts';

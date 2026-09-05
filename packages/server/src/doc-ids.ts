@@ -40,7 +40,7 @@ export const HUB_ROOM_PREFIXES = ['ws:', 'task:'] as const;
  * answers the different question "may a caller occupy this address", and is a
  * superset — both read the same prefix list, one line apart, so the two can
  * never disagree about `ws:` and `task:`. It lives here rather than in
- * `rooms.ts` for that reason, and `rooms.ts` re-exports the name it was
+ * `doc-store.ts` for that reason, and `doc-store.ts` re-exports the name it was
  * first published under.
  */
 export function isHubOwnedRoom(docId: string): boolean {

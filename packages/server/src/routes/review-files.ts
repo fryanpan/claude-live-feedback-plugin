@@ -18,7 +18,7 @@
 import { reviewIdOf } from '@feedback/core';
 import type { DocMeta } from '@feedback/core';
 import type { ShareTarget } from '../middleware/host-guard.ts';
-import type { Rooms } from '../rooms.ts';
+import type { Rooms } from '../doc-store.ts';
 import {
   redactWorkspaceFilesForVisitor,
   redactWorkspaceGroupedForVisitor,

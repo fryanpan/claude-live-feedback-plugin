@@ -16,7 +16,7 @@
  * and nothing there owns the bindings' own timers.
  *
  * Timings, ordering and log lines are unchanged from when this lived in
- * `rooms.ts`: the write-back debounce, the read settle, the reconcile's
+ * `doc-store.ts`: the write-back debounce, the read settle, the reconcile's
  * decision order and its backup-before-reassert rule are the contract the
  * bound-doc sync behaviour rests on, and this file moved them without
  * touching them.
@@ -49,8 +49,8 @@ import {
 import { isHubOwnedRoom } from './doc-ids.ts';
 import { showFile } from './git-diff.ts';
 import { gitConflictHint } from './git-provenance.ts';
-import { ROOM_TIMINGS } from './room-timings.ts';
-import type { DocRoom } from './rooms.ts';
+import { ROOM_TIMINGS } from './doc-store-timings.ts';
+import type { DocRoom } from './doc-store.ts';
 import { isWithinRoot } from './safe-path.ts';
 import { boundFiles } from './slow-fs.ts';
 
@@ -223,7 +223,7 @@ const ACTIVATION_TAGS_REPORTED = 8;
  *
  * Only ever called when a binding goes idle -> active, which in a healthy
  * server is rare and in the case this exists to catch is exactly the thing
- * worth paying for. Frames inside `rooms.ts` AND this file are skipped —
+ * worth paying for. Frames inside `doc-store.ts` AND this file are skipped —
  * every touch passes through `get` / `getOrCreate` and then through
  * `FileBindings.touchDoc`, so the useful frame is the first one outside both.
  * Missing the second name would have made every activation read as
@@ -239,7 +239,7 @@ function activationTag(): string {
     const m = line.match(/[/\\]packages[/\\]([^\s)]+?):(\d+):\d+/);
     if (!m) continue;
     const where = m[1].replace(/\\/g, '/');
-    if (where.endsWith('/rooms.ts') || where.endsWith('/file-binding.ts')) continue;
+    if (where.endsWith('/doc-store.ts') || where.endsWith('/file-binding.ts')) continue;
     return `packages/${where}:${m[2]}`;
   }
   return 'external';
@@ -1876,7 +1876,7 @@ export class FileBindings {
 
   // ---------------------------------------------------------------------
   // What the room lifecycle asks the bindings. Each of these replaces a
-  // reach into the binding map from `rooms.ts`; the map itself never leaves
+  // reach into the binding map from `doc-store.ts`; the map itself never leaves
   // this file.
   // ---------------------------------------------------------------------
 

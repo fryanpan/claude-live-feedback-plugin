@@ -51,7 +51,7 @@ import {
   isBoardActivity,
 } from './ready-nudge.ts';
 import type { ReviewGateAddress } from './review-gate.ts';
-import type { Rooms } from './rooms.ts';
+import type { Rooms } from './doc-store.ts';
 import type { SseHub } from './sse.ts';
 import { StallEscalations } from './stall-escalation.ts';
 import {
@@ -926,7 +926,7 @@ export function createStallWiring(ctx: StallWiringContext): StallWiring {
     if (payload.event !== 'thread.created' && payload.event !== 'thread.replied') return rows;
     // thread.replied carries the comment on the payload; thread.created fires
     // with `comment: undefined` and the opening comment inside the thread
-    // (rooms.ts fireEvent call sites), so fall back to the newest one there.
+    // (doc-store.ts fireEvent call sites), so fall back to the newest one there.
     const comment =
       payload.comment ??
       (payload.event === 'thread.created'
@@ -991,7 +991,7 @@ export function createStallWiring(ctx: StallWiringContext): StallWiring {
     const reviewId = reviewIdOf(rooms.peekMeta(docId) ?? {});
     for (const board of hubBoardsForDoc(docId)) {
       const rows = queueCommentRows(board, docId, payload);
-      // rooms.ts already broadcast on the review's own channel; a second
+      // doc-store.ts already broadcast on the review's own channel; a second
       // send here would deliver the same comment twice to one listener. The
       // review frames carried no row id, so those rows are acked off the
       // grace-window redelivery instead — late receipt beats double frame.

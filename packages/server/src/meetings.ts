@@ -82,7 +82,7 @@ export interface MeetingRecord {
 }
 
 /**
- * The same sanitizer the clobber backups use (rooms.ts): a docId is
+ * The same sanitizer the clobber backups use (doc-store.ts): a docId is
  * caller-supplied and reaches a path here, so everything outside the
  * filename-safe set becomes an underscore before it can mean `..`.
  */

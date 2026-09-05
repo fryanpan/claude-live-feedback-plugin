@@ -10,7 +10,7 @@
  * a review's member docs as one unit.
  *
  * What is NOT here is the room lifecycle they act on. Hydration, teardown,
- * alias release and the persisted index stay in `rooms.ts`, reached through
+ * alias release and the persisted index stay in `doc-store.ts`, reached through
  * the interface below — so archiving can move a doc's files without this
  * file knowing what a room is made of.
  */
@@ -54,7 +54,7 @@ import {
   writeArchiveManifest,
   writeDocArchiveManifest,
 } from './review-archive.ts';
-import type { DocRoom, WorkspaceDirNode, WorkspaceFileNode, WorkspaceTree } from './rooms.ts';
+import type { DocRoom, WorkspaceDirNode, WorkspaceFileNode, WorkspaceTree } from './doc-store.ts';
 import { isWithinRoot } from './safe-path.ts';
 import { boundFiles } from './slow-fs.ts';
 

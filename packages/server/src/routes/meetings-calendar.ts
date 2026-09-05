@@ -36,7 +36,7 @@ import {
 } from '../recall-calendar.ts';
 
 import type { RecallMeetingRelay } from '../recall-meeting.ts';
-import type { Rooms } from '../rooms.ts';
+import type { Rooms } from '../doc-store.ts';
 import type { ServerOptions } from '../server-options.ts';
 import type { TaskStore } from '../tasks.ts';
 

@@ -396,7 +396,7 @@ describe('classifyActor', () => {
     // caller may also use it to declare the actor axis. When the two signals
     // disagree, the tie goes to 'agent' on purpose — an agent misfiled as a
     // person launders the audit log AND reopens threads it closes
-    // (rooms.ts reply-reopen rule), while the reverse only over-filters.
+    // (doc-store.ts reply-reopen rule), while the reverse only over-filters.
     expect(classifyActor({ id: 'agent-lighthouse', name: 'Lighthouse', kind: 'person' })).toBe(
       'agent',
     );

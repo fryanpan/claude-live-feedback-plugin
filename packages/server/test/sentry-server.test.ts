@@ -274,7 +274,7 @@ describe('scrubEventForPrivacy: a floor beneath withRouteSpan, proven with a neg
     // because a caller-chosen docId (a bound file's relative path, or a
     // `task:<id>` alias) reads as ordinary text — MINTED_ID_SHAPE only
     // matches OUR OWN minted-id shape. ReservedDocIdError is a real,
-    // currently-thrown error (rooms.ts) that puts the raw value straight
+    // currently-thrown error (doc-store.ts) that puts the raw value straight
     // into `.message`, with nothing catching it by name before it could
     // reach captureServerError. This is the one place a structured field
     // makes exact — not shape-guessed — redaction possible.
@@ -526,7 +526,7 @@ describe('server Sentry: configured — reaches Sentry end to end', () => {
   it('a real ReservedDocIdError caught and captured never ships its raw docId, end to end', async () => {
     // The concrete instance codex review found: a bound-file-shaped docId
     // that no shape-based scrub would ever catch, going through the real
-    // capture path a caller in rooms.ts actually hits. Built from
+    // capture path a caller in doc-store.ts actually hits. Built from
     // crypto.randomUUID() rather than a hardcoded literal, same reasoning
     // as elsewhere in this file: ContextLines attaches source snippets
     // around the throw site, and a literal sitting in the SOURCE a few

@@ -144,7 +144,7 @@ export function withRouteSpan<T>(req: Request, pathname: string, fn: () => Promi
  * `ReservedDocIdError` (doc-ids.ts) formats an arbitrary `docId` — which can
  * be a bound file's relative path or a `task:<id>` alias, exactly the
  * caller-chosen shapes that don't match MINTED_ID_SHAPE — directly into its
- * own `.message`, and it's thrown from a live code path (rooms.ts) with
+ * own `.message`, and it's thrown from a live code path (doc-store.ts) with
  * nothing catching it by name before it could reach captureServerError. This
  * doesn't need to guess at a shape: when an Error exposes one of these
  * fields, the exact value is known, so every occurrence of it in the

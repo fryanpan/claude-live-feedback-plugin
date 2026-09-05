@@ -38,7 +38,7 @@
  */
 import { type DocMeta, normalizeEmail, reviewIdOf } from '@feedback/core';
 import type { ShareTarget } from './middleware/host-guard.ts';
-import type { Rooms } from './rooms.ts';
+import type { Rooms } from './doc-store.ts';
 import { renderShareLinkUnavailable } from './share/share-link-page.ts';
 import type { ShareLinks } from './share/share-links.ts';
 import { type Shares, audienceEntryAdmits } from './share/shares.ts';

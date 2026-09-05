@@ -19,7 +19,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { runBackfill } from '../src/activity-backfill.ts';
 import { listArchivedReviews, readArchiveManifest } from '../src/review-archive.ts';
-import { Rooms } from '../src/rooms.ts';
+import { Rooms } from '../src/doc-store.ts';
 import { SseHub } from '../src/sse.ts';
 import { createWebhookDispatcher } from '../src/webhooks.ts';
 

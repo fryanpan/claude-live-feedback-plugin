@@ -18,7 +18,7 @@
  * before the fan-out — so every channel carrying that broadcast carries the
  * same string, and no two broadcasts anywhere ever share one.
  *
- * Its own module (rather than a pair of `let`s in rooms.ts) so a test can
+ * Its own module (rather than a pair of `let`s in doc-store.ts) so a test can
  * prove the process-scoped half: two subprocesses importing this must not
  * agree on `boot`, and nothing that boots a whole server can show that.
  */

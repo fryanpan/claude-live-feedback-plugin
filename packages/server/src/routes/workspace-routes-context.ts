@@ -3,7 +3,7 @@ import type { AgentWatches } from '../agent-watches.ts';
 import type { HomeBriefStore } from '../home-brief.ts';
 import type { ShareTarget } from '../middleware/host-guard.ts';
 import type { ReviewItemRow } from '../review-queue.ts';
-import type { Rooms } from '../rooms.ts';
+import type { Rooms } from '../doc-store.ts';
 import type { SseHub } from '../sse.ts';
 import type { TaskProjection } from '../task-projection.ts';
 import type { HubWorkspace, TaskStore } from '../tasks.ts';
