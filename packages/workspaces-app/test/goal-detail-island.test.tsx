@@ -1,13 +1,9 @@
 import { options } from 'preact';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { goalDetailData, mountGoalDetailIsland } from '../src/hub/goal-detail-island.tsx';
-import {
-  type BoardSection,
-  DEFAULT_DONE_WINDOW,
-  boardSections,
-} from '../src/hub/hub-board-model.ts';
-import type { TaskDiscussion } from '../src/hub/hub-detail-render.ts';
-import type { GoalDetailHandlers } from '../src/hub/hub-render.ts';
+import type { TaskDiscussion } from '../src/board/board-detail-render.ts';
+import { type BoardSection, DEFAULT_DONE_WINDOW, boardSections } from '../src/board/board-model.ts';
+import type { GoalDetailHandlers } from '../src/board/board-render.ts';
+import { goalDetailData, mountGoalDetailIsland } from '../src/board/goal-detail-island.tsx';
 import { IPAD, installSheets, setViewport, styleOf } from './css-harness.ts';
 
 /**
@@ -60,7 +56,7 @@ const EMPTY: TaskDiscussion = { loading: false, threads: [] };
 let live: (() => void) | null = null;
 function mount(): HTMLElement {
   const host = document.createElement('div');
-  host.className = 'hub-detail hidden';
+  host.className = 'board-detail hidden';
   document.body.replaceChildren(host);
   live = mountGoalDetailIsland(host);
   return host;
@@ -77,13 +73,13 @@ function repaint(
   goalDetailData.value = { section: { ...s }, discussion, handlers: handlers(extra) };
 }
 
-/** The page's own sheets, in the order the hub shell loads them, so any test
+/** The page's own sheets, in the order the board shell loads them, so any test
  *  here may read a computed value. Installing a stylesheet changes no text and
  *  no structure, so the behavioural cases either side are unaffected. */
 let sheets = () => {};
 beforeEach(() => {
   setViewport(IPAD);
-  sheets = installSheets('hub.css', 'styles.css');
+  sheets = installSheets('board.css', 'styles.css');
 });
 
 afterEach(() => {
@@ -107,7 +103,7 @@ describe('the goal detail island’s mount contract', () => {
 
     const wrapper = host.querySelector('[data-preact-island="goal-detail"]');
     expect(wrapper).not.toBeNull();
-    expect(wrapper?.querySelector('.hub-detail-panel')).not.toBeNull();
+    expect(wrapper?.querySelector('.board-detail-panel')).not.toBeNull();
     expect(host.firstChild).toBe(vanilla);
 
     unmount();
@@ -120,13 +116,13 @@ describe('the goal detail island’s mount contract', () => {
   });
 
   it('the wrapper is out of layout, so the panel stays a direct child of the backdrop', () => {
-    // `.hub-detail` centres its child with flex, and without `display:
+    // `.board-detail` centres its child with flex, and without `display:
     // contents` the WRAPPER — not the panel — becomes the flex item, so the
     // panel stretches to fill it and the panel's own width stops describing
     // anything on screen. Measured off the mounted island rather than read
-    // out of the stylesheet: the rule is `.hub-detail > [data-preact-island]`,
+    // out of the stylesheet: the rule is `.board-detail > [data-preact-island]`,
     // and only a real mount can show that the wrapper Preact creates is
-    // actually a direct child of a `.hub-detail` host. happy-dom lays nothing
+    // actually a direct child of a `.board-detail` host. happy-dom lays nothing
     // out, so what is asserted is the `display` the browser would use, not the
     // geometry that follows from it.
     const host = mount();
@@ -135,10 +131,10 @@ describe('the goal detail island’s mount contract', () => {
     expect(wrapper).not.toBeNull();
     expect(styleOf(wrapper).display).toBe('contents');
     // Positive control: the sheets really are attached and this host really is
-    // the `.hub-detail` backdrop — an unstyled element reads `''` for every
+    // the `.board-detail` backdrop — an unstyled element reads `''` for every
     // property, which would satisfy nothing above but everything below.
     expect(styleOf(host).position).toBe('fixed');
-    expect(styleOf(host.querySelector('.hub-detail-panel') as HTMLElement).display).not.toBe('');
+    expect(styleOf(host.querySelector('.board-detail-panel') as HTMLElement).display).not.toBe('');
   });
 
   it('closes on a backdrop tap, and stops listening once disposed', () => {
@@ -148,7 +144,7 @@ describe('the goal detail island’s mount contract', () => {
 
     // A click inside the panel bubbles through the same listener and must not
     // close the goal the reader is reading.
-    (host.querySelector('.hub-detail-panel') as HTMLElement).dispatchEvent(
+    (host.querySelector('.board-detail-panel') as HTMLElement).dispatchEvent(
       new Event('click', { bubbles: true }),
     );
     expect(onClose).not.toHaveBeenCalled();
@@ -165,11 +161,11 @@ describe('the goal detail island’s mount contract', () => {
     const host = mount();
     repaint(section(), EMPTY);
     expect(host.classList.contains('hidden')).toBe(false);
-    expect(document.body.classList.contains('hub-detail-open')).toBe(true);
+    expect(document.body.classList.contains('board-detail-open')).toBe(true);
 
     goalDetailData.value = { section: null, handlers: handlers() };
     expect(host.classList.contains('hidden')).toBe(true);
-    expect(host.querySelector('.hub-detail-panel')).toBeNull();
+    expect(host.querySelector('.board-detail-panel')).toBeNull();
     // Still MOUNTED: the wrapper is the island's for as long as the app runs,
     // and a closed panel is a render of nothing rather than an unmount.
     expect(host.querySelector('[data-preact-island="goal-detail"]')).not.toBeNull();
@@ -182,7 +178,7 @@ describe('the goal detail island’s mount contract', () => {
     const host = mount();
     const chores = section('chores', { title: 'Backlog' });
     goalDetailData.value = { section: { ...chores, isChores: true }, handlers: handlers() };
-    expect(host.querySelector('.hub-detail-panel')).toBeNull();
+    expect(host.querySelector('.board-detail-panel')).toBeNull();
     expect(host.classList.contains('hidden')).toBe(true);
   });
 });
@@ -192,34 +188,34 @@ describe('the goal detail island keeps its nodes across a repaint', () => {
     const host = mount();
     const s = section();
     repaint(s, EMPTY);
-    const panel = host.querySelector('.hub-detail-panel');
-    const title = host.querySelector('.hub-detail-title');
-    const slot = host.querySelector('.hub-detail-body-slot');
+    const panel = host.querySelector('.board-detail-panel');
+    const title = host.querySelector('.board-detail-title');
+    const slot = host.querySelector('.board-detail-body-slot');
     expect(panel).not.toBeNull();
     expect(slot).not.toBeNull();
 
     repaint(s, EMPTY);
-    expect(host.querySelector('.hub-detail-panel')).toBe(panel);
-    expect(host.querySelector('.hub-detail-title')).toBe(title);
+    expect(host.querySelector('.board-detail-panel')).toBe(panel);
+    expect(host.querySelector('.board-detail-title')).toBe(title);
     // The one node a repaint must NEVER rebuild: the live editor is a
     // ProseMirror view bound to a Yjs room, and even MOVING the node removes
     // it from the document first, which blurs it and drops the caret.
-    expect(host.querySelector('.hub-detail-body-slot')).toBe(slot);
+    expect(host.querySelector('.board-detail-body-slot')).toBe(slot);
   });
 
   it('rebuilds them when the reader moves to another goal', () => {
     const host = mount();
     repaint(section('g-pr'), EMPTY);
-    const slot = host.querySelector('.hub-detail-body-slot');
+    const slot = host.querySelector('.board-detail-body-slot');
     repaint(section('g-two', { title: '2. Ship it' }), EMPTY);
-    expect(host.querySelector('.hub-detail-body-slot')).not.toBe(slot);
+    expect(host.querySelector('.board-detail-body-slot')).not.toBe(slot);
   });
 
   it('keeps a half-typed rename through a repaint, with no snapshot to restore', () => {
     const host = mount();
     const s = section();
     repaint(s, EMPTY);
-    const title = host.querySelector<HTMLElement>('.hub-detail-title');
+    const title = host.querySelector<HTMLElement>('.board-detail-title');
     title?.click();
     const input = title?.querySelector('input');
     expect(input).not.toBeNull();
@@ -228,7 +224,7 @@ describe('the goal detail island keeps its nodes across a repaint', () => {
     repaint(s, EMPTY);
     // The SAME input, still carrying the words — not a rebuilt one that had to
     // be re-opened by a `title.click()` and refilled from a snapshot.
-    expect(host.querySelector('.hub-detail-title input')).toBe(input);
+    expect(host.querySelector('.board-detail-title input')).toBe(input);
     expect(input?.value).toBe('half typed');
   });
 
@@ -237,20 +233,20 @@ describe('the goal detail island keeps its nodes across a repaint', () => {
     const s = section();
     const onComment = vi.fn(async () => true);
     repaint(s, EMPTY, { onComment });
-    const box = host.querySelector<HTMLTextAreaElement>('.hub-comment-form textarea');
+    const box = host.querySelector<HTMLTextAreaElement>('.board-comment-form textarea');
     expect(box).not.toBeNull();
     if (box) box.value = 'half a thought';
 
     repaint(s, EMPTY, { onComment });
-    expect(host.querySelector('.hub-comment-form textarea')).toBe(box);
+    expect(host.querySelector('.board-comment-form textarea')).toBe(box);
     expect(box?.value).toBe('half a thought');
   });
 
   it('follows the projection when nothing is being typed', () => {
     const host = mount();
     repaint(section(), EMPTY);
-    expect(host.querySelector('.hub-detail-title')?.textContent).toBe('1. Get the PR out');
+    expect(host.querySelector('.board-detail-title')?.textContent).toBe('1. Get the PR out');
     repaint(section('g-pr', { title: 'Renamed by a peer' }), EMPTY);
-    expect(host.querySelector('.hub-detail-title')?.textContent).toBe('Renamed by a peer');
+    expect(host.querySelector('.board-detail-title')?.textContent).toBe('Renamed by a peer');
   });
 });

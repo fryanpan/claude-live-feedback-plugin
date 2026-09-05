@@ -21,21 +21,21 @@
  *
  *  3. Behaviour parity with the vanilla renderer: rows, bands, badges,
  *     pickers, the caret, inline renaming, drag and keyboard reordering. These
- *     are the renderBoard tests from hub-render.test.ts, re-aimed at the
+ *     are the renderBoard tests from board-render.test.ts, re-aimed at the
  *     island and otherwise unchanged.
  *
  * All fixtures are synthetic — invented names, jordan@partner.example register.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { boardData } from '../src/hub/board-island.tsx';
+import { boardData } from '../src/board/board-island.tsx';
 import {
   type BoardFilters,
+  type BoardGoal,
+  type BoardTask,
   CHORES_ID,
   DEFAULT_DONE_WINDOW,
-  type HubGoal,
-  type HubTask,
   boardSections,
-} from '../src/hub/hub-board-model.ts';
+} from '../src/board/board-model.ts';
 import { IPAD, installSheets, setViewport, styleOf } from './css-harness.ts';
 import { type ShimHandlers, disposeBoards, renderBoard } from './support/board.ts';
 import { renderTaskDetail } from './support/task-detail.ts';
@@ -43,7 +43,7 @@ import { renderTaskDetail } from './support/task-detail.ts';
 const NOW = 1_700_000_000_000;
 
 let seq = 0;
-function task(overrides: Partial<HubTask> = {}): HubTask {
+function task(overrides: Partial<BoardTask> = {}): BoardTask {
   seq += 1;
   return {
     id: `t-${seq}`,
@@ -62,7 +62,7 @@ function task(overrides: Partial<HubTask> = {}): HubTask {
   };
 }
 
-const GOALS: HubGoal[] = [
+const GOALS: BoardGoal[] = [
   { id: 'g-pr', title: '1. Get the PR out' },
   { id: 'g-sub', title: '1.1 Tickets' },
 ];
@@ -123,20 +123,20 @@ function withCaretApi(
 const tick = () => new Promise((r) => setTimeout(r, 0));
 
 let root: HTMLElement;
-/** The page's own sheets, in the order the hub shell loads them, so any case
+/** The page's own sheets, in the order the board shell loads them, so any case
  *  here may read a computed value. Installing a stylesheet changes no text and
  *  no structure, so every behavioural case in this file is unaffected. */
 let sheets = () => {};
 beforeEach(() => {
   root = document.createElement('div');
-  // The app's host is `<div id="hub-board" class="hub-board">` (hub-app.ts),
+  // The app's host is `<div id="board" class="board">` (board-app.ts),
   // and the island-wrapper rule below is scoped to that class. Carrying it
   // here is what lets that rule be read off the board the island renders,
   // rather than out of the stylesheet's text.
-  root.className = 'hub-board';
+  root.className = 'board';
   document.body.replaceChildren(root);
   setViewport(IPAD);
-  sheets = installSheets('hub.css', 'styles.css');
+  sheets = installSheets('board.css', 'styles.css');
   // A fold is a reading preference kept in localStorage, and it outlives a
   // test unless it is cleared — one collapsed band would silently hide the
   // rows every later case is asserting on.
@@ -154,7 +154,7 @@ afterEach(() => {
 /**
  * The grid tracks an element actually resolves to, as a list.
  *
- * Read off the rendered row rather than out of `hub.css`: a declaration that
+ * Read off the rendered row rather than out of `board.css`: a declaration that
  * survives in the file proves nothing about the row, which may carry a class
  * a later rule re-tracks, or sit inside a media query that does not match at
  * the width being read. `minmax(0, 1fr)` holds a space after its comma, so
@@ -183,9 +183,9 @@ async function repaint(patch: Partial<typeof boardData.value>): Promise<void> {
 // the remount case below is the durable one, kept in the file so a future
 // reader can still see the assertion discriminate without the deleted code.
 
-const boardOf = (tasks: HubTask[], goals: HubGoal[] = GOALS) =>
+const boardOf = (tasks: BoardTask[], goals: BoardGoal[] = GOALS) =>
   boardSections(goals, tasks, filters);
-const rows = () => [...root.querySelectorAll<HTMLElement>('.hub-task-row')];
+const rows = () => [...root.querySelectorAll<HTMLElement>('.board-task-row')];
 const rowFor = (id: string) => root.querySelector<HTMLElement>(`[data-task-id="${id}"]`);
 
 describe('the board island contract', () => {
@@ -199,7 +199,7 @@ describe('the board island contract', () => {
     // A peer moves Beta to in-progress — the commonest update this board sees.
     await repaint({ sections: boardOf([alpha, { ...beta, status: 'in-progress' }]) });
 
-    expect(rowFor('k-b')?.classList.contains('hub-status-in-progress')).toBe(true);
+    expect(rowFor('k-b')?.classList.contains('board-status-in-progress')).toBe(true);
     // The property the migration exists for: the same object, not a recreated
     // equal. Under the renderer this replaces, this line failed.
     expect(rowFor('k-a')).toBe(alphaRow);
@@ -223,9 +223,9 @@ describe('the board island contract', () => {
   it('keeps the band’s node when only a row inside it changes', async () => {
     const alpha = task({ id: 'k-a', goal: 'g-pr', order: 1 });
     renderBoard(root, boardOf([alpha]), handlers());
-    const band = root.querySelector('.hub-section[data-goal-id="g-pr"] .hub-band');
+    const band = root.querySelector('.board-section[data-goal-id="g-pr"] .board-band');
     await repaint({ sections: boardOf([{ ...alpha, title: 'Renamed by a peer' }]) });
-    expect(root.querySelector('.hub-section[data-goal-id="g-pr"] .hub-band')).toBe(band);
+    expect(root.querySelector('.board-section[data-goal-id="g-pr"] .board-band')).toBe(band);
   });
 
   it('a row that really leaves the board is gone — the key is not glue', async () => {
@@ -253,7 +253,7 @@ describe('the board island contract', () => {
   });
 
   it('keyboard reordering keeps working past the first press', async () => {
-    // The failure the deleted focus workaround in hub-app existed for: the
+    // The failure the deleted focus workaround in board-app existed for: the
     // move repaints the board, and if the focused row does not survive it the
     // SECOND Alt+Arrow has nothing to act on — the shortcut worked exactly
     // once and then silently stopped.
@@ -292,14 +292,14 @@ describe('the board island contract', () => {
     const alpha = task({ id: 'k-a', title: 'Old title', goal: 'g-pr', order: 1 });
     const beta = task({ id: 'k-b', title: 'Beta', goal: 'g-pr', order: 2 });
     renderBoard(root, boardOf([alpha, beta]), handlers());
-    const words = rowFor('k-a')?.querySelector('.hub-task-title-text') as HTMLElement;
+    const words = rowFor('k-a')?.querySelector('.board-task-title-text') as HTMLElement;
     words.click();
     expect(words.hasAttribute('contenteditable')).toBe(true);
     words.textContent = 'Half typed';
 
     await repaint({ sections: boardOf([alpha, { ...beta, status: 'done' }]) });
 
-    const after = rowFor('k-a')?.querySelector('.hub-task-title-text') as HTMLElement;
+    const after = rowFor('k-a')?.querySelector('.board-task-title-text') as HTMLElement;
     expect(after).toBe(words);
     expect(after.hasAttribute('contenteditable')).toBe(true);
     // The repaint carries the task's own title, and it must NOT be written
@@ -312,7 +312,7 @@ describe('the board island contract', () => {
     // island's to write, so a peer's rename still lands.
     const alpha = task({ id: 'k-a', title: 'Old title', goal: 'g-pr', order: 1 });
     renderBoard(root, boardOf([alpha]), handlers());
-    const words = rowFor('k-a')?.querySelector('.hub-task-title-text') as HTMLElement;
+    const words = rowFor('k-a')?.querySelector('.board-task-title-text') as HTMLElement;
     await repaint({ sections: boardOf([{ ...alpha, title: 'A peer renamed it' }]) });
     expect(words.textContent).toBe('A peer renamed it');
   });
@@ -325,31 +325,33 @@ describe('the board island contract', () => {
     // The reader saw a button that had to be pressed twice.
     const alpha = task({ id: 'k-a', goal: 'g-pr', order: 1 });
     renderBoard(root, boardOf([alpha]), handlers());
-    const openBox = root.querySelector('.hub-goal-add-btn') as HTMLElement;
+    const openBox = root.querySelector('.board-goal-add-btn') as HTMLElement;
     openBox.click();
     await tick();
-    const box = root.querySelector('.hub-goal-add-input') as HTMLInputElement;
+    const box = root.querySelector('.board-goal-add-input') as HTMLInputElement;
     expect(box.classList.contains('hidden')).toBe(false);
     box.value = 'Half a goal';
 
     await repaint({ sections: boardOf([{ ...alpha, status: 'in-progress' }]) });
 
-    const after = root.querySelector('.hub-goal-add-input') as HTMLInputElement;
+    const after = root.querySelector('.board-goal-add-input') as HTMLInputElement;
     expect(after).toBe(box);
     expect(after.classList.contains('hidden')).toBe(false);
     expect(after.value).toBe('Half a goal');
     // …and the button behind it is still out of the way, so the reader is not
     // looking at both halves at once.
     expect(
-      (root.querySelector('.hub-goal-add-btn') as HTMLElement).classList.contains('hidden'),
+      (root.querySelector('.board-goal-add-btn') as HTMLElement).classList.contains('hidden'),
     ).toBe(true);
   });
 
   it('a fold the reader set survives a repaint without a round trip through storage', async () => {
     const alpha = task({ id: 'k-a', goal: 'g-pr', order: 1 });
     renderBoard(root, boardOf([alpha]), handlers());
-    const band = root.querySelector('.hub-section[data-goal-id="g-pr"] .hub-band') as HTMLElement;
-    (band.querySelector('.hub-twisty') as HTMLElement).click();
+    const band = root.querySelector(
+      '.board-section[data-goal-id="g-pr"] .board-band',
+    ) as HTMLElement;
+    (band.querySelector('.board-twisty') as HTMLElement).click();
     await tick();
     expect(band.classList.contains('is-collapsed')).toBe(true);
     await repaint({ sections: boardOf([{ ...alpha, status: 'done' }]) });
@@ -358,14 +360,14 @@ describe('the board island contract', () => {
 
   it('draws no rows while the restore list has the board’s place', async () => {
     // The restore list is a view OF the board and takes its place. Leaving the
-    // rows behind it would not merely be waste: `hub-shortcuts` resolves
-    // j/k/o/s/e against every `.hub-task-row` on the page, so a hidden row set
+    // rows behind it would not merely be waste: `board-shortcuts` resolves
+    // j/k/o/s/e against every `.board-task-row` on the page, so a hidden row set
     // lets those keys act on rows the reader is not looking at.
     renderBoard(root, boardOf([task({ id: 'k-a', goal: 'g-pr', order: 1 })]), handlers());
     expect(rows()).toHaveLength(1); // control
     await repaint({ showArchived: true });
     expect(rows()).toHaveLength(0);
-    expect(root.querySelectorAll('.hub-section')).toHaveLength(0);
+    expect(root.querySelectorAll('.board-section')).toHaveLength(0);
     // …and back, because the swap is not one-way.
     await repaint({ showArchived: false });
     expect(rows()).toHaveLength(1);
@@ -381,7 +383,7 @@ describe('the board island contract', () => {
     renderBoard(host, boardOf([task({ id: 'k-a', goal: 'g-pr', order: 1 })]), handlers());
     const wrapper = host.querySelector('[data-preact-island="board"]');
     expect(wrapper).not.toBeNull();
-    expect(wrapper?.querySelector('.hub-task-row')).not.toBeNull();
+    expect(wrapper?.querySelector('.board-task-row')).not.toBeNull();
     expect(host.firstChild).toBe(vanillaChild);
 
     disposeBoards();
@@ -394,13 +396,13 @@ describe('the board island contract', () => {
 
   it('the wrapper is out of layout, so sections stay direct children of the board', () => {
     // Without `display: contents` the wrapper becomes a block between
-    // `.hub-board` and its sections, which breaks the column's own spacing
-    // and — worse — changes what `.closest('.hub-section')` walks past during
+    // `.board` and its sections, which breaks the column's own spacing
+    // and — worse — changes what `.closest('.board-section')` walks past during
     // a drag.
     //
     // Measured off the mounted island rather than read out of the stylesheet:
-    // the rule is `.hub-board > [data-preact-island]`, so it holds only if the
-    // wrapper Preact creates is a DIRECT child of a `.hub-board` host, which
+    // the rule is `.board > [data-preact-island]`, so it holds only if the
+    // wrapper Preact creates is a DIRECT child of a `.board` host, which
     // is the half a text read cannot see. happy-dom lays nothing out, so this
     // is the `display` the browser would use, not the column it produces.
     renderBoard(root, boardOf([task({ id: 'k-css', goal: 'g-pr', order: 1 })]), handlers());
@@ -410,7 +412,7 @@ describe('the board island contract', () => {
     // Positive control: the sheets are attached and the cascade reaches the
     // rendered tree. An unstyled element reads `''` for every property, which
     // would make "the wrapper is not a box" true of nothing at all.
-    expect(styleOf(root.querySelector('.hub-task-row') as HTMLElement).display).toBe('grid');
+    expect(styleOf(root.querySelector('.board-task-row') as HTMLElement).display).toBe('grid');
   });
 });
 
@@ -424,18 +426,18 @@ describe('renderBoard', () => {
     });
     const open = task({ goal: 'g-pr', order: 2 });
     renderBoard(root, boardSections(GOALS, [done, open], filters), handlers());
-    const sections = Array.from(root.querySelectorAll('.hub-section'));
+    const sections = Array.from(root.querySelectorAll('.board-section'));
     expect(sections.map((s) => (s as HTMLElement).dataset.goalId)).toEqual([
       'g-pr',
       'g-sub',
       CHORES_ID,
     ]);
     // Done is a status, not a group: the done row keeps its priority slot…
-    const rows = Array.from(sections[0]?.querySelectorAll('.hub-task-row') ?? []);
+    const rows = Array.from(sections[0]?.querySelectorAll('.board-task-row') ?? []);
     expect(rows.map((r) => (r as HTMLElement).dataset.taskId)).toEqual([done.id, open.id]);
     // …and is drawn in the done style.
-    expect((rows[0] as HTMLElement).classList.contains('hub-done')).toBe(true);
-    expect((rows[1] as HTMLElement).classList.contains('hub-done')).toBe(false);
+    expect((rows[0] as HTMLElement).classList.contains('board-done')).toBe(true);
+    expect((rows[1] as HTMLElement).classList.contains('board-done')).toBe(false);
   });
 
   // Every status is one gesture away — the point of replacing the cycle. A
@@ -445,7 +447,7 @@ describe('renderBoard', () => {
     const h = handlers();
     const t = task({ goal: 'g-pr', status: 'done' });
     renderBoard(root, boardSections(GOALS, [t], { ...filters, doneWindow: 'all' }), h);
-    const select = root.querySelector('.hub-status-select') as HTMLSelectElement;
+    const select = root.querySelector('.board-status-select') as HTMLSelectElement;
     expect([...select.options].map((o) => o.value).sort()).toEqual([
       'done',
       'in-progress',
@@ -470,16 +472,16 @@ describe('renderBoard', () => {
     const h = handlers();
     const discussed = task({ goal: 'g-pr', commentCount: 3, dueAt: NOW + 86_400_000 });
     renderBoard(root, boardSections(GOALS, [discussed], filters), h);
-    const row = root.querySelector(`.hub-task-row[data-task-id="${discussed.id}"]`);
+    const row = root.querySelector(`.board-task-row[data-task-id="${discussed.id}"]`);
     expect(row).not.toBeNull();
     // Control: the strip is alive and this row's other badge is in it. (It
     // used to be the `decision` badge, then `after`; both are gone — see
     // below. `due` is what is left that a row can still carry.)
-    expect(row?.querySelector('.hub-badge-due')).not.toBeNull();
-    expect(row?.querySelector('.hub-badge-comments')).toBeNull();
+    expect(row?.querySelector('.board-badge-due')).not.toBeNull();
+    expect(row?.querySelector('.board-badge-comments')).toBeNull();
     // …and no badge anywhere on the row spells the count either, which is what
     // a differently-classed replacement glyph would do.
-    expect(row?.querySelector('.hub-task-badges')?.textContent ?? '').not.toContain('3');
+    expect(row?.querySelector('.board-task-badges')?.textContent ?? '').not.toContain('3');
   });
 
   // The parked badge lived here until 2026-08-27. Parking is a move to
@@ -498,13 +500,13 @@ describe('renderBoard', () => {
     const h = handlers();
     const blocked = task({ goal: 'g-pr', after: ['t-a', 't-b'], dueAt: NOW + 86_400_000 });
     renderBoard(root, boardSections(GOALS, [blocked], filters), h);
-    const row = root.querySelector(`.hub-task-row[data-task-id="${blocked.id}"]`);
+    const row = root.querySelector(`.board-task-row[data-task-id="${blocked.id}"]`);
     expect(row).not.toBeNull();
-    expect(row?.querySelector('.hub-badge-due')).not.toBeNull(); // control: strip renders
-    expect(row?.querySelector('.hub-badge-after')).toBeNull();
+    expect(row?.querySelector('.board-badge-due')).not.toBeNull(); // control: strip renders
+    expect(row?.querySelector('.board-badge-after')).toBeNull();
     // No differently-classed replacement spells the count or the blockers
     // either — that is what a quieter substitute would do.
-    const badgeText = row?.querySelector('.hub-task-badges')?.textContent ?? '';
+    const badgeText = row?.querySelector('.board-task-badges')?.textContent ?? '';
     expect(badgeText).not.toContain('after');
     expect(badgeText).not.toContain('2');
     expect(row?.textContent ?? '').not.toContain('t-a');
@@ -520,12 +522,12 @@ describe('renderBoard', () => {
     const decide = task({ goal: 'g-pr', needs: 'decision', dueAt: NOW + 86_400_000 });
     const act = task({ goal: 'g-pr', needs: 'action' });
     renderBoard(root, boardSections(GOALS, [decide, act], filters), h);
-    const row = root.querySelector(`.hub-task-row[data-task-id="${decide.id}"]`);
-    expect(row?.querySelector('.hub-badge-due')).not.toBeNull();
-    expect(root.querySelector('.hub-badge-decision')).toBeNull();
-    expect(root.querySelector('.hub-badge-action')).toBeNull();
+    const row = root.querySelector(`.board-task-row[data-task-id="${decide.id}"]`);
+    expect(row?.querySelector('.board-badge-due')).not.toBeNull();
+    expect(root.querySelector('.board-badge-decision')).toBeNull();
+    expect(root.querySelector('.board-badge-action')).toBeNull();
     // And no differently-classed replacement spells the words either.
-    const badgeText = [...root.querySelectorAll('.hub-task-badges')]
+    const badgeText = [...root.querySelectorAll('.board-task-badges')]
       .map((b) => b.textContent ?? '')
       .join(' ');
     expect(badgeText).not.toContain('decision');
@@ -541,11 +543,11 @@ describe('renderBoard', () => {
     const gate = task({ goal: 'g-pr', assignee: 'human', dueAt: NOW + 86_400_000 });
     const waiting = task({ goal: 'g-pr', after: [gate.id] });
     renderBoard(root, boardSections(GOALS, [gate, waiting], filters), h);
-    const row = root.querySelector(`.hub-task-row[data-task-id="${gate.id}"]`);
+    const row = root.querySelector(`.board-task-row[data-task-id="${gate.id}"]`);
     expect(row).not.toBeNull();
-    expect(row?.querySelector('.hub-badge-due')).not.toBeNull(); // control: badges render
-    expect(row?.querySelector('.hub-badge-blocked')).toBeNull();
-    expect(row?.querySelector('.hub-task-badges')?.textContent ?? '').not.toMatch(/blocked/i);
+    expect(row?.querySelector('.board-badge-due')).not.toBeNull(); // control: badges render
+    expect(row?.querySelector('.board-badge-blocked')).toBeNull();
+    expect(row?.querySelector('.board-task-badges')?.textContent ?? '').not.toMatch(/blocked/i);
   });
 
   // Every band is a section of its own, in list order, and none of them is
@@ -560,21 +562,23 @@ describe('renderBoard', () => {
     renderBoard(root, sections, h);
     // Positive control: the section it would have been on is really there,
     // in board order, with its task in it.
-    const rendered = [...root.querySelectorAll('.hub-section')].map(
+    const rendered = [...root.querySelectorAll('.board-section')].map(
       (s) => (s as HTMLElement).dataset.goalId,
     );
     expect(rendered).toEqual(sections.map((s) => s.id));
-    expect(root.querySelector('.hub-section[data-goal-id="g-sub"] .hub-task-row')).not.toBeNull();
+    expect(
+      root.querySelector('.board-section[data-goal-id="g-sub"] .board-task-row'),
+    ).not.toBeNull();
   });
 
   it('offers a goal-add row that reports the title and the band to follow', () => {
     const h = handlers();
     const sections = boardSections(GOALS, [], filters);
     renderBoard(root, sections, h);
-    const btn = root.querySelector('.hub-goal-add-btn') as HTMLButtonElement;
+    const btn = root.querySelector('.board-goal-add-btn') as HTMLButtonElement;
     expect(btn).not.toBeNull();
     btn.click();
-    const input = root.querySelector('.hub-goal-add-input') as HTMLInputElement;
+    const input = root.querySelector('.board-goal-add-input') as HTMLInputElement;
     input.value = '  3. Cut support load  ';
     input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
     // Trimmed, and placed after the last REAL band — never after Backlog,
@@ -591,8 +595,8 @@ describe('renderBoard', () => {
   it('files nothing for an empty goal title, or for Escape over a typed one', () => {
     const h = handlers();
     renderBoard(root, boardSections(GOALS, [], filters), h);
-    (root.querySelector('.hub-goal-add-btn') as HTMLButtonElement).click();
-    const input = root.querySelector('.hub-goal-add-input') as HTMLInputElement;
+    (root.querySelector('.board-goal-add-btn') as HTMLButtonElement).click();
+    const input = root.querySelector('.board-goal-add-input') as HTMLInputElement;
     input.value = '   ';
     input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
     input.value = 'a real title';
@@ -600,7 +604,7 @@ describe('renderBoard', () => {
     expect(h.onGoalAdd).not.toHaveBeenCalled();
     // Positive control in the same pass: the same box CAN file, so the two
     // absences above are refusals rather than a dead affordance.
-    (root.querySelector('.hub-goal-add-btn') as HTMLButtonElement).click();
+    (root.querySelector('.board-goal-add-btn') as HTMLButtonElement).click();
     input.value = 'a real title';
     input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
     expect(h.onGoalAdd).toHaveBeenCalledWith('a real title', expect.any(String));
@@ -610,15 +614,15 @@ describe('renderBoard', () => {
     const h = handlers();
     const { onGoalAdd: _drop, ...noAdd } = h;
     renderBoard(root, boardSections(GOALS, [], filters), noAdd as ShimHandlers);
-    expect(root.querySelector('.hub-goal-add')).toBeNull();
+    expect(root.querySelector('.board-goal-add')).toBeNull();
     // Control: the board rendered.
-    expect(root.querySelector('.hub-section')).not.toBeNull();
+    expect(root.querySelector('.board-section')).not.toBeNull();
   });
 
   it('a change event that re-picks the current status writes nothing', () => {
     const h = handlers();
     renderBoard(root, boardSections(GOALS, [task({ goal: 'g-pr' })], filters), h);
-    const select = root.querySelector('.hub-status-select') as HTMLSelectElement;
+    const select = root.querySelector('.board-status-select') as HTMLSelectElement;
     select.dispatchEvent(new Event('change', { bubbles: true }));
     expect(h.onStatusSet).not.toHaveBeenCalled();
   });
@@ -629,7 +633,7 @@ describe('renderBoard', () => {
   it('the status dropdown still names its status for assistive tech', () => {
     const h = handlers();
     renderBoard(root, boardSections(GOALS, [task({ goal: 'g-pr' })], filters), h);
-    const mark = root.querySelector('.hub-status-select') as HTMLElement;
+    const mark = root.querySelector('.board-status-select') as HTMLElement;
     expect(mark.getAttribute('aria-label') ?? '').toContain('To do');
     expect(mark.title).toContain('To do');
   });
@@ -642,11 +646,11 @@ describe('renderBoard', () => {
       title: 'B16: drop the 10s age bound; suppress the installer auto-launch on cold start',
     });
     renderBoard(root, boardSections(GOALS, [long], filters), h);
-    const title = root.querySelector('.hub-task-title') as HTMLElement;
+    const title = root.querySelector('.board-task-title') as HTMLElement;
     // Not `white-space: normal` — that (plus flex-wrap) is what wrapped a
     // long title under its own status control and misaligned the column.
-    expect(title.className).toContain('hub-task-title');
-    const row = root.querySelector('.hub-task-row') as HTMLElement;
+    expect(title.className).toContain('board-task-title');
+    const row = root.querySelector('.board-task-row') as HTMLElement;
     // Order is the contract the grid tracks are written against — and it is
     // the row anatomy itself: handle, status, title, badges, open caret,
     // assignee. The caret's place in this list is a REQUIREMENT, not an
@@ -656,12 +660,12 @@ describe('renderBoard', () => {
     // grid tracks, since auto-placement fills them consecutively and a
     // mismatch would slide the title into a fixed track.
     expect([...row.children].map((c) => (c as HTMLElement).className.split(' ')[0])).toEqual([
-      'hub-drag-handle',
-      'hub-status-ctl',
-      'hub-task-title',
-      'hub-task-badges',
-      'hub-task-open',
-      'hub-owner-ctl',
+      'board-drag-handle',
+      'board-status-ctl',
+      'board-task-title',
+      'board-task-badges',
+      'board-task-open',
+      'board-owner-ctl',
     ]);
   });
 
@@ -678,13 +682,13 @@ describe('renderBoard', () => {
       boardSections(GOALS, [task({ goal: 'g-pr', status: 'in-progress' })], filters),
       h,
     );
-    const ctl = root.querySelector('.hub-status-ctl') as HTMLElement;
-    const mark = ctl.querySelector('.hub-status-mark') as HTMLElement;
-    expect(mark.className).toContain('hub-status-mark-in-progress');
+    const ctl = root.querySelector('.board-status-ctl') as HTMLElement;
+    const mark = ctl.querySelector('.board-status-mark') as HTMLElement;
+    expect(mark.className).toContain('board-status-mark-in-progress');
     // The mark carries no label text — the status is shape and colour.
     expect(mark.textContent?.trim()).toBe('');
     // …and the picker underneath is untouched: same class, same options.
-    const select = ctl.querySelector('.hub-status-select') as HTMLSelectElement;
+    const select = ctl.querySelector('.board-status-select') as HTMLSelectElement;
     expect(select.value).toBe('in-progress');
     select.value = 'done';
     select.dispatchEvent(new Event('change', { bubbles: true }));
@@ -710,9 +714,9 @@ describe('renderBoard', () => {
       renderBoard(root, boardSections(GOALS, [task({ goal: 'g-pr', assignee })], filters), h);
       // Scoped to the task row: the goal band above it draws its own owner
       // slot with the same avatar class.
-      const avatar = root.querySelector('.hub-task-row .hub-owner-avatar') as HTMLElement;
+      const avatar = root.querySelector('.board-task-row .board-owner-avatar') as HTMLElement;
       expect(avatar.textContent).toBe(expected);
-      const picker = root.querySelector('.hub-row-assignee') as HTMLSelectElement;
+      const picker = root.querySelector('.board-row-assignee') as HTMLSelectElement;
       expect(picker.title).toContain(reads);
       // The VALUE is untouched: what gets posted is still the id.
       expect(picker.value).toBe(assignee);
@@ -727,7 +731,7 @@ describe('renderBoard', () => {
       boardSections(GOALS, [task({ goal: 'g-pr', assignee: 'team-lead-fleet' })], filters),
       handlers({ knownAgentIds: ['team-lead-fleet'] }),
     );
-    const picker = root.querySelector('.hub-row-assignee') as HTMLSelectElement;
+    const picker = root.querySelector('.board-row-assignee') as HTMLSelectElement;
     const labels = [...picker.options].map((o) => o.textContent);
     expect(labels).toContain('A person');
     expect(labels).not.toContain('human');
@@ -746,9 +750,9 @@ describe('renderBoard', () => {
       boardSections(GOALS, [task({ goal: 'g-pr', assignee: 'agent' })], filters),
       h,
     );
-    const avatar = root.querySelector('.hub-task-row .hub-owner-avatar') as HTMLElement;
+    const avatar = root.querySelector('.board-task-row .board-owner-avatar') as HTMLElement;
     expect(avatar.textContent).toBe('?');
-    expect(avatar.className).toContain('hub-owner-none');
+    expect(avatar.className).toContain('board-owner-none');
   });
 
   // The regression this pins, and the reason the risk dot could not simply be
@@ -756,7 +760,7 @@ describe('renderBoard', () => {
   // grid auto-placement fills them CONSECUTIVELY, so a row emitting fewer
   // children than there are tracks slides every later cell one track LEFT.
   // That is how the title once landed in the risk dot's track — collapsed to
-  // `0` by a `:not(:has(.hub-risk))` rule — and rendered at zero width on
+  // `0` by a `:not(:has(.board-risk))` rule — and rendered at zero width on
   // every row without a tier, which was most rows.
   //
   // happy-dom runs no layout engine, so "the title is 0px wide" is not
@@ -793,14 +797,14 @@ describe('renderBoard', () => {
       ),
       h,
     );
-    const rows = [...root.querySelectorAll('.hub-task-row')] as HTMLElement[];
+    const rows = [...root.querySelectorAll('.board-task-row')] as HTMLElement[];
     expect(rows).toHaveLength(3);
     const shape = (r: HTMLElement) =>
       [...r.children].map((c) => (c as HTMLElement).className.split(' ')[0]);
     // Positive control FIRST: these really are different rows, so the shapes
     // agreeing below is not three empty rows agreeing about nothing.
-    expect(rows[2].querySelectorAll('.hub-badge').length).toBeGreaterThan(0);
-    expect(rows[0].querySelectorAll('.hub-badge')).toHaveLength(0);
+    expect(rows[2].querySelectorAll('.board-badge').length).toBeGreaterThan(0);
+    expect(rows[0].querySelectorAll('.board-badge')).toHaveLength(0);
 
     expect(shape(rows[1])).toEqual(shape(rows[0]));
     expect(shape(rows[2])).toEqual(shape(rows[0]));
@@ -814,7 +818,7 @@ describe('renderBoard', () => {
     expect(tracks.length).toBeGreaterThan(1); // control: the split found tracks
 
     expect(shape(rows[0])).toHaveLength(tracks.length);
-    const titleIndex = shape(rows[0]).indexOf('hub-task-title');
+    const titleIndex = shape(rows[0]).indexOf('board-task-title');
     expect(titleIndex).toBeGreaterThan(-1);
     expect(tracks[titleIndex]).toContain('1fr');
     // …and it is the ONLY flexible track, so "the title ellipsizes, everything
@@ -833,9 +837,9 @@ describe('renderBoard', () => {
     const h = handlers();
     const t = task({ goal: 'g-pr' });
     renderBoard(root, boardSections(GOALS, [t], filters), h);
-    expect(root.querySelectorAll('.hub-task-row')).toHaveLength(1); // control
-    expect(root.querySelector('.hub-risk')).toBeNull();
-    expect(root.querySelector('.hub-risk-slot')).toBeNull();
+    expect(root.querySelectorAll('.board-task-row')).toHaveLength(1); // control
+    expect(root.querySelector('.board-risk')).toBeNull();
+    expect(root.querySelector('.board-risk-slot')).toBeNull();
 
     const panel = document.createElement('div');
     renderTaskDetail(panel, t, {
@@ -846,7 +850,7 @@ describe('renderBoard', () => {
       onAssign: vi.fn(),
     });
     // Control: the panel really did render its key-fields row.
-    expect(panel.querySelectorAll('.hub-detail-fields dt').length).toBeGreaterThan(0);
+    expect(panel.querySelectorAll('.board-detail-fields dt').length).toBeGreaterThan(0);
     expect(panel.textContent).not.toContain('Risk');
   });
 
@@ -857,7 +861,7 @@ describe('renderBoard', () => {
     const h = handlers();
     const t = task({ goal: 'g-pr' });
     renderBoard(root, boardSections(GOALS, [t], filters), h);
-    (root.querySelector('.hub-task-row') as HTMLElement).click();
+    (root.querySelector('.board-task-row') as HTMLElement).click();
     expect(h.onOpenTask).toHaveBeenCalledWith(expect.objectContaining({ id: t.id }));
   });
 
@@ -868,7 +872,7 @@ describe('renderBoard', () => {
     const h = handlers();
     renderBoard(root, boardSections(GOALS, [], filters), h);
     const goalTitle = root.querySelector(
-      '.hub-section[data-goal-id="g-pr"] .hub-goal-title-text',
+      '.board-section[data-goal-id="g-pr"] .board-goal-title-text',
     ) as HTMLElement;
     goalTitle.click();
     expect(goalTitle.hasAttribute('contenteditable')).toBe(true);
@@ -876,7 +880,7 @@ describe('renderBoard', () => {
     goalTitle.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
     expect(h.onGoalTitleCommit).toHaveBeenCalledWith('g-pr', '1. Ship the PR');
     const choresTitle = root.querySelector(
-      `.hub-section[data-goal-id="${CHORES_ID}"] .hub-goal-title-text`,
+      `.board-section[data-goal-id="${CHORES_ID}"] .board-goal-title-text`,
     ) as HTMLElement;
     choresTitle.click();
     expect(choresTitle.hasAttribute('contenteditable')).toBe(false);
@@ -890,11 +894,11 @@ describe('renderBoard', () => {
 // of that chrome.
 describe('the goal band row', () => {
   const DAY = 86_400_000;
-  const goalsWith = (over: Partial<HubGoal> = {}): HubGoal[] => [
+  const goalsWith = (over: Partial<BoardGoal> = {}): BoardGoal[] => [
     { id: 'g-pr', title: '1. Get the PR out', ...over },
   ];
   const goalRow = () =>
-    root.querySelector('.hub-section[data-goal-id="g-pr"] .hub-goal-row') as HTMLElement;
+    root.querySelector('.board-section[data-goal-id="g-pr"] .board-goal-row') as HTMLElement;
 
   it('renders the header as a row — title, plain due text, owner slot, and none of the struck chrome', () => {
     const h = handlers();
@@ -905,31 +909,31 @@ describe('the goal band row', () => {
     );
     const row = goalRow();
     expect(row).not.toBeNull();
-    expect(row.querySelector('.hub-goal-title-text')?.textContent).toBe('1. Get the PR out');
+    expect(row.querySelector('.board-goal-title-text')?.textContent).toBe('1. Get the PR out');
     // Decision 6: the due date is plain muted text right of the title — not a
     // chip — and only an OVERDUE open band goes red, which this one is not.
-    const due = row.querySelector('.hub-due') as HTMLElement;
+    const due = row.querySelector('.board-due') as HTMLElement;
     expect(due).not.toBeNull();
     expect(due.textContent).toContain('due');
-    expect(due.className).not.toContain('hub-badge');
-    expect(due.className).not.toContain('hub-due-overdue');
+    expect(due.className).not.toContain('board-badge');
+    expect(due.className).not.toContain('board-due-overdue');
     // Decisions 1, 2, 6: no counts, no drag handle, no status circle, no chips.
-    expect(row.querySelector('.hub-drag-handle')).toBeNull();
-    expect(row.querySelector('.hub-status-ctl')).toBeNull();
-    expect(row.querySelector('.hub-status-mark')).toBeNull();
-    expect(row.querySelector('.hub-badge')).toBeNull();
-    expect(row.querySelector('.hub-goal-counts')).toBeNull();
+    expect(row.querySelector('.board-drag-handle')).toBeNull();
+    expect(row.querySelector('.board-status-ctl')).toBeNull();
+    expect(row.querySelector('.board-status-mark')).toBeNull();
+    expect(row.querySelector('.board-badge')).toBeNull();
+    expect(row.querySelector('.board-goal-counts')).toBeNull();
     expect(row.textContent ?? '').not.toMatch(/\d+ (open|doing|done)/);
     // Positive control: the task row inside the same band still carries its
     // chrome, so the absences above are the goal row's own.
-    const trow = root.querySelector('.hub-task-row') as HTMLElement;
-    expect(trow.querySelector('.hub-drag-handle')).not.toBeNull();
-    expect(trow.querySelector('.hub-status-ctl')).not.toBeNull();
+    const trow = root.querySelector('.board-task-row') as HTMLElement;
+    expect(trow.querySelector('.board-drag-handle')).not.toBeNull();
+    expect(trow.querySelector('.board-status-ctl')).not.toBeNull();
     // Decision 8's slot: the owner cell is always there (it is what keeps the
     // avatar column aligned with the task rows'), drawn as a vacancy while
     // nothing owns the goal.
-    expect(row.querySelector('.hub-owner-ctl .hub-owner-avatar')?.className).toContain(
-      'hub-owner-none',
+    expect(row.querySelector('.board-owner-ctl .board-owner-avatar')?.className).toContain(
+      'board-owner-none',
     );
   });
 
@@ -943,18 +947,18 @@ describe('the goal band row', () => {
     );
     const shape = [...goalRow().children].map((c) => (c as HTMLElement).className.split(' ')[0]);
     expect(shape).toEqual([
-      'hub-twisty',
-      'hub-goal-title',
-      'hub-goal-meta',
-      'hub-goal-open',
-      'hub-owner-ctl',
+      'board-twisty',
+      'board-goal-title',
+      'board-goal-meta',
+      'board-goal-open',
+      'board-owner-ctl',
     ]);
     const row = goalRow();
     expect(styleOf(row).display).toBe('grid'); // control: the sheet is live
     const tracks = trackList(row);
     expect(tracks.length).toBeGreaterThan(1); // control: the split found tracks
     expect(shape).toHaveLength(tracks.length);
-    expect(tracks[shape.indexOf('hub-goal-title')]).toContain('1fr');
+    expect(tracks[shape.indexOf('board-goal-title')]).toContain('1fr');
     expect(tracks.filter((t) => t.includes('fr'))).toHaveLength(1);
   });
 
@@ -964,7 +968,7 @@ describe('the goal band row', () => {
       boardSections(goalsWith({ dueAt: Date.now() - DAY }), [], filters),
       handlers(),
     );
-    expect(goalRow().querySelector('.hub-due')?.className).toContain('hub-due-overdue');
+    expect(goalRow().querySelector('.board-due')?.className).toContain('board-due-overdue');
     root.replaceChildren();
     renderBoard(
       root,
@@ -973,7 +977,7 @@ describe('the goal band row', () => {
     );
     // Not merely un-reddened: a date the goal finished past is noise, and the
     // slot is spent on the word `done` instead (below).
-    expect(goalRow().querySelector('.hub-due')).toBeNull();
+    expect(goalRow().querySelector('.board-due')).toBeNull();
   });
 
   // A done goal has to READ as done with no hover. The muted title is a
@@ -992,14 +996,14 @@ describe('the goal band row', () => {
       ),
       handlers(),
     );
-    const meta = goalRow().querySelector('.hub-goal-meta') as HTMLElement;
-    const note = meta.querySelector('.hub-done-note') as HTMLElement;
+    const meta = goalRow().querySelector('.board-goal-meta') as HTMLElement;
+    const note = meta.querySelector('.board-done-note') as HTMLElement;
     expect(note).not.toBeNull();
     expect(note.textContent).toBe('done');
-    expect(note.className).not.toContain('hub-badge');
-    expect(meta.querySelector('.hub-due')).toBeNull();
-    expect(goalRow().querySelector('.hub-status-mark')).toBeNull();
-    expect(goalRow().querySelector('.hub-badge')).toBeNull();
+    expect(note.className).not.toContain('board-badge');
+    expect(meta.querySelector('.board-due')).toBeNull();
+    expect(goalRow().querySelector('.board-status-mark')).toBeNull();
+    expect(goalRow().querySelector('.board-badge')).toBeNull();
     // Positive control: an open band with that same past due date still draws
     // the date, and claims nothing about being done.
     root.replaceChildren();
@@ -1008,8 +1012,8 @@ describe('the goal band row', () => {
       boardSections(goalsWith({ dueAt: Date.now() - DAY }), [], filters),
       handlers(),
     );
-    expect(goalRow().querySelector('.hub-due')?.textContent).toContain('due');
-    expect(goalRow().querySelector('.hub-done-note')).toBeNull();
+    expect(goalRow().querySelector('.board-due')?.textContent).toContain('due');
+    expect(goalRow().querySelector('.board-done-note')).toBeNull();
   });
 
   // A band in triage is a goal nobody has agreed to — nothing under it is
@@ -1022,15 +1026,17 @@ describe('the goal band row', () => {
       boardSections(goalsWith({ status: 'triage', dueAt: Date.now() + DAY }), [], filters),
       handlers(),
     );
-    const meta = goalRow().querySelector('.hub-goal-meta') as HTMLElement;
-    const note = meta.querySelector('.hub-triage-note') as HTMLElement;
+    const meta = goalRow().querySelector('.board-goal-meta') as HTMLElement;
+    const note = meta.querySelector('.board-triage-note') as HTMLElement;
     expect(note).not.toBeNull();
     expect(note.textContent).toBe('triage');
-    expect(note.className).not.toContain('hub-badge');
-    expect(meta.querySelector('.hub-due')).toBeNull();
-    expect(goalRow().querySelector('.hub-badge')).toBeNull();
-    const band = root.querySelector('.hub-section[data-goal-id="g-pr"] .hub-band') as HTMLElement;
-    expect(band.className).toContain('hub-band-triage');
+    expect(note.className).not.toContain('board-badge');
+    expect(meta.querySelector('.board-due')).toBeNull();
+    expect(goalRow().querySelector('.board-badge')).toBeNull();
+    const band = root.querySelector(
+      '.board-section[data-goal-id="g-pr"] .board-band',
+    ) as HTMLElement;
+    expect(band.className).toContain('board-band-triage');
     expect(goalRow().title).toContain('not ready');
     // Positive control: an agreed band with the same due date draws the date
     // and claims nothing about triage.
@@ -1040,11 +1046,12 @@ describe('the goal band row', () => {
       boardSections(goalsWith({ status: 'todo', dueAt: Date.now() + DAY }), [], filters),
       handlers(),
     );
-    expect(goalRow().querySelector('.hub-due')?.textContent).toContain('due');
-    expect(goalRow().querySelector('.hub-triage-note')).toBeNull();
+    expect(goalRow().querySelector('.board-due')?.textContent).toContain('due');
+    expect(goalRow().querySelector('.board-triage-note')).toBeNull();
     expect(
-      (root.querySelector('.hub-section[data-goal-id="g-pr"] .hub-band') as HTMLElement).className,
-    ).not.toContain('hub-band-triage');
+      (root.querySelector('.board-section[data-goal-id="g-pr"] .board-band') as HTMLElement)
+        .className,
+    ).not.toContain('board-band-triage');
   });
 
   // The avatar draws from the projected owner the way a task row's does —
@@ -1055,9 +1062,9 @@ describe('the goal band row', () => {
       boardSections(goalsWith({ assignee: 'team-lead-fleet', ownerKind: 'agent' }), [], filters),
       handlers(),
     );
-    const avatar = goalRow().querySelector('.hub-owner-avatar') as HTMLElement;
+    const avatar = goalRow().querySelector('.board-owner-avatar') as HTMLElement;
     expect(avatar.textContent).toBe('TL');
-    expect(avatar.className).toContain('hub-owner-agent');
+    expect(avatar.className).toContain('board-owner-agent');
     expect(avatar.title).toContain('team-lead-fleet');
   });
 
@@ -1065,7 +1072,7 @@ describe('the goal band row', () => {
     const onOpenGoal = vi.fn();
     const h = handlers({ onOpenGoal });
     renderBoard(root, boardSections(goalsWith(), [], filters), h);
-    const words = goalRow().querySelector('.hub-goal-title-text') as HTMLElement;
+    const words = goalRow().querySelector('.board-goal-title-text') as HTMLElement;
     words.click();
     expect(words.hasAttribute('contenteditable')).toBe(true);
     expect(onOpenGoal).not.toHaveBeenCalled();
@@ -1082,7 +1089,7 @@ describe('the goal band row', () => {
     const onOpenGoal = vi.fn();
     const h = handlers({ inlineTitleEdit: () => false, onOpenGoal });
     renderBoard(root, boardSections(goalsWith(), [], filters), h);
-    const words = goalRow().querySelector('.hub-goal-title-text') as HTMLElement;
+    const words = goalRow().querySelector('.board-goal-title-text') as HTMLElement;
     words.click();
     expect(words.hasAttribute('contenteditable')).toBe(false);
     expect(onOpenGoal).toHaveBeenCalledWith(expect.objectContaining({ id: 'g-pr' }));
@@ -1095,15 +1102,17 @@ describe('the goal band row', () => {
   // makes constantly.
   it('collapses to the goal row alone, per viewer, surviving a re-render', async () => {
     try {
-      localStorage.removeItem('hub:collapsed-bands');
+      localStorage.removeItem('board:collapsed-bands');
     } catch {
       /* private mode */
     }
     const h = handlers();
     const sections = boardSections(goalsWith(), [task({ goal: 'g-pr' })], filters);
     renderBoard(root, sections, h);
-    const band = root.querySelector('.hub-section[data-goal-id="g-pr"] .hub-band') as HTMLElement;
-    const twisty = band.querySelector('.hub-twisty') as HTMLButtonElement;
+    const band = root.querySelector(
+      '.board-section[data-goal-id="g-pr"] .board-band',
+    ) as HTMLElement;
+    const twisty = band.querySelector('.board-twisty') as HTMLButtonElement;
     expect(twisty.getAttribute('aria-expanded')).toBe('true');
     twisty.click();
     // The fold is component state now, so it lands on the next scheduled
@@ -1114,19 +1123,21 @@ describe('the goal band row', () => {
     expect(twisty.getAttribute('aria-expanded')).toBe('false');
     // Nothing extra rendered for the folded state — the CSS hides the tasks,
     // and no summary element takes their place.
-    expect(band.querySelector('.hub-band-hidden')).toBeNull();
-    expect(band.querySelector('.hub-section-more')).toBeNull();
+    expect(band.querySelector('.board-band-hidden')).toBeNull();
+    expect(band.querySelector('.board-section-more')).toBeNull();
     // Per viewer, across renders: the repaint keeps the fold.
     root.replaceChildren();
     renderBoard(root, sections, h);
-    const again = root.querySelector('.hub-section[data-goal-id="g-pr"] .hub-band') as HTMLElement;
+    const again = root.querySelector(
+      '.board-section[data-goal-id="g-pr"] .board-band',
+    ) as HTMLElement;
     expect(again.classList.contains('is-collapsed')).toBe(true);
     // Reopen and leave no state behind for the other tests.
-    (again.querySelector('.hub-twisty') as HTMLButtonElement).click();
+    (again.querySelector('.board-twisty') as HTMLButtonElement).click();
     await tick();
     expect(again.classList.contains('is-collapsed')).toBe(false);
     try {
-      localStorage.removeItem('hub:collapsed-bands');
+      localStorage.removeItem('board:collapsed-bands');
     } catch {
       /* private mode */
     }
@@ -1138,12 +1149,12 @@ describe('the goal band row', () => {
   // and the visible text disagreed with it.
   it('the twisty’s tooltip flips with the fold, matching its aria-label', async () => {
     try {
-      localStorage.removeItem('hub:collapsed-bands');
+      localStorage.removeItem('board:collapsed-bands');
     } catch {
       /* private mode */
     }
     renderBoard(root, boardSections(goalsWith(), [], filters), handlers());
-    const twisty = goalRow().querySelector('.hub-twisty') as HTMLButtonElement;
+    const twisty = goalRow().querySelector('.board-twisty') as HTMLButtonElement;
     expect(twisty.title).toMatch(/^Collapse/);
     expect(twisty.getAttribute('aria-label')).toMatch(/^Collapse/);
     twisty.click();
@@ -1154,7 +1165,7 @@ describe('the goal band row', () => {
     // saying the same thing rather than the build-time default.
     root.replaceChildren();
     renderBoard(root, boardSections(goalsWith(), [], filters), handlers());
-    const again = goalRow().querySelector('.hub-twisty') as HTMLButtonElement;
+    const again = goalRow().querySelector('.board-twisty') as HTMLButtonElement;
     expect(again.title).toMatch(/^Expand/);
     // Unfold, so the persisted state nets to zero for the other tests.
     again.click();
@@ -1165,10 +1176,10 @@ describe('the goal band row', () => {
   it('the twisty folds without opening the goal', () => {
     const onOpenGoal = vi.fn();
     renderBoard(root, boardSections(goalsWith(), [], filters), handlers({ onOpenGoal }));
-    (goalRow().querySelector('.hub-twisty') as HTMLButtonElement).click();
+    (goalRow().querySelector('.board-twisty') as HTMLButtonElement).click();
     expect(onOpenGoal).not.toHaveBeenCalled();
     // Fold it back so the persisted state nets to zero for the other tests.
-    (goalRow().querySelector('.hub-twisty') as HTMLButtonElement).click();
+    (goalRow().querySelector('.board-twisty') as HTMLButtonElement).click();
   });
 
   it('Backlog is a bucket, not a goal: reserved styling, no rename, no open, an empty owner slot', () => {
@@ -1176,20 +1187,20 @@ describe('the goal band row', () => {
     const h = handlers({ onOpenGoal });
     renderBoard(root, boardSections(goalsWith(), [], filters), h);
     const band = root.querySelector(
-      `.hub-section[data-goal-id="${CHORES_ID}"] .hub-band`,
+      `.board-section[data-goal-id="${CHORES_ID}"] .board-band`,
     ) as HTMLElement;
-    expect(band.className).toContain('hub-band-reserved');
-    const row = band.querySelector('.hub-goal-row') as HTMLElement;
-    const words = row.querySelector('.hub-goal-title-text') as HTMLElement;
+    expect(band.className).toContain('board-band-reserved');
+    const row = band.querySelector('.board-goal-row') as HTMLElement;
+    const words = row.querySelector('.board-goal-title-text') as HTMLElement;
     words.click();
     expect(words.hasAttribute('contenteditable')).toBe(false);
     row.click();
     expect(onOpenGoal).not.toHaveBeenCalled();
     // No vacancy mark either — Backlog cannot be owned, so drawing a hole
     // would invite filling it. The slot itself stays for column alignment.
-    expect(row.querySelector('.hub-owner-ctl')).not.toBeNull();
-    expect(row.querySelector('.hub-owner-avatar')).toBeNull();
-    expect(row.querySelector('.hub-due')).toBeNull();
+    expect(row.querySelector('.board-owner-ctl')).not.toBeNull();
+    expect(row.querySelector('.board-owner-avatar')).toBeNull();
+    expect(row.querySelector('.board-due')).toBeNull();
   });
 
   // A done band's treatment is a muted title by CLASS (the mock draws no
@@ -1205,13 +1216,17 @@ describe('the goal band row', () => {
       ),
       handlers(),
     );
-    const band = root.querySelector('.hub-section[data-goal-id="g-pr"] .hub-band') as HTMLElement;
-    expect(band.className).toContain('hub-band-done');
+    const band = root.querySelector(
+      '.board-section[data-goal-id="g-pr"] .board-band',
+    ) as HTMLElement;
+    expect(band.className).toContain('board-band-done');
     expect(goalRow().title).toContain('Jordan');
     root.replaceChildren();
     renderBoard(root, boardSections(goalsWith(), [], filters), handlers());
-    const bare = root.querySelector('.hub-section[data-goal-id="g-pr"] .hub-band') as HTMLElement;
-    expect(bare.className).not.toContain('hub-band-done');
+    const bare = root.querySelector(
+      '.board-section[data-goal-id="g-pr"] .board-band',
+    ) as HTMLElement;
+    expect(bare.className).not.toContain('board-band-done');
     expect(goalRow().title).toBe('');
   });
 });
@@ -1229,13 +1244,13 @@ describe('the open caret', () => {
     renderBoard(root, boardSections(GOALS, [t], filters), h);
     // The pencil is gone from the row entirely — the regression this pins is
     // it coming back beside the caret and giving the row two rename gestures.
-    expect(root.querySelector('.hub-title-edit')).toBeNull();
-    const caret = root.querySelector('.hub-task-open') as HTMLButtonElement;
+    expect(root.querySelector('.board-title-edit')).toBeNull();
+    const caret = root.querySelector('.board-task-open') as HTMLButtonElement;
     expect(caret).not.toBeNull();
     caret.click();
     expect(h.onOpenTask).toHaveBeenCalledWith(expect.objectContaining({ id: t.id }));
     // …and it did not start a rename on the way.
-    const words = root.querySelector('.hub-task-title-text') as HTMLElement;
+    const words = root.querySelector('.board-task-title-text') as HTMLElement;
     expect(words.hasAttribute('contenteditable')).toBe(false);
   });
 
@@ -1245,10 +1260,10 @@ describe('the open caret', () => {
   // that list would still pass with the caret and the bubble both moved.
   it('sits immediately before the assignee bubble', () => {
     renderBoard(root, boardSections(GOALS, [task({ goal: 'g-pr' })], filters), handlers());
-    const caret = root.querySelector('.hub-task-open') as HTMLElement;
-    expect(caret.nextElementSibling?.className).toContain('hub-owner-ctl');
+    const caret = root.querySelector('.board-task-open') as HTMLElement;
+    expect(caret.nextElementSibling?.className).toContain('board-owner-ctl');
     // …and it is the LAST thing before it, so nothing may be slipped between.
-    expect((caret.previousElementSibling as HTMLElement).className).toContain('hub-task-badges');
+    expect((caret.previousElementSibling as HTMLElement).className).toContain('board-task-badges');
   });
 
   // It has no click handler of its own — the ROW's handler is what opens, and
@@ -1259,7 +1274,7 @@ describe('the open caret', () => {
   it('opens by bubbling into the row rather than handling its own click', () => {
     const h = handlers();
     renderBoard(root, boardSections(GOALS, [task({ goal: 'g-pr' })], filters), h);
-    const caret = root.querySelector('.hub-task-open') as HTMLButtonElement;
+    const caret = root.querySelector('.board-task-open') as HTMLButtonElement;
     const ev = new MouseEvent('click', { bubbles: true, cancelable: true });
     caret.dispatchEvent(ev);
     expect(h.onOpenTask).toHaveBeenCalledTimes(1);
@@ -1272,7 +1287,7 @@ describe('the open caret', () => {
   // focusable precisely because it was the keyboard's only path to a rename.
   it('is a pointer affordance only — no tab stop, nothing announced', () => {
     renderBoard(root, boardSections(GOALS, [task({ goal: 'g-pr' })], filters), handlers());
-    const caret = root.querySelector('.hub-task-open') as HTMLButtonElement;
+    const caret = root.querySelector('.board-task-open') as HTMLButtonElement;
     expect(caret.tagName).toBe('BUTTON');
     expect(caret.tabIndex).toBe(-1);
     expect(caret.getAttribute('aria-hidden')).toBe('true');
@@ -1288,14 +1303,14 @@ describe('the open caret', () => {
   // the fix, so the assertion is that the default is cancelled.
   it('does not take focus when it is clicked', () => {
     renderBoard(root, boardSections(GOALS, [task({ goal: 'g-pr' })], filters), handlers());
-    const caret = root.querySelector('.hub-task-open') as HTMLButtonElement;
+    const caret = root.querySelector('.board-task-open') as HTMLButtonElement;
     const down = new MouseEvent('mousedown', { bubbles: true, cancelable: true });
     caret.dispatchEvent(down);
     expect(down.defaultPrevented).toBe(true);
     // Control: the row's own mousedown — the drag-select guard's snapshot — is
     // untouched, so preventing focus did not stop the event getting there.
     const rowDown = new MouseEvent('mousedown', { bubbles: true, cancelable: true });
-    (root.querySelector('.hub-task-row') as HTMLElement).dispatchEvent(rowDown);
+    (root.querySelector('.board-task-row') as HTMLElement).dispatchEvent(rowDown);
     expect(rowDown.defaultPrevented).toBe(false);
   });
 
@@ -1308,7 +1323,7 @@ describe('the open caret', () => {
     const h = handlers({ inlineTitleEdit: () => false });
     const t = task({ goal: 'g-pr' });
     renderBoard(root, boardSections(GOALS, [t], filters), h);
-    const caret = root.querySelector('.hub-task-open') as HTMLButtonElement;
+    const caret = root.querySelector('.board-task-open') as HTMLButtonElement;
     expect(caret.disabled).toBe(false);
     caret.click();
     expect(h.onOpenTask).toHaveBeenCalledWith(expect.objectContaining({ id: t.id }));
@@ -1317,7 +1332,7 @@ describe('the open caret', () => {
 
 describe('inline title editing', () => {
   /** The inline element the WORDS live in, as against the cell holding it. */
-  const words = () => root.querySelector('.hub-task-title-text') as HTMLElement;
+  const words = () => root.querySelector('.board-task-title-text') as HTMLElement;
   /** A click that carries a position, which a bare `.click()` does not. */
   const clickAt = (el: HTMLElement, x = 0, y = 0) =>
     el.dispatchEvent(new MouseEvent('click', { bubbles: true, clientX: x, clientY: y }));
@@ -1348,7 +1363,7 @@ describe('inline title editing', () => {
     const h = handlers();
     const t = task({ goal: 'g-pr', title: 'Old title' });
     renderBoard(root, boardSections(GOALS, [t], filters), h);
-    const title = root.querySelector('.hub-task-title') as HTMLElement;
+    const title = root.querySelector('.board-task-title') as HTMLElement;
     // Control first: the two really are different elements, or this whole
     // case is one element agreeing with itself.
     expect(words()).not.toBeNull();
@@ -1371,7 +1386,7 @@ describe('inline title editing', () => {
   // input can only ever APPROXIMATE that: it is a different box that has to
   // be talked into matching a span's font, padding, border and baseline, and
   // the last attempt missed by the 4px padding and 1px border still on
-  // `.hub-title-input`. Editing the words where they are makes zero shift
+  // `.board-title-input`. Editing the words where they are makes zero shift
   // structural — same element, same text node, same box — so this case
   // asserts the structure rather than measuring pixels happy-dom cannot lay
   // out anyway.
@@ -1382,7 +1397,7 @@ describe('inline title editing', () => {
       boardSections(GOALS, [task({ goal: 'g-pr', title: 'Old title' })], filters),
       h,
     );
-    const title = root.querySelector('.hub-task-title') as HTMLElement;
+    const title = root.querySelector('.board-task-title') as HTMLElement;
     const before = words();
     const node = before.firstChild;
     clickAt(before);
@@ -1404,12 +1419,12 @@ describe('inline title editing', () => {
   it('marks the cell as editing, and unmarks it on the way out', () => {
     const h = handlers();
     renderBoard(root, boardSections(GOALS, [task({ goal: 'g-pr', title: 'Old' })], filters), h);
-    const title = root.querySelector('.hub-task-title') as HTMLElement;
-    expect(title.classList.contains('hub-title-editing')).toBe(false);
+    const title = root.querySelector('.board-task-title') as HTMLElement;
+    expect(title.classList.contains('board-title-editing')).toBe(false);
     clickAt(words());
-    expect(title.classList.contains('hub-title-editing')).toBe(true);
+    expect(title.classList.contains('board-title-editing')).toBe(true);
     press('Escape');
-    expect(title.classList.contains('hub-title-editing')).toBe(false);
+    expect(title.classList.contains('board-title-editing')).toBe(false);
   });
 
   // The half Bryan asked for by name: *"clicking on text edits with the cursor
@@ -1498,8 +1513,8 @@ describe('inline title editing', () => {
       boardSections(GOALS, [task({ goal: 'g-pr', title: 'Select me' })], filters),
       h,
     );
-    const row = root.querySelector('.hub-task-row') as HTMLElement;
-    const title = root.querySelector('.hub-task-title') as HTMLElement;
+    const row = root.querySelector('.board-task-row') as HTMLElement;
+    const title = root.querySelector('.board-task-title') as HTMLElement;
     const sel = (collapsed: boolean) =>
       ({ isCollapsed: collapsed, anchorNode: title.firstChild }) as unknown as Selection;
     const spy = vi.spyOn(document, 'getSelection').mockReturnValue(sel(false));
@@ -1524,8 +1539,8 @@ describe('inline title editing', () => {
       boardSections(GOALS, [task({ goal: 'g-pr', title: 'Select me' })], filters),
       h,
     );
-    const row = root.querySelector('.hub-task-row') as HTMLElement;
-    const title = root.querySelector('.hub-task-title') as HTMLElement;
+    const row = root.querySelector('.board-task-row') as HTMLElement;
+    const title = root.querySelector('.board-task-title') as HTMLElement;
     const nothing = { isCollapsed: true, anchorNode: null } as unknown as Selection;
     const selected = {
       isCollapsed: false,
@@ -1570,7 +1585,7 @@ describe('inline title editing', () => {
       boardSections(GOALS, [task({ goal: 'g-pr', title: 'Select me' })], filters),
       h,
     );
-    const row = root.querySelector('.hub-task-row') as HTMLElement;
+    const row = root.querySelector('.board-task-row') as HTMLElement;
     const none = { isCollapsed: true, anchorNode: null } as unknown as Selection;
     const some = {
       isCollapsed: false,
@@ -1624,7 +1639,7 @@ describe('inline title editing', () => {
       boardSections(GOALS, [task({ goal: 'g-pr', title: 'Old title' })], filters),
       h,
     );
-    const title = root.querySelector('.hub-task-title') as HTMLElement;
+    const title = root.querySelector('.board-task-title') as HTMLElement;
     clickAt(words());
     words().textContent = 'New title';
     press('Enter');
@@ -1643,7 +1658,7 @@ describe('inline title editing', () => {
   it('Escape cancels without writing', () => {
     const h = handlers();
     renderBoard(root, boardSections(GOALS, [task({ goal: 'g-pr', title: 'Keep me' })], filters), h);
-    const title = root.querySelector('.hub-task-title') as HTMLElement;
+    const title = root.querySelector('.board-task-title') as HTMLElement;
     clickAt(words());
     words().textContent = 'Discard me';
     press('Escape');
@@ -1671,7 +1686,7 @@ describe('inline title editing', () => {
   it('blur with an unchanged title restores without writing', () => {
     const h = handlers();
     renderBoard(root, boardSections(GOALS, [task({ goal: 'g-pr', title: 'Keep me' })], filters), h);
-    const title = root.querySelector('.hub-task-title') as HTMLElement;
+    const title = root.querySelector('.board-task-title') as HTMLElement;
     clickAt(words());
     words().dispatchEvent(new FocusEvent('blur'));
     expect(h.onTitleCommit).not.toHaveBeenCalled();
@@ -1689,9 +1704,9 @@ describe('inline title editing', () => {
     const h = handlers();
     const t = task({ goal: 'g-pr', title: 'Old title' });
     renderBoard(root, boardSections(GOALS, [t], filters), h);
-    const title = root.querySelector('.hub-task-title') as HTMLElement;
+    const title = root.querySelector('.board-task-title') as HTMLElement;
     expect(title.hasAttribute('tabindex')).toBe(false);
-    const row = root.querySelector('.hub-task-row') as HTMLElement;
+    const row = root.querySelector('.board-task-row') as HTMLElement;
     press(key, row);
     expect(editing()).toBe(true);
     // Entered by a key, so there is no click position — the caret goes to the
@@ -1713,7 +1728,7 @@ describe('inline title editing', () => {
   it('leaves the letter alone once it is being typed into the title', () => {
     const h = handlers();
     renderBoard(root, boardSections(GOALS, [task({ goal: 'g-pr', title: 'Old' })], filters), h);
-    const row = root.querySelector('.hub-task-row') as HTMLElement;
+    const row = root.querySelector('.board-task-row') as HTMLElement;
     press('r', row);
     const editor = words();
     editor.textContent = 'Old r';
@@ -1733,7 +1748,7 @@ describe('inline title editing', () => {
   it('has no keyboard rename where the title is not editable', () => {
     const h = handlers({ inlineTitleEdit: () => false });
     renderBoard(root, boardSections(GOALS, [task({ goal: 'g-pr' })], filters), h);
-    const row = root.querySelector('.hub-task-row') as HTMLElement;
+    const row = root.querySelector('.board-task-row') as HTMLElement;
     for (const key of ['r', 'F2']) press(key, row);
     expect(editing()).toBe(false);
   });
@@ -1763,7 +1778,7 @@ describe('inline title editing', () => {
 // control inside it, and a keydown from any of them bubbles through the row
 // on its way out. The row therefore has to say which Enters are its own.
 describe('Enter on a task row', () => {
-  const rowIn = () => root.querySelector('.hub-task-row') as HTMLElement;
+  const rowIn = () => root.querySelector('.board-task-row') as HTMLElement;
   const enter = (from: HTMLElement) =>
     from.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
 
@@ -1784,15 +1799,16 @@ describe('Enter on a task row', () => {
   it('leaves the task closed when a control inside the row has the focus', () => {
     const h = handlers();
     renderBoard(root, boardSections(GOALS, [task({ goal: 'g-pr' })], filters), h);
-    enter(root.querySelector('.hub-status-select') as HTMLElement);
-    enter(root.querySelector('.hub-row-assignee') as HTMLElement);
-    enter(root.querySelector('.hub-drag-handle') as HTMLElement);
+    enter(root.querySelector('.board-status-select') as HTMLElement);
+    enter(root.querySelector('.board-row-assignee') as HTMLElement);
+    enter(root.querySelector('.board-drag-handle') as HTMLElement);
     expect(h.onOpenTask).not.toHaveBeenCalled();
   });
 });
 
 describe('the row assignee', () => {
-  const pickerIn = (el: HTMLElement) => el.querySelector('.hub-row-assignee') as HTMLSelectElement;
+  const pickerIn = (el: HTMLElement) =>
+    el.querySelector('.board-row-assignee') as HTMLSelectElement;
   const values = (sel: HTMLSelectElement) => [...sel.options].map((o) => o.value);
 
   // The gesture used to be a two-word toggle: tap and the owner flipped
@@ -1849,7 +1865,7 @@ describe('the row assignee', () => {
     const pick = pickerIn(root);
     expect(pick.value).toBe('');
     expect(pick.selectedOptions[0]?.textContent ?? '').toMatch(/unassigned/i);
-    expect(pick.classList.contains('hub-owner-none')).toBe(true);
+    expect(pick.classList.contains('board-owner-none')).toBe(true);
   });
 
   // 'human' and a named agent are the two answers a reader acts on
@@ -1858,7 +1874,7 @@ describe('the row assignee', () => {
   // Four states, not three. A named owner used to be drawn as an agent
   // whatever they were — so a person named Bryan and an agent were the same
   // mark — and the row now reads the kind the SERVER resolved (`ownerKind`)
-  // rather than inferring one from the name. `hub-owner-unknown` is the state
+  // rather than inferring one from the name. `board-owner-unknown` is the state
   // that fold used to hide.
   it('marks a person, an agent, an undeclared owner and nobody apart', () => {
     const h = handlers({ knownAgentIds: ['Index Rebuild'] });
@@ -1870,15 +1886,15 @@ describe('the row assignee', () => {
       task({ goal: 'g-pr', order: 5, assignee: 'agent' }),
     ];
     renderBoard(root, boardSections(GOALS, rows, filters), h);
-    const classes = [...root.querySelectorAll('.hub-row-assignee')].map((el) =>
-      [...el.classList].filter((c) => c.startsWith('hub-owner-')).join(),
+    const classes = [...root.querySelectorAll('.board-row-assignee')].map((el) =>
+      [...el.classList].filter((c) => c.startsWith('board-owner-')).join(),
     );
     expect(classes).toEqual([
-      'hub-owner-human',
-      'hub-owner-agent',
-      'hub-owner-human',
-      'hub-owner-unknown',
-      'hub-owner-none',
+      'board-owner-human',
+      'board-owner-agent',
+      'board-owner-human',
+      'board-owner-unknown',
+      'board-owner-none',
     ]);
   });
 
@@ -1891,18 +1907,18 @@ describe('the row assignee', () => {
       boardSections(GOALS, [task({ goal: 'g-pr', assignee: 'agent' })], filters),
       handlers(),
     );
-    expect(root.querySelectorAll('.hub-row-assignee')).toHaveLength(1);
+    expect(root.querySelectorAll('.board-row-assignee')).toHaveLength(1);
     // …and no longer duplicated as a badge.
-    expect(root.querySelector('.hub-badge-assignee')).toBeNull();
+    expect(root.querySelector('.board-badge-assignee')).toBeNull();
   });
 });
 
 describe('the drag handle', () => {
   it('is a real control with an accessible name, at the far left of the row', () => {
     renderBoard(root, boardSections(GOALS, [task({ goal: 'g-pr' })], filters), handlers());
-    const row = root.querySelector('.hub-task-row') as HTMLElement;
+    const row = root.querySelector('.board-task-row') as HTMLElement;
     const handle = row.firstElementChild as HTMLButtonElement;
-    expect(handle.className).toContain('hub-drag-handle');
+    expect(handle.className).toContain('board-drag-handle');
     expect(handle.tagName).toBe('BUTTON');
     expect(handle.getAttribute('aria-label') ?? '').toMatch(/reorder|move/i);
   });
@@ -1922,8 +1938,8 @@ describe('the drag handle', () => {
       boardSections(GOALS, [done, open], { ...filters, doneWindow: 'all' }),
       handlers(),
     );
-    const rows = [...root.querySelectorAll('.hub-task-row')] as HTMLElement[];
-    const handleOf = (r: HTMLElement) => r.querySelector('.hub-drag-handle') as HTMLButtonElement;
+    const rows = [...root.querySelectorAll('.board-task-row')] as HTMLElement[];
+    const handleOf = (r: HTMLElement) => r.querySelector('.board-drag-handle') as HTMLButtonElement;
     expect(rows[0].children.length).toBe(rows[1].children.length);
     expect(handleOf(rows[0]).disabled).toBe(true);
     // Positive control: the open row's handle is live, so `disabled` above is
@@ -1943,7 +1959,7 @@ describe('the drag handle', () => {
       boardSections(GOALS, [done, task({ goal: 'g-pr' })], { ...filters, doneWindow: 'all' }),
       h,
     );
-    const handle = root.querySelector('.hub-drag-handle') as HTMLButtonElement;
+    const handle = root.querySelector('.board-drag-handle') as HTMLButtonElement;
     handle.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true }));
     expect(h.onReorder).not.toHaveBeenCalled();
   });
@@ -1959,7 +1975,9 @@ describe('keyboard reordering', () => {
   it('the focused handle moves its row with the arrow keys', () => {
     const h = handlers();
     renderBoard(root, boardSections(GOALS, three(), filters), h);
-    const handle = root.querySelector('[data-task-id="k-a"] .hub-drag-handle') as HTMLButtonElement;
+    const handle = root.querySelector(
+      '[data-task-id="k-a"] .board-drag-handle',
+    ) as HTMLButtonElement;
     handle.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true }));
     expect(h.onReorder).toHaveBeenCalledWith(expect.objectContaining({ id: 'k-a' }), {
       goal: 'g-pr',
@@ -2010,16 +2028,16 @@ describe('keyboard reordering', () => {
 // and only a reload put it right. A board that displays a status nobody set
 // is worse than the refusal it just reported.
 //
-// The repair is `revertToServerTruth()` in hub-app: repaint from `state`,
+// The repair is `revertToServerTruth()` in board-app: repaint from `state`,
 // which is the projection and nothing else. What is under test HERE is that
 // the repaint actually undoes a local change — because if it does not, the
-// call in hub-app is a no-op and the ghost survives it.
+// call in board-app is a no-op and the ghost survives it.
 describe('a repaint puts a locally-changed control back to server truth', () => {
   it('undoes a status the reader picked and the server refused', async () => {
     const t = task({ id: 'k-a', title: 'Alpha', goal: 'g-pr', status: 'triage' });
     const h = handlers();
     renderBoard(root, boardOf([t]), h);
-    const select = root.querySelector('.hub-status-select') as HTMLSelectElement;
+    const select = root.querySelector('.board-status-select') as HTMLSelectElement;
     expect(select.value).toBe('triage');
 
     // The reader picks Done. The board sends the transition; the server says
@@ -2039,7 +2057,7 @@ describe('a repaint puts a locally-changed control back to server truth', () => 
   it('undoes a title the reader typed and the server refused', async () => {
     const t = task({ id: 'k-a', title: 'Alpha', goal: 'g-pr' });
     renderBoard(root, boardOf([t]), handlers());
-    const words = rowFor('k-a')?.querySelector('.hub-task-title-text') as HTMLElement;
+    const words = rowFor('k-a')?.querySelector('.board-task-title-text') as HTMLElement;
     expect(words.textContent).toBe('Alpha');
 
     // What `wireWordsInPlace` leaves behind when a rename commits: the typed

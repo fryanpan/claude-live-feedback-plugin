@@ -5,7 +5,7 @@
  * to select it".
  */
 import { describe, expect, it } from 'vitest';
-import { wordRangeAt } from '../src/hub/selection-pill.ts';
+import { wordRangeAt } from '../src/board/selection-pill.ts';
 
 describe('wordRangeAt', () => {
   it('finds the word under an offset', () => {

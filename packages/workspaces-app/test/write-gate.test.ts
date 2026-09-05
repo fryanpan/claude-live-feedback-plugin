@@ -50,13 +50,13 @@ function docShell(): HTMLElement {
 }
 
 /** The board's shell: ordinary flow, one header, no `#shell` at all. */
-function hubShell(): HTMLElement {
+function boardShell(): HTMLElement {
   const root = document.createElement('div');
-  root.id = 'hub-root';
+  root.id = 'board-root';
   const topbar = document.createElement('header');
-  topbar.className = 'hub-topbar';
+  topbar.className = 'board-topbar';
   const main = document.createElement('div');
-  main.className = 'hub-main';
+  main.className = 'board-main';
   root.append(topbar, main);
   document.body.append(root);
   return root;
@@ -287,11 +287,11 @@ describe('where the standing bar lands', () => {
   });
 
   it('becomes a row under the board header, where the connection banner sits', () => {
-    const root = hubShell();
+    const root = boardShell();
     showSignInBar();
     const bar = document.querySelector('.signin-bar');
     expect(bar?.parentElement).toBe(root);
-    expect(bar?.previousElementSibling?.className).toBe('hub-topbar');
+    expect(bar?.previousElementSibling?.className).toBe('board-topbar');
     expect(bar?.classList.contains('signin-bar--floating')).toBe(false);
     // The doc shell's row declaration must not leak onto a surface that has
     // no `#shell` to declare rows on.
@@ -435,12 +435,12 @@ describe('the fetch wrapper', () => {
   });
 
   it("a refused board write — the board's own request shape — raises the prompt", async () => {
-    // `send()` in hub-app.ts: fetch(path, { method, headers, body }), then
+    // `send()` in board-app.ts: fetch(path, { method, headers, body }), then
     // `res.json()` on whatever came back. The wrapper must leave that body
     // readable AND raise the prompt, or the board's toast says "Couldn't
     // save" over a person who was never told to sign in.
     document.querySelector('.signin-required')?.remove();
-    hubShell();
+    boardShell();
     next = jsonResponse(401, { error: 'sign_in_required', signInUrl: '/signin' });
     const res = await fetch('/api/workspaces/w-1/tasks', {
       method: 'POST',
@@ -539,12 +539,12 @@ describe('the fetch wrapper', () => {
 
 /**
  * Both entry points going through this gate is asserted by DRIVING them, in
- * `app-boot.test.ts` and `hub-boot.test.ts`: each boot is given a server that
+ * `app-boot.test.ts` and `board-boot.test.ts`: each boot is given a server that
  * refuses writes and the bar has to appear, and the doc boot has to have asked
  * before it opened its socket.
  *
  * It used to be pinned here on the source text of `main()`, because neither
  * entry point could be imported at all — importing one WAS running the app.
- * They export `bootApp` / `bootHub` now, so the wiring is checked by what it
+ * They export `bootApp` / `bootBoard` now, so the wiring is checked by what it
  * does rather than by how it is spelled.
  */

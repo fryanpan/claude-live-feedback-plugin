@@ -1,0 +1,101 @@
+/**
+ * What the board tells the server the speaker is LOOKING AT.
+ *
+ * The board's own affordance for "a ticket is in view" is the keyboard row
+ * cursor — `j`/`k` focus a `.board-task-row` — and the detail panel is the other
+ * one. The first cut of voice actions keyed only on the detail panel, so the
+ * ticket's own flow ("with a ticket highlighted, say mark this done") sent
+ * `{surface:'board'}` and the utterance went to the agent: no resource in view,
+ * so the guardrail correctly refused, and the highlighted row never moved.
+ */
+import { describe, expect, it } from 'vitest';
+import { voiceBoardContext } from '../src/board/board-presence-model.ts';
+
+describe('voiceBoardContext', () => {
+  it('reports the open detail panel’s task', () => {
+    expect(voiceBoardContext('t-detail', null)).toEqual({ surface: 'task', taskId: 't-detail' });
+  });
+
+  it('reports the HIGHLIGHTED row when no detail panel is open', () => {
+    expect(voiceBoardContext(null, 't-row')).toEqual({ surface: 'task', taskId: 't-row' });
+  });
+
+  it('prefers the detail panel when both are present — it is the narrower thing in view', () => {
+    expect(voiceBoardContext('t-detail', 't-row')).toEqual({
+      surface: 'task',
+      taskId: 't-detail',
+    });
+  });
+
+  it('falls back to the board itself when nothing is in view', () => {
+    expect(voiceBoardContext(null, null)).toEqual({ surface: 'board' });
+    // A blank dataset value is nothing in view, not a task called "".
+    expect(voiceBoardContext(null, '')).toEqual({ surface: 'board' });
+  });
+});
+
+describe('voiceBoardContext — the review item the speaker is IN', () => {
+  it('carries the open thread when the detail panel is aimed at one', () => {
+    // Bryan, 2026-08-29: "If I'm in a review item, I should be able to reply
+    // by voice." With several items open on one ticket, the thread is what
+    // makes "pick the second one" unambiguous.
+    expect(voiceBoardContext('t-detail', null, 'th-9')).toEqual({
+      surface: 'task',
+      taskId: 't-detail',
+      threadId: 'th-9',
+    });
+  });
+
+  it('never attaches a thread to a highlighted ROW — a row has no open thread', () => {
+    expect(voiceBoardContext(null, 't-row', 'th-9')).toEqual({ surface: 'task', taskId: 't-row' });
+  });
+
+  it('a blank thread is no thread', () => {
+    expect(voiceBoardContext('t-detail', null, '')).toEqual({
+      surface: 'task',
+      taskId: 't-detail',
+    });
+    expect(voiceBoardContext('t-detail', null, null)).toEqual({
+      surface: 'task',
+      taskId: 't-detail',
+    });
+  });
+});
+
+describe('voiceBoardContext — a ticket-borne review item rides only with an OPEN panel', () => {
+  const items = [{ kind: 'task-review', taskId: 't-detail', reviewItemId: 'ri-1' }];
+
+  it('names the ticket’s one open review item when the panel is open on that ticket', () => {
+    expect(voiceBoardContext('t-detail', null, null, items)).toEqual({
+      surface: 'task',
+      taskId: 't-detail',
+      reviewItemId: 'ri-1',
+    });
+  });
+
+  it('never for a merely HIGHLIGHTED row — "answer: yes" must not land on the cursor', () => {
+    expect(voiceBoardContext(null, 't-detail', null, items)).toEqual({
+      surface: 'task',
+      taskId: 't-detail',
+    });
+  });
+
+  it('not when the ticket has several, or the item belongs to another ticket', () => {
+    const two = [...items, { kind: 'task-review', taskId: 't-detail', reviewItemId: 'ri-2' }];
+    expect(voiceBoardContext('t-detail', null, null, two)).toEqual({
+      surface: 'task',
+      taskId: 't-detail',
+    });
+    const elsewhere = [{ kind: 'task-review', taskId: 't-other', reviewItemId: 'ri-9' }];
+    expect(voiceBoardContext('t-detail', null, null, elsewhere)).toEqual({
+      surface: 'task',
+      taskId: 't-detail',
+    });
+    // A thread item is not a ticket-borne row, whatever task it hangs on.
+    const thread = [{ kind: 'task-thread', taskId: 't-detail', reviewItemId: 'ri-1' }];
+    expect(voiceBoardContext('t-detail', null, null, thread)).toEqual({
+      surface: 'task',
+      taskId: 't-detail',
+    });
+  });
+});

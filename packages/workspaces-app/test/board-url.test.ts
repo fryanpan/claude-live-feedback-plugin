@@ -7,7 +7,7 @@ import {
   parseBoardLocation,
   resourceOf,
   taskShareUrl,
-} from '../src/hub/board-url.ts';
+} from '../src/board/board-url.ts';
 
 const at = (over: Partial<BoardLocation>): BoardLocation => ({
   nav: 'tasks',

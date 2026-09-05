@@ -8,21 +8,21 @@
  */
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { mountPushToggle } from '../src/hub/push-toggle.ts';
+import { mountPushToggle } from '../src/board/push-toggle.ts';
 
 const AUTHOR = { id: 'u-bryan', name: 'Bryan' };
 
 function dom() {
   document.body.innerHTML = `
-    <label class="hub-settings-row hub-settings-row--push" for="hub-push-toggle">
-      <span class="hub-settings-label">Notify me on this device
-        <small id="hub-push-note" class="hub-settings-note"></small>
+    <label class="board-settings-row board-settings-row--push" for="board-push-toggle">
+      <span class="board-settings-label">Notify me on this device
+        <small id="board-push-note" class="board-settings-note"></small>
       </span>
-      <input type="checkbox" id="hub-push-toggle" class="hub-check" />
+      <input type="checkbox" id="board-push-toggle" class="board-check" />
     </label>`;
   return {
-    toggle: document.getElementById('hub-push-toggle') as HTMLInputElement,
-    note: document.getElementById('hub-push-note') as HTMLElement,
+    toggle: document.getElementById('board-push-toggle') as HTMLInputElement,
+    note: document.getElementById('board-push-note') as HTMLElement,
   };
 }
 

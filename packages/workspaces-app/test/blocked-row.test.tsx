@@ -15,20 +15,20 @@
  * Fixtures are synthetic.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { boardData } from '../src/hub/board-island.tsx';
+import { boardData } from '../src/board/board-island.tsx';
 import {
   type BoardFilters,
+  type BoardGoal,
+  type BoardTask,
   CHORES_ID,
   DEFAULT_DONE_WINDOW,
-  type HubGoal,
-  type HubTask,
   boardSections,
-} from '../src/hub/hub-board-model.ts';
+} from '../src/board/board-model.ts';
 import { IPAD, installSheets, setViewport, styleOf } from './css-harness.ts';
 import { type ShimHandlers, disposeBoards, renderBoard } from './support/board.ts';
 
 const NOW = 1_700_000_000_000;
-const GOALS: HubGoal[] = [{ id: 'g-board', title: 'The board reads clearly' }];
+const GOALS: BoardGoal[] = [{ id: 'g-board', title: 'The board reads clearly' }];
 const filters: BoardFilters = {
   tab: 'all',
   userName: 'Wren',
@@ -37,7 +37,7 @@ const filters: BoardFilters = {
 };
 
 let seq = 0;
-function task(over: Partial<HubTask> = {}): HubTask {
+function task(over: Partial<BoardTask> = {}): BoardTask {
   seq += 1;
   return {
     id: `t-${seq}`,
@@ -75,10 +75,10 @@ let root: HTMLElement;
 let sheets = () => {};
 beforeEach(() => {
   root = document.createElement('div');
-  root.className = 'hub-board';
+  root.className = 'board';
   document.body.replaceChildren(root);
   setViewport(IPAD);
-  sheets = installSheets('hub.css', 'styles.css');
+  sheets = installSheets('board.css', 'styles.css');
 });
 afterEach(() => {
   disposeBoards();
@@ -86,7 +86,7 @@ afterEach(() => {
   document.body.replaceChildren();
 });
 
-function paint(tasks: HubTask[]): void {
+function paint(tasks: BoardTask[]): void {
   renderBoard(root, boardSections(GOALS, tasks, filters), handlers());
 }
 
@@ -98,15 +98,17 @@ function rowOf(id: string): HTMLElement {
 
 /** The ring's modifier, as one word. */
 function ringOf(id: string): string {
-  const mark = rowOf(id).querySelector('.hub-status-mark');
+  const mark = rowOf(id).querySelector('.board-status-mark');
   return (
-    [...(mark?.classList ?? [])].find((c) => c.startsWith('hub-status-mark-'))?.slice(16) ?? 'none'
+    [...(mark?.classList ?? [])]
+      .find((c) => c.startsWith('board-status-mark-'))
+      ?.slice('board-status-mark-'.length) ?? 'none'
   );
 }
 
 /** Whatever the right-hand slot says, as text. */
 function noteOf(id: string): string {
-  return rowOf(id).querySelector('.hub-state-note')?.textContent?.trim() ?? '';
+  return rowOf(id).querySelector('.board-state-note')?.textContent?.trim() ?? '';
 }
 
 describe('the ring and the word', () => {
@@ -117,7 +119,7 @@ describe('the ring and the word', () => {
     paint([gate, waiting, free]);
     expect(ringOf(waiting.id)).toBe('blocked');
     expect(noteOf(waiting.id)).toBe('blocked');
-    expect(rowOf(waiting.id).classList.contains('hub-blocked')).toBe(true);
+    expect(rowOf(waiting.id).classList.contains('board-blocked')).toBe(true);
     // The control: two rows on the same board, same status, no edge.
     expect(ringOf(free.id)).toBe('todo');
     expect(noteOf(free.id)).toBe('');
@@ -180,15 +182,15 @@ describe('the ring and the word', () => {
     expect(ringOf(unvetted.id)).toBe('triage');
     // Blocked and triage never co-occur, so one word is enough — and the due
     // date is still there, in the same slot, not displaced by it.
-    expect(rowOf(waiting.id).querySelectorAll('.hub-state-note')).toHaveLength(1);
-    expect(rowOf(waiting.id).querySelector('.hub-badge-due')?.textContent).toContain('due');
+    expect(rowOf(waiting.id).querySelectorAll('.board-state-note')).toHaveLength(1);
+    expect(rowOf(waiting.id).querySelector('.board-badge-due')?.textContent).toContain('due');
   });
 
   it('says blocked in the status control name, and does not offer it as a status', () => {
     const gate = task({ title: 'Ship the renderer' });
     const waiting = task({ title: 'Wire the panel', after: [gate.id] });
     paint([gate, waiting]);
-    const select = rowOf(waiting.id).querySelector<HTMLSelectElement>('.hub-status-select');
+    const select = rowOf(waiting.id).querySelector<HTMLSelectElement>('.board-status-select');
     expect(select?.getAttribute('aria-label')).toContain('blocked');
     // The way out of blocked is closing what it waits for, so the picker must
     // not pretend otherwise.
@@ -207,16 +209,16 @@ describe('the ring and the word', () => {
     });
     paint([gate, waiting]);
     const row = rowOf(waiting.id);
-    const note = row.querySelector<HTMLElement>('.hub-state-note');
-    const due = row.querySelector<HTMLElement>('.hub-badge-due');
-    const title = row.querySelector<HTMLElement>('.hub-task-title-text');
+    const note = row.querySelector<HTMLElement>('.board-state-note');
+    const due = row.querySelector<HTMLElement>('.board-badge-due');
+    const title = row.querySelector<HTMLElement>('.board-task-title-text');
     if (!note || !due || !title) throw new Error('row is missing a cell');
     // Muted, the same muted the due date already is, and NOT the title's ink.
     expect(styleOf(note).color).toBe(styleOf(due).color);
     expect(styleOf(note).color).not.toBe(styleOf(title).color);
     // It is in the badge slot, which sits after the title cell in the grid.
-    expect(note.closest('.hub-task-badges')).toBeTruthy();
-    expect(row.querySelector('.hub-task-title')?.textContent).toBe('Wire the panel');
+    expect(note.closest('.board-task-badges')).toBeTruthy();
+    expect(row.querySelector('.board-task-title')?.textContent).toBe('Wire the panel');
   });
 });
 
@@ -224,10 +226,10 @@ describe('the gutter curve', () => {
   /** happy-dom lays nothing out, so the boxes are supplied. Rows are 40 tall,
    *  stacked from the container's top, in DOM order. */
   function stubLayout(): void {
-    const box = root.querySelector<HTMLElement>('.hub-band-tasks');
+    const box = root.querySelector<HTMLElement>('.board-band-tasks');
     if (!box) throw new Error('no band');
     box.getBoundingClientRect = () => ({ top: 0, left: 0, width: 600, height: 200 }) as DOMRect;
-    const rows = [...root.querySelectorAll<HTMLElement>('.hub-task-row')];
+    const rows = [...root.querySelectorAll<HTMLElement>('.board-task-row')];
     rows.forEach((el, i) => {
       el.getBoundingClientRect = () =>
         ({ top: i * 40, left: 0, width: 600, height: 40 }) as DOMRect;
@@ -252,7 +254,7 @@ describe('the gutter curve', () => {
   }
 
   function layer(): SVGSVGElement {
-    const el = root.querySelector<SVGSVGElement>('.hub-dep-layer');
+    const el = root.querySelector<SVGSVGElement>('.board-dep-layer');
     if (!el) throw new Error('no dep layer');
     return el;
   }
@@ -291,7 +293,7 @@ describe('the gutter curve', () => {
     stubLayout();
     await repaint();
     expect(ringOf(waiting.id)).toBe('blocked');
-    const bands = [...root.querySelectorAll<SVGSVGElement>('.hub-dep-layer')];
+    const bands = [...root.querySelectorAll<SVGSVGElement>('.board-dep-layer')];
     expect(bands.flatMap((b) => [...b.querySelectorAll('path')])).toHaveLength(0);
     // Positive control: move the blocker into the same goal and the curve
     // appears, so the empty result above is the band boundary.
@@ -364,7 +366,7 @@ describe('the gutter curve', () => {
  *
  * happy-dom has no `::before`, so this reads the CSSOM the sheets built rather
  * than a computed style: the assertion is that no rule in the cascade still
- * gives `.hub-band-tasks` a pseudo-element to paint. How the gutter LOOKS is
+ * gives `.board-band-tasks` a pseudo-element to paint. How the gutter LOOKS is
  * the headless-Chromium pass; what this catches is the rule coming back.
  */
 describe('the band gutter', () => {
@@ -387,7 +389,7 @@ describe('the band gutter', () => {
     const all = selectors();
     // Positive control: the walk reaches the band's own rule, so the absence
     // below is the rule being gone and not an empty read.
-    expect(all).toContain('.hub-band-tasks');
-    expect(all.filter((sel) => sel.includes('.hub-band-tasks::before'))).toEqual([]);
+    expect(all).toContain('.board-band-tasks');
+    expect(all.filter((sel) => sel.includes('.board-band-tasks::before'))).toEqual([]);
   });
 });
