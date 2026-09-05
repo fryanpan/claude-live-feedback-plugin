@@ -95,16 +95,22 @@ value. *SSE* pushes changes to anyone holding no Yjs socket for them.
 | --- | --- | --- |
 | **HTTP** | `server.ts`, `routes/**`, `middleware/**`, `shells.ts`, `request-admission.ts`, `request-attribution.ts`, `socket-handlers.ts` | The only code that knows about HTTP. Parse, admit, call one service, format. |
 | **Services / stores** | `rooms.ts`, `tasks.ts` and the `task-*` stores, `review-items/**`, `home-pane.ts`, `share/**`, `auth/**`, the `meeting-*` and `notes-*` families, `sse.ts`, `activity.ts` | Owns durable state and orchestrates one change across stores and adapters. |
-| **Domain (pure)** | `task-owner.ts`, `task-fields.ts`, `task-row.ts`, `decision-shape.ts`, `safe-path.ts`, `diff-groups.ts`, `pause-ticker.ts`, `keep-moving.ts`, `stall-gate.ts`, `notes-section.ts`, `ask-detection.ts` | Functions over values: no clock, filesystem or socket unless passed in, so a rule is testable without a server. |
+| **Domain (pure)** | `task-owner.ts`, `task-fields.ts`, `task-row.ts`, `decision-shape.ts`, `safe-path.ts`, `diff-groups.ts`, `pause-ticker.ts`, `keep-moving.ts`, `stall-gate.ts`, `notes-section.ts`, `ask-detection.ts`, `notes-link-intent.ts` | Functions over values: no clock, filesystem or socket unless passed in, so a rule is testable without a server. |
 | **Adapters** | `transcribe-*.ts`, `recall*.ts`, `google-oauth.ts`, `summarize.ts`, `deploy*.ts`, `client-release.ts`, `push-notify.ts`, `share/cf-api.ts`, `share/keychain.ts`, `git-diff.ts`, `sentry.ts` | One vendor or OS facility each, behind an injected interface, so a swap or a test double touches one file and no state. |
 | *Composition root* | `bin.ts`, `server-config.ts`, `server-deps.ts` | Reads the environment once, builds adapters, wires services. Beside the stack, not on top of it. |
 
 `workspaces-app` layers the same way — entries, controllers, views, models,
 transport — and its models are DOM-free, which is what lets `hub/hub-board-model.ts`,
 `hub/hub-review-model.ts` and `hub/hub-presence-model.ts` be tested without a
-document. `core` is three tiers: wire types, the document model (`prose-*.ts`,
+document. `notes-link-affordance.ts` joins the editor tier beside
+`task-link-chips.ts`, and is the one plugin there that WRITES: the chips are
+render-time and change nothing, while accepting a note's suggestion or undoing
+a link edits the stored doc and calls the board. `core` is three tiers: wire types, the document model (`prose-*.ts`,
 `anchor/**`, `redline.ts`), then the rules both sides must compute identically
-(`review-item*.ts`, `effort-*.ts`, `goal-effort.ts`).
+(`review-item*.ts`, `effort-*.ts`, `goal-effort.ts`, and
+`note-suggestion.ts`, which is how a note's written "did you mean this row?"
+is spelled — server writes it, browser reads it back, one definition so the
+two cannot drift into a suggestion nobody can accept).
 
 ## The core flows
 
