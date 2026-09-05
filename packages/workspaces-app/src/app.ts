@@ -13,7 +13,6 @@ import { mountPointerPillLayer } from './doc/doc-pointer-pill.ts';
 import { wireDocReady } from './doc/doc-ready.ts';
 import { mountDocSaveState } from './doc/doc-save-state.ts';
 import { mountDocSetNav } from './doc/doc-set-nav.ts';
-import { createSpinoffRunner } from './doc/doc-spinoff.ts';
 import { wireEditViewport } from './edit-viewport.ts';
 import { type EditorHandle, createEditor } from './editor.ts';
 import { wantsHuddleStart } from './huddle-entry.ts';
@@ -182,16 +181,13 @@ async function mountMarkdown(ctx: MountContext): Promise<void> {
   const editorMount = el<HTMLElement>('editor');
   const composer = el<HTMLElement>('composer');
   const commentPill = el<HTMLButtonElement>('comment-pill');
-  // The pill's markup says "Add comment" because that is all it ever did. On
-  // a huddle doc a RANGE selection grows the pointer pill instead (see
-  // doc/doc-pointer-pill.ts), and the round pill only survives in caret mode,
-  // where its job is to make the selection the pointer pill then hangs off.
-  // Named for where it leads.
+  // The pill's markup says "Add comment" because that is all it ever did, and
+  // on a huddle doc that is now all it leads to as well. It was relabelled
+  // "Turn this line into work" here while a range selection grew a pill
+  // offering Research and Create Task (see doc/doc-pointer-pill.ts); those
+  // went on 2026-09-04, so the label goes with them rather than promising a
+  // menu of work that no longer opens.
   const huddle = ctx.huddle === true;
-  if (huddle) {
-    commentPill.setAttribute('aria-label', 'Turn this line into work');
-    commentPill.title = 'Turn this line into work';
-  }
   const formatBar = el<HTMLElement>('format-bar');
   const toggleFormat = el<HTMLButtonElement>('toggle-format');
   const toggleEditMode = el<HTMLButtonElement>('toggle-edit-mode');
@@ -390,11 +386,14 @@ async function mountMarkdown(ctx: MountContext): Promise<void> {
   });
 
   // ---- Selection affordances ----
-  // Three modules, wired in the order they depend on each other: what a
-  // spun-off selection becomes (doc-spinoff), the pointer pill a huddle doc
-  // grows over a range (doc-pointer-pill), and the round comment pill that
-  // owns the cached selection both of them read (doc-comment-pill).
-  const takeSpinoff = createSpinoffRunner({ docId, ydoc, user, editor, meta: ctx });
+  // Two modules, wired in the order they depend on each other: the pointer
+  // pill a huddle doc grows over a range (doc-pointer-pill), and the round
+  // comment pill that owns the cached selection it reads (doc-comment-pill).
+  //
+  // There was a third — `createSpinoffRunner`, which turned a selection into
+  // a board row or a research section. Nothing calls it from here as of
+  // 2026-09-04: the pill offers only Comment, and the ask is made in the
+  // comment. `doc/doc-spinoff.ts` and the routes behind it are untouched.
   const pointer = mountPointerPillLayer({
     huddle,
     editor,
@@ -403,7 +402,6 @@ async function mountMarkdown(ctx: MountContext): Promise<void> {
     getSelection: () => pill?.currentSelection() ?? null,
     hideAll: () => pill?.hide(),
     openComposer: () => reviewChrome.openComposer(),
-    takeSpinoff: (action, sel, range) => void takeSpinoff(action, sel, range),
   });
   pill = mountCommentPill({
     huddle,

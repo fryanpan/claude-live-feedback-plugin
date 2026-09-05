@@ -13,7 +13,11 @@
  * into `mountReviewChrome`.
  */
 import { type Thread, type User, authorLabel, formatTime } from '@feedback/core';
-import { attachMarkdownComposer, focusMarkdownComposer } from '../md-composer.ts';
+import {
+  attachMarkdownComposer,
+  blurMarkdownComposer,
+  focusMarkdownComposer,
+} from '../md-composer.ts';
 import type { ReviewSurface } from '../review-surface.ts';
 import type { ThreadPanel } from '../threads.ts';
 import { type ChromeSelection, anchorBody } from './anchor-body.ts';
@@ -117,24 +121,30 @@ export function wireReviewComposer(opts: ComposerOptions): ComposerHandle {
   let composerRequestId: string | null = null;
 
   /**
-   * The caret is put in the box 30ms after it opens, and the highlight is
-   * scrolled to 150ms after a comment posts. Both are timers that can outlive
-   * what they are aimed at — a composer the reader dismissed, or a whole mount
-   * the router disposed — so each is held and cancelled rather than left to
-   * fire into a dead document. The focus one is the sharp edge: Tiptap's focus
+   * The highlight is scrolled to 150ms after a comment posts — a timer that
+   * can outlive what it is aimed at (a whole mount the router disposed), so
+   * it is held and cancelled rather than left to fire into a dead document.
+   *
+   * The CARET used to be on a timer beside it, 30ms out, and that one is
+   * gone. It could outlive the composer in the sharper way — Tiptap's focus
    * command reaches for `requestAnimationFrame`, which a torn-down page no
-   * longer has, so a late focus throws where a late scroll would merely waste.
+   * longer has — and it cost the thing it was scheduled for: iOS raises the
+   * keyboard only for a focus that happens inside the gesture that asked for
+   * it, so a caret 30ms behind the tap was a caret with no keyboard under it,
+   * and the reader had to tap the box again (Bryan, 2026-09-04: "when user
+   * clicks comment, focus immediately on the text input"). The focus is now
+   * synchronous inside `openComposer`, and `hideComposer` gives the caret
+   * back — which is what the timer's cancellation was really buying.
    */
-  let focusTimer: ReturnType<typeof setTimeout> | null = null;
   let postScrollTimer: ReturnType<typeof setTimeout> | null = null;
-  function cancelFocus(): void {
-    if (focusTimer !== null) clearTimeout(focusTimer);
-    focusTimer = null;
-  }
   opts.onCleanup?.(() => {
-    cancelFocus();
     if (postScrollTimer !== null) clearTimeout(postScrollTimer);
     postScrollTimer = null;
+    // `#composer` is shell DOM that outlives this mount, so a composer left
+    // open by a navigation is a box wired to the document the reader just
+    // left — its submit would post to the old `docId`. Close it, which also
+    // takes the caret back out of it.
+    hideComposer();
   });
 
   /**
@@ -163,19 +173,21 @@ export function wireReviewComposer(opts: ComposerOptions): ComposerHandle {
     // told — otherwise the previous comment is still sitting in the box the
     // reviewer just opened for a new one.
     refreshComposer();
-    // Focusing without scrolling stops iOS's auto-scroll-to-focus from
-    // yanking the page — what `preventScroll` bought while this was a
-    // textarea.
-    cancelFocus();
-    focusTimer = setTimeout(() => {
-      focusTimer = null;
-      focusMarkdownComposer(composerText, null, { scroll: false });
-    }, 30);
+    // SYNCHRONOUS, and it has to stay that way: everything above this line is
+    // DOM work with nothing awaited, so the focus still sits inside the click
+    // that opened the composer and iOS raises the keyboard on that tap rather
+    // than the next one. Focusing without scrolling stops iOS's
+    // auto-scroll-to-focus from yanking the page — what `preventScroll`
+    // bought while this was a textarea.
+    focusMarkdownComposer(composerText, null, { scroll: false });
     opts.onComposerOpened?.();
   }
   function hideComposer(): void {
-    // The composer is going away; the caret must not follow it there.
-    cancelFocus();
+    // The composer is going away; the caret must not stay in a box nobody can
+    // see. A real browser blurs a focused element it hides, and happy-dom
+    // does not — so say it, rather than letting the test environment and the
+    // product disagree about who holds the caret.
+    blurMarkdownComposer(composerText);
     composer.classList.add('hidden');
     composerScrim.classList.add('hidden');
     document.body.classList.remove('composer-open');

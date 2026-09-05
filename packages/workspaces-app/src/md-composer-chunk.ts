@@ -83,6 +83,9 @@ export function createComposerEditor(opts: CreateComposerEditorOpts): ComposerEd
       if (typeof requestAnimationFrame !== 'function') return;
       editor.commands.focus(sel ? undefined : 'end', { scrollIntoView });
     },
+    blur() {
+      editor.commands.blur();
+    },
     selection() {
       const { from, to } = editor.state.selection;
       return { from, to };

@@ -1124,6 +1124,13 @@ Cost, measured on the capture model with `count_tokens` rather than estimated
 (`scripts/capture-overlap-cost.ts`): **+92 input tokens per tick** at a full
 window — 43 for the standing instruction, 49 for the speech.
 
+> **The tap is gone as of 2026-09-04, the payloads are not.** Bryan cut the
+> pointer pill to a single Comment button, so nothing in the UI presses
+> Research or Create Task; a reader asks for either inside the comment
+> instead. Everything this section describes — the bodies, the placement, the
+> routes, `runSpinoff`, and the whole spoken path — is unchanged, which is
+> why the two verbs are still named below as what a spoken ask matches.
+
 **A spoken request files what the same words tapped would file** (2026-09-01,
 the mid-meeting-help board task, criterion 3). The pointer pill's Create Task and the
 capture pass are one path with two triggers: both build the body with
