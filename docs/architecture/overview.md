@@ -17,7 +17,7 @@ flowchart TB
   plug["plugin<br/>skills · hooks · bundled mcp"]
   mcp["mcp<br/>stdio MCP server"]
   subgraph srv["server — one Bun process"]
-    edge["HTTP edge<br/>server.ts · routes/ · middleware/ · shells.ts<br/>request-admission · request-attribution<br/>upgrade-stream · socket-handlers · shell-static"]
+    edge["HTTP edge<br/>server.ts · routes/ · middleware/ · shells.ts<br/>request-admission · request-attribution<br/>socket-handlers · server-options"]
     docs["Docs and rooms<br/>rooms.ts · binds.ts · file-binding.ts<br/>doc-*.ts · yjs-protocol.ts · sse.ts · sse-mux.ts"]
     board["Board<br/>tasks.ts · task-*.ts · review-items/<br/>home-pane.ts · board-membership.ts · activity.ts"]
     meet["Meetings<br/>meetings.ts · meeting-*.ts · notes-*.ts<br/>transcribe-*.ts · recall*.ts"]
@@ -50,6 +50,18 @@ flowchart TB
 | `widget` | The injectable comment widget for mockups and dev servers. | 40 KB gzipped (`check:widget-size`). Vanilla JS, no framework deps. |
 | `plugin` | Skills, hooks, and a bundled copy of `mcp`. | Version bumped in three places; see CLAUDE.md. |
 
+**Where a route lives.** Everything that decides which URL paths it answers is
+under `routes/`, `server.ts` composes and delegates to it and matches nothing
+itself, and imports point one way: `server.ts` → `routes/` → everything else.
+So `routes/shell-static.ts` (which page or asset an address gets) and
+`routes/upgrade-stream.ts` (this request wants a connection, not a response)
+sit there rather than at the top level, while `request-admission.ts`,
+`request-attribution.ts` and `socket-handlers.ts` stay top-level because they
+run for a request whatever path it named. `server-options.ts` holds
+`ServerOptions` so a route can name it without importing the router back, and
+`review-gate-types.ts` holds the two verdict shapes a route and the gate both
+need. Full rule: [.claude/rules/code-health.md](../../.claude/rules/code-health.md).
+
 **Which channel carries what.** *Yjs*, one WebSocket per document, carries what
 two people watch change under each other's cursors: text, threads, replies,
 suggestions, anchors, presence, live notes. Agents hold no replica, so an agent
@@ -64,7 +76,7 @@ value. *SSE* pushes changes to anyone holding no Yjs socket for them.
 
 | Layer | Where it lives | Why it is its own layer |
 | --- | --- | --- |
-| **HTTP** | `server.ts`, `routes/**`, `middleware/**`, `shells.ts`, `shell-static.ts`, `request-admission.ts`, `upgrade-stream.ts`, `socket-handlers.ts` | The only code that knows about HTTP. Parse, admit, call one service, format. |
+| **HTTP** | `server.ts`, `routes/**`, `middleware/**`, `shells.ts`, `request-admission.ts`, `request-attribution.ts`, `socket-handlers.ts` | The only code that knows about HTTP. Parse, admit, call one service, format. |
 | **Services / stores** | `rooms.ts`, `tasks.ts` and the `task-*` stores, `review-items/**`, `home-pane.ts`, `share/**`, `auth/**`, the `meeting-*` and `notes-*` families, `sse.ts`, `activity.ts` | Owns durable state and orchestrates one change across stores and adapters. |
 | **Domain (pure)** | `task-owner.ts`, `task-fields.ts`, `task-row.ts`, `decision-shape.ts`, `safe-path.ts`, `diff-groups.ts`, `pause-ticker.ts`, `keep-moving.ts`, `stall-gate.ts`, `notes-section.ts`, `ask-detection.ts` | Functions over values: no clock, filesystem or socket unless passed in, so a rule is testable without a server. |
 | **Adapters** | `transcribe-*.ts`, `recall*.ts`, `google-oauth.ts`, `summarize.ts`, `deploy*.ts`, `client-release.ts`, `push-notify.ts`, `share/cf-api.ts`, `share/keychain.ts`, `git-diff.ts`, `sentry.ts` | One vendor or OS facility each, behind an injected interface, so a swap or a test double touches one file and no state. |
@@ -127,3 +139,9 @@ exactly once, and nothing word-rate enters the SSE buffer.
 4. If it is a **top-level** module — a file or directory sitting directly in
    `packages/<pkg>/src/` — redraw the diagram above in the same PR.
    `bun run check:architecture` fails a PR that moves that map without it.
+5. In `server`, if it names a URL path it goes under `routes/`; if it runs for
+   every request whatever the path, or never sees a `Request`, it stays at the
+   top level. The rule and its two consequences are
+   [.claude/rules/code-health.md](../../.claude/rules/code-health.md), "A route
+   lives in `routes/`", and `bun run check:imports` fails the import edges it
+   forbids.

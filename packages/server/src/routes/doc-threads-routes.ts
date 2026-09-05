@@ -45,7 +45,7 @@ import {
   parsePlacement,
   parseSuggestionAuthor,
   withSyncError,
-} from './docs.ts';
+} from './docs-routes-context.ts';
 
 /** A comment's optional Review Item declaration, checked at the door.
  *
