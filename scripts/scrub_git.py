@@ -208,3 +208,42 @@ def push_files(rev_args: List[str]) -> List[str]:
             seen.add(path)
             files.append(path)
     return files
+
+
+def becoming_public_shas(rev_args: List[str]) -> set:
+    """The commits this push would publish, as full shas.
+
+    The push gate reads WHOLE BLOBS, so a finding it reports may be text the
+    branch never wrote — a file it merely touched, whose offending line has
+    been on the remote for weeks. Knowing which of the two it is decides the
+    remedy, and the remedy is the expensive part: history rewrite versus a
+    forward anonymization commit. The gate used to make the writer work that
+    out by hand, and one of them (PR 723) guessed wrong first.
+    """
+    out = _git(["git", "rev-list", *rev_args])
+    return {line.strip() for line in out.splitlines() if line.strip()}
+
+
+def blame_line(rev: str, path: str, line_no: int) -> Optional[tuple]:
+    """(sha, subject) of the commit that last wrote `path:line_no` at `rev`.
+
+    None when blame cannot answer — a path git named that the rev does not
+    carry, a line past end of file, no git at all. The caller degrades to an
+    unannotated finding rather than losing the finding itself.
+    """
+    out = _git([
+        "git", "blame", "--porcelain", "-L", f"{line_no},{line_no}",
+        rev, "--", path,
+    ])
+    if not out:
+        return None
+    first = out.split("\n", 1)[0].split(" ")
+    if not first or len(first[0]) < 7:
+        return None
+    sha = first[0]
+    subject = ""
+    for line in out.split("\n"):
+        if line.startswith("summary "):
+            subject = line[len("summary "):].strip()
+            break
+    return sha, subject
