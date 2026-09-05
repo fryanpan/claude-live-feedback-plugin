@@ -101,7 +101,7 @@ describe('classifyOpenTasks — a note on the row is activity', () => {
 const WAITING_NOTE =
   'Waiting on Bryan: the four factual corrections sit in the doc as accept/reject suggestions, and the voice items above are his to make. Nothing for the agent to do.';
 const PARKED_NOTE =
-  "A56 std arm is parked on Bryan's (a) build-only / (b) rebuild with the install intent and rerun / (c) harness fix";
+  "R12 std arm is parked on Bryan's (a) build-only / (b) rebuild with the install intent and rerun / (c) harness fix";
 const PROGRESS_NOTE = 'All three adversarial-review breaks verified real and fixed.';
 
 /** The prefilter alone — no judge, which is the state a box with no summary

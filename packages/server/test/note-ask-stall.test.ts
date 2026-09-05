@@ -38,7 +38,7 @@ function input(
     tasks: [
       {
         id: 't-arm',
-        title: 'Land the A56 standard arm',
+        title: 'Land the R12 standard arm',
         status: 'in-progress',
         goal: 'g1',
         createdAt: now - 300 * MIN,
@@ -152,7 +152,7 @@ function snapshot(over: Partial<StallSnapshot>): StallSnapshot {
 
 describe('StallNudger — the same row coming back as an unfiled ask', () => {
   it('wakes the lead again, because the bucket changed even though the row did not', () => {
-    const row = { id: 't-arm', title: 'Land the A56 standard arm', quietMs: 40 * MIN };
+    const row = { id: 't-arm', title: 'Land the R12 standard arm', quietMs: 40 * MIN };
     let phase: 'stalled' | 'unfiled' = 'stalled';
     const { sent, nudger, advance } = nudgerHarness(() =>
       phase === 'stalled'
@@ -185,7 +185,7 @@ describe('the stall event name is unchanged', () => {
         unfiled: [
           {
             id: 't-arm',
-            title: 'Land the A56 standard arm',
+            title: 'Land the R12 standard arm',
             bucket: 'blocked-on-owner-unfiled',
             quietMs: 40 * MIN,
           },
