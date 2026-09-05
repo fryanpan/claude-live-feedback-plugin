@@ -131,8 +131,8 @@ describe('a legacy evidence payload on the transition route', () => {
 describe('evidence already stored on a transition', () => {
   let dataDir: string;
   let store: TaskStore;
-  const wsId = 'w-storedevid1';
-  const taskId = 't-stored-evidence';
+  const wsId = 'w-stored1';
+  const taskId = 't-stored';
   const OLD_TS = 1_700_000_000_000;
 
   /** A sidecar written by a build that still recorded evidence — a transition
