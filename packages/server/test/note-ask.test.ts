@@ -21,7 +21,7 @@ const PEOPLE = ['Bryan'];
 const ASKS: ReadonlyArray<[label: string, text: string]> = [
   [
     'parked on a named person with the options spelled out',
-    "A56 std arm is parked on Bryan's (a) build-only / (b) rebuild with the install intent and rerun / (c) harness fix",
+    "R12 std arm is parked on Bryan's (a) build-only / (b) rebuild with the install intent and rerun / (c) harness fix",
   ],
   [
     'waiting on a named person, with the agent saying it has nothing to do',
@@ -38,11 +38,11 @@ const NOT_ASKS: ReadonlyArray<[label: string, text: string]> = [
   ],
   [
     'opens by denying it, and reports a run in flight',
-    'Not stalled: the A56 Quick Build arm is running (driver alive since 14:42Z, 21 of 34 apps have events).',
+    'Not stalled: the R12 fast-build arm is running (driver alive since 14:42Z, 21 of 34 apps have events).',
   ],
   [
     'plain progress with no waiting vocabulary at all',
-    'All three adversarial-review breaks verified real and fixed (qb-04 first-frame ordering…)',
+    'All three adversarial-review breaks verified real and fixed (rb-04 first-frame ordering…)',
   ],
   [
     'waiting on a MACHINE is work, not an ask',
@@ -68,7 +68,7 @@ describe('noteReadsAsWaitingOnPerson — the deterministic prefilter', () => {
   }
 
   it('needs a PERSON, not just a waiting phrase — the name is what supplies one', () => {
-    const text = "A56 std arm is parked on Bryan's build-only run";
+    const text = "R12 std arm is parked on Bryan's build-only run";
     // Positive control first: with the board's person named, it is an ask.
     expect(noteReadsAsWaitingOnPerson(text, ['Bryan'])).toBe(true);
     // The same words with nobody on the board called that: the phrase alone
@@ -223,7 +223,7 @@ describe('NoteAskClassifier — the confirmation, and what happens without one',
 
   it('the person names can be swapped between boards without clearing the cache', async () => {
     const c = new NoteAskClassifier({ personNames: [], judge: async () => true });
-    const named = { ts: 9_000, text: "A56 std arm is parked on Bryan's build-only run" };
+    const named = { ts: 9_000, text: "R12 std arm is parked on Bryan's build-only run" };
     expect(c.asks(named)).toBe(false);
     c.setPersonNames(['Bryan']);
     expect(c.asks(named)).toBe(true);
