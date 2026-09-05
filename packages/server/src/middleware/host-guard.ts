@@ -855,9 +855,9 @@ export function shareScopeAllows(
     // What stays off the table is the agent roster's own verbs — the writes
     // under `/workspaces/<id>/agents`, `dispatches`, `agent-notes`: a seat on
     // the board, not work on it. The roster's READ moved with the route, to
-    // the `/workspaces/` block above. `voice` stays off too — it routes an utterance to
-    // the owner's agents, which is spending the owner's machine rather than
-    // working the board. Board lifecycle (`DELETE`, `rename`, `retired`,
+    // the `/workspaces/` block above. `voice` stays off too — it routes an
+    // utterance to the owner's agents, which is spending the owner's machine
+    // rather than working the board. Board lifecycle (`DELETE`, `rename`, `retired`,
     // `lead`) stays closed: a member was given a board to work on, not to
     // retire.
     if (pathname.startsWith('/api/workspaces/')) {
