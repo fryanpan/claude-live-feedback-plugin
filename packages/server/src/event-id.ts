@@ -2,7 +2,7 @@
  * A globally unique id for one broadcast — the thing `seq` is not.
  *
  * `room.seq` is a monotonic counter on the in-memory room, initialised to 0
- * by `Rooms.getOrCreate` and never written into the `.ydoc`. It separates two
+ * by `DocStore.getOrCreate` and never written into the `.ydoc`. It separates two
  * events WITHIN one server epoch and nothing more: every restart (a deploy, a
  * `bun --watch` reload) rebuilds every room counting from 1 again, and a room
  * destroyed and re-created under a live server does the same. A subscriber
@@ -18,7 +18,7 @@
  * before the fan-out — so every channel carrying that broadcast carries the
  * same string, and no two broadcasts anywhere ever share one.
  *
- * Its own module (rather than a pair of `let`s in rooms.ts) so a test can
+ * Its own module (rather than a pair of `let`s in doc-store.ts) so a test can
  * prove the process-scoped half: two subprocesses importing this must not
  * agree on `boot`, and nothing that boots a whole server can show that.
  */

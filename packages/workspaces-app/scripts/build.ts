@@ -27,14 +27,14 @@ const isWatch = process.argv.includes('--watch');
  */
 const HASHED = [
   'app.js',
-  'hub.js',
+  'board.js',
   'signin.js',
   'landing.js',
   'sentry.js',
   'sw.js',
   'styles.css',
   'doc.css',
-  'hub.css',
+  'board.css',
   'signin.css',
   'tokens.css',
   'index.html',
@@ -78,7 +78,7 @@ async function emit(buildId: string): Promise<boolean> {
     return false;
   }
 
-  // The workspace hub is its own entry (served at /app/hub.js by the shell
+  // The workspace board is its own entry (served at /app/board.js by the shell
   // the server renders for /workspaces/:id) — a separate build call because
   // each entry wants a fixed output name.
   //
@@ -95,8 +95,8 @@ async function emit(buildId: string): Promise<boolean> {
   // `/app/*`. The build id still moves when a chunk changes, because the
   // chunk's name carries a content hash and the entry imports it BY NAME —
   // so the hashed entry bytes change with it.
-  const hubResult = await Bun.build({
-    entrypoints: [join(pkgRoot, 'src', 'hub', 'hub-entry.ts')],
+  const boardResult = await Bun.build({
+    entrypoints: [join(pkgRoot, 'src', 'board', 'board-entry.ts')],
     outdir: dist,
     target: 'browser',
     format: 'esm',
@@ -104,15 +104,15 @@ async function emit(buildId: string): Promise<boolean> {
     sourcemap: 'external',
     define,
     naming: {
-      entry: 'hub.js',
+      entry: 'board.js',
       chunk: '[name]-[hash].js',
       asset: '[name].[ext]',
     },
     minify: process.env.NODE_ENV !== 'dev' && !isWatch,
   });
-  if (!hubResult.success) {
-    console.error('hub build failed:');
-    for (const m of hubResult.logs) console.error(m);
+  if (!boardResult.success) {
+    console.error('board build failed:');
+    for (const m of boardResult.logs) console.error(m);
     if (!isWatch) process.exit(1);
     return false;
   }
@@ -210,10 +210,10 @@ async function emit(buildId: string): Promise<boolean> {
   cpSync(join(pkgRoot, 'src', 'styles.css'), join(dist, 'styles.css'));
   // The review editor's own rules, loaded by index.html AFTER styles.css.
   cpSync(join(pkgRoot, 'src', 'doc.css'), join(dist, 'doc.css'));
-  // The board's own rules, loaded by the hub shell on top of styles.css.
+  // The board's own rules, loaded by the board shell on top of styles.css.
   // Copied rather than bundled for the same reason styles.css is: a
   // stylesheet the shells name by URL has to exist under that name.
-  cpSync(join(pkgRoot, 'src', 'hub.css'), join(dist, 'hub.css'));
+  cpSync(join(pkgRoot, 'src', 'board.css'), join(dist, 'board.css'));
   cpSync(join(pkgRoot, 'src', 'signin.css'), join(dist, 'signin.css'));
   // The Open Props trial layer: the vendored subset (self-hosted — a strict
   // CSP and offline tailnet use forbid CDN hosts) concatenated with the
@@ -233,7 +233,7 @@ async function emit(buildId: string): Promise<boolean> {
 
   // ── Content-addressed copies of everything a shell names ────────────────
   //
-  // The shells (this index.html, and the hub/sign-in shells the server
+  // The shells (this index.html, and the board/sign-in shells the server
   // renders) used to point at permanent URLs, so whether a reloaded tab got
   // the new bundle was the browser's call and nothing the server sent could
   // overrule it. Emitting `app-<hash>.js` beside `app.js` makes new bytes a

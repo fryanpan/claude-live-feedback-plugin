@@ -8,11 +8,11 @@ import { type ServerHandle, createServer } from '../src/server.ts';
 /**
  * `deletedSnippet` round-trips through the REAL REST routes.
  *
- * The point of this test is the ROUTE, not the rooms method. `docs/process/
+ * The point of this test is the ROUTE, not the doc-store method. `docs/process/
  * learnings.md` records how `groups` shipped broken: it was added to the MCP
  * tool schema and to bindDiff, but the route that fronts bindDiff never
  * forwarded it — the API returned ok:true and discarded the value, and unit
- * tests passed because they called the rooms method directly.
+ * tests passed because they called the doc-store method directly.
  *
  * A comment on struck-through text in the redline view has no position in
  * `content` (deleted text exists only on the base side), so its anchor snaps
@@ -73,7 +73,7 @@ describe('deletedSnippet anchor hint (HTTP)', () => {
   /** Build a text-range anchor over the doc's first line, exactly the way the
    *  flat surfaces do (CM offsets are byte-identical to `content` indices). */
   function anchorFirstLine(extra: Record<string, unknown> = {}) {
-    const room = handle.rooms.get(docId);
+    const room = handle.docStore.get(docId);
     if (!room) throw new Error('room missing');
     const content = room.ydoc.getText('content');
     const source = content.toString();

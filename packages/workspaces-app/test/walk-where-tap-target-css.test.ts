@@ -13,10 +13,10 @@ import { IPAD, PHONE, attach, installSheets, setViewport, styleOf } from './css-
  * happy-dom has no layout engine, so the rendered height is still a browser
  * check. What it CAN answer is whether the two declarations that make the box
  * atomic and give it a floor survive the cascade to the element — which is
- * what the old regex over `hub.css` could not, since a later rule putting the
+ * what the old regex over `board.css` could not, since a later rule putting the
  * button back to `display: inline` would have left the text read green.
  *
- * SHEETS: `hub.css` before `styles.css` is the order `renderHubShell` links
+ * SHEETS: `board.css` before `styles.css` is the order `renderBoardShell` links
  * them in; `tokens.css` is left out because the served file is a vendored Open
  * Props subset plus `src/tokens.css`, and the mapping half alone re-points
  * every remapped token at an undefined `var(--gray-N)`.
@@ -24,7 +24,7 @@ import { IPAD, PHONE, attach, installSheets, setViewport, styleOf } from './css-
 
 let cleanup = () => {};
 beforeEach(() => {
-  cleanup = installSheets('hub.css', 'styles.css');
+  cleanup = installSheets('board.css', 'styles.css');
 });
 afterEach(() => {
   cleanup();
@@ -32,10 +32,10 @@ afterEach(() => {
 });
 
 describe('the card’s pointer out is thumb-sized', () => {
-  it('gives .hub-walk-where-link an atomic box with a 36px floor at every width', () => {
+  it('gives .board-walk-where-link an atomic box with a 36px floor at every width', () => {
     for (const vp of [IPAD, PHONE]) {
       setViewport(vp);
-      const link = styleOf(attach('hub-walk-where-link', { tag: 'button' }));
+      const link = styleOf(attach('board-walk-where-link', { tag: 'button' }));
       // `inline-flex` is the half that matters — `min-height` on a plain
       // inline box is ignored outright, so the floor without it says nothing.
       expect(link.display, `${vp.width}px`).toBe('inline-flex');
@@ -48,7 +48,7 @@ describe('the card’s pointer out is thumb-sized', () => {
     // no floor at all. Without this an empty stylesheet would look like a
     // renamed class rather than like a broken harness.
     setViewport(PHONE);
-    const bare = styleOf(attach('hub-walk-where-link-not-a-class', { tag: 'button' }));
+    const bare = styleOf(attach('board-walk-where-link-not-a-class', { tag: 'button' }));
     expect(bare.display).toBe('inline-block');
     expect(bare.minHeight).toBe('');
   });

@@ -498,7 +498,7 @@ describe('the board projection', () => {
     expect(added.ok).toBe(true);
     handle.projection.refresh(ws);
 
-    const room = handle.rooms.get(`ws:${ws}`);
+    const room = handle.docStore.get(`ws:${ws}`);
     if (!room) throw new Error('no board room');
     const map = room.ydoc.getMap('tasks');
     const projectedDecision = map.get(decision.id) as Record<string, unknown>;
@@ -537,7 +537,7 @@ describe('the board projection', () => {
         author: AGENT,
       }),
     );
-    const map = handle.rooms.get(`ws:${ws}`)?.ydoc.getMap('tasks');
+    const map = handle.docStore.get(`ws:${ws}`)?.ydoc.getMap('tasks');
     const projected = map?.get(task.id) as Record<string, unknown> | undefined;
     const reviews = projected?.reviews as Array<{ review: ReviewPayload }> | undefined;
     expect(reviews).toHaveLength(1);
@@ -572,7 +572,7 @@ describe('the board projection', () => {
     );
     const last = tasks.find((t) => t.title === 'rebuild the index');
     expect(last, JSON.stringify(tasks.map((t) => t.title))).toBeDefined();
-    const map = handle.rooms.get(`ws:${ws}`)?.ydoc.getMap('tasks');
+    const map = handle.docStore.get(`ws:${ws}`)?.ydoc.getMap('tasks');
     const projected = map?.get(last?.id ?? '') as Record<string, unknown> | undefined;
     const reviews = projected?.reviews as Array<{ review: ReviewPayload }> | undefined;
     expect(reviews).toHaveLength(1);

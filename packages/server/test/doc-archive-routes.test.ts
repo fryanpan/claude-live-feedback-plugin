@@ -1,7 +1,7 @@
 /**
  * The route half of archiving one free-standing doc.
  *
- * `Rooms.archiveDoc` moves files and writes a manifest; it knows nothing about
+ * `DocStore.archiveDoc` moves files and writes a manifest; it knows nothing about
  * BOARDS. Taking the doc's row off every board on the way out, and putting it
  * back on the way in, happens only in the route — so it is only testable here,
  * through the real HTTP surface, the same way the back-target suite covers the

@@ -53,7 +53,7 @@ export function setSidebarSignature(sig: string): void {
 }
 
 /** Forget the current signature (e.g. after clearing the sidebar for a doc that
- *  has no review set) so the next render always rebuilds. */
+ *  has no attachment set) so the next render always rebuilds. */
 export function resetSidebarSignature(): void {
   renderedSig = null;
 }

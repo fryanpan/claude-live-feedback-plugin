@@ -2,10 +2,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ACTIVE_WINDOW_MS, startReadingTracker } from '../src/reading-tracker.ts';
 
 /**
- * The `root` option — what makes the tracker mountable on the hub's ticket
+ * The `root` option — what makes the tracker mountable on the board's ticket
  * panel rather than only on a surface where the page IS the document.
  *
- * The hub is the reason it exists: a ticket opens as a panel over a board
+ * The board is the reason it exists: a ticket opens as a panel over a board
  * that is still on screen, so a tracker listening on `window` would accrue
  * every scroll of the rows behind it as time spent reading the ticket.
  */
@@ -40,9 +40,9 @@ const sessions = (): Posted[] => posted.filter((p) => p.type === 'read_session')
 
 function panel(): HTMLElement {
   const host = document.createElement('div');
-  host.id = 'hub-detail';
+  host.id = 'board-detail';
   const inner = document.createElement('div');
-  inner.className = 'hub-detail-panel';
+  inner.className = 'board-detail-panel';
   host.appendChild(inner);
   document.body.appendChild(host);
   return host;
@@ -60,9 +60,9 @@ describe('reading tracker scoped to a root element', () => {
     const host = panel();
     const stop = startReadingTracker({ docId: 'task:t-1', user: USER, root: host });
     host
-      .querySelector('.hub-detail-panel')
+      .querySelector('.board-detail-panel')
       ?.dispatchEvent(new Event('pointerdown', { bubbles: true }));
-    stop(); // the hub's close path — flushes what is in flight
+    stop(); // the board's close path — flushes what is in flight
     expect(sessions()).toHaveLength(1);
     expect(sessions()[0].payload.durationMs).toBe(ACTIVE_WINDOW_MS);
   });
@@ -86,7 +86,9 @@ describe('reading tracker scoped to a root element', () => {
     // `bubbles: false` is what a real scroll event is. Capture is the only
     // reason an ancestor hears it — if the listener were bubble-phase this
     // would record nothing.
-    host.querySelector('.hub-detail-panel')?.dispatchEvent(new Event('scroll', { bubbles: false }));
+    host
+      .querySelector('.board-detail-panel')
+      ?.dispatchEvent(new Event('scroll', { bubbles: false }));
     stop();
     expect(sessions()).toHaveLength(1);
   });
@@ -127,7 +129,7 @@ describe('reading tracker scoped to a root element', () => {
 
   it('resolves a scrollEl getter lazily, after the panel is painted', () => {
     const host = panel();
-    // The hub opens a ticket by writing a signal; the panel it scrolls does
+    // The board opens a ticket by writing a signal; the panel it scrolls does
     // not exist yet at this point. Start with the element absent.
     host.innerHTML = '';
     let asked = 0;
@@ -137,12 +139,12 @@ describe('reading tracker scoped to a root element', () => {
       root: host,
       scrollEl: () => {
         asked++;
-        return host.querySelector<HTMLElement>('.hub-detail-panel');
+        return host.querySelector<HTMLElement>('.board-detail-panel');
       },
     });
     // Painted a microtask later.
     const inner = document.createElement('div');
-    inner.className = 'hub-detail-panel';
+    inner.className = 'board-detail-panel';
     host.appendChild(inner);
     host.dispatchEvent(new Event('pointerdown', { bubbles: true }));
     stop();

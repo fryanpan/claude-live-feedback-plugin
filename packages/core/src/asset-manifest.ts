@@ -2,7 +2,7 @@
  * Content-addressed names for the assets an HTML shell loads.
  *
  * The entry bundles used to live at permanent URLs — `/app/app.js`,
- * `/app/hub.js` — and the only thing standing between a tab and last week's
+ * `/app/board.js` — and the only thing standing between a tab and last week's
  * code was `Cache-Control: no-cache`, which is a REQUEST to revalidate, not a
  * guarantee. When a browser declined to revalidate (iOS Safari, and a Home
  * Screen web app most of all, which keeps its own cache partition), the tab
@@ -40,13 +40,13 @@ export type AssetManifest = Record<string, string>;
  */
 export const SHELL_ASSETS = [
   'app.js',
-  'hub.js',
+  'board.js',
   'landing.js',
   'signin.js',
   'sentry.js',
   'styles.css',
   'doc.css',
-  'hub.css',
+  'board.css',
   'signin.css',
   'tokens.css',
 ] as const;

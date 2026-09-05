@@ -18,7 +18,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { type ServerHandle, createServer } from '../src/server.ts';
-import { taskBodyDocId, workspaceRoomId } from '../src/task-projection.ts';
+import { taskBodyDocId, workspaceDocId } from '../src/task-projection.ts';
 
 const PERSON = { id: 'known-bryan', name: 'Bryan', kind: 'known', color: '#2e7dd7' };
 
@@ -160,7 +160,7 @@ describe('task discussion', () => {
   it('the board projection counts the discussion', async () => {
     const { taskId, workspaceId } = await makeTaskIn('Wire the index');
     const docId = taskBodyDocId(taskId);
-    const room = handle.rooms.get(workspaceRoomId(workspaceId));
+    const room = handle.docStore.get(workspaceDocId(workspaceId));
     if (!room) throw new Error('ws room missing');
     const projected = () => room.ydoc.getMap('tasks').get(taskId) as { commentCount?: number };
 
@@ -188,9 +188,12 @@ describe('task discussion', () => {
    */
   it('a task comment reaches the workspace channel', async () => {
     const { taskId, workspaceId } = await makeTaskIn('Wire the index');
-    const stream = await fetch(`${base}/events/workspace/${encodeURIComponent(workspaceId)}`, {
-      headers: { host: `localhost:${handle.port}` },
-    });
+    const stream = await fetch(
+      `${base}/workspaces/${encodeURIComponent(workspaceId)}/events:stream`,
+      {
+        headers: { host: `localhost:${handle.port}` },
+      },
+    );
     expect(stream.status).toBe(200);
     const heard = listen(stream);
 

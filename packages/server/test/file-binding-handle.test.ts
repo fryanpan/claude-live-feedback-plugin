@@ -34,9 +34,9 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { type DocMeta, type WebhookPayload, prose } from '@feedback/core';
 import * as Y from 'yjs';
+import { DOC_STORE_TIMINGS } from '../src/doc-store-timings.ts';
+import type { DocRoom } from '../src/doc-store.ts';
 import { type FileBindingHost, FileBindings } from '../src/file-binding.ts';
-import { ROOM_TIMINGS } from '../src/room-timings.ts';
-import type { DocRoom } from '../src/rooms.ts';
 import { waitFor } from './wait-for.ts';
 
 const DOC_ID = 'bound-doc';
@@ -113,7 +113,7 @@ function recorder(dataDir: string, room: DocRoom): Recorder {
  * write landing in the same filesystem timestamp tick as the attach is
  * invisible to it forever. That is a real property of the mechanism, not a
  * bug to hide: it is why the write-back stamps its own mtime. Bumping the
- * stamp here (the same helper `doc-home-binding.test.ts` uses) is what makes
+ * stamp here (the same helper `doc-origin-repo-binding.test.ts` uses) is what makes
  * the assertion about the SWEEP rather than about how fast this machine is.
  */
 let mtimeBump = 0;
@@ -191,7 +191,7 @@ describe('a binding drives its room only through the host', () => {
 
     await waitFor(() => readFileSync(filePath, 'utf8').includes('live edit'), {
       describe: 'the write-back to reach disk',
-      timeout: ROOM_TIMINGS.writeBackMs + 4000,
+      timeout: DOC_STORE_TIMINGS.writeBackMs + 4000,
     });
 
     // The host is told LAST, and only once the bytes are on disk: the flag it
@@ -269,7 +269,7 @@ describe('a binding drives its room only through the host', () => {
     writeExternal(filePath, '# Doc\n\nseen by the poll\n');
     await waitFor(() => proseText(room).includes('seen by the poll'), {
       describe: 'the mtime poll to pull the external edit in',
-      timeout: ROOM_TIMINGS.filePollMs + ROOM_TIMINGS.readDebounceMs + 4000,
+      timeout: DOC_STORE_TIMINGS.filePollMs + DOC_STORE_TIMINGS.readDebounceMs + 4000,
     });
   });
 

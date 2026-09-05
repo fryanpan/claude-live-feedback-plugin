@@ -474,7 +474,7 @@ describe('shareScopeAllows (workspace share)', () => {
 
   it('allows the LAZY-OPEN endpoints — without them a shared folder shows one file', () => {
     // bind_folder binds only the entry doc; every other member comes into
-    // being through these calls. Bounded by the workspace root (rooms
+    // being through these calls. Bounded by the workspace root (the doc store
     // rejects an escaping relPath with 'bad-path').
     expect(shareScopeAllows('/api/workspaces/ws-1/files', 'GET', WS, workspaceOf)).toBe(true);
     expect(shareScopeAllows('/api/workspaces/ws-1/context-file', 'POST', WS, workspaceOf)).toBe(
@@ -713,11 +713,11 @@ describe('shareScopeAllows — a visitor is a reviewer, not an operator', () => 
   });
 });
 
-describe('shareScopeAllows (workspace-hub surfaces — §3.12 commit 8)', () => {
+describe('shareScopeAllows (workspace-board surfaces — §3.12 commit 8)', () => {
   // A board share. Every share is one now — it opens `/workspaces/<id>` and
   // scope comes entirely from workspaceId, which is why the target is a single
   // field rather than a landing doc plus a grant.
-  const HUB: ShareTarget = { workspaceId: 'hub-1' };
+  const BOARD: ShareTarget = { workspaceId: 'board-1' };
   // A share scoped to a DIFFERENT board — the neighbour that must not reach
   // this one. It used to be a doc-scoped share, then a doc-plus-workspace one;
   // the boundary it tests has always been board-to-board.
@@ -725,21 +725,23 @@ describe('shareScopeAllows (workspace-hub surfaces — §3.12 commit 8)', () => 
   const workspaceOf = (d: string) =>
     d === 'auth-rfc'
       ? ['ws-a']
-      : d.startsWith('hub-1:')
-        ? ['hub-1']
+      : d.startsWith('board-1:')
+        ? ['board-1']
         : // A task row and a goal row on each board. The guard asks about a
           // row as `task:<rowId>`, so this is what makes a row-scoped route
           // resolvable at all — and `task:t-other` answering `ws-a` is what
           // makes the cross-board negative below a real one.
           d === 'task:t-1' || d === 'task:g-1'
-          ? ['hub-1']
+          ? ['board-1']
           : d === 'task:t-other'
             ? ['ws-a']
             : [];
 
-  it('allows the hub page for a workspace-scope share', () => {
-    expect(shareScopeAllows('/workspaces/hub-1', 'GET', HUB)).toBe(true);
-    expect(shareScopeAllows(`/workspaces/${encodeURIComponent('hub-1')}`, 'GET', HUB)).toBe(true);
+  it('allows the board page for a workspace-scope share', () => {
+    expect(shareScopeAllows('/workspaces/board-1', 'GET', BOARD)).toBe(true);
+    expect(shareScopeAllows(`/workspaces/${encodeURIComponent('board-1')}`, 'GET', BOARD)).toBe(
+      true,
+    );
   });
 
   it('never lets a share host reach the plugin refresh', () => {
@@ -749,55 +751,61 @@ describe('shareScopeAllows (workspace-hub surfaces — §3.12 commit 8)', () => 
     // step on someone's laptop. The allowlist is closed-by-default so this
     // was already true the moment the route existed — this pins it, because
     // "closed by default" is a property of a file somebody can edit.
-    for (const target of [HUB, OTHER_WS]) {
+    for (const target of [BOARD, OTHER_WS]) {
       expect(shareScopeAllows('/api/plugin/refresh', 'POST', target, workspaceOf)).toBe(false);
       expect(shareScopeAllows('/api/plugin/refresh', 'GET', target, workspaceOf)).toBe(false);
     }
     // Positive control: the same targets DO reach their own surfaces, so the
     // refusals above are about this path and not about the fixture.
-    expect(shareScopeAllows('/workspaces/hub-1', 'GET', HUB, workspaceOf)).toBe(true);
+    expect(shareScopeAllows('/workspaces/board-1', 'GET', BOARD, workspaceOf)).toBe(true);
     expect(shareScopeAllows('/api/docs/auth-rfc', 'GET', OTHER_WS, workspaceOf)).toBe(true);
   });
 
   it('allows the ws:<id> board room socket (the resolver knows nothing of it)', () => {
     // The room is not a member doc — its allowance is explicit, so pass a
     // resolver that knows nothing about it and watch it still pass.
-    expect(shareScopeAllows('/y/ws%3Ahub-1', 'GET', HUB, () => [])).toBe(true);
-    expect(shareScopeAllows('/y/ws:hub-1', 'GET', HUB, () => [])).toBe(true);
+    expect(shareScopeAllows('/y/ws%3Aboard-1', 'GET', BOARD, () => [])).toBe(true);
+    expect(shareScopeAllows('/y/ws:board-1', 'GET', BOARD, () => [])).toBe(true);
   });
 
   it('allows the workspace SSE feed', () => {
-    expect(shareScopeAllows('/events/workspace/hub-1', 'GET', HUB, () => [])).toBe(true);
+    expect(shareScopeAllows('/workspaces/board-1/events:stream', 'GET', BOARD, () => [])).toBe(
+      true,
+    );
   });
 
   it('a share on ANOTHER board gets NONE of the three (the §3.3 rule-2 boundary)', () => {
-    expect(shareScopeAllows('/workspaces/hub-1', 'GET', OTHER_WS, workspaceOf)).toBe(false);
-    expect(shareScopeAllows('/y/ws%3Ahub-1', 'GET', OTHER_WS, workspaceOf)).toBe(false);
-    expect(shareScopeAllows('/y/ws:hub-1', 'GET', OTHER_WS, workspaceOf)).toBe(false);
-    expect(shareScopeAllows('/events/workspace/hub-1', 'GET', OTHER_WS, workspaceOf)).toBe(false);
+    expect(shareScopeAllows('/workspaces/board-1', 'GET', OTHER_WS, workspaceOf)).toBe(false);
+    expect(shareScopeAllows('/y/ws%3Aboard-1', 'GET', OTHER_WS, workspaceOf)).toBe(false);
+    expect(shareScopeAllows('/y/ws:board-1', 'GET', OTHER_WS, workspaceOf)).toBe(false);
+    expect(
+      shareScopeAllows('/workspaces/board-1/events:stream', 'GET', OTHER_WS, workspaceOf),
+    ).toBe(false);
     // Positive control: the same three, for the board that share DOES cover.
     // Without it a target that reached no board at all would pass this test.
     expect(shareScopeAllows('/workspaces/ws-a', 'GET', OTHER_WS, workspaceOf)).toBe(true);
     expect(shareScopeAllows('/y/ws%3Aws-a', 'GET', OTHER_WS, workspaceOf)).toBe(true);
-    expect(shareScopeAllows('/events/workspace/ws-a', 'GET', OTHER_WS, workspaceOf)).toBe(true);
+    expect(shareScopeAllows('/workspaces/ws-a/events:stream', 'GET', OTHER_WS, workspaceOf)).toBe(
+      true,
+    );
   });
 
-  it('BLOCKS another workspace’s hub surfaces', () => {
-    expect(shareScopeAllows('/workspaces/hub-2', 'GET', HUB)).toBe(false);
-    expect(shareScopeAllows('/y/ws%3Ahub-2', 'GET', HUB)).toBe(false);
-    expect(shareScopeAllows('/events/workspace/hub-2', 'GET', HUB)).toBe(false);
+  it('BLOCKS another workspace’s board surfaces', () => {
+    expect(shareScopeAllows('/workspaces/board-2', 'GET', BOARD)).toBe(false);
+    expect(shareScopeAllows('/y/ws%3Aboard-2', 'GET', BOARD)).toBe(false);
+    expect(shareScopeAllows('/workspaces/board-2/events:stream', 'GET', BOARD)).toBe(false);
   });
 
-  it('BLOCKS non-GET on the hub page and anything nested under it', () => {
-    expect(shareScopeAllows('/workspaces/hub-1', 'POST', HUB)).toBe(false);
-    expect(shareScopeAllows('/workspaces/hub-1/extra', 'GET', HUB)).toBe(false);
-    expect(shareScopeAllows('/workspaces', 'GET', HUB)).toBe(false);
+  it('BLOCKS non-GET on the board page and anything nested under it', () => {
+    expect(shareScopeAllows('/workspaces/board-1', 'POST', BOARD)).toBe(false);
+    expect(shareScopeAllows('/workspaces/board-1/extra', 'GET', BOARD)).toBe(false);
+    expect(shareScopeAllows('/workspaces', 'GET', BOARD)).toBe(false);
   });
 
   it('is not fooled by a prefix that merely starts with the workspace id', () => {
-    expect(shareScopeAllows('/workspaces/hub-1-other', 'GET', HUB)).toBe(false);
-    expect(shareScopeAllows('/y/ws%3Ahub-1-other', 'GET', HUB)).toBe(false);
-    expect(shareScopeAllows('/events/workspace/hub-1-other', 'GET', HUB)).toBe(false);
+    expect(shareScopeAllows('/workspaces/board-1-other', 'GET', BOARD)).toBe(false);
+    expect(shareScopeAllows('/y/ws%3Aboard-1-other', 'GET', BOARD)).toBe(false);
+    expect(shareScopeAllows('/workspaces/board-1-other/events:stream', 'GET', BOARD)).toBe(false);
   });
 
   /**
@@ -807,14 +815,14 @@ describe('shareScopeAllows (workspace-hub surfaces — §3.12 commit 8)', () => 
    * `<ws>` and `<ws>/attachments` were reopened to fix.
    */
   it('allows the review queue for a workspace share, and only its own workspace', () => {
-    expect(shareScopeAllows('/api/workspaces/hub-1/review-items', 'GET', HUB)).toBe(true);
-    expect(shareScopeAllows('/api/workspaces/hub-2/review-items', 'GET', HUB)).toBe(false);
+    expect(shareScopeAllows('/api/workspaces/board-1/review-items', 'GET', BOARD)).toBe(true);
+    expect(shareScopeAllows('/api/workspaces/board-2/review-items', 'GET', BOARD)).toBe(false);
     // A share on another board never reaches this one, review queue included.
     expect(
-      shareScopeAllows('/api/workspaces/hub-1/review-items', 'GET', OTHER_WS, workspaceOf),
+      shareScopeAllows('/api/workspaces/board-1/review-items', 'GET', OTHER_WS, workspaceOf),
     ).toBe(false);
     // Read-only, like every other allowance here.
-    expect(shareScopeAllows('/api/workspaces/hub-1/review-items', 'POST', HUB)).toBe(false);
+    expect(shareScopeAllows('/api/workspaces/board-1/review-items', 'POST', BOARD)).toBe(false);
   });
 
   /**
@@ -827,35 +835,35 @@ describe('shareScopeAllows (workspace-hub surfaces — §3.12 commit 8)', () => 
     // the name prompt `main()` awaits, so a member saw a modal and no board
     // behind it (measured in headless Chromium, 2026-09-03). The payload is
     // the caller's own identity, which Access already proved to get here.
-    expect(shareScopeAllows('/api/auth/session', 'GET', HUB, workspaceOf)).toBe(true);
+    expect(shareScopeAllows('/api/auth/session', 'GET', BOARD, workspaceOf)).toBe(true);
     // Read only, and the rest of the sign-in flow stays out — there is no
     // second sign-in behind Access to start or finish.
-    expect(shareScopeAllows('/api/auth/session', 'POST', HUB, workspaceOf)).toBe(false);
-    expect(shareScopeAllows('/api/auth/start', 'POST', HUB, workspaceOf)).toBe(false);
-    expect(shareScopeAllows('/api/auth/verify', 'POST', HUB, workspaceOf)).toBe(false);
-    expect(shareScopeAllows('/api/auth/profile', 'POST', HUB, workspaceOf)).toBe(false);
+    expect(shareScopeAllows('/api/auth/session', 'POST', BOARD, workspaceOf)).toBe(false);
+    expect(shareScopeAllows('/api/auth/start', 'POST', BOARD, workspaceOf)).toBe(false);
+    expect(shareScopeAllows('/api/auth/verify', 'POST', BOARD, workspaceOf)).toBe(false);
+    expect(shareScopeAllows('/api/auth/profile', 'POST', BOARD, workspaceOf)).toBe(false);
   });
 
   it('admits the board-participation routes on the shared workspace', () => {
     const cases: Array<[string, string]> = [
-      ['/api/workspaces/hub-1/tasks', 'GET'],
-      ['/api/workspaces/hub-1/tasks', 'POST'],
-      ['/api/workspaces/hub-1/home', 'GET'],
-      ['/api/workspaces/hub-1/home/read', 'POST'],
-      ['/api/workspaces/hub-1/goals/add', 'POST'],
-      ['/api/workspaces/hub-1/goals/rename', 'POST'],
-      ['/api/workspaces/hub-1/goals/reorder', 'POST'],
-      ['/api/workspaces/hub-1/home/instructions', 'PUT'],
+      ['/api/workspaces/board-1/tasks', 'GET'],
+      ['/api/workspaces/board-1/tasks', 'POST'],
+      ['/api/workspaces/board-1/home', 'GET'],
+      ['/api/workspaces/board-1/home/read', 'POST'],
+      ['/api/workspaces/board-1/goals/add', 'POST'],
+      ['/api/workspaces/board-1/goals/rename', 'POST'],
+      ['/api/workspaces/board-1/goals/reorder', 'POST'],
+      ['/api/workspaces/board-1/home/instructions', 'PUT'],
       // Full access to the board (Bryan, 2026-09-03): a doc filed on it, a
       // meeting started on it, its settings, its Activity tab and the boot
       // report the page itself writes.
-      ['/api/workspaces/hub-1/docs', 'POST'],
-      ['/api/workspaces/hub-1/huddles', 'POST'],
-      ['/api/workspaces/hub-1/settings', 'GET'],
-      ['/api/workspaces/hub-1/settings', 'PUT'],
-      ['/api/workspaces/hub-1/events', 'GET'],
-      ['/api/workspaces/hub-1/load-reports', 'GET'],
-      ['/api/workspaces/hub-1/load-reports', 'POST'],
+      ['/api/workspaces/board-1/docs', 'POST'],
+      ['/api/workspaces/board-1/huddles', 'POST'],
+      ['/api/workspaces/board-1/settings', 'GET'],
+      ['/api/workspaces/board-1/settings', 'PUT'],
+      ['/api/workspaces/board-1/events', 'GET'],
+      ['/api/workspaces/board-1/load-reports', 'GET'],
+      ['/api/workspaces/board-1/load-reports', 'POST'],
       ['/api/tasks/t-1/transition', 'POST'],
       ['/api/tasks/t-1/evidence', 'POST'],
       ['/api/tasks/t-1/title', 'POST'],
@@ -885,7 +893,7 @@ describe('shareScopeAllows (workspace-hub surfaces — §3.12 commit 8)', () => 
       ['/api/goals/g-1/restore', 'POST'],
     ];
     for (const [p, m] of cases) {
-      expect(shareScopeAllows(p, m, HUB, workspaceOf), `${m} ${p}`).toBe(true);
+      expect(shareScopeAllows(p, m, BOARD, workspaceOf), `${m} ${p}`).toBe(true);
     }
   });
 
@@ -899,7 +907,7 @@ describe('shareScopeAllows (workspace-hub surfaces — §3.12 commit 8)', () => 
       ['/api/tasks/t-other/review-items/r-9/answer', 'POST'],
       ['/api/tasks/t-unknown/transition', 'POST'],
     ] as Array<[string, string]>) {
-      expect(shareScopeAllows(p, m, HUB, workspaceOf), `${m} ${p}`).toBe(false);
+      expect(shareScopeAllows(p, m, BOARD, workspaceOf), `${m} ${p}`).toBe(false);
     }
   });
 
@@ -909,23 +917,23 @@ describe('shareScopeAllows (workspace-hub surfaces — §3.12 commit 8)', () => 
     // the board boundary and nothing else — and the positive test above is
     // the control that these paths can be reached at all.
     const cases: Array<[string, string]> = [
-      ['/api/workspaces/hub-1/tasks', 'GET'],
-      ['/api/workspaces/hub-1/tasks', 'POST'],
-      ['/api/workspaces/hub-1/home', 'GET'],
-      ['/api/workspaces/hub-1/home/read', 'POST'],
-      ['/api/workspaces/hub-1/home/instructions', 'PUT'],
-      ['/api/workspaces/hub-1/goals/add', 'POST'],
-      ['/api/workspaces/hub-1/goals/rename', 'POST'],
-      ['/api/workspaces/hub-1/goals/reorder', 'POST'],
-      ['/api/workspaces/hub-1/docs', 'POST'],
-      ['/api/workspaces/hub-1/huddles', 'POST'],
-      ['/api/workspaces/hub-1/settings', 'GET'],
-      ['/api/workspaces/hub-1/settings', 'PUT'],
-      ['/api/workspaces/hub-1/events', 'GET'],
-      ['/api/workspaces/hub-1/load-reports', 'GET'],
-      ['/api/workspaces/hub-1/load-reports', 'POST'],
-      ['/api/workspaces/hub-1/attachments', 'GET'],
-      ['/api/workspaces/hub-1/review-items', 'GET'],
+      ['/api/workspaces/board-1/tasks', 'GET'],
+      ['/api/workspaces/board-1/tasks', 'POST'],
+      ['/api/workspaces/board-1/home', 'GET'],
+      ['/api/workspaces/board-1/home/read', 'POST'],
+      ['/api/workspaces/board-1/home/instructions', 'PUT'],
+      ['/api/workspaces/board-1/goals/add', 'POST'],
+      ['/api/workspaces/board-1/goals/rename', 'POST'],
+      ['/api/workspaces/board-1/goals/reorder', 'POST'],
+      ['/api/workspaces/board-1/docs', 'POST'],
+      ['/api/workspaces/board-1/huddles', 'POST'],
+      ['/api/workspaces/board-1/settings', 'GET'],
+      ['/api/workspaces/board-1/settings', 'PUT'],
+      ['/api/workspaces/board-1/events', 'GET'],
+      ['/api/workspaces/board-1/load-reports', 'GET'],
+      ['/api/workspaces/board-1/load-reports', 'POST'],
+      ['/workspaces/board-1/agents', 'GET'],
+      ['/api/workspaces/board-1/review-items', 'GET'],
     ];
     for (const [p, m] of cases) {
       expect(shareScopeAllows(p, m, OTHER_WS, workspaceOf), `${m} ${p}`).toBe(false);
@@ -935,22 +943,22 @@ describe('shareScopeAllows (workspace-hub surfaces — §3.12 commit 8)', () => 
   it('keeps the board’s lifecycle out of a member’s hands, and the roster with it', () => {
     const cases: Array<[string, string]> = [
       // The agent roster's own verbs — a seat on the board, not work on it.
-      ['/api/workspaces/hub-1/attachments', 'POST'],
+      ['/workspaces/board-1/agents', 'POST'],
       // Board lifecycle.
-      ['/api/workspaces/hub-1', 'DELETE'],
-      ['/api/workspaces/hub-1/rename', 'POST'],
-      ['/api/workspaces/hub-1/retired', 'PUT'],
-      ['/api/workspaces/hub-1/lead', 'PUT'],
-      ['/api/workspaces/hub-1/goal', 'PUT'],
-      ['/api/workspaces/hub-1/goals', 'PUT'],
+      ['/api/workspaces/board-1', 'DELETE'],
+      ['/api/workspaces/board-1/rename', 'POST'],
+      ['/api/workspaces/board-1/retired', 'PUT'],
+      ['/api/workspaces/board-1/lead', 'PUT'],
+      ['/api/workspaces/board-1/goal', 'PUT'],
+      ['/api/workspaces/board-1/goals', 'PUT'],
       // Routing an utterance to the owner's agents is spending the owner's
       // machine, not working this board.
-      ['/api/workspaces/hub-1/voice', 'POST'],
+      ['/api/workspaces/board-1/voice', 'POST'],
       // Reads a file off the owner's disk by the path in the request body and
       // answers with what it parsed. A member never names a host path.
-      ['/api/workspaces/hub-1/import-tasks', 'POST'],
+      ['/api/workspaces/board-1/import-tasks', 'POST'],
       // A board route added later is closed until somebody names it.
-      ['/api/workspaces/hub-1/some-route-added-later', 'POST'],
+      ['/api/workspaces/board-1/some-route-added-later', 'POST'],
       // A row route this table does not name stays closed.
       ['/api/tasks/t-1', 'GET'],
       ['/api/tasks/t-1/reopen', 'POST'],
@@ -971,7 +979,7 @@ describe('shareScopeAllows (workspace-hub surfaces — §3.12 commit 8)', () => 
       ['/api/review-items/r-9', 'GET'],
     ];
     for (const [p, m] of cases) {
-      expect(shareScopeAllows(p, m, HUB, workspaceOf), `${m} ${p}`).toBe(false);
+      expect(shareScopeAllows(p, m, BOARD, workspaceOf), `${m} ${p}`).toBe(false);
     }
   });
 
@@ -985,17 +993,22 @@ describe('shareScopeAllows (workspace-hub surfaces — §3.12 commit 8)', () => 
     // A boolean here IS the assertion: `toBe(false)` cannot pass if the call
     // throws. Asserted on all three tables, since each one is read this way.
     for (const seg of ['toString', 'constructor', '__proto__', 'hasOwnProperty', 'valueOf']) {
-      expect(shareScopeAllows(`/api/tasks/t-1/${seg}`, 'POST', HUB, workspaceOf), seg).toBe(false);
-      expect(shareScopeAllows(`/api/goals/g-1/${seg}`, 'POST', HUB, workspaceOf), seg).toBe(false);
-      expect(shareScopeAllows(`/api/workspaces/hub-1/${seg}`, 'GET', HUB, workspaceOf), seg).toBe(
+      expect(shareScopeAllows(`/api/tasks/t-1/${seg}`, 'POST', BOARD, workspaceOf), seg).toBe(
         false,
       );
+      expect(shareScopeAllows(`/api/goals/g-1/${seg}`, 'POST', BOARD, workspaceOf), seg).toBe(
+        false,
+      );
+      expect(
+        shareScopeAllows(`/api/workspaces/board-1/${seg}`, 'GET', BOARD, workspaceOf),
+        seg,
+      ).toBe(false);
     }
     // Positive control on the same rows: the listed verbs still pass, so the
     // refusals above are the segment and not a table that stopped matching.
-    expect(shareScopeAllows('/api/tasks/t-1/transition', 'POST', HUB, workspaceOf)).toBe(true);
-    expect(shareScopeAllows('/api/goals/g-1/archive', 'POST', HUB, workspaceOf)).toBe(true);
-    expect(shareScopeAllows('/api/workspaces/hub-1/tasks', 'GET', HUB, workspaceOf)).toBe(true);
+    expect(shareScopeAllows('/api/tasks/t-1/transition', 'POST', BOARD, workspaceOf)).toBe(true);
+    expect(shareScopeAllows('/api/goals/g-1/archive', 'POST', BOARD, workspaceOf)).toBe(true);
+    expect(shareScopeAllows('/api/workspaces/board-1/tasks', 'GET', BOARD, workspaceOf)).toBe(true);
   });
 
   it('allows promoting a thread to a task — a member files tasks on this board', () => {
@@ -1007,7 +1020,7 @@ describe('shareScopeAllows (workspace-hub surfaces — §3.12 commit 8)', () => 
     ).toBe(true);
     // …on a doc this share does not cover, still no.
     expect(
-      shareScopeAllows('/api/docs/auth-rfc/threads/t1/promote', 'POST', HUB, workspaceOf),
+      shareScopeAllows('/api/docs/auth-rfc/threads/t1/promote', 'POST', BOARD, workspaceOf),
     ).toBe(false);
   });
 
@@ -1019,10 +1032,10 @@ describe('shareScopeAllows (workspace-hub surfaces — §3.12 commit 8)', () => 
 });
 
 /**
- * A GROUPING filed on a HUB board — the shape PR #131 made the default.
+ * A GROUPING filed on a board — the shape PR #131 made the default.
  *
  * A folder bind / diff review is one row on a board, and its members answer
- * with the GROUPING's id while the share carries the HUB's. Exact equality
+ * with the GROUPING's id while the share carries the BOARD's. Exact equality
  * refused every one of them, so a shared board showed a review row that
  * opened onto nothing.
  *
@@ -1035,30 +1048,31 @@ describe('shareScopeAllows — a grouping filed on a shared board', () => {
   // Both targets are board shares, which since the board-only removal is the
   // only kind there is: a grouping cannot be shared on its own, so reaching
   // one is always the board→grouping hop under test here.
-  const HUB: ShareTarget = { workspaceId: 'hub-1' };
-  const OTHER_HUB: ShareTarget = { workspaceId: 'hub-2' };
-  /** grouping `rev-a` sits on hub-1; grouping `rev-b` sits on hub-2. */
+  const BOARD: ShareTarget = { workspaceId: 'board-1' };
+  const OTHER_BOARD: ShareTarget = { workspaceId: 'board-2' };
+  /** grouping `rev-a` sits on board-1; grouping `rev-b` sits on board-2. */
   const OWNERS: Record<string, string[]> = {
-    'rev-a': ['hub-1'],
-    'rev-a:src~app.ts': ['rev-a', 'hub-1'],
-    'rev-b': ['hub-2'],
-    'rev-b:src~app.ts': ['rev-b', 'hub-2'],
-    'hub-1:plan.md': ['hub-1'], // a doc attached to the board directly
+    'rev-a': ['board-1'],
+    'rev-a:src~app.ts': ['rev-a', 'board-1'],
+    'rev-b': ['board-2'],
+    'rev-b:src~app.ts': ['rev-b', 'board-2'],
+    'board-1:plan.md': ['board-1'], // a doc attached to the board directly
   };
   const workspacesOf = (id: string) => OWNERS[id] ?? [];
 
   it('opens the grouping’s navigation endpoints from the board share', () => {
     for (const sub of ['tree', 'grouped', 'threads', 'files']) {
-      expect(shareScopeAllows(`/api/workspaces/rev-a/${sub}`, 'GET', HUB, workspacesOf), sub).toBe(
-        true,
-      );
+      expect(
+        shareScopeAllows(`/api/workspaces/rev-a/${sub}`, 'GET', BOARD, workspacesOf),
+        sub,
+      ).toBe(true);
     }
-    expect(shareScopeAllows('/api/workspaces/rev-a/context-file', 'POST', HUB, workspacesOf)).toBe(
-      true,
-    );
-    expect(shareScopeAllows('/api/workspaces/rev-a/editable-file', 'POST', HUB, workspacesOf)).toBe(
-      true,
-    );
+    expect(
+      shareScopeAllows('/api/workspaces/rev-a/context-file', 'POST', BOARD, workspacesOf),
+    ).toBe(true);
+    expect(
+      shareScopeAllows('/api/workspaces/rev-a/editable-file', 'POST', BOARD, workspacesOf),
+    ).toBe(true);
   });
 
   it('opens the grouping’s member docs from the board share', () => {
@@ -1069,55 +1083,60 @@ describe('shareScopeAllows — a grouping filed on a shared board', () => {
       '/api/docs/rev-a%3Asrc~app.ts',
       '/api/docs/rev-a%3Asrc~app.ts/threads',
     ]) {
-      expect(shareScopeAllows(p, 'GET', HUB, workspacesOf), p).toBe(true);
+      expect(shareScopeAllows(p, 'GET', BOARD, workspacesOf), p).toBe(true);
     }
   });
 
   // ── the half that matters ──
   it('BLOCKS a grouping filed on a DIFFERENT board, and its members', () => {
     for (const sub of ['tree', 'grouped', 'threads', 'files']) {
-      expect(shareScopeAllows(`/api/workspaces/rev-b/${sub}`, 'GET', HUB, workspacesOf), sub).toBe(
-        false,
-      );
+      expect(
+        shareScopeAllows(`/api/workspaces/rev-b/${sub}`, 'GET', BOARD, workspacesOf),
+        sub,
+      ).toBe(false);
     }
-    expect(shareScopeAllows('/api/workspaces/rev-b/context-file', 'POST', HUB, workspacesOf)).toBe(
-      false,
-    );
+    expect(
+      shareScopeAllows('/api/workspaces/rev-b/context-file', 'POST', BOARD, workspacesOf),
+    ).toBe(false);
     for (const p of [
       '/review/rev-b%3Asrc~app.ts',
       '/y/rev-b%3Asrc~app.ts',
       '/api/docs/rev-b%3Asrc~app.ts',
       '/api/docs/rev-b%3Asrc~app.ts/threads',
     ]) {
-      expect(shareScopeAllows(p, 'GET', HUB, workspacesOf), p).toBe(false);
+      expect(shareScopeAllows(p, 'GET', BOARD, workspacesOf), p).toBe(false);
     }
     // Mirrored, so neither board is special.
-    expect(shareScopeAllows('/api/workspaces/rev-a/tree', 'GET', OTHER_HUB, workspacesOf)).toBe(
+    expect(shareScopeAllows('/api/workspaces/rev-a/tree', 'GET', OTHER_BOARD, workspacesOf)).toBe(
       false,
     );
-    expect(shareScopeAllows('/review/rev-a%3Asrc~app.ts', 'GET', OTHER_HUB, workspacesOf)).toBe(
+    expect(shareScopeAllows('/review/rev-a%3Asrc~app.ts', 'GET', OTHER_BOARD, workspacesOf)).toBe(
       false,
     );
   });
 
   it('BLOCKS deleting the grouping, and the workspace list', () => {
-    expect(shareScopeAllows('/api/workspaces/rev-a', 'DELETE', HUB, workspacesOf)).toBe(false);
-    expect(shareScopeAllows('/api/workspaces/rev-a/tree', 'DELETE', HUB, workspacesOf)).toBe(false);
-    expect(shareScopeAllows('/api/workspaces', 'GET', HUB, workspacesOf)).toBe(false);
+    expect(shareScopeAllows('/api/workspaces/rev-a', 'DELETE', BOARD, workspacesOf)).toBe(false);
+    expect(shareScopeAllows('/api/workspaces/rev-a/tree', 'DELETE', BOARD, workspacesOf)).toBe(
+      false,
+    );
+    expect(shareScopeAllows('/api/workspaces', 'GET', BOARD, workspacesOf)).toBe(false);
   });
 
-  it('BLOCKS the grouping’s hub-only surfaces — reachable is not the same as on the board', () => {
+  it('BLOCKS the grouping’s board-only surfaces — reachable is not the same as on the board', () => {
     // These three are allowed for the SHARED workspace id only. A grouping has
     // no board record, no agent presence and no review queue; granting them by
     // reachability would answer a board question with a grouping's id.
     for (const sub of ['', '/attachments', '/review-items']) {
-      expect(shareScopeAllows(`/api/workspaces/rev-a${sub}`, 'GET', HUB, workspacesOf), sub).toBe(
+      expect(shareScopeAllows(`/api/workspaces/rev-a${sub}`, 'GET', BOARD, workspacesOf), sub).toBe(
         false,
       );
     }
-    expect(shareScopeAllows('/workspaces/rev-a', 'GET', HUB, workspacesOf)).toBe(false);
-    expect(shareScopeAllows('/y/ws%3Arev-a', 'GET', HUB, workspacesOf)).toBe(false);
-    expect(shareScopeAllows('/events/workspace/rev-a', 'GET', HUB, workspacesOf)).toBe(false);
+    expect(shareScopeAllows('/workspaces/rev-a', 'GET', BOARD, workspacesOf)).toBe(false);
+    expect(shareScopeAllows('/y/ws%3Arev-a', 'GET', BOARD, workspacesOf)).toBe(false);
+    expect(shareScopeAllows('/workspaces/rev-a/events:stream', 'GET', BOARD, workspacesOf)).toBe(
+      false,
+    );
   });
 
   it('the old doc-only target reaches nothing at all, not even its own doc', () => {
@@ -1134,22 +1153,22 @@ describe('shareScopeAllows — a grouping filed on a shared board', () => {
     expect(shareScopeAllows('/api/workspaces/rev-a/tree', 'GET', docShare, workspacesOf)).toBe(
       false,
     );
-    expect(shareScopeAllows('/api/docs/hub-1%3Aplan.md', 'GET', docShare, workspacesOf)).toBe(
+    expect(shareScopeAllows('/api/docs/board-1%3Aplan.md', 'GET', docShare, workspacesOf)).toBe(
       false,
     );
     // Positive control, same path, same resolver: the board share reaches it.
-    expect(shareScopeAllows('/api/docs/rev-a%3Asrc~app.ts', 'GET', HUB, workspacesOf)).toBe(true);
+    expect(shareScopeAllows('/api/docs/rev-a%3Asrc~app.ts', 'GET', BOARD, workspacesOf)).toBe(true);
   });
 
   it('refuses a resolver still returning the OLD `string | null` shape', () => {
     // A string answers `.includes` too, so the old shape would have granted on
     // any substring. Closing rather than trusting it can only refuse more.
-    const legacy = (id: string) => (id.startsWith('rev-a') ? 'hub-1' : null);
+    const legacy = (id: string) => (id.startsWith('rev-a') ? 'board-1' : null);
     expect(
       shareScopeAllows(
         '/api/workspaces/rev-a/tree',
         'GET',
-        HUB,
+        BOARD,
         legacy as unknown as (id: string) => string[],
       ),
     ).toBe(false);
@@ -1161,7 +1180,7 @@ describe('shareScopeAllows — resources under the workspace path', () => {
   // allowlist is closed-by-default, so each nested shape needs an allowance —
   // and each allowance needs a matching refusal, or "it works" and "it is
   // open" look the same from a passing test.
-  const HUB: ShareTarget = { workspaceId: 'w-1' };
+  const BOARD: ShareTarget = { workspaceId: 'w-1' };
   // `d-in` is a doc on the shared workspace; `rev-1` is a review filed on it;
   // `d-out` and `rev-out` belong to a DIFFERENT workspace.
   const workspacesOf = (id: string): string[] => {
@@ -1171,7 +1190,7 @@ describe('shareScopeAllows — resources under the workspace path', () => {
   };
 
   it('serves the workspace’s own nav pages — the bug this fixes', () => {
-    // Before this, the allowance was `!seg.includes('/')`, so the bare hub
+    // Before this, the allowance was `!seg.includes('/')`, so the bare board
     // page passed and every tab on it was refused. A visitor landing on the
     // share link could not click Tasks.
     for (const p of [
@@ -1181,13 +1200,13 @@ describe('shareScopeAllows — resources under the workspace path', () => {
       '/workspaces/w-1/mine',
       '/workspaces/w-1/activity',
     ]) {
-      expect(shareScopeAllows(p, 'GET', HUB, workspacesOf), p).toBe(true);
+      expect(shareScopeAllows(p, 'GET', BOARD, workspacesOf), p).toBe(true);
     }
   });
 
   it('refuses another workspace’s nav pages', () => {
     for (const p of ['/workspaces/w-2', '/workspaces/w-2/home', '/workspaces/w-2/tasks']) {
-      expect(shareScopeAllows(p, 'GET', HUB, workspacesOf), p).toBe(false);
+      expect(shareScopeAllows(p, 'GET', BOARD, workspacesOf), p).toBe(false);
     }
   });
 
@@ -1195,14 +1214,14 @@ describe('shareScopeAllows — resources under the workspace path', () => {
     // The allowance is a named list, not "one more segment". Otherwise a
     // route added later is granted before anyone decides it should be.
     for (const p of ['/workspaces/w-1/settings', '/workspaces/w-1/admin', '/workspaces/w-1/x/y']) {
-      expect(shareScopeAllows(p, 'GET', HUB, workspacesOf), p).toBe(false);
+      expect(shareScopeAllows(p, 'GET', BOARD, workspacesOf), p).toBe(false);
     }
   });
 
   it('serves a doc on the shared workspace', () => {
-    expect(shareScopeAllows('/workspaces/w-1/docs/d-in', 'GET', HUB, workspacesOf)).toBe(true);
+    expect(shareScopeAllows('/workspaces/w-1/docs/d-in', 'GET', BOARD, workspacesOf)).toBe(true);
     expect(
-      shareScopeAllows('/workspaces/w-1/docs/rev-1%3Asrc~a.ts', 'GET', HUB, workspacesOf),
+      shareScopeAllows('/workspaces/w-1/docs/rev-1%3Asrc~a.ts', 'GET', BOARD, workspacesOf),
     ).toBe(true);
   });
 
@@ -1210,28 +1229,34 @@ describe('shareScopeAllows — resources under the workspace path', () => {
     // Negative control for the line above: the workspace segment matching is
     // not enough on its own — the doc has to be in scope too, or naming your
     // own workspace would serve you every doc on the server.
-    expect(shareScopeAllows('/workspaces/w-1/docs/d-out', 'GET', HUB, workspacesOf)).toBe(false);
-    expect(shareScopeAllows('/workspaces/w-1/docs/unknown', 'GET', HUB, workspacesOf)).toBe(false);
+    expect(shareScopeAllows('/workspaces/w-1/docs/d-out', 'GET', BOARD, workspacesOf)).toBe(false);
+    expect(shareScopeAllows('/workspaces/w-1/docs/unknown', 'GET', BOARD, workspacesOf)).toBe(
+      false,
+    );
     // …and naming the doc correctly under the WRONG workspace is refused too.
-    expect(shareScopeAllows('/workspaces/w-2/docs/d-in', 'GET', HUB, workspacesOf)).toBe(false);
+    expect(shareScopeAllows('/workspaces/w-2/docs/d-in', 'GET', BOARD, workspacesOf)).toBe(false);
   });
 
   it('serves a review filed on the shared workspace, and refuses one that is not', () => {
-    expect(shareScopeAllows('/workspaces/w-1/reviews/rev-1', 'GET', HUB, workspacesOf)).toBe(true);
-    expect(shareScopeAllows('/workspaces/w-1/reviews/rev-out', 'GET', HUB, workspacesOf)).toBe(
+    expect(shareScopeAllows('/workspaces/w-1/reviews/rev-1', 'GET', BOARD, workspacesOf)).toBe(
+      true,
+    );
+    expect(shareScopeAllows('/workspaces/w-1/reviews/rev-out', 'GET', BOARD, workspacesOf)).toBe(
       false,
     );
   });
 
   it('serves a mockup on the shared workspace, and refuses one that is not', () => {
-    expect(shareScopeAllows('/workspaces/w-1/mockups/d-in', 'GET', HUB, workspacesOf)).toBe(true);
-    expect(shareScopeAllows('/workspaces/w-1/mockups/d-out', 'GET', HUB, workspacesOf)).toBe(false);
+    expect(shareScopeAllows('/workspaces/w-1/mockups/d-in', 'GET', BOARD, workspacesOf)).toBe(true);
+    expect(shareScopeAllows('/workspaces/w-1/mockups/d-out', 'GET', BOARD, workspacesOf)).toBe(
+      false,
+    );
   });
 
   it('refuses every write to a workspace path, however in-scope the ids are', () => {
     for (const m of ['POST', 'PUT', 'DELETE', 'PATCH']) {
       for (const p of ['/workspaces/w-1', '/workspaces/w-1/home', '/workspaces/w-1/docs/d-in']) {
-        expect(shareScopeAllows(p, m, HUB, workspacesOf), `${m} ${p}`).toBe(false);
+        expect(shareScopeAllows(p, m, BOARD, workspacesOf), `${m} ${p}`).toBe(false);
       }
     }
   });
@@ -1239,10 +1264,12 @@ describe('shareScopeAllows — resources under the workspace path', () => {
   it('refuses a deeper path under an allowed prefix', () => {
     // `/docs/<id>` and nothing below it: a doc id never contains a slash, so
     // an extra segment is either a typo or someone probing.
-    expect(shareScopeAllows('/workspaces/w-1/docs/d-in/raw', 'GET', HUB, workspacesOf)).toBe(false);
-    expect(shareScopeAllows('/workspaces/w-1/reviews/rev-1/files', 'GET', HUB, workspacesOf)).toBe(
+    expect(shareScopeAllows('/workspaces/w-1/docs/d-in/raw', 'GET', BOARD, workspacesOf)).toBe(
       false,
     );
+    expect(
+      shareScopeAllows('/workspaces/w-1/reviews/rev-1/files', 'GET', BOARD, workspacesOf),
+    ).toBe(false);
   });
 
   it('refuses the old per-doc share target on every new path', () => {
@@ -1521,12 +1548,12 @@ describe('collabScope', () => {
   const workspacesOf = (id: string): string[] => {
     if (id === 'design-doc') return ['ws-a'];
     if (id === 'other-doc') return ['ws-b'];
-    // Filed on two boards at once — the shape a review filed on a hub has,
+    // Filed on two boards at once — the shape a review filed on a board has,
     // and the one a single-answer lookup got wrong.
     if (id === 'two-board-doc') return ['ws-a', 'ws-b'];
-    // A colon in the id, because a huddle doc's is spelled `hub-<n>:<file>`
+    // A colon in the id, because a huddle doc's is spelled `board-<n>:<file>`
     // and reaches the guard percent-encoded.
-    if (id === 'hub-1:plan.md') return ['ws-a'];
+    if (id === 'board-1:plan.md') return ['ws-a'];
     return [];
   };
   /** Path scope only: everybody is a member, so a `false` here is the path. */
@@ -1542,7 +1569,7 @@ describe('collabScope', () => {
       '/workspaces/ws-a/tasks',
       '/workspaces/ws-a/docs/design-doc',
       '/api/workspaces/ws-a',
-      '/api/workspaces/ws-a/attachments',
+      '/workspaces/ws-a/agents',
       '/api/workspaces/ws-a/tree',
       '/api/docs/design-doc',
       '/api/docs/design-doc/threads',
@@ -1550,7 +1577,7 @@ describe('collabScope', () => {
       '/y/design-doc',
       '/y/ws:ws-a',
       '/events/design-doc',
-      '/events/workspace/ws-a',
+      '/workspaces/ws-a/events:stream',
     ]) {
       expect(allows(p), p).toBe(true);
     }
@@ -1596,7 +1623,7 @@ describe('collabScope', () => {
     expect(allows('/audio/design-doc')).toBe(true);
     expect(allows('/audio/two-board-doc')).toBe(true);
     // Percent-encoded, the way a huddle doc's id actually arrives.
-    expect(allows('/audio/hub-1%3Aplan.md')).toBe(true);
+    expect(allows('/audio/board-1%3Aplan.md')).toBe(true);
     // The verdict names the board, so the request is served scoped to it.
     expect(collabScope('/audio/design-doc', 'GET', { workspacesOf, isMember: () => true })).toEqual(
       { allowed: true, target: { workspaceId: 'ws-a' } },
@@ -1698,7 +1725,7 @@ describe('collabScope', () => {
       '/review/design-doc',
       '/y/design-doc',
       '/y/ws:ws-a',
-      '/events/workspace/ws-a',
+      '/workspaces/ws-a/events:stream',
     ]) {
       expect(allowsFor(['ws-b'], p), p).toBe(false);
       expect(allowsFor(['ws-a'], p), p).toBe(true);

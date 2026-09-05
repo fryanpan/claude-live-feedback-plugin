@@ -213,7 +213,7 @@ success. That refusal waits ~1.5s and re-reads first, because "busy" is an
 before the deploy arrives would otherwise refuse over a flush already on its way
 to disk. A doc that settles proceeds; one still being typed in still refuses and
 still names its files. The refusal is about the PULL, so a `restarted` deploy
-skips it — nothing is rewritten, and `Rooms.flush` saves every pending
+skips it — nothing is rewritten, and `DocStore.flush` saves every pending
 write-back on the way down. The manual three steps remain the fallback for the
 one case the route cannot serve: a server that is already down.
 
@@ -272,7 +272,7 @@ modified path, not only the ones that set the suffix. So a clean `sourceRef`
 sitting next to `dirtyPaths: ["docs/product/plans/…"]` reads as a decision
 rather than an oversight, and a `-dirty` one names the file that earned it.
 
-The workspace hub's presence strip reads that, next to the plugin-drift notice,
+The workspace board's presence strip reads that, next to the plugin-drift notice,
 and says how old the served client is, how long the build has been failing, and
 that the fix ends in a restart. **It arms on two failed starts in a row, or one
 over a client already older than a day** — a single failed start over a client
@@ -458,7 +458,7 @@ the reading covers, not to invent a fleet registry to make a broader sentence
 true.**
 
 That is what ships: every reading now carries its denominator and its domain.
-`GET /api/workspaces/:id/attachments` returns `pluginRelease.checked` — how
+`GET /workspaces/:id/agents` returns `pluginRelease.checked` — how
 many sessions the `behind` list was computed over, counted from the same
 population the check filtered — and the presence strip renders a quiet line
 even when nobody is behind: *"No attached session is behind 0.1.40 (1

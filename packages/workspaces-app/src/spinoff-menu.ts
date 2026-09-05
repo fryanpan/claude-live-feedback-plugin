@@ -8,7 +8,7 @@
  * selection: two ways for a line to leave the doc as work, anchored on the
  * line itself so nothing has to be re-described.
  *
- * ONLY on huddle docs. An ordinary review doc's pill stays exactly what it
+ * ONLY on huddle docs. An ordinary attachment's pill stays exactly what it
  * was — a comment affordance — because a doc under review is not a place work
  * is generated from, and a work menu over a proofreading selection is the
  * wrong answer twice.

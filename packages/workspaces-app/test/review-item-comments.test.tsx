@@ -19,12 +19,7 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import {
-  type ReviewStripHandlers,
-  homeReviewData,
-  mountHomeReviewIsland,
-} from '../src/hub/home-review-island.tsx';
-import { CHORES_ID, type HubTask } from '../src/hub/hub-board-model.ts';
+import { type BoardTask, CHORES_ID } from '../src/board/board-model.ts';
 import {
   type ReviewItem,
   type ReviewQueue,
@@ -35,14 +30,19 @@ import {
   reviewQueue,
   revisedPhrase,
   wholeItemPhrase,
-} from '../src/hub/hub-review-model.ts';
+} from '../src/board/board-review-model.ts';
+import {
+  type ReviewStripHandlers,
+  homeReviewData,
+  mountHomeReviewIsland,
+} from '../src/board/home-review-island.tsx';
 import {
   type WalkthroughHandlers,
   type WalkthroughView,
   mountWalkthroughIsland,
   walkthroughData,
-} from '../src/hub/walkthrough-island.tsx';
-import { HUB_BOOT_SOURCES } from './support/hub-boot-sources.ts';
+} from '../src/board/walkthrough-island.tsx';
+import { BOARD_BOOT_SOURCES } from './support/board-boot-sources.ts';
 
 const NOW = 1_700_000_000_000;
 const DETAIL = 'The mockup shows one and the build ships the other. Which do we keep?';
@@ -250,17 +250,17 @@ describe('the model: where a question on an item goes, and what a revision carri
 describe('the walkthrough card: select a phrase, ask on it, wait', () => {
   it('the "Tell me more" box is gone from every card', () => {
     mountWalk(reviewQueue([], [ticketRow()], NOW), walk());
-    expect(root.querySelector('.hub-walk-info')).toBeNull();
-    expect(root.querySelector('.hub-walk-more')).toBeNull();
+    expect(root.querySelector('.board-walk-info')).toBeNull();
+    expect(root.querySelector('.board-walk-more')).toBeNull();
   });
 
   it('a pill appears when a phrase of the detail is selected, and hides when it is not', async () => {
     mountWalk(reviewQueue([], [ticketRow()], NOW), walk());
-    const pill = root.querySelector('.hub-walk-pill') as HTMLElement;
+    const pill = root.querySelector('.board-walk-pill') as HTMLElement;
     expect(pill).not.toBeNull();
     expect(pill.classList.contains('comment-pill')).toBe(true);
     expect(pill.classList.contains('hidden')).toBe(true);
-    await select(root.querySelector('.hub-walk-body') as HTMLElement, 'ships the other');
+    await select(root.querySelector('.board-walk-body') as HTMLElement, 'ships the other');
     expect(pill.classList.contains('hidden')).toBe(false);
     // A selection somewhere else on the page is not a phrase of the item.
     const elsewhere = document.createElement('p');
@@ -272,23 +272,23 @@ describe('the walkthrough card: select a phrase, ask on it, wait', () => {
 
   it('offers no pill on an item with nothing to anchor to', () => {
     mountWalk(reviewQueue([], [threadRow()], NOW), walk());
-    expect(root.querySelector('.hub-walk-body')).not.toBeNull();
-    expect(root.querySelector('.hub-walk-pill')).toBeNull();
+    expect(root.querySelector('.board-walk-body')).not.toBeNull();
+    expect(root.querySelector('.board-walk-pill')).toBeNull();
   });
 
   it('tapping the pill opens a thread card quoting the phrase; sending asks on it', async () => {
     const onAskOnItem = vi.fn().mockResolvedValue(true);
     const q = reviewQueue([], [ticketRow()], NOW);
     mountWalk(q, walk({ onAskOnItem }));
-    await select(root.querySelector('.hub-walk-body') as HTMLElement, 'ships the other');
-    (root.querySelector('.hub-walk-pill') as HTMLElement).click();
+    await select(root.querySelector('.board-walk-body') as HTMLElement, 'ships the other');
+    (root.querySelector('.board-walk-pill') as HTMLElement).click();
     await tick();
-    const card = root.querySelector('.hub-walk-thread') as HTMLElement;
+    const card = root.querySelector('.board-walk-thread') as HTMLElement;
     expect(card).not.toBeNull();
-    expect((card.querySelector('.hub-walk-thread-quote') as HTMLElement).textContent).toContain(
+    expect((card.querySelector('.board-walk-thread-quote') as HTMLElement).textContent).toContain(
       'ships the other',
     );
-    const form = card.querySelector('.hub-walk-thread-form') as HTMLFormElement;
+    const form = card.querySelector('.board-walk-thread-form') as HTMLFormElement;
     (form.querySelector('textarea') as HTMLTextAreaElement).value = 'Which other?';
     form.dispatchEvent(new Event('submit', { cancelable: true }));
     expect(onAskOnItem).toHaveBeenCalledWith(
@@ -301,8 +301,8 @@ describe('the walkthrough card: select a phrase, ask on it, wait', () => {
     // card stays is the queue's call, and the loader's re-read drops an
     // asked-on item (see "the card leaves the queue" below). No note
     // either — the toast carries the word, and the card is gone.
-    expect(root.querySelector('.hub-walk-thread')).toBeNull();
-    expect(root.querySelector('.hub-walk-waiting')).toBeNull();
+    expect(root.querySelector('.board-walk-thread')).toBeNull();
+    expect(root.querySelector('.board-walk-waiting')).toBeNull();
   });
 
   it('the thread card opens BESIDE the card, in its own margin column, not inside it', async () => {
@@ -311,65 +311,67 @@ describe('the walkthrough card: select a phrase, ask on it, wait', () => {
     // (below the card at ≤1100px). That is a DOM fact before it is a CSS one:
     // the thread must be the stage's second child, never a child of the card.
     mountWalk(reviewQueue([], [ticketRow()], NOW), walk());
-    const stage = root.querySelector('.hub-walk-stage') as HTMLElement;
+    const stage = root.querySelector('.board-walk-stage') as HTMLElement;
     expect(stage, 'the card sits on a stage').not.toBeNull();
-    expect(stage.querySelector(':scope > .hub-walk-card')).not.toBeNull();
+    expect(stage.querySelector(':scope > .board-walk-card')).not.toBeNull();
     // Nothing to the side until a phrase is asked on — and no column reserved
     // for it either: the stage only widens to two columns while it is open.
-    expect(stage.querySelector(':scope > .hub-walk-margin')).toBeNull();
-    expect(stage.classList.contains('hub-walk-stage-open')).toBe(false);
-    await select(root.querySelector('.hub-walk-body') as HTMLElement, 'ships the other');
-    (root.querySelector('.hub-walk-pill') as HTMLElement).click();
+    expect(stage.querySelector(':scope > .board-walk-margin')).toBeNull();
+    expect(stage.classList.contains('board-walk-stage-open')).toBe(false);
+    await select(root.querySelector('.board-walk-body') as HTMLElement, 'ships the other');
+    (root.querySelector('.board-walk-pill') as HTMLElement).click();
     await tick();
-    const margin = stage.querySelector(':scope > .hub-walk-margin') as HTMLElement;
+    const margin = stage.querySelector(':scope > .board-walk-margin') as HTMLElement;
     expect(margin, 'the margin column appears with the thread').not.toBeNull();
-    expect(stage.classList.contains('hub-walk-stage-open')).toBe(true);
-    expect(margin.querySelector('.hub-walk-thread')).not.toBeNull();
-    expect(root.querySelector('.hub-walk-card .hub-walk-thread')).toBeNull();
+    expect(stage.classList.contains('board-walk-stage-open')).toBe(true);
+    expect(margin.querySelector('.board-walk-thread')).not.toBeNull();
+    expect(root.querySelector('.board-walk-card .board-walk-thread')).toBeNull();
     // The margin follows the card in source order, so at ≤1100px (one
     // column) it stacks BELOW the card.
-    expect(margin.previousElementSibling?.classList.contains('hub-walk-card')).toBe(true);
+    expect(margin.previousElementSibling?.classList.contains('board-walk-card')).toBe(true);
   });
 
   it('a refused ask keeps the thread card and the words', async () => {
     const onAskOnItem = vi.fn().mockResolvedValue(false);
     mountWalk(reviewQueue([], [ticketRow()], NOW), walk({ onAskOnItem }));
-    await select(root.querySelector('.hub-walk-body') as HTMLElement, 'ships the other');
-    (root.querySelector('.hub-walk-pill') as HTMLElement).click();
+    await select(root.querySelector('.board-walk-body') as HTMLElement, 'ships the other');
+    (root.querySelector('.board-walk-pill') as HTMLElement).click();
     await tick();
-    const form = root.querySelector('.hub-walk-thread-form') as HTMLFormElement;
+    const form = root.querySelector('.board-walk-thread-form') as HTMLFormElement;
     (form.querySelector('textarea') as HTMLTextAreaElement).value = 'Which other?';
     form.dispatchEvent(new Event('submit', { cancelable: true }));
     await tick();
-    expect(root.querySelector('.hub-walk-thread')).not.toBeNull();
-    expect(root.querySelector('.hub-walk-waiting')).toBeNull();
+    expect(root.querySelector('.board-walk-thread')).not.toBeNull();
+    expect(root.querySelector('.board-walk-waiting')).toBeNull();
     expect((form.querySelector('textarea') as HTMLTextAreaElement).value).toBe('Which other?');
   });
 
   it('cancel puts the thread card away', async () => {
     mountWalk(reviewQueue([], [ticketRow()], NOW), walk());
-    await select(root.querySelector('.hub-walk-body') as HTMLElement, 'ships the other');
-    (root.querySelector('.hub-walk-pill') as HTMLElement).click();
+    await select(root.querySelector('.board-walk-body') as HTMLElement, 'ships the other');
+    (root.querySelector('.board-walk-pill') as HTMLElement).click();
     await tick();
-    (root.querySelector('.hub-walk-thread-cancel') as HTMLElement).click();
+    (root.querySelector('.board-walk-thread-cancel') as HTMLElement).click();
     await tick();
-    expect(root.querySelector('.hub-walk-thread')).toBeNull();
+    expect(root.querySelector('.board-walk-thread')).toBeNull();
   });
 
   it('the ask box keeps its draft across a repaint, like the answer box', async () => {
     mountWalk(reviewQueue([], [ticketRow()], NOW), walk());
-    await select(root.querySelector('.hub-walk-body') as HTMLElement, 'ships the other');
-    (root.querySelector('.hub-walk-pill') as HTMLElement).click();
+    await select(root.querySelector('.board-walk-body') as HTMLElement, 'ships the other');
+    (root.querySelector('.board-walk-pill') as HTMLElement).click();
     await tick();
-    const ta = root.querySelector('.hub-walk-thread-form textarea') as HTMLTextAreaElement;
+    const ta = root.querySelector('.board-walk-thread-form textarea') as HTMLTextAreaElement;
     ta.value = 'Which oth';
     // A board event: the loader writes the signal, nothing is torn down.
     walkthroughData.value = { ...walkthroughData.value, now: NOW + 30_000 };
     await tick();
-    const after = root.querySelector('.hub-walk-thread-form textarea') as HTMLTextAreaElement;
+    const after = root.querySelector('.board-walk-thread-form textarea') as HTMLTextAreaElement;
     expect(after).toBe(ta);
     expect(after.value).toBe('Which oth');
-    expect(root.querySelector('.hub-walk-thread-quote')?.textContent).toContain('ships the other');
+    expect(root.querySelector('.board-walk-thread-quote')?.textContent).toContain(
+      'ships the other',
+    );
   });
 
   it('the card leaves the queue in the same interaction: the loader’s re-read drops it and the next card takes its place', async () => {
@@ -385,24 +387,24 @@ describe('the walkthrough card: select a phrase, ask on it, wait', () => {
       return true;
     });
     mountWalk(q, walk({ onAskOnItem }));
-    await select(root.querySelector('.hub-walk-body') as HTMLElement, 'ships the other');
-    (root.querySelector('.hub-walk-pill') as HTMLElement).click();
+    await select(root.querySelector('.board-walk-body') as HTMLElement, 'ships the other');
+    (root.querySelector('.board-walk-pill') as HTMLElement).click();
     await tick();
-    const form = root.querySelector('.hub-walk-thread-form') as HTMLFormElement;
+    const form = root.querySelector('.board-walk-thread-form') as HTMLFormElement;
     (form.querySelector('textarea') as HTMLTextAreaElement).value = 'Which other?';
     form.dispatchEvent(new Event('submit', { cancelable: true }));
     await tick();
     expect(onAskOnItem).toHaveBeenCalledTimes(1);
-    const card = root.querySelector('.hub-walk-card') as HTMLElement;
+    const card = root.querySelector('.board-walk-card') as HTMLElement;
     expect(card).not.toBeNull();
     // The card on screen is r-2's — the asked-on one is gone, not held.
-    expect(card.querySelector('.hub-walk-answer textarea')?.getAttribute('data-keep')).toBe(
+    expect(card.querySelector('.board-walk-answer textarea')?.getAttribute('data-keep')).toBe(
       'walk-answer:task-review:tk-1:r-2',
     );
-    expect(root.querySelector('.hub-walk-waiting')).toBeNull();
-    expect(root.querySelector('.hub-walk-thread')).toBeNull();
+    expect(root.querySelector('.board-walk-waiting')).toBeNull();
+    expect(root.querySelector('.board-walk-thread')).toBeNull();
     // Nothing about the queue is faked: the stepper counts the server's one.
-    expect((root.querySelector('.hub-walk-nav') as HTMLElement).textContent).toContain('1 of 1');
+    expect((root.querySelector('.board-walk-nav') as HTMLElement).textContent).toContain('1 of 1');
     // Asking on the LAST item lands on the finished screen — not a stale card.
     const onlyOne = reviewQueue([], [ticketRow()], NOW);
     const empty = reviewQueue([], [], NOW);
@@ -415,30 +417,32 @@ describe('the walkthrough card: select a phrase, ask on it, wait', () => {
         }),
       }),
     );
-    await select(root.querySelector('.hub-walk-body') as HTMLElement, 'ships the other');
-    (root.querySelector('.hub-walk-pill') as HTMLElement).click();
+    await select(root.querySelector('.board-walk-body') as HTMLElement, 'ships the other');
+    (root.querySelector('.board-walk-pill') as HTMLElement).click();
     await tick();
-    const last = root.querySelector('.hub-walk-thread-form') as HTMLFormElement;
+    const last = root.querySelector('.board-walk-thread-form') as HTMLFormElement;
     (last.querySelector('textarea') as HTMLTextAreaElement).value = 'Which other?';
     last.dispatchEvent(new Event('submit', { cancelable: true }));
     await tick();
-    expect(root.querySelector('.hub-walk-card')).toBeNull();
-    expect(root.querySelector('.hub-walk-done')).not.toBeNull();
+    expect(root.querySelector('.board-walk-card')).toBeNull();
+    expect(root.querySelector('.board-walk-done')).not.toBeNull();
   });
 });
 
 describe('the walkthrough card: "I have a question" — asking without selecting a phrase', () => {
-  const link = () => root.querySelector('.hub-walk-question-link') as HTMLElement | null;
-  const box = () => root.querySelector('.hub-walk-question-box') as HTMLElement | null;
-  const answering = () => root.querySelector('.hub-walk-answering') as HTMLElement;
+  const link = () => root.querySelector('.board-walk-question-link') as HTMLElement | null;
+  const box = () => root.querySelector('.board-walk-question-box') as HTMLElement | null;
+  const answering = () => root.querySelector('.board-walk-answering') as HTMLElement;
 
   it('every ticket-borne card shows the link, beside Skip', () => {
     mountWalk(reviewQueue([], [ticketRow()], NOW), walk());
     const l = link();
     expect(l).not.toBeNull();
     expect(l?.textContent).toBe('I have a question');
-    expect(l?.closest('.hub-walk-actions')).not.toBeNull();
-    expect(l?.closest('.hub-walk-actions')?.querySelector('.hub-walk-skip-link')).not.toBeNull();
+    expect(l?.closest('.board-walk-actions')).not.toBeNull();
+    expect(
+      l?.closest('.board-walk-actions')?.querySelector('.board-walk-skip-link'),
+    ).not.toBeNull();
     // A revised item coming back is a fresh ask: it gets the link too.
     mountWalk(reviewQueue([], [revisedRow()], NOW), walk());
     expect(link()).not.toBeNull();
@@ -446,7 +450,7 @@ describe('the walkthrough card: "I have a question" — asking without selecting
 
   it('no link on an item with nowhere for a question to land', () => {
     mountWalk(reviewQueue([], [threadRow()], NOW), walk());
-    expect(root.querySelector('.hub-walk-answer')).not.toBeNull();
+    expect(root.querySelector('.board-walk-answer')).not.toBeNull();
     expect(link()).toBeNull();
   });
 
@@ -458,20 +462,20 @@ describe('the walkthrough card: "I have a question" — asking without selecting
     await tick();
     const b = box();
     expect(b).not.toBeNull();
-    expect(b?.querySelector('.hub-walk-question-form textarea')).not.toBeNull();
-    expect(b?.querySelector('.hub-walk-question-form button[type="submit"]')?.textContent).toBe(
+    expect(b?.querySelector('.board-walk-question-form textarea')).not.toBeNull();
+    expect(b?.querySelector('.board-walk-question-form button[type="submit"]')?.textContent).toBe(
       'Send',
     );
-    expect(b?.querySelector('.hub-walk-question-cancel')?.textContent).toBe('Cancel');
-    expect(b?.querySelector('.hub-walk-question-hint')?.textContent).toContain('Ask Helper');
+    expect(b?.querySelector('.board-walk-question-cancel')?.textContent).toBe('Cancel');
+    expect(b?.querySelector('.board-walk-question-hint')?.textContent).toContain('Ask Helper');
     // The box stands IN the card, where the answer furniture was — which is
     // hidden rather than gone (a half-typed answer survives), and the phrase
     // pill is off while the box is up: one way of asking at a time.
-    expect(b?.closest('.hub-walk-card')).not.toBeNull();
+    expect(b?.closest('.board-walk-card')).not.toBeNull();
     expect(answering().classList.contains('hidden')).toBe(true);
-    expect(root.querySelector('.hub-walk-answer')).not.toBeNull();
-    expect(root.querySelector('.hub-walk-pill')).toBeNull();
-    expect(root.querySelector('.hub-walk-thread')).toBeNull();
+    expect(root.querySelector('.board-walk-answer')).not.toBeNull();
+    expect(root.querySelector('.board-walk-pill')).toBeNull();
+    expect(root.querySelector('.board-walk-thread')).toBeNull();
   });
 
   it('opening the box puts the caret in it — the link that opened it has left the tab order', async () => {
@@ -482,7 +486,7 @@ describe('the walkthrough card: "I have a question" — asking without selecting
     await tick();
     // The caret is in the box's field — the editor's surface once the editor
     // has mounted (it has, here), the textarea until then.
-    const form = box()?.querySelector<HTMLFormElement>('.hub-walk-question-form');
+    const form = box()?.querySelector<HTMLFormElement>('.board-walk-question-form');
     expect(form).not.toBeNull();
     expect(document.activeElement).not.toBe(document.body);
     expect(form?.contains(document.activeElement)).toBe(true);
@@ -493,18 +497,18 @@ describe('the walkthrough card: "I have a question" — asking without selecting
     mountWalk(reviewQueue([], [ticketRow()], NOW), walk({ onQuestionOnItem }));
     link()?.click();
     await tick();
-    const form = box()?.querySelector<HTMLFormElement>('.hub-walk-question-form');
+    const form = box()?.querySelector<HTMLFormElement>('.board-walk-question-form');
     expect(form).not.toBeNull();
-    expect(form?.querySelector('.hub-form-error')).toBeNull();
+    expect(form?.querySelector('.board-form-error')).toBeNull();
     form?.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
     await tick();
     expect(onQuestionOnItem).not.toHaveBeenCalled();
-    expect(form?.querySelector('.hub-form-error')?.textContent).toBe('Write a question first');
+    expect(form?.querySelector('.board-form-error')?.textContent).toBe('Write a question first');
     // The note goes the moment the reader starts typing.
     const ta = form?.querySelector('textarea') as HTMLTextAreaElement;
     ta.value = 'W';
     ta.dispatchEvent(new Event('input', { bubbles: true }));
-    expect(form?.querySelector('.hub-form-error')).toBeNull();
+    expect(form?.querySelector('.board-form-error')).toBeNull();
     // Positive control: the same submit with words in the box reaches the handler.
     ta.value = 'Which build?';
     form?.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
@@ -519,7 +523,7 @@ describe('the walkthrough card: "I have a question" — asking without selecting
     mountWalk(q, walk({ onQuestionOnItem, onAskOnItem }));
     link()?.click();
     await tick();
-    const form = root.querySelector('.hub-walk-question-form') as HTMLFormElement;
+    const form = root.querySelector('.board-walk-question-form') as HTMLFormElement;
     (form.querySelector('textarea') as HTMLTextAreaElement).value = 'Which other?';
     form.dispatchEvent(new Event('submit', { cancelable: true }));
     expect(onQuestionOnItem).toHaveBeenCalledWith(q.items[0], 'Which other?');
@@ -542,18 +546,18 @@ describe('the walkthrough card: "I have a question" — asking without selecting
     mountWalk(q, walk({ onQuestionOnItem }));
     link()?.click();
     await tick();
-    const form = root.querySelector('.hub-walk-question-form') as HTMLFormElement;
+    const form = root.querySelector('.board-walk-question-form') as HTMLFormElement;
     (form.querySelector('textarea') as HTMLTextAreaElement).value = 'Which other?';
     form.dispatchEvent(new Event('submit', { cancelable: true }));
     await tick();
-    const card = root.querySelector('.hub-walk-card') as HTMLElement;
-    expect(card.querySelector('.hub-walk-answer textarea')?.getAttribute('data-keep')).toBe(
+    const card = root.querySelector('.board-walk-card') as HTMLElement;
+    expect(card.querySelector('.board-walk-answer textarea')?.getAttribute('data-keep')).toBe(
       'walk-answer:task-review:tk-1:r-2',
     );
     // The next card arrives in answer mode, its own link ready.
     expect(box()).toBeNull();
     expect(link()).not.toBeNull();
-    expect(root.querySelector('.hub-walk-waiting')).toBeNull();
+    expect(root.querySelector('.board-walk-waiting')).toBeNull();
   });
 
   it('a refused send keeps the box and the words', async () => {
@@ -561,7 +565,7 @@ describe('the walkthrough card: "I have a question" — asking without selecting
     mountWalk(reviewQueue([], [ticketRow()], NOW), walk({ onQuestionOnItem }));
     link()?.click();
     await tick();
-    const form = root.querySelector('.hub-walk-question-form') as HTMLFormElement;
+    const form = root.querySelector('.board-walk-question-form') as HTMLFormElement;
     (form.querySelector('textarea') as HTMLTextAreaElement).value = 'Which other?';
     form.dispatchEvent(new Event('submit', { cancelable: true }));
     await tick();
@@ -571,15 +575,15 @@ describe('the walkthrough card: "I have a question" — asking without selecting
 
   it('Cancel puts the box away and the answer furniture back, draft intact', async () => {
     mountWalk(reviewQueue([], [ticketRow()], NOW), walk());
-    const answer = root.querySelector('.hub-walk-answer textarea') as HTMLTextAreaElement;
+    const answer = root.querySelector('.board-walk-answer textarea') as HTMLTextAreaElement;
     answer.value = 'Blue, I think';
     link()?.click();
     await tick();
-    (root.querySelector('.hub-walk-question-cancel') as HTMLElement).click();
+    (root.querySelector('.board-walk-question-cancel') as HTMLElement).click();
     await tick();
     expect(box()).toBeNull();
     expect(answering().classList.contains('hidden')).toBe(false);
-    const after = root.querySelector('.hub-walk-answer textarea') as HTMLTextAreaElement;
+    const after = root.querySelector('.board-walk-answer textarea') as HTMLTextAreaElement;
     expect(after).toBe(answer);
     expect(after.value).toBe('Blue, I think');
   });
@@ -588,11 +592,11 @@ describe('the walkthrough card: "I have a question" — asking without selecting
     mountWalk(reviewQueue([], [ticketRow()], NOW), walk());
     link()?.click();
     await tick();
-    const ta = root.querySelector('.hub-walk-question-form textarea') as HTMLTextAreaElement;
+    const ta = root.querySelector('.board-walk-question-form textarea') as HTMLTextAreaElement;
     ta.value = 'Which oth';
     walkthroughData.value = { ...walkthroughData.value, now: NOW + 30_000 };
     await tick();
-    const after = root.querySelector('.hub-walk-question-form textarea') as HTMLTextAreaElement;
+    const after = root.querySelector('.board-walk-question-form textarea') as HTMLTextAreaElement;
     expect(after).toBe(ta);
     expect(after.value).toBe('Which oth');
   });
@@ -602,10 +606,10 @@ describe('the walkthrough card: "I have a question" — asking without selecting
     const onQuestionOnItem = vi.fn().mockResolvedValue(true);
     const q = reviewQueue([], [ticketRow()], NOW);
     mountWalk(q, walk({ onAskOnItem, onQuestionOnItem }));
-    await select(root.querySelector('.hub-walk-body') as HTMLElement, 'ships the other');
-    (root.querySelector('.hub-walk-pill') as HTMLElement).click();
+    await select(root.querySelector('.board-walk-body') as HTMLElement, 'ships the other');
+    (root.querySelector('.board-walk-pill') as HTMLElement).click();
     await tick();
-    const form = root.querySelector('.hub-walk-thread-form') as HTMLFormElement;
+    const form = root.querySelector('.board-walk-thread-form') as HTMLFormElement;
     (form.querySelector('textarea') as HTMLTextAreaElement).value = 'Which other?';
     form.dispatchEvent(new Event('submit', { cancelable: true }));
     expect(onAskOnItem).toHaveBeenCalledWith(
@@ -620,14 +624,14 @@ describe('the walkthrough card: "I have a question" — asking without selecting
 // Pinned on the source (the pattern of walk-return.test.ts): the wiring is
 // read rather than driven, and the behaviour — the card leaving on Send,
 // the toast — was verified headlessly against a built client; see the PR.
-describe('hub-app wires both asks to one POST and holds nothing back', () => {
-  const src = HUB_BOOT_SOURCES.map((m) =>
-    readFileSync(join(__dirname, '..', 'src', 'hub', `${m}.ts`), 'utf8'),
+describe('board-app wires both asks to one POST and holds nothing back', () => {
+  const src = BOARD_BOOT_SOURCES.map((m) =>
+    readFileSync(join(__dirname, '..', 'src', 'board', `${m}.ts`), 'utf8'),
   ).join('\n');
   // The asking verbs themselves live in the review controller; the entry keeps
   // the wiring that says which surface calls which.
   const controller = readFileSync(
-    join(__dirname, '..', 'src', 'hub', 'hub-review-controller.ts'),
+    join(__dirname, '..', 'src', 'board', 'board-review-controller.ts'),
     'utf8',
   );
 
@@ -664,21 +668,23 @@ describe('the walkthrough card: a revised item comes back marked', () => {
     const onOpenThread = vi.fn();
     const q = reviewQueue([], [revisedRow()], NOW);
     mountWalk(q, walk({ onOpenThread }));
-    expect((root.querySelector('.hub-walk-k-revised') as HTMLElement).textContent).toBe('Revised');
-    expect((root.querySelector('.hub-walk-question') as HTMLElement).textContent).toContain(
+    expect((root.querySelector('.board-walk-k-revised') as HTMLElement).textContent).toBe(
+      'Revised',
+    );
+    expect((root.querySelector('.board-walk-question') as HTMLElement).textContent).toContain(
       'Which other?',
     );
-    const mark = root.querySelector('.hub-walk-body .thread-range.resolved') as HTMLElement;
+    const mark = root.querySelector('.board-walk-body .thread-range.resolved') as HTMLElement;
     expect(mark).not.toBeNull();
     expect(mark.textContent).toBe('the OTHER (blue)');
     // The words around the mark are untouched — highlighting is presentation.
-    expect((root.querySelector('.hub-walk-body') as HTMLElement).textContent).toContain(
+    expect((root.querySelector('.board-walk-body') as HTMLElement).textContent).toContain(
       'the build ships the OTHER (blue). Which do we keep?',
     );
-    (root.querySelector('.hub-walk-thread-link') as HTMLElement).click();
+    (root.querySelector('.board-walk-thread-link') as HTMLElement).click();
     expect(onOpenThread).toHaveBeenCalledWith(q.items[0]);
     // No waiting note: it is the reader's turn again.
-    expect(root.querySelector('.hub-walk-waiting')).toBeNull();
+    expect(root.querySelector('.board-walk-waiting')).toBeNull();
   });
 
   it('marks a revised phrase that crosses inline formatting, shedding the source’s markdown', () => {
@@ -689,35 +695,35 @@ describe('the walkthrough card: a revised item comes back marked', () => {
       revisedRange: { start, end: start + '**one** and'.length },
     } as Partial<ReviewThreadItem>);
     mountWalk(reviewQueue([], [row], NOW), walk());
-    const mark = root.querySelector('.hub-walk-body .thread-range.resolved') as HTMLElement;
+    const mark = root.querySelector('.board-walk-body .thread-range.resolved') as HTMLElement;
     expect(mark).not.toBeNull();
     // The rendered words, across the <strong> boundary — two marks, one phrase.
-    const marks = Array.from(root.querySelectorAll('.hub-walk-body .thread-range.resolved'));
+    const marks = Array.from(root.querySelectorAll('.board-walk-body .thread-range.resolved'));
     expect(marks.map((m) => m.textContent).join('')).toBe('one and');
-    expect((root.querySelector('.hub-walk-body') as HTMLElement).textContent).toContain(
+    expect((root.querySelector('.board-walk-body') as HTMLElement).textContent).toContain(
       'The mockup shows one and the build ships the OTHER.',
     );
   });
 
   it('an unknown range still quotes the question, with no mark', () => {
     mountWalk(reviewQueue([], [revisedRow({ revisedRange: undefined } as never)], NOW), walk());
-    expect(root.querySelector('.hub-walk-k-revised')).not.toBeNull();
-    expect(root.querySelector('.hub-walk-body .thread-range')).toBeNull();
-    expect((root.querySelector('.hub-walk-question') as HTMLElement).textContent).toContain(
+    expect(root.querySelector('.board-walk-k-revised')).not.toBeNull();
+    expect(root.querySelector('.board-walk-body .thread-range')).toBeNull();
+    expect((root.querySelector('.board-walk-question') as HTMLElement).textContent).toContain(
       'Which other?',
     );
   });
 
   it('an open item carries none of it', () => {
     mountWalk(reviewQueue([], [ticketRow()], NOW), walk());
-    expect(root.querySelector('.hub-walk-k-revised')).toBeNull();
-    expect(root.querySelector('.hub-walk-question')).toBeNull();
-    expect(root.querySelector('.hub-walk-thread-link')).toBeNull();
+    expect(root.querySelector('.board-walk-k-revised')).toBeNull();
+    expect(root.querySelector('.board-walk-question')).toBeNull();
+    expect(root.querySelector('.board-walk-thread-link')).toBeNull();
   });
 });
 
 /** A ticket filed with `needs: 'decision'` — the card whose only exit was Skip. */
-function decisionTask(over: Partial<HubTask> = {}): HubTask {
+function decisionTask(over: Partial<BoardTask> = {}): BoardTask {
   return {
     id: 'tk-9',
     title: 'Pick a retry budget',
@@ -739,7 +745,7 @@ function decisionTask(over: Partial<HubTask> = {}): HubTask {
       { id: 'o-1', label: 'Once' },
     ],
     ...over,
-  } as HubTask;
+  } as BoardTask;
 }
 
 describe('the model: a ticket’s own decision asks, waits and comes back like any item', () => {
@@ -788,16 +794,18 @@ describe('the model: a ticket’s own decision asks, waits and comes back like a
 });
 
 describe('the walkthrough card: a ticket’s own decision offers the link too', () => {
-  const link = () => root.querySelector('.hub-walk-question-link') as HTMLElement | null;
-  const box = () => root.querySelector('.hub-walk-question-box') as HTMLElement | null;
-  const note = () => root.querySelector('.hub-walk-question-note') as HTMLElement | null;
+  const link = () => root.querySelector('.board-walk-question-link') as HTMLElement | null;
+  const box = () => root.querySelector('.board-walk-question-box') as HTMLElement | null;
+  const note = () => root.querySelector('.board-walk-question-note') as HTMLElement | null;
 
   it('shows "I have a question" beside Skip on the decision card', () => {
     mountWalk(reviewQueue([decisionTask()], [], NOW), walk());
-    expect(root.querySelector('.hub-walk-decision')).not.toBeNull();
+    expect(root.querySelector('.board-walk-decision')).not.toBeNull();
     const l = link();
     expect(l?.textContent).toBe('I have a question');
-    expect(l?.closest('.hub-walk-actions')?.querySelector('.hub-walk-skip-link')).not.toBeNull();
+    expect(
+      l?.closest('.board-walk-actions')?.querySelector('.board-walk-skip-link'),
+    ).not.toBeNull();
     expect(note()).toBeNull();
   });
 
@@ -810,9 +818,9 @@ describe('the walkthrough card: a ticket’s own decision offers the link too', 
     await tick();
     const b = box();
     expect(b).not.toBeNull();
-    expect(b?.querySelector('.hub-walk-question-hint')?.textContent).toContain('Ask Poller Bot');
-    expect(root.querySelector('.hub-walk-answering')?.classList.contains('hidden')).toBe(true);
-    const form = b?.querySelector('.hub-walk-question-form') as HTMLFormElement;
+    expect(b?.querySelector('.board-walk-question-hint')?.textContent).toContain('Ask Poller Bot');
+    expect(root.querySelector('.board-walk-answering')?.classList.contains('hidden')).toBe(true);
+    const form = b?.querySelector('.board-walk-question-form') as HTMLFormElement;
     (form.querySelector('textarea') as HTMLTextAreaElement).value = 'What does a blip cost?';
     form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
     await tick();
@@ -840,11 +848,11 @@ describe('the walkthrough card: a ticket’s own decision offers the link too', 
       NOW,
     );
     mountWalk(q, walk({ onOpenThread }));
-    expect(root.querySelector('.hub-walk-k-revised')?.textContent).toBe('Revised');
-    expect(root.querySelector('.hub-walk-question-text')?.textContent).toContain(
+    expect(root.querySelector('.board-walk-k-revised')?.textContent).toBe('Revised');
+    expect(root.querySelector('.board-walk-question-text')?.textContent).toContain(
       'What does a blip cost?',
     );
-    (root.querySelector('.hub-walk-thread-link') as HTMLElement).click();
+    (root.querySelector('.board-walk-thread-link') as HTMLElement).click();
     expect(onOpenThread).toHaveBeenCalledWith(q.items[0]);
     // A fresh ask again: the link is there.
     expect(link()).not.toBeNull();
@@ -854,7 +862,7 @@ describe('the walkthrough card: a ticket’s own decision offers the link too', 
     mountWalk(reviewQueue([], [threadRow()], NOW), walk());
     expect(link()).toBeNull();
     expect(note()?.textContent).toContain('Reply above');
-    expect(note()?.closest('.hub-walk-actions')).not.toBeNull();
+    expect(note()?.closest('.board-walk-actions')).not.toBeNull();
   });
 });
 
@@ -864,12 +872,14 @@ describe('the Home queue row: a revised item', () => {
     const onOpenThread = vi.fn();
     const q = reviewQueue([], [revisedRow()], NOW);
     mountHome(q, strip({ onReview, onOpenThread }));
-    const row = root.querySelector('.hub-review-row') as HTMLElement;
-    expect((row.querySelector('.hub-review-row-badge') as HTMLElement).textContent).toBe('Revised');
-    expect((row.querySelector('.hub-review-row-quote') as HTMLElement).textContent).toContain(
+    const row = root.querySelector('.board-review-row') as HTMLElement;
+    expect((row.querySelector('.board-review-row-badge') as HTMLElement).textContent).toBe(
+      'Revised',
+    );
+    expect((row.querySelector('.board-review-row-quote') as HTMLElement).textContent).toContain(
       'Which other?',
     );
-    (row.querySelector('.hub-review-thread-link') as HTMLElement).click();
+    (row.querySelector('.board-review-thread-link') as HTMLElement).click();
     expect(onOpenThread).toHaveBeenCalledWith(q.items[0]);
     expect(onReview).not.toHaveBeenCalled();
     row.click();
@@ -878,9 +888,9 @@ describe('the Home queue row: a revised item', () => {
 
   it('an open row carries none of it', () => {
     mountHome(reviewQueue([], [ticketRow()], NOW), strip());
-    const row = root.querySelector('.hub-review-row') as HTMLElement;
-    expect(row.querySelector('.hub-review-row-badge')).toBeNull();
-    expect(row.querySelector('.hub-review-row-quote')).toBeNull();
-    expect(row.querySelector('.hub-review-thread-link')).toBeNull();
+    const row = root.querySelector('.board-review-row') as HTMLElement;
+    expect(row.querySelector('.board-review-row-badge')).toBeNull();
+    expect(row.querySelector('.board-review-row-quote')).toBeNull();
+    expect(row.querySelector('.board-review-thread-link')).toBeNull();
   });
 });

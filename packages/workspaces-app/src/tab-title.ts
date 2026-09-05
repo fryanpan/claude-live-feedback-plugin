@@ -3,7 +3,7 @@
  *
  * A tab strip gives each title roughly twenty characters before it truncates,
  * and every surface here used to spend all twenty on the same leading word —
- * so a reader with a board, three review docs and a diff open saw one word
+ * so a reader with a board, three attachments and a diff open saw one word
  * five times over and had to click to find out which tab was which. Leading
  * with the doc / workspace name puts the varying half where the reader can
  * see it and lets the product name be the part that gets cut.
@@ -31,7 +31,7 @@ export function tabTitle(...parts: Array<string | null | undefined>): string {
 /**
  * The tab-worthy part of a doc's label.
  *
- * A file-backed review doc labels itself with the full path on the host, which
+ * A file-backed attachment labels itself with the full path on the host, which
  * is the one shape a tab handles worst: truncation eats from the right, so
  * `/Volumes/Data/Users/…` would fill the title and the filename — the only
  * part that differs between two open docs — would never appear. An absolute

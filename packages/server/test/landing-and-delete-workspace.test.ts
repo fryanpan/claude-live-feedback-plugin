@@ -104,7 +104,7 @@ describe('landing + delete_workspace e2e (HTTP)', () => {
     standaloneId = (await j<{ docId: string }>(sr)).docId;
   });
 
-  it('GET / renders a project LINK for the review docs and NOT their artifacts', async () => {
+  it('GET / renders a project LINK for the attachments and NOT their artifacts', async () => {
     const r = await fetch(`${base}/`);
     expect(r.ok).toBe(true);
     const html = await r.text();
@@ -113,10 +113,10 @@ describe('landing + delete_workspace e2e (HTTP)', () => {
     // MUST ship the responsive viewport meta or it renders at ~980px and
     // scales down to unreadable on a phone.
     expect(html).toContain('name="viewport"');
-    // The review docs surface as one per-project link behind the fold,
+    // The attachments surface as one per-project link behind the fold,
     // deriving from the owner cwd basename and linking to the project's own
     // on-demand page.
-    expect(html).toContain('Review docs by project');
+    expect(html).toContain('Attachments by project');
     expect(html).toContain('alpha');
     expect(html).toContain(`/projects/${encodeURIComponent('/proj/alpha')}`);
 
@@ -202,8 +202,8 @@ describe('landing + delete_workspace e2e (HTTP)', () => {
     expect(body.error).toBe('has-open-threads');
     expect(body.files).toEqual([{ docId: mdDocId, openThreads: 1 }]);
     // Nothing deleted — both members survive.
-    expect(handle.rooms.get(mdDocId)).toBeTruthy();
-    expect(handle.rooms.get(files.get('src/index.ts')!.docId)).toBeTruthy();
+    expect(handle.docStore.get(mdDocId)).toBeTruthy();
+    expect(handle.docStore.get(files.get('src/index.ts')!.docId)).toBeTruthy();
   });
 
   it('DELETE /api/workspaces/:id?force=true ARCHIVES the whole folder', async () => {
@@ -216,13 +216,13 @@ describe('landing + delete_workspace e2e (HTTP)', () => {
     });
     const body = await j<{ ok: true; archived: number; docIds: string[] }>(r);
     expect(body.archived).toBe(2);
-    for (const f of files.values()) expect(handle.rooms.get(f.docId)).toBeUndefined();
+    for (const f of files.values()) expect(handle.docStore.get(f.docId)).toBeUndefined();
     for (const f of files.values()) {
       expect(existsSync(join(dataDir, '_archive', `${f.docId}.ydoc`))).toBe(true);
     }
     // Standalone doc is untouched — and still answers to the readable name
     // it was created under, resolving to the id the server minted.
-    expect(handle.rooms.get('standalone-doc')?.docId).toBe(standaloneId);
+    expect(handle.docStore.get('standalone-doc')?.docId).toBe(standaloneId);
   });
 
   it('DELETE ?purge=true is the destructive half, and it has to be asked for', async () => {
@@ -233,7 +233,7 @@ describe('landing + delete_workspace e2e (HTTP)', () => {
       { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' },
     );
     expect((await j<{ ok: true; restored: number }>(restored)).restored).toBe(2);
-    for (const f of files.values()) expect(handle.rooms.get(f.docId)).toBeTruthy();
+    for (const f of files.values()) expect(handle.docStore.get(f.docId)).toBeTruthy();
 
     const r = await fetch(
       `${base}/api/workspaces/${encodeURIComponent(workspaceId)}?force=true&purge=true`,
@@ -242,7 +242,7 @@ describe('landing + delete_workspace e2e (HTTP)', () => {
     const body = await j<{ ok: true; deleted: number }>(r);
     expect(body.deleted).toBe(2);
     for (const f of files.values()) {
-      expect(handle.rooms.get(f.docId)).toBeUndefined();
+      expect(handle.docStore.get(f.docId)).toBeUndefined();
       expect(existsSync(join(dataDir, `${f.docId}.ydoc`))).toBe(false);
       expect(existsSync(join(dataDir, '_archive', `${f.docId}.ydoc`))).toBe(false);
     }

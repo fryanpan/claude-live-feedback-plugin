@@ -31,7 +31,7 @@ import {
  *
  * All mutations transact under the same 'agent' origin the existing agent
  * edit tools use (findAndReplace, rewriteRange, block deletion): NOT
- * 'file-seed'/'file-watch', so the rooms write-back observer flushes the
+ * 'file-seed'/'file-watch', so the doc store's write-back observer flushes the
  * result to disk; not a browser-local origin, so a client Y.UndoManager with
  * default trackedOrigins never puts these transactions on a human's undo
  * stack (pinned by test).

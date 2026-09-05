@@ -2,8 +2,8 @@ import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
 import { mkdtempSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { Rooms } from '../src/rooms.ts';
-import { SseHub } from '../src/sse.ts';
+import { DocStore } from '../src/doc-store.ts';
+import { SseBus } from '../src/sse.ts';
 import { createWebhookDispatcher } from '../src/webhooks.ts';
 import { waitFor } from './wait-for.ts';
 
@@ -26,10 +26,10 @@ import { waitFor } from './wait-for.ts';
 const MD = '# Title\n\nAlpha beta gamma.\n\nSecond paragraph here.\n';
 const author = { id: 'agent-7', name: 'Redline Bot', color: '#3aa675' };
 
-function makeRooms(dataDir: string): Rooms {
-  return new Rooms({
+function makeDocStore(dataDir: string): DocStore {
+  return new DocStore({
     dataDir,
-    sse: new SseHub(),
+    sse: new SseBus(),
     webhooks: createWebhookDispatcher({ onLog: () => {} }),
     decorateDocMeta: (m) => ({ ...m, reviewUrl: `http://test/review/${m.docId}` }),
   });
@@ -46,15 +46,15 @@ describe('a doc edited while its deferred bind is in flight', () => {
   let dataDir: string;
   let mdPath: string;
   let ydocPath: string;
-  let first: Rooms;
-  let second: Rooms | undefined;
+  let first: DocStore;
+  let second: DocStore | undefined;
 
   beforeEach(() => {
     dataDir = mkdtempSync(join(tmpdir(), 'cw-deferred-bind-'));
     mdPath = join(dataDir, 'notes.md');
     ydocPath = join(dataDir, 'db1.ydoc');
     writeFileSync(mdPath, MD);
-    first = makeRooms(dataDir);
+    first = makeDocStore(dataDir);
     first.getOrCreate('db1', { type: 'markdown', sourceUrl: mdPath });
     expect(first.attachFile('db1', mdPath).ok).toBe(true);
   });
@@ -73,7 +73,7 @@ describe('a doc edited while its deferred bind is in flight', () => {
     first.stop();
     tieMtimes(mdPath, ydocPath);
 
-    second = makeRooms(dataDir);
+    second = makeDocStore(dataDir);
     // The read is handed to the pool here, so the doc comes back UNBOUND —
     // this assertion is the seam the test turns on. Everything below happens
     // in the gap, deterministically, because a pool read cannot land in the
@@ -110,7 +110,7 @@ describe('a doc edited while its deferred bind is in flight', () => {
     writeFileSync(mdPath, '# Title\n\nAlpha beta gamma.\n\nEdited while down.\n');
     tieMtimes(mdPath, ydocPath);
 
-    second = makeRooms(dataDir);
+    second = makeDocStore(dataDir);
     // Reaching for the doc is what hydrates it and starts the pool read.
     expect(second.listSuggestions('db1')).toHaveLength(0);
     expect(second.boundPathOf('db1')).toBeUndefined();
@@ -131,7 +131,7 @@ describe('a doc edited while its deferred bind is in flight', () => {
     first.flush();
     first.stop();
 
-    second = makeRooms(dataDir);
+    second = makeDocStore(dataDir);
     expect(second.listSuggestions('db1')).toHaveLength(0);
     expect(second.boundPathOf('db1')).toBeUndefined();
     // The read is in flight. Stopping here is what a shutdown — or a test's

@@ -34,7 +34,7 @@
  * `docId` / `room` / `rest` once (both halves of the alias contract — see
  * the comment inside the function), then delegates to `doc-resource.ts`
  * (the doc's own reads/writes, its task chips, the meeting-float asks, its
- * repo home, and content/status/diff/activity), `doc-threads-routes.ts`
+ * origin repo, and content/status/diff/activity), `doc-threads-routes.ts`
  * (creating a thread and every per-thread mutation) and `doc-edit-routes.ts`
  * (whole-doc rewrite, disk reparse, agent anchors, find_and_replace,
  * suggestions, the structural deletes) — the same shape `routes/tasks.ts`
@@ -44,11 +44,11 @@
  * strings), so no two of the ~30 subroutes can match the same request and a
  * fixed delegation order cannot make one answer a path meant for another.
  */
-import { type Anchor, type DocMeta, type DocType, reviewIdOf } from '@feedback/core';
+import { type Anchor, type DocMeta, type DocType, attachmentIdOf } from '@feedback/core';
 import { classifyActor } from '../actor-identity.ts';
-import { normalizeDocHome, resolveHomeCheckout } from '../doc-home.ts';
 import { RESERVED_DOC_PREFIXES } from '../doc-ids.ts';
 import { compactDocRow, matchesDocFilters, pageDocs, parseListDocsQuery } from '../doc-listing.ts';
+import { normalizeDocOriginRepo, resolveOriginRepoCheckout } from '../doc-origin-repo.ts';
 import { browserCannotBindBody, isBrowserRequest } from '../middleware/write-gate.ts';
 import {
   captureMockup,
@@ -102,7 +102,7 @@ export async function handleDocCreateListRoutes(
   rq: DocRouteRequest,
 ): Promise<Response | undefined> {
   const {
-    rooms,
+    docStore,
     taskStore,
     dataDir,
     j,
@@ -110,9 +110,9 @@ export async function handleDocCreateListRoutes(
     isValidDocId,
     withReviewUrl,
     boardIndexForListing,
-    hubBoardsForDocIndexed,
+    boardsForDocIndexed,
     homeForDocIndexed,
-    fileUnderHubWorkspace,
+    fileUnderBoardWorkspace,
   } = ctx;
   const { req, url, pathname } = rq;
 
@@ -129,7 +129,7 @@ export async function handleDocCreateListRoutes(
     // A markdown doc created WITHOUT a path can be placed by its
     // workspace's configured notes home: the file is derived as
     // `<dir>/<docId>.md` on the home branch and the doc is pinned
-    // there (see rooms.setDocHome), which is what gets planning notes
+    // there (see docStore.setDocOriginRepo), which is what gets planning notes
     // checked in instead of scattered wherever a session's checkout
     // happens to sit. Opt-in twice over — the workspace set a
     // notesHome, and the caller named the workspace.
@@ -139,13 +139,13 @@ export async function handleDocCreateListRoutes(
       const notes = wsForNotes ? taskStore.notesHome(wsForNotes) : undefined;
       if (notes) {
         const fileName = `${docId.replace(/[^a-zA-Z0-9._-]/g, '-')}.md`;
-        const norm = normalizeDocHome({
+        const norm = normalizeDocOriginRepo({
           repoRoot: notes.repoRoot,
           branch: notes.branch,
           relPath: `${notes.dir}/${fileName}`,
         });
         if (!norm.ok) return j(400, { error: 'bad_notes_home', hint: norm.error });
-        const placed = resolveHomeCheckout(norm.home);
+        const placed = resolveOriginRepoCheckout(norm.home);
         if (!placed.placed) {
           return j(409, {
             error: 'notes_home_unplaced',
@@ -174,13 +174,13 @@ export async function handleDocCreateListRoutes(
     if (type === 'diff') {
       return j(400, {
         error: 'use /api/diffs',
-        hint: 'Diff review docs are created per changed file by POST /api/diffs {repo, base, target}.',
+        hint: 'Diff attachments are created per changed file by POST /api/diffs {repo, base, target}.',
       });
     }
     if ((type === 'markdown' || type === 'code') && !sourceUrl) {
       return j(400, {
         error: 'sourceUrl required',
-        hint: 'Markdown and code review docs are backed by a file on disk. Pass sourceUrl: "/abs/path/to/file" in the POST body.',
+        hint: 'Markdown and code attachments are backed by a file on disk. Pass sourceUrl: "/abs/path/to/file" in the POST body.',
       });
     }
     // A mockup binds to a file OUTSIDE the repo, so this route was the
@@ -222,8 +222,8 @@ export async function handleDocCreateListRoutes(
     // route was measured parking production for 328 seconds. Prewarming here
     // puts the bytes in hand (or quarantines the path) before the synchronous
     // create below can reach for the file.
-    await rooms.prewarmHydration(docId);
-    const created = rooms.createForCaller(docId, {
+    await docStore.prewarmHydration(docId);
+    const created = docStore.createForCaller(docId, {
       type,
       sourceUrl,
       title: body?.title as string | undefined,
@@ -250,25 +250,25 @@ export async function handleDocCreateListRoutes(
     // point, and the 409 below returns early — filing afterwards would
     // leave a failed bind as the one doc this route can still strand
     // outside a workspace.
-    const hubWorkspaceId = fileUnderHubWorkspace(
+    const boardWorkspaceId = fileUnderBoardWorkspace(
       canonicalId,
       body?.hubWorkspaceId as string | undefined,
     );
-    let attached: ReturnType<typeof rooms.attachFile> | undefined;
+    let attached: ReturnType<typeof docStore.attachFile> | undefined;
     if (type === 'markdown' && sourceUrl) {
-      attached = await rooms.attachFileAsync(canonicalId, sourceUrl);
+      attached = await docStore.attachFileAsync(canonicalId, sourceUrl);
       if (!attached.ok) return j(409, { error: 'attach_failed', attached });
       // Notes-home creation: pin the doc to the derived home. The pin
       // exports the (possibly still missing) file and takes over the
       // binding, so branch churn from here on follows the branch.
-      if (derivedHome) rooms.setDocHome(canonicalId, derivedHome);
+      if (derivedHome) docStore.setDocOriginRepo(canonicalId, derivedHome);
     } else if (type === 'code' && sourceUrl) {
       // The pool door, like the markdown branch above it. `sourceUrl` is
       // whatever the caller put in the body, so this is the same class of
       // path — a synchronous read of one that has stopped answering parks
       // the process, and being the code branch rather than the prose one
       // makes no difference to that.
-      attached = await rooms.attachReadonlyFileAsync(canonicalId, sourceUrl);
+      attached = await docStore.attachReadonlyFileAsync(canonicalId, sourceUrl);
       if (!attached.ok) return j(409, { error: 'attach_failed', attached });
     }
     // Capture at bind, not merely on first serve: a mock that is bound
@@ -312,7 +312,7 @@ export async function handleDocCreateListRoutes(
       meta: withReviewUrl(room.meta),
       // Where the doc landed, in the same call that created it — a
       // caller who supplied no workspace still learns which one it got.
-      hubWorkspaceId,
+      hubWorkspaceId: boardWorkspaceId,
       ...(attached ? { attached } : {}),
     });
   }
@@ -321,15 +321,15 @@ export async function handleDocCreateListRoutes(
     // list_docs accepted the param and silently answered a board-scoped
     // question with every doc on the server. It matches either kind of
     // id a caller holds under the name "workspace": the review tag in
-    // meta (folder binds, diff reviews) or a hub board the doc is filed
-    // under — resolved via hubBoardsForDoc so the answer is the same
+    // meta (folder binds, diff reviews) or a board the doc is filed
+    // under — resolved via boardsForDoc so the answer is the same
     // set the event fan-out and coverage readout already use.
     //
     // `?setId=` scopes it to one REVIEW instead. It exists because the
     // sidebar's legacy flat-set path had no way to ask: it fetched every
     // doc on the server — 4,205,683 bytes for 4,062 rows, measured
     // 2026-08-21 — and kept the 6 that shared its setId. Matching goes
-    // through `reviewIdOf` so this route cannot answer differently from
+    // through `attachmentIdOf` so this route cannot answer differently from
     // the other set queries beside it (grouped diff, repo files, tree),
     // which means a doc restored from an archive carrying only the
     // deprecated `workspaceId` spelling is still found by its set.
@@ -345,7 +345,7 @@ export async function handleDocCreateListRoutes(
     // See doc-listing.ts.
     const q = parseListDocsQuery(url.searchParams);
     const { workspaceId, setId } = q;
-    const all = rooms.list();
+    const all = docStore.list();
     // ONE pass over the workspaces for the whole listing. Both the
     // board filter and the reviewUrl below used to run their own scan
     // per row, which is what made an unscoped listing quadratic — and
@@ -355,10 +355,10 @@ export async function handleDocCreateListRoutes(
     const byWorkspace = workspaceId
       ? all.filter(
           (m) =>
-            m.workspaceId === workspaceId || hubBoardsForDocIndexed(boardIndex, m).has(workspaceId),
+            m.workspaceId === workspaceId || boardsForDocIndexed(boardIndex, m).has(workspaceId),
         )
       : all;
-    const bySet = setId ? byWorkspace.filter((m) => reviewIdOf(m) === setId) : byWorkspace;
+    const bySet = setId ? byWorkspace.filter((m) => attachmentIdOf(m) === setId) : byWorkspace;
     const docs = bySet.filter((m) => matchesDocFilters(m, q));
     const decorate = (m: DocMeta) => withReviewUrl(m, homeForDocIndexed(boardIndex, m));
     if (q.limit === undefined) {
@@ -369,7 +369,7 @@ export async function handleDocCreateListRoutes(
       : (m: DocMeta) =>
           compactDocRow(decorate(m), {
             boardId: homeForDocIndexed(boardIndex, m),
-            threads: rooms.threadCounts(m.docId),
+            threads: docStore.threadCounts(m.docId),
           });
     return j(200, {
       ...pageDocs(docs, { limit: q.limit, cursor: q.cursor }, project),
@@ -384,7 +384,7 @@ export async function handleDocPromoteRoute(
   ctx: DocRoutesContext,
   rq: DocRouteRequest,
 ): Promise<Response | undefined> {
-  const { rooms, taskStore, j, safeJson, canonicalDocId, workspacesOfDoc } = ctx;
+  const { docStore, taskStore, j, safeJson, canonicalDocId, workspacesOfDoc } = ctx;
   const { req, pathname, authorFor, visitor } = rq;
   // promote_to_task (§3.10): thread → task. Captures the origin ref,
   // the latest HUMAN comment as the verbatim quote (an agent's closing
@@ -419,7 +419,7 @@ export async function handleDocPromoteRoute(
     if (!taskStore.getWorkspace(workspaceId)) {
       return j(404, { error: 'workspace not found' });
     }
-    const thread = rooms.getThread(docId, threadId);
+    const thread = docStore.getThread(docId, threadId);
     if (!thread) return j(404, { error: 'thread not found' });
     const humanComment = [...thread.comments]
       .reverse()
@@ -478,7 +478,7 @@ export async function handleDocPromoteRoute(
     // rows are drafts like the batch-filed ones, held until the same
     // approval. A doc with no plan gate (or an approved one) promotes
     // exactly as before.
-    const promoteRoom = rooms.get(docId);
+    const promoteRoom = docStore.get(docId);
     const promoteHold =
       promoteRoom?.meta.planState === 'pending' ? { docId: promoteRoom.docId } : undefined;
     const res = taskStore.createTask(workspaceId, {
@@ -534,14 +534,14 @@ export async function handleDocResourceRoutes(
   ctx: DocRoutesContext,
   rq: DocRouteRequest,
 ): Promise<Response | undefined> {
-  const { rooms, j, isValidDocId } = ctx;
+  const { docStore, j, isValidDocId } = ctx;
   const { pathname } = rq;
   const docMatch = pathname.match(/^\/api\/docs\/([^/]+)(?:\/(.*))?$/);
   if (!docMatch) return undefined;
   const addressed = decodeURIComponent(docMatch[1] ?? '');
   const rest = docMatch[2] ?? '';
   if (!isValidDocId(addressed)) return j(400, { error: 'bad docId' });
-  const room = rooms.get(addressed);
+  const room = docStore.get(addressed);
   if (!room) return j(404, { error: 'doc not found' });
   // Canonicalize ONCE, here, and the ~30 subroutes below inherit both
   // halves of the alias contract: a readable name resolves, and

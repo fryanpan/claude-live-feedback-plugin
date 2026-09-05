@@ -225,17 +225,17 @@ describe('the review-item quality gate', () => {
 
   async function agentStream(workspaceId: string, agent: { id: string }) {
     await jj(
-      await post(`/api/workspaces/${workspaceId}/attachments`, {
+      await post(`/workspaces/${workspaceId}/agents`, {
         agentId: agent.id,
         runtime: 'claude-code-local',
       }),
     );
     const res = await fetch(
-      `${base}/events/workspace/${workspaceId}?agentId=${encodeURIComponent(agent.id)}`,
+      `${base}/workspaces/${workspaceId}/events:stream?agentId=${encodeURIComponent(agent.id)}`,
       { headers: { accept: 'text/event-stream' } },
     );
     const stream = listenFrames(res);
-    // `fetch` resolves on the response HEADERS, and the hub registers this
+    // `fetch` resolves on the response HEADERS, and the board registers this
     // stream's sink inside the body's `start()` — which enqueues its `:ok`
     // preamble in the same synchronous block. So the first BYTES are proof
     // the sink is registered, and headers alone are not: without this await,

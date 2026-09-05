@@ -20,6 +20,7 @@ import {
   formatTimeOfDay,
   formatUntil,
   scheduleModeOf,
+  scheduleRuleChipParts,
   writeSchedulePhrase,
 } from './schedule-phrase.ts';
 import { type ScheduleRule, nextOccurrence, zonedParts } from './task-schedule.ts';
@@ -282,5 +283,54 @@ describe('the pieces the chips are drawn from', () => {
       kind: 'after-completion',
       delayMs: 7_200_000,
     });
+  });
+});
+
+describe('the rule as chips', () => {
+  it('splits a calendar rule at the joint a reader scans — which days, then when', () => {
+    expect(scheduleRuleChipParts(parse('every weekday at 9am'), CTX)).toEqual([
+      'Every weekday',
+      '9am',
+    ]);
+    expect(scheduleRuleChipParts(parse('twice a day at 9 and 5'), CTX)).toEqual([
+      'Every day',
+      '9am and 5pm',
+    ]);
+    expect(scheduleRuleChipParts(parse('every Monday 9:00'), CTX)).toEqual(['Every Monday', '9am']);
+  });
+
+  it('writes an interval and a delay as one part each', () => {
+    expect(scheduleRuleChipParts({ rule: { kind: 'every', everyMs: 1_200_000 } }, CTX)).toEqual([
+      'Every 20 minutes',
+    ]);
+    expect(
+      scheduleRuleChipParts({ rule: { kind: 'after-completion', delayMs: 259_200_000 } }, CTX),
+    ).toEqual(["3 days after it's done"]);
+  });
+
+  it('says the end out loud — a rule that stops in December must not read as forever', () => {
+    const bounded = parse('every Monday 9:00 until Dec');
+    expect(scheduleRuleChipParts(bounded, CTX)).toEqual(['Every Monday', '9am', 'until Dec']);
+    // The control: the same rule with no end has exactly the first two parts,
+    // so the third above is the `until` and not a constant.
+    expect(scheduleRuleChipParts({ rule: bounded.rule }, CTX)).toEqual(['Every Monday', '9am']);
+  });
+
+  it('gives a one-off NO parts — its rule is the instant the row already prints', () => {
+    const once = parse('Sep 10 at 3pm');
+    expect(once.rule.kind).toBe('once');
+    expect(scheduleRuleChipParts(once, CTX)).toEqual([]);
+  });
+
+  it('spells every label the way the phrase does, so a chip cannot drift from it', () => {
+    // The point of the function existing at all. Each part is a substring of
+    // the sentence the same rule writes, lower-cased for the leading capital.
+    for (const example of SCHEDULE_PHRASE_EXAMPLES) {
+      const phrase = parse(example);
+      const sentence = writeSchedulePhrase(phrase, CTX);
+      for (const part of scheduleRuleChipParts(phrase, CTX)) {
+        expect(sentence).toContain(part.charAt(0).toLowerCase() + part.slice(1));
+      }
+    }
   });
 });

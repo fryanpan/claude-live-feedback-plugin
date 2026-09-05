@@ -49,7 +49,7 @@ export interface WatchRestoreDeps {
   markAttached: (workspaceId: string) => void;
   /** Where a channel line goes — `server.notification` in the real process. */
   notify: (n: ChannelNotification) => Promise<void>;
-  /** The doc/hub renderer, for the backlog the attach response drains. */
+  /** The doc/board renderer, for the backlog the attach response drains. */
   emitChannelMessage: (event: string, payload: unknown) => Promise<void>;
   /** The process-wide dedup; a backlog row may also be arriving on a stream. */
   shouldForward: (event: string, payload: unknown) => boolean;
@@ -145,7 +145,7 @@ async function ensureWatchesRestored(deps: WatchRestoreDeps, rt: RestoreRuntime)
         try {
           const attachRes = (await deps.http(
             'POST',
-            `/api/workspaces/${encodeURIComponent(workspaceId)}/attachments`,
+            `/workspaces/${encodeURIComponent(workspaceId)}/agents`,
             {
               agentId: deps.author.id,
               agentName: deps.author.name,

@@ -161,7 +161,7 @@ const ROUTE_TEMPLATES: readonly (readonly string[])[] = [
   ['api', 'reviews', ':id', 'archive'],
   ['api', 'reviews', ':id', 'unarchive'],
   // reviewApi(sub): `/api/(?:reviews|workspaces)/:id/<sub>` — a review or a
-  // hub workspace can be addressed under either prefix (compat for
+  // board workspace can be addressed under either prefix (compat for
   // long-running sessions and open tabs; see the reviewApi comment in
   // server.ts), so every one of these 8 subroutes needs BOTH prefixes.
   ['api', 'reviews', ':id', 'refresh'],
@@ -184,7 +184,6 @@ const ROUTE_TEMPLATES: readonly (readonly string[])[] = [
   ['s', ':id'],
   ['api', 'share', ':id'],
   ['api', 'share', ':id', 'ttl'],
-  ['events', 'workspace', ':id'],
   ['api', 'dispatches', ':id'],
   ['api', 'chat-audit', ':id'],
   ['review', ':id'],
@@ -215,9 +214,6 @@ const ROUTE_TEMPLATES: readonly (readonly string[])[] = [
   ['api', 'workspaces', ':id', 'huddles'],
   ['api', 'workspaces', ':id', 'tasks'],
   ['api', 'workspaces', ':id', 'tasks', 'batch'],
-  ['api', 'workspaces', ':id', 'attachments'],
-  ['api', 'workspaces', ':id', 'attachments', ':id'],
-  ['api', 'workspaces', ':id', 'attachments', ':id', 'heartbeat'],
   ['api', 'workspaces', ':id', 'comment-queue', ':id', 'ack'],
   ['api', 'workspaces', ':id', 'voice-queue', ':id', 'ack'],
   // /api/tasks/:id/...
@@ -299,6 +295,12 @@ const ROUTE_TEMPLATES: readonly (readonly string[])[] = [
   ['workspaces', ':id', 'docs', ':id'],
   ['workspaces', ':id', 'mockups', ':id'],
   ['workspaces', ':id', 'reviews', ':id'],
+  // Board collections addressed the canonical way — the live event stream
+  // and the agent roster, both moved off names the glossary spends elsewhere.
+  ['workspaces', ':id', 'events:stream'],
+  ['workspaces', ':id', 'agents'],
+  ['workspaces', ':id', 'agents', ':id'],
+  ['workspaces', ':id', 'agents', ':id', 'heartbeat'],
 ];
 
 function matchesRouteTemplate(segments: readonly string[], template: readonly string[]): boolean {

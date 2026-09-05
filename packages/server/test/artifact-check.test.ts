@@ -502,7 +502,7 @@ describe('server wiring: REST done-transition triggers the check', () => {
       const check = await until(() => handle.tasks.getTask(taskId)?.artifactCheck);
       expect(check.links[0]?.verdict).toBe('missing');
       const doc = await until(() => {
-        const d = handle.rooms.getDoc(taskBodyDocId(taskId));
+        const d = handle.docStore.getDoc(taskBodyDocId(taskId));
         return d && d.threads.length > 0 ? d : undefined;
       });
       const comment = doc.threads[0]?.comments[0];
@@ -516,7 +516,7 @@ describe('server wiring: REST done-transition triggers the check', () => {
       const taskId = await doneTaskOver(post);
       const check = await until(() => handle.tasks.getTask(taskId)?.artifactCheck);
       expect(check.links[0]?.verdict).toBe('verified');
-      expect(handle.rooms.getDoc(taskBodyDocId(taskId))?.threads ?? []).toHaveLength(0);
+      expect(handle.docStore.getDoc(taskBodyDocId(taskId))?.threads ?? []).toHaveLength(0);
     });
   });
 });

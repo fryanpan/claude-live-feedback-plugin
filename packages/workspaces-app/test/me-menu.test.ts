@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { type MeSession, defaultSigninHref, wireMeMenu } from '../src/hub/me-menu.ts';
+import { type MeSession, defaultSigninHref, wireMeMenu } from '../src/board/me-menu.ts';
 
 let button: HTMLButtonElement;
 let menu: HTMLElement;
@@ -8,7 +8,7 @@ let dispose: (() => void) | null = null;
 beforeEach(() => {
   button = document.createElement('button');
   menu = document.createElement('div');
-  menu.className = 'hub-me-menu hidden';
+  menu.className = 'board-me-menu hidden';
   document.body.append(button, menu);
 });
 
@@ -45,7 +45,7 @@ describe('wireMeMenu', () => {
     expect(menu.classList.contains('hidden')).toBe(false);
     expect(button.getAttribute('aria-expanded')).toBe('true');
     await vi.waitFor(() => {
-      expect(menu.querySelector('a.hub-me-action')?.getAttribute('href')).toBe(
+      expect(menu.querySelector('a.board-me-action')?.getAttribute('href')).toBe(
         '/signin?next=%2Fworkspaces%2Fw-1',
       );
     });
@@ -63,7 +63,7 @@ describe('wireMeMenu', () => {
       expect(menu.textContent).toContain('Signed in as');
     });
     expect(menu.querySelector('b')?.textContent).toBe('Bryan');
-    menu.querySelector<HTMLButtonElement>('.hub-me-signout')?.click();
+    menu.querySelector<HTMLButtonElement>('.board-me-signout')?.click();
     await vi.waitFor(() => {
       expect(onSignedOut).toHaveBeenCalled();
     });
@@ -78,9 +78,9 @@ describe('wireMeMenu', () => {
     wire({ authenticated: true, user: { name: 'Bryan' } }, { saveName, storeName, onRenamed });
     button.click();
     await vi.waitFor(() => {
-      expect(menu.querySelector('.hub-me-rename')).not.toBeNull();
+      expect(menu.querySelector('.board-me-rename')).not.toBeNull();
     });
-    menu.querySelector<HTMLButtonElement>('.hub-me-rename')?.click();
+    menu.querySelector<HTMLButtonElement>('.board-me-rename')?.click();
     // The form has to be LOOKED AT, not merely present. A click on a control
     // inside the menu rewrites the menu's own innerHTML, which detaches the
     // clicked node before the document-level outside-click handler sees the
@@ -89,7 +89,7 @@ describe('wireMeMenu', () => {
     // on screen for more than a frame.
     expect(menu.classList.contains('hidden')).toBe(false);
     expect(button.getAttribute('aria-expanded')).toBe('true');
-    const input = menu.querySelector<HTMLInputElement>('#hub-me-name');
+    const input = menu.querySelector<HTMLInputElement>('#board-me-name');
     expect(input?.value).toBe('Bryan');
     if (!input) throw new Error('no rename input');
     input.value = '  Bryan C. ';
@@ -108,18 +108,18 @@ describe('wireMeMenu', () => {
     wire({ authenticated: true, user: { name: 'Bryan' } }, { saveName, onRenamed });
     button.click();
     await vi.waitFor(() => {
-      expect(menu.querySelector('.hub-me-rename')).not.toBeNull();
+      expect(menu.querySelector('.board-me-rename')).not.toBeNull();
     });
-    menu.querySelector<HTMLButtonElement>('.hub-me-rename')?.click();
-    const input = menu.querySelector<HTMLInputElement>('#hub-me-name');
+    menu.querySelector<HTMLButtonElement>('.board-me-rename')?.click();
+    const input = menu.querySelector<HTMLInputElement>('#board-me-name');
     if (!input) throw new Error('no rename input');
     input.value = 'Bryan C.';
     menu.querySelector('form')?.dispatchEvent(new Event('submit', { cancelable: true }));
     await vi.waitFor(() => {
-      expect(menu.querySelector('.hub-me-error')?.classList.contains('hidden')).toBe(false);
+      expect(menu.querySelector('.board-me-error')?.classList.contains('hidden')).toBe(false);
     });
     expect(onRenamed).not.toHaveBeenCalled();
-    expect(menu.querySelector('#hub-me-name')).not.toBeNull();
+    expect(menu.querySelector('#board-me-name')).not.toBeNull();
   });
 
   it('closes on a second click, an outside click, and Escape', async () => {
@@ -141,9 +141,9 @@ describe('wireMeMenu', () => {
     wire({ authenticated: true, user: { name: 'Bryan' } });
     button.click();
     await vi.waitFor(() => {
-      expect(menu.querySelector('.hub-me-rename')).not.toBeNull();
+      expect(menu.querySelector('.board-me-rename')).not.toBeNull();
     });
-    const rename = menu.querySelector<HTMLButtonElement>('.hub-me-rename');
+    const rename = menu.querySelector<HTMLButtonElement>('.board-me-rename');
     if (!rename) throw new Error('no rename button');
     // A real click, dispatched the way a browser dispatches one: it reaches
     // the button, the button rewrites the menu, and the event then carries on
@@ -151,7 +151,7 @@ describe('wireMeMenu', () => {
     rename.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
     expect(rename.isConnected).toBe(false);
     expect(menu.classList.contains('hidden')).toBe(false);
-    expect(menu.querySelector('#hub-me-name')).not.toBeNull();
+    expect(menu.querySelector('#board-me-name')).not.toBeNull();
   });
 
   it('lets an unsigned browser rename itself locally, with no profile write', async () => {
@@ -161,13 +161,13 @@ describe('wireMeMenu', () => {
     wire({ authenticated: false }, { saveName, storeName, onRenamed });
     button.click();
     await vi.waitFor(() => {
-      expect(menu.querySelector('.hub-me-rename')).not.toBeNull();
+      expect(menu.querySelector('.board-me-rename')).not.toBeNull();
     });
     // Signing in is still offered beside it — renaming is not a substitute.
-    expect(menu.querySelector('a.hub-me-action')?.textContent).toBe('Sign in');
-    menu.querySelector<HTMLButtonElement>('.hub-me-rename')?.click();
+    expect(menu.querySelector('a.board-me-action')?.textContent).toBe('Sign in');
+    menu.querySelector<HTMLButtonElement>('.board-me-rename')?.click();
     expect(menu.classList.contains('hidden')).toBe(false);
-    const input = menu.querySelector<HTMLInputElement>('#hub-me-name');
+    const input = menu.querySelector<HTMLInputElement>('#board-me-name');
     // Seeded from the chip's local name, which is the only name this browser has.
     expect(input?.value).toBe('Casey');
     if (!input) throw new Error('no rename input');
@@ -189,16 +189,16 @@ describe('wireMeMenu', () => {
     wire({ authenticated: false }, { storeName, onRenamed });
     button.click();
     await vi.waitFor(() => {
-      expect(menu.querySelector('.hub-me-rename')).not.toBeNull();
+      expect(menu.querySelector('.board-me-rename')).not.toBeNull();
     });
-    menu.querySelector<HTMLButtonElement>('.hub-me-rename')?.click();
-    const input = menu.querySelector<HTMLInputElement>('#hub-me-name');
+    menu.querySelector<HTMLButtonElement>('.board-me-rename')?.click();
+    const input = menu.querySelector<HTMLInputElement>('#board-me-name');
     if (!input) throw new Error('no rename input');
     input.value = '   ';
     menu.querySelector('form')?.dispatchEvent(new Event('submit', { cancelable: true }));
     expect(storeName).not.toHaveBeenCalled();
     expect(onRenamed).not.toHaveBeenCalled();
-    expect(menu.querySelector('#hub-me-name')).not.toBeNull();
+    expect(menu.querySelector('#board-me-name')).not.toBeNull();
     expect(menu.classList.contains('hidden')).toBe(false);
   });
 
@@ -221,7 +221,7 @@ describe('a deployment with no sign-in page', () => {
     expect(menu.querySelector('a')).toBeNull();
     // Not an empty menu: everything that does not depend on a sign-in page
     // is still here, so the assertion above is about the link and nothing else.
-    expect(menu.querySelector('.hub-me-rename')).not.toBeNull();
+    expect(menu.querySelector('.board-me-rename')).not.toBeNull();
   });
 
   it('POSITIVE CONTROL: the same menu still links where sign-in exists', async () => {

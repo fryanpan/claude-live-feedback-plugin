@@ -127,7 +127,7 @@ describe('GET /api/workspaces/:id/related-work', () => {
     title: string,
     path: string,
     markdown: string,
-    hub: string = wsId,
+    board: string = wsId,
   ): Promise<string> {
     writeFileSync(path, markdown);
     const res = await fetch(`${base}/api/docs`, {
@@ -138,7 +138,7 @@ describe('GET /api/workspaces/:id/related-work', () => {
         type: 'markdown',
         title,
         sourceUrl: path,
-        hubWorkspaceId: hub,
+        hubWorkspaceId: board,
       }),
     });
     expect(res.status, `creating ${alias}: ${await res.clone().text()}`).toBe(200);

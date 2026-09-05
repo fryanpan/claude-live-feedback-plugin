@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { wireInPlaceTitle } from '../src/hub/hub-render.ts';
-import { wireWordsInPlace } from '../src/hub/inline-rename.ts';
+import { wireInPlaceTitle } from '../src/board/board-render.ts';
+import { wireWordsInPlace } from '../src/board/inline-rename.ts';
 
 // Urgent-fixes ticket, 2026-09-01: editing a task title and clicking outside
 // reverted the edit. Both title editors used to cancel on blur; now a changed

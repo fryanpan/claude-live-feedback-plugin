@@ -26,7 +26,7 @@ import {
  * re-anchoring when the text under a thread moved, and the review payload a
  * thread can carry — answered, revised, judged, withdrawn, undone.
  *
- * Split out of `rooms.ts`, which keeps the room lifecycle and the event
+ * Split out of `doc-store.ts`, which keeps the room lifecycle and the event
  * plumbing this fires into. The review verbs come with the threads rather
  * than to a file of their own on purpose: a review IS a field on a thread
  * here, every one of them ends in the same `thread.replied` frame, and
@@ -41,7 +41,7 @@ import {
 import * as Y from 'yjs';
 import type { ActivityType } from './activity.ts';
 import { classifyActor } from './actor-identity.ts';
-import type { DocRoom } from './rooms.ts';
+import type { DocRoom } from './doc-store.ts';
 
 export function randomId(): string {
   return Math.random().toString(36).slice(2, 10) + Date.now().toString(36).slice(-4);
@@ -101,7 +101,7 @@ export interface DocThreadPersistence {
   ): void;
 }
 
-/** The thread verbs. One per `Rooms`, holding no state of its own. */
+/** The thread verbs. One per `DocStore`, holding no state of its own. */
 export class DocThreads {
   constructor(private readonly p: DocThreadPersistence) {}
 

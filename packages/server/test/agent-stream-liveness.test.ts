@@ -16,7 +16,7 @@
  * were none to ride.
  *
  * The whole time, the MCP child process was holding an SSE stream open on
- * `/events/workspace/<id>` — the very channel the delivery would have ridden.
+ * `/workspaces/<id>/events:stream` — the very channel the delivery would have ridden.
  * The server had a live socket to the agent and declined to use it because a
  * language model had not spoken in nineteen minutes.
  *
@@ -46,7 +46,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { type ServerHandle, createServer } from '../src/server.ts';
-import { SseHub } from '../src/sse.ts';
+import { SseBus } from '../src/sse.ts';
 import { TaskStore, attachmentState } from '../src/tasks.ts';
 import { type AgentStream, openWorkspaceStream } from './agent-stream.ts';
 
@@ -75,7 +75,7 @@ describe('an open agent stream is a delivery signal', () => {
 
   it('reaches an agent working off-server for longer than the observed window', async () => {
     const store = tightStore();
-    const ws = store.createWorkspace('stream-hub');
+    const ws = store.createWorkspace('stream-board');
     store.attachAgent(ws.id, { agentId: 'worker', runtime: 'claude-code-local' });
 
     // Nineteen minutes of grep, in miniature: no heartbeat, no write, no tool
@@ -96,7 +96,7 @@ describe('an open agent stream is a delivery signal', () => {
     // had — an open tab impersonating a working agent, and the request handed
     // to it lost rather than late.
     const store = tightStore();
-    const ws = store.createWorkspace('other-hub');
+    const ws = store.createWorkspace('other-board');
     store.attachAgent(ws.id, { agentId: 'worker', runtime: 'claude-code-local' });
     await new Promise((r) => setTimeout(r, 60));
 
@@ -119,7 +119,7 @@ describe('an open agent stream is a delivery signal', () => {
     // A long-running session attaches once. Before this, `drainVoiceQueue`
     // ran only from `attachAgent`, so a queued message waited for a restart.
     const store = tightStore();
-    const ws = store.createWorkspace('queue-hub');
+    const ws = store.createWorkspace('queue-board');
     store.attachAgent(ws.id, { agentId: 'worker', runtime: 'claude-code-local' });
 
     store.queueVoiceRequest(ws.id, {
@@ -140,7 +140,7 @@ describe('an open agent stream is a delivery signal', () => {
 
   it('POSITIVE CONTROL: a heartbeat from an agent with nothing queued drains nothing', () => {
     const store = tightStore();
-    const ws = store.createWorkspace('empty-queue-hub');
+    const ws = store.createWorkspace('empty-queue-board');
     store.attachAgent(ws.id, { agentId: 'worker', runtime: 'claude-code-local' });
     const beat = store.heartbeat(ws.id, 'worker');
     if (!beat.ok) throw new Error('unreachable');
@@ -148,27 +148,27 @@ describe('an open agent stream is a delivery signal', () => {
   });
 });
 
-describe('SseHub knows which agent is on a stream', () => {
+describe('SseBus knows which agent is on a stream', () => {
   it('reports an agent-tagged stream and ignores an anonymous one', () => {
-    const hub = new SseHub();
+    const bus = new SseBus();
     const sink = { write: () => {}, close: () => {} };
     const tab = { write: () => {}, close: () => {} };
 
-    hub.add('ws~w-1', tab); // a browser tab: no agent identity
-    expect(hub.agentsOn('ws~w-1').size).toBe(0);
+    bus.add('ws~w-1', tab); // a browser tab: no agent identity
+    expect(bus.agentsOn('ws~w-1').size).toBe(0);
 
-    const drop = hub.add('ws~w-1', sink, undefined, 'worker');
-    expect(hub.agentsOn('ws~w-1').has('worker')).toBe(true);
+    const drop = bus.add('ws~w-1', sink, undefined, 'worker');
+    expect(bus.agentsOn('ws~w-1').has('worker')).toBe(true);
 
     drop();
-    expect(hub.agentsOn('ws~w-1').has('worker')).toBe(false);
+    expect(bus.agentsOn('ws~w-1').has('worker')).toBe(false);
     // The tab is still there — removing the agent must not close the channel.
-    expect(hub.count('ws~w-1')).toBe(1);
+    expect(bus.count('ws~w-1')).toBe(1);
   });
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
-// The wiring seam. Everything above tests the store and the hub apart; this
+// The wiring seam. Everything above tests the store and the board apart; this
 // runs the real route, because the two halves being right proves nothing if
 // `?agentId=` never reaches `agentsOn`.
 // ─────────────────────────────────────────────────────────────────────────────
@@ -203,7 +203,7 @@ describe('a real stream on the real route keeps a working agent reachable', () =
       body: JSON.stringify({ name, goal: 'Ship it.' }),
     });
     const { workspace } = (await r.json()) as { workspace: { id: string } };
-    await fetch(`${base}/api/workspaces/${workspace.id}/attachments`, {
+    await fetch(`${base}/workspaces/${workspace.id}/agents`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ agentId: 'worker', runtime: 'claude-code-local' }),

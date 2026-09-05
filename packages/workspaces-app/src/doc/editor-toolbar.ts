@@ -19,7 +19,7 @@ const WIDTH_PREF_KEY = 'lfb.editor.width';
 let widthPrefInMemory: 'full' | 'reading' | undefined;
 
 /** Read the persisted width preference. Default is 'full' so wide tables
- *  in review docs aren't squeezed. */
+ *  in attachments aren't squeezed. */
 function readWidthPref(): 'full' | 'reading' {
   try {
     const raw = localStorage.getItem(WIDTH_PREF_KEY);

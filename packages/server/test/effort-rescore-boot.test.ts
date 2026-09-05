@@ -24,7 +24,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { EFFORT_ESTIMATE_PROMPT_VERSION } from '@feedback/core/effort-estimate-prompt';
 import { type ServerHandle, createServer } from '../src/server.ts';
-import { workspaceRoomId } from '../src/task-projection.ts';
+import { workspaceDocId } from '../src/task-projection.ts';
 
 const FILER = { id: 'agent-index-keeper', name: 'Index Keeper', kind: 'agent' };
 
@@ -168,7 +168,7 @@ describe('a prompt bump re-scores the open rows on boot', () => {
     // refresh. The goal bar is computed in the browser off this projection,
     // so an estimate the projection never picked up is an estimate that did
     // not happen as far as any reader is concerned.
-    const room = h.rooms.get(workspaceRoomId(workspaceId));
+    const room = h.docStore.get(workspaceDocId(workspaceId));
     if (!room) throw new Error('ws room was not created');
     const projected = room.ydoc.getMap('tasks').get(ids.open) as Record<string, unknown>;
     expect((projected.effortEstimate as Record<string, unknown>)?.wallClockSeconds).toBe(

@@ -3,16 +3,16 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { type ServerHandle, createServer } from '../src/server.ts';
-import { workspaceRoomId } from '../src/task-projection.ts';
+import { workspaceDocId } from '../src/task-projection.ts';
 
 const AGENT = { id: 'agent-x', name: 'Search Revamp', kind: 'agent' };
 
 /**
  * Legacy `triagedAgainst` rows carry the ENTIRE workspace goal text — the
  * writer stamped `goal: state.workspace.goal` until it was narrowed to
- * `{ goalId, ts }`. The data outlived the fix: measured on the live hub
+ * `{ goalId, ts }`. The data outlived the fix: measured on the live
  * board, 187 of 339 tasks each carry a ~3KB goal blob, 546KB of the board
- * ydoc that every open ships to every reader (t-scWMQmOZcpu1, the iPad
+ * ydoc that every open ships to every reader (the iPad
  * 10-second load). The projection is the cut point — same precedent as
  * `evidence`: the STORE keeps whatever the sidecar recorded, and the wire
  * gets the declared shape.
@@ -67,7 +67,7 @@ describe('projection narrows legacy triagedAgainst rows', () => {
   });
 
   it('the board ydoc row carries only { goalId, ts }', () => {
-    const room = handle.rooms.get(workspaceRoomId(wsId));
+    const room = handle.docStore.get(workspaceDocId(wsId));
     if (!room) throw new Error('ws room was not created');
     const row = room.ydoc.getMap('tasks').get(taskId) as {
       triagedAgainst?: Record<string, unknown>;

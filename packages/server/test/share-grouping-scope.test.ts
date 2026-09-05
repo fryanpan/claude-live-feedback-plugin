@@ -2,9 +2,9 @@
  * A review filed on a shared board is reachable from that board — and only
  * from that board.
  *
- * PR #131 files every group bind (diff review / folder bind) on a hub
+ * PR #131 files every group bind (diff review / folder bind) on a board
  * workspace, so sharing a board makes the review row appear on it. Nothing
- * behind the row resolved: the share is scoped to the HUB id, while both the
+ * behind the row resolved: the share is scoped to the BOARD id, while both the
  * grouping's own endpoints and every member doc answer with the GROUPING id.
  * Two exact-equality comparisons refused everything.
  *
@@ -326,7 +326,7 @@ describe('a shared board reaches the reviews filed on it — and no others', () 
       expect((await pub(`/workspaces/${boardB}`, visitorA)).status).toBe(403);
       expect((await pub(`/api/workspaces/${boardB}`, visitorA)).status).toBe(403);
       expect((await pub(`/y/ws%3A${boardB}`, visitorA)).status).toBe(403);
-      expect((await pub(`/events/workspace/${boardB}`, visitorA)).status).toBe(403);
+      expect((await pub(`/workspaces/${boardB}/events:stream`, visitorA)).status).toBe(403);
     });
 
     it('still refuses the operator surfaces on its OWN grouping', async () => {

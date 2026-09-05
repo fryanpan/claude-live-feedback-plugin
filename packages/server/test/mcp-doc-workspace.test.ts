@@ -118,7 +118,7 @@ describe('the MCP tools file a doc in a workspace, through the real bundle', () 
     expect(res.hubWorkspaceId).toBe(wsId);
     expect(handle.tasks.workspaceOfDoc(docId)).toBe(wsId);
     // ...and the name the tool was given still reaches the same room.
-    expect(handle.rooms.get('mcp-doc-named')?.docId).toBe(docId);
+    expect(handle.docStore.get('mcp-doc-named')?.docId).toBe(docId);
   });
 
   it('create_review_doc with no workspace still lands the doc in one, in a single call', async () => {
@@ -134,7 +134,7 @@ describe('the MCP tools file a doc in a workspace, through the real bundle', () 
     expect(res.hubWorkspaceId).toBeTruthy();
     expect(res.docId).toBeTruthy();
     expect(handle.tasks.workspaceOfDoc(res.docId as string)).toBe(res.hubWorkspaceId as string);
-    expect(handle.rooms.get('mcp-doc-unfiled')?.docId).toBe(res.docId as string);
+    expect(handle.docStore.get('mcp-doc-unfiled')?.docId).toBe(res.docId as string);
   });
 
   it('bind_mock forwards it too — two tools reach the one route', async () => {
@@ -156,6 +156,6 @@ describe('the MCP tools file a doc in a workspace, through the real bundle', () 
     expect(docId).toBeTruthy();
     expect(res.hubWorkspaceId).toBe(wsId);
     expect(handle.tasks.workspaceOfDoc(docId)).toBe(wsId);
-    expect(handle.rooms.get('mcp-mock-named')?.docId).toBe(docId);
+    expect(handle.docStore.get('mcp-mock-named')?.docId).toBe(docId);
   });
 });

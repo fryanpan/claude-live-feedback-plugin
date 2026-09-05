@@ -48,7 +48,9 @@ function thread(id: string, over: Partial<Thread> = {}): Thread {
       kind: 'text-range',
       startRel: new Uint8Array(),
       endRel: new Uint8Array(),
-      snippet: { text: `snippet ${id}` },
+      // Three words minimum: a shorter snippet never reaches the topic line
+      // (TOPIC_MIN_SNIPPET_WORDS in core/thread-summary.ts).
+      snippet: { text: `the snippet for ${id}` },
     } as Thread['anchor'],
     createdBy: alice,
     commentCount: comments.length,
@@ -66,7 +68,7 @@ const orphanThread = (id: string): Thread =>
         kind: 'text-range',
         startRel: new Uint8Array(),
         endRel: new Uint8Array(),
-        snippet: { text: `snippet ${id}` },
+        snippet: { text: `the snippet for ${id}` },
       },
       lastSeenAt: seq,
     } as Thread['anchor'],
@@ -279,12 +281,14 @@ describe('inline placement', () => {
     const t = thread('t1');
     const h = harness([t]);
     const before = h.placed()[0].el;
-    expect(before.querySelector('.thread-topic')?.textContent).toBe('snippet t1');
+    expect(before.querySelector('.thread-topic')?.textContent).toBe('the snippet for t1');
 
-    (t.anchor as { snippet: { text: string } }).snippet = { text: 'edited anchor' };
+    (t.anchor as { snippet: { text: string } }).snippet = { text: 'the edited anchor text' };
     h.mobile.refresh();
     expect(h.placed()[0].el).not.toBe(before);
-    expect(h.placed()[0].el.querySelector('.thread-topic')?.textContent).toBe('edited anchor');
+    expect(h.placed()[0].el.querySelector('.thread-topic')?.textContent).toBe(
+      'the edited anchor text',
+    );
   });
 
   it('produces no inline cards at all where the balloon margin owns the comments', () => {

@@ -3,7 +3,7 @@
  *
  * Two endpoints, and the choice between them is the whole decision: with a
  * `find` string the thread anchors to that text; without one it is about the
- * document itself. The second case exists because a hub task's discussion is
+ * document itself. The second case exists because a board task's discussion is
  * about the task, and a fresh task's description is empty — there is nothing
  * in it to find.
  */

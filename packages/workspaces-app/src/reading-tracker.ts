@@ -86,7 +86,7 @@ export interface ReadingTrackerOptions {
    * the document scrolling element.
    *
    * May be a getter, for a surface whose scroll container does not exist yet
-   * when the tracker starts: the hub opens a ticket by writing a signal, and
+   * when the tracker starts: the board opens a ticket by writing a signal, and
    * the panel is painted a microtask later, so an element resolved at start
    * would be the previous ticket's or nothing at all.
    */
@@ -95,7 +95,7 @@ export interface ReadingTrackerOptions {
    * Where an interaction has to happen to count as reading THIS doc.
    *
    * Defaults to `window`, which is right on the doc surfaces: the page IS the
-   * document, so anything the reader does is done to it. The hub is the case
+   * document, so anything the reader does is done to it. The board is the case
    * that needs narrowing — a ticket opens as a PANEL over a board that is
    * still there, and on `window` every scroll of the rows behind it would
    * accrue as time spent reading the ticket. Passing the panel scopes the
@@ -239,7 +239,7 @@ export function startReadingTracker(opts: ReadingTrackerOptions): () => void {
   const onOpener = (): void => onSignal(true);
   const onMove = (): void => onSignal(false);
   const openerEvents = ['scroll', 'pointerdown', 'keydown'] as const;
-  // The doc surfaces read the whole page; the hub scopes this to the open
+  // The doc surfaces read the whole page; the board scopes this to the open
   // ticket panel (see `root`).
   const interactionRoot: EventTarget = opts.root ?? window;
   for (const ev of openerEvents) {

@@ -9,7 +9,7 @@
  *
  * What identifies an event, in order: the server's `eid` (one per broadcast,
  * unique across restarts by construction), then `${event}#${docId}#${seq}`
- * for a server older than that stamp. `rooms.ts` bumps a PER-ROOM monotonic
+ * for a server older than that stamp. `doc-store.ts` bumps a PER-ROOM monotonic
  * `seq` on every thread and suggestion event, so two events in one room can
  * never share it and two rooms freely can — which is why docId has to be in
  * the fallback key and why seq alone is not a key at all. And because that
@@ -20,7 +20,7 @@
  * The direction of the failure matters more than the dedup: a dropped frame
  * is silence, and silence is the whole bug class this ticket exists for. So
  * anything the key cannot positively identify — no numeric `seq`, no docId —
- * is forwarded. Every hub `task.*` / `decision.*` / `voice.*` event is in
+ * is forwarded. Every board `task.*` / `decision.*` / `voice.*` event is in
  * that category: they carry no seq, they ride exactly one channel, and
  * swallowing one would be a real drop rather than a saved duplicate.
  */
@@ -52,11 +52,11 @@ describe('createFrameDedup', () => {
     expect(shouldForward('thread.resolved', threadFrame('doc-alpha', 9))).toBe(true);
   });
 
-  // POSITIVE CONTROL 2 — hub events carry no seq. Two of them can be byte
+  // POSITIVE CONTROL 2 — board events carry no seq. Two of them can be byte
   // identical (two voice notes with the same text, two `triage.requested`
   // for the same batch) and BOTH are real. They ride one channel, so there
   // is no duplicate to suppress and a collision here would be a true drop.
-  it('forwards every seq-less hub frame, even byte-identical ones', () => {
+  it('forwards every seq-less board frame, even byte-identical ones', () => {
     const { shouldForward } = createFrameDedup();
     const voice = { workspaceId: 'ws-1', text: 'make token usage the top goal' };
     expect(shouldForward('voice.note', voice)).toBe(true);
@@ -117,7 +117,7 @@ describe('createFrameDedup', () => {
 
   /**
    * THE REGRESSION THIS SUITE MISSED. `room.seq` is a plain field on the room
-   * object, initialised to 0 in `rooms.ts` `getOrCreate` and never persisted
+   * object, initialised to 0 in `doc-store.ts` `getOrCreate` and never persisted
    * into the `.ydoc` — so every server start (a deploy, a `bun --watch`
    * reload, a `delete_workspace` + re-create of the same id) rebuilds every
    * room counting from 1 again, while this process and its `seen` set live

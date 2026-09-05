@@ -298,7 +298,7 @@ describe('answering with a question asks back instead of closing', () => {
     });
   });
 
-  // ── The legacy task decision route: the hub's own-decision door ──────────
+  // ── The legacy task decision route: the board's own-decision door ──────────
 
   describe('the task’s own decision (/api/tasks/:id/answer)', () => {
     /**

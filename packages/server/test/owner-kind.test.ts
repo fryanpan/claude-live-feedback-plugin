@@ -23,7 +23,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { type ServerHandle, createServer } from '../src/server.ts';
 import { attachedAgentTest, declaredAssigneeKind, resolveOwnerKind } from '../src/task-owner.ts';
-import { workspaceRoomId } from '../src/task-projection.ts';
+import { workspaceDocId } from '../src/task-projection.ts';
 import type { Task } from '../src/tasks.ts';
 
 const NOBODY_ATTACHED = () => false;
@@ -151,7 +151,7 @@ describe('owner kind over the real routes', () => {
    *  browser renders from this map and from nothing else, so a field that is
    *  correct in the store and absent here is invisible on the surface. */
   function projected(wsId: string, taskId: string): Record<string, unknown> | undefined {
-    const room = handle.rooms.get(workspaceRoomId(wsId));
+    const room = handle.docStore.get(workspaceDocId(wsId));
     return room?.ydoc.getMap('tasks').get(taskId) as Record<string, unknown> | undefined;
   }
 
@@ -169,7 +169,7 @@ describe('owner kind over the real routes', () => {
   it('projects person / agent / unknown, and tells a named person from a named agent', async () => {
     const wsId = await seedWorkspace();
     await jj(
-      await post(`/api/workspaces/${wsId}/attachments`, {
+      await post(`/workspaces/${wsId}/agents`, {
         // The shape the DEFAULT attach path produces: `attach_agent` sends
         // the session's identity id, never its display name. Attaching as
         // 'Cartographer' here is what let the roster half of this feature
@@ -402,7 +402,7 @@ describe('owner kind over the real routes', () => {
     expect(projected(wsId, task.id)?.ownerKind).toBe('unknown');
 
     await jj(
-      await post(`/api/workspaces/${wsId}/attachments`, {
+      await post(`/workspaces/${wsId}/agents`, {
         // Production shape again: the owner is `Surveyor`, the attachment is
         // `agent-surveyor`. The migration claim is only true if THOSE match.
         agentId: 'agent-surveyor',
@@ -414,7 +414,7 @@ describe('owner kind over the real routes', () => {
 
     // …and back, when the roster no longer vouches for it. Unknown, not
     // person: losing evidence is not gaining the opposite evidence.
-    const del = await fetch(`${base}/api/workspaces/${wsId}/attachments/agent-surveyor`, {
+    const del = await fetch(`${base}/workspaces/${wsId}/agents/agent-surveyor`, {
       method: 'DELETE',
     });
     expect(del.ok).toBe(true);
@@ -455,7 +455,7 @@ describe('owner id beside the owner name', () => {
   const get = (path: string) => fetch(`${base}${path}`);
 
   function projected(wsId: string, taskId: string): Record<string, unknown> | undefined {
-    const room = handle.rooms.get(workspaceRoomId(wsId));
+    const room = handle.docStore.get(workspaceDocId(wsId));
     return room?.ydoc.getMap('tasks').get(taskId) as Record<string, unknown> | undefined;
   }
 
@@ -467,7 +467,7 @@ describe('owner id beside the owner name', () => {
   }
   const attach = async (wsId: string, agentId: string, agentName: string) =>
     jj(
-      await post(`/api/workspaces/${wsId}/attachments`, {
+      await post(`/workspaces/${wsId}/agents`, {
         agentId,
         agentName,
         runtime: 'claude-code-local',

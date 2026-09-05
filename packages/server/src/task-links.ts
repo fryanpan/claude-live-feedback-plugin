@@ -229,7 +229,7 @@ export class TaskLinksStore {
    * Every task that references `ref` — via `links` or via its promotion
    * `origin` (a task promoted from a thread references that thread without
    * anyone calling link_refs). Exact-ref matching; spans all workspaces,
-   * because refs do (a task may cite a doc that lives outside its hub
+   * because refs do (a task may cite a doc that lives outside its board
    * workspace). Deterministic order: creation time, then id.
    */
   backlinksFor(ref: Ref): Task[] {
@@ -255,7 +255,7 @@ export class TaskLinksStore {
   /**
    * A plan doc's content moved past the revision some derived rows were
    * stamped at — flag them `possiblyStale`. Wired to the doc store's settled
-   * revision bump (`rooms.onContentRevision`); `docIds` carries the canonical
+   * revision bump (`docStore.onContentRevision`); `docIds` carries the canonical
    * id AND the alias because origin refs routinely hold the caller-chosen
    * name. Advisory only: nothing here gates a transition. Open rows only —
    * a done row's premise no longer matters, and an archived one has left the

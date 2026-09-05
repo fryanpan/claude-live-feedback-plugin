@@ -60,8 +60,8 @@ describe('plugin drift over the attachment routes', () => {
   });
 
   it('carries the reported version through attach and back out of the list', async () => {
-    const wsId = await makeWorkspace('drift-hub');
-    const r = await post(`/api/workspaces/${wsId}/attachments`, {
+    const wsId = await makeWorkspace('drift-board');
+    const r = await post(`/workspaces/${wsId}/agents`, {
       agentId: 'agent-quill',
       runtime: 'claude-code-local',
       pluginVersion: '0.1.12',
@@ -71,30 +71,30 @@ describe('plugin drift over the attachment routes', () => {
       ((await r.json()) as { attachment: { pluginVersion?: string } }).attachment.pluginVersion,
     ).toBe('0.1.12');
 
-    const body = (await (await local(`/api/workspaces/${wsId}/attachments`)).json()) as ListBody;
+    const body = (await (await local(`/workspaces/${wsId}/agents`)).json()) as ListBody;
     expect(body.attachments[0]?.pluginVersion).toBe('0.1.12');
   });
 
   it('reports what the deploy source would install, and who is behind it', async () => {
-    const wsId = await makeWorkspace('drift-hub-2');
+    const wsId = await makeWorkspace('drift-board-2');
     // The released version is read from this checkout's own manifest, so the
     // test asserts a RELATIONSHIP against that manifest rather than a literal
     // — a literal would go red on every routine patch bump.
     const manifest = readReleasedPluginVersion(join(import.meta.dir, '../../..'));
     if (!manifest) throw new Error('this repo must have a plugin manifest to test against');
 
-    await post(`/api/workspaces/${wsId}/attachments`, {
+    await post(`/workspaces/${wsId}/agents`, {
       agentId: 'agent-stale',
       runtime: 'claude-code-local',
       pluginVersion: '0.0.1',
     });
-    await post(`/api/workspaces/${wsId}/attachments`, {
+    await post(`/workspaces/${wsId}/agents`, {
       agentId: 'agent-current',
       runtime: 'claude-code-local',
       pluginVersion: manifest,
     });
 
-    const body = (await (await local(`/api/workspaces/${wsId}/attachments`)).json()) as ListBody;
+    const body = (await (await local(`/workspaces/${wsId}/agents`)).json()) as ListBody;
     expect(body.pluginRelease.version).toBe(manifest);
     // Positive control beside the absence: the stale one IS named, which is
     // what makes the current one's absence mean anything.
@@ -105,12 +105,12 @@ describe('plugin drift over the attachment routes', () => {
   it('counts a session that reports no version at all', async () => {
     // The version field ships in the release that reads it, so a peer on any
     // older bundle sends nothing. That silence is the fleet-wide drift.
-    const wsId = await makeWorkspace('drift-hub-3');
-    await post(`/api/workspaces/${wsId}/attachments`, {
+    const wsId = await makeWorkspace('drift-board-3');
+    await post(`/workspaces/${wsId}/agents`, {
       agentId: 'agent-silent',
       runtime: 'claude-code-local',
     });
-    const body = (await (await local(`/api/workspaces/${wsId}/attachments`)).json()) as ListBody;
+    const body = (await (await local(`/workspaces/${wsId}/agents`)).json()) as ListBody;
     expect(body.pluginRelease.behind.map((b) => b.agentId)).toEqual(['agent-silent']);
     expect(body.pluginRelease.behind[0]?.pluginVersion).toBeUndefined();
   });
@@ -119,8 +119,8 @@ describe('plugin drift over the attachment routes', () => {
     // Attachments live in a sidecar, not in a ydoc. A version that only
     // existed in memory would read as "everyone is behind" after every
     // server restart, i.e. after every deploy.
-    const wsId = await makeWorkspace('drift-hub-4');
-    await post(`/api/workspaces/${wsId}/attachments`, {
+    const wsId = await makeWorkspace('drift-board-4');
+    await post(`/workspaces/${wsId}/agents`, {
       agentId: 'agent-persisted',
       runtime: 'claude-code-local',
       pluginVersion: '0.9.9',
@@ -128,7 +128,7 @@ describe('plugin drift over the attachment routes', () => {
     await handle.stop();
     handle = createServer({ port: 0, dataDir });
     base = `http://localhost:${handle.port}`;
-    const body = (await (await local(`/api/workspaces/${wsId}/attachments`)).json()) as ListBody;
+    const body = (await (await local(`/workspaces/${wsId}/agents`)).json()) as ListBody;
     expect(body.attachments.find((a) => a.agentId === 'agent-persisted')?.pluginVersion).toBe(
       '0.9.9',
     );
@@ -150,18 +150,18 @@ describe('plugin drift over the attachment routes', () => {
 
     // Nobody attached yet: zero behind out of zero checked. Indistinguishable
     // from a real clearance without the second number.
-    let body = (await (await local(`/api/workspaces/${wsId}/attachments`)).json()) as ListBody;
+    let body = (await (await local(`/workspaces/${wsId}/agents`)).json()) as ListBody;
     expect(body.pluginRelease.behind).toEqual([]);
     expect(body.pluginRelease.checked).toBe(0);
 
     // One current session: still zero behind, but now out of one — which is
     // the exact reading that was mistaken for a fleet-wide all-clear.
-    await post(`/api/workspaces/${wsId}/attachments`, {
+    await post(`/workspaces/${wsId}/agents`, {
       agentId: 'agent-current',
       runtime: 'claude-code-local',
       pluginVersion: manifest,
     });
-    body = (await (await local(`/api/workspaces/${wsId}/attachments`)).json()) as ListBody;
+    body = (await (await local(`/workspaces/${wsId}/agents`)).json()) as ListBody;
     expect(body.pluginRelease.behind).toEqual([]);
     expect(body.pluginRelease.checked).toBe(1);
   });
@@ -170,21 +170,21 @@ describe('plugin drift over the attachment routes', () => {
     // A webhook cannot be behind, so it must not pad the denominator either —
     // otherwise "0 behind of 3 checked" claims two checks that never happened.
     const wsId = await makeWorkspace('drift-domain-2');
-    await post(`/api/workspaces/${wsId}/attachments`, {
+    await post(`/workspaces/${wsId}/agents`, {
       agentId: 'agent-session',
       runtime: 'claude-code-local',
       pluginVersion: '0.0.1',
     });
-    await post(`/api/workspaces/${wsId}/attachments`, {
+    await post(`/workspaces/${wsId}/agents`, {
       agentId: 'agent-hook',
       runtime: 'webhook',
     });
-    await post(`/api/workspaces/${wsId}/attachments`, {
+    await post(`/workspaces/${wsId}/agents`, {
       agentId: 'agent-cloud',
       runtime: 'managed-agent',
     });
 
-    const body = (await (await local(`/api/workspaces/${wsId}/attachments`)).json()) as ListBody;
+    const body = (await (await local(`/workspaces/${wsId}/agents`)).json()) as ListBody;
     // Positive control beside the count: three attachments really did land.
     expect(body.attachments.length).toBe(3);
     expect(body.pluginRelease.checked).toBe(1);

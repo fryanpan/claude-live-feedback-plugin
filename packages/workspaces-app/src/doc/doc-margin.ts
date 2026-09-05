@@ -20,8 +20,8 @@ import { mountCommentHints } from '../comment-hints.ts';
 import type { EditorHandle } from '../editor.ts';
 import type { MountScope } from '../mount-scope.ts';
 import { type MarkupMarginHandle, mountMarkupMargin } from '../redline/markup-margin.ts';
-import { mountSuggestionsSummary } from '../redline/suggestions-summary.ts';
 import type { ReviewChrome } from '../review-chrome.ts';
+import { mountSuggestionsSummary } from '../suggestions/suggestions-summary.ts';
 import { threadCards } from '../thread-morph.ts';
 
 export interface DocMarginOptions {

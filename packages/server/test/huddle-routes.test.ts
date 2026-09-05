@@ -5,17 +5,17 @@
  * Board starts one with a single call and gets back a doc it can open at
  * once: a workspace-tied markdown doc, titled by the clock, empty (or headed
  * by the topic when one was given), filed on the board exactly like every
- * other board doc — so `list_docs` and the hub's docs list see it with no
- * new verb — and MARKED as a huddle, so the hub can dress it as one.
+ * other board doc — so `list_docs` and the board's docs list see it with no
+ * new verb — and MARKED as a huddle, so the board can dress it as one.
  *
  * The other action files an EMPTY task: a person taps "New task" and types
  * straight into the title. The store refuses a blank title at every door, so
  * the route takes an explicit `untitled: true` instead, stores the
- * placeholder title, and flags the row so the hub can draw it as empty —
+ * placeholder title, and flags the row so the board can draw it as empty —
  * and the flag clears the moment somebody names the row.
  *
  * Both routes hold the sibling posture: local host only; a share visitor's
- * cookie reaches the hub page and is refused here.
+ * cookie reaches the board page and is refused here.
  *
  * All fixtures synthetic; no port is bound (port: 0). The repo is public.
  */
@@ -365,9 +365,9 @@ describe('POST /api/workspaces/:id/huddles and the empty task', () => {
 
   describe('share members', () => {
     it('starts a huddle on the board, and is told nothing about the machine', async () => {
-      const visitor = await mintAccessShare(base, access, workspaceId, { label: 'hub share' });
+      const visitor = await mintAccessShare(base, access, workspaceId, { label: 'board share' });
       const visitorHeaders = { ...visitor.headers, 'content-type': 'application/json' };
-      // Presence: the cookie DOES reach the hub page.
+      // Presence: the cookie DOES reach the board page.
       const page = await fetch(`${base}/workspaces/${workspaceId}`, { headers: visitorHeaders });
       expect(page.status).toBe(200);
       const before = (await boardDocs(workspaceId)).length;

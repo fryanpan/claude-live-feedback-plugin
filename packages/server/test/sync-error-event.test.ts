@@ -2,9 +2,9 @@ import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { Rooms } from '../src/rooms.ts';
+import { DocStore } from '../src/doc-store.ts';
 import { type ServerHandle, createServer } from '../src/server.ts';
-import { SseHub } from '../src/sse.ts';
+import { SseBus } from '../src/sse.ts';
 import { createWebhookDispatcher } from '../src/webhooks.ts';
 import { insideWriteBack, waitFor } from './wait-for.ts';
 
@@ -12,7 +12,7 @@ import { insideWriteBack, waitFor } from './wait-for.ts';
  * A lost write into a bound doc must tell SOMEBODY — the syncError needs an
  * event on the doc's watch channel.
  *
- * Measured twice before this suite existed (in-process Rooms and HTTP against
+ * Measured twice before this suite existed (in-process DocStore and HTTP against
  * a spawned server): when an external write lands inside the 800ms write
  * debounce it is silently overwritten, and the resulting syncError was only
  * readable via get_doc or a later edit response. The party who LOST content —
@@ -63,24 +63,24 @@ interface SyncErrorEvent {
   message?: string;
 }
 
-describe('doc.sync_error broadcast (in-process Rooms)', () => {
+describe('doc.sync_error broadcast (in-process DocStore)', () => {
   let dataDir: string;
   let path: string;
-  let sse: SseHub;
-  let rooms: Rooms;
+  let sse: SseBus;
+  let docStore: DocStore;
 
   beforeEach(() => {
     dataDir = mkdtempSync(join(tmpdir(), 'cw-syncerr-'));
     path = join(dataDir, 'doc.md');
     writeFileSync(path, DOC);
-    sse = new SseHub();
-    rooms = new Rooms({
+    sse = new SseBus();
+    docStore = new DocStore({
       dataDir,
       sse,
       webhooks: createWebhookDispatcher({ onLog: () => {} }),
     });
-    rooms.getOrCreate('d1', { type: 'markdown', sourceUrl: path });
-    expect(rooms.attachFile('d1', path).ok).toBe(true);
+    docStore.getOrCreate('d1', { type: 'markdown', sourceUrl: path });
+    expect(docStore.attachFile('d1', path).ok).toBe(true);
   });
 
   afterEach(() => {
@@ -96,13 +96,13 @@ describe('doc.sync_error broadcast (in-process Rooms)', () => {
 
   it('a conflict reassert (editor-save shape) broadcasts the event with path + backup', () => {
     expect(
-      rooms.findAndReplace('d1', {
+      docStore.findAndReplace('d1', {
         find: 'Intro paragraph.',
         replace: 'Live edit, not yet flushed.',
       }).ok,
     ).toBe(true);
     writeExternal(path, EXT_ONE);
-    expect(rooms.reconcileNow('d1')).toBe('conflict');
+    expect(docStore.reconcileNow('d1')).toBe('conflict');
 
     const events = syncErrorEvents('d1');
     expect(events.length).toBe(1);
@@ -118,7 +118,7 @@ describe('doc.sync_error broadcast (in-process Rooms)', () => {
 
   it('a git-shaped overwrite inside the 800ms write debounce broadcasts the event', async () => {
     expect(
-      rooms.findAndReplace('d1', {
+      docStore.findAndReplace('d1', {
         find: 'Intro paragraph.',
         replace: 'Live edit racing the external write.',
       }).ok,
@@ -145,7 +145,7 @@ describe('doc.sync_error broadcast (in-process Rooms)', () => {
 
   it('a clean reconcile broadcasts nothing', () => {
     writeExternal(path, EXT_ONE);
-    expect(rooms.reconcileNow('d1')).toBe('apply');
+    expect(docStore.reconcileNow('d1')).toBe('apply');
     expect(syncErrorEvents('d1').length).toBe(0);
   });
 });
@@ -176,7 +176,7 @@ describe('doc.sync_error reaches a watching SSE stream (HTTP end-to-end)', () =>
       body: JSON.stringify({ docId: 'h1', type: 'markdown', sourceUrl: path }),
     });
     expect(create.ok).toBe(true);
-    // `h1` was the NAME; the server minted the id. The rooms handle keys on
+    // `h1` was the NAME; the server minted the id. The doc-store handle keys on
     // the canonical one, and the stream below is opened by the name — so this
     // exercise is also the alias contract: a watcher that subscribed by name
     // and a writer that fired on the doc's own id have to meet.
@@ -206,10 +206,10 @@ describe('doc.sync_error reaches a watching SSE stream (HTTP end-to-end)', () =>
     // The git-shaped overwrite: un-flushed live edits, then the file is
     // rewritten out from under the doc.
     expect(
-      handle.rooms.findAndReplace(h1, { find: 'Intro paragraph.', replace: 'Un-flushed.' }).ok,
+      handle.docStore.findAndReplace(h1, { find: 'Intro paragraph.', replace: 'Un-flushed.' }).ok,
     ).toBe(true);
     writeExternal(path, EXT_ONE);
-    expect(handle.rooms.reconcileNow(h1)).toBe('conflict');
+    expect(handle.docStore.reconcileNow(h1)).toBe('conflict');
 
     // timed: a failure DEADLINE, not a wait — the race settles the instant the
     // event arrives, and only a stream that never delivers pays the 3s.

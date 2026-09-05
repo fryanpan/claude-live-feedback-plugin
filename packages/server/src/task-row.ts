@@ -33,7 +33,7 @@ import { type Task, legacyDecisionItem, taskAskedBy } from './tasks.ts';
  *
  * What that settles, deliberately: a body room never gets a second, prettier
  * name, so the alias layer that generated DOC ids need does not extend here.
- * `isHubOwnedRoom` (rooms.ts) is already the prefix authority; making the
+ * `isBoardOwnedDoc` (doc-store.ts) is already the prefix authority; making the
  * prefixes unwritable by an outside caller belongs with the doc-id half of
  * this work, and is noted there rather than claimed here.
  */
@@ -239,6 +239,13 @@ export function projectTask(
     // owed; a field the store can see and no surface can render is the bug
     // this line exists to avoid. Workspace content like every field here.
     ...(task.schedule !== undefined ? { schedule: task.schedule } : {}),
+    // The recurrence MARK — this row is one occurrence of a rule, and which
+    // one. Projected for the same reason the rule above is: the board draws a
+    // live instance in its own goal band with a mark back to the rule it came
+    // from, and a mark it cannot resolve is a mark it cannot draw. Narrow by
+    // construction (an id, an instant, a count), so there is nothing here to
+    // widen later.
+    ...(task.recurrenceOf !== undefined ? { recurrenceOf: task.recurrenceOf } : {}),
     // Soft-deleted, by whom, and why. Conditional like everything else here,
     // and the refresh deletes projected keys absent from this object — so a
     // RESTORE removes the keys and the row rejoins its lane with nothing
@@ -258,7 +265,7 @@ export function projectTask(
     ...(task.answer !== undefined ? { answer: task.answer } : {}),
     // Narrowed to the declared shape, never spread: the pre-fix writer
     // stamped the ENTIRE workspace goal text into this marker, and 187 rows
-    // on the live hub board still carry ~3KB each — 546KB of the board ydoc
+    // on the live board still carry ~3KB each — 546KB of the board ydoc
     // shipped to every reader on every open. The store
     // keeps whatever the sidecar recorded; the wire gets { goalId, ts } —
     // same precedent as `evidence` two fields down.

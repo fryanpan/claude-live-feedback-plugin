@@ -146,18 +146,18 @@ describe('the board wakes its lead over the wire', () => {
     const workspaceId = workspace.id;
     expect(workspace.leadAgentId).toBe(LEAD.id);
     await jj(
-      await post(`/api/workspaces/${workspaceId}/attachments`, {
+      await post(`/workspaces/${workspaceId}/agents`, {
         agentId: LEAD.id,
         runtime: 'claude-code-local',
       }),
     );
 
     const leadRes = await fetch(
-      `${base}/events/workspace/${workspaceId}?agentId=${encodeURIComponent(LEAD.id)}`,
+      `${base}/workspaces/${workspaceId}/events:stream?agentId=${encodeURIComponent(LEAD.id)}`,
       { headers: { accept: 'text/event-stream' } },
     );
     // A browser tab on the same channel. Nothing addressed may reach it.
-    const tabRes = await fetch(`${base}/events/workspace/${workspaceId}`, {
+    const tabRes = await fetch(`${base}/workspaces/${workspaceId}/events:stream`, {
       headers: { accept: 'text/event-stream' },
     });
     const lead = listenFrames(leadRes);
@@ -781,7 +781,7 @@ describe('the board wakes its lead over the wire', () => {
     // The lead pings. Nothing on the board changed, so nothing re-arms —
     // the stamp is still the one that was already spent.
     await jj(
-      await post(`/api/workspaces/${workspaceId}/attachments/${LEAD.id}/heartbeat`, {
+      await post(`/workspaces/${workspaceId}/agents/${LEAD.id}/heartbeat`, {
         toolCallAt: Date.now(),
       }),
     );
@@ -814,14 +814,14 @@ describe('the board wakes its lead over the wire', () => {
     handle = createServer({ port: 0, dataDir, readyNudgeIdleMs: 0 });
     base = `http://localhost:${handle.port}`;
     await jj(
-      await post(`/api/workspaces/${workspaceId}/attachments`, {
+      await post(`/workspaces/${workspaceId}/agents`, {
         agentId: LEAD.id,
         runtime: 'claude-code-local',
       }),
     );
     const revived = listenFrames(
       await fetch(
-        `${base}/events/workspace/${workspaceId}?agentId=${encodeURIComponent(LEAD.id)}`,
+        `${base}/workspaces/${workspaceId}/events:stream?agentId=${encodeURIComponent(LEAD.id)}`,
         { headers: { accept: 'text/event-stream' } },
       ),
     );

@@ -10,7 +10,7 @@
  * "Decisions keep the words" failed on the one surface built to review them.
  *
  * So: drive the real routes, read the real log back, and render THOSE rows
- * with the real client model. `hub-presence-model.ts` is pure (no DOM, no fetch), so
+ * with the real client model. `board-presence-model.ts` is pure (no DOM, no fetch), so
  * a server test can import it directly.
  *
  * All fixtures are synthetic — invented names in the jordan@partner.example
@@ -24,7 +24,7 @@ import type { User } from '@feedback/core';
 import {
   type ActivityEvent,
   describeEvent,
-} from '../../workspaces-app/src/hub/hub-presence-model.ts';
+} from '../../workspaces-app/src/board/board-presence-model.ts';
 import { type ServerHandle, createServer } from '../src/server.ts';
 import { type Task, eventsLogPath } from '../src/tasks.ts';
 

@@ -323,7 +323,7 @@ const VIA_PROSE = [
 /**
  * A harness with a real marker line and one export whose type is inferred.
  * Its importers must count: no annotation is not evidence that no text comes
- * out, and `export const HUB_TEXT = TEXT['hub.css'];` appended to the real
+ * out, and `export const BOARD_TEXT = TEXT['board.css'];` appended to the real
  * `css-harness.ts` is exactly this, a one-line hole.
  */
 const HARNESS_UNANNOTATED = [

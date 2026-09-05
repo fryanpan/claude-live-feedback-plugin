@@ -8,7 +8,7 @@ import type { ReviewPayload } from './review-item.ts';
  *  - diff: one changed file of a git diff review (base..target). Content is
  *    the file at the TARGET commit — immutable, so anchors never drift; the
  *    diff itself is a client-side rendering against the base text.
- *  - workspace: a hub workspace's board room (`ws:<workspaceId>`). Carries
+ *  - workspace: a board workspace's board room (`ws:<workspaceId>`). Carries
  *    no LF-held content surface of its own — its `tasks`/`workspace` maps
  *    are a server-written projection of the task store (see the server's
  *    task-projection module), never edited through a content editor.
@@ -62,14 +62,14 @@ export function docKindLabel(kind?: HuddleKind): string {
 }
 
 /**
- * A doc's declared repo home: where its on-disk copy belongs, as
+ * A doc's declared origin repo: where its on-disk copy belongs, as
  * repo + branch + path-within-the-repo. `repoRoot` may be any checkout of
  * the repo — the server resolves the repo's identity (git common dir) from
  * it, then finds whichever worktree has `branch` checked out. That is what
  * lets the binding survive worktree churn: the home names a branch, never a
  * checkout.
  */
-export interface DocHome {
+export interface DocOriginRepo {
   repoRoot: string;
   branch: string;
   relPath: string;
@@ -87,7 +87,7 @@ export interface DocMeta {
    * them meant the only way to rename a doc was to re-key it, which orphans
    * every thread anchored to it and every link anyone saved.
    *
-   * Written once, at creation, and never repointed — see `Rooms.claimAlias`.
+   * Written once, at creation, and never repointed — see `DocStore.claimAlias`.
    * Absent on docs created before minting: those carry the caller's string as
    * their `docId` and need no alias to keep resolving.
    */
@@ -133,15 +133,21 @@ export interface DocMeta {
    */
   workspaceRoot?: string;
   /**
-   * The doc's pinned repo home (see `DocHome`). Private-meta: it names host
+   * The doc's pinned origin repo (see `DocOriginRepo`). Private-meta: it names host
    * paths, so it lives in the sidecar next to the `.ydoc`, never in the CRDT
    * a share visitor syncs. When set, both sync directions verify the bound
    * path is still a checkout of this repo ON this branch before moving
    * bytes; a checkout that switched branches is re-resolved to the worktree
    * now holding the branch, or the writes park (the .ydoc stays the durable
    * copy). Absent = classic binding to an explicit path, unguarded.
+   *
+   * The KEY keeps the pre-rename spelling on purpose. Every pinned doc has
+   * this field written verbatim into its `<docId>.private.json` sidecar, so
+   * renaming the key would not rename anything — it would silently unpin
+   * every doc already pinned. Same rule as `setId` above: the type is the
+   * product word, the key is data on disk.
    */
-  docHome?: DocHome;
+  docHome?: DocOriginRepo;
   /**
    * The workspace's own bind-time configuration, replicated onto every
    * member the same way `workspaceRoot` is — there is no workspace registry,
@@ -167,7 +173,7 @@ export interface DocMeta {
    * This doc is a HUDDLE — a live conversation over a doc, started from the
    * Board before there is a task. Set at creation by the huddle route and
    * never cleared: when the mic stops the doc stays as the record, still a
-   * huddle, still listed among the board's docs. The hub reads it to dress
+   * huddle, still listed among the board's docs. The board reads it to dress
    * the row and the editor; nothing else branches on it. In the CRDT meta
    * (not the private sidecar): it describes the document, not the host, and
    * a share visitor rendering the doc may see it.
@@ -199,7 +205,7 @@ export interface DocMeta {
    * gate refuses to move them out of triage until somebody approves the plan
    * (`POST /api/docs/:id/plan`). `'approved'` releases them and lets later
    * derived tasks skip the hold. Absent means the doc is not a gated plan at
-   * all — a discussion, a huddle, an ordinary review doc — and derived tasks
+   * all — a discussion, a huddle, an ordinary attachment — and derived tasks
    * move like any other row. Set by the first create-from-doc call that
    * declares plan mode, in the CRDT meta (it describes the document, and a
    * share visitor rendering the doc may see it).
@@ -341,7 +347,7 @@ export interface TextRangeAnchor {
    *
    * Persisted for free: the REST route passes `anchor` through as an opaque
    * object and `createThread` stores it wholesale as frozen JSON, so no route
-   * or rooms change is needed. `deleted-snippet.test.ts` guards that at the
+   * or doc-store change is needed. `deleted-snippet.test.ts` guards that at the
    * HTTP level in case the route is ever "tightened" into hand-copying fields.
    */
   deletedSnippet?: string;

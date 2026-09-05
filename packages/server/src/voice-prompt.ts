@@ -22,7 +22,7 @@
  */
 import type { Ref, TaskStatus } from './tasks.ts';
 
-export type VoiceSurface = 'hub' | 'doc' | 'task';
+export type VoiceSurface = 'board' | 'doc' | 'task';
 
 /** The per-utterance anchor (§3.8): wherever the speaker is NOW. */
 export interface VoiceContext {
@@ -94,7 +94,7 @@ export interface VoiceThreadReviewItem extends VoiceReviewItemBase {
    *  `answerReviewItem` without re-deriving which comment was the ask. */
   commentId: string;
   /**
-   * Whether `rooms.answerReviewItem` can complete for this item — true exactly
+   * Whether `docStore.answerReviewItem` can complete for this item — true exactly
    * when the comment carries a `review` declaration.
    *
    * Read from the projection rather than discovered from an error string,

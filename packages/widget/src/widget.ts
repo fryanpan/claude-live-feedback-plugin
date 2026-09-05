@@ -60,7 +60,7 @@ export interface WidgetOpts {
    * site's keys.
    *
    * `'host'` reads the UNPREFIXED keys — the ones `ensureUserIdentity` in the
-   * workspaces-app/hub uses. Set it only when the widget is embedded in one of
+   * workspaces-app/board uses. Set it only when the widget is embedded in one of
    * OUR OWN surfaces, where the page has already asked the person who they are:
    * there, two namespaces mean one page holds two identities for one human, and
    * the widget posts as "Anonymous <animal>" on a board that greets the same
@@ -235,7 +235,7 @@ export class FeedbackWidgetEl extends HTMLElement {
     // `identity-scope="host"` — see WidgetOpts.identityScope. Short version for
     // whoever lands here debugging a namespace collision: the `cfw:` prefix
     // exists because the widget is normally a GUEST on someone else's page and
-    // must not read or write their keys. Our own hub is the one surface where
+    // must not read or write their keys. Our own board is the one surface where
     // it isn't a guest, and there the prefix splits one human into two
     // identities on a single page.
     //

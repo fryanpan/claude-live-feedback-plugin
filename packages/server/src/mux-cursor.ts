@@ -9,7 +9,7 @@
  * the server restarts, the boot nonce changes and nothing about the old ids
  * is comparable with the new ones. A single global cursor would therefore
  * report a gap on every quiet key after every deploy, which is exactly the
- * vacuous-gap wave `SseHub.lastEver` was written to end.
+ * vacuous-gap wave `SseBus.lastEver` was written to end.
  *
  * So the client presents what it actually knows: the last id it DELIVERED on
  * each key it has heard anything on. A key with no entry gets no replay

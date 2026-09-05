@@ -93,7 +93,7 @@ describe('a bound file that never answers', () => {
     // with no binding, so nothing will be written over the file we could not
     // read. The path is quarantined, which is what stops the next reconnect
     // starting the same doomed read.
-    expect(handle.rooms.boundPathOf(DOC_ID)).toBeUndefined();
+    expect(handle.docStore.boundPathOf(DOC_ID)).toBeUndefined();
     expect(boundFiles.quarantined(boundPath)).toBe(true);
     // And the file itself is untouched. This is the half that matters most:
     // a doc that binds without having read its file will overwrite that file
@@ -112,7 +112,7 @@ describe('a bound file that never answers', () => {
     // doc went the unprewarmed way and hydrated on the main thread, which is
     // most of the surface: this route, and the canonical
     // `/workspaces/<ws>/docs/<docId>` address with it. `GET /api/docs/<id>`
-    // reaches the same `rooms.get` the SSE route does, so on a build that
+    // reaches the same `docStore.get` the SSE route does, so on a build that
     // only prewarms by prefix this request parks the whole server and the
     // unrelated one below never answers.
     handle = createServer({ port: 0, dataDir, requireSignInToWrite: false });
@@ -127,7 +127,7 @@ describe('a bound file that never answers', () => {
     expect(res.status).toBeLessThan(500);
     await res.body?.cancel();
 
-    expect(handle.rooms.boundPathOf(DOC_ID)).toBeUndefined();
+    expect(handle.docStore.boundPathOf(DOC_ID)).toBeUndefined();
     expect(boundFiles.quarantined(boundPath)).toBe(true);
   });
 
@@ -144,7 +144,7 @@ describe('a bound file that never answers', () => {
     expect(res.status).toBeLessThan(500);
     await res.body?.cancel();
 
-    expect(handle.rooms.boundPathOf(DOC_ID)).toBe(boundPath);
+    expect(handle.docStore.boundPathOf(DOC_ID)).toBe(boundPath);
     expect(boundFiles.quarantined(boundPath)).toBe(false);
   });
 });

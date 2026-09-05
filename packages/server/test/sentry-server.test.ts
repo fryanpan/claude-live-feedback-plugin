@@ -69,7 +69,7 @@ describe('routePatternForSpan: default-deny redaction', () => {
     // server.ts serves these four with `pathname.startsWith('/<root>/')`,
     // not a fixed segment count — codex review caught the whole-template
     // rewrite silently collapsing them to the generic `/:id/:id` fallback.
-    expect(routePatternForSpan('/app/hub.js')).toBe('/app/:id');
+    expect(routePatternForSpan('/app/board.js')).toBe('/app/:id');
     expect(routePatternForSpan('/widget/assets/chunk-abc123.js')).toBe('/widget/:id');
     expect(routePatternForSpan('/demos/some-demo/index.html')).toBe('/demos/:id');
     expect(routePatternForSpan('/projects/octocat/hello-world')).toBe('/projects/:id');
@@ -113,7 +113,7 @@ describe('routePatternForSpan: default-deny redaction', () => {
   it('names the reviewApi subroutes under both of their live aliases', () => {
     // codex review: server.ts's `reviewApi(sub)` builds ONE regex per
     // subroute that matches `/api/(?:reviews|workspaces)/:id/<sub>` — a
-    // review or a hub workspace addressed under either prefix (compat for
+    // review or a board workspace addressed under either prefix (compat for
     // long-running sessions and open tabs). Missing either alias here isn't
     // a privacy bug (an unmatched path still redacts to all-:id), but it
     // does lose the route name for every request to that alias — this
@@ -274,7 +274,7 @@ describe('scrubEventForPrivacy: a floor beneath withRouteSpan, proven with a neg
     // because a caller-chosen docId (a bound file's relative path, or a
     // `task:<id>` alias) reads as ordinary text — MINTED_ID_SHAPE only
     // matches OUR OWN minted-id shape. ReservedDocIdError is a real,
-    // currently-thrown error (rooms.ts) that puts the raw value straight
+    // currently-thrown error (doc-store.ts) that puts the raw value straight
     // into `.message`, with nothing catching it by name before it could
     // reach captureServerError. This is the one place a structured field
     // makes exact — not shape-guessed — redaction possible.
@@ -526,7 +526,7 @@ describe('server Sentry: configured — reaches Sentry end to end', () => {
   it('a real ReservedDocIdError caught and captured never ships its raw docId, end to end', async () => {
     // The concrete instance codex review found: a bound-file-shaped docId
     // that no shape-based scrub would ever catch, going through the real
-    // capture path a caller in rooms.ts actually hits. Built from
+    // capture path a caller in doc-store.ts actually hits. Built from
     // crypto.randomUUID() rather than a hardcoded literal, same reasoning
     // as elsewhere in this file: ContextLines attaches source snippets
     // around the throw site, and a literal sitting in the SOURCE a few

@@ -1,5 +1,5 @@
 /**
- * The review shell's back arrow.
+ * The document editor shell's back arrow.
  *
  * `index.html` ships it as a static `href="/"`, which is the machine-wide
  * landing page — a list of every artifact on the box. That is the wrong
@@ -41,7 +41,7 @@ export function backLinkFor(
   returnItem?: string | null,
 ): { href: string; label: string } {
   const id = backTo?.workspaceId;
-  if (!id) return { href: '/', label: 'Back to all review docs' };
+  if (!id) return { href: '/', label: 'Back to all attachments' };
   const board = `/workspaces/${encodeURIComponent(id)}`;
   return {
     // Encoded because the stamp comes from the address bar: an un-encoded `/`

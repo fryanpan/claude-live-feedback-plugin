@@ -3,6 +3,14 @@
  *
  * Lifted verbatim out of `createServer`'s request closure; the handlers
  * read their collaborators off `WorkspaceRoutesContext` instead of the scope.
+ *
+ * The roster lives at `/workspaces/<id>/agents`. It used to be
+ * `/api/workspaces/<id>/attachments`, and that name was the collision the
+ * glossary could not land around: an *attachment* is a doc, a mockup, a
+ * preview or a diff filed on a board, and this collection holds none of
+ * those — it holds the sessions sitting at the board. The plainer noun goes
+ * to the thing being displaced, and `attachments` is left free for the
+ * collection the glossary spends it on. The old path is gone, not aliased.
  */
 import { attachNotes } from '../attach-notes.ts';
 import { clientReleaseStatus } from '../client-release.ts';
@@ -12,6 +20,7 @@ import {
   readReleasedPluginVersion,
 } from '../plugin-release.ts';
 import { isAttachmentRuntime } from '../tasks.ts';
+import { matchWorkspaceRoute } from './workspace-path.ts';
 import type { WorkspaceRouteRequest, WorkspaceRoutesContext } from './workspace-routes-context.ts';
 
 /** Answers the routes below, or `undefined` when the path is none of them. */
@@ -27,9 +36,9 @@ export async function handleWorkspaceAttachments(
   // a share visitor's read is redacted (the private-meta pattern) and
   // the mutations are owner-only outright — a visitor attaching an
   // agent or forging a heartbeat is never legitimate.
-  const wsAgentsMatch = pathname.match(/^\/api\/workspaces\/([^/]+)\/attachments$/);
+  const wsAgentsMatch = matchWorkspaceRoute(pathname, 'agents');
   if (wsAgentsMatch && req.method === 'GET') {
-    const workspaceId = decodeURIComponent(wsAgentsMatch[1] ?? '');
+    const workspaceId = wsAgentsMatch.workspaceId;
     if (!taskStore.getWorkspace(workspaceId)) {
       return j(404, { error: 'workspace not found' });
     }
@@ -81,7 +90,7 @@ export async function handleWorkspaceAttachments(
   }
   if (wsAgentsMatch && req.method === 'POST') {
     if (visitor) return j(403, { error: 'not available to share visitors' });
-    const workspaceId = decodeURIComponent(wsAgentsMatch[1] ?? '');
+    const workspaceId = wsAgentsMatch.workspaceId;
     const body = await safeJson(req);
     const agentId = body?.agentId;
     if (typeof agentId !== 'string' || agentId.trim().length === 0) {
@@ -135,7 +144,7 @@ export async function handleWorkspaceAttachments(
     return j(200, { ...res, watching, notes: attachNotes(res, watching) });
   }
   const wsAgentHeartbeatMatch = pathname.match(
-    /^\/api\/workspaces\/([^/]+)\/attachments\/([^/]+)\/heartbeat$/,
+    /^\/workspaces\/([^/]+)\/agents\/([^/]+)\/heartbeat$/,
   );
   if (wsAgentHeartbeatMatch && req.method === 'POST') {
     if (visitor) return j(403, { error: 'not available to share visitors' });
@@ -213,7 +222,7 @@ export async function handleWorkspaceAttachments(
     const cleared = taskStore.ackVoiceRequest(workspaceId, entryId);
     return j(200, { ok: true, cleared });
   }
-  const wsAgentDetachMatch = pathname.match(/^\/api\/workspaces\/([^/]+)\/attachments\/([^/]+)$/);
+  const wsAgentDetachMatch = pathname.match(/^\/workspaces\/([^/]+)\/agents\/([^/]+)$/);
   if (wsAgentDetachMatch && req.method === 'DELETE') {
     if (visitor) return j(403, { error: 'not available to share visitors' });
     const workspaceId = decodeURIComponent(wsAgentDetachMatch[1] ?? '');

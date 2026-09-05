@@ -110,7 +110,7 @@ describe('spoken asks on a huddle doc', () => {
       body: JSON.stringify(body),
     });
   const docMarkdown = (): string => {
-    const room = handle.rooms.get(docId);
+    const room = handle.docStore.get(docId);
     if (!room) throw new Error(`no room for ${docId}`);
     return prose.serializeFragmentToMarkdown(prose.getProseFragment(room.ydoc));
   };

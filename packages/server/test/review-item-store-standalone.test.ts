@@ -29,7 +29,7 @@ import type {
 } from '../src/review-items/persistence.ts';
 import { ReviewItemQueries } from '../src/review-items/queries.ts';
 import { ReviewItemStore } from '../src/review-items/store.ts';
-import type { HubWorkspace } from '../src/tasks.ts';
+import type { BoardWorkspace } from '../src/tasks.ts';
 
 const PERSON = { id: 'known-reviewer', name: 'Reviewer', kind: 'known' };
 const AGENT = { id: 'agent-scheduler', name: 'Scheduler Agent', kind: 'known' };
@@ -74,7 +74,7 @@ function task(over: Partial<Task> = {}): Task {
  */
 function fake(tasks: Task[] = [task()]) {
   const rows = new Map(tasks.map((t) => [t.id, t]));
-  const workspace: HubWorkspace = {
+  const workspace: BoardWorkspace = {
     id: 'w-fake',
     name: 'Fake board',
     goals: [],

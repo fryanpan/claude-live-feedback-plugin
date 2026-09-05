@@ -12,7 +12,7 @@
  * 99.92% of it one repeated line. Every cause was found by grepping by hand.
  *
  * Dynamic import, gated on the DSN being present — same pattern as the
- * browser's Sentry init in hub-app.ts. An unconfigured process (every test,
+ * browser's Sentry init in board-app.ts. An unconfigured process (every test,
  * every stranger's clone, prod with the env var unset) never imports
  * `@sentry/bun`, never calls `Sentry.init`, and never opens a socket to
  * anywhere. See sentry-server.test.ts, which proves that by pointing a real
@@ -144,7 +144,7 @@ export function withRouteSpan<T>(req: Request, pathname: string, fn: () => Promi
  * `ReservedDocIdError` (doc-ids.ts) formats an arbitrary `docId` — which can
  * be a bound file's relative path or a `task:<id>` alias, exactly the
  * caller-chosen shapes that don't match MINTED_ID_SHAPE — directly into its
- * own `.message`, and it's thrown from a live code path (rooms.ts) with
+ * own `.message`, and it's thrown from a live code path (doc-store.ts) with
  * nothing catching it by name before it could reach captureServerError. This
  * doesn't need to guess at a shape: when an Error exposes one of these
  * fields, the exact value is known, so every occurrence of it in the

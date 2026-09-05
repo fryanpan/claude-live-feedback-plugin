@@ -21,7 +21,7 @@ import { describe, expect, it } from 'bun:test';
 import { formatMuxCursor } from '../../mcp/src/mux-cursor.ts';
 import { isMuxCursor, parseMuxCursor } from '../src/mux-cursor.ts';
 import { channelForWatchKey, openAgentMuxStream } from '../src/sse-mux.ts';
-import { REPLAY_MAX_EVENTS, SseHub } from '../src/sse.ts';
+import { REPLAY_MAX_EVENTS, SseBus } from '../src/sse.ts';
 
 type Frame = { event: string; id?: string; data: Record<string, unknown> };
 
@@ -71,7 +71,7 @@ const settle = () => new Promise((r) => setTimeout(r, 0));
 const KEYS_AB = ['doc-a', 'doc-b'];
 
 function openMux(
-  hub: SseHub,
+  bus: SseBus,
   opts: {
     keys: () => string[];
     cursors?: Map<string, string>;
@@ -79,7 +79,7 @@ function openMux(
   },
 ) {
   return openAgentMuxStream({
-    hub,
+    bus,
     agentId: 'agent-mira',
     keys: opts.keys,
     channelFor: (key) => channelForWatchKey(key, (id) => id),
@@ -92,56 +92,56 @@ function openMux(
 
 describe('agent mux stream', () => {
   it('carries two keys on one stream, each frame tagged with its key', async () => {
-    const hub = new SseHub();
-    const res = openMux(hub, { keys: () => [...KEYS_AB] });
+    const bus = new SseBus();
+    const res = openMux(bus, { keys: () => [...KEYS_AB] });
     const out = drain(res);
 
-    hub.broadcast('doc-a', { event: 'thread.created' });
-    hub.broadcast('doc-b', { event: 'thread.reply' });
+    bus.broadcast('doc-a', { event: 'thread.created' });
+    bus.broadcast('doc-b', { event: 'thread.reply' });
     await settle();
 
     const frames = out.frames();
     expect(frames.map((f) => f.event)).toEqual(['thread.created', 'thread.reply']);
     expect(frames.map((f) => f.data.watchKey)).toEqual(['doc-a', 'doc-b']);
     // One subscriber per channel — the whole point is that it is the SAME one.
-    expect(hub.count('doc-a')).toBe(1);
-    expect(hub.count('doc-b')).toBe(1);
+    expect(bus.count('doc-a')).toBe(1);
+    expect(bus.count('doc-b')).toBe(1);
     out.cancel();
   });
 
   it('resolves a ws: watch key onto the board channel and names the agent there', async () => {
-    const hub = new SseHub();
-    const res = openMux(hub, { keys: () => ['ws:w-board', 'doc-a'] });
+    const bus = new SseBus();
+    const res = openMux(bus, { keys: () => ['ws:w-board', 'doc-a'] });
     const out = drain(res);
 
-    hub.broadcast('ws~w-board', { event: 'task.updated' });
+    bus.broadcast('ws~w-board', { event: 'task.updated' });
     await settle();
 
     expect(out.frames()[0]?.data.watchKey).toBe('ws:w-board');
     // The board channel is where an agent is ADDRESSABLE, so the mux names
     // itself there — and stays anonymous on doc channels, exactly as the
     // per-key streams were.
-    expect([...hub.agentsOn('ws~w-board')]).toEqual(['agent-mira']);
-    expect([...hub.agentsOn('doc-a')]).toEqual([]);
+    expect([...bus.agentsOn('ws~w-board')]).toEqual(['agent-mira']);
+    expect([...bus.agentsOn('doc-a')]).toEqual([]);
     out.cancel();
   });
 
   it('replays per key: a proven tail on one, a gap naming the other', async () => {
-    const hub = new SseHub();
+    const bus = new SseBus();
     // doc-a: one event the client saw, then two it missed while disconnected.
-    hub.broadcast('doc-a', { event: 'a.seen' });
-    const seenA = hub.lastIdOn('doc-a') as string;
-    hub.broadcast('doc-a', { event: 'a.missed.1' });
-    hub.broadcast('doc-a', { event: 'a.missed.2' });
+    bus.broadcast('doc-a', { event: 'a.seen' });
+    const seenA = bus.lastIdOn('doc-a') as string;
+    bus.broadcast('doc-a', { event: 'a.missed.1' });
+    bus.broadcast('doc-a', { event: 'a.missed.2' });
     // doc-b: the client's cursor is evicted by the count bound, so its tail
     // cannot be proven complete.
-    hub.broadcast('doc-b', { event: 'b.old' });
-    const evictedB = hub.lastIdOn('doc-b') as string;
+    bus.broadcast('doc-b', { event: 'b.old' });
+    const evictedB = bus.lastIdOn('doc-b') as string;
     for (let i = 0; i < REPLAY_MAX_EVENTS + 1; i++) {
-      hub.broadcast('doc-b', { event: 'b.filler' });
+      bus.broadcast('doc-b', { event: 'b.filler' });
     }
 
-    const res = openMux(hub, {
+    const res = openMux(bus, {
       keys: () => [...KEYS_AB],
       cursors: new Map([
         ['doc-a', seenA],
@@ -166,12 +166,12 @@ describe('agent mux stream', () => {
   });
 
   it('a key with no cursor gets no replay and no gap notice', async () => {
-    const hub = new SseHub();
-    hub.broadcast('doc-a', { event: 'a.one' });
-    const seenA = hub.lastIdOn('doc-a') as string;
-    hub.broadcast('doc-b', { event: 'b.before' });
+    const bus = new SseBus();
+    bus.broadcast('doc-a', { event: 'a.one' });
+    const seenA = bus.lastIdOn('doc-a') as string;
+    bus.broadcast('doc-b', { event: 'b.before' });
 
-    const res = openMux(hub, {
+    const res = openMux(bus, {
       keys: () => [...KEYS_AB],
       cursors: new Map([['doc-a', seenA]]),
     });
@@ -185,10 +185,10 @@ describe('agent mux stream', () => {
   });
 
   it('picks up a watch added to the set without a reconnect', async () => {
-    const hub = new SseHub();
+    const bus = new SseBus();
     let keys = ['doc-a'];
     let fire: (() => void) | undefined;
-    const res = openMux(hub, {
+    const res = openMux(bus, {
       keys: () => [...keys],
       onWatchSetChanged: (cb) => {
         fire = cb;
@@ -199,27 +199,27 @@ describe('agent mux stream', () => {
     });
     const out = drain(res);
 
-    hub.broadcast('doc-b', { event: 'b.before.watch' });
+    bus.broadcast('doc-b', { event: 'b.before.watch' });
     await settle();
     expect(out.frames()).toEqual([]);
 
     keys = ['doc-a', 'doc-b'];
     fire?.();
-    hub.broadcast('doc-b', { event: 'b.after.watch' });
+    bus.broadcast('doc-b', { event: 'b.after.watch' });
     await settle();
 
     expect(out.frames().map((f) => f.event)).toEqual(['b.after.watch']);
     // The key that was already there kept its one registration — the sync
     // moves the difference, not the whole set.
-    expect(hub.count('doc-a')).toBe(1);
+    expect(bus.count('doc-a')).toBe(1);
     out.cancel();
   });
 
   it('drops a channel when its key leaves the set, and keeps the rest', async () => {
-    const hub = new SseHub();
+    const bus = new SseBus();
     let keys = [...KEYS_AB];
     let fire: (() => void) | undefined;
-    const res = openMux(hub, {
+    const res = openMux(bus, {
       keys: () => [...keys],
       onWatchSetChanged: (cb) => {
         fire = cb;
@@ -232,27 +232,27 @@ describe('agent mux stream', () => {
 
     keys = ['doc-a'];
     fire?.();
-    hub.broadcast('doc-b', { event: 'b.after.unwatch' });
-    hub.broadcast('doc-a', { event: 'a.still.here' });
+    bus.broadcast('doc-b', { event: 'b.after.unwatch' });
+    bus.broadcast('doc-a', { event: 'a.still.here' });
     await settle();
 
-    expect(hub.count('doc-b')).toBe(0);
+    expect(bus.count('doc-b')).toBe(0);
     expect(out.frames().map((f) => f.event)).toEqual(['a.still.here']);
     out.cancel();
   });
 
   it('unregisters every channel when the stream is cancelled', async () => {
-    const hub = new SseHub();
-    const res = openMux(hub, { keys: () => [...KEYS_AB] });
+    const bus = new SseBus();
+    const res = openMux(bus, { keys: () => [...KEYS_AB] });
     const out = drain(res);
     await settle();
-    expect(hub.count('doc-a')).toBe(1);
+    expect(bus.count('doc-a')).toBe(1);
 
     out.cancel();
     await settle();
 
-    expect(hub.count('doc-a')).toBe(0);
-    expect(hub.count('doc-b')).toBe(0);
+    expect(bus.count('doc-a')).toBe(0);
+    expect(bus.count('doc-b')).toBe(0);
   });
 });
 

@@ -18,8 +18,8 @@ import { IPAD, PHONE, attach, installSheets, setViewport, styleOf } from './css-
  * Here the sheets are installed and the elements are built at each viewport,
  * so the assertion is the value the browser would use.
  *
- * The class chain (`hub-walk-body hub-walk-body-clamp`, and the sibling
- * `.hub-walk-body-expand`) is what `walkReviewBody` renders for a long ask;
+ * The class chain (`board-walk-body board-walk-body-clamp`, and the sibling
+ * `.board-walk-body-expand`) is what `walkReviewBody` renders for a long ask;
  * `review-walkthrough.test.ts` pins that the island produces it. What is left
  * to the browser is the rendered height — happy-dom lays nothing out, so
  * `max-height` is read as a declared cap, not as a measured fold.
@@ -27,7 +27,7 @@ import { IPAD, PHONE, attach, installSheets, setViewport, styleOf } from './css-
 
 let cleanup = () => {};
 beforeEach(() => {
-  cleanup = installSheets('hub.css', 'styles.css');
+  cleanup = installSheets('board.css', 'styles.css');
 });
 afterEach(() => {
   cleanup();
@@ -37,13 +37,13 @@ afterEach(() => {
 /** The body element the island renders for a long ask, at the given width. */
 function clampedBody(viewport: { width: number; height: number }) {
   setViewport(viewport);
-  return styleOf(attach('hub-walk-body hub-walk-body-clamp'));
+  return styleOf(attach('board-walk-body board-walk-body-clamp'));
 }
 
 /** The expand button the island renders alongside it. */
 function expandButton(viewport: { width: number; height: number }) {
   setViewport(viewport);
-  return styleOf(attach('hub-walk-body-expand', { tag: 'button' }));
+  return styleOf(attach('board-walk-body-expand', { tag: 'button' }));
 }
 
 describe('the long-detail clamp is scoped to the mobile tier', () => {
@@ -73,7 +73,7 @@ describe('the long-detail clamp is scoped to the mobile tier', () => {
     // none`, `overflow: visible` and `display: block`, which is precisely the
     // iPad expectation.
     setViewport(PHONE);
-    expect(styleOf(attach('hub-walk-body')).lineHeight).toBe('1.55');
-    expect(styleOf(attach('hub-walk-body-clamp')).maxHeight).not.toBe('none');
+    expect(styleOf(attach('board-walk-body')).lineHeight).toBe('1.55');
+    expect(styleOf(attach('board-walk-body-clamp')).maxHeight).not.toBe('none');
   });
 });

@@ -1,7 +1,7 @@
 /**
  * A group bind lands on a board too — as ONE unit.
  *
- * PR #127 made every STANDALONE doc land in a hub workspace and deliberately
+ * PR #127 made every STANDALONE doc land in a board workspace and deliberately
  * left group binds alone, so a diff review or folder bind was reachable only
  * by its URL: nothing on any board pointed at it. This closes that path.
  *
@@ -10,17 +10,17 @@
  *
  *   - a GROUPING id (`meta.workspaceId`, a.k.a. `reviewId`) bundles the member
  *     docs of one folder bind or diff review. It has no doc room of its own.
- *   - a HUB workspace is the board: goals, tasks, and a list of attached ids.
+ *   - a BOARD workspace is the board: goals, tasks, and a list of attached ids.
  *
  * A board's `docIds` is a list of ATTACHMENT ids, and an attachment is either
  * a doc room or a grouping — `POST /api/workspaces/:id/docs` has accepted both
- * since it was written, and the hub sidebar already resolves a grouping id
+ * since it was written, and the board sidebar already resolves a grouping id
  * through the workspace endpoints. So the unit that goes on the board is the
  * grouping, and its members stay off: a hundred-file review is one row, not a
  * hundred.
  *
  * Route-level on purpose. Every REST handler here hand-copies body fields into
- * the rooms call and nothing type-checks that layer.
+ * the doc-store call and nothing type-checks that layer.
  *
  * All fixtures are synthetic. The repo is public.
  */
@@ -145,7 +145,7 @@ describe('a group bind lands on a board, as one unit', () => {
     // server materialized was never named to anyone, so the list is the only
     // way in.
     const list = await local('/api/workspaces');
-    const ids = ((await list.json()) as { hubWorkspaces: { id: string }[] }).hubWorkspaces.map(
+    const ids = ((await list.json()) as { boardWorkspaces: { id: string }[] }).boardWorkspaces.map(
       (w) => w.id,
     );
     expect(ids).toContain(boardId);
@@ -163,7 +163,7 @@ describe('a group bind lands on a board, as one unit', () => {
     expect(body.files.length).toBeGreaterThan(1);
     expect(handle.tasks.getWorkspace(boardId)?.docIds).toContain('rev-members');
     for (const f of body.files) {
-      expect(handle.rooms.get(f.docId)).toBeTruthy();
+      expect(handle.docStore.get(f.docId)).toBeTruthy();
       expect(handle.tasks.workspaceOfDoc(f.docId)).toBeNull();
     }
   });

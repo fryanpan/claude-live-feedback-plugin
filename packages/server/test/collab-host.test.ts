@@ -552,7 +552,7 @@ describe('the collaboration hostname over HTTP', () => {
         `/review/${otherDocId}`,
         `/y/${otherDocId}`,
         `/y/ws:${encodeURIComponent(otherBoard)}`,
-        `/events/workspace/${encodeURIComponent(otherBoard)}`,
+        `/workspaces/${encodeURIComponent(otherBoard)}/events:stream`,
       ]) {
         expect((await asCollaborator(path)).status, path).toBe(403);
       }

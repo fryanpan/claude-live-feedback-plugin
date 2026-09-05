@@ -14,15 +14,20 @@
  * half-typed goal surviving one — must drive `boardData` directly instead. A
  * remount rebuilds everything, which is the property they exist to disprove.
  */
-import { type BoardHandlers, boardData, mountBoardIsland } from '../../src/hub/board-island.tsx';
-import type { BoardSection } from '../../src/hub/hub-board-model.ts';
-import type { HubPane } from '../../src/hub/hub-presence-model.ts';
+import { type BoardHandlers, boardData, mountBoardIsland } from '../../src/board/board-island.tsx';
+import type { BoardSection, BoardTask } from '../../src/board/board-model.ts';
+import type { BoardPane } from '../../src/board/board-presence-model.ts';
 
 /** The two per-paint values that used to ride inside the handlers object and
  *  now ride the signal. Accepted here so ported cases read as they did. */
 export type ShimHandlers = BoardHandlers & {
   knownAgentIds?: string[];
   archivedCount?: number;
+  /** Every projected row, by id — what a live instance's recurrence mark and
+   *  an after-completion cursor resolve through. Defaults to the rows in the
+   *  sections passed, which is right for every case that does not deliberately
+   *  filter one out. */
+  tasksById?: ReadonlyMap<string, BoardTask>;
 };
 
 const islands = new Map<HTMLElement, () => void>();
@@ -31,13 +36,15 @@ export function renderBoard(
   container: HTMLElement,
   sections: BoardSection[],
   handlers: ShimHandlers,
-  pane: HubPane = 'board',
+  pane: BoardPane = 'board',
 ): void {
   boardData.value = {
     sections,
     pane,
     showArchived: false,
     knownAgentIds: handlers.knownAgentIds ?? [],
+    tasksById:
+      handlers.tasksById ?? new Map(sections.flatMap((s) => s.tasks).map((t) => [t.id, t])),
     archivedCount: handlers.archivedCount ?? 0,
   };
   islands.get(container)?.();
@@ -55,6 +62,7 @@ export function disposeBoards(): void {
     pane: 'board',
     showArchived: false,
     knownAgentIds: [],
+    tasksById: new Map(),
     archivedCount: 0,
   };
 }

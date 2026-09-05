@@ -140,26 +140,26 @@ describe('the page Sentry entry', () => {
 describe('the page bundles stay out of the SDK', async () => {
   const { readFileSync } = await import('node:fs');
   const { join } = await import('node:path');
-  const { HUB_BOOT_SOURCES } = await import('./support/hub-boot-sources.ts');
-  const hubSrc = HUB_BOOT_SOURCES.map((m) =>
-    readFileSync(join(__dirname, '..', 'src', 'hub', `${m}.ts`), 'utf8'),
+  const { BOARD_BOOT_SOURCES } = await import('./support/board-boot-sources.ts');
+  const boardSrc = BOARD_BOOT_SOURCES.map((m) =>
+    readFileSync(join(__dirname, '..', 'src', 'board', `${m}.ts`), 'utf8'),
   ).join('\n');
   const appSrc = readFileSync(join(__dirname, '..', 'src', 'app.ts'), 'utf8');
 
   it('neither entry imports @sentry/browser', () => {
     // `app.ts` builds with splitting OFF, so an import here — static or
     // dynamic — lands the whole SDK in the file every doc load fetches,
-    // configured or not. `hub.js` used to carry it as a chunk; now nothing
+    // configured or not. `board.js` used to carry it as a chunk; now nothing
     // but sentry.js references the SDK at all.
-    expect(hubSrc).not.toContain('@sentry/browser');
+    expect(boardSrc).not.toContain('@sentry/browser');
     expect(appSrc).not.toContain('@sentry/browser');
   });
 
   it('the board still feeds its load phases into the pageload trace', () => {
     // The built-in load recorder and Sentry have to tell one story: the same
     // msToBoot / msToFirstProjection the report posts land as measurements.
-    expect(hubSrc).toMatch(/setMeasurement\('ms_to_boot'/);
-    expect(hubSrc).toMatch(/setMeasurement\('ms_to_first_projection'/);
-    expect(hubSrc).toContain('pageSentry()');
+    expect(boardSrc).toMatch(/setMeasurement\('ms_to_boot'/);
+    expect(boardSrc).toMatch(/setMeasurement\('ms_to_first_projection'/);
+    expect(boardSrc).toContain('pageSentry()');
   });
 });

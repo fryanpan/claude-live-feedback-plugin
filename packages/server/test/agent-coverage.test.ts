@@ -155,7 +155,7 @@ describe('watch coverage — what an agent is missing, not what it holds', () =>
    * alone would describe that half-agent and assert it was fine.
    */
   const attach = async (workspaceId: string, agentId = AGENT) => {
-    const res = await post(`/api/workspaces/${workspaceId}/attachments`, {
+    const res = await post(`/workspaces/${workspaceId}/agents`, {
       agentId,
       runtime: 'claude-code-local',
     });
@@ -280,7 +280,7 @@ describe('watch coverage — what an agent is missing, not what it holds', () =>
     // A folder bind / diff review puts ONE row on the board — the GROUPING —
     // and the agent watches the grouping's own channel. It never asked about
     // the board, so a board row here would be an alarm about somebody else's
-    // seat, on a key that is not a hub board at all.
+    // seat, on a key that is not a board at all.
     const boardId = await makeBoard('holding-board');
     writeFileSync(join(srcDir, 'README.md'), '# Bound folder\n\nBody.\n');
     const bound = await post('/api/workspaces', { folderPath: srcDir, hubWorkspaceId: boardId });
@@ -296,7 +296,7 @@ describe('watch coverage — what an agent is missing, not what it holds', () =>
     expect(row.key).toBe(`ws:${groupingId}`);
     expect(row.workspaceId).toBe(groupingId);
     expect(row.kind).toBe('review');
-    // Attachment / lead / heartbeat are hub-board facts. Printing `false` for
+    // Attachment / lead / heartbeat are board facts. Printing `false` for
     // a grouping would read as a gap that cannot exist.
     expect(row.attached).toBeUndefined();
     expect(row.lead).toBeUndefined();
@@ -405,7 +405,7 @@ describe('watch coverage — what an agent is missing, not what it holds', () =>
 
     it('reports a stale-heartbeat lead holding only a ws: key, with what is queued', async () => {
       const boardId = await seedBoard('lead-gone-quiet');
-      await tpost(`/api/workspaces/${boardId}/attachments`, {
+      await tpost(`/workspaces/${boardId}/agents`, {
         agentId: AGENT,
         runtime: 'claude-code-local',
       });
@@ -437,7 +437,7 @@ describe('watch coverage — what an agent is missing, not what it holds', () =>
     // only that the builder lists every board it can reach.
     it('POSITIVE CONTROL: a live attachment on the same key raises no alarm', async () => {
       const boardId = await seedBoard('lead-still-here');
-      await tpost(`/api/workspaces/${boardId}/attachments`, {
+      await tpost(`/workspaces/${boardId}/agents`, {
         agentId: AGENT,
         runtime: 'claude-code-local',
       });
@@ -485,7 +485,7 @@ describe('watch coverage — what an agent is missing, not what it holds', () =>
           body: JSON.stringify({ name: 'busy-but-quiet', goal: 'Ship it.' }),
         });
         const boardId = ((await r.json()) as { workspace: { id: string } }).workspace.id;
-        await fetch(`${sbase}/api/workspaces/${boardId}/attachments`, {
+        await fetch(`${sbase}/workspaces/${boardId}/agents`, {
           method: 'POST',
           headers: shost,
           body: JSON.stringify({ agentId: AGENT, runtime: 'claude-code-local' }),
@@ -535,7 +535,7 @@ describe('watch coverage — what an agent is missing, not what it holds', () =>
       // The incumbent attaches (claiming the empty seat), holds its stream,
       // and stays fresh — all three, or it is not the live lead this test is
       // about and `leadLive` would be false for an uninteresting reason.
-      await tpost(`/api/workspaces/${boardId}/attachments`, {
+      await tpost(`/workspaces/${boardId}/agents`, {
         agentId: 'agent-incumbent',
         runtime: 'claude-code-local',
       });

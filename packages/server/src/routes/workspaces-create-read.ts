@@ -7,8 +7,8 @@
 import { classifyActor } from '../actor-identity.ts';
 import { browserCannotBindBody, isBrowserRequest } from '../middleware/write-gate.ts';
 import {
+  redactBoardWorkspaceForVisitor,
   redactCapChangeForVisitor,
-  redactHubWorkspaceForVisitor,
 } from '../share/redact-workspace.ts';
 import { summarizeGoals } from '../task-queue.ts';
 import { isRetired, retiredNotice } from '../tasks.ts';
@@ -22,21 +22,21 @@ export async function handleWorkspaceCreateRead(
   const {
     taskStore,
     taskProjection,
-    rooms,
+    docStore,
     j,
     safeJson,
     isValidDocId,
     withReviewUrl,
     parallelismCapView,
-    fileUnderHubWorkspace,
+    fileUnderBoardWorkspace,
   } = ctx;
   const { req, pathname, visitor, authorFor } = rq;
-  // --- REST: workspaces (hub create OR folder bind) ---
+  // --- REST: workspaces (board create OR folder bind) ---
   // One resource, two shapes: `folderPath` binds a folder of files
-  // (the review), `name` creates a hub Workspace —
+  // (the review), `name` creates a board Workspace —
   // a NEW first-class entity with a crypto-random id that tasks and
   // goals hang off (plan §3.12 commit 1). Nothing is migrated between
-  // the two; attach_doc LINKS existing docs/reviews to a hub workspace.
+  // the two; attach_doc LINKS existing docs/reviews to a board workspace.
   if (pathname === '/api/workspaces' && req.method === 'POST') {
     const body = await safeJson(req);
     const folderPath = body?.folderPath as string | undefined;
@@ -75,9 +75,9 @@ export async function handleWorkspaceCreateRead(
       return j(200, { workspace });
     }
     if (!folderPath || typeof folderPath !== 'string') {
-      return j(400, { error: 'folderPath (folder bind) or name (hub workspace) required' });
+      return j(400, { error: 'folderPath (folder bind) or name (board workspace) required' });
     }
-    const res = await rooms.bindFolder({
+    const res = await docStore.bindFolder({
       folderPath,
       // `workspaceId` is what this body key was called before a review
       // stopped being a workspace; both are read, neither is required.
@@ -105,8 +105,8 @@ export async function handleWorkspaceCreateRead(
     }
     // The GROUPING goes on the board, not its members: `res.workspaceId`
     // is the review id, and one row for the whole bind is the unit a
-    // reader thinks in. See the vocabulary note above `fileUnderHubWorkspace`.
-    const hubWorkspaceId = fileUnderHubWorkspace(
+    // reader thinks in. See the vocabulary note above `fileUnderBoardWorkspace`.
+    const boardWorkspaceId = fileUnderBoardWorkspace(
       res.workspaceId,
       body?.hubWorkspaceId as string | undefined,
     );
@@ -117,7 +117,7 @@ export async function handleWorkspaceCreateRead(
       // deprecated for one release — a caller built before the rename
       // reads it by that name, and a key must never change MEANING.
       setId: res.workspaceId,
-      hubWorkspaceId,
+      hubWorkspaceId: boardWorkspaceId,
       files: res.files.map((f) => ({
         ...f,
         reviewUrl: withReviewUrl({ docId: f.docId, type: f.type }).reviewUrl,
@@ -154,7 +154,7 @@ export async function handleWorkspaceCreateRead(
     if (reviewId !== undefined && !isValidDocId(reviewId)) {
       return j(400, { error: 'bad reviewId' });
     }
-    const res = await rooms.bindDiff({
+    const res = await docStore.bindDiff({
       repoPath,
       base,
       target,
@@ -197,7 +197,7 @@ export async function handleWorkspaceCreateRead(
     // members are reachable through the review's own tree. Idempotent, so
     // a re-run that omits `hubWorkspaceId` cannot sweep a live review out
     // of the board a reviewer already filed it on.
-    const hubWorkspaceId = fileUnderHubWorkspace(
+    const boardWorkspaceId = fileUnderBoardWorkspace(
       res.reviewId,
       body?.hubWorkspaceId as string | undefined,
     );
@@ -206,7 +206,7 @@ export async function handleWorkspaceCreateRead(
     return j(200, {
       ...res,
       setId: res.reviewId,
-      hubWorkspaceId,
+      hubWorkspaceId: boardWorkspaceId,
       files,
       entryUrl: entry?.reviewUrl,
     });
@@ -216,13 +216,13 @@ export async function handleWorkspaceCreateRead(
   // this to treat a folder bind as one cleanup unit.
   if (pathname === '/api/workspaces' && req.method === 'GET') {
     return j(200, {
-      workspaces: rooms.listWorkspaces(),
-      // Hub workspaces (the boards) are a different thing from the
+      workspaces: docStore.listWorkspaces(),
+      // Board workspaces (the boards) are a different thing from the
       // reviews above and stay in their own key rather than
       // being mixed into one list. They belong on this route because a
       // workspace the SERVER materialized for an unfiled doc has no
       // other way to be found: nobody was told its id at creation time.
-      hubWorkspaces: taskStore.listWorkspaces().map((w) => ({
+      boardWorkspaces: taskStore.listWorkspaces().map((w) => ({
         id: w.id,
         name: w.name,
         docCount: w.docIds.length,
@@ -234,14 +234,14 @@ export async function handleWorkspaceCreateRead(
       })),
     });
   }
-  // --- REST: hub workspaces + tasks (plan §3.10) ---
+  // --- REST: board workspaces + tasks (plan §3.10) ---
   // Every handler below hand-copies body fields into the store call.
   // A field that isn't copied is silently discarded while the request
   // still returns 200 — so every param here has an HTTP-level test in
   // task-routes.test.ts (the `groups` lesson).
-  const hubWsMatch = pathname.match(/^\/api\/workspaces\/([^/]+)$/);
-  if (hubWsMatch && req.method === 'GET') {
-    const workspaceId = decodeURIComponent(hubWsMatch[1] ?? '');
+  const boardWsMatch = pathname.match(/^\/api\/workspaces\/([^/]+)$/);
+  if (boardWsMatch && req.method === 'GET') {
+    const workspaceId = decodeURIComponent(boardWsMatch[1] ?? '');
     const stored = taskStore.getWorkspace(workspaceId);
     if (!stored) return j(404, { error: 'workspace not found' });
     // A visitor gets a PROJECTION, never the stored record. This route
@@ -249,9 +249,9 @@ export async function handleWorkspaceCreateRead(
     // (host-guard.ts), and the record it used to answer with verbatim
     // carries `notesHome.repoRoot` — an absolute path on this machine —
     // and `retiredBy`, an actor id every neighbouring visitor surface
-    // strips. See redactHubWorkspaceForVisitor. The local surface keeps
+    // strips. See redactBoardWorkspaceForVisitor. The local surface keeps
     // the whole record: `notesHome` is what the settings panel edits.
-    const workspace = visitor ? redactHubWorkspaceForVisitor(stored) : stored;
+    const workspace = visitor ? redactBoardWorkspaceForVisitor(stored) : stored;
     // Goals with their counts, in priority order. The goals were always
     // in this payload and no MCP tool read it, so ordering lived in
     // each agent's head; the counts are what make the list answer
@@ -260,7 +260,7 @@ export async function handleWorkspaceCreateRead(
     // Who moved the cap, given to a visitor the way every other visitor
     // surface gives an actor: name and kind, no id. The SAME change over
     // their SSE feed is already reduced by `displayActor`
-    // (redactHubEventForVisitor), and the transport and the surface have
+    // (redactBoardEventForVisitor), and the transport and the surface have
     // to agree about the same fact — an id here is one the neighbouring
     // `retiredBy` redaction exists to strip. The local surface keeps the
     // full actor. Shared with `GET …/settings`, the third door onto this

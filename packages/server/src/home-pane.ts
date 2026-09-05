@@ -17,13 +17,14 @@
  * The context is explicit, the same shape `board-membership.ts` and
  * `stall-wiring.ts` use, and every member of it is a VALUE: nothing here is
  * built later than the stores it reads, so `createServer` composes this
- * wherever the stores, the rooms and the summarizer seam are already in hand.
+ * wherever the stores, the doc store and the summarizer seam are already in hand.
  *
  * `homeBriefInflight`, `homeBriefInput` and `generateHomeBriefFor` stay
  * internal: nothing outside this module reached them inside `createServer`
  * either, and the in-flight set is only correct if exactly one thing owns it.
  */
 import { reviewItemState } from '@feedback/core';
+import type { DocStore } from './doc-store.ts';
 import {
   type BriefCoverage,
   type BriefInput,
@@ -39,11 +40,10 @@ import {
   readerKey,
 } from './home-brief.ts';
 import { type ReviewItemRow, reviewItemRows } from './review-queue.ts';
-import type { Rooms } from './rooms.ts';
 import type { ThreadSummarizer } from './summarize.ts';
 import { taskBodyDocId } from './task-projection.ts';
 import {
-  type HubWorkspace,
+  type BoardWorkspace,
   LEGACY_REVIEW_ITEM_ID,
   type TaskStore,
   legacyDecisionItem,
@@ -56,8 +56,8 @@ export interface HomePaneContext {
   dataDir: string;
   /** The board itself: tasks, goals, review items, decisions. */
   taskStore: TaskStore;
-  /** Doc rooms: the meta a doc's label is read from, and its threads. */
-  rooms: Rooms;
+  /** Doc store: the meta a doc's label is read from, and its threads. */
+  docStore: DocStore;
   /** The summarizer seam, or null on a server with generation off. A server
    *  with no summarizer serves the deterministic brief and never calls out. */
   summarizer: ThreadSummarizer | null;
@@ -86,15 +86,15 @@ export interface HomePane {
   /** The read-marker + stored-brief store, also read by the Home routes. */
   homeBriefs: HomeBriefStore;
   /** The review items exactly as `GET /review-items` ships them. */
-  reviewItemsFor: (workspace: HubWorkspace) => ReviewItemRow[];
+  reviewItemsFor: (workspace: BoardWorkspace) => ReviewItemRow[];
   /** How many items the Home queue holds right now, over those items. */
-  homeQueueTotal: (workspace: HubWorkspace, items: ReviewItemRow[]) => number;
+  homeQueueTotal: (workspace: BoardWorkspace, items: ReviewItemRow[]) => number;
   /** Everything `GET /home` answers, brief included. */
-  homePayload: (workspace: HubWorkspace, person: string, now: number) => HomePayload;
+  homePayload: (workspace: BoardWorkspace, person: string, now: number) => HomePayload;
 }
 
 export function createHomePane(ctx: HomePaneContext): HomePane {
-  const { dataDir, taskStore, rooms, summarizer } = ctx;
+  const { dataDir, taskStore, docStore, summarizer } = ctx;
 
   const homeBriefs = new HomeBriefStore(dataDir);
   /** One generation in flight per workspace+reader: the client polls while
@@ -104,7 +104,7 @@ export function createHomePane(ctx: HomePaneContext): HomePane {
   /** The review items exactly as GET /review-items ships them.
    *  ONE builder for that route and for the brief's queue count, so the
    *  number the brief prints cannot drift from the queue rendered under it. */
-  const reviewItemsFor = (workspace: HubWorkspace): ReviewItemRow[] =>
+  const reviewItemsFor = (workspace: BoardWorkspace): ReviewItemRow[] =>
     reviewItemRows({
       tasks: taskStore.listTasks(workspace.id).map((t) => ({
         id: t.id,
@@ -130,7 +130,7 @@ export function createHomePane(ctx: HomePaneContext): HomePane {
         done: g.status === 'done',
       })),
       docs: workspace.docIds.map((docId) => {
-        const meta = rooms.peekMeta(docId);
+        const meta = docStore.peekMeta(docId);
         // Title, else the file's BASENAME — never `relPath` whole and
         // never `sourceUrl`. Those describe the host machine, and a
         // share visitor reads this route (§3.3): a label is workspace
@@ -139,10 +139,10 @@ export function createHomePane(ctx: HomePaneContext): HomePane {
         return { docId, title: meta?.title || base || docId };
       }),
       source: {
-        threadsOf: (docId) => rooms.listThreads(docId, { status: 'open' }),
+        threadsOf: (docId) => docStore.listThreads(docId, { status: 'open' }),
         // Unfiltered, and only for the roster: who counts as a person
         // here must not depend on whether their thread is still open.
-        allThreadsOf: (docId) => rooms.listThreads(docId),
+        allThreadsOf: (docId) => docStore.listThreads(docId),
       },
     });
 
@@ -170,7 +170,7 @@ export function createHomePane(ctx: HomePaneContext): HomePane {
    * queue that renders nothing.
    *
    * TICKET-borne rows (`kind: 'task-review'`) count too — Home places them
-   * now (`reviewQueue` in hub-review-model.ts), which closed the measured gap where
+   * now (`reviewQueue` in board-review-model.ts), which closed the measured gap where
    * a review item filed with `create_tasks` / `add_review_item` was shipped
    * by the route and rendered by nothing. The one exception is the DERIVED
    * `r-legacy` row: its legacy decision is already counted from the tasks
@@ -184,7 +184,7 @@ export function createHomePane(ctx: HomePaneContext): HomePane {
    * derived rows instead would tie this number to a row Home does not read.
    * A decision is therefore counted once, never twice.
    */
-  const homeQueueTotal = (workspace: HubWorkspace, items: ReviewItemRow[]): number => {
+  const homeQueueTotal = (workspace: BoardWorkspace, items: ReviewItemRow[]): number => {
     const open = taskStore.listTasks(workspace.id).filter((t) => t.status !== 'done');
     // A decision the reader has asked on is the OWNER's turn and off the
     // browser's queue (`decisionRows` reads `decisionState`), so it is not
@@ -200,7 +200,7 @@ export function createHomePane(ctx: HomePaneContext): HomePane {
     return rendered.length + decisions.length;
   };
 
-  const homeBriefInput = (workspace: HubWorkspace, since: number): BriefInput => {
+  const homeBriefInput = (workspace: BoardWorkspace, since: number): BriefInput => {
     const events = briefEvents(readEventRows(dataDir, workspace.id), since);
     const items = reviewItemsFor(workspace);
     return {
@@ -213,7 +213,7 @@ export function createHomePane(ctx: HomePaneContext): HomePane {
 
   /** Fire-and-forget one generation; the client re-reads when it lands. */
   const generateHomeBriefFor = (
-    workspace: HubWorkspace,
+    workspace: BoardWorkspace,
     person: string,
     marker: number,
     input: BriefInput,
@@ -256,7 +256,7 @@ export function createHomePane(ctx: HomePaneContext): HomePane {
    * brief-relevant events — see BRIEF_EVENT_TYPES for why heartbeats are
    * excluded from that count.
    */
-  const homePayload = (workspace: HubWorkspace, person: string, now: number): HomePayload => {
+  const homePayload = (workspace: BoardWorkspace, person: string, now: number): HomePayload => {
     const marker = homeBriefs.lastReadAt(workspace.id, person);
     const since = effectiveSince(marker, now);
     const input = homeBriefInput(workspace, since);

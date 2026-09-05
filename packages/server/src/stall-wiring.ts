@@ -20,7 +20,7 @@
  * move code whose position is load-bearing (it needs `resolveWorkspaceForDoc`
  * and the projection, and says so where it is built).
  *
- * `hubBoardsForDoc` and `backTargetFor` were thunks for the same reason until
+ * `boardsForDoc` and `backTargetFor` were thunks for the same reason until
  * they moved into `board-membership.ts`, which `createServer` now composes
  * above this wiring. They arrive as plain values.
  *
@@ -33,13 +33,14 @@ import { join } from 'node:path';
 import {
   type WebhookPayload,
   agentIdCandidates,
+  attachmentIdOf,
   isReviewPayloadGated,
   isReviewPayloadHeld,
   pendingDeclaration,
-  reviewIdOf,
 } from '@feedback/core';
 import type { AgentWatches } from './agent-watches.ts';
 import type { DispatchRegistry } from './dispatch-registry.ts';
+import type { DocStore } from './doc-store.ts';
 import { createLeadPresenceMonitor } from './lead-presence.ts';
 import { NoteAskClassifier, type NoteAskJudge } from './note-ask.ts';
 import { evaluateReadyWork } from './ready-gate.ts';
@@ -51,8 +52,7 @@ import {
   isBoardActivity,
 } from './ready-nudge.ts';
 import type { ReviewGateAddress } from './review-gate.ts';
-import type { Rooms } from './rooms.ts';
-import type { SseHub } from './sse.ts';
+import type { SseBus } from './sse.ts';
 import { StallEscalations } from './stall-escalation.ts';
 import {
   HELD_ITEM_DEFAULT_MS,
@@ -65,8 +65,8 @@ import { STALL_NUDGE_STAMP_FILENAME, StallNudger, type StallSnapshot } from './s
 import { type TaskProjection, taskBodyDocId, taskIdOfBodyDoc } from './task-projection.ts';
 import { buildQueue } from './task-queue.ts';
 import {
+  type BoardWorkspace,
   DEFAULT_PARALLELISM_CAP,
-  type HubWorkspace,
   LEGACY_REVIEW_ITEM_ID,
   type ParallelismCapChange,
   type TaskStore,
@@ -95,15 +95,15 @@ export interface ParallelismCapRead {
 /** The long-lived collaborators this subsystem reads, plus the tuning knobs
  *  `ServerOptions` carries for it. Built once per server. */
 export interface StallWiringContext {
-  /** The hub task store — workspaces, rows, review state, the held items. */
+  /** The board task store — workspaces, rows, review state, the held items. */
   taskStore: TaskStore;
   /** The ydoc projection: the roster reader both snapshots ask who owns a
    *  row, and the refresh a task comment needs to move its count. */
   taskProjection: TaskProjection;
-  /** Doc rooms — read for a row's discussion and for the docs it links. */
-  rooms: Rooms;
-  /** The stream hub: who can be reached, and where a wake is sent. */
-  sse: SseHub;
+  /** Doc store — read for a row's discussion and for the docs it links. */
+  docStore: DocStore;
+  /** The stream board: who can be reached, and where a wake is sent. */
+  sse: SseBus;
   /** Open builder dispatches — the witness that keeps the loop from waking a
    *  lead over a row whose builder is busy in a checkout the board cannot
    *  see. */
@@ -126,12 +126,12 @@ export interface StallWiringContext {
     lastChange?: ParallelismCapChange;
   }) => CapSummary;
 
-  /** Every hub board a doc's discussion actually reaches —
+  /** Every board a doc's discussion actually reaches —
    *  `board-membership.ts`, composed above this wiring. */
-  hubBoardsForDoc: (docId: string) => Set<string>;
+  boardsForDoc: (docId: string) => Set<string>;
   /** The board a doc belongs back to, for the lead-presence monitor. Same
    *  module, same reason it can be a value. */
-  backTargetFor: (docId: string, reviewId?: string) => { id: string; name: string } | null;
+  backTargetFor: (docId: string, attachmentId?: string) => { id: string; name: string } | null;
   /** The paste-ready call that ends a hold, per surface — the review gate's
    *  own spelling, so the lead's report cannot name a different verb from
    *  the one the filer was told to call. Same reason it is a function: the
@@ -170,8 +170,8 @@ export interface StallWiring {
   readyNudger: ReadyWorkNudger;
   /** The stall wake. Started by `createServer`, not here. */
   stallNudger: StallNudger;
-  /** The comment-queue bridge, for the late-bound hook `Rooms` was built
-   *  with — `Rooms` is constructed before the stores this needs. */
+  /** The comment-queue bridge, for the late-bound hook `DocStore` was built
+   *  with — `DocStore` is constructed before the stores this needs. */
   onDocRoomEvent: (docId: string, payload: WebhookPayload) => void;
 }
 
@@ -179,14 +179,14 @@ export function createStallWiring(ctx: StallWiringContext): StallWiring {
   const {
     taskStore,
     taskProjection,
-    rooms,
+    docStore,
     sse,
     dispatches,
     agentWatches,
     dataDir,
     parallelismCapView,
     capSummary,
-    hubBoardsForDoc,
+    boardsForDoc,
     backTargetFor,
     reviseCallFor,
   } = ctx;
@@ -221,7 +221,7 @@ export function createStallWiring(ctx: StallWiringContext): StallWiring {
    * invisible to this wake by construction rather than by a second rule that
    * could drift from the one `next_tasks` follows.
    */
-  const readyWorkSnapshot = (workspace: HubWorkspace): ReadyWorkSnapshot => {
+  const readyWorkSnapshot = (workspace: BoardWorkspace): ReadyWorkSnapshot => {
     const tasks = taskStore.listTasks(workspace.id);
     const byId = new Map(tasks.map((t) => [t.id, t]));
     const ownerKindOf = taskProjection.ownerKindReader(workspace.id);
@@ -294,7 +294,7 @@ export function createStallWiring(ctx: StallWiringContext): StallWiring {
     hasListeners: (docId) => sse.count(docId) > 0,
   });
   // The lead's own stream opening is what makes it deliverable, and it
-  // emits no store event — so the hub says so directly.
+  // emits no store event — so the board says so directly.
   sse.onAgentStreams = (channel) => {
     if (channel.startsWith('ws~')) leadPresence.notify(channel.slice('ws~'.length));
   };
@@ -369,7 +369,7 @@ export function createStallWiring(ctx: StallWiringContext): StallWiring {
     ctx.noteAskJudge !== undefined ? { judge: ctx.noteAskJudge } : {},
   );
 
-  const stallVerdict = (workspace: HubWorkspace): StallVerdict => {
+  const stallVerdict = (workspace: BoardWorkspace): StallVerdict => {
     const tasks = taskStore.listTasks(workspace.id);
     const ownerKindOf = taskProjection.ownerKindReader(workspace.id);
     const goals = workspace.goals;
@@ -568,7 +568,7 @@ export function createStallWiring(ctx: StallWiringContext): StallWiring {
       askCounts?: (askedBy: string | undefined) => boolean,
     ): number => {
       let newest = 0;
-      for (const thread of rooms.listThreads(docId)) {
+      for (const thread of docStore.listThreads(docId)) {
         if (thread.lastActivity > newest) newest = thread.lastActivity;
         const declaring = pendingDeclaration(thread);
         // A HELD ask exonerates nothing. The whole point of a hold is that
@@ -627,7 +627,7 @@ export function createStallWiring(ctx: StallWiringContext): StallWiring {
       const ownerId = task === undefined ? undefined : taskStore.ownerIdOf(task);
       for (const ref of task?.links ?? []) {
         if (ref.kind !== 'doc' && ref.kind !== 'thread') continue;
-        const editedAt = rooms.lastContentChangeFor(ref.docId);
+        const editedAt = docStore.lastContentChangeFor(ref.docId);
         if (editedAt !== undefined && editedAt > newest) newest = editedAt;
         // …and that doc's DISCUSSION, on the same opt-in gesture and by the
         // same rules as the row's own room. The prose fold above could never
@@ -696,10 +696,10 @@ export function createStallWiring(ctx: StallWiringContext): StallWiring {
    * is the "held for hours, nobody told" shape the five-minute window exists
    * to prevent.
    */
-  function heldThreadReviewItems(workspace: HubWorkspace): HeldItemInput[] {
+  function heldThreadReviewItems(workspace: BoardWorkspace): HeldItemInput[] {
     const out: HeldItemInput[] = [];
     const scan = (docId: string, title: string, taskId?: string) => {
-      for (const thread of rooms.listThreads(docId, { status: 'open' })) {
+      for (const thread of docStore.listThreads(docId, { status: 'open' })) {
         for (const comment of thread.comments) {
           const review = comment.review;
           // `held`, not `gated`: a verdict still out is seconds old, and a
@@ -737,12 +737,12 @@ export function createStallWiring(ctx: StallWiringContext): StallWiring {
       scan(taskBodyDocId(goal.id), goal.title);
     }
     for (const docId of workspace.docIds) {
-      const meta = rooms.peekMeta(docId);
+      const meta = docStore.peekMeta(docId);
       scan(docId, meta?.title || meta?.relPath?.split('/').pop() || docId);
     }
     return out;
   }
-  const stallSnapshot = (workspace: HubWorkspace): StallSnapshot => {
+  const stallSnapshot = (workspace: BoardWorkspace): StallSnapshot => {
     const verdict = stallVerdict(workspace);
     const capRead = taskStore.parallelismCap(workspace.id);
     // Review items the quality gate is holding past the window — a fourth
@@ -870,9 +870,9 @@ export function createStallWiring(ctx: StallWiringContext): StallWiring {
   // refresh (the store never changes, so no task.* event fires).
   //
   // EVERY other doc room needs the same bridge, for the same reason and with
-  // one extra hop. `rooms.broadcastToRoom` fans out on `ws~<meta.workspaceId>`
+  // one extra hop. `docStore.broadcastToRoom` fans out on `ws~<meta.workspaceId>`
   // — the GROUPING tag a diff review or folder bind sets — and a board link is
-  // not that tag, so a plain review doc filed on a board reached that board's
+  // not that tag, so a plain attachment filed on a board reached that board's
   // agent never. Measured: a session with six docs under `watch_doc` and a
   // seat on the board heard nothing from any of them on the board channel, and
   // silence from a subscription you never made is indistinguishable from
@@ -881,7 +881,7 @@ export function createStallWiring(ctx: StallWiringContext): StallWiring {
   // Resolution happens HERE, at BROADCAST time, against `workspace.docIds` —
   // nothing is registered when a doc is created. That is what makes "and
   // anything created later" true with no new call, no new field and no
-  // migration: `fileUnderHubWorkspace` already files every doc onto some
+  // migration: `fileUnderBoardWorkspace` already files every doc onto some
   // board, defaulting to Unfiled, so a doc that exists is a doc some board
   // holds.
   /** Does this comment author name this agent? Candidate-matched both ways,
@@ -926,7 +926,7 @@ export function createStallWiring(ctx: StallWiringContext): StallWiring {
     if (payload.event !== 'thread.created' && payload.event !== 'thread.replied') return rows;
     // thread.replied carries the comment on the payload; thread.created fires
     // with `comment: undefined` and the opening comment inside the thread
-    // (rooms.ts fireEvent call sites), so fall back to the newest one there.
+    // (doc-store.ts fireEvent call sites), so fall back to the newest one there.
     const comment =
       payload.comment ??
       (payload.event === 'thread.created'
@@ -988,14 +988,14 @@ export function createStallWiring(ctx: StallWiringContext): StallWiring {
     // Exactly one hop from review to board — the same non-transitive rule
     // `shareWorkspacesOf` spells out, so what an agent HEARS about a review
     // and what a share visitor may OPEN in it cannot drift apart.
-    const reviewId = reviewIdOf(rooms.peekMeta(docId) ?? {});
-    for (const board of hubBoardsForDoc(docId)) {
+    const attachmentId = attachmentIdOf(docStore.peekMeta(docId) ?? {});
+    for (const board of boardsForDoc(docId)) {
       const rows = queueCommentRows(board, docId, payload);
-      // rooms.ts already broadcast on the review's own channel; a second
+      // doc-store.ts already broadcast on the review's own channel; a second
       // send here would deliver the same comment twice to one listener. The
       // review frames carried no row id, so those rows are acked off the
       // grace-window redelivery instead — late receipt beats double frame.
-      if (board !== reviewId) {
+      if (board !== attachmentId) {
         sse.broadcast(`ws~${board}`, payload, (who) => {
           const rowId = who.agentId ? rows.get(who.agentId) : undefined;
           return rowId ? { ...payload, workspaceId: board, commentQueueId: rowId } : undefined;

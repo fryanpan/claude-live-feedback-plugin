@@ -1,7 +1,7 @@
 /**
  * What the landing page is FOR: a list of active workspaces to open up.
  *
- * That sentence is Bryan's, verbatim (task `t-UZMXu32nt4wN`, 2026-08-18):
+ * That sentence is Bryan's, verbatim (from the task that asked for it, 2026-08-18):
  * "please don't build the overengineered version. Let's just have a simple
  * workspace list and not overlap with the purpose of each workspace home
  * page which is also being built." The previous `/` — a cross-workspace
@@ -14,7 +14,7 @@
  * hard way (see the git history of this file and docs/process/learnings.md):
  *
  *  1. **Recency is real events, never `meta.lastActivityAt`.** That field is
- *     derived from the `.ydoc` file's mtime (`rooms.ts` `withActivity`), so a
+ *     derived from the `.ydoc` file's mtime (`doc-store.ts` `withActivity`), so a
  *     server-side snapshot rewrite refreshes it: on the live server all 3,741
  *     docs reported activity inside 7 days, in identical-millisecond
  *     clusters. `lastActivity` here is computed by the collector from task
@@ -37,7 +37,7 @@
  *  sprint stays on the page, short enough that the graveyard folds away. */
 export const ACTIVE_WINDOW_MS = 14 * 86_400_000;
 
-/** One hub workspace, as the collector hands it over. */
+/** One board workspace, as the collector hands it over. */
 export interface LandingWorkspaceInput {
   id: string;
   name: string;
@@ -105,7 +105,7 @@ export interface LandingModel {
  * a nav link back to it, so nothing is further away than one tap.
  *
  * `/workspaces/<id>` is deliberately left alone as the board (see
- * `paneFromPath` in the hub client): every link already in the field points
+ * `paneFromPath` in the board client): every link already in the field points
  * there, so this changes where the LIST sends you, not what any existing URL
  * means.
  */

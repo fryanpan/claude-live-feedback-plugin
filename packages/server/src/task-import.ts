@@ -30,7 +30,7 @@ import {
 
 // ── Banner + marker ────────────────────────────────────────────────────────
 
-const MARKER_RE = /<!--\s*imported-to-workspace-hub:\s*([^\s>]+)/;
+const MARKER_RE = /<!--\s*imported-to-workspace-board:\s*([^\s>]+)/;
 
 /** The workspaceId a previous import stamped into this file, or null.
  *  A stamped file refuses re-import — the banner is both the human notice
@@ -41,21 +41,21 @@ export function importMarkerFor(markdown: string): string | null {
 
 /**
  * The banner a successful import prepends to the source file (§3.10: "a
- * successful import stamps the source file with a banner + hub link, so the
+ * successful import stamps the source file with a banner + board link, so the
  * old tracker can't quietly stay a second source of truth").
  */
 export function importBanner(opts: {
   workspaceId: string;
-  hubUrl: string;
+  boardUrl: string;
   taskCount: number;
   ts: number;
 }): string {
   const date = new Date(opts.ts).toISOString().slice(0, 10);
   return (
-    `> **Imported into the Workspace Hub** on ${date} — ` +
+    `> **Imported into the Workspace Board** on ${date} — ` +
     `${opts.taskCount} task${opts.taskCount === 1 ? '' : 's'} now live at ` +
-    `${opts.hubUrl} — this file is no longer the source of truth; edits here are not tracked.\n` +
-    `<!-- imported-to-workspace-hub: ${opts.workspaceId} ts=${opts.ts} -->\n\n`
+    `${opts.boardUrl} — this file is no longer the source of truth; edits here are not tracked.\n` +
+    `<!-- imported-to-workspace-board: ${opts.workspaceId} ts=${opts.ts} -->\n\n`
   );
 }
 

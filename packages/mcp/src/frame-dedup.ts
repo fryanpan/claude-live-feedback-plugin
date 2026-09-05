@@ -26,7 +26,7 @@
  *     that is correct by construction, and it is what a current server sends.
  *  2. `${event}#${docId}#${seq}` — the fallback for a server older than that
  *     stamp (a new bundle against an un-restarted box is normal here).
- *     `rooms.ts` bumps a PER-ROOM monotonic `seq` on every thread and
+ *     `doc-store.ts` bumps a PER-ROOM monotonic `seq` on every thread and
  *     suggestion event, so within one room `seq` separates two real events
  *     and across rooms it collides freely — hence `docId`, and hence `seq`
  *     alone is not a key at all.
@@ -45,7 +45,7 @@
  * window of seconds is already enormous for the job it has to do.
  *
  * Anything the key cannot positively identify is forwarded: no `eid`, no
- * numeric `seq`, no docId, not an object. Every hub `task.*` / `decision.*` /
+ * numeric `seq`, no docId, not an object. Every board `task.*` / `decision.*` /
  * `voice.*` event is in that category — none carry a `seq`, each
  * rides exactly one channel, and two can be byte-identical and both real (two
  * voice notes with the same text). For those there is no duplicate to

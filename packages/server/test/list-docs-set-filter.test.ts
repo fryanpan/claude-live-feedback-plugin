@@ -1,12 +1,12 @@
 /**
- * GET /api/docs?setId=<id> scopes the listing to one review set.
+ * GET /api/docs?setId=<id> scopes the listing to one attachment set.
  *
  * The review sidebar's legacy flat-set path asks this route for EVERY doc on
  * the server and keeps the handful that share its `setId` — measured
  * 2026-08-21 as 4,205,683 bytes downloaded to select 6 rows out of 4,062. The
  * client already knew the answer it wanted; only the server could narrow it.
  *
- * Matching goes through `reviewIdOf`, the same predicate every other set query
+ * Matching goes through `attachmentIdOf`, the same predicate every other set query
  * on this server uses (`listGroupedDiff`, `listRepoFiles`, the tree builder),
  * so `?setId=` cannot answer a different question from the routes beside it.
  *
@@ -117,7 +117,7 @@ describe('GET /api/docs honours its setId filter', () => {
   });
 
   it('matches a doc carrying only the deprecated workspaceId spelling', async () => {
-    // `reviewIdOf` reads setId first and falls back to workspaceId, for a doc
+    // `attachmentIdOf` reads setId first and falls back to workspaceId, for a doc
     // restored from an archive written before the rename. The filter must not
     // be the one place that forgets the fallback.
     const r = await post('/api/docs', {

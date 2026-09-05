@@ -2,9 +2,9 @@
  * A doc's discussion reaches every BOARD holding it, not just its grouping.
  *
  * The measured gap: an agent that attached to a board and watches
- * `/events/workspace/<boardId>` hears task events and task-body comments, and
- * hears NOTHING from a plain review doc filed on that same board. The fan-out
- * in `rooms.ts` is keyed on `meta.workspaceId` — the GROUPING tag a diff
+ * `/workspaces/<boardId>/events:stream` hears task events and task-body comments, and
+ * hears NOTHING from a plain attachment filed on that same board. The fan-out
+ * in `doc-store.ts` is keyed on `meta.workspaceId` — the GROUPING tag a diff
  * review or folder bind sets — and a board link is not that tag. So a doc
  * created after the agent took its seat is silent, and silence from a
  * subscription you never made is indistinguishable from nobody commenting.
@@ -23,7 +23,7 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { type ServerHandle, createServer } from '../src/server.ts';
-import { taskBodyDocId, workspaceRoomId } from '../src/task-projection.ts';
+import { taskBodyDocId, workspaceDocId } from '../src/task-projection.ts';
 
 const PERSON = { id: 'known-reviewer', name: 'Reviewer', kind: 'known', color: '#2e7dd7' };
 
@@ -85,7 +85,7 @@ describe('a doc thread reaches the boards holding the doc', () => {
     rmSync(srcDir, { recursive: true, force: true });
   });
 
-  /** A hub board with `agentId` seated as its lead, then a live SSE listener
+  /** A board with `agentId` seated as its lead, then a live SSE listener
    *  on the board channel — exactly what `attach_agent` + the MCP watch do. */
   async function seatLead(
     name: string,
@@ -94,14 +94,14 @@ describe('a doc thread reaches the boards holding the doc', () => {
     const w = await post('/api/workspaces', { name, goal: 'Ship the index.' });
     const { workspace } = (await w.json()) as { workspace: { id: string } };
 
-    const att = await post(`/api/workspaces/${workspace.id}/attachments`, {
+    const att = await post(`/workspaces/${workspace.id}/agents`, {
       agentId,
       runtime: 'claude-code-local',
     });
     expect(att.status).toBe(200);
     expect(((await att.json()) as { lead?: boolean }).lead).toBe(true);
 
-    const stream = await get(`/events/workspace/${encodeURIComponent(workspace.id)}`);
+    const stream = await get(`/workspaces/${encodeURIComponent(workspace.id)}/events:stream`);
     expect(stream.status).toBe(200);
     await settle(150);
     return { workspaceId: workspace.id, heard: listen(stream) };
@@ -178,7 +178,7 @@ describe('a doc thread reaches the boards holding the doc', () => {
     expect(boundJson.hubWorkspaceId).toBe(workspaceId);
     const memberDocId = boundJson.files[0]?.docId;
     if (!memberDocId) throw new Error('folder bind produced no entry doc');
-    expect(handle.rooms.get(memberDocId)?.meta.workspaceId).toBe(boundJson.workspaceId);
+    expect(handle.docStore.get(memberDocId)?.meta.workspaceId).toBe(boundJson.workspaceId);
 
     const before = heard.events.length;
     await settle(150);
@@ -204,7 +204,7 @@ describe('a doc thread reaches the boards holding the doc', () => {
     const { task } = (await t.json()) as { task: { id: string } };
     await settle();
 
-    const boardRoom = handle.rooms.get(workspaceRoomId(workspaceId));
+    const boardRoom = handle.docStore.get(workspaceDocId(workspaceId));
     if (!boardRoom) throw new Error('board room missing');
     const projected = () =>
       boardRoom.ydoc.getMap('tasks').get(task.id) as { commentCount?: number };
@@ -242,7 +242,7 @@ describe('a doc thread reaches the boards holding the doc', () => {
   });
 
   /**
-   * (e) POSITIVE CONTROL C — the grouping channel `rooms.ts` already serves
+   * (e) POSITIVE CONTROL C — the grouping channel `doc-store.ts` already serves
    * must not double up now that a second resolver runs over the same event.
    */
   it('POSITIVE CONTROL: a grouping channel still gets the event exactly once', async () => {
@@ -257,7 +257,7 @@ describe('a doc thread reaches the boards holding the doc', () => {
     const memberDocId = boundJson.files[0]?.docId;
     if (!memberDocId) throw new Error('folder bind produced no entry doc');
 
-    const stream = await get(`/events/workspace/${encodeURIComponent(groupingId)}`);
+    const stream = await get(`/workspaces/${encodeURIComponent(groupingId)}/events:stream`);
     expect(stream.status).toBe(200);
     const heard = listen(stream);
     await settle(150);

@@ -48,7 +48,7 @@ import type { WorkspaceRouteRequest, WorkspaceRoutesContext } from './workspace-
  * How much of a doc's markdown is scored.
  *
  * A body read is a hydrate-and-evict for every non-resident doc (see
- * `Rooms.readMarkdownBody`), and a plan doc runs to pages. The opening of a
+ * `DocStore.readMarkdownBody`), and a plan doc runs to pages. The opening of a
  * plan is where its subject is stated — title, problem statement, the goal it
  * serves — so the first few thousand characters carry nearly all of the
  * signal at a fraction of the tokenizing. A longer read would change the
@@ -74,7 +74,7 @@ export async function handleWorkspaceRelated(
   ctx: WorkspaceRoutesContext,
   rq: WorkspaceRouteRequest,
 ): Promise<Response | undefined> {
-  const { taskStore, rooms, j } = ctx;
+  const { taskStore, docStore, j } = ctx;
   const { req, pathname, url } = rq;
   const match = pathname.match(/^\/api\/workspaces\/([^/]+)\/related-work$/);
   if (!match || req.method !== 'GET') return undefined;
@@ -149,7 +149,7 @@ export async function handleWorkspaceRelated(
   let bodiesRead = 0;
   for (const docId of workspace.docIds) {
     if (docId === fromDocId) continue; // The request's own doc is not a match for itself.
-    const meta = rooms.peekMeta(docId);
+    const meta = docStore.peekMeta(docId);
     if (!meta || meta.type !== 'markdown') continue;
     const path = meta.relPath ?? meta.sourceUrl;
     const title = meta.title ?? meta.alias ?? docId;
@@ -164,7 +164,7 @@ export async function handleWorkspaceRelated(
     let body: string | undefined;
     if (bodiesRead < MAX_DOC_BODIES) {
       bodiesRead++;
-      body = rooms.readMarkdownBody(docId)?.slice(0, BODY_SCAN_CHARS) ?? undefined;
+      body = docStore.readMarkdownBody(docId)?.slice(0, BODY_SCAN_CHARS) ?? undefined;
     }
     candidates.push({
       kind: 'doc',

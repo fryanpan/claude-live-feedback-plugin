@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { CHORES_ID, type HubTask } from '../src/hub/hub-board-model';
+import { type BoardTask, CHORES_ID } from '../src/board/board-model';
 import {
   type ReviewQueue,
   type ReviewThreadItem,
@@ -10,14 +10,14 @@ import {
   walkHandoffReady,
   walkNextUrl,
   walkPosition,
-} from '../src/hub/hub-review-model';
-import { HUB_BOOT_SOURCES } from './support/hub-boot-sources.ts';
+} from '../src/board/board-review-model';
+import { BOARD_BOOT_SOURCES } from './support/board-boot-sources.ts';
 
 // The landing page's review chip and "Review all" bar (the walkthrough
 // handoff ticket) hand
 // the client `?walk=1` (open the walkthrough on arrival) and `&then=<ids>`
 // (workspaces still holding items, to visit after this queue drains). These
-// two pure helpers are the whole contract; hub-app just wires them.
+// two pure helpers are the whole contract; board-app just wires them.
 
 describe('walkHandoff', () => {
   it('reads walk + the handoff chain from a query string', () => {
@@ -53,16 +53,19 @@ describe('walkNextUrl', () => {
 
 // Pinned on the source: these three sit behind a four-second deadline and a
 // cross-workspace hop, so the wiring is read rather than driven — the boot
-// itself is driveable (hub-boot.test.ts). The boot reads the handoff, an armed
+// itself is driveable (board-boot.test.ts). The boot reads the handoff, an armed
 // walk auto-opens after the first review-items load, and a drained queue
 // chains to the next workspace instead of dead-ending on a cleared card.
-describe('hub-app wires the handoff', () => {
-  const src = HUB_BOOT_SOURCES.map((m) =>
-    readFileSync(join(__dirname, '..', 'src', 'hub', `${m}.ts`), 'utf8'),
+describe('board-app wires the handoff', () => {
+  const src = BOARD_BOOT_SOURCES.map((m) =>
+    readFileSync(join(__dirname, '..', 'src', 'board', `${m}.ts`), 'utf8'),
   ).join('\n');
-  // The ydoc observers moved to `hub-live-wiring.ts`; the entry is what hands
+  // The ydoc observers moved to `board-live-wiring.ts`; the entry is what hands
   // them the tick, so the retry contract is asserted across both halves.
-  const wiring = readFileSync(join(__dirname, '..', 'src', 'hub', 'hub-live-wiring.ts'), 'utf8');
+  const wiring = readFileSync(
+    join(__dirname, '..', 'src', 'board', 'board-live-wiring.ts'),
+    'utf8',
+  );
 
   it('reads walkHandoff from the boot URL', () => {
     expect(src).toContain('walkHandoff(location.search)');
@@ -109,7 +112,7 @@ describe('hub-app wires the handoff', () => {
 
 const NOW = 1_700_000_000_000;
 
-function task(id: string, order: number): HubTask {
+function task(id: string, order: number): BoardTask {
   return {
     id,
     title: `Task ${id}`,
@@ -198,9 +201,9 @@ describe('the handoff walk starts at item 1', () => {
   });
 });
 
-describe('hub-app gates the auto-walk on both sources', () => {
-  const src = HUB_BOOT_SOURCES.map((m) =>
-    readFileSync(join(__dirname, '..', 'src', 'hub', `${m}.ts`), 'utf8'),
+describe('board-app gates the auto-walk on both sources', () => {
+  const src = BOARD_BOOT_SOURCES.map((m) =>
+    readFileSync(join(__dirname, '..', 'src', 'board', `${m}.ts`), 'utf8'),
   ).join('\n');
 
   it('maybeAutoWalk asks walkHandoffReady, not queue length', () => {

@@ -10,7 +10,7 @@
  */
 import { existsSync } from 'node:fs';
 import { join, relative, sep } from 'node:path';
-import { reviewIdOf } from '@feedback/core';
+import { attachmentIdOf } from '@feedback/core';
 import { bindDiff } from './bind-diff.ts';
 import {
   type BindHost,
@@ -88,7 +88,7 @@ export async function refreshWorkspace(
   host: BindHost,
   setId: string,
 ): Promise<RefreshWorkspaceResult> {
-  const members = host.list().filter((m) => reviewIdOf(m) === setId);
+  const members = host.list().filter((m) => attachmentIdOf(m) === setId);
   // No members means nothing is bound — which is also the state a folder
   // bound while EMPTY is left in (a documented degenerate success that
   // creates no docs). The root can't be recovered from the hashed
@@ -183,7 +183,7 @@ export async function refreshWorkspace(
   const stale: Array<WorkspaceMemberRef & { openThreads: number }> = [];
   const restored: WorkspaceMemberRef[] = [];
   for (const meta of host.list()) {
-    if (reviewIdOf(meta) !== setId) continue;
+    if (attachmentIdOf(meta) !== setId) continue;
     const ref: WorkspaceMemberRef = {
       docId: meta.docId,
       ...(meta.relPath ? { relPath: meta.relPath } : {}),
@@ -259,7 +259,7 @@ export function setWorkspaceGroups(
   setId: string,
   groups: Array<{ title: string; paths: string[]; details?: string }>,
 ): SetWorkspaceGroupsResult {
-  const members = host.list().filter((m) => reviewIdOf(m) === setId);
+  const members = host.list().filter((m) => attachmentIdOf(m) === setId);
   if (members.length === 0) return { ok: false, error: 'not-found' };
   const diffMembers = members.filter(
     (m): m is typeof m & { relPath: string } => m.type === 'diff' && !!m.relPath,

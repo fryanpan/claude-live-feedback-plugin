@@ -24,7 +24,7 @@ import {
   TASK_NOTES_STORE_CAP,
 } from '../src/agent-notes.ts';
 import { type ServerHandle, createServer } from '../src/server.ts';
-import { workspaceRoomId } from '../src/task-projection.ts';
+import { workspaceDocId } from '../src/task-projection.ts';
 
 const PERSON = { id: 'known-jordan', name: 'Jordan', kind: 'person' };
 const LEAD = { id: 'agent-cartographer', name: 'Cartographer', kind: 'agent' };
@@ -69,7 +69,7 @@ describe('agent notes routes', () => {
       await post('/api/workspaces', { name, leadAgentId: LEAD.id }),
     );
     await jj(
-      await post(`/api/workspaces/${workspace.id}/attachments`, {
+      await post(`/workspaces/${workspace.id}/agents`, {
         agentId: LEAD.id,
         runtime: 'claude-code-local',
       }),
@@ -101,7 +101,7 @@ describe('agent notes routes', () => {
   }
 
   function projected(workspaceId: string, taskId: string): ProjectedTask {
-    const room = handle.rooms.get(workspaceRoomId(workspaceId));
+    const room = handle.docStore.get(workspaceDocId(workspaceId));
     if (!room) throw new Error('ws room was not created');
     const row = room.ydoc.getMap('tasks').get(taskId) as ProjectedTask | undefined;
     if (!row) throw new Error('task was not projected');
@@ -246,7 +246,7 @@ describe('agent notes routes', () => {
   it('the latest claimant wins over the stored assignee on a handed-over row', async () => {
     const OTHER = { id: 'agent-nomad', name: 'Nomad', kind: 'agent' };
     const wsId = await boardWithLead();
-    await post(`/api/workspaces/${wsId}/attachments`, {
+    await post(`/workspaces/${wsId}/agents`, {
       agentId: OTHER.id,
       runtime: 'claude-code-local',
     });
@@ -381,7 +381,7 @@ describe('agent notes routes', () => {
     // the audit log are the readers.
     const wsId = await boardWithLead();
     const taskId = await inProgressRow(wsId, 'Wire the index');
-    const stream = await fetch(`${base}/events/workspace/${wsId}?agentId=agent-other`, {
+    const stream = await fetch(`${base}/workspaces/${wsId}/events:stream?agentId=agent-other`, {
       headers: { host: `localhost:${handle.port}` },
     });
     expect(stream.status).toBe(200);
