@@ -44,14 +44,16 @@ describe('moduleOf', () => {
 
 describe('topLevelModules', () => {
   it('deduplicates a directory named by many files', () => {
-    expect([
-      ...topLevelModules([
-        'packages/server/src/routes/a.ts',
-        'packages/server/src/routes/b.ts',
-        'packages/server/src/routes/c/d.ts',
-        'packages/server/src/tasks.ts',
-      ]),
-    ].sort()).toEqual(['packages/server/src/routes/', 'packages/server/src/tasks.ts']);
+    expect(
+      [
+        ...topLevelModules([
+          'packages/server/src/routes/a.ts',
+          'packages/server/src/routes/b.ts',
+          'packages/server/src/routes/c/d.ts',
+          'packages/server/src/tasks.ts',
+        ]),
+      ].sort(),
+    ).toEqual(['packages/server/src/routes/', 'packages/server/src/tasks.ts']);
   });
 });
 
@@ -65,34 +67,43 @@ describe('judge', () => {
   });
 
   it('passes when a file is added inside a directory that already existed', () => {
-    const v = judge(base, [...base, 'packages/server/src/routes/goals.ts'], [
-      'packages/server/src/routes/goals.ts',
-    ]);
+    const v = judge(
+      base,
+      [...base, 'packages/server/src/routes/goals.ts'],
+      ['packages/server/src/routes/goals.ts'],
+    );
     expect(v.ok).toBe(true);
     expect(v.ok && v.reason).toBe('unchanged');
   });
 
   it('fails when a top-level file appears and the overview does not move', () => {
-    const v = judge(base, [...base, 'packages/server/src/zz-probe.ts'], [
-      'packages/server/src/zz-probe.ts',
-    ]);
+    const v = judge(
+      base,
+      [...base, 'packages/server/src/zz-probe.ts'],
+      ['packages/server/src/zz-probe.ts'],
+    );
     expect(v.ok).toBe(false);
     expect(v.added).toEqual(['packages/server/src/zz-probe.ts']);
     expect(v.removed).toEqual([]);
   });
 
   it('passes the same change once the overview moves with it', () => {
-    const v = judge(base, [...base, 'packages/server/src/zz-probe.ts'], [
-      'packages/server/src/zz-probe.ts',
-      OVERVIEW_DOC,
-    ]);
+    const v = judge(
+      base,
+      [...base, 'packages/server/src/zz-probe.ts'],
+      ['packages/server/src/zz-probe.ts', OVERVIEW_DOC],
+    );
     expect(v.ok).toBe(true);
     expect(v.ok && v.reason).toBe('documented');
     expect(v.added).toEqual(['packages/server/src/zz-probe.ts']);
   });
 
   it('fails on a removal, not only an addition', () => {
-    const v = judge(base, ['packages/server/src/routes/tasks.ts'], ['packages/server/src/tasks.ts']);
+    const v = judge(
+      base,
+      ['packages/server/src/routes/tasks.ts'],
+      ['packages/server/src/tasks.ts'],
+    );
     expect(v.ok).toBe(false);
     expect(v.removed).toEqual(['packages/server/src/tasks.ts']);
   });
@@ -109,9 +120,11 @@ describe('judge', () => {
   });
 
   it('does not accept an unrelated doc edit as the update', () => {
-    const v = judge(base, [...base, 'packages/server/src/zz-probe.ts'], [
-      'docs/architecture/stall-detection.md',
-    ]);
+    const v = judge(
+      base,
+      [...base, 'packages/server/src/zz-probe.ts'],
+      ['docs/architecture/stall-detection.md'],
+    );
     expect(v.ok).toBe(false);
   });
 });

@@ -177,7 +177,9 @@ function main(): void {
 
   if (verdict.ok) {
     if (verdict.reason === 'unchanged') {
-      console.log('✓ architecture freshness gate — no top-level module was added, removed or moved.');
+      console.log(
+        '✓ architecture freshness gate — no top-level module was added, removed or moved.',
+      );
     } else {
       console.log(
         `✓ architecture freshness gate — ${verdict.added.length} added, ` +
@@ -191,7 +193,7 @@ function main(): void {
     list.length === 0 ? '' : `${label}\n${list.map((m) => `    ${m}`).join('\n')}\n\n`;
 
   console.error(
-    `\n✗ architecture freshness gate\n\n` +
+    '\n✗ architecture freshness gate\n\n' +
       `This branch moves the top-level module map, and ${OVERVIEW_DOC} does not\n` +
       'change with it.\n\n' +
       show('  Added:', verdict.added) +
