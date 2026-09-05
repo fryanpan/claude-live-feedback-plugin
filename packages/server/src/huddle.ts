@@ -101,6 +101,38 @@ export const REVIEW_REQUEST_COMMENT =
   'Please review these notes against the transcript so far. Where a point is thin, ambiguous, or missing a decision, ask a clarifying question as a comment on that line — as a review or decision item where one would help.';
 
 /**
+ * The same two asks, pressed on a TICKET rather than on a huddle doc.
+ *
+ * A task's comments live in its body doc (`task:<id>`), so the board's
+ * controls file through the very routes the floats use and the seated lead
+ * hears them on the subscription it already holds. What cannot travel from
+ * the doc is the WORDS: `PLAN_REQUEST_COMMENT` tells the agent to append a
+ * Plan section to "this doc" and file the first tickets from it, which on a
+ * ticket names the ticket's own description and asks for tickets from a
+ * ticket. So the text is the ticket's, and only the text — the shape, the
+ * channel and the stamp are shared.
+ */
+export const TASK_PLAN_REQUEST_COMMENT =
+  'Please make a plan for this ticket. Write it into the ticket description as a "Plan" section, covering the approach and the steps, and file any follow-up tickets it needs. ' +
+  'Ask each question you have as its own thread on this ticket (create_thread with a `review` payload) — never a list of questions in one comment.';
+
+export const TASK_REVIEW_REQUEST_COMMENT =
+  'Please review this ticket before it is worked. Where the goal, the acceptance criteria or the approach is thin, ambiguous, or missing a decision, ask a clarifying question as a comment on this ticket — as a review or decision item where an answer is a choice rather than prose.';
+
+/**
+ * Which words an ask carries: a ticket's, or a huddle doc's.
+ *
+ * `onTask` rather than a doc id, because whether a doc id names a ticket's
+ * body is `taskIdOfBodyDoc`'s question (`task-row.ts`) and there must not be
+ * a second answer to it — spelling the `task:` prefix here would be exactly
+ * that, one rename away from silently sending huddle words to a ticket.
+ */
+export function askCommentFor(onTask: boolean, kind: 'plan' | 'review'): string {
+  if (kind === 'plan') return onTask ? TASK_PLAN_REQUEST_COMMENT : PLAN_REQUEST_COMMENT;
+  return onTask ? TASK_REVIEW_REQUEST_COMMENT : REVIEW_REQUEST_COMMENT;
+}
+
+/**
  * What a review ask heard in the transcript says — the Review float's press
  * with the person's own question attached, so the agent answers what was
  * asked rather than reviewing everything. Same channel, same shape: a
