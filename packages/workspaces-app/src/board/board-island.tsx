@@ -42,6 +42,8 @@ import {
   ownerInitials,
   ownerKindSuffix,
   ownerMarkKind,
+  scheduleChips,
+  scheduleCursorFor,
   statusLabel,
   statusOptions,
   stepTarget,
@@ -114,6 +116,17 @@ export interface BoardData {
    *  board is open, and a picker built from a stale list offers agents who
    *  have left. */
   knownAgentIds: string[];
+  /**
+   * Every projected task on this board, by id — the UNFILTERED list.
+   *
+   * Two rows need to reach a row the sections may not be showing: a live
+   * instance's recurrence mark resolves the rule it came from, and an
+   * after-completion rule asks its last instance whether it has finished.
+   * Both answers have to survive the reader switching to the "Mine" tab or
+   * narrowing the done window, so this is deliberately not derived from
+   * `sections`.
+   */
+  tasksById: ReadonlyMap<string, BoardTask>;
   /** How many rows this board has archived. A single line above the first
    *  goal, and deliberately NOT a fifth nav item: the phone rail has exactly
    *  four seats, and "what did I put down" is not a place people go, it is a
@@ -127,6 +140,7 @@ export const boardData = signal<BoardData>({
   pane: 'board',
   showArchived: false,
   knownAgentIds: [],
+  tasksById: new Map(),
   archivedCount: 0,
 });
 
@@ -401,9 +415,59 @@ function OwnerControl(props: {
  * no rows, which is the test a badge has to pass on a list whose job is
  * answering what to work on next.
  */
-function TaskBadges(props: { task: BoardTask; blocked: boolean }) {
+function TaskBadges(props: {
+  task: BoardTask;
+  blocked: boolean;
+  /** Every projected row, for the two lookups a scheduled row needs. */
+  tasksById: ReadonlyMap<string, BoardTask>;
+  /** Open the rule a live instance came from. */
+  onOpenTask: (task: BoardTask) => void;
+}) {
   const { task } = props;
   const badges: ComponentChildren[] = [];
+  // The recurrence mark: this row is one RUN of a rule, and the mark is the
+  // way back to it. First in the strip, before anything about this row's own
+  // state, because it says what KIND of row this is. Icon only — the mock
+  // carries no word here and none is invented: the strip's whole discipline
+  // is that a mark on almost no rows earns its place and a caption never
+  // does.
+  //
+  // A rule this board cannot see (filtered out, aged out, archived) leaves
+  // the mark drawn and UNLINKED rather than dropping it: the row is still a
+  // recurrence, and silently hiding that because the rule is off-screen would
+  // make the mark mean "recurring AND visible".
+  const ruleId = task.recurrenceOf?.taskId;
+  if (ruleId !== undefined) {
+    const rule = props.tasksById.get(ruleId);
+    badges.push(
+      rule ? (
+        <button
+          key="recur"
+          type="button"
+          class="board-recur board-recur-link"
+          title={`One run of “${rule.title}” — open the schedule`}
+          aria-label={`One run of ${rule.title} — open the schedule`}
+          onClick={(ev) => {
+            ev.stopPropagation();
+            props.onOpenTask(rule);
+          }}
+        >
+          <RepeatMark />
+          {/* The tap target, sized past the 36px floor in
+              docs/product/design-mobile.md and laid out over the glyph rather
+              than around it, so the row's grid never widens by a pixel. A real
+              span rather than a `::after` because a pseudo-element is
+              unmeasurable in the test environment, and an unmeasurable target
+              is one that quietly shrinks back to the size of its icon. */}
+          <span class="board-recur-target" aria-hidden="true" />
+        </button>
+      ) : (
+        <span key="recur" class="board-recur" title="One run of a scheduled task">
+          <RepeatMark />
+        </span>
+      ),
+    );
+  }
   // The state word, in the slot the due date already had. Triage and blocked
   // share it because they never co-occur — blocked is a `todo` row — and
   // because a second slot would be a second thing to scan on every row for
@@ -420,6 +484,37 @@ function TaskBadges(props: { task: BoardTask; blocked: boolean }) {
         {state}
       </span>,
     );
+  }
+  // A scheduled row's two chips: the rule, then when it next runs. The row IS
+  // the rule, so this is not decoration — strip them and the section is a
+  // list of titles that never says when anything happens.
+  //
+  // AFTER the state word, not before it. Blocked and triage are the two
+  // things on any row that change what the reader does next, and a rule row
+  // can be either; putting a cadence in front of them would bury the one
+  // mark the strip exists for behind the one it was extended for.
+  const chips = scheduleChips(task, Date.now(), scheduleCursorFor(task, props.tasksById));
+  if (chips) {
+    if (chips.rule.length > 0) {
+      badges.push(
+        <span key="rule" class="board-badge board-badge-rule">
+          {chips.rule.map((part, i) => (
+            // biome-ignore lint/suspicious/noArrayIndexKey: the parts of one rule are positional and have no id.
+            <Fragment key={i}>
+              {i > 0 ? <span class="board-badge-sep">·</span> : null}
+              {part}
+            </Fragment>
+          ))}
+        </span>,
+      );
+    }
+    if (chips.next !== undefined) {
+      badges.push(
+        <span key="next" class={chips.soon ? 'board-next board-next-soon' : 'board-next'}>
+          {chips.next}
+        </span>,
+      );
+    }
   }
   if (task.dueAt !== undefined) {
     const due = new Date(task.dueAt);
@@ -438,6 +533,31 @@ function TaskBadges(props: { task: BoardTask; blocked: boolean }) {
     );
   }
   return <span class="board-task-badges">{badges}</span>;
+}
+
+/** The recurrence glyph — two arrows chasing each other. Inline rather than a
+ *  sprite reference: the board island has no sprite, and one 13px mark does
+ *  not earn one. */
+function RepeatMark() {
+  return (
+    <svg viewBox="0 0 16 16" aria-hidden="true" focusable="false">
+      <path
+        d="M3 7a5 5 0 0 1 8.6-3.4M13 9a5 5 0 0 1-8.6 3.4"
+        fill="none"
+        stroke="currentColor"
+        stroke-width="1.6"
+        stroke-linecap="round"
+      />
+      <path
+        d="M11.6 1.1v2.6H9M4.4 14.9v-2.6H7"
+        fill="none"
+        stroke="currentColor"
+        stroke-width="1.6"
+        stroke-linecap="round"
+        stroke-linejoin="round"
+      />
+    </svg>
+  );
 }
 
 /** A box whose contents are rewritten on every render and read from a
@@ -516,6 +636,8 @@ function TaskRow(props: {
   blocked: boolean;
   handlers: BoardHandlers;
   knownAgentIds: string[];
+  /** Every projected row, threaded to the badge strip — see `BoardData`. */
+  tasksById: ReadonlyMap<string, BoardTask>;
   editable: boolean;
   reorder: ReorderCtx;
 }) {
@@ -686,7 +808,12 @@ function TaskRow(props: {
         guard={guard}
         begin={begin}
       />
-      <TaskBadges task={task} blocked={props.blocked} />
+      <TaskBadges
+        task={task}
+        blocked={props.blocked}
+        tasksById={props.tasksById}
+        onOpenTask={handlers.onOpenTask}
+      />
       {/* The open caret. Asana's desktop affordance, asked for by name: it
           appears on hover and always opens the task. It needs no click handler
           — the row's own opens and this click bubbles into it. It sits at the
@@ -738,7 +865,8 @@ function GoalEffort(props: { section: BoardSection }): ComponentChildren {
   // caller built without a rollup says nothing rather than guessing. And a
   // band in triage is not yet work: a projected finish for a goal nobody has
   // agreed to is a date for something that may never start.
-  if (section.isChores || section.status === 'triage' || !section.effort) return null;
+  if (section.isChores || section.isScheduled === true) return null;
+  if (section.status === 'triage' || !section.effort) return null;
   const label = goalEffortLabel(section.effort, Date.now());
   if (!label.show) return null;
   // No bar on an unscored goal, deliberately. An empty grey track is exactly
@@ -963,10 +1091,20 @@ function GoalBand(props: {
   section: BoardSection;
   handlers: BoardHandlers;
   knownAgentIds: string[];
+  tasksById: ReadonlyMap<string, BoardTask>;
   editable: boolean;
   reorder: ReorderCtx;
 }) {
   const { section, handlers } = props;
+  /**
+   * A RESERVED band: Backlog, or Scheduled. Neither is a goal, so neither is
+   * renamed, opened, owned or given a due date — the whole set of gestures a
+   * goal row has. One predicate rather than two tests at every site, because
+   * the failure mode of adding a second reserved section is exactly that one
+   * of the sites keeps saying `isChores` and quietly grows a rename cursor on
+   * a band nobody can rename.
+   */
+  const reserved = section.isChores || section.isScheduled === true;
   // Seeded from the reading preference and owned by the component from there.
   // Under the vanilla renderer the fold could only live in localStorage,
   // because the band it belonged to was destroyed on every paint.
@@ -974,7 +1112,7 @@ function GoalBand(props: {
   const row = useRef<HTMLDivElement | null>(null);
   const guard = useSelectionGuard(row);
   const begin = useRef<((caret?: number) => void) | null>(null);
-  const editable = props.editable && !section.isChores;
+  const editable = props.editable && !reserved;
   const open = (): void => {
     if (guard.selectedByThisClick()) return;
     handlers.onOpenGoal?.(section);
@@ -1001,6 +1139,7 @@ function GoalBand(props: {
       class={[
         'board-band',
         section.isChores ? 'board-band-reserved' : '',
+        section.isScheduled === true ? 'board-band-scheduled' : '',
         section.status === 'done' ? 'board-band-done' : '',
         section.status === 'triage' ? 'board-band-triage' : '',
         folded ? 'is-collapsed' : '',
@@ -1012,11 +1151,11 @@ function GoalBand(props: {
         ref={row}
         class="board-goal-row"
         title={rowTitle}
-        tabIndex={section.isChores ? undefined : 0}
+        tabIndex={reserved ? undefined : 0}
         onMouseDown={guard.arm}
-        onClick={section.isChores ? undefined : open}
+        onClick={reserved ? undefined : open}
         onKeyDown={
-          section.isChores
+          reserved
             ? undefined
             : (ev) => {
                 if (
@@ -1059,7 +1198,7 @@ function GoalBand(props: {
           text={section.title}
           editable={editable}
           tip={
-            section.isChores
+            reserved
               ? undefined
               : editable
                 ? 'Click the words to rename · anywhere else opens the goal'
@@ -1076,11 +1215,11 @@ function GoalBand(props: {
             triage takes it for the opposite reason: a date on work nobody has
             agreed to is not yet a commitment. */}
         <span class="board-goal-meta">
-          {!section.isChores && section.status === 'done' ? (
+          {!reserved && section.status === 'done' ? (
             <span class="board-done-note">done</span>
-          ) : !section.isChores && section.status === 'triage' ? (
+          ) : !reserved && section.status === 'triage' ? (
             <span class="board-triage-note">triage</span>
-          ) : !section.isChores && section.dueAt !== undefined ? (
+          ) : !reserved && section.dueAt !== undefined ? (
             <span
               class={section.dueAt < Date.now() ? 'board-due board-due-overdue' : 'board-due'}
             >{`due ${new Date(section.dueAt).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}`}</span>
@@ -1104,7 +1243,7 @@ function GoalBand(props: {
             a vacancy would invite filling it. A goal without a projected owner
             IS a vacancy, drawn as one, exactly like an unowned task. */}
         <span class="board-owner-ctl">
-          {!section.isChores &&
+          {!reserved &&
             (section.assignee !== undefined ? (
               <span
                 class={`board-owner-avatar ${
@@ -1152,6 +1291,7 @@ function GoalBand(props: {
               blocked={(section.blockedBy?.get(task.id)?.length ?? 0) > 0}
               handlers={handlers}
               knownAgentIds={props.knownAgentIds}
+              tasksById={props.tasksById}
               editable={props.editable}
               reorder={props.reorder}
             />
@@ -1225,7 +1365,10 @@ function GoalAddRow(props: {
               close();
               return;
             }
-            props.onGoalAdd(title, [...props.sections].reverse().find((s) => !s.isChores)?.id);
+            props.onGoalAdd(
+              title,
+              [...props.sections].reverse().find((s) => !s.isChores && s.isScheduled !== true)?.id,
+            );
             close();
           } else if (ev.key === 'Escape') {
             ev.preventDefault();
@@ -1243,7 +1386,7 @@ function GoalAddRow(props: {
 // ── The board ──────────────────────────────────────────────────────────────
 
 function Board(props: { handlers: BoardHandlers; wrapper: Box<HTMLElement> }) {
-  const { sections, pane, showArchived, knownAgentIds, archivedCount } = boardData.value;
+  const { sections, pane, showArchived, knownAgentIds, tasksById, archivedCount } = boardData.value;
   const { handlers } = props;
   const onBoard = pane === 'board' && !showArchived;
 
@@ -1293,13 +1436,16 @@ function Board(props: { handlers: BoardHandlers; wrapper: Box<HTMLElement> }) {
       {sections.map((section) => (
         <section
           key={section.id}
-          class={`board-section${section.isChores ? ' board-chores' : ''}`}
+          class={`board-section${section.isChores ? ' board-chores' : ''}${
+            section.isScheduled === true ? ' board-scheduled' : ''
+          }`}
           data-goal-id={section.id}
         >
           <GoalBand
             section={section}
             handlers={handlers}
             knownAgentIds={knownAgentIds}
+            tasksById={tasksById}
             editable={editable}
             reorder={reorder}
           />
