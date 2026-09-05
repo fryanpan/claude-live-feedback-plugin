@@ -76,7 +76,7 @@ describe('a prompt bump re-scores the open rows on boot', () => {
     handle = boot(NEW);
     const base = `http://localhost:${handle.port}`;
     const { workspace } = await jj<{ workspace: { id: string } }>(
-      await fetch(`${base}/api/workspaces`, {
+      await fetch(`${base}/workspaces`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ name: 'rescore-board' }),
@@ -84,7 +84,7 @@ describe('a prompt bump re-scores the open rows on boot', () => {
     );
     const mk = async (title: string): Promise<string> => {
       const { task } = await jj<{ task: { id: string } }>(
-        await fetch(`${base}/api/workspaces/${workspace.id}/tasks`, {
+        await fetch(`${base}/workspaces/${workspace.id}/tasks`, {
           method: 'POST',
           headers: { 'content-type': 'application/json' },
           body: JSON.stringify({ title, author: FILER }),

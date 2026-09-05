@@ -149,7 +149,7 @@ describe('the owning session over the real routes', () => {
 
   it('names the session behind an agent-owned row, and nobody behind the others', async () => {
     const { workspace } = await jj<{ workspace: { id: string } }>(
-      await post('/api/workspaces', { name: 'atlas', goal: 'Ship the atlas.' }),
+      await post('/workspaces', { name: 'atlas', goal: 'Ship the atlas.' }),
     );
     const wsId = workspace.id;
 
@@ -168,7 +168,7 @@ describe('the owning session over the real routes', () => {
 
     const mk = async (assignee: string) =>
       jj<{ task: { id: string } }>(
-        await post(`/api/workspaces/${wsId}/tasks`, {
+        await post(`/workspaces/${wsId}/tasks`, {
           title: `owned by ${assignee}`,
           assignee,
           author: AUTHOR,
@@ -179,7 +179,7 @@ describe('the owning session over the real routes', () => {
     const person = await mk('human');
     const stranger = await mk('Ada Fenwick');
 
-    const res = await fetch(`${base}/api/workspaces/${wsId}/tasks`);
+    const res = await fetch(`${base}/workspaces/${wsId}/tasks?format=json`);
     const raw = await res.clone().text();
     const { tasks } = await jj<{ tasks: Array<Record<string, unknown>> }>(res);
     const byId = new Map(tasks.map((t) => [t.id as string, t]));

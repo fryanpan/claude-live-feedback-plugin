@@ -144,7 +144,7 @@ describe('the review-item gate when the judge is unreliable', () => {
       // `afterEach` stops whatever `handle` names, so it names this one now.
       h.handle = createServer({ port: 0, dataDir: h.dataDir, heldReviewItemMs: 0 });
       const listed = (await (
-        await fetch(`http://localhost:${h.handle.port}/api/workspaces/${workspaceId}/tasks`)
+        await fetch(`http://localhost:${h.handle.port}/workspaces/${workspaceId}/tasks?format=json`)
       ).json()) as {
         tasks: Array<{
           id: string;

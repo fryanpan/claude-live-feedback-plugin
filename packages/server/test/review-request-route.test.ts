@@ -76,8 +76,7 @@ describe('POST /api/docs/:docId/review-request', () => {
     return res.json() as Promise<T>;
   };
   const newHuddle = async (kind: 'plan' | 'discussion'): Promise<string> =>
-    (await jj<HuddleResponse>(await post(`/api/workspaces/${workspaceId}/huddles`, { kind })))
-      .docId;
+    (await jj<HuddleResponse>(await post(`/workspaces/${workspaceId}/huddles`, { kind }))).docId;
   const threadsOf = async (docId: string): Promise<ThreadRow[]> =>
     (await jj<{ threads: ThreadRow[] }>(await local(`/api/docs/${docId}/threads`))).threads;
   const docOf = async (docId: string): Promise<DocResponse> =>
@@ -94,7 +93,7 @@ describe('POST /api/docs/:docId/review-request', () => {
     base = `http://localhost:${handle.port}`;
     workspaceId = (
       await jj<{ workspace: { id: string } }>(
-        await post('/api/workspaces', { name: 'review-request-board' }),
+        await post('/workspaces', { name: 'review-request-board' }),
       )
     ).workspace.id;
   });

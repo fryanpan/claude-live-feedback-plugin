@@ -3,7 +3,7 @@
  *
  *   GET  /workspaces/:id        — the board page shell (server-rendered, loads /app/board.js)
  *   POST /api/tasks/:id/title   — in-place task title edit (§3.9)
- *   GET  /api/workspaces/:id/events — the activity view's audit-log read (§3.9)
+ *   GET  /workspaces/:id/events — the activity view's audit-log read (§3.9)
  *
  * Route-layer lesson applies: every param goes over real HTTP and the stored
  * EFFECT is read back (including the ydoc projection the board renders from).
@@ -41,14 +41,14 @@ describe('board UI routes (plan §3.12 commit 7)', () => {
 
   async function seedWorkspace(name = 'search-revamp'): Promise<string> {
     const { workspace } = await jj<{ workspace: { id: string } }>(
-      await post('/api/workspaces', { name, goal: 'Ship search v2.' }),
+      await post('/workspaces', { name, goal: 'Ship search v2.' }),
     );
     return workspace.id;
   }
 
   async function seedTask(workspaceId: string, title = 'Fix the ranking clause'): Promise<Task> {
     const { task } = await jj<{ task: Task }>(
-      await post(`/api/workspaces/${workspaceId}/tasks`, { assignee: 'human', title }),
+      await post(`/workspaces/${workspaceId}/tasks`, { assignee: 'human', title }),
     );
     return task;
   }
@@ -171,7 +171,7 @@ describe('board UI routes (plan §3.12 commit 7)', () => {
       expect(res.task.title).toBe('New sharper title');
 
       const { tasks } = await jj<{ tasks: Task[] }>(
-        await fetch(`${base}/api/workspaces/${wsId}/tasks`),
+        await fetch(`${base}/workspaces/${wsId}/tasks?format=json`),
       );
       expect(tasks.find((t) => t.id === task.id)?.title).toBe('New sharper title');
 
@@ -205,13 +205,13 @@ describe('board UI routes (plan §3.12 commit 7)', () => {
       ).toBe(404);
       // Positive control: the failed attempts really left the title alone.
       const { tasks } = await jj<{ tasks: Task[] }>(
-        await fetch(`${base}/api/workspaces/${wsId}/tasks`),
+        await fetch(`${base}/workspaces/${wsId}/tasks?format=json`),
       );
       expect(tasks.find((t) => t.id === task.id)?.title).toBe('Fix the ranking clause');
     });
   });
 
-  describe('GET /api/workspaces/:id/events (activity view)', () => {
+  describe('GET /workspaces/:id/events (activity view)', () => {
     it('returns the audit rows the store appended, oldest first as written', async () => {
       const wsId = await seedWorkspace();
       const task = await seedTask(wsId, 'Audited task');
@@ -219,7 +219,7 @@ describe('board UI routes (plan §3.12 commit 7)', () => {
         await post(`/api/tasks/${task.id}/transition`, { to: 'in-progress', author: PERSON }),
       );
       const { events } = await jj<{ events: Array<{ event: string; ts: number }> }>(
-        await fetch(`${base}/api/workspaces/${wsId}/events`),
+        await fetch(`${base}/workspaces/${wsId}/events`),
       );
       // Positive control: the probe can see events at all.
       expect(events.length).toBeGreaterThanOrEqual(2);
@@ -231,13 +231,13 @@ describe('board UI routes (plan §3.12 commit 7)', () => {
     it('returns an empty list for a workspace with no audit log yet', async () => {
       const wsId = await seedWorkspace('untouched');
       const { events } = await jj<{ events: unknown[] }>(
-        await fetch(`${base}/api/workspaces/${wsId}/events`),
+        await fetch(`${base}/workspaces/${wsId}/events`),
       );
       expect(events).toEqual([]);
     });
 
     it('404s for an unknown workspace', async () => {
-      const res = await fetch(`${base}/api/workspaces/ws-nope/events`);
+      const res = await fetch(`${base}/workspaces/ws-nope/events`);
       expect(res.status).toBe(404);
     });
   });

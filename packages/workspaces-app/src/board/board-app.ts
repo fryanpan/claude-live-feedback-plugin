@@ -190,8 +190,11 @@ export async function bootBoard(env: BoardBootEnv): Promise<void> {
   /** The boot URL named a walkthrough item; opened when the queue holds it. */
   let pendingBootItem = bootLoc.item;
 
+  // `?format=json` is what asks for the RECORD. This path also serves the
+  // board page — one address, HTML by default — so a read without it would
+  // hand this fetch the shell that is currently running it.
   const initial = await fetchJson<{ workspace: BoardWorkspaceInfo }>(
-    `/api/workspaces/${encodeURIComponent(workspaceId)}`,
+    `/workspaces/${encodeURIComponent(workspaceId)}?format=json`,
   );
   if (initial) state.info = initial.workspace;
   buildShell(document, root, state.info?.name ?? workspaceId, workspaceId);

@@ -118,10 +118,10 @@ export function startJudgeHarness(): JudgeHarness {
       }),
     async board() {
       const { workspace } = await h.jj<{ workspace: { id: string } }>(
-        h.post('/api/workspaces', { name: 'index-rebuild', leadAgentId: LEAD.id }),
+        h.post('/workspaces', { name: 'index-rebuild', leadAgentId: LEAD.id }),
       );
       const { task } = await h.jj<{ task: { id: string } }>(
-        h.post(`/api/workspaces/${workspace.id}/tasks`, {
+        h.post(`/workspaces/${workspace.id}/tasks`, {
           title: 'Rebuild the index nightly',
           body: 'Agent can rebuild the index so that search stays fresh.',
           assignee: FILER.name,

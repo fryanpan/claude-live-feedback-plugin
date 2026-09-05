@@ -139,7 +139,7 @@ describe('a proxied trusted host, with Access in front of it', () => {
     });
 
     it('may do operator work — create a workspace, read the share admin surface', async () => {
-      const created = await fetch(`http://localhost:${h.port}/api/workspaces`, {
+      const created = await fetch(`http://localhost:${h.port}/workspaces`, {
         method: 'POST',
         headers: {
           host: PROXIED_HOST,
@@ -197,7 +197,7 @@ describe('a proxied trusted host, with Access in front of it', () => {
       const list = await get(h, '/api/docs', asCollaborator);
       expect(list.status).toBe(403);
       expect(await list.json()).toEqual({ error: 'forbidden' });
-      const create = await fetch(`http://localhost:${h.port}/api/workspaces`, {
+      const create = await fetch(`http://localhost:${h.port}/workspaces`, {
         method: 'POST',
         headers: { ...asCollaborator, 'content-type': 'application/json' },
         body: JSON.stringify({ name: 'Should not exist' }),
@@ -274,7 +274,7 @@ describe('a proxied trusted host, with Access in front of it', () => {
       const list = await get(h, '/api/docs', collab);
       expect(list.status).toBe(403);
       expect(await list.json()).toEqual({ error: 'out_of_share_scope' });
-      const create = await fetch(`http://localhost:${h.port}/api/workspaces`, {
+      const create = await fetch(`http://localhost:${h.port}/workspaces`, {
         method: 'POST',
         headers: { ...collab, 'content-type': 'application/json' },
         body: JSON.stringify({ name: 'Should not exist' }),
@@ -329,7 +329,7 @@ describe('a proxied trusted host, with Access in front of it', () => {
     });
 
     it('refuses a cross-origin write from the visitor’s localhost — the CSRF half', async () => {
-      const r = await fetch(`http://localhost:${h.port}/api/workspaces`, {
+      const r = await fetch(`http://localhost:${h.port}/workspaces`, {
         method: 'POST',
         headers: { ...auth(), origin: 'http://localhost:3000', 'content-type': 'application/json' },
         body: JSON.stringify({ name: 'CSRF' }),
@@ -337,7 +337,7 @@ describe('a proxied trusted host, with Access in front of it', () => {
       expect(r.status).toBe(403);
       expect(await r.json()).toEqual({ error: 'origin_not_allowed' });
       // POSITIVE CONTROL: the same write from the page's own origin lands.
-      const own = await fetch(`http://localhost:${h.port}/api/workspaces`, {
+      const own = await fetch(`http://localhost:${h.port}/workspaces`, {
         method: 'POST',
         headers: {
           ...auth(),

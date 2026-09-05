@@ -134,7 +134,7 @@ describe('spoken asks on a huddle doc', () => {
     });
     base = `http://localhost:${handle.port}`;
     workspaceId = (
-      (await (await post('/api/workspaces', { name: 'spoken-asks-board' })).json()) as {
+      (await (await post('/workspaces', { name: 'spoken-asks-board' })).json()) as {
         workspace: { id: string };
       }
     ).workspace.id;
@@ -146,9 +146,9 @@ describe('spoken asks on a huddle doc', () => {
     expect(attached.ok).toBe(true);
     expect(handle.tasks.getWorkspace(workspaceId)?.leadAgentId).toBe('agent-lead');
     docId = (
-      (await (
-        await post(`/api/workspaces/${workspaceId}/huddles`, { kind: 'discussion' })
-      ).json()) as { docId: string }
+      (await (await post(`/workspaces/${workspaceId}/huddles`, { kind: 'discussion' })).json()) as {
+        docId: string;
+      }
     ).docId;
   });
 

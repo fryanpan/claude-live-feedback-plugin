@@ -3,7 +3,7 @@
  *
  *   POST /api/tasks/:id/goal          — set_task_goal (placement IS triage)
  *   POST /api/tasks/:id/answer        — answer_decision (verbatim text)
- *   PUT  /api/workspaces/:id/goals    — set_goal_list (ordered board sections)
+ *   PUT  /workspaces/:id/goals    — set_goal_list (ordered board sections)
  *   POST /api/docs/:docId/threads/:threadId/promote — promote_to_task
  *
  * The route layer hand-copies body fields and nothing type-checks it — a
@@ -82,7 +82,7 @@ describe('task tool routes (plan §3.12 commit 6)', () => {
    *  file used to hard-code as ids (`g1`, `g1a`, `g2`). */
   async function seedWorkspace(): Promise<{ wsId: string; G: GoalIds }> {
     const { workspace } = await jj<{ workspace: { id: string } }>(
-      await post('/api/workspaces', { name: 'search-revamp', goal: 'Ship search v2.' }),
+      await post('/workspaces', { name: 'search-revamp', goal: 'Ship search v2.' }),
     );
     const G = await seedGoalsOverHttp(
       base,
@@ -103,7 +103,7 @@ describe('task tool routes (plan §3.12 commit 6)', () => {
     opts: Record<string, unknown> = {},
   ): Promise<Task> {
     const { task } = await jj<{ task: Task }>(
-      await post(`/api/workspaces/${workspaceId}/tasks`, {
+      await post(`/workspaces/${workspaceId}/tasks`, {
         author: AGENT,
         title: 'tune the ranking',
         goal,
@@ -115,7 +115,7 @@ describe('task tool routes (plan §3.12 commit 6)', () => {
 
   async function getTasks(workspaceId: string): Promise<Task[]> {
     const { tasks } = await jj<{ tasks: Task[] }>(
-      await fetch(`${base}/api/workspaces/${workspaceId}/tasks`),
+      await fetch(`${base}/workspaces/${workspaceId}/tasks?format=json`),
     );
     return tasks;
   }
@@ -151,12 +151,12 @@ describe('task tool routes (plan §3.12 commit 6)', () => {
     rmSync(dataDir, { recursive: true, force: true });
   });
 
-  // ── PUT /api/workspaces/:id/goals ─────────────────────────────────────────
+  // ── PUT /workspaces/:id/goals ─────────────────────────────────────────
 
-  describe('PUT /api/workspaces/:id/goals', () => {
+  describe('PUT /workspaces/:id/goals', () => {
     it('forwards the goal list — dueAt included — and GET reads it back', async () => {
       const { workspace } = await jj<{ workspace: { id: string } }>(
-        await post('/api/workspaces', { name: 'goals-fwd', goal: 'North star.' }),
+        await post('/workspaces', { name: 'goals-fwd', goal: 'North star.' }),
       );
       const goals = [
         { title: 'First', dueAt: 1765000000000 },
@@ -166,14 +166,14 @@ describe('task tool routes (plan §3.12 commit 6)', () => {
         ok: true;
         changed: boolean;
         created: Array<{ id: string; title: string; parent?: string }>;
-      }>(await put(`/api/workspaces/${workspace.id}/goals`, { goals, author: PERSON }));
+      }>(await put(`/workspaces/${workspace.id}/goals`, { goals, author: PERSON }));
       expect(res.changed).toBe(true);
       // The ids come back from the server, in submission order.
       expect(res.created.map((c) => c.title)).toEqual(['First', 'Second']);
       const [first, second] = res.created.map((c) => c.id) as [string, string];
 
       const got = await jj<{ workspace: { goals: unknown } }>(
-        await fetch(`${base}/api/workspaces/${workspace.id}`),
+        await fetch(`${base}/workspaces/${workspace.id}?format=json`),
       );
       expect(got.workspace.goals).toEqual([
         { id: first, title: 'First', dueAt: 1765000000000 },
@@ -188,10 +188,10 @@ describe('task tool routes (plan §3.12 commit 6)', () => {
     // it in all along — and nothing nested comes back out.
     it('accepts a legacy nested payload and reads it back flat', async () => {
       const { workspace } = await jj<{ workspace: { id: string } }>(
-        await post('/api/workspaces', { name: 'goals-legacy', goal: 'North star.' }),
+        await post('/workspaces', { name: 'goals-legacy', goal: 'North star.' }),
       );
       const res = await jj<{ created: Array<{ id: string; title: string }> }>(
-        await put(`/api/workspaces/${workspace.id}/goals`, {
+        await put(`/workspaces/${workspace.id}/goals`, {
           goals: [{ title: 'First', subgoals: [{ title: 'Sub one' }] }, { title: 'Second' }],
           author: PERSON,
         }),
@@ -199,7 +199,7 @@ describe('task tool routes (plan §3.12 commit 6)', () => {
       expect(res.created.map((c) => c.title)).toEqual(['First', 'Sub one', 'Second']);
       const [first, sub, second] = res.created.map((c) => c.id) as [string, string, string];
       const got = await jj<{ workspace: { goals: unknown } }>(
-        await fetch(`${base}/api/workspaces/${workspace.id}`),
+        await fetch(`${base}/workspaces/${workspace.id}?format=json`),
       );
       expect(got.workspace.goals).toEqual([
         { id: first, title: 'First' },
@@ -210,19 +210,19 @@ describe('task tool routes (plan §3.12 commit 6)', () => {
 
     it('forwards the author into the goals_changed event (person and agent both classify)', async () => {
       const { workspace } = await jj<{ workspace: { id: string } }>(
-        await post('/api/workspaces', { name: 'goals-author', goal: 'North star.' }),
+        await post('/workspaces', { name: 'goals-author', goal: 'North star.' }),
       );
       const events: TaskStoreEvent[] = [];
       const off = handle.tasks.onEvent((e) => events.push(e));
       try {
         await jj(
-          await put(`/api/workspaces/${workspace.id}/goals`, {
+          await put(`/workspaces/${workspace.id}/goals`, {
             goals: [{ title: 'Person set this' }],
             author: PERSON,
           }),
         );
         await jj(
-          await put(`/api/workspaces/${workspace.id}/goals`, {
+          await put(`/workspaces/${workspace.id}/goals`, {
             goals: [{ title: 'Agent set this' }],
             author: AGENT,
           }),
@@ -240,7 +240,7 @@ describe('task tool routes (plan §3.12 commit 6)', () => {
       const { wsId, G } = await seedWorkspace();
       const task = await seedTask(wsId, G.g2);
       const res = await jj<{ movedToChores: string[] }>(
-        await put(`/api/workspaces/${wsId}/goals`, {
+        await put(`/workspaces/${wsId}/goals`, {
           goals: [{ id: G.g1, title: '1. Get the PR out' }],
           drop: [G.g2],
           author: PERSON,
@@ -289,7 +289,7 @@ describe('task tool routes (plan §3.12 commit 6)', () => {
         ['w-missing', { goals: [{ title: 'Fine' }], author: PERSON }, 404],
       ];
       for (const [id, body, status, error] of cases) {
-        const r = await put(`/api/workspaces/${id}/goals`, body);
+        const r = await put(`/workspaces/${id}/goals`, body);
         expect(r.status, JSON.stringify(body)).toBe(status);
         if (error) expect(((await r.json()) as { error: string }).error).toBe(error);
       }
@@ -297,7 +297,7 @@ describe('task tool routes (plan §3.12 commit 6)', () => {
       // Positive control for the inverted row: the same list with no `id` at
       // all is accepted, and the minted id comes back in `created`.
       const ok = await jj<{ created: Array<{ id: string; title: string }> }>(
-        await put(`/api/workspaces/${wsId}/goals`, {
+        await put(`/workspaces/${wsId}/goals`, {
           goals: [{ title: 'Newly minted' }],
           author: PERSON,
         }),
@@ -419,7 +419,7 @@ describe('task tool routes (plan §3.12 commit 6)', () => {
     it('placement stamps triagedAgainst with the goal id and clears the unplaced mark', async () => {
       const { wsId, G } = await seedWorkspace();
       const { task } = await jj<{ task: Task }>(
-        await post(`/api/workspaces/${wsId}/tasks`, {
+        await post(`/workspaces/${wsId}/tasks`, {
           assignee: 'human',
           title: 'unplaced capture',
         }),

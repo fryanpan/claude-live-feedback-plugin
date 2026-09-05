@@ -12,7 +12,7 @@ const AGENT = { id: 'agent-x', name: 'Estimator Test', kind: 'agent' };
  * The effort model's numbers have to REACH the board, because the goal bar
  * is computed in the browser off this projection. Until this change neither
  * `effortEstimate` (#486) nor `readingTime` (#482) was projected, so both
- * were server-side-only: readable through `GET /api/workspaces/:id/tasks`,
+ * were server-side-only: readable through `GET /workspaces/:id/tasks`,
  * which spreads the whole stored row, and invisible to the one surface that
  * needs them.
  *
@@ -29,7 +29,7 @@ describe('the board projection carries the effort model', () => {
   let wsId: string;
 
   const mkTask = async (title: string): Promise<string> => {
-    const res = await fetch(`${base}/api/workspaces/${wsId}/tasks`, {
+    const res = await fetch(`${base}/workspaces/${wsId}/tasks`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ author: AGENT, title, goal: 'chores' }),
@@ -66,7 +66,7 @@ describe('the board projection carries the effort model', () => {
     dataDir = mkdtempSync(join(tmpdir(), 'proj-effort-'));
     handle = createServer({ port: 0, dataDir });
     base = `http://localhost:${handle.port}`;
-    const mk = await fetch(`${base}/api/workspaces`, {
+    const mk = await fetch(`${base}/workspaces`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ name: 'effort board', goal: 'Ship it.' }),

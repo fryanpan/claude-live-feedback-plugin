@@ -66,7 +66,7 @@ export function createSpinoffRunner(opts: DocSpinoffOptions): SpinoffRunner {
     // comment exists for: `meta.workspaceId` is the GROUPING id of a diff
     // review or a folder browse, and a huddle doc has none at all. Reading it
     // gave the empty string, which is not `undefined`, so the guard below
-    // passed and the create went to `/api/workspaces//tasks` — a 404 the
+    // passed and the create went to `/workspaces//tasks` — a 404 the
     // person saw as a toast reading "404".
     //
     // `backTo` is what the server answers when it can name the board a doc

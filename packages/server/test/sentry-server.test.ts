@@ -59,7 +59,7 @@ const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms
 
 describe('routePatternForSpan: default-deny redaction', () => {
   it('keeps known literal route keywords', () => {
-    expect(routePatternForSpan('/api/workspaces/w-abc123/tasks')).toBe('/api/workspaces/:id/tasks');
+    expect(routePatternForSpan('/workspaces/w-abc123/tasks')).toBe('/workspaces/:id/tasks');
     expect(routePatternForSpan('/api/tasks/t-xyz/transition')).toBe('/api/tasks/:id/transition');
     expect(routePatternForSpan('/y/w-abc123')).toBe('/y/:id');
     expect(routePatternForSpan('/')).toBe('/');
@@ -110,14 +110,18 @@ describe('routePatternForSpan: default-deny redaction', () => {
     expect(routePatternForSpan('/api/tasks/archive/transition')).toBe('/api/tasks/:id/transition');
   });
 
-  it('names the reviewApi subroutes under both of their live aliases', () => {
-    // codex review: server.ts's `reviewApi(sub)` builds ONE regex per
-    // subroute that matches `/api/(?:reviews|workspaces)/:id/<sub>` — a
-    // review or a board workspace addressed under either prefix (compat for
-    // long-running sessions and open tabs). Missing either alias here isn't
-    // a privacy bug (an unmatched path still redacts to all-:id), but it
-    // does lose the route name for every request to that alias — this
-    // exercises all 8 subroutes under both prefixes.
+  it('names the reviewApi subroutes at the one prefix they answer on', () => {
+    // These eight used to be templated twice, because `reviewApi(sub)` built
+    // one regex matching `/api/(?:reviews|workspaces)/:id/<sub>` — compat for
+    // sessions and tabs nobody could restart. The alias is gone with the
+    // canonical-routes cutover, so the review prefix is named and the board
+    // prefix is not.
+    //
+    // The second assertion is the one with teeth. A path that matches no
+    // template still redacts to all-`:id`, so losing the alias is an
+    // observability change and not a privacy one — but a template left behind
+    // for a route that no longer exists would name a span after a shape the
+    // server never serves, and nothing else would say so.
     for (const sub of [
       'refresh',
       'groups',
@@ -129,10 +133,24 @@ describe('routePatternForSpan: default-deny redaction', () => {
       'editable-file',
     ]) {
       expect(routePatternForSpan(`/api/reviews/r-abc123/${sub}`)).toBe(`/api/reviews/:id/${sub}`);
-      expect(routePatternForSpan(`/api/workspaces/w-abc123/${sub}`)).toBe(
-        `/api/workspaces/:id/${sub}`,
-      );
+      expect(routePatternForSpan(`/workspaces/w-abc123/${sub}`)).toBe('/:id/:id/:id');
     }
+  });
+
+  it('names the board’s own collections at the prefix that lost its /api', () => {
+    // The other half of the same move: every `/api/workspaces/:id/…` route
+    // became `/workspaces/:id/…`, and the board page it now shares an address
+    // with is the same template — `?format=json` is a query string, and a
+    // route pattern has none. So ONE entry covers both, and the old spelling
+    // names nothing.
+    for (const sub of ['home', 'tasks', 'settings', 'events', 'review-items', 'goals']) {
+      expect(routePatternForSpan(`/workspaces/w-abc123/${sub}`)).toBe(`/workspaces/:id/${sub}`);
+      expect(routePatternForSpan(`/api/workspaces/w-abc123/${sub}`)).toBe('/:id/:id/:id/:id');
+    }
+    // A goal band's verbs carry two ids now, and both redact.
+    expect(routePatternForSpan('/workspaces/w-abc123/goals/g-xyz789/archive')).toBe(
+      '/workspaces/:id/goals/:id/archive',
+    );
   });
 
   it('names three more docs-subroute shapes missed on the first pass through the dispatch chain', () => {
@@ -244,14 +262,14 @@ describe('scrubEventForPrivacy: a floor beneath withRouteSpan, proven with a neg
   it('redacts a minted id inside a span/transaction name — in case anything ever names one by raw path', () => {
     const secretId = `w-${crypto.randomUUID()}`;
     const raw = {
-      transaction: `GET /api/workspaces/${secretId}/home`,
+      transaction: `GET /workspaces/${secretId}/home`,
       spans: [{ description: secretId }],
     };
     expect(JSON.stringify(raw)).toContain(secretId); // fixture actually leaks first
 
     const scrubbed = scrubEventForPrivacy(raw) as typeof raw;
     expect(JSON.stringify(scrubbed)).not.toContain(secretId);
-    expect(scrubbed.transaction).toBe('GET /api/workspaces/[id]/home');
+    expect(scrubbed.transaction).toBe('GET /workspaces/[id]/home');
   });
 
   it('fails closed past the recursion guard — a subtree too deep to walk is redacted, not passed through raw', () => {
@@ -317,8 +335,8 @@ describe('server Sentry: silent with no DSN', () => {
   });
 
   it('withRouteSpan and captureServerError run as plain passthroughs and open no socket', async () => {
-    const req = new Request('http://localhost/api/workspaces/w-quiet/home');
-    const result = await withRouteSpan(req, '/api/workspaces/w-quiet/home', async () => {
+    const req = new Request('http://localhost/workspaces/w-quiet/home');
+    const result = await withRouteSpan(req, '/workspaces/w-quiet/home', async () => {
       await sleep(10);
       return 'handled';
     });

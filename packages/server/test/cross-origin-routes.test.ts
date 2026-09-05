@@ -167,7 +167,7 @@ describe('cross-origin access to the trusted host', () => {
       // file names a host path and is refused to EVERY browser origin now
       // (binding-routes-browser.test.ts), so it can no longer stand as the
       // origin gate's success case.
-      const r = await req('/api/workspaces', 'http://localhost:3000', {
+      const r = await req('/workspaces', 'http://localhost:3000', {
         method: 'POST',
         body: JSON.stringify({ name: 'made from an allowed origin' }),
       });
@@ -335,13 +335,13 @@ describe('the public share host is same-origin only', () => {
         workspaceId: 'ws-shared',
       }),
     });
-    const board = await local('/api/workspaces', {
+    const board = await local('/workspaces', {
       method: 'POST',
       body: JSON.stringify({ name: 'Cross-origin board' }),
     });
     expect(board.status).toBe(200);
     const boardId = ((await board.json()) as { workspace: { id: string } }).workspace.id;
-    const filed = await local(`/api/workspaces/${encodeURIComponent(boardId)}/docs`, {
+    const filed = await local(`/workspaces/${encodeURIComponent(boardId)}/docs`, {
       method: 'POST',
       body: JSON.stringify({ docId: 'ws-shared' }),
     });

@@ -41,7 +41,7 @@ describe('POST /api/docs/:id/archive', () => {
       body: JSON.stringify(body),
     });
   const boardDocIds = async (boardId: string): Promise<string[]> => {
-    const r = await local(`/api/workspaces/${boardId}`);
+    const r = await local(`/workspaces/${boardId}?format=json`);
     return ((await r.json()) as { workspace: { docIds?: string[] } }).workspace.docIds ?? [];
   };
   const archivedListing = async (): Promise<ArchivedListing> => {
@@ -70,7 +70,7 @@ describe('POST /api/docs/:id/archive', () => {
   };
 
   it('takes the doc off its board, and unarchive puts it back', async () => {
-    const ws = await post('/api/workspaces', { name: 'drafts', goal: 'Ship the draft.' });
+    const ws = await post('/workspaces', { name: 'drafts', goal: 'Ship the draft.' });
     const boardId = ((await ws.json()) as { workspace: { id: string } }).workspace.id;
     const created = await post('/api/docs', {
       docId: 'draft-doc',

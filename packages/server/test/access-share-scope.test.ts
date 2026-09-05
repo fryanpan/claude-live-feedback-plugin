@@ -128,7 +128,7 @@ describe('Access-mode shares over HTTP', () => {
 
     /** A fresh board, and a folder bound onto it in one call. */
     const makeBoard = async (name: string) => {
-      const r = await local('/api/workspaces', {
+      const r = await local('/workspaces', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ name }),
@@ -139,7 +139,7 @@ describe('Access-mode shares over HTTP', () => {
       return id;
     };
     const bindFolder = async (path: string, hubWorkspaceId: string) => {
-      const r = await local('/api/workspaces', {
+      const r = await local('/workspaces', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ folderPath: path, hubWorkspaceId }),
@@ -367,7 +367,7 @@ describe('Access-mode shares over HTTP', () => {
     });
 
     it('gives nothing away about which share hostnames exist', async () => {
-      const unknown = await fetch(`${base}/workspaces/${soloBoardId}`, {
+      const unknown = await fetch(`${base}/workspaces/${soloBoardId}?format=json`, {
         headers: { host: `share-never-minted.${soloShare.host.split('.').slice(1).join('.')}` },
       });
       expect(unknown.status).toBe(403);
@@ -424,7 +424,7 @@ describe('Access-mode shares over HTTP', () => {
       expect((await pub(`/api/docs/${PRIVATE}`, cookie)).status).toBe(403);
       expect((await pub(`/review/${PRIVATE}`, cookie)).status).toBe(403);
       expect((await pub('/api/docs', cookie)).status).toBe(403);
-      expect((await pub('/api/workspaces', cookie)).status).toBe(403);
+      expect((await pub('/workspaces', cookie)).status).toBe(403);
     });
 
     it('CANNOT mint itself a wider share', async () => {
@@ -467,13 +467,13 @@ describe('Access-mode shares over HTTP', () => {
     it('opens the entry doc and lists the tree', async () => {
       expect((await pub(`/api/docs/${encodeURIComponent(entryDocId)}`, cookie)).status).toBe(200);
       expect(
-        (await pub(`/api/workspaces/${encodeURIComponent(workspaceId)}/tree`, cookie)).status,
+        (await pub(`/api/reviews/${encodeURIComponent(workspaceId)}/tree`, cookie)).status,
       ).toBe(200);
     });
 
     it('opens a sibling lazily and can then read it', async () => {
       const opened = await pub(
-        `/api/workspaces/${encodeURIComponent(workspaceId)}/editable-file`,
+        `/api/reviews/${encodeURIComponent(workspaceId)}/editable-file`,
         cookie,
         {
           method: 'POST',
@@ -495,7 +495,7 @@ describe('Access-mode shares over HTTP', () => {
     /**
      * This block used to prove that a doc-scoped link WITHHELD `workspaceId`
      * from the doc payload: the client treats a non-empty workspaceId as
-     * permission to render workspace nav and re-poll `/api/workspaces/<id>/…`
+     * permission to render workspace nav and re-poll `/workspaces/<id>/…`
      * every 30s, and a doc share was refused those routes — so the id bought
      * the visitor a broken sidebar and a steady loop of 403s.
      *
@@ -542,7 +542,7 @@ describe('Access-mode shares over HTTP', () => {
       // The id is only worth handing over because the nav routes are open to
       // this visitor — the pairing the doc-scoped link could never have.
       expect(
-        (await pub(`/api/workspaces/${encodeURIComponent(workspaceId)}/tree`, wsCookie)).status,
+        (await pub(`/api/reviews/${encodeURIComponent(workspaceId)}/tree`, wsCookie)).status,
       ).toBe(200);
     });
 
@@ -550,7 +550,7 @@ describe('Access-mode shares over HTTP', () => {
       // Positive control is the test above: this same cookie reads its own
       // tree. The one-file workspace is a different set, so it is refused.
       expect(
-        (await pub(`/api/workspaces/${encodeURIComponent(soloWorkspaceId)}/tree`, wsCookie)).status,
+        (await pub(`/api/reviews/${encodeURIComponent(soloWorkspaceId)}/tree`, wsCookie)).status,
       ).toBe(403);
       expect((await pub(`/api/docs/${soloPath}`, wsCookie)).status).toBe(403);
     });

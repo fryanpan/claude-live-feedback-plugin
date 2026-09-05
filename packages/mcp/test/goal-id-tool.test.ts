@@ -89,7 +89,7 @@ describe('the handler forwards `created` rather than dropping it', () => {
       goals: [{ title: 'Ship the search revamp' }],
     });
     expect(res.isError).toBe(false);
-    expect(res.sent.map((r) => `${r.method} ${r.path}`)).toEqual(['PUT /api/workspaces/w-1/goals']);
+    expect(res.sent.map((r) => `${r.method} ${r.path}`)).toEqual(['PUT /workspaces/w-1/goals']);
     const out = res.json as typeof goalsReply & { workspaceId: string };
     expect(out.created).toEqual([{ id: 'g-7Qa2', title: 'Ship the search revamp' }]);
     // The neighbours it is hand-copied beside, so a copy that lost one field

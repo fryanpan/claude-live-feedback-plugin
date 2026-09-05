@@ -55,7 +55,7 @@ function makeHarness(summarizer?: ThreadSummarizer) {
 }
 
 async function makeWorkspace(h: ReturnType<typeof makeHarness>): Promise<string> {
-  const res = await h.post('/api/workspaces', { name: 'Synthetic Board', goal: 'Ship it' });
+  const res = await h.post('/workspaces', { name: 'Synthetic Board', goal: 'Ship it' });
   const data = (await res.json()) as { workspace: { id: string } };
   return data.workspace.id;
 }
@@ -74,14 +74,16 @@ describe('home routes — deterministic server (no summarizer)', () => {
   });
 
   const home = async (user = 'Riley'): Promise<HomePayload> => {
-    const res = await h.local(`/api/workspaces/${ws}/home?user=${encodeURIComponent(user)}`);
+    const res = await h.local(
+      `/workspaces/${ws}/home?user=${encodeURIComponent(user)}&format=json`,
+    );
     expect(res.status).toBe(200);
     return (await res.json()) as HomePayload;
   };
 
   it('GET requires a user and a real workspace', async () => {
-    expect((await h.local(`/api/workspaces/${ws}/home`)).status).toBe(400);
-    expect((await h.local('/api/workspaces/w-none/home?user=Riley')).status).toBe(404);
+    expect((await h.local(`/workspaces/${ws}/home?format=json`)).status).toBe(400);
+    expect((await h.local('/workspaces/w-none/home?user=Riley')).status).toBe(404);
   });
 
   it('a fresh reader gets the deterministic brief with the queue denominator, never generating', async () => {
@@ -98,13 +100,13 @@ describe('home routes — deterministic server (no summarizer)', () => {
   });
 
   it('board changes since the marker show up in the brief; the queue counts open decisions', async () => {
-    const created = await h.post(`/api/workspaces/${ws}/tasks`, {
+    const created = await h.post(`/workspaces/${ws}/tasks`, {
       title: 'Rewrite the retry helper',
       author: AGENT,
       assignee: AGENT.name,
     });
     expect(created.status).toBe(200);
-    const decision = await h.post(`/api/workspaces/${ws}/tasks`, {
+    const decision = await h.post(`/workspaces/${ws}/tasks`, {
       title: 'Which fallback should the reconciler keep?',
       body: 'Keep the degraded response, or fail loudly? Blocked until answered: the retry PR.',
       author: AGENT,
@@ -121,13 +123,13 @@ describe('home routes — deterministic server (no summarizer)', () => {
 
   it('mark caught up moves the marker per PERSON, the brief covers from it, and undo restores', async () => {
     // Jordan marking read must not move Riley's marker.
-    const jordan = await h.post(`/api/workspaces/${ws}/home/read`, {
+    const jordan = await h.post(`/workspaces/${ws}/home/read`, {
       author: { name: 'Jordan' },
     });
     expect(jordan.status).toBe(200);
     expect((await home()).lastReadAt).toBe(0);
 
-    const marked = await h.post(`/api/workspaces/${ws}/home/read`, { author: PERSON });
+    const marked = await h.post(`/workspaces/${ws}/home/read`, { author: PERSON });
     const markedBody = (await marked.json()) as {
       ok: boolean;
       lastReadAt: number;
@@ -148,7 +150,7 @@ describe('home routes — deterministic server (no summarizer)', () => {
     expect(after.brief.markdown).toContain('What needs your review is queued below.');
 
     // Undo: post the previous value back.
-    const undone = await h.post(`/api/workspaces/${ws}/home/read`, {
+    const undone = await h.post(`/workspaces/${ws}/home/read`, {
       author: PERSON,
       at: markedBody.previous,
     });
@@ -157,11 +159,11 @@ describe('home routes — deterministic server (no summarizer)', () => {
   });
 
   it('rejects a mark with no author name', async () => {
-    expect((await h.post(`/api/workspaces/${ws}/home/read`, {})).status).toBe(400);
+    expect((await h.post(`/workspaces/${ws}/home/read`, {})).status).toBe(400);
   });
 
   it('instructions persist workspace-wide and come back on GET', async () => {
-    const put = await h.put(`/api/workspaces/${ws}/home/instructions`, {
+    const put = await h.put(`/workspaces/${ws}/home/instructions`, {
       instructions: 'Be terse. Two lines max.',
       author: PERSON,
     });
@@ -173,7 +175,7 @@ describe('home routes — deterministic server (no summarizer)', () => {
   });
 
   it('refuses empty instructions — blanking the recipe is not expressible', async () => {
-    const put = await h.put(`/api/workspaces/${ws}/home/instructions`, {
+    const put = await h.put(`/workspaces/${ws}/home/instructions`, {
       instructions: '   ',
       author: PERSON,
     });
@@ -230,20 +232,20 @@ describe('home brief queue count — blockers are not review items', () => {
   });
 
   const briefLine = async (): Promise<string> => {
-    const res = await h.local(`/api/workspaces/${ws}/home?user=Riley`);
+    const res = await h.local(`/workspaces/${ws}/home?user=Riley&format=json`);
     expect(res.status).toBe(200);
     return ((await res.json()) as HomePayload).brief.markdown;
   };
 
   it('a person-owned blocker with an open dependent does not count as queued', async () => {
-    const blocker = await h.post(`/api/workspaces/${ws}/tasks`, {
+    const blocker = await h.post(`/workspaces/${ws}/tasks`, {
       title: 'Ship the export fix',
       author: AGENT,
       assignee: 'human', // reserved word: unconditionally a person
     });
     expect(blocker.status).toBe(200);
     const blockerId = ((await blocker.json()) as { task: { id: string } }).task.id;
-    const dependent = await h.post(`/api/workspaces/${ws}/tasks`, {
+    const dependent = await h.post(`/workspaces/${ws}/tasks`, {
       title: 'Wire the importer to the fixed export',
       author: AGENT,
       assignee: AGENT.name,
@@ -264,7 +266,7 @@ describe('home brief queue count — blockers are not review items', () => {
   it('positive control: a real open decision flips the same line', async () => {
     // Proves the probe can see a queued item at all — without this, the
     // assertion above would also pass on a brief that never counts anything.
-    const decision = await h.post(`/api/workspaces/${ws}/tasks`, {
+    const decision = await h.post(`/workspaces/${ws}/tasks`, {
       title: 'Which export format do we keep?',
       body: 'CSV or Parquet? Blocked until answered: the importer wiring.',
       author: AGENT,
@@ -295,7 +297,7 @@ describe('home routes — generated brief (stub summarizer)', () => {
     }) as unknown as typeof fetch;
     h = makeHarness(new ThreadSummarizer({ apiKey: 'test-key', fetchImpl: impl }));
     ws = await makeWorkspace(h);
-    await h.post(`/api/workspaces/${ws}/tasks`, {
+    await h.post(`/workspaces/${ws}/tasks`, {
       title: 'Ship the fuzzy matcher',
       author: AGENT,
       assignee: AGENT.name,
@@ -307,7 +309,7 @@ describe('home routes — generated brief (stub summarizer)', () => {
   });
 
   const home = async (): Promise<HomePayload> => {
-    const res = await h.local(`/api/workspaces/${ws}/home?user=Riley`);
+    const res = await h.local(`/workspaces/${ws}/home?user=Riley&format=json`);
     return (await res.json()) as HomePayload;
   };
 
@@ -360,7 +362,7 @@ describe('home routes — generated brief (stub summarizer)', () => {
 
   it('a board change stales the brief; saving instructions drops every cached brief', async () => {
     const before = calls.length;
-    await h.post(`/api/workspaces/${ws}/tasks`, {
+    await h.post(`/workspaces/${ws}/tasks`, {
       title: 'Prune the device pool',
       author: AGENT,
       assignee: AGENT.name,
@@ -375,7 +377,7 @@ describe('home routes — generated brief (stub summarizer)', () => {
     expect(calls.length).toBe(before + 1);
 
     // Save & Update Summary: the instructions ride the next prompt.
-    const put = await h.put(`/api/workspaces/${ws}/home/instructions`, {
+    const put = await h.put(`/workspaces/${ws}/home/instructions`, {
       instructions: 'Only ever write ONE sentence.',
       author: PERSON,
     });
@@ -410,7 +412,7 @@ describe('the queue count matches what Home places — thread rows', () => {
   beforeAll(async () => {
     h = makeHarness();
     ws = await makeWorkspace(h);
-    const created = await h.post(`/api/workspaces/${ws}/tasks`, {
+    const created = await h.post(`/workspaces/${ws}/tasks`, {
       title: 'Sweep the cache dir',
       body: 'Agent can sweep the cache dir so that the disk stops filling up.',
       author: AGENT,
@@ -425,12 +427,12 @@ describe('the queue count matches what Home places — thread rows', () => {
   });
 
   const briefLine = async (): Promise<string> => {
-    const res = await h.local(`/api/workspaces/${ws}/home?user=Riley`);
+    const res = await h.local(`/workspaces/${ws}/home?user=Riley&format=json`);
     expect(res.status).toBe(200);
     return ((await res.json()) as HomePayload).brief.markdown;
   };
   const rows = async (): Promise<Array<Record<string, unknown>>> => {
-    const res = await h.local(`/api/workspaces/${ws}/review-items`);
+    const res = await h.local(`/workspaces/${ws}/review-items`);
     expect(res.status).toBe(200);
     return ((await res.json()) as { items: Array<Record<string, unknown>> }).items;
   };

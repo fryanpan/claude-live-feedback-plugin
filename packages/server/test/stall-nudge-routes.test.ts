@@ -144,7 +144,7 @@ describe('the board tells its lead which rows have stopped', () => {
     tab: ReturnType<typeof listenFrames>;
   }> {
     const { workspace } = await jj<{ workspace: { id: string; leadAgentId?: string } }>(
-      await post('/api/workspaces', { name: 'search-revamp', leadAgentId: LEAD.id }),
+      await post('/workspaces', { name: 'search-revamp', leadAgentId: LEAD.id }),
     );
     const workspaceId = workspace.id;
     expect(workspace.leadAgentId).toBe(LEAD.id);
@@ -180,7 +180,7 @@ describe('the board tells its lead which rows have stopped', () => {
     over: Record<string, unknown> = {},
   ): Promise<string> {
     const { task } = await jj<{ task: { id: string } }>(
-      await post(`/api/workspaces/${workspaceId}/tasks`, {
+      await post(`/workspaces/${workspaceId}/tasks`, {
         title,
         body: `Agent can ${title.toLowerCase()} so that the queue keeps moving.`,
         assignee: LEAD.name,
@@ -287,7 +287,7 @@ describe('the board tells its lead which rows have stopped', () => {
     const ownBase = `http://localhost:${own.port}`;
     try {
       const { workspace } = await jj<{ workspace: { id: string } }>(
-        await fetch(`${ownBase}/api/workspaces`, {
+        await fetch(`${ownBase}/workspaces`, {
           method: 'POST',
           headers: { 'content-type': 'application/json' },
           body: JSON.stringify({ name: 'quiet-window', leadAgentId: LEAD.id }),
@@ -304,7 +304,7 @@ describe('the board tells its lead which rows have stopped', () => {
       );
       const lead = listenFrames(res);
       const { task } = await jj<{ task: { id: string } }>(
-        await fetch(`${ownBase}/api/workspaces/${workspace.id}/tasks`, {
+        await fetch(`${ownBase}/workspaces/${workspace.id}/tasks`, {
           method: 'POST',
           headers: { 'content-type': 'application/json' },
           body: JSON.stringify({
@@ -697,7 +697,7 @@ describe('the board tells its lead which rows have stopped', () => {
     const ownBase = `http://localhost:${own.port}`;
     try {
       const { workspace } = await jj<{ workspace: { id: string } }>(
-        await fetch(`${ownBase}/api/workspaces`, {
+        await fetch(`${ownBase}/workspaces`, {
           method: 'POST',
           headers: { 'content-type': 'application/json' },
           body: JSON.stringify({ name: 'repeat-window', leadAgentId: LEAD.id }),
@@ -714,7 +714,7 @@ describe('the board tells its lead which rows have stopped', () => {
       );
       const lead = listenFrames(res);
       const { task } = await jj<{ task: { id: string } }>(
-        await fetch(`${ownBase}/api/workspaces/${workspace.id}/tasks`, {
+        await fetch(`${ownBase}/workspaces/${workspace.id}/tasks`, {
           method: 'POST',
           headers: { 'content-type': 'application/json' },
           body: JSON.stringify({

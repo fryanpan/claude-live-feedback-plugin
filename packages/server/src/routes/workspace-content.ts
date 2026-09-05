@@ -52,7 +52,7 @@ export async function handleWorkspaceContent(
   } = ctx;
   const { req, pathname, authorFor, visitor } = rq;
   // attach_doc: link an existing doc or review to a board workspace.
-  const wsAttachMatch = pathname.match(/^\/api\/workspaces\/([^/]+)\/docs$/);
+  const wsAttachMatch = pathname.match(/^\/workspaces\/([^/]+)\/docs$/);
   if (wsAttachMatch && req.method === 'POST') {
     const workspaceId = decodeURIComponent(wsAttachMatch[1] ?? '');
     const body = await safeJson(req);
@@ -121,7 +121,7 @@ export async function handleWorkspaceContent(
   // apply:true creates the goals + tasks and stamps the source file
   // with a banner + board link so the old tracker can't quietly stay a
   // second source of truth (a stamped file refuses re-import).
-  const wsImportMatch = pathname.match(/^\/api\/workspaces\/([^/]+)\/import-tasks$/);
+  const wsImportMatch = pathname.match(/^\/workspaces\/([^/]+)\/import-tasks$/);
   if (wsImportMatch && req.method === 'POST') {
     // Reads a markdown file off disk by path. Agents only — see
     // browserCannotBindBody.
@@ -233,7 +233,7 @@ export async function handleWorkspaceContent(
   // at the doc. A member of this board reaches it too (Bryan, 2026-09-03:
   // a share link means full access), which is why the reply's doc metadata
   // below is redacted rather than returned raw.
-  const wsHuddlesMatch = pathname.match(/^\/api\/workspaces\/([^/]+)\/huddles$/);
+  const wsHuddlesMatch = pathname.match(/^\/workspaces\/([^/]+)\/huddles$/);
   if (wsHuddlesMatch && req.method === 'POST') {
     const workspaceId = decodeURIComponent(wsHuddlesMatch[1] ?? '');
     const body = await safeJson(req);

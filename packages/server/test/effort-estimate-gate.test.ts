@@ -94,7 +94,7 @@ describe('effort-estimate scoring', () => {
 
   async function board(): Promise<{ workspaceId: string }> {
     const { workspace } = await jj<{ workspace: { id: string } }>(
-      await post('/api/workspaces', { name: 'launch-board' }),
+      await post('/workspaces', { name: 'launch-board' }),
     );
     return { workspaceId: workspace.id };
   }
@@ -104,7 +104,7 @@ describe('effort-estimate scoring', () => {
     opts: { title?: string; body?: string } = {},
   ): Promise<string> {
     const { task } = await jj<{ task: { id: string } }>(
-      await post(`/api/workspaces/${workspaceId}/tasks`, {
+      await post(`/workspaces/${workspaceId}/tasks`, {
         title: opts.title ?? 'Rebuild the index nightly',
         ...(opts.body !== undefined ? { body: opts.body } : {}),
         author: FILER,
@@ -178,7 +178,7 @@ describe('effort-estimate scoring', () => {
   it('re-scores when a ticket moves to a DIFFERENT goal, but not on a plain reorder', async () => {
     const { workspaceId } = await board();
     const { created } = await jj<{ created: Array<{ id: string; title: string }> }>(
-      await put(`/api/workspaces/${workspaceId}/goals`, {
+      await put(`/workspaces/${workspaceId}/goals`, {
         goals: [{ title: 'Launch week' }],
         author: PERSON,
       }),
@@ -211,7 +211,7 @@ describe('effort-estimate scoring', () => {
   it("a slow answer scored under the OLD goal never overwrites a re-triaged ticket's newer answer", async () => {
     const { workspaceId } = await board();
     const { created } = await jj<{ created: Array<{ id: string; title: string }> }>(
-      await put(`/api/workspaces/${workspaceId}/goals`, {
+      await put(`/workspaces/${workspaceId}/goals`, {
         goals: [{ title: 'Launch week' }],
         author: PERSON,
       }),
@@ -269,14 +269,14 @@ describe('effort-estimate scoring', () => {
     try {
       const b2 = `http://localhost:${unscored.port}`;
       const { workspace } = await jj<{ workspace: { id: string } }>(
-        await fetch(`${b2}/api/workspaces`, {
+        await fetch(`${b2}/workspaces`, {
           method: 'POST',
           headers: { 'content-type': 'application/json' },
           body: JSON.stringify({ name: 'no-scorer-board' }),
         }),
       );
       const { task } = await jj<{ task: { id: string } }>(
-        await fetch(`${b2}/api/workspaces/${workspace.id}/tasks`, {
+        await fetch(`${b2}/workspaces/${workspace.id}/tasks`, {
           method: 'POST',
           headers: { 'content-type': 'application/json' },
           body: JSON.stringify({ title: 'Untouched ticket', author: FILER }),
@@ -293,7 +293,7 @@ describe('effort-estimate scoring', () => {
     const { workspaceId } = await board();
     verdict = 'defer';
     const started = Date.now();
-    const res = await post(`/api/workspaces/${workspaceId}/tasks`, {
+    const res = await post(`/workspaces/${workspaceId}/tasks`, {
       title: 'A ticket whose scoring never returns',
       author: FILER,
     });
@@ -397,18 +397,18 @@ describe('effort-estimate scoring', () => {
       const before = await jj<{
         reviewItemCriteria: { value: string; isDefault: boolean };
         effortEstimatePrompt: { value: string; isDefault: boolean };
-      }>(await get(`/api/workspaces/${workspaceId}/settings`));
+      }>(await get(`/workspaces/${workspaceId}/settings`));
       expect(before.effortEstimatePrompt.isDefault).toBe(true);
       expect(before.effortEstimatePrompt.value).toBe(DEFAULT_EFFORT_ESTIMATE_PROMPT);
 
       await jj(
-        await put(`/api/workspaces/${workspaceId}/settings`, {
+        await put(`/workspaces/${workspaceId}/settings`, {
           effortEstimatePrompt: 'Weigh review overhead heavily.',
           author: PERSON,
         }),
       );
       const after = await jj<{ effortEstimatePrompt: { value: string; isDefault: boolean } }>(
-        await get(`/api/workspaces/${workspaceId}/settings`),
+        await get(`/workspaces/${workspaceId}/settings`),
       );
       expect(after.effortEstimatePrompt).toMatchObject({
         value: 'Weigh review overhead heavily.',
@@ -419,13 +419,13 @@ describe('effort-estimate scoring', () => {
     it('writing one prompt never clobbers the other back to its default', async () => {
       const { workspaceId } = await board();
       await jj(
-        await put(`/api/workspaces/${workspaceId}/settings`, {
+        await put(`/workspaces/${workspaceId}/settings`, {
           reviewItemCriteria: 'Every headline is a question.',
           author: PERSON,
         }),
       );
       await jj(
-        await put(`/api/workspaces/${workspaceId}/settings`, {
+        await put(`/workspaces/${workspaceId}/settings`, {
           effortEstimatePrompt: 'Weigh review overhead heavily.',
           author: PERSON,
         }),
@@ -433,7 +433,7 @@ describe('effort-estimate scoring', () => {
       const after = await jj<{
         reviewItemCriteria: { value: string; isDefault: boolean };
         effortEstimatePrompt: { value: string; isDefault: boolean };
-      }>(await get(`/api/workspaces/${workspaceId}/settings`));
+      }>(await get(`/workspaces/${workspaceId}/settings`));
       expect(after.reviewItemCriteria).toMatchObject({
         value: 'Every headline is a question.',
         isDefault: false,
@@ -447,14 +447,14 @@ describe('effort-estimate scoring', () => {
     it('a null write returns the prompt to the default without touching the other', async () => {
       const { workspaceId } = await board();
       await jj(
-        await put(`/api/workspaces/${workspaceId}/settings`, {
+        await put(`/workspaces/${workspaceId}/settings`, {
           reviewItemCriteria: 'custom criteria',
           effortEstimatePrompt: 'custom effort prompt',
           author: PERSON,
         }),
       );
       await jj(
-        await put(`/api/workspaces/${workspaceId}/settings`, {
+        await put(`/workspaces/${workspaceId}/settings`, {
           effortEstimatePrompt: null,
           author: PERSON,
         }),
@@ -462,7 +462,7 @@ describe('effort-estimate scoring', () => {
       const after = await jj<{
         reviewItemCriteria: { value: string; isDefault: boolean };
         effortEstimatePrompt: { isDefault: boolean };
-      }>(await get(`/api/workspaces/${workspaceId}/settings`));
+      }>(await get(`/workspaces/${workspaceId}/settings`));
       expect(after.effortEstimatePrompt.isDefault).toBe(true);
       expect(after.reviewItemCriteria).toMatchObject({
         value: 'custom criteria',
@@ -472,7 +472,7 @@ describe('effort-estimate scoring', () => {
 
     it('refuses a non-string prompt', async () => {
       const { workspaceId } = await board();
-      const bad = await put(`/api/workspaces/${workspaceId}/settings`, {
+      const bad = await put(`/workspaces/${workspaceId}/settings`, {
         effortEstimatePrompt: 42,
         author: PERSON,
       });
@@ -485,7 +485,7 @@ describe('effort-estimate scoring', () => {
     // would persist the first while still answering 400 for the second.
     it('a 400 on either field leaves BOTH fields untouched, even when the other is valid', async () => {
       const { workspaceId } = await board();
-      const bad = await put(`/api/workspaces/${workspaceId}/settings`, {
+      const bad = await put(`/workspaces/${workspaceId}/settings`, {
         reviewItemCriteria: 'Every headline is a question.',
         effortEstimatePrompt: 42,
         author: PERSON,
@@ -494,7 +494,7 @@ describe('effort-estimate scoring', () => {
       const after = await jj<{
         reviewItemCriteria: { isDefault: boolean };
         effortEstimatePrompt: { isDefault: boolean };
-      }>(await get(`/api/workspaces/${workspaceId}/settings`));
+      }>(await get(`/workspaces/${workspaceId}/settings`));
       expect(after.reviewItemCriteria.isDefault).toBe(true);
       expect(after.effortEstimatePrompt.isDefault).toBe(true);
     });
@@ -505,7 +505,7 @@ describe('effort-estimate scoring', () => {
       await until(() => (calls.length > 0 ? calls.length : undefined));
       expect(calls[0]?.prompt).toBe(DEFAULT_EFFORT_ESTIMATE_PROMPT);
       await jj(
-        await put(`/api/workspaces/${workspaceId}/settings`, {
+        await put(`/workspaces/${workspaceId}/settings`, {
           effortEstimatePrompt: 'Weigh review overhead heavily.',
           author: PERSON,
         }),

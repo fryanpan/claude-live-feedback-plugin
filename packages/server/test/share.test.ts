@@ -112,9 +112,9 @@ describe('share REST endpoints', () => {
     });
     base = `http://localhost:${handle.port}`;
 
-    // A board first — `POST /api/workspaces` with a `name` rather than a
+    // A board first — `POST /workspaces` with a `name` rather than a
     // `folderPath`. This is the only id the share routes accept.
-    const board = await fetch(`${base}/api/workspaces`, {
+    const board = await fetch(`${base}/workspaces`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ name: 'Share test board' }),
@@ -123,7 +123,7 @@ describe('share REST endpoints', () => {
     boardId = ((await board.json()) as { workspace: { id: string } }).workspace.id;
     expect(boardId).toBeTruthy();
 
-    const bind = await fetch(`${base}/api/workspaces`, {
+    const bind = await fetch(`${base}/workspaces`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ folderPath: folder, hubWorkspaceId: boardId }),
@@ -311,13 +311,13 @@ describe('share REST endpoints', () => {
     // record is distinguishable from the fixture one.
     const persistFolder = mkdtempSync(join(tmpdir(), 'share-test-persist-'));
     writeFileSync(join(persistFolder, 'persist.md'), '# persist\n');
-    const board = await fetch(`${base}/api/workspaces`, {
+    const board = await fetch(`${base}/workspaces`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ name: 'Persist board' }),
     });
     const persistBoardId = ((await board.json()) as { workspace: { id: string } }).workspace.id;
-    const bind = await fetch(`${base}/api/workspaces`, {
+    const bind = await fetch(`${base}/workspaces`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ folderPath: persistFolder, hubWorkspaceId: persistBoardId }),

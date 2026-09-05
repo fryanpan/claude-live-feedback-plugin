@@ -78,12 +78,12 @@ describe('POST /api/docs/:docId/plan-request', () => {
   const newBoard = async (name: string, leadAgentId?: string): Promise<string> =>
     (
       await jj<{ workspace: { id: string } }>(
-        await post('/api/workspaces', { name, ...(leadAgentId ? { leadAgentId } : {}) }),
+        await post('/workspaces', { name, ...(leadAgentId ? { leadAgentId } : {}) }),
       )
     ).workspace.id;
   /** A fresh "Make a plan" doc — the only surface the float ever presses on. */
   const newPlanDoc = async (ws: string): Promise<string> =>
-    (await jj<HuddleResponse>(await post(`/api/workspaces/${ws}/huddles`, { kind: 'plan' }))).docId;
+    (await jj<HuddleResponse>(await post(`/workspaces/${ws}/huddles`, { kind: 'plan' }))).docId;
   const threadsOf = async (docId: string): Promise<ThreadRow[]> =>
     (await jj<{ threads: ThreadRow[] }>(await local(`/api/docs/${docId}/threads`))).threads;
 

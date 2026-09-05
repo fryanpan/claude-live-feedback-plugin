@@ -126,13 +126,13 @@ describe('board rooms defend everything the server owns', () => {
   };
 
   async function makeWorkspace(name: string): Promise<string> {
-    const r = await post('/api/workspaces', { name, goal: 'Ship the search revamp.' });
+    const r = await post('/workspaces', { name, goal: 'Ship the search revamp.' });
     expect(r.status).toBe(200);
     return ((await r.json()) as { workspace: { id: string } }).workspace.id;
   }
 
   async function makeTask(wsId: string, opts: Record<string, unknown>): Promise<string> {
-    const r = await post(`/api/workspaces/${wsId}/tasks`, { assignee: 'human', ...opts });
+    const r = await post(`/workspaces/${wsId}/tasks`, { assignee: 'human', ...opts });
     expect(r.status).toBe(200);
     return ((await r.json()) as { task: { id: string } }).task.id;
   }

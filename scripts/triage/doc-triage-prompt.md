@@ -14,7 +14,7 @@ Bryan's feedback — so you NEVER delete docs yourself. Owners decide.
    `reviewUrl`, `sourceUrl`, and — for docs that belong to a bound folder —
    `workspaceId`.
 
-3. Fetch the **workspace list**: `curl -s http://localhost:8787/api/workspaces`.
+3. Fetch the **workspace list**: `curl -s http://localhost:8787/workspaces`.
    Each workspace rolls up its member files: `workspaceId`, `owner`,
    `fileCount`, `openThreads`, `lastActivityAt` (max member), and `allIdle`
    (true iff EVERY member file is idle >24h). A workspace is a folder/worktree

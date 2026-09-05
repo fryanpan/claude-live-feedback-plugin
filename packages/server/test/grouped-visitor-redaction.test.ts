@@ -92,7 +92,7 @@ describe('a share visitor’s /grouped leaks no hostname and no other board', ()
     base = `http://localhost:${handle.port}`;
 
     boardId = (
-      (await local('/api/workspaces', {
+      (await local('/workspaces', {
         method: 'POST',
         body: JSON.stringify({ name: 'Grouped board' }),
       }).then((r) => r.json())) as { workspace: { id: string } }
@@ -119,13 +119,13 @@ describe('a share visitor’s /grouped leaks no hostname and no other board', ()
     // The host is whatever `publicHost()` resolves on the machine running
     // this — a tailnet name in prod. The assertion is the SHAPE, because the
     // name is the very thing that must not be written down anywhere.
-    const raw = await local(`/api/workspaces/${reviewId}/grouped`).then((r) => r.text());
+    const raw = await local(`/api/reviews/${reviewId}/grouped`).then((r) => r.text());
     expect(raw).toContain('alpha.ts'); // the payload really has file nodes
     expect(hostsIn(raw).length).toBeGreaterThan(0);
   });
 
   it('CONTROL: the visitor really reaches /grouped, with the same files', async () => {
-    const r = await visitor(`/api/workspaces/${reviewId}/grouped`);
+    const r = await visitor(`/api/reviews/${reviewId}/grouped`);
     expect(r.status).toBe(200);
     const raw = await r.text();
     // Nothing below can be a vacuous pass on an empty or refused body.
@@ -134,7 +134,7 @@ describe('a share visitor’s /grouped leaks no hostname and no other board', ()
   });
 
   it('the visitor’s /grouped exposes no hostname at all', async () => {
-    const raw = await visitor(`/api/workspaces/${reviewId}/grouped`).then((r) => r.text());
+    const raw = await visitor(`/api/reviews/${reviewId}/grouped`).then((r) => r.text());
     expect(hostsIn(raw)).toEqual([]);
     // The two shapes a tailnet / LAN name arrives in, independently of the
     // host-extracting regex above.
@@ -143,7 +143,7 @@ describe('a share visitor’s /grouped leaks no hostname and no other board', ()
   });
 
   it('every reviewUrl stays usable, relative, and under the board actually shared', async () => {
-    const raw = await visitor(`/api/workspaces/${reviewId}/grouped`).then((r) => r.text());
+    const raw = await visitor(`/api/reviews/${reviewId}/grouped`).then((r) => r.text());
     const urls = [...raw.matchAll(/"reviewUrl":"([^"]+)"/g)].map((m) => m[1] as string);
     expect(urls.length).toBeGreaterThan(0); // control: there ARE reviewUrls
     for (const u of urls) {
@@ -152,7 +152,7 @@ describe('a share visitor’s /grouped leaks no hostname and no other board', ()
   });
 
   it('the owner’s copy is untouched — this redaction is the visitor’s alone', async () => {
-    const raw = await local(`/api/workspaces/${reviewId}/grouped`).then((r) => r.text());
+    const raw = await local(`/api/reviews/${reviewId}/grouped`).then((r) => r.text());
     const urls = [...raw.matchAll(/"reviewUrl":"([^"]+)"/g)].map((m) => m[1] as string);
     expect(urls.length).toBeGreaterThan(0);
     for (const u of urls) expect(u.startsWith('http')).toBe(true);

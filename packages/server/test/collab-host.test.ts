@@ -190,7 +190,7 @@ describe('the collaboration hostname over HTTP', () => {
       name: string,
       requestedDocId: string,
     ): Promise<{ boardId: string; mintedDocId: string }> => {
-      const created = await asOwner('/api/workspaces', {
+      const created = await asOwner('/workspaces', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ name }),
@@ -208,7 +208,7 @@ describe('the collaboration hostname over HTTP', () => {
       const mintedDocId = ((await doc.json()) as { docId: string }).docId;
       // Filed by the readable name; the membership the board records is the
       // minted id, which is what the scope checks below are measured against.
-      const filed = await asOwner(`/api/workspaces/${encodeURIComponent(id)}/docs`, {
+      const filed = await asOwner(`/workspaces/${encodeURIComponent(id)}/docs`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ docId: requestedDocId }),
@@ -285,12 +285,12 @@ describe('the collaboration hostname over HTTP', () => {
     it('opens the board it was linked to, and the docs filed on it', async () => {
       // Not asserting 200 on the page routes — the workspaces-app dist is not
       // built in tests. What is under test is the gate.
-      expect((await asCollaborator(`/workspaces/${encodeURIComponent(board)}`)).status).not.toBe(
-        403,
-      );
-      expect((await asCollaborator(`/api/workspaces/${encodeURIComponent(board)}`)).status).toBe(
-        200,
-      );
+      expect(
+        (await asCollaborator(`/workspaces/${encodeURIComponent(board)}?format=json`)).status,
+      ).not.toBe(403);
+      expect(
+        (await asCollaborator(`/workspaces/${encodeURIComponent(board)}?format=json`)).status,
+      ).toBe(200);
       const doc = await asCollaborator(`/api/docs/${docId}`);
       expect(doc.status).toBe(200);
       expect(((await doc.json()) as { meta: { docId: string } }).meta.docId).toBe(docId);
@@ -339,7 +339,7 @@ describe('the collaboration hostname over HTTP', () => {
 
   describe('C. what stays privileged', () => {
     it('CANNOT enumerate the server — the doc list or the workspace list', async () => {
-      for (const p of ['/api/docs', '/api/workspaces']) {
+      for (const p of ['/api/docs', '/workspaces']) {
         const r = await asCollaborator(p);
         expect(r.status, p).toBe(403);
         expect(await r.json(), p).toEqual({ error: 'out_of_share_scope' });
@@ -348,7 +348,7 @@ describe('the collaboration hostname over HTTP', () => {
       // refusals above are about the host and not about a server that has
       // stopped answering.
       expect((await asOwner('/api/docs')).status).toBe(200);
-      expect((await asOwner('/api/workspaces')).status).toBe(200);
+      expect((await asOwner('/workspaces')).status).toBe(200);
     });
 
     it('CANNOT open the landing page — this is not the product at a nicer name', async () => {
@@ -369,7 +369,7 @@ describe('the collaboration hostname over HTTP', () => {
     });
 
     it('CANNOT bind a folder or create a diff review (arbitrary filesystem read)', async () => {
-      const bind = await asCollaborator('/api/workspaces', {
+      const bind = await asCollaborator('/workspaces', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ folderPath: '/etc' }),
@@ -409,16 +409,16 @@ describe('the collaboration hostname over HTTP', () => {
 
     it('CANNOT delete a board or reshape one', async () => {
       expect(
-        (await asCollaborator(`/api/workspaces/${encodeURIComponent(board)}`, { method: 'DELETE' }))
+        (await asCollaborator(`/workspaces/${encodeURIComponent(board)}`, { method: 'DELETE' }))
           .status,
       ).toBe(403);
-      const regroup = await asCollaborator(`/api/workspaces/${encodeURIComponent(board)}/groups`, {
+      const regroup = await asCollaborator(`/api/reviews/${encodeURIComponent(board)}/groups`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ groups: [] }),
       });
       expect(regroup.status).toBe(403);
-      expect((await asOwner('/api/workspaces')).status).toBe(200);
+      expect((await asOwner('/workspaces')).status).toBe(200);
     });
 
     it('CANNOT reach a doc through a board it does not belong to', async () => {
@@ -436,14 +436,14 @@ describe('the collaboration hostname over HTTP', () => {
       // about the code: an Access-admitted collaborator could open ANY board
       // they had the id for. Access admits an email to the HOSTNAME; the
       // board's own allow list is what says who was given the board.
-      const r = await asCollaborator(`/api/workspaces/${encodeURIComponent(otherBoard)}`);
+      const r = await asCollaborator(`/workspaces/${encodeURIComponent(otherBoard)}?format=json`);
       expect(r.status).toBe(403);
       // POSITIVE CONTROL: the same request shape, the same token, on the board
       // this collaborator WAS given — so the 403 above is membership and not
       // a route that stopped answering.
-      expect((await asCollaborator(`/api/workspaces/${encodeURIComponent(board)}`)).status).toBe(
-        200,
-      );
+      expect(
+        (await asCollaborator(`/workspaces/${encodeURIComponent(board)}?format=json`)).status,
+      ).toBe(200);
     });
   });
 
@@ -455,7 +455,13 @@ describe('the collaboration hostname over HTTP', () => {
    * live share names that person.
    */
   describe('E. one admitted email, one board', () => {
-    const boardPath = (id: string) => `/api/workspaces/${encodeURIComponent(id)}`;
+    const boardPath = (id: string) => `/workspaces/${encodeURIComponent(id)}?format=json`;
+    // The board's own path with a collection under it. Separate from
+    // `boardPath` because that one carries `?format=json` — the board record
+    // and the board PAGE are one address now, and the query string is what
+    // tells them apart — so appending a segment to it would put the
+    // collection inside the query.
+    const boardSub = (id: string, sub: string) => `/workspaces/${encodeURIComponent(id)}/${sub}`;
 
     it('a DOMAIN entry admits every address at that domain', async () => {
       // `board` was shared with `@partner.example`, and the collaborator is
@@ -494,7 +500,7 @@ describe('the collaboration hostname over HTTP', () => {
       // and the scope question have to land on the same board. This is that,
       // end to end, on the collaboration hostname.
       const json = { 'content-type': 'application/json' };
-      const mine = await asCollaborator(`${boardPath(board)}/tasks`, {
+      const mine = await asCollaborator(boardSub(board, 'tasks'), {
         method: 'POST',
         headers: json,
         body: JSON.stringify({ title: 'Filed by a collaborator', assignee: 'human' }),
@@ -517,7 +523,7 @@ describe('the collaboration hostname over HTTP', () => {
       expect(crossed.status).toBe(403);
       expect(await crossed.json()).toEqual({ error: 'out_of_share_scope' });
       // POSITIVE CONTROL: the same address files on the board it DOES hold.
-      const theirs = await asEmail(NAMED_EMAIL, `${boardPath(exactBoard)}/tasks`, {
+      const theirs = await asEmail(NAMED_EMAIL, boardSub(exactBoard, 'tasks'), {
         method: 'POST',
         headers: json,
         body: JSON.stringify({ title: 'On their own board', assignee: 'human' }),
@@ -587,14 +593,14 @@ describe('the collaboration hostname over HTTP', () => {
       // share hostname served it. Both orders are asserted, because the bug
       // was invisible in one of them.
       const first = await boardWith('Filed first', 'two-board-doc');
-      const second = await asOwner('/api/workspaces', {
+      const second = await asOwner('/workspaces', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ name: 'Filed second' }),
       });
       expect(second.status).toBe(200);
       const secondId = ((await second.json()) as { workspace: { id: string } }).workspace.id;
-      const filed = await asOwner(`/api/workspaces/${encodeURIComponent(secondId)}/docs`, {
+      const filed = await asOwner(`/workspaces/${encodeURIComponent(secondId)}/docs`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ docId: 'two-board-doc' }),
@@ -777,7 +783,7 @@ describe('the collaboration hostname, with email identity in effect', () => {
           ...((init.headers as Record<string, string>) ?? {}),
         },
       });
-    const board = await local('/api/workspaces', {
+    const board = await local('/workspaces', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ name: 'Collab identity' }),
@@ -794,7 +800,7 @@ describe('the collaboration hostname, with email identity in effect', () => {
     });
     expect(doc.status).toBe(200);
     const docId = ((await doc.json()) as { docId: string }).docId;
-    const filed = await local(`/api/workspaces/${encodeURIComponent(boardId)}/docs`, {
+    const filed = await local(`/workspaces/${encodeURIComponent(boardId)}/docs`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ docId: name }),

@@ -10,7 +10,7 @@
  *
  * What must NOT break, and is asserted here rather than assumed:
  *
- *  1. `PUT /api/workspaces/:id/goal` is a SHARED-SERVER route. Old plugin
+ *  1. `PUT /workspaces/:id/goal` is a SHARED-SERVER route. Old plugin
  *     bundles call it from sessions nobody can restart, so it may not 404 (a
  *     route that vanished) or 500 (a route that broke). It answers 410 with a
  *     body naming the replacement — a deliberate, readable refusal that the
@@ -62,7 +62,7 @@ describe('the legacy text goal is removed', () => {
     });
 
   const newWorkspace = async (extra: Record<string, unknown> = {}): Promise<string> => {
-    const r = await post('/api/workspaces', { name: 'intake', author: AGENT, ...extra });
+    const r = await post('/workspaces', { name: 'intake', author: AGENT, ...extra });
     const { workspace } = (await r.json()) as { workspace: { id: string } };
     return workspace.id;
   };
@@ -81,7 +81,7 @@ describe('the legacy text goal is removed', () => {
   describe('the deprecated goal route', () => {
     it('answers 410 — not 404, not 500 — and names what replaced it', async () => {
       const id = await newWorkspace();
-      const r = await put(`/api/workspaces/${id}/goal`, {
+      const r = await put(`/workspaces/${id}/goal`, {
         goal: 'Ship the intake queue, then prove it under load.',
         author: PERSON,
       });
@@ -100,19 +100,30 @@ describe('the legacy text goal is removed', () => {
       expect(body.error).toContain('set_goal_list');
     });
 
-    it('answers the same way for an unknown workspace — the route no longer looks one up', async () => {
-      const r = await put('/api/workspaces/w-missing/goal', {
+    it('answers 404 for an unknown board — the board question is asked first now', async () => {
+      // This used to be a second 410: the route named no board, so a bad
+      // workspace id and a good one reached the same tombstone. The board is
+      // in the path now and one middleware resolves it above every handler,
+      // so an id no board answers to stops there.
+      //
+      // The 410 above is the control that keeps this honest: the tombstone
+      // still answers for a board that EXISTS, so this 404 is the unknown id
+      // and not the route having quietly disappeared.
+      const r = await put('/workspaces/w-missing/goal', {
         goal: 'anything',
         author: PERSON,
       });
-      expect(r.status).toBe(410);
+      expect(r.status).toBe(404);
     });
 
     it('changes nothing on the board', async () => {
       const id = await newWorkspace();
-      const before = await (await local(`/api/workspaces/${id}`)).text();
-      await put(`/api/workspaces/${id}/goal`, { goal: 'A new north star.', author: PERSON });
-      const after = await (await local(`/api/workspaces/${id}`)).text();
+      // The board RECORD, not the page it shares an address with: the shell
+      // HTML is the same bytes for every board, so comparing it before and
+      // after would pass whatever the write did.
+      const before = await (await local(`/workspaces/${id}?format=json`)).text();
+      await put(`/workspaces/${id}/goal`, { goal: 'A new north star.', author: PERSON });
+      const after = await (await local(`/workspaces/${id}?format=json`)).text();
       expect(after).toBe(before);
     });
   });
@@ -120,7 +131,7 @@ describe('the legacy text goal is removed', () => {
   describe('read payloads', () => {
     it('carries no goal, goalUpdatedAt, or pendingRetriage', async () => {
       const id = await newWorkspace();
-      const r = await local(`/api/workspaces/${id}`);
+      const r = await local(`/workspaces/${id}?format=json`);
       expect(r.status).toBe(200);
       const payload = (await r.json()) as {
         workspace: Record<string, unknown>;
@@ -137,7 +148,7 @@ describe('the legacy text goal is removed', () => {
 
     it('leaves the workspace list without a goal column', async () => {
       await newWorkspace();
-      const r = await local('/api/workspaces');
+      const r = await local('/workspaces');
       const { boardWorkspaces } = (await r.json()) as {
         boardWorkspaces: Array<Record<string, unknown>>;
       };
@@ -151,7 +162,7 @@ describe('the legacy text goal is removed', () => {
 
   describe('old create payloads', () => {
     it('ignores a legacy goal field rather than refusing the create', async () => {
-      const r = await post('/api/workspaces', {
+      const r = await post('/workspaces', {
         name: 'legacy caller',
         goal: 'A north star an old bundle still sends.',
         author: AGENT,
@@ -167,17 +178,17 @@ describe('the legacy text goal is removed', () => {
     it('records triagedAgainst with goalId and no text copy', async () => {
       const id = await newWorkspace();
       // Band ids are minted by the store, never chosen by the caller.
-      const listed = await put(`/api/workspaces/${id}/goals`, {
+      const listed = await put(`/workspaces/${id}/goals`, {
         goals: [{ title: 'Ship it' }],
         author: PERSON,
       });
       expect(listed.status).toBe(200);
-      const read = (await (await local(`/api/workspaces/${id}`)).json()) as {
+      const read = (await (await local(`/workspaces/${id}?format=json`)).json()) as {
         workspace: { goals: Array<{ id: string }> };
       };
       const bandId = read.workspace.goals[0]?.id as string;
       expect(bandId).toBeTruthy();
-      const created = await post(`/api/workspaces/${id}/tasks`, {
+      const created = await post(`/workspaces/${id}/tasks`, {
         title: 'Wire the intake form',
         body: 'Agent can file intake so that requests stop arriving by mail.',
         author: AGENT,

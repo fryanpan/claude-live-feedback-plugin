@@ -106,7 +106,7 @@ describe('allow-rule review items', () => {
 
   async function boardWithLead(name = 'search-revamp'): Promise<string> {
     const { workspace } = await jj<{ workspace: { id: string } }>(
-      await post('/api/workspaces', { name, leadAgentId: LEAD.id }),
+      await post('/workspaces', { name, leadAgentId: LEAD.id }),
     );
     await jj(
       await post(`/workspaces/${workspace.id}/agents`, {
@@ -119,7 +119,7 @@ describe('allow-rule review items', () => {
 
   async function inProgressRow(workspaceId: string, title: string): Promise<string> {
     const { task } = await jj<{ task: { id: string } }>(
-      await post(`/api/workspaces/${workspaceId}/tasks`, {
+      await post(`/workspaces/${workspaceId}/tasks`, {
         title,
         body: `Agent can ${title.toLowerCase()} so that the queue keeps moving.`,
         assignee: LEAD.name,

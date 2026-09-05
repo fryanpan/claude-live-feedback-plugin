@@ -109,10 +109,10 @@ describe('the owner hears a comment on their review item', () => {
     name: string,
   ): Promise<{ workspaceId: string; taskId: string; itemId: string }> {
     const { workspace } = await jj<{ workspace: { id: string } }>(
-      await post('/api/workspaces', { name, goal: 'Rebuild the index nightly.' }),
+      await post('/workspaces', { name, goal: 'Rebuild the index nightly.' }),
     );
     const { task } = await jj<{ task: { id: string } }>(
-      await post(`/api/workspaces/${workspace.id}/tasks`, {
+      await post(`/workspaces/${workspace.id}/tasks`, {
         title: 'Rebuild the index nightly',
         assignee: AGENT.name,
         author: AGENT,
@@ -234,7 +234,7 @@ describe('the owner hears a comment on their review item', () => {
     // the fan-out would produce.
     const mine = await seed('index-rebuild');
     const { task: sibling } = await jj<{ task: { id: string } }>(
-      await post(`/api/workspaces/${mine.workspaceId}/tasks`, {
+      await post(`/workspaces/${mine.workspaceId}/tasks`, {
         title: 'Warm the cache',
         assignee: AGENT.name,
         author: AGENT,

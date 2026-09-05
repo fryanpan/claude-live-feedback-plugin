@@ -67,12 +67,12 @@ async function main(): Promise<void> {
   const now = Date.now();
 
   const [tasksRes, eventsRes, itemsRes] = await Promise.all([
-    fetch(`${base}/api/workspaces/${ws}/tasks`),
-    fetch(`${base}/api/workspaces/${ws}/events`),
-    fetch(`${base}/api/workspaces/${ws}/review-items`),
+    fetch(`${base}/workspaces/${ws}/tasks`),
+    fetch(`${base}/workspaces/${ws}/events`),
+    fetch(`${base}/workspaces/${ws}/review-items`),
   ]);
   const tasks = ((await tasksRes.json()) as { tasks: TaskRow[] }).tasks ?? [];
-  const wsRes = await fetch(`${base}/api/workspaces/${ws}`);
+  const wsRes = await fetch(`${base}/workspaces/${ws}`);
   const wsBody = (await wsRes.json()) as {
     workspace?: { goals?: Array<{ id: string; name?: string; title?: string }> };
     goalSummary?: Array<{ id: string; status?: string }>;

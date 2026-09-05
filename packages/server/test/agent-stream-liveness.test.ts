@@ -197,7 +197,7 @@ describe('a real stream on the real route keeps a working agent reachable', () =
   });
 
   async function makeAttachedWorkspace(name: string): Promise<string> {
-    const r = await fetch(`${base}/api/workspaces`, {
+    const r = await fetch(`${base}/workspaces`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ name, goal: 'Ship it.' }),

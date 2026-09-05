@@ -72,7 +72,7 @@ const post = (path: string, body?: unknown) =>
 
 async function seedWorkspace(): Promise<string> {
   const { workspace } = await jj<{ workspace: { id: string } }>(
-    await post('/api/workspaces', { name: 'storage-cleanup', goal: 'Cut the storage bill.' }),
+    await post('/workspaces', { name: 'storage-cleanup', goal: 'Cut the storage bill.' }),
   );
   return workspace.id;
 }
@@ -81,7 +81,7 @@ async function seedWorkspace(): Promise<string> {
  *  exactly as every task on disk today carries one. Nothing new is written. */
 async function seedDecision(workspaceId: string, title = 'keep disk or memory?'): Promise<Task> {
   const { task } = await jj<{ task: Task }>(
-    await post(`/api/workspaces/${workspaceId}/tasks`, {
+    await post(`/workspaces/${workspaceId}/tasks`, {
       title,
       assignee: 'Jordan',
       needs: 'decision',
@@ -94,7 +94,7 @@ async function seedDecision(workspaceId: string, title = 'keep disk or memory?')
 
 async function seedAction(workspaceId: string, title = 'sweep the cache dir'): Promise<Task> {
   const { task } = await jj<{ task: Task }>(
-    await post(`/api/workspaces/${workspaceId}/tasks`, {
+    await post(`/workspaces/${workspaceId}/tasks`, {
       title,
       assignee: 'Scheduler Agent',
       body: 'Agent can sweep the cache dir so that the disk stops filling up.',
@@ -105,14 +105,14 @@ async function seedAction(workspaceId: string, title = 'sweep the cache dir'): P
 
 async function queueRows(workspaceId: string): Promise<QueueRow[]> {
   const { items } = await jj<{ items: QueueRow[] }>(
-    await fetch(`${base}/api/workspaces/${workspaceId}/review-items`),
+    await fetch(`${base}/workspaces/${workspaceId}/review-items`),
   );
   return items;
 }
 
 async function briefLine(workspaceId: string): Promise<string> {
   const { brief } = await jj<{ brief: { markdown: string } }>(
-    await fetch(`${base}/api/workspaces/${workspaceId}/home?user=Jordan`),
+    await fetch(`${base}/workspaces/${workspaceId}/home?user=Jordan&format=json`),
   );
   return brief.markdown;
 }
@@ -127,7 +127,7 @@ afterEach(async () => {
   rmSync(dataDir, { recursive: true, force: true });
 });
 
-describe('GET /api/workspaces/:id/review-items — ticket-borne rows', () => {
+describe('GET /workspaces/:id/review-items — ticket-borne rows', () => {
   /**
    * The ticket's core complaint, as one assertion. Before this change the
    * answer was `[]`: the decision existed, the board's own strip drew it, and
@@ -237,7 +237,7 @@ describe('who asked — the ticket-borne row carries an asker like a thread row 
   it('a legacy decision names the actor who filed the ticket', async () => {
     const ws = await seedWorkspace();
     const { task } = await jj<{ task: Task }>(
-      await post(`/api/workspaces/${ws}/tasks`, {
+      await post(`/workspaces/${ws}/tasks`, {
         title: 'keep disk or memory?',
         assignee: 'Jordan',
         needs: 'decision',
@@ -254,7 +254,7 @@ describe('who asked — the ticket-borne row carries an asker like a thread row 
     // And the board projection carries it, so the Home card's decision row
     // (built in the browser off the projection) can say the same words.
     const { tasks } = await jj<{ tasks: Array<{ id: string; createdBy?: string }> }>(
-      await fetch(`${base}/api/workspaces/${ws}/tasks`),
+      await fetch(`${base}/workspaces/${ws}/tasks?format=json`),
     );
     expect(tasks.find((t) => t.id === task.id)?.createdBy).toBe('Harbor agent');
   });
@@ -299,7 +299,7 @@ describe('the Home queue count', () => {
     await jj(await post(`/api/tasks/${third.id}/answer`, { text: 'A week.', author: PERSON }));
 
     const { tasks } = await jj<{ tasks: Task[] }>(
-      await fetch(`${base}/api/workspaces/${ws}/tasks`),
+      await fetch(`${base}/workspaces/${ws}/tasks?format=json`),
     );
     const oldTerm = tasks.filter(
       (t) => t.status !== 'done' && t.needs === 'decision' && !t.answer,
@@ -341,7 +341,7 @@ describe('the Home queue count', () => {
   it('a review item on an agent-filed triage row reaches the queue and the brief', async () => {
     const ws = await seedWorkspace();
     const { tasks } = await jj<{ tasks: Task[] }>(
-      await post(`/api/workspaces/${ws}/tasks/batch`, {
+      await post(`/workspaces/${ws}/tasks/batch`, {
         author: AGENT,
         tasks: [
           {
@@ -376,7 +376,7 @@ describe('the create response names visibility', () => {
       tasks: Task[];
       visibility?: Array<{ taskId: string; note: string }>;
     }>(
-      await post(`/api/workspaces/${ws}/tasks/batch`, {
+      await post(`/workspaces/${ws}/tasks/batch`, {
         author: AGENT,
         tasks: [
           {
@@ -407,7 +407,7 @@ describe('the create response names visibility', () => {
       tasks: Task[];
       visibility?: Array<{ taskId: string; note: string }>;
     }>(
-      await post(`/api/workspaces/${ws}/tasks/batch`, {
+      await post(`/workspaces/${ws}/tasks/batch`, {
         author: PERSON,
         tasks: [{ title: 'keep disk or memory?', assignee: 'Jordan' }],
       }),
@@ -419,7 +419,7 @@ describe('the create response names visibility', () => {
   it('states visibility on the single door too', async () => {
     const ws = await seedWorkspace();
     const res = await jj<{ task: Task; visibility?: string }>(
-      await post(`/api/workspaces/${ws}/tasks`, {
+      await post(`/workspaces/${ws}/tasks`, {
         title: 'Jordan can pick the cache so that the cleanup unblocks',
         assignee: 'Jordan',
         review: REVIEW,
@@ -529,7 +529,7 @@ describe('the board projection', () => {
   it('projects a review item filed on the SINGLE create door, with no extra refresh', async () => {
     const ws = await seedWorkspace();
     const { task } = await jj<{ task: Task }>(
-      await post(`/api/workspaces/${ws}/tasks`, {
+      await post(`/workspaces/${ws}/tasks`, {
         title: 'sweep the cache dir',
         assignee: 'Scheduler Agent',
         body: 'Agent can sweep the cache dir so that the disk stops filling up.',
@@ -553,7 +553,7 @@ describe('the board projection', () => {
   it('projects a review item on the LAST row of a batch create', async () => {
     const ws = await seedWorkspace();
     const { tasks } = await jj<{ tasks: Task[] }>(
-      await post(`/api/workspaces/${ws}/tasks/batch`, {
+      await post(`/workspaces/${ws}/tasks/batch`, {
         author: AGENT,
         tasks: [
           {

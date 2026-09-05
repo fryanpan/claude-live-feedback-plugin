@@ -109,7 +109,7 @@ describe('a scan does not activate the docs it enumerates', () => {
       });
 
     it('a board-wide listing leaves every bound doc idle', async () => {
-      const ws = (await (await post('/api/workspaces', { name: 'scan-board' })).json()) as {
+      const ws = (await (await post('/workspaces', { name: 'scan-board' })).json()) as {
         workspace: { id: string };
       };
       const docIds: string[] = [];
@@ -122,7 +122,7 @@ describe('a scan does not activate the docs it enumerates', () => {
         );
         // On the board, which is what makes it part of the listing the
         // review-items builder walks.
-        expect((await post(`/api/workspaces/${ws.workspace.id}/docs`, { docId })).status).toBe(200);
+        expect((await post(`/workspaces/${ws.workspace.id}/docs`, { docId })).status).toBe(200);
         docIds.push(docId);
       }
 
@@ -151,7 +151,7 @@ describe('a scan does not activate the docs it enumerates', () => {
       // the review-items builder behind it.
       expect((await local('/')).status).toBe(200);
       expect(
-        (await local(`/api/workspaces/${encodeURIComponent(holder.id)}/review-items`)).status,
+        (await local(`/workspaces/${encodeURIComponent(holder.id)}/review-items`)).status,
       ).toBe(200);
 
       const after = (await (await local('/api/metrics')).json()) as { activeBindings: number };

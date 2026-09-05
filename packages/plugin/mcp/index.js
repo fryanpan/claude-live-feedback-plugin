@@ -13808,7 +13808,7 @@ async function sendDueHeartbeats(deps) {
 async function claimNoticeFor(deps, taskId) {
   for (const workspaceId of deps.keepalive.boards()) {
     try {
-      const res = await deps.http("GET", `/api/workspaces/${encodeURIComponent(workspaceId)}/next?includeBlocked=true`);
+      const res = await deps.http("GET", `/workspaces/${encodeURIComponent(workspaceId)}/next?includeBlocked=true`);
       const row = res.tasks?.find((t) => t?.id === taskId);
       if (row)
         return claimWarning(row, deps.author.id, now(deps));
@@ -14320,7 +14320,7 @@ async function emitBoardChannelMessage(deps, event, rawPayload) {
   });
   if (event === "voice.request" && typeof p.queueId === "string" && p.workspaceId) {
     try {
-      await deps.http("POST", `/api/workspaces/${encodeURIComponent(p.workspaceId)}/voice-queue/${encodeURIComponent(p.queueId)}/ack`, {});
+      await deps.http("POST", `/workspaces/${encodeURIComponent(p.workspaceId)}/voice-queue/${encodeURIComponent(p.queueId)}/ack`, {});
     } catch {}
   }
 }
@@ -14565,7 +14565,7 @@ async function ackCommentRow(deps, payload) {
   if (typeof p?.commentQueueId !== "string" || typeof p?.workspaceId !== "string")
     return;
   try {
-    await deps.http("POST", `/api/workspaces/${encodeURIComponent(p.workspaceId)}/comment-queue/${encodeURIComponent(p.commentQueueId)}/ack`, {});
+    await deps.http("POST", `/workspaces/${encodeURIComponent(p.workspaceId)}/comment-queue/${encodeURIComponent(p.commentQueueId)}/ack`, {});
   } catch {}
 }
 
@@ -16973,7 +16973,7 @@ async function handleDocsTool(name, a, ctx) {
         subscribe,
         producedBy
       } = a;
-      const res = await http("POST", "/api/workspaces", {
+      const res = await http("POST", "/workspaces", {
         folderPath,
         owner: process.cwd(),
         ...workspaceId ? { workspaceId } : {},
@@ -17066,7 +17066,7 @@ async function handleDocsTool(name, a, ctx) {
       const { workspaceId, force, purge } = a;
       const params = [force ? "force=true" : "", purge ? "purge=true" : ""].filter(Boolean);
       const qs = params.length > 0 ? `?${params.join("&")}` : "";
-      const res = await http("DELETE", `/api/workspaces/${encodeURIComponent(workspaceId)}${qs}`);
+      const res = await http("DELETE", `/workspaces/${encodeURIComponent(workspaceId)}${qs}`);
       return ok2(res);
     }
     case "refresh_workspace":
@@ -17420,7 +17420,7 @@ async function handleTaskTool(name, a, ctx) {
   switch (name) {
     case "create_tasks": {
       const { workspaceId, tasks, sourceDoc } = a;
-      const res = await http("POST", `/api/workspaces/${encodeURIComponent(workspaceId)}/tasks/batch`, { tasks, author: AUTHOR, ...sourceDoc !== undefined ? { sourceDoc } : {} });
+      const res = await http("POST", `/workspaces/${encodeURIComponent(workspaceId)}/tasks/batch`, { tasks, author: AUTHOR, ...sourceDoc !== undefined ? { sourceDoc } : {} });
       const gapsFor = (taskId) => res.shapeGaps?.find((g) => g.taskId === taskId)?.gaps ?? undefined;
       const adviceFor = (taskId) => res.reviewAdvice?.find((r) => r.taskId === taskId)?.advice ?? undefined;
       const visibilityFor = (taskId) => res.visibility?.find((v) => v.taskId === taskId)?.note ?? undefined;
@@ -17489,7 +17489,7 @@ async function handleTaskTool(name, a, ctx) {
       if (includeArchived === true)
         qs.set("includeArchived", "true");
       const query = qs.size > 0 ? `?${qs.toString()}` : "";
-      const res = await http("GET", `/api/workspaces/${encodeURIComponent(workspaceId)}/next${query}`);
+      const res = await http("GET", `/workspaces/${encodeURIComponent(workspaceId)}/next${query}`);
       return ok2({
         workspaceId,
         ...res.retired ? { retired: res.retired } : {},
@@ -17498,7 +17498,7 @@ async function handleTaskTool(name, a, ctx) {
     }
     case "list_tasks": {
       const { workspaceId, goal, status, assignee, needs, fields, includeArchived } = a;
-      const qs = new URLSearchParams;
+      const qs = new URLSearchParams({ format: "json" });
       if (goal !== undefined)
         qs.set("goal", goal);
       if (status !== undefined)
@@ -17509,8 +17509,7 @@ async function handleTaskTool(name, a, ctx) {
         qs.set("needs", needs);
       if (includeArchived === true)
         qs.set("includeArchived", "true");
-      const query = qs.size > 0 ? `?${qs.toString()}` : "";
-      const res = await http("GET", `/api/workspaces/${encodeURIComponent(workspaceId)}/tasks${query}`);
+      const res = await http("GET", `/workspaces/${encodeURIComponent(workspaceId)}/tasks?${qs.toString()}`);
       return ok2({
         workspaceId,
         tasks: projectTaskRows(res.tasks, fields)
@@ -17626,7 +17625,7 @@ async function handleTaskTool(name, a, ctx) {
     }
     case "set_goal_list": {
       const { workspaceId, goals, drop } = a;
-      const res = await http("PUT", `/api/workspaces/${encodeURIComponent(workspaceId)}/goals`, {
+      const res = await http("PUT", `/workspaces/${encodeURIComponent(workspaceId)}/goals`, {
         goals,
         ...drop !== undefined ? { drop } : {},
         author: AUTHOR
@@ -17642,7 +17641,7 @@ async function handleTaskTool(name, a, ctx) {
     }
     case "rename_goal": {
       const { workspaceId, goal, title, dueAt } = a;
-      const res = await http("POST", `/api/workspaces/${encodeURIComponent(workspaceId)}/goals/rename`, {
+      const res = await http("POST", `/workspaces/${encodeURIComponent(workspaceId)}/goals/rename`, {
         goal,
         title,
         ...dueAt !== undefined ? { dueAt } : {},
@@ -17652,7 +17651,7 @@ async function handleTaskTool(name, a, ctx) {
     }
     case "reorder_goals": {
       const { workspaceId, order } = a;
-      const res = await http("POST", `/api/workspaces/${encodeURIComponent(workspaceId)}/goals/reorder`, { order, author: AUTHOR });
+      const res = await http("POST", `/workspaces/${encodeURIComponent(workspaceId)}/goals/reorder`, { order, author: AUTHOR });
       return ok2({
         workspaceId,
         order: res.order,
@@ -17860,7 +17859,7 @@ async function handleTaskTool(name, a, ctx) {
     }
     case "import_tasks_markdown": {
       const { workspaceId, path, apply } = a;
-      const res = await http("POST", `/api/workspaces/${encodeURIComponent(workspaceId)}/import-tasks`, { path, ...apply !== undefined ? { apply } : {}, author: AUTHOR });
+      const res = await http("POST", `/workspaces/${encodeURIComponent(workspaceId)}/import-tasks`, { path, ...apply !== undefined ? { apply } : {}, author: AUTHOR });
       return ok2(res);
     }
     case "link_refs": {
@@ -17892,7 +17891,7 @@ async function declareWorkspaceLead(args, deps) {
   const named = typeof args.leadAgentId === "string" ? args.leadAgentId.trim() : "";
   const declaring = named.length === 0 || named === deps.self.id;
   const leadAgentId = declaring ? deps.self.id : named;
-  const path = `/api/workspaces/${encodeURIComponent(workspaceId)}`;
+  const path = `/workspaces/${encodeURIComponent(workspaceId)}`;
   if (declaring && deps.identityIsShared === true) {
     return {
       isError: true,
@@ -17983,7 +17982,7 @@ function parseCapArg(raw) {
 // packages/mcp/src/tools/workspace.ts
 async function setBoardRetired(ctx, workspaceId, retired, reason) {
   const { http, AUTHOR } = ctx;
-  const res = await http("PUT", `/api/workspaces/${encodeURIComponent(workspaceId)}/retired`, {
+  const res = await http("PUT", `/workspaces/${encodeURIComponent(workspaceId)}/retired`, {
     retired,
     ...retired && reason !== undefined ? { reason } : {},
     author: AUTHOR
@@ -18015,7 +18014,7 @@ async function handleWorkspaceTool(name, a, ctx) {
         leadAgentId,
         subscribe
       } = a;
-      const res = await http("POST", "/api/workspaces", {
+      const res = await http("POST", "/workspaces", {
         name: wsName,
         leadAgentId: leadAgentId ?? AUTHOR.id
       });
@@ -18030,7 +18029,7 @@ async function handleWorkspaceTool(name, a, ctx) {
     }
     case "rename_workspace": {
       const { workspaceId, name: nextName } = a;
-      const res = await http("POST", `/api/workspaces/${encodeURIComponent(workspaceId)}/rename`, {
+      const res = await http("POST", `/workspaces/${encodeURIComponent(workspaceId)}/rename`, {
         name: nextName,
         author: AUTHOR
       });
@@ -18080,7 +18079,7 @@ async function handleWorkspaceTool(name, a, ctx) {
         }
         effectiveWorkspaceId = res2.workspaceId;
       }
-      const res = await http("PUT", `/api/workspaces/${encodeURIComponent(effectiveWorkspaceId)}/settings`, {
+      const res = await http("PUT", `/workspaces/${encodeURIComponent(effectiveWorkspaceId)}/settings`, {
         reviewItemCriteria: criteria !== undefined && criteria.trim() !== "" ? criteria : null,
         author: AUTHOR
       });
@@ -18092,14 +18091,14 @@ async function handleWorkspaceTool(name, a, ctx) {
     }
     case "attach_doc": {
       const { workspaceId, docId } = a;
-      const res = await http("POST", `/api/workspaces/${encodeURIComponent(workspaceId)}/docs`, {
+      const res = await http("POST", `/workspaces/${encodeURIComponent(workspaceId)}/docs`, {
         docId
       });
       return ok2({ ok: true, workspaceId, docIds: res.workspace?.docIds ?? [] });
     }
     case "get_workspace": {
       const { workspaceId } = a;
-      const res = await http("GET", `/api/workspaces/${encodeURIComponent(workspaceId)}`);
+      const res = await http("GET", `/workspaces/${encodeURIComponent(workspaceId)}?format=json`);
       return ok2({
         workspaceId: res.workspace.id,
         name: res.workspace.name,
@@ -18120,7 +18119,7 @@ async function handleWorkspaceTool(name, a, ctx) {
         params.set("docId", docId);
       if (typeof limit === "number" && Number.isFinite(limit))
         params.set("limit", String(limit));
-      const res = await http("GET", `/api/workspaces/${encodeURIComponent(workspaceId)}/related-work?${params.toString()}`);
+      const res = await http("GET", `/workspaces/${encodeURIComponent(workspaceId)}/related-work?${params.toString()}`);
       return ok2({
         workspaceId,
         considered: res.considered,
@@ -18146,7 +18145,7 @@ async function handleWorkspaceTool(name, a, ctx) {
         if (typeof q?.id !== "string")
           continue;
         try {
-          await http("POST", `/api/workspaces/${encodeURIComponent(workspaceId)}/comment-queue/${encodeURIComponent(q.id)}/ack`, {});
+          await http("POST", `/workspaces/${encodeURIComponent(workspaceId)}/comment-queue/${encodeURIComponent(q.id)}/ack`, {});
         } catch {}
       }
       return ok2({
@@ -18205,7 +18204,7 @@ async function handleWorkspaceTool(name, a, ctx) {
       const parsed = parseCapArg(rawCap);
       if (!parsed.ok)
         return err2(parsed.error);
-      const res = await http("PUT", `/api/workspaces/${encodeURIComponent(workspaceId)}/parallelism-cap`, { cap: parsed.cap, author: AUTHOR });
+      const res = await http("PUT", `/workspaces/${encodeURIComponent(workspaceId)}/parallelism-cap`, { cap: parsed.cap, author: AUTHOR });
       return ok2({
         workspaceId,
         cap: res.cap,
@@ -18510,7 +18509,7 @@ async function ensureWatchesRestored(deps, rt) {
               }
             },
             ackComment: async (rowId) => {
-              await deps.http("POST", `/api/workspaces/${encodeURIComponent(workspaceId)}/comment-queue/${encodeURIComponent(rowId)}/ack`, {});
+              await deps.http("POST", `/workspaces/${encodeURIComponent(workspaceId)}/comment-queue/${encodeURIComponent(rowId)}/ack`, {});
             }
           }));
         } catch {}
@@ -18575,7 +18574,7 @@ var STATUS_TEXT_MAX = 4000;
 function suggestionAuthor() {
   return { id: AUTHOR.id, name: AUTHOR.name, color: AUTHOR.color };
 }
-var PLUGIN_VERSION = "0.1.168";
+var PLUGIN_VERSION = "0.1.169";
 var PROCESS_ID = randomUUID();
 var server = new Server({
   name: "claude-workspaces",

@@ -54,7 +54,7 @@ describe('share_link arguments are honoured or refused, never dropped', () => {
       },
     });
     base = `http://localhost:${handle.port}`;
-    const board = await local('/api/workspaces', { name: 'Args board' });
+    const board = await local('/workspaces', { name: 'Args board' });
     expect(board.status).toBe(200);
     boardId = ((await board.json()) as { workspace: { id: string } }).workspace.id;
     expect(boardId).toBeTruthy();
