@@ -3433,8 +3433,8 @@ body.hub-body {
   font-size: 13px;
   color: var(--fg-muted);
   /* Vertically centred against a 44px sibling — one control can be a receipt
-     while the other is still an offer, and a baseline-aligned span beside a
-     button sits visibly high. */
+     while the other is still an offer, and a baseline-aligned <output> beside
+     a button sits visibly high. */
   min-height: 44px;
   display: inline-flex;
   align-items: center;
