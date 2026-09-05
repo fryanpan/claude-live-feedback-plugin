@@ -78,6 +78,18 @@ const NOT_ASKS: ReadonlyArray<[label: string, text: string]> = [
     'a rebase is not a person, however many pronouns follow',
     'Needs a rebase onto main before you can review it.',
   ],
+  // `my` and `our` were possessives in the first cut, which made the writer's
+  // own next step read as an ask on somebody — the note's author is the agent
+  // (PR 691 review). One fixture per word, both drawn from the shape that
+  // reported it.
+  [
+    'the agent describing its OWN next step is not an ask',
+    'Pending my review of the diff before I open the PR.',
+  ],
+  [
+    'a first-person-plural act is still the writer, not a person to ask',
+    'Waiting on our review of the importer before this can land.',
+  ],
 ];
 
 /** Asks whose person is a pronoun or an act, not a name — so the table above
