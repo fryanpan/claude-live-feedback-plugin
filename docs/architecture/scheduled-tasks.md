@@ -110,14 +110,42 @@ not move the clock would have to wait until tomorrow to assert that a daily
 rule fires tomorrow. `schedulerNow` on `ServerOptions` is where a caller
 supplies one.
 
+## A rule is written as a sentence
+
+A rule is set by typing English — "every weekday at 9am" — and read back as
+chips you can click. The phrase and the chips are **two views of one rule**
+(Bryan, on the approved mock), so neither is the source: the phrase is parsed
+into the rule, the chips are drawn from the rule, and editing a chip rewrites
+the phrase from the rule it just changed. That is the only arrangement in
+which a chip cannot say something the sentence above it does not.
+
+The pair lives beside the arithmetic in `core` —
+`schedule-phrase-parse.ts` reads, `schedule-phrase.ts` writes and owns the
+vocabulary both the sentence and the chips are spelled in — and the tests
+assert they are inverses, and that the canonical spelling is a fixed point.
+Without the second property a chip edit followed by a phrase edit could drift.
+
+Two limits are worth knowing because they are shapes the rule type does not
+have, not gaps in the parser:
+
+- **An interval rule never writes the word "day."** `every` is a fixed number
+  of milliseconds and `calendar` is a wall clock, and "every day" has to mean
+  the second one — so one day of interval writes as "every 24 hours". "every 3
+  days" is still ACCEPTED; it just canonicalises to hours, which is also the
+  honest reading, since an interval really does drift across a DST change.
+- **An interval and a time of day cannot both be set.** `calendar` has no
+  interval field, so "every 3 days at 9am" is refused rather than silently
+  becoming "every day at 9am" and throwing away what was typed.
+
+The editor is the task panel's Schedule section. An unscheduled row shows one
+ghost affordance; everything else appears once there is a rule to show.
+
 ## What is not here yet
 
 Deliberately, and each is a row of its own:
 
 - **the Scheduled board section** — rule rows have no home of their own on the
   board yet, and Scheduled is separate from Blocked;
-- **the phrase editor** — a rule is written as a phrase and shown as chips;
-  the type and the arithmetic are what this subsystem owns, not the parser;
 - **the missed-run policy** — the count is recorded, but nothing yet lets a
   rule say what it wants done about a run it missed;
 - **the run record** — the activity note is the run history today;
