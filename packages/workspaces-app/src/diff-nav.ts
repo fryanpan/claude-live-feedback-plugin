@@ -329,7 +329,7 @@ function fileRow(f: GroupedFile, activeDocId: string): string {
   const open = f.openCount > 0 ? `<span class="tree-badge badge-open">${f.openCount}</span>` : '';
   const cls = [isActive ? 'active' : '', f.stale ? 'stale' : ''].filter(Boolean).join(' ');
   const hint = f.stale
-    ? `${escapeHtml(f.relPath)} — no longer in this review; comments kept`
+    ? `${escapeHtml(f.relPath)} — no longer in this attachment set; comments kept`
     : escapeHtml(f.relPath);
   return `<li class="diff-file"><a href="${href}" class="${cls}"${
     isActive ? ' aria-current="page"' : ''

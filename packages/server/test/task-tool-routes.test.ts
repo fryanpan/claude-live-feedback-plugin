@@ -22,7 +22,7 @@ import { join } from 'node:path';
 import type { ElementAnchor, Thread, User } from '@feedback/core';
 
 import { type ServerHandle, createServer } from '../src/server.ts';
-import { workspaceRoomId } from '../src/task-projection.ts';
+import { workspaceDocId } from '../src/task-projection.ts';
 import type { Task, TaskStoreEvent } from '../src/tasks.ts';
 import { type GoalIds, seedGoalsOverHttp } from './goal-seed.ts';
 
@@ -77,7 +77,7 @@ describe('task tool routes (plan §3.12 commit 6)', () => {
       body: JSON.stringify(body),
     });
 
-  /** A fresh hub workspace with a north-star goal + two board goals. The ids
+  /** A fresh board workspace with a north-star goal + two board goals. The ids
    *  are minted by the server, so the bands come back keyed by the labels this
    *  file used to hard-code as ids (`g1`, `g1a`, `g2`). */
   async function seedWorkspace(): Promise<{ wsId: string; G: GoalIds }> {
@@ -512,7 +512,7 @@ describe('task tool routes (plan §3.12 commit 6)', () => {
 
         // The board room is what every browser and share visitor reads; a
         // store-only change would be invisible there (§3.3).
-        const board = handle.rooms.get(workspaceRoomId(wsId));
+        const board = handle.docStore.get(workspaceDocId(wsId));
         expect(board).toBeDefined(); // positive control: the room exists at all
         const projected = board?.ydoc.getMap('tasks').get(task.id) as
           | { assignee?: string; title?: string }
@@ -591,7 +591,7 @@ describe('task tool routes (plan §3.12 commit 6)', () => {
 
         // The board room is what every browser reads; a store-only change
         // would be invisible there.
-        const board = handle.rooms.get(workspaceRoomId(wsId));
+        const board = handle.docStore.get(workspaceDocId(wsId));
         expect(board).toBeDefined(); // control: the room exists at all
         const projected = board?.ydoc.getMap('tasks').get(task.id) as
           | { dueAt?: number; title?: string }

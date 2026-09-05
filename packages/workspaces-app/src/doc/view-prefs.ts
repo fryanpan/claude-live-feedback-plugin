@@ -2,7 +2,7 @@
  * Where this reader's comments and doc list live, on THIS device.
  *
  * Two stored view preferences and the toggle that owns one of them: the
- * threads drawer, and the In-This-Review doc list. They are one module
+ * threads drawer, and the attachment-set doc list. They are one module
  * because they answer one question in one way — a stored choice wins in both
  * directions, and with nothing stored a width tier decides — and because
  * neither is a property of the document: navigating to another doc must not
@@ -77,7 +77,7 @@ export const WIDE_SCREEN_QUERY = '(min-width: 1921px)';
 
 const SET_PANE_PREF_KEY = 'lf:set-pane';
 
-/** Whether the review-set sidebar starts open. A stored choice wins in both
+/** Whether the attachment-set sidebar starts open. A stored choice wins in both
  *  directions; with nothing stored, only a 4K-class screen opens it. */
 export function initialSetPaneOpen(stored: string | null, isWide: boolean): boolean {
   if (stored === 'open') return true;
@@ -100,7 +100,9 @@ export function wireSetPaneToggle(): void {
     btn.title = open ? 'Hide doc list' : 'Show doc list';
     btn.setAttribute(
       'aria-label',
-      open ? 'Hide the list of docs in this review' : 'Show the list of docs in this review',
+      open
+        ? 'Hide the list of docs in this attachment set'
+        : 'Show the list of docs in this attachment set',
     );
   };
   let stored: string | null = null;

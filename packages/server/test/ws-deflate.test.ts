@@ -1,9 +1,9 @@
 /**
  * The Yjs socket compresses what it sends.
  *
- * The hub board is ONE ws room per workspace, and a fresh tab receives the
+ * The board is ONE ws room per workspace, and a fresh tab receives the
  * whole board state in sync step 2 — one uncompressed binary frame, measured
- * at 1,264,566 bytes over the live hub board's persisted state on 2026-08-29,
+ * at 1,264,566 bytes over the live board's persisted state on 2026-08-29,
  * deflating to 431,733 (2.9×). Browsers offer permessage-deflate on every
  * WebSocket by default; the server has to accept it AND ask for compression
  * on each send — Bun's `perMessageDeflate: true` only negotiates, and
@@ -24,7 +24,7 @@ import * as encoding from 'lib0/encoding';
 import * as syncProtocol from 'y-protocols/sync';
 import * as Y from 'yjs';
 import { type ServerHandle, createServer } from '../src/server.ts';
-import { workspaceRoomId } from '../src/task-projection.ts';
+import { workspaceDocId } from '../src/task-projection.ts';
 
 let dataDir: string;
 let handle: ServerHandle;
@@ -183,7 +183,7 @@ describe('yjs websocket compression', () => {
       );
       expect(r.status).toBe(200);
     }
-    const path = `/y/${encodeURIComponent(workspaceRoomId(workspace.id))}?type=workspace`;
+    const path = `/y/${encodeURIComponent(workspaceDocId(workspace.id))}?type=workspace`;
 
     const offered = await handshakeAndSync(path, 'permessage-deflate; client_max_window_bits');
     expect(offered.status).toBe(101);

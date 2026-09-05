@@ -3,7 +3,7 @@
  *
  * A spoken "mark this done" over a ticket in view no longer waits for an
  * agent — the router runs it through `taskStore.transition` /
- * `taskStore.setAssignee` / `rooms.postComment` / `rooms.answerReviewItem`,
+ * `taskStore.setAssignee` / `docStore.postComment` / `docStore.answerReviewItem`,
  * the SAME choke points the REST routes use, so the move is attributed to the
  * speaker and lands in `events.jsonl` exactly as a tapped one does. Anything
  * outside the scoped verb set still goes to the agent, unchanged.
@@ -72,10 +72,10 @@ describe('voice actions (§3.8): status and assignee, on the speaker’s authori
   let agentStream: AgentStream | null = null;
   let dataDir: string;
   let base: string;
-  let hubId: string;
+  let boardId: string;
   /** A second board with NO attachment, so "queued" is a real fixture rather
    *  than a test-ordering artifact. */
-  let quietHubId: string;
+  let quietBoardId: string;
   let doneTaskId: string;
   let assignTaskId: string;
   let blockerTaskId: string;
@@ -85,7 +85,7 @@ describe('voice actions (§3.8): status and assignee, on the speaker’s authori
   let commentTaskId: string;
   let linkedTaskId: string;
   let urlOnlyTaskId: string;
-  /** Docs attached to `hubId`, carrying one / two / no open review items. */
+  /** Docs attached to `boardId`, carrying one / two / no open review items. */
   let oneItemDocId: string;
   let twoItemDocId: string;
   let noItemDocId: string;
@@ -154,7 +154,7 @@ describe('voice actions (§3.8): status and assignee, on the speaker’s authori
   };
 
   /**
-   * A doc room on disk, attached to `hubId` — the shape `docResource` reads.
+   * A doc room on disk, attached to `boardId` — the shape `docResource` reads.
    * Returns the id the server MINTED; `docId` is only the readable name.
    */
   const newDoc = async (docId: string): Promise<string> => {
@@ -163,7 +163,7 @@ describe('voice actions (§3.8): status and assignee, on the speaker’s authori
     const made = await post('/api/docs', { docId, type: 'markdown', sourceUrl: file });
     expect(made.status).toBe(200);
     const mintedId = ((await made.json()) as { docId: string }).docId;
-    expect((await post(`/api/workspaces/${hubId}/docs`, { docId: mintedId })).status).toBe(200);
+    expect((await post(`/api/workspaces/${boardId}/docs`, { docId: mintedId })).status).toBe(200);
     return mintedId;
   };
 
@@ -211,13 +211,13 @@ describe('voice actions (§3.8): status and assignee, on the speaker’s authori
       goal: 'Ship the new search.',
     });
     expect(ws.status).toBe(200);
-    hubId = ((await ws.json()) as { workspace: { id: string } }).workspace.id;
+    boardId = ((await ws.json()) as { workspace: { id: string } }).workspace.id;
 
-    doneTaskId = await newTask(hubId, { title: 'Wire the results page' });
-    assignTaskId = await newTask(hubId, { title: 'Benchmark the crawler', assignee: 'human' });
-    kindlessTaskId = await newTask(hubId, { title: 'Rename the settings panel' });
-    blockerTaskId = await newTask(hubId, { title: 'Land the schema migration' });
-    blockedTaskId = await newTask(hubId, { title: 'Cut over the read path' });
+    doneTaskId = await newTask(boardId, { title: 'Wire the results page' });
+    assignTaskId = await newTask(boardId, { title: 'Benchmark the crawler', assignee: 'human' });
+    kindlessTaskId = await newTask(boardId, { title: 'Rename the settings panel' });
+    blockerTaskId = await newTask(boardId, { title: 'Land the schema migration' });
+    blockedTaskId = await newTask(boardId, { title: 'Cut over the read path' });
     expect(
       (
         await post(`/api/tasks/${blockedTaskId}/after`, {
@@ -232,7 +232,7 @@ describe('voice actions (§3.8): status and assignee, on the speaker’s authori
     // queued fallback is proved on a board that genuinely has nobody.
     expect(
       (
-        await post(`/api/workspaces/${hubId}/attachments`, {
+        await post(`/workspaces/${boardId}/agents`, {
           agentId: 'agent-search-revamp',
           runtime: 'claude-code-local',
         })
@@ -242,27 +242,27 @@ describe('voice actions (§3.8): status and assignee, on the speaker’s authori
     // delivery is a BROADCAST on `ws~<id>` — so attaching alone describes a
     // session that registered and never connected, and nothing could be
     // handed to it. The MCP opens this immediately after attaching
-    // (`subscribe !== false`). `quietHubId` below deliberately gets neither,
+    // (`subscribe !== false`). `quietBoardId` below deliberately gets neither,
     // which is what keeps it an honest fixture for the queued fallback.
-    agentStream = await openWorkspaceStream(base, hubId);
+    agentStream = await openWorkspaceStream(base, boardId);
 
     const quiet = await post('/api/workspaces', {
       name: 'billing-cleanup',
       goal: 'Retire the old invoicing path.',
     });
     expect(quiet.status).toBe(200);
-    quietHubId = ((await quiet.json()) as { workspace: { id: string } }).workspace.id;
-    quietTaskId = await newTask(quietHubId, { title: 'Drop the legacy invoice job' });
+    quietBoardId = ((await quiet.json()) as { workspace: { id: string } }).workspace.id;
+    quietTaskId = await newTask(quietBoardId, { title: 'Drop the legacy invoice job' });
 
     // ── Commit 4 fixtures: comment / answer-review / open-link ──────────────
-    commentTaskId = await newTask(hubId, { title: 'Tune the ranking weights' });
+    commentTaskId = await newTask(boardId, { title: 'Tune the ranking weights' });
 
     linkedDocId = await newDoc('voice-linked-notes');
-    linkedTaskId = await newTask(hubId, {
+    linkedTaskId = await newTask(boardId, {
       title: 'Review the ranking notes',
       links: [{ kind: 'doc', docId: linkedDocId }],
     });
-    urlOnlyTaskId = await newTask(hubId, {
+    urlOnlyTaskId = await newTask(boardId, {
       title: 'Chase the upstream ticket',
       links: [{ kind: 'url', url: 'https://example.invalid/tickets/9' }],
     });
@@ -284,7 +284,7 @@ describe('voice actions (§3.8): status and assignee, on the speaker’s authori
   describe('set-status', () => {
     it('“mark this done” transitions the task and acks the title and from→to', async () => {
       classify({ kind: 'action', action: 'set-status', status: 'done', id: doneTaskId });
-      const body = await say(hubId, 'mark this done', { surface: 'task', taskId: doneTaskId });
+      const body = await say(boardId, 'mark this done', { surface: 'task', taskId: doneTaskId });
 
       expect(body.route).toBe('fast-path-action');
       // The human in the room is the only verifier this design has, so the
@@ -297,7 +297,7 @@ describe('voice actions (§3.8): status and assignee, on the speaker’s authori
     });
 
     it('the move is attributed to the SPEAKER and lands in events.jsonl', () => {
-      const rows = audit(hubId);
+      const rows = audit(boardId);
       // Positive control: this probe can see the log at all.
       expect(rows.length).toBeGreaterThan(0);
       const moves = rows.filter((r) => r.event === 'task.transitioned' && r.taskId === doneTaskId);
@@ -314,31 +314,31 @@ describe('voice actions (§3.8): status and assignee, on the speaker’s authori
 
     it('re-sending the same transition acks SUCCESS — the board is already right', async () => {
       classify({ kind: 'action', action: 'set-status', status: 'done', id: doneTaskId });
-      const body = await say(hubId, 'mark this done', { surface: 'task', taskId: doneTaskId });
+      const body = await say(boardId, 'mark this done', { surface: 'task', taskId: doneTaskId });
 
       expect(body.route).toBe('fast-path-action');
       expect(body.ack).toContain('Wire the results page');
       expect(body.ack.toLowerCase()).toContain('already');
       expect(body.ack.toLowerCase()).not.toContain('sent to the workspace agent');
       // Acked as success, and still exactly one move on the record.
-      expect(transitionsFor(hubId, doneTaskId)).toHaveLength(1);
+      expect(transitionsFor(boardId, doneTaskId)).toHaveLength(1);
     });
 
     it('a transition refused as BLOCKED writes nothing and hands the utterance to the agent', async () => {
       classify({ kind: 'action', action: 'set-status', status: 'done', id: blockedTaskId });
-      const body = await say(hubId, 'mark this done', { surface: 'task', taskId: blockedTaskId });
+      const body = await say(boardId, 'mark this done', { surface: 'task', taskId: blockedTaskId });
 
       expect(body.route).toBe('agent');
       // The speaker is told WHY it went to the agent, by name.
       expect(body.ack).toContain('Land the schema migration');
       expect(handle.tasks.getTask(blockedTaskId)?.status).toBe('todo');
-      expect(transitionsFor(hubId, blockedTaskId)).toHaveLength(0);
+      expect(transitionsFor(boardId, blockedTaskId)).toHaveLength(0);
     });
 
     it('an actor with no `kind` writes NOTHING — attribution would be a lie', async () => {
       classify({ kind: 'action', action: 'set-status', status: 'done', id: kindlessTaskId });
       const body = await say(
-        hubId,
+        boardId,
         'mark this done',
         { surface: 'task', taskId: kindlessTaskId },
         KINDLESS,
@@ -346,14 +346,14 @@ describe('voice actions (§3.8): status and assignee, on the speaker’s authori
 
       expect(body.route).toBe('agent');
       expect(handle.tasks.getTask(kindlessTaskId)?.status).toBe('todo');
-      expect(transitionsFor(hubId, kindlessTaskId)).toHaveLength(0);
+      expect(transitionsFor(boardId, kindlessTaskId)).toHaveLength(0);
     });
   });
 
   describe('set-assignee', () => {
     it('“assign this to me” resolves to the SPEAKER’s name, in the router', async () => {
       classify({ kind: 'action', action: 'set-assignee', assignee: 'me', id: assignTaskId });
-      const body = await say(hubId, 'assign this to me', {
+      const body = await say(boardId, 'assign this to me', {
         surface: 'task',
         taskId: assignTaskId,
       });
@@ -363,7 +363,7 @@ describe('voice actions (§3.8): status and assignee, on the speaker’s authori
       expect(body.ack).toContain('Jordan');
       expect(handle.tasks.getTask(assignTaskId)?.assignee).toBe('Jordan');
 
-      const assigned = audit(hubId).filter(
+      const assigned = audit(boardId).filter(
         (r) => r.event === 'task.assigned' && r.taskId === assignTaskId,
       );
       expect(assigned).toHaveLength(1);
@@ -377,7 +377,7 @@ describe('voice actions (§3.8): status and assignee, on the speaker’s authori
     it('posts the transcript VERBATIM on task:<taskId>, attributed to the speaker', async () => {
       const said = 'note that the crawler is flaky on retries';
       classify({ kind: 'action', action: 'comment', id: commentTaskId });
-      const body = await say(hubId, said, { surface: 'task', taskId: commentTaskId });
+      const body = await say(boardId, said, { surface: 'task', taskId: commentTaskId });
 
       expect(body.route).toBe('fast-path-action');
       expect(body.ack).toContain('Tune the ranking weights');
@@ -397,7 +397,7 @@ describe('voice actions (§3.8): status and assignee, on the speaker’s authori
     it('an actor with no `kind` posts NOTHING — the comment would be misattributed', async () => {
       classify({ kind: 'action', action: 'comment', id: kindlessTaskId });
       const body = await say(
-        hubId,
+        boardId,
         'the retry backoff looks wrong',
         { surface: 'task', taskId: kindlessTaskId },
         KINDLESS,
@@ -412,7 +412,7 @@ describe('voice actions (§3.8): status and assignee, on the speaker’s authori
     it('answers when EXACTLY ONE open item is in scope, verbatim and as the speaker', async () => {
       const said = 'go with the shorter clause, it reads better on mobile';
       classify({ kind: 'action', action: 'answer-review', id: oneItemDocId });
-      const body = await say(hubId, said, { surface: 'doc', docId: oneItemDocId });
+      const body = await say(boardId, said, { surface: 'doc', docId: oneItemDocId });
 
       expect(body.route).toBe('fast-path-action');
 
@@ -427,7 +427,7 @@ describe('voice actions (§3.8): status and assignee, on the speaker’s authori
 
     it('with TWO open items in scope it writes NOTHING and hands the utterance to the agent', async () => {
       classify({ kind: 'action', action: 'answer-review', id: twoItemDocId });
-      const body = await say(hubId, 'yes, do that one', { surface: 'doc', docId: twoItemDocId });
+      const body = await say(boardId, 'yes, do that one', { surface: 'doc', docId: twoItemDocId });
 
       expect(body.route).toBe('agent');
       // Both threads still hold exactly the agent's declaration.
@@ -438,7 +438,7 @@ describe('voice actions (§3.8): status and assignee, on the speaker’s authori
 
     it('with NO open item in scope it writes nothing either', async () => {
       classify({ kind: 'action', action: 'answer-review', id: noItemDocId });
-      const body = await say(hubId, 'yes, do that one', { surface: 'doc', docId: noItemDocId });
+      const body = await say(boardId, 'yes, do that one', { surface: 'doc', docId: noItemDocId });
 
       expect(body.route).toBe('agent');
       expect(await threadsOf(noItemDocId)).toHaveLength(0);
@@ -448,7 +448,7 @@ describe('voice actions (§3.8): status and assignee, on the speaker’s authori
   describe('open-link', () => {
     it('“open the linked doc” navigates to the task’s own doc ref', async () => {
       classify({ kind: 'action', action: 'open-link', id: linkedTaskId });
-      const body = await say(hubId, 'open the linked doc', {
+      const body = await say(boardId, 'open the linked doc', {
         surface: 'task',
         taskId: linkedTaskId,
       });
@@ -462,7 +462,7 @@ describe('voice actions (§3.8): status and assignee, on the speaker’s authori
 
     it('a task whose only link is a `url` ref navigates nowhere and goes to the agent', async () => {
       classify({ kind: 'action', action: 'open-link', id: urlOnlyTaskId });
-      const body = await say(hubId, 'open the linked mockup', {
+      const body = await say(boardId, 'open the linked mockup', {
         surface: 'task',
         taskId: urlOnlyTaskId,
       });
@@ -475,7 +475,7 @@ describe('voice actions (§3.8): status and assignee, on the speaker’s authori
   describe('positive control: everything outside the scoped set is unchanged', () => {
     it('“rewrite the goal list” still goes to the attached agent, with the old ack', async () => {
       classify({ kind: 'change' });
-      const body = await say(hubId, 'rewrite the goal list', { surface: 'hub' });
+      const body = await say(boardId, 'rewrite the goal list', { surface: 'board' });
 
       expect(body.route).toBe('agent');
       expect(body.ack).toContain('rewrite the goal list');
@@ -485,27 +485,27 @@ describe('voice actions (§3.8): status and assignee, on the speaker’s authori
 
     it('and it QUEUES on a board with nobody attached', async () => {
       classify({ kind: 'change' });
-      const body = await say(quietHubId, 'rewrite the goal list', {
+      const body = await say(quietBoardId, 'rewrite the goal list', {
         surface: 'task',
         taskId: quietTaskId,
       });
 
       expect(body.route).toBe('agent-queued');
       expect(body.ack.toLowerCase()).toContain('queued');
-      const qPath = voiceQueuePath(dataDir, quietHubId);
+      const qPath = voiceQueuePath(dataDir, quietBoardId);
       expect(existsSync(qPath)).toBe(true);
       expect(readFileSync(qPath, 'utf8')).toContain('rewrite the goal list');
     });
 
     it('a LOOKUP still answers on the plain fast-path route', async () => {
       classify({ kind: 'lookup', target: 'task', id: doneTaskId });
-      const body = await say(hubId, 'take me to the results page task', { surface: 'hub' });
+      const body = await say(boardId, 'take me to the results page task', { surface: 'board' });
 
       // Distinct from 'fast-path-action' on purpose: the MCP suppresses this
       // one as "a lookup the server already answered", and an executed action
       // is not that.
       expect(body.route).toBe('fast-path');
-      expect(body.navigate).toBe(`/workspaces/${hubId}?task=${doneTaskId}`);
+      expect(body.navigate).toBe(`/workspaces/${boardId}?task=${doneTaskId}`);
       // The same-origin assertion is applied to EVERY navigate the router
       // returns, so the pre-existing lookup paths have to keep satisfying it.
       expect(body.navigate).toMatch(SAME_ORIGIN);
@@ -515,7 +515,7 @@ describe('voice actions (§3.8): status and assignee, on the speaker’s authori
       classify({ kind: 'lookup', target: 'doc', id: noItemDocId });
       // Model-named: with an opener ("open …") the server resolves by title
       // first, and "Review the ranking notes" is a task on this board.
-      const body = await say(hubId, 'the ranking notes doc', { surface: 'hub' });
+      const body = await say(boardId, 'the ranking notes doc', { surface: 'board' });
 
       expect(body.route).toBe('fast-path');
       expect(body.navigate).toBe(`/review/${noItemDocId}`);

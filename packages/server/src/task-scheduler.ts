@@ -57,7 +57,7 @@ import {
   dueOccurrence,
 } from '@feedback/core/task-schedule';
 import type { Task } from '@feedback/core/task-wire';
-import type { CreateTaskOpts, CreateTaskResult, HubWorkspace } from './tasks.ts';
+import type { BoardWorkspace, CreateTaskOpts, CreateTaskResult } from './tasks.ts';
 import { isRetired } from './workspace-store.ts';
 
 /**
@@ -224,7 +224,7 @@ export class TaskScheduler {
 
 /** What the wiring reaches in the store. `TaskStore` satisfies it. */
 export interface SchedulerStore {
-  listWorkspaces(): HubWorkspace[];
+  listWorkspaces(): BoardWorkspace[];
   listTasks(workspaceId: string): Task[];
   getTask(taskId: string): Task | undefined;
   createTask(workspaceId: string, opts: CreateTaskOpts): CreateTaskResult;

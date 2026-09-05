@@ -30,18 +30,18 @@ import {
   verifySession as verifyEmailSession,
 } from '../auth/session.ts';
 import { mintWidgetToken } from '../auth/widget-token.ts';
+import type { DocStore } from '../doc-store.ts';
 import type { Identities, IdentityRecord } from '../identities.ts';
 import { userForIdentity } from '../identities.ts';
 import { type OriginPolicy, isAllowedBrowserOrigin } from '../middleware/browser-origin.ts';
 import { browserCannotOperateBody, isBrowserRequest } from '../middleware/write-gate.ts';
-import type { Rooms } from '../rooms.ts';
 import { readCookie } from '../share/link-session.ts';
 import { type ShareLinks, shareMemberKey } from '../share/share-links.ts';
 import { ACCESS_NOT_CONFIGURED, type Shares } from '../share/shares.ts';
 import type { SharingGate } from '../share/sharing-gate.ts';
 import { resolveTtl } from '../share/ttl.ts';
 import { DEFAULT_LINK_TTL_SECONDS } from '../share/types.ts';
-import type { SseHub } from '../sse.ts';
+import type { SseBus } from '../sse.ts';
 import type { TaskStore } from '../tasks.ts';
 import { widgetAuthPage } from '../widget-auth-page.ts';
 
@@ -116,12 +116,12 @@ h1{font-size:1.25rem;margin:0 0 .5rem}p{color:#555;margin:0}
 
 /** The long-lived collaborators these routes need, built once per server. */
 export interface AuthShareRoutesContext {
-  /** Doc rooms — read to refuse sharing a board that holds a bound review,
+  /** Doc store — read to refuse sharing a board that holds a bound review,
    *  and told to drop a revoked share's sockets. */
-  rooms: Rooms;
-  /** The SSE hub, told to drop a revoked share's streams. */
-  sse: SseHub;
-  /** The hub task store — the only thing that knows what a board is. */
+  docStore: DocStore;
+  /** The SSE bus, told to drop a revoked share's streams. */
+  sse: SseBus;
+  /** The board task store — the only thing that knows what a board is. */
   taskStore: TaskStore;
   /** The share registry, or null when sharing was never configured. */
   shares: Shares | null;
@@ -162,7 +162,7 @@ export interface AuthShareRoutesContext {
    */
   emailCodeSignIn: boolean;
   /** The name of the catch-all board, which may not be shared. */
-  defaultHubWorkspaceName: string;
+  defaultBoardWorkspaceName: string;
   /**
    * Who a share admits when the caller names nobody — the operator allowlist
    * (`CW_PROXIED_TRUSTED_EMAILS`, defaulting to `CW_OWNER_EMAIL`).
@@ -219,7 +219,7 @@ export async function handleAuthShareRoutes(
   rq: AuthShareRouteRequest,
 ): Promise<Response | undefined> {
   const {
-    rooms,
+    docStore,
     sse,
     taskStore,
     shares,
@@ -233,7 +233,7 @@ export async function handleAuthShareRoutes(
     requireEmailAuth,
     requireSignInToWrite,
     emailCodeSignIn,
-    defaultHubWorkspaceName: DEFAULT_HUB_WORKSPACE_NAME,
+    defaultBoardWorkspaceName: DEFAULT_BOARD_WORKSPACE_NAME,
     defaultShareAudience,
     j,
     safeJson,
@@ -583,14 +583,14 @@ export async function handleAuthShareRoutes(
     let closedStreams = 0;
     if (!enabled) {
       for (const share of shares?.list() ?? []) {
-        closedSockets += rooms.closeSocketsForShare(share.shareId);
+        closedSockets += docStore.closeSocketsForShare(share.shareId);
         closedStreams += sse.closeForShare(share.shareId);
       }
       // And every share-link visitor, who carries no Cloudflare shareId for
       // the sweep above to match. Without this the switch closed the door to
       // new requests while an already-open `/y/<doc>` kept reading AND
       // writing, and an `/events/` stream kept delivering.
-      closedSockets += rooms.closeSocketsForShareMembers(() => true);
+      closedSockets += docStore.closeSocketsForShareMembers(() => true);
       closedStreams += sse.closeForShareMembers(() => true);
     }
     return j(200, {
@@ -671,12 +671,12 @@ export async function handleAuthShareRoutes(
     if (!workspaceId) return j(400, { error: 'workspaceId required' });
 
     // Only a BOARD may be shared. A board is what `taskStore` answers
-    // for; a review is what only `rooms` knows about. They arrive in
+    // for; a review is what only `docStore` knows about. They arrive in
     // the SAME field — unlike the per-doc removal above, no shape of
     // the payload separates them — so the lookup IS the discriminator.
     const linkBoard = taskStore.getWorkspace(workspaceId);
     if (!linkBoard) {
-      if (rooms.list().some((m) => m.workspaceId === workspaceId)) {
+      if (docStore.list().some((m) => m.workspaceId === workspaceId)) {
         return j(410, GROUPING_SHARING_REMOVED);
       }
       // Neither. Kept distinct from the 410 so that reply keeps meaning
@@ -685,10 +685,10 @@ export async function handleAuthShareRoutes(
       return j(404, { error: 'workspace not found', workspaceId });
     }
     // And never the UNFILED board. Matched by NAME, because that is
-    // how `defaultHubWorkspaceId()` itself finds it on every call —
+    // how `defaultBoardWorkspaceId()` itself finds it on every call —
     // the id is never cached, and any board answering that lookup can
     // receive other agents' stray reviews.
-    if (linkBoard.name === DEFAULT_HUB_WORKSPACE_NAME) {
+    if (linkBoard.name === DEFAULT_BOARD_WORKSPACE_NAME) {
       return j(403, UNFILED_SHARING_REFUSED);
     }
     // A board share opens the board. There is no entry doc to choose,
@@ -893,19 +893,19 @@ export async function handleAuthShareRoutes(
     }
     // Only a BOARD may be shared, and the same two refusals as every other
     // mint. A board is what `taskStore` answers for; a review is what only
-    // `rooms` knows about, and they arrive in the same field, so the lookup IS
+    // `docStore` knows about, and they arrive in the same field, so the lookup IS
     // the discriminator.
     const board = taskStore.getWorkspace(workspaceId);
     if (!board) {
-      if (rooms.list().some((m) => m.workspaceId === workspaceId)) {
+      if (docStore.list().some((m) => m.workspaceId === workspaceId)) {
         return j(410, GROUPING_SHARING_REMOVED);
       }
       return j(404, { error: 'workspace not found', workspaceId });
     }
     // And never the UNFILED board — matched by NAME, the way
-    // `defaultHubWorkspaceId()` finds it, because the id is never cached and
+    // `defaultBoardWorkspaceId()` finds it, because the id is never cached and
     // any board answering that lookup receives other agents' stray reviews.
-    if (board.name === DEFAULT_HUB_WORKSPACE_NAME) {
+    if (board.name === DEFAULT_BOARD_WORKSPACE_NAME) {
       return j(403, UNFILED_SHARING_REFUSED);
     }
     // BELOW the board lookup, in the order the retired mint used: an older
@@ -997,7 +997,7 @@ export async function handleAuthShareRoutes(
     // Exactly this membership. Someone ejected from one board may still hold
     // another, and their connections to that one must survive.
     const key = shareMemberKey(workspaceId, email);
-    const closedSockets = rooms.closeSocketsForShareMembers((k) => k === key);
+    const closedSockets = docStore.closeSocketsForShareMembers((k) => k === key);
     const closedStreams = sse.closeForShareMembers((k) => k === key);
     return j(200, { ok: true, closedSockets, closedStreams });
   }
@@ -1027,7 +1027,7 @@ export async function handleAuthShareRoutes(
       // authorized once at its upgrade — so without this, a visitor who
       // already had the doc open kept reading and writing it after the
       // share was revoked.
-      const closed = result.ok ? rooms.closeSocketsForShare(shareId) : 0;
+      const closed = result.ok ? docStore.closeSocketsForShare(shareId) : 0;
       // The SSE stream has the same "authorized once, then long-lived"
       // shape: a visitor with the review page still open would otherwise
       // keep receiving every new comment on a doc they can no longer load.

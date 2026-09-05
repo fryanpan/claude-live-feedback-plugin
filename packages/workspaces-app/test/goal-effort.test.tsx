@@ -27,20 +27,20 @@ import {
   ratioForGoal,
 } from '@feedback/core/goal-effort';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { effortComputationLines, effortFields } from '../src/board/board-detail-render.ts';
 import {
   type BoardFilters,
+  type BoardGoal,
+  type BoardTask,
   CHORES_ID,
   DEFAULT_DONE_WINDOW,
-  type HubGoal,
-  type HubTask,
   bandOfGoal,
   boardCalibration,
   boardEffort,
   boardSectionsWithEffort,
   goalBandIds,
   goalEffortLabel,
-} from '../src/hub/hub-board-model.ts';
-import { effortComputationLines, effortFields } from '../src/hub/hub-detail-render.ts';
+} from '../src/board/board-model.ts';
 import { IPAD, PHONE, installSheets, setViewport, styleOf } from './css-harness.ts';
 import { disposeBoards, renderBoard } from './support/board.ts';
 
@@ -49,7 +49,7 @@ const DAY = 24 * 60 * 60 * 1000;
 const HOUR = 60 * 60 * 1000;
 
 let seq = 0;
-function task(overrides: Partial<HubTask> = {}): HubTask {
+function task(overrides: Partial<BoardTask> = {}): BoardTask {
   seq += 1;
   return {
     id: `t-${seq}`,
@@ -76,7 +76,7 @@ function task(overrides: Partial<HubTask> = {}): HubTask {
 
 /** A closed ticket: claimed `workedMs` before it finished, finished `agoMs`
  *  before NOW. */
-function closed(agoMs: number, workedMs = HOUR, overrides: Partial<HubTask> = {}): HubTask {
+function closed(agoMs: number, workedMs = HOUR, overrides: Partial<BoardTask> = {}): BoardTask {
   const doneAt = NOW - agoMs;
   return task({
     status: 'done',
@@ -93,7 +93,7 @@ function closed(agoMs: number, workedMs = HOUR, overrides: Partial<HubTask> = {}
   });
 }
 
-const GOALS: HubGoal[] = [{ id: 'g-ship', title: 'Ship the thing' }];
+const GOALS: BoardGoal[] = [{ id: 'g-ship', title: 'Ship the thing' }];
 
 const filters = (over: Partial<BoardFilters> = {}): BoardFilters => ({
   tab: 'all',
@@ -155,7 +155,7 @@ describe('boardEffort ignores the reader’s filter', () => {
 });
 
 describe('the board says when a projection is uncalibrated', () => {
-  const labelFor = (tasks: HubTask[]) => {
+  const labelFor = (tasks: BoardTask[]) => {
     const summary = boardEffort(GOALS, tasks, NOW).byGoal.get('g-ship');
     if (!summary) throw new Error('no summary');
     return goalEffortLabel(summary, NOW, 'en-US');
@@ -164,7 +164,7 @@ describe('the board says when a projection is uncalibrated', () => {
   /** Closed, worked, and scored under an OLDER ask — so it sets a pace and
    *  teaches the calibrator nothing. The shape a board wears right after a
    *  prompt bump, and the only way to hold a date and no correction at once. */
-  const staleClose = (agoMs: number): HubTask =>
+  const staleClose = (agoMs: number): BoardTask =>
     closed(agoMs, HOUR, {
       effortEstimate: {
         status: 'ok',
@@ -213,7 +213,7 @@ describe('the board says when a projection is uncalibrated', () => {
 });
 
 describe('goalEffortLabel keeps three states apart', () => {
-  const labelFor = (tasks: HubTask[]) => {
+  const labelFor = (tasks: BoardTask[]) => {
     const summary = boardEffort(GOALS, tasks, NOW).byGoal.get('g-ship');
     if (!summary) throw new Error('no summary');
     return goalEffortLabel(summary, NOW, 'en-US');
@@ -462,7 +462,7 @@ describe('the board renders the readout and leaves the rows alone', () => {
     host.remove();
   });
 
-  const paint = (tasks: HubTask[]): void => {
+  const paint = (tasks: BoardTask[]): void => {
     renderBoard(host, boardSectionsWithEffort(GOALS, tasks, filters(), NOW), {} as never);
   };
 
@@ -473,25 +473,25 @@ describe('the board renders the readout and leaves the rows alone', () => {
     renderBoard(
       host,
       boardSectionsWithEffort(
-        [{ ...GOALS[0], status: 'triage' }] as HubGoal[],
+        [{ ...GOALS[0], status: 'triage' }] as BoardGoal[],
         rows,
         filters(),
         NOW,
       ),
       {} as never,
     );
-    expect(host.querySelector('.hub-goal-effort')).toBeNull();
+    expect(host.querySelector('.board-goal-effort')).toBeNull();
     // POSITIVE CONTROL: the same rows under the agreed band draw it.
     disposeBoards();
     host.replaceChildren();
     paint(rows);
-    expect(host.querySelector('.hub-goal-effort')).not.toBeNull();
+    expect(host.querySelector('.board-goal-effort')).not.toBeNull();
   });
 
   it('draws "estimate only" under the date, never in the title row', () => {
     // Scored under an older ask: three closes set a pace, and none of them
     // corrected the factor the date divides.
-    const stale = (agoMs: number): HubTask =>
+    const stale = (agoMs: number): BoardTask =>
       closed(agoMs, HOUR, {
         effortEstimate: {
           status: 'ok',
@@ -501,58 +501,58 @@ describe('the board renders the readout and leaves the rows alone', () => {
         },
       });
     paint([stale(DAY), stale(2 * DAY), stale(3 * DAY), task()]);
-    const strip = host.querySelector('.hub-goal-effort') as HTMLElement;
-    const est = strip.querySelector('.hub-goal-effort-est');
+    const strip = host.querySelector('.board-goal-effort') as HTMLElement;
+    const est = strip.querySelector('.board-goal-effort-est');
     expect(est?.textContent).toBe('estimate only');
     // In the DATE's column — so it wraps under the date and spends height,
     // the axis this board has, rather than width from the goal title.
-    expect(est?.closest('.hub-goal-effort-fin')).not.toBeNull();
-    expect(est?.closest('.hub-goal-row')).toBeNull();
+    expect(est?.closest('.board-goal-effort-fin')).not.toBeNull();
+    expect(est?.closest('.board-goal-row')).toBeNull();
     // The pair still has exactly two children, which is what keeps
     // `space-between` holding the label and the date at opposite edges.
-    expect(strip.querySelector('.hub-goal-effort-fin')?.children).toHaveLength(2);
+    expect(strip.querySelector('.board-goal-effort-fin')?.children).toHaveLength(2);
     // The date itself is untouched beside it.
-    expect(strip.querySelector('.hub-goal-effort-fin .hub-goal-effort-v')?.textContent).toContain(
-      '~',
-    );
+    expect(
+      strip.querySelector('.board-goal-effort-fin .board-goal-effort-v')?.textContent,
+    ).toContain('~');
 
     // Positive control: the same board scored under the CURRENT ask draws no
     // marker at all, so the assertion above is the state and not the markup.
     disposeBoards();
     host.innerHTML = '';
     paint([closed(DAY), closed(2 * DAY), closed(3 * DAY), task()]);
-    expect(host.querySelector('.hub-goal-effort-est')).toBeNull();
+    expect(host.querySelector('.board-goal-effort-est')).toBeNull();
   });
 
   it('draws the strip on its own row beneath the header, not on the meta row', () => {
     paint([closed(DAY), closed(2 * DAY), closed(3 * DAY), task(), task()]);
-    const strips = host.querySelectorAll('.hub-goal-effort');
+    const strips = host.querySelectorAll('.board-goal-effort');
     // One strip per goal — the treatment Bryan approved on 2026-08-30 (mock
     // round six, variant 1): a row of its own under the header, not a
     // fragment tucked into the due date's slot.
     expect(strips).toHaveLength(1);
     const strip = strips[0] as HTMLElement;
-    expect(strip.closest('.hub-goal-meta')).toBeNull();
+    expect(strip.closest('.board-goal-meta')).toBeNull();
     // A SIBLING of the goal row, and after it — which is what the "one block"
     // hairline rule and the folded-band rule in the stylesheet both key on.
-    expect(strip.previousElementSibling?.classList.contains('hub-goal-row')).toBe(true);
+    expect(strip.previousElementSibling?.classList.contains('board-goal-row')).toBe(true);
     // …and outside the task list, so folding the band keeps the strip.
-    expect(strip.closest('.hub-band-tasks')).toBeNull();
+    expect(strip.closest('.board-band-tasks')).toBeNull();
     // Three labelled facts, in Bryan's order: hands-on on the left, then
     // progress, then the projected finish.
     const label = (sel: string): string =>
-      strip.querySelector(`${sel} .hub-goal-effort-k`)?.textContent ?? '';
+      strip.querySelector(`${sel} .board-goal-effort-k`)?.textContent ?? '';
     const value = (sel: string): string =>
-      strip.querySelector(`${sel} .hub-goal-effort-v`)?.textContent ?? '';
-    expect(label('.hub-goal-effort-hands')).toBe('Hands-on left');
-    expect(label('.hub-goal-effort-progress')).toBe('Progress');
-    expect(label('.hub-goal-effort-fin')).toBe('Projected finish');
-    expect(value('.hub-goal-effort-progress')).toBe('60%');
-    expect(value('.hub-goal-effort-fin')).toContain('~Sep 3');
+      strip.querySelector(`${sel} .board-goal-effort-v`)?.textContent ?? '';
+    expect(label('.board-goal-effort-hands')).toBe('Hands-on left');
+    expect(label('.board-goal-effort-progress')).toBe('Progress');
+    expect(label('.board-goal-effort-fin')).toBe('Projected finish');
+    expect(value('.board-goal-effort-progress')).toBe('60%');
+    expect(value('.board-goal-effort-fin')).toContain('~Sep 3');
     // The figure is the figure alone: the words are the label's job now, so
     // the value must not repeat them.
-    expect(value('.hub-goal-effort-hands')).not.toContain('hands-on');
-    expect(host.querySelector('.hub-goal-bar i')?.getAttribute('style')).toContain('60%');
+    expect(value('.board-goal-effort-hands')).not.toContain('hands-on');
+    expect(host.querySelector('.board-goal-bar i')?.getAttribute('style')).toContain('60%');
   });
 
   it('keeps the coverage caveat in the FLEXIBLE column, off the pinned ones', () => {
@@ -569,17 +569,17 @@ describe('the board renders the readout and leaves the rows alone', () => {
       task({ effortEstimate: undefined }),
       task({ effortEstimate: { status: 'failed', reason: 'the body was empty' } }),
     ]);
-    const note = host.querySelector('.hub-goal-effort-note');
+    const note = host.querySelector('.board-goal-effort-note');
     expect(note?.textContent).toBe('2 not scored, 1 failed');
-    expect(note?.closest('.hub-goal-effort-hands')).not.toBeNull();
-    expect(note?.closest('.hub-goal-effort-progress')).toBeNull();
-    expect(note?.closest('.hub-goal-effort-fin')).toBeNull();
+    expect(note?.closest('.board-goal-effort-hands')).not.toBeNull();
+    expect(note?.closest('.board-goal-effort-progress')).toBeNull();
+    expect(note?.closest('.board-goal-effort-fin')).toBeNull();
     // Positive control: a band where every ticket is scored gets no caveat,
     // so the assertion above cannot be met by a note that is always drawn.
     disposeBoards();
     host.replaceChildren();
     paint([closed(DAY), closed(2 * DAY), closed(3 * DAY), task()]);
-    expect(host.querySelector('.hub-goal-effort-note')).toBeNull();
+    expect(host.querySelector('.board-goal-effort-note')).toBeNull();
   });
 
   it('reddens a projected finish that lands past the goal’s due date', () => {
@@ -589,7 +589,7 @@ describe('the board renders the readout and leaves the rows alone', () => {
     const withDue = (dueAt: number): HTMLElement => {
       disposeBoards();
       host.replaceChildren();
-      const goals: HubGoal[] = [{ id: 'g-ship', title: 'Ship the thing', dueAt }];
+      const goals: BoardGoal[] = [{ id: 'g-ship', title: 'Ship the thing', dueAt }];
       renderBoard(
         host,
         boardSectionsWithEffort(
@@ -600,21 +600,21 @@ describe('the board renders the readout and leaves the rows alone', () => {
         ),
         {} as never,
       );
-      return host.querySelector('.hub-goal-effort-fin .hub-goal-effort-v') as HTMLElement;
+      return host.querySelector('.board-goal-effort-fin .board-goal-effort-v') as HTMLElement;
     };
-    expect(withDue(Date.UTC(2026, 8, 2)).className).toContain('hub-goal-effort-late');
-    expect(withDue(Date.UTC(2026, 8, 20)).className).not.toContain('hub-goal-effort-late');
+    expect(withDue(Date.UTC(2026, 8, 2)).className).toContain('board-goal-effort-late');
+    expect(withDue(Date.UTC(2026, 8, 20)).className).not.toContain('board-goal-effort-late');
   });
 
   it('puts no numbers on a task row', () => {
     paint([closed(DAY), task()]);
-    for (const row of host.querySelectorAll('.hub-task-row')) {
+    for (const row of host.querySelectorAll('.board-task-row')) {
       const text = row.textContent ?? '';
       // The struck pair, in the shapes the mock showed them: "2h · 10m".
       expect(text).not.toMatch(/\d+\s*h\s*·/);
       expect(text).not.toMatch(/\d+\s*m\s*(left|·)/);
-      expect(row.querySelector('.hub-goal-bar')).toBeNull();
-      expect(row.querySelector('.hub-goal-effort')).toBeNull();
+      expect(row.querySelector('.board-goal-bar')).toBeNull();
+      expect(row.querySelector('.board-goal-effort')).toBeNull();
     }
   });
 
@@ -624,9 +624,10 @@ describe('the board renders the readout and leaves the rows alone', () => {
       boardSectionsWithEffort(GOALS, [task({ goal: CHORES_ID })], filters(), NOW),
       {} as never,
     );
-    const chores = host.querySelector('.hub-chores') ?? host.querySelector('.hub-band-reserved');
+    const chores =
+      host.querySelector('.board-chores') ?? host.querySelector('.board-band-reserved');
     expect(chores, 'no Backlog band rendered').not.toBeNull();
-    expect(chores?.querySelector('.hub-goal-effort')).toBeNull();
+    expect(chores?.querySelector('.board-goal-effort')).toBeNull();
   });
 });
 
@@ -635,9 +636,9 @@ describe('the strip’s columns and its two-row fold, measured on the rendered b
   let sheets = () => {};
 
   beforeEach(() => {
-    sheets = installSheets('hub.css', 'styles.css');
+    sheets = installSheets('board.css', 'styles.css');
     host = document.createElement('div');
-    host.className = 'hub-board';
+    host.className = 'board';
     document.body.appendChild(host);
   });
   afterEach(() => {
@@ -657,7 +658,7 @@ describe('the strip’s columns and its two-row fold, measured on the rendered b
    * before the board is mounted, since a computed style is cached on an
    * element from its first read.
    *
-   * This replaces a regex over `hub.css`. A text read passes against a
+   * This replaces a regex over `board.css`. A text read passes against a
    * declaration that survives in the file whatever the cascade then does with
    * it — overridden later, on a class the strip never carries, or inside a
    * media query that does not match at the width the reader is on. The last
@@ -669,7 +670,7 @@ describe('the strip’s columns and its two-row fold, measured on the rendered b
     host.replaceChildren();
     const rows = [closed(DAY), closed(2 * DAY), closed(3 * DAY), task()];
     renderBoard(host, boardSectionsWithEffort(GOALS, rows, filters(), NOW), {} as never);
-    const el = host.querySelector('.hub-goal-effort') as HTMLElement;
+    const el = host.querySelector('.board-goal-effort') as HTMLElement;
     expect(el, 'the band rendered no effort strip').not.toBeNull();
     const pick = (sel: string) => {
       const found = el.querySelector(sel) as HTMLElement;
@@ -679,13 +680,13 @@ describe('the strip’s columns and its two-row fold, measured on the rendered b
     return {
       el,
       style: styleOf(el),
-      progress: pick('.hub-goal-effort-progress'),
-      hands: pick('.hub-goal-effort-hands'),
-      fin: pick('.hub-goal-effort-fin'),
-      bar: pick('.hub-goal-bar'),
-      label: pick('.hub-goal-effort-k'),
-      value: pick('.hub-goal-effort-v'),
-      goalRow: host.querySelector('.hub-goal-row') as HTMLElement,
+      progress: pick('.board-goal-effort-progress'),
+      hands: pick('.board-goal-effort-hands'),
+      fin: pick('.board-goal-effort-fin'),
+      bar: pick('.board-goal-bar'),
+      label: pick('.board-goal-effort-k'),
+      value: pick('.board-goal-effort-v'),
+      goalRow: host.querySelector('.board-goal-row') as HTMLElement,
     };
   }
 
@@ -752,7 +753,7 @@ describe('the strip’s columns and its two-row fold, measured on the rendered b
     //
     // Read as the VALUE, not as "not auto". An element no rule reaches
     // computes `''` for width, and `''` is not `'auto'` — so the negative
-    // passed against a renamed `.hub-goal-bar` and against a deleted rule
+    // passed against a renamed `.board-goal-bar` and against a deleted rule
     // alike, which is how a mutation run found it. 110px is the only number
     // that says the base rule is the one in force.
     const wide = strip(IPAD);
@@ -790,12 +791,12 @@ describe('the strip’s columns and its two-row fold, measured on the rendered b
  * this is read on has no hover.
  */
 describe('the ticket panel shows two estimates and hides the arithmetic', () => {
-  const closedSet = (): HubTask[] => {
+  const closedSet = (): BoardTask[] => {
     // Six closes, each of which took twice its estimate — 2h of wall clock
     // against an hour estimated, 20m read against 10m — so the learned factor
     // is a round 2.00 and the assertions below are arithmetic rather than a
     // snapshot.
-    const rows: HubTask[] = [];
+    const rows: BoardTask[] = [];
     for (let i = 0; i < 6; i += 1) {
       rows.push(
         closed(2 * DAY, 2 * HOUR, {
@@ -899,7 +900,7 @@ describe('the ticket panel shows two estimates and hides the arithmetic', () => 
 
   it('reports what a closed ticket actually took, unmultiplied', () => {
     const lines = effortComputationLines(
-      closedSet()[0] as HubTask,
+      closedSet()[0] as BoardTask,
       { handsOnSeconds: 600, wallClockSeconds: 3600 },
       ratioForGoal(computeEffortCalibration(closedSet()).wallClock, 'g-ship'),
       ratioForGoal(computeEffortCalibration(closedSet()).handsOn, 'g-ship'),
@@ -914,7 +915,7 @@ describe('the ticket panel shows two estimates and hides the arithmetic', () => 
     const cal = shipCal(factor(2, 6));
     const wall = ratioForGoal(cal.wallClock, 'g-ship');
     const hands = ratioForGoal(cal.handsOn, 'g-ship');
-    const wasClosed = closedSet()[0] as HubTask;
+    const wasClosed = closedSet()[0] as BoardTask;
     // Positive control: the same row, still closed, does report it — so the
     // absence below is the status and not a fixture that never had actuals.
     expect(
@@ -925,7 +926,7 @@ describe('the ticket panel shows two estimates and hides the arithmetic', () => 
         hands,
       ).join(' '),
     ).toContain('Actually took');
-    const reopened: HubTask = {
+    const reopened: BoardTask = {
       ...wasClosed,
       status: 'in-progress',
       transitions: [

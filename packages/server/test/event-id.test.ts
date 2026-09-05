@@ -100,7 +100,7 @@ describe('broadcast event ids', () => {
     });
 
     const docStream = await get('/events/doc-one');
-    const boardStream = await get(`/events/workspace/${encodeURIComponent(workspace.id)}`);
+    const boardStream = await get(`/workspaces/${encodeURIComponent(workspace.id)}/events:stream`);
     const onDoc = listenData(docStream);
     const onBoard = listenData(boardStream);
     await settle(150);
@@ -126,7 +126,7 @@ describe('broadcast event ids', () => {
     expect(docEids[0]).not.toBe(docEids[1]);
   });
 
-  it('is unique within a process even across rooms', () => {
+  it('is unique within a process even across docs', () => {
     const ids = new Set<string>();
     for (let i = 0; i < 1000; i++) ids.add(newEventId());
     expect(ids.size).toBe(1000);

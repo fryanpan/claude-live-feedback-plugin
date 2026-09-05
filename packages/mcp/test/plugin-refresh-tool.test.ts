@@ -35,7 +35,7 @@ describe('request_plugin_refresh', () => {
   // a harness that somehow listed nothing would fail here rather than let the
   // assertions below pass vacuously.
   it('POSITIVE CONTROL: the running bundle serves a known tool', () => {
-    expect(mcp.tool('list_attachments')).toBeDefined();
+    expect(mcp.tool('list_agents')).toBeDefined();
     expect(mcp.tool('a_tool_that_was_never_declared')).toBeUndefined();
   });
 

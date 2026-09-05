@@ -530,7 +530,6 @@ const BOARD_MEMBER_ROUTES: Readonly<Record<string, readonly string[]>> = {
   // Reads that predate membership — the workspace record, the presence strip,
   // and the review-item queue the strip's thread half arrives on.
   '': ['GET'],
-  attachments: ['GET'],
   'review-items': ['GET'],
   // The board's rows. GET is the list the Tasks pane pages through; POST is
   // filing one. The board room syncs the same rows, so the GET is a
@@ -666,8 +665,8 @@ export function shareScopeAllows(
    *
    * The id may be a doc OR a review (folder bind / diff review), and a
    * doc belongs to more than one workspace at once: its review, and the
-   * hub board that review is filed on. Membership is therefore a SET, not
-   * a single answer — an exact `=== workspaceOf(id)` was what refused a hub
+   * board that review is filed on. Membership is therefore a SET, not
+   * a single answer — an exact `=== workspaceOf(id)` was what refused a board
    * visitor every review row on their own board.
    *
    * Every share is a workspace share, so this is consulted for every scope
@@ -752,7 +751,7 @@ export function shareScopeAllows(
     return id === target.workspaceId || insideSharedWorkspace(id);
   };
 
-  // Workspace-hub surfaces (§3.12 commit 8) — three explicit allowances,
+  // Workspace-board surfaces (§3.12 commit 8) — three explicit allowances,
   // ONLY for a workspace-scope share. A doc-scoped share never reaches the
   // board: the ws:<id> room syncs every task in the workspace (§3.3 rule 2),
   // so task chips inside a shared doc resolve through the REST endpoint
@@ -791,6 +790,18 @@ export function shareScopeAllows(
         // The workspace page itself and its nav tabs. A named list — a tab
         // added later has to be added here too, on purpose.
         if (sub === '' || ['home', 'tasks', 'mine', 'activity'].includes(sub)) return true;
+        // Two board collections that are NOT panes, admitted by name for the
+        // grants they carried at their old addresses:
+        //   agents         the presence strip's read, which was
+        //                  `attachments: ['GET']` in BOARD_MEMBER_ROUTES.
+        //   events:stream  the live board feed, which was the
+        //                  `/events/workspace/<id>` allowance. Task events on
+        //                  it are redacted for visitors (actor display names
+        //                  only) before they reach the stream.
+        // GET only, which is the whole of what moved: attaching an agent,
+        // detaching one and forging a heartbeat were never a member's, and
+        // this block admits no other method.
+        if (sub === 'agents' || sub === 'events:stream') return true;
         // `<kind>/<id>` and nothing deeper. An id never contains a slash, so
         // a third segment is a typo or a probe either way.
         const cut = sub.indexOf('/');
@@ -807,12 +818,6 @@ export function shareScopeAllows(
     // visitor-contract projection; foreign writes are reverted server-side.
     if (pathname.startsWith('/y/') && safeDecode(pathname.slice('/y/'.length)) === `ws:${wsId}`) {
       return true;
-    }
-    // The workspace SSE feed. Task events on it are redacted for visitors
-    // (actor display names only) before they reach the stream.
-    if (pathname.startsWith('/events/workspace/')) {
-      const seg = pathname.slice('/events/workspace/'.length);
-      if (!seg.includes('/') && safeDecode(seg) === wsId) return true;
     }
     // The board's own REST surface, `<sub>` by `<sub>` and method by method:
     // BOARD_MEMBER_ROUTES. Everything not in that table is refused here, so a
@@ -847,11 +852,12 @@ export function shareScopeAllows(
     // holding a share link. The browser gate in front of it is not the answer
     // either — it refuses pages, and a member's non-browser client is not a
     // page. Nothing names a host path on a member's behalf.
-    // What stays off the table is the agent roster's own verbs — `attachments`
-    // POST, `agent-heartbeat`, `dispatches`, `agent-notes`: a seat on the
-    // board, not work on it. `voice` stays off too — it routes an utterance to
-    // the owner's agents, which is spending the owner's machine rather than
-    // working the board. Board lifecycle (`DELETE`, `rename`, `retired`,
+    // What stays off the table is the agent roster's own verbs — the writes
+    // under `/workspaces/<id>/agents`, `dispatches`, `agent-notes`: a seat on
+    // the board, not work on it. The roster's READ moved with the route, to
+    // the `/workspaces/` block above. `voice` stays off too — it routes an
+    // utterance to the owner's agents, which is spending the owner's machine
+    // rather than working the board. Board lifecycle (`DELETE`, `rename`, `retired`,
     // `lead`) stays closed: a member was given a board to work on, not to
     // retire.
     if (pathname.startsWith('/api/workspaces/')) {
@@ -944,7 +950,7 @@ export function shareScopeAllows(
   // The last three matter because members bind LAZILY: `bind_folder` binds
   // only the entry doc, and everything else in the tree comes into being
   // through these calls. Block them and a shared folder shows one file.
-  // They are bounded by the workspace root — rooms.openContextFile /
+  // They are bounded by the workspace root — docStore.openContextFile /
   // openEditableFile reject any relPath that escapes it ('bad-path').
   //
   // Two things stay closed: a workspace this share does not cover, and
@@ -952,9 +958,9 @@ export function shareScopeAllows(
   // the review.
   //
   // "Covers" is `inScope`, not string equality, and that is the whole of the
-  // fix for a shared BOARD: a group bind is filed on a hub workspace, so the
+  // fix for a shared BOARD: a group bind is filed on a board workspace, so the
   // review row a visitor can see on the board is reached through the
-  // GROUPING's id while the share is scoped to the HUB's. An exact `!==`
+  // GROUPING's id while the share is scoped to the BOARD's. An exact `!==`
   // refused every one of them. A review filed on a different board is not
   // in the set `workspacesOf` returns, so it stays refused — that half is
   // the one under test, because widening is the direction that costs.
@@ -973,7 +979,7 @@ export function shareScopeAllows(
   //
   // "Any of them" means any file the TREE shows. Both open verbs are bound
   // by `git ls-files --cached --others --exclude-standard` in
-  // rooms.openContextFile / openEditableFile — an ignored `.env` under the
+  // docStore.openContextFile / openEditableFile — an ignored `.env` under the
   // root, or anything under `.git/`, answers 404 by path however the caller
   // spells it (Urgent-fixes ticket, 2026-09-02). This allowlist admits the
   // route; the listing decides the file.
@@ -1111,7 +1117,7 @@ export function collabScope(
  * enumerate-the-server route.
  *
  * A LIST rather than one answer, because a doc belongs to more than one
- * workspace at once: its review, and every hub board that review or doc is
+ * workspace at once: its review, and every board that review or doc is
  * filed on. Answering with the first of them asked the membership question
  * about whichever board the store iterated first, so a doc filed on two
  * boards was refused to a visitor who holds the second — while that board's
@@ -1138,7 +1144,7 @@ function pathWorkspaces(pathname: string, workspacesOf?: (id: string) => string[
   // Paths whose segment IS a workspace (or a review filed on one — the guard
   // accepts either through `inWorkspaceScope`). One candidate: the path spells
   // the workspace out, so there is nothing to resolve.
-  const named = seg('/events/workspace/') ?? seg('/workspaces/') ?? seg('/api/reviews/');
+  const named = seg('/workspaces/') ?? seg('/api/reviews/');
   if (named) return [named];
   // `/api/workspaces/` splits: `<id>/tree` names a workspace, and so does the
   // bare `<id>`; the LIST route has no segment and falls through to none.
@@ -1184,13 +1190,13 @@ function pathWorkspaces(pathname: string, workspacesOf?: (id: string) => string[
  * websocket (that's the point of a live review) and comment through the
  * thread routes — but the doc's OPERATOR verbs stay local-only:
  *
- *   DELETE <doc>        destroys the review doc
+ *   DELETE <doc>        destroys the attachment
  *   POST content        replaces the whole document in one call
  *   POST reparse_from_disk  discards live state, including others' edits
  *   POST threads/<id>/{rewrite_region,insert_after,insert_blocks_after}
  *                       agent-side document surgery, not a review action
  * `threads/<id>/promote` used to be in that list, with the reason "visitors
- * are read-only on the hub gate, comments are their only write". That reason
+ * are read-only on the board gate, comments are their only write". That reason
  * is the thing Bryan's 2026-09-03 call removed: a member files tasks on the
  * board this doc is filed on, so turning a comment into one is the same act
  * by a shorter route. It is allowed now.

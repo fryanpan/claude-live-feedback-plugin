@@ -3,7 +3,7 @@
  * anchored edits a comment thread drives, suggestions, and block insert and
  * delete.
  *
- * Split out of `rooms.ts`, which keeps the room lifecycle these operate on.
+ * Split out of `doc-store.ts`, which keeps the room lifecycle these operate on.
  * Almost every verb here is a thin, deliberate wrapper: resolve the room,
  * hand the `Y.Doc` to `prose` or `suggestOps`, return what it says. The
  * value of gathering them is that the wrapping is the SAME each time —
@@ -18,7 +18,7 @@ import { existsSync, mkdirSync, readdirSync, rmSync, writeFileSync } from 'node:
 import { join } from 'node:path';
 import { type Thread, contentKind, prose, suggestOps } from '@feedback/core';
 import * as Y from 'yjs';
-import type { DocRoom } from './rooms.ts';
+import type { DocRoom } from './doc-store.ts';
 
 /** Backups kept per doc by `backupReplacedContent` before rotation. */
 const REPLACE_BACKUP_CAP = 20;
@@ -40,7 +40,7 @@ export interface DocEditPersistence {
   ): void;
 }
 
-/** The editing verbs. One per `Rooms`; its only state is the backup counter,
+/** The editing verbs. One per `DocStore`; its only state is the backup counter,
  *  which nothing outside a backup has ever read. */
 export class DocEditOps {
   private backupSeq = 0;
@@ -71,7 +71,7 @@ export class DocEditOps {
       }
       return file;
     } catch (err) {
-      console.error(`[rooms] set_doc_content backup failed for ${docId}:`, err);
+      console.error(`[doc-store] set_doc_content backup failed for ${docId}:`, err);
       return null;
     }
   }

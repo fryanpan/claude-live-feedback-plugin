@@ -18,9 +18,9 @@ import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
 import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { Rooms } from '../src/rooms.ts';
+import { DocStore } from '../src/doc-store.ts';
 import { type BoundStatResult, boundFiles } from '../src/slow-fs.ts';
-import { SseHub } from '../src/sse.ts';
+import { SseBus } from '../src/sse.ts';
 import { createWebhookDispatcher } from '../src/webhooks.ts';
 import { waitFor } from './wait-for.ts';
 
@@ -37,7 +37,7 @@ const patchable = boundFiles as unknown as { write?: PoolWrite };
 describe('the bound-file write lane', () => {
   let dataDir: string;
   let path: string;
-  let rooms: Rooms;
+  let docStore: DocStore;
   const original: PoolWrite = boundFiles.write.bind(boundFiles);
 
   beforeEach(() => {
@@ -45,21 +45,21 @@ describe('the bound-file write lane', () => {
     dataDir = mkdtempSync(join(tmpdir(), 'cw-write-lane-'));
     path = join(dataDir, 'Notes.md');
     writeFileSync(path, 'first line\n');
-    rooms = new Rooms({
+    docStore = new DocStore({
       dataDir,
-      sse: new SseHub(),
+      sse: new SseBus(),
       webhooks: createWebhookDispatcher({ onLog: () => {} }),
       decorateDocMeta: (m) => ({ ...m, reviewUrl: `http://test/review/${m.docId}` }),
     });
-    rooms.getOrCreate('n1', { type: 'code', sourceUrl: path });
-    expect(rooms.attachFlatFile('n1', path, { writeBack: true }).ok).toBe(true);
+    docStore.getOrCreate('n1', { type: 'code', sourceUrl: path });
+    expect(docStore.attachFlatFile('n1', path, { writeBack: true }).ok).toBe(true);
   });
 
   afterEach(() => {
     // Belt and braces: a leaked patch would break every later test file, since
     // the whole server suite shares one process and one `boundFiles`.
     patchable.write = original;
-    rooms.stop();
+    docStore.stop();
     boundFiles.reset();
     rmSync(dataDir, { recursive: true, force: true });
   });
@@ -81,21 +81,21 @@ describe('the bound-file write lane', () => {
     };
 
     try {
-      rooms.get('n1')?.ydoc.getText('content').insert(0, 'an unsaved sentence\n');
+      docStore.get('n1')?.ydoc.getText('content').insert(0, 'an unsaved sentence\n');
       // Before the debounce fires this is pending because a timer is armed —
       // the positive control for the assertion below, which must hold for a
       // different reason.
-      expect(rooms.pendingFileWrites()).toHaveLength(1);
+      expect(docStore.pendingFileWrites()).toHaveLength(1);
 
       await waitFor(() => started === 1, { describe: 'the write-back to reach the pool' });
       // No timer now, and nothing on disk yet. This is the state that used to
       // read as "nothing to do".
       expect(readFileSync(path, 'utf8')).toBe('first line\n');
-      expect(rooms.pendingFileWrites().map((w) => w.docId)).toEqual(['n1']);
+      expect(docStore.pendingFileWrites().map((w) => w.docId)).toEqual(['n1']);
 
       // `flush()` cannot await the pool, so it writes synchronously. What it
       // must not do is skip.
-      rooms.flush();
+      docStore.flush();
       expect(readFileSync(path, 'utf8')).toContain('an unsaved sentence');
     } finally {
       open();
@@ -127,14 +127,14 @@ describe('the bound-file write lane', () => {
       return landed;
     };
 
-    const doc = rooms.get('n1')?.ydoc.getText('content');
+    const doc = docStore.get('n1')?.ydoc.getText('content');
     try {
       doc?.insert(0, 'version one\n');
       await waitFor(() => started === 1, { describe: 'the first write to reach the pool' });
       // A second edit while the first is still out. Its write-back re-arms
       // rather than racing, so the flush below is what carries it out.
       doc?.insert(0, 'version two\n');
-      rooms.flush();
+      docStore.flush();
     } finally {
       open();
     }
@@ -187,19 +187,19 @@ describe('the bound-file write lane', () => {
     rmSync(member, { recursive: true, force: true });
     writeFileSync(member, 'fun member() {}\n');
 
-    rooms.getOrCreate('m1', { type: 'code', sourceUrl: member });
-    expect(rooms.attachFlatFile('m1', member)).toMatchObject({
+    docStore.getOrCreate('m1', { type: 'code', sourceUrl: member });
+    expect(docStore.attachFlatFile('m1', member)).toMatchObject({
       ok: false,
       error: 'read-failed',
     });
     // Refused means unbound and unseeded — the doc keeps its .ydoc content.
-    expect(rooms.get('m1')?.ydoc.getText('content').toString()).toBe('');
+    expect(docStore.get('m1')?.ydoc.getText('content').toString()).toBe('');
 
     // Positive control: the same call on the same file succeeds once the
     // backoff is forgotten, so the refusal above is the quarantine talking
     // and not something else about this path.
     boundFiles.reset();
-    expect(rooms.attachFlatFile('m1', member).ok).toBe(true);
-    expect(rooms.get('m1')?.ydoc.getText('content').toString()).toBe('fun member() {}\n');
+    expect(docStore.attachFlatFile('m1', member).ok).toBe(true);
+    expect(docStore.get('m1')?.ydoc.getText('content').toString()).toBe('fun member() {}\n');
   });
 });

@@ -81,7 +81,7 @@ export function publicBaseUrl(port: number): string {
  * server hands a human is built from it.
  *
  * This matters more than cosmetics. `publicBaseUrl` is the single source of
- * `reviewUrl`, `entryUrl` and the task-import banner's `hubUrl` — the links
+ * `reviewUrl`, `entryUrl` and the task-import banner's `boardUrl` — the links
  * agents paste to Bryan. Left at `http://<host>:<port>` behind a TLS
  * frontend, every one of those links lands on the INSECURE origin, which is
  * exactly the origin where the microphone does not exist. The whole point of

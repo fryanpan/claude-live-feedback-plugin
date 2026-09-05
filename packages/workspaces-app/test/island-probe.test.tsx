@@ -12,7 +12,7 @@
  *     and the host's own children survive.
  */
 import { describe, expect, it } from 'vitest';
-import { mountIslandProbe, probeCount } from '../src/hub/island-probe.tsx';
+import { mountIslandProbe, probeCount } from '../src/board/island-probe.tsx';
 
 /** Signal-driven text updates flush synchronously in @preact/signals, but a
  * component re-render would be scheduled — settle both paths. */

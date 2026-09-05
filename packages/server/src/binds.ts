@@ -32,7 +32,7 @@ export {
 
 /**
  * The two "bind a set of files as one workspace" flows — folder/worktree
- * (`bindFolder`) and git diff (`bindDiff`) — extracted from rooms.ts and
+ * (`bindFolder`) and git diff (`bindDiff`) — extracted from doc-store.ts and
  * built on the same skeleton: enumerate candidates → filter
  * (exclude/size/binary, recording `skipped[]`) → maxFiles guardrail →
  * deterministic member docIds → getOrCreate + attach per file.

@@ -70,6 +70,9 @@ describe('MCP tool wiring', () => {
       ['bind_mock', 'attach_mockup'],
       ['promote_to_task', 'spin_off_task'],
       ['retire_workspace', 'archive_workspace'],
+      // The roster read followed its route off `attachments` when the agent
+      // collection moved to /workspaces/<id>/agents.
+      ['list_attachments', 'list_agents'],
     ] as const) {
       expect(SRC, alias).toMatch(new RegExp(`\\n( {4,6})case '${alias}':\\n\\1case '${now}': \\{`));
       // …and the old name is NOT advertised: an agent reading the tool list

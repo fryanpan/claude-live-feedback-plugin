@@ -223,7 +223,7 @@ describe('a server that predates the mux route falls back to a stream per key', 
     const { registry, opened } = harness({ muxUnsupported: true });
     await registry.watchWorkspace('w1');
     expect(opened).toEqual([
-      { label: 'ws:w1', path: '/events/workspace/w1?agentId=agent-workspaces' },
+      { label: 'ws:w1', path: '/workspaces/w1/events:stream?agentId=agent-workspaces' },
     ]);
   });
 });
@@ -386,13 +386,13 @@ describe('coverage is never fabricated out of a failed request', () => {
           coverage: {
             agentId: AUTHOR.id,
             workspaces: [],
-            unattachedBoards: [{ workspaceId: 'w1', name: 'Hub', queuedTotal: 2 }],
+            unattachedBoards: [{ workspaceId: 'w1', name: 'Board', queuedTotal: 2 }],
           },
         };
       },
     });
     const cov = await registry.refreshCoverage();
-    expect(cov?.unattachedBoards).toEqual([{ workspaceId: 'w1', name: 'Hub', queuedTotal: 2 }]);
+    expect(cov?.unattachedBoards).toEqual([{ workspaceId: 'w1', name: 'Board', queuedTotal: 2 }]);
     expect(asked).toEqual([`GET ${WATCHES_PATH}`]);
   });
 

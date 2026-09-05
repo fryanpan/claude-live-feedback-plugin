@@ -7,7 +7,7 @@
  * tick).
  */
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { HOME_CLOCK_MS, startHomeClock } from '../src/hub/home-clock.ts';
+import { HOME_CLOCK_MS, startHomeClock } from '../src/board/home-clock.ts';
 
 describe('startHomeClock', () => {
   afterEach(() => vi.useRealTimers());

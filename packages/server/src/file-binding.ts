@@ -2,21 +2,21 @@
  * The file bindings: everything that keeps a live doc and a file on disk
  * saying the same thing. `attachFile` and its flat-text twins, the shared
  * mtime poll, the debounced write-back and the conflict reconcile that
- * arbitrates when both sides moved — plus the doc-home pin, which is only
+ * arbitrates when both sides moved — plus the doc-origin-repo pin, which is only
  * ever a rule about which file a binding may write.
  *
  * It reaches the room lifecycle through `FileBindingHost` rather than
- * holding a `Rooms`. The seam is that shape because the bindings touch a
+ * holding a `DocStore`. The seam is that shape because the bindings touch a
  * room on every path — its ydoc, its persist debounce, its event fan-out —
  * so a line-range extraction would have had to copy those, and a copy of a
  * persist timer is a second timer. Every entry below is a THUNK onto the
- * live thing: `room` is the rooms map, `schedulePersist` is the 200ms
+ * live thing: `room` is the doc map, `schedulePersist` is the 200ms
  * `.ydoc` debounce, `noteTouched` writes the one residency clock the
  * eviction policy also reads. Nothing here owns state the lifecycle owns,
  * and nothing there owns the bindings' own timers.
  *
  * Timings, ordering and log lines are unchanged from when this lived in
- * `rooms.ts`: the write-back debounce, the read settle, the reconcile's
+ * `doc-store.ts`: the write-back debounce, the read settle, the reconcile's
  * decision order and its backup-before-reassert rule are the contract the
  * bound-doc sync behaviour rests on, and this file moved them without
  * touching them.
@@ -32,25 +32,25 @@ import {
 } from 'node:fs';
 import { dirname, join } from 'node:path';
 import {
-  type DocHome,
   type DocMeta,
+  type DocOriginRepo,
   type WebhookPayload,
   contentKind,
   prose,
   suggestOps,
 } from '@feedback/core';
 import * as Y from 'yjs';
+import { isBoardOwnedDoc } from './doc-ids.ts';
 import {
   canonicalRepoRoot,
-  normalizeDocHome,
-  resolveHomeCheckout,
-  verifyPathInHome,
-} from './doc-home.ts';
-import { isHubOwnedRoom } from './doc-ids.ts';
+  normalizeDocOriginRepo,
+  resolveOriginRepoCheckout,
+  verifyPathInOriginRepo,
+} from './doc-origin-repo.ts';
+import { DOC_STORE_TIMINGS } from './doc-store-timings.ts';
+import type { DocRoom } from './doc-store.ts';
 import { showFile } from './git-diff.ts';
 import { gitConflictHint } from './git-provenance.ts';
-import { ROOM_TIMINGS } from './room-timings.ts';
-import type { DocRoom } from './rooms.ts';
 import { isWithinRoot } from './safe-path.ts';
 import { boundFiles } from './slow-fs.ts';
 
@@ -71,7 +71,7 @@ import { boundFiles } from './slow-fs.ts';
  * `.ydoc`'s, and EQUAL goes to disk. The two are routinely written inside one
  * file-timestamp tick (~4ms on a stock Linux kernel): an evict-flush right after
  * the bind, a `git worktree add` a few ms before the rebind's persist. Both
- * reverted a live edit with the file's stale copy — the doc-home-binding and
+ * reverted a live edit with the file's stale copy — the doc-origin-repo-binding and
  * doc-eviction reds of 2026-08-31/09-01 — and read as a bare timeout.
  */
 /**
@@ -183,13 +183,13 @@ export function decideReconcile(args: {
 /** How often the shared mtime sweep runs — the cadence the old per-binding
  *  interval ran at, kept so external-edit latency is unchanged for a doc
  *  anyone is actually looking at. */
-const FILE_POLL_MS = ROOM_TIMINGS.filePollMs;
+const FILE_POLL_MS = DOC_STORE_TIMINGS.filePollMs;
 
 /** Settle time before a changed file is read, so no half-written save is parsed. */
-const READ_DEBOUNCE_MS = ROOM_TIMINGS.readDebounceMs;
+const READ_DEBOUNCE_MS = DOC_STORE_TIMINGS.readDebounceMs;
 
 /** Doc → disk: how long a prose change waits before the serialize+write. */
-const WRITE_BACK_MS = ROOM_TIMINGS.writeBackMs;
+const WRITE_BACK_MS = DOC_STORE_TIMINGS.writeBackMs;
 
 /** How long after an access a bound doc counts as ACTIVE — stat'd on every
  *  tick. Long enough that a person reading, thinking and typing never falls
@@ -223,7 +223,7 @@ const ACTIVATION_TAGS_REPORTED = 8;
  *
  * Only ever called when a binding goes idle -> active, which in a healthy
  * server is rare and in the case this exists to catch is exactly the thing
- * worth paying for. Frames inside `rooms.ts` AND this file are skipped —
+ * worth paying for. Frames inside `doc-store.ts` AND this file are skipped —
  * every touch passes through `get` / `getOrCreate` and then through
  * `FileBindings.touchDoc`, so the useful frame is the first one outside both.
  * Missing the second name would have made every activation read as
@@ -239,7 +239,7 @@ function activationTag(): string {
     const m = line.match(/[/\\]packages[/\\]([^\s)]+?):(\d+):\d+/);
     if (!m) continue;
     const where = m[1].replace(/\\/g, '/');
-    if (where.endsWith('/rooms.ts') || where.endsWith('/file-binding.ts')) continue;
+    if (where.endsWith('/doc-store.ts') || where.endsWith('/file-binding.ts')) continue;
     return `packages/${where}:${m[2]}`;
   }
   return 'external';
@@ -249,7 +249,7 @@ function activationTag(): string {
  * What the bindings need from the room lifecycle, and nothing more.
  *
  * Every member is a function onto the live thing rather than a copy of it:
- * the rooms map, the `.ydoc` persist debounce, the residency clock, the
+ * the doc map, the `.ydoc` persist debounce, the residency clock, the
  * room's event fan-out. That is the whole reason this interface exists —
  * the bindings mutate a room's ydoc and re-arm its persist timer on almost
  * every path, so handing them a snapshot of a room would give two owners to
@@ -285,7 +285,7 @@ export interface FileBindingHost {
 }
 
 /**
- * One server's file bindings. Constructed by `Rooms`, which keeps the
+ * One server's file bindings. Constructed by `DocStore`, which keeps the
  * lifecycle and the websocket fan-out and calls in here for everything that
  * touches a file.
  */
@@ -348,7 +348,7 @@ export class FileBindings {
    * attach was reached from a synchronous caller: an async door with no
    * caller is worse than none, because it reads like coverage the flat path
    * does not have. The two callers that made the flat path blocking — the
-   * bind loop in `bind-diff` and the member opens in `rooms-workspaces` —
+   * bind loop in `bind-diff` and the member opens in `doc-store-workspaces` —
    * are async now and come through these, so the doors have callers and the
    * flat path has the guarantee the prose one already had.
    */
@@ -459,7 +459,7 @@ export class FileBindings {
     // the workspace member opens come through the async doors, is an
     // in-process caller holding a path it supplied itself and needing the
     // binding in the same turn. In production that is BOOT and nothing else:
-    // hydration passes a preread on every other path (`Rooms.prereadFor`),
+    // hydration passes a preread on every other path (`DocStore.prereadFor`),
     // and no request handler reaches these two without one. The rest of the
     // callers are the tests.
     if (!pre && (boundFiles.quarantined(abs) || boundFiles.busy())) {
@@ -477,7 +477,7 @@ export class FileBindings {
           seeded = true;
         }
       } catch (err) {
-        console.error(`[rooms] read failed for ${abs}:`, err);
+        console.error(`[doc-store] read failed for ${abs}:`, err);
         return { ok: false, error: 'read-failed' };
       }
     }
@@ -571,7 +571,7 @@ export class FileBindings {
           }
         }
       } catch (err) {
-        console.error(`[rooms] attach-time reconcile failed for ${abs}:`, err);
+        console.error(`[doc-store] attach-time reconcile failed for ${abs}:`, err);
       }
     }
 
@@ -646,7 +646,7 @@ export class FileBindings {
       try {
         text = pre ? (pre.text ?? '') : readFileSync(abs, 'utf8');
       } catch (err) {
-        console.error(`[rooms] read failed for ${abs}:`, err);
+        console.error(`[doc-store] read failed for ${abs}:`, err);
         return { ok: false, error: 'read-failed' };
       }
     }
@@ -716,10 +716,10 @@ export class FileBindings {
   }
 
   /**
-   * Pin a doc to its repo home: repo + branch + relPath (see `DocHome` in
+   * Pin a doc to its origin repo: repo + branch + relPath (see `DocOriginRepo` in
    * core). From here on, the file the doc syncs with is "the declared
    * relPath in whichever worktree has the declared branch checked out" —
-   * resolved at pin, at hydrate, and re-verified by `homeGuard` before every
+   * resolved at pin, at hydrate, and re-verified by `originRepoGuard` before every
    * flush and every disk→doc apply. A checkout that switches branches under
    * the binding is never written again; the binding follows the branch or
    * parks.
@@ -728,26 +728,26 @@ export class FileBindings {
    * code and mockup docs follow their surface (the diff's repo, the running
    * server) and pinning them would fight those flows.
    */
-  setDocHome(
+  setDocOriginRepo(
     docId: string,
     input: unknown,
   ):
     | {
         ok: true;
-        home: DocHome;
+        home: DocOriginRepo;
         placement: { placed: true; path: string } | { placed: false; reason: string };
       }
     | { ok: false; error: 'not-found' | 'invalid-home' | 'not-markdown'; detail?: string } {
     const room = this.p.room(docId);
     if (!room) return { ok: false, error: 'not-found' };
-    if (isHubOwnedRoom(room.docId) || contentKind(room.meta.type) !== 'prose') {
+    if (isBoardOwnedDoc(room.docId) || contentKind(room.meta.type) !== 'prose') {
       return {
         ok: false,
         error: 'not-markdown',
-        detail: 'a repo home is for markdown docs; code/diff/mockup docs follow their surface',
+        detail: 'an origin repo is for markdown docs; code/diff/mockup docs follow their surface',
       };
     }
-    const norm = normalizeDocHome(input);
+    const norm = normalizeDocOriginRepo(input);
     if (!norm.ok) return { ok: false, error: 'invalid-home', detail: norm.error };
     // The repo must at least exist as a repo — a typo'd repoRoot pinned
     // as-is would park the doc forever with a message blaming the branch.
@@ -761,9 +761,9 @@ export class FileBindings {
         detail: `${norm.home.repoRoot} is not a git checkout`,
       };
     }
-    const home: DocHome = { ...norm.home, repoRoot: canonRoot };
+    const home: DocOriginRepo = { ...norm.home, repoRoot: canonRoot };
     room.meta.docHome = home;
-    const placement = resolveHomeCheckout(home);
+    const placement = resolveOriginRepoCheckout(home);
     if (placement.placed) {
       const binding = this.bindings.get(room.docId);
       // Already bound to an EXISTING copy of the home: nothing to move. A
@@ -778,7 +778,7 @@ export class FileBindings {
     // Unplaced is a legal pin: the doc stays durable in the .ydoc and the
     // guard parks every write until a checkout on the branch appears. An
     // existing binding to some other path is deliberately left in the map —
-    // homeGuard is what stops it writing, and keeping it is what lets the
+    // originRepoGuard is what stops it writing, and keeping it is what lets the
     // next flush attempt re-resolve and recover.
     this.p.schedulePersist(room);
     return { ok: true, home, placement: { placed: false, reason: placement.reason } };
@@ -786,7 +786,7 @@ export class FileBindings {
 
   /** Unpin: the doc keeps whatever binding it has and goes back to being an
    *  ordinary explicit-path doc. */
-  clearDocHome(docId: string): { ok: boolean } {
+  clearDocOriginRepo(docId: string): { ok: boolean } {
     const room = this.p.room(docId);
     if (!room || !room.meta.docHome) return { ok: false };
     room.meta.docHome = undefined;
@@ -795,9 +795,9 @@ export class FileBindings {
   }
 
   /** The pin plus where it resolves RIGHT NOW — for doc status surfaces. */
-  docHomeStatus(docId: string):
+  docOriginRepoStatus(docId: string):
     | {
-        home: DocHome;
+        home: DocOriginRepo;
         placement: { placed: true; path: string } | { placed: false; reason: string };
         boundPath?: string;
       }
@@ -805,7 +805,7 @@ export class FileBindings {
     const room = this.p.room(docId);
     const home = room?.meta.docHome;
     if (!room || !home) return undefined;
-    const placement = resolveHomeCheckout(home);
+    const placement = resolveOriginRepoCheckout(home);
     const boundPath = this.bindings.get(room.docId)?.path;
     return {
       home,
@@ -857,35 +857,35 @@ export class FileBindings {
         // attach's own read is not the syscall this guard exists for.
         attachOpts = { ...opts, preread: undefined };
       } catch (err) {
-        console.error(`[rooms] ${docId}: could not export doc to its home ${absPath}:`, err);
+        console.error(`[doc-store] ${docId}: could not export doc to its home ${absPath}:`, err);
       }
     }
     // attachFile only records sourceUrl when absent; a retarget must repoint.
     room.meta.sourceUrl = absPath;
     this.attachFile(docId, absPath, attachOpts);
     this.p.schedulePersist(room);
-    console.log(`[rooms] ${docId}: home binding now at ${absPath}`);
+    console.log(`[doc-store] ${docId}: home binding now at ${absPath}`);
   }
 
   /**
    * A home-pinned doc with NO binding tries to re-place its home. The state
    * exists when hydration found no checkout on the home branch: parking
    * there leaves nothing in `fileBindings`, and every recovery path below
-   * this one — homeGuard, the poll sweep — hangs off a binding. Without this
+   * this one — originRepoGuard, the poll sweep — hangs off a binding. Without this
    * hook the park message's promise ("check the branch out and the next
    * edit or reparse resumes syncing") held only for docs parked while LIVE;
    * a doc parked at hydrate stayed parked until a re-pin or restart. Called
    * from the room's update hook (throttled) and from reparseFromDisk
-   * (forced). Bound docs return immediately — homeGuard owns them.
+   * (forced). Bound docs return immediately — originRepoGuard owns them.
    */
   maybeRebindHome(room: DocRoom, opts?: { force?: boolean }): void {
     const home = room.meta.docHome;
     if (!home || this.bindings.has(room.docId)) return;
-    if (isHubOwnedRoom(room.docId) || contentKind(room.meta.type) !== 'prose') return;
+    if (isBoardOwnedDoc(room.docId) || contentKind(room.meta.type) !== 'prose') return;
     const now = Date.now();
     if (!opts?.force && now - (this.homeRebindAttemptAt.get(room.docId) ?? 0) < 1000) return;
     this.homeRebindAttemptAt.set(room.docId, now);
-    const placement = resolveHomeCheckout(home);
+    const placement = resolveOriginRepoCheckout(home);
     if (!placement.placed) return;
     // Persist BEFORE attaching so the .ydoc the attach's at-rest arbitration
     // reads (diskNewerThanState) holds the current state, not the pre-edit
@@ -914,11 +914,11 @@ export class FileBindings {
    * 'parked'     the home resolves nowhere; nothing was read or written,
    *              and a syncError names why and how to resume.
    */
-  private homeGuard(room: DocRoom, binding: FileBinding): 'ok' | 'retargeted' | 'parked' {
+  private originRepoGuard(room: DocRoom, binding: FileBinding): 'ok' | 'retargeted' | 'parked' {
     const home = room.meta.docHome;
     if (!home) return 'ok';
-    if (verifyPathInHome(binding.path, home) === 'ok') return 'ok';
-    const placement = resolveHomeCheckout(home);
+    if (verifyPathInOriginRepo(binding.path, home) === 'ok') return 'ok';
+    const placement = resolveOriginRepoCheckout(home);
     if (placement.placed) {
       // Resolution landing on the very path the verify refused (a nested
       // repo under relPath can split the two): writing there is what the
@@ -934,14 +934,14 @@ export class FileBindings {
     }
     const message =
       placement.reason === 'repo-missing'
-        ? `doc home is unreachable: ${home.repoRoot} is not (or no longer) a git checkout. ` +
+        ? `doc origin repo is unreachable: ${home.repoRoot} is not (or no longer) a git checkout. ` +
           'Writes are parked; the live doc stays the source of truth and its content is durable ' +
           'in the workspace. Re-pin the home at a valid checkout to resume.'
         : placement.reason === 'path-escapes-checkout'
-          ? `doc home is unsafe: ${home.relPath} passes through a symlink that leaves the ` +
+          ? `doc origin repo is unsafe: ${home.relPath} passes through a symlink that leaves the ` +
             'checkout, so writing it would land outside the repo. Writes are parked; the live ' +
             'doc stays the source of truth. Re-pin the home at a path contained in the checkout.'
-          : `doc home is unplaced: no checkout of the repo has branch "${home.branch}" checked out. ` +
+          : `doc origin repo is unplaced: no checkout of the repo has branch "${home.branch}" checked out. ` +
             'Writes are parked; the live doc stays the source of truth and its content is durable ' +
             'in the workspace. Check the branch out in some worktree (git worktree add <path> ' +
             `"${home.branch}") and the next edit or reparse resumes syncing there.`;
@@ -1240,17 +1240,18 @@ export class FileBindings {
     // A pinned doc re-resolves its home before the reparse reads anything.
     // The old path's checkout may have switched branches since the binding
     // was made — an unguarded read here would pull that branch's copy
-    // straight into the live doc, the exact incident homeGuard closes on
+    // straight into the live doc, the exact incident originRepoGuard closes on
     // the poll path — and a doc parked at hydrate has no binding at all,
     // with reparse documented as one of its two recovery verbs.
     if (
       room.meta.docHome &&
-      !isHubOwnedRoom(room.docId) &&
+      !isBoardOwnedDoc(room.docId) &&
       contentKind(room.meta.type) === 'prose'
     ) {
       const bound = this.bindings.get(docId);
       if (!bound) this.maybeRebindHome(room, { force: true });
-      else if (this.homeGuard(room, bound) === 'parked') return { ok: false, error: 'missing' };
+      else if (this.originRepoGuard(room, bound) === 'parked')
+        return { ok: false, error: 'missing' };
     }
     const binding = this.bindings.get(docId);
     if (!binding) return { ok: false, error: 'no-binding' };
@@ -1317,7 +1318,7 @@ export class FileBindings {
     // pinned doc's old path rewrites the file, the poll sees an mtime change,
     // and the OTHER branch's copy gets applied into the live doc — the read
     // half of the same incident the write half guards against.
-    if (this.homeGuard(room, binding) !== 'ok') return 'missing';
+    if (this.originRepoGuard(room, binding) !== 'ok') return 'missing';
     let md: string;
     if (preread) {
       if (!preread.exists) return 'missing';
@@ -1333,7 +1334,7 @@ export class FileBindings {
       try {
         md = readFileSync(binding.path, 'utf8');
       } catch (err) {
-        console.error(`[rooms] read failed for ${binding.path}:`, err);
+        console.error(`[doc-store] read failed for ${binding.path}:`, err);
         return 'missing';
       }
     }
@@ -1424,7 +1425,7 @@ export class FileBindings {
       // (we never started the transact), so the next edit retries cleanly.
       const message = err instanceof Error ? err.message : String(err);
       this.recordSyncError(room, binding, `parse failed: ${message}`);
-      console.error(`[rooms] ${room.docId}: disk→doc parse failed for ${binding.path}:`, err);
+      console.error(`[doc-store] ${room.docId}: disk→doc parse failed for ${binding.path}:`, err);
       return decision;
     }
     if (blocks.length === 0) {
@@ -1436,7 +1437,7 @@ export class FileBindings {
         'disk content parsed to zero blocks; live doc left unchanged',
       );
       console.warn(
-        `[rooms] ${room.docId}: disk→doc reconcile yielded 0 blocks from ${binding.path}; keeping prior state`,
+        `[doc-store] ${room.docId}: disk→doc reconcile yielded 0 blocks from ${binding.path}; keeping prior state`,
       );
       return decision;
     }
@@ -1477,13 +1478,13 @@ export class FileBindings {
         `external edit dropped pending suggestion(s): ${droppedSids.join(', ')}`,
       );
       console.warn(
-        `[rooms] ${room.docId}: external edit to ${binding.path} dropped suggestion(s) ${droppedSids.join(', ')}`,
+        `[doc-store] ${room.docId}: external edit to ${binding.path} dropped suggestion(s) ${droppedSids.join(', ')}`,
       );
     } else {
       binding.lastSyncError = undefined;
     }
     console.log(
-      `[rooms] ${room.docId}: applied external edit from ${binding.path} (${blocks.length} blocks)`,
+      `[doc-store] ${room.docId}: applied external edit from ${binding.path} (${blocks.length} blocks)`,
     );
     return decision;
   }
@@ -1526,7 +1527,7 @@ export class FileBindings {
       // current". A retarget already carried this flush's content out (the
       // export) or re-armed one on the new binding; parked means the bytes
       // stay in the live doc.
-      if (this.homeGuard(room, binding) !== 'ok') return;
+      if (this.originRepoGuard(room, binding) !== 'ok') return;
       // Guard (RC2a): the poll has already SEEN an external change and is
       // holding it behind the read debounce. It advanced `lastMtimeMs` the
       // instant it saw the change, so the mtime guard below now compares disk
@@ -1684,7 +1685,7 @@ export class FileBindings {
       // here and the write timer is already cleared, so nothing downstream
       // can tell a failed write from a finished one.
       this.failedWrites.add(room.docId);
-      console.error(`[rooms] file write failed for ${binding.path}:`, err);
+      console.error(`[doc-store] file write failed for ${binding.path}:`, err);
     }
   }
 
@@ -1718,7 +1719,7 @@ export class FileBindings {
       backupPath,
     );
     console.warn(
-      `[rooms] ${room.docId}: disk↔doc conflict for ${binding.path}; kept live edits, reasserting to disk` +
+      `[doc-store] ${room.docId}: disk↔doc conflict for ${binding.path}; kept live edits, reasserting to disk` +
         (backupPath ? ` (external version backed up to ${backupPath})` : '') +
         (gitHint ? ' — the overwritten bytes came from git, not an editor save' : ''),
     );
@@ -1775,7 +1776,7 @@ export class FileBindings {
       writeFileSync(file, content);
       return file;
     } catch (err) {
-      console.error(`[rooms] clobber backup failed for ${docId}:`, err);
+      console.error(`[doc-store] clobber backup failed for ${docId}:`, err);
       return null;
     }
   }
@@ -1876,7 +1877,7 @@ export class FileBindings {
 
   // ---------------------------------------------------------------------
   // What the room lifecycle asks the bindings. Each of these replaces a
-  // reach into the binding map from `rooms.ts`; the map itself never leaves
+  // reach into the binding map from `doc-store.ts`; the map itself never leaves
   // this file.
   // ---------------------------------------------------------------------
 
@@ -1969,7 +1970,7 @@ export class FileBindings {
     try {
       this.writeBoundFileNow(room, binding, 'sync');
     } catch (err) {
-      console.error(`[rooms] evict ${room.docId}: write-back failed:`, err);
+      console.error(`[doc-store] evict ${room.docId}: write-back failed:`, err);
     }
   }
 
@@ -1990,14 +1991,14 @@ export class FileBindings {
     this.bindings.delete(docId);
   }
 
-  /** Stop the shared mtime sweep — part of `Rooms.stop()`. */
+  /** Stop the shared mtime sweep — part of `DocStore.stop()`. */
   stopPolling(): void {
     if (this.pollTicker) clearInterval(this.pollTicker);
     this.pollTicker = null;
   }
 
   /**
-   * What `Rooms.stats()` reports about the bindings: how many exist, how many
+   * What `DocStore.stats()` reports about the bindings: how many exist, how many
    * the sweep would stat on this tick, how many debounce timers they hold,
    * and who has been promoting them into the fast lane.
    */

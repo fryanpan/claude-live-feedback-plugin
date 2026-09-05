@@ -3,7 +3,7 @@ import { randomBytes } from 'node:crypto';
 /**
  * Who is allowed to bring a docId into existence, and where.
  *
- * The doc id space is shared: a caller-chosen review doc, a folder member, a
+ * The doc id space is shared: a caller-chosen attachment, a folder member, a
  * task's body room and a board room are all just strings in the same map, and
  * the same string reaches disk as a filename. That shared space is the reason
  * two holes existed at once — a folder bound as `setId: 'task'` minted real
@@ -27,10 +27,10 @@ export type DocIdAuthority =
 
 /** Prefixes whose rooms the server owns — never file-bound, content projected
  *  from the task store rather than typed into a doc. */
-export const HUB_ROOM_PREFIXES = ['ws:', 'task:'] as const;
+export const BOARD_DOC_PREFIXES = ['ws:', 'task:'] as const;
 
 /**
- * Rooms the HUB owns rather than the filesystem: the `ws:<workspaceId>`
+ * Docs the BOARD owns rather than the filesystem: the `ws:<workspaceId>`
  * board room and every `task:<taskId>` body room (§3.3). They are never
  * bound to a file, so a `sourceUrl` on one is by construction not ours —
  * and unlike a bound doc they have no private-meta sidecar to outvote a
@@ -40,22 +40,22 @@ export const HUB_ROOM_PREFIXES = ['ws:', 'task:'] as const;
  * answers the different question "may a caller occupy this address", and is a
  * superset — both read the same prefix list, one line apart, so the two can
  * never disagree about `ws:` and `task:`. It lives here rather than in
- * `rooms.ts` for that reason, and `rooms.ts` re-exports the name it was
+ * `doc-store.ts` for that reason, and `doc-store.ts` re-exports the name it was
  * first published under.
  */
-export function isHubOwnedRoom(docId: string): boolean {
-  return HUB_ROOM_PREFIXES.some((p) => docId.startsWith(p));
+export function isBoardOwnedDoc(docId: string): boolean {
+  return BOARD_DOC_PREFIXES.some((p) => docId.startsWith(p));
 }
 
 /**
  * Prefixes a CALLER may never create or name.
  *
- * A superset of the hub room prefixes: `goal:` reserves the namespace for the
+ * A superset of the board room prefixes: `goal:` reserves the namespace for the
  * goal ids minted in `tasks.ts`, which are not rooms today. Reserving ahead of
  * the room is deliberate — a namespace is cheap to hold and expensive to
  * reclaim once callers have addresses inside it.
  */
-export const RESERVED_DOC_PREFIXES = [...HUB_ROOM_PREFIXES, 'goal:'] as const;
+export const RESERVED_DOC_PREFIXES = [...BOARD_DOC_PREFIXES, 'goal:'] as const;
 
 /** Is this an address only the server may occupy? */
 export function isReservedDocId(docId: string): boolean {
@@ -105,16 +105,16 @@ export function isMintedDocId(docId: string): boolean {
 }
 
 /**
- * The one doc every hub's feedback widget writes to.
+ * The one doc every board's feedback widget writes to.
  *
- * Deliberately NOT per-workspace: a comment on the hub UI is about the
- * product, so it should reach the same agent from every hub rather than
+ * Deliberately NOT per-workspace: a comment on the board UI is about the
+ * product, so it should reach the same agent from every board rather than
  * whoever happens to own the workspace you were standing in. The anchor's
- * url carries which hub it came from.
+ * url carries which board it came from.
  *
  * The value keeps the prefix of the old product name on purpose. It is not a
  * class name: it names a doc that already exists in the corpus, so changing
- * the string orphans every comment written on the hub so far. Renaming it is
+ * the string orphans every comment written on the board so far. Renaming it is
  * a migration, not a rename pass.
  */
-export const HUB_FEEDBACK_DOC_ID = 'lf-hub-feedback';
+export const BOARD_FEEDBACK_DOC_ID = 'lf-hub-feedback';

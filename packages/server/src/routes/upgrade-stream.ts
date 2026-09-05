@@ -18,8 +18,8 @@
  *
  * Composed the way A18 was: a factory of long-lived values, with the address
  * and the admitted visitor passed per call. Nothing the handlers read per
- * request is hoisted to factory time — `rooms`, the meeting sessions and the
- * SSE hub are all read through their stores on each call, and
+ * request is hoisted to factory time — `docStore`, the meeting sessions and the
+ * SSE bus are all read through their stores on each call, and
  * `browserProvedNobody` arrives per request because it closes over the
  * request that is being decided.
  *
@@ -50,18 +50,19 @@ import {
   isValidAgentId,
 } from '../agent-watches.ts';
 import { authorizeAgentCaller } from '../auth/agent-token.ts';
+import type { DocStore } from '../doc-store.ts';
 import type { OriginPolicy } from '../middleware/browser-origin.ts';
 import { isAllowedBrowserOrigin } from '../middleware/browser-origin.ts';
 import type { ShareTarget } from '../middleware/host-guard.ts';
 import { signInRequiredBody } from '../middleware/write-gate.ts';
 import { parseMuxCursor } from '../mux-cursor.ts';
 import type { RecallMeetingRelay } from '../recall-meeting.ts';
-import type { Rooms } from '../rooms.ts';
-import { redactHubEventForVisitor } from '../share/redact-hub-events.ts';
+import { redactBoardEventForVisitor } from '../share/redact-board-events.ts';
 import type { UpgradeData } from '../socket-handlers.ts';
 import { channelForWatchKey, openAgentMuxStream } from '../sse-mux.ts';
-import { type SseHub, openSseStream } from '../sse.ts';
+import { type SseBus, openSseStream } from '../sse.ts';
 import type { TaskStore } from '../tasks.ts';
+import { matchWorkspaceRoute } from './workspace-path.ts';
 
 /** The id a reconnecting SSE client last saw: the `Last-Event-ID` header a
  *  native EventSource sends back by itself once frames carry `id:` lines,
@@ -80,12 +81,12 @@ export interface UpgradeStreamContext {
    *  composed — and it is narrowed so this module can take a connection over
    *  and nothing else. */
   server: { upgrade: (req: Request, options: { data: UpgradeData }) => boolean };
-  /** Doc rooms: what an address resolves to, and whether it exists at all. */
-  rooms: Rooms;
+  /** Doc store: what an address resolves to, and whether it exists at all. */
+  docStore: DocStore;
   /** The boards, for whether a workspace-level stream has a channel. */
   taskStore: TaskStore;
-  /** The event hub every SSE stream here subscribes against. */
-  sse: SseHub;
+  /** The event bus every SSE stream here subscribes against. */
+  sse: SseBus;
   /** One agent's durable watch set, which is what the agent-level stream
    *  fans out and what `onWatchSetChanged` re-reads. */
   agentWatches: AgentWatches;
@@ -106,9 +107,9 @@ export interface UpgradeStreamContext {
   isValidDocId: (id: string) => boolean;
   /** An address resolved to the canonical doc id, for the mux channel map. */
   canonicalDocId: (addressed: string) => string;
-  /** Files a doc under the hub workspace — the widget's own creation path,
+  /** Files a doc under the board workspace — the widget's own creation path,
    *  which is the `/y/` upgrade for a mockup. */
-  fileUnderHubWorkspace: (docId: string) => void;
+  fileUnderBoardWorkspace: (docId: string) => void;
   /** The JSON responder, so a refusal here is spelled as a route's. */
   j: (status: number, body: unknown) => Response;
   /** The request's SOCKET peer address, never a header. Long-lived here
@@ -161,7 +162,7 @@ export interface UpgradeStream {
 export function createUpgradeStream(ctx: UpgradeStreamContext): UpgradeStream {
   const {
     server,
-    rooms,
+    docStore,
     taskStore,
     sse,
     agentWatches,
@@ -171,7 +172,7 @@ export function createUpgradeStream(ctx: UpgradeStreamContext): UpgradeStream {
     requireSignInToWrite,
     isValidDocId,
     canonicalDocId,
-    fileUnderHubWorkspace,
+    fileUnderBoardWorkspace,
     j,
     requestAddress,
     agentTokenKey,
@@ -228,11 +229,11 @@ export function createUpgradeStream(ctx: UpgradeStreamContext): UpgradeStream {
         }
         const addressed = decodeURIComponent(pathname.slice('/audio/'.length));
         if (!isValidDocId(addressed)) return j(400, { error: 'bad docId' });
-        const docId = rooms.get(addressed)?.docId ?? addressed;
+        const docId = docStore.get(addressed)?.docId ?? addressed;
         // Unlike `/y/`, this never conjures a room: a meeting belongs to a
         // doc that already exists, and auto-creating one here would let a
         // typo start a billed session against a doc nobody can find.
-        if (!rooms.get(docId)) return j(404, { error: 'doc not found' });
+        if (!docStore.get(docId)) return j(404, { error: 'doc not found' });
         // The SAME sign-in decision `/y/` makes two branches down, for a
         // surface that is write-only: a meeting opens a billed engine
         // session and writes transcript and notes into the doc, and the
@@ -253,7 +254,7 @@ export function createUpgradeStream(ctx: UpgradeStreamContext): UpgradeStream {
             // connections that grant opened. Without these two the sweeps
             // closed the editor and left an open microphone running a
             // billed transcription session against a doc the person may no
-            // longer read. `Rooms.trackShareSocket` is the other half: this
+            // longer read. `DocStore.trackShareSocket` is the other half: this
             // socket is in no room's `conns` for a sweep to walk.
             ...(visitorShareId ? { shareId: visitorShareId } : {}),
             ...(visitorMemberKey ? { shareMember: visitorMemberKey } : {}),
@@ -279,7 +280,7 @@ export function createUpgradeStream(ctx: UpgradeStreamContext): UpgradeStream {
         // `ws.data.docId` is re-resolved on every frame, so it must be the
         // canonical id — a socket opened by alias would otherwise sync a
         // room of its own.
-        const docId = rooms.get(addressed)?.docId ?? addressed;
+        const docId = docStore.get(addressed)?.docId ?? addressed;
         const type = url.searchParams.get('type') as DocType | null;
         const sourceUrl = url.searchParams.get('sourceUrl') ?? undefined;
         // Mockup docs auto-create on WS — the widget connects first with a
@@ -292,20 +293,20 @@ export function createUpgradeStream(ctx: UpgradeStreamContext): UpgradeStream {
         // and filing a workspace row is a write like any other, and it used
         // to run above this line: a browser that had proven nobody could
         // open `/y/<any-new-id>?type=mockup` and make the server create a
-        // doc and file it under the hub workspace, with the read-only carry
+        // doc and file it under the board workspace, with the read-only carry
         // only stopping the ydoc edits that came afterwards.
         const readOnly = requireSignInToWrite && browserProvedNobody();
-        if (!rooms.get(docId)) {
+        if (!docStore.get(docId)) {
           if (type === 'mockup') {
             // Nothing to read yet, so refusing here gates no read: the doc
             // this socket would have created does not exist for anybody.
             if (readOnly) return j(401, signInRequiredBody());
-            rooms.getOrCreate(docId, { type, sourceUrl });
+            docStore.getOrCreate(docId, { type, sourceUrl });
             // The widget is the third creation path (next to POST /api/docs
             // and the MCP tools that front it), so it files its doc too —
             // otherwise a mockup that was only ever opened in a browser is
-            // an orphan the hub can't see.
-            fileUnderHubWorkspace(docId);
+            // an orphan the board can't see.
+            fileUnderBoardWorkspace(docId);
           } else {
             return j(404, { error: 'doc not found' });
           }
@@ -374,7 +375,7 @@ export function createUpgradeStream(ctx: UpgradeStreamContext): UpgradeStream {
         if (!allowed.ok) return j(allowed.status, allowed.body);
         if (allowed.proof === 'legacy') warnLegacyAgentCaller(streamAgentId, '/events/agent/<id>');
         return openAgentMuxStream({
-          hub: sse,
+          bus: sse,
           agentId: streamAgentId,
           keys: () => agentWatches.list(streamAgentId, watchKeyExists).watches.map((w) => w.key),
           channelFor: (key) => channelForWatchKey(key, canonicalDocId),
@@ -386,19 +387,27 @@ export function createUpgradeStream(ctx: UpgradeStreamContext): UpgradeStream {
       // --- SSE (workspace-level): every thread event on any member doc of a
       // workspace/diff review, one stream — agents watch this instead of one
       // stream per file. ---
-      const wsEventsMatch = pathname.match(/^\/events\/workspace\/([^/]+)$/);
+      //
+      // `/workspaces/<id>/events:stream`, not `/events/workspace/<id>`. The
+      // old address named the workspace in a segment that was not under
+      // `/workspaces`, so the guard could not read it the way it reads every
+      // other board path — and it spelled the LIVE stream `events`, which is
+      // the activity feed's name on the board's own REST surface. The colon
+      // is the design guide's custom-verb spelling, and it is what keeps this
+      // apart from the five board panes at `/workspaces/<id>/<tab>`.
+      const wsEventsMatch = matchWorkspaceRoute(pathname, 'events:stream');
       if (wsEventsMatch) {
-        const workspaceId = decodeURIComponent(wsEventsMatch[1] ?? '');
+        const workspaceId = wsEventsMatch.workspaceId;
         if (!isValidDocId(workspaceId)) return j(400, { error: 'bad workspaceId' });
         // A workspace channel exists for reviews (diff
-        // reviews / folder binds) AND for hub workspaces — task.* events
+        // reviews / folder binds) AND for board workspaces — task.* events
         // broadcast on the same `ws~<id>` channel (§3.6).
         const exists =
-          rooms.list().some((m) => m.workspaceId === workspaceId) ||
+          docStore.list().some((m) => m.workspaceId === workspaceId) ||
           taskStore.getWorkspace(workspaceId) !== undefined;
         if (!exists) return j(404, { error: 'workspace not found' });
         // A share visitor's stream carries the §3.3 visitor-contract view
-        // of every hub event (display names, projected tasks) — the SSE
+        // of every board event (display names, projected tasks) — the SSE
         // feed is the second door next to the ws room, and redacting one
         // transport but not the other is how the DocMeta leak shipped.
         // An agent's MCP child names itself here; a browser tab does not.
@@ -410,7 +419,7 @@ export function createUpgradeStream(ctx: UpgradeStreamContext): UpgradeStream {
           sse,
           `ws~${workspaceId}`,
           visitorShareId ?? undefined,
-          visitor ? redactHubEventForVisitor : undefined,
+          visitor ? redactBoardEventForVisitor : undefined,
           streamAgentId,
           sseLastEventId(req, url),
           visitorMemberKey ?? undefined,
@@ -420,7 +429,7 @@ export function createUpgradeStream(ctx: UpgradeStreamContext): UpgradeStream {
       if (pathname.startsWith('/events/')) {
         const addressed = decodeURIComponent(pathname.slice('/events/'.length));
         if (!isValidDocId(addressed)) return j(400, { error: 'bad docId' });
-        const eventsRoom = rooms.get(addressed);
+        const eventsRoom = docStore.get(addressed);
         if (!eventsRoom) return j(404, { error: 'doc not found' });
         // The CHANNEL is the doc's own id: a watcher that opened the stream
         // by the readable name and a writer that fired on the canonical one

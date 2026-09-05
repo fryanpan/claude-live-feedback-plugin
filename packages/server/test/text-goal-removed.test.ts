@@ -101,7 +101,7 @@ describe('the legacy text goal is removed', () => {
     });
 
     it('answers the same way for an unknown workspace — the route no longer looks one up', async () => {
-      const r = await put('/api/workspaces/w-does-not-exist/goal', {
+      const r = await put('/api/workspaces/w-missing/goal', {
         goal: 'anything',
         author: PERSON,
       });
@@ -138,11 +138,11 @@ describe('the legacy text goal is removed', () => {
     it('leaves the workspace list without a goal column', async () => {
       await newWorkspace();
       const r = await local('/api/workspaces');
-      const { hubWorkspaces } = (await r.json()) as {
-        hubWorkspaces: Array<Record<string, unknown>>;
+      const { boardWorkspaces } = (await r.json()) as {
+        boardWorkspaces: Array<Record<string, unknown>>;
       };
-      expect(hubWorkspaces.length).toBeGreaterThan(0);
-      for (const row of hubWorkspaces) {
+      expect(boardWorkspaces.length).toBeGreaterThan(0);
+      for (const row of boardWorkspaces) {
         expect(row).not.toHaveProperty('goal');
         expect(row).toHaveProperty('name');
       }

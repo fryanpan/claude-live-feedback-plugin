@@ -205,7 +205,7 @@ function speakerLicensesAction(
  *  1. the reply parses as a well-formed action (`parseVoiceReply` above);
  *  2. the id the action needs is present in the VALIDATED context — the
  *     `resource` is the thing that context named, and both must agree, so a
- *     deictic "mark this done" spoken from the hub with no detail panel open
+ *     deictic "mark this done" spoken from the board with no detail panel open
  *     resolves to nothing rather than to whatever was nearby;
  *  3. the model NAMED an id, and it is the context's. The prompt now REQUIRES
  *     the id, which is what makes this check able to fire: while the prompt
@@ -348,7 +348,7 @@ export function pickReviewItem(
   // The one item there is — but only on the DOC surface, where the speaker
   // is looking at the item itself. On the task surface `taskId` may be a
   // keyboard-highlighted ROW, not an open panel, and "answer: yes" would
-  // land on whatever the cursor rested on. There, the hub sends a pin
+  // land on whatever the cursor rested on. There, the board sends a pin
   // (`threadId` / `reviewItemId`) only with the panel open, and no pin means
   // no item.
   if (context.surface !== 'doc') return undefined;

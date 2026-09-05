@@ -112,29 +112,31 @@ const update = (docId: string, notes: string): NotesUpdate => ({
 });
 
 describe('applyNotesUpdate', () => {
-  const roomsWith = (docId: string, type: DocType, markdown = '# Doc\n') => {
+  const docStoreWith = (docId: string, type: DocType, markdown = '# Doc\n') => {
     const ydoc = docFrom(markdown);
     return {
-      rooms: { get: (id: string) => (id === docId ? { ydoc, meta: { type } } : undefined) },
+      docStore: { get: (id: string) => (id === docId ? { ydoc, meta: { type } } : undefined) },
       ydoc,
     };
   };
 
   it('writes prose docs and reports true', () => {
-    const { rooms, ydoc } = roomsWith('doc-a', 'markdown');
-    expect(applyNotesUpdate(rooms, update('doc-a', '- noted'), createNotesLedger())).toBe(true);
+    const { docStore, ydoc } = docStoreWith('doc-a', 'markdown');
+    expect(applyNotesUpdate(docStore, update('doc-a', '- noted'), createNotesLedger())).toBe(true);
     expect(markdownOf(ydoc)).toContain('- noted');
   });
 
   it('refuses flat docs — a diff surface is not a notepad', () => {
-    const { rooms, ydoc } = roomsWith('doc-a', 'diff');
-    expect(applyNotesUpdate(rooms, update('doc-a', '- noted'), createNotesLedger())).toBe(false);
+    const { docStore, ydoc } = docStoreWith('doc-a', 'diff');
+    expect(applyNotesUpdate(docStore, update('doc-a', '- noted'), createNotesLedger())).toBe(false);
     expect(markdownOf(ydoc)).not.toContain('- noted');
   });
 
   it('an unknown doc is a false, never a throw', () => {
-    const { rooms } = roomsWith('doc-a', 'markdown');
-    expect(applyNotesUpdate(rooms, update('doc-gone', '- noted'), createNotesLedger())).toBe(false);
+    const { docStore } = docStoreWith('doc-a', 'markdown');
+    expect(applyNotesUpdate(docStore, update('doc-gone', '- noted'), createNotesLedger())).toBe(
+      false,
+    );
   });
 });
 
@@ -323,10 +325,10 @@ describe('retagSpeakerInNotes — renaming by label rather than by spelling', ()
 });
 
 describe('applyNotesRelabel', () => {
-  const roomsWith = (docId: string, type: DocType, markdown: string) => {
+  const docStoreWith = (docId: string, type: DocType, markdown: string) => {
     const ydoc = docFrom(markdown);
     return {
-      rooms: { get: (id: string) => (id === docId ? { ydoc, meta: { type } } : undefined) },
+      docStore: { get: (id: string) => (id === docId ? { ydoc, meta: { type } } : undefined) },
       ydoc,
     };
   };
@@ -346,13 +348,13 @@ describe('applyNotesRelabel', () => {
   });
 
   it('renames tags AND untagged prose when the name is unambiguous', () => {
-    const { rooms, ydoc } = roomsWith(
+    const { docStore, ydoc } = docStoreWith(
       'doc-a',
       'markdown',
       '## Meeting notes\n\n- [@Speaker B](speaker:B) asked.\n- Speaker B also agreed.\n',
     );
     expect(
-      applyNotesRelabel(rooms, relabel('doc-a', 'Speaker B', 'Devi'), createNotesLedger()),
+      applyNotesRelabel(docStore, relabel('doc-a', 'Speaker B', 'Devi'), createNotesLedger()),
     ).toBe(2);
     const md = markdownOf(ydoc);
     expect(md).toContain('- [@Devi](speaker:B) asked.');
@@ -364,12 +366,12 @@ describe('applyNotesRelabel', () => {
     // a retag the tag's own text still contains it: "Devi" lives inside
     // "@Devi Raman". Run the retag first and the sweep corrupts what it just
     // wrote. Raised by review before merge, not in the field.
-    const { rooms, ydoc } = roomsWith(
+    const { docStore, ydoc } = docStoreWith(
       'doc-a',
       'markdown',
       '## Meeting notes\n\n- [@Devi](speaker:B) asked.\n- Devi also agreed.\n',
     );
-    applyNotesRelabel(rooms, relabel('doc-a', 'Devi', 'Devi Raman'), createNotesLedger());
+    applyNotesRelabel(docStore, relabel('doc-a', 'Devi', 'Devi Raman'), createNotesLedger());
     const md = markdownOf(ydoc);
     expect(md).toContain('- [@Devi Raman](speaker:B) asked.');
     expect(md).toContain('- Devi Raman also agreed.');
@@ -379,14 +381,14 @@ describe('applyNotesRelabel', () => {
   it('renames only the tags when the display name belongs to more than one voice', () => {
     // Two Alexes: the tag knows which one it is and renames; the sentence
     // that merely SAYS "Alex" does not, and is left as the person wrote it.
-    const { rooms, ydoc } = roomsWith(
+    const { docStore, ydoc } = docStoreWith(
       'doc-a',
       'markdown',
       '## Meeting notes\n\n- [@Alex](speaker:A) proposed it.\n- Alex and Alex disagreed.\n',
     );
     expect(
       applyNotesRelabel(
-        rooms,
+        docStore,
         relabel('doc-a', 'Alex', 'Sam', { label: 'A', rewriteUntagged: false }),
         createNotesLedger(),
       ),
@@ -397,13 +399,13 @@ describe('applyNotesRelabel', () => {
   });
 
   it('rewrites the mentions in a prose doc and counts them', () => {
-    const { rooms, ydoc } = roomsWith(
+    const { docStore, ydoc } = docStoreWith(
       'doc-a',
       'markdown',
       '## Meeting notes\n\n- Speaker B: yes.\n',
     );
     expect(
-      applyNotesRelabel(rooms, relabel('doc-a', 'Speaker B', 'Marisol'), createNotesLedger()),
+      applyNotesRelabel(docStore, relabel('doc-a', 'Speaker B', 'Marisol'), createNotesLedger()),
     ).toBe(1);
     expect(markdownOf(ydoc)).toContain('- Marisol: yes.');
   });
@@ -413,12 +415,12 @@ describe('applyNotesRelabel', () => {
     // out of that not recognising its own line, the note-taker would have
     // silently handed it to Bryan: the next tick could only propose on it,
     // and the notes would freeze at the moment of the rename.
-    const { rooms, ydoc } = roomsWith('doc-a', 'markdown', '# Huddle\n');
+    const { docStore, ydoc } = docStoreWith('doc-a', 'markdown', '# Huddle\n');
     const ledger = createNotesLedger();
     let n = 0;
     const tick = (notes: string) =>
       applyNotesUpdate(
-        rooms,
+        docStore,
         {
           docId: 'doc-a',
           meetingId: 'm-1',
@@ -428,7 +430,7 @@ describe('applyNotesRelabel', () => {
         ledger,
       );
     tick('## Meeting notes\n\n- Speaker B: yes.\n');
-    expect(applyNotesRelabel(rooms, relabel('doc-a', 'Speaker B', 'Marisol'), ledger)).toBe(1);
+    expect(applyNotesRelabel(docStore, relabel('doc-a', 'Speaker B', 'Marisol'), ledger)).toBe(1);
 
     tick('## Meeting notes\n\n- Marisol: yes, on Friday.\n');
     const md = markdownOf(ydoc);
@@ -440,12 +442,12 @@ describe('applyNotesRelabel', () => {
     // Same freeze as above, reached through the tag path: the retag rewrites
     // characters inside the agent's own bullet, so the ledger has to learn
     // the new wording or the next tick can only propose on it.
-    const { rooms, ydoc } = roomsWith('doc-a', 'markdown', '# Huddle\n');
+    const { docStore, ydoc } = docStoreWith('doc-a', 'markdown', '# Huddle\n');
     const ledger = createNotesLedger();
     let n = 0;
     const tick = (notes: string) =>
       applyNotesUpdate(
-        rooms,
+        docStore,
         {
           docId: 'doc-a',
           meetingId: 'm-1',
@@ -457,7 +459,7 @@ describe('applyNotesRelabel', () => {
     tick('## Meeting notes\n\n- [@Speaker B](speaker:B) said yes.\n');
     expect(
       applyNotesRelabel(
-        rooms,
+        docStore,
         relabel('doc-a', 'Speaker B', 'Marisol', { rewriteUntagged: false }),
         ledger,
       ),
@@ -470,12 +472,12 @@ describe('applyNotesRelabel', () => {
   });
 
   it('a rename does not let the agent reclaim a line Bryan made his', () => {
-    const { rooms, ydoc } = roomsWith('doc-a', 'markdown', '# Huddle\n');
+    const { docStore, ydoc } = docStoreWith('doc-a', 'markdown', '# Huddle\n');
     const ledger = createNotesLedger();
     let n = 0;
     const tick = (notes: string) =>
       applyNotesUpdate(
-        rooms,
+        docStore,
         {
           docId: 'doc-a',
           meetingId: 'm-1',
@@ -497,20 +499,28 @@ describe('applyNotesRelabel', () => {
         parseInlineMarks: true,
       });
     }, 'browser');
-    applyNotesRelabel(rooms, relabel('doc-a', 'Speaker B', 'Marisol'), ledger);
+    applyNotesRelabel(docStore, relabel('doc-a', 'Speaker B', 'Marisol'), ledger);
 
     tick('## Meeting notes\n\n- Marisol: yes.\n- Marisol: the date, tidied up.\n');
     expect(markdownOf(ydoc)).toContain('Marisol — MY wording of the date');
   });
 
   it('a gone doc and a flat doc are both zero, never a throw', () => {
-    const { rooms } = roomsWith('doc-a', 'markdown', '## Meeting notes\n\n- Speaker B: yes.\n');
+    const { docStore } = docStoreWith(
+      'doc-a',
+      'markdown',
+      '## Meeting notes\n\n- Speaker B: yes.\n',
+    );
     expect(
-      applyNotesRelabel(rooms, relabel('doc-gone', 'Speaker B', 'Marisol'), createNotesLedger()),
+      applyNotesRelabel(docStore, relabel('doc-gone', 'Speaker B', 'Marisol'), createNotesLedger()),
     ).toBe(0);
-    const flat = roomsWith('doc-b', 'diff', '## Meeting notes\n\n- Speaker B: yes.\n');
+    const flat = docStoreWith('doc-b', 'diff', '## Meeting notes\n\n- Speaker B: yes.\n');
     expect(
-      applyNotesRelabel(flat.rooms, relabel('doc-b', 'Speaker B', 'Marisol'), createNotesLedger()),
+      applyNotesRelabel(
+        flat.docStore,
+        relabel('doc-b', 'Speaker B', 'Marisol'),
+        createNotesLedger(),
+      ),
     ).toBe(0);
     expect(markdownOf(flat.ydoc)).toContain('- Speaker B: yes.');
   });
@@ -519,7 +529,7 @@ describe('applyNotesRelabel', () => {
 describe('withServerNotesSinks', () => {
   const serverDeps = () => {
     const ydoc = docFrom('# Planning\n');
-    const rooms = {
+    const docStore = {
       get: (id: string) =>
         id === 'doc-a'
           ? { ydoc, meta: { type: 'markdown' as DocType, title: 'Q3 planning', setId: 'w-1' } }
@@ -535,7 +545,7 @@ describe('withServerNotesSinks', () => {
             ]
           : [],
     };
-    return { ydoc, deps: { rooms: () => rooms, tasks: () => tasks } };
+    return { ydoc, deps: { docStore: () => docStore, tasks: () => tasks } };
   };
 
   it('resolves doc title and OPEN board task titles as the composer context', () => {
@@ -617,7 +627,7 @@ describe('withServerNotesSinks', () => {
 describe('withServerNotesSinks task capture', () => {
   const captureWorld = () => {
     const ydoc = docFrom('# Planning\n');
-    const rooms = {
+    const docStore = {
       get: (id: string) =>
         id === 'doc-a'
           ? { ydoc, meta: { type: 'markdown' as DocType, title: 'Q3 planning', setId: 'w-1' } }
@@ -640,7 +650,7 @@ describe('withServerNotesSinks task capture', () => {
       name: 'stub',
       extract: () => Promise.resolve([{ kind: 'reference' as const, taskId: 't-live' }]),
     };
-    return { ydoc, rooms, board, created, wakes, extractor };
+    return { ydoc, docStore, board, created, wakes, extractor };
   };
 
   it('assembles a per-tick capture that resolves the doc board and links rows', async () => {
@@ -648,7 +658,7 @@ describe('withServerNotesSinks task capture', () => {
     const wired = withServerNotesSinks(
       { composer: { name: 's', compose: async () => 'n' }, taskExtractor: w.extractor },
       {
-        rooms: () => w.rooms,
+        docStore: () => w.docStore,
         tasks: () => ({ listTasks: () => [] }),
         captureBoard: () => w.board,
         onTaskReady: (wake) => w.wakes.push(wake),
@@ -671,7 +681,7 @@ describe('withServerNotesSinks task capture', () => {
     const wired = withServerNotesSinks(
       { composer: { name: 's', compose: async () => 'n' }, taskExtractor: w.extractor },
       {
-        rooms: () => w.rooms,
+        docStore: () => w.docStore,
         tasks: () => ({ listTasks: () => [] }),
         captureBoard: () => w.board,
       },
@@ -702,7 +712,7 @@ describe('withServerNotesSinks task capture', () => {
         },
       },
       {
-        rooms: () => w.rooms,
+        docStore: () => w.docStore,
         tasks: () => ({ listTasks: () => [] }),
         captureBoard: () => ({
           ...w.board,
@@ -749,16 +759,16 @@ describe('withServerNotesSinks task capture', () => {
   });
 
   it('scopes a huddle doc — held by a board, never owned — through boardOf', async () => {
-    // A huddle doc has no `setId`: it is held by a hub workspace, the way
+    // A huddle doc has no `setId`: it is held by a board workspace, the way
     // the doc page's back arrow finds it. Scoping on `setId` alone was why
     // "create a task" said aloud on one used to do nothing.
     const w = captureWorld();
     const ydoc = docFrom('# Goal\n');
-    const rooms = {
+    const docStore = {
       get: (id: string) =>
         id === 'doc-h'
           ? { ydoc, meta: { type: 'markdown' as DocType, title: 'Huddle', huddle: true } }
-          : w.rooms.get(id),
+          : w.docStore.get(id),
     };
     const created: string[] = [];
     const wired = withServerNotesSinks(
@@ -773,7 +783,7 @@ describe('withServerNotesSinks task capture', () => {
         },
       },
       {
-        rooms: () => rooms,
+        docStore: () => docStore,
         tasks: () => ({ listTasks: () => [] }),
         captureBoard: () => ({
           ...w.board,
@@ -814,7 +824,7 @@ describe('withServerNotesSinks task capture', () => {
         },
       },
       {
-        rooms: () => w.rooms,
+        docStore: () => w.docStore,
         tasks: () => ({ listTasks: () => [] }),
         captureBoard: () => w.board,
         onReviewAsk: ({ docId, question }) => {
@@ -842,7 +852,11 @@ describe('withServerNotesSinks task capture', () => {
     const w = captureWorld();
     const wired = withServerNotesSinks(
       { composer: { name: 's', compose: async () => 'n' } },
-      { rooms: () => w.rooms, tasks: () => ({ listTasks: () => [] }), captureBoard: () => w.board },
+      {
+        docStore: () => w.docStore,
+        tasks: () => ({ listTasks: () => [] }),
+        captureBoard: () => w.board,
+      },
     );
     expect(wired.captureIntents).toBeUndefined();
   });
@@ -851,7 +865,7 @@ describe('withServerNotesSinks task capture', () => {
 describe('withServerNotesSinks — the person’s writing survives the next tick', () => {
   const wire = () => {
     const ydoc = docFrom('# Planning\n');
-    const rooms = {
+    const docStore = {
       get: (id: string) =>
         id === 'doc-a'
           ? { ydoc, meta: { type: 'markdown' as DocType, title: 'Q3 planning', setId: 'w-1' } }
@@ -859,7 +873,7 @@ describe('withServerNotesSinks — the person’s writing survives the next tick
     };
     const wired = withServerNotesSinks(
       { composer: { name: 's', compose: async () => 'n' } },
-      { rooms: () => rooms, tasks: () => ({ listTasks: () => [] }) },
+      { docStore: () => docStore, tasks: () => ({ listTasks: () => [] }) },
     );
     return { ydoc, wired };
   };
@@ -917,7 +931,7 @@ describe('withServerNotesSinks — the person’s writing survives the next tick
     const { ydoc, wired } = wire();
     wired.onNotes(update('doc-a', '## Meeting notes\n\n- from before the restart\n'));
     // A fresh wiring is a fresh process: its ledger claims nothing.
-    const rooms = {
+    const docStore = {
       get: (id: string) =>
         id === 'doc-a'
           ? { ydoc, meta: { type: 'markdown' as DocType, title: 'Q3 planning', setId: 'w-1' } }
@@ -925,7 +939,7 @@ describe('withServerNotesSinks — the person’s writing survives the next tick
     };
     const restarted = withServerNotesSinks(
       { composer: { name: 's', compose: async () => 'n' } },
-      { rooms: () => rooms, tasks: () => ({ listTasks: () => [] }) },
+      { docStore: () => docStore, tasks: () => ({ listTasks: () => [] }) },
     );
     restarted.onNotes(update('doc-a', '## Meeting notes\n\n- after the restart\n'));
     const md = markdownOf(ydoc);
@@ -940,7 +954,7 @@ describe('applyNotesReattribution — the engine changes its mind after the word
   function composed(notes: string) {
     const ydoc = docFrom('# Huddle\n\nSome intro.\n');
     const ledger = createNotesLedger();
-    const rooms = {
+    const docStore = {
       get: (id: string) =>
         id === 'doc-a' ? { ydoc, meta: { type: 'markdown' as DocType } } : undefined,
     };
@@ -950,8 +964,8 @@ describe('applyNotesReattribution — the engine changes its mind after the word
       tick: { tick: 1, reason: 'pause', turns: [] },
       notes: `## ${MEETING_NOTES_HEADING}\n\n${notes}`,
     };
-    expect(applyNotesUpdate(rooms, update, ledger)).toBe(true);
-    return { ydoc, ledger, rooms };
+    expect(applyNotesUpdate(docStore, update, ledger)).toBe(true);
+    return { ydoc, ledger, docStore };
   }
 
   const reattribution = (
@@ -1028,26 +1042,34 @@ describe('applyNotesReattribution — the engine changes its mind after the word
   }
 
   it('moves a mention whose every turn moved the same way', () => {
-    const { ydoc, ledger, rooms } = composed('- [@Speaker B](speaker:B?t=10,12) wants the gate.\n');
+    const { ydoc, ledger, docStore } = composed(
+      '- [@Speaker B](speaker:B?t=10,12) wants the gate.\n',
+    );
     expect(
-      applyNotesReattribution(rooms, reattribution({ 10: 'C', 12: 'C' }, { C: 'Rowan' }), ledger),
+      applyNotesReattribution(
+        docStore,
+        reattribution({ 10: 'C', 12: 'C' }, { C: 'Rowan' }),
+        ledger,
+      ),
     ).toBe(1);
     expect(markdownOf(ydoc)).toContain('- [@Rowan](speaker:C?t=10,12) wants the gate.');
   });
 
   it('marks a mention it cannot place rather than guessing between two voices', () => {
-    const { ydoc, ledger, rooms } = composed('- [@Speaker B](speaker:B?t=10,12) wants the gate.\n');
-    expect(applyNotesReattribution(rooms, reattribution({ 12: 'C' }, { C: 'Rowan' }), ledger)).toBe(
-      1,
+    const { ydoc, ledger, docStore } = composed(
+      '- [@Speaker B](speaker:B?t=10,12) wants the gate.\n',
     );
+    expect(
+      applyNotesReattribution(docStore, reattribution({ 12: 'C' }, { C: 'Rowan' }), ledger),
+    ).toBe(1);
     expect(markdownOf(ydoc)).toContain(
       '- [@Speaker B](speaker:B?t=10,12&unsure=1) wants the gate.',
     );
   });
 
   it('takes the claim off, and the link with it, when the words are nobody s', () => {
-    const { ydoc, ledger, rooms } = composed('- [@Speaker B](speaker:B?t=10) wants the gate.\n');
-    expect(applyNotesReattribution(rooms, reattribution({ 10: null }), ledger)).toBe(1);
+    const { ydoc, ledger, docStore } = composed('- [@Speaker B](speaker:B?t=10) wants the gate.\n');
+    expect(applyNotesReattribution(docStore, reattribution({ 10: null }), ledger)).toBe(1);
     const md = markdownOf(ydoc);
     expect(md).toContain('- Speaker B wants the gate.');
     expect(md).not.toContain('speaker:');
@@ -1076,8 +1098,8 @@ describe('applyNotesReattribution — the engine changes its mind after the word
   });
 
   it('leaves the tag a tag, so a later rename still finds it', () => {
-    const { ydoc, ledger, rooms } = composed('- [@Speaker B](speaker:B?t=10) wants the gate.\n');
-    applyNotesReattribution(rooms, reattribution({ 10: 'C' }, { C: 'Rowan' }), ledger);
+    const { ydoc, ledger, docStore } = composed('- [@Speaker B](speaker:B?t=10) wants the gate.\n');
+    applyNotesReattribution(docStore, reattribution({ 10: 'C' }, { C: 'Rowan' }), ledger);
     expect(retagSpeakerInNotes(ydoc, 'C', 'Rowan Pike').replaced).toBe(1);
     expect(markdownOf(ydoc)).toContain('- [@Rowan Pike](speaker:C?t=10) wants the gate.');
   });
@@ -1085,11 +1107,15 @@ describe('applyNotesReattribution — the engine changes its mind after the word
   it('keeps two voices with the same display name apart', () => {
     // Both answer to "Alex", so nothing about the visible text says which
     // mention moved. The label in the href does.
-    const { ydoc, ledger, rooms } = composed(
+    const { ydoc, ledger, docStore } = composed(
       '- [@Alex](speaker:A?t=10) proposed it.\n- [@Alex](speaker:B?t=11) objected.\n',
     );
     expect(
-      applyNotesReattribution(rooms, reattribution({ 10: 'B' }, { A: 'Alex', B: 'Alex' }), ledger),
+      applyNotesReattribution(
+        docStore,
+        reattribution({ 10: 'B' }, { A: 'Alex', B: 'Alex' }),
+        ledger,
+      ),
     ).toBe(1);
     const md = markdownOf(ydoc);
     expect(md).toContain('- [@Alex](speaker:B?t=10) proposed it.');
@@ -1101,8 +1127,8 @@ describe('applyNotesReattribution — the engine changes its mind after the word
   });
 
   it('never touches a mention a PERSON reassigned — it carries no provenance', () => {
-    const { ydoc, ledger, rooms } = composed('- [@Rowan](speaker:C) wants the gate.\n');
-    expect(applyNotesReattribution(rooms, reattribution({ 10: 'B' }), ledger)).toBe(0);
+    const { ydoc, ledger, docStore } = composed('- [@Rowan](speaker:C) wants the gate.\n');
+    expect(applyNotesReattribution(docStore, reattribution({ 10: 'B' }), ledger)).toBe(0);
     expect(markdownOf(ydoc)).toContain('- [@Rowan](speaker:C) wants the gate.');
   });
 
@@ -1112,38 +1138,42 @@ describe('applyNotesReattribution — the engine changes its mind after the word
     // do not get to edit somebody's own sentence — and the same boundary is
     // what keeps this off an earlier meeting's leftovers in the same doc,
     // whose turn numbers start again from the beginning.
-    const { ydoc, ledger, rooms } = composed(
+    const { ydoc, ledger, docStore } = composed(
       '- [@Speaker B](speaker:B?t=10) wants the gate.\n- [@Speaker B](speaker:B?t=10) said why.\n',
     );
     appendInside(ydoc, 'said why', ' — my note');
-    expect(applyNotesReattribution(rooms, reattribution({ 10: 'C' }, { C: 'Rowan' }), ledger)).toBe(
-      1,
-    );
+    expect(
+      applyNotesReattribution(docStore, reattribution({ 10: 'C' }, { C: 'Rowan' }), ledger),
+    ).toBe(1);
     const md = markdownOf(ydoc);
     expect(md).toContain('- [@Rowan](speaker:C?t=10) wants the gate.');
     expect(md).toContain('- [@Speaker B](speaker:B?t=10) said why. — my note');
   });
 
   it('cannot reach a tag outside the notes section', () => {
-    const { ydoc, ledger, rooms } = composed('- [@Speaker B](speaker:B?t=10) wants the gate.\n');
+    const { ydoc, ledger, docStore } = composed('- [@Speaker B](speaker:B?t=10) wants the gate.\n');
     prose.applyMarkdownToFragment(
       prose.getProseFragment(ydoc),
       `${markdownOf(ydoc)}\n## Next steps\n\n- [@Speaker B](speaker:B?t=10) to file it.\n`,
     );
-    applyNotesReattribution(rooms, reattribution({ 10: 'C' }, { C: 'Rowan' }), ledger);
+    applyNotesReattribution(docStore, reattribution({ 10: 'C' }, { C: 'Rowan' }), ledger);
     expect(markdownOf(ydoc)).toContain('- [@Speaker B](speaker:B?t=10) to file it.');
   });
 
   it('a doc the meeting has outlived is a zero, not a throw', () => {
-    const { ledger, rooms } = composed('- [@Speaker B](speaker:B?t=10) wants the gate.\n');
+    const { ledger, docStore } = composed('- [@Speaker B](speaker:B?t=10) wants the gate.\n');
     expect(
-      applyNotesReattribution(rooms, { ...reattribution({ 10: 'C' }), docId: 'doc-gone' }, ledger),
+      applyNotesReattribution(
+        docStore,
+        { ...reattribution({ 10: 'C' }), docId: 'doc-gone' },
+        ledger,
+      ),
     ).toBe(0);
   });
 
   it('an empty revision writes nothing', () => {
-    const { ydoc, ledger, rooms } = composed('- [@Speaker B](speaker:B?t=10) wants the gate.\n');
-    expect(applyNotesReattribution(rooms, reattribution({}), ledger)).toBe(0);
+    const { ydoc, ledger, docStore } = composed('- [@Speaker B](speaker:B?t=10) wants the gate.\n');
+    expect(applyNotesReattribution(docStore, reattribution({}), ledger)).toBe(0);
     expect(markdownOf(ydoc)).toContain('- [@Speaker B](speaker:B?t=10) wants the gate.');
   });
 });

@@ -59,7 +59,7 @@ const createTwo = () =>
 
 describe('create_tasks is the canonical create verb', () => {
   it('POSITIVE CONTROL: the running bundle serves a known tool', () => {
-    expect(mcp.tool('list_attachments')).toBeDefined();
+    expect(mcp.tool('list_agents')).toBeDefined();
     expect(mcp.tool('create_tasks_batch')).toBeUndefined();
   });
 

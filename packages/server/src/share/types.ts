@@ -66,7 +66,7 @@ export interface Share {
   mode?: ShareMode;
   /**
    * The doc this share's URL OPENS — the workspace's entry doc, or `''` for
-   * a hub share, which lands on the board instead. It is a landing address,
+   * a board share, which lands on the board instead. It is a landing address,
    * not a grant: scope comes entirely from `workspaceId`, and the entry doc
    * is reachable because it is a member, not because it is named here.
    */

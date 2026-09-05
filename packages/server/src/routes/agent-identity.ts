@@ -36,7 +36,7 @@ export interface AgentIdentityRoutesContext {
   agentWatches: AgentWatches;
   /** The roster a merge folds one row into another in. */
   identities: Identities;
-  /** The hub store — a merge moves its lead seats, attachments and comments. */
+  /** The board store — a merge moves its lead seats, attachments and comments. */
   taskStore: TaskStore;
 
   /** JSON response helper — status plus body, no CORS (the per-request

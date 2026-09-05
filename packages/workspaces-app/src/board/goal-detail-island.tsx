@@ -1,0 +1,655 @@
+/**
+ * The goal detail panel — the band a reader opens to see what the goal is for,
+ * declare it done or argue about it — as a Preact island.
+ *
+ * `renderGoalDetail` rebuilt the whole panel with `replaceChildren()` on every
+ * repaint, and the board repaints on every SSE event. Everything the panel was
+ * HOLDING died with each rebuild, so each rescue had to be hand-built against
+ * the one-line window either side of the swap:
+ *
+ *   - `keepFields` / `restoreFields` snapshotted a half-typed rename out of the
+ *     doomed DOM and wrote it back into the fresh one, caret and all;
+ *   - `keptBodySlot` found the live description editor's node, and the renderer
+ *     then patched AROUND it — inserting `before` above it and appending
+ *     `after` below — because even MOVING that node detaches a ProseMirror view
+ *     from the document and drops the caret;
+ *   - a `title.click()` at the very end reopened a rename the repaint had just
+ *     closed, so `restoreFields` had somewhere to put the draft back.
+ *
+ * All three are gone. `GoalDetailPanel` is keyed on the goal's id, so a repaint
+ * of the SAME goal reuses the instance and its DOM: the title survives because
+ * it survives, and the slot is simply never rebuilt. Moving to another goal
+ * changes the key, which unmounts the panel — so the next one opens with an
+ * empty box and nothing of its predecessor, which is the other half of the
+ * guarantee.
+ *
+ * The bridge is one-directional, as in the board, task-detail, Home-review,
+ * presence and walkthrough islands: `renderDetail` in board-app still owns the
+ * fetches and the projection and writes them into `goalDetailData`; the island
+ * only reads. The HANDLERS ride the signal rather than being bound at mount,
+ * for the walkthrough's reason — they close over the section and the clock this
+ * paint resolved.
+ *
+ * Two kinds of node are deliberately not Preact's children, for the same reason
+ * they are not in the task panel: an element with no vnode children is diffed
+ * against nothing, so Preact never reaches inside it.
+ *
+ *   - the title `<h2>` — `wireInPlaceTitle` swaps its text for an `<input>`
+ *     mid-rename;
+ *   - the description slot — the live Tiptap editor mounts INTO it.
+ *
+ * The HEAD carries the task panel's action set — copy link, full screen,
+ * archive/restore, close — because a goal is a row like any other and being
+ * the one row whose menu is short is not a design, it is an omission (Bryan,
+ * 2026-08-29: *"goals should have the same additional extra actions that tasks
+ * do like being able to Archive get a link and so on"*). The share and
+ * full-screen controls used to be listed here as deliberate absences; they
+ * were not, and the goal panel has the same long description and the same
+ * discussion the task panel expands for.
+ *
+ * Archive is the one that is not simply the task panel's, one row over: it
+ * takes the band's tasks with it, so it asks first and says how many. See
+ * `archiveConfirmLine`.
+ *
+ * What this panel still deliberately does NOT have, and the task panel does:
+ * tabs, a review queue, a transition history. A goal has no transitions worth
+ * a second tab, so its conversation sits directly under the description where
+ * a reader on a short screen reaches it by scrolling rather than by finding a
+ * control.
+ */
+import { signal } from '@preact/signals';
+import { type RefObject, render } from 'preact';
+import { useLayoutEffect, useRef, useState } from 'preact/hooks';
+import {
+  BODY_LIVE_CLASS,
+  type TaskDiscussion,
+  bodySlot,
+  localDateInputValue,
+  relatedDocLinks,
+  renderRelatedLinks,
+} from './board-detail-render.ts';
+import {
+  type BoardSection,
+  GOAL_STATUS_ORDER,
+  type TaskStatus,
+  cascadePhrase,
+  isGoalArchived,
+  statusLabel,
+  statusOptions,
+} from './board-model.ts';
+import { type GoalDetailHandlers, wireInPlaceTitle } from './board-render.ts';
+import { Discussion, useFill } from './detail-parts.tsx';
+
+export interface GoalDetailView {
+  /** The band on screen, or null for "nothing is open". */
+  section: BoardSection | null;
+  discussion?: TaskDiscussion;
+  handlers: GoalDetailHandlers;
+}
+
+const IDLE_HANDLERS: GoalDetailHandlers = {
+  onClose: () => {},
+  onTitleCommit: () => {},
+  onStatusSet: () => {},
+};
+
+export const goalDetailData = signal<GoalDetailView>({
+  section: null,
+  handlers: IDLE_HANDLERS,
+});
+
+/** What a band's archive would take with it, as the server counted it. */
+export interface GoalCascade {
+  tasks: number;
+}
+
+/**
+ * The sentence the confirmation asks, with the count in it.
+ *
+ * This is the feature, not decoration around it: a band header shows a title
+ * and a progress bar, so the fourteen tickets an archive is about to take are
+ * invisible at the moment somebody reaches for it (Bryan, 2026-08-30: *"say
+ * what is about to happen, with the count, before the action commits"*). The
+ * task panel's archive deliberately has no dialog at all — it is three fields
+ * on one row and a ten-second Undo pays for it — and this one does, because
+ * the two acts are not the same size.
+ *
+ * `null` is the answer not yet in: the bar still says what is about to happen
+ * in the vaguest honest terms, and the panel withholds the button until a
+ * number arrives.
+ */
+export function archiveConfirmLine(title: string, cascade: GoalCascade | null): string {
+  const name = `“${title}”`;
+  if (cascade === null) return `Archive ${name} and everything under it?`;
+  const { tasks } = cascade;
+  if (tasks === 0) return `Archive ${name}? Nothing else is under it.`;
+  // Shared with the toast that follows this confirmation, so the two cannot
+  // describe the same archive differently.
+  return `Archive ${name} and its ${cascadePhrase(tasks)}?`;
+}
+
+/** One `<dt>/<dd>` pair. Built here rather than as JSX so the fields row can go
+ *  through `useFill` — it holds no state, so it is cheapest rebuilt. A Node
+ *  value is a control (the Due date input mirrors the task panel's); a
+ *  string is read-only text. */
+function fieldCell(key: string, value: Node | string): HTMLElement {
+  const wrap = document.createElement('div');
+  wrap.className = 'board-detail-field';
+  const dt = document.createElement('dt');
+  dt.className = 'board-detail-field-k';
+  dt.textContent = key;
+  const dd = document.createElement('dd');
+  dd.className = 'board-detail-field-v';
+  if (typeof value === 'string') dd.textContent = value;
+  else dd.append(value);
+  wrap.append(dt, dd);
+  return wrap;
+}
+
+function GoalDetailPanel(props: {
+  host: HTMLElement;
+  section: BoardSection;
+  discussion?: TaskDiscussion;
+  handlers: GoalDetailHandlers;
+}) {
+  const { host, section, discussion, handlers } = props;
+  const now = handlers.now ?? Date.now();
+  const archived = isGoalArchived(section);
+  // The reader's full-screen choice, seeded from the host so a panel that
+  // opens while the last one was expanded does not silently un-expand it.
+  const [full, setFull] = useState(host.classList.contains('board-detail--full'));
+  // The archive confirmation: null = not asking. `cascade` fills in when the
+  // count arrives, and `failed` is the answer that never came — a state of its
+  // own rather than a zero, because "nothing is under it" and "I could not
+  // find out" must not read the same.
+  const [asking, setAsking] = useState(false);
+  const [cascade, setCascade] = useState<GoalCascade | null>(null);
+  const [countFailed, setCountFailed] = useState(false);
+  // Which question is outstanding. A cancel or a re-open invalidates the one
+  // in flight, so a slow answer cannot paint a count under a bar that has
+  // since been dismissed or re-asked.
+  const askToken = useRef(0);
+  const panelRef = useRef<HTMLDivElement | null>(null);
+  const titleRef = useRef<HTMLHeadingElement | null>(null);
+  const fieldsRef = useRef<HTMLDListElement | null>(null);
+  const relatedLinksRef = useRef<HTMLDivElement | null>(null);
+  const slotRef = useRef<HTMLDivElement | null>(null);
+
+  // What the title needs at the moment it FIRES, rather than at the moment it
+  // was wired — the rename is wired once and outlives every paint.
+  const latest = useRef({ section, handlers });
+  latest.current = { section, handlers };
+
+  useLayoutEffect(() => {
+    const el = titleRef.current;
+    if (!el) return;
+    wireInPlaceTitle(
+      el,
+      () => latest.current.section.title,
+      (v) => latest.current.handlers.onTitleCommit(latest.current.section.id, v),
+    );
+  }, []);
+  useLayoutEffect(() => {
+    const el = titleRef.current;
+    // Not while the reader is renaming: writing the stored title over the input
+    // would delete what they are typing.
+    if (el && !el.querySelector('input')) el.textContent = section.title;
+  });
+
+  // The fields row: status, owner, and a due date when there is one. No `Tasks`
+  // breakdown — *"how many tasks are in triage/todo/in-progress/done is just
+  // not useful information"* (Bryan, 2026-08-24, reviewing the live panel). The
+  // band header carries the count where it answers "how big is this band" while
+  // you are scanning; repeated inside the goal you already opened it answered
+  // nothing and cost a row of a panel whose scarce axis is height.
+  useFill(fieldsRef as RefObject<HTMLElement>, () => {
+    const cells: HTMLElement[] = [];
+
+    const statusCtl = document.createElement('span');
+    statusCtl.className = 'board-detail-statusctl';
+    const status = document.createElement('select');
+    status.className = 'board-detail-select board-detail-status board-goal-detail-status';
+    // GOAL_STATUS_ORDER carries triage too: a band nobody has agreed to holds
+    // its rows out of dispatch, and this control is where a person releases
+    // it — or sends it back.
+    for (const s of statusOptions(section.status ?? 'todo', GOAL_STATUS_ORDER)) {
+      const opt = document.createElement('option');
+      opt.value = s;
+      opt.textContent = statusLabel(s);
+      // An undecorated section (an older server's projection) claims nothing;
+      // the select then shows "To do" — the value a fresh row starts on.
+      opt.selected = s === (section.status ?? 'todo');
+      status.append(opt);
+    }
+    status.setAttribute('aria-label', 'Goal status — pick to declare a new one');
+    status.addEventListener('change', () => {
+      handlers.onStatusSet(section.id, status.value as TaskStatus);
+    });
+    statusCtl.append(status);
+
+    const statusWrap = document.createElement('div');
+    statusWrap.className = 'board-detail-field';
+    const dt = document.createElement('dt');
+    dt.className = 'board-detail-field-k';
+    dt.textContent = 'Status';
+    const dd = document.createElement('dd');
+    dd.className = 'board-detail-field-v';
+    dd.append(statusCtl);
+    statusWrap.append(dt, dd);
+    cells.push(statusWrap);
+
+    // The vacancy is stated rather than hidden — an unowned goal is a fact a
+    // reader acts on. No picker yet: no verb sets a goal's owner.
+    cells.push(fieldCell('Owner', section.assignee ?? 'Nobody yet'));
+
+    // The same native date input the task panel's Due field is — same
+    // local-day conversions, same cleared-input-means-`null` contract — so a
+    // goal's due date is as human-editable as a task's (approved mock: "the
+    // GOAL panel mirrors the task panel's fields including an editable Due
+    // date"). Always shown, not only when a date is already set: the empty
+    // input IS the way to set one.
+    const due = document.createElement('input');
+    due.type = 'date';
+    due.className = 'board-detail-input board-detail-due';
+    due.value = section.dueAt === undefined ? '' : localDateInputValue(section.dueAt);
+    due.setAttribute('aria-label', 'Due date');
+    due.addEventListener('change', () => {
+      const v = due.value;
+      if (!v) {
+        handlers.onDueSet?.(section.id, null);
+        return;
+      }
+      const [y, m, d] = v.split('-').map(Number);
+      if (!y || !m || !d) return;
+      handlers.onDueSet?.(section.id, new Date(y, m - 1, d, 12, 0, 0, 0).getTime());
+    });
+    cells.push(fieldCell('Due', due));
+    return cells;
+  });
+
+  // The Related Links section: title-only links to every doc this goal ties
+  // to, directly below the fields row — same section, same function, as the
+  // task panel's. Computed once as a pure list for the emptiness check
+  // below; `renderRelatedLinks` (which does the hydration fetch) runs only
+  // inside the fill.
+  const relatedLinks = relatedDocLinks(section);
+  useFill(relatedLinksRef as RefObject<HTMLElement>, () => [
+    ...(renderRelatedLinks(relatedLinks, handlers.workspaceId)?.childNodes ?? []),
+  ]);
+
+  // The description slot is the one node a repaint must never rebuild. Preact
+  // owns the element and none of its children, and the fallback below only runs
+  // while no editor has claimed it — an un-mounted slot must follow the
+  // projection like everything else in the panel.
+  useLayoutEffect(() => {
+    const el = slotRef.current;
+    if (!el || el.classList.contains(BODY_LIVE_CLASS)) return;
+    el.replaceChildren(...bodySlot(section).childNodes);
+  });
+
+  // The reader's full-screen choice, on the container and on `<body>`: at full
+  // screen the panel covers the board, so the board must stop reserving room
+  // for it. Same two classes the task panel writes, because it is the same
+  // overlay geometry — a second set would need a second copy of the CSS.
+  //
+  // Deliberately WITHOUT an unmount cleanup, which reads like a leak and is
+  // not one (raised in review, measured before answering). The board rule is
+  // `body.board-detail-open.board-detail-full`, and `board-detail-open` comes off
+  // when the last panel closes — so the class left behind matches nothing: a
+  // board measured after closing a full-screen panel is 1472px wide, exactly
+  // the width of one that has never been full screen. What the class DOES do
+  // is carry the reader's choice to the next row they open — `full` is seeded
+  // from it above — and reopening restores the wide panel (1905px against
+  // 1100px) because it survived. A cleanup here would delete that.
+  useLayoutEffect(() => {
+    host.classList.toggle('board-detail--full', full);
+    document.body.classList.toggle('board-detail-full', full);
+  }, [host, full]);
+
+  // Take the focus on OPEN only — this effect runs once per mount, and a mount
+  // is a new goal. A repaint that focused the panel would pull the caret out of
+  // the composer every time a peer's comment landed.
+  useLayoutEffect(() => {
+    const panel = panelRef.current;
+    if (panel && typeof panel.focus === 'function') panel.focus({ preventScroll: true });
+  }, []);
+
+  /** Open the confirmation, and go and ask what it will cost. */
+  function askToArchive(): void {
+    const token = ++askToken.current;
+    setAsking(true);
+    setCascade(null);
+    setCountFailed(false);
+    const count = handlers.onCascadeCount;
+    if (!count) {
+      setCountFailed(true);
+      return;
+    }
+    void count(section.id).then(
+      (res) => {
+        if (askToken.current !== token) return;
+        if (res === null) setCountFailed(true);
+        else setCascade(res);
+      },
+      () => {
+        if (askToken.current === token) setCountFailed(true);
+      },
+    );
+  }
+
+  function cancelArchive(): void {
+    askToken.current++;
+    setAsking(false);
+    setCascade(null);
+    setCountFailed(false);
+  }
+
+  // The slot this render decided on, handed to whatever mounts the live editor.
+  // Idempotent for an unchanged pair, so the repaints that arrive while
+  // somebody is typing cost nothing. It lives here rather than after the
+  // loader's call because a signal write does not paint synchronously: the
+  // loader cannot know when the slot exists.
+  useLayoutEffect(() => {
+    handlers.onBodySlot?.(section, slotRef.current);
+  });
+
+  // What triage HOLDS, said where the picker is. The word alone reads as a
+  // task's triage; on a goal it is the whole band that waits.
+  const triageNote =
+    section.status === 'triage'
+      ? 'In triage — not ready to work on. Nothing under this goal is dispatched until it moves to To do.'
+      : null;
+  const doneNote =
+    section.status === 'done'
+      ? section.doneBy
+        ? `Declared by ${section.doneBy.name}${
+            section.doneAt !== undefined
+              ? `, ${new Date(section.doneAt).toLocaleDateString(undefined, {
+                  month: 'short',
+                  day: 'numeric',
+                })}`
+              : ''
+          }`
+        : 'Declared done'
+      : null;
+
+  return (
+    <div
+      ref={panelRef}
+      class="board-detail-panel"
+      // biome-ignore lint/a11y/useSemanticElements: a real <dialog> would own
+      // its own top-layer, backdrop and dismissal, and this panel is painted
+      // inside `.board-detail`'s backdrop by an app that opens and closes it from
+      // board state. The role is the accurate description of what it is.
+      role="dialog"
+      aria-modal="true"
+      // Focusable as a container: the keyboard follows the dialog, and Escape
+      // has somewhere to land without a global listener.
+      tabIndex={-1}
+      data-goal-id={section.id}
+      onKeyDown={(ev) => {
+        if (ev.key === 'Escape') handlers.onClose();
+      }}
+    >
+      <div class="board-detail-head">
+        <div>
+          <div class="board-detail-kind-line">
+            <span class="board-detail-kind">Goal</span>
+            <span class="board-detail-id">{section.id}</span>
+          </div>
+          {/* biome-ignore lint/a11y/useHeadingContent: deliberately childless.
+              `wireInPlaceTitle` swaps the text for an <input> and back, so the
+              heading's content is imperative — a vnode child here would make
+              every repaint an instruction to throw a half-typed rename away. */}
+          <h2
+            ref={titleRef}
+            class="board-detail-title"
+            // It IS interactive — Enter opens the rename, exactly as the board
+            // row's title does.
+            // biome-ignore lint/a11y/noNoninteractiveTabindex: see above
+            tabIndex={0}
+            title="Click or press Enter to rename"
+          />
+        </div>
+        {/* The task panel's action set, on the band: share first (the one
+            action about the goal AS A LINK, wanted before anything has been
+            read), then the reader's own preference, then the one that changes
+            the goal, then the way out. Icons with BOTH an `aria-label` and a
+            `title`, the way the task panel's carry them. */}
+        <div class="board-detail-head-actions">
+          {handlers.onCopyLink && (
+            <button
+              type="button"
+              class="board-btn board-icon-btn board-detail-share"
+              title="Copy a link to this goal"
+              aria-label="Copy a link to this goal"
+              onClick={() => handlers.onCopyLink?.(section)}
+            >
+              🔗
+            </button>
+          )}
+          <button
+            type="button"
+            class="board-btn board-icon-btn board-detail-expand"
+            title={full ? 'Exit full screen' : 'Full screen'}
+            aria-label={full ? 'Exit full screen' : 'Full screen'}
+            aria-pressed={full ? 'true' : 'false'}
+            onClick={() => setFull((on) => !on)}
+          >
+            {full ? '⤡' : '⤢'}
+          </button>
+          {(archived ? handlers.onRestore : handlers.onArchive) && (
+            <button
+              type="button"
+              class="board-btn board-icon-btn board-detail-archive"
+              title={archived ? 'Restore this goal to the board' : 'Archive this goal'}
+              aria-label={archived ? 'Restore this goal to the board' : 'Archive this goal'}
+              aria-expanded={archived ? undefined : asking ? 'true' : 'false'}
+              onClick={() => (archived ? handlers.onRestore?.(section) : askToArchive())}
+            >
+              {archived ? '↩︎' : '🗄'}
+            </button>
+          )}
+          <button
+            type="button"
+            class="board-btn board-icon-btn board-detail-close"
+            title="Close goal detail"
+            aria-label="Close goal detail"
+            onClick={() => handlers.onClose()}
+          >
+            ✕
+          </button>
+        </div>
+      </div>
+
+      {/* The confirmation, in the panel rather than in a modal: it belongs to
+          the band it is about, and a `confirm()` on a tablet covers the very
+          header the reader is checking. It states the blast radius and then
+          asks — and it withholds Archive until it can state it, because a
+          confirmation that cannot say what it is about to do is a dialog
+          pretending to be one. */}
+      {asking && !archived && (
+        <div class="board-goal-archive-confirm" role="alertdialog" aria-live="polite">
+          <p class="board-goal-archive-ask">
+            {countFailed
+              ? `Could not work out what is under “${section.title}”. Nothing has been archived — try again in a moment.`
+              : archiveConfirmLine(section.title, cascade)}
+          </p>
+          <p class="board-goal-archive-note">
+            Everything goes together and comes back together — restoring the goal brings its tasks
+            with it.
+          </p>
+          <div class="board-goal-archive-buttons">
+            {!countFailed && cascade !== null && (
+              <button
+                type="button"
+                class="board-btn board-goal-archive-go"
+                onClick={() => {
+                  cancelArchive();
+                  handlers.onArchive?.(section);
+                }}
+              >
+                Archive
+              </button>
+            )}
+            <button
+              type="button"
+              class="board-btn board-goal-archive-cancel"
+              onClick={cancelArchive}
+            >
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Archived, and the panel has to SAY so: a link or the restore list can
+          both open a band that is on no board, and without this its absence
+          from the lanes reads as a rendering bug rather than as something
+          somebody decided. */}
+      {archived && (
+        <div class="board-archived-note">
+          <span class="board-decide-k board-archived-k">Archived</span>
+          <p>
+            {`${section.archivedAt ? new Date(section.archivedAt).toLocaleDateString() : ''}${
+              section.archivedBy ? ` by ${section.archivedBy}` : ''
+            }${section.archiveReason ? ` — ${section.archiveReason}` : ''}`}
+          </p>
+          {handlers.onRestore && (
+            <button
+              type="button"
+              class="board-btn board-archived-restore"
+              onClick={() => handlers.onRestore?.(section)}
+            >
+              Restore to the board
+            </button>
+          )}
+        </div>
+      )}
+
+      {/* Siblings, not wrapped — the task panel's own fields/related-links/
+          notes sit flat too. `.board-detail-body` is the DESCRIPTION prose's
+          class elsewhere in this file (serif font, indented lists); reusing
+          it here as a bare layout wrapper had these three inheriting both
+          by accident. */}
+      <dl ref={fieldsRef} class="board-detail-fields" />
+      {/* Title-only links to the docs this goal ties to — the approved
+          mock's Related Links section, right below the fields row. Absent
+          entirely when the goal names no doc. */}
+      {relatedLinks.length > 0 && <div ref={relatedLinksRef} class="board-related-links-slot" />}
+      {/* The attribution the row can only whisper (its tooltip), said plainly
+          where there is room: a done goal is somebody's claim, and the claim
+          names its author. No open-children advisory beside it — the server
+          has always accepted a done declaration over open children, so it
+          spent two lines restating a rule nothing enforced. */}
+      {doneNote !== null && <p class="board-goal-done-note">{doneNote}</p>}
+      {triageNote !== null && <p class="board-goal-triage-note">{triageNote}</p>}
+
+      {/* The prose the whole ticket is about: *"the most important object on
+          the board is the only one you cannot explain"*. Drawn unconditionally,
+          including for a goal nobody has described — the empty state is an
+          invitation, and more to the point the slot has to EXIST for the editor
+          to mount on. */}
+      <h3 class="board-detail-subhead board-detail-body-head">Description</h3>
+      <div ref={slotRef} class="board-detail-body-slot" data-task-id={section.id} />
+      {/* A secondary way in, not the way to edit. Only once the projection has
+          told us the address: a link built from a guessed docId would 404 on
+          exactly the older servers that omit it. */}
+      {section.bodyDocId !== undefined && (
+        <p class="board-detail-body-link">
+          <a href={`/review/${encodeURIComponent(section.bodyDocId)}`}>Open in the full editor</a>
+        </p>
+      )}
+
+      {/* *"A single comment thread with review item support — so a decision
+          about a goal has somewhere to live."* Never drawn without a handler to
+          deliver from: the panel does not show a composer it cannot post. */}
+      {discussion !== undefined && handlers.onComment !== undefined && (
+        <>
+          <h3 class="board-detail-subhead">Comments</h3>
+          <Discussion
+            rowId={section.id}
+            discussion={discussion}
+            onComment={(text, threadId) => handlers.onComment?.(section.id, text, threadId)}
+            {...(handlers.focusThreadId !== undefined
+              ? { focusThreadId: handlers.focusThreadId }
+              : {})}
+            now={now}
+          />
+        </>
+      )}
+    </div>
+  );
+}
+
+/**
+ * The panel, or nothing at all.
+ *
+ * The container classes live on the HOST the shell built rather than on
+ * anything the island renders — the host is what the CSS targets, and a class
+ * is not a child, so this writes nothing Preact believes it owns.
+ * `board-detail-open` marks `<body>` rather than being inferred with `:has()`,
+ * because the board and the panel are siblings under different subtrees.
+ */
+function GoalDetail(props: { host: HTMLElement }) {
+  const { section, discussion, handlers } = goalDetailData.value;
+  const { host } = props;
+  // Backlog is a bucket, not a goal: nothing to declare and nothing to rename,
+  // so there is deliberately no panel for it — the same refusal its row gives.
+  const shown = section !== null && !section.isChores;
+  useLayoutEffect(() => {
+    host.classList.toggle('hidden', !shown);
+    if (shown) {
+      document.body.classList.add('board-detail-open');
+      return;
+    }
+    // The marker says "an overlay is open", and the TASK panel is the other
+    // one. Dropping the class unconditionally would take it straight back off a
+    // task panel that had just put it on.
+    if (host.ownerDocument.querySelector('.board-detail:not(.hidden)') === null) {
+      document.body.classList.remove('board-detail-open');
+    }
+  }, [host, shown]);
+  // The editor host is told the slot is gone before the render that removes it
+  // could leave it holding a detached node.
+  useLayoutEffect(() => {
+    if (!shown) handlers.onBodySlot?.(null, null);
+  }, [shown, handlers]);
+  if (!shown || section === null) return null;
+  // Keyed on the goal id — the one id that survives a re-fetch and a reorder.
+  return (
+    <GoalDetailPanel
+      key={section.id}
+      host={host}
+      section={section}
+      discussion={discussion}
+      handlers={handlers}
+    />
+  );
+}
+
+/**
+ * Mounts the panel into a wrapper it appends to `host` (`#board-goal-detail`);
+ * returns the disposer. The island contract: the wrapper — not the host — is
+ * Preact's container, disposal is `render(null, el)`, and no vanilla code may
+ * `replaceChildren` a container holding the live island.
+ *
+ * The backdrop tap is wired here rather than per paint: it is a fact about the
+ * container, and the old renderer added a fresh listener every time it built a
+ * panel from scratch.
+ */
+export function mountGoalDetailIsland(host: HTMLElement): () => void {
+  const el = document.createElement('div');
+  el.setAttribute('data-preact-island', 'goal-detail');
+  host.appendChild(el);
+  const onBackdrop = (ev: Event): void => {
+    if (ev.target === host) goalDetailData.value.handlers.onClose();
+  };
+  host.addEventListener('click', onBackdrop);
+  render(<GoalDetail host={host} />, el);
+  return () => {
+    host.removeEventListener('click', onBackdrop);
+    render(null, el);
+    el.remove();
+  };
+}

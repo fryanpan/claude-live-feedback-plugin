@@ -9,7 +9,7 @@
  *
  * It lives in its own module because BOTH entry points need it and only one
  * had it. `app.ts` (the doc surface) has published this since the composer
- * first went under the keyboard; the hub — board, Home, the task panel — is a
+ * first went under the keyboard; the board — board, Home, the task panel — is a
  * separate entry and inherited none of it, which is how the task panel's
  * Comment button ended up under the bar with no scroll left to reach it.
  */

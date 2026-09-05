@@ -173,7 +173,7 @@ describe('companion (:edit) doc comments route to the member watchers', () => {
 
   it('the review stream (create_diff_review auto-watch) hears a companion comment', async () => {
     const { reviewId, memberId, companionId } = await openReview();
-    const stream = await get(`/events/workspace/${encodeURIComponent(reviewId)}`);
+    const stream = await get(`/workspaces/${encodeURIComponent(reviewId)}/events:stream`);
     expect(stream.status).toBe(200);
     await settle(150);
     const heard = listen(stream);

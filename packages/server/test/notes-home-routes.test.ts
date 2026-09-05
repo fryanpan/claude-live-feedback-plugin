@@ -14,7 +14,7 @@ import { join } from 'node:path';
 import { type ServerHandle, createServer } from '../src/server.ts';
 
 /**
- * The workspace notes-home setting and the doc-home routes, through the real
+ * The workspace notes-home setting and the doc-origin-repo routes, through the real
  * HTTP surface: a board declares where its planning notes get checked in,
  * `POST /api/docs` derives a pinned file from it, and `/api/docs/<id>/home`
  * pins/reads/unpins an explicit home. Docs bound the classic way (an
@@ -38,7 +38,7 @@ function git(cwd: string, ...args: string[]): string {
   });
 }
 
-describe('workspace notes home + doc home routes', () => {
+describe('workspace notes home + doc origin repo routes', () => {
   let tmp: string;
   let dataDir: string;
   let repo: string;

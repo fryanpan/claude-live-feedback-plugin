@@ -165,6 +165,6 @@ describe('binding a diff over a tree that has stopped answering', () => {
     // rather than merely declining to hang.
     const member = body.files?.find((f) => f.relPath === 'meeting-notes.md');
     expect(member).toBeDefined();
-    expect(handle.rooms.boundPathOf(member?.docId ?? '')).toBe(wedged);
+    expect(handle.docStore.boundPathOf(member?.docId ?? '')).toBe(wedged);
   });
 });

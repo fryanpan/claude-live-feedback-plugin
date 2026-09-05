@@ -2,14 +2,14 @@ import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { Rooms } from '../src/rooms.ts';
-import { SseHub } from '../src/sse.ts';
+import { DocStore } from '../src/doc-store.ts';
+import { SseBus } from '../src/sse.ts';
 import { createWebhookDispatcher } from '../src/webhooks.ts';
 
-function makeRooms(dataDir: string): Rooms {
-  return new Rooms({
+function makeDocStore(dataDir: string): DocStore {
+  return new DocStore({
     dataDir,
-    sse: new SseHub(),
+    sse: new SseBus(),
     webhooks: createWebhookDispatcher({ onLog: () => {} }),
     decorateDocMeta: (m) => ({ ...m, reviewUrl: `http://test/review/${m.docId}` }),
   });
@@ -20,15 +20,15 @@ function makeRooms(dataDir: string): Rooms {
  * a base): one eagerly-bound entry doc, everything else lazily opened via
  * openContextFile. These tests cover the new contract.
  */
-describe('Rooms.bindFolder (browse-mode alias)', () => {
+describe('DocStore.bindFolder (browse-mode alias)', () => {
   let dataDir: string;
   let folder: string;
-  let rooms: Rooms;
+  let docStore: DocStore;
 
   beforeEach(() => {
     dataDir = mkdtempSync(join(tmpdir(), 'bf-data-'));
     folder = mkdtempSync(join(tmpdir(), 'bf-src-'));
-    rooms = makeRooms(dataDir);
+    docStore = makeDocStore(dataDir);
   });
 
   afterEach(() => {
@@ -44,14 +44,14 @@ describe('Rooms.bindFolder (browse-mode alias)', () => {
   }
 
   it('errors not-found for a missing folder', async () => {
-    const res = await rooms.bindFolder({ folderPath: join(folder, 'nope') });
+    const res = await docStore.bindFolder({ folderPath: join(folder, 'nope') });
     expect(res.ok).toBe(false);
     if (!res.ok) expect(res.error).toBe('not-found');
   });
 
   it('binds ONE entry doc (README preferred, editable markdown); fileCount is the scan count', async () => {
     seedFolder();
-    const res = await rooms.bindFolder({ folderPath: folder, owner: '/cwd' });
+    const res = await docStore.bindFolder({ folderPath: folder, owner: '/cwd' });
     expect(res.ok).toBe(true);
     if (!res.ok) return;
 
@@ -60,7 +60,7 @@ describe('Rooms.bindFolder (browse-mode alias)', () => {
     expect(res.files[0]?.relPath).toBe('README.md');
     expect(res.files[0]?.type).toBe('markdown');
 
-    const entry = rooms.get(res.files[0]?.docId ?? '');
+    const entry = docStore.get(res.files[0]?.docId ?? '');
     expect(entry?.meta.workspaceId).toBe(res.workspaceId);
     expect(entry?.meta.workspaceRoot).toBe(res.root);
     // Markdown entry is EDITABLE (prose-bound, not flat content).
@@ -69,22 +69,22 @@ describe('Rooms.bindFolder (browse-mode alias)', () => {
 
   it('remaining files open lazily with md → editable markdown, code → read-only', async () => {
     seedFolder();
-    const res = await rooms.bindFolder({ folderPath: folder });
+    const res = await docStore.bindFolder({ folderPath: folder });
     expect(res.ok).toBe(true);
     if (!res.ok) return;
 
-    const code = await rooms.openContextFile(res.workspaceId, 'src/util.ts');
+    const code = await docStore.openContextFile(res.workspaceId, 'src/util.ts');
     expect(code.ok).toBe(true);
     if (!code.ok) return;
-    expect(rooms.get(code.docId)?.meta.type).toBe('code');
-    expect(rooms.get(code.docId)?.ydoc.getText('content').toString()).toContain('const y = 2');
+    expect(docStore.get(code.docId)?.meta.type).toBe('code');
+    expect(docStore.get(code.docId)?.ydoc.getText('content').toString()).toContain('const y = 2');
 
     // Re-open is idempotent.
-    const again = await rooms.openContextFile(res.workspaceId, 'src/util.ts');
+    const again = await docStore.openContextFile(res.workspaceId, 'src/util.ts');
     expect(again.ok && again.docId === code.docId).toBe(true);
 
     // listRepoFiles surfaces everything, none marked changed (no diff).
-    const all = rooms.listRepoFiles(res.workspaceId);
+    const all = docStore.listRepoFiles(res.workspaceId);
     expect(all.ok).toBe(true);
     expect((all.files ?? []).map((f) => f.relPath).sort()).toEqual([
       'README.md',
@@ -96,8 +96,8 @@ describe('Rooms.bindFolder (browse-mode alias)', () => {
 
   it('is idempotent — re-binding maps to the same workspace + entry doc', async () => {
     seedFolder();
-    const a = await rooms.bindFolder({ folderPath: folder });
-    const b = await rooms.bindFolder({ folderPath: folder });
+    const a = await docStore.bindFolder({ folderPath: folder });
+    const b = await docStore.bindFolder({ folderPath: folder });
     expect(a.ok && b.ok).toBe(true);
     if (!a.ok || !b.ok) return;
     expect(b.workspaceId).toBe(a.workspaceId);
@@ -105,7 +105,7 @@ describe('Rooms.bindFolder (browse-mode alias)', () => {
   });
 
   it('empty folder is a degenerate success (no entry to bind)', async () => {
-    const res = await rooms.bindFolder({ folderPath: folder });
+    const res = await docStore.bindFolder({ folderPath: folder });
     expect(res.ok).toBe(true);
     if (!res.ok) return;
     expect(res.fileCount).toBe(0);
@@ -114,20 +114,20 @@ describe('Rooms.bindFolder (browse-mode alias)', () => {
 
   it('workspace tree still rolls up counts across lazily-opened members', async () => {
     seedFolder();
-    const res = await rooms.bindFolder({ folderPath: folder });
+    const res = await docStore.bindFolder({ folderPath: folder });
     expect(res.ok).toBe(true);
     if (!res.ok) return;
-    const opened = await rooms.openContextFile(res.workspaceId, 'src/util.ts');
+    const opened = await docStore.openContextFile(res.workspaceId, 'src/util.ts');
     expect(opened.ok).toBe(true);
     if (!opened.ok) return;
-    const created = await rooms.createThreadByFind(
+    const created = await docStore.createThreadByFind(
       opened.docId,
       { find: 'const y = 2' },
       { id: 'u1', name: 'T', kind: 'known', color: '#000' },
       'why 2?',
     );
     expect(created.ok).toBe(true);
-    const tree = rooms.buildWorkspaceTree(res.workspaceId);
+    const tree = docStore.buildWorkspaceTree(res.workspaceId);
     expect(tree.totalOpen).toBe(1);
   });
 });

@@ -1,6 +1,6 @@
 import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
-import { reviewIdOf } from '@feedback/core';
+import { attachmentIdOf } from '@feedback/core';
 /**
  * Content filed onto a board: a doc attached, a tracker imported, a huddle opened.
  *
@@ -40,18 +40,18 @@ export async function handleWorkspaceContent(
   const {
     taskStore,
     taskProjection,
-    rooms,
+    docStore,
     dataDir,
     j,
     safeJson,
     externalBaseUrl,
     withReviewUrl,
-    fileUnderHubWorkspace,
+    fileUnderBoardWorkspace,
     unfileFromDefault,
     workspacesOfDoc,
   } = ctx;
   const { req, pathname, authorFor, visitor } = rq;
-  // attach_doc: link an existing doc or review to a hub workspace.
+  // attach_doc: link an existing doc or review to a board workspace.
   const wsAttachMatch = pathname.match(/^\/api\/workspaces\/([^/]+)\/docs$/);
   if (wsAttachMatch && req.method === 'POST') {
     const workspaceId = decodeURIComponent(wsAttachMatch[1] ?? '');
@@ -62,7 +62,7 @@ export async function handleWorkspaceContent(
     // diff review / folder bind, attached as one unit). Only the first
     // kind canonicalizes — a review id names no room, so there is
     // nothing to resolve it to.
-    const attachRoom = rooms.get(addressed);
+    const attachRoom = docStore.get(addressed);
     const docId = attachRoom?.docId ?? addressed;
     /**
      * A member may file onto their board something they can ALREADY see.
@@ -104,7 +104,8 @@ export async function handleWorkspaceContent(
     // which is the doc LIST one id at a time. A member now gets the same
     // out-of-board refusal either way, and the miss reaches only callers who
     // could have attached the doc had it been there.
-    const exists = attachRoom !== undefined || rooms.list().some((m) => reviewIdOf(m) === docId);
+    const exists =
+      attachRoom !== undefined || docStore.list().some((m) => attachmentIdOf(m) === docId);
     if (!exists) return j(404, { error: 'doc not found', docId });
     const res = taskStore.attachDoc(workspaceId, docId);
     if (!res.ok) return j(404, res);
@@ -118,7 +119,7 @@ export async function handleWorkspaceContent(
   // hand-maintained tracker (group headings + status tables). The
   // DEFAULT is a dry-run that returns the mapping and touches nothing;
   // apply:true creates the goals + tasks and stamps the source file
-  // with a banner + hub link so the old tracker can't quietly stay a
+  // with a banner + board link so the old tracker can't quietly stay a
   // second source of truth (a stamped file refuses re-import).
   const wsImportMatch = pathname.match(/^\/api\/workspaces\/([^/]+)\/import-tasks$/);
   if (wsImportMatch && req.method === 'POST') {
@@ -177,7 +178,7 @@ export async function handleWorkspaceContent(
     // which no backlink query can see. A pending plan gate on the bound
     // doc holds the rows as drafts, same as the batch route.
     const resolved = resolve(path);
-    const bound = rooms
+    const bound = docStore
       .list()
       .find((m) => m.sourceUrl !== undefined && resolve(m.sourceUrl) === resolved);
     const res = applyImport(taskStore, workspaceId, mapping, {
@@ -192,24 +193,24 @@ export async function handleWorkspaceContent(
     // pull the banner into the live doc too — reparse right after our
     // own write, so disk (which we just wrote) wins the race with the
     // doc's debounced flush.
-    const hubUrl = `${externalBaseUrl()}/workspaces/${encodeURIComponent(workspaceId)}`;
+    const boardUrl = `${externalBaseUrl()}/workspaces/${encodeURIComponent(workspaceId)}`;
     writeFileSync(
       path,
       importBanner({
         workspaceId,
-        hubUrl,
+        boardUrl,
         taskCount: res.tasksCreated.length,
         ts: Date.now(),
       }) + markdown,
     );
-    if (bound) rooms.reparseFromDisk(bound.docId);
+    if (bound) docStore.reparseFromDisk(bound.docId);
     // Task/goal events already refreshed the projection; this covers a
     // mapping with zero new goals and zero tasks (nothing emitted).
     taskProjection.ensureWorkspace(workspaceId);
     return j(200, {
       ok: true,
       workspaceId,
-      hubUrl,
+      boardUrl,
       stamped: true,
       goalsCreated: res.goalsCreated,
       tasksCreated: res.tasksCreated,
@@ -226,7 +227,7 @@ export async function handleWorkspaceContent(
   // The Board's "Make a plan" / "Have a meeting" buttons. ONE call: a
   // workspace-tied markdown doc, titled by its kind and the clock, empty or headed
   // by the topic, filed on this board exactly as every other board doc
-  // is (so `list_docs`, the hub's docs list and the board fan-out see
+  // is (so `list_docs`, the board's docs list and the board fan-out see
   // it with no new verb), flagged `huddle`, and answered with where to
   // open it. The mic is the browser's to start; the server's part ends
   // at the doc. A member of this board reaches it too (Bryan, 2026-09-03:
@@ -276,14 +277,14 @@ export async function handleWorkspaceContent(
     const startedAt = Date.now();
     // Minted, never re-used: `createForCaller` answers an existing doc
     // for a name that already resolves, and a huddle is always new.
-    let created = rooms.createForCaller(huddleAlias(startedAt), {
+    let created = docStore.createForCaller(huddleAlias(startedAt), {
       type: 'markdown',
       title: huddleTitle(startedAt, parsedKind.kind),
       huddle: true,
       huddleKind: parsedKind.kind,
     });
     if (created.ok && !created.minted) {
-      created = rooms.createForCaller(huddleAlias(startedAt), {
+      created = docStore.createForCaller(huddleAlias(startedAt), {
         type: 'markdown',
         title: huddleTitle(startedAt, parsedKind.kind),
         huddle: true,
@@ -295,7 +296,7 @@ export async function handleWorkspaceContent(
     }
     const room = created.room;
     const docId = room.docId;
-    const hubWorkspaceId = fileUnderHubWorkspace(docId, workspaceId);
+    const boardWorkspaceId = fileUnderBoardWorkspace(docId, workspaceId);
     // The file first, then the bind — `attachFile` seeds the room from
     // the file when the room is empty, so the topic heading lands
     // through the same path a bound project file's content does, and
@@ -309,7 +310,7 @@ export async function handleWorkspaceContent(
       console.error(`[huddle] could not write ${file}:`, err);
       return j(500, { error: 'huddle-file-failed' });
     }
-    const attached = await rooms.attachFileAsync(docId, file);
+    const attached = await docStore.attachFileAsync(docId, file);
     if (!attached.ok) return j(409, { error: 'attach_failed', attached });
     if (typeof huddleTaskId === 'string') {
       const linked = taskStore.linkRef(huddleTaskId, { kind: 'doc', docId });
@@ -317,7 +318,7 @@ export async function handleWorkspaceContent(
       // link-refs route does.
       if (linked.ok) taskProjection.ensureWorkspace(linked.task.workspaceId);
     }
-    const decorated = withReviewUrl(room.meta, hubWorkspaceId);
+    const decorated = withReviewUrl(room.meta, boardWorkspaceId);
     /**
      * The reply's doc metadata, as this caller may see it.
      *
@@ -341,9 +342,9 @@ export async function handleWorkspaceContent(
       ...(typeof huddleTaskId === 'string' ? { taskId: huddleTaskId } : {}),
       // Where the Board opens it — the SPA doc route under THIS board,
       // relative so the client navigates within its own origin.
-      url: `/workspaces/${encodeURIComponent(hubWorkspaceId)}/docs/${encodeURIComponent(docId)}`,
+      url: `/workspaces/${encodeURIComponent(boardWorkspaceId)}/docs/${encodeURIComponent(docId)}`,
       ...(reviewUrl !== undefined ? { reviewUrl } : {}),
-      hubWorkspaceId,
+      hubWorkspaceId: boardWorkspaceId,
       meta,
       ...(parsedTopic.topic !== undefined ? { topic: parsedTopic.topic } : {}),
     });

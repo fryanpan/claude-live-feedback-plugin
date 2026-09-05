@@ -48,7 +48,7 @@
   grid-template-columns: minmax(0, 1fr) var(--threads-w, 360px);
   overflow: hidden;
 }
-/* Review-set sidebar adds a left column — but only once the reviewer opens
+/* Attachment-set sidebar adds a left column — but only once the reviewer opens
    it. Closed is the default and needs no rule of its own: the grid falls
    through to #main's own two-column definition above, which IS the closed
    layout. That fall-through also fixes something the width-gated rule this
@@ -85,7 +85,7 @@
   }
 }
 
-/* ================= REVIEW-SET SIDEBAR + DROPDOWN ================= */
+/* ================= ATTACHMENT-SET SIDEBAR + DROPDOWN ================= */
 
 #set-pane {
   display: none;
@@ -3275,7 +3275,7 @@ body.redline-mode #toggle-suggest-mode {
 /* ---------------------------------------------------------------------------
    Markup margin — Word's balloon column for deletions AND open comment
    threads. Mounted on the editable redline surface (deletions + comments)
-   AND on plain markdown review docs (comments only, via mountMarkupMargin
+   AND on plain markdown attachments (comments only, via mountMarkupMargin
    from app.ts) — NOT scoped to body.redline-mode, since the plain-doc mount
    never sets that class.
 

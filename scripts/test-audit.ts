@@ -215,7 +215,7 @@ function moduleReadsSource(lines: string[]): boolean {
  * An import specifier is not a read.
  *
  * `packages/server/test/wait-for.ts` polls files at runtime paths and imports
- * `../src/room-timings.ts` for the cadence constants. Counting that specifier
+ * `../src/doc-store-timings.ts` for the cadence constants. Counting that specifier
  * as a source path made every one of its thirty-two importers a source-shape
  * test — a bigger false positive than the blind spot this check was fixing.
  */
@@ -230,7 +230,7 @@ function stripImports(text: string): string {
  *
  * `annotated` is the load-bearing half. An export with no annotation is not
  * evidence that the module returns no text — it is the absence of evidence,
- * and `export const HUB_TEXT = TEXT['hub.css'];` appended to a harness is a
+ * and `export const BOARD_TEXT = TEXT['board.css'];` appended to a harness is a
  * one-line hole that inference would happily fill with `string` while a
  * regex sees nothing. So an unannotated export lapses the exemption on its
  * own, and `export {`, `export *`, `export default` and `export class` all
@@ -238,7 +238,7 @@ function stripImports(text: string): string {
  * comes out.
  *
  * Exported types and interfaces are skipped. `export type SheetName =
- * 'hub.css' | …` is a string union that hands no test any stylesheet text.
+ * 'board.css' | …` is a string union that hands no test any stylesheet text.
  */
 type ExportedValue = { annotated: boolean; type: string };
 

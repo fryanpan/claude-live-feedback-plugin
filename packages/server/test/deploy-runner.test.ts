@@ -361,7 +361,7 @@ describe('runDeploy — the refusals', () => {
 
   it('deploys over a modified file the pull does not touch', async () => {
     // The positive control for the case above, on the same shape: a bound
-    // review doc under docs/ is modified for hours at a time in the deploy
+    // attachment under docs/ is modified for hours at a time in the deploy
     // source, and blocking on it would make the feature unusable.
     const git = fakeGit({ ...behindScript(), [STATUS]: { ok: true, stdout: ' M docs/plan.md\0' } });
     const res = await runDeploy(deps({ git: git.run, readSource: movingSource('a', 'b', git) }));
@@ -570,7 +570,7 @@ describe('runDeploy — a checkout at the tip serving an older client', () => {
   it('does not refuse over a bound document — no file is rewritten', async () => {
     // The busy refusal exists because a PULL overwrites files under an
     // editor. A restart writes nothing, and `handle.stop()` flushes every
-    // pending write-back on the way down (rooms.ts `flush`), so refusing
+    // pending write-back on the way down (doc-store.ts `flush`), so refusing
     // here would block a deploy over a hazard that is not present.
     const git = fakeGit(currentScript());
     const w = fakeWait();

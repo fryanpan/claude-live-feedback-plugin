@@ -4,7 +4,7 @@
  * a Cmd/Ctrl+Click opens them instead. This helper answers only the "what URL,
  * if any, is safe to open" half so it can be unit-tested without a DOM.
  *
- * Permissive by design — a review doc's own links (relative paths, anchors,
+ * Permissive by design — an attachment's own links (relative paths, anchors,
  * mailto/tel) should all open — EXCEPT script-bearing schemes, which must
  * never be handed to window.open.
  */
@@ -41,7 +41,7 @@ export function safeLinkHref(href: string | null | undefined): string | null {
  * inside the app instead of 404ing on a raw relative URL.
  *
  * Member docIds are `${workspaceId}:${relPath.replaceAll('/', '~')}` (see
- * rooms.ts) — resolution is pure path math against the current doc's
+ * doc-store.ts) — resolution is pure path math against the current doc's
  * repo-relative path. Returns null for anything that isn't an in-workspace
  * relative path (external URLs, absolute paths, anchor-only links, paths
  * escaping the workspace root, or paths containing the `~` separator, which

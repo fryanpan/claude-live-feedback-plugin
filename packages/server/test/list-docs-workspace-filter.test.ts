@@ -4,7 +4,7 @@
  * Before this route learned the param, `list_docs` accepted a workspaceId
  * from callers and silently dropped it — a board-scoped question answered
  * with every doc on the server, and nothing said so. The filter matches a
- * doc either by its hub-board membership (the board `attach_doc` /
+ * doc either by its board membership (the board `attach_doc` /
  * `hubWorkspaceId` files it under) or by its `meta.workspaceId` grouping tag
  * (folder binds and diff reviews), because callers hold both kinds of id and
  * both are called "workspace".
@@ -107,7 +107,7 @@ describe('GET /api/docs honours its workspaceId filter', () => {
 
   it('matches the meta.workspaceId grouping tag too, not just board membership', async () => {
     // Folder binds and diff reviews stamp their members with a GROUPING
-    // workspaceId in meta — a different id namespace from hub boards, held by
+    // workspaceId in meta — a different id namespace from boards, held by
     // real callers asking the same scoped question.
     const r = await post('/api/docs', {
       docId: 'doc-grouped',
@@ -129,6 +129,6 @@ describe('GET /api/docs honours its workspaceId filter', () => {
   it('an unknown workspaceId returns an empty list, not everything', async () => {
     // The old behaviour was precisely "unmatchable filter → whole server", so
     // this is the regression the ticket is about, stated directly.
-    expect(await listDocs('?workspaceId=w-does-not-exist')).toEqual([]);
+    expect(await listDocs('?workspaceId=w-missing')).toEqual([]);
   });
 });

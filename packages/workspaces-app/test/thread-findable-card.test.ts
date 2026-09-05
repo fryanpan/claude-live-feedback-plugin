@@ -22,7 +22,14 @@ function thread(comments: Comment[], over: Partial<Thread> = {}): Thread {
   return {
     id: 't1',
     status: 'open',
-    anchor: { kind: 'element', fingerprint: undefined as never, snippet: { text: 'the sentence' } },
+    // A real sentence, not two words: a snippet under
+    // TOPIC_MIN_SNIPPET_WORDS never reaches the topic line, so a short
+    // fixture would prove the fallback instead of the anchor path.
+    anchor: {
+      kind: 'element',
+      fingerprint: undefined as never,
+      snippet: { text: 'the sentence it hangs off' },
+    },
     commentCount: comments.length,
     lastActivity: comments[comments.length - 1]?.ts ?? ts,
     createdBy: alice,
@@ -115,7 +122,7 @@ describe('the folded line of a declared thread', () => {
 
   it('a plain comment still leads with the anchored sentence', () => {
     const { card } = render(thread([comment('Looks fine.')]));
-    expect(card.querySelector('.thread-topic')?.textContent).toBe('the sentence');
+    expect(card.querySelector('.thread-topic')?.textContent).toBe('the sentence it hangs off');
   });
 });
 

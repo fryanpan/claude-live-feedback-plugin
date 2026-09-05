@@ -349,7 +349,7 @@ describe('a comment posted while the subscriber is disconnected is delivered aft
   async function board(name: string, agentId: string): Promise<string> {
     const w = await post('/api/workspaces', { name, goal: 'Ship it.' });
     const { workspace } = (await w.json()) as { workspace: { id: string } };
-    const att = await post(`/api/workspaces/${workspace.id}/attachments`, {
+    const att = await post(`/workspaces/${workspace.id}/agents`, {
       agentId,
       runtime: 'claude-code-local',
     });
@@ -390,7 +390,7 @@ describe('a comment posted while the subscriber is disconnected is delivered aft
 
     // Reconnect: the agent's MCP child re-opens the workspace stream…
     const stream = await get(
-      `/events/workspace/${encodeURIComponent(workspaceId)}?agentId=agent-owner`,
+      `/workspaces/${encodeURIComponent(workspaceId)}/events:stream?agentId=agent-owner`,
     );
     expect(stream.status).toBe(200);
     const heard = listenFrames(stream);
@@ -399,7 +399,7 @@ describe('a comment posted while the subscriber is disconnected is delivered aft
 
     // …and the next heartbeat hands the parked comment over as an addressed
     // frame carrying the row id to acknowledge.
-    const beat = await post(`/api/workspaces/${workspaceId}/attachments/agent-owner/heartbeat`, {});
+    const beat = await post(`/workspaces/${workspaceId}/agents/agent-owner/heartbeat`, {});
     expect(beat.status).toBe(200);
     await settle();
 
@@ -408,7 +408,7 @@ describe('a comment posted while the subscriber is disconnected is delivered aft
     expect(delivered?.event).toBe('thread.created');
     // The frame is the ORIGINAL broadcast payload replayed — and a
     // thread.created carries its opening comment inside the thread, not on
-    // the payload's `comment` field (rooms.ts fireEvent call sites).
+    // the payload's `comment` field (doc-store.ts fireEvent call sites).
     const threadComments = (delivered?.data.thread as { comments?: Array<{ text?: string }> })
       ?.comments;
     expect(threadComments?.[threadComments.length - 1]?.text).toBe('This contradicts the goal.');
@@ -426,13 +426,13 @@ describe('a comment posted while the subscriber is disconnected is delivered aft
     await makeDoc('live-doc', workspaceId);
 
     const stream = await get(
-      `/events/workspace/${encodeURIComponent(workspaceId)}?agentId=agent-live`,
+      `/workspaces/${encodeURIComponent(workspaceId)}/events:stream?agentId=agent-live`,
     );
     const heard = listenFrames(stream);
     stops.push(heard.stop);
     // A browser tab on the same channel — it must never see delivery
     // bookkeeping addressed to an agent.
-    const tab = await get(`/events/workspace/${encodeURIComponent(workspaceId)}`);
+    const tab = await get(`/workspaces/${encodeURIComponent(workspaceId)}/events:stream`);
     const tabHeard = listenFrames(tab);
     stops.push(tabHeard.stop);
     await settle(150);
@@ -492,34 +492,25 @@ describe('a comment posted while the subscriber is disconnected is delivered aft
 
     // Heartbeat with NO stream open: the hand-over happens, the send finds
     // nobody, and the emitted mark is rolled back rather than left burning.
-    const first = await post(
-      `/api/workspaces/${workspaceId}/attachments/agent-starve/heartbeat`,
-      {},
-    );
+    const first = await post(`/workspaces/${workspaceId}/agents/agent-starve/heartbeat`, {});
     expect(first.status).toBe(200);
     expect(handle.tasks.listQueuedComments(workspaceId)[0]?.emittedAt).toBeUndefined();
 
     // …so the very next heartbeat is a fresh attempt, not a grace-window
     // wait (the server's real grace is 90s — far longer than this test).
-    const second = await post(
-      `/api/workspaces/${workspaceId}/attachments/agent-starve/heartbeat`,
-      {},
-    );
+    const second = await post(`/workspaces/${workspaceId}/agents/agent-starve/heartbeat`, {});
     const secondBody = (await second.json()) as { queuedComments?: Array<{ id: string }> };
     expect(secondBody.queuedComments?.map((q) => q.id)).toEqual([rowId]);
 
     // POSITIVE CONTROL: once the stream is up, the same heartbeat path
     // delivers the frame and the emitted mark STAYS.
     const stream = await get(
-      `/events/workspace/${encodeURIComponent(workspaceId)}?agentId=agent-starve`,
+      `/workspaces/${encodeURIComponent(workspaceId)}/events:stream?agentId=agent-starve`,
     );
     const heard = listenFrames(stream);
     stops.push(heard.stop);
     await settle(150);
-    const third = await post(
-      `/api/workspaces/${workspaceId}/attachments/agent-starve/heartbeat`,
-      {},
-    );
+    const third = await post(`/workspaces/${workspaceId}/agents/agent-starve/heartbeat`, {});
     expect(third.status).toBe(200);
     await settle();
     expect(heard.frames.find((f) => f.data.commentQueueId === rowId)).toBeDefined();
@@ -532,7 +523,7 @@ describe('a comment posted while the subscriber is disconnected is delivered aft
 
     // Open the stream for real, then sever the CONNECTION — an aborted
     // fetch is what a dying process or dropped socket looks like, and it
-    // fires the server stream's cancel() → hub removal within ~1ms
+    // fires the server stream's cancel() → board removal within ~1ms
     // (measured; a bare reader.cancel() does NOT sever in Bun, it leaves
     // the connection open and the sink live). The headline test above never
     // opens a stream before commenting, so a regression where removal stops
@@ -540,7 +531,7 @@ describe('a comment posted while the subscriber is disconnected is delivered aft
     // still counts) would sail through it.
     const ac = new AbortController();
     const stream = await fetch(
-      `${base}/events/workspace/${encodeURIComponent(workspaceId)}?agentId=agent-sever`,
+      `${base}/workspaces/${encodeURIComponent(workspaceId)}/events:stream?agentId=agent-sever`,
       { headers: { host: `localhost:${handle.port}` }, signal: ac.signal },
     );
     expect(stream.status).toBe(200);
@@ -562,14 +553,14 @@ describe('a comment posted while the subscriber is disconnected is delivered aft
 
     // Reconnect + heartbeat: the full recovery, from a REAL severed stream.
     const back = await get(
-      `/events/workspace/${encodeURIComponent(workspaceId)}?agentId=agent-sever`,
+      `/workspaces/${encodeURIComponent(workspaceId)}/events:stream?agentId=agent-sever`,
     );
     const rejoined = listenFrames(back);
     stops.push(rejoined.stop);
     await settle(150);
-    expect(
-      (await post(`/api/workspaces/${workspaceId}/attachments/agent-sever/heartbeat`, {})).status,
-    ).toBe(200);
+    expect((await post(`/workspaces/${workspaceId}/agents/agent-sever/heartbeat`, {})).status).toBe(
+      200,
+    );
     await settle();
     expect(rejoined.frames.find((f) => f.data.commentQueueId === rowId)).toBeDefined();
     const acked = await post(`/api/workspaces/${workspaceId}/comment-queue/${rowId}/ack`, {});
@@ -584,7 +575,7 @@ describe('a comment posted while the subscriber is disconnected is delivered aft
     // attaches first" defect, deliberately not copied here — this is the
     // addressing-level negative control (the drain-level one is up in the
     // store suite).
-    const att = await post(`/api/workspaces/${workspaceId}/attachments`, {
+    const att = await post(`/workspaces/${workspaceId}/agents`, {
       agentId: 'agent-bystander',
       runtime: 'claude-code-local',
     });

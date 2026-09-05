@@ -11,7 +11,7 @@
  * This module computes the rows: the two thread-shaped kinds, and — since a
  * ticket HAS review items rather than IS one — the rows hanging on tickets.
  * `reviewItemRows` is the whole queue in one order. The client's `reviewQueue`
- * (hub-review-model) still owns the PRIORITY rule that ranks a row against the board's
+ * (board-review-model) still owns the PRIORITY rule that ranks a row against the board's
  * own task rows, which is what keeps that judgement in one pure, testable place
  * instead of split across the wire.
  *

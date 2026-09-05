@@ -12,11 +12,11 @@ import { mountReviewChrome } from '../review-chrome.ts';
 import type { ReviewSurface } from '../review-surface.ts';
 import { navigateTo, remountCurrent } from '../router.ts';
 import { asBackgroundWrite, lockDocToReading } from '../signin/write-gate.ts';
+import { mountSuggestionsSummary } from '../suggestions/suggestions-summary.ts';
 import { getMarkdownMount } from '../surface-registry.ts';
 import { createLiveRedlineEditor } from './live-redline-editor.ts';
 import { type MarkupMarginHandle, mountMarkupMargin } from './markup-margin.ts';
 import { createRedlineEditor } from './redline-editor.ts';
-import { mountSuggestionsSummary } from './suggestions-summary.ts';
 
 /**
  * Mount the Word-style redline surface for a markdown file in a diff review.

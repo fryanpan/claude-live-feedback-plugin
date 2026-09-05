@@ -25,8 +25,8 @@ import {
   reviewWithdrawn,
   threadSummary,
 } from '@feedback/core';
+import { askedMetaLine, decidedMetaLine } from '../board/board-review-model.ts';
 import { renderCommentMarkdown, renderCommentMarkdownInline } from '../comment-markdown.ts';
-import { askedMetaLine, decidedMetaLine } from '../hub/hub-review-model.ts';
 import { threadDecision } from '../long-thread.ts';
 import { attachMarkdownComposer } from '../md-composer.ts';
 import { threadGlyph, threadKind } from '../thread-kind.ts';
@@ -560,10 +560,10 @@ function compactAnswerField(
 
 /**
  * The FULL review-item interface, in the thread that carries it: the same
- * one-card anatomy as the hub's walkthrough and task panel — head row (kind
+ * one-card anatomy as the board's walkthrough and task panel — head row (kind
  * badge, headline, asked-by meta), one markdown body — then the ways to
  * answer, or the answered record once somebody has. Thread-scoped class
- * names, hub anatomy: the vocabulary must read as one component wherever an
+ * names, board anatomy: the vocabulary must read as one component wherever an
  * item is met.
  */
 function itemCard(
@@ -582,8 +582,8 @@ function itemCard(
   // restates in a word what the reader can already press, and the modal was
   // the one place a person met both at once.
   //
-  // Doc surface only. The hub board renders review items through its own
-  // `src/hub/thread-card.tsx`, which this file shares no code with, so its
+  // Doc surface only. The board renders review items through its own
+  // `src/board/thread-card.tsx`, which this file shares no code with, so its
   // cards are untouched by this change.
   const headline = document.createElement('p');
   headline.className = 'thread-item-headline';
@@ -594,7 +594,7 @@ function itemCard(
   const meta = document.createElement('p');
   meta.className = 'thread-item-meta';
   // A declaration IS an ask, so this always reads "Asked" — same judgment
-  // the hub's `askedMeta` records for declared items. The clock is the
+  // the board's `askedMeta` records for declared items. The clock is the
   // declaring comment's, which is when the question was put.
   meta.textContent = askedMetaLine(authorLabel(c.author), true, c.ts, Date.now());
   head.append(meta);

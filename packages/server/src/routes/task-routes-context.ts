@@ -1,10 +1,10 @@
 import type { DocMeta, TaskReviewItem, User } from '@feedback/core';
 import type { AgentNoteRing } from '../agent-notes.ts';
 import type { DispatchRegistry } from '../dispatch-registry.ts';
+import type { DocStore } from '../doc-store.ts';
 import type { ShareTarget } from '../middleware/host-guard.ts';
 import type { ReadyWorkNudger } from '../ready-nudge.ts';
 import type { ReviewGate } from '../review-gate-types.ts';
-import type { Rooms } from '../rooms.ts';
 import type { TaskProjection } from '../task-projection.ts';
 import type { ParallelismCapChange, Task, TaskStore } from '../tasks.ts';
 
@@ -34,14 +34,14 @@ export interface ParallelismCapView {
 
 /** The long-lived collaborators, built once per server. */
 export interface TaskRoutesContext {
-  /** The hub task store — workspaces, tasks, review items, the gate. */
+  /** The board task store — workspaces, tasks, review items, the gate. */
   taskStore: TaskStore;
   /** The ydoc projection of the store; refreshed by hand after the writes
    *  that emit no store event (links, goal placement, archive-in-place). */
   taskProjection: TaskProjection;
-  /** Doc rooms — read for a batch's source doc and written when an ask-back
+  /** Doc store — read for a batch's source doc and written when an ask-back
    *  turns a question into a thread. */
-  rooms: Rooms;
+  docStore: DocStore;
   /** Open builder dispatches and their worktree watchers. */
   dispatches: DispatchRegistry;
   /** The per-agent ring of turn / denial / status notes. */
@@ -71,7 +71,7 @@ export interface TaskRoutesContext {
     author: User,
     visitor: boolean,
   ) => Promise<Response>;
-  /** doc id → the hub boards holding it, built once per request that needs it. */
+  /** doc id → the boards holding it, built once per request that needs it. */
   boardIndexForListing: () => Map<string, string[]>;
   /**
    * Every workspace an id belongs to — `shareWorkspacesOf`, the same resolver
@@ -88,8 +88,8 @@ export interface TaskRoutesContext {
   holdersClause: (
     holders: ReadonlyArray<{ taskId: string; title?: string; agentName?: string }>,
   ) => string;
-  /** Which hub boards hold a doc, answered off a prebuilt index. */
-  hubBoardsForDocIndexed: (index: Map<string, string[]>, meta: DocMeta) => Set<string>;
+  /** Which boards hold a doc, answered off a prebuilt index. */
+  boardsForDocIndexed: (index: Map<string, string[]>, meta: DocMeta) => Set<string>;
   /** Put a filed or revised review item through the quality gate. */
   judgeReviewItem: (
     task: Task,

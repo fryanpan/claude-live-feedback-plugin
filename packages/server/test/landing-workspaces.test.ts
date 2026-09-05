@@ -15,7 +15,7 @@ import { type ServerHandle, createServer } from '../src/server.ts';
  * does: that the route feeds the model REAL activity signals (a task
  * mutation and a task-thread comment both move a board up the list), that a
  * board's link is the one the rest of the product navigates to, and that
- * review docs stay reachable as project links without their contents
+ * attachments stay reachable as project links without their contents
  * leaking back onto `/`. Every absence asserted here has a presence
  * asserted beside it in the same response.
  */
@@ -154,7 +154,7 @@ describe('the landing page is a list of active workspaces', () => {
   });
 });
 
-describe('review docs stay reachable without leaking back onto /', () => {
+describe('attachments stay reachable without leaking back onto /', () => {
   it('renders one project link, not the docs inside it', async () => {
     const file = join(srcDir, 'NOTES-UNIQUE.md');
     writeFileSync(file, '# Notes\n\nthe unique line\n');
@@ -173,7 +173,7 @@ describe('review docs stay reachable without leaking back onto /', () => {
     );
     const html = await landing();
     // Present: the project's label, linking to its on-demand page.
-    expect(html).toContain('Review docs by project');
+    expect(html).toContain('Attachments by project');
     expect(html).toContain(`/projects/${encodeURIComponent('/proj/gamma')}`);
     expect(html).toContain('gamma');
     // Absent: the doc itself — no file name, no review link. The project

@@ -13,7 +13,7 @@ import { readMcpSource } from './harness/mcp-source.ts';
 /**
  * The two wake events exist to make the board the scheduler instead of the
  * human. That only works if the wake SAYS something: rendered through the
- * hub renderer's `default:` case, both arrived as `[workspace.ready_idle]
+ * board renderer's `default:` case, both arrived as `[workspace.ready_idle]
  * task t-abc123` — a slug the lead has to go look up before it can know
  * whether the interruption was worth the turn. A wake that costs a turn and
  * carries no subject is the training signal the nudger's arming rules were

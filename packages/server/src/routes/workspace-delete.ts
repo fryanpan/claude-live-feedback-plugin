@@ -23,7 +23,7 @@ export async function handleWorkspaceDelete(
     // what every shipped plugin bundle and skill has always called, from
     // sessions nobody can restart. New callers use DELETE
     // /api/reviews/<setId> above, which cannot touch a board at all.
-    // Ask the task store first: `rooms.deleteWorkspace` enumerates DOC
+    // Ask the task store first: `docStore.deleteWorkspace` enumerates DOC
     // members, so a board — which has none — always came back not-found,
     // and a board created for a five-minute experiment was permanent.
     if (taskStore.getWorkspace(workspaceId)) {
@@ -54,16 +54,16 @@ export async function handleWorkspaceDelete(
         return j(500, { ok: false, error: 'rooms-cleanup-failed' });
       }
       // force: the open-task guard was applied above.
-      const hub = taskStore.deleteWorkspace(workspaceId, { force: true });
-      if (!hub.ok) {
+      const board = taskStore.deleteWorkspace(workspaceId, { force: true });
+      if (!board.ok) {
         taskProjection.unstageWorkspaceFiles(workspaceId, taskIds);
         // 'persist-failed' is a 500, not a 404: the board is still
         // there, and the caller must not read the refusal as "already
         // gone" and stop asking.
-        return j(hub.error === 'persist-failed' ? 500 : 404, hub);
+        return j(board.error === 'persist-failed' ? 500 : 404, board);
       }
-      taskProjection.dropWorkspaceRooms(workspaceId, hub.taskIds);
-      return j(200, { ok: true, deletedTasks: hub.deletedTasks });
+      taskProjection.dropWorkspaceDocs(workspaceId, board.taskIds);
+      return j(200, { ok: true, deletedTasks: board.deletedTasks });
     }
     return deleteReview(workspaceId, force, url.searchParams.get('purge') === 'true');
   }

@@ -153,9 +153,9 @@ export {
   retagSpeakerInNotes,
 } from './notes-section-write.ts';
 
-/** The slice of `Rooms` the notes sink needs — narrow so the tests hand in a
+/** The slice of `DocStore` the notes sink needs — narrow so the tests hand in a
  *  map instead of a server. */
-export interface NotesDocRooms {
+export interface NotesDocStore {
   get(
     docId: string,
   ): { ydoc: Y.Doc; meta: { type: DocType; title?: string; setId?: string } } | undefined;
@@ -321,12 +321,12 @@ function noteLegacyKept(docId: string): void {
  * a flat doc is not a notepad.
  */
 export function applyNotesUpdate(
-  rooms: NotesDocRooms,
+  docStore: NotesDocStore,
   update: NotesUpdate,
   ledger: NotesLedger,
   opts: { dataDir?: string } = {},
 ): boolean {
-  const room = rooms.get(update.docId);
+  const room = docStore.get(update.docId);
   if (!room) return false;
   if (contentKind(room.meta.type) !== 'prose') return false;
   // NO TRANSCRIPT IN THIS DOC (owner, 2026-09-03). A tick used to append the
@@ -341,7 +341,7 @@ export function applyNotesUpdate(
   // and why it removes only the writer's exact fingerprint and never a
   // transcript a person put there themselves.
   const legacy = dropLegacyTranscriptSection(room.ydoc, {
-    boundPath: rooms.boundPathOf?.(update.docId),
+    boundPath: docStore.boundPathOf?.(update.docId),
     dataDir: opts.dataDir,
   });
   if (legacy === 'kept') noteLegacyKept(update.docId);
@@ -353,11 +353,11 @@ export function applyNotesUpdate(
 
 /** The notes section as it currently reads, for the composer's `previous`. */
 export function readNotesState(
-  rooms: NotesDocRooms,
+  docStore: NotesDocStore,
   ids: { docId: string; meetingId: string },
   ledger: NotesLedger,
 ): NotesSectionState | null {
-  const room = rooms.get(ids.docId);
+  const room = docStore.get(ids.docId);
   if (!room) return null;
   if (contentKind(room.meta.type) !== 'prose') return null;
   return readNotesSection(room.ydoc, MEETING_NOTES_HEADINGS, ledger.forDoc(ids.docId));
@@ -380,11 +380,11 @@ export function readNotesState(
  * twice.
  */
 export function applyNotesRelabel(
-  rooms: NotesDocRooms,
+  docStore: NotesDocStore,
   relabel: NotesRelabel,
   ledger: NotesLedger,
 ): number {
-  const room = rooms.get(relabel.docId);
+  const room = docStore.get(relabel.docId);
   if (!room) return 0;
   if (contentKind(room.meta.type) !== 'prose') return 0;
   // Through the reclaim wrapper, not straight at the doc: the rename edits
@@ -429,11 +429,11 @@ export function applyNotesRelabel(
  * person had made theirs stays theirs.
  */
 export function applyNotesCorrection(
-  rooms: NotesDocRooms,
+  docStore: NotesDocStore,
   correction: NotesCorrection,
   ledger: NotesLedger,
 ): NotesCorrectionResult {
-  const room = rooms.get(correction.docId);
+  const room = docStore.get(correction.docId);
   if (!room) return 'none';
   if (contentKind(room.meta.type) !== 'prose') return 'none';
   const ownership = ledger.forDoc(correction.docId);
@@ -452,11 +452,11 @@ export function applyNotesCorrection(
  * other side still recognising them.
  */
 export function applyNotesReattribution(
-  rooms: NotesDocRooms,
+  docStore: NotesDocStore,
   reattribution: NotesReattribution,
   ledger: NotesLedger,
 ): number {
-  const room = rooms.get(reattribution.docId);
+  const room = docStore.get(reattribution.docId);
   if (!room) return 0;
   if (contentKind(room.meta.type) !== 'prose') return 0;
   const ownership = ledger.forDoc(reattribution.docId);
@@ -480,13 +480,13 @@ export function applyNotesReattribution(
  * resolver reads the doc's title and its board's open task titles at meeting
  * start — the "informed, not generic" half of the notes agent.
  *
- * `rooms` / `tasks` are thunks because `createServer` builds the relay before
+ * `docStore` / `tasks` are thunks because `createServer` builds the relay before
  * either exists; a meeting can only start once both do.
  */
 export function withServerNotesSinks(
   options: MeetingNotesOptions,
   deps: {
-    rooms: () => NotesDocRooms;
+    docStore: () => NotesDocStore;
     tasks: () => NotesContextTasks;
     /** The store the capture pipeline writes through. A thunk like `tasks`,
      *  and only read when `taskExtractor` is present. */
@@ -500,7 +500,7 @@ export function withServerNotesSinks(
     onTaskReady?: (wake: { workspaceId: string; taskId: string; title: string }) => void;
     /**
      * The board a doc's meeting files onto. A huddle doc has no `setId` —
-     * it is HELD by a hub workspace, not owned by one — so scoping capture
+     * it is HELD by a board workspace, not owned by one — so scoping capture
      * on `meta.setId` alone silently returned nothing for exactly the docs
      * meetings run on. Absent, `meta.setId` is the whole answer.
      */
@@ -535,7 +535,7 @@ export function withServerNotesSinks(
     deps.ledger ??
     createNotesLedger(deps.dataDir ? createNotesLedgerStore(deps.dataDir) : undefined);
   const boardOf = (docId: string): string | undefined => {
-    const room = deps.rooms().get(docId);
+    const room = deps.docStore().get(docId);
     return room?.meta.setId ?? deps.boardOf?.(docId);
   };
   // Review asks already filed this meeting, by normalized question. The
@@ -562,7 +562,7 @@ export function withServerNotesSinks(
       ? async ({ docId, turns, priorTurns }) => {
           // The doc's board is the capture's scope: a meeting on a doc no
           // workspace owns or holds has no board to find or create on.
-          const room = deps.rooms().get(docId);
+          const room = deps.docStore().get(docId);
           const workspaceId = boardOf(docId);
           if (!room || !workspaceId) return { tasks: [], docs: [] };
           return runTaskCapture(
@@ -572,7 +572,7 @@ export function withServerNotesSinks(
               ...(deps.lookup ? { lookup: deps.lookup } : {}),
               ...(deps.onTaskReady ? { onTaskReady: deps.onTaskReady } : {}),
               onResearchFiled: (filed) => {
-                const target = deps.rooms().get(filed.docId);
+                const target = deps.docStore().get(filed.docId);
                 if (target) {
                   const wrote = appendResearchPlaceholder(target.ydoc, filed.title, filed.url);
                   if (!wrote.ok) {
@@ -655,7 +655,7 @@ export function withServerNotesSinks(
     resolveContext: (docId: string): NotesProjectContext | undefined => {
       const gathered: NotesProjectContext = {};
       try {
-        const room = deps.rooms().get(docId);
+        const room = deps.docStore().get(docId);
         if (room?.meta.title) gathered.docTitle = room.meta.title;
         const workspaceId = boardOf(docId);
         if (workspaceId) {
@@ -732,7 +732,7 @@ export function withServerNotesSinks(
     },
     readSection: (ids: { docId: string; meetingId: string }): NotesSectionState | null => {
       try {
-        return readNotesState(deps.rooms(), ids, ledger);
+        return readNotesState(deps.docStore(), ids, ledger);
       } catch (err) {
         // A section we cannot read costs the compose its awareness of the
         // person's writing, never its notes.
@@ -743,7 +743,7 @@ export function withServerNotesSinks(
     onNotes: (update: NotesUpdate): void => {
       try {
         if (
-          !applyNotesUpdate(deps.rooms(), update, ledger, {
+          !applyNotesUpdate(deps.docStore(), update, ledger, {
             ...(deps.dataDir ? { dataDir: deps.dataDir } : {}),
           })
         ) {
@@ -758,7 +758,7 @@ export function withServerNotesSinks(
     },
     onRelabel: (relabel: NotesRelabel): void => {
       try {
-        applyNotesRelabel(deps.rooms(), relabel, ledger);
+        applyNotesRelabel(deps.docStore(), relabel, ledger);
       } catch (err) {
         // A rename that cannot reach the doc leaves a stale label, which is
         // a blemish; letting it reach the compose chain as a rejection would
@@ -769,7 +769,7 @@ export function withServerNotesSinks(
     },
     onCorrection: (correction: NotesCorrection): NotesCorrectionResult => {
       try {
-        const result = applyNotesCorrection(deps.rooms(), correction, ledger);
+        const result = applyNotesCorrection(deps.docStore(), correction, ledger);
         options.onCorrection?.(correction);
         return result;
       } catch (err) {
@@ -794,7 +794,7 @@ export function withServerNotesSinks(
     },
     onReattribute: (reattribution: NotesReattribution): void => {
       try {
-        applyNotesReattribution(deps.rooms(), reattribution, ledger);
+        applyNotesReattribution(deps.docStore(), reattribution, ledger);
       } catch (err) {
         // Same containment as the relabel above: an attribution left stale
         // is a blemish, and a rejection reaching the compose chain would

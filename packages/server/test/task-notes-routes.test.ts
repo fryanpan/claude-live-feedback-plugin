@@ -14,7 +14,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { TASK_NOTES_READ_CAP } from '../src/agent-notes.ts';
 import { type ServerHandle, createServer } from '../src/server.ts';
-import { workspaceRoomId } from '../src/task-projection.ts';
+import { workspaceDocId } from '../src/task-projection.ts';
 
 const PERSON = { id: 'known-sam', name: 'Sam Reviewer', kind: 'person' };
 const AGENT = { id: 'agent-beacon-bot', name: 'Beacon Bot', kind: 'agent' };
@@ -72,7 +72,7 @@ describe('task status notes route', () => {
   }
 
   function projected(workspaceId: string, taskId: string): ProjectedTask {
-    const room = handle.rooms.get(workspaceRoomId(workspaceId));
+    const room = handle.docStore.get(workspaceDocId(workspaceId));
     if (!room) throw new Error('ws room was not created');
     const row = room.ydoc.getMap('tasks').get(taskId) as ProjectedTask | undefined;
     if (!row) throw new Error('task was not projected');
@@ -149,7 +149,7 @@ describe('task status notes route', () => {
     const wsId = await board();
     const taskId = await todoRow(wsId, 'Index the archive');
     await jj(
-      await post(`/api/workspaces/${wsId}/attachments`, {
+      await post(`/workspaces/${wsId}/agents`, {
         agentId: AGENT.id,
         runtime: 'claude-code-local',
       }),

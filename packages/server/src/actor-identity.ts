@@ -44,7 +44,7 @@ export type ActorKind = 'person' | 'agent';
  *  - Every agent signal is checked BEFORE `kind: 'person'`, so contradictory
  *    input resolves to `agent`. That direction is deliberate: an agent filed
  *    as a person launders the audit log AND trips the reply-reopen rule in
- *    rooms.ts (which exists precisely so an agent's closing note doesn't
+ *    doc-store.ts (which exists precisely so an agent's closing note doesn't
  *    resurrect a thread a human just resolved), whereas a person filed as an
  *    agent only over-filters a view.
  */
@@ -122,7 +122,7 @@ export function classifyActor(author: unknown): ActorKind {
  * the server knows which address is theirs.
  *
  * WHY A MODULE-LEVEL REGISTRY AND NOT A PARAMETER. `isOwnerActor` is called
- * from three places (`rooms.ts` twice, `activity-backfill.ts` twice) that sit
+ * from three places (`doc-store.ts` twice, `activity-backfill.ts` twice) that sit
  * far below any request and hold no configuration to thread through. The
  * alternative — an options bag pushed down four call layers — buys nothing a
  * registry does not, and the registry is set exactly once, at server

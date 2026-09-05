@@ -3,7 +3,7 @@ import type { ReplayMarks } from './sse-marks.ts';
 
 /**
  * Anything broadcast over SSE: thread/suggestion webhook payloads and the
- * hub task events. The hub only needs the event name here — the whole
+ * board task events. The bus only needs the event name here — the whole
  * object is serialized as the data line either way.
  */
 type SsePayload = { event: string };
@@ -20,7 +20,7 @@ type SsePayload = { event: string };
  * up); anything longer is a session that should refetch state anyway, which
  * is exactly what the `replay.gap` signal tells it to do. TWO HUNDRED events
  * bounds the memory side, with one honest caveat: thread events embed the
- * WHOLE current thread (`fireEvent` in rooms.ts sends `thread.comments` in
+ * WHOLE current thread (`fireEvent` in doc-store.ts sends `thread.comments` in
  * full, not a delta), so a buffered event is ~1-2KB for a short thread but
  * scales with the thread's size at the time it fired — a hot thread with
  * tens of long replies can push a saturated channel's buffer to several MB
@@ -62,8 +62,8 @@ type ChannelMarks = { broadcast?: string; addressedAfter: Map<string, string> };
  * `HTTP_IDLE_TIMEOUT_SEC * 1000`, and `sse-keepalive.test.ts` asserts exactly
  * that — separating them is what broke this.
  *
- * Measured 2026-08-19 on Bun 1.3.10: `curl -N` on `/events/workspace/<id>`
- * ended after 9.7s having received the 5-byte `:ok` preamble and nothing else,
+ * Measured 2026-08-19 on Bun 1.3.10: `curl -N` on
+ * `/workspaces/<id>/events:stream` ended after 9.7s having received the 5-byte `:ok` preamble and nothing else,
  * when asked to hold for 40. The keepalive comment was already here, on a
  * 20_000ms period; `Bun.serve` carried no `idleTimeout` at all and Bun's
  * default is 10 seconds. **The guard's period was longer than the timeout it
@@ -94,7 +94,7 @@ type Sink = {
   close: () => void;
 };
 
-export class SseHub {
+export class SseBus {
   /**
    * docId → (sink → who opened it).
    *
@@ -270,7 +270,7 @@ export class SseHub {
     payload: SsePayload,
     forSink?: (who: { shareId?: string; agentId?: string }) => SsePayload | undefined,
   ): void {
-    // Reuse the broadcast's own `eid` (rooms.ts stamps one per fan-out, so
+    // Reuse the broadcast's own `eid` (doc-store.ts stamps one per fan-out, so
     // both channels of one broadcast carry the SAME wire id) and mint one for
     // the direct broadcasts that carry none (task/triage frames), keeping a
     // single monotonic id namespace per process. `newEventId`'s counter is
@@ -563,7 +563,7 @@ export class SseHub {
 
   /**
    * Close every stream whose authorizing MEMBERSHIP the predicate names — the
-   * SSE half of `Rooms.closeSocketsForShareMembers`, and there for the same
+   * SSE half of `DocStore.closeSocketsForShareMembers`, and there for the same
    * reason: a stream is authorized once at open, so a share-link visitor who
    * has been ejected keeps receiving every new comment until it drops.
    */
@@ -598,7 +598,7 @@ export class SseHub {
   }
 }
 
-/** Produce a ReadableStream that emits SSE lines, and register with the hub.
+/** Produce a ReadableStream that emits SSE lines, and register with the bus.
  *  `shareId` tags the stream with the share that authorized it so revocation
  *  and expiry can hang it up. `transform` rewrites each payload before it is
  *  serialized — how a share visitor's stream gets the redacted view of an
@@ -616,7 +616,7 @@ export class SseHub {
  *  `transform` exactly like live ones, so a share visitor's catch-up is as
  *  redacted as their live view. */
 export function openSseStream(
-  hub: SseHub,
+  bus: SseBus,
   docId: string,
   shareId?: string,
   transform?: (payload: SsePayload & Record<string, unknown>) => SsePayload,
@@ -649,16 +649,16 @@ export function openSseStream(
       };
       // initial comment so proxies flush headers
       c.enqueue(encoder.encode(':ok\n\n'));
-      remove = hub.add(docId, sink, shareId, agentId, shareMember);
+      remove = bus.add(docId, sink, shareId, agentId, shareMember);
       // Catch-up, BETWEEN registration and the first live write. Everything
       // in start() runs synchronously on one event loop, so no broadcast can
-      // land between `hub.add` above and this replay — the replayed tail and
+      // land between `bus.add` above and this replay — the replayed tail and
       // the live feed meet with neither a hole nor a duplicate.
       if (lastEventId) {
         // The stream's own agentId scopes the replay: an agent's catch-up
         // includes the frames addressed to it, everyone else's excludes them
         // — the same visibility the live feed enforces.
-        const replay = hub.replayAfter(docId, lastEventId, agentId);
+        const replay = bus.replayAfter(docId, lastEventId, agentId);
         if (replay.ok) {
           for (const e of replay.events) sink.write(e.payload.event, e.payload, e.id);
         } else {

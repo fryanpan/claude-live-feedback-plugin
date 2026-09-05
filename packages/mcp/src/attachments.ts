@@ -71,7 +71,7 @@ async function sendDueHeartbeats(deps: AttachmentDeps): Promise<void> {
     try {
       await deps.http(
         'POST',
-        `/api/workspaces/${encodeURIComponent(workspaceId)}/attachments/${encodeURIComponent(deps.author.id)}/heartbeat`,
+        `/workspaces/${encodeURIComponent(workspaceId)}/agents/${encodeURIComponent(deps.author.id)}/heartbeat`,
         { toolCallAt: now(deps) },
       );
     } catch {

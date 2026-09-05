@@ -348,7 +348,7 @@ export function parseTaskCreate(
   // and come back", which is an agent going away to find something out and
   // never the person who asked. It goes to the board's lead when there is
   // one. With no lead it is filed at triage owned by nobody — the generic
-  // value the hub draws as "Unassigned" and no agent's queue matches —
+  // value the board draws as "Unassigned" and no agent's queue matches —
   // because the author fallback would hand it to the asker, which is the
   // exact outcome the flag exists to prevent. An explicit `assignee` beside
   // the flag still wins: a caller that names somebody has said more.

@@ -2,7 +2,7 @@
  * Editing a document while an on-screen keyboard is up.
  *
  * Two defects, both reported by Bryan from an iPhone after tapping a table
- * cell in a review doc: *"the keyboard and voice recording panel moved up to
+ * cell in an attachment: *"the keyboard and voice recording panel moved up to
  * cover what I'm editing. I don't need the voice recording panel while
  * editing and the screen should also scroll up to show the point being
  * edited"*.

@@ -15,11 +15,11 @@
  * type out of `routes/`.
  */
 import type { DocMeta, DocType, ReviewPayload, Thread, User, suggestOps } from '@feedback/core';
+import type { DocRoom, DocStore } from '../doc-store.ts';
 import type { createLeadPresenceMonitor } from '../lead-presence.ts';
 import type { ShareTarget } from '../middleware/host-guard.ts';
 import type { ReadyWorkNudger } from '../ready-nudge.ts';
 import type { ThreadReviewGate } from '../review-gate-types.ts';
-import type { DocRoom, Rooms } from '../rooms.ts';
 import type { ThreadSummarizer } from '../summarize.ts';
 import type { TaskProjection } from '../task-projection.ts';
 import type { Task, TaskStore } from '../tasks.ts';
@@ -33,15 +33,15 @@ export type { ThreadReviewGate };
  *  where a disk↔doc conflict actually reaches whoever can fix it. Used by
  *  both `doc-threads-routes.ts` and `doc-edit-routes.ts`, which is why it
  *  stays here rather than moving with either. */
-export function withSyncError(rooms: Rooms, docId: string, body: object): object {
-  const syncError = rooms.getSyncError(docId);
+export function withSyncError(docStore: DocStore, docId: string, body: object): object {
+  const syncError = docStore.getSyncError(docId);
   // The write just landed: ask whether it left markdown syntax sitting in the
   // doc as literal characters. This is the only signal for that family of
   // corruption — the verb returns ok and the file on disk serializes back
   // correctly, so a reader of the rendered page is otherwise the first to
   // know. A disk conflict is the more urgent of the two, so it leads and the
   // integrity note is appended rather than replacing it.
-  const literal = rooms.literalMarkdownSyncError(docId);
+  const literal = docStore.literalMarkdownSyncError(docId);
   if (syncError && literal) {
     return {
       ...body,
@@ -85,9 +85,9 @@ export function parseSuggestionAuthor(
 
 /** The long-lived collaborators these routes need, built once per server. */
 export interface DocRoutesContext {
-  /** Doc rooms — every route here is an operation on one. */
-  rooms: Rooms;
-  /** The hub task store — doc↔board membership, and the rows a doc carries. */
+  /** Doc store — every route here is an operation on one. */
+  docStore: DocStore;
+  /** The board task store — doc↔board membership, and the rows a doc carries. */
   taskStore: TaskStore;
   /** The ydoc projection of the store, refreshed after writes that emit no
    *  store event. */
@@ -118,7 +118,7 @@ export interface DocRoutesContext {
   /** An alias or an id → the doc's own id. */
   canonicalDocId: (addressed: string) => string;
   /** Where a doc's back arrow goes — the board or review that holds it. */
-  backTargetFor: (docId: string, reviewId?: string) => { id: string; name: string } | null;
+  backTargetFor: (docId: string, attachmentId?: string) => { id: string; name: string } | null;
   /** The board a doc belongs to, or null. */
   resolveWorkspaceForDoc: (docId: string) => string | null;
   /** Decorate a doc's meta with its review URL. `precomputedHome` is the
@@ -128,16 +128,16 @@ export interface DocRoutesContext {
     meta: T,
     precomputedHome?: string | null,
   ) => T & { reviewUrl?: string };
-  /** doc id → the hub boards holding it, built once per request that needs it. */
+  /** doc id → the boards holding it, built once per request that needs it. */
   boardIndexForListing: () => Map<string, string[]>;
-  /** Which hub boards hold a doc, answered off a prebuilt index. */
-  hubBoardsForDocIndexed: (index: Map<string, string[]>, meta: DocMeta) => Set<string>;
+  /** Which boards hold a doc, answered off a prebuilt index. */
+  boardsForDocIndexed: (index: Map<string, string[]>, meta: DocMeta) => Set<string>;
   /** Which board a doc calls home, answered off the same index. */
   homeForDocIndexed: (index: Map<string, string[]>, meta: DocMeta) => string | null;
-  /** File a loose attachment under a hub board, minting Unfiled if needed. */
-  fileUnderHubWorkspace: (attachmentId: string, requested?: string) => string | undefined;
-  /** Drop an attachment from every hub board that holds it. */
-  unlinkFromEveryHubWorkspace: (attachmentId: string) => void;
+  /** File a loose attachment under a board, minting Unfiled if needed. */
+  fileUnderBoardWorkspace: (attachmentId: string, requested?: string) => string | undefined;
+  /** Drop an attachment from every board that holds it. */
+  unlinkFromEveryBoardWorkspace: (attachmentId: string) => void;
   /** The doc-thread URL a webhook or an SSE payload carries. */
   threadUrl: (docId: string, isVisitor: boolean) => string | undefined;
 

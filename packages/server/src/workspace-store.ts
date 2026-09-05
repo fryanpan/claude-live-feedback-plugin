@@ -20,8 +20,8 @@ import { classifyActor } from './actor-identity.ts';
 import { cryptoId } from './task-fields.ts';
 import { AUTHOR_REQUIRED_MESSAGE, isCategoryAuthor } from './task-owner.ts';
 import type {
+  BoardWorkspace,
   GoalRow,
-  HubWorkspace,
   RenameWorkspaceResult,
   RetiredNotice,
   SameNamedWorkspace,
@@ -51,13 +51,13 @@ export type WorkspaceStoreEvent =
  * absent/false/0 question is answered in one place rather than at each of the
  * dozen enumeration sites that now ask it.
  */
-export function isRetired(workspace: HubWorkspace): boolean {
+export function isRetired(workspace: BoardWorkspace): boolean {
   return workspace.retiredAt !== undefined;
 }
 
 /** The reason clause, or empty — factored out so the refusal and the notice
  *  can never disagree about whether there was one. */
-function retiredBecause(workspace: HubWorkspace): string {
+function retiredBecause(workspace: BoardWorkspace): string {
   return workspace.retiredReason ? ` Reason given: ${workspace.retiredReason}.` : '';
 }
 
@@ -67,7 +67,7 @@ function retiredBecause(workspace: HubWorkspace): string {
  * states the two ways forward — because a refusal an agent cannot act on
  * produces a retry loop or a giving-up, and both look like the tool is broken.
  */
-export function retiredRefusal(workspace: HubWorkspace): string {
+export function retiredRefusal(workspace: BoardWorkspace): string {
   return (
     `"${workspace.name}" (${workspace.id}) is RETIRED and is not taking new work.` +
     `${retiredBecause(workspace)} Nothing on it was deleted — every task, doc and thread ` +
@@ -77,7 +77,7 @@ export function retiredRefusal(workspace: HubWorkspace): string {
 }
 
 /** What an agent reading or attaching to a retired board is told. */
-export function retiredNotice(workspace: HubWorkspace): RetiredNotice {
+export function retiredNotice(workspace: BoardWorkspace): RetiredNotice {
   return {
     since: workspace.retiredAt ?? 0,
     ...(workspace.retiredReason ? { reason: workspace.retiredReason } : {}),
@@ -131,10 +131,10 @@ export interface WorkspaceStorePersistence {
 export class WorkspaceStore {
   constructor(private readonly p: WorkspaceStorePersistence) {}
 
-  createWorkspace(name: string, opts?: { leadAgentId?: string }): HubWorkspace {
+  createWorkspace(name: string, opts?: { leadAgentId?: string }): BoardWorkspace {
     const now = Date.now();
     const lead = opts?.leadAgentId?.trim();
-    const workspace: HubWorkspace = {
+    const workspace: BoardWorkspace = {
       id: cryptoId('w'),
       name,
       goals: [],
@@ -154,7 +154,7 @@ export class WorkspaceStore {
     return workspace;
   }
 
-  getWorkspace(id: string): HubWorkspace | undefined {
+  getWorkspace(id: string): BoardWorkspace | undefined {
     return this.p.state(id)?.workspace;
   }
 
@@ -171,9 +171,9 @@ export class WorkspaceStore {
   }
 
   /**
-   * Remove a hub workspace and everything this store holds for it.
+   * Remove a board workspace and everything this store holds for it.
    *
-   * Guarded by open tasks the way `Rooms.deleteWorkspace` is guarded by open
+   * Guarded by open tasks the way `DocStore.deleteWorkspace` is guarded by open
    * threads: the mistake to make hard is discarding a board somebody is
    * working, and a bare id with no confirmation is exactly the call an agent
    * makes by accident. `force` is the deliberate override, and the refusal
@@ -247,7 +247,7 @@ export class WorkspaceStore {
     return { ok: true, deletedTasks: taskIds.length, taskIds };
   }
 
-  listWorkspaces(): HubWorkspace[] {
+  listWorkspaces(): BoardWorkspace[] {
     return Array.from(this.p.states()).map((s) => s.workspace);
   }
 
@@ -508,7 +508,7 @@ export class WorkspaceStore {
     });
   }
 
-  /** Link an existing doc or review to a hub workspace. A link only — the
+  /** Link an existing doc or review to a board workspace. A link only — the
    *  doc's own metadata and URLs are untouched (nothing is migrated). */
   attachDoc(
     workspaceId: string,
@@ -523,7 +523,7 @@ export class WorkspaceStore {
     return { ok: true };
   }
 
-  /** Unlink a doc from a hub workspace. `removed` distinguishes "it was
+  /** Unlink a doc from a board workspace. `removed` distinguishes "it was
    *  linked and now isn't" from "it was never linked" — the caller filing a
    *  doc out of the holding-pen workspace needs to know whether anything
    *  actually moved before it refreshes a projection. */
@@ -541,7 +541,7 @@ export class WorkspaceStore {
   }
 
   /**
-   * The hub workspace this docId belongs to for SHARE-SCOPE purposes, or
+   * The board workspace this docId belongs to for SHARE-SCOPE purposes, or
    * null (§3.12 commit 8): a doc linked via attachDoc, or a task's own body
    * room (`task:<taskId>`). Deliberately NOT the `ws:<id>` board room — its
    * share allowance is explicit in host-guard, so granting the board stays

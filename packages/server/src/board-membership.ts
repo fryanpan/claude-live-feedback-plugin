@@ -5,23 +5,23 @@
  * One question, asked from four directions, which is why these moved out of
  * `createServer` together:
  *
- *  - **Which boards hold an id** — `hubWorkspacesHolding` and the per-listing
+ *  - **Which boards hold an id** — `boardWorkspacesHolding` and the per-listing
  *    index twins built over the same `taskStore` state.
- *  - **Which boards a DOC reaches**, review→board hop included —
- *    `hubBoardsForDoc`, `backTargetFor`, `homeForDocIndexed`.
+ *  - **Which boards a DOC reaches**, set→board hop included —
+ *    `boardsForDoc`, `backTargetFor`, `homeForDocIndexed`.
  *  - **Who may reach it through one** — the share-scope resolver
  *    `shareWorkspacesOf` and the two membership predicates over it, plus the
  *    redemption that writes a membership row.
  *  - **Whether an agent is covered for them** — `watchCoverageFor`, which
- *    reports gaps against exactly the set `hubBoardsForDoc` fans events over.
+ *    reports gaps against exactly the set `boardsForDoc` fans events over.
  *
  * That last pairing is the reason the coverage readout is here rather than
  * beside the watches route: two readings of "which boards" would agree today
  * and drift later, and the drift is invisible in the worst direction — a probe
  * that says "covered" about a board the events never reach.
  *
- * The filing verbs are here for the same reason. `fileUnderHubWorkspace`,
- * `unfileFromDefault` and `unlinkFromEveryHubWorkspace` are what WRITE the
+ * The filing verbs are here for the same reason. `fileUnderBoardWorkspace`,
+ * `unfileFromDefault` and `unlinkFromEveryBoardWorkspace` are what WRITE the
  * links every function above reads, and the 403-on-your-own-share bug this
  * file's comments record was a disagreement between the write side and the
  * read side.
@@ -30,15 +30,15 @@
  * `routes/task-routes-context.ts` use, and every member of it is a VALUE:
  * nothing here is built later than the stores it reads, so `createServer`
  * composes this above the stall wiring and hands that wiring
- * `hubBoardsForDoc` and `backTargetFor` directly rather than as thunks.
+ * `boardsForDoc` and `backTargetFor` directly rather than as thunks.
  *
- * `hubWorkspacesHolding`, `heldByIndexed`, `queuedForLead` and
- * `defaultHubWorkspaceId` stay internal: nothing outside this module reached
+ * `boardWorkspacesHolding`, `heldByIndexed`, `queuedForLead` and
+ * `defaultBoardWorkspaceId` stay internal: nothing outside this module reached
  * them before the move, and a wider surface is a wider thing to keep true.
  */
-import { type DocMeta, normalizeEmail, reviewIdOf } from '@feedback/core';
+import { type DocMeta, attachmentIdOf, normalizeEmail } from '@feedback/core';
+import type { DocStore } from './doc-store.ts';
 import type { ShareTarget } from './middleware/host-guard.ts';
-import type { Rooms } from './rooms.ts';
 import { renderShareLinkUnavailable } from './share/share-link-page.ts';
 import type { ShareLinks } from './share/share-links.ts';
 import { type Shares, audienceEntryAdmits } from './share/shares.ts';
@@ -68,10 +68,11 @@ export interface CoverageWorkspaceRow {
   key: string;
   workspaceId: string;
   /** `board` — a workspace: tasks, a lead seat, attachments.
-   *  `review` — a diff review / folder bind, which has none of those. */
+   *  `review` — a diff review / folder bind, which has none of those. The
+   *  wire value keeps its old spelling. */
   kind: 'board' | 'review';
   /** Board only. Attachment / lead / heartbeat are board facts; printing
-   *  `attached: false` for a review would read as a gap that cannot exist. */
+   *  `attached: false` for a set would read as a gap that cannot exist. */
   name?: string;
   attached?: boolean;
   /** The displayed active/away label: a heartbeat inside the heartbeat
@@ -134,36 +135,38 @@ export interface WatchCoverage {
  * ── A WORKSPACE is a board. Everything else in it is content. ──
  *
  * A workspace (`taskStore`) has goals, tasks, a name, and a list of
- * ATTACHMENT ids in `docIds`. An attachment is a doc room id or a REVIEW id
- * — `POST /api/workspaces/:id/docs` has accepted both since it was written.
- * So a review goes on its workspace as ONE row and its members stay off,
- * because a hundred-file review is one unit of work, not a hundred.
+ * ATTACHMENT ids in `docIds`. An attachment is a doc room id or an
+ * ATTACHMENT SET id — `POST /api/workspaces/:id/docs` has accepted both since
+ * it was written. So a set goes on its workspace as ONE row and its members
+ * stay off, because a hundred-file set is one unit of work, not a hundred.
  *
- * A REVIEW (`meta.setId`, returned as `reviewId` by `bindDiff`) is the tag
- * binding the member docs of one folder bind or diff review together. It is
- * content, not a container of tasks: it has no doc room of its own, and it
- * is read through `/api/reviews/<setId>/tree|threads`. `reviewIdOf` in
- * `@feedback/core` is the one place a member's review id is derived.
+ * An ATTACHMENT SET (`meta.setId`, returned as `reviewId` by `bindDiff` —
+ * the wire keeps its old spelling) is the tag binding the member docs of one
+ * folder bind or diff review together. It is content, not a container of
+ * tasks: it has no doc room of its own, and it is read through
+ * `/api/reviews/<setId>/tree|threads`. `attachmentIdOf` in `@feedback/core`
+ * is the one place a member's set id is derived.
  *
  * Note the board page no longer LISTS attachments: the Docs and
  * Open-threads rails came out (Bryan, 2026-08-18, "remove docs and live
  * threads from the task list"), so `docIds` now feeds the review queue and
  * voice lookup rather than a sidebar.
  *
- * Every doc and every review belongs to a workspace (Bryan, 2026-08-13) —
+ * Every doc and every attachment set belongs to a workspace (Bryan,
+ * 2026-08-13) —
  * and requiring one must not add a step. "Bind it, send Bryan the URL" is
  * ONE agent call, so a caller with no board in hand does not get an error
  * telling them to go create one first: what arrives unfiled lands on the
  * default board, and the id comes back in the same response so the caller
  * learns where it went.
  */
-export const DEFAULT_HUB_WORKSPACE_NAME = 'Unfiled';
+export const DEFAULT_BOARD_WORKSPACE_NAME = 'Unfiled';
 
 /** What the membership map reads. Every member is a value — see the note at
  *  the top of this file about why none of them needs to be a thunk. */
 export interface BoardMembershipContext {
-  /** Doc rooms: id canonicalization and the meta a review id is read from. */
-  rooms: Rooms;
+  /** Doc store: id canonicalization and the meta a set id is read from. */
+  docStore: DocStore;
   /** The boards themselves: `docIds`, attach/detach, the lead seat, the voice
    *  queue and the attachment records coverage is measured against. */
   taskStore: TaskStore;
@@ -191,29 +194,29 @@ export interface BoardMembership {
   shareLinkMemberOf: (workspaceId: string, email: string | null) => boolean;
   /** `GET /s/<id>`: turn a verified email into a member. */
   redeemShareLink: (linkId: string, email: string | null) => Response;
-  /** Every hub board a doc's discussion actually reaches. */
-  hubBoardsForDoc: (docId: string) => Set<string>;
+  /** Every board a doc's discussion actually reaches. */
+  boardsForDoc: (docId: string) => Set<string>;
   /** One pass over the workspaces, for a whole listing. */
   boardIndexForListing: () => Map<string, string[]>;
-  /** `hubBoardsForDoc` against that index. */
-  hubBoardsForDocIndexed: (index: Map<string, string[]>, meta: DocMeta) => Set<string>;
+  /** `boardsForDoc` against that index. */
+  boardsForDocIndexed: (index: Map<string, string[]>, meta: DocMeta) => Set<string>;
   /** `resolveWorkspaceForDoc` against that index. */
   homeForDocIndexed: (index: Map<string, string[]>, meta: DocMeta) => string | null;
   /** The coverage readout for one agent's watch set. */
   watchCoverageFor: (agentId: string, keys: string[]) => WatchCoverage;
   /** The board a doc's "back" affordance should return to, or null. */
-  backTargetFor: (docId: string, reviewId?: string) => { id: string; name: string } | null;
-  /** Put an attachment on a hub workspace and answer which one. */
-  fileUnderHubWorkspace: (attachmentId: string, requested?: string) => string;
+  backTargetFor: (docId: string, attachmentId?: string) => { id: string; name: string } | null;
+  /** Put an attachment on a board workspace and answer which one. */
+  fileUnderBoardWorkspace: (attachmentId: string, requested?: string) => string;
   /** Filing onto a real board takes it out of the default holding pen. */
-  unfileFromDefault: (attachmentId: string, keptHubWorkspaceId: string) => void;
-  /** A deleted doc or review leaves no link behind. */
-  unlinkFromEveryHubWorkspace: (attachmentId: string) => void;
+  unfileFromDefault: (attachmentId: string, keptBoardWorkspaceId: string) => void;
+  /** A deleted doc or attachment set leaves no link behind. */
+  unlinkFromEveryBoardWorkspace: (attachmentId: string) => void;
 }
 
 export function createBoardMembership(ctx: BoardMembershipContext): BoardMembership {
   const {
-    rooms,
+    docStore,
     taskStore,
     taskProjection,
     shares,
@@ -224,25 +227,26 @@ export function createBoardMembership(ctx: BoardMembershipContext): BoardMembers
 
   /**
    * Which workspaces an id belongs to, for SHARE SCOPING (§3.12 commit 8).
-   * The id may be a doc room OR a review (folder bind / diff review), and
-   * the answer is a SET because those two senses of "workspace" nest:
+   * The id may be a doc room OR an attachment set (folder bind / diff
+   * review), and the answer is a SET because those two senses of
+   * "workspace" nest:
    *
    *   1. a member doc's own GROUPING     (`meta.workspaceId`)
-   *   2. the HUB board the id is filed on directly — docs linked via
-   *      attachDoc, each task's `task:<id>` body room, and a review id,
-   *      which is how a review goes on a board as one row
-   *   3. the HUB board that member's GROUPING is filed on — the hop that
-   *      makes a review row on a shared board actually open. Without it a
-   *      hub-scoped share saw the row and 403'd on everything behind it,
-   *      because every member answers with the review id and the share
-   *      carries the hub id.
+   *   2. the board the id is filed on directly — docs linked via
+   *      attachDoc, each task's `task:<id>` body room, and a set id,
+   *      which is how an attachment set goes on a board as one row
+   *   3. the board that member's GROUPING is filed on — the hop that
+   *      makes a set's row on a shared board actually open. Without it a
+   *      board-scoped share saw the row and 403'd on everything behind it,
+   *      because every member answers with the set id and the share
+   *      carries the board id.
    *
    * ONE rule for both halves of the guard, on purpose: the same function
-   * tells the allowlist that a review belongs to a hub and tells it that
-   * the review's members do. Two rules would agree today and diverge
+   * tells the allowlist that a set belongs to a board and tells it that
+   * the set's members do. Two rules would agree today and diverge
    * later, and the one that diverges open is the breach.
    *
-   * Exactly one hop from review to board — not a transitive closure.
+   * Exactly one hop from set to board — not a transitive closure.
    * Deliberately NOT the ws:<id> board room: its share allowance is spelled
    * out in host-guard, never a resolver side effect.
    */
@@ -252,20 +256,20 @@ export function createBoardMembership(ctx: BoardMembershipContext): BoardMembers
     // readable URL handed to an outside reviewer would simply not open. This
     // is the one resolver every share-scope predicate reads, which is why the
     // fix belongs here and not in each of them.
-    const id = rooms.resolveDocId(rawId);
+    const id = docStore.resolveDocId(rawId);
     const out = new Set<string>();
-    const reviewId = reviewIdOf(rooms.peekMeta(id) ?? {});
-    if (reviewId) out.add(reviewId);
-    for (const board of hubWorkspacesHolding(id)) out.add(board);
-    if (reviewId) for (const board of hubWorkspacesHolding(reviewId)) out.add(board);
+    const attachmentId = attachmentIdOf(docStore.peekMeta(id) ?? {});
+    if (attachmentId) out.add(attachmentId);
+    for (const board of boardWorkspacesHolding(id)) out.add(board);
+    if (attachmentId) for (const board of boardWorkspacesHolding(attachmentId)) out.add(board);
     return Array.from(out);
   };
 
   /**
-   * EVERY hub board an attachment is linked to — not the first one.
+   * EVERY board an attachment is linked to — not the first one.
    *
    * `attachDoc` links, it does not move: only the default holding pen is
-   * unfiled on the way (see `unfileFromDefault`), so a review deliberately
+   * unfiled on the way (see `unfileFromDefault`), so a set deliberately
    * put on two real boards is on both. `taskStore.workspaceOfDoc` answers
    * with whichever the store iterates first, which for share scoping means
    * the visitors of every OTHER board holding it are refused the row their
@@ -277,7 +281,7 @@ export function createBoardMembership(ctx: BoardMembershipContext): BoardMembers
    * task's workspace, which is a field rather than a link, so it has one
    * answer by construction.
    */
-  function hubWorkspacesHolding(attachmentId: string): string[] {
+  function boardWorkspacesHolding(attachmentId: string): string[] {
     if (attachmentId.startsWith('task:')) {
       const w = taskStore.workspaceOfDoc(attachmentId);
       return w ? [w] : [];
@@ -310,8 +314,8 @@ export function createBoardMembership(ctx: BoardMembershipContext): BoardMembers
    * Three details, each of which would otherwise be a hole:
    *
    *   - The candidate set is the workspace itself PLUS every workspace that
-   *     covers it (`shareWorkspacesOf`). A doc's path resolves to its REVIEW,
-   *     while the share that admits people is minted on the BOARD the review
+   *     covers it (`shareWorkspacesOf`). A doc's path resolves to its SET,
+   *     while the share that admits people is minted on the BOARD the set
    *     is filed on, so checking the path's workspace alone would refuse
    *     every legitimately shared diff review and folder bind. This is the
    *     same set `shareScopeAllows` reaches through, so it grants exactly
@@ -365,8 +369,8 @@ export function createBoardMembership(ctx: BoardMembershipContext): BoardMembers
    *
    * The candidate set is the workspace itself PLUS every workspace that
    * covers it, for the reason `collabMemberOf` gives at the same line: a
-   * doc's path resolves to its REVIEW, while the link that admitted people
-   * was minted on the BOARD the review is filed on. Same set
+   * doc's path resolves to its SET, while the link that admitted people
+   * was minted on the BOARD the set is filed on. Same set
    * `shareScopeAllows` reaches through, so it grants exactly what the board's
    * own link already grants — no wider.
    *
@@ -444,9 +448,9 @@ export function createBoardMembership(ctx: BoardMembershipContext): BoardMembers
   };
 
   /**
-   * Every hub board a DOC's discussion actually reaches — the boards holding
-   * the doc itself, plus the one review→board hop a diff review / folder
-   * bind needs (its members carry the review tag, and the review is what
+   * Every board a DOC's discussion actually reaches — the boards holding
+   * the doc itself, plus the one set→board hop a diff review / folder
+   * bind needs (its members carry the set tag, and the set is what
    * sits on the board as one row).
    *
    * Written once and used twice on purpose: `onDocRoomEvent` fans events out
@@ -456,22 +460,22 @@ export function createBoardMembership(ctx: BoardMembershipContext): BoardMembers
    * "covered" about a board the events never reach is the failure this
    * ticket exists to end, restated as a reassuring answer.
    */
-  function hubBoardsForDoc(docId: string): Set<string> {
-    const boards = new Set(hubWorkspacesHolding(docId));
-    const reviewId = reviewIdOf(rooms.peekMeta(docId) ?? {});
-    if (reviewId) for (const board of hubWorkspacesHolding(reviewId)) boards.add(board);
+  function boardsForDoc(docId: string): Set<string> {
+    const boards = new Set(boardWorkspacesHolding(docId));
+    const attachmentId = attachmentIdOf(docStore.peekMeta(docId) ?? {});
+    if (attachmentId) for (const board of boardWorkspacesHolding(attachmentId)) boards.add(board);
     return boards;
   }
 
   /**
-   * The same three questions as `hubWorkspacesHolding` / `hubBoardsForDoc` /
+   * The same three questions as `boardWorkspacesHolding` / `boardsForDoc` /
    * `resolveWorkspaceForDoc`, answered for a WHOLE LISTING from one pass over
    * the workspaces instead of one pass per row.
    *
    * The per-id versions above allocate a fresh array of every board and scan
    * each one's `docIds`. That is the right shape for a single lookup and the
    * wrong shape for a listing. `GET /api/docs` asked twice per row — once for
-   * the doc, once for the review-id fallback — so the work grew with the
+   * the doc, once for the set-id fallback — so the work grew with the
    * SQUARE of the doc count, and docs no board holds paid for both halves —
    * which, once a server accumulates diff-review members, is most of them.
    *
@@ -500,7 +504,7 @@ export function createBoardMembership(ctx: BoardMembershipContext): BoardMembers
   }
 
   /**
-   * `hubWorkspacesHolding` against a prebuilt index.
+   * `boardWorkspacesHolding` against a prebuilt index.
    *
    * `task:` ids are deliberately absent from the index and fall through to
    * `workspaceOfDoc`, exactly as the per-id version routes them: a task room
@@ -515,12 +519,12 @@ export function createBoardMembership(ctx: BoardMembershipContext): BoardMembers
     return index.get(attachmentId) ?? [];
   }
 
-  /** `hubBoardsForDoc` against a prebuilt index. The caller already holds the
-   *  row's meta, so the review id is read from it rather than re-fetched. */
-  function hubBoardsForDocIndexed(index: Map<string, string[]>, meta: DocMeta): Set<string> {
+  /** `boardsForDoc` against a prebuilt index. The caller already holds the
+   *  row's meta, so the set id is read from it rather than re-fetched. */
+  function boardsForDocIndexed(index: Map<string, string[]>, meta: DocMeta): Set<string> {
     const boards = new Set(heldByIndexed(index, meta.docId));
-    const reviewId = reviewIdOf(meta);
-    if (reviewId) for (const board of heldByIndexed(index, reviewId)) boards.add(board);
+    const attachmentId = attachmentIdOf(meta);
+    if (attachmentId) for (const board of heldByIndexed(index, attachmentId)) boards.add(board);
     return boards;
   }
 
@@ -529,7 +533,7 @@ export function createBoardMembership(ctx: BoardMembershipContext): BoardMembers
    *
    * Mirrors `backTargetFor`'s `pick(a) ?? pick(b)` exactly, including that a
    * first board which fails the `getWorkspace` check does NOT fall through to
-   * a second board holding the same id — it falls through to the review-id
+   * a second board holding the same id — it falls through to the set-id
    * lookup. (In practice the check cannot fail: `getWorkspace` reads the very
    * map `listWorkspaces` was built from. It is kept so this stays a
    * transcription of the original rather than a judgement about it.)
@@ -539,7 +543,7 @@ export function createBoardMembership(ctx: BoardMembershipContext): BoardMembers
       id && taskStore.getWorkspace(id) ? id : null;
     return (
       pick(heldByIndexed(index, meta.docId)[0]) ??
-      pick(heldByIndexed(index, reviewIdOf(meta) ?? '')[0])
+      pick(heldByIndexed(index, attachmentIdOf(meta) ?? '')[0])
     );
   }
 
@@ -563,7 +567,7 @@ export function createBoardMembership(ctx: BoardMembershipContext): BoardMembers
    * Two halves, answering two different questions:
    *
    *  - `workspaces` resolves each `ws:<id>` key the agent holds. A key can
-   *    name a hub BOARD or a review GROUPING, and today nothing tells the
+   *    name a BOARD or an attachment SET, and today nothing tells the
    *    agent which — so nothing tells it that a board key without an
    *    attachment hears the events but is invisible to every delivery gate.
    *  - `unattachedBoards` is the measured incident: boards this agent covers
@@ -580,7 +584,7 @@ export function createBoardMembership(ctx: BoardMembershipContext): BoardMembers
    *    the probe could not see.
    *
    * A `ws:<setId>` key still raises nothing. It resolves to the board the
-   * review sits on, but the agent asked about the review, not about somebody
+   * set sits on, but the agent asked about the set, not about somebody
    * else's seat — and an alarm that fires on the innocent case is how a real
    * one stops being read.
    *
@@ -623,7 +627,7 @@ export function createBoardMembership(ctx: BoardMembershipContext): BoardMembers
       const board = taskStore.getWorkspace(workspaceId);
       if (!board) {
         // Not a board. The key survived the liveness prune, so some doc room
-        // still carries this review id.
+        // still carries this set id.
         workspaces.push({ key, workspaceId, kind: 'review' });
         continue;
       }
@@ -646,7 +650,7 @@ export function createBoardMembership(ctx: BoardMembershipContext): BoardMembers
 
     for (const key of keys) {
       if (key.startsWith('ws:')) continue;
-      for (const boardId of hubBoardsForDoc(key)) {
+      for (const boardId of boardsForDoc(key)) {
         boardsInScope.set(boardId, [...(boardsInScope.get(boardId) ?? []), key]);
       }
     }
@@ -689,16 +693,18 @@ export function createBoardMembership(ctx: BoardMembershipContext): BoardMembers
   };
 
   /**
-   * The default hub workspace, created on first need.
+   * The default board workspace, created on first need.
    *
    * Found by LOOKUP, never remembered in a variable: the store hydrates from
    * disk on boot, so a cached id would fragment into one "Unfiled" per restart
    * — which is the same as no workspace at all, one board per doc.
    */
-  const defaultHubWorkspaceId = (): string => {
-    const existing = taskStore.listWorkspaces().find((w) => w.name === DEFAULT_HUB_WORKSPACE_NAME);
+  const defaultBoardWorkspaceId = (): string => {
+    const existing = taskStore
+      .listWorkspaces()
+      .find((w) => w.name === DEFAULT_BOARD_WORKSPACE_NAME);
     if (existing) return existing.id;
-    const created = taskStore.createWorkspace(DEFAULT_HUB_WORKSPACE_NAME);
+    const created = taskStore.createWorkspace(DEFAULT_BOARD_WORKSPACE_NAME);
     // createWorkspace emits no event (nothing subscribes to a workspace that
     // doesn't exist yet), so bring the board room up by hand — same as the
     // POST /api/workspaces route.
@@ -713,7 +719,7 @@ export function createBoardMembership(ctx: BoardMembershipContext): BoardMembers
    * whole reason this exists. That resolver answers a SHARE-SCOPE question and
    * is documented as non-transitive: a diff review / folder browse is filed on
    * a board as ONE row under its GROUPING id, so every member doc of every
-   * review answers null there. Reusing it would fix back for plain docs and
+   * set answers null there. Reusing it would fix back for plain docs and
    * leave it broken for exactly the surface Bryan reads most.
    *
    * Widening `workspaceOfDoc` itself would have widened share scoping with it,
@@ -724,28 +730,33 @@ export function createBoardMembership(ctx: BoardMembershipContext): BoardMembers
    * than none, because "back to one of this doc's boards" beats "back to the
    * index of everything on the machine", which is what the arrow does today.
    */
-  const backTargetFor = (docId: string, reviewId?: string): { id: string; name: string } | null => {
+  const backTargetFor = (
+    docId: string,
+    attachmentId?: string,
+  ): { id: string; name: string } | null => {
     const pick = (id: string | undefined): { id: string; name: string } | null => {
       if (!id) return null;
       const ws = taskStore.getWorkspace(id);
       return ws ? { id: ws.id, name: ws.name } : null;
     };
-    return pick(hubWorkspacesHolding(docId)[0]) ?? pick(hubWorkspacesHolding(reviewId ?? '')[0]);
+    return (
+      pick(boardWorkspacesHolding(docId)[0]) ?? pick(boardWorkspacesHolding(attachmentId ?? '')[0])
+    );
   };
 
   /**
-   * Put an attachment — a doc room id OR a review id — on a hub workspace and
+   * Put an attachment — a doc room id OR a set id — on a board workspace and
    * answer which one. Idempotent: something already attached keeps the board it
    * has (moving it is `attach_doc`'s job, not a side effect of re-binding, and
-   * re-running `create_diff_review` on a live review is documented as safe). A
+   * re-running `create_diff_review` on a live set is documented as safe). A
    * `requested` id that names no real board falls back to the default rather
    * than failing the bind — the whole point is that it always lands somewhere.
    */
-  const fileUnderHubWorkspace = (attachmentId: string, requested?: string): string => {
+  const fileUnderBoardWorkspace = (attachmentId: string, requested?: string): string => {
     const existing = taskStore.workspaceOfDoc(attachmentId);
     if (existing) return existing;
     const target =
-      requested && taskStore.getWorkspace(requested) ? requested : defaultHubWorkspaceId();
+      requested && taskStore.getWorkspace(requested) ? requested : defaultBoardWorkspaceId();
     taskStore.attachDoc(target, attachmentId);
     // attachDoc emits no store event; refresh the projection's docIds.
     taskProjection.ensureWorkspace(target);
@@ -756,29 +767,29 @@ export function createBoardMembership(ctx: BoardMembershipContext): BoardMembers
    * Filing an attachment onto a real board takes it OUT of the default one.
    *
    * Without this, the usual agent flow — create it, then attach it — leaves it
-   * linked to two hub workspaces, and `workspaceOfDoc` answers with whichever
+   * linked to two board workspaces, and `workspaceOfDoc` answers with whichever
    * the store iterates first. That is not cosmetic: it is what SHARE SCOPING
    * resolves against, so a workspace visitor was refused (403) on the very doc
    * the share was created for. The default board is a holding pen, not a second
    * home.
    */
-  const unfileFromDefault = (attachmentId: string, keptHubWorkspaceId: string): void => {
-    // `find`, never `defaultHubWorkspaceId()` — filing something must not
+  const unfileFromDefault = (attachmentId: string, keptBoardWorkspaceId: string): void => {
+    // `find`, never `defaultBoardWorkspaceId()` — filing something must not
     // conjure a holding pen on a server that has never needed one.
-    const holding = taskStore.listWorkspaces().find((w) => w.name === DEFAULT_HUB_WORKSPACE_NAME);
-    if (!holding || holding.id === keptHubWorkspaceId) return;
+    const holding = taskStore.listWorkspaces().find((w) => w.name === DEFAULT_BOARD_WORKSPACE_NAME);
+    if (!holding || holding.id === keptBoardWorkspaceId) return;
     const res = taskStore.detachDoc(holding.id, attachmentId);
     if (res.ok && res.removed) taskProjection.ensureWorkspace(holding.id);
   };
 
   /**
-   * A deleted doc — or a deleted REVIEW, which is deleted as one unit and is
+   * A deleted doc — or a deleted SET, which is deleted as one unit and is
    * one row on the board — leaves no link behind. This mattered little while
    * attaching was a deliberate act on a handful of docs; now that everything is
    * filed, a board would otherwise silently accumulate one tombstone per
    * deletion, invisible in the UI because a dangling id renders as nothing.
    */
-  const unlinkFromEveryHubWorkspace = (attachmentId: string): void => {
+  const unlinkFromEveryBoardWorkspace = (attachmentId: string): void => {
     for (const w of taskStore.listWorkspaces()) {
       const res = taskStore.detachDoc(w.id, attachmentId);
       if (res.ok && res.removed) taskProjection.ensureWorkspace(w.id);
@@ -790,14 +801,14 @@ export function createBoardMembership(ctx: BoardMembershipContext): BoardMembers
     collabMemberOf,
     shareLinkMemberOf,
     redeemShareLink,
-    hubBoardsForDoc,
+    boardsForDoc,
     boardIndexForListing,
-    hubBoardsForDocIndexed,
+    boardsForDocIndexed,
     homeForDocIndexed,
     watchCoverageFor,
     backTargetFor,
-    fileUnderHubWorkspace,
+    fileUnderBoardWorkspace,
     unfileFromDefault,
-    unlinkFromEveryHubWorkspace,
+    unlinkFromEveryBoardWorkspace,
   };
 }

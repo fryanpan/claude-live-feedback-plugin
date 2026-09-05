@@ -22,8 +22,8 @@ import {
  *
  * THREE PAGES, THREE CASCADES, and that is why the sheets are installed per
  * test rather than once. `renderSigninShell` loads styles.css then signin.css
- * then tokens.css; `renderHubShell` loads hub.css, styles.css, tokens.css and
- * never signin.css; the review doc loads neither of the two page sheets.
+ * then tokens.css; `renderBoardShell` loads board.css, styles.css, tokens.css and
+ * never signin.css; an attachment loads neither of the two page sheets.
  * Installing exactly the sheets a page loads is also what replaces the old
  * "which file is this rule in?" text assertions: a rule that moved into the
  * shared sheet shows up as a value the OTHER page can now see.
@@ -49,7 +49,7 @@ function page(...sheets: SheetName[]): void {
 }
 
 const SIGNIN: SheetName[] = ['styles.css', 'signin.css'];
-const HUB: SheetName[] = ['hub.css', 'styles.css'];
+const BOARD: SheetName[] = ['board.css', 'styles.css'];
 
 describe('sign-in page css', () => {
   it('centers a fluid card', () => {
@@ -117,19 +117,19 @@ describe('sign-in page css', () => {
     expect(styleOf(attach('identity-prompt')).position).toBe('');
   });
 
-  it('gives the hub identity chip a popover anchored like the settings panel', () => {
-    page(...HUB);
+  it('gives the board identity chip a popover anchored like the settings panel', () => {
+    page(...BOARD);
     setViewport(IPAD);
-    const menu = styleOf(attach('hub-me-menu'));
+    const menu = styleOf(attach('board-me-menu'));
     expect(menu.position).toBe('absolute');
     expect(menu.right).toBe('0px');
   });
 
   it('keeps the identity chip at the 36px tap-target floor (design-mobile.md)', () => {
     // The chip is the sole sign-in entry point, and it is tapped on an iPad.
-    page(...HUB);
+    page(...BOARD);
     setViewport(IPAD);
-    const chip = styleOf(attach('hub-me', { tag: 'button' }));
+    const chip = styleOf(attach('board-me', { tag: 'button' }));
     expect(chip.width).toBe('36px');
     expect(chip.height).toBe('36px');
   });
@@ -169,9 +169,9 @@ describe('sign-in page css', () => {
     // Both gated toggles were pixel-identical to the live control beside
     // them: opacity 1, cursor pointer. A `title` is not the substitute — the
     // primary device here is an iPad, where nothing hovers.
-    page(...HUB);
+    page(...BOARD);
     setViewport(IPAD);
-    for (const cls of ['icon-btn', 'hub-btn']) {
+    for (const cls of ['icon-btn', 'board-btn']) {
       const off = styleOf(attach(cls, { tag: 'button', attrs: { disabled: '' } }));
       expect(off.opacity, cls).toBe('0.35');
       expect(off.cursor, cls).toBe('default');

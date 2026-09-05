@@ -29,9 +29,9 @@ import { initialTaskStatus } from './task-helpers.ts';
 import { declaredAssigneeKind } from './task-owner.ts';
 import { bodyHead } from './task-title.ts';
 import type {
+  BoardWorkspace,
   CreateTaskOpts,
   CreateTaskResult,
-  HubWorkspace,
   RenameTaskResult,
   TaskBodyEditedEvent,
   TaskCreatedEvent,
@@ -52,7 +52,7 @@ export type TaskAuthoringEvent = TaskCreatedEvent | TaskRetitledEvent | TaskBody
 export interface TaskAuthoringPersistence {
   state(workspaceId: string): WorkspaceState | undefined;
   getTask(taskId: string): Task | undefined;
-  goalIdExists(workspace: HubWorkspace, goalId: string): boolean;
+  goalIdExists(workspace: BoardWorkspace, goalId: string): boolean;
   /** The roster id behind a display name, or undefined when nothing places
    *  it — see `TaskStore.rosterIdFor`. */
   rosterIdFor(assignee: string): string | undefined;

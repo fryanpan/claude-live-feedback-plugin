@@ -26,13 +26,13 @@ import { IPAD, PHONE, attach, installSheets, setViewport, styleOf } from './css-
 
 let cleanup = () => {};
 beforeEach(() => {
-  // The real cascade order — see `renderHubShell` in packages/server/src/shells.ts:
-  // hub.css loads BEFORE styles.css on the board. `tokens.css` is left out on
+  // The real cascade order — see `renderBoardShell` in packages/server/src/shells.ts:
+  // board.css loads BEFORE styles.css on the board. `tokens.css` is left out on
   // purpose: the served /app/tokens.css is the vendored Open Props subset
   // concatenated with src/tokens.css, and installing the mapping layer alone
   // resolves its `var(--gray-9)` chain to nothing. tokens-css.test.ts installs
   // the pair.
-  cleanup = installSheets('hub.css', 'styles.css');
+  cleanup = installSheets('board.css', 'styles.css');
 });
 afterEach(() => {
   cleanup();
@@ -57,10 +57,10 @@ function readout(viewport: { width: number; height: number }): CSSStyleDeclarati
   return styleOf(attach('voice-indicator'));
 }
 
-/** The same element docked in the hub's nav rail. */
+/** The same element docked in the board's nav rail. */
 function docked(viewport: { width: number; height: number }): CSSStyleDeclaration {
   setViewport(viewport);
-  return styleOf(attach('voice-indicator', { parent: attach('hub-nav-dock') }));
+  return styleOf(attach('voice-indicator', { parent: attach('board-nav-dock') }));
 }
 
 describe('the dictation readout is wide enough to follow', () => {
@@ -88,7 +88,7 @@ describe('the dictation readout is wide enough to follow', () => {
     // `width` is shrink-to-fit, whose upper bound is the room left in its
     // containing block — the viewport while the mic floats, and the dock's own
     // column once it is docked. `max-width` cannot raise that bound, so on the
-    // hub the two numbers above applied to nothing: measured 2026-08-21
+    // board the two numbers above applied to nothing: measured 2026-08-21
     // against a full sentence, the readout came out 45px wide and 978px tall
     // in the collapsed rail — 49 lines of roughly one syllable, the top 248px
     // of it above the viewport. `max-content` is what makes the sentence, not
@@ -98,12 +98,12 @@ describe('the dictation readout is wide enough to follow', () => {
   });
 
   it('gives the docked copy the same width behaviour, not a second copy of it', () => {
-    // The hub docks the same element in its nav (`.hub-nav-dock`), where it is
+    // The board docks the same element in its nav (`.board-nav-dock`), where it is
     // wider than the rail on purpose. Two hand-kept copies of a width is how
     // one surface gets the fix and the other keeps the bug — and what a reader
     // can observe is not whether the rule was restated but whether the two
     // resolve to the same thing, at both sizes. (The old text version asserted
-    // the absence of a `max-width` declaration under `.hub-nav-dock`; a
+    // the absence of a `max-width` declaration under `.board-nav-dock`; a
     // restatement that happened to agree was already indistinguishable to it.)
     for (const viewport of [IPAD, PHONE]) {
       expect(docked(viewport).maxWidth).toBe(readout(viewport).maxWidth);

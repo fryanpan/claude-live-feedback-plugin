@@ -109,7 +109,7 @@ describe('allow-rule review items', () => {
       await post('/api/workspaces', { name, leadAgentId: LEAD.id }),
     );
     await jj(
-      await post(`/api/workspaces/${workspace.id}/attachments`, {
+      await post(`/workspaces/${workspace.id}/agents`, {
         agentId: LEAD.id,
         runtime: 'claude-code-local',
       }),

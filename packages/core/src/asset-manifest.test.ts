@@ -46,7 +46,7 @@ describe('hashedAssetName', () => {
     expect([...SHELL_ASSETS]).toEqual(
       expect.arrayContaining([
         'app.js',
-        'hub.js',
+        'board.js',
         'landing.js',
         'signin.js',
         'sentry.js',
@@ -74,7 +74,7 @@ describe('isContentHashedAsset', () => {
     // revalidation at all. Each of these keeps a fixed URL on purpose.
     for (const name of [
       'app.js',
-      'hub.js',
+      'board.js',
       'styles.css',
       'tokens.css',
       'sw.js',
@@ -117,7 +117,7 @@ describe('assetHref', () => {
   });
 
   it('falls back to the plain name, which the build still emits', () => {
-    expect(assetHref({}, 'hub.js')).toBe('/app/hub.js');
+    expect(assetHref({}, 'board.js')).toBe('/app/board.js');
   });
 });
 

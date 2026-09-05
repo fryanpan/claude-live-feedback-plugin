@@ -1,5 +1,5 @@
 /**
- * `Rooms.pendingFileWrites` — the signal a deploy uses to decide whether a
+ * `DocStore.pendingFileWrites` — the signal a deploy uses to decide whether a
  * `git pull` would silently lose someone's un-flushed sentence.
  *
  * The whole value of this is timing, so the tests do not fake it: a real
@@ -11,28 +11,28 @@ import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { Rooms } from '../src/rooms.ts';
-import { SseHub } from '../src/sse.ts';
+import { DocStore } from '../src/doc-store.ts';
+import { SseBus } from '../src/sse.ts';
 import { createWebhookDispatcher } from '../src/webhooks.ts';
 import { waitFor } from './wait-for.ts';
 
 describe('pendingFileWrites', () => {
   let dataDir: string;
   let path: string;
-  let rooms: Rooms;
+  let docStore: DocStore;
 
   beforeEach(() => {
     dataDir = mkdtempSync(join(tmpdir(), 'cw-busy-'));
     path = join(dataDir, 'Main.kt');
     writeFileSync(path, 'fun main() {}\n');
-    rooms = new Rooms({
+    docStore = new DocStore({
       dataDir,
-      sse: new SseHub(),
+      sse: new SseBus(),
       webhooks: createWebhookDispatcher({ onLog: () => {} }),
       decorateDocMeta: (m) => ({ ...m, reviewUrl: `http://test/review/${m.docId}` }),
     });
-    rooms.getOrCreate('c1', { type: 'code', sourceUrl: path });
-    expect(rooms.attachFlatFile('c1', path, { writeBack: true }).ok).toBe(true);
+    docStore.getOrCreate('c1', { type: 'code', sourceUrl: path });
+    expect(docStore.attachFlatFile('c1', path, { writeBack: true }).ok).toBe(true);
   });
 
   afterEach(() => {
@@ -42,29 +42,29 @@ describe('pendingFileWrites', () => {
   it('is empty on an idle binding, names the doc mid-edit, and empties again', async () => {
     // Negative, positive, negative — in one test, on one binding, so the
     // empty answers are demonstrably not the only answer this can give.
-    expect(rooms.pendingFileWrites()).toEqual([]);
+    expect(docStore.pendingFileWrites()).toEqual([]);
 
-    rooms.get('c1')?.ydoc.getText('content').insert(0, '// half a thought\n');
-    const busy = rooms.pendingFileWrites();
+    docStore.get('c1')?.ydoc.getText('content').insert(0, '// half a thought\n');
+    const busy = docStore.pendingFileWrites();
     expect(busy).toHaveLength(1);
     expect(busy[0]?.docId).toBe('c1');
     expect(busy[0]?.path).toBe(path);
 
-    await waitFor(() => rooms.pendingFileWrites().length === 0, {
+    await waitFor(() => docStore.pendingFileWrites().length === 0, {
       describe: 'the pending write-back to drain',
     });
   });
 
   it('reports only bindings under the root it was asked about', () => {
-    rooms.get('c1')?.ydoc.getText('content').insert(0, 'x');
+    docStore.get('c1')?.ydoc.getText('content').insert(0, 'x');
     // Positive control: with no root, and with the containing root, it is
     // there — so the absence below is about the root and nothing else.
-    expect(rooms.pendingFileWrites()).toHaveLength(1);
-    expect(rooms.pendingFileWrites(dataDir)).toHaveLength(1);
+    expect(docStore.pendingFileWrites()).toHaveLength(1);
+    expect(docStore.pendingFileWrites(dataDir)).toHaveLength(1);
 
     const elsewhere = mkdtempSync(join(tmpdir(), 'cw-other-'));
     try {
-      expect(rooms.pendingFileWrites(elsewhere)).toEqual([]);
+      expect(docStore.pendingFileWrites(elsewhere)).toEqual([]);
     } finally {
       rmSync(elsewhere, { recursive: true, force: true });
     }
@@ -80,14 +80,14 @@ describe('pendingFileWrites', () => {
       mkdirSync(lookalike);
       const bound = join(lookalike, 'Main.kt');
       writeFileSync(bound, 'fun main() {}\n');
-      rooms.getOrCreate('c2', { type: 'code', sourceUrl: bound });
-      expect(rooms.attachFlatFile('c2', bound, { writeBack: true }).ok).toBe(true);
-      rooms.get('c2')?.ydoc.getText('content').insert(0, 'x');
+      docStore.getOrCreate('c2', { type: 'code', sourceUrl: bound });
+      expect(docStore.attachFlatFile('c2', bound, { writeBack: true }).ok).toBe(true);
+      docStore.get('c2')?.ydoc.getText('content').insert(0, 'x');
 
       // Positive control on the root that really does contain it.
-      expect(rooms.pendingFileWrites(lookalike).map((d) => d.docId)).toEqual(['c2']);
+      expect(docStore.pendingFileWrites(lookalike).map((d) => d.docId)).toEqual(['c2']);
       // …and the prefix-sharing sibling sees nothing.
-      expect(rooms.pendingFileWrites(repo)).toEqual([]);
+      expect(docStore.pendingFileWrites(repo)).toEqual([]);
     } finally {
       rmSync(parent, { recursive: true, force: true });
     }
