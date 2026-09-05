@@ -20,7 +20,7 @@ export interface SetDoc {
   workspaceId?: string;
 }
 
-/** The listing URL scoped to one review set. */
+/** The listing URL scoped to one attachment set. */
 export function setDocsUrl(setId: string): string {
   return `/api/docs?setId=${encodeURIComponent(setId)}`;
 }

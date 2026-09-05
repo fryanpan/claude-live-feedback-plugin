@@ -5,7 +5,7 @@
  * ## Why the marker is not simply `git describe --always --dirty`
  *
  * It was, and the suffix stopped meaning anything. Prod's deploy source is the
- * primary checkout, and that checkout also hosts **bound review documents**:
+ * primary checkout, and that checkout also hosts **bound attachments**:
  * markdown files under `docs/` that are attached to a live doc, so every agent
  * edit flushes back to the file ~1s later. Once such a file is also *tracked*
  * (which is a thing this repo deliberately does more of), the checkout has a
@@ -41,7 +41,7 @@
  * - `demos/` **is** served, live, out of the deploy source — `bin.ts` resolves
  *   `join(repoRoot, 'demos')` and `server.ts` serves `/demos/*` per request. So
  *   an uncommitted demo genuinely changes what a browser gets, and `demos/`
- *   stays on the marking side even though it holds bound review documents too.
+ *   stays on the marking side even though it holds bound attachments too.
  *   "It is a bound doc" is therefore NOT the criterion; "this deploy does not
  *   build or serve it" is.
  *

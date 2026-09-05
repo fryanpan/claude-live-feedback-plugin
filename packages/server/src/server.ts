@@ -2235,7 +2235,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
    *
    * Covers BOTH surfaces a thread can live on, and the second one is not a
    * nicety: the thread that asked you for something is very often a comment
-   * on a markdown review doc, not a task. A version of this that answered
+   * on a markdown attachment, not a task. A version of this that answered
    * only for `task:` docs would hand back nothing on the commonest reply
    * path — reintroducing, one surface over, exactly the friction the whole
    * change exists to remove.

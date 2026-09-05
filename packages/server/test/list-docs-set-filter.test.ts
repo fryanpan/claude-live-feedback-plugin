@@ -1,5 +1,5 @@
 /**
- * GET /api/docs?setId=<id> scopes the listing to one review set.
+ * GET /api/docs?setId=<id> scopes the listing to one attachment set.
  *
  * The review sidebar's legacy flat-set path asks this route for EVERY doc on
  * the server and keeps the handful that share its `setId` — measured

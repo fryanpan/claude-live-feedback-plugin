@@ -250,7 +250,7 @@ export interface DocRoom {
   revisionTimer?: ReturnType<typeof setTimeout> | null;
 }
 
-/** A file leaf in the workspace tree (a single bound review doc). */
+/** A file leaf in the workspace tree (a single bound attachment). */
 export interface WorkspaceFileNode {
   type: 'file';
   docId: string;
@@ -1066,7 +1066,7 @@ export class DocStore {
   }
 
   /**
-   * Permanently remove a review doc: drop the in-memory room, cancel its
+   * Permanently remove an attachment: drop the in-memory room, cancel its
    * timers, and delete the persisted `.ydoc` so it doesn't reload on the
    * next restart. The bound SOURCE file (sourceUrl) is the user's own file
    * and is left untouched.
@@ -2381,7 +2381,7 @@ export class DocStore {
 
   /**
    * Bind a whole folder/worktree for review. Scans the folder for
-   * supported files, creates one review doc per file grouped under a
+   * supported files, creates one attachment per file grouped under a
    * single review id, and returns the resulting file list plus a
    * record of anything skipped.
    *

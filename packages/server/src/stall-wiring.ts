@@ -872,7 +872,7 @@ export function createStallWiring(ctx: StallWiringContext): StallWiring {
   // EVERY other doc room needs the same bridge, for the same reason and with
   // one extra hop. `docStore.broadcastToRoom` fans out on `ws~<meta.workspaceId>`
   // — the GROUPING tag a diff review or folder bind sets — and a board link is
-  // not that tag, so a plain review doc filed on a board reached that board's
+  // not that tag, so a plain attachment filed on a board reached that board's
   // agent never. Measured: a session with six docs under `watch_doc` and a
   // seat on the board heard nothing from any of them on the board channel, and
   // silence from a subscription you never made is indistinguishable from
