@@ -77,7 +77,7 @@
  */
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
-import { isReviewItemOpen, reviewWithdrawn } from '@feedback/core';
+import { type TaskReviewItem, isReviewItemOpen, reviewWithdrawn } from '@feedback/core';
 import { taskDeepLink } from './home-brief.ts';
 import type { StallSnapshot, ToldTime } from './stall-nudge.ts';
 import type { TaskStore } from './tasks.ts';
@@ -205,6 +205,31 @@ function label(title: string): string {
   return title.replace(/[[\]]/g, '');
 }
 
+/**
+ * The newest moment OUR OWN item was written — its filing, its revisions, the
+ * questions asked back on it, the judge's verdict.
+ *
+ * `anchorHolds` reads the anchor ticket's `updatedAt` to ask whether anybody
+ * else has touched the row, and every write to an item on that ticket bumps
+ * it — including the reader's. So a person asking a question back on this
+ * very item read as the row moving, and the module answered by withdrawing
+ * the item and re-anchoring it somewhere else, which drops the thread the
+ * reader had just started. It only ever passed because the question and the
+ * filing landed in the same millisecond; one millisecond apart, it moved.
+ *
+ * Comparing against this instead asks the question the header always meant:
+ * is the ticket's newest write one of OURS. A stranger's write in the same
+ * millisecond as our own still reads as ours, which is the same tie the
+ * clock could never break anyway and strictly narrower than the old test.
+ */
+function ownActivityAt(item: TaskReviewItem): number {
+  let at = item.createdAt;
+  for (const revision of item.revisions ?? []) if (revision.at > at) at = revision.at;
+  for (const question of item.infoRequests ?? []) if (question.ts > at) at = question.ts;
+  if (item.judge !== undefined && item.judge.at > at) at = item.judge.at;
+  return at;
+}
+
 /** One board's live item, as the sidecar remembers it. */
 interface Filed {
   /** The ticket it hangs on — see the header on why it is chosen. */
@@ -294,7 +319,7 @@ export class StallEscalations {
 
     if (prior && item) {
       if (isReviewItemOpen(item) && !reviewWithdrawn(item.review)) {
-        this.updateLive(key, prior, fresh, now);
+        this.updateLive(key, prior, item, fresh, now);
         return;
       }
       // Answered, or withdrawn by a person. They have seen this set; only a
@@ -382,9 +407,10 @@ export class StallEscalations {
    * stuck, on a ticket the reader can still reach?
    *
    * Three facts, all readable while our own item masks the row from the gate:
-   * the ticket is not archived, it is not `done`, and nothing has touched it
-   * since we last wrote to it (our write set `updatedAt` to `wroteAt`, so a
-   * later bump is somebody else's).
+   * the ticket is not archived, it is not `done`, and nobody ELSE has
+   * touched it since we last wrote to it (our write set `updatedAt` to
+   * `wroteAt`, so a later bump is somebody else's — unless our own item
+   * explains it, see `ownActivityAt`).
    *
    * `done` is not a detail. `taskReviewItems` in `review-queue.ts` skips a
    * done ticket's items outright, so an item left on one is gone from the
@@ -394,17 +420,23 @@ export class StallEscalations {
    * store). When this returns false the item MOVES rather than being revised
    * in place.
    */
-  private anchorHolds(prior: Filed): boolean {
+  private anchorHolds(prior: Filed, item: TaskReviewItem): boolean {
     const task = this.store.getTask(prior.taskId);
     if (!task) return false;
     if (task.status === 'done' || task.archivedAt !== undefined) return false;
-    return task.updatedAt <= prior.wroteAt;
+    return task.updatedAt <= Math.max(prior.wroteAt, ownActivityAt(item));
   }
 
   /** Revise the open item to the rows that still qualify, move it when its
    *  anchor no longer holds, or withdraw it when nothing qualifies. */
-  private updateLive(key: string, prior: Filed, fresh: EscalatedRow[], now: number): void {
-    if (!this.anchorHolds(prior)) {
+  private updateLive(
+    key: string,
+    prior: Filed,
+    item: TaskReviewItem,
+    fresh: EscalatedRow[],
+    now: number,
+  ): void {
+    if (!this.anchorHolds(prior, item)) {
       // Re-anchored in the SAME tick and with no cooldown: the cooldown is
       // there to stop a board asking twice about a board-state that keeps
       // flickering, and this is one ask being moved to somewhere the reader
