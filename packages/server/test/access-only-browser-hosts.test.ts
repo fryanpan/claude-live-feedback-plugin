@@ -170,7 +170,7 @@ describe('access-only browser hosts', () => {
     base = `http://localhost:${handle.port}`;
     jwt = await signJwt(OPERATOR_AUD);
 
-    const board = await local('/api/workspaces', {
+    const board = await local('/workspaces', {
       method: 'POST',
       body: JSON.stringify({ name: 'Access-only board' }),
     });
@@ -190,14 +190,14 @@ describe('access-only browser hosts', () => {
     ).toBe(200);
     expect(
       (
-        await local(`/api/workspaces/${boardId}/docs`, {
+        await local(`/workspaces/${boardId}/docs`, {
           method: 'POST',
           body: JSON.stringify({ docId }),
         })
       ).status,
     ).toBe(200);
 
-    const bind = await local('/api/workspaces', {
+    const bind = await local('/workspaces', {
       method: 'POST',
       body: JSON.stringify({ folderPath: folder, hubWorkspaceId: boardId }),
     });
@@ -224,12 +224,12 @@ describe('access-only browser hosts', () => {
 
   /** Every browser-readable surface, by the name a person would use. */
   const surfaces = (): Array<[string, string]> => [
-    ['the board page', `/workspaces/${boardId}`],
-    ['the board record', `/api/workspaces/${boardId}`],
+    ['the board page', `/workspaces/${boardId}?format=json`],
+    ['the board record', `/workspaces/${boardId}?format=json`],
     ['a doc', `/api/docs/${docId}`],
     ['its comment threads', `/api/docs/${docId}/threads`],
     ['the board attachments', `/workspaces/${boardId}/agents`],
-    ['a bound folder tree', `/api/workspaces/${treeId}/tree`],
+    ['a bound folder tree', `/api/reviews/${treeId}/tree`],
     ['a diff review file', `/api/docs/${encodeURIComponent(diffMemberDocId)}`],
     ['the doc SSE stream', `/events/${encodeURIComponent(docId)}`],
   ];

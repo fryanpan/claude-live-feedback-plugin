@@ -67,7 +67,7 @@ describe("a task's linked doc counts as the task moving", () => {
     lead: ReturnType<typeof listenFrames>;
   }> {
     const { workspace } = await jj<{ workspace: { id: string } }>(
-      await post('/api/workspaces', { name: 'search-revamp', leadAgentId: LEAD.id }),
+      await post('/workspaces', { name: 'search-revamp', leadAgentId: LEAD.id }),
     );
     await jj(
       await post(`/workspaces/${workspace.id}/agents`, {
@@ -84,7 +84,7 @@ describe("a task's linked doc counts as the task moving", () => {
 
   async function inProgressRow(workspaceId: string, title: string): Promise<string> {
     const { task } = await jj<{ task: { id: string } }>(
-      await post(`/api/workspaces/${workspaceId}/tasks`, {
+      await post(`/workspaces/${workspaceId}/tasks`, {
         title,
         body: `Agent can ${title.toLowerCase()} so that the queue keeps moving.`,
         assignee: LEAD.name,

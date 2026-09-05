@@ -5,7 +5,7 @@
  * read their collaborators off `WorkspaceRoutesContext` instead of the scope.
  *
  * The roster lives at `/workspaces/<id>/agents`. It used to be
- * `/api/workspaces/<id>/attachments`, and that name was the collision the
+ * `/workspaces/<id>/attachments`, and that name was the collision the
  * glossary could not land around: an *attachment* is a doc, a mockup, a
  * preview or a diff filed on a board, and this collection holds none of
  * those — it holds the sessions sitting at the board. The plainer noun goes
@@ -20,7 +20,7 @@ import {
   readReleasedPluginVersion,
 } from '../plugin-release.ts';
 import { isAttachmentRuntime } from '../tasks.ts';
-import { matchWorkspaceRoute } from './workspace-path.ts';
+import { matchWorkspaceRoute } from '../workspace-path.ts';
 import type { WorkspaceRouteRequest, WorkspaceRoutesContext } from './workspace-routes-context.ts';
 
 /** Answers the routes below, or `undefined` when the path is none of them. */
@@ -39,9 +39,9 @@ export async function handleWorkspaceAttachments(
   const wsAgentsMatch = matchWorkspaceRoute(pathname, 'agents');
   if (wsAgentsMatch && req.method === 'GET') {
     const workspaceId = wsAgentsMatch.workspaceId;
-    if (!taskStore.getWorkspace(workspaceId)) {
-      return j(404, { error: 'workspace not found' });
-    }
+    // The board's existence is not asked here any more —
+    // `middleware/workspace-scope.ts` asked it once, above every handler, and
+    // refused with this same 404 when the answer was no.
     const attachments = visitor
       ? taskStore.listPublicAttachments(workspaceId)
       : taskStore.listAttachments(workspaceId);
@@ -197,9 +197,7 @@ export async function handleWorkspaceAttachments(
   // below, with the same idempotency: a replayed receipt for a row
   // already cleared answers 200 with cleared:false rather than an
   // error.
-  const wsCommentAckMatch = pathname.match(
-    /^\/api\/workspaces\/([^/]+)\/comment-queue\/([^/]+)\/ack$/,
-  );
+  const wsCommentAckMatch = pathname.match(/^\/workspaces\/([^/]+)\/comment-queue\/([^/]+)\/ack$/);
   if (wsCommentAckMatch && req.method === 'POST') {
     if (visitor) return j(403, { error: 'not available to share visitors' });
     const workspaceId = decodeURIComponent(wsCommentAckMatch[1] ?? '');
@@ -214,7 +212,7 @@ export async function handleWorkspaceAttachments(
   // cleared:false rather than an error, because a retrying client
   // should not have to distinguish "gone because I acked it" from
   // "gone because someone else drained it".
-  const wsVoiceAckMatch = pathname.match(/^\/api\/workspaces\/([^/]+)\/voice-queue\/([^/]+)\/ack$/);
+  const wsVoiceAckMatch = pathname.match(/^\/workspaces\/([^/]+)\/voice-queue\/([^/]+)\/ack$/);
   if (wsVoiceAckMatch && req.method === 'POST') {
     if (visitor) return j(403, { error: 'not available to share visitors' });
     const workspaceId = decodeURIComponent(wsVoiceAckMatch[1] ?? '');

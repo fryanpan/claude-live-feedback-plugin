@@ -132,7 +132,7 @@ describe('set_workspace_lead over the wire', () => {
       seen.length = 0;
       const res = await child.call('set_workspace_lead', { workspaceId: WS });
       expect(res.isError, text(res)).not.toBe(true);
-      expect(seen.some((r) => r.method === 'PUT' && r.path === `/api/workspaces/${WS}/lead`)).toBe(
+      expect(seen.some((r) => r.method === 'PUT' && r.path === `/workspaces/${WS}/lead`)).toBe(
         true,
       );
     } finally {

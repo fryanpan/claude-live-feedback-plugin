@@ -609,7 +609,7 @@ describe('DocStore.bindDiff', () => {
       });
       expect(res.ok).toBe(true);
       const grouped = (await (
-        await fetch(`http://localhost:${handle.port}/api/workspaces/http-groups/grouped`)
+        await fetch(`http://localhost:${handle.port}/api/reviews/http-groups/grouped`)
       ).json()) as { groups: Array<{ title: string; details?: string }> };
       expect(grouped.groups.map((g) => g.title)).toEqual(['Via HTTP']);
 
@@ -627,7 +627,7 @@ describe('DocStore.bindDiff', () => {
       });
       expect(dRes.ok).toBe(true);
       const withDetails = (await (
-        await fetch(`http://localhost:${handle.port}/api/workspaces/http-details/grouped`)
+        await fetch(`http://localhost:${handle.port}/api/reviews/http-details/grouped`)
       ).json()) as { groups: Array<{ title: string; details?: string }> };
       expect(withDetails.groups[0]?.details).toBe('Chapter one.');
 

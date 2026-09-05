@@ -122,7 +122,7 @@ describe('watch coverage — what an agent is missing, not what it holds', () =>
     post(watchesPath(agentId), { add: keys, name: agentId });
 
   const makeBoard = async (name: string): Promise<string> => {
-    const r = await post('/api/workspaces', { name, goal: 'Ship the index.' });
+    const r = await post('/workspaces', { name, goal: 'Ship the index.' });
     expect(r.status).toBe(200);
     return ((await r.json()) as { workspace: { id: string } }).workspace.id;
   };
@@ -174,7 +174,7 @@ describe('watch coverage — what an agent is missing, not what it holds', () =>
       'the landing page copy needs another pass',
       'park the export work until next week',
     ]) {
-      const voice = await post(`/api/workspaces/${workspaceId}/voice`, {
+      const voice = await post(`/workspaces/${workspaceId}/voice`, {
         transcript,
         author: PERSON,
       });
@@ -283,7 +283,7 @@ describe('watch coverage — what an agent is missing, not what it holds', () =>
     // seat, on a key that is not a board at all.
     const boardId = await makeBoard('holding-board');
     writeFileSync(join(srcDir, 'README.md'), '# Bound folder\n\nBody.\n');
-    const bound = await post('/api/workspaces', { folderPath: srcDir, hubWorkspaceId: boardId });
+    const bound = await post('/workspaces', { folderPath: srcDir, hubWorkspaceId: boardId });
     expect(bound.status).toBe(200);
     const groupingId = ((await bound.json()) as { workspaceId: string }).workspaceId;
     expect(groupingId).not.toBe(boardId);
@@ -380,7 +380,7 @@ describe('watch coverage — what an agent is missing, not what it holds', () =>
     };
 
     const seedBoard = async (name: string): Promise<string> => {
-      const r = await tpost('/api/workspaces', { name, goal: 'Ship the index.' });
+      const r = await tpost('/workspaces', { name, goal: 'Ship the index.' });
       return ((await r.json()) as { workspace: { id: string } }).workspace.id;
     };
 
@@ -394,7 +394,7 @@ describe('watch coverage — what an agent is missing, not what it holds', () =>
         'the landing page copy needs another pass',
         'park the export work until next week',
       ]) {
-        const voice = await tpost(`/api/workspaces/${boardId}/voice`, {
+        const voice = await tpost(`/workspaces/${boardId}/voice`, {
           transcript,
           author: PERSON,
         });
@@ -479,7 +479,7 @@ describe('watch coverage — what an agent is missing, not what it holds', () =>
       const sbase = `http://localhost:${split.port}`;
       const shost = { host: `localhost:${split.port}`, 'content-type': 'application/json' };
       try {
-        const r = await fetch(`${sbase}/api/workspaces`, {
+        const r = await fetch(`${sbase}/workspaces`, {
           method: 'POST',
           headers: shost,
           body: JSON.stringify({ name: 'busy-but-quiet', goal: 'Ship it.' }),

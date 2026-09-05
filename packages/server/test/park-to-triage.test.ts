@@ -56,7 +56,7 @@ describe('park_task moves a row to triage and comments', () => {
 
   async function seedWorkspace(): Promise<{ wsId: string; G: GoalIds }> {
     const { workspace } = await jj<{ workspace: { id: string } }>(
-      await post('/api/workspaces', { name: 'search-revamp', goal: 'Ship search v2.' }),
+      await post('/workspaces', { name: 'search-revamp', goal: 'Ship search v2.' }),
     );
     const G = await seedGoalsOverHttp(
       base,
@@ -72,7 +72,7 @@ describe('park_task moves a row to triage and comments', () => {
    *  moved" assertion below pass vacuously. */
   async function seedTodoTask(workspaceId: string, goal: string): Promise<Task> {
     const { task } = await jj<{ task: Task }>(
-      await post(`/api/workspaces/${workspaceId}/tasks`, {
+      await post(`/workspaces/${workspaceId}/tasks`, {
         author: AGENT,
         title: 'tune the ranking',
         goal,
@@ -84,7 +84,7 @@ describe('park_task moves a row to triage and comments', () => {
 
   async function getTask(workspaceId: string, taskId: string): Promise<Task> {
     const { tasks } = await jj<{ tasks: Task[] }>(
-      await fetch(`${base}/api/workspaces/${workspaceId}/tasks`),
+      await fetch(`${base}/workspaces/${workspaceId}/tasks?format=json`),
     );
     const found = tasks.find((t) => t.id === taskId);
     expect(found, `no such task: ${taskId}`).toBeDefined();
@@ -167,7 +167,7 @@ describe('park_task moves a row to triage and comments', () => {
   it('still comments on a row already in triage, and says the status did not move', async () => {
     const { wsId, G } = await seedWorkspace();
     const { task } = await jj<{ task: Task }>(
-      await post(`/api/workspaces/${wsId}/tasks`, {
+      await post(`/workspaces/${wsId}/tasks`, {
         author: AGENT,
         title: 'tune the ranking',
         goal: G.g1,
@@ -370,7 +370,9 @@ describe('rows still carrying the removed parked state', () => {
       // would pass a bare count assertion.
       expect(res.migrated.map((m) => m.taskId).sort()).toEqual(['t-bare', 't-dated']);
 
-      const { tasks } = (await (await fetch(`${at}/api/workspaces/w-legacy/tasks`)).json()) as {
+      const { tasks } = (await (
+        await fetch(`${at}/workspaces/w-legacy/tasks?format=json`)
+      ).json()) as {
         tasks: Array<Record<string, unknown>>;
       };
       const byId = new Map(tasks.map((t) => [t.id as string, t]));

@@ -62,9 +62,9 @@ describe('GET /api/docs honours its workspaceId filter', () => {
     handle = createServer({ port: 0, dataDir });
     base = `http://localhost:${handle.port}`;
 
-    const a = await post('/api/workspaces', { name: 'board-a', goal: 'Ship A.' });
+    const a = await post('/workspaces', { name: 'board-a', goal: 'Ship A.' });
     wsA = ((await a.json()) as { workspace: { id: string } }).workspace.id;
-    const b = await post('/api/workspaces', { name: 'board-b', goal: 'Ship B.' });
+    const b = await post('/workspaces', { name: 'board-b', goal: 'Ship B.' });
     wsB = ((await b.json()) as { workspace: { id: string } }).workspace.id;
 
     for (const [docId, ws] of [

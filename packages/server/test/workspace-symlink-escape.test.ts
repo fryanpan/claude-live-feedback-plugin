@@ -11,7 +11,7 @@
  *
  * It matters here more than it does for static files, because both endpoints
  * are reachable by a SHARE VISITOR on a workspace/diff share
- * (`POST /api/workspaces/<id>/{context-file,editable-file}` are on the
+ * (`POST /workspaces/<id>/{context-file,editable-file}` are on the
  * allowlist in middleware/host-guard.ts), and a diff review's workspace root
  * is the whole repository. `git ls-files` lists tracked symlinks, so on a real
  * repo the escaping path is also advertised in the visitor's own file list.
@@ -75,7 +75,7 @@ describe('symlink escape from a shared workspace', () => {
     });
 
   const openContext = (relPath: string) =>
-    visitor(`/api/workspaces/${workspaceId}/context-file`, {
+    visitor(`/api/reviews/${workspaceId}/context-file`, {
       method: 'POST',
       body: JSON.stringify({ relPath }),
     });
@@ -116,14 +116,14 @@ describe('symlink escape from a shared workspace', () => {
     // The bind is a GROUPING and is not shareable on its own; file it on a
     // board and share that. The escape this file guards is unchanged — a
     // board visitor reaches the grouping's files through the same routes.
-    const board = await local('/api/workspaces', {
+    const board = await local('/workspaces', {
       method: 'POST',
       body: JSON.stringify({ name: 'Escape board' }),
     }).then((r) => r.json());
     const boardId = board.workspace.id as string;
     expect(boardId).toBeTruthy();
 
-    const bound = await local('/api/workspaces', {
+    const bound = await local('/workspaces', {
       method: 'POST',
       body: JSON.stringify({ folderPath: repo, hubWorkspaceId: boardId }),
     }).then((r) => r.json());
@@ -208,7 +208,7 @@ describe('symlink escape from a shared workspace', () => {
     // miss-rescan window (250ms) or the tree gate answers not-listed first.
     symlinkSync(join(outside, 'id_rsa'), join(repo, 'escape.md'));
     await new Promise((r) => setTimeout(r, 400));
-    const res = await visitor(`/api/workspaces/${workspaceId}/editable-file`, {
+    const res = await visitor(`/api/reviews/${workspaceId}/editable-file`, {
       method: 'POST',
       body: JSON.stringify({ relPath: 'escape.md' }),
     });

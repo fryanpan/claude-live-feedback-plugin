@@ -142,7 +142,7 @@ describe('ending share access closes an open meeting socket', () => {
     });
     base = `http://localhost:${handle.port}`;
 
-    const created = await postLocal('/api/workspaces', { name: 'Meeting board' });
+    const created = await postLocal('/workspaces', { name: 'Meeting board' });
     expect(created.status).toBe(200);
     board = ((await created.json()) as { workspace: { id: string } }).workspace.id;
 
@@ -155,7 +155,7 @@ describe('ending share access closes an open meeting socket', () => {
     });
     expect(doc.status).toBe(200);
     docId = ((await doc.json()) as { docId: string }).docId;
-    const filed = await postLocal(`/api/workspaces/${encodeURIComponent(board)}/docs`, { docId });
+    const filed = await postLocal(`/workspaces/${encodeURIComponent(board)}/docs`, { docId });
     expect(filed.status).toBe(200);
   });
 

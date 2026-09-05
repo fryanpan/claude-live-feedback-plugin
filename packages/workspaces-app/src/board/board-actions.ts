@@ -489,7 +489,7 @@ export function createBoardActions(deps: BoardActionDeps) {
    *  the panel then refuses to offer Archive at all. */
   async function goalCascadeCount(goalId: string): Promise<{ tasks: number } | null> {
     const res = await fetchJson<{ taskIds?: string[] }>(
-      `/api/goals/${encodeURIComponent(goalId)}/cascade`,
+      `/workspaces/${encodeURIComponent(workspaceId)}/goals/${encodeURIComponent(goalId)}/cascade`,
     );
     if (!res) return null;
     return { tasks: res.taskIds?.length ?? 0 };
@@ -518,9 +518,13 @@ export function createBoardActions(deps: BoardActionDeps) {
    * is the one that happened.
    */
   async function archiveGoal(section: BoardSection): Promise<void> {
-    const res = await send(`/api/goals/${encodeURIComponent(section.id)}/archive`, 'POST', {
-      author,
-    });
+    const res = await send(
+      `/workspaces/${encodeURIComponent(workspaceId)}/goals/${encodeURIComponent(section.id)}/archive`,
+      'POST',
+      {
+        author,
+      },
+    );
     if (!res.ok) {
       showToast('Archiving failed — the goal is still on the board');
       return;
@@ -543,9 +547,13 @@ export function createBoardActions(deps: BoardActionDeps) {
   /** Put an archived band back, with the rows its archive took. The Undo
    *  button, the panel's Restore and the restore list's rows are all this. */
   async function restoreGoal(section: BoardSection): Promise<void> {
-    const res = await send(`/api/goals/${encodeURIComponent(section.id)}/restore`, 'POST', {
-      author,
-    });
+    const res = await send(
+      `/workspaces/${encodeURIComponent(workspaceId)}/goals/${encodeURIComponent(section.id)}/restore`,
+      'POST',
+      {
+        author,
+      },
+    );
     if (!res.ok) {
       showToast('Restoring failed — the goal is still archived');
       return;
@@ -601,11 +609,11 @@ export function createBoardActions(deps: BoardActionDeps) {
    * stale copy stops being able to do damage at all.
    */
   async function retitleGoal(sectionId: string, title: string): Promise<void> {
-    const res = await send(
-      `/api/workspaces/${encodeURIComponent(workspaceId)}/goals/rename`,
-      'POST',
-      { goal: sectionId, title, author },
-    );
+    const res = await send(`/workspaces/${encodeURIComponent(workspaceId)}/goals/rename`, 'POST', {
+      goal: sectionId,
+      title,
+      author,
+    });
     if (!res.ok) {
       showToast('Goal rename failed');
       revertToServerTruth();
@@ -620,11 +628,12 @@ export function createBoardActions(deps: BoardActionDeps) {
    * clears, the same contract `setTaskDue` uses.
    */
   async function setGoalDue(sectionId: string, title: string, dueAt: number | null): Promise<void> {
-    const res = await send(
-      `/api/workspaces/${encodeURIComponent(workspaceId)}/goals/rename`,
-      'POST',
-      { goal: sectionId, title, dueAt, author },
-    );
+    const res = await send(`/workspaces/${encodeURIComponent(workspaceId)}/goals/rename`, 'POST', {
+      goal: sectionId,
+      title,
+      dueAt,
+      author,
+    });
     if (!res.ok) {
       showToast(dueAt === null ? 'Clearing the due date failed' : 'Setting the due date failed');
       revertToServerTruth();
@@ -653,7 +662,7 @@ export function createBoardActions(deps: BoardActionDeps) {
    *  client-built full list can only add by re-asserting everything it last
    *  read, and what it did not read is what gets removed. */
   async function addGoal(title: string, after?: string): Promise<void> {
-    const res = await send(`/api/workspaces/${encodeURIComponent(workspaceId)}/goals/add`, 'POST', {
+    const res = await send(`/workspaces/${encodeURIComponent(workspaceId)}/goals/add`, 'POST', {
       title,
       ...(after !== undefined ? { after } : {}),
       author,
@@ -662,7 +671,7 @@ export function createBoardActions(deps: BoardActionDeps) {
   }
 
   async function saveLead(leadAgentId: string): Promise<void> {
-    const res = await send(`/api/workspaces/${encodeURIComponent(workspaceId)}/lead`, 'PUT', {
+    const res = await send(`/workspaces/${encodeURIComponent(workspaceId)}/lead`, 'PUT', {
       leadAgentId,
       author,
     });
@@ -693,7 +702,7 @@ export function createBoardActions(deps: BoardActionDeps) {
    * the way a boot deep link does.
    */
   async function newTask(): Promise<boolean> {
-    const res = await send(`/api/workspaces/${encodeURIComponent(workspaceId)}/tasks`, 'POST', {
+    const res = await send(`/workspaces/${encodeURIComponent(workspaceId)}/tasks`, 'POST', {
       untitled: true,
       author,
     });
@@ -725,7 +734,7 @@ export function createBoardActions(deps: BoardActionDeps) {
    * for no speaker labels and pays for none.
    */
   async function startHuddle(kind: HuddleKind, mode: CaptureMode): Promise<boolean> {
-    const res = await send(`/api/workspaces/${encodeURIComponent(workspaceId)}/huddles`, 'POST', {
+    const res = await send(`/workspaces/${encodeURIComponent(workspaceId)}/huddles`, 'POST', {
       kind,
     });
     const url = typeof res.data?.url === 'string' ? res.data.url : null;

@@ -1,5 +1,5 @@
 /**
- * `GET /api/workspaces/:id/related-work` — what on this board already covers
+ * `GET /workspaces/:id/related-work` — what on this board already covers
  * a request, before anybody writes a plan for it.
  *
  * The route's whole job is to assemble candidates out of board state and hand
@@ -76,7 +76,7 @@ export async function handleWorkspaceRelated(
 ): Promise<Response | undefined> {
   const { taskStore, docStore, j } = ctx;
   const { req, pathname, url } = rq;
-  const match = pathname.match(/^\/api\/workspaces\/([^/]+)\/related-work$/);
+  const match = pathname.match(/^\/workspaces\/([^/]+)\/related-work$/);
   if (!match || req.method !== 'GET') return undefined;
 
   const workspaceId = decodeURIComponent(match[1] ?? '');

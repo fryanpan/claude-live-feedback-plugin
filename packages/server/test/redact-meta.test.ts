@@ -97,7 +97,7 @@ describe('redactMetaForVisitor', () => {
 
   it('withholds workspaceId from a DOC-scoped share of a workspace member', () => {
     // The client reads any non-empty workspaceId as permission to render
-    // workspace nav and poll /api/workspaces/<id>/… every 30s — which
+    // workspace nav and poll /workspaces/<id>/… every 30s — which
     // shareScopeAllows refuses for a doc share. Advertising it buys the
     // visitor a broken sidebar and a loop of 403s.
     const solo = redactMetaForVisitor(FULL) as Record<string, unknown>;

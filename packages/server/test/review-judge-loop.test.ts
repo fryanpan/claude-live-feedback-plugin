@@ -316,7 +316,7 @@ describe('the review-item hold loop', () => {
         }),
       );
       const { items } = await jj<{ items: Array<{ reviewItemId?: string }> }>(
-        await fetch(`${h.base}/api/workspaces/${workspaceId}/review-items`),
+        await fetch(`${h.base}/workspaces/${workspaceId}/review-items`),
       );
       expect(items.some((i) => i.reviewItemId === itemId)).toBe(true);
     });

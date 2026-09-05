@@ -69,7 +69,7 @@ describe('find_related_work', () => {
     expect(res.isError).toBe(false);
     const sent = res.sent.find((r) => r.path.endsWith('/related-work'));
     expect(sent?.method).toBe('GET');
-    expect(sent?.path).toBe('/api/workspaces/w-1/related-work');
+    expect(sent?.path).toBe('/workspaces/w-1/related-work');
     expect(sent?.query.get('q')).toBe('Write a plan for the meeting notes UX');
   });
 
@@ -95,7 +95,7 @@ describe('find_related_work', () => {
   it('escapes a board id rather than splicing it into the path', async () => {
     const res = await mcp.call('find_related_work', { workspaceId: 'w/1 2', text: 'notes' });
     const sent = res.sent.find((r) => r.path.includes('related-work'));
-    expect(sent?.path).toBe('/api/workspaces/w%2F1%202/related-work');
+    expect(sent?.path).toBe('/workspaces/w%2F1%202/related-work');
   });
 
   it('refuses an empty request without calling the server', async () => {

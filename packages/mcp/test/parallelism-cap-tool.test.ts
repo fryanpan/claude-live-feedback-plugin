@@ -104,7 +104,7 @@ describe('set_parallelism_cap tool', () => {
     expect(res.isError).toBe(false);
     expect(res.sent).toHaveLength(1);
     expect(res.sent[0]?.method).toBe('PUT');
-    expect(res.sent[0]?.url).toBe('/api/workspaces/w%20DRa7%2FBg/parallelism-cap');
+    expect(res.sent[0]?.url).toBe('/workspaces/w%20DRa7%2FBg/parallelism-cap');
     const body = res.sent[0]?.body as { cap: number; author?: { name?: string } };
     expect(body.cap).toBe(3);
     // Without an author the change lands as `unknown` instead of this agent.

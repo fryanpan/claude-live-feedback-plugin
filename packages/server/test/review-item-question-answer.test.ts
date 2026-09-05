@@ -79,13 +79,13 @@ describe('answering with a question asks back instead of closing', () => {
 
   async function seedWorkspace(): Promise<string> {
     const { workspace } = await jj<{ workspace: { id: string } }>(
-      await post('/api/workspaces', { name: 'index-rebuild', goal: 'Rebuild the index nightly.' }),
+      await post('/workspaces', { name: 'index-rebuild', goal: 'Rebuild the index nightly.' }),
     );
     return workspace.id;
   }
   async function seedTask(workspaceId: string, extra: Record<string, unknown> = {}): Promise<Task> {
     const { task } = await jj<{ task: Task }>(
-      await post(`/api/workspaces/${workspaceId}/tasks`, {
+      await post(`/workspaces/${workspaceId}/tasks`, {
         title: 'Rebuild the index nightly',
         assignee: 'Index Keeper',
         author: AGENT,
@@ -102,7 +102,7 @@ describe('answering with a question asks back instead of closing', () => {
   }
   async function storedTask(workspaceId: string, taskId: string): Promise<Task> {
     const { tasks } = await jj<{ tasks: Task[] }>(
-      await fetch(`${base}/api/workspaces/${workspaceId}/tasks`),
+      await fetch(`${base}/workspaces/${workspaceId}/tasks?format=json`),
     );
     const task = tasks.find((t) => t.id === taskId);
     expect(task, 'the task is on the board').toBeTruthy();
@@ -117,7 +117,7 @@ describe('answering with a question asks back instead of closing', () => {
   }
   async function queueRows(workspaceId: string, taskId: string): Promise<ReviewRow[]> {
     const { items } = await jj<{ items: ReviewRow[] }>(
-      await fetch(`${base}/api/workspaces/${workspaceId}/review-items`),
+      await fetch(`${base}/workspaces/${workspaceId}/review-items`),
     );
     return items.filter((r) => r.taskId === taskId);
   }

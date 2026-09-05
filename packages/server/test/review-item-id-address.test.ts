@@ -76,13 +76,13 @@ describe('reviewItemId as a universal address', () => {
 
   async function seedWorkspace(): Promise<string> {
     const { workspace } = await jj<{ workspace: { id: string } }>(
-      await post('/api/workspaces', { name: 'index-rebuild', goal: 'Rebuild the index nightly.' }),
+      await post('/workspaces', { name: 'index-rebuild', goal: 'Rebuild the index nightly.' }),
     );
     return workspace.id;
   }
   async function seedTask(workspaceId: string): Promise<Task> {
     const { task } = await jj<{ task: Task }>(
-      await post(`/api/workspaces/${workspaceId}/tasks`, {
+      await post(`/workspaces/${workspaceId}/tasks`, {
         title: 'Rebuild the index nightly',
         assignee: 'Index Keeper',
         author: AGENT,
@@ -98,7 +98,7 @@ describe('reviewItemId as a universal address', () => {
   }
   async function taskNow(workspaceId: string, taskId: string): Promise<Task> {
     const { tasks } = await jj<{ tasks: Task[] }>(
-      await fetch(`${base}/api/workspaces/${workspaceId}/tasks`),
+      await fetch(`${base}/workspaces/${workspaceId}/tasks?format=json`),
     );
     const task = tasks.find((t) => t.id === taskId);
     expect(task, 'the ticket should still be there').toBeTruthy();
@@ -106,7 +106,7 @@ describe('reviewItemId as a universal address', () => {
   }
   async function queueRows(workspaceId: string): Promise<ReviewRow[]> {
     const { items } = await jj<{ items: ReviewRow[] }>(
-      await fetch(`${base}/api/workspaces/${workspaceId}/review-items`),
+      await fetch(`${base}/workspaces/${workspaceId}/review-items`),
     );
     return items;
   }
@@ -121,7 +121,7 @@ describe('reviewItemId as a universal address', () => {
     const created = await jj<{ docId: string }>(
       await post('/api/docs', { docId: slug, type: 'markdown', sourceUrl: file }),
     );
-    await jj(await post(`/api/workspaces/${workspaceId}/docs`, { docId: created.docId }));
+    await jj(await post(`/workspaces/${workspaceId}/docs`, { docId: created.docId }));
     const opened = await jj<{ thread: { id: string; comments: Array<{ id: string }> } }>(
       await post(`/api/docs/${created.docId}/threads/by_find`, {
         find: 'The phone layout holds together.',

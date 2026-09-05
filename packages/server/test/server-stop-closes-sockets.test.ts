@@ -63,7 +63,7 @@ describe('stopping the server closes its open connections', () => {
         },
       },
     });
-    sock.write('GET /api/workspaces HTTP/1.1\r\nHost: localhost\r\nConnection: keep-alive\r\n\r\n');
+    sock.write('GET /workspaces HTTP/1.1\r\nHost: localhost\r\nConnection: keep-alive\r\n\r\n');
     // The control the whole test rests on: a request completed AND the socket
     // is still open afterwards. That is what a keep-alive connection is, and
     // it is the thing the leak leaves behind. If this half fails the assert

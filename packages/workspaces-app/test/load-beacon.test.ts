@@ -17,7 +17,7 @@ describe('the board reports its own load time', () => {
 
   it('posts one report to the load-reports route', () => {
     expect(src).toMatch(
-      /fetch\(`\/api\/workspaces\/\$\{encodeURIComponent\(workspaceId\)\}\/load-reports`,\s*\{\s*\n\s*method: 'POST'/,
+      /fetch\(`\/workspaces\/\$\{encodeURIComponent\(workspaceId\)\}\/load-reports`,\s*\{\s*\n\s*method: 'POST'/,
     );
   });
 

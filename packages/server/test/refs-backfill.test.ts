@@ -74,7 +74,7 @@ describe('refs backfill (route + settle scan)', () => {
     (refs ?? []).filter((r) => r.kind === 'doc').map((r) => (r as { docId: string }).docId);
 
   const makeTask = async (title: string): Promise<string> => {
-    const r = await post(`/api/workspaces/${wsId}/tasks`, {
+    const r = await post(`/workspaces/${wsId}/tasks`, {
       title,
       goal: 'chores',
       assignee: 'human',
@@ -88,9 +88,9 @@ describe('refs backfill (route + settle scan)', () => {
     handle = createServer({ port: 0, dataDir });
     base = `http://localhost:${handle.port}`;
 
-    const ws = await post('/api/workspaces', { name: 'refs-backfill-ws', goal: 'Mine the links.' });
+    const ws = await post('/workspaces', { name: 'refs-backfill-ws', goal: 'Mine the links.' });
     wsId = ((await ws.json()) as { workspace: { id: string } }).workspace.id;
-    const goals = await local(`/api/workspaces/${wsId}/goals`, {
+    const goals = await local(`/workspaces/${wsId}/goals`, {
       method: 'PUT',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ goals: [{ title: 'Ship the linked flow' }], author: PERSON }),
@@ -126,7 +126,7 @@ describe('refs backfill (route + settle scan)', () => {
 
     // A row filed FROM doc A: its origin already ties it — the backfill must
     // skip it even though doc A's prose does not mention it.
-    const batch = await post(`/api/workspaces/${wsId}/tasks/batch`, {
+    const batch = await post(`/workspaces/${wsId}/tasks/batch`, {
       tasks: [{ title: 'Filed from doc A', assignee: 'human' }],
       sourceDoc: { docId: 'refs-doc-a', mode: 'discussion' },
     });

@@ -257,7 +257,7 @@ describe('the backlog the attach drains is delivered, not swallowed by its own a
     });
     await h.restore.ensureWatchesRestored();
     expect(h.emitted.map((e) => e.event)).toEqual(['thread.replied']);
-    expect(order).toEqual(['ack:/api/workspaces/w1/comment-queue/row-1/ack']);
+    expect(order).toEqual(['ack:/workspaces/w1/comment-queue/row-1/ack']);
   });
 
   it('holds the notice until the tool call in flight has answered', async () => {

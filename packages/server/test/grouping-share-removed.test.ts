@@ -112,14 +112,14 @@ describe('a grouping cannot be shared on its own', () => {
 
     // A real board. This is what `create_workspace` makes, and it is the
     // only id the share routes will accept after this change.
-    const board = await local('/api/workspaces', { name: 'Partner review' });
+    const board = await local('/workspaces', { name: 'Partner review' });
     expect(board.status).toBe(200);
     boardId = ((await board.json()) as { workspace: { id: string } }).workspace.id;
     expect(boardId).toBeTruthy();
 
     // A folder bind — a GROUPING. Filed onto the board, so the only thing
     // separating it from `boardId` is which store answers for it.
-    const bind = await local('/api/workspaces', { folderPath: folder, hubWorkspaceId: boardId });
+    const bind = await local('/workspaces', { folderPath: folder, hubWorkspaceId: boardId });
     expect(bind.status).toBe(200);
     bindGroupingId = ((await bind.json()) as { workspaceId: string }).workspaceId;
     expect(bindGroupingId).toBeTruthy();
@@ -161,7 +161,7 @@ describe('a grouping cannot be shared on its own', () => {
     docId: '',
     workspaceId,
     hostname: `share-legacy-board-${n}.${BASE_HOST}`,
-    url: `https://share-legacy-board-${n}.${BASE_HOST}/workspaces/${encodeURIComponent(workspaceId)}`,
+    url: `https://share-legacy-board-${n}.${BASE_HOST}/workspaces/${encodeURIComponent(workspaceId)}?format=json`,
     label: 'board share already on disk',
     createdAt: Date.now(),
     expiresAt: Date.now() + 86_400_000,
@@ -412,7 +412,7 @@ describe('a grouping cannot be shared on its own', () => {
         (await withCookie('legacy02', `/api/docs/${encodeURIComponent(diffMemberDocId)}`)).status,
       ).toBe(401);
       expect(
-        (await withCookie('legacy02', `/api/workspaces/${encodeURIComponent(diffGroupingId)}/tree`))
+        (await withCookie('legacy02', `/api/reviews/${encodeURIComponent(diffGroupingId)}/tree`))
           .status,
       ).toBe(401);
       // …and a cookie for the LIVE board share is no better: the credential
@@ -504,7 +504,9 @@ describe('a grouping cannot be shared on its own', () => {
       const asVisitor = (path: string) => fetch(`${base}${path}`, { headers: share.headers });
 
       // The board page itself.
-      expect((await asVisitor(`/workspaces/${encodeURIComponent(boardId)}`)).status).toBe(200);
+      expect(
+        (await asVisitor(`/workspaces/${encodeURIComponent(boardId)}?format=json`)).status,
+      ).toBe(200);
       // A changed file of the diff review, reachable because the review is
       // FILED on the shared board — never because anything named the doc.
       expect((await asVisitor(`/api/docs/${encodeURIComponent(diffMemberDocId)}`)).status).toBe(
@@ -512,7 +514,7 @@ describe('a grouping cannot be shared on its own', () => {
       );
       // And the review's own tree, through the grouping→board hop.
       expect(
-        (await asVisitor(`/api/workspaces/${encodeURIComponent(diffGroupingId)}/tree`)).status,
+        (await asVisitor(`/api/reviews/${encodeURIComponent(diffGroupingId)}/tree`)).status,
       ).toBe(200);
     });
 
@@ -529,13 +531,13 @@ describe('a grouping cannot be shared on its own', () => {
       const started = Date.now();
 
       // 1. A blank board, if the agent has not already got one.
-      const board = await local('/api/workspaces', { name: 'Fresh review' });
+      const board = await local('/workspaces', { name: 'Fresh review' });
       expect(board.status).toBe(200);
       const freshBoard = ((await board.json()) as { workspace: { id: string } }).workspace.id;
 
       // 2. The review, filed on it in the SAME call — no extra step, which is
       //    what keeps the prerequisite cheap.
-      const bound = await local('/api/workspaces', {
+      const bound = await local('/workspaces', {
         folderPath: other,
         hubWorkspaceId: freshBoard,
       });

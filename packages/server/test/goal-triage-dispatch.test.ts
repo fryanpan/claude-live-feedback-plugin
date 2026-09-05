@@ -240,7 +240,7 @@ describe('over the dispatch route', () => {
       ids[key] = created.task.id;
     }
 
-    const res = await fetch(`${base}/api/workspaces/${encodeURIComponent(wsId)}/next`);
+    const res = await fetch(`${base}/workspaces/${encodeURIComponent(wsId)}/next`);
     expect(res.status).toBe(200);
     const body = (await res.json()) as { tasks: Array<{ id: string; goalInTriage: boolean }> };
     const byId = new Map(body.tasks.map((r) => [r.id, r]));

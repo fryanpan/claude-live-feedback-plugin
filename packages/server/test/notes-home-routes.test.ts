@@ -88,7 +88,7 @@ describe('workspace notes home + doc origin repo routes', () => {
 
   async function board(): Promise<string> {
     const { workspace } = await jj<{ workspace: { id: string } }>(
-      await post('/api/workspaces', { name: 'planning-board' }),
+      await post('/workspaces', { name: 'planning-board' }),
     );
     return workspace.id;
   }
@@ -96,28 +96,28 @@ describe('workspace notes home + doc origin repo routes', () => {
   it('settings PUT/GET round-trips notesHome, validates it, and null clears it', async () => {
     const ws = await board();
     const saved = await jj<{ notesHome?: unknown }>(
-      await put(`/api/workspaces/${ws}/settings`, {
+      await put(`/workspaces/${ws}/settings`, {
         author: OWNER,
         notesHome: { repoRoot: repo, branch: 'notes', dir: 'docs/notes' },
       }),
     );
     expect(saved.notesHome).toEqual({ repoRoot: repo, branch: 'notes', dir: 'docs/notes' });
-    const read = await jj<{ notesHome?: unknown }>(await get(`/api/workspaces/${ws}/settings`));
+    const read = await jj<{ notesHome?: unknown }>(await get(`/workspaces/${ws}/settings`));
     expect(read.notesHome).toEqual({ repoRoot: repo, branch: 'notes', dir: 'docs/notes' });
 
-    const badDir = await put(`/api/workspaces/${ws}/settings`, {
+    const badDir = await put(`/workspaces/${ws}/settings`, {
       author: OWNER,
       notesHome: { repoRoot: repo, branch: 'notes', dir: '../outside' },
     });
     expect(badDir.status).toBe(400);
-    const badRepo = await put(`/api/workspaces/${ws}/settings`, {
+    const badRepo = await put(`/workspaces/${ws}/settings`, {
       author: OWNER,
       notesHome: { repoRoot: join(tmp, 'not-a-repo'), branch: 'notes', dir: 'docs' },
     });
     expect(badRepo.status).toBe(400);
 
     const cleared = await jj<{ notesHome?: unknown }>(
-      await put(`/api/workspaces/${ws}/settings`, { author: OWNER, notesHome: null }),
+      await put(`/workspaces/${ws}/settings`, { author: OWNER, notesHome: null }),
     );
     expect(cleared.notesHome).toBeUndefined();
   });
@@ -125,7 +125,7 @@ describe('workspace notes home + doc origin repo routes', () => {
   it('POST /api/docs derives a pinned, checked-in file from the workspace notes home', async () => {
     const ws = await board();
     await jj(
-      await put(`/api/workspaces/${ws}/settings`, {
+      await put(`/workspaces/${ws}/settings`, {
         author: OWNER,
         notesHome: { repoRoot: repo, branch: 'notes', dir: 'docs/notes' },
       }),
@@ -147,7 +147,7 @@ describe('workspace notes home + doc origin repo routes', () => {
   it('a notes-home create with nobody on the branch is a 409 naming the fix', async () => {
     const ws = await board();
     await jj(
-      await put(`/api/workspaces/${ws}/settings`, {
+      await put(`/workspaces/${ws}/settings`, {
         author: OWNER,
         notesHome: { repoRoot: repo, branch: 'notes', dir: 'docs/notes' },
       }),
@@ -162,7 +162,7 @@ describe('workspace notes home + doc origin repo routes', () => {
   it('an explicit sourceUrl still works untouched — the .claude/reviews convention', async () => {
     const ws = await board();
     await jj(
-      await put(`/api/workspaces/${ws}/settings`, {
+      await put(`/workspaces/${ws}/settings`, {
         author: OWNER,
         notesHome: { repoRoot: repo, branch: 'notes', dir: 'docs/notes' },
       }),

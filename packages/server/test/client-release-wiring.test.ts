@@ -168,7 +168,7 @@ describe('bin.ts --workspaces-app-dist / --widget-dist', () => {
       for (let i = 0; i < 100 && workspaceId === null; i++) {
         await new Promise((r) => setTimeout(r, 100));
         try {
-          const res = await fetch(`http://127.0.0.1:${port}/api/workspaces`, {
+          const res = await fetch(`http://127.0.0.1:${port}/workspaces`, {
             method: 'POST',
             headers,
             body: JSON.stringify({ name: 'wiring-board', goal: 'Ship it.' }),

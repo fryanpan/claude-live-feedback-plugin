@@ -63,7 +63,7 @@ function legacyAccessShare(workspaceId: string, slug: string): Share {
     docId: '',
     workspaceId,
     hostname,
-    url: `https://${hostname}/workspaces/${encodeURIComponent(workspaceId)}`,
+    url: `https://${hostname}/workspaces/${encodeURIComponent(workspaceId)}?format=json`,
     audience: `aud-${slug}`,
     appId: `app-${slug}`,
     policyId: `policy-${slug}`,
@@ -211,7 +211,7 @@ describe('host gate + share scoping over HTTP', () => {
     // id as one row, which is how a review goes on a board; the board is then
     // the only thing the share routes will accept.
     const boardHolding = async (name: string, groupingId: string): Promise<string> => {
-      const created = await fetch(`${base}/api/workspaces`, {
+      const created = await fetch(`${base}/workspaces`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ name }),
@@ -219,7 +219,7 @@ describe('host gate + share scoping over HTTP', () => {
       expect(created.status).toBe(200);
       const id = ((await created.json()) as { workspace: { id: string } }).workspace.id;
       expect(id).toBeTruthy();
-      const filed = await fetch(`${base}/api/workspaces/${encodeURIComponent(id)}/docs`, {
+      const filed = await fetch(`${base}/workspaces/${encodeURIComponent(id)}/docs`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ docId: groupingId }),
@@ -413,7 +413,7 @@ describe('host gate + share scoping over HTTP', () => {
     });
 
     it('CANNOT bind a folder or create a diff review (arbitrary filesystem read)', async () => {
-      const ws = await asVisitor('/api/workspaces', {
+      const ws = await asVisitor('/workspaces', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ folderPath: '/etc' }),
@@ -456,14 +456,14 @@ describe('host gate + share scoping over HTTP', () => {
       // workspace share reaches its OWN workspace and stops at the edge of it.
       // Positive control first, or the refusals below would pass on a visitor
       // who can reach no workspace at all.
-      expect((await asVisitor(`/api/workspaces/${WS_SHARED}/tree`)).status).toBe(200);
+      expect((await asVisitor(`/api/reviews/${WS_SHARED}/tree`)).status).toBe(200);
       // `grouped` and `files` answer 404 on a one-doc grouping (no diff groups,
       // no repo root) — asserting 200 would be asserting the fixture. What is
       // under test is the GATE, so: past it for its own workspace, refused for
       // the other one.
       for (const sub of ['tree', 'grouped', 'files']) {
-        expect((await asVisitor(`/api/workspaces/${WS_SHARED}/${sub}`)).status, sub).not.toBe(403);
-        expect((await asVisitor(`/api/workspaces/${WS_OTHER}/${sub}`)).status, sub).toBe(403);
+        expect((await asVisitor(`/api/reviews/${WS_SHARED}/${sub}`)).status, sub).not.toBe(403);
+        expect((await asVisitor(`/api/reviews/${WS_OTHER}/${sub}`)).status, sub).toBe(403);
       }
     });
 
@@ -660,7 +660,7 @@ describe('workspace share over HTTP', () => {
 
     // The board first, then the bind FILED on it in the same call — that is
     // the whole prerequisite a board-only share adds to this flow.
-    const board = await fetch(`${base}/api/workspaces`, {
+    const board = await fetch(`${base}/workspaces`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ name: 'Folder review' }),
@@ -669,7 +669,7 @@ describe('workspace share over HTTP', () => {
     boardId = ((await board.json()) as { workspace: { id: string } }).workspace.id;
     expect(boardId).toBeTruthy();
 
-    const bind = await fetch(`${base}/api/workspaces`, {
+    const bind = await fetch(`${base}/workspaces`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ folderPath: folder, hubWorkspaceId: boardId }),
@@ -705,7 +705,9 @@ describe('workspace share over HTTP', () => {
     expect(shared.workspaceId).toBe(boardId);
     // The share opens the board; the folder is reached because it is filed on
     // it, which is what every assertion below actually exercises.
-    expect(shared.url).toBe(`https://${shareHost}/workspaces/${encodeURIComponent(boardId)}`);
+    expect(shared.url).toBe(
+      `https://${shareHost}/workspaces/${encodeURIComponent(boardId)}?format=json`,
+    );
     shareJwt = await new SignJWT({ email: 'reviewer@partner.example' })
       .setProtectedHeader({ alg: 'RS256', kid: KID })
       .setIssuer(`https://${TEAM_DOMAIN}`)
@@ -728,14 +730,14 @@ describe('workspace share over HTTP', () => {
 
   it('can read the entry doc and the workspace tree', async () => {
     expect((await asVisitor(`/api/docs/${encodeURIComponent(entryDocId)}`)).status).toBe(200);
-    const tree = await asVisitor(`/api/workspaces/${encodeURIComponent(workspaceId)}/tree`);
+    const tree = await asVisitor(`/api/reviews/${encodeURIComponent(workspaceId)}/tree`);
     expect(tree.status).toBe(200);
   });
 
   it('can open a sibling lazily and then read it — the whole point', async () => {
     // bind_folder binds only the entry; this is how the rest come into being.
     const opened = await asVisitor(
-      `/api/workspaces/${encodeURIComponent(workspaceId)}/editable-file`,
+      `/api/reviews/${encodeURIComponent(workspaceId)}/editable-file`,
       {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
@@ -752,7 +754,7 @@ describe('workspace share over HTTP', () => {
   });
 
   it('cannot escape the workspace root via relPath', async () => {
-    const r = await asVisitor(`/api/workspaces/${encodeURIComponent(workspaceId)}/context-file`, {
+    const r = await asVisitor(`/api/reviews/${encodeURIComponent(workspaceId)}/context-file`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ relPath: '../../etc/hosts' }),
@@ -769,7 +771,7 @@ describe('workspace share over HTTP', () => {
 
   it('CANNOT enumerate docs or workspaces, or manage shares', async () => {
     expect((await asVisitor('/api/docs')).status).toBe(403);
-    expect((await asVisitor('/api/workspaces')).status).toBe(403);
+    expect((await asVisitor('/workspaces')).status).toBe(403);
     expect((await asVisitor('/api/share')).status).toBe(403);
   });
 
@@ -807,7 +809,7 @@ describe('workspace share over HTTP', () => {
     // entry doc — because the survivor is the positive control: the share is
     // demonstrably still live and still reaching its members.
     const opened = await asVisitor(
-      `/api/workspaces/${encodeURIComponent(workspaceId)}/editable-file`,
+      `/api/reviews/${encodeURIComponent(workspaceId)}/editable-file`,
       {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
@@ -848,7 +850,7 @@ describe('workspace share over HTTP', () => {
     // GET /api/docs/<id> is IN a visitor's scope — they need it to render —
     // but the full DocMeta describes Bryan's machine, not the document.
     const opened = await asVisitor(
-      `/api/workspaces/${encodeURIComponent(workspaceId)}/editable-file`,
+      `/api/reviews/${encodeURIComponent(workspaceId)}/editable-file`,
       {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
@@ -884,7 +886,7 @@ describe('workspace share over HTTP', () => {
     // feedback as the person who asked for it.
     // Its own doc, not the shared entry — a sibling test deletes that one.
     const opened = await asVisitor(
-      `/api/workspaces/${encodeURIComponent(workspaceId)}/editable-file`,
+      `/api/reviews/${encodeURIComponent(workspaceId)}/editable-file`,
       {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
@@ -926,7 +928,7 @@ describe('workspace share over HTTP', () => {
   it('CANNOT record reading activity as Bryan by omitting the author', async () => {
     // /activity used to DEFAULT to Bryan when no author was sent.
     const opened = await asVisitor(
-      `/api/workspaces/${encodeURIComponent(workspaceId)}/editable-file`,
+      `/api/reviews/${encodeURIComponent(workspaceId)}/editable-file`,
       {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
@@ -955,7 +957,7 @@ describe('workspace share over HTTP', () => {
     // A visitor reads and comments. Deciding which files are under review,
     // and how the sidebar organizes them, stays with whoever shared it.
     for (const sub of ['refresh', 'groups']) {
-      const r = await asVisitor(`/api/workspaces/${encodeURIComponent(workspaceId)}/${sub}`, {
+      const r = await asVisitor(`/api/reviews/${encodeURIComponent(workspaceId)}/${sub}`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ groups: [] }),
@@ -965,12 +967,12 @@ describe('workspace share over HTTP', () => {
   });
 
   it('CANNOT delete the workspace', async () => {
-    const r = await asVisitor(`/api/workspaces/${encodeURIComponent(workspaceId)}`, {
+    const r = await asVisitor(`/workspaces/${encodeURIComponent(workspaceId)}`, {
       method: 'DELETE',
     });
     expect(r.status).toBe(403);
     // …and it really is still there.
-    expect((await req('/api/workspaces', `localhost:${handle.port}`)).status).toBe(200);
+    expect((await req('/workspaces', `localhost:${handle.port}`)).status).toBe(200);
   });
 
   it('rejects an entryDocId — any entryDocId, not just a foreign one', async () => {

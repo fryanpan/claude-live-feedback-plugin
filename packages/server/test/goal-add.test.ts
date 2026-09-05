@@ -244,7 +244,7 @@ describe('TaskStore.addGoal', () => {
   });
 });
 
-describe('POST /api/workspaces/:id/goals/add', () => {
+describe('POST /workspaces/:id/goals/add', () => {
   let handle: ServerHandle;
   let dataDir: string;
   let base: string;
@@ -274,7 +274,7 @@ describe('POST /api/workspaces/:id/goals/add', () => {
 
   async function seedWorkspace(): Promise<{ wsId: string; launch: string; perf: string }> {
     const { workspace } = await jj<{ workspace: { id: string } }>(
-      await post('/api/workspaces', { name: 'search-revamp', goal: 'Ship search v2.' }),
+      await post('/workspaces', { name: 'search-revamp', goal: 'Ship search v2.' }),
     );
     const ids = await seedGoalsOverHttp(base, workspace.id, GOAL_SPEC, PERSON);
     return { wsId: workspace.id, launch: ids.launch as string, perf: ids.perf as string };
@@ -285,14 +285,14 @@ describe('POST /api/workspaces/:id/goals/add', () => {
   ): Promise<Array<{ id: string; title: string; dueAt?: number }>> =>
     (
       await jj<{ workspace: { goals: Array<{ id: string; title: string; dueAt?: number }> } }>(
-        await fetch(`${base}/api/workspaces/${wsId}`),
+        await fetch(`${base}/workspaces/${wsId}?format=json`),
       )
     ).workspace.goals;
 
   it('forwards `title`, `dueAt` and `after` — the stored list reads them back', async () => {
     const { wsId, launch, perf } = await seedWorkspace();
     const res = await jj<{ goal: { id: string; title: string; dueAt?: number } }>(
-      await post(`/api/workspaces/${wsId}/goals/add`, {
+      await post(`/workspaces/${wsId}/goals/add`, {
         title: '1a. Warm the list',
         dueAt: 1769000000000,
         after: launch,
@@ -311,17 +311,18 @@ describe('POST /api/workspaces/:id/goals/add', () => {
   it('a task filed under the new band reads it back', async () => {
     const { wsId } = await seedWorkspace();
     const { goal } = await jj<{ goal: { id: string } }>(
-      await post(`/api/workspaces/${wsId}/goals/add`, { title: '9. Later work', author: PERSON }),
+      await post(`/workspaces/${wsId}/goals/add`, { title: '9. Later work', author: PERSON }),
     );
     const { task } = await jj<{ task: { id: string } }>(
-      await post(`/api/workspaces/${wsId}/tasks`, {
+      await post(`/workspaces/${wsId}/tasks`, {
         author: AGENT,
         title: 'scope it',
         goal: goal.id,
       }),
     );
-    const tasks = (await jj<{ tasks: Task[] }>(await fetch(`${base}/api/workspaces/${wsId}/tasks`)))
-      .tasks;
+    const tasks = (
+      await jj<{ tasks: Task[] }>(await fetch(`${base}/workspaces/${wsId}/tasks?format=json`))
+    ).tasks;
     expect(tasks.find((t) => t.id === task.id)?.goal).toBe(goal.id);
   });
 
@@ -329,13 +330,13 @@ describe('POST /api/workspaces/:id/goals/add', () => {
     const { wsId, launch } = await seedWorkspace();
     const before = (await readGoals(wsId)).map((g) => g.id);
 
-    expect((await post(`/api/workspaces/${wsId}/goals/add`, { title: 'x' })).status).toBe(400);
+    expect((await post(`/workspaces/${wsId}/goals/add`, { title: 'x' })).status).toBe(400);
     expect(
-      (await post(`/api/workspaces/${wsId}/goals/add`, { title: '   ', author: PERSON })).status,
+      (await post(`/workspaces/${wsId}/goals/add`, { title: '   ', author: PERSON })).status,
     ).toBe(400);
     expect(
       (
-        await post(`/api/workspaces/${wsId}/goals/add`, {
+        await post(`/workspaces/${wsId}/goals/add`, {
           title: 'x',
           after: 'g-nope',
           author: PERSON,
@@ -343,13 +344,13 @@ describe('POST /api/workspaces/:id/goals/add', () => {
       ).status,
     ).toBe(404);
     expect(
-      (await post('/api/workspaces/ws-nope/goals/add', { title: 'x', author: PERSON })).status,
+      (await post('/workspaces/ws-nope/goals/add', { title: 'x', author: PERSON })).status,
     ).toBe(404);
 
     // Positive control beside the refusals: the route CAN write, so the
     // unchanged list above is a refusal rather than a dead route.
     const ok = await jj<{ goal: { id: string } }>(
-      await post(`/api/workspaces/${wsId}/goals/add`, { title: 'a real one', author: PERSON }),
+      await post(`/workspaces/${wsId}/goals/add`, { title: 'a real one', author: PERSON }),
     );
     expect((await readGoals(wsId)).map((g) => g.id)).toEqual([...before, ok.goal.id]);
     expect(before).toContain(launch);

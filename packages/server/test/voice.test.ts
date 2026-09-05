@@ -1,5 +1,5 @@
 /**
- * Voice routing (§2.4 / §3.8, commit 9): POST /api/workspaces/:id/voice takes
+ * Voice routing (§2.4 / §3.8, commit 9): POST /workspaces/:id/voice takes
  * a transcript + per-surface context, classifies it (Haiku fast path — via an
  * injected `complete`, tests never reach the network), and answers EVERY
  * utterance with an explicit ack naming what was heard and which route
@@ -90,7 +90,7 @@ describe('voice routing (§3.8)', () => {
       body: JSON.stringify(body),
     });
 
-  const voice = (body: unknown) => post(`/api/workspaces/${boardId}/voice`, body);
+  const voice = (body: unknown) => post(`/workspaces/${boardId}/voice`, body);
 
   beforeAll(async () => {
     dataDir = mkdtempSync(join(tmpdir(), 'voice-data-'));
@@ -105,14 +105,14 @@ describe('voice routing (§3.8)', () => {
     });
     base = `http://localhost:${handle.port}`;
 
-    const ws = await post('/api/workspaces', {
+    const ws = await post('/workspaces', {
       name: 'search-revamp',
       goal: 'Ship the new search.',
     });
     expect(ws.status).toBe(200);
     boardId = ((await ws.json()) as { workspace: { id: string } }).workspace.id;
 
-    const t = await post(`/api/workspaces/${boardId}/tasks`, {
+    const t = await post(`/workspaces/${boardId}/tasks`, {
       title: 'Wire the results page',
       author: PERSON,
     });
@@ -131,11 +131,11 @@ describe('voice routing (§3.8)', () => {
     });
     expect(madeDoc.status).toBe(200);
     docId = ((await madeDoc.json()) as { docId: string }).docId;
-    expect((await post(`/api/workspaces/${boardId}/docs`, { docId })).status).toBe(200);
+    expect((await post(`/workspaces/${boardId}/docs`, { docId })).status).toBe(200);
 
     // A task carrying links + an owner, so the resource block has something to
     // render beyond a title.
-    const linked = await post(`/api/workspaces/${boardId}/tasks`, {
+    const linked = await post(`/workspaces/${boardId}/tasks`, {
       title: 'Fold the expansion plan into the results page',
       assignee: 'Jordan',
       assigneeKind: 'person',
@@ -150,21 +150,21 @@ describe('voice routing (§3.8)', () => {
     linkedTaskId = ((await linked.json()) as { task: { id: string } }).task.id;
 
     // ── The second board: everything here is FOREIGN to `boardId` ────────────
-    const other = await post('/api/workspaces', {
+    const other = await post('/workspaces', {
       name: 'billing-cleanup',
       goal: 'Retire the old invoicing path.',
     });
     expect(other.status).toBe(200);
     otherBoardId = ((await other.json()) as { workspace: { id: string } }).workspace.id;
 
-    const ot = await post(`/api/workspaces/${otherBoardId}/tasks`, {
+    const ot = await post(`/workspaces/${otherBoardId}/tasks`, {
       title: 'Drop the legacy invoice job',
       author: PERSON,
     });
     expect(ot.status).toBe(200);
     otherTaskId = ((await ot.json()) as { task: { id: string } }).task.id;
 
-    const big = await post(`/api/workspaces/${otherBoardId}/tasks`, {
+    const big = await post(`/workspaces/${otherBoardId}/tasks`, {
       title: `Rewrite the invoicing narrative ${'and reconcile every ledger row '.repeat(60)}`,
       // The bulk has to be in something PER-FIELD clamping cannot shrink: a
       // long title is now cut at its own budget before the block budget is
@@ -188,7 +188,7 @@ describe('voice routing (§3.8)', () => {
     });
     expect(madeOtherDoc.status).toBe(200);
     otherDocId = ((await madeOtherDoc.json()) as { docId: string }).docId;
-    expect((await post(`/api/workspaces/${otherBoardId}/docs`, { docId: otherDocId })).status).toBe(
+    expect((await post(`/workspaces/${otherBoardId}/docs`, { docId: otherDocId })).status).toBe(
       200,
     );
   });
@@ -204,7 +204,7 @@ describe('voice routing (§3.8)', () => {
       expect((await voice({ transcript: '   ', author: PERSON })).status).toBe(400);
       expect((await voice({ transcript: 'hello' })).status).toBe(400);
       expect(
-        (await post('/api/workspaces/nope/voice', { transcript: 'hello', author: PERSON })).status,
+        (await post('/workspaces/nope/voice', { transcript: 'hello', author: PERSON })).status,
       ).toBe(404);
     });
   });
@@ -487,7 +487,7 @@ describe('voice routing (§3.8)', () => {
 
   describe('every utterance is audited (§3.6 voice.request)', () => {
     it('the events.jsonl audit log carries the transcript, route, and ack verbatim', async () => {
-      const r = await local(`/api/workspaces/${boardId}/events`);
+      const r = await local(`/workspaces/${boardId}/events`);
       expect(r.status).toBe(200);
       const { events } = (await r.json()) as {
         events: Array<{ event: string; transcript?: string; route?: string; ack?: string }>;
@@ -614,7 +614,7 @@ describe('voice routing (§3.8)', () => {
     it('over-budget resource content is truncated and SAYS it was', async () => {
       completeImpl = () => Promise.resolve(JSON.stringify({ kind: 'change' }));
       lastPrompt.value = null;
-      const r = await post(`/api/workspaces/${otherBoardId}/voice`, {
+      const r = await post(`/workspaces/${otherBoardId}/voice`, {
         transcript: 'mark this done',
         context: { surface: 'task', taskId: bigTaskId },
         author: PERSON,
@@ -854,7 +854,7 @@ describe('voice routing (§3.8)', () => {
           JSON.stringify({ kind: 'action', action: 'set-status', status: 'done', id: taskId }),
         );
       const status = async (): Promise<string | undefined> => {
-        const r = await local(`/api/workspaces/${boardId}/tasks`);
+        const r = await local(`/workspaces/${boardId}/tasks?format=json`);
         const { tasks } = (await r.json()) as { tasks: Array<{ id: string; status: string }> };
         return tasks.find((t) => t.id === taskId)?.status;
       };

@@ -72,7 +72,7 @@ export async function handleTaskBatch(
    * whole-call refusals left are the ones where nothing could have
    * landed anyway: an unknown workspace, and a body with no rows in it.
    */
-  const wsTasksBatchMatch = pathname.match(/^\/api\/workspaces\/([^/]+)\/tasks\/batch$/);
+  const wsTasksBatchMatch = pathname.match(/^\/workspaces\/([^/]+)\/tasks\/batch$/);
   if (wsTasksBatchMatch && req.method === 'POST') {
     const workspaceId = decodeURIComponent(wsTasksBatchMatch[1] ?? '');
     const body = await safeJson(req);

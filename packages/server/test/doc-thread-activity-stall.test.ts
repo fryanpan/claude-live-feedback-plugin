@@ -69,7 +69,7 @@ describe("a linked doc's discussion counts too", () => {
     lead: ReturnType<typeof listenFrames>;
   }> {
     const { workspace } = await jj<{ workspace: { id: string } }>(
-      await post('/api/workspaces', { name: 'search-revamp', leadAgentId: LEAD.id }),
+      await post('/workspaces', { name: 'search-revamp', leadAgentId: LEAD.id }),
     );
     for (const agent of [LEAD, BUILDER]) {
       await jj(
@@ -92,7 +92,7 @@ describe("a linked doc's discussion counts too", () => {
     owner: { id: string; name: string; kind: string } = LEAD,
   ): Promise<string> {
     const { task } = await jj<{ task: { id: string } }>(
-      await post(`/api/workspaces/${workspaceId}/tasks`, {
+      await post(`/workspaces/${workspaceId}/tasks`, {
         title,
         body: `Agent can ${title.toLowerCase()} so that the queue keeps moving.`,
         assignee: owner.name,

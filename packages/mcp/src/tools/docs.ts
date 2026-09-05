@@ -357,7 +357,7 @@ export async function handleDocsTool(
         subscribe?: boolean;
         producedBy?: { agentId?: string; sessionId?: string };
       };
-      const res = (await http('POST', '/api/workspaces', {
+      const res = (await http('POST', '/workspaces', {
         folderPath,
         owner: process.cwd(),
         ...(workspaceId ? { workspaceId } : {}),
@@ -479,7 +479,7 @@ export async function handleDocsTool(
       // board here, a review if that is what the id turns out to be. See
       // the compat note on it in the server's route table. `purge` only
       // reaches the review branch; a board's delete is unchanged.
-      const res = await http('DELETE', `/api/workspaces/${encodeURIComponent(workspaceId)}${qs}`);
+      const res = await http('DELETE', `/workspaces/${encodeURIComponent(workspaceId)}${qs}`);
       return ok(res);
     }
     // COMPAT: `refresh_workspace` and `set_workspace_groups` are the names

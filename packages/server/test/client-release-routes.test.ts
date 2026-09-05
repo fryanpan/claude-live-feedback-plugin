@@ -81,7 +81,7 @@ async function startWith(
   });
   handle = server;
   const base = `http://localhost:${server.port}`;
-  const res = await fetch(`${base}/api/workspaces`, {
+  const res = await fetch(`${base}/workspaces`, {
     method: 'POST',
     headers: { host: `localhost:${server.port}`, 'content-type': 'application/json' },
     body: JSON.stringify({ name: 'release-board', goal: 'Ship it.' }),
