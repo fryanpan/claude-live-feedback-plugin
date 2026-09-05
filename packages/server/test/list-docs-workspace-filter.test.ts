@@ -129,6 +129,6 @@ describe('GET /api/docs honours its workspaceId filter', () => {
   it('an unknown workspaceId returns an empty list, not everything', async () => {
     // The old behaviour was precisely "unmatchable filter → whole server", so
     // this is the regression the ticket is about, stated directly.
-    expect(await listDocs('?workspaceId=w-does-not-exist')).toEqual([]);
+    expect(await listDocs('?workspaceId=w-missing')).toEqual([]);
   });
 });

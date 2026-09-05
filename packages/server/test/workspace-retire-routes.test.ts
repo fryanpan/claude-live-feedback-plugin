@@ -103,7 +103,7 @@ describe('retire / rename routes', () => {
     ).toBe(400);
     expect((await put(`/api/workspaces/${id}/retired`, { retired: true })).status).toBe(400);
     expect(
-      (await put('/api/workspaces/w-not-a-board/retired', { retired: true, author: AGENT })).status,
+      (await put('/api/workspaces/w-no-board/retired', { retired: true, author: AGENT })).status,
     ).toBe(404);
   });
 
@@ -136,7 +136,7 @@ describe('retire / rename routes', () => {
     expect((await post(`/api/workspaces/${id}/rename`, { author: AGENT })).status).toBe(400);
     expect((await post(`/api/workspaces/${id}/rename`, { name: 'ok' })).status).toBe(400);
     expect(
-      (await post('/api/workspaces/w-not-a-board/rename', { name: 'ok', author: AGENT })).status,
+      (await post('/api/workspaces/w-no-board/rename', { name: 'ok', author: AGENT })).status,
     ).toBe(404);
   });
 

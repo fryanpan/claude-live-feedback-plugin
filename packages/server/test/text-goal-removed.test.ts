@@ -101,7 +101,7 @@ describe('the legacy text goal is removed', () => {
     });
 
     it('answers the same way for an unknown workspace — the route no longer looks one up', async () => {
-      const r = await put('/api/workspaces/w-does-not-exist/goal', {
+      const r = await put('/api/workspaces/w-missing/goal', {
         goal: 'anything',
         author: PERSON,
       });

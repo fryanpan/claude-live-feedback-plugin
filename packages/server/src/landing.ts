@@ -1,7 +1,7 @@
 /**
  * What the landing page is FOR: a list of active workspaces to open up.
  *
- * That sentence is Bryan's, verbatim (task `t-UZMXu32nt4wN`, 2026-08-18):
+ * That sentence is Bryan's, verbatim (from the task that asked for it, 2026-08-18):
  * "please don't build the overengineered version. Let's just have a simple
  * workspace list and not overlap with the purpose of each workspace home
  * page which is also being built." The previous `/` — a cross-workspace

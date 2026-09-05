@@ -115,7 +115,7 @@ describe('home routes — deterministic server (no summarizer)', () => {
     const payload = await home();
     expect(payload.brief.markdown).toContain('**Filed:** 2 new tasks');
     expect(payload.brief.markdown).toContain('Rewrite the retry helper');
-    // The closing line states presence, never a number (t-0iestDQdJTOZ).
+    // The closing line states presence, never a number.
     expect(payload.brief.markdown).toContain('What needs your review is queued below.');
   });
 

@@ -52,7 +52,7 @@ export function wireBoardVoice(deps: BoardVoiceDeps): void {
   const { state, author, workspaceId, document, location, el, renderDetail } = deps;
 
   // Voice (§2.4/§3.8): hold Space or the mic button; the context object sent
-  // with each utterance anchors it to wherever the speaker is NOW — the board
+  // with each utterance anchors it to wherever the speaker is NOW — the
   // board, or the open task detail. Every utterance gets an explicit ack.
   createVoiceCapture({
     button: el('board-mic'),
