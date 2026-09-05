@@ -53,7 +53,7 @@ export function lcsKept<T>(a: T[], b: T[]): { keptA: Set<number>; keptB: Set<num
 
 /**
  * Guard for the O(n·m) table. 2000x2000 is far past any real document — this
- * repo's review docs run 30–100 blocks. Past the budget a caller must degrade
+ * repo's attachments run 30–100 blocks. Past the budget a caller must degrade
  * deliberately (and say so), not silently build a table that stalls.
  */
 export const LCS_CELL_BUDGET = 4_000_000;

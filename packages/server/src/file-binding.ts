@@ -2,7 +2,7 @@
  * The file bindings: everything that keeps a live doc and a file on disk
  * saying the same thing. `attachFile` and its flat-text twins, the shared
  * mtime poll, the debounced write-back and the conflict reconcile that
- * arbitrates when both sides moved — plus the doc-home pin, which is only
+ * arbitrates when both sides moved — plus the doc-origin-repo pin, which is only
  * ever a rule about which file a binding may write.
  *
  * It reaches the room lifecycle through `FileBindingHost` rather than
@@ -32,21 +32,21 @@ import {
 } from 'node:fs';
 import { dirname, join } from 'node:path';
 import {
-  type DocHome,
   type DocMeta,
+  type DocOriginRepo,
   type WebhookPayload,
   contentKind,
   prose,
   suggestOps,
 } from '@feedback/core';
 import * as Y from 'yjs';
+import { isBoardOwnedDoc } from './doc-ids.ts';
 import {
   canonicalRepoRoot,
-  normalizeDocHome,
-  resolveHomeCheckout,
-  verifyPathInHome,
-} from './doc-home.ts';
-import { isBoardOwnedDoc } from './doc-ids.ts';
+  normalizeDocOriginRepo,
+  resolveOriginRepoCheckout,
+  verifyPathInOriginRepo,
+} from './doc-origin-repo.ts';
 import { DOC_STORE_TIMINGS } from './doc-store-timings.ts';
 import type { DocRoom } from './doc-store.ts';
 import { showFile } from './git-diff.ts';
@@ -71,7 +71,7 @@ import { boundFiles } from './slow-fs.ts';
  * `.ydoc`'s, and EQUAL goes to disk. The two are routinely written inside one
  * file-timestamp tick (~4ms on a stock Linux kernel): an evict-flush right after
  * the bind, a `git worktree add` a few ms before the rebind's persist. Both
- * reverted a live edit with the file's stale copy — the doc-home-binding and
+ * reverted a live edit with the file's stale copy — the doc-origin-repo-binding and
  * doc-eviction reds of 2026-08-31/09-01 — and read as a bare timeout.
  */
 /**
@@ -716,10 +716,10 @@ export class FileBindings {
   }
 
   /**
-   * Pin a doc to its repo home: repo + branch + relPath (see `DocHome` in
+   * Pin a doc to its origin repo: repo + branch + relPath (see `DocOriginRepo` in
    * core). From here on, the file the doc syncs with is "the declared
    * relPath in whichever worktree has the declared branch checked out" —
-   * resolved at pin, at hydrate, and re-verified by `homeGuard` before every
+   * resolved at pin, at hydrate, and re-verified by `originRepoGuard` before every
    * flush and every disk→doc apply. A checkout that switches branches under
    * the binding is never written again; the binding follows the branch or
    * parks.
@@ -728,13 +728,13 @@ export class FileBindings {
    * code and mockup docs follow their surface (the diff's repo, the running
    * server) and pinning them would fight those flows.
    */
-  setDocHome(
+  setDocOriginRepo(
     docId: string,
     input: unknown,
   ):
     | {
         ok: true;
-        home: DocHome;
+        home: DocOriginRepo;
         placement: { placed: true; path: string } | { placed: false; reason: string };
       }
     | { ok: false; error: 'not-found' | 'invalid-home' | 'not-markdown'; detail?: string } {
@@ -744,10 +744,10 @@ export class FileBindings {
       return {
         ok: false,
         error: 'not-markdown',
-        detail: 'a repo home is for markdown docs; code/diff/mockup docs follow their surface',
+        detail: 'an origin repo is for markdown docs; code/diff/mockup docs follow their surface',
       };
     }
-    const norm = normalizeDocHome(input);
+    const norm = normalizeDocOriginRepo(input);
     if (!norm.ok) return { ok: false, error: 'invalid-home', detail: norm.error };
     // The repo must at least exist as a repo — a typo'd repoRoot pinned
     // as-is would park the doc forever with a message blaming the branch.
@@ -761,9 +761,9 @@ export class FileBindings {
         detail: `${norm.home.repoRoot} is not a git checkout`,
       };
     }
-    const home: DocHome = { ...norm.home, repoRoot: canonRoot };
+    const home: DocOriginRepo = { ...norm.home, repoRoot: canonRoot };
     room.meta.docHome = home;
-    const placement = resolveHomeCheckout(home);
+    const placement = resolveOriginRepoCheckout(home);
     if (placement.placed) {
       const binding = this.bindings.get(room.docId);
       // Already bound to an EXISTING copy of the home: nothing to move. A
@@ -778,7 +778,7 @@ export class FileBindings {
     // Unplaced is a legal pin: the doc stays durable in the .ydoc and the
     // guard parks every write until a checkout on the branch appears. An
     // existing binding to some other path is deliberately left in the map —
-    // homeGuard is what stops it writing, and keeping it is what lets the
+    // originRepoGuard is what stops it writing, and keeping it is what lets the
     // next flush attempt re-resolve and recover.
     this.p.schedulePersist(room);
     return { ok: true, home, placement: { placed: false, reason: placement.reason } };
@@ -786,7 +786,7 @@ export class FileBindings {
 
   /** Unpin: the doc keeps whatever binding it has and goes back to being an
    *  ordinary explicit-path doc. */
-  clearDocHome(docId: string): { ok: boolean } {
+  clearDocOriginRepo(docId: string): { ok: boolean } {
     const room = this.p.room(docId);
     if (!room || !room.meta.docHome) return { ok: false };
     room.meta.docHome = undefined;
@@ -795,9 +795,9 @@ export class FileBindings {
   }
 
   /** The pin plus where it resolves RIGHT NOW — for doc status surfaces. */
-  docHomeStatus(docId: string):
+  docOriginRepoStatus(docId: string):
     | {
-        home: DocHome;
+        home: DocOriginRepo;
         placement: { placed: true; path: string } | { placed: false; reason: string };
         boundPath?: string;
       }
@@ -805,7 +805,7 @@ export class FileBindings {
     const room = this.p.room(docId);
     const home = room?.meta.docHome;
     if (!room || !home) return undefined;
-    const placement = resolveHomeCheckout(home);
+    const placement = resolveOriginRepoCheckout(home);
     const boundPath = this.bindings.get(room.docId)?.path;
     return {
       home,
@@ -871,12 +871,12 @@ export class FileBindings {
    * A home-pinned doc with NO binding tries to re-place its home. The state
    * exists when hydration found no checkout on the home branch: parking
    * there leaves nothing in `fileBindings`, and every recovery path below
-   * this one — homeGuard, the poll sweep — hangs off a binding. Without this
+   * this one — originRepoGuard, the poll sweep — hangs off a binding. Without this
    * hook the park message's promise ("check the branch out and the next
    * edit or reparse resumes syncing") held only for docs parked while LIVE;
    * a doc parked at hydrate stayed parked until a re-pin or restart. Called
    * from the room's update hook (throttled) and from reparseFromDisk
-   * (forced). Bound docs return immediately — homeGuard owns them.
+   * (forced). Bound docs return immediately — originRepoGuard owns them.
    */
   maybeRebindHome(room: DocRoom, opts?: { force?: boolean }): void {
     const home = room.meta.docHome;
@@ -885,7 +885,7 @@ export class FileBindings {
     const now = Date.now();
     if (!opts?.force && now - (this.homeRebindAttemptAt.get(room.docId) ?? 0) < 1000) return;
     this.homeRebindAttemptAt.set(room.docId, now);
-    const placement = resolveHomeCheckout(home);
+    const placement = resolveOriginRepoCheckout(home);
     if (!placement.placed) return;
     // Persist BEFORE attaching so the .ydoc the attach's at-rest arbitration
     // reads (diskNewerThanState) holds the current state, not the pre-edit
@@ -914,11 +914,11 @@ export class FileBindings {
    * 'parked'     the home resolves nowhere; nothing was read or written,
    *              and a syncError names why and how to resume.
    */
-  private homeGuard(room: DocRoom, binding: FileBinding): 'ok' | 'retargeted' | 'parked' {
+  private originRepoGuard(room: DocRoom, binding: FileBinding): 'ok' | 'retargeted' | 'parked' {
     const home = room.meta.docHome;
     if (!home) return 'ok';
-    if (verifyPathInHome(binding.path, home) === 'ok') return 'ok';
-    const placement = resolveHomeCheckout(home);
+    if (verifyPathInOriginRepo(binding.path, home) === 'ok') return 'ok';
+    const placement = resolveOriginRepoCheckout(home);
     if (placement.placed) {
       // Resolution landing on the very path the verify refused (a nested
       // repo under relPath can split the two): writing there is what the
@@ -934,14 +934,14 @@ export class FileBindings {
     }
     const message =
       placement.reason === 'repo-missing'
-        ? `doc home is unreachable: ${home.repoRoot} is not (or no longer) a git checkout. ` +
+        ? `doc origin repo is unreachable: ${home.repoRoot} is not (or no longer) a git checkout. ` +
           'Writes are parked; the live doc stays the source of truth and its content is durable ' +
           'in the workspace. Re-pin the home at a valid checkout to resume.'
         : placement.reason === 'path-escapes-checkout'
-          ? `doc home is unsafe: ${home.relPath} passes through a symlink that leaves the ` +
+          ? `doc origin repo is unsafe: ${home.relPath} passes through a symlink that leaves the ` +
             'checkout, so writing it would land outside the repo. Writes are parked; the live ' +
             'doc stays the source of truth. Re-pin the home at a path contained in the checkout.'
-          : `doc home is unplaced: no checkout of the repo has branch "${home.branch}" checked out. ` +
+          : `doc origin repo is unplaced: no checkout of the repo has branch "${home.branch}" checked out. ` +
             'Writes are parked; the live doc stays the source of truth and its content is durable ' +
             'in the workspace. Check the branch out in some worktree (git worktree add <path> ' +
             `"${home.branch}") and the next edit or reparse resumes syncing there.`;
@@ -1240,7 +1240,7 @@ export class FileBindings {
     // A pinned doc re-resolves its home before the reparse reads anything.
     // The old path's checkout may have switched branches since the binding
     // was made — an unguarded read here would pull that branch's copy
-    // straight into the live doc, the exact incident homeGuard closes on
+    // straight into the live doc, the exact incident originRepoGuard closes on
     // the poll path — and a doc parked at hydrate has no binding at all,
     // with reparse documented as one of its two recovery verbs.
     if (
@@ -1250,7 +1250,8 @@ export class FileBindings {
     ) {
       const bound = this.bindings.get(docId);
       if (!bound) this.maybeRebindHome(room, { force: true });
-      else if (this.homeGuard(room, bound) === 'parked') return { ok: false, error: 'missing' };
+      else if (this.originRepoGuard(room, bound) === 'parked')
+        return { ok: false, error: 'missing' };
     }
     const binding = this.bindings.get(docId);
     if (!binding) return { ok: false, error: 'no-binding' };
@@ -1317,7 +1318,7 @@ export class FileBindings {
     // pinned doc's old path rewrites the file, the poll sees an mtime change,
     // and the OTHER branch's copy gets applied into the live doc — the read
     // half of the same incident the write half guards against.
-    if (this.homeGuard(room, binding) !== 'ok') return 'missing';
+    if (this.originRepoGuard(room, binding) !== 'ok') return 'missing';
     let md: string;
     if (preread) {
       if (!preread.exists) return 'missing';
@@ -1526,7 +1527,7 @@ export class FileBindings {
       // current". A retarget already carried this flush's content out (the
       // export) or re-armed one on the new binding; parked means the bytes
       // stay in the live doc.
-      if (this.homeGuard(room, binding) !== 'ok') return;
+      if (this.originRepoGuard(room, binding) !== 'ok') return;
       // Guard (RC2a): the poll has already SEEN an external change and is
       // holding it behind the read debounce. It advanced `lastMtimeMs` the
       // instant it saw the change, so the mtime guard below now compares disk

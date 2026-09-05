@@ -15,7 +15,7 @@
  * Dependencies arrive in an explicit context rather than captured from the
  * `createServer` closure, following `task-routes-context.ts`.
  */
-import { reviewIdOf } from '@feedback/core';
+import { attachmentIdOf } from '@feedback/core';
 import type { DocMeta } from '@feedback/core';
 import type { DocStore } from '../doc-store.ts';
 import type { ShareTarget } from '../middleware/host-guard.ts';
@@ -105,7 +105,7 @@ export async function handleReviewFileRoutes(
   const wsThreadsMatch = pathname.match(REVIEW_API.threads);
   if (wsThreadsMatch && req.method === 'GET') {
     const setId = decodeURIComponent(wsThreadsMatch[1] ?? '');
-    if (!docStore.list().some((m) => reviewIdOf(m) === setId)) {
+    if (!docStore.list().some((m) => attachmentIdOf(m) === setId)) {
       return j(404, { error: 'review not found', setId, workspaceId: setId });
     }
     const status = url.searchParams.get('status') as 'open' | 'resolved' | null;

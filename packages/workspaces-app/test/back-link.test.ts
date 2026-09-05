@@ -20,8 +20,8 @@ describe('backLinkFor', () => {
   it('falls back to the machine-wide index when there is no board', () => {
     // Positive control lives in the case above: this `/` means "resolved to
     // nothing", not "the function returns a constant".
-    expect(backLinkFor(null)).toEqual({ href: '/', label: 'Back to all review docs' });
-    expect(backLinkFor(undefined)).toEqual({ href: '/', label: 'Back to all review docs' });
+    expect(backLinkFor(null)).toEqual({ href: '/', label: 'Back to all attachments' });
+    expect(backLinkFor(undefined)).toEqual({ href: '/', label: 'Back to all attachments' });
   });
 
   it('encodes an id that would otherwise break the path', () => {
@@ -46,7 +46,7 @@ describe('backLinkFor', () => {
 describe('applyBackLink', () => {
   beforeEach(() => {
     document.body.innerHTML =
-      '<div class="doc-crumb"><a href="/" class="back-link" title="All review docs" aria-label="Back to all review docs">←</a></div>';
+      '<div class="doc-crumb"><a href="/" class="back-link" title="All attachments" aria-label="Back to all attachments">←</a></div>';
   });
 
   const link = () => document.querySelector('.doc-crumb .back-link') as HTMLAnchorElement;
@@ -68,7 +68,7 @@ describe('applyBackLink', () => {
     expect(link().getAttribute('href')).toBe('/workspaces/w-abc'); // presence first
     applyBackLink(document, null);
     expect(link().getAttribute('href')).toBe('/');
-    expect(link().getAttribute('aria-label')).toBe('Back to all review docs');
+    expect(link().getAttribute('aria-label')).toBe('Back to all attachments');
   });
 
   it('does nothing when the shell has no back link', () => {

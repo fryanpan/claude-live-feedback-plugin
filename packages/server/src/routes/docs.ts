@@ -34,7 +34,7 @@
  * `docId` / `room` / `rest` once (both halves of the alias contract — see
  * the comment inside the function), then delegates to `doc-resource.ts`
  * (the doc's own reads/writes, its task chips, the meeting-float asks, its
- * repo home, and content/status/diff/activity), `doc-threads-routes.ts`
+ * origin repo, and content/status/diff/activity), `doc-threads-routes.ts`
  * (creating a thread and every per-thread mutation) and `doc-edit-routes.ts`
  * (whole-doc rewrite, disk reparse, agent anchors, find_and_replace,
  * suggestions, the structural deletes) — the same shape `routes/tasks.ts`
@@ -44,11 +44,11 @@
  * strings), so no two of the ~30 subroutes can match the same request and a
  * fixed delegation order cannot make one answer a path meant for another.
  */
-import { type Anchor, type DocMeta, type DocType, reviewIdOf } from '@feedback/core';
+import { type Anchor, type DocMeta, type DocType, attachmentIdOf } from '@feedback/core';
 import { classifyActor } from '../actor-identity.ts';
-import { normalizeDocHome, resolveHomeCheckout } from '../doc-home.ts';
 import { RESERVED_DOC_PREFIXES } from '../doc-ids.ts';
 import { compactDocRow, matchesDocFilters, pageDocs, parseListDocsQuery } from '../doc-listing.ts';
+import { normalizeDocOriginRepo, resolveOriginRepoCheckout } from '../doc-origin-repo.ts';
 import { browserCannotBindBody, isBrowserRequest } from '../middleware/write-gate.ts';
 import {
   captureMockup,
@@ -129,7 +129,7 @@ export async function handleDocCreateListRoutes(
     // A markdown doc created WITHOUT a path can be placed by its
     // workspace's configured notes home: the file is derived as
     // `<dir>/<docId>.md` on the home branch and the doc is pinned
-    // there (see docStore.setDocHome), which is what gets planning notes
+    // there (see docStore.setDocOriginRepo), which is what gets planning notes
     // checked in instead of scattered wherever a session's checkout
     // happens to sit. Opt-in twice over — the workspace set a
     // notesHome, and the caller named the workspace.
@@ -139,13 +139,13 @@ export async function handleDocCreateListRoutes(
       const notes = wsForNotes ? taskStore.notesHome(wsForNotes) : undefined;
       if (notes) {
         const fileName = `${docId.replace(/[^a-zA-Z0-9._-]/g, '-')}.md`;
-        const norm = normalizeDocHome({
+        const norm = normalizeDocOriginRepo({
           repoRoot: notes.repoRoot,
           branch: notes.branch,
           relPath: `${notes.dir}/${fileName}`,
         });
         if (!norm.ok) return j(400, { error: 'bad_notes_home', hint: norm.error });
-        const placed = resolveHomeCheckout(norm.home);
+        const placed = resolveOriginRepoCheckout(norm.home);
         if (!placed.placed) {
           return j(409, {
             error: 'notes_home_unplaced',
@@ -174,13 +174,13 @@ export async function handleDocCreateListRoutes(
     if (type === 'diff') {
       return j(400, {
         error: 'use /api/diffs',
-        hint: 'Diff review docs are created per changed file by POST /api/diffs {repo, base, target}.',
+        hint: 'Diff attachments are created per changed file by POST /api/diffs {repo, base, target}.',
       });
     }
     if ((type === 'markdown' || type === 'code') && !sourceUrl) {
       return j(400, {
         error: 'sourceUrl required',
-        hint: 'Markdown and code review docs are backed by a file on disk. Pass sourceUrl: "/abs/path/to/file" in the POST body.',
+        hint: 'Markdown and code attachments are backed by a file on disk. Pass sourceUrl: "/abs/path/to/file" in the POST body.',
       });
     }
     // A mockup binds to a file OUTSIDE the repo, so this route was the
@@ -261,7 +261,7 @@ export async function handleDocCreateListRoutes(
       // Notes-home creation: pin the doc to the derived home. The pin
       // exports the (possibly still missing) file and takes over the
       // binding, so branch churn from here on follows the branch.
-      if (derivedHome) docStore.setDocHome(canonicalId, derivedHome);
+      if (derivedHome) docStore.setDocOriginRepo(canonicalId, derivedHome);
     } else if (type === 'code' && sourceUrl) {
       // The pool door, like the markdown branch above it. `sourceUrl` is
       // whatever the caller put in the body, so this is the same class of
@@ -329,7 +329,7 @@ export async function handleDocCreateListRoutes(
     // sidebar's legacy flat-set path had no way to ask: it fetched every
     // doc on the server — 4,205,683 bytes for 4,062 rows, measured
     // 2026-08-21 — and kept the 6 that shared its setId. Matching goes
-    // through `reviewIdOf` so this route cannot answer differently from
+    // through `attachmentIdOf` so this route cannot answer differently from
     // the other set queries beside it (grouped diff, repo files, tree),
     // which means a doc restored from an archive carrying only the
     // deprecated `workspaceId` spelling is still found by its set.
@@ -358,7 +358,7 @@ export async function handleDocCreateListRoutes(
             m.workspaceId === workspaceId || boardsForDocIndexed(boardIndex, m).has(workspaceId),
         )
       : all;
-    const bySet = setId ? byWorkspace.filter((m) => reviewIdOf(m) === setId) : byWorkspace;
+    const bySet = setId ? byWorkspace.filter((m) => attachmentIdOf(m) === setId) : byWorkspace;
     const docs = bySet.filter((m) => matchesDocFilters(m, q));
     const decorate = (m: DocMeta) => withReviewUrl(m, homeForDocIndexed(boardIndex, m));
     if (q.limit === undefined) {

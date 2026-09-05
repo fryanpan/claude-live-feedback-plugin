@@ -27,11 +27,11 @@ import { ListBehavior } from './list-behavior.ts';
 import { MermaidCodeBlock } from './mermaid-code-block.ts';
 import { NotesLinkAffordance, type NotesLinkAffordanceOptions } from './notes-link-affordance.ts';
 import { PlanPlaceholder } from './plan-placeholder.ts';
-import { SuggestionChips } from './redline/suggestion-chips.ts';
 import type { InlineThreadCard } from './review-surface.ts';
 import { SettleWash, type SettleWashOptions } from './settle-wash.ts';
 import { SuggestInput } from './suggest-input.ts';
 import { SuggestDelete, SuggestInsert } from './suggest-marks.ts';
+import { SuggestionChips } from './suggestions/suggestion-chips.ts';
 import { TaskLinkChips } from './task-link-chips.ts';
 import { ThreadDecorations, type ThreadRange, setThreadDecorations } from './thread-decorations.ts';
 

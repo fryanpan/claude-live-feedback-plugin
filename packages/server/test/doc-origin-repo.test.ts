@@ -8,13 +8,13 @@ import {
   checkoutBranch,
   findWorktreeRoot,
   gitCommonDir,
-  normalizeDocHome,
-  resolveHomeCheckout,
-  verifyPathInHome,
-} from '../src/doc-home.ts';
+  normalizeDocOriginRepo,
+  resolveOriginRepoCheckout,
+  verifyPathInOriginRepo,
+} from '../src/doc-origin-repo.ts';
 
 /**
- * The doc-home resolvers read git's plumbing files directly (no subprocess),
+ * The doc-origin-repo resolvers read git's plumbing files directly (no subprocess),
  * so these tests build REAL repos and worktrees with the git CLI and assert
  * the pure readers agree with what git set up. All fixtures are synthetic.
  */
@@ -33,7 +33,7 @@ function git(cwd: string, ...args: string[]): string {
   });
 }
 
-describe('doc-home git plumbing readers', () => {
+describe('doc-origin-repo git plumbing readers', () => {
   let tmp: string;
   let main: string;
   let wt: string;
@@ -88,16 +88,16 @@ describe('doc-home git plumbing readers', () => {
     mkdirSync(outside);
     symlinkSync(outside, join(wt, 'docs'));
     const home = { repoRoot: main, branch: 'feature', relPath: 'docs/plans/triage.md' };
-    expect(resolveHomeCheckout(home)).toEqual({
+    expect(resolveOriginRepoCheckout(home)).toEqual({
       placed: false,
       reason: 'path-escapes-checkout',
     });
-    expect(verifyPathInHome(join(wt, 'docs/plans/triage.md'), home)).toBe('outside-repo');
+    expect(verifyPathInOriginRepo(join(wt, 'docs/plans/triage.md'), home)).toBe('outside-repo');
     // A symlink that stays INSIDE the checkout is a normal repo layout.
     mkdirSync(join(wt, 'real-docs'));
     symlinkSync(join(wt, 'real-docs'), join(wt, 'docs-in'));
     expect(
-      resolveHomeCheckout({ repoRoot: main, branch: 'feature', relPath: 'docs-in/triage.md' })
+      resolveOriginRepoCheckout({ repoRoot: main, branch: 'feature', relPath: 'docs-in/triage.md' })
         .placed,
     ).toBe(true);
   });
@@ -107,57 +107,69 @@ describe('doc-home git plumbing readers', () => {
     expect(findWorktreeRoot(join(tmp, 'nowhere', 'x.md'))).toBeNull();
   });
 
-  it('resolveHomeCheckout finds the worktree holding the branch, from any checkout', () => {
+  it('resolveOriginRepoCheckout finds the worktree holding the branch, from any checkout', () => {
     for (const repoRoot of [main, wt]) {
-      const placed = resolveHomeCheckout({ repoRoot, branch: 'feature', relPath: 'docs/plan.md' });
+      const placed = resolveOriginRepoCheckout({
+        repoRoot,
+        branch: 'feature',
+        relPath: 'docs/plan.md',
+      });
       expect(placed).toEqual({
         placed: true,
         worktreeRoot: wt,
         absPath: join(wt, 'docs/plan.md'),
       });
-      const onMain = resolveHomeCheckout({ repoRoot, branch: 'main', relPath: 'docs/plan.md' });
+      const onMain = resolveOriginRepoCheckout({
+        repoRoot,
+        branch: 'main',
+        relPath: 'docs/plan.md',
+      });
       expect(onMain.placed && onMain.worktreeRoot).toBe(main);
     }
   });
 
-  it('resolveHomeCheckout: no checkout on the branch / missing repo are named refusals', () => {
-    expect(resolveHomeCheckout({ repoRoot: main, branch: 'ghost', relPath: 'a.md' })).toEqual({
-      placed: false,
-      reason: 'no-checkout-on-branch',
-    });
+  it('resolveOriginRepoCheckout: no checkout on the branch / missing repo are named refusals', () => {
+    expect(resolveOriginRepoCheckout({ repoRoot: main, branch: 'ghost', relPath: 'a.md' })).toEqual(
+      {
+        placed: false,
+        reason: 'no-checkout-on-branch',
+      },
+    );
     expect(
-      resolveHomeCheckout({ repoRoot: join(tmp, 'gone'), branch: 'main', relPath: 'a.md' }),
+      resolveOriginRepoCheckout({ repoRoot: join(tmp, 'gone'), branch: 'main', relPath: 'a.md' }),
     ).toEqual({ placed: false, reason: 'repo-missing' });
   });
 
-  it('resolveHomeCheckout skips a removed worktree registration', () => {
+  it('resolveOriginRepoCheckout skips a removed worktree registration', () => {
     rmSync(wt, { recursive: true, force: true });
-    expect(resolveHomeCheckout({ repoRoot: main, branch: 'feature', relPath: 'a.md' })).toEqual({
+    expect(
+      resolveOriginRepoCheckout({ repoRoot: main, branch: 'feature', relPath: 'a.md' }),
+    ).toEqual({
       placed: false,
       reason: 'no-checkout-on-branch',
     });
   });
 
-  it('verifyPathInHome: the full verdict set', () => {
+  it('verifyPathInOriginRepo: the full verdict set', () => {
     const home = { repoRoot: main, branch: 'feature', relPath: 'docs/plan.md' };
     const good = join(wt, 'docs/plan.md');
-    expect(verifyPathInHome(good, home)).toBe('ok');
+    expect(verifyPathInOriginRepo(good, home)).toBe('ok');
     // Same worktree, different file.
-    expect(verifyPathInHome(join(wt, 'docs/other.md'), home)).toBe('wrong-path');
+    expect(verifyPathInOriginRepo(join(wt, 'docs/other.md'), home)).toBe('wrong-path');
     // A path in a checkout of a DIFFERENT repo, and one outside any repo.
     const other = join(tmp, 'other-repo');
     mkdirSync(other);
     git(other, 'init', '-b', 'feature');
-    expect(verifyPathInHome(join(other, 'docs/plan.md'), home)).toBe('outside-repo');
-    expect(verifyPathInHome(join(tmp, 'docs/plan.md'), home)).toBe('outside-repo');
+    expect(verifyPathInOriginRepo(join(other, 'docs/plan.md'), home)).toBe('outside-repo');
+    expect(verifyPathInOriginRepo(join(tmp, 'docs/plan.md'), home)).toBe('outside-repo');
     // The checkout under the path switches away from the home branch — the
     // exact incident the guard exists for.
     git(wt, 'checkout', '-b', 'someone-elses-feature');
-    expect(verifyPathInHome(good, home)).toBe('wrong-branch');
+    expect(verifyPathInOriginRepo(good, home)).toBe('wrong-branch');
   });
 
-  it('normalizeDocHome accepts the canonical shape and refuses traversal', () => {
-    const ok = normalizeDocHome({ repoRoot: main, branch: 'main', relPath: 'docs/a.md' });
+  it('normalizeDocOriginRepo accepts the canonical shape and refuses traversal', () => {
+    const ok = normalizeDocOriginRepo({ repoRoot: main, branch: 'main', relPath: 'docs/a.md' });
     expect(ok.ok).toBe(true);
     for (const bad of [
       null,
@@ -170,7 +182,7 @@ describe('doc-home git plumbing readers', () => {
       { repoRoot: main, branch: 'main', relPath: '.git/hooks/pre-commit' },
       { repoRoot: main, branch: 'main', relPath: '' },
     ]) {
-      expect(normalizeDocHome(bad).ok).toBe(false);
+      expect(normalizeDocOriginRepo(bad).ok).toBe(false);
     }
   });
 });

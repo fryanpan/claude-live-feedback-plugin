@@ -104,7 +104,7 @@ export interface DocRoutesContext {
   /** An alias or an id → the doc's own id. */
   canonicalDocId: (addressed: string) => string;
   /** Where a doc's back arrow goes — the board or review that holds it. */
-  backTargetFor: (docId: string, reviewId?: string) => { id: string; name: string } | null;
+  backTargetFor: (docId: string, attachmentId?: string) => { id: string; name: string } | null;
   /** The board a doc belongs to, or null. */
   resolveWorkspaceForDoc: (docId: string) => string | null;
   /** Decorate a doc's meta with its review URL. `precomputedHome` is the

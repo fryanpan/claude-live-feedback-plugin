@@ -1,13 +1,13 @@
 /**
- * The workspace surface of a review: what a bound folder or diff review
- * looks like from the outside, and how it is retired.
+ * The workspace surface of an attachment set: what a bound folder or diff
+ * review looks like from the outside, and how it is retired.
  *
  * Two clusters live here because they are the same subject seen twice. The
  * projections — the tree, the grouped diff, the all-files list, the thread
- * roll-up — all answer "what is in this review", and every one of them is
+ * roll-up — all answer "what is in this set", and every one of them is
  * built by walking `list()` and summing thread counts. The archive verbs
- * answer "this review is finished", and they are the only writers that treat
- * a review's member docs as one unit.
+ * answer "this set is finished", and they are the only writers that treat
+ * a set's member docs as one unit.
  *
  * What is NOT here is the room lifecycle they act on. Hydration, teardown,
  * alias release and the persisted index stay in `doc-store.ts`, reached through
@@ -20,8 +20,8 @@ import {
   type DocMeta,
   type DocType,
   type Thread,
-  isReviewMember,
-  reviewIdOf,
+  attachmentIdOf,
+  isAttachmentMember,
 } from '@feedback/core';
 import {
   type Event,
@@ -67,7 +67,7 @@ import { boundFiles } from './slow-fs.ts';
  * `room` resolves an alias and hydrates; `residentRoom` returns only what is
  * already in memory. Archiving uses the second on purpose — it flushes a room
  * that happens to be open, and must not page in the several hundred members
- * of a review nobody is looking at just to retire them.
+ * of a set nobody is looking at just to retire them.
  */
 export interface DocStoreWorkspacePersistence {
   dataDir(): string;
@@ -125,7 +125,7 @@ export class DocStoreWorkspaces {
   ): Array<Thread & { docId: string; relPath?: string }> {
     const out: Array<Thread & { docId: string; relPath?: string }> = [];
     for (const meta of this.p.list()) {
-      if (reviewIdOf(meta) !== setId) continue;
+      if (attachmentIdOf(meta) !== setId) continue;
       for (const t of this.p.listThreads(meta.docId, opts)) {
         out.push({ ...t, docId: meta.docId, relPath: meta.relPath });
       }
@@ -166,7 +166,7 @@ export class DocStoreWorkspaces {
     // short-circuits when one exists), so summing by relPath is safe.
     const companionThreads = new Map<string, { open: number; total: number }>();
     for (const meta of this.p.list()) {
-      if (reviewIdOf(meta) !== setId || meta.type === 'diff' || !meta.relPath) continue;
+      if (attachmentIdOf(meta) !== setId || meta.type === 'diff' || !meta.relPath) continue;
       const { open, total } = this.p.threadCounts(meta.docId);
       if (open === 0 && total === 0) continue;
       const prev = companionThreads.get(meta.relPath) ?? { open: 0, total: 0 };
@@ -174,7 +174,7 @@ export class DocStoreWorkspaces {
     }
     let totalOpen = 0;
     for (const meta of this.p.list()) {
-      if (reviewIdOf(meta) !== setId || meta.type !== 'diff') continue;
+      if (attachmentIdOf(meta) !== setId || meta.type !== 'diff') continue;
       const relPath = meta.relPath ?? meta.docId;
       const extra = companionThreads.get(relPath) ?? { open: 0, total: 0 };
       const counts = this.p.threadCounts(meta.docId);
@@ -244,7 +244,7 @@ export class DocStoreWorkspaces {
     }>;
     error?: 'not-found';
   } {
-    const members = this.p.list().filter((m) => reviewIdOf(m) === setId);
+    const members = this.p.list().filter((m) => attachmentIdOf(m) === setId);
     const root = members.find((m) => m.workspaceRoot)?.workspaceRoot;
     if (!root || !existsSync(root)) return { ok: false, error: 'not-found' };
     // A changed file can carry BOTH its diff member and its companion
@@ -295,7 +295,7 @@ export class DocStoreWorkspaces {
         error: 'not-found' | 'bad-path' | 'not-listed' | 'attach-failed' | 'unavailable';
       }
   > {
-    const members = this.p.list().filter((m) => reviewIdOf(m) === setId);
+    const members = this.p.list().filter((m) => attachmentIdOf(m) === setId);
     const root = members.find((m) => m.workspaceRoot)?.workspaceRoot;
     if (!root) return { ok: false, error: 'not-found' };
     const clean = normalizeRel(relPath);
@@ -349,7 +349,7 @@ export class DocStoreWorkspaces {
       setId,
       owner,
       // The persisted DocMeta field keeps its name: it is on disk in every
-      // .ydoc already, and `reviewIdOf` reads it as the fallback.
+      // .ydoc already, and `attachmentIdOf` reads it as the fallback.
       workspaceId: setId,
       workspaceRoot: root,
       relPath: clean,
@@ -389,7 +389,7 @@ export class DocStoreWorkspaces {
           | 'unavailable';
       }
   > {
-    const members = this.p.list().filter((m) => reviewIdOf(m) === setId);
+    const members = this.p.list().filter((m) => attachmentIdOf(m) === setId);
     const root = members.find((m) => m.workspaceRoot)?.workspaceRoot;
     if (!root) return { ok: false, error: 'not-found' };
     const clean = normalizeRel(relPath);
@@ -428,7 +428,7 @@ export class DocStoreWorkspaces {
       setId,
       owner,
       // The persisted DocMeta field keeps its name: it is on disk in every
-      // .ydoc already, and `reviewIdOf` reads it as the fallback.
+      // .ydoc already, and `attachmentIdOf` reads it as the fallback.
       workspaceId: setId,
       workspaceRoot: root,
       relPath: clean,
@@ -452,9 +452,9 @@ export class DocStoreWorkspaces {
     // member's event fan-out until somebody happened to open both.
     const meta = this.p.peekMeta(docId);
     if (!meta || meta.type !== 'diff' || !meta.relPath) return undefined;
-    const reviewId = reviewIdOf(meta);
-    if (!reviewId) return undefined;
-    const companionId = memberDocId(`${reviewId}:edit`, meta.relPath);
+    const attachmentId = attachmentIdOf(meta);
+    if (!attachmentId) return undefined;
+    const companionId = memberDocId(`${attachmentId}:edit`, meta.relPath);
     return this.p.docExists(companionId) ? companionId : undefined;
   }
 
@@ -465,9 +465,10 @@ export class DocStoreWorkspaces {
   memberOfCompanion(docId: string): string | undefined {
     const meta = this.p.peekMeta(docId);
     if (!meta || meta.type !== 'markdown' || !meta.relPath) return undefined;
-    const reviewId = reviewIdOf(meta);
-    if (!reviewId || docId !== memberDocId(`${reviewId}:edit`, meta.relPath)) return undefined;
-    const memberId = memberDocId(reviewId, meta.relPath);
+    const attachmentId = attachmentIdOf(meta);
+    if (!attachmentId || docId !== memberDocId(`${attachmentId}:edit`, meta.relPath))
+      return undefined;
+    const memberId = memberDocId(attachmentId, meta.relPath);
     return this.p.peekMeta(memberId)?.type === 'diff' ? memberId : undefined;
   }
 
@@ -499,7 +500,7 @@ export class DocStoreWorkspaces {
     // whichever doc the reviewer commented in, so badges merge across both.
     const byRel = new Map<string, { meta: DocMeta; openCount: number; threadCount: number }>();
     for (const meta of this.p.list()) {
-      if (reviewIdOf(meta) !== setId) continue;
+      if (attachmentIdOf(meta) !== setId) continue;
       if (!workspaceRoot && meta.workspaceRoot) workspaceRoot = meta.workspaceRoot;
       const key = meta.relPath ?? meta.docId;
       const { open, total } = this.p.threadCounts(meta.docId);
@@ -558,7 +559,7 @@ export class DocStoreWorkspaces {
   /**
    * List the bound workspaces with rolled-up triage signals — so the daily
    * cleanup can treat a folder bind as ONE unit instead of nagging per file.
-   * Each entry aggregates its member docs (`reviewIdOf(meta) === id`):
+   * Each entry aggregates its member docs (`attachmentIdOf(meta) === id`):
    *   - `fileCount`     number of member docs
    *   - `openThreads`   sum of every member's open-thread count
    *   - `allIdle`       true iff EVERY member is idle (lastActivityAt older
@@ -595,12 +596,12 @@ export class DocStoreWorkspaces {
       }
     >();
     for (const meta of this.p.list()) {
-      // `isReviewMember`, not just "has a review id": `setId` predates binds
+      // `isAttachmentMember`, not just "has a review id": `setId` predates binds
       // as a batch-registration tag, so 129 docs in the live data dir share a
       // set without belonging to any folder or diff. Listing those would
       // invent reviews nobody made, each with no root and nothing to refresh.
-      if (!isReviewMember(meta)) continue;
-      const id = reviewIdOf(meta) as string;
+      if (!isAttachmentMember(meta)) continue;
+      const id = attachmentIdOf(meta) as string;
       let entry = byId.get(id);
       if (!entry) {
         entry = {
@@ -657,7 +658,7 @@ export class DocStoreWorkspaces {
         error: 'has-open-threads';
         files: Array<{ docId: string; openThreads: number }>;
       } {
-    const members = this.p.list().filter((m) => reviewIdOf(m) === setId);
+    const members = this.p.list().filter((m) => attachmentIdOf(m) === setId);
     if (members.length === 0) return { ok: false, error: 'not-found' };
     if (!opts?.force) {
       // Pre-flight the guardrail across ALL members before deleting any, so a
@@ -716,7 +717,7 @@ export class DocStoreWorkspaces {
     | { ok: true; archived: number; docIds: string[]; manifest: ArchivedReview }
     | { ok: false; error: 'not-found' }
     | { ok: false; error: 'archive-collision' | 'move-failed'; docIds: string[] } {
-    const members = this.p.list().filter((m) => reviewIdOf(m) === setId);
+    const members = this.p.list().filter((m) => attachmentIdOf(m) === setId);
     if (members.length === 0) return { ok: false, error: 'not-found' };
     const dir = ensureArchiveDir(this.p.dataDir());
 
@@ -758,7 +759,7 @@ export class DocStoreWorkspaces {
       this.p.releaseAliases(m.docId);
     }
 
-    const entry = members.find((m) => reviewIdOf(m) === setId);
+    const entry = members.find((m) => attachmentIdOf(m) === setId);
     const manifest: ArchivedReview = {
       setId,
       archivedAt: toUtcIso(Date.now()),
@@ -828,9 +829,9 @@ export class DocStoreWorkspaces {
    *
    *   - `review-member` — the doc carries a review id, so `archiveReview` would
    *     sweep it up with its siblings. The test is deliberately the broad
-   *     `reviewIdOf` rather than `isReviewMember`: the question is not "is this
+   *     `attachmentIdOf` rather than `isAttachmentMember`: the question is not "is this
    *     a proper review" but "would `archiveReview` move this file", and that
-   *     selector is `reviewIdOf`. Answering the narrower question would let two
+   *     selector is `attachmentIdOf`. Answering the narrower question would let two
    *     verbs both claim the same doc.
    *   - `board-owned` — a `task:` body or a `ws:` board room is live furniture
    *     the board re-creates, not a document anyone archives.
@@ -854,7 +855,7 @@ export class DocStoreWorkspaces {
     // From here on the CANONICAL id: everything below names files, writes a
     // manifest and reports back, and an alias names none of them.
     const id = room.docId;
-    const setId = reviewIdOf(room.meta);
+    const setId = attachmentIdOf(room.meta);
     if (setId !== undefined) return { ok: false, error: 'review-member', setId };
 
     const dir = ensureArchiveDir(this.p.dataDir());

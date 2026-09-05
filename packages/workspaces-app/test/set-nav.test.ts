@@ -55,7 +55,7 @@ describe('selectSetSiblings', () => {
   });
 
   it('reads the deprecated workspaceId spelling as the set id', () => {
-    // Same fallback `reviewIdOf` applies server-side; a doc written before the
+    // Same fallback `attachmentIdOf` applies server-side; a doc written before the
     // rename must not drop out of its own sidebar.
     const docs = [doc('old', { workspaceId: 'S' }), doc('other', { workspaceId: 'T' })];
     expect(selectSetSiblings(docs, 'S').map((d) => d.docId)).toEqual(['old']);

@@ -167,7 +167,7 @@ function nameTab(extra?: Partial<ChromeOpts>): void {
   mountReviewChrome(chromeOpts(extra)).renderDocLabel();
 }
 
-describe('a review doc names its own tab', () => {
+describe('an attachment names its own tab', () => {
   it('leads with the doc title', () => {
     const ydoc = new Y.Doc();
     getMeta(ydoc).set('title', 'Launch plan');

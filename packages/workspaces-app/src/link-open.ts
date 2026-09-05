@@ -4,7 +4,7 @@
  * a Cmd/Ctrl+Click opens them instead. This helper answers only the "what URL,
  * if any, is safe to open" half so it can be unit-tested without a DOM.
  *
- * Permissive by design — a review doc's own links (relative paths, anchors,
+ * Permissive by design — an attachment's own links (relative paths, anchors,
  * mailto/tel) should all open — EXCEPT script-bearing schemes, which must
  * never be handed to window.open.
  */

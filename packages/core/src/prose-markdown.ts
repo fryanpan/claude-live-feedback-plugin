@@ -335,7 +335,7 @@ export function applyMarkdownToFragment(fragment: Y.XmlFragment, markdown: strin
   // Guard the O(n·m) table. Beyond this the destructive replace is the only
   // option — which reinstates the thread-orphaning this function exists to
   // prevent, so say so out loud rather than degrading silently. 2000×2000
-  // blocks is far past any real review doc (this repo's run 30–100).
+  // blocks is far past any real attachment (this repo's run 30–100).
   if (prevKeys.length * nextKeys.length > LCS_CELL_BUDGET) {
     console.warn(
       `[prose] ${prevKeys.length}→${nextKeys.length} blocks exceeds the diff budget; ` +

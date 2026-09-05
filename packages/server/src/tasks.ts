@@ -375,7 +375,7 @@ export interface BoardWorkspace {
   /**
    * Where this board's planning/discussion notes get checked in: a repo +
    * branch + directory, from which `POST /api/docs` derives a file (and a
-   * pinned doc home) for a markdown doc created without an explicit path.
+   * pinned doc origin repo) for a markdown doc created without an explicit path.
    * Absent means docs must name their own file — the fleet's
    * `<repo>/.claude/reviews/` scratch convention is untouched either way.
    * Host paths: served on the owner settings route only, never projected
@@ -388,7 +388,7 @@ export interface BoardWorkspace {
 
 /** A workspace's default location for planning notes — see
  *  `BoardWorkspace.notesHome`. `dir` is relative to the repo root, same
- *  traversal rules as a doc home's relPath. */
+ *  traversal rules as a doc origin repo's relPath. */
 export interface WorkspaceNotesHome {
   repoRoot: string;
   branch: string;

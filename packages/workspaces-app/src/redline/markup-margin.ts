@@ -26,7 +26,7 @@ export type { DeletionGroup };
 
 /**
  * The markup margin: Word's balloon column for the redline surface — and,
- * since comment balloons are shared chrome, for plain markdown review docs
+ * since comment balloons are shared chrome, for plain markdown attachments
  * too (no deletions there; `getDeletions` returns `[]`).
  *
  * Owns a right-hand column next to the prose (`.redline-layout` grid on the

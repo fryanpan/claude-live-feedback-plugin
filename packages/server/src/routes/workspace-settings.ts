@@ -6,7 +6,7 @@ import { DEFAULT_REVIEW_ITEM_CRITERIA } from '@feedback/core/review-judge-prompt
  * Lifted verbatim out of `createServer`'s request closure; the handlers
  * read their collaborators off `WorkspaceRoutesContext` instead of the scope.
  */
-import { canonicalRepoRoot, normalizeDocHome } from '../doc-home.ts';
+import { canonicalRepoRoot, normalizeDocOriginRepo } from '../doc-origin-repo.ts';
 import { redactCapChangeForVisitor } from '../share/redact-workspace.ts';
 import { PARALLELISM_CAP_MAX, PARALLELISM_CAP_MIN, type WorkspaceNotesHome } from '../tasks.ts';
 import { parseVoiceContext } from '../voice.ts';
@@ -174,7 +174,7 @@ export async function handleWorkspaceSettings(
         reviewCriteriaValue = typeof raw === 'string' ? raw : undefined;
       }
       // Same merge contract as the prompt fields: named-and-null
-      // clears, absent leaves it. The shape borrows a doc home's
+      // clears, absent leaves it. The shape borrows a doc origin repo's
       // validation (`dir` is a relPath with the same traversal rules)
       // and additionally insists repoRoot is a checkout NOW — a typo'd
       // path stored here would park every note the board ever derives.
@@ -208,7 +208,7 @@ export async function handleWorkspaceSettings(
           dir?: unknown;
         } | null;
         if (raw !== null) {
-          const norm = normalizeDocHome({
+          const norm = normalizeDocOriginRepo({
             repoRoot: raw?.repoRoot,
             branch: raw?.branch,
             relPath: raw?.dir,
@@ -220,7 +220,7 @@ export async function handleWorkspaceSettings(
           }
           // Store the MAIN checkout's root, not the caller's spelling:
           // a notes home declared from a linked worktree must survive
-          // that worktree's removal (canonicalRepoRoot in doc-home.ts).
+          // that worktree's removal (canonicalRepoRoot in doc-origin-repo.ts).
           const canonRoot = canonicalRepoRoot(norm.home.repoRoot);
           if (canonRoot === null) {
             return j(400, {

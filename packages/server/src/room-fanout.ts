@@ -30,9 +30,9 @@ import {
   type Thread,
   type User,
   type WebhookPayload,
+  attachmentIdOf,
   contentKind,
   prose,
-  reviewIdOf,
   setThreadSummary,
   suggestOps,
 } from '@feedback/core';
@@ -547,9 +547,9 @@ export class RoomFanout {
     // having commented. The workspace fan-out lives in server.ts's
     // `onDocRoomEvent`, which resolves `workspace.docIds` at broadcast time;
     // doc-store.ts has no view of workspaces.
-    const reviewId = reviewIdOf(room.meta);
-    if (reviewId) {
-      this.host.sse().broadcast(`ws~${reviewId}`, payload);
+    const attachmentId = attachmentIdOf(room.meta);
+    if (attachmentId) {
+      this.host.sse().broadcast(`ws~${attachmentId}`, payload);
     }
     if (room.webhookUrl) {
       void this.host.webhooks().send(room.webhookUrl, payload);

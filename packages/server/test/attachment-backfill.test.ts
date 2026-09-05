@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'bun:test';
 import type { DocMeta } from '@feedback/core';
-import { backfillReviewFiling, reviewIdsNeedingFiling } from '../src/review-backfill.ts';
+import {
+  attachmentIdsNeedingFiling,
+  backfillAttachmentFiling,
+} from '../src/attachment-backfill.ts';
 
 const doc = (over: Partial<DocMeta>): DocMeta => ({
   docId: over.docId ?? 'd',
@@ -9,9 +12,9 @@ const doc = (over: Partial<DocMeta>): DocMeta => ({
   ...over,
 });
 
-describe('reviewIdsNeedingFiling', () => {
-  it('names each review exactly once, however many members it has', () => {
-    const ids = reviewIdsNeedingFiling(
+describe('attachmentIdsNeedingFiling', () => {
+  it('names each attachment set exactly once, however many members it has', () => {
+    const ids = attachmentIdsNeedingFiling(
       [
         doc({ docId: 'r:a', setId: 'r', relPath: 'a.ts' }),
         doc({ docId: 'r:b', setId: 'r', relPath: 'b.ts' }),
@@ -22,25 +25,25 @@ describe('reviewIdsNeedingFiling', () => {
     expect(ids).toEqual(['r']);
   });
 
-  it('skips a review already filed on a workspace', () => {
+  it('skips an attachment set already filed on a workspace', () => {
     const docs = [doc({ docId: 'r:a', setId: 'r', relPath: 'a.ts' })];
-    expect(reviewIdsNeedingFiling(docs, (id) => id === 'r')).toEqual([]);
+    expect(attachmentIdsNeedingFiling(docs, (id) => id === 'r')).toEqual([]);
   });
 
-  it('skips a batch-registered set, which is not a review', () => {
+  it('skips a batch-registered set, which is not an attachment set', () => {
     // setId without relPath: docs registered together for one sidebar. Filing
-    // them would put rows on a board for things that are not reviews.
+    // them would put rows on a board for things that are not attachment sets.
     const docs = [doc({ docId: 'n1', setId: 'notes' }), doc({ docId: 'n2', setId: 'notes' })];
-    expect(reviewIdsNeedingFiling(docs, () => false)).toEqual([]);
+    expect(attachmentIdsNeedingFiling(docs, () => false)).toEqual([]);
   });
 
   it('skips standalone docs', () => {
-    expect(reviewIdsNeedingFiling([doc({ docId: 'plain' })], () => false)).toEqual([]);
+    expect(attachmentIdsNeedingFiling([doc({ docId: 'plain' })], () => false)).toEqual([]);
   });
 
   it('finds a member that carries only the deprecated field', () => {
     const docs = [doc({ docId: 'r:a', workspaceId: 'r', relPath: 'a.ts' })];
-    expect(reviewIdsNeedingFiling(docs, () => false)).toEqual(['r']);
+    expect(attachmentIdsNeedingFiling(docs, () => false)).toEqual(['r']);
   });
 
   it('returns ids in a stable order so two boots agree', () => {
@@ -49,14 +52,14 @@ describe('reviewIdsNeedingFiling', () => {
       doc({ docId: 'a:a', setId: 'alpha', relPath: 'a.ts' }),
       doc({ docId: 'm:a', setId: 'mu', relPath: 'a.ts' }),
     ];
-    expect(reviewIdsNeedingFiling(docs, () => false)).toEqual(['alpha', 'mu', 'zeta']);
+    expect(attachmentIdsNeedingFiling(docs, () => false)).toEqual(['alpha', 'mu', 'zeta']);
   });
 });
 
-describe('backfillReviewFiling', () => {
-  it('files an orphan review and reports where it went', () => {
+describe('backfillAttachmentFiling', () => {
+  it('files an orphan attachment set and reports where it went', () => {
     const filed: Array<[string, string]> = [];
-    const res = backfillReviewFiling({
+    const res = backfillAttachmentFiling({
       docs: () => [doc({ docId: 'r:a', setId: 'r', relPath: 'a.ts' })],
       isFiled: () => false,
       file: (id) => {
@@ -65,7 +68,7 @@ describe('backfillReviewFiling', () => {
       },
     });
     expect(filed).toEqual([['r', 'w-default']]);
-    expect(res.filed).toEqual([{ reviewId: 'r', workspaceId: 'w-default' }]);
+    expect(res.filed).toEqual([{ attachmentId: 'r', workspaceId: 'w-default' }]);
   });
 
   it('is a no-op on the second boot — the whole point, since it runs at every start', () => {
@@ -79,8 +82,8 @@ describe('backfillReviewFiling', () => {
         return 'w-default';
       },
     };
-    const first = backfillReviewFiling(deps);
-    const second = backfillReviewFiling(deps);
+    const first = backfillAttachmentFiling(deps);
+    const second = backfillAttachmentFiling(deps);
     expect(first.filed).toHaveLength(1);
     expect(second.filed).toHaveLength(0);
     expect(store.size).toBe(1);
@@ -88,7 +91,7 @@ describe('backfillReviewFiling', () => {
 
   it('never writes when everything is already filed', () => {
     let writes = 0;
-    const res = backfillReviewFiling({
+    const res = backfillAttachmentFiling({
       docs: () => [doc({ docId: 'r:a', setId: 'r', relPath: 'a.ts' })],
       isFiled: () => true,
       file: () => {
@@ -100,9 +103,9 @@ describe('backfillReviewFiling', () => {
     expect(res.filed).toEqual([]);
   });
 
-  it('keeps going when one review fails to file', () => {
-    // A single bad review must not stop the boot or strand the rest.
-    const res = backfillReviewFiling({
+  it('keeps going when one attachment set fails to file', () => {
+    // A single bad attachment set must not stop the boot or strand the rest.
+    const res = backfillAttachmentFiling({
       docs: () => [
         doc({ docId: 'a:x', setId: 'a', relPath: 'x.ts' }),
         doc({ docId: 'b:x', setId: 'b', relPath: 'x.ts' }),
@@ -113,7 +116,7 @@ describe('backfillReviewFiling', () => {
         return 'w';
       },
     });
-    expect(res.filed).toEqual([{ reviewId: 'b', workspaceId: 'w' }]);
+    expect(res.filed).toEqual([{ attachmentId: 'b', workspaceId: 'w' }]);
     expect(res.failed).toEqual(['a']);
   });
 });
