@@ -160,7 +160,7 @@ blocks over one set of fixtures is one harness, however long the file gets.
 | `packages/server/src/recall.ts` | 616 | Exception | One vendor client: `recallConfigFromEnv`, `buildCreateBotBody`, `createRecallClient`. The callback-URL helpers exist only because Recall dials us back. It also hosts `clip`, the failed-response clipper all three HTTP clients in this family share — A7 put it here because `recall-calendar.ts` and `google-oauth.ts` both call it and neither may import the other. |
 | `packages/server/src/client-release.ts` | 593 | Exception | One lifecycle for the numbered release directory: `publishClientRelease`, `currentClientRelease`, `readPublishLedger`, and `prepareClientRelease` — which is the decision the other three exist to make. |
 | `packages/server/src/recall-meeting.ts` | 572 | Exception | One class, `RecallMeetingRelay`: invite, webhook status, and the dialled transcript socket are three channels of one bot lifecycle. |
-| `packages/server/src/sse.ts` | 566 | Exception | One fan-out. `SseHub` holds `byDoc` and the bounded `replay`; `openSseStream` is the socket that consumes both, including the `replay.gap` path. |
+| `packages/server/src/sse.ts` | 703 | Exception | One fan-out. `SseHub` holds `byDoc` and the bounded `replay`; `openSseStream` is the socket that consumes both, including the `replay.gap` path. |
 | `packages/server/src/identities.ts` | 557 | Exception | One store — the `Identities` class over `identities.json` — plus its sanitizer and the single projection `userForIdentity`. |
 | `packages/server/src/summarize.ts` | 549 | Exception | One outbound-API owner, `ThreadSummarizer`. `generate`, `generateHomeBrief` and `backfill` share the key resolution, `post`, and the debounce maps that stop three browsers paying three times. |
 | `packages/server/src/meetings.ts` | 516 | Exception | One durable record: the append-only transcript and index paths, the `listMeetings` / `readTranscript` folds over them, and `MeetingStore` as the live handle on the same files. |
@@ -291,7 +291,7 @@ The remaining 93 are exceptions. Each row names the one harness its cases share.
 | `packages/server/test/stall-nudge-routes.test.ts` | 689 | A single describe over one real board plus `listenFrames` / `waitForFrames`. |
 | `packages/server/test/home-brief.test.ts` | 687 | Every describe feeds `ev()` / `input()` rows into the brief pipeline, store included. |
 | `packages/server/test/meeting-ask-cues.test.ts` | 662 | The detector describes and the `parseTaskCaptureReply` describes are the two halves of one convention, and the second reads the first: every licensing case is built from the same phrase tables the first half asserts, over the shared `candidates` / `reply()` fixture. |
-| `packages/server/test/sse-replay.test.ts` | 660 | Every describe exercises an `SseHub` stream through the shared `listenFrames()` and `settle()`. |
+| `packages/server/test/sse-replay.test.ts` | 792 | Every describe exercises an `SseHub` stream through the shared `listenFrames()` and `settle()`. |
 | `packages/server/test/refresh-workspace.test.ts` | 658 | All three describes build a `Rooms` through the module-scope `makeRooms(dataDir)` and `git()` helpers. |
 | `packages/server/test/auth-write-gate.test.ts` | 656 | Every case, HTTP and y-sync socket alike, boots through the one `boot(requireSignInToWrite)` harness. |
 | `packages/server/test/voice-hardening.test.ts` | 646 | The prompt, resolver and handle describes share the file's `PERSON` / `AGENT` / `INJECTION` fixtures with the one end-to-end describe. |
