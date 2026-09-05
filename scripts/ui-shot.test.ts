@@ -8,8 +8,11 @@
  *      window, which a resized real window cannot (Chrome floors near 500px).
  *      A unit test over the CDP params would pass against a script that
  *      launched nothing.
+ *   3. Profile hygiene — the throwaway profile must not outlive the run, on
+ *      any exit path. The naming rules are pure and unit-tested; that a
+ *      SIGTERM mid-launch actually cleans up needs a real Chrome to kill.
  */
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import {
   existsSync,
   mkdirSync,
@@ -198,16 +201,54 @@ describe('ui-shot stale profile report', () => {
 const CHROME = process.env.CW_CHROME_BIN ?? DEFAULT_CHROME_BIN;
 const SCRIPT = resolve(process.cwd(), 'scripts/ui-shot.ts');
 
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
 describe.skipIf(!existsSync(CHROME))('ui-shot against real headless Chrome', () => {
   let dir: string;
+  /**
+   * Run ids this file handed out. Only profiles carrying one of these may be
+   * removed here — every other `cw-ui-shot-*` directory on the machine may be
+   * another agent's live run.
+   */
+  const ownedRunIds: string[] = [];
+  const newRunId = () => {
+    const id = `vitest${process.pid}${ownedRunIds.length}`;
+    ownedRunIds.push(id);
+    return id;
+  };
+  /** Chrome processes running out of one of OUR profiles, by pid. */
+  const ownChromePids = (runId: string): number[] =>
+    spawnSync('/bin/ps', ['-Ao', 'pid,command'], { encoding: 'utf8' })
+      .stdout.split('\n')
+      .filter((line) => line.includes(`user-data-dir=${join(tmpdir(), profilePrefix(runId))}`))
+      .map((line) => Number(line.trim().split(/\s+/)[0]))
+      .filter((pid) => Number.isInteger(pid) && pid > 0);
+
   afterEach(() => {
     if (dir) rmSync(dir, { recursive: true, force: true });
+    // Best effort, and scoped to run ids this file handed out. A failing test
+    // can leave a live Chrome writing into its profile, and an ENOTEMPTY
+    // thrown from here would replace the assertion message that explains why.
+    for (const runId of ownedRunIds) {
+      for (const pid of ownChromePids(runId)) {
+        try {
+          process.kill(pid, 'SIGKILL');
+        } catch {}
+      }
+      for (const name of profilesOfRun(readdirSync(tmpdir()), runId)) {
+        try {
+          rmSync(join(tmpdir(), name), { recursive: true, force: true });
+        } catch (e) {
+          console.warn(`ui-shot test: could not remove ${name}: ${e}`);
+        }
+      }
+    }
   });
 
   it('screenshots a data: URL at 430px and the page reports innerWidth 430', () => {
     dir = mkdtempSync(join(tmpdir(), 'ui-shot-test-'));
     const out = join(dir, 'nested', 'phone.png');
-    const profilesBefore = readdirSync(tmpdir()).filter((d) => d.startsWith('cw-ui-shot-')).length;
+    const runId = newRunId();
     // Mobile emulation behaves like a phone, which is the point and also a
     // trap for this fixture: without the viewport meta the page lays out at
     // Chrome's 980px legacy width, and if the content overflows (the default
@@ -234,7 +275,7 @@ describe.skipIf(!existsSync(CHROME))('ui-shot against real headless Chrome', () 
         '--eval',
         'window.innerWidth',
       ],
-      { encoding: 'utf8', timeout: 60_000 },
+      { encoding: 'utf8', timeout: 60_000, env: { ...process.env, [RUN_ID_ENV]: runId } },
     );
     expect(r.status, r.stderr).toBe(0);
     expect(existsSync(out)).toBe(true);
@@ -248,9 +289,64 @@ describe.skipIf(!existsSync(CHROME))('ui-shot against real headless Chrome', () 
       title: 'probe',
     });
     expect(summary.screenshot).toBe(out);
-    // The throwaway profile must not survive the run.
-    const profilesAfter = readdirSync(tmpdir()).filter((d) => d.startsWith('cw-ui-shot-')).length;
-    expect(profilesAfter).toBeLessThanOrEqual(profilesBefore);
+    // The throwaway profile must not survive the run — and the check names
+    // this run's profiles rather than counting `cw-ui-shot-*`, so neither a
+    // profile another agent leaked yesterday nor one another agent creates
+    // while this test runs can decide the verdict.
+    expect(profilesOfRun(readdirSync(tmpdir()), runId)).toEqual([]);
+
+    // Profiles left by long-gone runs are somebody's to clean up by hand, so
+    // say which ones. Never a bare count, and never a delete: a day-old
+    // directory can still belong to a session that is still running.
+    const stale = findStaleProfiles(tmpdir());
+    if (stale.length > 0) console.warn(describeStaleProfiles(stale, tmpdir()));
+  }, 60_000);
+
+  it('a run killed mid-shot removes its profile and leaves no Chrome behind', async () => {
+    const runId = newRunId();
+    const url = `data:text/html,${encodeURIComponent('<title>hang</title>')}`;
+    // `--wait-for` a selector that never matches keeps the run inside its
+    // work, so SIGTERM lands mid-shot rather than after a tidy finish.
+    const child = spawn(
+      'bun',
+      [SCRIPT, '--url', url, '--wait-for', '#never-matches', '--timeout', '60000', '--eval', '1'],
+      { stdio: 'ignore', env: { ...process.env, [RUN_ID_ENV]: runId } },
+    );
+    try {
+      const deadline = Date.now() + 30_000;
+      let mine: string[] = [];
+      while (Date.now() < deadline) {
+        mine = profilesOfRun(readdirSync(tmpdir()), runId);
+        if (mine.length > 0) break;
+        await sleep(10);
+      }
+      // Non-vacuous by construction: if the profile were not named for the
+      // run, the emptiness check below would pass without proving anything.
+      expect(mine, 'the run must create a profile named for its run id').toHaveLength(1);
+
+      child.kill('SIGTERM');
+      await new Promise((r) => child.once('exit', r));
+      await sleep(500);
+      expect(profilesOfRun(readdirSync(tmpdir()), runId)).toEqual([]);
+
+      // And it stays gone. Killing Chrome is asynchronous, so a profile
+      // removed while Chrome is still starting up gets rebuilt a moment later.
+      await sleep(1000);
+      expect(profilesOfRun(readdirSync(tmpdir()), runId)).toEqual([]);
+
+      const orphans = spawnSync('/bin/ps', ['-Ao', 'command'], { encoding: 'utf8' })
+        .stdout.split('\n')
+        .filter((line) => line.includes(`user-data-dir=${join(tmpdir(), profilePrefix(runId))}`));
+      expect(orphans).toEqual([]);
+    } finally {
+      // SIGTERM, not SIGKILL: if an assertion above failed, the run still gets
+      // to clean up after itself rather than leaking onto a shared machine.
+      if (child.exitCode === null) {
+        child.kill('SIGTERM');
+        await new Promise((r) => child.once('exit', r));
+        await sleep(500);
+      }
+    }
   }, 60_000);
 
   it('exits 2 with usage on bad flags, without launching Chrome', () => {
