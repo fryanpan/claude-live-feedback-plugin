@@ -16,6 +16,7 @@ import type { AddressInfo } from 'node:net';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { isBackgroundRequest } from './harness/background-requests.ts';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const MCP_ENTRY = join(HERE, '../src/mcp.ts');
@@ -59,7 +60,10 @@ function payload(reply: Reply): Record<string, unknown> {
   expect(reply.result?.isError, reply.result?.content?.[0]?.text).not.toBe(true);
   return JSON.parse(reply.result?.content?.[0]?.text ?? '{}') as Record<string, unknown>;
 }
-/** The listing GETs only — the child also restores watches on initialize. */
+/**
+ * The listing GETs only. The recorder already drops the child's background
+ * traffic (`background-requests.ts`); this narrows to the verb as well.
+ */
 function lastListing(): URL {
   const r = seen.filter((x) => x.method === 'GET' && x.path.startsWith('/api/docs')).at(-1);
   expect(r, 'the stub received no GET /api/docs').toBeTruthy();
@@ -71,7 +75,8 @@ beforeAll(async () => {
     req.on('data', () => {});
     req.on('end', () => {
       const path = req.url ?? '';
-      seen.push({ method: req.method ?? '', path });
+      const rec = { method: req.method ?? '', path };
+      if (!isBackgroundRequest(rec)) seen.push(rec);
       res.writeHead(200, { 'content-type': 'application/json' });
       res.end(JSON.stringify(path.startsWith('/api/docs?') ? PAGE_REPLY : { ok: true }));
     });
