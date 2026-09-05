@@ -27,7 +27,14 @@ function makeThread(over: Partial<Thread> & { comments: Comment[] }): Thread {
   return {
     id: 't1',
     status: 'open',
-    anchor: { kind: 'element', fingerprint: undefined as never, snippet: { text: 'the anchor' } },
+    // Phrase-length on purpose: a snippet under TOPIC_MIN_SNIPPET_WORDS is
+    // not shown as the topic at all (thread-summary.ts), so a two-word
+    // fixture would test the fallback rather than the anchor path.
+    anchor: {
+      kind: 'element',
+      fingerprint: undefined as never,
+      snippet: { text: 'the anchored sentence' },
+    },
     commentCount: comments.length,
     lastActivity: comments[comments.length - 1]?.ts ?? ts,
     createdBy: comments[0]?.author ?? alice,
@@ -98,7 +105,7 @@ describe('thread card — the two slots', () => {
     expect(slotB.querySelector('.thread-face.face-summary')).not.toBeNull();
     expect(slotB.querySelector('.thread-face.face-detail')).not.toBeNull();
 
-    expect(text(slotA.querySelector('.face-summary .thread-topic'))).toBe('the anchor');
+    expect(text(slotA.querySelector('.face-summary .thread-topic'))).toBe('the anchored sentence');
     expect(text(slotA.querySelector('.face-detail .thread-message'))).toBe(
       'Why is the retry count fixed?',
     );
@@ -477,21 +484,30 @@ describe('thread card — resting slot heights', () => {
 describe('thread card — repaint', () => {
   it('repaints when only the anchor snippet changed (the topic line is keyed on it)', () => {
     const first = makeThread({
-      anchor: { kind: 'element', fingerprint: undefined as never, snippet: { text: 'before' } },
+      anchor: {
+        kind: 'element',
+        fingerprint: undefined as never,
+        // Long enough to reach the topic line — see the fixture note above.
+        snippet: { text: 'the line before the edit' },
+      },
       comments: [comment(alice, 'Open.')],
     });
     const { panel, cardFor } = mountPanel();
     panel.setThreads([first]);
-    expect(text(cardFor(first).querySelector('.thread-topic'))).toBe('before');
+    expect(text(cardFor(first).querySelector('.thread-topic'))).toBe('the line before the edit');
 
     // Same id, same status, same commentCount, same lastActivity — ONLY the
     // snippet moved, which is exactly what a doc edit does to it.
     const edited: Thread = {
       ...first,
-      anchor: { kind: 'element', fingerprint: undefined as never, snippet: { text: 'after' } },
+      anchor: {
+        kind: 'element',
+        fingerprint: undefined as never,
+        snippet: { text: 'the line after the edit' },
+      },
     };
     panel.setThreads([edited]);
-    expect(text(cardFor(edited).querySelector('.thread-topic'))).toBe('after');
+    expect(text(cardFor(edited).querySelector('.thread-topic'))).toBe('the line after the edit');
   });
 });
 

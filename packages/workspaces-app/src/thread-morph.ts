@@ -194,6 +194,33 @@ function faceIsEmpty(face: HTMLElement): boolean {
 }
 
 /**
+ * Is this card being laid out at all?
+ *
+ * The empty-face exception above needs one more question answered, because a
+ * zero from an empty face and a zero from a card inside `display: none` are
+ * the same number. The card answers it: a face that HAS content measures zero
+ * only when nothing in the subtree is being laid out, so one such face is
+ * proof the card is hidden and every zero it reports is meaningless. With no
+ * content-bearing face to disagree, there is nothing to disprove and the
+ * zeros stand.
+ *
+ * Without this, the closed desktop drawer — which renders its cards anyway —
+ * would pin an empty slot to `0px` before it had ever been measured for real.
+ */
+function threadIsLaidOut(card: HTMLElement | null): boolean {
+  if (!card) return false;
+  const expanded = card.classList.contains('expanded');
+  let sawContent = false;
+  for (const slot of Array.from(card.querySelectorAll<HTMLElement>('.thread-slot'))) {
+    const face = faceOf(slot, expanded);
+    if (!face || faceIsEmpty(face)) continue;
+    sawContent = true;
+    if (face.offsetHeight > 0) return true;
+  }
+  return !sawContent;
+}
+
+/**
  * Give every slot under `root` the height of the face that is currently
  * showing.
  *
@@ -228,13 +255,15 @@ export function sizeThreadSlots(root: ParentNode): void {
   for (let pass = 0; pass < 3; pass++) {
     let changed = false;
     for (const slot of Array.from(root.querySelectorAll<HTMLElement>('.thread-slot'))) {
-      const expanded = slot.closest('.thread')?.classList.contains('expanded') ?? false;
+      const card = slot.closest<HTMLElement>('.thread');
+      const expanded = card?.classList.contains('expanded') ?? false;
       const face = faceOf(slot, expanded);
       if (!face) continue;
       const h = face.offsetHeight;
-      // A zero is believed only from a face that is genuinely empty; from a
-      // face with content it means the subtree is not being laid out.
-      if (h === 0 && !faceIsEmpty(face)) continue;
+      // A zero is believed only from a face that is genuinely empty on a card
+      // that is genuinely being laid out. Anything else means the subtree is
+      // not being laid out and the number is not a height.
+      if (h === 0 && !(faceIsEmpty(face) && threadIsLaidOut(card))) continue;
       if (slot.style.height !== `${h}px`) {
         slot.style.height = `${h}px`;
         changed = true;
@@ -355,7 +384,7 @@ function slide(
   // open the drawer on a card clipped to its head and its foot. The class flip
   // above already landed. Zero from an EMPTY face is the real height, and
   // refusing it is what left a folded card holding its expanded slot.
-  if (to <= 0 && !faceIsEmpty(arriving)) return;
+  if (to <= 0 && !(faceIsEmpty(arriving) && threadIsLaidOut(slot.closest('.thread')))) return;
   // The resting state lands immediately; the tween below replays the journey.
   slot.style.height = `${to}px`;
   if (!timing.duration || typeof slot.animate !== 'function') return;
