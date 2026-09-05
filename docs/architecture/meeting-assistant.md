@@ -751,6 +751,52 @@ the turn settles — so there is no finished sentence inside a partial to cut
 at. A settled turn IS the unit of finished speech; the turn being spoken waits
 for the next tick rather than being written mid-clause.
 
+**Stopping is the third thing that fires a tick, and the only one that carries
+unfinished words.** Both clocks need the meeting to keep going: the sentence
+somebody is in the middle of when they press stop is waiting on a tick that
+never comes, and "wait for the next tick" is advice with no next tick behind
+it. So `end()` runs a final pass over everything the meeting has — the turns
+that settled since the last tick, and the latest partial of every turn that
+never settled, each flagged `partial` and ordered after the settled ones. The
+composer is TOLD they are fragments (`[unfinished — the recording stopped
+mid-sentence]` on the line), because the alternative to saying so is a
+note-taker reading a cut-off clause as a finished point. The record is
+unaffected: only settled turns reach the JSONL, so the durable transcript
+still keeps what a turn became rather than what it looked like mid-flight.
+
+Two engine behaviours already covered most of this and hid the gap. The
+microphone path's `close()` sends `Terminate` and waits for the flush, which
+settles the open turn before `notes.end()` runs, and the mock engine settles
+its open turn on close for the same reason. Neither is a guarantee: the flush
+has a timeout, a dropped socket has no flush at all, and the bot path's turns
+settle on a vendor event that a stop can precede. The final pass is what makes
+the last sentence survive all three.
+
+**Every meeting says what it came to, in one line.** At the stop the session
+reports `ticks`, `turnsSettled`, `turnsComposed` and `turnsLost` — settled
+turns no successful compose ever carried — and `meeting-notes-doc.ts` logs it
+(`console.error` when anything was lost, `console.log` otherwise). It exists
+because a meeting reported as "skipping chunks" left NOTHING in the log to
+check the claim against: the pipeline spoke only when a stage threw, so a
+meeting whose notes covered half of what was said read exactly like a healthy
+one, and the zero occurrences of every failure signal proved nothing about
+coverage. It is a summary and not a tick log on purpose — a line per tick is
+hundreds per meeting for a number nobody reads while the meeting is fine.
+`turnsComposed` may run one ahead of `turnsSettled`, because the final pass
+carries a sentence that by definition never settled.
+
+**What holds all of this is a coverage audit, not more unit tests.** The ways
+a meeting loses words are spread across the ticker's delta, the compose
+chain's carry, the composer's own reply, the ownership merge and the section
+finder, and each has tests that pass while the meeting as a whole drops a
+stretch of conversation. So `notes-turn-coverage.test.ts` runs a scripted
+three-minute meeting through the tick harness and asks of every settled turn
+whether the notes say anything about it: the script declares, per line, either
+the note it should produce or the reason it is filler, and a line with neither
+is a failure that names the sentence. The script ends mid-sentence, which is
+how a person stops a recording — so the audit reports the interrupted turn by
+name when the final pass regresses.
+
 **The write is a MERGE, and a person can type in the section while it runs**
 (owner, 2026-08-30: *"destroyed my notes"*). The old write deleted the whole
 section and re-inserted the composed string, so every tick ate what he had
