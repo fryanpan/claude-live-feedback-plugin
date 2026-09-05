@@ -260,6 +260,16 @@ export interface ServerOptions {
    */
   stallNudgeQuietMs?: number;
   /**
+   * The scheduled-task loop's clock (task-scheduler.ts). A test seam for the
+   * same reason `stallNudgeQuietMs` is one, and a stronger one: the feature
+   * is entirely a comparison against a clock, so without this a test asserting
+   * that a daily rule fires tomorrow would have to wait until tomorrow.
+   * Unset, the loop reads `Date.now`.
+   */
+  schedulerNow?: () => number;
+  /** How often that loop looks (ms). Unset → SCHEDULER_TICK_DEFAULT_MS. */
+  schedulerTickMs?: number;
+  /**
    * How many quiet windows a row with a WATCHING builder dispatch gets
    * before the wake calls its builder silent (default
    * `BUILDER_SILENT_MULTIPLIER_DEFAULT`, two; `CW_BUILDER_SILENT_MULTIPLIER`
