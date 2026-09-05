@@ -101,6 +101,16 @@ export interface NotesTurn {
    * ticker, where `speaker` IS the label.
    */
   speakerLabel?: string;
+  /**
+   * This turn was still being spoken when the meeting stopped.
+   *
+   * Set on the `end` tick and nowhere else. The text is the engine's last
+   * partial: unformatted, unpunctuated, and possibly cut mid-word. It is
+   * carried anyway because the alternative is losing the last thing said —
+   * and it is FLAGGED so the composer is told what it is holding rather
+   * than reading a fragment as a finished sentence.
+   */
+  partial?: boolean;
 }
 
 /**
@@ -651,17 +661,21 @@ export function beginNotesSession(
       // person in the room is still solo). Until a second voice has been
       // heard, the composer never learns who spoke, so it has nothing to tag.
       const multi = seen.size >= 2;
-      const turns = multi
-        ? raw.map(withNames)
-        : raw.map((t): NotesTurn => ({ turn: t.turn, text: t.text }));
+      // The solo path drops the voice and keeps everything else — `partial`
+      // included, because whether the last sentence finished is a fact about
+      // the words, not about who said them.
+      const bare = (t: NotesTurn): NotesTurn => ({
+        turn: t.turn,
+        text: t.text,
+        ...(t.partial ? { partial: true } : {}),
+      });
+      const turns = multi ? raw.map(withNames) : raw.map(bare);
       let taskLinks: readonly NoteTaskLink[] = [];
       let docLinks: readonly NoteDocLink[] = [];
       // Read before the pass, written after it: this tick's words are the
       // NEXT tick's overlap, never their own. Same multi gate as `turns`:
       // the capture pass must see exactly the window its guards see.
-      const priorTurns = multi
-        ? priorRaw.map(withNames)
-        : priorRaw.map((t): NotesTurn => ({ turn: t.turn, text: t.text }));
+      const priorTurns = multi ? priorRaw.map(withNames) : priorRaw.map(bare);
       priorRaw = raw;
       if (deps.captureIntents) {
         try {
