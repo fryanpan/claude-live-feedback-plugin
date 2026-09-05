@@ -998,6 +998,48 @@ describe('share links over HTTP', () => {
       // The board is still there, which a status code alone does not say.
       expect((await asMember(`/api/workspaces/${encodeURIComponent(board)}`)).status).toBe(200);
     });
+
+    /**
+     * The two share verbs that END somebody's access, asked by a member.
+     *
+     * They are the sharp half of "share administration", and the list above
+     * named them in its comment without ever sending them: revoking is
+     * `DELETE /api/share/<id>` and removing a member is
+     * `POST /api/share/member/remove`, neither of which matches the
+     * `/api/share/workspace` and `/api/share/enabled` paths it did send.
+     *
+     * The target here is the member's OWN live link and the member's OWN
+     * address, so a hole would not be a stray 403 somewhere harmless — it
+     * would be a member able to cut off the people they were let in beside,
+     * this test's own access included. That is also what makes the control at
+     * the end meaningful: the member is still a member afterwards, so the two
+     * refusals are the guard and not a request that never arrived.
+     */
+    it('cannot revoke a link or remove a member, not even its own', async () => {
+      const { linkId } = await mintLink(board);
+      const revoked = await asMember(`/api/share/${encodeURIComponent(linkId)}`, {
+        method: 'DELETE',
+      });
+      expect(revoked.status, await revoked.clone().text()).toBe(403);
+
+      const removedSelf = await postAsMember('/api/share/member/remove', {
+        workspaceId: board,
+        email: member,
+      });
+      expect(removedSelf.status, await removedSelf.clone().text()).toBe(403);
+
+      const removedOther = await postAsMember('/api/share/member/remove', {
+        workspaceId: board,
+        email: 'someone-else@partner.example',
+      });
+      expect(removedOther.status).toBe(403);
+
+      // Neither landed: the link the owner just minted still redeems, and
+      // this member is still on the board. A 403 alone would not say either.
+      const newcomer = 'still-admitted@partner.example';
+      expect((await onShareHost(`/s/${linkId}`, newcomer)).status).toBe(302);
+      expect((await asMember(`/api/workspaces/${encodeURIComponent(board)}`)).status).toBe(200);
+    });
   });
 
   /**
