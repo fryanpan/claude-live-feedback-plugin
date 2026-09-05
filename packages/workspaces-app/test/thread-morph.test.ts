@@ -676,6 +676,99 @@ describe('sizeThreadSlots refuses a zero measurement', () => {
   });
 });
 
+describe('a slot whose showing face is genuinely EMPTY collapses to zero', () => {
+  /* Bryan, 2026-09-05: "every collapsed comment card has ~100px of empty space
+     at the bottom". Slot B's summary face is participants + discussion + the
+     review-item control, and since the 2026-09-04 pass that dropped the kind
+     chips and the "No replies yet" row, a thread with none of those builds a
+     face with NOTHING in it. Both writers refused the 0 they measured, so a
+     card that had been expanded kept slot B at the height of the replies it
+     had just folded away — measured at 169px in Chrome at 1180x820. */
+
+  /** A one-comment thread with no repliers: the shape that builds an empty
+   *  slot-B summary face in the real card builder. */
+  function loneThread(): Thread {
+    const alice = { id: 'u1', name: 'Alice', kind: 'known' as const, color: '#2e7dd7' };
+    return thread({
+      commentCount: 1,
+      comments: [{ id: 'c1', author: alice, text: 'The opening message.', ts: 1_699_999_000_000 }],
+    } as Partial<Thread>);
+  }
+
+  it('builds an empty summary face for a thread with nothing to summarise', () => {
+    // The premise, asserted rather than assumed: if the builder ever puts a
+    // row back in this face, every assertion below would pass vacuously.
+    const { card } = mountCard(loneThread());
+    const face = card.querySelector<HTMLElement>('.slot-b > .face-summary') as HTMLElement;
+    expect(face.childNodes).toHaveLength(0);
+  });
+
+  it('folds back to zero after an expand, instead of keeping the replies height', () => {
+    const t = loneThread();
+    const { card } = mountCard(t);
+    // Real layout: the empty summary face is 0, the detail face is 169.
+    fakeLayout(card, {
+      '.slot-a > .face-summary': 22,
+      '.slot-a > .face-detail': 45,
+      '.slot-b > .face-summary': 0,
+      '.slot-b > .face-detail': 169,
+    });
+    const slotB = card.querySelector<HTMLElement>('.slot-b') as HTMLElement;
+
+    morphCard(card, true);
+    expect(slotB.style.height).toBe('169px');
+
+    morphCard(card, false);
+    expect(slotB.style.height).toBe('0px');
+  });
+
+  it('sizeThreadSlots writes the zero too, so a re-measure does not restore it', () => {
+    const t = loneThread();
+    const { card, container } = mountCard(t);
+    fakeLayout(card, {
+      '.slot-a > .face-summary': 22,
+      '.slot-a > .face-detail': 45,
+      '.slot-b > .face-summary': 0,
+      '.slot-b > .face-detail': 169,
+    });
+    const slotB = card.querySelector<HTMLElement>('.slot-b') as HTMLElement;
+    slotB.style.height = '169px';
+    sizeThreadSlots(container);
+    expect(slotB.style.height).toBe('0px');
+  });
+
+  it('refuses even the empty face\u2019s zero while the whole card measures nothing', () => {
+    // The other control. A closed desktop drawer is `display: none` and its
+    // cards are rendered inside it anyway, so EVERY face there measures 0 —
+    // the empty one truthfully and the rest meaninglessly. Believing the
+    // empty one would pin the slot before it had ever been measured for real.
+    const { card, container } = mountCard(loneThread());
+    fakeLayout(card, {
+      '.slot-a > .face-summary': 0,
+      '.slot-a > .face-detail': 0,
+      '.slot-b > .face-summary': 0,
+      '.slot-b > .face-detail': 0,
+    });
+    const slotB = card.querySelector<HTMLElement>('.slot-b') as HTMLElement;
+    slotB.style.height = '';
+    sizeThreadSlots(container);
+    expect(slotB.style.height).toBe('');
+  });
+
+  it('still refuses a zero from a face that HAS content — the drawer case holds', () => {
+    // The control for the exception above: the guard it narrows must still
+    // catch the failure it was written for.
+    const { card, container } = mountCard();
+    const slotB = card.querySelector<HTMLElement>('.slot-b') as HTMLElement;
+    const face = card.querySelector<HTMLElement>('.slot-b > .face-summary') as HTMLElement;
+    expect(face.childNodes.length).toBeGreaterThan(0);
+    expect(slotB.style.height).toBe('35px');
+    Object.defineProperty(face, 'offsetHeight', { get: () => 0, configurable: true });
+    sizeThreadSlots(container);
+    expect(slotB.style.height).toBe('35px');
+  });
+});
+
 describe('sizeThreadSlots converges when its own writes change layout', () => {
   /* Writing slot heights can itself reflow the cards it just measured: on a
      scroller whose content crosses its height only once the slots are tall,

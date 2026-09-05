@@ -561,14 +561,17 @@ describe('mountMarkupMargin — comment balloons', () => {
   it('repaints when only the anchor snippet moved — the topic line is keyed on it', async () => {
     const { parent, surface, ydoc, chrome, scope } = mountRedlineWithChrome(
       '',
-      'Alpha bravo gamma.\n',
+      'Alpha bravo gamma delta echo.\n',
     );
     await tick();
     const thread = openThreadAt(
       ydoc,
       surface.handle.editor,
       () => surface.getSelectionRel(),
-      { from: 1, to: 6 },
+      // Three words, not one: a snippet under TOPIC_MIN_SNIPPET_WORDS never
+      // reaches the topic line (core/thread-summary.ts), so a one-word
+      // selection would make the control below assert the fallback instead.
+      { from: 1, to: 18 },
       'Please clarify this.',
     );
 
@@ -586,16 +589,16 @@ describe('mountMarkupMargin — comment balloons', () => {
     const topic = () =>
       (parent.querySelector('.cw-balloon-comment .thread-topic')?.textContent ?? '').trim();
     // Positive control: the topic line really is the anchor snippet.
-    expect(topic()).toBe('Alpha');
+    expect(topic()).toBe('Alpha bravo gamma');
 
     // A doc edit moves the snippet without touching status, commentCount,
     // lastActivity or the active/expanded flags — every other term in the key.
     const map = ydoc.getMap('threads').get(thread.id) as Y.Map<unknown>;
     const anchor = map.get('anchor') as Record<string, unknown>;
-    map.set('anchor', { ...anchor, snippet: { text: 'Alpha bravo' } });
+    map.set('anchor', { ...anchor, snippet: { text: 'Alpha bravo gamma delta' } });
     margin.relayout();
 
-    expect(topic()).toBe('Alpha bravo');
+    expect(topic()).toBe('Alpha bravo gamma delta');
   });
 
   it('repaints when an answer is taken back — nothing else in the key moves', async () => {
