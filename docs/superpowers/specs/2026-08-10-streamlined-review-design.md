@@ -293,7 +293,7 @@ What the approval carries:
 - **Interface**, if built: `POST /api/docs/:docId/threads/:threadId/summary`,
 
   request `{}` (the server reads the thread it already holds), response `{topic, summary, hash}`, `503` when the key is absent or the call fails. Wrap as an MCP tool `summarize_thread` **in the same change** — a server route meant for agents that ships without its MCP tool is a documented failure mode in this repo.
-- **Opt-out**: `LF_SUMMARIES=0` disables generation; cards fall back to the
+- **Opt-out**: `CW_SUMMARIES=0` disables generation; cards fall back to the
 
   deterministic path and nothing breaks.
 

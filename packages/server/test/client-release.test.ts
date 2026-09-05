@@ -277,23 +277,6 @@ describe('clientReleaseRoot', () => {
     );
   });
 
-  /**
-   * The rename kept the old spelling working, and this is the only place that
-   * says so. A launch environment is the one input this repo cannot restart on
-   * somebody's behalf, so a plist or a shell profile still exporting
-   * `LF_CLIENT_ROOT` must keep pointing the server at the same directory —
-   * otherwise the flag day silently republishes the client somewhere nobody
-   * is serving from.
-   */
-  it('still honours the pre-rename LF_CLIENT_ROOT, and the current name wins', () => {
-    expect(clientReleaseRoot({ LF_CLIENT_ROOT: '/srv/cw-client' }, '/home/u')).toBe(
-      '/srv/cw-client',
-    );
-    expect(
-      clientReleaseRoot({ CW_CLIENT_ROOT: '/srv/cw', LF_CLIENT_ROOT: '/srv/lf' }, '/home/u'),
-    ).toBe('/srv/cw');
-  });
-
   it('defaults under the XDG state dir, outside any checkout', () => {
     expect(clientReleaseRoot({}, '/home/u')).toBe('/home/u/.local/state/claude-workspaces/client');
     expect(clientReleaseRoot({ XDG_STATE_HOME: '/var/state' }, '/home/u')).toBe(

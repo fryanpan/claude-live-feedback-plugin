@@ -1006,7 +1006,7 @@ under `node`, was the only test that could see it, because every other
 - **Two entries above say prod serves `packages/markdown-app/dist` from the
   primary checkout *per request*. That stopped being true** when prod started
   copying the built bundles into an immutable numbered release under the state
-  root (`~/.local/state/live-feedback/client`, `LF_CLIENT_ROOT` to override)
+  root (`~/.local/state/live-feedback/client`, `CW_CLIENT_ROOT` to override)
   and serving that. A `git checkout` in the repo can no longer change what a
   browser loads. What survives unchanged: that checkout is prod's **deploy
   source**, so bundles built there still ship at the next restart — which is

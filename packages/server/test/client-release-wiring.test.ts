@@ -103,7 +103,7 @@ describe('bin.ts --workspaces-app-dist / --widget-dist', () => {
         '--widget-dist',
         rel.widgetDir,
       ],
-      { cwd: repoRoot, stdio: 'ignore', env: { ...process.env, LF_SUMMARIES: '0' } },
+      { cwd: repoRoot, stdio: 'ignore', env: { ...process.env, CW_SUMMARIES: '0' } },
     );
 
     try {
@@ -159,7 +159,7 @@ describe('bin.ts --workspaces-app-dist / --widget-dist', () => {
         '--client-release-root',
         root,
       ],
-      { cwd: repoRoot, stdio: 'ignore', env: { ...process.env, LF_SUMMARIES: '0' } },
+      { cwd: repoRoot, stdio: 'ignore', env: { ...process.env, CW_SUMMARIES: '0' } },
     );
 
     try {

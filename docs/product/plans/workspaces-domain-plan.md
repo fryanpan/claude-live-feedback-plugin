@@ -26,7 +26,7 @@ are steps for the parent session and for Bryan.
 |---|---|
 | `ProgramArguments` | `bun run scripts/serve.ts --no-watch` |
 | `WorkingDirectory` | the primary checkout (prod's deploy source) |
-| `LF_PUBLIC_BASE_URL` | `https://mac-mini.tailb53801.ts.net` |
+| `CW_PUBLIC_BASE_URL` | `https://mac-mini.tailb53801.ts.net` |
 | other env | `HOME`, `PATH` — and nothing else |
 
 Two facts follow from that last row and they shape everything below.
@@ -107,7 +107,7 @@ Deliberately small, and phrased so its failure mode is refusal rather than
 exposure:
 
 1. **A second env var, not a widening of `TRUSTED_HOSTS`.** Something like
-   `LF_PROXIED_TRUSTED_HOSTS` — a host in it classifies `local` even with
+   `CW_PROXIED_TRUSTED_HOSTS` — a host in it classifies `local` even with
    `cf-ray` present. Keeping it separate matters: `TRUSTED_HOSTS` currently
    means "a name for this machine on a network I control", and quietly changing
    that meaning would grant tunnel access to entries added for LAN reasons.
@@ -137,8 +137,8 @@ Everything that would need to know about a new host, from a full sweep:
 | location | what it does | needs changing? |
 |---|---|---|
 | `TRUSTED_HOSTS` env → `bin.ts:96` → `opts.trustedHosts` | feeds **both** the host gate (`extraHosts`) and the browser-origin/CORS policy (`server.ts:989`, `server.ts:1000`) | yes — one variable covers both surfaces, which is why there is no second CORS step below |
-| `LF_PUBLIC_BASE_URL` → `normalizePublicBaseUrl` (`public-host.ts`) | the single source of every `reviewUrl` / `entryUrl` / `hubUrl` an agent pastes to Bryan | **yes, and this is the step that is invisible if skipped** — see the trap below |
-| `scripts/launchd/com.fryanpan.live-feedback.plist.template` | carries only `HOME`, `PATH`, `LF_PUBLIC_BASE_URL` today | yes, if any new env var must survive a reinstall |
+| `CW_PUBLIC_BASE_URL` → `normalizePublicBaseUrl` (`public-host.ts`) | the single source of every `reviewUrl` / `entryUrl` / `hubUrl` an agent pastes to Bryan | **yes, and this is the step that is invisible if skipped** — see the trap below |
+| `scripts/launchd/com.fryanpan.live-feedback.plist.template` | carries only `HOME`, `PATH`, `CW_PUBLIC_BASE_URL` today | yes, if any new env var must survive a reinstall |
 | `scripts/launchd/install.sh` | regenerates the plist from that template on every run | yes, to pass the new variable through |
 | `.claude/live-feedback.json` → `trustedPreviewDomains` | gates which hosts an agent may `navigate` to via the Chrome hook | yes — add `fryanpan.com`, or agents cannot open the new URL |
 | `CF_SHARE_PUBLIC_HOSTNAME` / `CF_SHARE_BASE_HOSTNAME` | link-mode and Access-mode share hostnames | only if option A |
@@ -150,7 +150,7 @@ only in tests, docs, and `.claude/live-feedback.json`.
 
 ### The trap, stated because it has already cost a deploy once
 
-Standing up HTTPS on a new name and **not** moving `LF_PUBLIC_BASE_URL` looks
+Standing up HTTPS on a new name and **not** moving `CW_PUBLIC_BASE_URL` looks
 exactly like success: the new URL answers, a spot check passes, and every link
 the server emits still points at the old origin. `docs/process/tailnet-https.md`
 records this happening for the tailnet cutover, and the shape is identical here.
@@ -190,8 +190,8 @@ it. Steps 1–3 are reversible; step 6 is the one that changes what agents paste
 5. **Reinstall the launchd job** with the new environment, after pulling:
    ```bash
    git pull --ff-only origin main            # in the PRIMARY checkout
-   LF_PUBLIC_BASE_URL=https://workspaces.fryanpan.com \
-   LF_PROXIED_TRUSTED_HOSTS=workspaces.fryanpan.com \
+   CW_PUBLIC_BASE_URL=https://workspaces.fryanpan.com \
+   CW_PROXIED_TRUSTED_HOSTS=workspaces.fryanpan.com \
    CF_ACCESS_TEAM_DOMAIN=<team>.cloudflareaccess.com \
      ./scripts/launchd/install.sh
    cat ~/.local/state/live-feedback/client/current/release.json
@@ -208,7 +208,7 @@ it. Steps 1–3 are reversible; step 6 is the one that changes what agents paste
    | a `reviewUrl` from a fresh `create_review_doc` | starts `https://workspaces.fryanpan.com` |
 7. **Add `fryanpan.com` to `trustedPreviewDomains`** in
    `.claude/live-feedback.json` so agents can navigate to the new URL.
-8. **Roll back** by reinstalling with the previous `LF_PUBLIC_BASE_URL` and
+8. **Roll back** by reinstalling with the previous `CW_PUBLIC_BASE_URL` and
    removing the Cloudflare hostname. The DNS record and the Access application
    are the only pieces outside the repo, and both are deletable.
 
@@ -226,7 +226,7 @@ session's MCP child loads
 `${CLAUDE_PLUGIN_ROOT}/mcp/index.js` out of a version-keyed cache under
 `~/.claude/plugins/cache/`, and that cache is refreshed by
 `command claude plugin update live-feedback@claude-live-feedback` — which prod
-now runs at boot and every 30 minutes (`LF_PLUGIN_REFRESH_MINUTES`). If a rename
+now runs at boot and every 30 minutes (`CW_PLUGIN_REFRESH_MINUTES`). If a rename
 breaks the fetch, the symptom is **silent**: `claude plugin update` reports
 success when it copies nothing, so the fleet simply stops receiving releases
 and no surface says so.

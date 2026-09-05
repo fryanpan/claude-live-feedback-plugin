@@ -82,7 +82,7 @@ describe('POST /api/docs/:docId/threads/:threadId/summary', () => {
   let dataDir: string;
   let base: string;
   let summarizer: ThreadSummarizer;
-  const priorEnv = process.env.LF_SUMMARIES;
+  const priorEnv = process.env.CW_SUMMARIES;
 
   beforeAll(() => {
     dataDir = mkdtempSync(join(tmpdir(), 'feedback-summary-route-'));
@@ -108,8 +108,8 @@ describe('POST /api/docs/:docId/threads/:threadId/summary', () => {
     // A real delete, not `= undefined` — that stores the STRING "undefined",
     // which is not '0', so generation would read as ENABLED for whatever runs
     // next. Reflect keeps biome's noDelete rule happy without reintroducing it.
-    if (priorEnv === undefined) Reflect.deleteProperty(process.env, 'LF_SUMMARIES');
-    else process.env.LF_SUMMARIES = priorEnv;
+    if (priorEnv === undefined) Reflect.deleteProperty(process.env, 'CW_SUMMARIES');
+    else process.env.CW_SUMMARIES = priorEnv;
   });
 
   beforeEach(() => {
@@ -118,7 +118,7 @@ describe('POST /api/docs/:docId/threads/:threadId/summary', () => {
     // Default OFF: doc/thread/reply setup must not schedule generation, so a
     // test that later asserts "no summary is stored yet" is asserting about
     // its own POST and nothing else. Each test opts in explicitly.
-    process.env.LF_SUMMARIES = '0';
+    process.env.CW_SUMMARIES = '0';
   });
 
   async function j<T>(res: Response): Promise<T> {
@@ -180,7 +180,7 @@ describe('POST /api/docs/:docId/threads/:threadId/summary', () => {
   it('answers from the stored summary instead of paying twice for the same thread', async () => {
     const docId = 'sum-cached';
     const threadId = await seed(docId, ['agreed — real bug, fix not started']);
-    process.env.LF_SUMMARIES = '1';
+    process.env.CW_SUMMARIES = '1';
     nextReply = '{"topic": "swallowed retry error", "discussion": "agreed, not fixed"}';
 
     // Positive control: the first call really does generate.
@@ -211,7 +211,7 @@ describe('POST /api/docs/:docId/threads/:threadId/summary', () => {
     // POSITIVE CONTROL for every absence below: with generation ON, this exact
     // URL succeeds, the stub is called, and a summary lands. So a 503 later is
     // the feature being off, not a typo in the path or a missing thread.
-    process.env.LF_SUMMARIES = '1';
+    process.env.CW_SUMMARIES = '1';
     const okRes = await postSummary(docId, threadId);
     expect(okRes.status).toBe(200);
     expect(calls.length).toBe(1);
@@ -219,7 +219,7 @@ describe('POST /api/docs/:docId/threads/:threadId/summary', () => {
 
     // Now the real assertion.
     calls = [];
-    process.env.LF_SUMMARIES = '0';
+    process.env.CW_SUMMARIES = '0';
     const res = await postSummary(docId, threadId);
     expect(res.status).toBe(503);
     const body = (await res.json()) as { error: string; detail?: string };
@@ -238,7 +238,7 @@ describe('POST /api/docs/:docId/threads/:threadId/summary', () => {
   it('404s on an unknown thread even while generation is on', async () => {
     const docId = 'sum-404';
     const threadId = await seed(docId, ['a reply']);
-    process.env.LF_SUMMARIES = '1';
+    process.env.CW_SUMMARIES = '1';
 
     // Positive control: the real id on this doc works.
     expect((await postSummary(docId, threadId)).status).toBe(200);
@@ -258,7 +258,7 @@ describe('POST /api/docs/:docId/threads/:threadId/summary', () => {
     expect(before.comments.length).toBe(2);
     expect(before.summary).toBeUndefined();
 
-    process.env.LF_SUMMARIES = '1';
+    process.env.CW_SUMMARIES = '1';
     nextReply =
       '{"topic": "retry loop swallows the error", "discussion": "agreed, real bug, fix not started"}';
     const res = await postSummary(docId, threadId);
@@ -295,7 +295,7 @@ describe('POST /api/docs/:docId/threads/:threadId/summary', () => {
     expect(linesBefore.discussion).toBe(lastReply);
     expect(linesBefore.discussionKind).toBe('replies');
 
-    process.env.LF_SUMMARIES = '1';
+    process.env.CW_SUMMARIES = '1';
     nextReply =
       '{"topic": "error swallowed on second retry", "discussion": "reproduced; not fixed"}';
     expect((await postSummary(docId, threadId)).status).toBe(200);
@@ -313,7 +313,7 @@ describe('POST /api/docs/:docId/threads/:threadId/summary', () => {
   it('refuses to store a summary for a thread that moved during the call', async () => {
     const docId = 'sum-raced';
     const threadId = await seed(docId, ['the first reply']);
-    process.env.LF_SUMMARIES = '1';
+    process.env.CW_SUMMARIES = '1';
 
     // A reply lands while the model is thinking. The summary that comes back
     // describes the OLD state: storing it would (a) report success for
@@ -356,7 +356,7 @@ describe('POST /api/docs/:docId/threads/:threadId/summary', () => {
     expect(before.comments.length).toBe(1);
     expect(threadLines(before).discussion).toBe(NO_REPLIES_TEXT);
 
-    process.env.LF_SUMMARIES = '1';
+    process.env.CW_SUMMARIES = '1';
     // A model that ignores the "return an empty discussion" instruction is the
     // case that matters: the seam, not the prompt, is what has to hold.
     nextReply = '{"topic": "swallowed retry error", "discussion": "team agreed to ship the fix"}';
