@@ -127,6 +127,50 @@ describe('threadSummary', () => {
       expect(s.discussion).not.toMatch(/wor…$/);
     });
 
+    it('does not present a one-word anchor snippet as the topic', () => {
+      // The defect Bryan reported (2026-09-05): a reviewer selected the single
+      // word "Scheduled" in a table and asked a question about notice periods.
+      // Generation was off for that thread (a share visitor's comment never
+      // spends the key), so the deterministic topic stood — and it was the
+      // word "Scheduled", which reads as a status label rather than as a
+      // summary of anything. The snippet says WHERE the thread is; with too
+      // few words to stand on its own it says nothing the highlight beside the
+      // card does not already say.
+      const t = makeThread({
+        docText: 'Rollout is Scheduled for the second week.\n',
+        range: [11, 20],
+        author: alex,
+        first: 'Is this 10 days notice or 120?',
+      });
+      expect(t.anchor.kind === 'text-range' && t.anchor.snippet.text).toBe('Scheduled');
+      expect(threadSummary(t).topic).toBe('Is this 10 days notice or 120?');
+    });
+
+    it('keeps a snippet that is long enough to stand as a topic', () => {
+      // The other side of the same threshold — a phrase-length selection is
+      // still the best thing to name the thread by, and this is the control
+      // that stops the rule above from swallowing every snippet.
+      const t = makeThread({
+        docText: DOC,
+        range: [0, 30],
+        author: alex,
+        first: 'We should rethrow on the last attempt.',
+      });
+      expect(threadSummary(t).topic).toBe('The retry loop swallows the un');
+    });
+
+    it('keeps a thin snippet when the opening message is thinner still', () => {
+      // Falling back is only an improvement when there is something to fall
+      // back TO. An empty opening message must not blank the topic line.
+      const t = makeThread({
+        docText: 'Rollout is Scheduled for the second week.\n',
+        range: [11, 20],
+        author: alex,
+        first: '   ',
+      });
+      expect(threadSummary(t).topic).toBe('Scheduled');
+    });
+
     it('falls back to the opening message when the anchor snippet is empty', () => {
       const t = makeThread({
         docText: DOC,
