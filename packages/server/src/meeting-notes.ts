@@ -51,6 +51,7 @@ import {
   renameSpeakerTags,
   speakerDisplayName,
 } from '@feedback/core';
+import { appendSuggestions, resolveNoteLinks } from './notes-link-intent.ts';
 import { type NoteReference, matchReferences } from './notes-references.ts';
 import {
   DEFAULT_NOTES_CADENCE_MS,
@@ -233,6 +234,17 @@ export interface NotesComposeInput {
    * touched: these were merely mentioned, and most ticks name none.
    */
   references?: readonly NoteReference[];
+  /**
+   * Rows this tick's speech probably concerns, which nobody explicitly asked
+   * to link — or the shortlist an ambiguous ask produced. NOT for the
+   * composer to weave in: these are written into the composed notes
+   * afterwards, deterministically, as the tappable question
+   * `notes-link-intent.ts` spells. They ride the input so a composer that
+   * wants them (the eval harness reads them to score the pass) can see what
+   * the tick decided; the real prompt is not given them, because a question
+   * whose marker has to be exact is not a thing to ask a model to spell.
+   */
+  suggestions?: readonly NoteReference[];
 }
 
 export interface NotesComposer {
@@ -477,6 +489,22 @@ export interface MeetingNotesDeps {
    * correct.
    */
   onCorrection?: (correction: NotesCorrection) => NotesCorrectionResult;
+  /**
+   * A board row somebody asked, out loud, to link this meeting to — the ref
+   * side of the note's link.
+   *
+   * The NOTE carries the citation on its own; this is what gives the ROW its
+   * backlink, so the work can be found from either end and so unlinking has
+   * something to remove. Optional: a meeting on a doc with no board, and
+   * every test that only reads the notes, wires nothing and loses nothing but
+   * the backlink.
+   */
+  onTaskLinked?: (link: {
+    docId: string;
+    meetingId: string;
+    taskId: string;
+    title: string;
+  }) => void;
   /**
    * Where the engine's late correction of who spoke goes. Optional on the
    * same terms as `onRelabel`: a session with no sink still corrects its own
@@ -772,7 +800,34 @@ export function beginNotesSession(
       // read at session start — no store call, no network, nothing that can
       // fail a tick — so it sits outside the try blocks the fallible stages
       // need.
-      const references = matchReferences(turns.map((t) => t.text).join('\n'), catalogue);
+      const spokenText = turns.map((t) => t.text).join('\n');
+      const references = matchReferences(spokenText, catalogue);
+      // The loose half, run over the same words and the same catalogue: what
+      // an explicit "link that to the existing task" points at, and what is
+      // probably related whether or not anybody asked. Local and pure, like
+      // the strict matcher above it — nothing here can fail a tick.
+      const loose = resolveNoteLinks({ spokenText, catalogue, named: references });
+      // A row somebody ASKED to link is cited like a named one; the ask is
+      // what makes it a citation rather than a guess. Deduped by URL, because
+      // an ask that also NAMED its row comes back from both matchers — the
+      // strict one for the words, the loose one so the row gets its ref.
+      const cited = [...new Map([...references, ...loose.linked].map((r) => [r.url, r])).values()];
+      for (const link of loose.linked) {
+        if (link.kind !== 'task' || !link.id) continue;
+        try {
+          deps.onTaskLinked?.({
+            docId: ids.docId,
+            meetingId: ids.meetingId,
+            taskId: link.id,
+            title: link.title,
+          });
+        } catch (err) {
+          // The ref is what gives the row its backlink; the note carries the
+          // link either way. A store that refuses costs the backlink, never
+          // the tick.
+          deps.onError?.(err instanceof Error ? err.message : 'notes task link failed');
+        }
+      }
       // Read INSIDE the chain, immediately before composing: the compose is
       // the thing that must not be written from stale text, and the chain is
       // what serializes it against the previous tick's write.
@@ -802,7 +857,8 @@ export function beginNotesSession(
         ...(context ? { context } : {}),
         ...(taskLinks.length > 0 ? { taskLinks } : {}),
         ...(docLinks.length > 0 ? { docLinks } : {}),
-        ...(references.length > 0 ? { references } : {}),
+        ...(cited.length > 0 ? { references: cited } : {}),
+        ...(loose.suggested.length > 0 ? { suggestions: loose.suggested } : {}),
       };
       try {
         const composed = await deps.composer.compose(input);
@@ -831,7 +887,15 @@ export function beginNotesSession(
               `${[...new Set(checked.unknown)].join(', ')} — no such voice in this meeting`,
           );
         }
-        const notes = checked.markdown;
+        // The questions, written after the model rather than by it: a
+        // suggestion is a decision this pipeline made deterministically, and
+        // a marker the client has to recognise exactly. Human lines are
+        // passed so none of them is appended to — a question added to
+        // somebody's own sentence reaches the doc as a proposed rewrite of
+        // it.
+        const notes = appendSuggestions(checked.markdown, loose.suggested, {
+          ...(input.humanNotes ? { protect: input.humanNotes } : {}),
+        });
         previous = notes;
         deps.onNotes({
           docId: ids.docId,
