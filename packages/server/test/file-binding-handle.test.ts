@@ -113,7 +113,7 @@ function recorder(dataDir: string, room: DocRoom): Recorder {
  * write landing in the same filesystem timestamp tick as the attach is
  * invisible to it forever. That is a real property of the mechanism, not a
  * bug to hide: it is why the write-back stamps its own mtime. Bumping the
- * stamp here (the same helper `doc-home-binding.test.ts` uses) is what makes
+ * stamp here (the same helper `doc-origin-repo-binding.test.ts` uses) is what makes
  * the assertion about the SWEEP rather than about how fast this machine is.
  */
 let mtimeBump = 0;

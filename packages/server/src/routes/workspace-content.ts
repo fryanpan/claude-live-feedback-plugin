@@ -1,6 +1,6 @@
 import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
-import { reviewIdOf } from '@feedback/core';
+import { attachmentIdOf } from '@feedback/core';
 /**
  * Content filed onto a board: a doc attached, a tracker imported, a huddle opened.
  *
@@ -104,7 +104,8 @@ export async function handleWorkspaceContent(
     // which is the doc LIST one id at a time. A member now gets the same
     // out-of-board refusal either way, and the miss reaches only callers who
     // could have attached the doc had it been there.
-    const exists = attachRoom !== undefined || docStore.list().some((m) => reviewIdOf(m) === docId);
+    const exists =
+      attachRoom !== undefined || docStore.list().some((m) => attachmentIdOf(m) === docId);
     if (!exists) return j(404, { error: 'doc not found', docId });
     const res = taskStore.attachDoc(workspaceId, docId);
     if (!res.ok) return j(404, res);

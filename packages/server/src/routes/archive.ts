@@ -19,7 +19,7 @@
  * Dependencies arrive in an explicit context, following
  * `task-routes-context.ts`.
  */
-import { reviewIdOf } from '@feedback/core';
+import { attachmentIdOf } from '@feedback/core';
 import type { DocStore } from '../doc-store.ts';
 import type { ShareTarget } from '../middleware/host-guard.ts';
 import { listArchivedDocs, listArchivedReviews } from '../review-archive.ts';
@@ -128,7 +128,7 @@ export function createArchiveRoutes(ctx: ArchiveRoutesContext): {
       if (!force) {
         const blocked = docStore
           .list()
-          .filter((m) => reviewIdOf(m) === setId)
+          .filter((m) => attachmentIdOf(m) === setId)
           .map((m) => ({
             docId: m.docId,
             openThreads: docStore.listThreads(m.docId, { status: 'open' }).length,
