@@ -22,7 +22,7 @@ import { classifyActor } from './actor-identity.ts';
 import { bumpWordsRevision, cryptoId } from './task-fields.ts';
 import type {
   AddGoalResult,
-  HubWorkspace,
+  BoardWorkspace,
   RenameGoalResult,
   ReorderGoalsResult,
   SetGoalListResult,
@@ -120,7 +120,7 @@ export interface GoalStorePersistence {
   state(workspaceId: string): WorkspaceState | undefined;
   states(): Iterable<WorkspaceState>;
   getTask(taskId: string): Task | undefined;
-  goalIdExists(workspace: HubWorkspace, goalId: string): boolean;
+  goalIdExists(workspace: BoardWorkspace, goalId: string): boolean;
   /** Re-derive the workspace's goal rows after the band list changed. */
   syncGoalRows(state: WorkspaceState, mintStatus: TaskStatus): void;
   scheduleSave(workspaceId: string): void;

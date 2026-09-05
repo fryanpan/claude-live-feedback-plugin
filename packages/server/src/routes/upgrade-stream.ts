@@ -19,7 +19,7 @@
  * Composed the way A18 was: a factory of long-lived values, with the address
  * and the admitted visitor passed per call. Nothing the handlers read per
  * request is hoisted to factory time — `rooms`, the meeting sessions and the
- * SSE hub are all read through their stores on each call, and
+ * SSE bus are all read through their stores on each call, and
  * `browserProvedNobody` arrives per request because it closes over the
  * request that is being decided.
  *
@@ -57,10 +57,10 @@ import { signInRequiredBody } from '../middleware/write-gate.ts';
 import { parseMuxCursor } from '../mux-cursor.ts';
 import type { RecallMeetingRelay } from '../recall-meeting.ts';
 import type { Rooms } from '../rooms.ts';
-import { redactHubEventForVisitor } from '../share/redact-hub-events.ts';
+import { redactBoardEventForVisitor } from '../share/redact-board-events.ts';
 import type { UpgradeData } from '../socket-handlers.ts';
 import { channelForWatchKey, openAgentMuxStream } from '../sse-mux.ts';
-import { type SseHub, openSseStream } from '../sse.ts';
+import { type SseBus, openSseStream } from '../sse.ts';
 import type { TaskStore } from '../tasks.ts';
 
 /** The id a reconnecting SSE client last saw: the `Last-Event-ID` header a
@@ -84,8 +84,8 @@ export interface UpgradeStreamContext {
   rooms: Rooms;
   /** The boards, for whether a workspace-level stream has a channel. */
   taskStore: TaskStore;
-  /** The event hub every SSE stream here subscribes against. */
-  sse: SseHub;
+  /** The event bus every SSE stream here subscribes against. */
+  sse: SseBus;
   /** One agent's durable watch set, which is what the agent-level stream
    *  fans out and what `onWatchSetChanged` re-reads. */
   agentWatches: AgentWatches;
@@ -106,9 +106,9 @@ export interface UpgradeStreamContext {
   isValidDocId: (id: string) => boolean;
   /** An address resolved to the canonical doc id, for the mux channel map. */
   canonicalDocId: (addressed: string) => string;
-  /** Files a doc under the hub workspace — the widget's own creation path,
+  /** Files a doc under the board workspace — the widget's own creation path,
    *  which is the `/y/` upgrade for a mockup. */
-  fileUnderHubWorkspace: (docId: string) => void;
+  fileUnderBoardWorkspace: (docId: string) => void;
   /** The JSON responder, so a refusal here is spelled as a route's. */
   j: (status: number, body: unknown) => Response;
   /** The request's SOCKET peer address, never a header. Long-lived here
@@ -171,7 +171,7 @@ export function createUpgradeStream(ctx: UpgradeStreamContext): UpgradeStream {
     requireSignInToWrite,
     isValidDocId,
     canonicalDocId,
-    fileUnderHubWorkspace,
+    fileUnderBoardWorkspace,
     j,
     requestAddress,
     agentTokenKey,
@@ -292,7 +292,7 @@ export function createUpgradeStream(ctx: UpgradeStreamContext): UpgradeStream {
         // and filing a workspace row is a write like any other, and it used
         // to run above this line: a browser that had proven nobody could
         // open `/y/<any-new-id>?type=mockup` and make the server create a
-        // doc and file it under the hub workspace, with the read-only carry
+        // doc and file it under the board workspace, with the read-only carry
         // only stopping the ydoc edits that came afterwards.
         const readOnly = requireSignInToWrite && browserProvedNobody();
         if (!rooms.get(docId)) {
@@ -304,8 +304,8 @@ export function createUpgradeStream(ctx: UpgradeStreamContext): UpgradeStream {
             // The widget is the third creation path (next to POST /api/docs
             // and the MCP tools that front it), so it files its doc too —
             // otherwise a mockup that was only ever opened in a browser is
-            // an orphan the hub can't see.
-            fileUnderHubWorkspace(docId);
+            // an orphan the board can't see.
+            fileUnderBoardWorkspace(docId);
           } else {
             return j(404, { error: 'doc not found' });
           }
@@ -374,7 +374,7 @@ export function createUpgradeStream(ctx: UpgradeStreamContext): UpgradeStream {
         if (!allowed.ok) return j(allowed.status, allowed.body);
         if (allowed.proof === 'legacy') warnLegacyAgentCaller(streamAgentId, '/events/agent/<id>');
         return openAgentMuxStream({
-          hub: sse,
+          bus: sse,
           agentId: streamAgentId,
           keys: () => agentWatches.list(streamAgentId, watchKeyExists).watches.map((w) => w.key),
           channelFor: (key) => channelForWatchKey(key, canonicalDocId),
@@ -391,14 +391,14 @@ export function createUpgradeStream(ctx: UpgradeStreamContext): UpgradeStream {
         const workspaceId = decodeURIComponent(wsEventsMatch[1] ?? '');
         if (!isValidDocId(workspaceId)) return j(400, { error: 'bad workspaceId' });
         // A workspace channel exists for reviews (diff
-        // reviews / folder binds) AND for hub workspaces — task.* events
+        // reviews / folder binds) AND for board workspaces — task.* events
         // broadcast on the same `ws~<id>` channel (§3.6).
         const exists =
           rooms.list().some((m) => m.workspaceId === workspaceId) ||
           taskStore.getWorkspace(workspaceId) !== undefined;
         if (!exists) return j(404, { error: 'workspace not found' });
         // A share visitor's stream carries the §3.3 visitor-contract view
-        // of every hub event (display names, projected tasks) — the SSE
+        // of every board event (display names, projected tasks) — the SSE
         // feed is the second door next to the ws room, and redacting one
         // transport but not the other is how the DocMeta leak shipped.
         // An agent's MCP child names itself here; a browser tab does not.
@@ -410,7 +410,7 @@ export function createUpgradeStream(ctx: UpgradeStreamContext): UpgradeStream {
           sse,
           `ws~${workspaceId}`,
           visitorShareId ?? undefined,
-          visitor ? redactHubEventForVisitor : undefined,
+          visitor ? redactBoardEventForVisitor : undefined,
           streamAgentId,
           sseLastEventId(req, url),
           visitorMemberKey ?? undefined,

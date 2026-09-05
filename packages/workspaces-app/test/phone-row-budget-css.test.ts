@@ -45,7 +45,7 @@ import { IPAD, PHONE, attach, installSheets, setViewport, styleOf } from './css-
  *
  * That guarantee cost a review round, and it is the reason this file is worth
  * converting. A media query adds NO specificity, so `min-width: max-content`
- * in the phone block and `min-width: 0` on the bare `.hub-task-badges` are one
+ * in the phone block and `min-width: 0` on the bare `.board-task-badges` are one
  * class each and SOURCE ORDER decides. Written beside the rest of the phone
  * row anatomy it computed to `0px` on a real 430px coarse-pointer viewport
  * while every other rule in the block applied — the badges vanished as
@@ -59,11 +59,11 @@ import { IPAD, PHONE, attach, installSheets, setViewport, styleOf } from './css-
 
 let cleanup = () => {};
 beforeEach(() => {
-  // The board's real cascade order — `renderHubShell`, packages/server/src/
-  // shells.ts: hub.css loads BEFORE styles.css. tokens.css is left out: the
+  // The board's real cascade order — `renderBoardShell`, packages/server/src/
+  // shells.ts: board.css loads BEFORE styles.css. tokens.css is left out: the
   // served sheet is the vendored Open Props subset concatenated with
   // src/tokens.css, and the mapping layer alone resolves to nothing.
-  cleanup = installSheets('hub.css', 'styles.css');
+  cleanup = installSheets('board.css', 'styles.css');
 });
 afterEach(() => {
   cleanup();
@@ -89,8 +89,8 @@ function setPointer(kind: 'fine' | 'coarse'): void {
 function row(pointer: 'fine' | 'coarse', viewport: { width: number; height: number }) {
   setPointer(pointer);
   setViewport(viewport);
-  const strip = attach('hub-task-badges');
-  const badge = attach('hub-badge hub-badge-due', { parent: strip });
+  const strip = attach('board-task-badges');
+  const badge = attach('board-badge board-badge-due', { parent: strip });
   return { strip: styleOf(strip), badge: styleOf(badge) };
 }
 
@@ -122,12 +122,14 @@ describe('the phone task row', () => {
   });
 
   it('drops them from the STRIP only — the same class labels a goal section', () => {
-    // `renderBoard` puts `hub-badge hub-badge-due` in `.hub-section-title` for
+    // `renderBoard` puts `board-badge board-badge-due` in `.board-section-title` for
     // a goal's own due date: one per section, not per row, and it costs the
-    // title nothing. A bare `.hub-badge { display: none }` took it with them.
+    // title nothing. A bare `.board-badge { display: none }` took it with them.
     setPointer('coarse');
     setViewport(PHONE);
-    const inSection = attach('hub-badge hub-badge-due', { parent: attach('hub-section-title') });
+    const inSection = attach('board-badge board-badge-due', {
+      parent: attach('board-section-title'),
+    });
     expect(styleOf(inSection).display).not.toBe('none');
     // …and the row's own badge really is hidden in the same pass, so this is a
     // scoping check and not a pair of elements nothing reached.
@@ -141,24 +143,24 @@ describe('the phone task row', () => {
     // badge in the strip is hidden, including the class the exception named.
     setPointer('coarse');
     setViewport(PHONE);
-    const strip = attach('hub-task-badges');
-    for (const variant of ['hub-badge-due', 'hub-badge-overdue', 'hub-badge-comments']) {
-      const badge = attach(`hub-badge ${variant}`, { parent: strip });
+    const strip = attach('board-task-badges');
+    for (const variant of ['board-badge-due', 'board-badge-overdue', 'board-badge-comments']) {
+      const badge = attach(`board-badge ${variant}`, { parent: strip });
       expect(styleOf(badge).display, variant).toBe('none');
     }
-    // And `hub-badge-comments` is gone from the whole stylesheet, not merely
+    // And `board-badge-comments` is gone from the whole stylesheet, not merely
     // un-excepted: it styles nothing anywhere.
     setPointer('fine');
     setViewport(IPAD);
-    const ghost = styleOf(attach('hub-badge-comments'));
+    const ghost = styleOf(attach('board-badge-comments'));
     expect(ghost.borderRadius).toBe('');
     expect(ghost.borderTopColor).toBe('');
     // Controls: the base class still draws the chip, and a VARIANT that
     // survived still recolours it — so the emptiness above is this class's
     // own. (`color` is no use on either side: it inherits, so an unstyled
     // element reports the body's.)
-    expect(styleOf(attach('hub-badge')).borderRadius).not.toBe('');
-    expect(styleOf(attach('hub-badge-overdue')).borderTopColor).not.toBe('');
+    expect(styleOf(attach('board-badge')).borderRadius).not.toBe('');
+    expect(styleOf(attach('board-badge-overdue')).borderTopColor).not.toBe('');
   });
 
   it('gives the strip a track minimum, so a chip is never clipped mid-glyph', () => {
@@ -186,13 +188,13 @@ describe('the phone task row', () => {
   it('has no parked chip left to budget for, on the phone row or off it', () => {
     setPointer('coarse');
     setViewport(PHONE);
-    const parked = styleOf(attach('hub-badge-parked', { parent: attach('hub-task-badges') }));
+    const parked = styleOf(attach('board-badge-parked', { parent: attach('board-task-badges') }));
     expect(parked.borderRadius).toBe('');
     expect(parked.borderTopColor).toBe('');
     // Control: a variant that survived still recolours the chip, in the same
     // pass and on the same sheet.
     setPointer('fine');
     setViewport(IPAD);
-    expect(styleOf(attach('hub-badge-overdue')).borderTopColor).not.toBe('');
+    expect(styleOf(attach('board-badge-overdue')).borderTopColor).not.toBe('');
   });
 });

@@ -30,11 +30,11 @@ const PHONE_430 = { width: 430, height: 932 } as const;
 
 let cleanup = () => {};
 beforeEach(() => {
-  // The doc surface loads styles.css; the board loads hub.css first (see
-  // `renderHubShell` in packages/server/src/shells.ts). tokens.css stays out:
+  // The doc surface loads styles.css; the board loads board.css first (see
+  // `renderBoardShell` in packages/server/src/shells.ts). tokens.css stays out:
   // the served sheet is the Open Props subset plus src/tokens.css, and the
   // mapping layer alone resolves its `var(--gray-9)` chain to nothing.
-  cleanup = installSheets('hub.css', 'styles.css');
+  cleanup = installSheets('board.css', 'styles.css');
 });
 afterEach(() => {
   cleanup();

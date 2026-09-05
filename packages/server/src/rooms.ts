@@ -48,7 +48,7 @@ export { maintainAwareness } from './room-fanout.ts';
 export { randomId } from './doc-threads.ts';
 /** Moved to `doc-ids.ts`, one line from the prefix list it reads — re-exported
  *  under the name it was first published as. */
-export { isHubOwnedRoom } from './doc-ids.ts';
+export { isBoardOwnedRoom } from './doc-ids.ts';
 /** Moved to `file-binding.ts` with the reconcile it decides — re-exported
  *  under the name it was first published as. */
 export { decideReconcile } from './file-binding.ts';
@@ -81,7 +81,7 @@ import { resolveHomeCheckout } from './doc-home.ts';
 import {
   type DocIdAuthority,
   ReservedDocIdError,
-  isHubOwnedRoom,
+  isBoardOwnedRoom,
   isReservedDocId,
   newDocId,
 } from './doc-ids.ts';
@@ -107,7 +107,7 @@ import { type ArchivedDoc, type ArchivedReview } from './review-archive.ts';
 import { CONTENT_REVISION_ORIGIN, RoomFanout, type RoomFanoutHost } from './room-fanout.ts';
 import { ROOM_TIMINGS } from './room-timings.ts';
 import { boundFiles, redactBoundPath } from './slow-fs.ts';
-import type { SseHub } from './sse.ts';
+import type { SseBus } from './sse.ts';
 import type { ScheduleArgs, ThreadSummarizer } from './summarize.ts';
 import type { WebhookDispatcher } from './webhooks.ts';
 
@@ -299,7 +299,7 @@ export interface WorkspaceTree {
 export interface RoomsConfig {
   dataDir: string;
   /** Called on new thread / reply / status change to dispatch webhooks + SSE. */
-  sse: SseHub;
+  sse: SseBus;
   webhooks: WebhookDispatcher;
   /** Decorate doc metadata on the way out (e.g. with a reachable reviewUrl). */
   decorateDocMeta?: (meta: DocMeta) => DocMeta & { reviewUrl?: string };
@@ -1274,13 +1274,13 @@ export class Rooms {
     // `bindAfterRead`). Both say "the live doc holds content disk has never
     // held", which is the one thing an mtime comparison cannot see.
     const liveWins = opts.liveWins === true || this.docIndex.get(docId)?.pendingFileWrite === true;
-    // A hub-owned room is never file-bound (§3.3), so a sourceUrl on one
+    // A board-owned room is never file-bound (§3.3), so a sourceUrl on one
     // can only have arrived from a peer's ydoc write. Refusing to bind
     // here is the second, independent stop behind `guardPrivateMeta` —
     // binding is what turns a stray meta key into "read (then overwrite)
     // any file this process can reach".
-    if (src && isHubOwnedRoom(docId)) {
-      console.error(`[rooms] ${docId}: ignoring a sourceUrl on a server-owned hub room`);
+    if (src && isBoardOwnedRoom(docId)) {
+      console.error(`[rooms] ${docId}: ignoring a sourceUrl on a server-owned board room`);
       return false;
     }
     // A home-pinned doc re-resolves its home rather than trusting the path
@@ -1288,7 +1288,7 @@ export class Rooms {
     // restarts. Unplaced parks exactly like a live park: content is in the
     // .ydoc, no binding, the pin persists for the next resolve.
     const home = room.meta.docHome;
-    if (home && !isHubOwnedRoom(docId) && contentKind(room.meta.type) === 'prose') {
+    if (home && !isBoardOwnedRoom(docId) && contentKind(room.meta.type) === 'prose') {
       const placement = resolveHomeCheckout(home);
       if (!placement.placed) {
         console.warn(
@@ -1488,7 +1488,7 @@ export class Rooms {
   async prewarmHydration(docId: string): Promise<void> {
     const target = this.aliases.get(docId) ?? docId;
     if (this.rooms.has(target)) return; // resident: no hydrate ahead of us
-    if (isHubOwnedRoom(target)) return; // never file-bound (§3.3)
+    if (isBoardOwnedRoom(target)) return; // never file-bound (§3.3)
     // The index row carries the whole DocMeta, so the bound path is known
     // WITHOUT loading the `.ydoc` — which is the point: nothing about this
     // may pull the doc into memory as a side effect.
@@ -1563,13 +1563,13 @@ export class Rooms {
       // existing doc, but this branch used to drop init.sourceUrl — the doc
       // kept serving the old file while the call reported success. sourceUrl
       // is private-sidecar meta (never CRDT), so the whole repoint is the
-      // in-memory field plus the same debounced persist creation uses. Hub
+      // in-memory field plus the same debounced persist creation uses. Board
       // rooms stay excluded for the same reason hydrateFromDisk refuses a
       // sourceUrl on them: a server-owned room is never file-bound.
       if (
         init?.sourceUrl !== undefined &&
         init.sourceUrl !== existing.meta.sourceUrl &&
-        !isHubOwnedRoom(docId)
+        !isBoardOwnedRoom(docId)
       ) {
         existing.meta.sourceUrl = init.sourceUrl;
         this.saveToDisk(existing);
@@ -2365,7 +2365,7 @@ export class Rooms {
     opts: { archivedBy: string; reason?: string; linkedWorkspaces?: string[] },
   ):
     | { ok: true; docId: string; manifest: ArchivedDoc }
-    | { ok: false; error: 'not-found' | 'hub-owned' | 'archive-collision' | 'move-failed' }
+    | { ok: false; error: 'not-found' | 'board-owned' | 'archive-collision' | 'move-failed' }
     | { ok: false; error: 'review-member'; setId: string } {
     return this.workspaces.archiveDoc(docId, opts);
   }

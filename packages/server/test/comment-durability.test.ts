@@ -532,7 +532,7 @@ describe('a comment posted while the subscriber is disconnected is delivered aft
 
     // Open the stream for real, then sever the CONNECTION — an aborted
     // fetch is what a dying process or dropped socket looks like, and it
-    // fires the server stream's cancel() → hub removal within ~1ms
+    // fires the server stream's cancel() → board removal within ~1ms
     // (measured; a bare reader.cancel() does NOT sever in Bun, it leaves
     // the connection open and the sink live). The headline test above never
     // opens a stream before commenting, so a regression where removal stops

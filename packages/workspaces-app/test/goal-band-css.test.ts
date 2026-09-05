@@ -4,7 +4,7 @@ import { IPAD, PHONE, attach, installSheets, setViewport, styleOf } from './css-
 /**
  * The goal band's stylesheet half (Bryan's live mockup review, 2026-08-23).
  *
- * These used to read `hub.css` as TEXT — a `ruleBody` regex, a `mediaBlocks`
+ * These used to read `board.css` as TEXT — a `ruleBody` regex, a `mediaBlocks`
  * brace-walker and an `effectiveRight` hand-rolled cascade that re-implemented
  * "which declaration wins" in the test. That machine is gone: the sheets are
  * installed, the band is built at each viewport, and the browser's own cascade
@@ -18,12 +18,12 @@ import { IPAD, PHONE, attach, installSheets, setViewport, styleOf } from './css-
  * measured columns. The 430px check CLAUDE.md mandates is what confirms the
  * avatars actually line up.
  *
- * The class chains (`.hub-band` › `.hub-goal-row` / `.hub-band-tasks` ›
- * `.hub-task-row`, plus `.is-collapsed`, `.hub-band-done`, `.hub-band-triage`
- * and `.hub-band-reserved`) are what the board island renders;
- * `hub-render.test.ts` pins that.
+ * The class chains (`.board-band` › `.board-goal-row` / `.board-band-tasks` ›
+ * `.board-task-row`, plus `.is-collapsed`, `.board-band-done`, `.board-band-triage`
+ * and `.board-band-reserved`) are what the board island renders;
+ * `board-render.test.ts` pins that.
  *
- * SHEETS: `hub.css` before `styles.css` is the order `renderHubShell` links
+ * SHEETS: `board.css` before `styles.css` is the order `renderBoardShell` links
  * them in. `tokens.css` is deliberately left out — the file the server serves
  * is a vendored Open Props subset PLUS the mapping in `src/tokens.css`, so
  * installing the mapping half alone would re-point `--accent`, `--border` and
@@ -33,7 +33,7 @@ import { IPAD, PHONE, attach, installSheets, setViewport, styleOf } from './css-
 
 let cleanup = () => {};
 beforeEach(() => {
-  cleanup = installSheets('hub.css', 'styles.css');
+  cleanup = installSheets('board.css', 'styles.css');
 });
 afterEach(() => {
   cleanup();
@@ -75,21 +75,21 @@ function snap(el: Element): Snap {
 
 /** A band as the board renders it: goal row, then the tasks rail with a row
  *  in it. `bandClasses` picks the flavour (done, triage, reserved, collapsed). */
-function band(vp: { width: number; height: number }, bandClasses = 'hub-band') {
+function band(vp: { width: number; height: number }, bandClasses = 'board-band') {
   setViewport(vp);
   const root = attach(bandClasses);
-  const goal = attach('hub-goal-row', { parent: root });
-  const rail = attach('hub-band-tasks', { parent: root });
-  const task = attach('hub-task-row', { parent: rail });
+  const goal = attach('board-goal-row', { parent: root });
+  const rail = attach('board-band-tasks', { parent: root });
+  const task = attach('board-task-row', { parent: rail });
   return {
     goal: snap(goal),
     rail: snap(rail),
     task: snap(task),
-    goalTitle: snap(attach('hub-goal-title-text', { tag: 'span', parent: goal })),
-    goalOpen: snap(attach('hub-goal-open', { tag: 'button', parent: goal })),
-    due: snap(attach('hub-due', { tag: 'span', parent: goal })),
-    doneNote: snap(attach('hub-done-note', { tag: 'span', parent: goal })),
-    triageNote: snap(attach('hub-triage-note', { tag: 'span', parent: goal })),
+    goalTitle: snap(attach('board-goal-title-text', { tag: 'span', parent: goal })),
+    goalOpen: snap(attach('board-goal-open', { tag: 'button', parent: goal })),
+    due: snap(attach('board-due', { tag: 'span', parent: goal })),
+    doneNote: snap(attach('board-done-note', { tag: 'span', parent: goal })),
+    triageNote: snap(attach('board-triage-note', { tag: 'span', parent: goal })),
   };
 }
 
@@ -101,7 +101,7 @@ describe('the goal band stylesheet', () => {
     // rule, so `none` below is a real difference rather than an empty read.
     expect(band(IPAD).rail.display).not.toBe('none');
     expect(band(IPAD).rail['padding-left']).toBe('34px');
-    expect(band(IPAD, 'hub-band is-collapsed').rail.display).toBe('none');
+    expect(band(IPAD, 'board-band is-collapsed').rail.display).toBe('none');
   });
 
   // Decision 8: the goal row's owner avatar sits in the same column as the
@@ -118,7 +118,7 @@ describe('the goal band stylesheet', () => {
   // The same arithmetic where the ≤900 block tightens the task row's padding:
   // the sum has to be re-taken from the values the cascade applies THERE,
   // because the base sum stays true while the phone breaks. (Shipped broken
-  // once: the ≤900 block shrank .hub-task-row to 2px and left the goal row at
+  // once: the ≤900 block shrank .board-task-row to 2px and left the goal row at
   // 14px — a 4px drift at the 430px check CLAUDE.md mandates.)
   it('keeps the avatar columns aligned at 430px, where the task row tightens', () => {
     const wide = band(IPAD);
@@ -178,13 +178,13 @@ describe('the goal band stylesheet', () => {
 
   it('mutes a done or triage band’s title, and neutralises the reserved band’s accent', () => {
     const open = band(IPAD);
-    for (const flavour of ['hub-band hub-band-done', 'hub-band hub-band-triage']) {
+    for (const flavour of ['board-band board-band-done', 'board-band board-band-triage']) {
       const muted = band(IPAD, flavour).goalTitle;
       expect(muted.color, flavour).toBe(open.due.color); // the muted token
       expect(muted.color, flavour).not.toBe(open.goalTitle.color); // control
     }
     // Backlog is drawn as NOT a goal: the accent rail goes neutral.
-    const reserved = band(IPAD, 'hub-band hub-band-reserved').goal;
+    const reserved = band(IPAD, 'board-band board-band-reserved').goal;
     expect(open.goal['border-left-color']).not.toBe(''); // control: the accent is live
     expect(reserved['border-left-color']).not.toBe('');
     expect(reserved['border-left-color']).not.toBe(open.goal['border-left-color']);

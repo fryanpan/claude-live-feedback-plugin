@@ -32,7 +32,7 @@ import {
   toUtcIso,
 } from './activity.ts';
 import { memberDocId } from './binds.ts';
-import { isHubOwnedRoom } from './doc-ids.ts';
+import { isBoardOwnedRoom } from './doc-ids.ts';
 import {
   type DocIndexEntry,
   deleteDocIndex,
@@ -832,8 +832,8 @@ export class RoomsWorkspaces {
    *     a proper review" but "would `archiveReview` move this file", and that
    *     selector is `reviewIdOf`. Answering the narrower question would let two
    *     verbs both claim the same doc.
-   *   - `hub-owned` — a `task:` body or a `ws:` board room is live furniture
-   *     the hub re-creates, not a document anyone archives.
+   *   - `board-owned` — a `task:` body or a `ws:` board room is live furniture
+   *     the board re-creates, not a document anyone archives.
    *   - `archive-collision` — an older snapshot of this id is already parked.
    *     Nothing here decides which of two snapshots is worth less.
    *
@@ -846,9 +846,9 @@ export class RoomsWorkspaces {
     opts: { archivedBy: string; reason?: string; linkedWorkspaces?: string[] },
   ):
     | { ok: true; docId: string; manifest: ArchivedDoc }
-    | { ok: false; error: 'not-found' | 'hub-owned' | 'archive-collision' | 'move-failed' }
+    | { ok: false; error: 'not-found' | 'board-owned' | 'archive-collision' | 'move-failed' }
     | { ok: false; error: 'review-member'; setId: string } {
-    if (isHubOwnedRoom(docId)) return { ok: false, error: 'hub-owned' };
+    if (isBoardOwnedRoom(docId)) return { ok: false, error: 'board-owned' };
     const room = this.p.room(docId);
     if (!room) return { ok: false, error: 'not-found' };
     // From here on the CANONICAL id: everything below names files, writes a

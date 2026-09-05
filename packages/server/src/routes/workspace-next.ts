@@ -13,7 +13,7 @@ import { join } from 'node:path';
  * Lifted verbatim out of `createServer`'s request closure; the handlers
  * read their collaborators off `WorkspaceRoutesContext` instead of the scope.
  */
-import { redactHubEventForVisitor } from '../share/redact-hub-events.ts';
+import { redactBoardEventForVisitor } from '../share/redact-board-events.ts';
 import { buildQueue } from '../task-queue.ts';
 import { eventsLogPath, isRetired, retiredNotice } from '../tasks.ts';
 import { SERVER_TICK_EVENT, analyzeUptime } from '../uptime.ts';
@@ -29,7 +29,7 @@ import type { WorkspaceRouteRequest, WorkspaceRoutesContext } from './workspace-
  * somebody else's disk.
  *
  * The shape below is what the board client actually sends: a flat handful of
- * numbers (`hub-app.ts`, `sendLoadReport`). Flat is the load-bearing part —
+ * numbers (`board-app.ts`, `sendLoadReport`). Flat is the load-bearing part —
  * a nested value is where an unbounded payload hides — and the limits sit
  * an order of magnitude above the real thing so a field added to the client
  * lands without anyone having to come back here.
@@ -321,7 +321,7 @@ export async function handleWorkspaceNext(
     if (events.length > 1000) events = events.slice(-1000);
     /**
      * A member reads the Activity tab, through the SAME redaction the board's
-     * live event stream already applies (`redactHubEventForVisitor`): actors
+     * live event stream already applies (`redactBoardEventForVisitor`): actors
      * reduced to display name and kind, tasks to the visitor projection, a
      * voice utterance's transcript dropped.
      *
@@ -335,7 +335,7 @@ export async function handleWorkspaceNext(
     if (visitor) {
       events = events.map((row) =>
         typeof (row as { event?: unknown })?.event === 'string'
-          ? redactHubEventForVisitor(row as { event: string })
+          ? redactBoardEventForVisitor(row as { event: string })
           : row,
       );
     }

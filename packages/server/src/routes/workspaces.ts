@@ -7,7 +7,7 @@
  * reach a different one. Splitting the chain into files kept the sequence
  * exactly. Nothing in the suite asserts the ORDER on its own — the guard is
  * the per-route HTTP tests (attachments.test.ts, delete-workspace.test.ts,
- * the goal-*.test.ts family and the hub-*.test.ts family), each of which
+ * the goal-*.test.ts family and the board-*.test.ts family), each of which
  * fails if its path starts reaching a different handler.
  *
  * FOUR entry points because the block sits in four places, not one. The task

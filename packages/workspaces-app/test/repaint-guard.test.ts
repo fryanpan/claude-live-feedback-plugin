@@ -3,7 +3,7 @@ import {
   REPAINT_GRACE_MS,
   REPAINT_WATCHDOG_MS,
   createRepaintGuard,
-} from '../src/hub/repaint-guard.ts';
+} from '../src/board/repaint-guard.ts';
 
 /**
  * Background repaints must not land under the reader's finger.

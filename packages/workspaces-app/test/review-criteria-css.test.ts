@@ -28,13 +28,13 @@ const NARROW = { width: 430, height: 820 } as const;
 
 let cleanup = () => {};
 beforeEach(() => {
-  // The board's real cascade order — `renderHubShell`, packages/server/src/
-  // shells.ts loads hub.css BEFORE styles.css. tokens.css is left out on
+  // The board's real cascade order — `renderBoardShell`, packages/server/src/
+  // shells.ts loads board.css BEFORE styles.css. tokens.css is left out on
   // purpose: the served /app/tokens.css is the vendored Open Props subset
   // concatenated with src/tokens.css, and installing the mapping layer alone
   // resolves its `var(--gray-9)` chain to nothing, which would blank every
   // colour compared below.
-  cleanup = installSheets('hub.css', 'styles.css');
+  cleanup = installSheets('board.css', 'styles.css');
 });
 afterEach(() => {
   cleanup();
@@ -53,11 +53,11 @@ function px(value: string): number {
  *  chain `renderSettingsPanel` emits. */
 function panel(viewport: { width: number; height: number }) {
   setViewport(viewport);
-  const box = attach('hub-settings-panel');
-  const row = attach('hub-settings-row hub-settings-row--criteria', { parent: box });
-  const field = attach('hub-criteria', { tag: 'textarea', parent: row });
-  const actions = attach('hub-criteria-actions', { parent: row });
-  const button = attach('hub-btn', { tag: 'button', parent: actions });
+  const box = attach('board-settings-panel');
+  const row = attach('board-settings-row board-settings-row--criteria', { parent: box });
+  const field = attach('board-criteria', { tag: 'textarea', parent: row });
+  const actions = attach('board-criteria-actions', { parent: row });
+  const button = attach('board-btn', { tag: 'button', parent: actions });
   return { box, row, field, actions, button };
 }
 
@@ -109,13 +109,13 @@ describe('the criteria field at 1180x820 and at 430px', () => {
   it('keeps both buttons at the 44px touch floor and lets them wrap', () => {
     const { actions, button } = panel(IPAD);
     expect(styleOf(actions).flexWrap).toBe('wrap');
-    // `.hub-btn` alone is 36px — a mouse target. These are pressed on a phone.
+    // `.board-btn` alone is 36px — a mouse target. These are pressed on a phone.
     expect(Number.parseFloat(styleOf(button).minHeight)).toBe(44);
     // The control: the base rule really is the smaller one, so this override
     // is doing work rather than restating what it inherits — and, unlike the
     // source comparison this replaces, a later rule that undid the override
     // would show up as 36 here.
-    expect(Number.parseFloat(styleOf(attach('hub-btn', { tag: 'button' })).minHeight)).toBe(36);
+    expect(Number.parseFloat(styleOf(attach('board-btn', { tag: 'button' })).minHeight)).toBe(36);
   });
 });
 
@@ -123,10 +123,10 @@ describe('the held note’s foot at 430px', () => {
   /** The held note, its foot, the meta line and the override button. */
   function heldNote(viewport: { width: number; height: number }) {
     setViewport(viewport);
-    const note = attach('hub-decide-held', { tag: 'p' });
-    const foot = attach('hub-decide-held-foot', { tag: 'span', parent: note });
-    const meta = attach('hub-decide-held-meta', { tag: 'span', parent: foot });
-    const release = attach('hub-btn hub-decide-held-release', { tag: 'button', parent: foot });
+    const note = attach('board-decide-held', { tag: 'p' });
+    const foot = attach('board-decide-held-foot', { tag: 'span', parent: note });
+    const meta = attach('board-decide-held-meta', { tag: 'span', parent: foot });
+    const release = attach('board-btn board-decide-held-release', { tag: 'button', parent: foot });
     return { note, foot, meta, release };
   }
 
@@ -149,8 +149,8 @@ describe('the held note’s foot at 430px', () => {
    * `:active` — there is no pointer, so nothing can put the element into
    * those states. The text version read those declarations instead; they are
    * dropped here and belong to `bun run ui:shot`. The defect they guard is
-   * worth restating for whoever runs that check: `.hub-btn:hover` paints
-   * `--bg-hover`, which is the background `.hub-decide-held` already sits on,
+   * worth restating for whoever runs that check: `.board-btn:hover` paints
+   * `--bg-hover`, which is the background `.board-decide-held` already sits on,
    * so the hover was invisible — the state change has to be an inversion, not
    * a tint.
    */
@@ -173,15 +173,15 @@ describe('the held note’s foot at 430px', () => {
   it('positive control: the ghost variant it shipped as DOES match the meta', () => {
     // Without this the test above could pass by measuring nothing — it
     // reproduces the reported defect through the same code path, so a
-    // regression to `.hub-btn-ghost` fails the assertion above rather than
+    // regression to `.board-btn-ghost` fails the assertion above rather than
     // quietly passing it.
     setViewport(IPAD);
-    const foot = attach('hub-decide-held-foot', {
+    const foot = attach('board-decide-held-foot', {
       tag: 'span',
-      parent: attach('hub-decide-held', { tag: 'p' }),
+      parent: attach('board-decide-held', { tag: 'p' }),
     });
-    const meta = attach('hub-decide-held-meta', { tag: 'span', parent: foot });
-    const ghost = attach('hub-btn hub-btn-ghost', { tag: 'button', parent: foot });
+    const meta = attach('board-decide-held-meta', { tag: 'span', parent: foot });
+    const ghost = attach('board-btn board-btn-ghost', { tag: 'button', parent: foot });
     expect(styleOf(ghost).color).toBe(styleOf(meta).color);
   });
 
@@ -192,9 +192,9 @@ describe('the held note’s foot at 430px', () => {
     // claim, rather than as "the rule's text carries no @media", which is not.
     // Both viewports are 820 tall so nothing viewport-height-relative moves.
     const wide = panel(IPAD);
-    const wideFoot = attach('hub-decide-held-foot', {
+    const wideFoot = attach('board-decide-held-foot', {
       tag: 'span',
-      parent: attach('hub-decide-held', { tag: 'p' }),
+      parent: attach('board-decide-held', { tag: 'p' }),
     });
     const wideValues = [
       styleOf(wide.field).maxHeight,
@@ -205,9 +205,9 @@ describe('the held note’s foot at 430px', () => {
     ];
     document.body.replaceChildren();
     const narrow = panel(NARROW);
-    const narrowFoot = attach('hub-decide-held-foot', {
+    const narrowFoot = attach('board-decide-held-foot', {
       tag: 'span',
-      parent: attach('hub-decide-held', { tag: 'p' }),
+      parent: attach('board-decide-held', { tag: 'p' }),
     });
     expect([
       styleOf(narrow.field).maxHeight,

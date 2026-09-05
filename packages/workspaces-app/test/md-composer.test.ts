@@ -306,9 +306,9 @@ describe('when the editor’s chunk never arrives', () => {
  * is that "nothing styles it" is now asked of the element rather than of the
  * file.
  *
- * The board's cascade is two files since the hub block moved to hub.css:
- * styles.css keeps the shared chrome, hub.css carries the board's own rules,
- * and the hub shell loads them in that order — which is the order they are
+ * The board's cascade is two files since the board block moved to board.css:
+ * styles.css keeps the shared chrome, board.css carries the board's own rules,
+ * and the board shell loads them in that order — which is the order they are
  * installed here, because two rules of equal specificity are settled by which
  * sheet came last.
  */
@@ -316,7 +316,7 @@ describe('the markdown composer is styled', () => {
   let sheets = () => {};
   beforeEach(() => {
     setViewport(IPAD);
-    sheets = installSheets('hub.css', 'styles.css');
+    sheets = installSheets('board.css', 'styles.css');
   });
   afterEach(() => {
     sheets();
@@ -460,9 +460,9 @@ describe('the markdown composer is styled', () => {
     const bareLook = [styleOf(bare).fontSize, styleOf(bare).borderRadius].join('|');
     for (const context of [
       'thread-reply',
-      'hub-comment-form',
-      'hub-answer-form',
-      'hub-walk-answer',
+      'board-comment-form',
+      'board-answer-form',
+      'board-walk-answer',
       'composer-inner',
     ]) {
       const surface = attach('md-composer-surface', { parent: attach(context) });

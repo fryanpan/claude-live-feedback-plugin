@@ -27,7 +27,7 @@ application that fronts the share hostname. Two mints meant two answers to
 "who may open this board". Shares already minted the old way keep working:
 `list_shares` lists them, `set_share_ttl` shortens one, `unshare` revokes one.
 
-So the id you share is always a hub board id: the one `create_workspace`
+So the id you share is always a board id: the one `create_workspace`
 returned, or the `hubWorkspaceId` that `attach_folder` / `create_diff_review`
 reports. Everything on that board is available to everyone the share reaches
 — that is the default and the point (see `.claude/rules/workspace-board.md`)

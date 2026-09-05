@@ -73,7 +73,7 @@ export function parseSuggestionAuthor(
 export interface DocRoutesContext {
   /** Doc rooms — every route here is an operation on one. */
   rooms: Rooms;
-  /** The hub task store — doc↔board membership, and the rows a doc carries. */
+  /** The board task store — doc↔board membership, and the rows a doc carries. */
   taskStore: TaskStore;
   /** The ydoc projection of the store, refreshed after writes that emit no
    *  store event. */
@@ -114,16 +114,16 @@ export interface DocRoutesContext {
     meta: T,
     precomputedHome?: string | null,
   ) => T & { reviewUrl?: string };
-  /** doc id → the hub boards holding it, built once per request that needs it. */
+  /** doc id → the boards holding it, built once per request that needs it. */
   boardIndexForListing: () => Map<string, string[]>;
-  /** Which hub boards hold a doc, answered off a prebuilt index. */
-  hubBoardsForDocIndexed: (index: Map<string, string[]>, meta: DocMeta) => Set<string>;
+  /** Which boards hold a doc, answered off a prebuilt index. */
+  boardsForDocIndexed: (index: Map<string, string[]>, meta: DocMeta) => Set<string>;
   /** Which board a doc calls home, answered off the same index. */
   homeForDocIndexed: (index: Map<string, string[]>, meta: DocMeta) => string | null;
-  /** File a loose attachment under a hub board, minting Unfiled if needed. */
-  fileUnderHubWorkspace: (attachmentId: string, requested?: string) => string | undefined;
-  /** Drop an attachment from every hub board that holds it. */
-  unlinkFromEveryHubWorkspace: (attachmentId: string) => void;
+  /** File a loose attachment under a board, minting Unfiled if needed. */
+  fileUnderBoardWorkspace: (attachmentId: string, requested?: string) => string | undefined;
+  /** Drop an attachment from every board that holds it. */
+  unlinkFromEveryBoardWorkspace: (attachmentId: string) => void;
   /** The doc-thread URL a webhook or an SSE payload carries. */
   threadUrl: (docId: string, isVisitor: boolean) => string | undefined;
 

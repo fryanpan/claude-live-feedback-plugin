@@ -71,11 +71,11 @@ function suggestionAuthor(): { id: string; name: string; color: string } {
  * packages/mcp/test/launcher.test.ts.
  *
  * One constant rather than a literal per use: the same value is reported to
- * the hub on attach, so the board can say which sessions are running an older
+ * the board on attach, so the board can say which sessions are running an older
  * bundle than the deploy source would install. A second literal would be a
  * fourth version site, and this file's history is that version sites drift.
  */
-const PLUGIN_VERSION = '0.1.165';
+const PLUGIN_VERSION = '0.1.167';
 
 /**
  * One nonce per PROCESS, minted at module load and sent on every attach.
@@ -183,7 +183,7 @@ const server = new Server(
       'BEFORE YOU EDIT A .md FILE: call list_docs first. If a doc has sourceUrl',
       'matching the path, route through the MCP. If not, normal file edits are fine.',
       '',
-      'WORKSPACE HUB: a hub workspace is a goal + a task board + linked docs.',
+      'WORKSPACE BOARD: a board workspace is a goal + a task board + linked docs.',
       'create_workspace mints one; attach_doc links existing docs/reviews to it;',
       'create_tasks (ALWAYS a list — one idea is a one-row list) and',
       'spin_off_task add work (omit `goal` and the task lands UNPLACED in',

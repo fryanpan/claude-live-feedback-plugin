@@ -18,7 +18,7 @@ import type { ChannelNotification } from './channel-messages.ts';
 export interface FrameHandlerDeps {
   /** Where a rendered line goes — `server.notification` in the real process. */
   notify: (n: ChannelNotification) => Promise<void>;
-  /** The doc/hub renderer; see channel-messages.ts. */
+  /** The doc/board renderer; see channel-messages.ts. */
   emitChannelMessage: (event: string, payload: unknown) => Promise<void>;
   /** The REST call to the feedback server; throws on a non-2xx. */
   http: (method: string, path: string, body?: unknown) => Promise<unknown>;

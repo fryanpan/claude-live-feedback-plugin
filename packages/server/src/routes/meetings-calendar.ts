@@ -44,7 +44,7 @@ import type { TaskStore } from '../tasks.ts';
 export interface MeetingCalendarRoutesContext {
   /** Doc rooms — a meeting is always a meeting ON a doc. */
   rooms: Rooms;
-  /** The hub task store, for the board a newly created huddle is filed on. */
+  /** The board task store, for the board a newly created huddle is filed on. */
   taskStore: TaskStore;
   /** The append-only transcript store. A transcript outlives its room, so
    *  these routes deliberately do not require the room to still exist. */
@@ -71,8 +71,8 @@ export interface MeetingCalendarRoutesContext {
   j: (status: number, body: unknown) => Response;
   /** Whether a string may be used as a doc id at all. */
   isValidDocId: (s: string) => boolean;
-  /** File a loose attachment under a hub board, minting Unfiled if needed. */
-  fileUnderHubWorkspace: (attachmentId: string, requested?: string) => string | undefined;
+  /** File a loose attachment under a board, minting Unfiled if needed. */
+  fileUnderBoardWorkspace: (attachmentId: string, requested?: string) => string | undefined;
 }
 
 /** What only this request knows. */
@@ -105,7 +105,7 @@ export async function handleMeetingCalendarRoutes(
     dataDir,
     j,
     isValidDocId,
-    fileUnderHubWorkspace,
+    fileUnderBoardWorkspace,
   } = ctx;
   const { req, url, pathname, visitor } = rq;
 
@@ -460,7 +460,7 @@ export async function handleMeetingCalendarRoutes(
       const attached = await rooms.attachFileAsync(docId, file);
       if (!attached.ok) return j(409, { error: 'attach_failed', attached });
       const requestedWs = typeof body?.workspaceId === 'string' ? body.workspaceId : undefined;
-      fileUnderHubWorkspace(docId, requestedWs);
+      fileUnderBoardWorkspace(docId, requestedWs);
     }
 
     const invited = await recallRelay.invite({

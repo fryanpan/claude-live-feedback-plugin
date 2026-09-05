@@ -15,7 +15,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { prose } from '@feedback/core';
 import { Rooms } from '../src/rooms.ts';
-import { SseHub } from '../src/sse.ts';
+import { SseBus } from '../src/sse.ts';
 import { createWebhookDispatcher } from '../src/webhooks.ts';
 import { pastExternalRead, waitFor, waitForFile } from './wait-for.ts';
 
@@ -48,7 +48,7 @@ function git(cwd: string, ...args: string[]): string {
 function makeRooms(dataDir: string): Rooms {
   return new Rooms({
     dataDir,
-    sse: new SseHub(),
+    sse: new SseBus(),
     webhooks: createWebhookDispatcher({ onLog: () => {} }),
     decorateDocMeta: (m) => ({ ...m, reviewUrl: `http://test/review/${m.docId}` }),
   });

@@ -1,0 +1,362 @@
+import { describe, expect, it, vi } from 'vitest';
+import { boardShortcutKeydown, wireBoardShortcuts } from '../src/board/board-shortcuts.ts';
+
+// The regression this file pins: opening a task detail moves focus INTO the
+// panel (deliberately — hold-to-talk needs a focus target), which left the
+// Gmail-style row shortcuts anchored on document.activeElement with no row
+// focused. j restarted from the top row and o/s/a went dead in exactly the
+// state a keyboard user is in right after opening a task. The handler must
+// fall back to the OPEN task's row when the detail panel holds focus — and
+// only then, so an unrelated focus does not silently inherit a row.
+
+function row(taskId: string): HTMLElement {
+  const r = document.createElement('div');
+  r.className = 'board-task-row';
+  r.tabIndex = 0;
+  r.dataset.taskId = taskId;
+  const status = document.createElement('select');
+  status.className = 'board-status-select';
+  const assignee = document.createElement('select');
+  assignee.className = 'board-row-assignee';
+  r.append(status, assignee);
+  return r;
+}
+
+function fixture(detailTaskId: string | null) {
+  document.body.innerHTML = '';
+  const help = document.createElement('div');
+  help.id = 'board-help';
+  help.classList.add('hidden');
+  const rows = [row('t1'), row('t2'), row('t3')];
+  const panel = document.createElement('div');
+  panel.className = 'board-detail-panel';
+  panel.tabIndex = -1;
+  document.body.append(help, ...rows, panel);
+  const state: {
+    detailTaskId: string | null;
+    detailGoalId: string | null;
+    tasks: Map<string, { id: string }>;
+  } = {
+    detailTaskId,
+    detailGoalId: null,
+    tasks: new Map([
+      ['t1', { id: 't1' }],
+      ['t2', { id: 't2' }],
+      ['t3', { id: 't3' }],
+    ]),
+  };
+  const opened: string[] = [];
+  const archived: string[] = [];
+  let closed = 0;
+  const handler = boardShortcutKeydown({
+    state,
+    helpEl: () => help,
+    openDetail: (id) => {
+      opened.push(id);
+      state.detailTaskId = id;
+    },
+    closeDetail: () => {
+      closed += 1;
+      state.detailTaskId = null;
+    },
+    archiveTask: (id) => archived.push(id),
+  });
+  return {
+    handler,
+    help,
+    rows,
+    panel,
+    state,
+    opened,
+    archived,
+    closedCount: () => closed,
+  };
+}
+
+/** Dispatch a real bubbling keydown from the currently focused element so the
+ *  handler sees a populated composedPath, exactly as it would live. */
+function press(
+  key: string,
+  handler: (ev: KeyboardEvent) => void,
+  mods: KeyboardEventInit = {},
+): KeyboardEvent {
+  const ev = new KeyboardEvent('keydown', {
+    key,
+    bubbles: true,
+    cancelable: true,
+    composed: true,
+    ...mods,
+  });
+  document.addEventListener('keydown', handler as EventListener, { once: true });
+  (document.activeElement ?? document.body).dispatchEvent(ev);
+  return ev;
+}
+
+describe('board row shortcuts with the detail panel focused (the #250 focus steal)', () => {
+  it('j continues from the open task, not from the top row', () => {
+    const f = fixture('t2');
+    f.panel.focus();
+    expect(document.activeElement).toBe(f.panel); // control: the steal happened
+    press('j', f.handler);
+    expect(document.activeElement).toBe(f.rows[2]);
+  });
+
+  it('k steps back from the open task', () => {
+    const f = fixture('t2');
+    f.panel.focus();
+    press('k', f.handler);
+    expect(document.activeElement).toBe(f.rows[0]);
+  });
+
+  it('s opens the open task row status dropdown instead of doing nothing', () => {
+    const f = fixture('t2');
+    f.panel.focus();
+    press('s', f.handler);
+    expect(document.activeElement).toBe(f.rows[1]?.querySelector('.board-status-select'));
+  });
+
+  it('a focuses the open task row assignee picker', () => {
+    const f = fixture('t2');
+    f.panel.focus();
+    press('a', f.handler);
+    expect(document.activeElement).toBe(f.rows[1]?.querySelector('.board-row-assignee'));
+  });
+
+  it('a focused row still outranks the fallback', () => {
+    const f = fixture('t2');
+    f.rows[0]?.focus();
+    press('j', f.handler);
+    expect(document.activeElement).toBe(f.rows[1]);
+  });
+
+  it('an unrelated focus does NOT inherit the open task anchor', () => {
+    const f = fixture('t2');
+    const settings = document.createElement('button');
+    document.body.append(settings);
+    settings.focus();
+    press('s', f.handler);
+    // `s` from a non-row, non-panel element stays dead rather than acting on
+    // a row the user is not looking at...
+    expect(document.activeElement).toBe(settings);
+    press('j', f.handler);
+    // ...and j starts from the top, the pre-detail behavior.
+    expect(document.activeElement).toBe(f.rows[0]);
+  });
+
+  // `e` — Gmail's archive key, on a board that already borrowed j/k/o/s from
+  // it. It resolves its target through the SAME anchor as o/s/a, which is the
+  // whole of the focus model: the focused row, or the open panel's row. Hover
+  // is deliberately not a target — it is not focus, it does not exist on an
+  // iPad, and it is the one way this key could remove a row nobody was
+  // looking at.
+  it('e archives the focused row', () => {
+    const f = fixture(null);
+    f.rows[1]?.focus();
+    press('e', f.handler);
+    expect(f.archived).toEqual(['t2']);
+  });
+
+  it('e archives the OPEN task when the panel holds focus', () => {
+    const f = fixture('t3');
+    f.panel.focus();
+    press('e', f.handler);
+    expect(f.archived).toEqual(['t3']);
+  });
+
+  it('e does nothing when nothing is anchored', () => {
+    const f = fixture(null);
+    const settings = document.createElement('button');
+    document.body.append(settings);
+    settings.focus();
+    press('e', f.handler);
+    expect(f.archived).toEqual([]);
+    // Positive control: the same key with a row focused DOES archive.
+    f.rows[0]?.focus();
+    press('e', f.handler);
+    expect(f.archived).toEqual(['t1']);
+  });
+
+  it('e never fires while typing', () => {
+    const f = fixture('t2');
+    const input = document.createElement('input');
+    document.body.append(input);
+    input.focus();
+    press('e', f.handler);
+    expect(f.archived).toEqual([]);
+  });
+
+  it('with no detail open, j from nowhere starts at the top row', () => {
+    const f = fixture(null);
+    f.panel.focus();
+    press('j', f.handler);
+    expect(document.activeElement).toBe(f.rows[0]);
+  });
+
+  it('never fires while typing', () => {
+    const f = fixture('t2');
+    const input = document.createElement('input');
+    document.body.append(input);
+    input.focus();
+    press('j', f.handler);
+    expect(document.activeElement).toBe(input);
+  });
+
+  it('Escape still closes the open detail', () => {
+    const f = fixture('t2');
+    f.panel.focus();
+    press('Escape', f.handler);
+    expect(f.closedCount()).toBe(1);
+  });
+
+  it('Escape closes the GOAL panel too, which has no task id at all', () => {
+    // The two panels float over the same board and never share a container,
+    // so "no task open" is not "nothing open" — the goal panel used to sit
+    // through the key its neighbour obeyed, which reads as stuck.
+    const f = fixture(null);
+    f.state.detailGoalId = 'g-pr';
+    f.panel.focus();
+    press('Escape', f.handler);
+    expect(f.closedCount()).toBe(1);
+  });
+
+  it('Escape with neither panel open closes nothing', () => {
+    // The control: the branch must be reading the two ids, not firing on
+    // every Escape the board ever sees.
+    const f = fixture(null);
+    press('Escape', f.handler);
+    expect(f.closedCount()).toBe(0);
+  });
+});
+
+// A modifier chord belongs to the browser or the OS, not to this board. The
+// bug this pins: Cmd+C on a selection inside a task ran the `c` capture
+// shortcut, which focused the quick-capture box and preventDefault()'d — so
+// the selection was gone and nothing reached the clipboard. Nothing here
+// deliberately owns a meta/ctrl/alt chord, so every one of them passes
+// through untouched. Shift is NOT a bail: `?` is Shift+/ on most layouts.
+describe('modifier chords pass through (the Cmd+C steal)', () => {
+  it('Cmd+C neither presses New task nor preventDefaults', () => {
+    const f = fixture(null);
+    const btn = document.createElement('button');
+    btn.className = 'board-quick-new';
+    const pressed = vi.fn();
+    btn.addEventListener('click', pressed);
+    document.body.append(btn);
+    f.rows[0]?.focus();
+
+    const ev = press('c', f.handler, { metaKey: true });
+    expect(pressed).not.toHaveBeenCalled();
+    expect(document.activeElement).toBe(f.rows[0]);
+    expect(ev.defaultPrevented).toBe(false);
+
+    // Positive control: bare `c` still files a task, so the assertion above
+    // is measuring the modifier and not a missing button.
+    const bare = press('c', f.handler);
+    expect(pressed).toHaveBeenCalledTimes(1);
+    expect(bare.defaultPrevented).toBe(true);
+  });
+
+  it('Ctrl+C is left alone too', () => {
+    const f = fixture(null);
+    const btn = document.createElement('button');
+    btn.className = 'board-quick-new';
+    const pressed = vi.fn();
+    btn.addEventListener('click', pressed);
+    document.body.append(btn);
+    f.rows[0]?.focus();
+    press('c', f.handler, { ctrlKey: true });
+    expect(pressed).not.toHaveBeenCalled();
+    expect(document.activeElement).toBe(f.rows[0]);
+  });
+
+  it('Cmd+A still selects all instead of focusing the assignee picker', () => {
+    const f = fixture(null);
+    f.rows[0]?.focus();
+    const ev = press('a', f.handler, { metaKey: true });
+    expect(document.activeElement).toBe(f.rows[0]);
+    expect(ev.defaultPrevented).toBe(false);
+  });
+
+  it('Cmd+E does not archive', () => {
+    const f = fixture(null);
+    f.rows[0]?.focus();
+    press('e', f.handler, { metaKey: true });
+    expect(f.archived).toEqual([]);
+  });
+
+  it('Shift is not a modifier bail — ? still opens help', () => {
+    const f = fixture(null);
+    press('?', f.handler, { shiftKey: true });
+    expect(f.help.classList.contains('hidden')).toBe(false);
+  });
+});
+
+/**
+ * `wireBoardShortcuts` — the boot half: which document hears the keys, and the
+ * one rule that only exists at the wiring seam. The handler's own decisions
+ * are driven above; what is left here is that the listener is registered at
+ * all, and that `e` cannot archive a row the board has already archived (the
+ * restore list is the one place such a row is still reachable by keyboard).
+ */
+describe('wireBoardShortcuts', () => {
+  function wire(over: Partial<Parameters<typeof wireBoardShortcuts>[0]> = {}) {
+    const help = document.createElement('div');
+    help.id = 'board-help';
+    help.classList.add('hidden');
+    document.body.replaceChildren(help);
+    const archived = new Set<string>();
+    const archiveTask = vi.fn();
+    const renderDetail = vi.fn();
+    const state = {
+      detailTaskId: null as string | null,
+      detailGoalId: null as string | null,
+      detailThreadId: null as string | null,
+      tasks: {
+        get: (id: string) => (id === 't-1' ? { id: 't-1' } : undefined),
+      },
+    };
+    wireBoardShortcuts({
+      document,
+      state,
+      el: () => help,
+      renderDetail,
+      archiveTask,
+      isArchived: (t) => archived.has(t.id),
+      ...over,
+    });
+    return { state, archiveTask, renderDetail, archived, help };
+  }
+
+  function press(key: string): void {
+    document.dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true }));
+  }
+
+  it('hears keys on the document it was given', () => {
+    const w = wire();
+    press('?');
+    expect(w.help.classList.contains('hidden')).toBe(false);
+  });
+
+  it('closes both overlays on Escape, not just the task panel', () => {
+    const w = wire();
+    w.state.detailTaskId = 't-1';
+    w.state.detailGoalId = 'g-1';
+    w.state.detailThreadId = 'th-1';
+    press('Escape');
+    expect(w.state.detailTaskId).toBeNull();
+    expect(w.state.detailGoalId).toBeNull();
+    expect(w.state.detailThreadId).toBeNull();
+    expect(w.renderDetail).toHaveBeenCalled();
+  });
+
+  it('refuses to archive a row that is already archived', () => {
+    const w = wire();
+    w.archived.add('t-1');
+    const row = document.createElement('div');
+    row.className = 'board-task-row';
+    row.dataset.taskId = 't-1';
+    document.body.append(row);
+    press('e');
+    expect(w.archiveTask).not.toHaveBeenCalled();
+  });
+});

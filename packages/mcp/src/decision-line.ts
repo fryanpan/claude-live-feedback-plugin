@@ -7,7 +7,7 @@
  * asserted against the payload the server really emits.
  */
 
-/** The fields this line reads off the hub frame. */
+/** The fields this line reads off the board frame. */
 export interface DecisionAnsweredPayload {
   taskId?: string;
   answer?: string;

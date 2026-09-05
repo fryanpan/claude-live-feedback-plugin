@@ -474,7 +474,7 @@ export interface ServerOptions {
    * `CW_PUBLIC_BASE_URL` at boot so a typo fails there rather than here.
    *
    * Every human-facing URL the server emits (`reviewUrl`, `entryUrl`, the
-   * import banner's `hubUrl`) is built from this when set. Unset — the
+   * import banner's `boardUrl`) is built from this when set. Unset — the
    * default, and every test that doesn't care — falls back to
    * `http://<discovered host>:<port>`, which is what a server with nothing
    * in front of it is actually reachable on.
@@ -619,7 +619,7 @@ export interface ServerOptions {
   meetingNotes?: MeetingNotesOptions;
   /**
    * Liveness-marker interval for the uptime measurement (§3.12 commit 11).
-   * The monitor appends `server.tick` lines to every hub workspace's
+   * The monitor appends `server.tick` lines to every board workspace's
    * events.jsonl so the gap analysis has density even on an idle board.
    * Overridable so tests never wait real minutes; default 5 minutes.
    */

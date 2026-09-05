@@ -20,7 +20,7 @@ import { join } from 'node:path';
 import { runBackfill } from '../src/activity-backfill.ts';
 import { listArchivedReviews, readArchiveManifest } from '../src/review-archive.ts';
 import { Rooms } from '../src/rooms.ts';
-import { SseHub } from '../src/sse.ts';
+import { SseBus } from '../src/sse.ts';
 import { createWebhookDispatcher } from '../src/webhooks.ts';
 
 const REVIEWER = { id: 'u1', name: 'Reviewer', kind: 'known' as const, color: '#2e7dd7' };
@@ -33,7 +33,7 @@ const settle = (): Promise<void> => new Promise((r) => setTimeout(r, 260));
 function makeRooms(dataDir: string): Rooms {
   return new Rooms({
     dataDir,
-    sse: new SseHub(),
+    sse: new SseBus(),
     webhooks: createWebhookDispatcher({ onLog: () => {} }),
     decorateDocMeta: (m) => ({ ...m, reviewUrl: `http://test/review/${m.docId}` }),
   });

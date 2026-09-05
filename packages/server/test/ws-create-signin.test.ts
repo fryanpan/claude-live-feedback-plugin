@@ -5,7 +5,7 @@
  * /api/docs and the MCP tools. It used to run ABOVE the socket's read-only
  * decision, so a browser that had proven nobody could open
  * `/y/<any-new-id>?type=mockup` and make the server create a room and file a
- * new row under the hub workspace — the read-only carry only stopped the ydoc
+ * new row under the board workspace — the read-only carry only stopped the ydoc
  * edits that came afterwards, never the creation itself.
  *
  * Refusing here gates no READ: the doc the socket would have created does not
@@ -65,7 +65,7 @@ async function connectAsBrowser(handle: ServerHandle, docId: string): Promise<bo
 }
 
 describe('the /y/ mockup auto-create is behind the sign-in gate', () => {
-  it('refuses a signed-out browser: no room, and no hub-workspace row', async () => {
+  it('refuses a signed-out browser: no room, and no board-workspace row', async () => {
     const handle = boot(true);
     expect(await connectAsBrowser(handle, 'ws-create-refused')).toBe(false);
     expect(handle.rooms.get('ws-create-refused')).toBeUndefined();

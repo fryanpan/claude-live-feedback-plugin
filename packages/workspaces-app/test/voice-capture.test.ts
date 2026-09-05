@@ -101,7 +101,7 @@ describe('createVoiceCapture', () => {
     createVoiceCapture({
       button,
       indicator,
-      getContext: () => ({ surface: 'hub' }),
+      getContext: () => ({ surface: 'board' }),
       send: (transcript, context) => {
         sent.push({ transcript, context });
         return Promise.resolve(ackToReturn);
@@ -258,7 +258,7 @@ describe('createVoiceCapture', () => {
     const cap = mount();
     const row = document.createElement('div');
     row.tabIndex = 0;
-    row.className = 'hub-task-row';
+    row.className = 'board-task-row';
     const pageButton = document.createElement('button');
     document.body.append(row, pageButton);
     for (const el of [row, pageButton]) {
@@ -334,7 +334,7 @@ describe('createVoiceCapture', () => {
     const cap = createVoiceCapture({
       button,
       indicator,
-      getContext: () => ({ surface: 'hub' }),
+      getContext: () => ({ surface: 'board' }),
       send: () =>
         new Promise<VoiceAck | null>((resolve) => {
           settle = resolve;
@@ -419,7 +419,7 @@ describe('createVoiceCapture', () => {
     expect(rec.stopped).toBe(1);
     expect(sent).toHaveLength(1);
     expect(sent[0]?.transcript).toBe('rework these into different groupings');
-    expect(sent[0]?.context).toEqual({ surface: 'hub' });
+    expect(sent[0]?.context).toEqual({ surface: 'board' });
     expect(indicator.textContent).toContain('Sent to the workspace agent');
     cap.destroy();
   });
@@ -503,7 +503,7 @@ describe('spaceScrollTarget', () => {
   it('sends the page itself to the viewport, whatever the body says about overflow', () => {
     // `body { overflow: auto }` PROPAGATES to the viewport — the body element
     // is then not the scroller, so `body.scrollBy()` moves nothing at all. The
-    // hub is exactly that layout, and it is the surface where this scroll is
+    // board is exactly that layout, and it is the surface where this scroll is
     // the one people use, so "null means the viewport" is load-bearing rather
     // than a fallback.
     document.body.style.overflowY = 'auto';
@@ -634,7 +634,7 @@ describe('createVoiceCapture on an insecure origin', () => {
     createVoiceCapture({
       button,
       indicator,
-      getContext: () => ({ surface: 'hub' }),
+      getContext: () => ({ surface: 'board' }),
       send: () => Promise.resolve(null),
       createRecognition: () => {
         created++;
@@ -736,7 +736,7 @@ describe('createVoiceCapture without the Space hotkey', () => {
       button,
       indicator,
       spaceHotkey,
-      getContext: () => ({ surface: 'hub' }),
+      getContext: () => ({ surface: 'board' }),
       send: () => Promise.resolve(null),
       createRecognition: () => rec,
       readOrigin: secureOrigin,
@@ -799,7 +799,7 @@ describe('createVoiceCapture from the keyboard', () => {
       button,
       indicator,
       spaceHotkey,
-      getContext: () => ({ surface: 'hub' }),
+      getContext: () => ({ surface: 'board' }),
       send: (transcript) => {
         sent.push(transcript);
         return Promise.resolve(null);
@@ -904,7 +904,7 @@ describe('a long ack stays up long enough to be read', () => {
     const cap = createVoiceCapture({
       button,
       indicator,
-      getContext: () => ({ surface: 'hub' }),
+      getContext: () => ({ surface: 'board' }),
       send: () => Promise.resolve({ route: 'fast-path', ack: brief }),
       createRecognition: () => rec,
       readOrigin: () => ({

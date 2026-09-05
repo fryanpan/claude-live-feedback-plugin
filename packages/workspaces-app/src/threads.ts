@@ -33,12 +33,12 @@ export interface ThreadPanelOpts {
    * nothing outstanding should do.
    *
    * `optionId` rides along when the answer came from TAPPING one of a
-   * decision's offered options — provenance only, same contract as the hub:
+   * decision's offered options — provenance only, same contract as the board:
    * the answer is always the verbatim `text`, and a typed answer sending no
    * id is not answering any less.
    *
    * The return value says whether the post LANDED: resolve `false` and the
-   * panel puts the typed words back in the box (every hub composer restores
+   * panel puts the typed words back in the box (every board composer restores
    * verbatim on refusal; this one used to clear first and toast 'try again'
    * over an empty textarea). Anything else — `true`, `undefined`, a
    * fire-and-forget handler — means posted. Typed `unknown` rather than a

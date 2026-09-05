@@ -4,16 +4,16 @@ import { IPAD, PHONE, attach, installSheets, setViewport, styleOf } from './css-
 /**
  * The review shell's back arrow as a TAP TARGET, read off the cascade.
  *
- * design-mobile.md asks for the back arrow to stay tappable at ≥36px. The hub
- * topbar's arrow has had that rule since it was written (`.hub-topbar
+ * design-mobile.md asks for the back arrow to stay tappable at ≥36px. The board
+ * topbar's arrow has had that rule since it was written (`.board-topbar
  * .back-link`); the review app's arrow never did, and it is the one Bryan uses
  * — measured in a browser at a 440px viewport before this rule existed, the
  * review `←` was **26 × 20 CSS px**: a 16px glyph with `padding: 2px 6px` and
  * nothing else. The base rule is shared by both surfaces, so it cannot simply
- * grow: widening `.back-link` globally would relayout the hub arrow that
+ * grow: widening `.back-link` globally would relayout the board arrow that
  * already has its own sizing.
  *
- * This file used to read `styles.css` + `hub.css` as text, brace-walk to the
+ * This file used to read `styles.css` + `board.css` as text, brace-walk to the
  * phone block and regex the declarations out of it. That could not see the two
  * things that actually decide the outcome — whether the block MATCHES at the
  * width a reader is on, and whether anything later un-does it — so the sheets
@@ -22,15 +22,15 @@ import { IPAD, PHONE, attach, installSheets, setViewport, styleOf } from './css-
  *
  * The class chain is what `packages/workspaces-app/index.html` server-renders
  * for the review topbar (`<a class="back-link">` inside `.doc-crumb`) and what
- * `hub-app.ts`'s shell renders for the board (`.hub-topbar` > `.back-link`);
- * `hub-render.test.ts` and the shell tests pin that markup.
+ * `board-app.ts`'s shell renders for the board (`.board-topbar` > `.back-link`);
+ * `board-render.test.ts` and the shell tests pin that markup.
  *
  * The rendered box is still a browser check — happy-dom lays nothing out, so
  * `min-width`/`min-height` are read as declared floors, not as measured pixels.
  *
- * SHEETS: the real board page links `hub.css` BEFORE `styles.css`
- * (`renderHubShell` in packages/server/src/shells.ts says so, and the
- * `.hub-topbar .back-link:hover` rule is written against that order), so that
+ * SHEETS: the real board page links `board.css` BEFORE `styles.css`
+ * (`renderBoardShell` in packages/server/src/shells.ts says so, and the
+ * `.board-topbar .back-link:hover` rule is written against that order), so that
  * is the order installed here. `tokens.css` is deliberately left out: the file
  * the server serves is a vendored Open Props subset PLUS the mapping in
  * `src/tokens.css`, and installing the mapping half alone re-points every
@@ -39,7 +39,7 @@ import { IPAD, PHONE, attach, installSheets, setViewport, styleOf } from './css-
 
 let cleanup = () => {};
 beforeEach(() => {
-  cleanup = installSheets('hub.css', 'styles.css');
+  cleanup = installSheets('board.css', 'styles.css');
 });
 afterEach(() => {
   cleanup();
@@ -59,10 +59,10 @@ function reviewTopbar(vp: { width: number; height: number }) {
 }
 
 /** The board's arrow, which shares the `.back-link` base and nothing else. */
-function hubArrow(vp: { width: number; height: number }) {
+function boardArrow(vp: { width: number; height: number }) {
   setViewport(vp);
   return styleOf(
-    attach('back-link', { tag: 'a', parent: attach('hub-topbar', { tag: 'header' }) }),
+    attach('back-link', { tag: 'a', parent: attach('board-topbar', { tag: 'header' }) }),
   );
 }
 
@@ -116,12 +116,12 @@ describe("the review shell's back arrow on a phone", () => {
     expect(arrow.fontSize).toBe('16px');
   });
 
-  it('leaves the hub arrow at the 36px it has always had, at every width', () => {
+  it('leaves the board arrow at the 36px it has always had, at every width', () => {
     // The board's arrow has its own sizing and must not inherit the review
     // shell's 44px floor (nor lose its own to it) — the two surfaces share
     // only the `.back-link` base.
     for (const vp of [IPAD, PHONE]) {
-      const arrow = hubArrow(vp);
+      const arrow = boardArrow(vp);
       expect(arrow.minWidth, `${vp.width}px`).toBe('36px');
       expect(arrow.minHeight, `${vp.width}px`).toBe('36px');
       expect(arrow.display, `${vp.width}px`).toBe('inline-flex');

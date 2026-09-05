@@ -48,13 +48,13 @@ that way and add new subsystem docs to the list here.
 - **Don't append CSS at EOF of any stylesheet under
   `packages/workspaces-app/src/`** — put rules in the
   `/* ===== SECTION ===== */` banner they belong to. The board's rules live in
-  `hub.css`, under the per-surface `/* ##### HUB · … ##### */` sub-banner that
-  names the surface (`grep -n '##### HUB' packages/workspaces-app/src/hub.css`
+  `board.css`, under the per-surface `/* ##### BOARD · … ##### */` sub-banner that
+  names the surface (`grep -n '##### BOARD' packages/workspaces-app/src/board.css`
   lists them); the review editor's live in `doc.css`; `styles.css` keeps only
   the chrome all three pages share. The test for which file is **which pages
   can reach the rule**, not which surface it looks like — `.thread-line` reads
   as diff chrome and the board renders it too, so it stays in the base. Link
-  order is load-bearing and measured: `hub.css` BEFORE `styles.css`, `doc.css`
+  order is load-bearing and measured: `board.css` BEFORE `styles.css`, `doc.css`
   and `signin.css` AFTER it, `tokens.css` last. Parallel branches that both
   append at EOF conflict every time.
 - **Edit Bryan's bound docs directly; don't default to `suggest: true`.**

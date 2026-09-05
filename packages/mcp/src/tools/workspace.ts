@@ -99,7 +99,7 @@ export async function handleWorkspaceTool(
     watchWorkspace,
   } = ctx;
   switch (name) {
-    // ── Workspace hub tools (plan §3.10). Results are TRIMMED per the
+    // ── Workspace board tools (plan §3.10). Results are TRIMMED per the
     // edit-interface conventions: an edit returns ids + status, not the
     // full object the caller just wrote. Mutations that carry authorship
     // send AUTHOR — the same identity every other MCP call uses.

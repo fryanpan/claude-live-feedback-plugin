@@ -1,10 +1,10 @@
 /**
  * Home carries no board rows.
  *
- * The board column is `display: none` on Home (`.hub-main--home .hub-board-col`),
+ * The board column is `display: none` on Home (`.board-main--home .board-col`),
  * and until this test existed the render path ran there anyway: `setNav`
  * called `renderBoardRegion()` for every destination, so arriving at Home
- * built one `.hub-task-row` per task — 70 of them on the real board, measured
+ * built one `.board-task-row` per task — 70 of them on the real board, measured
  * headless at 430x932 and 1180x820 — each with its selects and its drag and
  * keyboard listeners, and then collapsed the lot to zero height.
  *
@@ -26,22 +26,22 @@ import { resolve } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   type BoardFilters,
+  type BoardGoal,
+  type BoardTask,
   CHORES_ID,
   DEFAULT_DONE_WINDOW,
-  type HubGoal,
-  type HubTask,
   boardSections,
-} from '../src/hub/hub-board-model.ts';
+} from '../src/board/board-model.ts';
+import { BOARD_BOOT_SOURCES } from './support/board-boot-sources.ts';
 import { type ShimHandlers as BoardHandlers, disposeBoards, renderBoard } from './support/board.ts';
-import { HUB_BOOT_SOURCES } from './support/hub-boot-sources.ts';
 
-const HUB_APP = HUB_BOOT_SOURCES.map((m) =>
-  readFileSync(resolve(import.meta.dirname, `../src/hub/${m}.ts`), 'utf8'),
+const BOARD_APP = BOARD_BOOT_SOURCES.map((m) =>
+  readFileSync(resolve(import.meta.dirname, `../src/board/${m}.ts`), 'utf8'),
 ).join('\n');
 
 const NOW = 1_700_000_000_000;
 
-const GOALS: HubGoal[] = [{ id: 'g-pr', title: '1. Get the PR out' }];
+const GOALS: BoardGoal[] = [{ id: 'g-pr', title: '1. Get the PR out' }];
 
 const filters: BoardFilters = {
   tab: 'all',
@@ -50,7 +50,7 @@ const filters: BoardFilters = {
   now: NOW,
 };
 
-function task(n: number): HubTask {
+function task(n: number): BoardTask {
   return {
     id: `t-${n}`,
     title: `Task ${n}`,
@@ -89,7 +89,7 @@ beforeEach(() => {
 });
 afterEach(disposeBoards);
 
-const rowCount = () => root.querySelectorAll('.hub-task-row').length;
+const rowCount = () => root.querySelectorAll('.board-task-row').length;
 
 describe('the board island’s pane gate', () => {
   it('renders the rows on the board — the control the Home case is measured against', () => {
@@ -104,7 +104,7 @@ describe('the board island’s pane gate', () => {
     // off screen, so nothing in it has a reader. What is left is the island's
     // own wrapper — the container Preact owns, which must not be torn down and
     // rebuilt per pane — and it is EMPTY, which is the claim being made here.
-    expect(root.querySelectorAll('.hub-section')).toHaveLength(0);
+    expect(root.querySelectorAll('.board-section')).toHaveLength(0);
     const wrapper = root.querySelector('[data-preact-island="board"]');
     expect(wrapper).not.toBeNull();
     expect(wrapper?.childNodes.length).toBe(0);
@@ -124,16 +124,16 @@ describe('the board island’s pane gate', () => {
     expect(rowCount()).toBe(TASKS.length);
     // Live, not a corpse: the row still carries the wiring a fresh render
     // gives it, so returning to the board is a working board.
-    const row = root.querySelector('.hub-task-row') as HTMLElement;
-    expect(row.querySelector('.hub-status-select')).not.toBeNull();
-    expect(row.querySelector('.hub-drag-handle')).not.toBeNull();
+    const row = root.querySelector('.board-task-row') as HTMLElement;
+    expect(row.querySelector('.board-status-select')).not.toBeNull();
+    expect(row.querySelector('.board-drag-handle')).not.toBeNull();
   });
 });
 
-describe('the hub wires the pane through', () => {
+describe('the board wires the pane through', () => {
   it('renderBoardRegion writes state.pane into the signal, so the gate cannot be bypassed', () => {
-    const body = HUB_APP.match(/function renderBoardRegion\([\s\S]*?\n {2}\}\n/)?.[0] ?? '';
-    expect(body, 'renderBoardRegion went missing from hub-app.ts').not.toBe('');
+    const body = BOARD_APP.match(/function renderBoardRegion\([\s\S]*?\n {2}\}\n/)?.[0] ?? '';
+    expect(body, 'renderBoardRegion went missing from board-app.ts').not.toBe('');
     expect(body).toMatch(/boardData\.value = \{[\s\S]*?pane: state\.pane,/);
   });
 });

@@ -171,7 +171,7 @@ describe('bin.ts --workspaces-app-dist / --widget-dist', () => {
           const res = await fetch(`http://127.0.0.1:${port}/api/workspaces`, {
             method: 'POST',
             headers,
-            body: JSON.stringify({ name: 'wiring-hub', goal: 'Ship it.' }),
+            body: JSON.stringify({ name: 'wiring-board', goal: 'Ship it.' }),
           });
           if (res.ok) {
             workspaceId = ((await res.json()) as { workspace: { id: string } }).workspace.id;

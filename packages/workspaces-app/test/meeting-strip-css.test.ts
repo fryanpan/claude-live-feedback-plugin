@@ -34,7 +34,7 @@ const APP = readFileSync(resolve(import.meta.dirname, '../src/app.ts'), 'utf8');
 
 let cleanup = () => {};
 beforeEach(() => {
-  cleanup = installSheets('hub.css', 'styles.css', 'doc.css');
+  cleanup = installSheets('board.css', 'styles.css', 'doc.css');
   setViewport(IPAD);
 });
 afterEach(() => {

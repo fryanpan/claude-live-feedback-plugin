@@ -1,8 +1,8 @@
 /**
- * hub-app wires the address bar through the board-url codec.
+ * board-app wires the address bar through the board-url codec.
  *
  * The codec itself is unit-tested in board-url.test.ts, and the boot's own
- * history writes are driven in hub-boot.test.ts. What is left here is which
+ * history writes are driven in board-boot.test.ts. What is left here is which
  * codec call each site makes, pinned by source text because two spellings
  * that produce the same URL today diverge the moment the codec changes.
  * All fixtures synthetic.
@@ -10,62 +10,62 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { HUB_BOOT_SOURCES } from './support/hub-boot-sources.ts';
+import { BOARD_BOOT_SOURCES } from './support/board-boot-sources.ts';
 
-// The hub's boot sources: `hub-app.ts` and the three modules split out of
+// The board's boot sources: `board-app.ts` and the three modules split out of
 // it. Read as one string because these assertions are about the board's
 // shape, not about which file a line ended up in — a move must not fail
 // them, and an absence checked across all four is the stronger read.
-const HUB_APP = HUB_BOOT_SOURCES.map((m) =>
-  readFileSync(resolve(import.meta.dirname, `../src/hub/${m}.ts`), 'utf8'),
+const BOARD_APP = BOARD_BOOT_SOURCES.map((m) =>
+  readFileSync(resolve(import.meta.dirname, `../src/board/${m}.ts`), 'utf8'),
 ).join('\n');
 
 describe('boot reads the whole address once', () => {
   it('parses the boot URL through the codec', () => {
-    expect(HUB_APP).toContain('parseBoardLocation(location.pathname, location.search)');
+    expect(BOARD_APP).toContain('parseBoardLocation(location.pathname, location.search)');
   });
 
   it('seeds the panels and the archived filter from it before first render', () => {
-    expect(HUB_APP).toContain('detailTaskId: bootLoc.task');
-    expect(HUB_APP).toContain('detailGoalId: bootLoc.goal');
-    expect(HUB_APP).toContain('detailThreadId: bootLoc.thread');
-    expect(HUB_APP).toContain('showArchived: bootLoc.archived');
+    expect(BOARD_APP).toContain('detailTaskId: bootLoc.task');
+    expect(BOARD_APP).toContain('detailGoalId: bootLoc.goal');
+    expect(BOARD_APP).toContain('detailThreadId: bootLoc.thread');
+    expect(BOARD_APP).toContain('showArchived: bootLoc.archived');
   });
 });
 
 describe('one address writer', () => {
   it('renderDetail and renderWalkthrough end in syncBoardUrl, not raw history', () => {
-    const detail = HUB_APP.match(/function renderDetail\(\)[\s\S]*?\n {2}\}\n/)?.[0] ?? '';
+    const detail = BOARD_APP.match(/function renderDetail\(\)[\s\S]*?\n {2}\}\n/)?.[0] ?? '';
     expect(detail, 'renderDetail went missing').not.toBe('');
     expect(detail).toContain('syncBoardUrl()');
     expect(detail.match(/history\.(pushState|replaceState)/g)).toBeNull();
-    const walk = HUB_APP.match(/function renderWalkthrough\(\)[\s\S]*?\n {2}\}\n/)?.[0] ?? '';
+    const walk = BOARD_APP.match(/function renderWalkthrough\(\)[\s\S]*?\n {2}\}\n/)?.[0] ?? '';
     expect(walk, 'renderWalkthrough went missing').not.toBe('');
     expect(walk).toContain('syncBoardUrl()');
   });
 
   it('closing unwinds with Back only for an entry this document pushed', () => {
-    const sync = HUB_APP.match(/function syncBoardUrl\(\)[\s\S]*?\n {2}\}\n/)?.[0] ?? '';
+    const sync = BOARD_APP.match(/function syncBoardUrl\(\)[\s\S]*?\n {2}\}\n/)?.[0] ?? '';
     expect(sync, 'syncBoardUrl went missing').not.toBe('');
     expect(sync).toContain('history.pushState({ res: resourceOf(next) }');
     expect(sync).toMatch(/res === closing\) history\.back\(\)/);
   });
 
   it('popstate applies the entry and abandons boot deep links', () => {
-    expect(HUB_APP).toMatch(/addEventListener\('popstate'[\s\S]{0,400}applyHistoryLocation\(\)/);
-    expect(HUB_APP).toMatch(/addEventListener\('popstate'[\s\S]{0,300}pendingBootItem = null/);
+    expect(BOARD_APP).toMatch(/addEventListener\('popstate'[\s\S]{0,400}applyHistoryLocation\(\)/);
+    expect(BOARD_APP).toMatch(/addEventListener\('popstate'[\s\S]{0,300}pendingBootItem = null/);
   });
 });
 
 describe('cold-load deep links wait for the projection', () => {
   it('an unresolved boot goal is not cleared before the deadline', () => {
-    expect(HUB_APP).toContain(
+    expect(BOARD_APP).toContain(
       'if (state.detailGoalId !== pendingBootGoal) state.detailGoalId = null;',
     );
   });
 
   it('a boot ?item= opens once the queue holds it, without burning on empty', () => {
-    const open = HUB_APP.match(/const maybeOpenBootItem[\s\S]*?\n {2}\};\n/)?.[0] ?? '';
+    const open = BOARD_APP.match(/const maybeOpenBootItem[\s\S]*?\n {2}\};\n/)?.[0] ?? '';
     expect(open, 'maybeOpenBootItem went missing').not.toBe('');
     expect(open).toContain('openInQueue(item, idx)');
     // The don't-burn rule: an empty queue returns with the flag still armed.
@@ -73,13 +73,13 @@ describe('cold-load deep links wait for the projection', () => {
   });
 
   it('the deadline names the failure instead of leaving a blank panel', () => {
-    expect(HUB_APP).toContain('Nothing on this board matches that link');
-    expect(HUB_APP).toContain('That review item is not in the queue any more');
+    expect(BOARD_APP).toContain('Nothing on this board matches that link');
+    expect(BOARD_APP).toContain('That review item is not in the queue any more');
   });
 
   it('a deep-linked thread missing from the loaded discussion says so', () => {
-    expect(HUB_APP).toContain('That comment thread is gone');
-    expect(HUB_APP).toMatch(/function noteStaleBootThread[\s\S]{0,400}discussion\.threads\.some/);
+    expect(BOARD_APP).toContain('That comment thread is gone');
+    expect(BOARD_APP).toMatch(/function noteStaleBootThread[\s\S]{0,400}discussion\.threads\.some/);
   });
 });
 
@@ -116,7 +116,7 @@ describe('the card hands off to its item in one history step', () => {
   // `history.state` null, so syncBoardUrl replaces instead of calling
   // `history.back()`, and the race cannot appear however broken the code is.
   it('renders the open before the walkthrough close', () => {
-    const fn = HUB_APP.match(/function openFromWalk\([\s\S]*?\n {2}\}\n/)?.[0] ?? '';
+    const fn = BOARD_APP.match(/function openFromWalk\([\s\S]*?\n {2}\}\n/)?.[0] ?? '';
     expect(fn, 'openFromWalk went missing').not.toBe('');
     const openAt = fn.indexOf('const stillHere = open(back)');
     const closeAt = fn.indexOf('renderWalkthrough()');
@@ -132,22 +132,22 @@ describe('the card hands off to its item in one history step', () => {
     // queued beside it races the navigation. The opener reports whether it
     // stayed in-app, and only then does the card repaint (and its URL
     // close-step) run.
-    expect(HUB_APP).toMatch(/if \(stillHere\) renderWalkthrough\(\)/);
+    expect(BOARD_APP).toMatch(/if \(stillHere\) renderWalkthrough\(\)/);
   });
 });
 
 describe('emitted links are canonical', () => {
   it('the task copy-link goes through the shared share-URL builder', () => {
-    expect(HUB_APP).toContain('taskShareUrl(location.origin, workspaceIdFromPath(), taskId)');
+    expect(BOARD_APP).toContain('taskShareUrl(location.origin, workspaceIdFromPath(), taskId)');
   });
 
   it('a doc-thread review item navigates to the workspace doc address', () => {
     // The legacy `/review/` shape stays only where the doc's workspace is
     // unknown client-side (presence follows) — there the server's redirect is
     // the resolver. This jump knows its workspace, so it says so.
-    expect(HUB_APP).toMatch(
+    expect(BOARD_APP).toMatch(
       /\/workspaces\/\$\{encodeURIComponent\(workspaceId\)\}\/docs\/\$\{encodeURIComponent\(t\.docId\)\}\?thread=/,
     );
-    expect(HUB_APP).not.toMatch(/`\/review\/[^\n]*\?thread=/);
+    expect(BOARD_APP).not.toMatch(/`\/review\/[^\n]*\?thread=/);
   });
 });

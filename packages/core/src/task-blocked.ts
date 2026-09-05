@@ -40,7 +40,7 @@
 
 /** The two fields a blocked reading needs off a row, from any of the three
  *  shapes that carry them (the store's `Task`, the wire's `TaskPayload`, the
- *  board's `HubTask`). Structural on purpose: this module must not import a
+ *  board's `BoardTask`). Structural on purpose: this module must not import a
  *  store type into the browser or a browser type into the store. */
 export interface BlockableRow {
   status: string;

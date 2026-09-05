@@ -192,7 +192,7 @@ export class ReviewItemQueries {
   /**
    * The criteria this board judges review items against: the owner's own
    * text, or the default when nobody has written any. The ONE reader of
-   * `HubWorkspace.reviewItemCriteria`, so "what does default mean" is
+   * `BoardWorkspace.reviewItemCriteria`, so "what does default mean" is
    * answered in exactly one place. `undefined` for a board that does not
    * exist — distinct from a board on the default, which is the ordinary case.
    */
