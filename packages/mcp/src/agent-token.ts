@@ -49,6 +49,10 @@ export interface AgentTokenStore {
   /** `{ authorization }` when a token could be had, `{}` otherwise. Safe to
    *  call on every request; only the first one costs a round trip. */
   headers(): Promise<Record<string, string>>;
+  /** `headers()`, but only for a path that actually reads this agent's feed.
+   *  Every other REST path gets `{}` without a round trip -- see
+   *  `pathNeedsAgentToken`. */
+  headersFor(path: string): Promise<Record<string, string>>;
   /** Drop the cached token, so the next call mints again. */
   forget(): void;
   /** Whether a token is held right now. Test surface for single-flight. */
@@ -58,6 +62,26 @@ export interface AgentTokenStore {
 /** The route the token comes from. */
 export function agentTokenPath(agentId: string): string {
   return `/api/agents/${encodeURIComponent(agentId)}/token`;
+}
+
+/**
+ * Whether a REST path is one the server asks the token for.
+ *
+ * Only the durable watch set; the stream is not a REST call and asks the
+ * store directly, and the mint route is fetched by the store itself.
+ *
+ * The first version of this put the header on EVERY call, reasoning that a
+ * route list here is a second place to drift out of step with the server's.
+ * That was the wrong trade. It made the very first tool call of a session
+ * wait on a mint that has nothing to do with it -- coupling every tool's
+ * availability to a request none of them need -- and it put an extra round
+ * trip through paths that were previously one call. This predicate lives in
+ * the same module as `agentTokenPath`, so it moves when the route moves; and
+ * getting it wrong is loud rather than silent, because a missing header is a
+ * 401 naming the route once enforcement is on, never a quiet hole.
+ */
+export function pathNeedsAgentToken(path: string): boolean {
+  return /^\/api\/agents\/[^/?]+\/watches(\?|$)/.test(path);
 }
 
 export function createAgentTokenStore(deps: AgentTokenDeps): AgentTokenStore {
@@ -97,11 +121,12 @@ export function createAgentTokenStore(deps: AgentTokenDeps): AgentTokenStore {
     }
   };
 
-  return {
+  const store: AgentTokenStore = {
     hasToken: () => token !== null,
     forget: () => {
       token = null;
     },
+    headersFor: (path) => (pathNeedsAgentToken(path) ? store.headers() : Promise.resolve({})),
     async headers(): Promise<Record<string, string>> {
       if (deps.identityIsShared || unsupported) return {};
       if (token !== null) return { authorization: `Bearer ${token}` };
@@ -121,4 +146,5 @@ export function createAgentTokenStore(deps: AgentTokenDeps): AgentTokenStore {
       return minted === null ? {} : { authorization: `Bearer ${minted}` };
     },
   };
+  return store;
 }

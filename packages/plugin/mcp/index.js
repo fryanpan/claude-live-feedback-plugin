@@ -13673,6 +13673,9 @@ class StdioServerTransport {
 function agentTokenPath(agentId) {
   return `/api/agents/${encodeURIComponent(agentId)}/token`;
 }
+function pathNeedsAgentToken(path) {
+  return /^\/api\/agents\/[^/?]+\/watches(\?|$)/.test(path);
+}
 function createAgentTokenStore(deps) {
   let token = null;
   let minting = null;
@@ -13700,11 +13703,12 @@ function createAgentTokenStore(deps) {
       return null;
     }
   };
-  return {
+  const store = {
     hasToken: () => token !== null,
     forget: () => {
       token = null;
     },
+    headersFor: (path) => pathNeedsAgentToken(path) ? store.headers() : Promise.resolve({}),
     async headers() {
       if (deps.identityIsShared || unsupported)
         return {};
@@ -13721,6 +13725,7 @@ function createAgentTokenStore(deps) {
       return minted === null ? {} : { authorization: `Bearer ${minted}` };
     }
   };
+  return store;
 }
 
 // packages/mcp/src/attachment-keepalive.ts
@@ -14611,7 +14616,7 @@ function createHttp(resolve, fetchFn = fetch, authHeaders = async () => ({})) {
       method,
       headers: {
         ...body ? { "content-type": "application/json" } : {},
-        ...await authHeaders()
+        ...await authHeaders(path)
       },
       body: body ? JSON.stringify(body) : undefined
     });
@@ -18791,7 +18796,7 @@ var restore = createWatchRestore({
   identityIsShared: IDENTITY_IS_SHARED
 });
 var { ensureWatchesRestored: ensureWatchesRestored2 } = restore;
-var http = createHttp(resolveBaseUrl2, (url, init) => fetch(url, init), () => agentTokens.headers());
+var http = createHttp(resolveBaseUrl2, (url, init) => fetch(url, init), (path) => agentTokens.headersFor(path));
 var transport = new StdioServerTransport;
 server.oninitialized = () => {
   ensureWatchesRestored2();
