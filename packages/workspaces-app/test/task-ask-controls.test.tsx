@@ -207,6 +207,27 @@ describe('the ticket’s Plan and Review controls', () => {
     expect(askButton(host, 'review')?.disabled).toBe(false);
   });
 
+  it('does not carry a press from one ticket onto the next', async () => {
+    // A press is remembered in this control's OWN state until the doc's
+    // stamps come back, and the panel goes row-to-row without ever closing.
+    // What keeps that state from following the reader is `key={task.id}` on
+    // the panel, one file away and written for the composer drafts — so the
+    // receipt is correct here by inheritance rather than by anything this row
+    // does. Drop the key and the next ticket opens already claiming somebody
+    // asked for a plan on it.
+    const host = mount();
+    const first = task();
+    show(first, { onAsk: vi.fn(async () => true) });
+    askButton(host, 'plan')?.click();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(receipt(host, 'plan')).not.toBeNull();
+
+    show(task(), { onAsk: vi.fn(async () => true) });
+    expect(receipt(host, 'plan')).toBeNull();
+    expect(askButton(host, 'plan')).not.toBeNull();
+  });
+
   it('renders the receipt from the ticket’s own stamps, so a reopen shows it', () => {
     const host = mount();
     const asks: TaskAskState = {
