@@ -144,6 +144,15 @@ describe('security docs are wired together', () => {
       // shape the checklist exists to catch, and it lives in the ordering of
       // four lines inside one function.
       'packages/server/src/request-attribution.ts',
+      // …and the eighth, which is the other half of the sixth. A19 put the
+      // upgrade on this list because a websocket is authorized once; this is
+      // the file that then holds that authorization for the socket's whole
+      // life. `open` is what makes a share-stamped socket reachable by the
+      // revocation sweeps — a stamp that never reaches `trackShareSocket` is
+      // a connection no sweep can find — and `message` is where a frame is
+      // handed to a room, which is the read the share scope was deciding
+      // about in the first place.
+      'packages/server/src/socket-handlers.ts',
     ];
     for (const path of security) expect(pattern.test(path)).toBe(true);
 
