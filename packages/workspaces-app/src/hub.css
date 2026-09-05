@@ -3145,6 +3145,82 @@ body.hub-body {
   border-color: var(--red);
   color: var(--red);
 }
+/* --- scheduled rows: the rule, and when it next runs ---
+   Two marks, both on the RIGHT of the row where the due date already sits, in
+   the order a reader scans them: what the rule is, then when it fires. No
+   caption and no kind chip — the section header already said "Scheduled", and
+   a row under it does not need to say so again.
+
+   (Bryan's approved mock, 2026-09-04, section 2.) */
+/* The rule, as one pill holding its parts. `Every weekday` · `9am` reads as
+   one fact split at a joint, which is why the separator is INSIDE the pill
+   rather than being a second pill. */
+.hub-badge-rule {
+  background: var(--bg);
+}
+.hub-badge-sep {
+  color: var(--border-strong);
+  margin: 0 3px;
+}
+/* When it next runs. Deliberately NOT a `.hub-badge`: it is a value, not a
+   label, and the phone block below hides badges on a narrow row — a scheduled
+   row that lost its next occurrence would be a title with nothing to say.
+   Tabular figures so a column of times lines up. */
+.hub-next {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--fg);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  align-self: center;
+}
+/* Today. The one state on these rows that changes what the reader does next,
+   so it is the one that gets the accent. */
+.hub-next-soon {
+  color: var(--accent);
+}
+/* The recurrence mark on a LIVE INSTANCE — a row in its own goal band that
+   the scheduler created. Small, muted and icon-only: it says what kind of row
+   this is, and the rule it links to says the rest. */
+.hub-recur {
+  display: inline-flex;
+  align-items: center;
+  color: var(--fg-muted);
+  flex: none;
+}
+.hub-recur svg {
+  width: 13px;
+  height: 13px;
+  display: block;
+}
+/* The linked form, which is a button and must not look like one. */
+.hub-recur-link {
+  padding: 0;
+  border: none;
+  background: none;
+  cursor: pointer;
+}
+.hub-recur-link:hover {
+  color: var(--accent);
+}
+/* The Scheduled band itself. It KEEPS the goal band's chrome — the accent
+   rail, the panel header, an unmuted title — because it is a list of live
+   rules, not a bucket for work nobody placed, and the approved mock draws it
+   as a band like any other.
+
+   What it loses is the two affordances that would lie: a goal's header opens
+   a goal panel and can be renamed in place, and this section is neither a
+   goal nor a row anybody named. The gestures are withheld in the renderer;
+   these two rules stop the cursor and the caret from advertising them.
+   Backlog's `.hub-band-reserved` treatment is deliberately NOT applied — that
+   one also mutes the title, which would say "nothing here matters much" about
+   the rules that generate the board's recurring work. */
+.hub-band-scheduled .hub-goal-row {
+  cursor: default;
+}
+.hub-band-scheduled .hub-goal-open {
+  visibility: hidden;
+}
 /* ################# HUB · BOARD ACTIVITY VIEW #################
    Exactly two filters — §3.9. */
 /* Uptime banner (deploy readiness — §3.12 commit 11): the 99% target
@@ -5769,6 +5845,14 @@ label.hub-sched-chip:hover {
   .hub-task-badges .hub-badge {
     display: none;
   }
+  /* This takes the scheduled row's RULE chip with it, and that is the ranking
+     rather than a casualty: on a 430px row the essential fact about a
+     scheduled row is WHEN IT NEXT RUNS, and the rule is one tap away in the
+     panel. `.hub-next` is not a badge and stays, so a scheduled row on a
+     phone still says something — a row reduced to its title would be a
+     section that never tells you when anything happens. The recurrence mark
+     on a live instance is not a badge either, and stays for the same reason
+     the state word does: it changes what the reader thinks the row IS. */
   /* The state word is NOT a badge and stays. It was added to this strip when
      Blocked arrived (2026-09-03), which makes the paragraph above no longer
      true of the whole strip: a phone row is title-plus-state now, not
