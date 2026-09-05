@@ -54,7 +54,7 @@ interface BlockIndexEntry {
 }
 
 // Mirrors editor.ts's extension list — a redline of a markdown file must
-// render everything the normal markdown editor renders, or a review doc with a
+// render everything the normal markdown editor renders, or an attachment with a
 // table silently degrades to plain paragraphs in this view only.
 const RENDER_EXTENSIONS = [
   StarterKit.configure({ undoRedo: false, codeBlock: false }),

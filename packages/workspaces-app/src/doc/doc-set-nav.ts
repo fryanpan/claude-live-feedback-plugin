@@ -45,7 +45,7 @@ export interface DocSetNav {
 export function mountDocSetNav(opts: DocSetNavOptions): DocSetNav {
   const { docId, navDocId, ydoc, scope } = opts;
 
-  // ---- Review-set navigation ----
+  // ---- Attachment-set navigation ----
   // If the doc has a setId/workspaceId, render its siblings into the sidebar
   // and topbar dropdown. The sidebar renderers are idempotent per nav key, so
   // navigating between files in the same review keeps the sidebar (and its

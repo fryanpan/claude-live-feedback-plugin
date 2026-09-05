@@ -23,7 +23,7 @@ import {
  * THREE PAGES, THREE CASCADES, and that is why the sheets are installed per
  * test rather than once. `renderSigninShell` loads styles.css then signin.css
  * then tokens.css; `renderBoardShell` loads board.css, styles.css, tokens.css and
- * never signin.css; the review doc loads neither of the two page sheets.
+ * never signin.css; an attachment loads neither of the two page sheets.
  * Installing exactly the sheets a page loads is also what replaces the old
  * "which file is this rule in?" text assertions: a rule that moved into the
  * shared sheet shows up as a value the OTHER page can now see.

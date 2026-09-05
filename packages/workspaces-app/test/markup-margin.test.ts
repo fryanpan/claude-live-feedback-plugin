@@ -149,7 +149,7 @@ function mountRedlineWithChrome(baseText: string, md: string) {
 }
 
 /** The plain markdown surface (no deletions, no baseText) wired to a real
- *  chrome — matches how app.ts mounts the margin on a non-diff review doc. */
+ *  chrome — matches how app.ts mounts the margin on a non-diff attachment. */
 function mountPlainWithChrome(md: string) {
   mountChromeDom();
   const parent = document.getElementById('editor') as HTMLElement;
