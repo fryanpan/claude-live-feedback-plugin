@@ -203,13 +203,53 @@ describe('classifyOpenTasks — a note that says the agent is waiting on a perso
     expect(row?.bucket).toBe('in-progress');
   });
 
-  it('a row a person already owns is unfiled whatever its notes say', () => {
+  it('a row a person already owns is unfiled whatever its notes say, and its notes go unread', () => {
+    let judged = 0;
+    const counting = new NoteAskClassifier({
+      personNames: ['Bryan'],
+      judge: async () => {
+        judged += 1;
+        return true;
+      },
+    });
     const noted = quietRow({
       ownerKind: 'person',
-      notes: [{ ts: now - 40 * MIN, kind: 'turn', text: PROGRESS_NOTE, agent: 'Beacon Bot' }],
+      notes: [{ ts: now - 40 * MIN, kind: 'turn', text: WAITING_NOTE, agent: 'Beacon Bot' }],
     });
-    const [row] = classifyOpenTasks([noted], [], [], now, STALL, bands, undefined, seam());
+    const [row] = classifyOpenTasks([noted], [], [], now, STALL, bands, undefined, counting);
     expect(row?.bucket).toBe('blocked-on-owner-unfiled');
+    // The board already says a person is waiting, so no verdict could move
+    // the bucket — and a call that cannot change anything is not made.
     expect(row?.askedInNoteAt).toBeUndefined();
+    expect(judged).toBe(0);
+  });
+
+  it('a row with a FILED ask spends no confirmation either', () => {
+    let judged = 0;
+    const counting = new NoteAskClassifier({
+      personNames: ['Bryan'],
+      judge: async () => {
+        judged += 1;
+        return true;
+      },
+    });
+    const noted = quietRow({
+      notes: [{ ts: now - 40 * MIN, kind: 'turn', text: WAITING_NOTE, agent: 'Beacon Bot' }],
+    });
+    classifyOpenTasks(
+      [noted],
+      [],
+      [{ taskId: 't-1', askedAt: now - 30 * MIN }],
+      now,
+      STALL,
+      bands,
+      undefined,
+      counting,
+    );
+    expect(judged).toBe(0);
+    // Positive control: the same row with nothing filed DOES spend one, so
+    // the zero above is the gate and not a judge that never runs.
+    classifyOpenTasks([noted], [], [], now, STALL, bands, undefined, counting);
+    expect(judged).toBe(1);
   });
 });
